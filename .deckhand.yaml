@@ -3,3 +3,6 @@ inbox:
   ideas: 15
   bugs: 16
   discussions: Ask Claude
+
+hosts:
+  - registry.npmjs.org
