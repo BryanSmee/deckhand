@@ -1,0 +1,204 @@
+# Deckhand
+
+Deckhand runs Claude Code on your GitHub issues and pull requests. Comment `Claude work on
+this` on an issue and it starts a sandbox, works on a branch, opens a draft pull request and
+answers on the issue when it is done, or stops to ask when only you can decide.
+
+It is self-hosted and bring-your-own-key: you create your own private GitHub App, run your
+own server with Docker, and use your own Claude credential. One deployment serves one
+operator, across as many repositories as the App is installed on.
+
+## What it does
+
+- **Comment triggers.** On an issue, the first line of a comment is the command and the rest
+  are instructions:
+  - `Claude work on this`: a run in a sandbox, on the branch `issue-<n>-<slug>`, with a
+    draft pull request. Once started, any comment on the issue or its pull request (reviews
+    and review comments too) continues the same session.
+  - `Claude let's brainstorm this`: a discussion of the issue in its comments, without code.
+    `Claude stop` (or `/stop`) wraps it up.
+  - `/model <name>` and `/effort <level>` lines pick the model and thinking effort of that run.
+- **Live feedback.** The comment gets 👀 when it is received, then 🚀 (done), 😕 (needs
+  input) or 👎 (error). A burst of comments is one message, and one that arrives while
+  Claude works reaches the running session. The final message comes back as a comment from
+  the App's bot.
+- **Needs input.** A run that hits a decision only you can make pushes its work in progress,
+  asks numbered questions and labels the issue `needs-input`; your answer continues the same
+  session.
+- **Inboxes.** An ideas issue and a bug reports issue, where each of your comments becomes a
+  filed GitHub issue, and a GitHub Discussions category (for example "Ask Claude") where
+  Claude answers questions.
+- **Preview hook.** A command of the repository run on `pull_request` and `workflow_run`
+  events, to deploy or remove previews.
+- **Dashboard.** Every issue, pull request and discussion Deckhand worked on, grouped by
+  project and repository, with its state and the live log of its runs. Sign-in with GitHub.
+
+## How it works
+
+```
+GitHub ──webhook──▶ listener ──docker──▶ sandbox (one per issue, Claude Code inside)
+                     │  ▲                   │
+                     │  └── token broker ◀──┤  short-lived token for that repo only
+                     │                      └──▶ egress proxy ──▶ allowed hosts only
+                     └── dashboard
+```
+
+- The **listener** (`listener/`) checks each webhook's signature, the allowlist and the
+  trigger line, queues the work and starts one sandbox container per run. It holds the
+  Docker socket and the App's private key; no sandbox gets either.
+- A **sandbox** (`sandbox/`) is a container from the base image, or the repository's own
+  image built `FROM` it. It runs Claude Code with permissions bypassed, in a clone of the
+  repository kept between the issue's runs.
+- The **egress proxy** (`proxy/`) is the sandboxes' only way out: Anthropic's API, GitHub,
+  and the hosts you allow.
+- **Prompts** (`prompts/`): the generic sandbox rules, and those of brainstorms, inboxes
+  and discussions. A repository adds its own instructions through its config.
+
+## Quick start
+
+You need:
+
+- a server with Docker Engine 26 or later and the compose plugin;
+- an HTTPS address GitHub can reach (your reverse proxy, or a tunnel), forwarding to the
+  listener's port (8080);
+- a GitHub account (or organization) to own the App, and the repositories to use it on;
+- a Claude credential: a token from `claude setup-token` (your Claude plan) or an
+  `ANTHROPIC_API_KEY`.
+
+**1. Configure and start.**
+
+```sh
+git clone https://github.com/BryanSmee/deckhand.git
+cd deckhand
+cp .env.example .env
+```
+
+In `.env`, set `ALLOWED_USERS` to your GitHub login (comma-separated for several: nobody
+else can start a run, and with none set nothing starts), and `CLAUDE_CODE_OAUTH_TOKEN` or
+`ANTHROPIC_API_KEY`. Then:
+
+```sh
+docker compose up -d --build
+docker compose logs listener
+```
+
+This builds the listener, the egress proxy and the base sandbox image, and starts the first
+two. The logs print a one-time setup link, `…/setup?token=…`.
+
+**2. Create the GitHub App.** Open the setup link through your public address (for example
+`https://deckhand.example.com/setup?token=…`). Check the public URL, pick the App's name and
+owner, and create it on GitHub: its permissions and events are filled in for you. GitHub
+then sends you to the App's installation page: pick the repositories Deckhand may work on.
+
+**3. First run.** On an issue of one of those repositories, comment:
+
+```
+Claude work on this
+```
+
+The comment gets a 👀. The first run installs Claude Code (once, into a volume), then
+works: open the listener's address to follow it on the dashboard. When it is done, the issue
+has a reply, and the branch `issue-<n>-<slug>` a draft pull request.
+
+[docs/setup.md](docs/setup.md) has the details: what the App asks for, the dashboard's
+states, every setting and how sandboxes reach GitHub.
+
+## Per-repo config
+
+A repository can add a `.deckhand.yaml` at its root: its own users (narrowing
+`ALLOWED_USERS`), trigger lines, models, parallel runs, a setup command, project
+instructions, a Dockerfile for its image, caches, extra hosts, host mounts, inboxes and a
+preview hook.
+
+```yaml
+users: [alice]
+model: opus
+effort: high
+setup: npm ci
+instructions: AGENTS.md
+dockerfile: .deckhand/Dockerfile
+caches: [/home/node/.npm]
+hosts: [registry.npmjs.org]
+```
+
+It is read from the **default branch** only, at every run, and can only narrow what you, the
+operator, allow. See [docs/repo-config.md](docs/repo-config.md).
+
+## Isolation defaults
+
+Out of the box, without any configuration:
+
+- **Network:** sandboxes sit on an internal Docker network; the egress proxy lets them reach
+  `api.anthropic.com`, GitHub and nothing else. You add hosts for every repository
+  (`ALLOWED_HOSTS`) or for one (the grants file); a repository can ask for more in its
+  config.
+- **Host paths:** none. No `~/.ssh`, `~/.gitconfig`, Docker socket or source tree. A host
+  path is only mounted when you grant the repository a root that holds it, and read-only
+  unless you say otherwise.
+- **Privileges:** containers run as `node` with `--cap-drop ALL`, `no-new-privileges`, and
+  CPU, memory and pids limits (`SANDBOX_CPUS`, `SANDBOX_MEMORY`, `SANDBOX_PIDS`).
+- **GitHub:** no long-lived token or SSH key. Each run asks the listener's token broker for
+  an installation token limited to its own repository, with a secret that dies with the
+  run.
+
+## Security model
+
+Read this before installing Deckhand on a repository.
+
+- **Permissions are bypassed inside a sandbox.** Claude Code runs unattended, without
+  permission prompts, on issues and comments other people may have written. Deckhand
+  assumes whatever runs in a sandbox may try to read what it shouldn't or send it out, and
+  limits what it can reach instead (above).
+- **The allowlist decides who starts runs.** Only `ALLOWED_USERS` (narrowed per repository)
+  start runs, answer brainstorms or feed inboxes; everyone else, unknown repositories and
+  unknown events are ignored. With no allowlist, nothing starts. Webhooks are checked with
+  their HMAC signature.
+- **The egress proxy decides where data can go.** Every allowed host is trusted entirely:
+  anything a sandbox can write to there (its own repository on GitHub, a bucket behind `*`)
+  is a way out. Keep the list short.
+- **What isn't covered:** image builds, the Claude Code install and preview hooks run
+  outside the sandboxes' network, and preview hooks get the Docker socket (root on the
+  host). DNS lookups may leave the internal network.
+
+All of it, with the grants file and the limits of each measure:
+[docs/security.md](docs/security.md).
+
+## Updating
+
+```sh
+git pull
+docker compose up -d --build
+```
+
+Restarting the listener interrupts the runs in progress (the dashboard shows them as
+`interrupted`; comment again to resume). Comments still waiting for a run and brainstorms
+between replies are kept. To wait for a quiet moment first, check that the listener is
+idle:
+
+```sh
+docker compose exec listener node -e \
+  'fetch("http://localhost:8080/status").then((r) => r.json()).then((s) => console.log(s.idle, s.reasons))'
+```
+
+Claude Code's version is pinned by `CLAUDE_CODE_VERSION`: change it in `.env` to move to
+another one, and the next run installs it.
+
+## Claude Code and naming
+
+- Deckhand runs Claude Code; it is not made by or affiliated with Anthropic. Its name,
+  images and logo don't use "Claude" or "Anthropic".
+- Claude Code is not bundled in any image: the listener installs it on first start, at the
+  pinned version, into a Docker volume.
+- Each operator uses their own `ANTHROPIC_API_KEY` or their own Claude login (a token from
+  `claude setup-token`), under their own agreement with Anthropic, and follows Anthropic's
+  [Usage Policy](https://www.anthropic.com/legal/aup).
+
+## Development
+
+Node 22, no dependencies. Tests: `node --test`; syntax: `node --check listener/server.mjs`
+and `bash -n sandbox/*.sh`; format: `npx --yes prettier@3 --check .`. See
+[AGENTS.md](AGENTS.md) for the conventions and security rules.
+
+## Licence
+
+[Apache License 2.0](LICENSE).
