@@ -94,6 +94,11 @@ async function fakeGitHub(files = {}) {
         res.setHeader("content-type", "application/gzip");
         return res.end(tarball);
       }
+      // Dashboard sign-in: the browser comes back as alice.
+      if (req.url === "/login/oauth/access_token") {
+        return res.end(JSON.stringify({ access_token: "user-token" }));
+      }
+      if (req.url === "/user") return res.end(JSON.stringify({ login: "alice" }));
       if (req.url === "/app/installations/7/access_tokens") {
         const scoped = body.includes("repositories");
         const expires_at = new Date(Date.now() + 3600000).toISOString();
@@ -165,7 +170,8 @@ test("refuses to start with an empty allowlist", async () => {
 });
 
 // A listener with an App, a fake Docker and a fake GitHub serving `files`; `extra`: more
-// settings. Either may be a function of the listener's temp dir.
+// settings. Either may be a function of the listener's temp dir (and `extra`, of the fake
+// GitHub).
 async function listen(t, files, extra = {}) {
   const dir = mkdtempSync(join(tmpdir(), "deckhand-"));
   fakeDocker(dir);
@@ -176,6 +182,7 @@ async function listen(t, files, extra = {}) {
     JSON.stringify({
       id: 5,
       client_id: "Iv1.x",
+      client_secret: "cs",
       slug: "deckhand-x",
       bot_id: 77,
       webhook_secret: SECRET,
@@ -197,7 +204,7 @@ async function listen(t, files, extra = {}) {
     // The egress proxy asks from here: in the tests, the fake sandbox itself.
     EGRESS_PROXY: "http://127.0.0.1:3128",
     GRANTS_FILE: join(dir, "grants.yaml"),
-    ...(typeof extra === "function" ? extra(dir) : extra),
+    ...(typeof extra === "function" ? extra(dir, github) : extra),
   });
   t.after(() => {
     listener.child.kill("SIGKILL");
@@ -541,4 +548,52 @@ test("a discussion in the repo's category is answered in it, with a discussions 
   assert.match(runEnv, /^TASK_PROMPT=New on discussion #8 of org\/repo/m);
   const args = readFileSync(join(dir, "run-args"), "utf8").split("\n");
   assert.ok(args.includes("deckhand.task=org/repo#discussion-8"));
+});
+
+test("the dashboard and its logs are for allowed users signed in with GitHub", async (t) => {
+  // GitHub's sign-in pages are the fake GitHub too.
+  const { github, port, send, listener } = await listen(t, {}, (dir, github) => ({
+    GITHUB_URL: github.url,
+  }));
+  const base = `http://127.0.0.1:${port}`;
+  const get = (path, cookie) =>
+    fetch(base + path, { redirect: "manual", headers: cookie ? { cookie } : {} });
+  // Signed out: a sign-in page, and nothing from the API.
+  const home = await get("/");
+  assert.equal(home.status, 200);
+  assert.match(await home.text(), /Sign in with GitHub/);
+  assert.equal((await get("/api/state")).status, 401);
+  // A run, so there is a log to stream.
+  await send(comment("alice"));
+  await listener.until("done (ok)");
+
+  const login = await get("/auth/login");
+  const to = new URL(login.headers.get("location"));
+  assert.equal(to.pathname, "/login/oauth/authorize");
+  assert.equal(to.searchParams.get("redirect_uri"), "https://hooks.example.com/auth/callback");
+  const state = login.headers.getSetCookie()[0].split(";")[0];
+  const back = await get(`/auth/callback?code=c&state=${to.searchParams.get("state")}`, state);
+  assert.equal(back.status, 302);
+  const session = back.headers
+    .getSetCookie()
+    .find((c) => c.startsWith("deckhand_session="))
+    .split(";")[0];
+  assert.ok(github.requests.some((r) => r.path === "/user" && r.auth === "Bearer user-token"));
+
+  assert.match(await (await get("/", session)).text(), /<title>Deckhand<\/title>/);
+  const board = await (await get("/api/state", session)).json();
+  assert.equal(board.user, "alice");
+  const [task] = board.tasks;
+  assert.deepEqual([task.key, task.project, task.state], ["org/repo#12", "org", "done"]);
+  const stream = await get(`/api/runs/${task.runs[0].id}/stream`, session);
+  assert.equal(stream.status, 200);
+  assert.match(await stream.text(), /event: end/);
+  assert.equal((await get(`/api/runs/${task.runs[0].id}/stream`)).status, 401);
+});
+
+test("/status answers calls from inside the container without a session", async (t) => {
+  const { port } = await listen(t);
+  const res = await fetch(`http://127.0.0.1:${port}/status`);
+  assert.equal(res.status, 200);
+  assert.equal((await res.json()).idle, true);
 });

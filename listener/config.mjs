@@ -107,7 +107,6 @@ export function loadConfig(env) {
     brainstormDebounceMs: Number(env.BRAINSTORM_DEBOUNCE_MS ?? 3000),
     brainstormIdleMs: Number(env.BRAINSTORM_IDLE_MINUTES ?? 10) * 60000,
     dataDir: env.DATA_DIR || "/data",
-    dashboardPassword: env.DASHBOARD_PASSWORD ?? "",
     // Where GitHub sends webhooks and screenshots are served. Optional: /setup detects it
     // and stores it with the App.
     publicUrl: env.PUBLIC_URL ? env.PUBLIC_URL.replace(/\/$/, "") : null,

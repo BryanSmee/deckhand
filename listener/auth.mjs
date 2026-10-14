@@ -1,0 +1,292 @@
+// Dashboard login: GitHub's user-to-server OAuth through the operator's App, for the
+// operator's allowed users only (ALLOWED_USERS).
+//
+//   GET  /auth/login     to GitHub's authorize page, with a state bound to this browser
+//   GET  /auth/callback  the code becomes a user token, used once to read the login, then
+//                        revoked; an allowed login gets a session cookie, others a refusal
+//   POST /auth/logout    clears the cookie
+//
+// The session is a signed cookie (login and expiry, HMAC with a key kept in the data volume),
+// so it survives a restart. The allowlist is checked again on every request: removing a user
+// from ALLOWED_USERS and restarting signs them out.
+import { createHmac, randomBytes, timingSafeEqual, createHash } from "node:crypto";
+import { chmodSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+
+export const SESSION_COOKIE = "deckhand_session";
+const STATE_COOKIE = "deckhand_oauth_state";
+export const SESSION_MS = 7 * 24 * 3600000;
+const STATE_MS = 10 * 60000;
+
+// The key that signs sessions: random, created once, owner-only.
+export function sessionKey(dir) {
+  const path = join(dir, "session.key");
+  try {
+    const key = readFileSync(path);
+    if (key.length >= 32) return key;
+  } catch {
+    // None yet.
+  }
+  const key = randomBytes(32);
+  writeFileSync(path, key, { mode: 0o600 });
+  chmodSync(path, 0o600);
+  return key;
+}
+
+export function cookies(req) {
+  const out = {};
+  for (const part of String(req.headers.cookie ?? "").split(";")) {
+    const at = part.indexOf("=");
+    if (at > 0) out[part.slice(0, at).trim()] = part.slice(at + 1).trim();
+  }
+  return out;
+}
+
+function same(a, b) {
+  const digest = (s) => createHash("sha256").update(String(s)).digest();
+  return timingSafeEqual(digest(a), digest(b));
+}
+
+function escape(text) {
+  return String(text).replace(
+    /[&<>"']/g,
+    (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c],
+  );
+}
+
+// A small page of its own, like /setup's: the dashboard itself needs a session.
+export function page(res, status, title, body, headers = {}) {
+  res.writeHead(status, {
+    "content-type": "text/html; charset=utf-8",
+    "cache-control": "no-store",
+    "referrer-policy": "no-referrer",
+    ...headers,
+  });
+  res.end(`<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>${escape(title)} · Deckhand</title>
+    <style>
+      :root { color-scheme: light dark; --accent: #c2410c; --muted: #78716c; }
+      body { font: 15px/1.5 system-ui, sans-serif; max-width: 30rem; margin: 3rem auto; padding: 0 1rem; }
+      .button { display: inline-block; margin-top: 1rem; padding: 0.6rem 1.2rem; font: inherit; border: 0; border-radius: 6px; background: var(--accent); color: #fff; cursor: pointer; text-decoration: none; }
+      .muted { color: var(--muted); }
+    </style>
+  </head>
+  <body>
+    <h1>${escape(title)}</h1>
+    ${body}
+  </body>
+</html>`);
+}
+
+export function createAuth({
+  config,
+  app, // () => the GitHub App, or null before /setup
+  publicUrl, // () => where GitHub sends the browser back
+  key, // signs session cookies (sessionKey())
+  fetch = globalThis.fetch,
+  now = Date.now,
+  random = () => randomBytes(16).toString("hex"),
+  log = () => {},
+}) {
+  const secure = () => publicUrl().startsWith("https:");
+
+  function cookie(name, value, maxAgeMs) {
+    return [
+      `${name}=${value}`,
+      "Path=/",
+      "HttpOnly",
+      "SameSite=Lax",
+      `Max-Age=${Math.floor(maxAgeMs / 1000)}`,
+      ...(secure() ? ["Secure"] : []),
+    ].join("; ");
+  }
+
+  function sign(payload) {
+    return createHmac("sha256", key).update(payload).digest("base64url");
+  }
+
+  function issue(login) {
+    const payload = Buffer.from(JSON.stringify({ login, exp: now() + SESSION_MS })).toString(
+      "base64url",
+    );
+    return `${payload}.${sign(payload)}`;
+  }
+
+  // The signed-in allowed login, or null.
+  function user(req) {
+    const value = cookies(req)[SESSION_COOKIE];
+    if (!value) return null;
+    const [payload, signature = ""] = value.split(".");
+    if (!payload || !same(signature, sign(payload))) return null;
+    let session;
+    try {
+      session = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
+    } catch {
+      return null;
+    }
+    const login = String(session.login ?? "").toLowerCase();
+    if (!(session.exp > now()) || !config.users.includes(login)) return null;
+    return login;
+  }
+
+  function login(res) {
+    const credentials = app()?.credentials;
+    if (!credentials?.client_id) {
+      return page(
+        res,
+        503,
+        "No GitHub App yet",
+        `<p>Sign-in goes through the listener's GitHub App: create it first with the setup link
+from the listener's logs.</p>`,
+      );
+    }
+    const state = random();
+    const target = new URL(`${config.githubUrl}/login/oauth/authorize`);
+    target.searchParams.set("client_id", credentials.client_id);
+    target.searchParams.set("redirect_uri", `${publicUrl()}/auth/callback`);
+    target.searchParams.set("state", state);
+    res.writeHead(302, {
+      location: target.href,
+      "set-cookie": cookie(STATE_COOKIE, state, STATE_MS),
+      "cache-control": "no-store",
+    });
+    res.end();
+  }
+
+  // GitHub's answer as JSON, or null (logged).
+  async function json(res, what) {
+    if (res.ok) return res.json();
+    log(`Login: ${what}: ${res.status} ${await res.text()}`);
+    return null;
+  }
+
+  async function callback(req, res, url) {
+    const credentials = app()?.credentials;
+    const state = url.searchParams.get("state") ?? "";
+    const code = url.searchParams.get("code") ?? "";
+    const expected = cookies(req)[STATE_COOKIE] ?? "";
+    const clear = cookie(STATE_COOKIE, "", 0);
+    if (!credentials?.client_secret || !expected || !same(state, expected) || !code) {
+      return page(
+        res,
+        400,
+        "Sign-in expired",
+        `<p><a class="button" href="/auth/login">Sign in again</a></p>`,
+        { "set-cookie": clear },
+      );
+    }
+    const exchange = await fetch(`${config.githubUrl}/login/oauth/access_token`, {
+      method: "POST",
+      headers: {
+        accept: "application/json",
+        "content-type": "application/json",
+        "user-agent": "deckhand",
+      },
+      body: JSON.stringify({
+        client_id: credentials.client_id,
+        client_secret: credentials.client_secret,
+        code,
+        redirect_uri: `${publicUrl()}/auth/callback`,
+      }),
+    });
+    const grant = await json(exchange, "code exchange");
+    if (!grant?.access_token) {
+      if (grant) log(`Login: code exchange: ${grant.error ?? "no token"}`);
+      return page(
+        res,
+        502,
+        "GitHub refused the sign-in",
+        `<p><a class="button" href="/auth/login">Try again</a></p>`,
+        { "set-cookie": clear },
+      );
+    }
+    const me = await json(
+      await fetch(`${config.githubApi}/user`, {
+        headers: {
+          authorization: `Bearer ${grant.access_token}`,
+          accept: "application/vnd.github+json",
+          "user-agent": "deckhand",
+        },
+      }),
+      "user",
+    );
+    revoke(credentials, grant.access_token);
+    if (!me?.login) {
+      return page(res, 502, "GitHub didn't say who you are", `<p>See the listener's logs.</p>`, {
+        "set-cookie": clear,
+      });
+    }
+    const login = me.login.toLowerCase();
+    if (!config.users.includes(login)) {
+      log(`Login: refused ${me.login}: not in ALLOWED_USERS`);
+      return page(
+        res,
+        403,
+        "Not allowed",
+        `<p>You are signed in on GitHub as <strong>${escape(me.login)}</strong>, who isn't one of
+this Deckhand's allowed users.</p>
+<p class="muted">Ask its operator to add you to <code>ALLOWED_USERS</code>, or sign out of
+GitHub and sign in here with another account.</p>`,
+        { "set-cookie": clear },
+      );
+    }
+    log(`Login: ${login} signed in to the dashboard`);
+    res.writeHead(302, {
+      location: "/",
+      "set-cookie": [clear, cookie(SESSION_COOKIE, issue(login), SESSION_MS)],
+      "cache-control": "no-store",
+    });
+    res.end();
+  }
+
+  // The token only served to read the login: nothing keeps it, GitHub forgets it.
+  function revoke(credentials, token) {
+    const basic = Buffer.from(`${credentials.client_id}:${credentials.client_secret}`).toString(
+      "base64",
+    );
+    fetch(`${config.githubApi}/applications/${credentials.client_id}/token`, {
+      method: "DELETE",
+      headers: {
+        authorization: `Basic ${basic}`,
+        accept: "application/vnd.github+json",
+        "content-type": "application/json",
+        "user-agent": "deckhand",
+      },
+      body: JSON.stringify({ access_token: token }),
+    }).catch((error) => log(`Login: revoking the user token: ${error}`));
+  }
+
+  function logout(res) {
+    res.writeHead(303, {
+      location: "/",
+      "set-cookie": cookie(SESSION_COOKIE, "", 0),
+      "cache-control": "no-store",
+    });
+    res.end();
+  }
+
+  // Handles /auth/*; false for any other path.
+  function handle(req, res) {
+    const url = new URL(req.url, "http://localhost");
+    if (!url.pathname.startsWith("/auth/")) return false;
+    const run = async () => {
+      if (req.method === "GET" && url.pathname === "/auth/login") return login(res);
+      if (req.method === "GET" && url.pathname === "/auth/callback") {
+        return callback(req, res, url);
+      }
+      if (req.method === "POST" && url.pathname === "/auth/logout") return logout(res);
+      res.writeHead(404).end();
+    };
+    run().catch((error) => {
+      log(`Login: ${error.stack ?? error}`);
+      if (!res.headersSent) page(res, 500, "Sign-in failed", `<p>See the listener's logs.</p>`);
+    });
+    return true;
+  }
+
+  return { handle, user, issue };
+}

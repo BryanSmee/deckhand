@@ -64,6 +64,38 @@ Each repository can add a `.deckhand.yaml` on its default branch: its own users 
 `ALLOWED_USERS`), trigger lines, models, parallel cap, setup command, instructions,
 Dockerfile, caches and preview hook. See [Per-repo config](repo-config.md).
 
+## 4. The dashboard
+
+Open the listener's public address (`/`) and sign in with GitHub: the App's sign-in
+(user-to-server OAuth) tells the listener who you are, and only `ALLOWED_USERS` get in; anyone
+else sees who they are signed in as and a refusal. The token GitHub returns is only used to
+read your login, then revoked; the session is a signed cookie valid for 7 days, checked
+against `ALLOWED_USERS` on every request (the key is `/data/session.key`). `/status` also
+answers calls from inside the container (`docker compose exec listener …`) without a session.
+
+Apps created by `/setup` before the dashboard had sign-in have no callback URL: on the App's
+page on GitHub (Settings → Developer settings → GitHub Apps → your App → General), add
+`<public URL>/auth/callback` under **Callback URL** and save. `DASHBOARD_PASSWORD` is no
+longer used.
+
+The dashboard lists every issue, pull request and discussion Deckhand worked on, grouped by project (the
+repository's owner) and repository, with filters by repository and state. Each shows its
+listener's state:
+
+| State             | What                                                           |
+| ----------------- | -------------------------------------------------------------- |
+| `queued`          | comments wait for a run (a free slot, or the running one)      |
+| `building image`  | a run waits for the repository's image to build                |
+| `working`         | a run is in progress                                           |
+| `stopping`        | a brainstorm is wrapping up (`/stop`)                          |
+| `needs input`     | the last run stopped to ask; the issue has the label           |
+| `brainstorm`      | a brainstorm waits for your next comment                       |
+| `idle brainstorm` | no comment for a while; the next one restores the session      |
+| `done`, `error`   | how the last run ended (`interrupted`: the listener restarted) |
+
+Pick one to see its latest run's log live (and the next runs as they start), or an earlier
+run. On a phone, the list and the log take the whole screen in turn.
+
 ## Settings
 
 All in `.env`, read by `compose.yaml`:
@@ -74,7 +106,6 @@ All in `.env`, read by `compose.yaml`:
 | `ALLOWED_REPOS`                                                                         | all where the App is installed | narrows the repos (`owner/repo`, comma-separated)                |
 | `CLAUDE_CODE_OAUTH_TOKEN` / `ANTHROPIC_API_KEY`                                         |                                | Claude credential passed to each sandbox                         |
 | `PUBLIC_URL`                                                                            | stored by `/setup`             | the listener's public address                                    |
-| `DASHBOARD_PASSWORD`                                                                    | empty: no dashboard            | password of the dashboard at `/` (any user name)                 |
 | `CLAUDE_CODE_VERSION`                                                                   | `2.1.300`                      | Claude Code version the sandboxes install on first use           |
 | `SANDBOX_MODEL`, `SANDBOX_EFFORT`                                                       | `opus`, `medium`               | defaults; a comment's `/model` and `/effort` lines override them |
 | `MAX_PARALLEL`                                                                          | `2`                            | sandboxes running at once (a repo's `max_parallel` within it)    |
