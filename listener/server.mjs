@@ -47,8 +47,9 @@
 // limited to their repo, with a secret that dies with the run.
 //
 // GET / is a dashboard of every repo's issues and pull requests, their state and live logs,
-// for ALLOWED_USERS signed in with GitHub through the App (auth.mjs, board.mjs); GET /status
-// says what is going on, to them and to calls from inside the container.
+// for ALLOWED_USERS signed in with GitHub through the App (auth.mjs, board.mjs), built from
+// ../dashboard/ (static.mjs, titles.mjs); GET /status says what is going on, to them and to
+// calls from inside the container.
 //
 // The listener can restart at any time (an update is `docker compose pull && up -d`).
 // Sandboxes run detached, through the runner (runner/docker.mjs): on SIGTERM the listener
@@ -126,6 +127,8 @@ import {
 } from "./repo-config.mjs";
 import { createDockerRunner } from "./runner/docker.mjs";
 import { createSetup } from "./setup.mjs";
+import { serveAsset } from "./static.mjs";
+import { createTitles } from "./titles.mjs";
 
 const env = process.env;
 // The release (a git tag) the images were built from; "dev" from source.
@@ -221,6 +224,26 @@ async function graphql(repo, query, variables) {
   }
   return answer.data;
 }
+
+// The dashboard's titles: from webhooks, else fetched once (titles.mjs).
+const titles = createTitles({
+  path: join(config.dataDir, "titles.json"),
+  log,
+  fetchTitle: async (repo, kind, number) => {
+    if (kind === "discussion") {
+      const [owner, name] = repo.split("/");
+      const data = await graphql(
+        repo,
+        "query($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) { discussion(number: $number) { title } } }",
+        { owner, name, number },
+      );
+      return data.repository?.discussion?.title ?? null;
+    }
+    // Pull requests are issues too, for their title.
+    const res = await github(repo, "GET", `/repos/${repo}/issues/${number}`, undefined, [404]);
+    return res.ok ? ((await res.json()).title ?? null) : null;
+  },
+});
 
 // GitHub's reactions have no ✅: 🚀 reads as "shipped" and isn't mistaken for a manual 👍.
 // A wrap-up ("/stop") only loses its 👀.
@@ -411,6 +434,7 @@ async function accept(item) {
   const key = `${item.repo}#${item.id}`;
   item.mode = await modeOf(item, key, name);
   if (!item.mode) return;
+  titles.set(key, item.title);
   let task = tasks.get(key);
   if (!task) {
     task = {
@@ -890,6 +914,7 @@ async function run(task) {
     // work, brainstorm, idea, bug, discussion or one of the repo's own modes.
     taskMode: mode === "stop" ? "brainstorm" : mode,
     repo: task.repo,
+    title: titles.get(key),
     replyTo,
     mode: null,
     startedAt: Date.now(),
@@ -1268,6 +1293,7 @@ async function finish(task, error) {
     }
     log(`${key}: done (${status})`);
     record.status = status;
+    record.summary = summaryOf(result);
   } catch (error) {
     log(`${key}: ${error.stack ?? error}`);
     record.status = "error";
@@ -1527,6 +1553,8 @@ async function reattach(restored) {
 // --- Runs and their logs, for the dashboard ------------------------------------------------
 
 const runs = loadRuns(); // newest first
+// Logs that have their title (newest first: the latest wins).
+titles.seed(runs.map((r) => [r.key, r.title]));
 
 // Rebuilds the list from the log files, so the dashboard survives a listener restart.
 function loadRuns() {
@@ -1547,14 +1575,28 @@ function loadRuns() {
         replyTo: meta.replyTo ?? null,
         mode: meta.mode ?? null,
         taskMode: meta.taskMode ?? null,
+        model: meta.model ?? null,
+        effort: meta.effort ?? null,
         startedAt: meta.startedAt ?? Number(id.match(/-(\d+)$/)?.[1] ?? 0),
         finishedAt: statSync(logPath).mtimeMs,
         // Unfinished and not ours: the listener restarted during the run.
         status: result ? outcome(result) : "interrupted",
+        summary: summaryOf(result),
         logPath,
       };
     })
     .sort((a, b) => b.startedAt - a.startedAt);
+}
+
+// The first line of a run's reply, for the dashboard: what the run ended with.
+function summaryOf(result) {
+  const text = (result?.result ?? "").replace(NEEDS_INPUT, "");
+  const line = text
+    .split("\n")
+    .map((l) => l.replace(/^[#>*\s-]+/, "").trim())
+    .find(Boolean);
+  if (!line) return null;
+  return line.length > 200 ? `${line.slice(0, 199)}…` : line;
 }
 
 function parse(line) {
@@ -1667,12 +1709,13 @@ function state(user) {
       replyTo: t.pending.at(-1).replyTo,
     }));
   const talks = [...brainstorms].map(([key, { timer, ...b }]) => ({ key, ...b }));
+  const shown = board({ runs, queued, brainstorms: talks }).slice(0, 200);
+  // Titles the listener doesn't have yet show on a later poll.
+  if (app) titles.fill(shown.map((t) => t.key));
   // `now`: the dashboard compares run start times with the server clock, not its own.
   return {
     user,
-    tasks: board({ runs, queued, brainstorms: talks })
-      .slice(0, 200)
-      .map((t) => ({ ...t, runs: t.runs.map(publicRun) })),
+    tasks: shown.map((t) => ({ ...t, title: titles.get(t.key), runs: t.runs.map(publicRun) })),
     states: STATES,
     running,
     queued: queued.length,
@@ -1722,7 +1765,8 @@ function stream(req, res, run) {
   pump();
 }
 
-const dashboard = readFileSync(new URL("./dashboard.html", import.meta.url), "utf8");
+// The dashboard's build (../dashboard/, `npm run build`), copied there by the image.
+const dashboardDir = env.DASHBOARD_DIR || new URL("../dashboard/dist", import.meta.url).pathname;
 
 // Health checks and scripts call from inside the container (docker compose exec).
 function local(req) {
@@ -1757,10 +1801,13 @@ function serveDashboard(req, res) {
 <p><a class="button" href="/auth/login">Sign in with GitHub</a></p>`,
     );
   }
+  if (serveAsset(res, dashboardDir, url.pathname)) return;
   res.setHeader("cache-control", "no-store");
   if (url.pathname === "/") {
-    res.setHeader("content-type", "text/html; charset=utf-8");
-    return res.end(dashboard);
+    res.setHeader("content-type", "text/plain; charset=utf-8");
+    return res.writeHead(503).end(
+      `Deckhand listener: the dashboard isn't built (${dashboardDir}): run npm run build in dashboard/.\n`,
+    );
   }
   if (url.pathname === "/api/state") return sendJson(res, state(user));
   const match = /^\/api\/runs\/([\w.-]+)\/stream$/.exec(url.pathname);

@@ -25,6 +25,7 @@ function comment(body, { login = "alice", type = "User", installation = 7, pr } 
     repository: { full_name: "Org/Repo", default_branch: "main" },
     issue: {
       number: 12,
+      title: "Fix the queue",
       body: pr,
       ...(pr !== undefined && { pull_request: {} }),
     },
@@ -41,6 +42,7 @@ test("issue comments: trigger, text and reply target", () => {
       id: "12",
       kind: "issue",
       number: 12,
+      title: "Fix the queue",
       trigger: "work",
       modeLine: null,
       text: "Use X.",
@@ -71,8 +73,11 @@ test("pull request comments go to the linked issue's session", () => {
   const linked = workItem(config, "issue_comment", comment("fix the typo", { pr: "Closes #3" }));
   assert.equal(linked.id, "3");
   assert.equal(linked.replyTo, 12);
+  // The pull request's title isn't the issue's: the dashboard fetches that one.
+  assert.equal(linked.title, null);
   const alone = workItem(config, "issue_comment", comment("fix it", { pr: "No issue" }));
   assert.equal(alone.id, "pr-12");
+  assert.equal(alone.title, "Fix the queue");
   const brainstorm = comment("Deckhand\n/mode brainstorm", { pr: "" });
   assert.equal(workItem(config, "issue_comment", brainstorm), null);
 });
@@ -134,6 +139,7 @@ test("discussions: only in the repo's category, only from allowed users", () => 
       id: "discussion-8",
       kind: "discussion",
       number: 8,
+      title: "How do runs restart?",
       trigger: "discussion",
       text: undefined,
       replyTo: 8,
