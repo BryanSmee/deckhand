@@ -17,9 +17,13 @@ A sandbox only gets Docker named volumes:
 | `deckhand-claude-code`                            | Claude Code, installed by the listener       |
 | `deckhand-cache-<owner>-<repo>-<path>-…`          | the repo's `caches`, its own                 |
 | `deckhand-screenshots`, **its run's folder only** | screenshots, served under `/shots/<folder>/` |
+| `deckhand-runs`, **its run's folder, read-only**  | its inbox: comments that arrive mid-run      |
 
 Each run mounts only its own folder of the screenshots volume (`volume-subpath`, Docker
 Engine 26 or later), named with 24 random hex digits: it can't list or read another run's.
+Its inbox folder is mounted the same way, read-only: the listener writes the comments
+delivered to the run there (a file rather than the container's stdin, so a run outlives a
+listener restart).
 
 No host path is ever mounted by default: no `~/.ssh`, `~/.gitconfig`, Docker socket or
 source tree.
@@ -104,7 +108,7 @@ configure, see [Per-repo config](repo-config.md#preview-hook)). No sandbox gets 
 **Optional: a socket proxy.** The listener only uses the docker CLI, so it can talk to a
 socket proxy (for example `tecnativa/docker-socket-proxy`) through `DOCKER_HOST` instead of
 the socket itself. It needs: `CONTAINERS`, `IMAGES`, `BUILD`, `VOLUMES`, `NETWORKS`, `POST`
-and `DELETE` (`docker run`, `inspect`, `wait`, `cp`, `build`, `image ls/rm`,
+and `DELETE` (`docker run`, `ps`, `logs`, `inspect`, `wait`, `rm`, `cp`, `build`, `image ls/rm`,
 `volume create/inspect/rm`, `network inspect`). Preview hooks still need the real socket
 (`DOCKER_SOCKET`): leave `preview` out of your repos' configs if you go this way.
 

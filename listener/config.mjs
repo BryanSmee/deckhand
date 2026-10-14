@@ -78,6 +78,8 @@ export function loadConfig(env) {
     image: env.SANDBOX_IMAGE || `${prefix}-sandbox`,
     network: env.SANDBOX_NETWORK || `${prefix}-sandboxes`,
     shotsVolume: env.SHOTS_VOLUME || `${prefix}-screenshots`,
+    // Each run's inbox (runner/docker.mjs), mounted by the listener at <dataDir>/runs.
+    runsVolume: env.RUNS_VOLUME || `${prefix}-runs`,
     // Claude Code is not in the image: the first run installs this version into the volume.
     claudeCodeVolume: env.CLAUDE_CODE_VOLUME || `${prefix}-claude-code`,
     claudeCodeVersion: env.CLAUDE_CODE_VERSION || "2.1.300",

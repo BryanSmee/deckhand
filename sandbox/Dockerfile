@@ -60,6 +60,7 @@ COPY sandbox/pre-push /usr/local/share/git-hooks/pre-push
 COPY sandbox/progress.jq /usr/local/share/deckhand-progress.jq
 COPY prompts/sandbox.md /usr/local/share/deckhand-sandbox.md
 COPY sandbox/entrypoint.sh /usr/local/bin/deckhand-entrypoint
+COPY sandbox/deckhand-inbox /usr/local/bin/deckhand-inbox
 COPY sandbox/install-claude-code /usr/local/bin/deckhand-install-claude-code
 COPY sandbox/draft-pr.sh /usr/local/bin/sandbox-draft-pr
 # Its hooks: managed settings, because ~/.claude is a per-issue volume that would keep an

@@ -17,8 +17,8 @@ export function createBroker({
   const runs = new Map(); // hash(secret) → { repo, extra }
 
   // `extra`: permissions this run needs beyond the sandbox's usual ones (discussions).
-  function register(repo, extra) {
-    const secret = random();
+  // `secret`: a run's own again, when a restarted listener picks it up.
+  function register(repo, extra, secret = random()) {
     runs.set(hash(secret), { repo: repo.toLowerCase(), extra });
     return secret;
   }

@@ -3,10 +3,12 @@
 import { spawn } from "node:child_process";
 
 // Resolves with { code, out, err } (trimmed). `input`: written to stdin, then closed.
-// `onData`: stdout and stderr chunks as they come (build logs), not kept in out/err.
-export function docker(args, { input, onData } = {}) {
+// `onData`: stdout and stderr chunks as they come (build logs), not kept in out/err. `env`:
+// the CLI's environment, for `-e NAME` values that must not show in `ps`.
+export function docker(args, { input, onData, env } = {}) {
   return new Promise((resolve) => {
     const child = spawn("docker", args, {
+      env,
       stdio: [input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
     });
     let out = "";
