@@ -425,7 +425,11 @@
       };
       const icons = { brainstorm: "💬 ", discussion: "🗨️ ", idea: "💡 ", bug: "🐞 " };
       const names = { pr: "PR", discussion: "Discussion" };
-      const label = (t) => `${icons[t.kind] ?? ""}${names[t.kind] ?? "Issue"} #${t.number}`;
+      // The repo's own modes are named; the kind already says the others.
+      const plain = ["work", "brainstorm", "idea", "bug", "discussion"];
+      const own = (mode) => (mode && !plain.includes(mode) ? ` · ${mode}` : "");
+      const label = (t) =>
+        `${icons[t.kind] ?? ""}${names[t.kind] ?? "Issue"} #${t.number}${own(t.mode)}`;
       const link = (t) =>
         t.repo && t.replyTo
           ? `https://github.com/${t.repo}/${t.kind === "discussion" ? "discussions" : "issues"}/${t.replyTo}`
@@ -636,7 +640,7 @@
                     title: i === 0 ? "Latest: follows the next runs" : x.id,
                     onclick: () => select(t.key, i === 0 ? null : x.id),
                   },
-                  `${dot[x.status] ?? "✕"} ${x.mode ?? "run"} · ${x.status === "running" ? duration(x) : ago(x.startedAt)}`,
+                  `${dot[x.status] ?? "✕"}${own(x.taskMode).replace(" ·", "")} ${x.mode ?? "run"} · ${x.status === "running" ? duration(x) : ago(x.startedAt)}`,
                 ),
               )
             : []),

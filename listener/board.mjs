@@ -48,6 +48,8 @@ export function board({ runs, queued, brainstorms }) {
         // "#12", "#pr-12", "#discussion-8"
         number: Number(/(\d+)$/.exec(key)?.[1]) || null,
         kind: null,
+        // work, brainstorm, idea, bug, discussion or one of the repo's own modes.
+        mode: null,
         replyTo: null,
         state: null,
         since: 0,
@@ -70,6 +72,7 @@ export function board({ runs, queued, brainstorms }) {
     const q = waiting.get(t.key);
     const b = talks.get(t.key);
     t.kind = q?.kind ?? last?.kind ?? (b ? "brainstorm" : null);
+    t.mode = (q?.mode === "stop" ? "brainstorm" : q?.mode) ?? last?.taskMode ?? null;
     t.replyTo = q?.replyTo ?? last?.replyTo ?? t.number;
     t.since = Math.max(last?.startedAt ?? 0, b?.deadline ?? 0);
     // A running run first: comments for a follow-up wait behind it anyway.
@@ -80,6 +83,7 @@ export function board({ runs, queued, brainstorms }) {
     else t.state = last ? runState(last) : "done";
     if (b && b.status !== "stopped") {
       t.kind = "brainstorm";
+      t.mode = "brainstorm";
       t.deadline = b.deadline;
     }
   }

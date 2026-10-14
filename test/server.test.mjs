@@ -784,6 +784,115 @@ test("a discussion in the repo's category is answered in it, with a discussions 
   assert.ok(args.includes("deckhand.task=org/repo#discussion-8"));
 });
 
+const MODES = `setup: npm ci
+model: opus
+hosts: [registry.npmjs.org]
+modes:
+  review:
+    instructions: .deckhand/review.md
+    light: true
+    model: sonnet
+    effort: high
+`;
+
+test("/mode review: the repo's light mode, its instructions and model, the repo's grants", async (t) => {
+  const { dir, github, listener, send } = await listen(
+    t,
+    { ".deckhand.yaml": MODES, ".deckhand/review.md": "Read the diff and list the risks." },
+    (dir) => {
+      writeFileSync(join(dir, "grants.yaml"), "org/repo:\n  hosts: [pypi.org]\n");
+      return {};
+    },
+  );
+  await send(comment("alice", "Claude work on this\n/mode review\nMind the tests."));
+  const reply = await github.waitFor(
+    (r) => r.method === "POST" && r.path === "/repos/org/repo/issues/12/comments",
+  );
+  assert.match(JSON.parse(reply.body).body, /review mode: replies go on in it, `\/mode work`/);
+  const runEnv = readFileSync(join(dir, "run-env"), "utf8");
+  assert.match(runEnv, /^TASK_MODE=review$/m);
+  assert.match(runEnv, /^SANDBOX_LIGHT=1$/m);
+  assert.match(runEnv, /^TASK_SESSION=$/m);
+  assert.match(runEnv, /^SANDBOX_MODEL=sonnet$/m);
+  assert.match(runEnv, /^SANDBOX_EFFORT=high$/m);
+  // Like a brainstorm: no branch, no setup.
+  assert.match(runEnv, /^TASK_ISSUE=$/m);
+  assert.match(runEnv, /^SANDBOX_SETUP=$/m);
+  assert.match(runEnv, /^TASK_PROMPT=You are in the "review" mode of this repository/m);
+  assert.match(runEnv, /This mode only comments/);
+  assert.match(runEnv, /Read the diff and list the risks\./);
+  assert.match(runEnv, /^TASK_MESSAGE=Mind the tests\.$/m);
+  // Comments only: its token reads.
+  const mint = github.requests.find((r) => r.body.includes("repositories"));
+  assert.deepEqual(JSON.parse(mint.body).permissions, {
+    contents: "read",
+    issues: "read",
+    pull_requests: "read",
+    metadata: "read",
+    actions: "read",
+  });
+  // The same hosts as any run of the repo: the operator's, its grant's and its config's.
+  assert.deepEqual(allowedHosts(egressAnswers(dir)), [
+    "api.anthropic.com",
+    "github.com",
+    "objects.githubusercontent.com",
+    "registry.npmjs.org",
+    "pypi.org",
+  ]);
+  // The run's record names the mode.
+  const [log] = readdirSync(join(dir, "logs")).filter((f) => f.endsWith(".log"));
+  const meta = JSON.parse(readFileSync(join(dir, "logs", log), "utf8").split("\n")[0]);
+  assert.equal(meta.taskMode, "review");
+  assert.equal(meta.kind, "issue");
+  await listener.until("done (ok)");
+
+  // A comment without a trigger line goes on in the mode; "/mode work" moves to work.
+  await send(followUp(100, "And the docs?"));
+  await until(() => replies(github).length === 2, "the second reply");
+  assert.match(readFileSync(join(dir, "run-env"), "utf8"), /^TASK_MODE=review$/m);
+  await send(followUp(101, "/mode work\nFix them."));
+  await until(() => replies(github).length === 3, "the third reply");
+  const work = readFileSync(join(dir, "run-env"), "utf8");
+  assert.match(work, /^TASK_MODE=work$/m);
+  assert.match(work, /^SANDBOX_LIGHT=$/m);
+  assert.match(work, /^SANDBOX_SETUP=npm ci$/m);
+  assert.match(work, /^SANDBOX_MODEL=opus$/m);
+  assert.match(work, /^TASK_ISSUE=12$/m);
+  const mints = github.requests.filter((r) => r.body.includes("repositories"));
+  assert.equal(JSON.parse(mints.at(-1).body).permissions.contents, "write");
+  assert.deepEqual(JSON.parse(readFileSync(join(dir, "modes.json"), "utf8")), {});
+});
+
+test("/mode with a name the repo doesn't have: a reply listing the modes, no run", async (t) => {
+  const { dir, github, send } = await listen(t, {
+    ".deckhand.yaml": MODES,
+    ".deckhand/review.md": "Review.",
+  });
+  await send(comment("alice", "Claude work on this\n/mode reveiw"));
+  const reply = await github.waitFor(
+    (r) => r.method === "POST" && r.path === "/repos/org/repo/issues/12/comments",
+  );
+  assert.match(
+    JSON.parse(reply.body).body,
+    /^Unknown mode `reveiw`\. The modes here: `work`, `brainstorm`, `review` \(comments only\)\./,
+  );
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  assert.equal(exists(join(dir, "run-args")), null);
+});
+
+test("a mode whose instructions file is missing: the reply says so", async (t) => {
+  const { dir, github, send } = await listen(t, { ".deckhand.yaml": MODES });
+  await send(comment("alice", "Claude work on this\n/mode review"));
+  const reply = await github.waitFor(
+    (r) => r.method === "POST" && r.path === "/repos/org/repo/issues/12/comments",
+  );
+  assert.match(
+    JSON.parse(reply.body).body,
+    /the `review` mode's instructions, `\.deckhand\/review\.md`, are not on `trunk`/,
+  );
+  assert.equal(exists(join(dir, "run-args")), null);
+});
+
 test("the dashboard and its logs are for allowed users signed in with GitHub", async (t) => {
   // GitHub's sign-in pages are the fake GitHub too.
   const { github, port, send, listener } = await listen(t, {}, (dir, github) => ({

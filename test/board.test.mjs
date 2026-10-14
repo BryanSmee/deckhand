@@ -100,3 +100,23 @@ test("pull requests and discussions keep their number and kind", () => {
     ],
   );
 });
+
+test("each entry names its mode, the repo's own ones included", () => {
+  const tasks = board({
+    runs: [
+      run("acme/api#1", 30, { taskMode: "review" }),
+      run("acme/api#2", 20, { taskMode: "work" }),
+      run("acme/api#3", 10, { taskMode: "review" }),
+    ],
+    queued: [{ key: "acme/api#3", kind: "issue", mode: "triage", repo: "acme/api", replyTo: 3 }],
+    brainstorms: [{ key: "acme/api#4", repo: "acme/api", number: 4, status: "active" }],
+  });
+  const modes = Object.fromEntries(tasks.map((t) => [t.key, t.mode]));
+  // A queued comment says what the next run will be.
+  assert.deepEqual(modes, {
+    "acme/api#1": "review",
+    "acme/api#2": "work",
+    "acme/api#3": "triage",
+    "acme/api#4": "brainstorm",
+  });
+});

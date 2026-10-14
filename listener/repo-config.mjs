@@ -1,7 +1,8 @@
 // Per-repo settings: a repo's .deckhand.yaml, always read from its default branch so a pull
 // request can't change its own permissions. It can only narrow the operator's settings
 // (users, parallel runs), and brings what is the project's own: trigger lines, models,
-// setup command, extra instructions, Dockerfile, caches, preview hook. Format and example:
+// setup command, extra instructions, its own modes, Dockerfile, caches, preview hook. Format
+// and example:
 // ../docs/repo-config.md.
 import { createHash } from "node:crypto";
 import { posix } from "node:path";
@@ -14,6 +15,12 @@ export const CONFIG_FILE = ".deckhand.yaml";
 
 // What the sandbox mounts itself: a cache can't take these over.
 export const RESERVED = ["/workspace", "/home/node/.claude", "/opt/claude-code", "/screenshots"];
+
+// The listener's own modes: a repo's `modes:` can't take these names. Work and brainstorm
+// are the ones "/mode" picks; the others come from the inbox, discussions and "/stop".
+export const BUILTIN_MODES = ["work", "brainstorm"];
+const RESERVED_MODES = [...BUILTIN_MODES, "stop", "idea", "bug", "discussion"];
+const MODE_KEYS = ["instructions", "light", "session", "model", "effort"];
 
 // What a repo gets without a config file: the operator's settings as they are.
 export function defaultSettings(config) {
@@ -35,6 +42,7 @@ export function defaultSettings(config) {
     hosts: [],
     mounts: [],
     inbox: {},
+    modes: {},
     preview: null,
   };
 }
@@ -204,6 +212,13 @@ export function parseRepoConfig(text, config) {
           else fail(`inbox.${name}`, "expected an issue number");
         }
         break;
+      case "modes":
+        if (!isMap(value)) {
+          fail(key, "expected modes by name, each with its instructions");
+          break;
+        }
+        for (const [name, mode] of Object.entries(value)) parseMode(name, mode, settings, fail);
+        break;
       case "preview": {
         const preview = isMap(value) ? value : { command: value };
         const command = string("preview.command", preview.command);
@@ -228,6 +243,77 @@ export function parseRepoConfig(text, config) {
     }
   }
   return { settings, errors, warnings };
+}
+
+// One of `modes:`, into settings.modes. Every key is checked: a mistyped one would otherwise
+// change what the mode does without anyone noticing. Nothing here touches the repo's grants.
+function parseMode(name, mode, settings, fail) {
+  const where = `modes.${name}`;
+  const id = name.toLowerCase();
+  if (BUILTIN_MODES.includes(id)) {
+    const keys = id === "work" ? "model and effort" : "brainstorm_model and brainstorm_effort";
+    return fail(where, `${id} is built in: set its model with ${keys} instead`);
+  }
+  if (RESERVED_MODES.includes(id)) return fail(where, `${id} is reserved by Deckhand`);
+  if (!/^[a-z][a-z0-9_-]{0,31}$/.test(id)) {
+    return fail(where, "expected a name of letters, digits, - and _ (32 at most)");
+  }
+  if (!isMap(mode)) return fail(where, "expected instructions, light, session, model, effort");
+  const before = settings.modes[id];
+  const own = { instructions: null, light: false, session: "issue", model: null, effort: null };
+  let ok = true;
+  const bad = (key, what) => {
+    ok = false;
+    fail(`${where}.${key}`, what);
+  };
+  for (const [key, value] of Object.entries(mode)) {
+    if (!MODE_KEYS.includes(key)) {
+      bad(key, `unknown key (expected ${MODE_KEYS.join(", ")})`);
+    } else if (key === "instructions") {
+      own.instructions = repoPath(value);
+      if (!own.instructions) bad(key, "expected a path in the repository (relative, no ..)");
+    } else if (key === "light") {
+      if (typeof value === "boolean") own.light = value;
+      else bad(key, "expected true or false");
+    } else if (key === "session") {
+      if (["issue", "fresh"].includes(value)) own.session = value;
+      else bad(key, "expected issue or fresh");
+    } else if (key === "model") {
+      if (typeof value === "string" && /^[\w.[\]-]+$/.test(value)) own.model = value;
+      else bad(key, "expected a model name (opus, sonnet, claude-…)");
+    } else if (EFFORTS.includes(String(value).toLowerCase())) {
+      own.effort = String(value).toLowerCase();
+    } else bad(key, `expected one of ${EFFORTS.join(", ")}`);
+  }
+  if (!("instructions" in mode)) bad("instructions", "missing: a mode is its instructions");
+  if (before) return fail(where, "defined twice (names are not case-sensitive)");
+  if (ok) settings.modes[id] = own;
+}
+
+// What a run in the repo's own mode `name` gets, or null when the repo has no such mode
+// (work, brainstorm and the inbox are the listener's): light (no branch, no setup, a read-only
+// token: it can only comment), fresh (a new session each time, the issue's kept as it is),
+// its instructions file, and its model and effort, by default those of work or brainstorms.
+// No hosts, mounts or limits: those are the repo's grants, the same in every mode.
+export function customMode(settings, name) {
+  const own = settings?.modes?.[name];
+  if (!own) return null;
+  const [model, effort] = own.light
+    ? [settings.brainstormModel, settings.brainstormEffort]
+    : [settings.model, settings.effort];
+  return {
+    name,
+    light: own.light,
+    fresh: own.session === "fresh",
+    instructions: own.instructions,
+    model: own.model ?? model,
+    effort: own.effort ?? effort,
+  };
+}
+
+// The modes "/mode" can pick in a repo, for the reply to an unknown one.
+export function modeNames(settings) {
+  return [...BUILTIN_MODES, ...Object.keys(settings?.modes ?? {})];
 }
 
 function isMap(value) {
