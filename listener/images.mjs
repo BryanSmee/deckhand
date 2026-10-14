@@ -1,0 +1,200 @@
+// What a run starts from: the base image (../sandbox/Dockerfile, harness only) or the
+// repo's own image built FROM it; Claude Code, installed once per version into a shared
+// volume by a container of its own; and the repo's cache volumes.
+//
+// A repo image is built from the default branch (or, with allow_branch_docker_images, from
+// a pull request's own branch, never a fork's) and tagged with a hash of the base image's id
+// and the Dockerfile's blob: a new base or a changed Dockerfile builds a new tag, the same
+// ones reuse it. Old tags are pruned, keeping the most recent few.
+import { createHash } from "node:crypto";
+import { rmSync } from "node:fs";
+import { join } from "node:path";
+import { cacheVolume, repoImage } from "./repo-config.mjs";
+
+// Tags kept per repo image: the default branch's and those of a few branches in flight.
+export const KEEP_TAGS = 3;
+
+// Which ref a run's image is built from: the default branch, or a pull request's head when
+// the repo allows branch images and the pull request's branch lives in the repo itself.
+export function imageRef(settings, repo, base, pr) {
+  const own = pr?.head?.repo?.full_name?.toLowerCase() === repo.toLowerCase();
+  if (settings.allowBranchDockerImages && settings.dockerfile && pr?.head?.sha && own) {
+    return { ref: pr.head.sha, branch: true };
+  }
+  return { ref: base, branch: false };
+}
+
+export function imageTag(config, repo, baseId, dockerfile, blob) {
+  const hash = createHash("sha256").update([baseId, dockerfile, blob].join("\0")).digest("hex");
+  return `${repoImage(config, repo)}:${hash.slice(0, 16)}`;
+}
+
+export function createImages({
+  config,
+  docker, // docker.mjs
+  readFile, // (repo, path, ref) → { sha, text } or null (repo-config.mjs readRepoFile)
+  checkout, // (repo, ref) → a folder with the repo's files (checkout.mjs)
+  log = () => {},
+}) {
+  const builds = new Map(); // tag → Promise, so two runs never build the same image
+  const installs = new Map(); // Claude Code version → Promise
+  const volumes = new Map(); // cache volume → Promise
+
+  async function baseId() {
+    const { code, out } = await docker(["image", "inspect", "--format", "{{.Id}}", config.image]);
+    if (code !== 0 || !out) {
+      throw new Error(`the base image ${config.image} is missing: run docker compose build`);
+    }
+    return out;
+  }
+
+  // The image to run: the base without a Dockerfile, else the repo's, built if needed.
+  // `onBuild(tag)` is called when a build starts or is already under way; `output` gets its
+  // log (the first caller's only).
+  async function imageFor({ repo, ref, dockerfile, onBuild = () => {}, output }) {
+    const id = await baseId();
+    if (!dockerfile) return config.image;
+    const file = await readFile(repo, dockerfile, ref);
+    if (!file)
+      throw new Error(`${dockerfile} (the config's dockerfile) is not in ${repo} at ${ref}`);
+    const tag = imageTag(config, repo, id, dockerfile, file.sha);
+    if ((await docker(["image", "inspect", "--format", "{{.Id}}", tag])).code === 0) return tag;
+    if (!builds.has(tag)) {
+      const build = buildImage(repo, ref, dockerfile, tag, output).finally(() =>
+        builds.delete(tag),
+      );
+      builds.set(tag, build);
+    }
+    onBuild(tag);
+    await builds.get(tag);
+    return tag;
+  }
+
+  async function buildImage(repo, ref, dockerfile, tag, output) {
+    log(`${repo}: building ${tag} from ${dockerfile} at ${ref}`);
+    const dir = await checkout(repo, ref);
+    try {
+      const { code, err } = await docker(
+        [
+          "build",
+          "--progress",
+          "plain",
+          // A Dockerfile names its base with `ARG DECKHAND_BASE` / `FROM $DECKHAND_BASE`, so
+          // the operator's image name isn't written in every repo.
+          "--build-arg",
+          `DECKHAND_BASE=${config.image}`,
+          "--label",
+          `deckhand.repo=${repo.toLowerCase()}`,
+          "-t",
+          tag,
+          "-f",
+          join(dir, dockerfile),
+          dir,
+        ],
+        { onData: output },
+      );
+      if (code !== 0) {
+        throw new Error(
+          `building ${dockerfile} of ${repo} failed (exit ${code})${err ? `: ${err}` : ""}`,
+        );
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+    log(`${repo}: built ${tag}`);
+    await prune(repo, tag);
+  }
+
+  // Newest first (docker's order); a tag still used by a container refuses to go, and stays.
+  async function prune(repo, keep) {
+    const name = repoImage(config, repo);
+    const { code, out } = await docker(["image", "ls", "--format", "{{.Tag}}", name]);
+    if (code !== 0) return;
+    const tags = out.split("\n").filter((t) => t && t !== "<none>");
+    const kept = new Set([keep.split(":")[1], ...tags.slice(0, KEEP_TAGS)]);
+    for (const tag of tags) {
+      if (!kept.has(tag)) await docker(["image", "rm", `${name}:${tag}`]);
+    }
+  }
+
+  // Claude Code in the shared volume, once per version: a short container of its own before
+  // the first run that needs it (the base image ships without it).
+  function installClaudeCode(output) {
+    const version = config.claudeCodeVersion;
+    if (!installs.has(version)) {
+      const install = docker(
+        [
+          "run",
+          "--rm",
+          "--network",
+          config.network,
+          "-e",
+          `CLAUDE_CODE_VERSION=${version}`,
+          "-v",
+          `${config.claudeCodeVolume}:/opt/claude-code`,
+          "--entrypoint",
+          "deckhand-install-claude-code",
+          config.image,
+        ],
+        { onData: output },
+      ).then(({ code, err }) => {
+        if (code !== 0)
+          throw new Error(`installing Claude Code ${version} failed: ${err || `exit ${code}`}`);
+      });
+      // A failure is not kept: the next run tries again.
+      install.catch(() => installs.get(version) === install && installs.delete(version));
+      installs.set(version, install);
+    }
+    return installs.get(version);
+  }
+
+  // `-v` arguments for the repo's caches. A new volume is handed to the sandbox's user
+  // (uid 1000): Docker creates a missing mount point as root.
+  async function caches(repo, paths, image) {
+    const args = [];
+    for (const path of paths) {
+      const name = cacheVolume(config, repo, path);
+      if (!volumes.has(name)) {
+        const ready = cacheReady(repo, path, name, image);
+        ready.catch(() => volumes.get(name) === ready && volumes.delete(name));
+        volumes.set(name, ready);
+      }
+      await volumes.get(name);
+      args.push("-v", `${name}:${path}`);
+    }
+    return args;
+  }
+
+  async function cacheReady(repo, path, name, image) {
+    if ((await docker(["volume", "inspect", name])).code === 0) return;
+    const labels = [
+      "--label",
+      `deckhand.repo=${repo.toLowerCase()}`,
+      "--label",
+      `deckhand.cache=${path}`,
+    ];
+    const created = await docker(["volume", "create", ...labels, name]);
+    if (created.code !== 0) throw new Error(`creating the cache volume ${name}: ${created.err}`);
+    const owned = await docker([
+      "run",
+      "--rm",
+      "--network",
+      "none",
+      "--user",
+      "0",
+      "--entrypoint",
+      "chown",
+      "-v",
+      `${name}:${path}`,
+      image,
+      "1000:1000",
+      path,
+    ]);
+    if (owned.code !== 0) {
+      await docker(["volume", "rm", name]); // so the next run prepares it again
+      throw new Error(`preparing the cache volume ${name}: ${owned.err}`);
+    }
+  }
+
+  return { baseId, imageFor, installClaudeCode, caches, building: () => [...builds.keys()] };
+}

@@ -1,9 +1,13 @@
-# Deckhand's sandbox: a container per issue that clones the repository, runs Claude Code
-# without permission prompts, and pushes a branch. Built from the repository root
-# (compose.yaml), as it also takes ../prompts/sandbox.md.
+# Deckhand's base sandbox image: a container per issue that clones the repository, runs
+# Claude Code without permission prompts, and pushes a branch. Built from the repository
+# root (compose.yaml), as it also takes ../prompts/sandbox.md.
 #
-# Claude Code is not in the image: entrypoint.sh installs the pinned CLAUDE_CODE_VERSION on
-# first start into the /opt/claude-code volume, shared by all runs. GitHub access goes
+# The harness only: no project toolchain. A repo brings its own with a Dockerfile FROM this
+# image (`ARG DECKHAND_BASE` / `FROM $DECKHAND_BASE`, see ../docs/repo-config.md), which the
+# listener builds; without one, its runs use this image as is.
+#
+# Claude Code is not in the image: install-claude-code puts the pinned CLAUDE_CODE_VERSION
+# into the /opt/claude-code volume, shared by all runs, before the first run that needs it. GitHub access goes
 # through the listener's token broker (git-credential-deckhand, the gh wrapper): no token or
 # SSH key is ever mounted.
 
@@ -56,6 +60,7 @@ COPY sandbox/pre-push /usr/local/share/git-hooks/pre-push
 COPY sandbox/progress.jq /usr/local/share/deckhand-progress.jq
 COPY prompts/sandbox.md /usr/local/share/deckhand-sandbox.md
 COPY sandbox/entrypoint.sh /usr/local/bin/deckhand-entrypoint
+COPY sandbox/install-claude-code /usr/local/bin/deckhand-install-claude-code
 COPY sandbox/draft-pr.sh /usr/local/bin/sandbox-draft-pr
 # Its hooks: managed settings, because ~/.claude is a per-issue volume that would keep an
 # old copy of a settings.json forever.

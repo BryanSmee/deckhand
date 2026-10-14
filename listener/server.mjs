@@ -46,6 +46,13 @@
 // GET /shots/<token>/<file> serves the screenshots runs save for their pull requests: GitHub
 // cannot take image uploads through its API, so they need a public URL.
 //
+// Each repo may bring a .deckhand.yaml on its default branch (repo-config.mjs): its own
+// trigger lines, models, parallel cap and users (only narrowing the operator's), a setup
+// command and extra instructions for the sandbox, a Dockerfile FROM the base image
+// (images.mjs builds it), cache volumes, and a preview hook run on pull_request and
+// workflow_run deliveries (previews.mjs). A config with errors stops runs, and the reply
+// says why.
+//
 // Only comments from ALLOWED_USERS, on repos where the App is installed (narrowed by
 // ALLOWED_REPOS if set), are acted on: the sandbox runs without permission prompts and can
 // push. No dependencies: node:http, node:crypto, docker CLI.
@@ -69,9 +76,20 @@ import {
 import { createServer } from "node:http";
 import { join } from "node:path";
 import { createBroker } from "./broker.mjs";
+import { checkout } from "./checkout.mjs";
 import { ConfigError, loadConfig } from "./config.mjs";
-import { MARKER, takeOptions, verified, workItem } from "./events.mjs";
+import { docker } from "./docker.mjs";
+import { MARKER, previewEvent, takeOptions, verified, workItem } from "./events.mjs";
 import { createGitHubApp, loadCredentials, saveCredentials } from "./github-app.mjs";
+import { createImages, imageRef } from "./images.mjs";
+import { createPreviews } from "./previews.mjs";
+import {
+  CONFIG_FILE,
+  effectiveConfig,
+  loadRepoSettings,
+  readRepoFile,
+  startable,
+} from "./repo-config.mjs";
 import { createSetup } from "./setup.mjs";
 
 const env = process.env;
@@ -218,6 +236,59 @@ function label(repo, number, add) {
       );
 }
 
+// --- Per-repo settings, images and preview hooks -------------------------------------------
+
+// A repo's settings from its default branch; errors in its config file stop its runs.
+function repoSettings(repo, base) {
+  return loadRepoSettings(github, config, repo, base || "main");
+}
+
+const repoFile = (repo, path, ref) => readRepoFile(github, repo, path, ref);
+const fetchCheckout = (repo, ref) => checkout(github, repo, ref);
+
+const images = createImages({ config, docker, readFile: repoFile, checkout: fetchCheckout, log });
+const previews = createPreviews({
+  config,
+  docker,
+  checkout: fetchCheckout,
+  logDir: join(config.dataDir, "previews"),
+  log,
+});
+
+// A run that can't start for a reason the maintainer can fix: the reply says it.
+class RunError extends Error {}
+
+function configErrors(base, errors) {
+  return `Claude can't run here: \`${CONFIG_FILE}\` on \`${base || "main"}\` has errors.\n\n${errors.map((e) => `- ${e}`).join("\n")}`;
+}
+
+// A comment that passed the operator's checks, checked again with its repo's settings
+// (users, trigger lines), then queued.
+async function admit(first, event, payload) {
+  const { settings, errors } = await repoSettings(first.repo, first.base);
+  if (errors.length) {
+    log(`${first.repo}: ${CONFIG_FILE} has errors: ${errors.join("; ")}`);
+    // Only to someone asking for a run: other comments can't tell a broken config from none.
+    if (first.trigger) await reply(first.repo, first.replyTo, configErrors(first.base, errors));
+    return;
+  }
+  const item = workItem(effectiveConfig(config, settings), event, payload, skip);
+  if (!item) return;
+  item.base = first.base;
+  item.settings = settings;
+  await accept(item);
+}
+
+async function previewHook({ repo, base, event }, payload) {
+  const { settings, errors } = await repoSettings(repo, base);
+  if (errors.length) return skip(`${event}: ${CONFIG_FILE} of ${repo} has errors`);
+  if (!settings.preview) return skip(`${event}: ${repo} has no preview hook`);
+  const image =
+    settings.preview.image ??
+    (await images.imageFor({ repo, ref: base, dockerfile: settings.dockerfile }));
+  await previews.run({ repo, event, payload, ref: base, hook: settings.preview, image });
+}
+
 // --- Tasks: one queue per issue, at most maxParallel containers -----------------------------
 
 // live: the running sandbox's input (see run()); next: /model and /effort for the next run.
@@ -226,17 +297,6 @@ let running = 0;
 
 function containerName(repo, id) {
   return `${config.prefix}-${repo}-${id}`.toLowerCase().replace(/[^a-z0-9_.-]+/g, "-");
-}
-
-function docker(args) {
-  return new Promise((resolve) => {
-    const child = spawn("docker", args, {
-      stdio: ["ignore", "pipe", "ignore"],
-    });
-    let out = "";
-    child.stdout.on("data", (d) => (out += d));
-    child.on("close", (code) => resolve({ code, out: out.trim() }));
-  });
 }
 
 async function accept(item) {
@@ -258,6 +318,8 @@ async function accept(item) {
     };
     tasks.set(key, task);
   }
+  // The latest settings decide the repo's parallel cap.
+  if (item.settings) task.settings = item.settings;
   received(item);
   task.pending.push(item);
   if (task.running) {
@@ -392,10 +454,11 @@ function schedule() {
   const ready = [...tasks.values()]
     .filter((t) => t.ready && !t.running && t.pending.length)
     .sort((a, b) => Number(talking(b)) - Number(talking(a)));
-  for (const task of ready) {
-    if (running >= config.maxParallel) return;
-    run(task);
+  const perRepo = new Map();
+  for (const t of tasks.values()) {
+    if (t.running) perRepo.set(t.repo, (perRepo.get(t.repo) ?? 0) + 1);
   }
+  for (const task of startable(ready, perRepo, running, config.maxParallel)) run(task);
 }
 
 // --- Brainstorms: each issue's discussion state, kept across listener restarts -------------
@@ -547,9 +610,12 @@ async function run(task) {
     const message = started
       ? `${body || "Continue."}\n\n(Don't post comments on GitHub yourself: your final message is posted as a reply.)`
       : body;
+    // Fresh from the default branch: a config merged since the comment applies.
+    const { settings, errors, warnings } = await repoSettings(task.repo, task.base);
+    task.settings = settings;
     const defaults = talk
-      ? [config.brainstormModel, config.brainstormEffort]
-      : [config.model, config.effort];
+      ? [settings.brainstormModel, settings.brainstormEffort]
+      : [settings.model, settings.effort];
     record.model = options.model ?? defaults[0];
     record.effort = options.effort ?? defaults[1];
     record.mode =
@@ -560,6 +626,13 @@ async function run(task) {
     // First line of every log: what the dashboard needs to list it after a restart.
     const { logPath: _, ...meta } = record;
     logFile.write(JSON.stringify({ type: "listener", ...meta, message: text }) + "\n");
+    const note = (message) =>
+      logFile.write(
+        JSON.stringify({ type: "listener", event: "note", at: Date.now(), message }) + "\n",
+      );
+    if (errors.length) throw new RunError(configErrors(task.base, errors));
+    for (const warning of warnings) note(`${CONFIG_FILE}: ${warning}`);
+    const prepared = await prepare(task, items, settings, record, note, logFile);
 
     // A fresh, unguessable folder per run: its screenshots are public once linked on GitHub.
     const shots = randomBytes(12).toString("hex");
@@ -578,7 +651,7 @@ async function run(task) {
       handled: [], // every comment delivered to it, for their reactions
     };
     const prompt = talk ? brainstormPrompt(task) : initialPrompt(task);
-    const result = await sandbox(task, prompt, message, logFile, shots, record, secret);
+    const result = await sandbox(task, prompt, message, logFile, shots, record, secret, prepared);
     const live = task.live;
     task.live = null;
     handled.push(...(live?.handled ?? []));
@@ -615,7 +688,11 @@ async function run(task) {
   } catch (error) {
     log(`${key}: ${error.stack ?? error}`);
     record.status = "error";
+    if (error instanceof RunError) {
+      await reply(task.repo, replyTo, error.message).catch((e) => log(`${key}: ${e}`));
+    }
   } finally {
+    record.phase = null;
     broker.revoke(secret);
     record.finishedAt = Date.now();
     logFile.end();
@@ -646,11 +723,62 @@ async function run(task) {
   }
 }
 
+// The run's image (built first if the repo's Dockerfile changed), Claude Code and the repo's
+// cache volumes. While an image builds, the dashboard shows the run as "building image".
+async function prepare(task, items, settings, record, note, logFile) {
+  const base = task.base || "main";
+  const output = (chunk) => logFile.write(chunk);
+  try {
+    // A comment on a pull request may run on the image of its own branch (imageRef()).
+    const pr = items.at(-1).replyTo;
+    let source = { ref: base, branch: false };
+    if (
+      settings.allowBranchDockerImages &&
+      settings.dockerfile &&
+      (task.kind === "pr" || pr !== task.number)
+    ) {
+      const res = await github(task.repo, "GET", `/repos/${task.repo}/pulls/${pr}`);
+      if (res.ok) source = imageRef(settings, task.repo, base, await res.json());
+    }
+    const image = await images.imageFor({
+      repo: task.repo,
+      ref: source.ref,
+      dockerfile: settings.dockerfile,
+      onBuild: (tag) => {
+        record.phase = "building image";
+        note(
+          `Building ${tag} from ${settings.dockerfile} (${source.branch ? "pull request branch" : base})`,
+        );
+      },
+      output,
+    });
+    record.phase = null;
+    if (image !== config.image)
+      note(`Image ${image}${source.branch ? " (pull request branch)" : ""}`);
+    await images.installClaudeCode(output);
+    const cacheArgs = await images.caches(task.repo, settings.caches, image);
+    return { image, cacheArgs, settings };
+  } catch (error) {
+    throw new RunError(
+      `Claude couldn't start: ${error.message}\n\nThe run's log on the dashboard has the details.`,
+    );
+  }
+}
+
 // Runs the sandbox with raw stream-json output and resolves with its last `result` event.
 // Claude's stdin stays open for comments that arrive during the run; at each result the
 // listener sends what is waiting, or closes it so Claude exits. A message written before the
 // close is still answered (one more result), so nothing delivered is dropped.
-function sandbox(task, prompt, message, logFile, shots, { kind, model, effort }, secret) {
+function sandbox(
+  task,
+  prompt,
+  message,
+  logFile,
+  shots,
+  { kind, model, effort },
+  secret,
+  { image, cacheArgs, settings },
+) {
   const talk = kind === "brainstorm";
   const live = task.live;
   const n = task.name;
@@ -684,6 +812,8 @@ function sandbox(task, prompt, message, logFile, shots, { kind, model, effort },
       "TASK_MODE",
       "TASK_ISSUE",
       "SANDBOX_LIGHT",
+      "SANDBOX_SETUP",
+      "SANDBOX_INSTRUCTIONS",
       "SANDBOX_MODEL",
       "SANDBOX_EFFORT",
     ].flatMap((k) => ["-e", k]),
@@ -698,7 +828,9 @@ function sandbox(task, prompt, message, logFile, shots, { kind, model, effort },
     // The issue's clone and Claude session, kept between its runs.
     ...["-v", `${n}-workspace:/workspace`],
     ...["-v", `${n}-claude:/home/node/.claude`],
-    config.image,
+    // The repo's caches (its config's `caches`), one volume per path, kept across its runs.
+    ...cacheArgs,
+    image,
   ];
   // Only what is named in `args` reaches the container. The App's credentials are not in
   // the environment at all: they stay in the data volume.
@@ -721,6 +853,9 @@ function sandbox(task, prompt, message, logFile, shots, { kind, model, effort },
     TASK_ISSUE: task.kind === "issue" && !talk ? String(task.number) : "",
     // Talking needs no project setup.
     SANDBOX_LIGHT: talk ? "1" : "",
+    SANDBOX_SETUP: talk ? "" : (settings.setup ?? ""),
+    // Read by the sandbox from its default branch (origin/BASE_BRANCH), like the config.
+    SANDBOX_INSTRUCTIONS: settings.instructions ?? "",
     SANDBOX_MODEL: model,
     SANDBOX_EFFORT: effort,
   };
@@ -796,9 +931,17 @@ function status() {
   const reasons = [
     ...active.map((r) => `${r.kind} run ${r.key} since ${new Date(r.startedAt).toISOString()}`),
     ...(inflight.size ? [`${inflight.size} reaction update(s) in flight`] : []),
+    // A preview hook may be deploying: a restart waits for it too.
+    ...previews
+      .status()
+      .map(
+        (h) =>
+          `preview hook ${h.repo} (${h.event}) ${h.state} since ${new Date(h.since).toISOString()}`,
+      ),
   ];
   return {
     idle: running === 0 && !reasons.length,
+    previews: previews.status(),
     reasons,
     setUp: app !== null,
     queued: [...tasks.values()].reduce((n, t) => n + t.pending.length, 0),
@@ -920,6 +1063,7 @@ function format(line) {
   if (!line.trim()) return [];
   const e = parse(line);
   if (!e) return [{ kind: "raw", text: line }];
+  if (e.type === "listener" && e.event === "note") return [{ kind: "meta", text: e.message }];
   if (e.type === "listener" && e.event === "delivered") {
     const time = new Date(e.at).toISOString().slice(11, 19);
     return [
@@ -1006,6 +1150,7 @@ function state() {
       .sort((a, b) => b.deadline - a.deadline)
       .slice(0, 20),
     maxParallel: config.maxParallel,
+    previews: previews.status(),
     now: Date.now(),
   };
 }
@@ -1163,10 +1308,16 @@ function webhook(req, res) {
     const event = req.headers["x-github-event"];
     log(`Delivery: ${event} ${payload.action ?? ""} from ${payload.sender?.login ?? "?"}`);
     app.remember(payload.repository?.full_name, payload.installation?.id);
+    const preview = previewEvent(config, event, payload, skip);
+    if (preview) {
+      previewHook(preview, payload).catch((error) => log(error.stack ?? error));
+      return;
+    }
+    // The operator's checks first, so only comments that may run cost a config read.
     const item = workItem(config, event, payload, skip);
     if (item) {
       item.base = payload.repository?.default_branch;
-      accept(item).catch((error) => log(error.stack ?? error));
+      admit(item, event, payload).catch((error) => log(error.stack ?? error));
     }
   });
 }
