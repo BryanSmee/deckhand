@@ -3,7 +3,14 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
 import { createHmac, generateKeyPairSync } from "node:crypto";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -19,6 +26,12 @@ function fakeDocker(dir) {
 # Everything but the sandbox run is logged, one call per line.
 case "$1" in
   ps|wait) exit 1 ;;
+  network)
+    # The sandboxes' network: internal unless the test says otherwise.
+    cat "${dir}/network-internal" 2> /dev/null || echo true ;;
+  inspect)
+    # The sandbox's address on that network, for the egress proxy's questions.
+    echo '{"deckhand-sandboxes":{"IPAddress":"10.9.0.5"}}' ;;
   volume)
     [ "$2" = inspect ] && exit 1
     echo "$*" >> "${dir}/docker-calls" ;;
@@ -36,6 +49,12 @@ case "$1" in
     env > "${dir}/run-env"
     curl -fsS -H "Authorization: Bearer $DECKHAND_RUN_SECRET" "$DECKHAND_BROKER_URL/token" \\
       > "${dir}/broker-answer"
+    # What the egress proxy would ask about this sandbox's connections.
+    for host in api.anthropic.com github.com objects.githubusercontent.com evil.example \\
+      registry.npmjs.org pypi.org a.b.example.com example.com lan.internal; do
+      echo "$host $(curl -fsS "$DECKHAND_BROKER_URL/egress?ip=10.9.0.5&host=$host")" \\
+        >> "${dir}/egress"
+    done
     echo '{"type":"result","result":"All done.","duration_ms":60000}'
     cat > /dev/null # until the listener closes stdin
     ;;
@@ -145,11 +164,12 @@ test("refuses to start with an empty allowlist", async () => {
   assert.match(output(), /ALLOWED_USERS/);
 });
 
-// A listener with an App, a fake Docker and a fake GitHub serving `files`.
-async function listen(t, files) {
+// A listener with an App, a fake Docker and a fake GitHub serving `files`; `extra`: more
+// settings. Either may be a function of the listener's temp dir.
+async function listen(t, files, extra = {}) {
   const dir = mkdtempSync(join(tmpdir(), "deckhand-"));
   fakeDocker(dir);
-  const github = await fakeGitHub(files);
+  const github = await fakeGitHub(typeof files === "function" ? files(dir) : files);
   const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
   writeFileSync(
     join(dir, "app.json"),
@@ -174,6 +194,10 @@ async function listen(t, files) {
     GITHUB_API: github.url,
     PUBLIC_URL: "https://hooks.example.com",
     DEBOUNCE_MS: "0",
+    // The egress proxy asks from here: in the tests, the fake sandbox itself.
+    EGRESS_PROXY: "http://127.0.0.1:3128",
+    GRANTS_FILE: join(dir, "grants.yaml"),
+    ...(typeof extra === "function" ? extra(dir) : extra),
   });
   t.after(() => {
     listener.child.kill("SIGKILL");
@@ -248,6 +272,33 @@ test("a webhook from the App runs a sandbox that gets its repo's token from the 
   assert.match(runEnv, /^GIT_AUTHOR_EMAIL=77\+deckhand-x\[bot\]@users\.noreply\.github\.com$/m);
   assert.doesNotMatch(runEnv, /^GH_TOKEN=/m);
 
+  // Hardened, limited, and only its own screenshots folder.
+  const joined = args.join(" ");
+  assert.match(joined, /--cap-drop ALL --security-opt no-new-privileges/);
+  assert.match(joined, /--cpus 2 --memory 4g --memory-swap 4g --pids-limit 2048/);
+  const shots = joined.match(/SCREENSHOT_URL=https:\/\/hooks\.example\.com\/shots\/(\w+)/)[1];
+  assert.ok(
+    args.includes(`type=volume,src=deckhand-screenshots,dst=/screenshots,volume-subpath=${shots}`),
+  );
+  assert.equal(
+    args.some((a) => a.startsWith("deckhand-screenshots:")),
+    false,
+  );
+  assert.ok(args.includes("SCREENSHOT_DIR=/screenshots"));
+  // Out through the egress proxy only, the broker directly.
+  assert.match(runEnv, /^HTTPS_PROXY=http:\/\/127\.0\.0\.1:3128$/m);
+  assert.match(runEnv, /^https_proxy=http:\/\/127\.0\.0\.1:3128$/m);
+  assert.match(runEnv, /^NO_PROXY=localhost,127\.0\.0\.1,::1$/m);
+  assert.match(runEnv, /^NODE_USE_ENV_PROXY=1$/m);
+  // The default policy: Anthropic and GitHub, nothing else.
+  const egress = egressAnswers(dir);
+  assert.deepEqual(allowedHosts(egress), [
+    "api.anthropic.com",
+    "github.com",
+    "objects.githubusercontent.com",
+  ]);
+  assert.match(listener.output(), /Egress: refused evil\.example for org\/repo#12/);
+
   // Once the run is over, its secret gets nothing.
   await listener.until("done (ok)");
   const secret = readFileSync(join(dir, "run-secret"), "utf8").trim();
@@ -256,6 +307,16 @@ test("a webhook from the App runs a sandbox that gets its repo's token from the 
   });
   assert.equal(after.status, 401);
 });
+
+// "host {json}" lines the fake sandbox wrote → { host: answer }.
+function egressAnswers(dir) {
+  const lines = readFileSync(join(dir, "egress"), "utf8").trim().split("\n");
+  return Object.fromEntries(lines.map((l) => [l.split(" ")[0], JSON.parse(l.split(" ")[1])]));
+}
+
+function allowedHosts(answers) {
+  return Object.keys(answers).filter((h) => answers[h].allowed);
+}
 
 const CONFIG = `# Node project
 users: [alice, mallory]   # mallory isn't in ALLOWED_USERS: ignored
@@ -316,4 +377,93 @@ test("a config with errors stops the run and the reply says why", async (t) => {
     (r) => r.method === "POST" && r.path === "/repos/org/repo/issues/12/comments",
   );
   assert.match(JSON.parse(reply.body).body, /max_parallel: expected a whole number/);
+});
+
+test("hosts from the operator, its grants and the repo; granted mounts and limits", async (t) => {
+  const { dir, github, send } = await listen(
+    t,
+    (dir) => ({
+      ".deckhand.yaml": `hosts: ["*.example.com"]
+mounts:
+  - path: ${dir}/nfs/api
+    read_only: false
+  - path: ${dir}/nfs/docs
+`,
+    }),
+    (dir) => {
+      mkdirSync(join(dir, "nfs", "api"), { recursive: true });
+      mkdirSync(join(dir, "nfs", "docs"), { recursive: true });
+      writeFileSync(
+        join(dir, "grants.yaml"),
+        `org/repo:
+  hosts: [pypi.org]
+  limits: { memory: 8g }
+  mounts:
+    - root: ${join(dir, "nfs")}
+      read_only: false
+`,
+      );
+      return { ALLOWED_HOSTS: "registry.npmjs.org" };
+    },
+  );
+  assert.equal((await send(comment("alice"))).status, 202);
+  await github.waitFor(
+    (r) => r.method === "POST" && r.path === "/repos/org/repo/issues/12/comments",
+  );
+  const egress = egressAnswers(dir);
+  assert.deepEqual(allowedHosts(egress), [
+    "api.anthropic.com",
+    "github.com",
+    "objects.githubusercontent.com",
+    "registry.npmjs.org",
+    "pypi.org",
+    "a.b.example.com",
+  ]);
+  // Named hosts may resolve to private addresses; only "*" may not (proxy.mjs).
+  assert.equal(egress["a.b.example.com"].private, true);
+  const args = readFileSync(join(dir, "run-args"), "utf8").split("\n");
+  const joined = args.join(" ");
+  assert.match(joined, /--cpus 2 --memory 8g --memory-swap 8g --pids-limit 2048/);
+  assert.ok(
+    args.includes(`type=bind,src=${join(dir, "nfs", "api")},dst=${join(dir, "nfs", "api")}`),
+  );
+  assert.ok(
+    args.includes(
+      `type=bind,src=${join(dir, "nfs", "docs")},dst=${join(dir, "nfs", "docs")},readonly`,
+    ),
+  );
+});
+
+test("a mount outside the granted root, through a symlink, is refused on the issue", async (t) => {
+  const { dir, github, send } = await listen(
+    t,
+    (dir) => ({ ".deckhand.yaml": `mounts:\n  - ${dir}/nfs/escape\n  - ${dir}/nfs/../etc\n` }),
+    (dir) => {
+      mkdirSync(join(dir, "nfs"), { recursive: true });
+      symlinkSync("/etc", join(dir, "nfs", "escape"));
+      writeFileSync(join(dir, "grants.yaml"), `org/repo:\n  mounts: [${join(dir, "nfs")}]\n`);
+      return {};
+    },
+  );
+  await send(comment("alice"));
+  const reply = await github.waitFor(
+    (r) => r.method === "POST" && r.path === "/repos/org/repo/issues/12/comments",
+  );
+  const body = JSON.parse(reply.body).body;
+  assert.match(body, /host mounts requested by `\.deckhand\.yaml` are refused/);
+  assert.match(body, /escape`: resolves to \/etc, outside the roots/);
+  assert.match(body, /\.\.\/etc`: (resolves to \S+, outside|doesn't exist)/);
+  assert.throws(() => readFileSync(join(dir, "run-args")));
+});
+
+test("a sandboxes' network with a route out stops the run", async (t) => {
+  const { github, send } = await listen(t, {}, (dir) => {
+    writeFileSync(join(dir, "network-internal"), "false\n");
+    return {};
+  });
+  await send(comment("alice"));
+  const reply = await github.waitFor(
+    (r) => r.method === "POST" && r.path === "/repos/org/repo/issues/12/comments",
+  );
+  assert.match(JSON.parse(reply.body).body, /deckhand-sandboxes is not internal/);
 });

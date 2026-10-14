@@ -1,8 +1,8 @@
 # Setting up Deckhand
 
 Deckhand runs on your own server with your own private GitHub App and your own Claude
-credential. You need Docker with the compose plugin, and an HTTPS address that GitHub can
-reach (your reverse proxy, or a tunnel) forwarding to the listener's port.
+credential. You need Docker Engine 26 or later with the compose plugin, and an HTTPS address
+that GitHub can reach (your reverse proxy, or a tunnel) forwarding to the listener's port.
 
 ## 1. Start the listener
 
@@ -14,8 +14,9 @@ docker compose up -d --build
 docker compose logs listener
 ```
 
-`docker compose up` builds two images: the listener's and the base sandbox image runs start
-from (the `sandbox` service only builds it and exits). A repository can bring its own image
+`docker compose up` builds three images: the listener's, the egress proxy's (the only way
+out of the sandboxes' internal network, see [Security model](security.md)), and the base
+sandbox image runs start from (the `sandbox` service only builds it and exits). A repository can bring its own image
 `FROM` that base: see [Per-repo config](repo-config.md). The listener publishes port 8080
 (`PORT` to change it); point your reverse proxy at it.
 
@@ -67,6 +68,11 @@ All in `.env`, read by `compose.yaml`:
 | `CLAUDE_CODE_VERSION`                                                                   | `2.1.300`                      | Claude Code version the sandboxes install on first use           |
 | `SANDBOX_MODEL`, `SANDBOX_EFFORT`                                                       | `opus`, `medium`               | defaults; a comment's `/model` and `/effort` lines override them |
 | `MAX_PARALLEL`                                                                          | `2`                            | sandboxes running at once (a repo's `max_parallel` within it)    |
+| `ALLOWED_HOSTS`                                                                         | none                           | hosts every sandbox may reach besides Anthropic and GitHub       |
+| `SANDBOX_CPUS`, `SANDBOX_MEMORY`, `SANDBOX_PIDS`                                        | `2`, `4g`, `2048`              | each sandbox's limits (per repo: the grants file)                |
+| `GRANTS_FILE`                                                                           | `/etc/deckhand/grants.yaml`    | what you grant each repo: hosts, host mounts, limits             |
+| `EGRESS_PROXY`                                                                          | `http://egress:3128`           | the egress proxy, as sandboxes reach it                          |
+| `INSTALL_NETWORK`                                                                       | `bridge`                       | network of the Claude Code install container (needs npm)         |
 | `TRIGGER`, `BRAINSTORM_TRIGGER`, `BRAINSTORM_STOP`                                      | `Claude work on this`…         | trigger lines                                                    |
 | `NEEDS_INPUT_LABEL`                                                                     | `needs-input`                  | label while a run waits for answers (empty: none)                |
 | `DOCKER_SOCKET`                                                                         | `/var/run/docker.sock`         | the host's Docker socket, as preview hooks mount it              |
@@ -89,3 +95,14 @@ No sandbox gets a long-lived token, an SSH key or the host's git configuration:
 Claude Code is not part of any image: before the first run that needs it, the listener
 installs the pinned `CLAUDE_CODE_VERSION` into the `deckhand-claude-code` volume, in a
 container of its own, and later runs reuse it.
+
+## Isolation
+
+Sandboxes run without capabilities and with CPU, memory and pids limits, get no host path
+unless you grant one, and reach only Anthropic, GitHub and the hosts you or the repository
+allow, through the egress proxy. See [Security model](security.md): the grants file, host
+mounts, the mandatory hosts, and what isn't covered.
+
+Upgrading from a version whose `deckhand-sandboxes` network wasn't internal: stop the stack,
+`docker network rm deckhand-sandboxes`, and start it again so compose creates it internal.
+Until then the listener refuses to start runs.

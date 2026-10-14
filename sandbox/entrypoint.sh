@@ -71,10 +71,14 @@ if [ -n "${SANDBOX_INSTRUCTIONS:-}" ]; then
     echo "Instructions file $SANDBOX_INSTRUCTIONS not found on $BASE_BRANCH" >&2
   fi
 fi
-if ! claude mcp get playwright > /dev/null 2>&1; then
-  claude mcp add --scope user playwright -- playwright-mcp --headless --isolated \
-    --browser chromium --output-dir /tmp/playwright > /dev/null
+# Added again on every start: the proxy settings may change between runs. Chromium gets the
+# egress proxy as flags rather than from HTTP(S)_PROXY, which it doesn't reliably read.
+browser=(--headless --isolated --browser chromium --output-dir /tmp/playwright)
+if [ -n "${HTTPS_PROXY:-}" ]; then
+  browser+=(--proxy-server "$HTTPS_PROXY" --proxy-bypass "${NO_PROXY:-localhost}")
 fi
+claude mcp remove --scope user playwright > /dev/null 2>&1 || true
+claude mcp add --scope user playwright -- playwright-mcp "${browser[@]}" > /dev/null
 
 # Model and thinking effort, from the listener's defaults or a comment's /model and /effort.
 model=(--model "${SANDBOX_MODEL:-opus}" --effort "${SANDBOX_EFFORT:-medium}")

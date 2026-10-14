@@ -5,6 +5,7 @@
 // ../docs/repo-config.md.
 import { createHash } from "node:crypto";
 import { posix } from "node:path";
+import { hostProblem } from "./egress.mjs";
 import { EFFORTS } from "./events.mjs";
 import { list, normalize } from "./config.mjs";
 import { parseYaml } from "./yaml.mjs";
@@ -12,7 +13,7 @@ import { parseYaml } from "./yaml.mjs";
 export const CONFIG_FILE = ".deckhand.yaml";
 
 // What the sandbox mounts itself: a cache can't take these over.
-const RESERVED = ["/workspace", "/home/node/.claude", "/opt/claude-code", "/screenshots"];
+export const RESERVED = ["/workspace", "/home/node/.claude", "/opt/claude-code", "/screenshots"];
 
 // What a repo gets without a config file: the operator's settings as they are.
 export function defaultSettings(config) {
@@ -162,14 +163,15 @@ export function parseRepoConfig(text, config) {
           fail(key, "expected a list of host names");
           break;
         }
+        // Added to what its sandboxes may reach through the egress proxy (egress.mjs).
         for (const host of value) {
-          const name = String(host).toLowerCase();
-          if (/^(\*|(\*\.)?[a-z0-9-]+(\.[a-z0-9-]+)*)$/.test(name)) settings.hosts.push(name);
-          else fail(`hosts: ${JSON.stringify(host)}`, "expected a host name, *.domain or *");
+          if (hostProblem(host)) fail(`hosts: ${JSON.stringify(host)}`, hostProblem(host));
+          else settings.hosts.push(host.toLowerCase());
         }
         break;
       case "mounts":
-        // Granted by the operator only (#3): parsed here, so a typo shows up now.
+        // Requests only: a mount happens under a root the operator grants the repo
+        // (grants.mjs), checked at each run.
         if (!Array.isArray(value)) {
           fail(key, "expected a list of { path, read_only }");
           break;
