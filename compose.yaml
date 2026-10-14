@@ -31,8 +31,6 @@ services:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       # Optional: /setup detects it from your browser's address and stores it.
       PUBLIC_URL: ${PUBLIC_URL:-}
-      # Password of the dashboard at / (any user name). Empty: no dashboard.
-      DASHBOARD_PASSWORD: ${DASHBOARD_PASSWORD:-}
       CLAUDE_CODE_VERSION: ${CLAUDE_CODE_VERSION:-2.1.300}
       SANDBOX_MODEL: ${SANDBOX_MODEL:-opus}
       SANDBOX_EFFORT: ${SANDBOX_EFFORT:-medium}

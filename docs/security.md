@@ -181,4 +181,5 @@ listener's logs (`Egress: refused <host> for <repo>#<n>`).
 - **Allowed hosts are trusted entirely**: anything a sandbox can write to on one is a way
   out: its own repository on GitHub, a bucket or paste service behind `*`.
 - The listener's own port (8080: dashboard, webhook) is reachable from sandboxes; it needs
-  the dashboard password or the webhook's signature.
+  a dashboard session (a signed-in allowed user, see [Setup](setup.md#4-the-dashboard)) or
+  the webhook's signature. `/status` also answers calls from inside the listener's container.

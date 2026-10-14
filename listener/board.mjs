@@ -1,0 +1,89 @@
+// What the dashboard lists: one entry per issue or pull request the listener knows about,
+// with its current state, grouped by project (the repo's owner) and repo.
+//
+// States, from what the listener holds right now:
+//   building-image  a run waits for its repo's image to build
+//   working         a run is in progress
+//   stopping        a brainstorm is wrapping up ("/stop")
+//   queued          comments wait for a run (a free slot, or the running one to finish)
+//   brainstorm      a brainstorm waits for the maintainer's next comment
+//   idle-brainstorm a brainstorm without a comment for a while; the next one restores it
+//   needs-input     the last run stopped to ask (the issue carries the needs-input label)
+//   done, error, interrupted   how the last run ended (interrupted: the listener restarted)
+export const STATES = [
+  "building-image",
+  "working",
+  "stopping",
+  "queued",
+  "brainstorm",
+  "idle-brainstorm",
+  "needs-input",
+  "done",
+  "error",
+  "interrupted",
+];
+
+// Runs kept per entry: older ones stay in the logs.
+const RUNS_PER_TASK = 20;
+
+function runState(r) {
+  if (r.status === "running") {
+    if (r.phase === "building image") return "building-image";
+    return r.mode === "wrap-up" ? "stopping" : "working";
+  }
+  if (r.status === "ok") return "done";
+  return r.status; // needs-input, error, interrupted
+}
+
+// `runs`: newest first; `queued`, `brainstorms`: as server.mjs's state() has them.
+export function board({ runs, queued, brainstorms }) {
+  const tasks = new Map();
+  const entry = (key, repo) => {
+    if (!tasks.has(key)) {
+      const name = repo ?? key.slice(0, key.lastIndexOf("#"));
+      tasks.set(key, {
+        key,
+        repo: name,
+        project: name.split("/")[0],
+        // "#12", "#pr-12", "#discussion-8"
+        number: Number(/(\d+)$/.exec(key)?.[1]) || null,
+        kind: null,
+        replyTo: null,
+        state: null,
+        since: 0,
+        runs: [],
+      });
+    }
+    return tasks.get(key);
+  };
+  for (const r of runs) {
+    const t = entry(r.key, r.repo);
+    if (t.runs.length < RUNS_PER_TASK) t.runs.push(r);
+  }
+  const waiting = new Map(queued.map((q) => [q.key, q]));
+  for (const q of queued) entry(q.key, q.repo);
+  const talks = new Map(brainstorms.map((b) => [b.key, b]));
+  for (const b of brainstorms) entry(b.key, b.repo);
+
+  for (const t of tasks.values()) {
+    const last = t.runs[0];
+    const q = waiting.get(t.key);
+    const b = talks.get(t.key);
+    t.kind = q?.kind ?? last?.kind ?? (b ? "brainstorm" : null);
+    t.replyTo = q?.replyTo ?? last?.replyTo ?? t.number;
+    t.since = Math.max(last?.startedAt ?? 0, b?.deadline ?? 0);
+    // A running run first: comments for a follow-up wait behind it anyway.
+    if (last?.status === "running") t.state = runState(last);
+    else if (q) t.state = "queued";
+    else if (b?.status === "active") t.state = "brainstorm";
+    else if (b?.status === "idle") t.state = "idle-brainstorm";
+    else t.state = last ? runState(last) : "done";
+    if (b && b.status !== "stopped") {
+      t.kind = "brainstorm";
+      t.deadline = b.deadline;
+    }
+  }
+  // Most recent activity first, the live ones on top.
+  const live = (t) => ["building-image", "working", "stopping", "queued"].includes(t.state);
+  return [...tasks.values()].sort((a, b) => Number(live(b)) - Number(live(a)) || b.since - a.since);
+}

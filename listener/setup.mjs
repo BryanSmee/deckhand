@@ -21,6 +21,8 @@ export function manifest({ name, publicUrl }) {
     url: publicUrl,
     hook_attributes: { url: `${publicUrl}/webhook`, active: true },
     redirect_url: `${publicUrl}/setup/callback`,
+    // Dashboard sign-in (auth.mjs): GitHub sends the browser back here.
+    callback_urls: [`${publicUrl}/auth/callback`],
     public: false,
     default_permissions: APP_PERMISSIONS,
     default_events: APP_EVENTS,

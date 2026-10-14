@@ -39,9 +39,10 @@
 // ask the broker (broker.mjs, BROKER_PORT, only on the sandboxes' network) for a fresh token
 // limited to their repo, with a secret that dies with the run.
 //
-// GET / is a dashboard of the runs with their live logs, behind DASHBOARD_PASSWORD; GET
-// /status says whether the listener is idle. Comments still waiting for a run are saved to
-// queue.json on SIGTERM and picked up at the next start.
+// GET / is a dashboard of every repo's issues and pull requests, their state and live logs,
+// for ALLOWED_USERS signed in with GitHub through the App (auth.mjs, board.mjs); GET /status
+// says whether the listener is idle, to them and to calls from inside the container. Comments
+// still waiting for a run are saved to queue.json on SIGTERM and picked up at the next start.
 //
 // GET /shots/<token>/<file> serves the screenshots runs save for their pull requests: GitHub
 // cannot take image uploads through its API, so they need a public URL.
@@ -63,7 +64,7 @@
 // ALLOWED_REPOS if set), are acted on: the sandbox runs without permission prompts and can
 // push. No dependencies: node:http, node:crypto, docker CLI.
 import { spawn } from "node:child_process";
-import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import {
   chmodSync,
   createReadStream,
@@ -82,6 +83,8 @@ import {
 import { lookup } from "node:dns/promises";
 import { createServer } from "node:http";
 import { join } from "node:path";
+import { createAuth, page, sessionKey } from "./auth.mjs";
+import { board, STATES } from "./board.mjs";
 import { createBroker } from "./broker.mjs";
 import { checkout } from "./checkout.mjs";
 import { ConfigError, loadConfig } from "./config.mjs";
@@ -166,6 +169,17 @@ const setup = createSetup({
 });
 
 const broker = createBroker({ app: () => app, log });
+
+const auth = createAuth({
+  config,
+  app: () => app,
+  publicUrl,
+  key: sessionKey(config.dataDir),
+  log,
+});
+if (env.DASHBOARD_PASSWORD) {
+  log("DASHBOARD_PASSWORD is no longer used: allowed users sign in with GitHub (docs/setup.md)");
+}
 
 // PUBLIC_URL, or the one /setup stored with the App.
 function publicUrl() {
@@ -1352,7 +1366,8 @@ function publicRun(r) {
   return rest;
 }
 
-function state() {
+// What the dashboard shows `user`: each issue and pull request with its state (board.mjs).
+function state(user) {
   // A running task's comments are queued only when they wait for a follow-up run: the others
   // are on their way to the live session.
   const queued = [...tasks.values()]
@@ -1360,18 +1375,19 @@ function state() {
     .map((t) => ({
       key: `${t.repo}#${t.id}`,
       kind: kindOf(t.pending.at(-1).mode, t.kind),
-      title: null,
       repo: t.repo,
       replyTo: t.pending.at(-1).replyTo,
     }));
+  const talks = [...brainstorms].map(([key, { timer, ...b }]) => ({ key, ...b }));
   // `now`: the dashboard compares run start times with the server clock, not its own.
   return {
-    runs: runs.slice(0, 100).map(publicRun),
-    queued,
-    brainstorms: [...brainstorms]
-      .map(([key, { timer, ...b }]) => ({ key, ...b }))
-      .sort((a, b) => b.deadline - a.deadline)
-      .slice(0, 20),
+    user,
+    tasks: board({ runs, queued, brainstorms: talks })
+      .slice(0, 200)
+      .map((t) => ({ ...t, runs: t.runs.map(publicRun) })),
+    states: STATES,
+    running,
+    queued: queued.length,
     maxParallel: config.maxParallel,
     previews: previews.status(),
     now: Date.now(),
@@ -1420,26 +1436,13 @@ function stream(req, res, run) {
 
 const dashboard = readFileSync(new URL("./dashboard.html", import.meta.url), "utf8");
 
-function sha256(text) {
-  return createHash("sha256").update(text).digest();
-}
-
-// Basic auth, any user name: the password is the only secret.
-function authorized(req) {
-  const [scheme, encoded] = (req.headers.authorization ?? "").split(" ");
-  if (scheme !== "Basic" || !encoded) return false;
-  const decoded = Buffer.from(encoded, "base64").toString("utf8");
-  const password = decoded.slice(decoded.indexOf(":") + 1);
-  return timingSafeEqual(sha256(password), sha256(config.dashboardPassword));
-}
-
 // Health checks and scripts call from inside the container (docker compose exec).
 function local(req) {
   return ["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(req.socket.remoteAddress);
 }
 
 function trusted(req) {
-  return local(req) || (config.dashboardPassword && authorized(req));
+  return local(req) || auth.user(req) !== null;
 }
 
 function sendJson(res, value) {
@@ -1449,23 +1452,29 @@ function sendJson(res, value) {
 
 function serveDashboard(req, res) {
   const url = new URL(req.url, "http://localhost");
-  if (!config.dashboardPassword) {
+  if (!app) {
     res.setHeader("content-type", "text/plain; charset=utf-8");
     return res.end(
-      app
-        ? "Deckhand listener: up. Set DASHBOARD_PASSWORD to see the runs.\n"
-        : "Deckhand listener: up, no GitHub App yet. Open the /setup link from the listener's logs.\n",
+      "Deckhand listener: up, no GitHub App yet. Open the /setup link from the listener's logs.\n",
     );
   }
-  if (!authorized(req)) {
-    res.writeHead(401, { "www-authenticate": 'Basic realm="Deckhand"' });
-    return res.end();
+  const user = auth.user(req);
+  if (!user) {
+    if (url.pathname !== "/") return res.writeHead(401).end();
+    return page(
+      res,
+      200,
+      "Deckhand",
+      `<p>Runs, brainstorms and their live logs, for this Deckhand's allowed users.</p>
+<p><a class="button" href="/auth/login">Sign in with GitHub</a></p>`,
+    );
   }
+  res.setHeader("cache-control", "no-store");
   if (url.pathname === "/") {
     res.setHeader("content-type", "text/html; charset=utf-8");
     return res.end(dashboard);
   }
-  if (url.pathname === "/api/state") return sendJson(res, state());
+  if (url.pathname === "/api/state") return sendJson(res, state(user));
   const match = /^\/api\/runs\/([\w.-]+)\/stream$/.exec(url.pathname);
   const run = match && runs.find((r) => r.id === match[1]);
   if (run) return stream(req, res, run);
@@ -1549,11 +1558,9 @@ createServer((req, res) => {
   if (req.method === "GET" && req.url === "/health") return res.end("ok");
   if (req.method === "GET" && req.url.startsWith("/shots/")) return serveShot(req, res);
   if (setup.handle(req, res)) return;
+  if (auth.handle(req, res)) return;
   if (req.url === "/status") {
-    if (!trusted(req)) {
-      res.writeHead(401, { "www-authenticate": 'Basic realm="Deckhand"' });
-      return res.end();
-    }
+    if (!trusted(req)) return res.writeHead(401).end();
     return sendJson(res, status());
   }
   if (req.method === "POST" && req.url === "/webhook") return webhook(req, res);

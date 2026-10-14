@@ -65,6 +65,7 @@ test("the manifest asks for the App's permissions and events, webhook on /webhoo
   assert.equal(m.public, false);
   assert.equal(m.hook_attributes.url, "https://hooks.example.com/webhook");
   assert.equal(m.redirect_url, "https://hooks.example.com/setup/callback");
+  assert.deepEqual(m.callback_urls, ["https://hooks.example.com/auth/callback"]);
   assert.deepEqual(m.default_permissions, APP_PERMISSIONS);
   assert.deepEqual(m.default_events, APP_EVENTS);
 });
