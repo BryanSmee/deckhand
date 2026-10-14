@@ -16,9 +16,10 @@ export const CONFIG_FILE = ".deckhand.yaml";
 // What the sandbox mounts itself: a cache can't take these over.
 export const RESERVED = ["/workspace", "/home/node/.claude", "/opt/claude-code", "/screenshots"];
 
-// The listener's own modes: a repo's `modes:` can't take these names. Work and brainstorm
-// are the ones "/mode" picks; the others come from the inbox, discussions and "/stop".
-export const BUILTIN_MODES = ["work", "brainstorm"];
+// The listener's own modes: a repo's `modes:` can't take these names. Work, brainstorm and
+// onboarding (proposing this file, onboarding.mjs) are the ones "/mode" picks; the others
+// come from the inbox, discussions and "/stop".
+export const BUILTIN_MODES = ["work", "brainstorm", "onboarding"];
 const RESERVED_MODES = [...BUILTIN_MODES, "stop", "idea", "bug", "discussion"];
 const MODE_KEYS = ["instructions", "light", "session", "model", "effort"];
 
@@ -238,7 +239,7 @@ export function parseRepoConfig(text, config) {
 function parseMode(name, mode, settings, fail) {
   const where = `modes.${name}`;
   const id = name.toLowerCase();
-  if (BUILTIN_MODES.includes(id)) {
+  if (id === "work" || id === "brainstorm") {
     const keys = id === "work" ? "model and effort" : "brainstorm_model and brainstorm_effort";
     return fail(where, `${id} is built in: set its model with ${keys} instead`);
   }

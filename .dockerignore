@@ -1,6 +1,8 @@
 .git
 .env
 docs
+# The onboarding prompt's reference (listener/Dockerfile).
+!docs/repo-config.md
 test
 dashboard/node_modules
 dashboard/dist

@@ -84,6 +84,7 @@ export function workItem(config, event, p, skip = () => null) {
   const author = source?.user;
   const body = source?.body ?? "";
   if (event === "ping") return skip("ping (webhook configured)");
+  // Onboarding's (onboarding.mjs): they never carry a comment.
   if (event === "installation" || event === "installation_repositories") {
     return skip(`${event} ${p.action ?? ""} by ${p.sender?.login ?? "?"}`);
   }
@@ -205,8 +206,8 @@ export function previewEvent(config, event, p, skip = () => null) {
 // `pr`: { number, title, body }. A pull request that closes an issue is that issue's task,
 // whose title the payload doesn't have (the dashboard fetches it, titles.mjs).
 function prItem(skip, repo, { number: pr, title, body: prBody }, { trigger, mode }, text, comment) {
-  if (trigger === "stop" || mode === "brainstorm") {
-    return skip("brainstorms are on issues: pull request comments are about the code");
+  if (trigger === "stop" || mode === "brainstorm" || mode === "onboarding") {
+    return skip(`${mode ?? "brainstorm"}s are on issues: pull request comments are about the code`);
   }
   const issue = linkedIssue(prBody);
   return issue

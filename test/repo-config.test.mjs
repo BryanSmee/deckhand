@@ -196,7 +196,7 @@ test("modes: parsed, with the defaults of work or brainstorms", () => {
   const { settings, errors, warnings } = parseRepoConfig(MODES, config);
   assert.deepEqual(errors, []);
   assert.deepEqual(warnings, []);
-  assert.deepEqual(modeNames(settings), ["work", "brainstorm", "review", "triage"]);
+  assert.deepEqual(modeNames(settings), ["work", "brainstorm", "onboarding", "review", "triage"]);
   // A light mode takes the brainstorms' defaults, a full one work's.
   assert.deepEqual(customMode(settings, "review"), {
     name: "review",
@@ -226,6 +226,7 @@ test("modes: built-in names, wrong names, unknown keys and bad paths are errors"
   work: { model: sonnet }
   Brainstorm: { instructions: b.md }
   stop: { instructions: s.md }
+  onboarding: { instructions: o.md }
   "a b": { instructions: a.md }
   escape: { instructions: ../secrets.md }
   absolute: { instructions: /etc/passwd }
@@ -240,6 +241,7 @@ test("modes: built-in names, wrong names, unknown keys and bad paths are errors"
     "modes.work: work is built in: set its model with model and effort instead",
     "modes.Brainstorm: brainstorm is built in: set its model with brainstorm_model and brainstorm_effort instead",
     "modes.stop: stop is reserved by Deckhand",
+    "modes.onboarding: onboarding is reserved by Deckhand",
     "modes.a b: expected a name of letters, digits, - and _ (32 at most)",
     "modes.escape.instructions: expected a path in the repository (relative, no ..)",
     "modes.absolute.instructions: expected a path in the repository (relative, no ..)",

@@ -145,9 +145,12 @@ async function fakeGitHub(files = {}) {
       requests.push(entry);
       for (const w of [...waiters]) if (w.match(entry)) w.resolve(entry);
       res.setHeader("content-type", "application/json");
-      const file = /^\/repos\/org\/repo\/contents\/([^?]+)\?ref=trunk$/.exec(req.url);
+      // Other branches' files are keyed "<branch>:<path>".
+      const file = /^\/repos\/org\/repo\/contents\/([^?]+)\?ref=(.+)$/.exec(req.url);
       if (file) {
-        const text = files[decodeURIComponent(file[1])];
+        const path = decodeURIComponent(file[1]);
+        const ref = decodeURIComponent(file[2]);
+        const text = ref === "trunk" ? files[path] : files[`${ref}:${path}`];
         if (text === undefined) return res.writeHead(404).end("{}");
         const content = Buffer.from(text).toString("base64");
         return res.end(JSON.stringify({ type: "file", sha: `blob-${text.length}`, content }));
@@ -164,6 +167,18 @@ async function fakeGitHub(files = {}) {
       // A task from before titles were kept: the dashboard asks for its title once.
       if (req.method === "GET" && req.url === "/repos/org/repo/issues/3") {
         return res.end(JSON.stringify({ title: "An older pull request" }));
+      }
+      // Onboarding: the repo, its new issue, and the pull request the work run opened.
+      if (req.method === "GET" && req.url === "/repos/org/repo") {
+        return res.end(JSON.stringify({ default_branch: "trunk", has_issues: true }));
+      }
+      if (req.method === "POST" && req.url === "/repos/org/repo/issues") {
+        return res.end(JSON.stringify({ number: 30 }));
+      }
+      if (req.url === "/repos/org/repo/pulls?state=open&per_page=100") {
+        return res.end(
+          JSON.stringify([{ number: 31, head: { ref: "issue-30-deckhand-config" }, body: "" }]),
+        );
       }
       // A listener that restarted looks the installation up instead of reading it from a
       // delivery.
@@ -878,7 +893,7 @@ test("/mode with a name the repo doesn't have: a reply listing the modes, no run
   );
   assert.match(
     JSON.parse(reply.body).body,
-    /^Unknown mode `reveiw`\. The modes here: `work`, `brainstorm`, `review` \(comments only\)\./,
+    /^Unknown mode `reveiw`\. The modes here: `work`, `brainstorm`, `onboarding`, `review` \(comments only\)\./,
   );
   await new Promise((resolve) => setTimeout(resolve, 200));
   assert.equal(exists(join(dir, "run-args")), null);
@@ -938,7 +953,7 @@ test("/mode foo: a reply listing the modes, no run", async (t) => {
   );
   assert.match(
     JSON.parse(reply.body).body,
-    /^Unknown mode `foo`\. The modes here: `work`, `brainstorm`\./,
+    /^Unknown mode `foo`\. The modes here: `work`, `brainstorm`, `onboarding`\./,
   );
   await new Promise((resolve) => setTimeout(resolve, 200));
   assert.equal(exists(join(dir, "run-args")), null);
@@ -955,6 +970,134 @@ test("a mode whose instructions file is missing: the reply says so", async (t) =
     /the `review` mode's instructions, `\.deckhand\/review\.md`, are not on `trunk`/,
   );
   assert.equal(exists(join(dir, "run-args")), null);
+});
+
+function installed(sender = "alice", repos = ["org/repo"]) {
+  return {
+    action: "created",
+    installation: { id: 7 },
+    repositories: repos.map((full_name) => ({ full_name })),
+    sender: { login: sender },
+  };
+}
+
+const onIssue30 = (github) =>
+  github.requests.filter(
+    (r) => r.method === "POST" && r.path === "/repos/org/repo/issues/30/comments",
+  );
+
+function onIssue30Comment(id, body) {
+  const payload = followUp(id, body);
+  payload.issue = { number: 30 };
+  return payload;
+}
+
+test("installing the App on a repo without a config: an onboarding issue and conversation, then its pull request", async (t) => {
+  const ctx = await listen(
+    t,
+    {
+      // The work run's branch: a config with an error, and the Dockerfile it names is missing.
+      "issue-30-deckhand-config:.deckhand.yaml": "effort: huge\ndockerfile: .deckhand/Dockerfile\n",
+    },
+    { BRAINSTORM_DEBOUNCE_MS: "0", ALLOWED_HOSTS: "registry.npmjs.org" },
+  );
+  const { dir, github, listener, send, restart } = ctx;
+  assert.equal((await send(installed(), "installation")).status, 202);
+  const issue = await github.waitFor(
+    (r) => r.method === "POST" && r.path === "/repos/org/repo/issues",
+  );
+  const created = JSON.parse(issue.body);
+  assert.equal(created.title, "Set up Deckhand for this repository");
+  assert.deepEqual(created.labels, ["deckhand-onboarding"]);
+  assert.match(created.body, /^@alice installed Deckhand/);
+  assert.ok(github.requests.some((r) => r.path === "/repos/org/repo/labels"));
+
+  // The onboarding run: light, read-only, its prompt with the operator's frame and the reference.
+  await until(() => onIssue30(github).length === 1, "the proposal");
+  const reply = JSON.parse(onIssue30(github)[0].body).body;
+  assert.match(
+    reply,
+    /onboarding: reply to change the proposal, `Deckhand` opens the pull request/,
+  );
+  assert.equal(lastRun(dir), "onboarding 1");
+  const env = readFileSync(join(dir, "run-env"), "utf8");
+  assert.match(env, /^TASK_ISSUE=$/m);
+  assert.match(env, /^TASK_PROMPT=Onboard org\/repo with the maintainer, on GitHub issue #30/m);
+  assert.match(env, /operator's `ALLOWED_HOSTS`: `registry\.npmjs\.org`/);
+  assert.match(env, /Host mount roots granted to this repository: none/);
+  assert.match(env, /## Reference: `\.deckhand\.yaml`[\s\S]*# Per-repo config/);
+  const mints = () => github.requests.filter((r) => r.body.includes("repositories"));
+  assert.equal(JSON.parse(mints().at(-1).body).permissions.contents, "read");
+  assert.equal(JSON.parse(mints().at(-1).body).permissions.issues, "read");
+  assert.deepEqual(
+    JSON.parse(readFileSync(join(dir, "onboarding.json"), "utf8"))["org/repo"].issue,
+    30,
+  );
+  await listener.until("done (ok)");
+
+  // A comment without a trigger line: the same conversation, nothing pushed.
+  await send(onIssue30Comment(100, "Looks good, but use pnpm."));
+  await until(() => onIssue30(github).length === 2, "the updated proposal");
+  assert.equal(lastRun(dir), "onboarding 1");
+  assert.match(
+    readFileSync(join(dir, "run-env"), "utf8"),
+    /^TASK_MESSAGE=Looks good, but use pnpm\./m,
+  );
+  assert.equal(JSON.parse(mints().at(-1).body).permissions.contents, "read");
+
+  // The trigger line: a work run with the onboarding prompt, and the branch's config checked.
+  await send(onIssue30Comment(101, "Deckhand"));
+  await until(() => onIssue30(github).length === 3, "the pull request reply");
+  assert.equal(lastRun(dir), "work full");
+  const work = readFileSync(join(dir, "run-env"), "utf8");
+  assert.match(work, /^TASK_ISSUE=30$/m);
+  assert.match(work, /^TASK_PROMPT=The maintainer confirmed the onboarding proposal/m);
+  assert.equal(JSON.parse(mints().at(-1).body).permissions.contents, "write");
+  const done = JSON.parse(onIssue30(github)[2].body).body;
+  assert.match(done, /^All done\./);
+  assert.match(done, /`\.deckhand\.yaml` on `issue-30-deckhand-config` has errors/);
+  assert.match(done, /- ❌ dockerfile: `\.deckhand\/Dockerfile` is not on the branch/);
+  await listener.until("done (ok)");
+
+  // A restart, then the App installed again: already onboarded, no second issue.
+  await restart();
+  await send(installed(), "installation");
+  await ctx.listener.until("already onboarded (#30)");
+  assert.equal(github.requests.filter((r) => r.path === "/repos/org/repo/issues").length, 1);
+});
+
+test("installed by someone not in ALLOWED_USERS, or with ONBOARDING=off: no issue", async (t) => {
+  const { github, listener, send } = await listen(t);
+  await send(installed("mallory"), "installation");
+  await listener.until("mallory not in ALLOWED_USERS, no onboarding issue for org/repo");
+  const off = await listen(t, {}, { ONBOARDING: "off" });
+  await off.send(installed(), "installation");
+  await off.listener.until("ONBOARDING=off, no onboarding issue for org/repo");
+  for (const g of [github, off.github]) {
+    assert.equal(
+      g.requests.some((r) => r.path === "/repos/org/repo/issues"),
+      false,
+    );
+  }
+});
+
+test("/mode onboarding alone on an issue starts the conversation by hand", async (t) => {
+  const { dir, github, send } = await listen(
+    t,
+    {},
+    { ONBOARDING: "off", BRAINSTORM_DEBOUNCE_MS: "0" },
+  );
+  await send(comment("alice", "/mode onboarding"));
+  await until(() => replies(github).length === 1, "the proposal");
+  assert.equal(lastRun(dir), "onboarding 1");
+  assert.match(readFileSync(join(dir, "run-env"), "utf8"), /^TASK_PROMPT=Onboard org\/repo/m);
+  assert.equal(
+    JSON.parse(readFileSync(join(dir, "onboarding.json"), "utf8"))["org/repo"].issue,
+    12,
+  );
+  assert.deepEqual(JSON.parse(readFileSync(join(dir, "modes.json"), "utf8")), {
+    "org/repo#12": "onboarding",
+  });
 });
 
 test("the dashboard and its logs are for allowed users signed in with GitHub", async (t) => {
