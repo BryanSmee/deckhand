@@ -3,21 +3,30 @@
 # docs/security.md).
 #
 #   cp .env.example .env    # then set ALLOWED_USERS and a Claude credential
-#   docker compose up -d --build
+#   docker compose pull && docker compose up -d
 #   docker compose logs listener   # prints the one-time /setup link
 #
-# The listener's port is published as is: put your own reverse proxy (TLS, host name) in
-# front of it. See docs/setup.md.
+# The images are the release DECKHAND_VERSION (default: the latest), published for each tag.
+# Updating is the same two commands, at any time: running sandboxes go on, and the new
+# listener picks them up. `docker compose up -d --build` builds them from this checkout
+# instead. The listener's port is published as is: put your own reverse proxy (TLS, host
+# name) in front of it. See docs/setup.md.
 
 name: deckhand
+
+# The base image sandboxes run from: the `sandbox` service below pulls or builds it, the
+# listener starts runs from it.
+x-sandbox-image: &sandbox-image ${DECKHAND_REGISTRY:-ghcr.io/bryansmee}/deckhand-sandbox:${DECKHAND_VERSION:-latest}
 
 services:
   listener:
     build:
       context: .
       dockerfile: listener/Dockerfile
-    image: deckhand-listener
+    image: ${DECKHAND_REGISTRY:-ghcr.io/bryansmee}/deckhand-listener:${DECKHAND_VERSION:-latest}
     restart: unless-stopped
+    # Stopping only saves the queue and the runs' state: sandboxes keep running.
+    stop_grace_period: 30s
     ports:
       - "${PORT:-8080}:8080"
     environment:
@@ -47,9 +56,10 @@ services:
       BRAINSTORM_IDLE_MINUTES: ${BRAINSTORM_IDLE_MINUTES:-10}
       NEEDS_INPUT_LABEL: ${NEEDS_INPUT_LABEL-needs-input}
       # Names of what the listener creates on the host's Docker, matching the ones below.
-      SANDBOX_IMAGE: ${SANDBOX_IMAGE:-deckhand-sandbox}
+      SANDBOX_IMAGE: *sandbox-image
       SANDBOX_NETWORK: ${SANDBOX_NETWORK:-deckhand-sandboxes}
       SHOTS_VOLUME: ${SHOTS_VOLUME:-deckhand-screenshots}
+      RUNS_VOLUME: ${RUNS_VOLUME:-deckhand-runs}
       CLAUDE_CODE_VOLUME: ${CLAUDE_CODE_VOLUME:-deckhand-claude-code}
       NAME_PREFIX: ${NAME_PREFIX:-deckhand}
       # The host's path of the socket mounted below: preview hooks get it too.
@@ -64,6 +74,8 @@ services:
       - data:/data
       # Shared with the sandboxes, one folder per run, served under /shots/.
       - screenshots:/data/shots
+      # Each run's inbox: comments for a running sandbox, which reads its own folder only.
+      - runs:/data/runs
       # Optional: what you grant each repo (hosts, host mounts, limits): docs/security.md.
       # - ./grants.yaml:/etc/deckhand/grants.yaml:ro
       # Each mount root you grant, at the same path and read-only: the listener resolves the
@@ -77,7 +89,7 @@ services:
     build:
       context: .
       dockerfile: proxy/Dockerfile
-    image: deckhand-egress
+    image: ${DECKHAND_REGISTRY:-ghcr.io/bryansmee}/deckhand-egress:${DECKHAND_VERSION:-latest}
     restart: unless-stopped
     environment:
       POLICY_URL: http://listener:8081/egress
@@ -86,13 +98,13 @@ services:
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
 
-  # Builds the base image sandboxes run from (repo images build FROM it), then exits: the
-  # listener starts them itself.
+  # Pulls or builds the base image sandboxes run from (repo images build FROM it, and a new
+  # base rebuilds them on their next run), then exits: the listener starts them itself.
   sandbox:
     build:
       context: .
       dockerfile: sandbox/Dockerfile
-    image: ${SANDBOX_IMAGE:-deckhand-sandbox}
+    image: *sandbox-image
     entrypoint: ["true"]
     restart: "no"
     network_mode: none
@@ -108,3 +120,5 @@ volumes:
   data:
   screenshots:
     name: ${SHOTS_VOLUME:-deckhand-screenshots}
+  runs:
+    name: ${RUNS_VOLUME:-deckhand-runs}

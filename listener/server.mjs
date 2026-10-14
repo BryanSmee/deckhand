@@ -10,7 +10,7 @@
 //                  for that run (defaults: SANDBOX_MODEL, SANDBOX_EFFORT).
 //
 // A comment that arrives while its issue's run is working goes to that run: after the usual
-// pause (so a burst is one message), the listener writes it to Claude's stdin (stream-json
+// pause (so a burst is one message), the listener writes it to the run's inbox (stream-json
 // input, TASK_INPUT=stream in ../sandbox/entrypoint.sh), and Claude sees it after its current
 // tool call; the run's final message is still the one reply and covers it. "/model" and
 // "/effort" cannot change a live process: they apply to the next run, and the reply says so.
@@ -41,8 +41,14 @@
 //
 // GET / is a dashboard of every repo's issues and pull requests, their state and live logs,
 // for ALLOWED_USERS signed in with GitHub through the App (auth.mjs, board.mjs); GET /status
-// says whether the listener is idle, to them and to calls from inside the container. Comments
-// still waiting for a run are saved to queue.json on SIGTERM and picked up at the next start.
+// says what is going on, to them and to calls from inside the container.
+//
+// The listener can restart at any time (an update is `docker compose pull && up -d`).
+// Sandboxes run detached, through the runner (runner/docker.mjs): on SIGTERM the listener
+// starts no more runs and saves the comments still waiting for one to queue.json; each run's
+// state is in logs/<run>.live.json all along. The next listener reads both, finds the
+// sandboxes by their labels, follows their output from where the previous one stopped, and
+// posts each reply once.
 //
 // GET /shots/<token>/<file> serves the screenshots runs save for their pull requests: GitHub
 // cannot take image uploads through its API, so they need a public URL.
@@ -63,12 +69,12 @@
 // Only comments from ALLOWED_USERS, on repos where the App is installed (narrowed by
 // ALLOWED_REPOS if set), are acted on: the sandbox runs without permission prompts and can
 // push. No dependencies: node:http, node:crypto, docker CLI.
-import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import {
+  appendFileSync,
   chmodSync,
   createReadStream,
-  createWriteStream,
+  existsSync,
   mkdirSync,
   readdirSync,
   rmdirSync,
@@ -77,6 +83,7 @@ import {
   openSync,
   readSync,
   closeSync,
+  renameSync,
   writeFileSync,
   rmSync,
 } from "node:fs";
@@ -107,9 +114,12 @@ import {
   readRepoFile,
   startable,
 } from "./repo-config.mjs";
+import { createDockerRunner } from "./runner/docker.mjs";
 import { createSetup } from "./setup.mjs";
 
 const env = process.env;
+// The release (a git tag) the images were built from; "dev" from source.
+const VERSION = env.DECKHAND_VERSION || "dev";
 let config;
 try {
   config = loadConfig(env);
@@ -469,8 +479,8 @@ async function modeOf(item, key, name) {
   }
   // Without a trigger line, a comment only continues work Claude already started.
   if (!item.trigger && !tasks.has(key)) {
-    const started = (await docker(["volume", "inspect", `${name}-claude`])).code === 0;
-    if (!started) return skip(`#${item.replyTo} has no Claude session and no trigger line`);
+    if (!(await runner.hasSession(name)))
+      return skip(`#${item.replyTo} has no Claude session and no trigger line`);
   }
   return "work";
 }
@@ -510,6 +520,7 @@ function deliverable(task) {
 
 // Sends the comments the running session can take as one message; false when none went.
 function deliver(task) {
+  if (stopping) return false; // what waits is saved for the next listener
   const live = task.live;
   const items = task.pending.splice(0, deliverable(task));
   if (!items.length) return false;
@@ -526,8 +537,11 @@ function deliver(task) {
   log(`${live.key}: delivered ${items.length} comment(s) to the running session`);
   live.record.delivered = (live.record.delivered ?? 0) + items.length;
   // Only "/model …" lines: nothing to tell Claude.
-  if (!text) return false;
-  live.send(liveMessage(live.mode, text));
+  if (!text) {
+    saveLive(task);
+    return false;
+  }
+  runner.send(live.id, liveMessage(live.mode, text));
   const at = Date.now();
   live.logFile.write(
     JSON.stringify({
@@ -538,6 +552,7 @@ function deliver(task) {
     }) + "\n",
   );
   live.unanswered.push(...items);
+  saveLive(task);
   return true;
 }
 
@@ -557,6 +572,7 @@ function liveMessage(mode, text) {
 }
 
 function schedule() {
+  if (stopping) return;
   // Brainstorms first: someone is waiting for the reply, work runs take minutes anyway.
   const ready = [...tasks.values()]
     .filter((t) => t.ready && !t.running && t.pending.length)
@@ -698,6 +714,26 @@ ${common}`;
 
 // --- Runs ----------------------------------------------------------------------------------
 
+// A discussion run answers through GraphQL: its token needs Discussions too.
+function permissionsFor(mode) {
+  return mode === "discussion" ? DISCUSSION_PERMISSIONS : undefined;
+}
+
+// Sandboxes are started, followed and removed through the runner (runner/docker.mjs). They
+// run detached, so they outlive a listener restart: the next listener picks them up
+// (restoreRuns()).
+const runsDir = join(config.dataDir, "runs");
+mkdirSync(runsDir, { recursive: true });
+const runner = createDockerRunner({ config, docker, inboxDir: runsDir, log });
+
+// Set on SIGTERM: no run starts any more, what waits is saved for the next listener.
+let stopping = false;
+
+// Appended synchronously, so a line counted as read (live.lines) is on disk.
+function openLog(path) {
+  return { write: (text) => appendFileSync(path, text) };
+}
+
 async function run(task) {
   task.running = true;
   task.ready = false;
@@ -711,7 +747,6 @@ async function run(task) {
   const key = `${task.repo}#${task.id}`;
   const id = `${task.name}-${Date.now()}`;
   const logPath = join(logDir, `${id}.log`);
-  const logFile = createWriteStream(logPath);
   const record = {
     id,
     key,
@@ -725,172 +760,114 @@ async function run(task) {
     logPath,
   };
   runs.unshift(record);
-  // This run's comments, and those delivered to it while it works (see deliver()).
-  const handled = [...items];
-  // The sandbox's only way to GitHub: tokens for this repo, while this run lasts.
-  const secret = broker.register(
-    task.repo,
-    mode === "discussion" ? DISCUSSION_PERMISSIONS : undefined,
-  );
+  // Where comments that arrive during the run go (deliver()), and what a listener that
+  // restarts meanwhile needs to carry on with it (saveLive()).
+  task.live = {
+    id,
+    key,
+    mode,
+    talk,
+    light,
+    record,
+    logFile: openLog(logPath),
+    // The sandbox's only way to GitHub: tokens for this repo, while this run lasts.
+    secret: broker.register(task.repo, permissionsFor(mode)),
+    asked: replyTo, // where errors go
+    replyTo, // where the reply goes: the issue or pull request of the last comment it took
+    open: false, // whether its inbox takes comments
+    replied: false,
+    // What the egress proxy lets it reach (egressAnswer()), and its address once known.
+    hosts: null,
+    ip: null,
+    shots: null,
+    lines: { out: 0, err: 0 }, // of its output read so far, so a restart skips them
+    result: null, // its last result, with the duration of all
+    later: {}, // "/model" and "/effort" that came too late for this run
+    unanswered: [], // delivered since Claude's last result
+    handled: [...items], // its comments and those delivered to it, for their reactions
+    saving: null,
+  };
+  saveLive(task);
   try {
-    // Left over from a listener restart: wait for it.
-    if ((await docker(["ps", "-q", "--filter", `name=^${task.name}$`])).out) {
-      await docker(["wait", task.name]);
-    }
-    // Inbox entries start afresh: the sandbox doesn't resume their session (entrypoint.sh).
-    const started =
-      !FRESH.has(mode) && (await docker(["volume", "inspect", `${task.name}-claude`])).code === 0;
-    // A new comment answers the questions, if any: the issue no longer waits for input.
-    if (config.needsInputLabel && task.kind !== "discussion") {
-      await label(task.repo, task.number, false);
-    }
-    // "/model" and "/effort" sent during the previous run, unless these comments say otherwise.
-    const options = task.next;
-    task.next = {};
-    const text = items
-      .map((i) => takeOptions(i.text, options))
-      .filter(Boolean)
-      .join("\n\n---\n\n");
-    const restored = items.some((i) => i.restored);
-    const body = talk ? brainstormMessage(mode, text, restored) : text;
-    // An empty follow-up (only "/model …", say) would open an interactive session instead.
-    // A new inbox session reads its entries in the prompt (inboxPrompt()).
-    const message = started
-      ? `${body || "Continue."}\n\n(Don't post comments on GitHub yourself: your final message is posted as a reply.)`
-      : INBOX.has(mode)
-        ? ""
-        : body;
-    // Fresh from the default branch: a config merged since the comment applies.
-    const { settings, errors, warnings } = await repoSettings(task.repo, task.base);
-    task.settings = settings;
-    const defaults = light
-      ? [settings.brainstormModel, settings.brainstormEffort]
-      : [settings.model, settings.effort];
-    record.model = options.model ?? defaults[0];
-    record.effort = options.effort ?? defaults[1];
-    record.mode =
-      mode === "stop" ? "wrap-up" : restored ? "restore" : started ? "continue" : "start";
-    log(
-      `${key}: running ${task.name} (${mode}, ${record.mode}, ${record.model}/${record.effort}), log ${logPath}`,
-    );
-    // First line of every log: what the dashboard needs to list it after a restart.
-    const { logPath: _, ...meta } = record;
-    logFile.write(JSON.stringify({ type: "listener", ...meta, message: text }) + "\n");
-    const note = (message) =>
-      logFile.write(
-        JSON.stringify({ type: "listener", event: "note", at: Date.now(), message }) + "\n",
-      );
-    if (errors.length) throw new RunError(configErrors(task.base, errors));
-    for (const warning of warnings) note(`${CONFIG_FILE}: ${warning}`);
-    const access = grantedAccess(task.repo, settings, note);
-    const prepared = await prepare(task, items, settings, record, note, logFile);
-
-    // A fresh, unguessable folder per run: its screenshots are public once linked on GitHub.
-    const shots = randomBytes(12).toString("hex");
-    mkdirSync(join(shotsDir, shots), { recursive: true });
-    chmodSync(join(shotsDir, shots), 0o777); // the sandbox runs as uid 1000
-    // Where comments that arrive during the run go (deliver()).
-    task.live = {
-      key,
-      mode,
-      open: false,
-      // What the egress proxy lets it reach (egressAnswer()), and its address once known.
-      hosts: access.hosts,
-      ip: null,
-      logFile,
-      record,
-      replyTo,
-      later: {}, // "/model" and "/effort" that came too late for this run
-      unanswered: [], // delivered since Claude's last result
-      handled: [], // every comment delivered to it, for their reactions
-    };
-    const prompt = talk
-      ? brainstormPrompt(task)
-      : INBOX.has(mode)
-        ? inboxPrompt(task, mode, text)
-        : initialPrompt(task);
-    const result = await sandbox(task, prompt, message, logFile, shots, record, secret, {
-      ...prepared,
-      ...access,
-    });
-    const live = task.live;
-    task.live = null;
-    handled.push(...(live?.handled ?? []));
-    // Claude exited before answering a delivered comment (a crash): the next run gets it.
-    if (live?.unanswered.length) task.pending.unshift(...live.unanswered);
-    // The comment answered last decides where the reply goes (a discussion's thread).
-    const target = {
-      ...task,
-      replyTo: live?.replyTo ?? replyTo,
-      comment: (live?.handled.at(-1) ?? items.at(-1)).comment,
-    };
-    if (!readdirSync(join(shotsDir, shots)).length) rmdirSync(join(shotsDir, shots));
-    const minutes = result ? Math.round(result.duration_ms / 6000) / 10 : null;
-    // On a phone, the reply is where the next step is read.
-    const hint =
-      mode === "stop"
-        ? " · 💬 brainstorm ended: a trigger line starts it again"
-        : talk
-          ? " · 💬 brainstorm: reply to continue, `/stop` to wrap up"
-          : mode === "discussion"
-            ? " · 💬 reply in this discussion to continue"
-            : "";
-    const later = Object.entries(live?.later ?? {})
-      .map(([k, v]) => `\`/${k} ${v}\``)
-      .join(" ");
-    const next = later ? ` · ${later} came mid-run: it applies to the next run` : "";
-    const footer = `<sub>🤖 Claude ${record.model} · ${record.effort} effort${minutes !== null ? ` · ${minutes} min` : ""}${hint}${next}</sub>`;
-    const status = outcome(result);
-    if (status !== "error") {
-      await answer(target, `${result.result}\n\n${footer}`);
-      // Light runs ask questions all along: no label for those.
-      if (status === "needs-input" && config.needsInputLabel && !light) {
-        await label(task.repo, task.number, true);
-      }
-    } else {
-      const detail = result?.result ?? "No result: see the listener logs.";
-      await answer(target, `Claude stopped with an error.\n\n> ${detail}\n\n${footer}`);
-    }
-    log(`${key}: done (${status})`);
-    record.status = status;
+    if (!(await start(task, items))) return;
   } catch (error) {
-    log(`${key}: ${error.stack ?? error}`);
-    record.status = "error";
-    if (error instanceof RunError) {
-      await answer({ ...task, replyTo, comment: items.at(-1).comment }, error.message).catch((e) =>
-        log(`${key}: ${e}`),
-      );
-    }
-  } finally {
-    record.phase = null;
-    broker.revoke(secret);
-    record.finishedAt = Date.now();
-    logFile.end();
-    if (task.live) handled.push(...task.live.handled); // the run threw mid-way
-    task.live = null;
-    task.running = false;
-    running--;
-    // Comments put back for the next run keep their 👀 until that one is over. Light runs
-    // ask questions all along, like for the label: their replies are "done".
-    const status =
-      !light || record.status === "error" ? record.status : mode === "stop" ? "stopped" : "ok";
-    for (const item of handled) if (!task.pending.includes(item)) track(settle(item, status));
-    const b = brainstorms.get(key);
-    if (talk && b?.status === "active") {
-      b.deadline = Math.max(b.deadline, Date.now() + REPLY_GRACE_MS);
-      armIdle(key, b);
-      saveBrainstorms();
-    }
-    // Comments the run could not take go out together, after the usual pause.
-    if (task.pending.length) {
-      clearTimeout(task.timer);
-      task.timer = setTimeout(() => {
-        task.ready = true;
-        schedule();
-      }, debounce(task));
-    }
-    schedule();
+    return end(task, error);
   }
+  await follow(task);
+}
+
+// Everything up to the sandbox's start; false when the listener is stopping meanwhile (the
+// next one queues these comments again).
+async function start(task, items) {
+  const { live } = task;
+  const { key, mode, talk, light, record, logFile } = live;
+  // Left over from a listener that lost track of it: wait for it, then make room.
+  const leftover = await runner.state(task.name);
+  if (leftover === "running") await runner.wait(task.name);
+  if (leftover) await runner.remove(task.name);
+  // Inbox entries start afresh: the sandbox doesn't resume their session (entrypoint.sh).
+  const started = !FRESH.has(mode) && (await runner.hasSession(task.name));
+  // A new comment answers the questions, if any: the issue no longer waits for input.
+  if (config.needsInputLabel && task.kind !== "discussion") {
+    await label(task.repo, task.number, false);
+  }
+  // "/model" and "/effort" sent during the previous run, unless these comments say otherwise.
+  const options = task.next;
+  task.next = {};
+  const text = items
+    .map((i) => takeOptions(i.text, options))
+    .filter(Boolean)
+    .join("\n\n---\n\n");
+  const restored = items.some((i) => i.restored);
+  const body = talk ? brainstormMessage(mode, text, restored) : text;
+  // An empty follow-up (only "/model …", say) would open an interactive session instead.
+  // A new inbox session reads its entries in the prompt (inboxPrompt()).
+  const message = started
+    ? `${body || "Continue."}\n\n(Don't post comments on GitHub yourself: your final message is posted as a reply.)`
+    : INBOX.has(mode)
+      ? ""
+      : body;
+  // Fresh from the default branch: a config merged since the comment applies.
+  const { settings, errors, warnings } = await repoSettings(task.repo, task.base);
+  task.settings = settings;
+  const defaults = light
+    ? [settings.brainstormModel, settings.brainstormEffort]
+    : [settings.model, settings.effort];
+  record.model = options.model ?? defaults[0];
+  record.effort = options.effort ?? defaults[1];
+  record.mode = mode === "stop" ? "wrap-up" : restored ? "restore" : started ? "continue" : "start";
+  log(
+    `${key}: running ${task.name} (${mode}, ${record.mode}, ${record.model}/${record.effort}), log ${record.logPath}`,
+  );
+  // First line of every log: what the dashboard needs to list it after a restart.
+  const { logPath: _, ...meta } = record;
+  logFile.write(JSON.stringify({ type: "listener", ...meta, message: text }) + "\n");
+  const note = (message) =>
+    logFile.write(
+      JSON.stringify({ type: "listener", event: "note", at: Date.now(), message }) + "\n",
+    );
+  if (errors.length) throw new RunError(configErrors(task.base, errors));
+  for (const warning of warnings) note(`${CONFIG_FILE}: ${warning}`);
+  const access = grantedAccess(task.repo, settings, note);
+  const prepared = await prepare(task, items, settings, record, note, logFile);
+
+  // A fresh, unguessable folder per run: its screenshots are public once linked on GitHub.
+  const shots = randomBytes(12).toString("hex");
+  mkdirSync(join(shotsDir, shots), { recursive: true });
+  chmodSync(join(shotsDir, shots), 0o777); // the sandbox runs as uid 1000
+  live.shots = shots;
+  live.hosts = access.hosts;
+  if (stopping) return false;
+  const prompt = talk
+    ? brainstormPrompt(task)
+    : INBOX.has(mode)
+      ? inboxPrompt(task, mode, text)
+      : initialPrompt(task);
+  await runner.start(sandboxSpec(task, prompt, message, { ...prepared, ...access }));
+  // Written before Claude starts (setup takes a while), a message waits in the inbox.
+  live.open = true;
+  saveLive(task);
+  return true;
 }
 
 // What the operator grants the repo, with its config's requests: the hosts its sandbox may
@@ -918,34 +895,13 @@ function grantedAccess(repo, settings, note) {
   return { hosts: runHosts(config, grant, settings), mounts, limits: grant.limits };
 }
 
-// Sandboxes reach the outside through the egress proxy only: their network must have no
-// route out. Checked until it passes once, so a fixed network needs no restart.
-let internalNetwork = false;
-
-async function checkNetwork() {
-  if (internalNetwork) return;
-  const { code, out } = await docker([
-    "network",
-    "inspect",
-    "--format",
-    "{{.Internal}}",
-    config.network,
-  ]);
-  if (code !== 0 || out !== "true") {
-    throw new Error(
-      `the sandboxes' network ${config.network} is ${code === 0 ? "not internal" : "missing"}: sandboxes would bypass the egress proxy (see docs/security.md)`,
-    );
-  }
-  internalNetwork = true;
-}
-
 // The run's image (built first if the repo's Dockerfile changed), Claude Code and the repo's
 // cache volumes. While an image builds, the dashboard shows the run as "building image".
 async function prepare(task, items, settings, record, note, logFile) {
   const base = task.base || "main";
   const output = (chunk) => logFile.write(chunk);
   try {
-    await checkNetwork();
+    await runner.checkNetwork();
     // A comment on a pull request may run on the image of its own branch (imageRef()).
     const pr = items.at(-1).replyTo;
     let source = { ref: base, branch: false };
@@ -982,85 +938,21 @@ async function prepare(task, items, settings, record, note, logFile) {
   }
 }
 
-// Runs the sandbox with raw stream-json output and resolves with its last `result` event.
-// Claude's stdin stays open for comments that arrive during the run; at each result the
-// listener sends what is waiting, or closes it so Claude exits. A message written before the
-// close is still answered (one more result), so nothing delivered is dropped.
-function sandbox(
-  task,
-  prompt,
-  message,
-  logFile,
-  shots,
-  { model, effort },
-  secret,
-  { image, cacheArgs, settings, mounts, limits },
-) {
-  const live = task.live;
+// What the runner starts: the sandbox's image, environment, volumes and limits. Claude's
+// first message is TASK_PROMPT (and TASK_MESSAGE); comments that arrive during the run reach
+// it through its inbox (deliver()).
+function sandboxSpec(task, prompt, message, { image, cacheArgs, settings, mounts, limits }) {
+  const { live } = task;
   const mode = live.mode === "stop" ? "brainstorm" : live.mode;
-  const light = LIGHT.has(mode);
+  const { light } = live;
   const n = task.name;
   const bot = app.identity();
-  const args = [
-    "run",
-    "--rm",
-    "--init",
-    "-i",
-    "--name",
-    n,
-    "--label",
-    `deckhand.task=${task.repo}#${task.id}`,
-    "--network",
-    config.network,
-    ...hardeningArgs(limits),
-    // Values come from the environment below, so they never show in `ps`.
-    ...[
-      "CLAUDE_CODE_OAUTH_TOKEN",
-      "ANTHROPIC_API_KEY",
-      "DECKHAND_RUN_SECRET",
-      "DECKHAND_BROKER_URL",
-      "CLAUDE_CODE_VERSION",
-      "GIT_AUTHOR_NAME",
-      "GIT_AUTHOR_EMAIL",
-      "GIT_COMMITTER_NAME",
-      "GIT_COMMITTER_EMAIL",
-      "REPO_URL",
-      "BASE_BRANCH",
-      "TASK_PROMPT",
-      "TASK_MESSAGE",
-      "TASK_MODE",
-      "TASK_ISSUE",
-      "SANDBOX_LIGHT",
-      "SANDBOX_SETUP",
-      "SANDBOX_INSTRUCTIONS",
-      "SANDBOX_MODEL",
-      "SANDBOX_EFFORT",
-      ...Object.keys(proxyEnv(config)),
-    ].flatMap((k) => ["-e", k]),
-    ...["-e", "TASK_INPUT=stream", "-e", "TASK_OUTPUT=json"],
-    "-e",
-    "SCREENSHOT_DIR=/screenshots",
-    "-e",
-    `SCREENSHOT_URL=${publicUrl()}/shots/${shots}`,
-    // Its own folder of the screenshots volume only: no run sees another's.
-    "--mount",
-    `type=volume,src=${config.shotsVolume},dst=/screenshots,volume-subpath=${shots}`,
-    // Claude Code, installed by the first run that needs this version (../sandbox/entrypoint.sh).
-    ...["-v", `${config.claudeCodeVolume}:/opt/claude-code`],
-    // The issue's clone and Claude session, kept between its runs.
-    ...["-v", `${n}-workspace:/workspace`],
-    ...["-v", `${n}-claude:/home/node/.claude`],
-    // The repo's caches (its config's `caches`), one volume per path, kept across its runs.
-    ...cacheArgs,
-    // Host paths the operator grants the repo and its config asks for (grantedAccess()).
-    ...mountArgs(mounts),
-    image,
-  ];
-  // Only what is named in `args` reaches the container. The App's credentials are not in
-  // the environment at all: they stay in the data volume.
-  const childEnv = {
-    ...env,
-    DECKHAND_RUN_SECRET: secret,
+  // Values reach the container by name only: they never show in `ps`. The App's credentials
+  // are not among them: they stay in the data volume.
+  const env = {
+    CLAUDE_CODE_OAUTH_TOKEN: process.env.CLAUDE_CODE_OAUTH_TOKEN,
+    ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
+    DECKHAND_RUN_SECRET: live.secret,
     DECKHAND_BROKER_URL: config.brokerUrl,
     CLAUDE_CODE_VERSION: config.claudeCodeVersion,
     GIT_AUTHOR_NAME: bot.name,
@@ -1073,6 +965,9 @@ function sandbox(
     TASK_MESSAGE: message,
     // work, brainstorm, idea, bug or discussion.
     TASK_MODE: mode,
+    // Comments as stream-json messages (the runner's inbox), raw stream-json out.
+    TASK_INPUT: "stream",
+    TASK_OUTPUT: "json",
     // The sandbox opens the issue's branch and draft pull request (../sandbox/draft-pr.sh);
     // not for pull requests without an issue.
     TASK_ISSUE: task.kind === "issue" && !light ? String(task.number) : "",
@@ -1081,68 +976,190 @@ function sandbox(
     SANDBOX_SETUP: light ? "" : (settings.setup ?? ""),
     // Read by the sandbox from its default branch (origin/BASE_BRANCH), like the config.
     SANDBOX_INSTRUCTIONS: settings.instructions ?? "",
-    SANDBOX_MODEL: model,
-    SANDBOX_EFFORT: effort,
+    SANDBOX_MODEL: live.record.model,
+    SANDBOX_EFFORT: live.record.effort,
+    SCREENSHOT_DIR: "/screenshots",
+    SCREENSHOT_URL: `${publicUrl()}/shots/${live.shots}`,
     ...proxyEnv(config),
   };
-  return new Promise((resolve) => {
-    const child = spawn("docker", args, {
-      env: childEnv,
-      stdio: ["pipe", "pipe", "pipe"],
-    });
-    // Written before Claude starts (setup takes a while), a message waits in the pipe.
-    child.stdin.on("error", () => {}); // the container is gone: close() takes over
-    live.send = (text) =>
-      child.stdin.write(
-        JSON.stringify({
-          type: "user",
-          message: { role: "user", content: text },
-        }) + "\n",
-      );
-    live.open = true;
-    const close = () => {
-      if (!live.open) return;
-      live.open = false;
-      child.stdin.end();
-    };
-    let result = null;
-    let buffer = "";
-    child.stdout.on("data", (chunk) => {
-      logFile.write(chunk);
-      buffer += chunk;
-      let newline;
-      while ((newline = buffer.indexOf("\n")) >= 0) {
-        const line = buffer.slice(0, newline);
-        buffer = buffer.slice(newline + 1);
-        try {
-          const event = JSON.parse(line);
-          if (event.type === "result") {
-            // One result per turn: a comment answered after the first adds a turn.
-            result = {
-              ...event,
-              duration_ms: (result?.duration_ms ?? 0) + event.duration_ms,
-            };
-            live.unanswered = [];
-            // Comments still in their pause go now, rather than to a new container.
-            clearTimeout(task.timer);
-            if (!deliver(task)) close();
-          }
-        } catch {
-          // Setup output (clone, install) before Claude starts.
-        }
-      }
-    });
-    child.stderr.on("data", (chunk) => logFile.write(chunk));
-    child.on("close", () => {
-      live.open = false;
-      resolve(result);
-    });
-  });
+  const args = [
+    "--network",
+    config.network,
+    ...hardeningArgs(limits),
+    // Its own folder of the screenshots volume only: no run sees another's.
+    "--mount",
+    `type=volume,src=${config.shotsVolume},dst=/screenshots,volume-subpath=${live.shots}`,
+    // Claude Code, installed by the first run that needs this version (../sandbox/entrypoint.sh).
+    ...["-v", `${config.claudeCodeVolume}:/opt/claude-code`],
+    // The issue's clone and Claude session, kept between its runs.
+    ...["-v", `${n}-workspace:/workspace`],
+    ...["-v", `${n}-claude:/home/node/.claude`],
+    // The repo's caches (its config's `caches`), one volume per path, kept across its runs.
+    ...cacheArgs,
+    // Host paths the operator grants the repo and its config asks for (grantedAccess()).
+    ...mountArgs(mounts),
+  ];
+  return { run: live.id, name: n, image, labels: { "deckhand.task": live.key }, env, args };
 }
 
-// --- Restarts: what a restart would cut short, and the queue kept across it ----------------
+// Reads the sandbox's output until it exits. At each result Claude gives, the comments
+// waiting for it go to its inbox, or the inbox closes so Claude exits; a message written
+// before the close is still answered (one more result), so nothing delivered is dropped.
+// Also how a restarted listener picks a run up: what it already read is skipped.
+async function follow(task) {
+  const live = task.live;
+  try {
+    for (;;) {
+      await runner.follow(task.name, {
+        skip: { ...live.lines },
+        onOut: (line) => output(task, line),
+        // Setup output (clone, install) before Claude starts.
+        onErr: (line) => {
+          if (stopping) return; // left for the next listener
+          live.logFile.write(line + "\n");
+          live.lines.err++;
+        },
+      });
+      if (stopping || (await runner.state(task.name)) !== "running") break;
+      // The output stopped while the sandbox runs on (the daemon restarted, say): follow again.
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
+  } catch (error) {
+    return end(task, error);
+  }
+  if (!stopping) await end(task);
+}
 
-// Reaction updates still on their way to GitHub once a run is over (see run()).
+function output(task, line) {
+  const live = task.live;
+  if (stopping) return; // left for the next listener
+  live.logFile.write(line + "\n");
+  live.lines.out++;
+  const event = parse(line);
+  if (event?.type !== "result") return;
+  // One result per turn: a comment answered after the first adds a turn.
+  live.result = {
+    ...event,
+    duration_ms: (live.result?.duration_ms ?? 0) + event.duration_ms,
+  };
+  live.unanswered = [];
+  // Comments still in their pause go now, rather than to a new container.
+  clearTimeout(task.timer);
+  if (!deliver(task)) close(task);
+  saveLive(task);
+}
+
+// No more comments for this run: Claude exits once it has answered.
+function close(task) {
+  const live = task.live;
+  if (!live.open) return;
+  live.open = false;
+  runner.close(live.id);
+}
+
+// Ends under way: a listener that stops lets them post their reply first, so the next one
+// doesn't post it again.
+const ending = new Set();
+
+function end(task, error = null) {
+  const done = finish(task, error);
+  ending.add(done);
+  done.finally(() => ending.delete(done));
+  return done;
+}
+
+// Once the sandbox exited (or couldn't start): the reply, reactions and label, then the next
+// run for comments that came too late for this one.
+async function finish(task, error) {
+  const live = task.live;
+  const { key, mode, talk, light, record } = live;
+  live.open = false;
+  // The comment answered last decides where the reply goes (a discussion's thread).
+  const target = (replyTo) => ({ ...task, replyTo, comment: live.handled.at(-1)?.comment });
+  try {
+    if (error) throw error;
+    const result = live.result;
+    // Claude exited before answering a delivered comment (a crash): the next run gets it.
+    if (live.unanswered.length) task.pending.unshift(...live.unanswered);
+    const shots = live.shots && join(shotsDir, live.shots);
+    if (shots && existsSync(shots) && !readdirSync(shots).length) rmdirSync(shots);
+    const minutes = result ? Math.round(result.duration_ms / 6000) / 10 : null;
+    // On a phone, the reply is where the next step is read.
+    const hint =
+      mode === "stop"
+        ? " · 💬 brainstorm ended: a trigger line starts it again"
+        : talk
+          ? " · 💬 brainstorm: reply to continue, `/stop` to wrap up"
+          : mode === "discussion"
+            ? " · 💬 reply in this discussion to continue"
+            : "";
+    const later = Object.entries(live.later)
+      .map(([k, v]) => `\`/${k} ${v}\``)
+      .join(" ");
+    const next = later ? ` · ${later} came mid-run: it applies to the next run` : "";
+    const footer = `<sub>🤖 Claude ${record.model} · ${record.effort} effort${minutes !== null ? ` · ${minutes} min` : ""}${hint}${next}</sub>`;
+    const status = outcome(result);
+    // Once: a listener restarting from here on doesn't post it again.
+    if (!live.replied) {
+      const text =
+        status !== "error"
+          ? `${result.result}\n\n${footer}`
+          : `Claude stopped with an error.\n\n> ${result?.result ?? "No result: see the listener logs."}\n\n${footer}`;
+      await answer(target(live.replyTo), text);
+      live.replied = true;
+      saveLive(task);
+      // Light runs ask questions all along: no label for those.
+      if (status === "needs-input" && config.needsInputLabel && !light) {
+        await label(task.repo, task.number, true);
+      }
+    }
+    log(`${key}: done (${status})`);
+    record.status = status;
+  } catch (error) {
+    log(`${key}: ${error.stack ?? error}`);
+    record.status = "error";
+    if (error instanceof RunError && !live.replied) {
+      await answer(target(live.asked), error.message).catch((e) => log(`${key}: ${e}`));
+    }
+  } finally {
+    record.phase = null;
+    broker.revoke(live.secret);
+    record.finishedAt = Date.now();
+    await runner.remove(task.name, live.id).catch((e) => log(`${key}: ${e}`));
+    await live.saving;
+    rmSync(livePath(live.id), { force: true });
+    task.live = null;
+    task.running = false;
+    running--;
+    // Comments put back for the next run keep their 👀 until that one is over. Light runs
+    // ask questions all along, like for the label: their replies are "done".
+    const status =
+      !light || record.status === "error" ? record.status : mode === "stop" ? "stopped" : "ok";
+    for (const item of live.handled) if (!task.pending.includes(item)) track(settle(item, status));
+    const b = brainstorms.get(key);
+    if (talk && b?.status === "active") {
+      b.deadline = Math.max(b.deadline, Date.now() + REPLY_GRACE_MS);
+      armIdle(key, b);
+      saveBrainstorms();
+    }
+    // Comments the run could not take go out together, after the usual pause.
+    if (task.pending.length) startLater(task);
+    schedule();
+  }
+}
+
+// Starts the task's next run after the usual pause, so a burst of comments is one run.
+function startLater(task) {
+  clearTimeout(task.timer);
+  task.ready = false;
+  task.timer = setTimeout(() => {
+    task.ready = true;
+    schedule();
+  }, debounce(task));
+}
+// --- Restarts: the queue and the runs a listener leaves to the next one -------------------
+
+// Reaction updates still on their way to GitHub once a run is over (see end()).
 const inflight = new Set();
 
 function track(promise) {
@@ -1150,8 +1167,9 @@ function track(promise) {
   promise.finally(() => inflight.delete(promise));
 }
 
-// Queued comments don't count: they are saved (saveQueue()), and brainstorms between replies
-// are restored from brainstorms.json and their volume.
+// Queued comments don't count: they are saved (saveQueue()), running sandboxes go on without
+// the listener (restoreRuns()), and brainstorms between replies are restored from
+// brainstorms.json and their volume. Nothing needs to drain before a restart.
 function status() {
   const active = runs.filter((r) => r.status === "running");
   const reasons = [
@@ -1166,6 +1184,7 @@ function status() {
       ),
   ];
   return {
+    version: VERSION,
     idle: running === 0 && !reasons.length,
     previews: previews.status(),
     reasons,
@@ -1175,6 +1194,30 @@ function status() {
   };
 }
 
+// A comment as saved to disk: the id of its 👀 rather than the promise of it.
+async function plain({ eyes, comment, ...item }) {
+  return {
+    ...item,
+    comment: comment && {
+      id: comment.id,
+      html_url: comment.html_url,
+      review: comment.review,
+      node_id: comment.node_id,
+      parent_id: comment.parent_id,
+      discussion: comment.discussion,
+    },
+    eyes: (await eyes?.catch(() => null)) ?? null,
+  };
+}
+
+function revive(item) {
+  return { ...item, eyes: Promise.resolve(item.eyes) };
+}
+
+function pick({ repo, id, kind, number, name, base, discussionId, settings }) {
+  return { repo, id, kind, number, name, base, discussionId, settings };
+}
+
 const queuePath = join(config.dataDir, "queue.json");
 
 // Comments that wait for a run, with the 👀 they got, so the next listener runs them.
@@ -1182,29 +1225,11 @@ async function saveQueue() {
   const saved = [];
   for (const t of tasks.values()) {
     if (!t.pending.length && !Object.keys(t.next).length) continue;
-    const pending = [];
-    for (const { eyes, comment, ...item } of t.pending) {
-      pending.push({
-        ...item,
-        comment: comment && {
-          id: comment.id,
-          html_url: comment.html_url,
-          review: comment.review,
-          node_id: comment.node_id,
-          parent_id: comment.parent_id,
-          discussion: comment.discussion,
-        },
-        eyes: (await eyes?.catch(() => null)) ?? null,
-      });
-    }
+    const pending = await Promise.all(t.pending.map(plain));
     saved.push({ ...pick(t), pending, next: t.next });
   }
   if (saved.length) writeFileSync(queuePath, JSON.stringify(saved, null, 2));
   log(`Saved ${saved.length} task(s) with queued comments`);
-}
-
-function pick({ repo, id, kind, number, name, base, discussionId }) {
-  return { repo, id, kind, number, name, base, discussionId };
 }
 
 function loadQueue() {
@@ -1217,29 +1242,135 @@ function loadQueue() {
   rmSync(queuePath, { force: true });
   for (const t of saved) {
     const key = `${t.repo}#${t.id}`;
-    const pending = t.pending.map((i) => ({
-      ...i,
-      eyes: Promise.resolve(i.eyes),
-    }));
-    const task = {
-      ...t,
-      pending,
-      running: false,
-      ready: false,
-      timer: null,
-      live: null,
-    };
-    tasks.set(key, task);
-    if (pending.length) {
-      log(`${key}: ${pending.length} comment(s) queued before the restart`);
-      task.timer = setTimeout(() => {
-        task.ready = true;
-        schedule();
-      }, debounce(task));
+    // Its run may have gone on through the restart (restoreRuns()).
+    let task = tasks.get(key);
+    if (!task) {
+      task = { ...t, pending: [], running: false, ready: false, timer: null, live: null };
+      tasks.set(key, task);
     }
+    task.next = { ...t.next, ...task.next };
+    task.pending.push(...t.pending.map(revive));
+    if (!t.pending.length) continue;
+    log(`${key}: ${t.pending.length} comment(s) queued before the restart`);
+    if (!task.running) startLater(task);
+    else task.timer = setTimeout(() => deliver(task), debounce(task));
   }
 }
 
+// What a listener needs to carry on with a run started by a previous one: written when it
+// starts and whenever a comment reaches it, Claude answers or the reply is posted; removed
+// once it is over. In order, each after the comments' 👀 are known.
+const livePath = (id) => join(logDir, `${id}.live.json`);
+
+function saveLive(task) {
+  const live = task.live;
+  const write = async () => {
+    const { logPath, ...record } = live.record;
+    const state = {
+      task: pick(task),
+      ...Object.fromEntries(
+        ["id", "mode", "talk", "light", "secret", "asked", "replyTo", "replied", "hosts", "shots"]
+          .concat(["lines", "result", "later"])
+          .map((k) => [k, live[k]]),
+      ),
+      record,
+      handled: await Promise.all(live.handled.map(plain)),
+      // Delivered comments are among the handled ones.
+      unanswered: live.unanswered.map((i) => live.handled.indexOf(i)),
+    };
+    const path = livePath(live.id);
+    writeFileSync(`${path}.tmp`, JSON.stringify(state, null, 2));
+    renameSync(`${path}.tmp`, path);
+  };
+  live.saving = (live.saving ?? Promise.resolve())
+    .then(write)
+    .catch((error) => log(`${live.key}: saving its state: ${error.stack ?? error}`));
+  return live.saving;
+}
+
+// Runs a previous listener left behind, from their saved state: their tokens and egress work
+// again at once, and comments find them. reattach() then follows their sandboxes.
+function restoreRuns() {
+  const restored = [];
+  for (const file of readdirSync(logDir).filter((f) => f.endsWith(".live.json"))) {
+    let saved;
+    try {
+      saved = JSON.parse(readFileSync(join(logDir, file), "utf8"));
+    } catch {
+      continue;
+    }
+    const key = `${saved.task.repo}#${saved.task.id}`;
+    const logPath = join(logDir, `${saved.id}.log`);
+    const record = { ...saved.record, logPath, status: "running", finishedAt: null };
+    const known = runs.findIndex((r) => r.id === saved.id);
+    if (known >= 0) runs[known] = record;
+    else runs.unshift(record);
+    let task = tasks.get(key);
+    if (!task) {
+      task = { ...saved.task, pending: [], ready: false, timer: null, next: {} };
+      tasks.set(key, task);
+    }
+    const handled = saved.handled.map(revive);
+    task.live = {
+      ...saved,
+      key,
+      record,
+      logFile: openLog(logPath),
+      open: !runner.closed(saved.id),
+      ip: null,
+      handled,
+      unanswered: saved.unanswered.map((i) => handled[i]).filter(Boolean),
+      saving: null,
+    };
+    delete task.live.task;
+    task.running = true;
+    running++;
+    broker.register(task.repo, permissionsFor(saved.mode), saved.secret);
+    restored.push(task);
+  }
+  return restored;
+}
+
+// Follows each restored run's sandbox to its end, as if the listener had never stopped. A
+// run whose sandbox never started gives its comments back to the queue. Sandboxes nobody
+// knows about any more are told to finish (their next run waits for them).
+async function reattach(restored) {
+  let sandboxes;
+  // Not knowing isn't "none": that would remove sandboxes still at work.
+  while (!sandboxes) {
+    try {
+      sandboxes = await runner.list();
+    } catch (error) {
+      log(`Listing the sandboxes (again in 5 s): ${error.message}`);
+      await new Promise((resolve) => setTimeout(resolve, 5000));
+    }
+  }
+  for (const task of restored) {
+    const live = task.live;
+    if (live.replied || sandboxes.some((s) => s.run === live.id)) {
+      log(`${live.key}: picked up ${task.name} again`);
+      follow(task);
+      continue;
+    }
+    log(`${live.key}: its sandbox never started: its comments are queued again`);
+    live.record.status = "interrupted";
+    live.record.finishedAt = Date.now();
+    broker.revoke(live.secret);
+    await runner.remove(task.name, live.id);
+    rmSync(livePath(live.id), { force: true });
+    task.pending.unshift(...live.handled);
+    task.live = null;
+    task.running = false;
+    running--;
+    startLater(task);
+  }
+  for (const s of sandboxes) {
+    if (restored.some((t) => t.live?.id === s.run || t.name === s.name)) continue;
+    log(`${s.name}: no saved state for it: ${s.running ? "closing its input" : "removing it"}`);
+    if (s.running) runner.close(s.run);
+    else await runner.remove(s.name, s.run);
+  }
+}
 // --- Runs and their logs, for the dashboard ------------------------------------------------
 
 const runs = loadRuns(); // newest first
@@ -1508,6 +1639,9 @@ function serveShot(req, res) {
 
 // --- HTTP --------------------------------------------------------------------------------
 
+// Comments on their way to the queue: a listener that stops saves them too.
+const admitting = new Set();
+
 function webhook(req, res) {
   const chunks = [];
   let size = 0;
@@ -1518,6 +1652,12 @@ function webhook(req, res) {
   });
   req.on("end", () => {
     const body = Buffer.concat(chunks);
+    if (stopping) {
+      // Failed on GitHub's side, where it can be redelivered, rather than lost.
+      log("Rejected a delivery: stopping");
+      res.statusCode = 503;
+      return res.end("restarting");
+    }
     if (!app) {
       log("Rejected a delivery: no GitHub App yet (open /setup)");
       res.statusCode = 503;
@@ -1549,7 +1689,9 @@ function webhook(req, res) {
     const item = workItem(config, event, payload, skip);
     if (item) {
       item.base = payload.repository?.default_branch;
-      admit(item, event, payload).catch((error) => log(error.stack ?? error));
+      const admitted = admit(item, event, payload).catch((error) => log(error.stack ?? error));
+      admitting.add(admitted);
+      admitted.finally(() => admitting.delete(admitted));
     }
   });
 }
@@ -1578,16 +1720,7 @@ async function taskAt(ip) {
   for (const task of tasks.values()) {
     const live = task.live;
     if (!live?.hosts) continue;
-    if (!live.ip) {
-      const { code, out } = await docker([
-        "inspect",
-        "--format",
-        "{{json .NetworkSettings.Networks}}",
-        task.name,
-      ]);
-      const net = code === 0 ? parse(out)?.[config.network] : null;
-      if (net?.IPAddress) live.ip = [net.IPAddress, net.GlobalIPv6Address].filter(Boolean);
-    }
+    if (!live.ip) live.ip = await runner.address(task.name);
     if (task.live === live && live.ip?.includes(ip)) return task;
   }
   return null;
@@ -1632,14 +1765,25 @@ createServer((req, res) => {
   });
 }).listen(config.brokerPort, () => log(`Token broker on :${config.brokerPort}`));
 
+log(`Deckhand ${VERSION}`);
 if (!app) log(`No GitHub App yet. Set it up at ${setup.link()}`);
 
+// Before any request is served: runs still going since the previous listener, then what it
+// left queued (comments for those runs are delivered to them).
+const restored = restoreRuns();
 loadQueue();
+reattach(restored).catch((error) => log(`Re-attaching: ${error.stack ?? error}`));
 
-// `docker compose up` or `restart` stops the listener with SIGTERM, and kills it 10 s later:
-// enough to wait for the 👀 ids and save what is queued.
+// `docker compose up`, `restart` or an update stops the listener with SIGTERM, and kills it
+// after the stop grace period. Sandboxes go on: no run starts any more, what is queued is
+// saved with the 👀 ids, the runs' state is written, and the next listener carries on.
 process.on("SIGTERM", () => {
-  saveQueue()
+  stopping = true;
+  log("Stopping: running sandboxes go on, the next listener picks them up");
+  // Replies being posted and comments being admitted first, then what they leave.
+  Promise.allSettled([...ending, ...admitting])
+    .then(saveQueue)
+    .then(() => Promise.all([...tasks.values()].map((t) => t.live && saveLive(t))))
     .catch((error) => log(`Saving the queue: ${error.stack ?? error}`))
     .finally(() => process.exit(0));
 });

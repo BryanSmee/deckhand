@@ -78,12 +78,15 @@ else can start a run, and with none set nothing starts), and `CLAUDE_CODE_OAUTH_
 `ANTHROPIC_API_KEY`. Then:
 
 ```sh
-docker compose up -d --build
+docker compose pull
+docker compose up -d
 docker compose logs listener
 ```
 
-This builds the listener, the egress proxy and the base sandbox image, and starts the first
-two. The logs print a one-time setup link, `…/setup?token=…`.
+This pulls the released images (the listener, the egress proxy and the base sandbox image,
+at `DECKHAND_VERSION`, by default `latest`) and starts the first two; `docker compose up -d
+--build` builds them from your checkout instead. The logs print a one-time setup link,
+`…/setup?token=…`.
 
 **2. Create the GitHub App.** Open the setup link through your public address (for example
 `https://deckhand.example.com/setup?token=…`). Check the public URL, pick the App's name and
@@ -165,20 +168,19 @@ All of it, with the grants file and the limits of each measure:
 
 ## Updating
 
-```sh
-git pull
-docker compose up -d --build
-```
-
-Restarting the listener interrupts the runs in progress (the dashboard shows them as
-`interrupted`; comment again to resume). Comments still waiting for a run and brainstorms
-between replies are kept. To wait for a quiet moment first, check that the listener is
-idle:
+Each release (a `v1.2.3` tag) publishes the images to GHCR, tagged `1.2.3`, `1.2` and
+`latest`. Update like any compose service, at any time:
 
 ```sh
-docker compose exec listener node -e \
-  'fetch("http://localhost:8080/status").then((r) => r.json()).then((s) => console.log(s.idle, s.reasons))'
+docker compose pull
+docker compose up -d
 ```
+
+Runs in progress keep going while the listener restarts: their sandboxes run detached, and
+the new listener finds them by their Docker labels, delivers the comments that arrive
+meanwhile and posts each final reply once. Comments still waiting for a run and brainstorms
+between replies are kept. Pin a release with `DECKHAND_VERSION` in `.env` (for Renovate), or
+leave it on `latest` (for Watchtower). See [Updating](docs/setup.md#updating).
 
 Claude Code's version is pinned by `CLAUDE_CODE_VERSION`: change it in `.env` to move to
 another one, and the next run installs it.

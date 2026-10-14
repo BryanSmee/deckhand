@@ -1,0 +1,29 @@
+#!/usr/bin/env node
+// Prints the lines the listener appends to a run's inbox (TASK_INBOX, in a volume mounted
+// read-only) as they come, until its close line: Claude's stream-json input, fed through a
+// file rather than stdin so that it survives a restart of the listener (runner/docker.mjs).
+"use strict";
+const { closeSync, openSync, readSync } = require("node:fs");
+
+const CLOSE = JSON.stringify({ type: "deckhand", event: "close" });
+const fd = openSync(process.argv[2], "r");
+const buffer = Buffer.alloc(64 * 1024);
+let rest = "";
+
+function poll() {
+  let n;
+  while ((n = readSync(fd, buffer, 0, buffer.length, null)) > 0) {
+    const lines = (rest + buffer.toString("utf8", 0, n)).split("\n");
+    rest = lines.pop();
+    for (const line of lines) {
+      if (line === CLOSE) {
+        closeSync(fd);
+        return;
+      }
+      process.stdout.write(line + "\n");
+    }
+  }
+  setTimeout(poll, 500);
+}
+
+poll();

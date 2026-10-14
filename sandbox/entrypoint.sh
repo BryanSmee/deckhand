@@ -15,8 +15,10 @@ set -euo pipefail
 : "${BASE_BRANCH:=main}"
 : "${CLAUDE_CODE_VERSION:?CLAUDE_CODE_VERSION: the Claude Code version to run}"
 
-# TASK_INPUT=stream (the webhook listener): stdin carries comments that arrive while Claude
-# works, as stream-json user messages. Set it aside on fd 3 so no setup command reads them.
+# TASK_INPUT=stream (the webhook listener): comments that arrive while Claude works, as
+# stream-json user messages, from the run's inbox (TASK_INBOX, followed by deckhand-inbox
+# until the listener closes it) or else stdin. Stdin is set aside on fd 3 so no setup
+# command reads it.
 if [ "${TASK_INPUT:-}" = "stream" ]; then
   exec 3<&0 < /dev/null
 fi
@@ -136,14 +138,14 @@ $setup_failed"
   echo "$mode" > "$CLAUDE_CONFIG_DIR/sandbox-mode"
   # TASK_OUTPUT=json (the webhook listener) reads the raw events; people get progress lines.
   if [ "${TASK_OUTPUT:-}" = "json" ] && [ "${TASK_INPUT:-}" = "stream" ]; then
-    # The prompt is the first message, then each comment the listener writes; closing stdin
-    # ends the session once Claude has answered. A process substitution rather than a pipe:
-    # if Claude exits early, the container stops instead of waiting on `cat`.
+    # The prompt is the first message, then each comment the listener writes; closing the
+    # inbox (or stdin) ends the session once Claude has answered. A process substitution
+    # rather than a pipe: if Claude exits early, the container stops instead of waiting.
     exec claude --dangerously-skip-permissions "${model[@]}" "${resume[@]}" -p \
       --input-format stream-json --output-format stream-json --verbose \
       < <(
         jq -nc --arg text "$prompt" '{type: "user", message: {role: "user", content: $text}}'
-        cat <&3
+        if [ -n "${TASK_INBOX:-}" ]; then deckhand-inbox "$TASK_INBOX"; else cat <&3; fi
       )
   fi
   if [ "${TASK_OUTPUT:-}" = "json" ]; then

@@ -10,15 +10,19 @@ that GitHub can reach (your reverse proxy, or a tunnel) forwarding to the listen
 cp .env.example .env
 # ALLOWED_USERS: the GitHub logins allowed to start runs (required: no start without it)
 # CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-token`) or ANTHROPIC_API_KEY
-docker compose up -d --build
+docker compose pull
+docker compose up -d
 docker compose logs listener
 ```
 
-`docker compose up` builds three images: the listener's, the egress proxy's (the only way
-out of the sandboxes' internal network, see [Security model](security.md)), and the base
-sandbox image runs start from (the `sandbox` service only builds it and exits). A repository can bring its own image
+Compose runs three images, published for each release (`DECKHAND_VERSION`, default
+`latest`): the listener's, the egress proxy's (the only way out of the sandboxes' internal
+network, see [Security model](security.md)), and the base sandbox image runs start from
+(the `sandbox` service only pulls it and exits). A repository can bring its own image
 `FROM` that base: see [Per-repo config](repo-config.md). The listener publishes port 8080
 (`PORT` to change it); point your reverse proxy at it.
+
+To build the images from this checkout instead: `docker compose up -d --build`.
 
 ## 2. Create the GitHub App
 
@@ -82,16 +86,16 @@ The dashboard lists every issue, pull request and discussion Deckhand worked on,
 repository's owner) and repository, with filters by repository and state. Each shows its
 listener's state:
 
-| State             | What                                                           |
-| ----------------- | -------------------------------------------------------------- |
-| `queued`          | comments wait for a run (a free slot, or the running one)      |
-| `building image`  | a run waits for the repository's image to build                |
-| `working`         | a run is in progress                                           |
-| `stopping`        | a brainstorm is wrapping up (`/stop`)                          |
-| `needs input`     | the last run stopped to ask; the issue has the label           |
-| `brainstorm`      | a brainstorm waits for your next comment                       |
-| `idle brainstorm` | no comment for a while; the next one restores the session      |
-| `done`, `error`   | how the last run ended (`interrupted`: the listener restarted) |
+| State             | What                                                                    |
+| ----------------- | ----------------------------------------------------------------------- |
+| `queued`          | comments wait for a run (a free slot, or the running one)               |
+| `building image`  | a run waits for the repository's image to build                         |
+| `working`         | a run is in progress                                                    |
+| `stopping`        | a brainstorm is wrapping up (`/stop`)                                   |
+| `needs input`     | the last run stopped to ask; the issue has the label                    |
+| `brainstorm`      | a brainstorm waits for your next comment                                |
+| `idle brainstorm` | no comment for a while; the next one restores the session               |
+| `done`, `error`   | how the last run ended (`interrupted`: a restart came before its start) |
 
 Pick one to see its latest run's log live (and the next runs as they start), or an earlier
 run. On a phone, the list and the log take the whole screen in turn.
@@ -100,24 +104,50 @@ run. On a phone, the list and the log take the whole screen in turn.
 
 All in `.env`, read by `compose.yaml`:
 
-| Setting                                                                                 | Default                        | What                                                             |
-| --------------------------------------------------------------------------------------- | ------------------------------ | ---------------------------------------------------------------- |
-| `ALLOWED_USERS`                                                                         | none: required                 | GitHub logins that can start runs                                |
-| `ALLOWED_REPOS`                                                                         | all where the App is installed | narrows the repos (`owner/repo`, comma-separated)                |
-| `CLAUDE_CODE_OAUTH_TOKEN` / `ANTHROPIC_API_KEY`                                         |                                | Claude credential passed to each sandbox                         |
-| `PUBLIC_URL`                                                                            | stored by `/setup`             | the listener's public address                                    |
-| `CLAUDE_CODE_VERSION`                                                                   | `2.1.300`                      | Claude Code version the sandboxes install on first use           |
-| `SANDBOX_MODEL`, `SANDBOX_EFFORT`                                                       | `opus`, `medium`               | defaults; a comment's `/model` and `/effort` lines override them |
-| `MAX_PARALLEL`                                                                          | `2`                            | sandboxes running at once (a repo's `max_parallel` within it)    |
-| `ALLOWED_HOSTS`                                                                         | none                           | hosts every sandbox may reach besides Anthropic and GitHub       |
-| `SANDBOX_CPUS`, `SANDBOX_MEMORY`, `SANDBOX_PIDS`                                        | `2`, `4g`, `2048`              | each sandbox's limits (per repo: the grants file)                |
-| `GRANTS_FILE`                                                                           | `/etc/deckhand/grants.yaml`    | what you grant each repo: hosts, host mounts, limits             |
-| `EGRESS_PROXY`                                                                          | `http://egress:3128`           | the egress proxy, as sandboxes reach it                          |
-| `INSTALL_NETWORK`                                                                       | `bridge`                       | network of the Claude Code install container (needs npm)         |
-| `TRIGGER`, `BRAINSTORM_TRIGGER`, `BRAINSTORM_STOP`                                      | `Claude work on this`…         | trigger lines                                                    |
-| `NEEDS_INPUT_LABEL`                                                                     | `needs-input`                  | label while a run waits for answers (empty: none)                |
-| `DOCKER_SOCKET`                                                                         | `/var/run/docker.sock`         | the host's Docker socket, as preview hooks mount it              |
-| `SANDBOX_IMAGE`, `SANDBOX_NETWORK`, `SHOTS_VOLUME`, `CLAUDE_CODE_VOLUME`, `NAME_PREFIX` | `deckhand-…`                   | names of what the listener creates on Docker                     |
+| Setting                                                                               | Default                        | What                                                                 |
+| ------------------------------------------------------------------------------------- | ------------------------------ | -------------------------------------------------------------------- |
+| `ALLOWED_USERS`                                                                       | none: required                 | GitHub logins that can start runs                                    |
+| `ALLOWED_REPOS`                                                                       | all where the App is installed | narrows the repos (`owner/repo`, comma-separated)                    |
+| `CLAUDE_CODE_OAUTH_TOKEN` / `ANTHROPIC_API_KEY`                                       |                                | Claude credential passed to each sandbox                             |
+| `PUBLIC_URL`                                                                          | stored by `/setup`             | the listener's public address                                        |
+| `CLAUDE_CODE_VERSION`                                                                 | `2.1.300`                      | Claude Code version the sandboxes install on first use               |
+| `SANDBOX_MODEL`, `SANDBOX_EFFORT`                                                     | `opus`, `medium`               | defaults; a comment's `/model` and `/effort` lines override them     |
+| `MAX_PARALLEL`                                                                        | `2`                            | sandboxes running at once (a repo's `max_parallel` within it)        |
+| `ALLOWED_HOSTS`                                                                       | none                           | hosts every sandbox may reach besides Anthropic and GitHub           |
+| `SANDBOX_CPUS`, `SANDBOX_MEMORY`, `SANDBOX_PIDS`                                      | `2`, `4g`, `2048`              | each sandbox's limits (per repo: the grants file)                    |
+| `GRANTS_FILE`                                                                         | `/etc/deckhand/grants.yaml`    | what you grant each repo: hosts, host mounts, limits                 |
+| `EGRESS_PROXY`                                                                        | `http://egress:3128`           | the egress proxy, as sandboxes reach it                              |
+| `INSTALL_NETWORK`                                                                     | `bridge`                       | network of the Claude Code install container (needs npm)             |
+| `TRIGGER`, `BRAINSTORM_TRIGGER`, `BRAINSTORM_STOP`                                    | `Claude work on this`…         | trigger lines                                                        |
+| `NEEDS_INPUT_LABEL`                                                                   | `needs-input`                  | label while a run waits for answers (empty: none)                    |
+| `DOCKER_SOCKET`                                                                       | `/var/run/docker.sock`         | the host's Docker socket, as preview hooks mount it                  |
+| `DECKHAND_VERSION`                                                                    | `latest`                       | the release compose runs (`1.2.3`, `1.2`): see [Updating](#updating) |
+| `DECKHAND_REGISTRY`                                                                   | `ghcr.io/bryansmee`            | where compose pulls the images from                                  |
+| `SANDBOX_NETWORK`, `SHOTS_VOLUME`, `RUNS_VOLUME`, `CLAUDE_CODE_VOLUME`, `NAME_PREFIX` | `deckhand-…`                   | names of what the listener creates on Docker                         |
+
+## Updating
+
+Each release is a git tag (`v1.2.3`) that publishes the three images, tagged `1.2.3`, `1.2`
+and `latest`. There is no built-in updater: update the way you update other compose
+services.
+
+```sh
+docker compose pull
+docker compose up -d
+```
+
+- **`latest`** (the default): the two commands above take the newest release. Watchtower
+  can run them for you.
+- **A pinned version**: set `DECKHAND_VERSION=1.2.3` in `.env`, change it to update (by
+  hand, or with Renovate's docker-compose or regex manager), then the same two commands.
+
+You can update at any time, runs in progress included. The listener stops within its grace
+period without waiting for them: it starts no new run, saves the comments still waiting for
+one, and the sandboxes keep running. The new listener finds them again by their Docker
+labels, delivers the comments that arrive meanwhile, and posts each run's final reply once,
+even for a run that finished while no listener was there. Queued comments are then handled.
+A new base image rebuilds a repository's own image on its next run (see
+[Per-repo config](repo-config.md)); running sandboxes keep the image they started with.
 
 ## How sandboxes reach GitHub
 

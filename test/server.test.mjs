@@ -7,6 +7,7 @@ import {
   chmodSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   symlinkSync,
   writeFileSync,
@@ -18,20 +19,48 @@ import { test } from "node:test";
 
 const SECRET = "webhook-secret";
 
+// Sandboxes run detached: `run` starts the fake sandbox in the background (its output in
+// containers/<name>/out), `logs --follow` tails it, `ps`, `inspect`, `wait` and `rm` see it.
+// The fake sandbox asks the broker and the egress policy, prints a result (once
+// ${dir}/go exists, if ${dir}/hold does), then answers each comment of its inbox, through
+// the image's own deckhand-inbox, until the listener closes it.
 function fakeDocker(dir) {
   const path = join(dir, "docker");
+  const inbox = new URL("../sandbox/deckhand-inbox", import.meta.url).pathname;
   writeFileSync(
     path,
     `#!/bin/bash
 # Everything but the sandbox run is logged, one call per line.
+c="${dir}/containers"
+alive() { [ -f "$c/$1/pid" ] && kill -0 "$(cat "$c/$1/pid")" 2> /dev/null; }
 case "$1" in
-  ps|wait) exit 1 ;;
+  ps)
+    for d in "$c"/*/; do
+      [ -d "$d" ] || continue
+      n=$(basename "$d")
+      alive "$n" && state=running || state=exited
+      printf '%s\\t%s\\t%s\\n' "$n" "$(cat "$d/run")" "$state"
+    done ;;
+  wait)
+    while alive "\${@: -1}"; do sleep 0.05; done ;;
+  rm)
+    rm -rf "$c/\${@: -1}" ;;
+  logs)
+    n=\${@: -1}
+    [ -d "$c/$n" ] || exit 1
+    exec tail -n +1 -f --pid="$(cat "$c/$n/pid")" -s 0.05 "$c/$n/out" ;;
   network)
     # The sandboxes' network: internal unless the test says otherwise.
     cat "${dir}/network-internal" 2> /dev/null || echo true ;;
   inspect)
-    # The sandbox's address on that network, for the egress proxy's questions.
-    echo '{"deckhand-sandboxes":{"IPAddress":"10.9.0.5"}}' ;;
+    n=\${@: -1}
+    case "$3" in
+      *State*)
+        [ -d "$c/$n" ] || exit 1
+        alive "$n" && echo running || echo exited ;;
+      # The sandbox's address on that network, for the egress proxy's questions.
+      *) echo '{"deckhand-sandboxes":{"IPAddress":"10.9.0.5"}}' ;;
+    esac ;;
   volume)
     [ "$2" = inspect ] && exit 1
     echo "$*" >> "${dir}/docker-calls" ;;
@@ -47,21 +76,54 @@ case "$1" in
     printf '%s\\n' "$@" > "${dir}/run-args"
     echo "$DECKHAND_RUN_SECRET" > "${dir}/run-secret"
     env > "${dir}/run-env"
-    curl -fsS -H "Authorization: Bearer $DECKHAND_RUN_SECRET" "$DECKHAND_BROKER_URL/token" \\
-      > "${dir}/broker-answer"
-    # What the egress proxy would ask about this sandbox's connections.
-    for host in api.anthropic.com github.com objects.githubusercontent.com evil.example \\
-      registry.npmjs.org pypi.org a.b.example.com example.com lan.internal; do
-      echo "$host $(curl -fsS "$DECKHAND_BROKER_URL/egress?ip=10.9.0.5&host=$host")" \\
-        >> "${dir}/egress"
-    done
-    echo '{"type":"result","result":"All done.","duration_ms":60000}'
-    cat > /dev/null # until the listener closes stdin
+    name=$(printf '%s\\n' "$@" | grep -A1 -x -- --name | tail -1)
+    run=$(printf '%s\\n' "$@" | sed -n 's/^deckhand\\.run=//p')
+    mkdir -p "$c/$name"
+    echo "$run" > "$c/$name/run"
+    setsid bash -c '
+      curl -fsS -H "Authorization: Bearer $DECKHAND_RUN_SECRET" "$DECKHAND_BROKER_URL/token" \\
+        > "${dir}/broker-answer"
+      # What the egress proxy would ask about this sandbox'"'"'s connections.
+      for host in api.anthropic.com github.com objects.githubusercontent.com evil.example \\
+        registry.npmjs.org pypi.org a.b.example.com example.com lan.internal; do
+        echo "$host $(curl -fsS "$DECKHAND_BROKER_URL/egress?ip=10.9.0.5&host=$host")" \\
+          >> "${dir}/egress"
+      done
+      # Not all of stdout is Claude'"'"'s: gh prints the draft pull request'"'"'s address.
+      echo "https://github.com/org/repo/pull/13"
+      if [ -e "${dir}/hold" ]; then
+        until [ -e "${dir}/go" ]; do sleep 0.05; done
+      fi
+      echo "{\\"type\\":\\"result\\",\\"result\\":\\"All done.\\",\\"duration_ms\\":60000}"
+      node "${inbox}" "${dir}/runs/$1/inbox.jsonl" | while IFS= read -r line; do
+        echo "$line" >> "${dir}/delivered"
+        if [ -e "${dir}/hold-answer" ]; then
+          until [ -e "${dir}/answer" ]; do sleep 0.05; done
+        fi
+        echo "{\\"type\\":\\"result\\",\\"result\\":\\"Answered.\\",\\"duration_ms\\":6000}"
+      done
+    ' sandbox "$run" > "$c/$name/out" 2> "$c/$name/err" < /dev/null &
+    echo $! > "$c/$name/pid"
     ;;
 esac
 `,
   );
   chmodSync(path, 0o755);
+}
+
+// Stops the fake sandboxes a test leaves running.
+function stopSandboxes(dir) {
+  try {
+    for (const name of readdirSync(join(dir, "containers"))) {
+      try {
+        process.kill(-Number(readFileSync(join(dir, "containers", name, "pid"), "utf8")));
+      } catch {
+        // Already over.
+      }
+    }
+  } catch {
+    // None started.
+  }
 }
 
 // `files`: the repo's files on its default branch, served by the contents API and as a
@@ -99,6 +161,9 @@ async function fakeGitHub(files = {}) {
         return res.end(JSON.stringify({ access_token: "user-token" }));
       }
       if (req.url === "/user") return res.end(JSON.stringify({ login: "alice" }));
+      // A listener that restarted looks the installation up instead of reading it from a
+      // delivery.
+      if (req.url === "/repos/org/repo/installation") return res.end(JSON.stringify({ id: 7 }));
       if (req.url === "/app/installations/7/access_tokens") {
         const scoped = body.includes("repositories");
         const expires_at = new Date(Date.now() + 3600000).toISOString();
@@ -191,7 +256,7 @@ async function listen(t, files, extra = {}) {
   );
   const port = 20000 + Math.floor(Math.random() * 20000);
   const brokerPort = port + 1;
-  const listener = start({
+  const settings = {
     PATH: `${dir}:${process.env.PATH}`,
     DATA_DIR: dir,
     ALLOWED_USERS: "alice,bob",
@@ -205,10 +270,12 @@ async function listen(t, files, extra = {}) {
     EGRESS_PROXY: "http://127.0.0.1:3128",
     GRANTS_FILE: join(dir, "grants.yaml"),
     ...(typeof extra === "function" ? extra(dir, github) : extra),
-  });
+  };
+  let listener = start(settings);
   t.after(() => {
     listener.child.kill("SIGKILL");
     github.server.close();
+    stopSandboxes(dir);
   });
   await listener.until("Token broker on");
   const send = (payload, event = "issue_comment") => {
@@ -222,7 +289,28 @@ async function listen(t, files, extra = {}) {
       body,
     });
   };
-  return { dir, github, listener, port, brokerPort, send };
+  // Stops the listener (SIGTERM unless `signal` says otherwise) and starts another one on the
+  // same data and ports, with `more` settings.
+  const restart = async ({ signal = "SIGTERM", ...more } = {}) => {
+    const old = listener;
+    const { child } = old;
+    const exited = new Promise((resolve) => child.on("exit", resolve));
+    const code = child.exitCode ?? (child.signalCode || (child.kill(signal), await exited));
+    listener = start({ ...settings, ...more });
+    await listener.until("Token broker on");
+    return { code, output: old.output() };
+  };
+  return {
+    dir,
+    github,
+    get listener() {
+      return listener;
+    },
+    port,
+    brokerPort,
+    send,
+    restart,
+  };
 }
 
 function comment(login, body = "Claude work on this") {
@@ -283,7 +371,7 @@ test("a webhook from the App runs a sandbox that gets its repo's token from the 
   const joined = args.join(" ");
   assert.match(joined, /--cap-drop ALL --security-opt no-new-privileges/);
   assert.match(joined, /--cpus 2 --memory 4g --memory-swap 4g --pids-limit 2048/);
-  const shots = joined.match(/SCREENSHOT_URL=https:\/\/hooks\.example\.com\/shots\/(\w+)/)[1];
+  const shots = runEnv.match(/^SCREENSHOT_URL=https:\/\/hooks\.example\.com\/shots\/(\w+)$/m)[1];
   assert.ok(
     args.includes(`type=volume,src=deckhand-screenshots,dst=/screenshots,volume-subpath=${shots}`),
   );
@@ -291,7 +379,7 @@ test("a webhook from the App runs a sandbox that gets its repo's token from the 
     args.some((a) => a.startsWith("deckhand-screenshots:")),
     false,
   );
-  assert.ok(args.includes("SCREENSHOT_DIR=/screenshots"));
+  assert.match(runEnv, /^SCREENSHOT_DIR=\/screenshots$/m);
   // Out through the egress proxy only, the broker directly.
   assert.match(runEnv, /^HTTPS_PROXY=http:\/\/127\.0\.0\.1:3128$/m);
   assert.match(runEnv, /^https_proxy=http:\/\/127\.0\.0\.1:3128$/m);
@@ -473,6 +561,152 @@ test("a sandboxes' network with a route out stops the run", async (t) => {
     (r) => r.method === "POST" && r.path === "/repos/org/repo/issues/12/comments",
   );
   assert.match(JSON.parse(reply.body).body, /deckhand-sandboxes is not internal/);
+});
+
+// Polls until `check()` is truthy.
+async function until(check, what) {
+  for (let i = 0; i < 400; i++) {
+    const value = check();
+    if (value) return value;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error(`timed out waiting for ${what}`);
+}
+
+function exists(path) {
+  try {
+    return readFileSync(path, "utf8");
+  } catch {
+    return null;
+  }
+}
+
+const replies = (github) =>
+  github.requests.filter(
+    (r) => r.method === "POST" && r.path === "/repos/org/repo/issues/12/comments",
+  );
+
+// A follow-up comment on issue 12 (no trigger line), with its own id.
+function followUp(id, body) {
+  const payload = comment("alice", body);
+  payload.comment = { ...payload.comment, id };
+  return payload;
+}
+
+// A listener whose sandbox waits (`hold`) before Claude's first answer, with a run started.
+async function holding(t) {
+  const ctx = await listen(t, {}, (dir) => {
+    writeFileSync(join(dir, "hold"), "");
+    return {};
+  });
+  await ctx.send(comment("alice"));
+  const egress = join(ctx.dir, "egress");
+  await until(() => exists(egress)?.trim().split("\n").length === 9, "the sandbox");
+  return ctx;
+}
+
+test("a restart during a run: it goes on, a new comment reaches it, one reply", async (t) => {
+  const ctx = await holding(t);
+  const { dir, github, send, brokerPort } = ctx;
+  const { code, output } = await ctx.restart();
+  assert.equal(code, 0);
+  assert.match(output, /Stopping: running sandboxes go on/);
+  await ctx.listener.until("picked up deckhand-org-repo-12 again");
+
+  // Its token still works, through the new listener's broker.
+  const secret = readFileSync(join(dir, "run-secret"), "utf8").trim();
+  const token = await fetch(`http://127.0.0.1:${brokerPort}/token`, {
+    headers: { authorization: `Bearer ${secret}` },
+  });
+  assert.equal(token.status, 200);
+
+  // A comment without a trigger line goes to the running session, through its inbox.
+  await send(followUp(100, "Also cover the edge case"));
+  const [run] = readdirSync(join(dir, "runs"));
+  const inbox = join(dir, "runs", run, "inbox.jsonl");
+  await until(() => exists(inbox)?.includes("Also cover the edge case"), "the delivery");
+  writeFileSync(join(dir, "go"), "");
+  await ctx.listener.until("done (ok)");
+  assert.match(exists(join(dir, "delivered")), /Also cover the edge case/);
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  assert.equal(replies(github).length, 1);
+  assert.match(JSON.parse(replies(github)[0].body).body, /^Answered\./);
+  // Both comments get their outcome.
+  for (const id of [99, 100]) {
+    await github.waitFor(
+      (r) => r.path === `/repos/org/repo/issues/comments/${id}/reactions` && /rocket/.test(r.body),
+    );
+  }
+  // The sandbox, its inbox and the run's saved state are gone.
+  assert.deepEqual(readdirSync(join(dir, "containers")), []);
+  assert.deepEqual(readdirSync(join(dir, "runs")), []);
+  assert.deepEqual(
+    readdirSync(join(dir, "logs")).filter((f) => f.endsWith(".live.json")),
+    [],
+  );
+});
+
+test("a listener killed mid-run: Claude answers meanwhile, the next one replies once", async (t) => {
+  const ctx = await holding(t);
+  const { dir, github } = ctx;
+  // Claude answers while no listener is there: the sandbox waits for its inbox to close.
+  const killed = ctx.listener.child;
+  killed.kill("SIGKILL");
+  await new Promise((resolve) => killed.on("exit", resolve));
+  writeFileSync(join(dir, "go"), "");
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  await ctx.restart();
+  await ctx.listener.until("done (ok)");
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  assert.equal(replies(github).length, 1);
+  assert.match(JSON.parse(replies(github)[0].body).body, /^All done\./);
+  // Its log on the dashboard holds Claude's answer once.
+  const [log] = readdirSync(join(dir, "logs")).filter((f) => f.endsWith(".log"));
+  const results = readFileSync(join(dir, "logs", log), "utf8").match(/"type":"result"/g);
+  assert.equal(results.length, 1);
+});
+
+test("comments queued when the listener stops run after it starts", async (t) => {
+  const ctx = await listen(t, {}, { DEBOUNCE_MS: "60000" });
+  await ctx.send(comment("alice"));
+  await ctx.listener.until("queued (work");
+  await ctx.github.waitFor((r) => r.path === "/repos/org/repo/issues/comments/99/reactions");
+  const { output } = await ctx.restart({ DEBOUNCE_MS: "0" });
+  assert.match(output, /Saved 1 task\(s\) with queued comments/);
+  await ctx.listener.until("1 comment(s) queued before the restart");
+  await ctx.listener.until("done (ok)");
+  assert.equal(replies(ctx.github).length, 1);
+  // Its 👀 from before the restart is replaced by the outcome.
+  await ctx.github.waitFor(
+    (r) => r.method === "DELETE" && r.path === "/repos/org/repo/issues/comments/99/reactions/1",
+  );
+});
+
+test("a restart after Claude answered once: nothing is read twice", async (t) => {
+  const ctx = await holding(t);
+  const { dir, github, send } = ctx;
+  writeFileSync(join(dir, "hold-answer"), "");
+  await send(followUp(100, "Also cover the edge case"));
+  const [run] = readdirSync(join(dir, "runs"));
+  const inbox = join(dir, "runs", run, "inbox.jsonl");
+  await until(() => exists(inbox)?.includes("Also cover the edge case"), "the delivery");
+  writeFileSync(join(dir, "go"), "");
+  // Claude answered the prompt and reads the comment: the listener restarts meanwhile.
+  await until(() => exists(join(dir, "delivered")), "Claude reading the comment");
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  await ctx.restart();
+  await ctx.listener.until("picked up deckhand-org-repo-12 again");
+  writeFileSync(join(dir, "answer"), "");
+  await ctx.listener.until("done (ok)");
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  assert.equal(replies(github).length, 1);
+  assert.match(JSON.parse(replies(github)[0].body).body, /^Answered\./);
+  // Both answers once each in the run's log, and the duration of both in the footer.
+  const [log] = readdirSync(join(dir, "logs")).filter((f) => f.endsWith(".log"));
+  const text = readFileSync(join(dir, "logs", log), "utf8");
+  assert.equal(text.match(/"type":"result"/g).length, 2);
+  assert.equal(text.match(/pull\/13/g).length, 1);
+  assert.match(JSON.parse(replies(github)[0].body).body, / · 1\.1 min/);
 });
 
 test("a comment on the ideas inbox is a light run with the idea prompt, answered there", async (t) => {
