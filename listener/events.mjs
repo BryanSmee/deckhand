@@ -20,8 +20,9 @@ export function linkedIssue(prBody) {
   return match ? Number(match[1]) : null;
 }
 
-// The command on the first line ("work", "brainstorm" or "stop") and the rest of the comment;
-// trigger null and the whole comment when there is none.
+// The command on the first line ("work", "brainstorm" or "stop"), the mode a "/mode <name>"
+// line asks for (lowercase, or null) and the rest of the comment; trigger null and the whole
+// comment when there is none.
 export function splitTrigger(config, body) {
   const [first, ...rest] = body.split(/\r?\n/);
   const line = normalize(first);
@@ -33,7 +34,18 @@ export function splitTrigger(config, body) {
         : line === config.stopTrigger || first.trim().toLowerCase() === "/stop"
           ? "stop"
           : null;
-  return trigger ? { trigger, text: rest.join("\n").trim() } : { trigger: null, text: body.trim() };
+  return takeMode(trigger ? rest.join("\n") : body, trigger);
+}
+
+// Removes a "/mode <name>" line. Its own line, like "/model": the space keeps the two apart.
+function takeMode(text, trigger) {
+  let mode = null;
+  const kept = text.split(/\r?\n/).filter((line) => {
+    const match = /^\s*\/mode\s+([\w-]+)\s*$/i.exec(line);
+    if (match) mode = match[1].toLowerCase();
+    return !match;
+  });
+  return { trigger, mode, text: kept.join("\n").trim() };
 }
 
 export const EFFORTS = ["low", "medium", "high", "xhigh", "max"];
@@ -59,7 +71,8 @@ function entry(author, url, body) {
   return `From @${author.login}${url ? ` (${url})` : ""}:\n\n${body.trim()}`;
 }
 
-// Returns { repo, id, kind, number, trigger, text, replyTo, comment } or null to ignore.
+// Returns { repo, id, kind, number, trigger, modeLine, text, replyTo, comment } or null to
+// ignore. `modeLine`: what a "/mode <name>" line asks for, checked against the repo's modes later.
 // `skip(reason)` logs why a delivery is ignored and returns null: deliveries that do nothing
 // are the usual question.
 //
@@ -94,7 +107,7 @@ export function workItem(config, event, p, skip = () => null) {
     return discussionItem(config, event, p, skip);
   }
   if (event === "issue_comment" && p.action === "created") {
-    const { trigger, text } = splitTrigger(config, body);
+    const { trigger, mode, text } = splitTrigger(config, body);
     if (!p.issue.pull_request) {
       const n = p.issue.number;
       // Every comment on an inbox issue is an entry: trigger lines don't apply there.
@@ -120,31 +133,32 @@ export function workItem(config, event, p, skip = () => null) {
         kind: "issue",
         number: n,
         trigger,
+        modeLine: mode,
         text,
         replyTo: n,
         comment: p.comment,
       };
     }
-    return prItem(skip, repo, p.issue.number, p.issue.body, trigger, text, p.comment);
+    return prItem(skip, repo, p.issue.number, p.issue.body, { trigger, mode }, text, p.comment);
   }
   if (event === "pull_request_review_comment" && p.action === "created") {
-    const { trigger, text } = splitTrigger(config, body);
+    const cmd = splitTrigger(config, body);
     const c = p.comment;
     const where = `Review comment on \`${c.path}\` line ${c.line ?? c.original_line}:\n\`\`\`diff\n${c.diff_hunk}\n\`\`\`\n`;
-    return prItem(skip, repo, p.pull_request.number, p.pull_request.body, trigger, where + text, {
+    return prItem(skip, repo, p.pull_request.number, p.pull_request.body, cmd, where + cmd.text, {
       ...c,
       review: true,
     });
   }
   if (event === "pull_request_review" && p.action === "submitted" && body.trim()) {
-    const { trigger, text } = splitTrigger(config, body);
+    const cmd = splitTrigger(config, body);
     return prItem(
       skip,
       repo,
       p.pull_request.number,
       p.pull_request.body,
-      trigger,
-      `Review: ${text}`,
+      cmd,
+      `Review: ${cmd.text}`,
     );
   }
   return skip(`${event} ${p.action ?? ""} is not handled`);
@@ -193,8 +207,8 @@ export function previewEvent(config, event, p, skip = () => null) {
   return { repo, base: p.repository.default_branch || "main", event };
 }
 
-function prItem(skip, repo, pr, prBody, trigger, text, comment) {
-  if (trigger === "brainstorm" || trigger === "stop") {
+function prItem(skip, repo, pr, prBody, { trigger, mode }, text, comment) {
+  if (trigger === "brainstorm" || trigger === "stop" || mode === "brainstorm") {
     return skip("brainstorms are on issues: pull request comments are about the code");
   }
   const issue = linkedIssue(prBody);
@@ -205,6 +219,7 @@ function prItem(skip, repo, pr, prBody, trigger, text, comment) {
         kind: "issue",
         number: issue,
         trigger,
+        modeLine: mode,
         text,
         replyTo: pr,
         comment,
@@ -215,6 +230,7 @@ function prItem(skip, repo, pr, prBody, trigger, text, comment) {
         kind: "pr",
         number: pr,
         trigger,
+        modeLine: mode,
         text,
         replyTo: pr,
         comment,

@@ -5,9 +5,11 @@ import { workItem } from "../listener/events.mjs";
 import {
   cacheProblem,
   cacheVolume,
+  customMode,
   defaultSettings,
   effectiveConfig,
   loadRepoSettings,
+  modeNames,
   parseRepoConfig,
   repoPath,
   startable,
@@ -164,4 +166,116 @@ test("parallel caps: the operator's overall, each repo's within it", () => {
     startable(ready, new Map([["org/a", 1]]), 2, 3).map((t) => t.repo),
     ["org/b"],
   );
+});
+
+const MODES = `model: opus
+brainstorm_model: haiku
+brainstorm_effort: low
+modes:
+  Review:
+    instructions: .deckhand/review.md # from the default branch, like instructions
+    light: true
+    model: sonnet
+  triage:
+    instructions: .deckhand/triage.md
+    session: fresh
+    effort: high
+`;
+
+test("modes: parsed, with the defaults of work or brainstorms", () => {
+  const { settings, errors, warnings } = parseRepoConfig(MODES, config);
+  assert.deepEqual(errors, []);
+  assert.deepEqual(warnings, []);
+  assert.deepEqual(modeNames(settings), ["work", "brainstorm", "review", "triage"]);
+  // A light mode takes the brainstorms' defaults, a full one work's.
+  assert.deepEqual(customMode(settings, "review"), {
+    name: "review",
+    light: true,
+    fresh: false,
+    instructions: ".deckhand/review.md",
+    model: "sonnet",
+    effort: "low",
+  });
+  assert.deepEqual(customMode(settings, "triage"), {
+    name: "triage",
+    light: false,
+    fresh: true,
+    instructions: ".deckhand/triage.md",
+    model: "opus",
+    effort: "high",
+  });
+  // The listener's own modes aren't the repo's.
+  assert.equal(customMode(settings, "work"), null);
+  assert.equal(customMode(settings, "brainstorm"), null);
+  assert.equal(customMode(defaultSettings(config), "review"), null);
+});
+
+test("modes: built-in names, wrong names, unknown keys and bad paths are errors", () => {
+  const { settings, errors } = parseRepoConfig(
+    `modes:
+  work: { model: sonnet }
+  Brainstorm: { instructions: b.md }
+  stop: { instructions: s.md }
+  "a b": { instructions: a.md }
+  escape: { instructions: ../secrets.md }
+  absolute: { instructions: /etc/passwd }
+  vague: { light: yes, session: forever, effort: huge }
+  bare: { light: true }
+  ok: { instructions: ok.md }
+  OK: { instructions: other.md }
+`,
+    config,
+  );
+  assert.deepEqual(errors, [
+    "modes.work: work is built in: set its model with model and effort instead",
+    "modes.Brainstorm: brainstorm is built in: set its model with brainstorm_model and brainstorm_effort instead",
+    "modes.stop: stop is reserved by Deckhand",
+    "modes.a b: expected a name of letters, digits, - and _ (32 at most)",
+    "modes.escape.instructions: expected a path in the repository (relative, no ..)",
+    "modes.absolute.instructions: expected a path in the repository (relative, no ..)",
+    "modes.vague.light: expected true or false",
+    "modes.vague.session: expected issue or fresh",
+    "modes.vague.effort: expected one of low, medium, high, xhigh, max",
+    "modes.vague.instructions: missing: a mode is its instructions",
+    "modes.bare.instructions: missing: a mode is its instructions",
+    "modes.OK: defined twice (names are not case-sensitive)",
+  ]);
+  assert.deepEqual(Object.keys(settings.modes), ["ok"]);
+  assert.match(parseRepoConfig("modes: [review]", config).errors[0], /^modes: expected modes/);
+});
+
+test("a mode can't grant anything: hosts, mounts and limits stay the repo's", () => {
+  const { settings, errors } = parseRepoConfig(
+    `hosts: [registry.npmjs.org]
+modes:
+  wide:
+    instructions: wide.md
+    hosts: ["*"]
+    mounts: [/]
+    limits: { memory: 64g }
+    allow_branch_docker_images: true
+`,
+    config,
+  );
+  assert.deepEqual(errors, [
+    "modes.wide.hosts: unknown key (expected instructions, light, session, model, effort)",
+    "modes.wide.mounts: unknown key (expected instructions, light, session, model, effort)",
+    "modes.wide.limits: unknown key (expected instructions, light, session, model, effort)",
+    "modes.wide.allow_branch_docker_images: unknown key (expected instructions, light, session, model, effort)",
+  ]);
+  // Refused as a whole, and the repo's own grants are untouched.
+  assert.equal(customMode(settings, "wide"), null);
+  assert.deepEqual(settings.hosts, ["registry.npmjs.org"]);
+  assert.deepEqual(settings.mounts, []);
+  assert.equal(settings.allowBranchDockerImages, false);
+  // What a valid mode's run gets: nothing about access.
+  const { settings: valid } = parseRepoConfig(MODES, config);
+  assert.deepEqual(Object.keys(customMode(valid, "review")).sort(), [
+    "effort",
+    "fresh",
+    "instructions",
+    "light",
+    "model",
+    "name",
+  ]);
 });

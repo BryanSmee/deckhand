@@ -42,6 +42,7 @@ test("issue comments: trigger, text and reply target", () => {
       kind: "issue",
       number: 12,
       trigger: "work",
+      modeLine: null,
       text: "Use X.",
       replyTo: 12,
       comment: undefined,
@@ -171,10 +172,12 @@ test("discussions: only in the repo's category, only from allowed users", () => 
 test("trigger lines and options", () => {
   assert.deepEqual(splitTrigger(config, "/stop"), {
     trigger: "stop",
+    mode: null,
     text: "",
   });
   assert.deepEqual(splitTrigger(config, "just text"), {
     trigger: null,
+    mode: null,
     text: "just text",
   });
   const options = {};
@@ -183,4 +186,41 @@ test("trigger lines and options", () => {
     "/effort huge\nhello",
   );
   assert.deepEqual(options, { model: "sonnet", effort: "high" });
+});
+
+test("a /mode line picks the mode, and is never taken for /model", () => {
+  assert.deepEqual(splitTrigger(config, "Claude work on this\n/mode Review\nLook at X."), {
+    trigger: "work",
+    mode: "review",
+    text: "Look at X.",
+  });
+  // Without a trigger line: a switch, for an issue that has a session (server.mjs decides).
+  assert.deepEqual(splitTrigger(config, "/mode work\nGo ahead."), {
+    trigger: null,
+    mode: "work",
+    text: "Go ahead.",
+  });
+  const model = splitTrigger(config, "Claude work on this\n/model sonnet");
+  assert.equal(model.mode, null);
+  assert.equal(model.text, "/model sonnet");
+  const options = {};
+  assert.equal(takeOptions("/mode review", options), "/mode review");
+  assert.deepEqual(options, {});
+  // Only on its own line.
+  assert.equal(splitTrigger(config, "use /mode review here").mode, null);
+});
+
+test("a /mode line reaches the item; brainstorms stay off pull requests", () => {
+  const item = workItem(config, "issue_comment", comment("/mode review\nCheck the tests."));
+  assert.equal(item.modeLine, "review");
+  assert.equal(item.trigger, null);
+  assert.equal(item.text, "Check the tests.");
+  const onPr = workItem(config, "issue_comment", comment("/mode review", { pr: "Closes #3" }));
+  assert.equal(onPr.modeLine, "review");
+  assert.equal(onPr.id, "3");
+  const reasons = [];
+  const skip = (reason) => (reasons.push(reason), null);
+  const brainstorm = comment("/mode brainstorm", { pr: "Closes #3" });
+  assert.equal(workItem(config, "issue_comment", brainstorm, skip), null);
+  assert.match(reasons[0], /brainstorms are on issues/);
 });

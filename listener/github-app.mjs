@@ -35,6 +35,13 @@ export const SANDBOX_PERMISSIONS = {
 };
 // Added for discussion runs only: an App created before discussions keeps working elsewhere.
 export const DISCUSSION_PERMISSIONS = { discussions: "write" };
+// A repo's light modes (its config's `modes:`) only comment, and the listener posts their
+// reply: their token can read the code, issues and pull requests, not push or write.
+export const READ_ONLY_PERMISSIONS = {
+  contents: "read",
+  issues: "read",
+  pull_requests: "read",
+};
 
 // Installation tokens last an hour: a cached one is renewed when less than this is left, so
 // whoever gets it can use it for at least that long.
@@ -130,7 +137,9 @@ export function createGitHubApp({
   // `repo`: a token for that repo alone, with the sandbox's permissions (and `extra`); none:
   // the whole installation with the App's, for the listener's own calls.
   function token(installationId, repo, extra = {}) {
-    const key = `${installationId}:${repo ?? "*"}:${Object.keys(extra).sort().join(",")}`;
+    // The levels too: a read-only token is not a writing one.
+    const levels = Object.entries(extra).map(([name, level]) => `${name}=${level}`);
+    const key = `${installationId}:${repo ?? "*"}:${levels.sort().join(",")}`;
     const cached = tokens.get(key);
     if (cached) {
       const still = cached.then((t) => (t.expiresAt - now() > REFRESH_MS ? t : null));

@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import {
   DISCUSSION_PERMISSIONS,
+  READ_ONLY_PERMISSIONS,
   REFRESH_MS,
   SANDBOX_PERMISSIONS,
   createGitHubApp,
@@ -97,6 +98,22 @@ test("a discussion run's token adds discussions, cached apart from the others", 
     discussions: "write",
   });
   assert.equal(SANDBOX_PERMISSIONS.discussions, undefined);
+});
+
+test("a light mode's read-only token is never a cached writing one, nor the reverse", async () => {
+  const { app, gh } = setup();
+  // The same permission names at other levels: a cache keyed on names alone would mix them.
+  await app.repoToken("org/repo", { contents: "write", issues: "write", pull_requests: "write" });
+  const { token } = await app.repoToken("org/repo", READ_ONLY_PERMISSIONS);
+  assert.equal(token, "tok-2");
+  assert.equal((await app.repoToken("org/repo", READ_ONLY_PERMISSIONS)).token, "tok-2");
+  const mints = gh.calls.filter((c) => c.path.endsWith("/access_tokens"));
+  assert.deepEqual(JSON.parse(mints[1].body).permissions, {
+    ...SANDBOX_PERMISSIONS,
+    contents: "read",
+    issues: "read",
+    pull_requests: "read",
+  });
 });
 
 test("tokens are cached, and renewed before they run out", async () => {

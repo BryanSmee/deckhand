@@ -18,6 +18,9 @@ operator, across as many repositories as the App is installed on.
   - `Claude let's brainstorm this`: a discussion of the issue in its comments, without code.
     `Claude stop` (or `/stop`) wraps it up.
   - `/model <name>` and `/effort <level>` lines pick the model and thinking effort of that run.
+  - `/mode <name>` picks a mode: `work`, `brainstorm` or one the repository declares in its
+    `.deckhand.yaml` (a review that only comments, say). Alone on an issue with a session,
+    it switches modes and keeps the conversation.
 - **Live feedback.** The comment gets 👀 when it is received, then 🚀 (done), 😕 (needs
   input) or 👎 (error). A burst of comments is one message, and one that arrives while
   Claude works reaches the running session. The final message comes back as a comment from

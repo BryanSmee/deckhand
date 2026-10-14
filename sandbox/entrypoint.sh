@@ -88,13 +88,20 @@ model=(--model "${SANDBOX_MODEL:-opus}" --effort "${SANDBOX_EFFORT:-medium}")
 if [ $# -eq 0 ] && [ -n "${TASK_PROMPT:-}" ]; then
   # The volumes keep the session between runs: the first run starts on TASK_PROMPT, later
   # ones continue with TASK_MESSAGE, or interactively without one. TASK_MODE is "work"
-  # (implement, the default) or "brainstorm" (discuss, no code); both share the issue's
-  # session, so an implementation starts with what a brainstorm settled. "discussion" keeps
-  # its own session; "idea" and "bug" (inbox entries) start a new one every time.
+  # (implement, the default), "brainstorm" (discuss, no code) or one of the repo's own modes
+  # (its config's `modes:`); they share the issue's session, so each starts with what the
+  # previous one settled. "discussion" keeps its own session. TASK_SESSION=fresh ("idea" and
+  # "bug", the inbox entries, and the repo's fresh modes) starts a new one every time, and
+  # doesn't keep it: the issue's session stays the one the next run continues.
   mode=${TASK_MODE:-work}
-  resume=()
+  resume=() # session options: --continue, or none kept for a fresh one
   prompt=$TASK_PROMPT
-  if [ "$mode" != idea ] && [ "$mode" != bug ] &&
+  fresh=
+  if [ "${TASK_SESSION:-}" = fresh ] || [ "$mode" = idea ] || [ "$mode" = bug ]; then
+    fresh=1
+    resume=(--no-session-persistence)
+  fi
+  if [ -z "$fresh" ] &&
     compgen -G "$CLAUDE_CONFIG_DIR/projects/-workspace/*.jsonl" > /dev/null; then
     resume=(--continue)
     if [ -z "${TASK_MESSAGE:-}" ]; then
@@ -116,6 +123,11 @@ Also take this into account: $TASK_MESSAGE"
       prompt="New comment in the discussion: $TASK_MESSAGE
 
 (Still the discussion: no code, branch, commit or pull request.)"
+    elif [ "$mode" != work ]; then
+      # One of the repo's modes: its instructions came with its first prompt in this session.
+      prompt="New comment: $TASK_MESSAGE
+
+(Still in the $mode mode: follow its instructions.)"
     else
       prompt="New feedback on this issue: $TASK_MESSAGE
 
@@ -135,7 +147,7 @@ Also take this into account: $TASK_MESSAGE"
 
 $setup_failed"
   fi
-  echo "$mode" > "$CLAUDE_CONFIG_DIR/sandbox-mode"
+  [ -n "$fresh" ] || echo "$mode" > "$CLAUDE_CONFIG_DIR/sandbox-mode"
   # TASK_OUTPUT=json (the webhook listener) reads the raw events; people get progress lines.
   if [ "${TASK_OUTPUT:-}" = "json" ] && [ "${TASK_INPUT:-}" = "stream" ]; then
     # The prompt is the first message, then each comment the listener writes; closing the

@@ -27,6 +27,13 @@
 // idle; a comment then restores it from the issue's session volume. "Claude work on this"
 // afterwards implements in the same session, so the decisions carry over. Issues only.
 //
+// A "/mode <name>" line picks a mode: work, brainstorm or one of the repo's own (its
+// config's `modes:`), with the trigger line, or alone on an issue that has a session, which
+// then goes on in the new mode with its conversation so far. A repo's mode brings its own
+// instructions, model and effort; a light one runs like a brainstorm and only comments (its
+// token only reads), a fresh one starts a new session each time. Comments without a trigger
+// or "/mode" line go on in the issue's current mode (modes.json).
+//
 // A run that stops to ask (its final message starts with "<!-- needs-input -->", see
 // ../prompts/sandbox.md) shows as "needs-input" on the dashboard and labels the issue or PR
 // NEEDS_INPUT_LABEL (default needs-input) until the next run starts.
@@ -102,6 +109,7 @@ import {
   createGitHubApp,
   DISCUSSION_PERMISSIONS,
   loadCredentials,
+  READ_ONLY_PERMISSIONS,
   saveCredentials,
 } from "./github-app.mjs";
 import { grantFor, hardeningArgs, loadGrants, mountArgs, resolveMounts } from "./grants.mjs";
@@ -109,8 +117,10 @@ import { createImages, imageRef } from "./images.mjs";
 import { createPreviews } from "./previews.mjs";
 import {
   CONFIG_FILE,
+  customMode,
   effectiveConfig,
   loadRepoSettings,
+  modeNames,
   readRepoFile,
   startable,
 } from "./repo-config.mjs";
@@ -364,7 +374,7 @@ async function admit(first, event, payload) {
     log(`${first.repo}: ${CONFIG_FILE} has errors: ${errors.join("; ")}`);
     // Only to someone asking for a run: other comments can't tell a broken config from none,
     // and discussions can't tell whether they are in the category that calls Claude.
-    if (first.trigger && first.kind !== "discussion") {
+    if ((first.trigger || first.modeLine) && first.kind !== "discussion") {
       await reply(first.repo, first.replyTo, configErrors(first.base, errors));
     }
     return;
@@ -439,21 +449,51 @@ async function accept(item) {
   }
 }
 
-// What a comment asks for: "work", "brainstorm" or "stop" (wrap a brainstorm up); null when
-// it doesn't reach Claude. Keeps the issue's brainstorm state up to date.
+// What a comment asks for: "work", "brainstorm", "stop" (wrap a brainstorm up) or one of the
+// repo's own modes (its config's `modes:`); null when it doesn't reach Claude. A "/mode"
+// line picks the mode, with or without a trigger line; without either, a comment goes on in
+// the issue's current mode. Keeps the issue's brainstorm and mode state up to date.
 async function modeOf(item, key, name) {
   // The inbox issue or the discussion category is the trigger (workItem()).
   if (INBOX.has(item.trigger)) return item.trigger;
   const b = brainstorms.get(key);
-  if (item.trigger === "work") {
-    // Same session: the implementation starts from what the brainstorm settled.
+  let wanted = item.trigger === "stop" ? null : item.trigger;
+  if (item.modeLine && item.trigger !== "stop") {
+    if (!modeNames(item.settings).includes(item.modeLine)) {
+      await unknownMode(item, `Unknown mode \`${item.modeLine}\`.`);
+      return null;
+    }
+    // Without a trigger line, a switch: the conversation so far carries over.
+    if (!item.trigger && !b && !issueModes.has(key) && !tasks.has(key)) {
+      if (!(await runner.hasSession(name)))
+        return skip(`#${item.replyTo} has no Claude session and no trigger line`);
+    }
+    wanted = item.modeLine;
+  }
+  // A comment without either goes on in the repo's own mode the issue is in, if any.
+  const current = issueModes.get(key);
+  const talks = b && item.replyTo === item.number && b.status !== "stopped";
+  if (!wanted && item.trigger !== "stop" && current && !talks) {
+    if (!customMode(item.settings, current)) {
+      // Gone from the config: don't guess what to run instead (work could push).
+      await unknownMode(item, `The mode \`${current}\` is no longer in \`${CONFIG_FILE}\`.`);
+      return null;
+    }
+    return current;
+  }
+  const own = customMode(item.settings, wanted);
+  if (wanted === "work" || (own && !own.fresh)) {
+    // Same session: the work (or the repo's mode) starts from what the brainstorm settled.
     if (b) {
       clearTimeout(b.timer);
       brainstorms.delete(key);
       saveBrainstorms();
     }
-    return "work";
+    setIssueMode(key, own ? wanted : null);
+    return wanted;
   }
+  // A fresh mode runs once on its own session: the issue stays in the mode it was in.
+  if (own) return wanted;
   if (item.trigger === "stop") {
     if (!b || b.status === "stopped") return skip(`#${item.number} has no brainstorm to stop`);
     clearTimeout(b.timer);
@@ -462,10 +502,11 @@ async function modeOf(item, key, name) {
     return "stop";
   }
   // A comment on the issue itself continues its brainstorm; one on its pull request is work.
-  if (item.trigger === "brainstorm" || (b && item.replyTo === item.number)) {
-    if (!item.trigger && b.status === "stopped") {
+  if (wanted === "brainstorm" || (!wanted && b && item.replyTo === item.number)) {
+    if (!wanted && b.status === "stopped") {
       return skip(`#${item.number}: brainstorm stopped and no trigger line`);
     }
+    setIssueMode(key, null);
     item.restored = b?.status === "idle";
     const next = b ?? { repo: item.repo, number: item.number, timer: null };
     Object.assign(next, {
@@ -485,6 +526,18 @@ async function modeOf(item, key, name) {
   return "work";
 }
 
+// The reply to a "/mode" Claude can't run: the modes there are. No run starts.
+async function unknownMode(item, what) {
+  const own = item.settings?.modes ?? {};
+  const list = modeNames(item.settings)
+    .map((m) => `\`${m}\`${own[m]?.light ? " (comments only)" : ""}`)
+    .join(", ");
+  const where = `${item.repo}#${item.id}`;
+  log(`${where}: ${what}`);
+  const text = `${what} The modes here: ${list}. Pick one with a \`/mode <name>\` line.`;
+  await reply(item.repo, item.replyTo, text).catch((error) => log(`${where}: ${error}`));
+}
+
 // Runs that read the code and answer, without a branch or the repo's setup: brainstorms (and
 // their wrap-up), inbox entries and discussions.
 const INBOX = new Set(["idea", "bug", "discussion"]);
@@ -494,9 +547,21 @@ const LIGHT = new Set(["brainstorm", "stop", ...INBOX]);
 // discussion keeps its own, like a brainstorm.
 const FRESH = new Set(["idea", "bug"]);
 
+// Any other mode is one of the repo's own.
+const BUILT_IN = new Set(["work", "brainstorm", "stop", ...INBOX]);
+
+// The repo's own modes (its config's `modes:`, customMode()) add theirs to both.
+function isLight(task, mode) {
+  return LIGHT.has(mode) || !!customMode(task.settings, mode)?.light;
+}
+
+function isFresh(task, mode) {
+  return FRESH.has(mode) || !!customMode(task.settings, mode)?.fresh;
+}
+
 // A light run is what the task's next run will be: it goes first, after a shorter pause.
 function talking(task) {
-  return LIGHT.has(task.pending.at(-1)?.mode);
+  return isLight(task, task.pending.at(-1)?.mode);
 }
 
 // What the dashboard shows a run or queued task as.
@@ -626,6 +691,29 @@ function armIdle(key, b) {
   );
 }
 
+// --- Repo modes: the issues whose session is in one of their repo's own modes -------------
+
+// key → mode name, kept across listener restarts: a comment without a trigger or "/mode"
+// line goes on in that mode (modeOf()). Fresh modes don't change it; work, a brainstorm or
+// another "/mode" do.
+const issueModesPath = join(config.dataDir, "modes.json");
+const issueModes = loadIssueModes();
+
+function loadIssueModes() {
+  try {
+    return new Map(Object.entries(JSON.parse(readFileSync(issueModesPath, "utf8"))));
+  } catch {
+    return new Map(); // None yet.
+  }
+}
+
+function setIssueMode(key, mode) {
+  if ((issueModes.get(key) ?? null) === mode) return;
+  if (mode) issueModes.set(key, mode);
+  else issueModes.delete(key);
+  writeFileSync(issueModesPath, JSON.stringify(Object.fromEntries(issueModes), null, 2));
+}
+
 // --- Prompts -------------------------------------------------------------------------------
 
 const instructions = (name) => readFileSync(new URL(`../prompts/${name}`, import.meta.url), "utf8");
@@ -712,11 +800,59 @@ ${common}`;
 ${common}`;
 }
 
+// A run in one of the repo's own modes: its instructions (`instructions`, the file's text
+// from the default branch) after what every run of that kind is told. CLAUDE.md has the
+// generic rules, as for work.
+function modePrompt(task, own, instructions) {
+  const { number: n, repo } = task;
+  const base = task.base || "main";
+  const where =
+    task.kind === "pr"
+      ? `pull request #${n} of ${repo}. Read it with \`gh pr view ${n} --comments\` and \`gh pr diff ${n}\``
+      : `GitHub issue #${n} of ${repo}. Read it with \`gh issue view ${n} --comments\`, and its pull
+request if it has one (\`gh pr list --state all --search ${n}\`)`;
+  const rules = own.light
+    ? `This mode only comments: never write or edit code, create a branch, commit, push, open a
+pull request or create issues (your GitHub token can only read). The clone in /workspace is
+set up for reading, not running: the project's setup was skipped. The base branch was
+fetched from \`origin\` at the start of this run.`
+    : task.kind === "pr"
+      ? `Check the pull request out with \`gh pr checkout ${n}\` if you change code, and push to its
+branch. Never push to ${base}.`
+      : `The sandbox has already checked out the issue's branch, pushed it and opened a draft pull
+request (\`gh pr view\` shows it): if you change code, commit and push to that branch. Never
+push to ${base}.`;
+  return `You are in the "${own.name}" mode of this repository, on ${where}.
+
+${rules}
+Don't post comments on GitHub yourself: your final message is posted for you as the reply.
+
+The ${own.name} mode's instructions, from the repository:
+
+${instructions.trim()}`;
+}
+
+// The instructions file of the repo's mode, from its default branch like the config.
+async function modeInstructions(task, own) {
+  const base = task.base || "main";
+  const missing = `Claude can't run here: the \`${own.name}\` mode's instructions, \`${own.instructions}\`, are not on \`${base}\`.`;
+  let file;
+  try {
+    file = await repoFile(task.repo, own.instructions, base);
+  } catch (error) {
+    throw new RunError(`${missing}\n\n${error.message}`);
+  }
+  if (!file) throw new RunError(missing);
+  return file.text;
+}
+
 // --- Runs ----------------------------------------------------------------------------------
 
-// A discussion run answers through GraphQL: its token needs Discussions too.
-function permissionsFor(mode) {
-  return mode === "discussion" ? DISCUSSION_PERMISSIONS : undefined;
+// A discussion run answers through GraphQL: its token needs Discussions too. A light run in
+// one of the repo's own modes only comments: its token only reads.
+function permissionsFor(mode, light) {
+  if (mode === "discussion") return DISCUSSION_PERMISSIONS;
+  return light && !LIGHT.has(mode) ? READ_ONLY_PERMISSIONS : undefined;
 }
 
 // Sandboxes are started, followed and removed through the runner (runner/docker.mjs). They
@@ -743,7 +879,7 @@ async function run(task) {
   // The last comment decides: a work trigger after a brainstorm comment means work.
   const mode = items.at(-1).mode;
   const talk = mode === "brainstorm" || mode === "stop";
-  const light = LIGHT.has(mode);
+  const light = isLight(task, mode);
   const key = `${task.repo}#${task.id}`;
   const id = `${task.name}-${Date.now()}`;
   const logPath = join(logDir, `${id}.log`);
@@ -751,6 +887,8 @@ async function run(task) {
     id,
     key,
     kind: kindOf(mode, task.kind),
+    // work, brainstorm, idea, bug, discussion or one of the repo's own modes.
+    taskMode: mode === "stop" ? "brainstorm" : mode,
     repo: task.repo,
     replyTo,
     mode: null,
@@ -771,7 +909,7 @@ async function run(task) {
     record,
     logFile: openLog(logPath),
     // The sandbox's only way to GitHub: tokens for this repo, while this run lasts.
-    secret: broker.register(task.repo, permissionsFor(mode)),
+    secret: broker.register(task.repo, permissionsFor(mode, light)),
     asked: replyTo, // where errors go
     replyTo, // where the reply goes: the issue or pull request of the last comment it took
     open: false, // whether its inbox takes comments
@@ -806,7 +944,7 @@ async function start(task, items) {
   if (leftover === "running") await runner.wait(task.name);
   if (leftover) await runner.remove(task.name);
   // Inbox entries start afresh: the sandbox doesn't resume their session (entrypoint.sh).
-  const started = !FRESH.has(mode) && (await runner.hasSession(task.name));
+  const started = !isFresh(task, mode) && (await runner.hasSession(task.name));
   // A new comment answers the questions, if any: the issue no longer waits for input.
   if (config.needsInputLabel && task.kind !== "discussion") {
     await label(task.repo, task.number, false);
@@ -830,9 +968,12 @@ async function start(task, items) {
   // Fresh from the default branch: a config merged since the comment applies.
   const { settings, errors, warnings } = await repoSettings(task.repo, task.base);
   task.settings = settings;
-  const defaults = light
-    ? [settings.brainstormModel, settings.brainstormEffort]
-    : [settings.model, settings.effort];
+  const own = customMode(settings, mode);
+  const defaults = own
+    ? [own.model, own.effort]
+    : light
+      ? [settings.brainstormModel, settings.brainstormEffort]
+      : [settings.model, settings.effort];
   record.model = options.model ?? defaults[0];
   record.effort = options.effort ?? defaults[1];
   record.mode = mode === "stop" ? "wrap-up" : restored ? "restore" : started ? "continue" : "start";
@@ -848,6 +989,12 @@ async function start(task, items) {
     );
   if (errors.length) throw new RunError(configErrors(task.base, errors));
   for (const warning of warnings) note(`${CONFIG_FILE}: ${warning}`);
+  if (!own && !BUILT_IN.has(mode)) {
+    throw new RunError(
+      `Claude can't run here: the \`${mode}\` mode is no longer in \`${CONFIG_FILE}\` on \`${task.base || "main"}\`.`,
+    );
+  }
+  const ownInstructions = own && (await modeInstructions(task, own));
   const access = grantedAccess(task.repo, settings, note);
   const prepared = await prepare(task, items, settings, record, note, logFile);
 
@@ -862,7 +1009,9 @@ async function start(task, items) {
     ? brainstormPrompt(task)
     : INBOX.has(mode)
       ? inboxPrompt(task, mode, text)
-      : initialPrompt(task);
+      : own
+        ? modePrompt(task, own, ownInstructions)
+        : initialPrompt(task);
   await runner.start(sandboxSpec(task, prompt, message, { ...prepared, ...access }));
   // Written before Claude starts (setup takes a while), a message waits in the inbox.
   live.open = true;
@@ -963,8 +1112,10 @@ function sandboxSpec(task, prompt, message, { image, cacheArgs, settings, mounts
     BASE_BRANCH: task.base || "main",
     TASK_PROMPT: prompt,
     TASK_MESSAGE: message,
-    // work, brainstorm, idea, bug or discussion.
+    // work, brainstorm, idea, bug, discussion or one of the repo's own modes.
     TASK_MODE: mode,
+    // A new session each time, which doesn't replace the issue's (inbox entries, fresh modes).
+    TASK_SESSION: isFresh(task, mode) ? "fresh" : "",
     // Comments as stream-json messages (the runner's inbox), raw stream-json out.
     TASK_INPUT: "stream",
     TASK_OUTPUT: "json",
@@ -1092,7 +1243,9 @@ async function finish(task, error) {
           ? " · 💬 brainstorm: reply to continue, `/stop` to wrap up"
           : mode === "discussion"
             ? " · 💬 reply in this discussion to continue"
-            : "";
+            : !BUILT_IN.has(mode) && !isFresh(task, mode)
+              ? ` · ${mode} mode: replies go on in it, \`/mode work\` switches`
+              : "";
     const later = Object.entries(live.later)
       .map(([k, v]) => `\`/${k} ${v}\``)
       .join(" ");
@@ -1325,7 +1478,7 @@ function restoreRuns() {
     delete task.live.task;
     task.running = true;
     running++;
-    broker.register(task.repo, permissionsFor(saved.mode), saved.secret);
+    broker.register(task.repo, permissionsFor(saved.mode, saved.light), saved.secret);
     restored.push(task);
   }
   return restored;
@@ -1393,6 +1546,7 @@ function loadRuns() {
         repo: meta.repo ?? null,
         replyTo: meta.replyTo ?? null,
         mode: meta.mode ?? null,
+        taskMode: meta.taskMode ?? null,
         startedAt: meta.startedAt ?? Number(id.match(/-(\d+)$/)?.[1] ?? 0),
         finishedAt: statSync(logPath).mtimeMs,
         // Unfinished and not ours: the listener restarted during the run.
@@ -1441,6 +1595,7 @@ function format(line) {
     ];
   }
   if (e.type === "listener") {
+    const own = e.taskMode && e.taskMode !== "work" ? `Starting the ${e.taskMode} mode` : null;
     const what =
       ({
         "wrap-up": "Wrapping up the brainstorm",
@@ -1448,6 +1603,7 @@ function format(line) {
         continue: "Continuing the session",
       }[e.mode] ??
         STARTING[e.kind] ??
+        own ??
         "Starting") + (e.model ? ` (${e.model}, ${e.effort} effort)` : "");
     return [{ kind: "meta", text: what + (e.message ? `: ${e.message}` : "") }];
   }
@@ -1506,6 +1662,7 @@ function state(user) {
     .map((t) => ({
       key: `${t.repo}#${t.id}`,
       kind: kindOf(t.pending.at(-1).mode, t.kind),
+      mode: t.pending.at(-1).mode,
       repo: t.repo,
       replyTo: t.pending.at(-1).replyTo,
     }));

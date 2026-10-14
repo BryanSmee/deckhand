@@ -8,7 +8,8 @@ change on a branch or in a pull request has no effect until it is merged, so nob
 change a run's permissions from the code it runs on. The file can only **narrow** the
 operator's settings (users, parallel runs), never widen them.
 
-A file with errors stops the repository's runs: the reply to a trigger comment lists them.
+A file with errors stops the repository's runs: the reply to a trigger comment (or a
+`/mode` line) lists them.
 Unknown keys and users the operator doesn't allow are only warnings, shown in the run's log
 on the dashboard.
 
@@ -52,6 +53,15 @@ caches:
   - /home/node/.npm
   - /home/node/.cache/ms-playwright
 
+# The repo's own modes, started with a "/mode <name>" line (see Modes below).
+modes:
+  review:
+    instructions: .deckhand/review.md # path in the repo, default branch
+    light: true # comments only: no branch, no setup, a read-only token
+    session: issue # issue: kept, like a brainstorm | fresh: a new one each time
+    model: sonnet
+    effort: medium
+
 # Where ideas, bug reports and questions go (see Inboxes below).
 inbox:
   ideas: 3 # issue number
@@ -81,6 +91,7 @@ preview:
 | `caches`                                | none                                               | absolute paths in the sandbox kept in a volume per repo and path                         |
 | `hosts`                                 | none                                               | extra hosts the sandbox may reach through the egress proxy (`name`, `"*.domain"`, `"*"`) |
 | `mounts`                                | none                                               | host paths requested (`- path: /nfs/work/api`, `read_only`); only under granted roots    |
+| `modes.<name>`                          | none                                               | the repo's own modes, picked with `/mode <name>` (see Modes)                             |
 | `inbox.ideas`, `inbox.bugs`             | none                                               | issue numbers whose comments are ideas or bug reports to file (see Inboxes)              |
 | `inbox.discussions`                     | none                                               | GitHub Discussions category whose discussions Claude answers (see Inboxes)               |
 | `preview.command`                       | none                                               | preview hook command (a plain string `preview: ./x.sh` works too)                        |
@@ -168,7 +179,8 @@ sandbox mounts itself (`/workspace`, `/home/node/.claude`, `/opt/claude-code`,
 Claude starts, on every work run (a follow-up comment starts a new container). Its output
 goes to the run's log. If it fails, the run goes on and Claude is told.
 
-Brainstorms are light runs: no branch, no setup command, so the answer comes quickly.
+Brainstorms are light runs: no branch, no setup command, so the answer comes quickly. So
+are the repo's modes with `light: true`.
 
 ## Instructions
 
@@ -176,6 +188,59 @@ The file named by `instructions` is read from the default branch and appended to
 generic sandbox instructions (`prompts/sandbox.md`) under "This project". Put there what
 the generic rules can't know: language of the product, services and how to start them,
 checks to run.
+
+## Modes
+
+A run is in a mode: **work** (implement, the default) or **brainstorm** (discuss, no code),
+or one of the repository's own, declared under `modes:`. A `/mode <name>` line in a comment
+picks one, on its own line (`/mode` is never read as `/model`; names are not case-sensitive):
+
+```text
+Claude work on this
+/mode review
+Focus on the error handling.
+```
+
+- **With the trigger line**, it starts that mode. Without one, on an issue that already has
+  a session, it **switches**: the new mode goes on in the same session, so it starts from
+  the conversation so far (a review, then `/mode work` to fix what it found).
+- **A comment with neither** goes on in the issue's current mode. The trigger line alone,
+  or `/mode work`, goes back to work; `/mode brainstorm` (or its trigger line) to a
+  brainstorm. Brainstorms stay on issues: `/mode brainstorm` on a pull request is ignored.
+- **An unknown name** gets a reply listing the modes, and nothing runs. So does a comment
+  for a mode that was removed from the config since.
+- Work is the default: there is no `default_mode`.
+
+Each mode of `modes:` takes these keys; any other key, a built-in name or a bad path is an
+error, listed in the reply:
+
+| Key            | Default                                   | What                                                                         |
+| -------------- | ----------------------------------------- | ---------------------------------------------------------------------------- |
+| `instructions` | required                                  | Markdown file of the repo, read from the default branch, like `instructions` |
+| `light`        | `false`                                   | `true`: no branch, no `setup`, a read-only token: it can only comment        |
+| `session`      | `issue`                                   | `issue`: the issue's session, kept; `fresh`: a new one each run, not kept    |
+| `model`        | `model`, or `brainstorm_model` if light   | its model                                                                    |
+| `effort`       | `effort`, or `brainstorm_effort` if light | its thinking effort                                                          |
+
+- **Names**: letters, digits, `-` and `_`. `work` and `brainstorm` can't be redefined (set
+  their model with `model`/`effort` and `brainstorm_model`/`brainstorm_effort`); `stop`,
+  `idea`, `bug` and `discussion` are reserved.
+- **Prompt**: the generic sandbox instructions (`prompts/sandbox.md`, and the repo's
+  `instructions`) as for every run, then a short frame (the issue or pull request to read,
+  what the mode may do) and the mode's file.
+- **Light modes** run like a brainstorm: the shorter pause, before queued work, no branch
+  and no `setup`. They only comment: their GitHub token can read the code, issues and pull
+  requests, not push or write, and their final message is the reply. They can run on pull
+  requests, where a review mode is most useful.
+- **Full modes** run like work: the issue's branch and draft pull request, `setup`, a token
+  that can push.
+- **Fresh modes** (`session: fresh`) start a new session on every run and don't keep it:
+  the issue stays in the mode it was in, and its next run continues its own session.
+- **A mode narrows, never widens**: the hosts, mounts and limits of every run of the repo
+  are the same whatever the mode (the operator's grants and the repo's `hosts` and
+  `mounts`). A mode has no key for them.
+
+The dashboard names the repo's modes next to the issue, and in each run.
 
 ## Inboxes
 
