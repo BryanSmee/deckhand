@@ -1,0 +1,137 @@
+.detail {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+}
+
+.head {
+  padding: 1rem 1.5rem 0.9rem;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.back {
+  display: none;
+  margin: 0 0 0.5rem;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  cursor: pointer;
+}
+
+.repo {
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.repo:hover {
+  color: var(--ink);
+  text-decoration: underline;
+}
+
+.title {
+  margin: 0.15rem 0 0.5rem;
+  font-size: 1.25rem;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.title a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.title a:hover {
+  text-decoration: underline;
+}
+
+.number {
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.facts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem 0.9rem;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.summary {
+  margin: 0.75rem 0 0;
+  padding: 0.5rem 0.75rem;
+  border-radius: 6px;
+  background: var(--raised);
+  border: 1px solid var(--line);
+  font-size: 0.85rem;
+  overflow-wrap: anywhere;
+}
+
+.summary b {
+  color: var(--muted);
+  font-weight: 600;
+  margin-right: 0.4rem;
+}
+
+.runs {
+  display: flex;
+  gap: 0.4rem;
+  overflow-x: auto;
+  padding: 0.6rem 1.5rem;
+  border-bottom: 1px solid var(--line);
+  scrollbar-width: thin;
+}
+
+.run {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.2rem 0.65rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel);
+  font-size: 0.75rem;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.run[aria-current="true"] {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.placeholder {
+  margin: auto;
+  padding: 2rem;
+  color: var(--muted);
+  text-align: center;
+}
+
+@media (max-width: 760px) {
+  .back {
+    display: inline;
+    margin: 0 0.75rem 0 0;
+  }
+  .head {
+    padding: 0.75rem 1rem;
+  }
+  .title {
+    font-size: 1.05rem;
+    margin-bottom: 0.4rem;
+  }
+  .summary {
+    margin-top: 0.5rem;
+    padding: 0.35rem 0.6rem;
+  }
+  .runs {
+    padding: 0.5rem 1rem;
+  }
+}

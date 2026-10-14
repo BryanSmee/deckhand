@@ -74,26 +74,26 @@ preview:
 
 ## Keys
 
-| Key                                     | Default                                            | What                                                                                     |
-| --------------------------------------- | -------------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| `users`                                 | `ALLOWED_USERS`                                    | GitHub logins that may start runs here; those not in `ALLOWED_USERS` are ignored         |
-| `trigger`                               | `TRIGGER`                                          | the whole first line of a comment that starts a run; `/mode` picks another mode          |
-| `model`, `effort`                       | `SANDBOX_MODEL`, `SANDBOX_EFFORT`                  | work runs' model and thinking effort (`low`, `medium`, `high`, `xhigh`, `max`)           |
-| `brainstorm_model`, `brainstorm_effort` | `BRAINSTORM_MODEL`, `BRAINSTORM_EFFORT`            | the same for brainstorms, inbox entries and discussions                                  |
-| `max_parallel`                          | `MAX_PARALLEL`                                     | runs of this repo at once; capped by `MAX_PARALLEL`                                      |
-| `setup`                                 | none                                               | shell command run in `/workspace` before Claude, on work runs                            |
-| `instructions`                          | none                                               | Markdown file of the repo, appended to Claude's instructions                             |
-| `dockerfile`                            | none: the base image                               | Dockerfile of the repo for its runs' image                                               |
-| `allow_branch_docker_images`            | `false`                                            | runs on a pull request use the Dockerfile of its branch; never for forks                 |
-| `caches`                                | none                                               | absolute paths in the sandbox kept in a volume per repo and path                         |
-| `hosts`                                 | none                                               | extra hosts the sandbox may reach through the egress proxy (`name`, `"*.domain"`, `"*"`) |
-| `mounts`                                | none                                               | host paths requested (`- path: /nfs/work/api`, `read_only`); only under granted roots    |
-| `modes.<name>`                          | none                                               | the repo's own modes, picked with `/mode <name>` (see Modes)                             |
-| `inbox.ideas`, `inbox.bugs`             | none                                               | issue numbers whose comments are ideas or bug reports to file (see Inboxes)              |
-| `inbox.discussions`                     | none                                               | GitHub Discussions category whose discussions Claude answers (see Inboxes)               |
-| `preview.command`                       | none                                               | preview hook command (a plain string `preview: ./x.sh` works too)                        |
-| `preview.image`                         | the repo's image                                   | image the hook runs in; it needs a Docker client                                         |
-| `preview.timeout_minutes`               | `30`                                               | the hook is stopped after that                                                           |
+| Key                                     | Default                                 | What                                                                                     |
+| --------------------------------------- | --------------------------------------- | ---------------------------------------------------------------------------------------- |
+| `users`                                 | `ALLOWED_USERS`                         | GitHub logins that may start runs here; those not in `ALLOWED_USERS` are ignored         |
+| `trigger`                               | `TRIGGER`                               | the whole first line of a comment that starts a run; `/mode` picks another mode          |
+| `model`, `effort`                       | `SANDBOX_MODEL`, `SANDBOX_EFFORT`       | work runs' model and thinking effort (`low`, `medium`, `high`, `xhigh`, `max`)           |
+| `brainstorm_model`, `brainstorm_effort` | `BRAINSTORM_MODEL`, `BRAINSTORM_EFFORT` | the same for brainstorms, inbox entries and discussions                                  |
+| `max_parallel`                          | `MAX_PARALLEL`                          | runs of this repo at once; capped by `MAX_PARALLEL`                                      |
+| `setup`                                 | none                                    | shell command run in `/workspace` before Claude, on work runs                            |
+| `instructions`                          | none                                    | Markdown file of the repo, appended to Claude's instructions                             |
+| `dockerfile`                            | none: the base image                    | Dockerfile of the repo for its runs' image                                               |
+| `allow_branch_docker_images`            | `false`                                 | runs on a pull request use the Dockerfile of its branch; never for forks                 |
+| `caches`                                | none                                    | absolute paths in the sandbox kept in a volume per repo and path                         |
+| `hosts`                                 | none                                    | extra hosts the sandbox may reach through the egress proxy (`name`, `"*.domain"`, `"*"`) |
+| `mounts`                                | none                                    | host paths requested (`- path: /nfs/work/api`, `read_only`); only under granted roots    |
+| `modes.<name>`                          | none                                    | the repo's own modes, picked with `/mode <name>` (see Modes)                             |
+| `inbox.ideas`, `inbox.bugs`             | none                                    | issue numbers whose comments are ideas or bug reports to file (see Inboxes)              |
+| `inbox.discussions`                     | none                                    | GitHub Discussions category whose discussions Claude answers (see Inboxes)               |
+| `preview.command`                       | none                                    | preview hook command (a plain string `preview: ./x.sh` works too)                        |
+| `preview.image`                         | the repo's image                        | image the hook runs in; it needs a Docker client                                         |
+| `preview.timeout_minutes`               | `30`                                    | the hook is stopped after that                                                           |
 
 ## Network and mounts
 

@@ -1,0 +1,25 @@
+import { expect, test } from "vitest";
+import { formatRoute, parseRoute } from "./route";
+
+test("tabs, tasks and runs in the address, both ways", () => {
+  const route = { repo: "org/repo", task: "org/repo#12", run: "org-repo-12-1000" };
+  expect(formatRoute(route)).toBe("#/org/repo?task=org%2Frepo%2312&run=org-repo-12-1000");
+  expect(parseRoute(formatRoute(route))).toEqual(route);
+  expect(formatRoute({ repo: null, task: null, run: null })).toBe("#/all");
+  expect(parseRoute("#/all")).toEqual({ repo: null, task: null, run: null });
+  // A run without its task means nothing.
+  expect(formatRoute({ repo: null, task: null, run: "x" })).toBe("#/all");
+});
+
+test("links from before the tabs open their task in All", () => {
+  expect(parseRoute("#task=org%2Frepo%2312&run=r1")).toEqual({
+    repo: null,
+    task: "org/repo#12",
+    run: "r1",
+  });
+  expect(parseRoute("")).toEqual({ repo: null, task: null, run: null });
+});
+
+test("anything else in the path is All", () => {
+  expect(parseRoute("#/not a repo")).toEqual({ repo: null, task: null, run: null });
+});

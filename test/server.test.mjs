@@ -1035,7 +1035,7 @@ test("the dashboard and its logs are for allowed users signed in with GitHub", a
     fetched = await older();
   }
   assert.equal(fetched.title, "An older pull request");
-  assert.equal(fetched.runs[0].summary, "Fixed");
+  assert.equal(fetched.runs[0].summary, "The typo.");
   const stream = await get(`/api/runs/${task.runs[0].id}/stream`, session);
   assert.equal(stream.status, 200);
   assert.match(await stream.text(), /event: end/);

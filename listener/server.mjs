@@ -1588,13 +1588,13 @@ function loadRuns() {
     .sort((a, b) => b.startedAt - a.startedAt);
 }
 
-// The first line of a run's reply, for the dashboard: what the run ended with.
+// The first line of a run's reply, for the dashboard: what the run ended with. Headings
+// ("## Needs your input") say less than the sentence under them.
 function summaryOf(result) {
-  const text = (result?.result ?? "").replace(NEEDS_INPUT, "");
-  const line = text
-    .split("\n")
-    .map((l) => l.replace(/^[#>*\s-]+/, "").trim())
-    .find(Boolean);
+  const lines = (result?.result ?? "").replace(NEEDS_INPUT, "").split("\n");
+  const plain = (l) => l.replace(/^[#>*\s-]+/, "").trim();
+  const line =
+    plain(lines.find((l) => plain(l) && !/^\s*#/.test(l)) ?? "") || plain(lines.find(plain) ?? "");
   if (!line) return null;
   return line.length > 200 ? `${line.slice(0, 199)}…` : line;
 }
@@ -1805,9 +1805,11 @@ function serveDashboard(req, res) {
   res.setHeader("cache-control", "no-store");
   if (url.pathname === "/") {
     res.setHeader("content-type", "text/plain; charset=utf-8");
-    return res.writeHead(503).end(
-      `Deckhand listener: the dashboard isn't built (${dashboardDir}): run npm run build in dashboard/.\n`,
-    );
+    return res
+      .writeHead(503)
+      .end(
+        `Deckhand listener: the dashboard isn't built (${dashboardDir}): run npm run build in dashboard/.\n`,
+      );
   }
   if (url.pathname === "/api/state") return sendJson(res, state(user));
   const match = /^\/api\/runs\/([\w.-]+)\/stream$/.exec(url.pathname);

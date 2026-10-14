@@ -66,10 +66,7 @@ test("its users and trigger decide which comments run", () => {
     workItem(repoConfig, "issue_comment", payload("bob", "deckhand go")).trigger,
     "work",
   );
-  assert.equal(
-    workItem(repoConfig, "issue_comment", payload("bob", "Deckhand")).trigger,
-    null,
-  );
+  assert.equal(workItem(repoConfig, "issue_comment", payload("bob", "Deckhand")).trigger, null);
 });
 
 test("a bad trigger is an error; the old triggers key only a warning", () => {

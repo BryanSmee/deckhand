@@ -1,0 +1,88 @@
+/* Theme colours: the system's light or dark scheme. Components use these only. */
+:root {
+  --bg: #f6f5f3;
+  --panel: #ffffff;
+  --raised: #fbfaf9;
+  --ink: #1c1917;
+  --muted: #6f6964;
+  --line: #e5e2df;
+  --code: #f3f1ef;
+  --hover: #f1efec;
+  --accent: #c2410c;
+  --accent-soft: #fdeee5;
+  --run: #1d4ed8;
+  --run-soft: #e6edfd;
+  --ok: #15803d;
+  --ok-soft: #e5f4ea;
+  --err: #b91c1c;
+  --err-soft: #fbe9e9;
+  --idle: #8a837d;
+  --idle-soft: #efedeb;
+  --radius: 8px;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f0d0c;
+    --panel: #181514;
+    --raised: #1f1b1a;
+    --ink: #f3f1ef;
+    --muted: #a39d98;
+    --line: #2c2725;
+    --code: #121010;
+    --hover: #24201e;
+    --accent: #fb923c;
+    --accent-soft: #3a2316;
+    --run: #7aa2ff;
+    --run-soft: #1a2440;
+    --ok: #4ade80;
+    --ok-soft: #142a1c;
+    --err: #f87171;
+    --err-soft: #361819;
+    --idle: #8f8883;
+    --idle-soft: #26221f;
+    color-scheme: dark;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+}
+
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font:
+    14px/1.5 system-ui,
+    -apple-system,
+    "Segoe UI",
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+#app {
+  height: 100vh;
+  height: 100dvh;
+}
+
+a {
+  color: var(--accent);
+}
+
+button {
+  font: inherit;
+  color: inherit;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
