@@ -1,0 +1,5 @@
+max_parallel: 4
+inbox:
+  ideas: 15
+  bugs: 16
+  discussions: Ask Claude
