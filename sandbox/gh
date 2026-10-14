@@ -1,0 +1,12 @@
+#!/bin/bash
+# gh with a token fresh from the broker on every call (deckhand-token): a run outlives any
+# token it could get at start. Installed ahead of the real gh on PATH. Outside a Deckhand run
+# (no broker), gh runs as usual.
+if [ -n "${DECKHAND_BROKER_URL:-}" ]; then
+  GH_TOKEN=$(deckhand-token) || {
+    echo "gh: no GitHub token from Deckhand's broker" >&2
+    exit 1
+  }
+  export GH_TOKEN
+fi
+exec /usr/bin/gh "$@"

@@ -1,0 +1,11 @@
+#!/bin/bash
+# Prints a GitHub token for this run's repo, fresh from the listener's broker
+# (../listener/broker.mjs): installation tokens expire after an hour, runs last longer, so
+# nothing keeps one. The git credential helper and the gh wrapper call it.
+set -euo pipefail
+: "${DECKHAND_BROKER_URL:?not a Deckhand run: no broker}"
+: "${DECKHAND_RUN_SECRET:?not a Deckhand run: no run secret}"
+# The secret goes through a header file on stdin, so it never shows in `ps`.
+curl -fsS --max-time 30 --retry 2 \
+  -H @- "$DECKHAND_BROKER_URL/token" <<< "Authorization: Bearer $DECKHAND_RUN_SECRET" |
+  jq -er .token

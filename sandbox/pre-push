@@ -1,0 +1,9 @@
+#!/bin/bash
+# The sandbox only pushes branches: the base branch (often deployed) is the maintainer's.
+base=${BASE_BRANCH:-main}
+while read -r _local_ref _local_sha remote_ref _remote_sha; do
+  if [ "$remote_ref" = "refs/heads/$base" ]; then
+    echo "pre-push: pushing to $base is not allowed from the sandbox; push a branch." >&2
+    exit 1
+  fi
+done

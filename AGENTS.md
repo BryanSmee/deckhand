@@ -15,11 +15,11 @@ brainstorm sessions). The plan and its decisions: PocketBerry's PB-135 and issue
 
 Node 22, no dependencies (see Conventions).
 
-| Task         | Command                                                       |
-| ------------ | ------------------------------------------------------------- |
-| Tests        | `node --test`                                                 |
-| Syntax check | `node --check listener/server.mjs`, `bash -n sandbox/*.sh`    |
-| Format       | `npx --yes prettier@3 --check .` (`--write` to fix)           |
+| Task         | Command                                                    |
+| ------------ | ---------------------------------------------------------- |
+| Tests        | `node --test`                                              |
+| Syntax check | `node --check listener/server.mjs`, `bash -n sandbox/*.sh` |
+| Format       | `npx --yes prettier@3 --check .` (`--write` to fix)        |
 
 Run all three before pushing. The sandbox you run in has **no Docker** and receives no
 webhooks: test through the injectable seams below, and say in the pull request what you
