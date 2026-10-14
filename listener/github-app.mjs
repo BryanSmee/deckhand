@@ -13,10 +13,13 @@ export const APP_PERMISSIONS = {
   metadata: "read",
   deployments: "write",
   actions: "read",
+  discussions: "write",
 };
 // What workItem() routes, plus the previews' events (handled by a later hook).
 export const APP_EVENTS = [
   "issue_comment",
+  "discussion",
+  "discussion_comment",
   "pull_request",
   "pull_request_review",
   "pull_request_review_comment",
@@ -30,6 +33,8 @@ export const SANDBOX_PERMISSIONS = {
   metadata: "read",
   actions: "read",
 };
+// Added for discussion runs only: an App created before discussions keeps working elsewhere.
+export const DISCUSSION_PERMISSIONS = { discussions: "write" };
 
 // Installation tokens last an hour: a cached one is renewed when less than this is left, so
 // whoever gets it can use it for at least that long.
@@ -122,21 +127,24 @@ export function createGitHubApp({
     return installations.get(key);
   }
 
-  // `repo`: a token for that repo alone, with the sandbox's permissions; none: the whole
-  // installation with the App's, for the listener's own calls.
-  function token(installationId, repo) {
-    const key = `${installationId}:${repo ?? "*"}`;
+  // `repo`: a token for that repo alone, with the sandbox's permissions (and `extra`); none:
+  // the whole installation with the App's, for the listener's own calls.
+  function token(installationId, repo, extra = {}) {
+    const key = `${installationId}:${repo ?? "*"}:${Object.keys(extra).sort().join(",")}`;
     const cached = tokens.get(key);
     if (cached) {
       const still = cached.then((t) => (t.expiresAt - now() > REFRESH_MS ? t : null));
-      return still.then((t) => t ?? mint(key, installationId, repo));
+      return still.then((t) => t ?? mint(key, installationId, repo, extra));
     }
-    return mint(key, installationId, repo);
+    return mint(key, installationId, repo, extra);
   }
 
-  function mint(key, installationId, repo) {
+  function mint(key, installationId, repo, extra) {
     const body = repo
-      ? { repositories: [repo.split("/")[1]], permissions: SANDBOX_PERMISSIONS }
+      ? {
+          repositories: [repo.split("/")[1]],
+          permissions: { ...SANDBOX_PERMISSIONS, ...extra },
+        }
       : undefined;
     const minted = call("POST", `/app/installations/${installationId}/access_tokens`, jwt(), body)
       .then((res) => json(res, `token for installation ${installationId}`))
@@ -148,8 +156,8 @@ export function createGitHubApp({
   }
 
   // A sandbox's token: only its repo, only what a run needs.
-  async function repoToken(repo) {
-    return token(await installationOf(repo), repo.toLowerCase());
+  async function repoToken(repo, extra) {
+    return token(await installationOf(repo), repo.toLowerCase(), extra);
   }
 
   // `expected`: error statuses that are normal for this call, so not logged.

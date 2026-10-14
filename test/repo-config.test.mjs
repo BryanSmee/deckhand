@@ -86,7 +86,7 @@ hosts: [registry.npmjs.org, "*.example.com"]
 mounts:
   - path: /nfs/work/api
     read_only: false
-inbox: { ideas: 3, bugs: 4 }
+inbox: { ideas: 3, bugs: 4, discussions: "💬 Ask Claude" }
 preview:
   command: ./deploy/preview.sh
   image: docker:27-cli
@@ -105,7 +105,7 @@ colour: blue
   assert.deepEqual(settings.caches, ["/home/node/.npm", "/home/node/.cache/pip"]);
   assert.deepEqual(settings.hosts, ["registry.npmjs.org", "*.example.com"]);
   assert.deepEqual(settings.mounts, [{ path: "/nfs/work/api", readOnly: false }]);
-  assert.deepEqual(settings.inbox, { ideas: 3, bugs: 4 });
+  assert.deepEqual(settings.inbox, { ideas: 3, bugs: 4, discussions: "ask claude" });
   assert.deepEqual(settings.preview, {
     command: "./deploy/preview.sh",
     image: "docker:27-cli",
@@ -121,10 +121,13 @@ dockerfile: ../outside/Dockerfile
 allow_branch_docker_images: "yes"
 caches: [relative/path, /workspace/node_modules, /home/node/../root]
 hosts: ["bad host"]
+inbox: { ideas: three, discussions: 5 }
 `,
     config,
   );
-  assert.equal(errors.length, 8);
+  assert.equal(errors.length, 10);
+  assert.match(errors.join("\n"), /inbox\.ideas: expected an issue number/);
+  assert.match(errors.join("\n"), /inbox\.discussions: expected the name of a discussion category/);
   assert.match(errors.join("\n"), /effort: expected one of low/);
   assert.match(errors.join("\n"), /the sandbox uses \/workspace itself/);
   assert.match(parseRepoConfig("a: [", config).errors[0], /\.deckhand\.yaml: line 1/);

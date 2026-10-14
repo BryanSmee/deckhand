@@ -52,6 +52,12 @@ caches:
   - /home/node/.npm
   - /home/node/.cache/ms-playwright
 
+# Where ideas, bug reports and questions go (see Inboxes below).
+inbox:
+  ideas: 3 # issue number
+  bugs: 4 # issue number
+  discussions: Ask Claude # GitHub Discussions category
+
 # Run on pull_request and workflow_run deliveries (see below).
 preview:
   command: ./deploy/preview.sh
@@ -66,7 +72,7 @@ preview:
 | `users`                                 | `ALLOWED_USERS`                                    | GitHub logins that may start runs here; those not in `ALLOWED_USERS` are ignored         |
 | `triggers.work`, `.brainstorm`, `.stop` | `TRIGGER`, `BRAINSTORM_TRIGGER`, `BRAINSTORM_STOP` | trigger lines                                                                            |
 | `model`, `effort`                       | `SANDBOX_MODEL`, `SANDBOX_EFFORT`                  | work runs' model and thinking effort (`low`, `medium`, `high`, `xhigh`, `max`)           |
-| `brainstorm_model`, `brainstorm_effort` | `BRAINSTORM_MODEL`, `BRAINSTORM_EFFORT`            | the same for brainstorms                                                                 |
+| `brainstorm_model`, `brainstorm_effort` | `BRAINSTORM_MODEL`, `BRAINSTORM_EFFORT`            | the same for brainstorms, inbox entries and discussions                                  |
 | `max_parallel`                          | `MAX_PARALLEL`                                     | runs of this repo at once; capped by `MAX_PARALLEL`                                      |
 | `setup`                                 | none                                               | shell command run in `/workspace` before Claude, on work runs                            |
 | `instructions`                          | none                                               | Markdown file of the repo, appended to Claude's instructions                             |
@@ -75,12 +81,11 @@ preview:
 | `caches`                                | none                                               | absolute paths in the sandbox kept in a volume per repo and path                         |
 | `hosts`                                 | none                                               | extra hosts the sandbox may reach through the egress proxy (`name`, `"*.domain"`, `"*"`) |
 | `mounts`                                | none                                               | host paths requested (`- path: /nfs/work/api`, `read_only`); only under granted roots    |
-| `inbox`                                 | none                                               | issue numbers collecting `ideas`, `bugs` and `discussions` (#5)                          |
+| `inbox.ideas`, `inbox.bugs`             | none                                               | issue numbers whose comments are ideas or bug reports to file (see Inboxes)              |
+| `inbox.discussions`                     | none                                               | GitHub Discussions category whose discussions Claude answers (see Inboxes)               |
 | `preview.command`                       | none                                               | preview hook command (a plain string `preview: ./x.sh` works too)                        |
 | `preview.image`                         | the repo's image                                   | image the hook runs in; it needs a Docker client                                         |
 | `preview.timeout_minutes`               | `30`                                               | the hook is stopped after that                                                           |
-
-`inbox` is read and checked now; the inbox prompts (#5) will use it.
 
 ## Network and mounts
 
@@ -171,6 +176,27 @@ The file named by `instructions` is read from the default branch and appended to
 generic sandbox instructions (`prompts/sandbox.md`) under "This project". Put there what
 the generic rules can't know: language of the product, services and how to start them,
 checks to run.
+
+## Inboxes
+
+Places where a maintainer drops something for Claude to handle, without a trigger line.
+Only `ALLOWED_USERS` (narrowed by `users`) are answered; others are ignored, like anywhere.
+They are light runs, like brainstorms: no branch, no `setup`, the brainstorm model.
+
+- **Ideas and bug reports**: an open issue each (pin them), named by its number. Every
+  comment on it is an entry: Claude reads the code, looks for an existing issue, and
+  creates one (labelled `idea` or `bug` plus those of the repo that fit, with Problem,
+  Proposal, Acceptance criteria and Open questions; a bug also gets its likely cause, a big
+  idea sub-issues). Its reply on the inbox links what it created or found, or answers when
+  there is nothing to file. Each entry starts a new session: a follow-up is read from the
+  inbox's earlier comments. Prompts: `prompts/idea.md`, `prompts/bug.md`.
+- **Discussions**: a category of the repository's GitHub Discussions (create it first, for
+  example "Ask Claude"; compared loosely, emoji aside). A new discussion in it, and every
+  later comment of an allowed user, gets an answer in the discussion, in the thread of the
+  comment it answers; the discussion keeps one session, like a brainstorm. When it settles
+  on something to build, Claude files an issue and links it. Other categories are never
+  read. These runs alone get a token with the Discussions permission (see
+  [Setting up](setup.md) for an App created before it). Prompt: `prompts/discussion.md`.
 
 ## Preview hook
 

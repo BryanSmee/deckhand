@@ -14,11 +14,12 @@ export function createBroker({
   random = () => randomBytes(32).toString("hex"),
   log = () => {},
 }) {
-  const runs = new Map(); // hash(secret) → repo
+  const runs = new Map(); // hash(secret) → { repo, extra }
 
-  function register(repo) {
+  // `extra`: permissions this run needs beyond the sandbox's usual ones (discussions).
+  function register(repo, extra) {
     const secret = random();
-    runs.set(hash(secret), repo.toLowerCase());
+    runs.set(hash(secret), { repo: repo.toLowerCase(), extra });
     return secret;
   }
 
@@ -39,12 +40,13 @@ export function createBroker({
       return send(res, 404, { error: "not found" });
     }
     const [scheme, secret] = (req.headers.authorization ?? "").split(" ");
-    const repo = scheme === "Bearer" && secret ? runs.get(hash(secret)) : undefined;
-    if (!repo) return send(res, 401, { error: "unknown or finished run" });
+    const run = scheme === "Bearer" && secret ? runs.get(hash(secret)) : undefined;
+    if (!run) return send(res, 401, { error: "unknown or finished run" });
+    const { repo, extra } = run;
     const github = app();
     if (!github) return send(res, 503, { error: "the GitHub App is not set up" });
     try {
-      const { token, expiresAt } = await github.repoToken(repo);
+      const { token, expiresAt } = await github.repoToken(repo, extra);
       send(res, 200, {
         token,
         expires_at: new Date(expiresAt).toISOString(),

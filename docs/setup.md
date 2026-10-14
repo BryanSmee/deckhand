@@ -40,8 +40,13 @@ What the App asks for:
 | Permissions                                     | Events                                        |
 | ----------------------------------------------- | --------------------------------------------- |
 | Issues, Pull requests, Contents: read and write | `issue_comment`, `pull_request`               |
-| Deployments: read and write                     | `pull_request_review`                         |
+| Deployments, Discussions: read and write        | `pull_request_review`                         |
 | Actions, Metadata: read                         | `pull_request_review_comment`, `workflow_run` |
+|                                                 | `discussion`, `discussion_comment`            |
+
+An App created before Deckhand answered discussions lacks the last two events and the
+Discussions permission: add them in the App's settings (_Permissions & events_), then accept
+the new permissions on its installation. Everything else works without them.
 
 ## 3. Use it
 
@@ -49,6 +54,11 @@ On an issue of an installed repository, an allowed user comments `Claude work on
 (first line; the rest are instructions). The sandbox opens the branch `issue-<n>-<slug>` and
 a draft pull request, and Claude's final message comes back as a comment from the App's bot.
 `Claude let's brainstorm this` discusses the issue without code; `/stop` wraps it up.
+
+A repository can also declare inboxes in its `.deckhand.yaml`: an ideas issue and a bug
+reports issue, where every comment of an allowed user becomes a labelled GitHub issue (or an
+answer), and a GitHub Discussions category (for example "Ask Claude") where Claude answers
+allowed users' questions. See [Inboxes](repo-config.md#inboxes).
 
 Each repository can add a `.deckhand.yaml` on its default branch: its own users (narrowing
 `ALLOWED_USERS`), trigger lines, models, parallel cap, setup command, instructions,
@@ -86,7 +96,8 @@ No sandbox gets a long-lived token, an SSH key or the host's git configuration:
 - Its git credential helper and `gh` wrapper send that secret to the listener's token
   broker (port 8081, on the `deckhand-sandboxes` network only, not published) on every
   call, and get back an installation token limited to the run's repository, with
-  contents, issues and pull requests (read and write), actions and metadata (read).
+  contents, issues and pull requests (read and write), actions and metadata (read);
+  discussions too (read and write) for runs answering a discussion, and only those.
   Installation tokens last an hour; the broker renews them before that, so a run can go on
   for hours.
 - Git pushes over HTTPS; commits and comments come from the App's bot

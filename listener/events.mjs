@@ -54,13 +54,24 @@ export function takeOptions(text, options) {
     .trim();
 }
 
+// An inbox entry, as Claude reads it: who wrote it and where, so its reply can link back.
+function entry(author, url, body) {
+  return `From @${author.login}${url ? ` (${url})` : ""}:\n\n${body.trim()}`;
+}
+
 // Returns { repo, id, kind, number, trigger, text, replyTo, comment } or null to ignore.
 // `skip(reason)` logs why a delivery is ignored and returns null: deliveries that do nothing
 // are the usual question.
+//
+// `config.inbox` is the repo's (repo-config.mjs): comments on its ideas or bugs issue are
+// inbox entries ("idea", "bug"), and discussions in its discussions category are answered
+// ("discussion"), with no trigger line. The operator's own check runs without it, before the
+// repo's config is read: discussions then pass whatever their category.
 export function workItem(config, event, p, skip = () => null) {
   const repo = p.repository?.full_name;
-  const author = (p.comment ?? p.review)?.user;
-  const body = (p.comment ?? p.review)?.body ?? "";
+  const source = p.comment ?? p.review ?? (event === "discussion" ? p.discussion : null);
+  const author = source?.user;
+  const body = source?.body ?? "";
   if (event === "ping") return skip("ping (webhook configured)");
   if (event === "installation" || event === "installation_repositories") {
     return skip(`${event} ${p.action ?? ""} by ${p.sender?.login ?? "?"}`);
@@ -79,10 +90,30 @@ export function workItem(config, event, p, skip = () => null) {
   }
   if (body.includes(MARKER)) return skip("our own reply");
 
+  if (event === "discussion" || event === "discussion_comment") {
+    return discussionItem(config, event, p, skip);
+  }
   if (event === "issue_comment" && p.action === "created") {
     const { trigger, text } = splitTrigger(config, body);
     if (!p.issue.pull_request) {
       const n = p.issue.number;
+      // Every comment on an inbox issue is an entry: trigger lines don't apply there.
+      const inbox = [
+        ["idea", config.inbox?.ideas],
+        ["bug", config.inbox?.bugs],
+      ].find(([, number]) => number === n)?.[0];
+      if (inbox) {
+        return {
+          repo,
+          id: String(n),
+          kind: "issue",
+          number: n,
+          trigger: inbox,
+          text: entry(author, p.comment.html_url, body),
+          replyTo: n,
+          comment: p.comment,
+        };
+      }
       return {
         repo,
         id: String(n),
@@ -117,6 +148,36 @@ export function workItem(config, event, p, skip = () => null) {
     );
   }
   return skip(`${event} ${p.action ?? ""} is not handled`);
+}
+
+// A new discussion, or a comment on one, in the repo's discussions category: one session per
+// discussion, like a brainstorm. Discussions only exist in GraphQL for writing, so the item
+// keeps the node ids its reply and reactions need (server.mjs).
+function discussionItem(config, event, p, skip) {
+  const d = p.discussion;
+  if (p.action !== "created") return skip(`${event} ${p.action ?? ""} is not handled`);
+  const category = d?.category?.name ?? "";
+  if (config.inbox && normalize(category) !== config.inbox.discussions) {
+    return skip(`discussion category "${category}" doesn't call Claude`);
+  }
+  const c = event === "discussion" ? null : p.comment;
+  const text = c
+    ? entry(c.user, c.html_url, c.body ?? "")
+    : `${entry(d.user, d.html_url, d.body ?? "")}\n\n(Title: ${d.title})`;
+  return {
+    repo: p.repository.full_name,
+    id: `discussion-${d.number}`,
+    kind: "discussion",
+    number: d.number,
+    trigger: "discussion",
+    text,
+    replyTo: d.number,
+    discussionId: d.node_id,
+    // What the reply answers: the discussion itself, or a comment (its thread, see server.mjs).
+    comment: c
+      ? { id: c.id, node_id: c.node_id, parent_id: c.parent_id ?? null, discussion: true }
+      : { id: d.id, node_id: d.node_id, discussion: true },
+  };
 }
 
 // A delivery for the repo's preview hook (previews.mjs): { repo, base, event } or null.

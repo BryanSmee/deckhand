@@ -198,7 +198,7 @@ login made of letters, digits and dashes.</p>`,
       200,
       "Create it on GitHub",
       `<p>GitHub shows the App with its permissions (issues, pull requests, contents,
-deployments; actions and metadata read-only) and its events. Create it there, and you come
+deployments, discussions; actions and metadata read-only) and its events. Create it there, and you come
 back here to install it.</p>
 <form method="post" action="${escape(target)}?state=${escape(state)}">
   <input type="hidden" name="manifest" value="${escape(JSON.stringify(manifest({ name: app, publicUrl })))}" />

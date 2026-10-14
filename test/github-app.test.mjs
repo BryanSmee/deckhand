@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import {
+  DISCUSSION_PERMISSIONS,
   REFRESH_MS,
   SANDBOX_PERMISSIONS,
   createGitHubApp,
@@ -83,6 +84,19 @@ test("a sandbox token covers its repo only, with the sandbox's permissions", asy
     permissions: SANDBOX_PERMISSIONS,
   });
   assert.equal(SANDBOX_PERMISSIONS.deployments, undefined);
+});
+
+test("a discussion run's token adds discussions, cached apart from the others", async () => {
+  const { app, gh } = setup();
+  await app.repoToken("org/repo");
+  const { token } = await app.repoToken("org/repo", DISCUSSION_PERMISSIONS);
+  assert.equal(token, "tok-2");
+  const mints = gh.calls.filter((c) => c.path.endsWith("/access_tokens"));
+  assert.deepEqual(JSON.parse(mints[1].body).permissions, {
+    ...SANDBOX_PERMISSIONS,
+    discussions: "write",
+  });
+  assert.equal(SANDBOX_PERMISSIONS.discussions, undefined);
 });
 
 test("tokens are cached, and renewed before they run out", async () => {

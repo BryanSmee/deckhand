@@ -6,7 +6,7 @@ FROM node:22-alpine
 RUN apk add --no-cache docker-cli docker-cli-buildx tar
 WORKDIR /app
 COPY listener/*.mjs listener/dashboard.html listener/
-COPY prompts/brainstorm.md prompts/
+COPY prompts/brainstorm.md prompts/idea.md prompts/bug.md prompts/discussion.md prompts/
 ENV NODE_ENV=production
 # 8080: webhooks, /setup, dashboard (published). 8081: token broker (sandboxes only).
 EXPOSE 8080

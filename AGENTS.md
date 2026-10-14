@@ -1,7 +1,7 @@
 # Deckhand: guide for coding agents
 
 Deckhand runs Claude Code on GitHub issues and pull requests: comment triggers, brainstorms,
-inbox issues (ideas, bugs, discussions), a sandbox container per issue, a dashboard. It is
+inbox issues (ideas, bugs), GitHub Discussions, a sandbox container per issue, a dashboard. It is
 self-hosted and bring-your-own-key: each operator creates their own private GitHub App and
 runs their own server with their own Claude credentials. One deployment = one operator, Docker
 only.
