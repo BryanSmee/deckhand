@@ -21,11 +21,8 @@ on the dashboard.
 # Who may start runs here: only narrows the operator's ALLOWED_USERS.
 users: [alice, bob]
 
-# Trigger lines (first line of a comment), compared loosely.
-triggers:
-  work: Claude work on this
-  brainstorm: Claude let's brainstorm this
-  stop: Claude stop
+# The first line of a comment that starts a run, compared loosely ("@Deckhand:" matches).
+trigger: Deckhand
 
 # Defaults; a comment's /model and /effort lines still override them.
 model: opus
@@ -80,7 +77,7 @@ preview:
 | Key                                     | Default                                            | What                                                                                     |
 | --------------------------------------- | -------------------------------------------------- | ---------------------------------------------------------------------------------------- |
 | `users`                                 | `ALLOWED_USERS`                                    | GitHub logins that may start runs here; those not in `ALLOWED_USERS` are ignored         |
-| `triggers.work`, `.brainstorm`, `.stop` | `TRIGGER`, `BRAINSTORM_TRIGGER`, `BRAINSTORM_STOP` | trigger lines                                                                            |
+| `trigger`                               | `TRIGGER`                                          | the whole first line of a comment that starts a run; `/mode` picks another mode          |
 | `model`, `effort`                       | `SANDBOX_MODEL`, `SANDBOX_EFFORT`                  | work runs' model and thinking effort (`low`, `medium`, `high`, `xhigh`, `max`)           |
 | `brainstorm_model`, `brainstorm_effort` | `BRAINSTORM_MODEL`, `BRAINSTORM_EFFORT`            | the same for brainstorms, inbox entries and discussions                                  |
 | `max_parallel`                          | `MAX_PARALLEL`                                     | runs of this repo at once; capped by `MAX_PARALLEL`                                      |
@@ -193,10 +190,11 @@ checks to run.
 
 A run is in a mode: **work** (implement, the default) or **brainstorm** (discuss, no code),
 or one of the repository's own, declared under `modes:`. A `/mode <name>` line in a comment
-picks one, on its own line (`/mode` is never read as `/model`; names are not case-sensitive):
+picks one, on its own line or after the trigger on the first one (`Deckhand /mode review`;
+`/mode` is never read as `/model`; names are not case-sensitive):
 
 ```text
-Claude work on this
+Deckhand
 /mode review
 Focus on the error handling.
 ```
@@ -205,8 +203,8 @@ Focus on the error handling.
   a session, it **switches**: the new mode goes on in the same session, so it starts from
   the conversation so far (a review, then `/mode work` to fix what it found).
 - **A comment with neither** goes on in the issue's current mode. The trigger line alone,
-  or `/mode work`, goes back to work; `/mode brainstorm` (or its trigger line) to a
-  brainstorm. Brainstorms stay on issues: `/mode brainstorm` on a pull request is ignored.
+  or `/mode work`, goes back to work; `/mode brainstorm` to a brainstorm, which `/stop` wraps
+  up. Brainstorms stay on issues: `/mode brainstorm` on a pull request is ignored.
 - **An unknown name** gets a reply listing the modes, and nothing runs. So does a comment
   for a mode that was removed from the config since.
 - Work is the default: there is no `default_mode`.

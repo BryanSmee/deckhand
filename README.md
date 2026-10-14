@@ -1,8 +1,8 @@
 # Deckhand
 
-Deckhand runs Claude Code on your GitHub issues and pull requests. Comment `Claude work on
-this` on an issue and it starts a sandbox, works on a branch, opens a draft pull request and
-answers on the issue when it is done, or stops to ask when only you can decide.
+Deckhand runs Claude Code on your GitHub issues and pull requests. Comment `Deckhand` on an
+issue and it starts a sandbox, works on a branch, opens a draft pull request and answers on the
+issue when it is done, or stops to ask when only you can decide.
 
 It is self-hosted and bring-your-own-key: you create your own private GitHub App, run your
 own server with Docker, and use your own Claude credential. One deployment serves one
@@ -12,11 +12,13 @@ operator, across as many repositories as the App is installed on.
 
 - **Comment triggers.** On an issue, the first line of a comment is the command and the rest
   are instructions:
-  - `Claude work on this`: a run in a sandbox, on the branch `issue-<n>-<slug>`, with a
-    draft pull request. Once started, any comment on the issue or its pull request (reviews
-    and review comments too) continues the same session.
-  - `Claude let's brainstorm this`: a discussion of the issue in its comments, without code.
-    `Claude stop` (or `/stop`) wraps it up.
+  - `Deckhand`: a run in a sandbox, on the branch `issue-<n>-<slug>`, with a draft pull
+    request. Once started, any comment on the issue or its pull request (reviews and review
+    comments too) continues the same session. The trigger is the whole first line (any case or
+    punctuation: `@deckhand:` too), so "Deckhand is down" starts nothing.
+  - `Deckhand` then `/mode brainstorm` (on the next line, or the same one): a discussion of
+    the issue in its comments, without code. `/stop` wraps it up; `Deckhand` or `/mode work`
+    then implements in the same session.
   - `/model <name>` and `/effort <level>` lines pick the model and thinking effort of that run.
   - `/mode <name>` picks a mode: `work`, `brainstorm` or one the repository declares in its
     `.deckhand.yaml` (a review that only comments, say). Alone on an issue with a session,
@@ -99,7 +101,7 @@ then sends you to the App's installation page: pick the repositories Deckhand ma
 **3. First run.** On an issue of one of those repositories, comment:
 
 ```
-Claude work on this
+Deckhand
 ```
 
 The comment gets a 👀. The first run installs Claude Code (once, into a volume), then
@@ -112,7 +114,7 @@ states, every setting and how sandboxes reach GitHub.
 ## Per-repo config
 
 A repository can add a `.deckhand.yaml` at its root: its own users (narrowing
-`ALLOWED_USERS`), trigger lines, models, parallel runs, a setup command, project
+`ALLOWED_USERS`), trigger word, models, parallel runs, a setup command, project
 instructions, a Dockerfile for its image, caches, extra hosts, host mounts, inboxes and a
 preview hook.
 

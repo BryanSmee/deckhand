@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
 import { test } from "node:test";
-import { loadConfig } from "../listener/config.mjs";
+import { loadConfig, normalize } from "../listener/config.mjs";
 import { MARKER, splitTrigger, takeOptions, verified, workItem } from "../listener/events.mjs";
 
 const config = loadConfig({ ALLOWED_USERS: "alice" });
@@ -33,7 +33,7 @@ function comment(body, { login = "alice", type = "User", installation = 7, pr } 
 }
 
 test("issue comments: trigger, text and reply target", () => {
-  const item = workItem(config, "issue_comment", comment("Claude work on this\nUse X."));
+  const item = workItem(config, "issue_comment", comment("Deckhand\nUse X."));
   assert.deepEqual(
     { ...item, comment: undefined },
     {
@@ -53,7 +53,7 @@ test("issue comments: trigger, text and reply target", () => {
 test("deliveries outside the allowlist or the App are ignored", () => {
   const reasons = [];
   const skip = (reason) => (reasons.push(reason), null);
-  const go = "Claude work on this";
+  const go = "Deckhand";
   assert.equal(workItem(config, "issue_comment", comment(go, { installation: null }), skip), null);
   assert.equal(workItem(config, "issue_comment", comment(go, { login: "mallory" }), skip), null);
   assert.equal(workItem(config, "issue_comment", comment(go, { type: "Bot" }), skip), null);
@@ -73,20 +73,20 @@ test("pull request comments go to the linked issue's session", () => {
   assert.equal(linked.replyTo, 12);
   const alone = workItem(config, "issue_comment", comment("fix it", { pr: "No issue" }));
   assert.equal(alone.id, "pr-12");
-  const brainstorm = comment("Claude let's brainstorm this", { pr: "" });
+  const brainstorm = comment("Deckhand\n/mode brainstorm", { pr: "" });
   assert.equal(workItem(config, "issue_comment", brainstorm), null);
 });
 
 test("inbox issues: every comment is an entry, trigger lines or not", () => {
   const repoConfig = { ...config, inbox: { ideas: 12, bugs: 13 } };
-  const payload = comment("Claude work on this\nDark mode", { login: "alice" });
+  const payload = comment("Deckhand\nDark mode", { login: "alice" });
   payload.comment.html_url = "https://github.com/Org/Repo/issues/12#issuecomment-99";
   const item = workItem(repoConfig, "issue_comment", payload);
   assert.equal(item.trigger, "idea");
   assert.equal(item.replyTo, 12);
   assert.equal(
     item.text,
-    "From @alice (https://github.com/Org/Repo/issues/12#issuecomment-99):\n\nClaude work on this\nDark mode",
+    "From @alice (https://github.com/Org/Repo/issues/12#issuecomment-99):\n\nDeckhand\nDark mode",
   );
   // Another issue of the same repo: the usual trigger lines.
   payload.issue.number = 14;
@@ -180,6 +180,23 @@ test("trigger lines and options", () => {
     mode: null,
     text: "just text",
   });
+  // The default trigger, compared loosely; the lines after it are the instructions.
+  for (const line of ["Deckhand", "deckhand:", "@Deckhand", " DECKHAND! "]) {
+    assert.deepEqual(splitTrigger(config, `${line}\nFix it.`), {
+      trigger: "work",
+      mode: null,
+      text: "Fix it.",
+    });
+  }
+  // The whole first line: text after the trigger is not one.
+  assert.equal(splitTrigger(config, "Deckhand is down again").trigger, null);
+  assert.equal(splitTrigger(config, "Deckhand fix the typo").trigger, null);
+  // The old lines are gone.
+  assert.equal(splitTrigger(config, "Claude work on this").trigger, null);
+  assert.equal(splitTrigger(config, "Claude stop").trigger, null);
+  const own = { ...config, trigger: normalize("Hey bot") };
+  assert.equal(splitTrigger(own, "hey, bot!").trigger, "work");
+  assert.equal(splitTrigger(own, "Deckhand").trigger, null);
   const options = {};
   assert.equal(
     takeOptions("/model sonnet\n/effort HIGH\n/effort huge\nhello", options),
@@ -189,18 +206,26 @@ test("trigger lines and options", () => {
 });
 
 test("a /mode line picks the mode, and is never taken for /model", () => {
-  assert.deepEqual(splitTrigger(config, "Claude work on this\n/mode Review\nLook at X."), {
+  assert.deepEqual(splitTrigger(config, "Deckhand\n/mode Review\nLook at X."), {
     trigger: "work",
     mode: "review",
     text: "Look at X.",
   });
+  // On the trigger's line too.
+  assert.deepEqual(splitTrigger(config, "@deckhand /mode Brainstorm\nIdeas?"), {
+    trigger: "work",
+    mode: "brainstorm",
+    text: "Ideas?",
+  });
+  assert.equal(splitTrigger(config, "Deckhand /model sonnet").trigger, null);
+  assert.equal(splitTrigger(config, "Deckhand is down /mode work").trigger, null);
   // Without a trigger line: a switch, for an issue that has a session (server.mjs decides).
   assert.deepEqual(splitTrigger(config, "/mode work\nGo ahead."), {
     trigger: null,
     mode: "work",
     text: "Go ahead.",
   });
-  const model = splitTrigger(config, "Claude work on this\n/model sonnet");
+  const model = splitTrigger(config, "Deckhand\n/model sonnet");
   assert.equal(model.mode, null);
   assert.equal(model.text, "/model sonnet");
   const options = {};
