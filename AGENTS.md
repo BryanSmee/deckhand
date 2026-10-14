@@ -13,22 +13,26 @@ brainstorm sessions). The plan and its decisions: PocketBerry's PB-135 and issue
 
 ## Commands
 
-Node 22, no dependencies (see Conventions).
+Node 22. The listener has no dependencies; the dashboard has build-time ones (see
+Conventions).
 
-| Task         | Command                                                    |
-| ------------ | ---------------------------------------------------------- |
-| Tests        | `node --test`                                              |
-| Syntax check | `node --check listener/server.mjs`, `bash -n sandbox/*.sh` |
-| Format       | `npx --yes prettier@3 --check .` (`--write` to fix)        |
+| Task            | Command                                                                     |
+| --------------- | --------------------------------------------------------------------------- |
+| Tests           | `node --test`                                                               |
+| Dashboard       | `cd dashboard && npm ci && npm test && npm run build` (types, tests, build) |
+| Syntax check    | `node --check listener/server.mjs`, `bash -n sandbox/*.sh`                  |
+| Format          | `npx --yes prettier@3 --check .` (`--write` to fix)                         |
+| Dashboard (dev) | `cd dashboard && npm run dev` (proxies the API to a listener on `:8080`)    |
 
-Run all three before pushing. The sandbox you run in has **no Docker** and receives no
+Run the first four before pushing (the dashboard's when it changed). The sandbox you run in has **no Docker** and receives no
 webhooks: test through the injectable seams below, and say in the pull request what you
 could not run.
 
 ## Layout (target; build it as the issues land)
 
 ```
-listener/     server.mjs (webhooks, queue, runs, dashboard API), dashboard.html, runner/ (Docker backend)
+listener/     server.mjs (webhooks, queue, runs, dashboard API), runner/ (Docker backend)
+dashboard/    the dashboard: Preact + Vite + TypeScript, built to dist/ in the listener's image
 sandbox/      base image: Dockerfile, entrypoint.sh, draft-pr.sh, pre-push, progress.jq,
               managed-settings.json, git credential helper and gh wrapper
 prompts/      sandbox.md (generic rules), idea.md, bug.md, discussion.md, brainstorm.md
@@ -40,8 +44,14 @@ docs/         setup, per-repo config reference, security model
 ## Conventions
 
 - **No runtime dependencies.** The listener uses `node:http`, `node:crypto`, `node:fs` and the
-  docker CLI only; the dashboard is plain HTML served by the listener, no build step. Ask
-  before adding a package.
+  docker CLI only. Ask before adding a package.
+- **The dashboard is the exception** (`dashboard/`, issue #22): Preact, Vite and TypeScript,
+  with hand-written CSS Modules, no UI or chart library. Its packages are build-time only: the
+  image's build stage turns them into static files in `dashboard/dist/`, which the listener
+  serves; the released image has no `node_modules`. `src/types.ts` is the contract with
+  `server.mjs` (`api/state`, the log stream): change both together. Tests: Vitest and
+  Testing Library, named `*.spec.ts(x)`: Node 22 runs `*.test.ts` files itself, and
+  `node --test` must leave them alone.
 - **ESM** (`.mjs`), small functions, comments that explain _why_, briefly.
 - **Nothing project-specific.** No PocketBerry, Linear, pnpm or Postgres in the listener, base
   image or generic prompts: a project brings those through its per-repo config, Dockerfile

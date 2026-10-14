@@ -1,0 +1,340 @@
+{
+  "user": "BryanSmee",
+  "tasks": [
+    {
+      "key": "BryanSmee/deckhand#22",
+      "repo": "BryanSmee/deckhand",
+      "project": "BryanSmee",
+      "number": 22,
+      "title": "Dashboard on a frontend framework, built at image build time",
+      "kind": "issue",
+      "mode": "work",
+      "replyTo": 25,
+      "state": "working",
+      "since": 1791989580000,
+      "runs": [
+        {
+          "id": "BryanSmee-deckhand-22-1791989580000",
+          "key": "BryanSmee/deckhand#22",
+          "kind": "issue",
+          "title": "Dashboard on a frontend framework, built at image build time",
+          "repo": "BryanSmee/deckhand",
+          "replyTo": 22,
+          "mode": "continue",
+          "taskMode": "work",
+          "model": "opus",
+          "effort": "high",
+          "startedAt": 1791989580000,
+          "finishedAt": null,
+          "status": "running",
+          "summary": null
+        },
+        {
+          "id": "BryanSmee-deckhand-22-1791987600000",
+          "key": "BryanSmee/deckhand#22",
+          "kind": "issue",
+          "title": "Dashboard on a frontend framework, built at image build time",
+          "repo": "BryanSmee/deckhand",
+          "replyTo": 22,
+          "mode": "start",
+          "taskMode": "work",
+          "model": "opus",
+          "effort": "high",
+          "startedAt": 1791987600000,
+          "finishedAt": 1791988320000,
+          "status": "needs-input",
+          "summary": "The sandbox can't reach registry.npmjs.org: npm installs get a 403 from the egress proxy."
+        },
+        {
+          "id": "BryanSmee-deckhand-22-1791984600000",
+          "key": "BryanSmee/deckhand#22",
+          "kind": "issue",
+          "title": "Dashboard on a frontend framework, built at image build time",
+          "repo": "BryanSmee/deckhand",
+          "replyTo": 22,
+          "mode": "start",
+          "taskMode": "brainstorm",
+          "model": "opus",
+          "effort": "high",
+          "startedAt": 1791984600000,
+          "finishedAt": 1791985320000,
+          "status": "ok",
+          "summary": "The brainstorm is over and everything needed to build is settled."
+        }
+      ]
+    },
+    {
+      "key": "BryanSmee/shiny-piece#pr-141",
+      "repo": "BryanSmee/shiny-piece",
+      "project": "BryanSmee",
+      "number": 141,
+      "title": "Offline sync for the reading list",
+      "kind": "pr",
+      "mode": "work",
+      "replyTo": 141,
+      "state": "building-image",
+      "since": 1791989880000,
+      "runs": [
+        {
+          "id": "BryanSmee-shiny-piece-pr-141-1791989880000",
+          "key": "BryanSmee/shiny-piece#pr-141",
+          "kind": "pr",
+          "title": "Offline sync for the reading list",
+          "repo": "BryanSmee/shiny-piece",
+          "replyTo": 141,
+          "mode": "start",
+          "taskMode": "work",
+          "model": "opus",
+          "effort": "high",
+          "startedAt": 1791989880000,
+          "finishedAt": null,
+          "status": "running",
+          "summary": null,
+          "phase": "building image"
+        }
+      ]
+    },
+    {
+      "key": "BryanSmee/deckhand#23",
+      "repo": "BryanSmee/deckhand",
+      "project": "BryanSmee",
+      "number": 23,
+      "title": "Per-repo budgets for runs",
+      "kind": "issue",
+      "mode": "work",
+      "replyTo": 23,
+      "state": "queued",
+      "since": 0,
+      "runs": []
+    },
+    {
+      "key": "BryanSmee/shiny-piece#138",
+      "repo": "BryanSmee/shiny-piece",
+      "project": "BryanSmee",
+      "number": 138,
+      "title": "Search results flicker when typing fast",
+      "kind": "issue",
+      "mode": "review",
+      "replyTo": 138,
+      "state": "needs-input",
+      "since": 1791979200000,
+      "runs": [
+        {
+          "id": "BryanSmee-shiny-piece-138-1791979200000",
+          "key": "BryanSmee/shiny-piece#138",
+          "kind": "issue",
+          "title": "Search results flicker when typing fast",
+          "repo": "BryanSmee/shiny-piece",
+          "replyTo": 138,
+          "mode": "start",
+          "taskMode": "review",
+          "model": "opus",
+          "effort": "high",
+          "startedAt": 1791979200000,
+          "finishedAt": 1791979920000,
+          "status": "needs-input",
+          "summary": "Needs your input: should the debounce be 150 ms or 300 ms?"
+        }
+      ]
+    },
+    {
+      "key": "BryanSmee/deckhand#20",
+      "repo": "BryanSmee/deckhand",
+      "project": "BryanSmee",
+      "number": 20,
+      "title": "Egress proxy: allow wildcard ports",
+      "kind": "brainstorm",
+      "mode": "brainstorm",
+      "replyTo": 20,
+      "state": "brainstorm",
+      "since": 1791990360000,
+      "deadline": 1791990360000,
+      "runs": [
+        {
+          "id": "BryanSmee-deckhand-20-1791989760000",
+          "key": "BryanSmee/deckhand#20",
+          "kind": "brainstorm",
+          "title": "Egress proxy: allow wildcard ports",
+          "repo": "BryanSmee/deckhand",
+          "replyTo": 20,
+          "mode": "start",
+          "taskMode": "brainstorm",
+          "model": "opus",
+          "effort": "high",
+          "startedAt": 1791989760000,
+          "finishedAt": 1791989940000,
+          "status": "ok",
+          "summary": "Three options for port wildcards, with a recommendation"
+        }
+      ]
+    },
+    {
+      "key": "BryanSmee/notes#discussion-8",
+      "repo": "BryanSmee/notes",
+      "project": "BryanSmee",
+      "number": 8,
+      "title": "How do runs restart after an update?",
+      "kind": "discussion",
+      "mode": "discussion",
+      "replyTo": 8,
+      "state": "done",
+      "since": 1791896400000,
+      "runs": [
+        {
+          "id": "BryanSmee-notes-discussion-8-1791896400000",
+          "key": "BryanSmee/notes#discussion-8",
+          "kind": "discussion",
+          "title": "How do runs restart after an update?",
+          "repo": "BryanSmee/notes",
+          "replyTo": 8,
+          "mode": "start",
+          "taskMode": "discussion",
+          "model": "opus",
+          "effort": "high",
+          "startedAt": 1791896400000,
+          "finishedAt": 1791897120000,
+          "status": "ok",
+          "summary": "Runs keep going: the next listener follows their output from where it stopped."
+        }
+      ]
+    },
+    {
+      "key": "BryanSmee/shiny-piece#131",
+      "repo": "BryanSmee/shiny-piece",
+      "project": "BryanSmee",
+      "number": 131,
+      "title": "Dark mode for the settings page",
+      "kind": "issue",
+      "mode": "work",
+      "replyTo": 131,
+      "state": "done",
+      "since": 1791972000000,
+      "runs": [
+        {
+          "id": "BryanSmee-shiny-piece-131-1791972000000",
+          "key": "BryanSmee/shiny-piece#131",
+          "kind": "issue",
+          "title": "Dark mode for the settings page",
+          "repo": "BryanSmee/shiny-piece",
+          "replyTo": 131,
+          "mode": "start",
+          "taskMode": "work",
+          "model": "opus",
+          "effort": "high",
+          "startedAt": 1791972000000,
+          "finishedAt": 1791974040000,
+          "status": "ok",
+          "summary": "Done: settings follow the system theme, with screenshots on the pull request."
+        }
+      ]
+    },
+    {
+      "key": "BryanSmee/deckhand#16",
+      "repo": "BryanSmee/deckhand",
+      "project": "BryanSmee",
+      "number": 16,
+      "title": "Bugs",
+      "kind": "bug",
+      "mode": "bug",
+      "replyTo": 16,
+      "state": "error",
+      "since": 1791961200000,
+      "runs": [
+        {
+          "id": "BryanSmee-deckhand-16-1791961200000",
+          "key": "BryanSmee/deckhand#16",
+          "kind": "bug",
+          "title": "Bugs",
+          "repo": "BryanSmee/deckhand",
+          "replyTo": 16,
+          "mode": "start",
+          "taskMode": "bug",
+          "model": "opus",
+          "effort": "high",
+          "startedAt": 1791961200000,
+          "finishedAt": 1791961920000,
+          "status": "error",
+          "summary": "Claude stopped with an error."
+        }
+      ]
+    },
+    {
+      "key": "BryanSmee/shiny-piece#127",
+      "repo": "BryanSmee/shiny-piece",
+      "project": "BryanSmee",
+      "number": 127,
+      "title": null,
+      "kind": "issue",
+      "mode": "work",
+      "replyTo": 127,
+      "state": "interrupted",
+      "since": 1791882000000,
+      "runs": [
+        {
+          "id": "BryanSmee-shiny-piece-127-1791882000000",
+          "key": "BryanSmee/shiny-piece#127",
+          "kind": "issue",
+          "title": null,
+          "repo": "BryanSmee/shiny-piece",
+          "replyTo": 127,
+          "mode": "start",
+          "taskMode": "work",
+          "model": "opus",
+          "effort": "high",
+          "startedAt": 1791882000000,
+          "finishedAt": 1791882720000,
+          "status": "interrupted",
+          "summary": null
+        }
+      ]
+    },
+    {
+      "key": "BryanSmee/notes#4",
+      "repo": "BryanSmee/notes",
+      "project": "BryanSmee",
+      "number": 4,
+      "title": "Weekly digest of merged pull requests",
+      "kind": "brainstorm",
+      "mode": "brainstorm",
+      "replyTo": 4,
+      "state": "idle-brainstorm",
+      "since": 1791987000000,
+      "deadline": 1791987000000,
+      "runs": [
+        {
+          "id": "BryanSmee-notes-4-1791985800000",
+          "key": "BryanSmee/notes#4",
+          "kind": "brainstorm",
+          "title": "Weekly digest of merged pull requests",
+          "repo": "BryanSmee/notes",
+          "replyTo": 4,
+          "mode": "start",
+          "taskMode": "brainstorm",
+          "model": "opus",
+          "effort": "high",
+          "startedAt": 1791985800000,
+          "finishedAt": 1791986040000,
+          "status": "ok",
+          "summary": "A digest issue each Monday, or a discussion?"
+        }
+      ]
+    }
+  ],
+  "states": [
+    "building-image",
+    "working",
+    "stopping",
+    "queued",
+    "brainstorm",
+    "idle-brainstorm",
+    "needs-input",
+    "done",
+    "error",
+    "interrupted"
+  ],
+  "running": 2,
+  "queued": 1,
+  "maxParallel": 4,
+  "previews": [],
+  "now": 1791990000000
+}

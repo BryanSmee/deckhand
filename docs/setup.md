@@ -84,9 +84,12 @@ page on GitHub (Settings → Developer settings → GitHub Apps → your App →
 `<public URL>/auth/callback` under **Callback URL** and save. `DASHBOARD_PASSWORD` is no
 longer used.
 
-The dashboard lists every issue, pull request and discussion Deckhand worked on, grouped by project (the
-repository's owner) and repository, with filters by repository and state. Each shows its
-listener's state:
+The dashboard lists every issue, pull request and discussion Deckhand worked on, by title,
+with a tab per repository (the most recently active first; each counts its running tasks and
+those waiting for you) and chips by state: running, needs input (a brainstorm waiting for your
+comment too), done, error. Titles come with the webhooks; for tasks from before the dashboard
+had them, the listener asks GitHub once and keeps them in `titles.json` in its data volume.
+Each task shows its listener's state:
 
 | State             | What                                                                    |
 | ----------------- | ----------------------------------------------------------------------- |
@@ -99,8 +102,9 @@ listener's state:
 | `idle brainstorm` | no comment for a while; the next one restores the session               |
 | `done`, `error`   | how the last run ended (`interrupted`: a restart came before its start) |
 
-Pick one to see its latest run's log live (and the next runs as they start), or an earlier
-run. On a phone, the list and the log take the whole screen in turn.
+Pick one to see the first line of its last reply and its latest run's log live (and the
+next runs as they start), or an earlier run. The address keeps the tab, task and run, so a
+link opens the same view. On a phone, the list and the log take the whole screen in turn.
 
 ## Settings
 

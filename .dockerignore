@@ -2,3 +2,5 @@
 .env
 docs
 test
+dashboard/node_modules
+dashboard/dist

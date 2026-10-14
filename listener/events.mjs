@@ -119,6 +119,7 @@ export function workItem(config, event, p, skip = () => null) {
           id: String(n),
           kind: "issue",
           number: n,
+          title: p.issue.title ?? null,
           trigger: inbox,
           text: entry(author, p.comment.html_url, body),
           replyTo: n,
@@ -130,6 +131,7 @@ export function workItem(config, event, p, skip = () => null) {
         id: String(n),
         kind: "issue",
         number: n,
+        title: p.issue.title ?? null,
         trigger,
         modeLine: mode,
         text,
@@ -137,27 +139,21 @@ export function workItem(config, event, p, skip = () => null) {
         comment: p.comment,
       };
     }
-    return prItem(skip, repo, p.issue.number, p.issue.body, { trigger, mode }, text, p.comment);
+    const pr = { number: p.issue.number, title: p.issue.title, body: p.issue.body };
+    return prItem(skip, repo, pr, { trigger, mode }, text, p.comment);
   }
   if (event === "pull_request_review_comment" && p.action === "created") {
     const cmd = splitTrigger(config, body);
     const c = p.comment;
     const where = `Review comment on \`${c.path}\` line ${c.line ?? c.original_line}:\n\`\`\`diff\n${c.diff_hunk}\n\`\`\`\n`;
-    return prItem(skip, repo, p.pull_request.number, p.pull_request.body, cmd, where + cmd.text, {
+    return prItem(skip, repo, p.pull_request, cmd, where + cmd.text, {
       ...c,
       review: true,
     });
   }
   if (event === "pull_request_review" && p.action === "submitted" && body.trim()) {
     const cmd = splitTrigger(config, body);
-    return prItem(
-      skip,
-      repo,
-      p.pull_request.number,
-      p.pull_request.body,
-      cmd,
-      `Review: ${cmd.text}`,
-    );
+    return prItem(skip, repo, p.pull_request, cmd, `Review: ${cmd.text}`);
   }
   return skip(`${event} ${p.action ?? ""} is not handled`);
 }
@@ -181,6 +177,7 @@ function discussionItem(config, event, p, skip) {
     id: `discussion-${d.number}`,
     kind: "discussion",
     number: d.number,
+    title: d.title ?? null,
     trigger: "discussion",
     text,
     replyTo: d.number,
@@ -205,7 +202,9 @@ export function previewEvent(config, event, p, skip = () => null) {
   return { repo, base: p.repository.default_branch || "main", event };
 }
 
-function prItem(skip, repo, pr, prBody, { trigger, mode }, text, comment) {
+// `pr`: { number, title, body }. A pull request that closes an issue is that issue's task,
+// whose title the payload doesn't have (the dashboard fetches it, titles.mjs).
+function prItem(skip, repo, { number: pr, title, body: prBody }, { trigger, mode }, text, comment) {
   if (trigger === "stop" || mode === "brainstorm") {
     return skip("brainstorms are on issues: pull request comments are about the code");
   }
@@ -216,6 +215,7 @@ function prItem(skip, repo, pr, prBody, { trigger, mode }, text, comment) {
         id: String(issue),
         kind: "issue",
         number: issue,
+        title: null,
         trigger,
         modeLine: mode,
         text,
@@ -227,6 +227,7 @@ function prItem(skip, repo, pr, prBody, { trigger, mode }, text, comment) {
         id: `pr-${pr}`,
         kind: "pr",
         number: pr,
+        title: title ?? null,
         trigger,
         modeLine: mode,
         text,

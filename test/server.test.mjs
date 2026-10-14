@@ -161,6 +161,10 @@ async function fakeGitHub(files = {}) {
         return res.end(JSON.stringify({ access_token: "user-token" }));
       }
       if (req.url === "/user") return res.end(JSON.stringify({ login: "alice" }));
+      // A task from before titles were kept: the dashboard asks for its title once.
+      if (req.method === "GET" && req.url === "/repos/org/repo/issues/3") {
+        return res.end(JSON.stringify({ title: "An older pull request" }));
+      }
       // A listener that restarted looks the installation up instead of reading it from a
       // delivery.
       if (req.url === "/repos/org/repo/installation") return res.end(JSON.stringify({ id: 7 }));
@@ -954,10 +958,23 @@ test("a mode whose instructions file is missing: the reply says so", async (t) =
 });
 
 test("the dashboard and its logs are for allowed users signed in with GitHub", async (t) => {
-  // GitHub's sign-in pages are the fake GitHub too.
-  const { github, port, send, listener } = await listen(t, {}, (dir, github) => ({
-    GITHUB_URL: github.url,
-  }));
+  // GitHub's sign-in pages are the fake GitHub too. A built dashboard, and an older log with
+  // no title.
+  const { github, port, send, listener } = await listen(t, {}, (dir, github) => {
+    const dist = join(dir, "dist");
+    mkdirSync(join(dist, "assets"), { recursive: true });
+    writeFileSync(join(dist, "index.html"), "<title>Deckhand</title>");
+    writeFileSync(join(dist, "assets", "app-1a2b.js"), "export {}");
+    writeFileSync(join(dir, "secret.js"), "nope");
+    mkdirSync(join(dir, "logs"));
+    const meta = { type: "listener", key: "org/repo#pr-3", repo: "org/repo", startedAt: 1000 };
+    const result = { type: "result", result: "## Fixed\n\nThe typo.", duration_ms: 6000 };
+    writeFileSync(
+      join(dir, "logs", "org-repo-pr-3-1000.log"),
+      `${JSON.stringify(meta)}\n${JSON.stringify(result)}\n`,
+    );
+    return { GITHUB_URL: github.url, DASHBOARD_DIR: dist };
+  });
   const base = `http://127.0.0.1:${port}`;
   const get = (path, cookie) =>
     fetch(base + path, { redirect: "manual", headers: cookie ? { cookie } : {} });
@@ -966,8 +983,13 @@ test("the dashboard and its logs are for allowed users signed in with GitHub", a
   assert.equal(home.status, 200);
   assert.match(await home.text(), /Sign in with GitHub/);
   assert.equal((await get("/api/state")).status, 401);
-  // A run, so there is a log to stream.
-  await send(comment("alice"));
+  for (const path of ["/assets/app-1a2b.js", "/index.html", "/nope.js"]) {
+    assert.equal((await get(path)).status, 401);
+  }
+  // A run, so there is a log to stream; its title comes with the webhook.
+  const titled = comment("alice");
+  titled.issue.title = "Fix the queue";
+  await send(titled);
   await listener.until("done (ok)");
 
   const login = await get("/auth/login");
@@ -983,11 +1005,37 @@ test("the dashboard and its logs are for allowed users signed in with GitHub", a
     .split(";")[0];
   assert.ok(github.requests.some((r) => r.path === "/user" && r.auth === "Bearer user-token"));
 
-  assert.match(await (await get("/", session)).text(), /<title>Deckhand<\/title>/);
+  const index = await get("/", session);
+  assert.equal(index.headers.get("cache-control"), "no-store");
+  assert.match(await index.text(), /<title>Deckhand<\/title>/);
+  const asset = await get("/assets/app-1a2b.js", session);
+  assert.equal(asset.status, 200);
+  assert.match(asset.headers.get("content-type"), /^text\/javascript/);
+  assert.match(asset.headers.get("cache-control"), /immutable/);
+  await asset.text();
+  for (const path of ["/assets/nope.js", "/../secret.js", "/assets/%2e%2e/%2e%2e/secret.js"]) {
+    assert.equal((await get(path, session)).status, 404, path);
+  }
   const board = await (await get("/api/state", session)).json();
   assert.equal(board.user, "alice");
   const [task] = board.tasks;
-  assert.deepEqual([task.key, task.project, task.state], ["org/repo#12", "org", "done"]);
+  assert.deepEqual(
+    [task.key, task.project, task.state, task.title],
+    ["org/repo#12", "org", "done", "Fix the queue"],
+  );
+  assert.equal(task.runs[0].title, "Fix the queue");
+  assert.equal(task.runs[0].summary, "All done.");
+  // The older task's title is fetched once, then shows.
+  await github.waitFor((r) => r.method === "GET" && r.path === "/repos/org/repo/issues/3");
+  const older = async () =>
+    (await (await get("/api/state", session)).json()).tasks.find((x) => x.key === "org/repo#pr-3");
+  let fetched = await older();
+  for (let i = 0; i < 100 && !fetched.title; i++) {
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    fetched = await older();
+  }
+  assert.equal(fetched.title, "An older pull request");
+  assert.equal(fetched.runs[0].summary, "The typo.");
   const stream = await get(`/api/runs/${task.runs[0].id}/stream`, session);
   assert.equal(stream.status, 200);
   assert.match(await stream.text(), /event: end/);
