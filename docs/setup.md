@@ -34,7 +34,8 @@ address (for example `https://deckhand.example.com/setup?token=…`):
 2. GitHub shows the App with its permissions and events. Create it.
 3. GitHub sends you back to the listener, which stores the App's ID, private key and
    webhook secret in its data volume (`/data/app.json`, readable by the listener only), then
-   on to the App's installation page: pick the repositories Deckhand may work on.
+   on to the App's installation page: pick the repositories Deckhand may work on. Each one
+   without a `.deckhand.yaml` gets an onboarding issue (see Onboarding below).
 
 Once an App is stored, `/setup` is closed. To start over, delete `/data/app.json` from the
 `data` volume and restart the listener.
@@ -60,6 +61,24 @@ branch `issue-<n>-<slug>` and a draft pull request, and Claude's final message c
 comment from the App's bot.
 `Deckhand` then a `/mode brainstorm` line (or `Deckhand /mode brainstorm`) discusses the issue
 without code; `/stop` wraps it up.
+
+**Onboarding.** When the App is installed on a repository (at creation, or added to the
+installation later) that has no `.deckhand.yaml` on its default branch, the listener opens an
+issue there, "Set up Deckhand for this repository", labelled `deckhand-onboarding`. Claude
+reads the repository and replies with a proposed `.deckhand.yaml` (and a Dockerfile or
+instructions file when needed), each key with its reason, within what you allow. Comments on
+the issue change the proposal, with a read-only token: nothing is pushed. A comment whose
+first line is `Deckhand` (or `/mode work`) confirms it: Claude opens a pull request with
+only the agreed files, and the listener checks the branch's config and adds any errors or
+warnings to its reply. Merge it, and the next runs use the config. See
+[Onboarding](repo-config.md#onboarding).
+
+Only installations by someone in `ALLOWED_USERS`, on repositories `ALLOWED_REPOS` lets
+through, open an issue; the others are skipped, with the reason in the listener's logs. A
+repository gets one onboarding issue, ever (`/data/onboarding.json`), so reinstalling the App
+opens no second one. `ONBOARDING=off` turns the automatic issue off; a `/mode onboarding`
+comment on any issue starts the same conversation by hand, for repositories installed
+before, or skipped.
 
 A repository can also declare inboxes in its `.deckhand.yaml`: an ideas issue and a bug
 reports issue, where every comment of an allowed user becomes a labelled GitHub issue (or an
@@ -110,26 +129,27 @@ link opens the same view. On a phone, the list and the log take the whole screen
 
 All in `.env`, read by `compose.yaml`:
 
-| Setting                                                                               | Default                        | What                                                                 |
-| ------------------------------------------------------------------------------------- | ------------------------------ | -------------------------------------------------------------------- |
-| `ALLOWED_USERS`                                                                       | none: required                 | GitHub logins that can start runs                                    |
-| `ALLOWED_REPOS`                                                                       | all where the App is installed | narrows the repos (`owner/repo`, comma-separated)                    |
-| `CLAUDE_CODE_OAUTH_TOKEN` / `ANTHROPIC_API_KEY`                                       |                                | Claude credential passed to each sandbox                             |
-| `PUBLIC_URL`                                                                          | stored by `/setup`             | the listener's public address                                        |
-| `CLAUDE_CODE_VERSION`                                                                 | `2.1.300`                      | Claude Code version the sandboxes install on first use               |
-| `SANDBOX_MODEL`, `SANDBOX_EFFORT`                                                     | `opus`, `medium`               | defaults; a comment's `/model` and `/effort` lines override them     |
-| `MAX_PARALLEL`                                                                        | `2`                            | sandboxes running at once (a repo's `max_parallel` within it)        |
-| `ALLOWED_HOSTS`                                                                       | none                           | hosts every sandbox may reach besides Anthropic and GitHub           |
-| `SANDBOX_CPUS`, `SANDBOX_MEMORY`, `SANDBOX_PIDS`                                      | `2`, `4g`, `2048`              | each sandbox's limits (per repo: the grants file)                    |
-| `GRANTS_FILE`                                                                         | `/etc/deckhand/grants.yaml`    | what you grant each repo: hosts, host mounts, limits                 |
-| `EGRESS_PROXY`                                                                        | `http://egress:3128`           | the egress proxy, as sandboxes reach it                              |
-| `INSTALL_NETWORK`                                                                     | `bridge`                       | network of the Claude Code install container (needs npm)             |
-| `TRIGGER`                                                                             | `Deckhand`                     | first line of a comment that starts a run                            |
-| `NEEDS_INPUT_LABEL`                                                                   | `needs-input`                  | label while a run waits for answers (empty: none)                    |
-| `DOCKER_SOCKET`                                                                       | `/var/run/docker.sock`         | the host's Docker socket, as preview hooks mount it                  |
-| `DECKHAND_VERSION`                                                                    | `latest`                       | the release compose runs (`1.2.3`, `1.2`): see [Updating](#updating) |
-| `DECKHAND_REGISTRY`                                                                   | `ghcr.io/bryansmee`            | where compose pulls the images from                                  |
-| `SANDBOX_NETWORK`, `SHOTS_VOLUME`, `RUNS_VOLUME`, `CLAUDE_CODE_VOLUME`, `NAME_PREFIX` | `deckhand-…`                   | names of what the listener creates on Docker                         |
+| Setting                                                                               | Default                        | What                                                                            |
+| ------------------------------------------------------------------------------------- | ------------------------------ | ------------------------------------------------------------------------------- |
+| `ALLOWED_USERS`                                                                       | none: required                 | GitHub logins that can start runs                                               |
+| `ALLOWED_REPOS`                                                                       | all where the App is installed | narrows the repos (`owner/repo`, comma-separated)                               |
+| `CLAUDE_CODE_OAUTH_TOKEN` / `ANTHROPIC_API_KEY`                                       |                                | Claude credential passed to each sandbox                                        |
+| `PUBLIC_URL`                                                                          | stored by `/setup`             | the listener's public address                                                   |
+| `CLAUDE_CODE_VERSION`                                                                 | `2.1.300`                      | Claude Code version the sandboxes install on first use                          |
+| `SANDBOX_MODEL`, `SANDBOX_EFFORT`                                                     | `opus`, `medium`               | defaults; a comment's `/model` and `/effort` lines override them                |
+| `MAX_PARALLEL`                                                                        | `2`                            | sandboxes running at once (a repo's `max_parallel` within it)                   |
+| `ALLOWED_HOSTS`                                                                       | none                           | hosts every sandbox may reach besides Anthropic and GitHub                      |
+| `SANDBOX_CPUS`, `SANDBOX_MEMORY`, `SANDBOX_PIDS`                                      | `2`, `4g`, `2048`              | each sandbox's limits (per repo: the grants file)                               |
+| `GRANTS_FILE`                                                                         | `/etc/deckhand/grants.yaml`    | what you grant each repo: hosts, host mounts, limits                            |
+| `EGRESS_PROXY`                                                                        | `http://egress:3128`           | the egress proxy, as sandboxes reach it                                         |
+| `INSTALL_NETWORK`                                                                     | `bridge`                       | network of the Claude Code install container (needs npm)                        |
+| `TRIGGER`                                                                             | `Deckhand`                     | first line of a comment that starts a run                                       |
+| `ONBOARDING`                                                                          | on                             | `off`: no onboarding issue when the App is installed on a repo without a config |
+| `NEEDS_INPUT_LABEL`                                                                   | `needs-input`                  | label while a run waits for answers (empty: none)                               |
+| `DOCKER_SOCKET`                                                                       | `/var/run/docker.sock`         | the host's Docker socket, as preview hooks mount it                             |
+| `DECKHAND_VERSION`                                                                    | `latest`                       | the release compose runs (`1.2.3`, `1.2`): see [Updating](#updating)            |
+| `DECKHAND_REGISTRY`                                                                   | `ghcr.io/bryansmee`            | where compose pulls the images from                                             |
+| `SANDBOX_NETWORK`, `SHOTS_VOLUME`, `RUNS_VOLUME`, `CLAUDE_CODE_VOLUME`, `NAME_PREFIX` | `deckhand-…`                   | names of what the listener creates on Docker                                    |
 
 ## Updating
 

@@ -23,6 +23,9 @@ operator, across as many repositories as the App is installed on.
   - `/mode <name>` picks a mode: `work`, `brainstorm` or one the repository declares in its
     `.deckhand.yaml` (a review that only comments, say). Alone on an issue with a session,
     it switches modes and keeps the conversation.
+- **Onboarding.** Installing the App on a repository without a `.deckhand.yaml` opens an
+  issue there where Claude proposes one, grounded in the repository; your comments refine it
+  and `Deckhand` turns it into a pull request. `/mode onboarding` starts it on any issue.
 - **Live feedback.** The comment gets 👀 when it is received, then 🚀 (done), 😕 (needs
   input) or 👎 (error). A burst of comments is one message, and one that arrives while
   Claude works reaches the running session. The final message comes back as a comment from
@@ -56,8 +59,8 @@ GitHub ──webhook──▶ listener ──docker──▶ sandbox (one per is
   repository kept between the issue's runs.
 - The **egress proxy** (`proxy/`) is the sandboxes' only way out: Anthropic's API, GitHub,
   and the hosts you allow.
-- **Prompts** (`prompts/`): the generic sandbox rules, and those of brainstorms, inboxes
-  and discussions. A repository adds its own instructions through its config.
+- **Prompts** (`prompts/`): the generic sandbox rules, and those of brainstorms, onboarding,
+  inboxes and discussions. A repository adds its own instructions through its config.
 
 ## Quick start
 
@@ -130,7 +133,8 @@ hosts: [registry.npmjs.org]
 ```
 
 It is read from the **default branch** only, at every run, and can only narrow what you, the
-operator, allow. See [docs/repo-config.md](docs/repo-config.md).
+operator, allow. A repository without one gets an onboarding issue when the App is installed
+on it, where Claude proposes the file. See [docs/repo-config.md](docs/repo-config.md).
 
 ## Isolation defaults
 

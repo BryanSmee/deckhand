@@ -34,6 +34,14 @@
 // token only reads), a fresh one starts a new session each time. Comments without a trigger
 // or "/mode" line go on in the issue's current mode (modes.json).
 //
+// Installing the App on a repo without a .deckhand.yaml (an `installation` or
+// `installation_repositories` delivery, sent to every App) opens an onboarding issue there
+// (onboarding.mjs) and starts the "onboarding" mode on it: a light conversation like a
+// brainstorm, with a read-only token, where Claude proposes the file
+// (../prompts/onboarding.md). Comments go on in it; the trigger line or "/mode work" opens the
+// pull request, and the reply says what the listener makes of the branch's config.
+// "/mode onboarding" starts it on any issue.
+//
 // A run that stops to ask (its final message starts with "<!-- needs-input -->", see
 // ../prompts/sandbox.md) shows as "needs-input" on the dashboard and labels the issue or PR
 // NEEDS_INPUT_LABEL (default needs-input) until the next run starts.

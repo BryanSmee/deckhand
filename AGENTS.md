@@ -35,7 +35,8 @@ listener/     server.mjs (webhooks, queue, runs, dashboard API), runner/ (Docker
 dashboard/    the dashboard: Preact + Vite + TypeScript, built to dist/ in the listener's image
 sandbox/      base image: Dockerfile, entrypoint.sh, draft-pr.sh, pre-push, progress.jq,
               managed-settings.json, git credential helper and gh wrapper
-prompts/      sandbox.md (generic rules), idea.md, bug.md, discussion.md, brainstorm.md
+prompts/      sandbox.md (generic rules), idea.md, bug.md, discussion.md, brainstorm.md,
+              onboarding.md (followed by docs/repo-config.md, copied into the image)
 proxy/        egress proxy for sandboxes
 compose.yaml  what an operator runs (publishes a port; no reverse-proxy labels)
 docs/         setup, per-repo config reference, security model
