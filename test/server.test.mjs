@@ -313,7 +313,7 @@ async function listen(t, files, extra = {}) {
   };
 }
 
-function comment(login, body = "Claude work on this") {
+function comment(login, body = "Deckhand") {
   return {
     action: "created",
     installation: { id: 7 },
@@ -804,7 +804,7 @@ test("/mode review: the repo's light mode, its instructions and model, the repo'
       return {};
     },
   );
-  await send(comment("alice", "Claude work on this\n/mode review\nMind the tests."));
+  await send(comment("alice", "Deckhand\n/mode review\nMind the tests."));
   const reply = await github.waitFor(
     (r) => r.method === "POST" && r.path === "/repos/org/repo/issues/12/comments",
   );
@@ -868,7 +868,7 @@ test("/mode with a name the repo doesn't have: a reply listing the modes, no run
     ".deckhand.yaml": MODES,
     ".deckhand/review.md": "Review.",
   });
-  await send(comment("alice", "Claude work on this\n/mode reveiw"));
+  await send(comment("alice", "Deckhand\n/mode reveiw"));
   const reply = await github.waitFor(
     (r) => r.method === "POST" && r.path === "/repos/org/repo/issues/12/comments",
   );
@@ -880,9 +880,69 @@ test("/mode with a name the repo doesn't have: a reply listing the modes, no run
   assert.equal(exists(join(dir, "run-args")), null);
 });
 
+// The run's mode and whether it is light, from the fake sandbox's last environment.
+function lastRun(dir) {
+  const env = readFileSync(join(dir, "run-env"), "utf8");
+  return `${/^TASK_MODE=(.*)$/m.exec(env)[1]} ${/^SANDBOX_LIGHT=(.*)$/m.exec(env)[1] || "full"}`;
+}
+
+const brainstormOf = (dir) =>
+  JSON.parse(readFileSync(join(dir, "brainstorms.json"), "utf8"))["org/repo#12"];
+
+test("Deckhand /mode brainstorm discusses; /stop wraps up; Deckhand then works", async (t) => {
+  const { dir, github, listener, send } = await listen(t, {}, { BRAINSTORM_DEBOUNCE_MS: "0" });
+  await send(comment("alice", "@Deckhand /mode Brainstorm\nWhat about dark mode?"));
+  await until(() => replies(github).length === 1, "the first reply");
+  assert.equal(lastRun(dir), "brainstorm 1");
+  const env = readFileSync(join(dir, "run-env"), "utf8");
+  assert.match(env, /^TASK_MESSAGE=What about dark mode\?$/m);
+  assert.equal(brainstormOf(dir).status, "active");
+  await listener.until("done (ok)");
+  // A comment without the trigger goes on in the brainstorm.
+  await send(followUp(100, "And the contrast?"));
+  await until(() => replies(github).length === 2, "the second reply");
+  assert.equal(lastRun(dir), "brainstorm 1");
+  await send(followUp(101, "/stop"));
+  await until(() => replies(github).length === 3, "the wrap-up");
+  assert.equal(lastRun(dir), "brainstorm 1");
+  assert.equal(brainstormOf(dir).status, "stopped");
+  // The trigger alone implements, in the same session.
+  await send(followUp(102, "Deckhand\nGo with the second option."));
+  await until(() => replies(github).length === 4, "the work reply");
+  assert.equal(lastRun(dir), "work full");
+  assert.match(readFileSync(join(dir, "run-env"), "utf8"), /^TASK_SESSION=$/m);
+  assert.equal(brainstormOf(dir), undefined);
+});
+
+test("/mode work alone moves a brainstorm to work", async (t) => {
+  const { dir, github, listener, send } = await listen(t, {}, { BRAINSTORM_DEBOUNCE_MS: "0" });
+  await send(comment("alice", "Deckhand\n/mode brainstorm"));
+  await until(() => replies(github).length === 1, "the first reply");
+  assert.equal(lastRun(dir), "brainstorm 1");
+  await listener.until("done (ok)");
+  await send(followUp(100, "/mode work\nBuild it."));
+  await until(() => replies(github).length === 2, "the work reply");
+  assert.equal(lastRun(dir), "work full");
+  assert.equal(brainstormOf(dir), undefined);
+});
+
+test("/mode foo: a reply listing the modes, no run", async (t) => {
+  const { dir, github, send } = await listen(t);
+  await send(comment("alice", "Deckhand /mode foo"));
+  const reply = await github.waitFor(
+    (r) => r.method === "POST" && r.path === "/repos/org/repo/issues/12/comments",
+  );
+  assert.match(
+    JSON.parse(reply.body).body,
+    /^Unknown mode `foo`\. The modes here: `work`, `brainstorm`\./,
+  );
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  assert.equal(exists(join(dir, "run-args")), null);
+});
+
 test("a mode whose instructions file is missing: the reply says so", async (t) => {
   const { dir, github, send } = await listen(t, { ".deckhand.yaml": MODES });
-  await send(comment("alice", "Claude work on this\n/mode review"));
+  await send(comment("alice", "Deckhand\n/mode review"));
   const reply = await github.waitFor(
     (r) => r.method === "POST" && r.path === "/repos/org/repo/issues/12/comments",
   );

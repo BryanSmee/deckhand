@@ -20,21 +20,19 @@ export function linkedIssue(prBody) {
   return match ? Number(match[1]) : null;
 }
 
-// The command on the first line ("work", "brainstorm" or "stop"), the mode a "/mode <name>"
-// line asks for (lowercase, or null) and the rest of the comment; trigger null and the whole
-// comment when there is none.
+// The command on the first line ("work" for the trigger, "stop" for "/stop"), the mode a
+// "/mode <name>" line asks for (lowercase, or null) and the rest of the comment; trigger null
+// and the whole comment when there is none. The trigger is the whole first line, so "Deckhand
+// is down" starts nothing; "/mode" may follow it there ("Deckhand /mode brainstorm").
 export function splitTrigger(config, body) {
   const [first, ...rest] = body.split(/\r?\n/);
-  const line = normalize(first);
-  const trigger =
-    line === config.trigger
-      ? "work"
-      : line === config.brainstormTrigger
-        ? "brainstorm"
-        : line === config.stopTrigger || first.trim().toLowerCase() === "/stop"
-          ? "stop"
-          : null;
-  return takeMode(trigger ? rest.join("\n") : body, trigger);
+  if (first.trim().toLowerCase() === "/stop") return takeMode(rest.join("\n"), "stop");
+  const inline = /^(.*?)\s+(\/mode\s+[\w-]+)\s*$/i.exec(first);
+  if (inline && normalize(inline[1]) === config.trigger) {
+    return takeMode([inline[2], ...rest].join("\n"), "work");
+  }
+  if (normalize(first) === config.trigger) return takeMode(rest.join("\n"), "work");
+  return takeMode(body, null);
 }
 
 // Removes a "/mode <name>" line. Its own line, like "/model": the space keeps the two apart.
@@ -208,7 +206,7 @@ export function previewEvent(config, event, p, skip = () => null) {
 }
 
 function prItem(skip, repo, pr, prBody, { trigger, mode }, text, comment) {
-  if (trigger === "brainstorm" || trigger === "stop" || mode === "brainstorm") {
+  if (trigger === "stop" || mode === "brainstorm") {
     return skip("brainstorms are on issues: pull request comments are about the code");
   }
   const issue = linkedIssue(prBody);

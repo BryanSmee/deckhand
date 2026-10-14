@@ -51,8 +51,8 @@ test("a repo can only narrow the operator's users and parallel cap", () => {
   assert.deepEqual(parseRepoConfig("users: []", config).settings.users, []);
 });
 
-test("its users and trigger lines decide which comments run", () => {
-  const { settings } = parseRepoConfig("users: [bob]\ntriggers:\n  work: Deckhand, go!\n", config);
+test("its users and trigger decide which comments run", () => {
+  const { settings } = parseRepoConfig("users: [bob]\ntrigger: Deckhand, go!\n", config);
   const repoConfig = effectiveConfig(config, settings);
   const payload = (login, body) => ({
     action: "created",
@@ -67,9 +67,22 @@ test("its users and trigger lines decide which comments run", () => {
     "work",
   );
   assert.equal(
-    workItem(repoConfig, "issue_comment", payload("bob", "Claude work on this")).trigger,
+    workItem(repoConfig, "issue_comment", payload("bob", "Deckhand")).trigger,
     null,
   );
+});
+
+test("a bad trigger is an error; the old triggers key only a warning", () => {
+  assert.deepEqual(parseRepoConfig("trigger: '!!'", config).errors, [
+    "trigger: expected a line of text",
+  ]);
+  assert.deepEqual(parseRepoConfig("trigger: [a, b]", config).errors, [
+    "trigger: expected a line of text",
+  ]);
+  const old = parseRepoConfig("triggers:\n  work: Go\n", config);
+  assert.deepEqual(old.errors, []);
+  assert.deepEqual(old.warnings, ["triggers: unknown, ignored"]);
+  assert.equal(old.settings.trigger, "deckhand");
 });
 
 test("everything a repo brings", () => {

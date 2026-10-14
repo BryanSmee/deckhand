@@ -2,7 +2,7 @@
 // container (../sandbox/) for issue and pull request comments, one container and one set of
 // volumes per issue, and posts Claude's final message back as a comment.
 //
-//   On an issue:   "Claude work on this" as the first line starts the work; the other lines
+//   On an issue:   "Deckhand" (TRIGGER) as the first line starts the work; the other lines
 //                  are extra instructions. Once started, any comment continues the session.
 //                  The sandbox opens the branch and draft pull request (../sandbox/draft-pr.sh).
 //   On its PR:     any comment, review or review comment continues the same session.
@@ -17,14 +17,14 @@
 // Comments the run cannot take (a trigger that switches between work and brainstorm, a
 // wrap-up, or one arriving once Claude's input is closed) wait for a follow-up run.
 //
-// "Claude let's brainstorm this" (BRAINSTORM_TRIGGER) as the first line of an issue comment
-// starts a brainstorm instead: Claude discusses the issue (../prompts/brainstorm.md) without
+// "Deckhand" then "/mode brainstorm" (or "Deckhand /mode brainstorm" on one line) starts a
+// brainstorm instead: Claude discusses the issue (../prompts/brainstorm.md) without
 // writing code, and each later comment on the issue is the next message of that
 // conversation. A brainstorm run starts light (SANDBOX_LIGHT) after a short pause
-// (BRAINSTORM_DEBOUNCE_MS) and goes before queued work. "Claude stop" or "/stop" ends it:
-// Claude posts a summary and updates the issue's description, then comments no longer reach
-// it until a trigger line. After BRAINSTORM_IDLE_MINUTES (10) without a comment it shows as
-// idle; a comment then restores it from the issue's session volume. "Claude work on this"
+// (BRAINSTORM_DEBOUNCE_MS) and goes before queued work. "/stop" ends it: Claude posts a
+// summary and updates the issue's description, then comments no longer reach it until a
+// trigger line. After BRAINSTORM_IDLE_MINUTES (10) without a comment it shows as idle; a
+// comment then restores it from the issue's session volume. "Deckhand" or "/mode work"
 // afterwards implements in the same session, so the decisions carry over. Issues only.
 //
 // A "/mode <name>" line picks a mode: work, brainstorm or one of the repo's own (its
@@ -61,7 +61,7 @@
 // cannot take image uploads through its API, so they need a public URL.
 //
 // Each repo may bring a .deckhand.yaml on its default branch (repo-config.mjs): its own
-// trigger lines, models, parallel cap and users (only narrowing the operator's), a setup
+// trigger word, models, parallel cap and users (only narrowing the operator's), a setup
 // command and extra instructions for the sandbox, a Dockerfile FROM the base image
 // (images.mjs builds it), cache volumes, and a preview hook run on pull_request and
 // workflow_run deliveries (previews.mjs). A config with errors stops runs, and the reply

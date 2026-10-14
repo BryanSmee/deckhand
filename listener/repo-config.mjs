@@ -1,6 +1,6 @@
 // Per-repo settings: a repo's .deckhand.yaml, always read from its default branch so a pull
 // request can't change its own permissions. It can only narrow the operator's settings
-// (users, parallel runs), and brings what is the project's own: trigger lines, models,
+// (users, parallel runs), and brings what is the project's own: trigger word, models,
 // setup command, extra instructions, its own modes, Dockerfile, caches, preview hook. Format
 // and example:
 // ../docs/repo-config.md.
@@ -27,8 +27,6 @@ export function defaultSettings(config) {
   return {
     users: config.users,
     trigger: config.trigger,
-    brainstormTrigger: config.brainstormTrigger,
-    stopTrigger: config.stopTrigger,
     model: config.model,
     effort: config.effort,
     brainstormModel: config.brainstormModel,
@@ -49,15 +47,13 @@ export function defaultSettings(config) {
 
 // The operator's config as seen from one repo: what events.mjs and the runs read.
 export function effectiveConfig(config, settings) {
-  const { users, trigger, brainstormTrigger, stopTrigger, maxParallel } = settings;
+  const { users, trigger, maxParallel } = settings;
   const { model, effort, brainstormModel, brainstormEffort, inbox } = settings;
   return {
     ...config,
     inbox,
     users,
     trigger,
-    brainstormTrigger,
-    stopTrigger,
     model,
     effort,
     brainstormModel,
@@ -104,18 +100,10 @@ export function parseRepoConfig(text, config) {
         settings.users = wanted.filter((u) => config.users.includes(u));
         break;
       }
-      case "triggers": {
-        if (!isMap(value)) {
-          fail(key, "expected work, brainstorm and stop lines");
-          break;
-        }
-        const names = { work: "trigger", brainstorm: "brainstormTrigger", stop: "stopTrigger" };
-        for (const [name, line] of Object.entries(value)) {
-          if (!names[name]) warnings.push(`triggers.${name}: unknown, ignored`);
-          else if (typeof line === "string" && normalize(line))
-            settings[names[name]] = normalize(line);
-          else fail(`triggers.${name}`, "expected a line of text");
-        }
+      case "trigger": {
+        // The whole first line of a comment, compared loosely ("Deckhand", "@deckhand:").
+        if (typeof value === "string" && normalize(value)) settings.trigger = normalize(value);
+        else fail(key, "expected a line of text");
         break;
       }
       case "model":

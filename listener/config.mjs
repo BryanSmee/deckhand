@@ -13,7 +13,7 @@ export function list(value) {
     .filter(Boolean);
 }
 
-// "Claude let's brainstorm this" matches "claude lets brainstorm this!".
+// "@Deckhand:" matches "deckhand", "Let's go!" matches "lets go".
 export function normalize(line) {
   return line
     .toLowerCase()
@@ -71,9 +71,8 @@ export function loadConfig(env) {
     users,
     // Optional: narrows the repos where the App is installed. Empty: all of them.
     repos: list(env.ALLOWED_REPOS),
-    trigger: normalize(env.TRIGGER || "Claude work on this"),
-    brainstormTrigger: normalize(env.BRAINSTORM_TRIGGER || "Claude let's brainstorm this"),
-    stopTrigger: normalize(env.BRAINSTORM_STOP || "Claude stop"),
+    // The first line of a comment that calls Deckhand; "/mode <name>" picks another mode.
+    trigger: normalize(env.TRIGGER || "Deckhand"),
     prefix,
     image: env.SANDBOX_IMAGE || `${prefix}-sandbox`,
     network: env.SANDBOX_NETWORK || `${prefix}-sandboxes`,

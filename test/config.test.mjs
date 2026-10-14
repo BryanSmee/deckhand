@@ -36,5 +36,11 @@ test("names come from settings, with a neutral default", () => {
 });
 
 test("trigger lines are compared loosely", () => {
-  assert.equal(normalize("Claude let’s brainstorm this!"), "claude lets brainstorm this");
+  assert.equal(normalize("@Deckhand:"), "deckhand");
+  assert.equal(normalize("Let’s go!"), "lets go");
+});
+
+test("the default trigger is Deckhand", () => {
+  assert.equal(loadConfig({ ALLOWED_USERS: "alice" }).trigger, "deckhand");
+  assert.equal(loadConfig({ ALLOWED_USERS: "alice", TRIGGER: "Hey Bot!" }).trigger, "hey bot");
 });

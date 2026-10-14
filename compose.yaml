@@ -50,9 +50,7 @@ services:
       SANDBOX_CPUS: ${SANDBOX_CPUS:-2}
       SANDBOX_MEMORY: ${SANDBOX_MEMORY:-4g}
       SANDBOX_PIDS: ${SANDBOX_PIDS:-2048}
-      TRIGGER: ${TRIGGER:-Claude work on this}
-      BRAINSTORM_TRIGGER: ${BRAINSTORM_TRIGGER:-Claude let's brainstorm this}
-      BRAINSTORM_STOP: ${BRAINSTORM_STOP:-Claude stop}
+      TRIGGER: ${TRIGGER:-Deckhand}
       BRAINSTORM_IDLE_MINUTES: ${BRAINSTORM_IDLE_MINUTES:-10}
       NEEDS_INPUT_LABEL: ${NEEDS_INPUT_LABEL-needs-input}
       # Names of what the listener creates on the host's Docker, matching the ones below.

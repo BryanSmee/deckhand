@@ -54,10 +54,12 @@ the new permissions on its installation. Everything else works without them.
 
 ## 3. Use it
 
-On an issue of an installed repository, an allowed user comments `Claude work on this`
-(first line; the rest are instructions). The sandbox opens the branch `issue-<n>-<slug>` and
-a draft pull request, and Claude's final message comes back as a comment from the App's bot.
-`Claude let's brainstorm this` discusses the issue without code; `/stop` wraps it up.
+On an issue of an installed repository, an allowed user comments `Deckhand` (the
+whole first line, any case or punctuation; the rest are instructions). The sandbox opens the
+branch `issue-<n>-<slug>` and a draft pull request, and Claude's final message comes back as a
+comment from the App's bot.
+`Deckhand` then a `/mode brainstorm` line (or `Deckhand /mode brainstorm`) discusses the issue
+without code; `/stop` wraps it up.
 
 A repository can also declare inboxes in its `.deckhand.yaml`: an ideas issue and a bug
 reports issue, where every comment of an allowed user becomes a labelled GitHub issue (or an
@@ -65,7 +67,7 @@ answer), and a GitHub Discussions category (for example "Ask Claude") where Clau
 allowed users' questions. See [Inboxes](repo-config.md#inboxes).
 
 Each repository can add a `.deckhand.yaml` on its default branch: its own users (narrowing
-`ALLOWED_USERS`), trigger lines, models, parallel cap, setup command, instructions,
+`ALLOWED_USERS`), trigger word, models, parallel cap, setup command, instructions,
 Dockerfile, caches and preview hook. See [Per-repo config](repo-config.md).
 
 ## 4. The dashboard
@@ -118,7 +120,7 @@ All in `.env`, read by `compose.yaml`:
 | `GRANTS_FILE`                                                                         | `/etc/deckhand/grants.yaml`    | what you grant each repo: hosts, host mounts, limits                 |
 | `EGRESS_PROXY`                                                                        | `http://egress:3128`           | the egress proxy, as sandboxes reach it                              |
 | `INSTALL_NETWORK`                                                                     | `bridge`                       | network of the Claude Code install container (needs npm)             |
-| `TRIGGER`, `BRAINSTORM_TRIGGER`, `BRAINSTORM_STOP`                                    | `Claude work on this`…         | trigger lines                                                        |
+| `TRIGGER`                                                                             | `Deckhand`                     | first line of a comment that starts a run                            |
 | `NEEDS_INPUT_LABEL`                                                                   | `needs-input`                  | label while a run waits for answers (empty: none)                    |
 | `DOCKER_SOCKET`                                                                       | `/var/run/docker.sock`         | the host's Docker socket, as preview hooks mount it                  |
 | `DECKHAND_VERSION`                                                                    | `latest`                       | the release compose runs (`1.2.3`, `1.2`): see [Updating](#updating) |
