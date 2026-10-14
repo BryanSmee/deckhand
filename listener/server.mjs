@@ -1902,7 +1902,7 @@ function webhook(req, res) {
   });
 }
 
-createServer((req, res) => {
+const web = createServer((req, res) => {
   if (req.method === "GET" && req.url === "/health") return res.end("ok");
   if (req.method === "GET" && req.url.startsWith("/shots/")) return serveShot(req, res);
   if (setup.handle(req, res)) return;
@@ -1916,7 +1916,11 @@ createServer((req, res) => {
   if (req.method === "GET") return serveDashboard(req, res);
   res.statusCode = 404;
   res.end();
-}).listen(config.port, () => log(`Listening on :${config.port}`));
+}).listen(config.port, () => {
+  // PORT=0 (the tests): the OS picks a free port, logged for whoever started the listener.
+  config.port = web.address().port;
+  log(`Listening on :${config.port}`);
+});
 
 // --- Egress: the proxy asks, for each connection, whether a sandbox may reach a host ------
 
@@ -1958,7 +1962,7 @@ async function egressAnswer(req, res) {
 }
 
 // Sandboxes and the egress proxy only: compose.yaml doesn't publish this port.
-createServer((req, res) => {
+const brokerServer = createServer((req, res) => {
   if (req.method === "GET" && req.url.startsWith("/egress?")) {
     return egressAnswer(req, res).catch((error) => {
       log(`Egress: ${error.stack ?? error}`);
@@ -1969,7 +1973,16 @@ createServer((req, res) => {
     log(`Broker: ${error.stack ?? error}`);
     if (!res.headersSent) res.writeHead(500).end();
   });
-}).listen(config.brokerPort, () => log(`Token broker on :${config.brokerPort}`));
+}).listen(config.brokerPort, () => {
+  // BROKER_PORT=0 (the tests): the OS picks a free port, and sandboxes are sent to that one.
+  if (!config.brokerPort) {
+    const url = new URL(config.brokerUrl);
+    url.port = brokerServer.address().port;
+    config.brokerUrl = url.href.replace(/\/$/, "");
+  }
+  config.brokerPort = brokerServer.address().port;
+  log(`Token broker on :${config.brokerPort}`);
+});
 
 log(`Deckhand ${VERSION}`);
 if (!app) log(`No GitHub App yet. Set it up at ${setup.link()}`);

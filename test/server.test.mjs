@@ -218,7 +218,9 @@ function start(env) {
   const until = (text) =>
     new Promise((resolve, reject) => {
       const timer = setInterval(
-        () => out.includes(text) && (clearInterval(timer), resolve(out)),
+        () =>
+          (typeof text === "string" ? out.includes(text) : text.test(out)) &&
+          (clearInterval(timer), resolve(out)),
         20,
       );
       child.on("exit", (code) => (clearInterval(timer), reject(new Error(`exit ${code}: ${out}`))));
@@ -237,6 +239,15 @@ test("refuses to start with an empty allowlist", async () => {
   assert.equal(code, 1);
   assert.match(output(), /ALLOWED_USERS/);
 });
+
+// The ports a listener bound, from its log: its own, then its broker's.
+async function ports(listener) {
+  const bound = async (name) => {
+    const re = new RegExp(`${name} on :(\\d+)\n`);
+    return Number((await listener.until(re)).match(re)[1]);
+  };
+  return [await bound("Listening"), await bound("Token broker")];
+}
 
 // A listener with an App, a fake Docker and a fake GitHub serving `files`; `extra`: more
 // settings. Either may be a function of the listener's temp dir (and `extra`, of the fake
@@ -258,15 +269,14 @@ async function listen(t, files, extra = {}) {
       pem: privateKey.export({ type: "pkcs1", format: "pem" }),
     }),
   );
-  const port = 20000 + Math.floor(Math.random() * 20000);
-  const brokerPort = port + 1;
+  // Port 0: the OS picks free ports, which the listener logs. The broker's URL gets its port.
   const settings = {
     PATH: `${dir}:${process.env.PATH}`,
     DATA_DIR: dir,
     ALLOWED_USERS: "alice,bob",
-    PORT: String(port),
-    BROKER_PORT: String(brokerPort),
-    BROKER_URL: `http://127.0.0.1:${brokerPort}`,
+    PORT: "0",
+    BROKER_PORT: "0",
+    BROKER_URL: "http://127.0.0.1",
     GITHUB_API: github.url,
     PUBLIC_URL: "https://hooks.example.com",
     DEBOUNCE_MS: "0",
@@ -281,7 +291,13 @@ async function listen(t, files, extra = {}) {
     github.server.close();
     stopSandboxes(dir);
   });
-  await listener.until("Token broker on");
+  const [port, brokerPort] = await ports(listener);
+  // Restarts keep them: the sandboxes still running talk to the broker at a fixed URL.
+  Object.assign(settings, {
+    PORT: String(port),
+    BROKER_PORT: String(brokerPort),
+    BROKER_URL: `http://127.0.0.1:${brokerPort}`,
+  });
   const send = (payload, event = "issue_comment") => {
     const body = JSON.stringify(payload);
     return fetch(`http://127.0.0.1:${port}/webhook`, {
@@ -301,7 +317,7 @@ async function listen(t, files, extra = {}) {
     const exited = new Promise((resolve) => child.on("exit", resolve));
     const code = child.exitCode ?? (child.signalCode || (child.kill(signal), await exited));
     listener = start({ ...settings, ...more });
-    await listener.until("Token broker on");
+    await ports(listener);
     return { code, output: old.output() };
   };
   return {
