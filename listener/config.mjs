@@ -51,6 +51,8 @@ export function loadConfig(env) {
     claudeCodeVolume: env.CLAUDE_CODE_VOLUME || `${prefix}-claude-code`,
     claudeCodeVersion: env.CLAUDE_CODE_VERSION || "2.1.300",
     maxParallel: Number(env.MAX_PARALLEL ?? 2),
+    // The host's Docker socket, as preview hooks mount it.
+    dockerSocket: env.DOCKER_SOCKET || "/var/run/docker.sock",
     // Batches the comments of one review (each arrives as its own webhook) into one run.
     debounceMs: Number(env.DEBOUNCE_MS ?? 15000),
     // A brainstorm comment comes alone, and someone is waiting for the answer.

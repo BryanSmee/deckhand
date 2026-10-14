@@ -324,8 +324,10 @@
           queued = state.queued;
           serverNow = state.now ?? Date.now();
           const active = runs.filter((r) => r.status === "running").length;
+          const hooks = (state.previews ?? []).length;
           $("summary").textContent =
-            `${active} running (max ${state.maxParallel}), ${state.queued.length} queued`;
+            `${active} running (max ${state.maxParallel}), ${state.queued.length} queued` +
+            (hooks ? `, ${hooks} preview hook${hooks > 1 ? "s" : ""}` : "");
           $("queued").replaceChildren(
             ...(state.queued.length
               ? state.queued.map((q) =>
@@ -393,7 +395,9 @@
                       el(
                         "span",
                         { class: "when" },
-                        r.status === "running" ? duration(r) : ago(r.startedAt),
+                        r.status === "running"
+                          ? (r.phase ? `${r.phase} · ` : "") + duration(r)
+                          : ago(r.startedAt),
                       ),
                     ),
                   ),
@@ -422,7 +426,7 @@
         const url = link(r);
         $("title").replaceChildren(
           el("strong", {}, label(r)),
-          el("span", { class: r.status }, `${dot[r.status] ?? ""} ${r.status}`),
+          el("span", { class: r.status }, `${dot[r.status] ?? ""} ${r.phase ?? r.status}`),
           el(
             "span",
             { class: "when" },

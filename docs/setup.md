@@ -14,8 +14,9 @@ docker compose up -d --build
 docker compose logs listener
 ```
 
-`docker compose up` builds two images: the listener's and the sandbox image it starts runs
-from (the `sandbox` service only builds it and exits). The listener publishes port 8080
+`docker compose up` builds two images: the listener's and the base sandbox image runs start
+from (the `sandbox` service only builds it and exits). A repository can bring its own image
+`FROM` that base: see [Per-repo config](repo-config.md). The listener publishes port 8080
 (`PORT` to change it); point your reverse proxy at it.
 
 ## 2. Create the GitHub App
@@ -48,6 +49,10 @@ On an issue of an installed repository, an allowed user comments `Claude work on
 a draft pull request, and Claude's final message comes back as a comment from the App's bot.
 `Claude let's brainstorm this` discusses the issue without code; `/stop` wraps it up.
 
+Each repository can add a `.deckhand.yaml` on its default branch: its own users (narrowing
+`ALLOWED_USERS`), trigger lines, models, parallel cap, setup command, instructions,
+Dockerfile, caches and preview hook. See [Per-repo config](repo-config.md).
+
 ## Settings
 
 All in `.env`, read by `compose.yaml`:
@@ -61,9 +66,10 @@ All in `.env`, read by `compose.yaml`:
 | `DASHBOARD_PASSWORD`                                                                    | empty: no dashboard            | password of the dashboard at `/` (any user name)                 |
 | `CLAUDE_CODE_VERSION`                                                                   | `2.1.300`                      | Claude Code version the sandboxes install on first use           |
 | `SANDBOX_MODEL`, `SANDBOX_EFFORT`                                                       | `opus`, `medium`               | defaults; a comment's `/model` and `/effort` lines override them |
-| `MAX_PARALLEL`                                                                          | `2`                            | sandboxes running at once                                        |
+| `MAX_PARALLEL`                                                                          | `2`                            | sandboxes running at once (a repo's `max_parallel` within it)    |
 | `TRIGGER`, `BRAINSTORM_TRIGGER`, `BRAINSTORM_STOP`                                      | `Claude work on this`…         | trigger lines                                                    |
 | `NEEDS_INPUT_LABEL`                                                                     | `needs-input`                  | label while a run waits for answers (empty: none)                |
+| `DOCKER_SOCKET`                                                                         | `/var/run/docker.sock`         | the host's Docker socket, as preview hooks mount it              |
 | `SANDBOX_IMAGE`, `SANDBOX_NETWORK`, `SHOTS_VOLUME`, `CLAUDE_CODE_VOLUME`, `NAME_PREFIX` | `deckhand-…`                   | names of what the listener creates on Docker                     |
 
 ## How sandboxes reach GitHub
@@ -80,5 +86,6 @@ No sandbox gets a long-lived token, an SSH key or the host's git configuration:
 - Git pushes over HTTPS; commits and comments come from the App's bot
   (`<app>[bot]`, identity set through `GIT_AUTHOR_*` and `GIT_COMMITTER_*`).
 
-Claude Code is not part of any image: the first run installs the pinned
-`CLAUDE_CODE_VERSION` into the `deckhand-claude-code` volume, and later runs reuse it.
+Claude Code is not part of any image: before the first run that needs it, the listener
+installs the pinned `CLAUDE_CODE_VERSION` into the `deckhand-claude-code` volume, in a
+container of its own, and later runs reuse it.

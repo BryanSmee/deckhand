@@ -1,12 +1,12 @@
 // The listener end to end, without Docker or GitHub: a fake `docker` on PATH plays the
 // sandbox (asks the broker for a token, prints a result), a local server plays GitHub.
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { createHmac, generateKeyPairSync } from "node:crypto";
-import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { test } from "node:test";
 
 const SECRET = "webhook-secret";
@@ -16,9 +16,21 @@ function fakeDocker(dir) {
   writeFileSync(
     path,
     `#!/bin/bash
+# Everything but the sandbox run is logged, one call per line.
 case "$1" in
-  volume|ps|wait) exit 1 ;;
+  ps|wait) exit 1 ;;
+  volume)
+    [ "$2" = inspect ] && exit 1
+    echo "$*" >> "${dir}/docker-calls" ;;
+  image)
+    # The base image exists; repo images don't, until built.
+    [ "$2" = inspect ] && case "$*" in *-repo-*) exit 1 ;; *) echo sha256:base ;; esac ;;
+  build)
+    echo "$*" >> "${dir}/docker-calls"
+    # The build context is the repo's checkout.
+    cp "\${@: -1}/docker/Dockerfile" "${dir}/built-dockerfile" ;;
   run)
+    case "$*" in *--entrypoint*) echo "$*" >> "${dir}/docker-calls"; exit 0 ;; esac
     printf '%s\\n' "$@" > "${dir}/run-args"
     echo "$DECKHAND_RUN_SECRET" > "${dir}/run-secret"
     env > "${dir}/run-env"
@@ -33,7 +45,10 @@ esac
   chmodSync(path, 0o755);
 }
 
-async function fakeGitHub() {
+// `files`: the repo's files on its default branch, served by the contents API and as a
+// tarball; none: no .deckhand.yaml (404).
+async function fakeGitHub(files = {}) {
+  const tarball = files["Dockerfile"] || files["docker/Dockerfile"] ? tarOf(files) : null;
   const requests = [];
   const waiters = [];
   const server = createServer((req, res) => {
@@ -49,6 +64,17 @@ async function fakeGitHub() {
       requests.push(entry);
       for (const w of [...waiters]) if (w.match(entry)) w.resolve(entry);
       res.setHeader("content-type", "application/json");
+      const file = /^\/repos\/org\/repo\/contents\/([^?]+)\?ref=trunk$/.exec(req.url);
+      if (file) {
+        const text = files[decodeURIComponent(file[1])];
+        if (text === undefined) return res.writeHead(404).end("{}");
+        const content = Buffer.from(text).toString("base64");
+        return res.end(JSON.stringify({ type: "file", sha: `blob-${text.length}`, content }));
+      }
+      if (req.url === "/repos/org/repo/tarball/trunk" && tarball) {
+        res.setHeader("content-type", "application/gzip");
+        return res.end(tarball);
+      }
       if (req.url === "/app/installations/7/access_tokens") {
         const scoped = body.includes("repositories");
         const expires_at = new Date(Date.now() + 3600000).toISOString();
@@ -75,6 +101,16 @@ async function fakeGitHub() {
     waitFor,
     server,
   };
+}
+
+// GitHub's tarball: one top folder holding the repo's files.
+function tarOf(files) {
+  const dir = mkdtempSync(join(tmpdir(), "deckhand-repo-"));
+  for (const [path, text] of Object.entries(files)) {
+    mkdirSync(join(dir, "org-repo-abc", dirname(path)), { recursive: true });
+    writeFileSync(join(dir, "org-repo-abc", path), text);
+  }
+  return execFileSync("tar", ["-czf", "-", "-C", dir, "org-repo-abc"]);
 }
 
 function start(env) {
@@ -109,10 +145,11 @@ test("refuses to start with an empty allowlist", async () => {
   assert.match(output(), /ALLOWED_USERS/);
 });
 
-test("a webhook from the App runs a sandbox that gets its repo's token from the broker", async (t) => {
+// A listener with an App, a fake Docker and a fake GitHub serving `files`.
+async function listen(t, files) {
   const dir = mkdtempSync(join(tmpdir(), "deckhand-"));
   fakeDocker(dir);
-  const github = await fakeGitHub();
+  const github = await fakeGitHub(files);
   const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
   writeFileSync(
     join(dir, "app.json"),
@@ -130,7 +167,7 @@ test("a webhook from the App runs a sandbox that gets its repo's token from the 
   const listener = start({
     PATH: `${dir}:${process.env.PATH}`,
     DATA_DIR: dir,
-    ALLOWED_USERS: "alice",
+    ALLOWED_USERS: "alice,bob",
     PORT: String(port),
     BROKER_PORT: String(brokerPort),
     BROKER_URL: `http://127.0.0.1:${brokerPort}`,
@@ -143,19 +180,34 @@ test("a webhook from the App runs a sandbox that gets its repo's token from the 
     github.server.close();
   });
   await listener.until("Token broker on");
+  const send = (payload, event = "issue_comment") => {
+    const body = JSON.stringify(payload);
+    return fetch(`http://127.0.0.1:${port}/webhook`, {
+      method: "POST",
+      headers: {
+        "x-github-event": event,
+        "x-hub-signature-256": `sha256=${createHmac("sha256", SECRET).update(body).digest("hex")}`,
+      },
+      body,
+    });
+  };
+  return { dir, github, listener, port, brokerPort, send };
+}
 
-  const payload = JSON.stringify({
+function comment(login, body = "Claude work on this") {
+  return {
     action: "created",
     installation: { id: 7 },
     repository: { full_name: "org/repo", default_branch: "trunk" },
     issue: { number: 12 },
-    comment: {
-      id: 99,
-      body: "Claude work on this",
-      user: { login: "alice", type: "User" },
-    },
-    sender: { login: "alice" },
-  });
+    comment: { id: 99, body, user: { login, type: "User" } },
+    sender: { login },
+  };
+}
+
+test("a webhook from the App runs a sandbox that gets its repo's token from the broker", async (t) => {
+  const { dir, github, listener, port, brokerPort } = await listen(t);
+  const payload = JSON.stringify(comment("alice"));
   const deliver = (signature) =>
     fetch(`http://127.0.0.1:${port}/webhook`, {
       method: "POST",
@@ -203,4 +255,65 @@ test("a webhook from the App runs a sandbox that gets its repo's token from the 
     headers: { authorization: `Bearer ${secret}` },
   });
   assert.equal(after.status, 401);
+});
+
+const CONFIG = `# Node project
+users: [alice, mallory]   # mallory isn't in ALLOWED_USERS: ignored
+model: sonnet
+setup: npm ci
+instructions: docs/agents.md
+dockerfile: docker/Dockerfile
+caches:
+  - /home/node/.npm
+`;
+
+test("a repo's config: its image, caches, setup and model", async (t) => {
+  const { dir, github, listener, send } = await listen(t, {
+    ".deckhand.yaml": CONFIG,
+    "docker/Dockerfile": "ARG DECKHAND_BASE\nFROM $DECKHAND_BASE\nRUN true\n",
+  });
+  // Bob is allowed by the operator, not by the repo: nothing runs for him.
+  await send(comment("bob"));
+  await listener.until("bob not in ALLOWED_USERS");
+  assert.equal((await send(comment("alice"))).status, 202);
+  await github.waitFor(
+    (r) => r.method === "POST" && r.path === "/repos/org/repo/issues/12/comments",
+  );
+
+  const calls = readFileSync(join(dir, "docker-calls"), "utf8");
+  // Built from the default branch's Dockerfile, FROM the base image.
+  assert.match(
+    calls,
+    /^build .*--build-arg DECKHAND_BASE=deckhand-sandbox .*-t deckhand-repo-org-repo:[0-9a-f]{16} /m,
+  );
+  assert.match(readFileSync(join(dir, "built-dockerfile"), "utf8"), /FROM \$DECKHAND_BASE/);
+  // Claude Code in its own container, then the cache volume, handed to the sandbox's user.
+  assert.match(
+    calls,
+    /^run --rm .*CLAUDE_CODE_VERSION=.* --entrypoint deckhand-install-claude-code deckhand-sandbox$/m,
+  );
+  assert.match(calls, /^volume create .*deckhand-cache-org-repo-home-node-npm-[0-9a-f]{10}$/m);
+  assert.match(
+    calls,
+    /--entrypoint chown -v deckhand-cache-org-repo-home-node-npm-\w+:\/home\/node\/\.npm deckhand-repo-org-repo:\w+ 1000:1000/,
+  );
+
+  const args = readFileSync(join(dir, "run-args"), "utf8").split("\n");
+  assert.match(args.at(-2), /^deckhand-repo-org-repo:[0-9a-f]{16}$/);
+  assert.ok(
+    args.some((a) => /^deckhand-cache-org-repo-home-node-npm-\w+:\/home\/node\/\.npm$/.test(a)),
+  );
+  const runEnv = readFileSync(join(dir, "run-env"), "utf8");
+  assert.match(runEnv, /^SANDBOX_SETUP=npm ci$/m);
+  assert.match(runEnv, /^SANDBOX_INSTRUCTIONS=docs\/agents\.md$/m);
+  assert.match(runEnv, /^SANDBOX_MODEL=sonnet$/m);
+});
+
+test("a config with errors stops the run and the reply says why", async (t) => {
+  const { github, send } = await listen(t, { ".deckhand.yaml": "max_parallel: lots\n" });
+  await send(comment("alice"));
+  const reply = await github.waitFor(
+    (r) => r.method === "POST" && r.path === "/repos/org/repo/issues/12/comments",
+  );
+  assert.match(JSON.parse(reply.body).body, /max_parallel: expected a whole number/);
 });

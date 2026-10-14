@@ -46,17 +46,20 @@ services:
       SHOTS_VOLUME: ${SHOTS_VOLUME:-deckhand-screenshots}
       CLAUDE_CODE_VOLUME: ${CLAUDE_CODE_VOLUME:-deckhand-claude-code}
       NAME_PREFIX: ${NAME_PREFIX:-deckhand}
+      # The host's path of the socket mounted below: preview hooks get it too.
+      DOCKER_SOCKET: ${DOCKER_SOCKET:-/var/run/docker.sock}
       # How sandboxes reach the token broker: this service, on the sandboxes' network.
       BROKER_URL: http://listener:8081
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
+      - ${DOCKER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock
       # The App's credentials (app.json), run logs, queue and brainstorm state.
       - data:/data
       # Shared with the sandboxes, one folder per run, served under /shots/.
       - screenshots:/data/shots
     networks: [default, sandboxes]
 
-  # Builds the image sandboxes run from, then exits: the listener starts them itself.
+  # Builds the base image sandboxes run from (repo images build FROM it), then exits: the
+  # listener starts them itself.
   sandbox:
     build:
       context: .

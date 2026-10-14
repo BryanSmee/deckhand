@@ -1,9 +1,10 @@
 #!/bin/bash
-# Installs Claude Code on first use (CLAUDE_CODE_VERSION, into the shared /opt/claude-code
-# volume: no image ships it), clones the repository over HTTPS (tokens from the listener's
-# broker, git-credential-deckhand), opens the task's branch and draft pull request
-# (draft-pr.sh, for TASK_ISSUE; skipped with SANDBOX_LIGHT=1), then runs Claude without
-# permission prompts: the container is the sandbox.
+# Finds Claude Code (CLAUDE_CODE_VERSION, in the shared /opt/claude-code volume: no image
+# ships it, install-claude-code puts it there), clones the repository over HTTPS (tokens
+# from the listener's broker, git-credential-deckhand), opens the task's branch and draft
+# pull request (draft-pr.sh, for TASK_ISSUE), runs the repo's setup command (SANDBOX_SETUP),
+# then runs Claude without permission prompts: the container is the sandbox. SANDBOX_LIGHT=1
+# (brainstorms) skips the branch and the setup.
 #
 #   (no arguments)      interactive claude
 #   -p "<task>" …       arguments for claude, e.g. a headless task
@@ -20,17 +21,9 @@ if [ "${TASK_INPUT:-}" = "stream" ]; then
   exec 3<&0 < /dev/null
 fi
 
-# One folder per version in the volume, installed aside then renamed, so two first runs at
-# once can't leave a half-installed copy behind.
-claude_home=/opt/claude-code/$CLAUDE_CODE_VERSION
-if [ ! -x "$claude_home/node_modules/.bin/claude" ]; then
-  tmp=$(mktemp -d /opt/claude-code/.install-XXXXXX)
-  npm install --prefix "$tmp" --no-fund --no-audit --loglevel=error \
-    "@anthropic-ai/claude-code@$CLAUDE_CODE_VERSION" > /tmp/claude-install.log 2>&1 ||
-    { cat /tmp/claude-install.log >&2; rm -rf "$tmp"; exit 1; }
-  mv -T "$tmp" "$claude_home" 2> /dev/null || rm -rf "$tmp" # another run got there first
-fi
-export PATH=$claude_home/node_modules/.bin:$PATH
+# Installed by the listener before the run; this covers a sandbox started by hand.
+deckhand-install-claude-code
+export PATH=/opt/claude-code/$CLAUDE_CODE_VERSION/node_modules/.bin:$PATH
 
 if [ ! -d /workspace/.git ]; then
   # Blobless clone: full history for git log/blame, file contents fetched on demand. The
@@ -53,11 +46,31 @@ else
   # The task's branch and draft pull request first, so the run shows up on GitHub within
   # seconds (does nothing outside work runs on an issue).
   sandbox-draft-pr start
+  # The repo's own setup (its config's `setup`: dependencies, services…), on stderr so its
+  # output never reads as Claude's. A failure doesn't stop the run: Claude is told.
+  if [ -n "${SANDBOX_SETUP:-}" ]; then
+    echo "Setup: $SANDBOX_SETUP" >&2
+    if ! bash -c "$SANDBOX_SETUP" >&2; then
+      setup_failed="The repository's setup command failed before you started (its output is in
+the run's log): $SANDBOX_SETUP
+Check what it should have prepared before relying on it."
+    fi
+  fi
 fi
 
 # Copied on every start rather than baked into ~/.claude: that directory is a per-issue
 # volume, which would keep an old copy forever.
 cp /usr/local/share/deckhand-sandbox.md "$CLAUDE_CONFIG_DIR/CLAUDE.md"
+# The project's part (its config's `instructions`), from the default branch like the config:
+# a branch can't rewrite the rules it runs under.
+if [ -n "${SANDBOX_INSTRUCTIONS:-}" ]; then
+  git fetch --quiet origin "$BASE_BRANCH" 2> /dev/null || true
+  if extra=$(git show "origin/$BASE_BRANCH:$SANDBOX_INSTRUCTIONS" 2> /dev/null); then
+    printf '\n# This project\n\n%s\n' "$extra" >> "$CLAUDE_CONFIG_DIR/CLAUDE.md"
+  else
+    echo "Instructions file $SANDBOX_INSTRUCTIONS not found on $BASE_BRANCH" >&2
+  fi
+fi
 if ! claude mcp get playwright > /dev/null 2>&1; then
   claude mcp add --scope user playwright -- playwright-mcp --headless --isolated \
     --browser chromium --output-dir /tmp/playwright > /dev/null
@@ -104,6 +117,11 @@ feedback, say), stop and ask instead: see \"Stopping to ask\" in CLAUDE.md."
     prompt+="
 
 Also take this into account: $TASK_MESSAGE"
+  fi
+  if [ -n "${setup_failed:-}" ]; then
+    prompt+="
+
+$setup_failed"
   fi
   echo "$mode" > "$CLAUDE_CONFIG_DIR/sandbox-mode"
   # TASK_OUTPUT=json (the webhook listener) reads the raw events; people get progress lines.
