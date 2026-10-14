@@ -1,0 +1,77 @@
+# What an operator runs: the listener, and the sandbox image it starts runs from.
+#
+#   cp .env.example .env    # then set ALLOWED_USERS and a Claude credential
+#   docker compose up -d --build
+#   docker compose logs listener   # prints the one-time /setup link
+#
+# The listener's port is published as is: put your own reverse proxy (TLS, host name) in
+# front of it. See docs/setup.md.
+
+name: deckhand
+
+services:
+  listener:
+    build:
+      context: .
+      dockerfile: listener/Dockerfile
+    image: deckhand-listener
+    restart: unless-stopped
+    ports:
+      - "${PORT:-8080}:8080"
+    environment:
+      # Required: GitHub logins allowed to start runs (comma-separated). Empty: no start.
+      ALLOWED_USERS: ${ALLOWED_USERS:-}
+      # Optional: only these repos (owner/repo, comma-separated), among those where the App
+      # is installed. Empty: all of them.
+      ALLOWED_REPOS: ${ALLOWED_REPOS:-}
+      # Claude Code's credential, passed to each sandbox: one of the two.
+      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      # Optional: /setup detects it from your browser's address and stores it.
+      PUBLIC_URL: ${PUBLIC_URL:-}
+      # Password of the dashboard at / (any user name). Empty: no dashboard.
+      DASHBOARD_PASSWORD: ${DASHBOARD_PASSWORD:-}
+      CLAUDE_CODE_VERSION: ${CLAUDE_CODE_VERSION:-2.1.300}
+      SANDBOX_MODEL: ${SANDBOX_MODEL:-opus}
+      SANDBOX_EFFORT: ${SANDBOX_EFFORT:-medium}
+      MAX_PARALLEL: ${MAX_PARALLEL:-2}
+      TRIGGER: ${TRIGGER:-Claude work on this}
+      BRAINSTORM_TRIGGER: ${BRAINSTORM_TRIGGER:-Claude let's brainstorm this}
+      BRAINSTORM_STOP: ${BRAINSTORM_STOP:-Claude stop}
+      BRAINSTORM_IDLE_MINUTES: ${BRAINSTORM_IDLE_MINUTES:-10}
+      NEEDS_INPUT_LABEL: ${NEEDS_INPUT_LABEL-needs-input}
+      # Names of what the listener creates on the host's Docker, matching the ones below.
+      SANDBOX_IMAGE: ${SANDBOX_IMAGE:-deckhand-sandbox}
+      SANDBOX_NETWORK: ${SANDBOX_NETWORK:-deckhand-sandboxes}
+      SHOTS_VOLUME: ${SHOTS_VOLUME:-deckhand-screenshots}
+      CLAUDE_CODE_VOLUME: ${CLAUDE_CODE_VOLUME:-deckhand-claude-code}
+      NAME_PREFIX: ${NAME_PREFIX:-deckhand}
+      # How sandboxes reach the token broker: this service, on the sandboxes' network.
+      BROKER_URL: http://listener:8081
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      # The App's credentials (app.json), run logs, queue and brainstorm state.
+      - data:/data
+      # Shared with the sandboxes, one folder per run, served under /shots/.
+      - screenshots:/data/shots
+    networks: [default, sandboxes]
+
+  # Builds the image sandboxes run from, then exits: the listener starts them itself.
+  sandbox:
+    build:
+      context: .
+      dockerfile: sandbox/Dockerfile
+    image: ${SANDBOX_IMAGE:-deckhand-sandbox}
+    entrypoint: ["true"]
+    restart: "no"
+    network_mode: none
+
+networks:
+  # Sandboxes and the listener's broker. Fixed name: the listener attaches runs to it.
+  sandboxes:
+    name: ${SANDBOX_NETWORK:-deckhand-sandboxes}
+
+volumes:
+  data:
+  screenshots:
+    name: ${SHOTS_VOLUME:-deckhand-screenshots}

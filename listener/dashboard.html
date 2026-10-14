@@ -1,0 +1,588 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Deckhand runs</title>
+    <style>
+      :root {
+        --bg: #fafaf9;
+        --panel: #ffffff;
+        --ink: #1c1917;
+        --muted: #78716c;
+        --line: #e7e5e4;
+        --code: #f5f5f4;
+        --accent: #c2410c;
+        --ok: #15803d;
+        --err: #b91c1c;
+        --run: #1d4ed8;
+        color-scheme: light;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #0c0a09;
+          --panel: #1c1917;
+          --ink: #f5f5f4;
+          --muted: #a8a29e;
+          --line: #292524;
+          --code: #0c0a09;
+          --accent: #fb923c;
+          --ok: #4ade80;
+          --err: #f87171;
+          --run: #60a5fa;
+          color-scheme: dark;
+        }
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--ink);
+        font:
+          14px/1.5 system-ui,
+          sans-serif;
+        height: 100vh;
+        display: grid;
+        grid-template-columns: minmax(16rem, 22rem) 1fr;
+      }
+      aside {
+        border-right: 1px solid var(--line);
+        overflow-y: auto;
+        background: var(--panel);
+      }
+      header {
+        padding: 1rem;
+        border-bottom: 1px solid var(--line);
+      }
+      header h1 {
+        margin: 0;
+        font-size: 1rem;
+      }
+      header p {
+        margin: 0.25rem 0 0;
+        color: var(--muted);
+        font-size: 0.8rem;
+      }
+      h2 {
+        margin: 1rem 1rem 0.25rem;
+        font-size: 0.7rem;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: var(--muted);
+      }
+      ul {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+      }
+      li button {
+        all: unset;
+        box-sizing: border-box;
+        width: 100%;
+        padding: 0.5rem 1rem;
+        cursor: pointer;
+        display: grid;
+        grid-template-columns: 1rem 1fr auto;
+        gap: 0.5rem;
+        align-items: baseline;
+      }
+      li button:hover,
+      li button:focus-visible {
+        background: var(--code);
+      }
+      li button[aria-current="true"] {
+        background: var(--code);
+        box-shadow: inset 3px 0 var(--accent);
+      }
+      .dot {
+        font-size: 0.7rem;
+      }
+      .running {
+        color: var(--run);
+      }
+      .ok {
+        color: var(--ok);
+      }
+      .needs-input {
+        color: var(--accent);
+      }
+      .error,
+      .interrupted {
+        color: var(--err);
+      }
+      .queued,
+      .idle,
+      .stopped {
+        color: var(--muted);
+      }
+      .active {
+        color: var(--run);
+      }
+      .when {
+        color: var(--muted);
+        font-size: 0.75rem;
+        white-space: nowrap;
+      }
+      .empty {
+        padding: 0.5rem 1rem;
+        color: var(--muted);
+      }
+      main {
+        display: flex;
+        flex-direction: column;
+        min-width: 0;
+        min-height: 0;
+      }
+      #title {
+        padding: 1rem 1.25rem;
+        border-bottom: 1px solid var(--line);
+        display: flex;
+        gap: 1rem;
+        align-items: baseline;
+        flex-wrap: wrap;
+      }
+      #title strong {
+        font-size: 1rem;
+      }
+      #title a {
+        color: var(--accent);
+      }
+      #log {
+        flex: 1;
+        overflow-y: auto;
+        padding: 1rem 1.25rem 3rem;
+      }
+      .entry {
+        margin: 0 0 0.75rem;
+        max-width: 60rem;
+      }
+      .text {
+        white-space: pre-wrap;
+      }
+      .meta {
+        color: var(--muted);
+        font-style: italic;
+        white-space: pre-wrap;
+      }
+      pre {
+        margin: 0;
+        padding: 0.5rem 0.75rem;
+        background: var(--code);
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        overflow-x: auto;
+        font:
+          12px/1.45 ui-monospace,
+          monospace;
+      }
+      .tool summary {
+        cursor: pointer;
+        list-style: none;
+      }
+      .tool summary::-webkit-details-marker {
+        display: none;
+      }
+      .tool .name {
+        color: var(--accent);
+        font-weight: 600;
+        margin-right: 0.5rem;
+      }
+      .tool summary pre {
+        display: inline-block;
+        vertical-align: top;
+        max-width: calc(100% - 6rem);
+        white-space: pre-wrap;
+      }
+      .tool .out {
+        margin: 0.25rem 0 0 1.5rem;
+        color: var(--muted);
+      }
+      .tool .out.error {
+        color: var(--err);
+      }
+      .raw pre {
+        color: var(--muted);
+      }
+      .result {
+        border-left: 3px solid var(--ok);
+        padding: 0.5rem 0.75rem;
+        background: var(--panel);
+        white-space: pre-wrap;
+      }
+      .result.error {
+        border-color: var(--err);
+      }
+      .result.needs-input {
+        border-color: var(--accent);
+        color: inherit;
+      }
+      #follow {
+        position: fixed;
+        right: 1.5rem;
+        bottom: 1.5rem;
+        font: inherit;
+        padding: 0.4rem 0.8rem;
+        border: 1px solid var(--line);
+        background: var(--panel);
+        color: var(--ink);
+        border-radius: 999px;
+        cursor: pointer;
+      }
+      @media (max-width: 760px) {
+        body {
+          grid-template-columns: 1fr;
+          grid-template-rows: minmax(0, 40vh) 1fr;
+        }
+        aside {
+          border-right: 0;
+          border-bottom: 1px solid var(--line);
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <aside>
+      <header>
+        <h1>Deckhand runs</h1>
+        <p id="summary">Loading…</p>
+      </header>
+      <h2>Queued</h2>
+      <ul id="queued"></ul>
+      <h2>Brainstorms</h2>
+      <ul id="brainstorms"></ul>
+      <h2>Runs</h2>
+      <ul id="runs"></ul>
+    </aside>
+    <main>
+      <div id="title"><strong>Pick a run</strong></div>
+      <div id="log"></div>
+      <button id="follow" hidden>↓ Follow</button>
+    </main>
+    <script>
+      const $ = (id) => document.getElementById(id);
+      let current = null;
+      let source = null;
+      let runs = [];
+      let queued = [];
+      let serverNow = Date.now();
+      // A followed task: its runs started at or after `since` (server clock) open on their own,
+      // one after the other, until another run or task is picked.
+      let tracking = null; // { key, since }
+
+      const ago = (ms) => {
+        const s = Math.round((Date.now() - ms) / 1000);
+        if (s < 60) return `${s}s ago`;
+        if (s < 3600) return `${Math.round(s / 60)} min ago`;
+        if (s < 86400) return `${Math.round(s / 3600)} h ago`;
+        return new Date(ms).toLocaleDateString();
+      };
+      const duration = (r) => {
+        const ms = (r.finishedAt ?? Date.now()) - r.startedAt;
+        return `${Math.round(ms / 6000) / 10} min`;
+      };
+      const label = (r) => (r.kind === "brainstorm" ? "💬 " : "") + r.key;
+      const link = (r) =>
+        r.repo && r.replyTo ? `https://github.com/${r.repo}/issues/${r.replyTo}` : null;
+      const dot = {
+        running: "●",
+        ok: "✓",
+        error: "✕",
+        interrupted: "✕",
+        "needs-input": "?",
+        queued: "○",
+        active: "●",
+        idle: "◌",
+        stopped: "■",
+      };
+      // A brainstorm's state: active until its idle deadline, idle, or stopped.
+      const brainstormWhen = (b) =>
+        b.status === "active"
+          ? `idle in ${Math.max(0, Math.ceil((b.deadline - serverNow) / 60000))} min`
+          : b.status === "idle"
+            ? `idle since ${ago(b.deadline)}`
+            : "stopped";
+
+      function el(tag, attrs = {}, ...children) {
+        const node = document.createElement(tag);
+        for (const [k, v] of Object.entries(attrs)) {
+          if (k === "class") node.className = v;
+          else if (k.startsWith("on")) node.addEventListener(k.slice(2), v);
+          else node.setAttribute(k, v);
+        }
+        node.append(...children.filter((c) => c !== null && c !== undefined));
+        return node;
+      }
+
+      async function refresh() {
+        try {
+          const res = await fetch("api/state");
+          if (!res.ok) throw new Error(res.status);
+          const state = await res.json();
+          runs = state.runs;
+          queued = state.queued;
+          serverNow = state.now ?? Date.now();
+          const active = runs.filter((r) => r.status === "running").length;
+          $("summary").textContent =
+            `${active} running (max ${state.maxParallel}), ${state.queued.length} queued`;
+          $("queued").replaceChildren(
+            ...(state.queued.length
+              ? state.queued.map((q) =>
+                  el(
+                    "li",
+                    {},
+                    el(
+                      "button",
+                      {
+                        "aria-current": String(q.key === tracking?.key),
+                        title: "Follow its log when it starts",
+                        onclick: () => follow(q.key, serverNow),
+                      },
+                      el("span", { class: "dot queued" }, dot.queued),
+                      el("span", {}, label(q)),
+                      el("span", { class: "when" }, `reply on #${q.replyTo}`),
+                    ),
+                  ),
+                )
+              : [el("li", { class: "empty" }, "Nothing waiting")]),
+          );
+          const brainstorms = state.brainstorms ?? [];
+          $("brainstorms").replaceChildren(
+            ...(brainstorms.length
+              ? brainstorms.map((b) =>
+                  el(
+                    "li",
+                    {},
+                    el(
+                      "button",
+                      {
+                        "aria-current": String(b.key === tracking?.key),
+                        title: `${b.status}: follow its replies`,
+                        // From its latest reply on, so a live discussion reads as one log.
+                        onclick: () =>
+                          follow(b.key, runs.find((r) => r.key === b.key)?.startedAt ?? serverNow),
+                      },
+                      el("span", { class: `dot ${b.status}` }, dot[b.status] ?? "?"),
+                      el("span", {}, label({ ...b, kind: "brainstorm" })),
+                      el("span", { class: "when" }, brainstormWhen(b)),
+                    ),
+                  ),
+                )
+              : [el("li", { class: "empty" }, "No brainstorms")]),
+          );
+          $("runs").replaceChildren(
+            ...(runs.length
+              ? runs.map((r) =>
+                  el(
+                    "li",
+                    {},
+                    el(
+                      "button",
+                      {
+                        "aria-current": String(r.id === current?.id),
+                        title: r.status,
+                        onclick: () => select(r.id),
+                      },
+                      el("span", { class: `dot ${r.status}` }, dot[r.status] ?? "?"),
+                      el(
+                        "span",
+                        {},
+                        label(r) + (r.mode && r.mode !== "start" ? ` · ${r.mode}` : ""),
+                      ),
+                      el(
+                        "span",
+                        { class: "when" },
+                        r.status === "running" ? duration(r) : ago(r.startedAt),
+                      ),
+                    ),
+                  ),
+                )
+              : [el("li", { class: "empty" }, "No runs yet")]),
+          );
+          if (tracking) track();
+          else if (!current) {
+            const wanted = location.hash.slice(1);
+            const followed = new URLSearchParams(wanted);
+            if (followed.has("follow")) {
+              return follow(followed.get("follow"), Number(followed.get("since")) || serverNow);
+            }
+            const first =
+              runs.find((r) => r.id === wanted) ??
+              runs.find((r) => r.status === "running") ??
+              runs[0];
+            if (first) select(first.id);
+          }
+        } catch (error) {
+          $("summary").textContent = `Can't reach the listener (${error.message})`;
+        }
+      }
+
+      function title(r) {
+        const url = link(r);
+        $("title").replaceChildren(
+          el("strong", {}, label(r)),
+          el("span", { class: r.status }, `${dot[r.status] ?? ""} ${r.status}`),
+          el(
+            "span",
+            { class: "when" },
+            `${new Date(r.startedAt).toLocaleString()} · ${duration(r)}`,
+          ),
+          url
+            ? el("a", { href: url, target: "_blank", rel: "noreferrer" }, `#${r.replyTo} on GitHub`)
+            : "",
+        );
+      }
+
+      const log = $("log");
+      let following = true;
+      log.addEventListener("scroll", () => {
+        following = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
+        $("follow").hidden = following;
+      });
+      $("follow").addEventListener("click", () => {
+        following = true;
+        log.scrollTop = log.scrollHeight;
+      });
+
+      let lastTool = null;
+      function render(entry) {
+        if (entry.kind === "output" && lastTool) {
+          lastTool.append(
+            el("pre", { class: `out${entry.error ? " error" : ""}` }, entry.text || "(no output)"),
+          );
+          if (entry.error) lastTool.open = true;
+          return;
+        }
+        lastTool = null;
+        let node;
+        if (entry.kind === "text") node = el("div", { class: "entry text" }, entry.text);
+        else if (entry.kind === "meta") node = el("div", { class: "entry meta" }, entry.text);
+        else if (entry.kind === "raw")
+          node = el("div", { class: "entry raw" }, el("pre", {}, entry.text));
+        else if (entry.kind === "tool") {
+          node = el(
+            "details",
+            { class: "entry tool" },
+            el(
+              "summary",
+              {},
+              el("span", { class: "name" }, entry.name),
+              el("pre", {}, entry.text || " "),
+            ),
+          );
+          lastTool = node;
+        } else if (entry.kind === "result") {
+          node = el(
+            "div",
+            {
+              class: `entry result${entry.status === "ok" ? "" : ` ${entry.status}`}`,
+            },
+            el(
+              "strong",
+              {},
+              entry.status === "error"
+                ? "Failed"
+                : `${entry.status === "ok" ? "Done" : "Needs input"} in ${entry.minutes} min`,
+            ),
+            "\n\n" + entry.text,
+          );
+        } else if (entry.kind === "output") {
+          node = el("div", { class: "entry raw" }, el("pre", {}, entry.text));
+        }
+        if (node) log.append(node);
+      }
+
+      function clear() {
+        source?.close();
+        source = null;
+        log.replaceChildren();
+        lastTool = null;
+        following = true;
+        for (const b of document.querySelectorAll("aside button"))
+          b.setAttribute("aria-current", "false");
+      }
+
+      // Picked by hand: stops following a task. `track()` passes `auto` to keep following it.
+      function select(id, auto = false) {
+        const r = runs.find((x) => x.id === id);
+        if (!r) return;
+        current = r;
+        if (auto) tracking.since = r.startedAt;
+        else tracking = null;
+        history.replaceState(null, "", tracking ? followHash() : `#${id}`);
+        clear();
+        title(r);
+        source = new EventSource(`api/runs/${encodeURIComponent(id)}/stream`);
+        source.addEventListener("entries", (event) => {
+          for (const entry of JSON.parse(event.data)) render(entry);
+          if (following) log.scrollTop = log.scrollHeight;
+        });
+        source.addEventListener("end", (event) => {
+          source.close();
+          const finished = JSON.parse(event.data);
+          Object.assign(current, finished);
+          title(current);
+        });
+        refresh();
+      }
+
+      const followHash = () =>
+        "#" + new URLSearchParams({ follow: tracking.key, since: tracking.since });
+
+      function follow(key, since) {
+        tracking = { key, since };
+        current = null;
+        history.replaceState(null, "", followHash());
+        clear();
+        waiting();
+        refresh();
+      }
+
+      // The next run of the followed task, if one started since the click (or the last run).
+      function track() {
+        const next = runs.findLast(
+          (r) =>
+            r.key === tracking.key &&
+            r.startedAt >= tracking.since &&
+            r.id !== current?.id &&
+            (!current || r.startedAt > current.startedAt),
+        );
+        if (next) return select(next.id, true);
+        // Still on the placeholder: say so if the task is gone without a run.
+        if (!current) waiting();
+      }
+
+      function waiting() {
+        const q = queued.find((x) => x.key === tracking.key);
+        // A run in progress takes the task's new comments itself (they show in its log), so
+        // the task is only queued when a comment waits for a follow-up run.
+        const busy = runs.some((r) => r.key === tracking.key && r.status === "running");
+        const name = label(q ?? tracking);
+        const url = q ? link(q) : null;
+        $("title").replaceChildren(
+          el("strong", {}, name),
+          el(
+            "span",
+            { class: q ? "queued" : busy ? "running" : "queued" },
+            q ? `${dot.queued} queued` : busy ? `${dot.running} running` : "not queued",
+          ),
+          url
+            ? el("a", { href: url, target: "_blank", rel: "noreferrer" }, `#${q.replyTo} on GitHub`)
+            : "",
+        );
+        const text =
+          q || busy
+            ? `Waiting for ${name} to start…`
+            : `${name} left the queue without starting a run (did the listener restart?). Its next run will still open here.`;
+        if (log.textContent !== text) log.replaceChildren(el("div", { class: "entry meta" }, text));
+      }
+
+      refresh();
+      setInterval(async () => {
+        await refresh();
+        if (current) title(runs.find((r) => r.id === current.id) ?? current);
+      }, 3000);
+    </script>
+  </body>
+</html>
