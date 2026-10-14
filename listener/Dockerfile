@@ -1,7 +1,7 @@
 # Deckhand's listener (server.mjs): receives the GitHub App's webhooks and starts sandbox
 # containers through the host's Docker. Built from the repository root (compose.yaml) for
-# ../prompts/ and ../dashboard/; the layout is kept, so server.mjs finds them at the same
-# relative paths.
+# ../prompts/, ../docs/ and ../dashboard/; the layout is kept, so server.mjs finds them at
+# the same relative paths.
 
 # The dashboard: built on the build machine's platform (static files, the same for every
 # architecture), so a multi-arch release doesn't run Vite under emulation.
@@ -20,7 +20,9 @@ WORKDIR /app
 COPY listener/*.mjs listener/
 COPY --from=dashboard /dashboard/dist/ dashboard/dist/
 COPY listener/runner/ listener/runner/
-COPY prompts/brainstorm.md prompts/idea.md prompts/bug.md prompts/discussion.md prompts/
+COPY prompts/brainstorm.md prompts/idea.md prompts/bug.md prompts/discussion.md prompts/onboarding.md prompts/
+# The onboarding prompt ends with the config's reference.
+COPY docs/repo-config.md docs/
 ENV NODE_ENV=production
 # The release it is (a git tag, .github/workflows/release.yml); "dev" when built from source.
 ARG DECKHAND_VERSION=dev

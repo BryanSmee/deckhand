@@ -116,5 +116,8 @@ export function loadConfig(env) {
     brainstormModel: env.BRAINSTORM_MODEL || env.SANDBOX_MODEL || "opus",
     brainstormEffort: env.BRAINSTORM_EFFORT || env.SANDBOX_EFFORT || "medium",
     needsInputLabel: env.NEEDS_INPUT_LABEL ?? "needs-input",
+    // An issue proposing a .deckhand.yaml when the App is installed on a repo without one
+    // (onboarding.mjs). "/mode onboarding" works either way.
+    onboarding: !["off", "false", "0", "no"].includes((env.ONBOARDING ?? "").trim().toLowerCase()),
   };
 }

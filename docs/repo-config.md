@@ -13,6 +13,24 @@ A file with errors stops the repository's runs: the reply to a trigger comment (
 Unknown keys and users the operator doesn't allow are only warnings, shown in the run's log
 on the dashboard.
 
+## Onboarding
+
+When the App is installed on a repository without this file, the listener opens an
+onboarding issue there (see [Setting up](setup.md#3-use-it)), and Claude proposes the file
+in its comments: it reads the repository (package managers, CI workflows, `AGENTS.md`, test
+and lint commands, services) and gives each key a reason, within the hosts, users and mount
+roots the operator allows. Each comment on the issue goes on in that conversation, with a
+read-only token. Claude may suggest inboxes; they are created only if you agree.
+
+The trigger line (`Deckhand`) or `/mode work` confirms: a work run on the issue's branch
+writes only the agreed files and marks its pull request ready. The listener then reads the
+branch's `.deckhand.yaml` as it would on the default branch, checks that the files it names
+are there, and adds its errors and warnings to the reply, so a broken config isn't merged by
+mistake.
+
+`/mode onboarding` on any issue starts the same conversation. Its prompt is
+`prompts/onboarding.md`, followed by this page.
+
 ## Example
 
 ```yaml
@@ -188,8 +206,8 @@ checks to run.
 
 ## Modes
 
-A run is in a mode: **work** (implement, the default) or **brainstorm** (discuss, no code),
-or one of the repository's own, declared under `modes:`. A `/mode <name>` line in a comment
+A run is in a mode: **work** (implement, the default), **brainstorm** (discuss, no code),
+**onboarding** (propose this file, see [Onboarding](#onboarding)), or one of the repository's own, declared under `modes:`. A `/mode <name>` line in a comment
 picks one, on its own line or after the trigger on the first one (`Deckhand /mode review`;
 `/mode` is never read as `/model`; names are not case-sensitive):
 
@@ -221,8 +239,8 @@ error, listed in the reply:
 | `effort`       | `effort`, or `brainstorm_effort` if light | its thinking effort                                                          |
 
 - **Names**: letters, digits, `-` and `_`. `work` and `brainstorm` can't be redefined (set
-  their model with `model`/`effort` and `brainstorm_model`/`brainstorm_effort`); `stop`,
-  `idea`, `bug` and `discussion` are reserved.
+  their model with `model`/`effort` and `brainstorm_model`/`brainstorm_effort`);
+  `onboarding`, `stop`, `idea`, `bug` and `discussion` are reserved.
 - **Prompt**: the generic sandbox instructions (`prompts/sandbox.md`, and the repo's
   `instructions`) as for every run, then a short frame (the issue or pull request to read,
   what the mode may do) and the mode's file.

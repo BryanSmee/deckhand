@@ -34,6 +34,14 @@
 // token only reads), a fresh one starts a new session each time. Comments without a trigger
 // or "/mode" line go on in the issue's current mode (modes.json).
 //
+// Installing the App on a repo without a .deckhand.yaml (an `installation` or
+// `installation_repositories` delivery, sent to every App) opens an onboarding issue there
+// (onboarding.mjs) and starts the "onboarding" mode on it: a light conversation like a
+// brainstorm, with a read-only token, where Claude proposes the file
+// (../prompts/onboarding.md). Comments go on in it; the trigger line or "/mode work" opens the
+// pull request, and the reply says what the listener makes of the branch's config.
+// "/mode onboarding" starts it on any issue.
+//
 // A run that stops to ask (its final message starts with "<!-- needs-input -->", see
 // ../prompts/sandbox.md) shows as "needs-input" on the dashboard and labels the issue or PR
 // NEEDS_INPUT_LABEL (default needs-input) until the next run starts.
@@ -104,7 +112,7 @@ import { createBroker } from "./broker.mjs";
 import { checkout } from "./checkout.mjs";
 import { ConfigError, loadConfig } from "./config.mjs";
 import { docker } from "./docker.mjs";
-import { matchHost, proxyEnv, runHosts } from "./egress.mjs";
+import { mandatoryHosts, matchHost, proxyEnv, runHosts } from "./egress.mjs";
 import { MARKER, previewEvent, takeOptions, verified, workItem } from "./events.mjs";
 import {
   createGitHubApp,
@@ -115,6 +123,13 @@ import {
 } from "./github-app.mjs";
 import { grantFor, hardeningArgs, loadGrants, mountArgs, resolveMounts } from "./grants.mjs";
 import { createImages, imageRef } from "./images.mjs";
+import {
+  branchConfigReport,
+  createOnboarding,
+  createOnboardingStore,
+  onboardingTargets,
+  triggerWord,
+} from "./onboarding.mjs";
 import { createPreviews } from "./previews.mjs";
 import {
   CONFIG_FILE,
@@ -374,6 +389,9 @@ const repoFile = (repo, path, ref) => readRepoFile(github, repo, path, ref);
 const fetchCheckout = (repo, ref) => checkout(github, repo, ref);
 
 const images = createImages({ config, docker, readFile: repoFile, checkout: fetchCheckout, log });
+// The repos onboarded so far (onboarding.json) and their onboarding issues (onboarding.mjs).
+const onboarded = createOnboardingStore(join(config.dataDir, "onboarding.json"));
+const onboarding = createOnboarding({ request: github, store: onboarded, config, log });
 const previews = createPreviews({
   config,
   docker,
@@ -407,6 +425,33 @@ async function admit(first, event, payload) {
   item.base = first.base;
   item.settings = settings;
   await accept(item);
+}
+
+// An installation delivery: an onboarding issue per repo that needs one, each starting an
+// onboarding run, as a "/mode onboarding" comment on it would.
+async function onboard(repos, sender) {
+  for (const repo of repos) {
+    const issue = await onboarding.open(repo, sender).catch((error) => {
+      log(`  onboarding ${repo}: ${error.stack ?? error}`);
+      return null;
+    });
+    if (!issue) continue;
+    const { settings } = await repoSettings(repo, issue.base);
+    await accept({
+      repo,
+      id: String(issue.number),
+      kind: "issue",
+      number: issue.number,
+      title: issue.title,
+      trigger: null,
+      modeLine: "onboarding",
+      text: "",
+      replyTo: issue.number,
+      comment: null,
+      base: issue.base,
+      settings,
+    });
+  }
 }
 
 async function previewHook({ repo, base, event }, payload) {
@@ -487,8 +532,10 @@ async function modeOf(item, key, name) {
       await unknownMode(item, `Unknown mode \`${item.modeLine}\`.`);
       return null;
     }
-    // Without a trigger line, a switch: the conversation so far carries over.
-    if (!item.trigger && !b && !issueModes.has(key) && !tasks.has(key)) {
+    // Without a trigger line, a switch: the conversation so far carries over. Onboarding
+    // starts its own.
+    const starts = item.modeLine === "onboarding";
+    if (!item.trigger && !starts && !b && !issueModes.has(key) && !tasks.has(key)) {
       if (!(await runner.hasSession(name)))
         return skip(`#${item.replyTo} has no Claude session and no trigger line`);
     }
@@ -498,12 +545,26 @@ async function modeOf(item, key, name) {
   const current = issueModes.get(key);
   const talks = b && item.replyTo === item.number && b.status !== "stopped";
   if (!wanted && item.trigger !== "stop" && current && !talks) {
+    if (current === "onboarding") return current;
     if (!customMode(item.settings, current)) {
       // Gone from the config: don't guess what to run instead (work could push).
       await unknownMode(item, `The mode \`${current}\` is no longer in \`${CONFIG_FILE}\`.`);
       return null;
     }
     return current;
+  }
+  if (wanted === "onboarding") {
+    // Like a brainstorm, kept in modes.json: comments go on in it until the trigger line.
+    if (b) {
+      clearTimeout(b.timer);
+      brainstorms.delete(key);
+      saveBrainstorms();
+    }
+    setIssueMode(key, "onboarding");
+    // Its work run gets the onboarding prompt and the config check (finish()); no
+    // automatic issue for the repo any more.
+    if (!onboarded.isIssue(item.repo, item.number)) onboarded.record(item.repo, item.number);
+    return wanted;
   }
   const own = customMode(item.settings, wanted);
   if (wanted === "work" || (own && !own.fresh)) {
@@ -563,16 +624,16 @@ async function unknownMode(item, what) {
 }
 
 // Runs that read the code and answer, without a branch or the repo's setup: brainstorms (and
-// their wrap-up), inbox entries and discussions.
+// their wrap-up), onboarding, inbox entries and discussions.
 const INBOX = new Set(["idea", "bug", "discussion"]);
-const LIGHT = new Set(["brainstorm", "stop", ...INBOX]);
+const LIGHT = new Set(["brainstorm", "stop", "onboarding", ...INBOX]);
 
 // Each inbox entry starts a fresh session (the inbox issue collects unrelated entries); a
 // discussion keeps its own, like a brainstorm.
 const FRESH = new Set(["idea", "bug"]);
 
 // Any other mode is one of the repo's own.
-const BUILT_IN = new Set(["work", "brainstorm", "stop", ...INBOX]);
+const BUILT_IN = new Set(["work", "brainstorm", "stop", "onboarding", ...INBOX]);
 
 // The repo's own modes (its config's `modes:`, customMode()) add theirs to both.
 function isLight(task, mode) {
@@ -657,6 +718,9 @@ function liveMessage(mode, text) {
     return `Another entry arrived on the inbox while you were working:\n\n${text}\n\nHandle it like the others, as its own entry. ${reply}`;
   }
   if (mode === "discussion") return `New comment in the discussion:\n\n${text}\n\n${reply}`;
+  if (mode === "onboarding") {
+    return `New comment on the issue: ${text}\n\n(Still onboarding: no code, branch, commit, pull request or new issue. ${reply})`;
+  }
   return `New comment on this issue while you are working:\n\n${text}\n\nTake it into account from here on. ${reply}`;
 }
 
@@ -742,6 +806,9 @@ function setIssueMode(key, mode) {
 
 const instructions = (name) => readFileSync(new URL(`../prompts/${name}`, import.meta.url), "utf8");
 const brainstormInstructions = instructions("brainstorm.md");
+const onboardingInstructions = instructions("onboarding.md");
+// The config's reference, in the image next to the prompts so the two can't drift apart.
+const configReference = readFileSync(new URL("../docs/repo-config.md", import.meta.url), "utf8");
 const inboxInstructions = {
   idea: instructions("idea.md"),
   bug: instructions("bug.md"),
@@ -782,6 +849,55 @@ function brainstormPrompt(task) {
 \`gh issue view ${task.number} --comments\`.
 
 ${brainstormInstructions}`;
+}
+
+// Onboarding: its instructions, what this Deckhand allows the repo (a config can only narrow
+// it, the operator's grants widen it), and the config's reference.
+function onboardingPrompt(task, settings) {
+  const { repo, number } = task;
+  const grant = grantFor(loadGrants(config), config, repo);
+  const none = (items) => (items.length ? items.map((i) => `\`${i}\``).join(", ") : "none");
+  const roots = grant.mounts.map((m) => `${m.root}${m.readOnly === false ? " (read-write)" : ""}`);
+  return `Onboard ${repo} with the maintainer, on GitHub issue #${number}. Read it with
+\`gh issue view ${number} --comments\`.
+
+${onboardingInstructions}
+
+## This Deckhand
+
+- Trigger (confirms the proposal, alone on the first line of a comment): \`${triggerWord(settings.trigger)}\`
+- Users who may start runs (\`ALLOWED_USERS\`; \`users\` can only narrow it): ${none(config.users)}
+- Hosts every sandbox reaches: ${none(mandatoryHosts(config))}, and the operator's \`ALLOWED_HOSTS\`: ${none(config.hosts)}
+- Hosts the operator grants this repository: ${none(grant.hosts)}
+- Host mount roots granted to this repository: ${roots.length ? none(roots) : "none: a \`mounts\` entry would be refused until the operator grants a root"}
+- Models: work \`${settings.model}\` (${settings.effort} effort), brainstorms \`${settings.brainstormModel}\` (${settings.brainstormEffort})
+
+## Reference: \`.deckhand.yaml\` (docs/repo-config.md)
+
+${configReference}`;
+}
+
+// The run the trigger line starts on an onboarding issue: the agreed files, nothing else.
+function onboardingWorkPrompt(task) {
+  const n = task.number;
+  const base = task.base || "main";
+  return `The maintainer confirmed the onboarding proposal on GitHub issue #${n} of ${task.repo}
+(\`gh issue view ${n} --comments\` has the conversation). Open the pull request:
+1. The sandbox has already checked out the issue's branch, pushed it and opened a draft pull
+   request (\`Closes #${n}\`; \`gh pr view\` shows it). If you are still on ${base}, create a
+   branch from ${base} named \`issue-${n}-deckhand-config\` and push it.
+2. If the maintainer agreed to inbox issues, create them now (\`gh issue create\`) and put
+   their numbers in \`inbox\`. Create none they didn't agree to.
+3. Write only the agreed files (\`.deckhand.yaml\`, and the Dockerfile and instructions file
+   if they were part of it), exactly as last proposed with the changes agreed since. Change
+   nothing else in the repository.
+4. Commit, push, then update the pull request with \`gh pr edit\`: title "Set up Deckhand", a
+   description with \`Closes #${n}\` and a line per file, and mark it ready with
+   \`gh pr ready\`.
+Never push to ${base}. The listener checks the branch's \`.deckhand.yaml\` once you are done
+and adds the result to your reply.
+Don't post comments on GitHub yourself: your final message is posted for you as a reply, so
+end with a short summary (the pull request link, the files, the inbox issues created).`;
 }
 
 // What Claude reads for a brainstorm run, besides the comments themselves.
@@ -872,10 +988,12 @@ async function modeInstructions(task, own) {
 
 // --- Runs ----------------------------------------------------------------------------------
 
-// A discussion run answers through GraphQL: its token needs Discussions too. A light run in
-// one of the repo's own modes only comments: its token only reads.
+// A discussion run answers through GraphQL: its token needs Discussions too. Onboarding and
+// a light run in one of the repo's own modes only comment: their token only reads.
 function permissionsFor(mode, light) {
   if (mode === "discussion") return DISCUSSION_PERMISSIONS;
+  // Onboarding proposes: nothing is pushed or created before the trigger line.
+  if (mode === "onboarding") return READ_ONLY_PERMISSIONS;
   return light && !LIGHT.has(mode) ? READ_ONLY_PERMISSIONS : undefined;
 }
 
@@ -1034,9 +1152,13 @@ async function start(task, items) {
     ? brainstormPrompt(task)
     : INBOX.has(mode)
       ? inboxPrompt(task, mode, text)
-      : own
-        ? modePrompt(task, own, ownInstructions)
-        : initialPrompt(task);
+      : mode === "onboarding"
+        ? onboardingPrompt(task, settings)
+        : own
+          ? modePrompt(task, own, ownInstructions)
+          : onboardingWork(task)
+            ? onboardingWorkPrompt(task)
+            : initialPrompt(task);
   await runner.start(sandboxSpec(task, prompt, message, { ...prepared, ...access }));
   // Written before Claude starts (setup takes a while), a message waits in the inbox.
   live.open = true;
@@ -1268,9 +1390,11 @@ async function finish(task, error) {
           ? " · 💬 brainstorm: reply to continue, `/stop` to wrap up"
           : mode === "discussion"
             ? " · 💬 reply in this discussion to continue"
-            : !BUILT_IN.has(mode) && !isFresh(task, mode)
-              ? ` · ${mode} mode: replies go on in it, \`/mode work\` switches`
-              : "";
+            : mode === "onboarding"
+              ? ` · 💬 onboarding: reply to change the proposal, \`${triggerWord(task.settings?.trigger ?? config.trigger)}\` opens the pull request`
+              : !BUILT_IN.has(mode) && !isFresh(task, mode)
+                ? ` · ${mode} mode: replies go on in it, \`/mode work\` switches`
+                : "";
     const later = Object.entries(live.later)
       .map(([k, v]) => `\`/${k} ${v}\``)
       .join(" ");
@@ -1279,9 +1403,10 @@ async function finish(task, error) {
     const status = outcome(result);
     // Once: a listener restarting from here on doesn't post it again.
     if (!live.replied) {
+      const check = status !== "error" && mode === "work" ? await configCheck(task) : null;
       const text =
         status !== "error"
-          ? `${result.result}\n\n${footer}`
+          ? `${result.result}\n\n${check ? `${check}\n\n` : ""}${footer}`
           : `Claude stopped with an error.\n\n> ${result?.result ?? "No result: see the listener logs."}\n\n${footer}`;
       await answer(target(live.replyTo), text);
       live.replied = true;
@@ -1324,6 +1449,22 @@ async function finish(task, error) {
     // Comments the run could not take go out together, after the usual pause.
     if (task.pending.length) startLater(task);
     schedule();
+  }
+}
+
+// A work run on an onboarding issue proposes a config for merging: what the listener makes of
+// its branch's .deckhand.yaml goes with the reply.
+function onboardingWork(task) {
+  return task.kind === "issue" && onboarded.isIssue(task.repo, task.number);
+}
+
+async function configCheck(task) {
+  if (!onboardingWork(task)) return null;
+  try {
+    return await branchConfigReport(github, config, task.repo, task.number);
+  } catch (error) {
+    log(`${task.repo}#${task.id}: checking the branch's config: ${error.stack ?? error}`);
+    return `⚠️ The listener couldn't check the branch's \`${CONFIG_FILE}\`: ${error.message}`;
   }
 }
 
@@ -1886,6 +2027,16 @@ function webhook(req, res) {
     const event = req.headers["x-github-event"];
     log(`Delivery: ${event} ${payload.action ?? ""} from ${payload.sender?.login ?? "?"}`);
     app.remember(payload.repository?.full_name, payload.installation?.id);
+    if (event === "installation" || event === "installation_repositories") {
+      const added = [...(payload.repositories ?? []), ...(payload.repositories_added ?? [])];
+      for (const r of added) app.remember(r.full_name, payload.installation?.id);
+      const repos = onboardingTargets(config, event, payload, skip);
+      if (!repos.length) return;
+      const started = onboard(repos, payload.sender.login).catch((e) => log(e.stack ?? e));
+      admitting.add(started);
+      started.finally(() => admitting.delete(started));
+      return;
+    }
     const preview = previewEvent(config, event, payload, skip);
     if (preview) {
       previewHook(preview, payload).catch((error) => log(error.stack ?? error));
