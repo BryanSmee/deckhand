@@ -1,5 +1,7 @@
 // The operator's settings, from the environment. Names of images, volumes and networks come
-// from here so nothing in the listener is tied to one deployment.
+// from here so nothing in the listener is tied to one deployment. What the operator grants
+// one repo (hosts, mounts, limits) is in its grants file instead (grants.mjs).
+import { hostProblem } from "./egress.mjs";
 
 export class ConfigError extends Error {}
 
@@ -20,6 +22,31 @@ export function normalize(line) {
     .trim();
 }
 
+// A sandbox's CPU, memory and pids limits: { cpus: "2", memory: "4g", pids: 2048 } → the
+// same, checked, or a ConfigError naming the key with `label`. Missing keys keep `base`'s.
+export function parseLimits(value, base, label) {
+  const limits = { ...base };
+  for (const [key, raw] of Object.entries(value ?? {})) {
+    const text = String(raw ?? "")
+      .trim()
+      .toLowerCase();
+    if (key === "cpus" && /^\d+(\.\d+)?$/.test(text) && Number(text) > 0) limits.cpus = text;
+    else if (key === "memory" && /^\d+[kmg]?$/.test(text) && parseInt(text) > 0)
+      limits.memory = text;
+    else if (key === "pids" && /^\d+$/.test(text) && Number(text) > 0) limits.pids = Number(text);
+    else if (["cpus", "memory", "pids"].includes(key)) {
+      throw new ConfigError(`${label(key)}: expected ${LIMIT_FORMAT[key]}, got ${raw}`);
+    } else throw new ConfigError(`${label(key)}: unknown (cpus, memory or pids)`);
+  }
+  return limits;
+}
+
+const LIMIT_FORMAT = {
+  cpus: "a number of CPUs (2, 0.5)",
+  memory: "an amount (512m, 4g)",
+  pids: "a whole number",
+};
+
 export function loadConfig(env) {
   // Fail closed: the sandbox runs without permission prompts and can push, so nobody may
   // trigger it until the operator names who can.
@@ -29,6 +56,10 @@ export function loadConfig(env) {
   }
   const port = Number(env.PORT ?? 8080);
   const prefix = env.NAME_PREFIX || "deckhand";
+  // Hosts every sandbox may reach, besides the mandatory ones (egress.mjs).
+  const hosts = list(env.ALLOWED_HOSTS);
+  const badHost = hosts.find(hostProblem);
+  if (badHost) throw new ConfigError(`ALLOWED_HOSTS: ${badHost}: ${hostProblem(badHost)}`);
   return {
     port,
     // Internal only: sandboxes ask it for tokens. Not published by compose.yaml.
@@ -51,6 +82,23 @@ export function loadConfig(env) {
     claudeCodeVolume: env.CLAUDE_CODE_VOLUME || `${prefix}-claude-code`,
     claudeCodeVersion: env.CLAUDE_CODE_VERSION || "2.1.300",
     maxParallel: Number(env.MAX_PARALLEL ?? 2),
+    hosts,
+    // Per sandbox; a repo's grants may set its own.
+    limits: parseLimits(
+      {
+        cpus: env.SANDBOX_CPUS || "2",
+        memory: env.SANDBOX_MEMORY || "4g",
+        pids: env.SANDBOX_PIDS || "2048",
+      },
+      {},
+      (key) => `SANDBOX_${key.toUpperCase()}`,
+    ),
+    // The only way out of the sandboxes' network (../proxy/proxy.mjs).
+    egressProxy: (env.EGRESS_PROXY || "http://egress:3128").replace(/\/$/, ""),
+    // What the operator grants each repo: hosts, host mounts, limits (grants.mjs).
+    grantsFile: env.GRANTS_FILE || "/etc/deckhand/grants.yaml",
+    // Claude Code's install container downloads from npm, outside the sandboxes' network.
+    installNetwork: env.INSTALL_NETWORK || "bridge",
     // The host's Docker socket, as preview hooks mount it.
     dockerSocket: env.DOCKER_SOCKET || "/var/run/docker.sock",
     // Batches the comments of one review (each arrives as its own webhook) into one run.

@@ -61,27 +61,41 @@ preview:
 
 ## Keys
 
-| Key                                     | Default                                            | What                                                                                      |
-| --------------------------------------- | -------------------------------------------------- | ----------------------------------------------------------------------------------------- |
-| `users`                                 | `ALLOWED_USERS`                                    | GitHub logins that may start runs here; those not in `ALLOWED_USERS` are ignored          |
-| `triggers.work`, `.brainstorm`, `.stop` | `TRIGGER`, `BRAINSTORM_TRIGGER`, `BRAINSTORM_STOP` | trigger lines                                                                             |
-| `model`, `effort`                       | `SANDBOX_MODEL`, `SANDBOX_EFFORT`                  | work runs' model and thinking effort (`low`, `medium`, `high`, `xhigh`, `max`)            |
-| `brainstorm_model`, `brainstorm_effort` | `BRAINSTORM_MODEL`, `BRAINSTORM_EFFORT`            | the same for brainstorms                                                                  |
-| `max_parallel`                          | `MAX_PARALLEL`                                     | runs of this repo at once; capped by `MAX_PARALLEL`                                       |
-| `setup`                                 | none                                               | shell command run in `/workspace` before Claude, on work runs                             |
-| `instructions`                          | none                                               | Markdown file of the repo, appended to Claude's instructions                              |
-| `dockerfile`                            | none: the base image                               | Dockerfile of the repo for its runs' image                                                |
-| `allow_branch_docker_images`            | `false`                                            | runs on a pull request use the Dockerfile of its branch; never for forks                  |
-| `caches`                                | none                                               | absolute paths in the sandbox kept in a volume per repo and path                          |
-| `hosts`                                 | none                                               | extra hosts the sandbox may reach (`name`, `*.domain`, `*`), for the egress proxy (#3)    |
-| `mounts`                                | none                                               | host paths requested (`- path: /nfs/work/api`, `read_only`); granted by the operator (#3) |
-| `inbox`                                 | none                                               | issue numbers collecting `ideas`, `bugs` and `discussions` (#5)                           |
-| `preview.command`                       | none                                               | preview hook command (a plain string `preview: ./x.sh` works too)                         |
-| `preview.image`                         | the repo's image                                   | image the hook runs in; it needs a Docker client                                          |
-| `preview.timeout_minutes`               | `30`                                               | the hook is stopped after that                                                            |
+| Key                                     | Default                                            | What                                                                                     |
+| --------------------------------------- | -------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| `users`                                 | `ALLOWED_USERS`                                    | GitHub logins that may start runs here; those not in `ALLOWED_USERS` are ignored         |
+| `triggers.work`, `.brainstorm`, `.stop` | `TRIGGER`, `BRAINSTORM_TRIGGER`, `BRAINSTORM_STOP` | trigger lines                                                                            |
+| `model`, `effort`                       | `SANDBOX_MODEL`, `SANDBOX_EFFORT`                  | work runs' model and thinking effort (`low`, `medium`, `high`, `xhigh`, `max`)           |
+| `brainstorm_model`, `brainstorm_effort` | `BRAINSTORM_MODEL`, `BRAINSTORM_EFFORT`            | the same for brainstorms                                                                 |
+| `max_parallel`                          | `MAX_PARALLEL`                                     | runs of this repo at once; capped by `MAX_PARALLEL`                                      |
+| `setup`                                 | none                                               | shell command run in `/workspace` before Claude, on work runs                            |
+| `instructions`                          | none                                               | Markdown file of the repo, appended to Claude's instructions                             |
+| `dockerfile`                            | none: the base image                               | Dockerfile of the repo for its runs' image                                               |
+| `allow_branch_docker_images`            | `false`                                            | runs on a pull request use the Dockerfile of its branch; never for forks                 |
+| `caches`                                | none                                               | absolute paths in the sandbox kept in a volume per repo and path                         |
+| `hosts`                                 | none                                               | extra hosts the sandbox may reach through the egress proxy (`name`, `"*.domain"`, `"*"`) |
+| `mounts`                                | none                                               | host paths requested (`- path: /nfs/work/api`, `read_only`); only under granted roots    |
+| `inbox`                                 | none                                               | issue numbers collecting `ideas`, `bugs` and `discussions` (#5)                          |
+| `preview.command`                       | none                                               | preview hook command (a plain string `preview: ./x.sh` works too)                        |
+| `preview.image`                         | the repo's image                                   | image the hook runs in; it needs a Docker client                                         |
+| `preview.timeout_minutes`               | `30`                                               | the hook is stopped after that                                                           |
 
-`hosts`, `mounts` and `inbox` are read and checked now; the egress proxy and mount rules
-(#3) and inbox prompts (#5) use them. Until then a mount request grants nothing.
+`inbox` is read and checked now; the inbox prompts (#5) will use it.
+
+## Network and mounts
+
+Sandboxes reach the outside through an egress proxy only: Anthropic's API, GitHub, the
+operator's `ALLOWED_HOSTS` and what the operator grants the repository, plus the repo's
+`hosts`. Anything else is refused with a `403` saying so. Quote patterns that start with
+`*`: YAML reads a bare `*` as an alias.
+
+```yaml
+hosts: [registry.npmjs.org, "*.pythonhosted.org", pypi.org]
+```
+
+A `mounts` entry is only a request: it is mounted when the operator grants the repository a
+root holding it, after resolving `..` and symlinks. Otherwise the run stops and the reply
+says which path was refused and why. See [Security model](security.md).
 
 ### YAML
 
@@ -101,7 +115,8 @@ Every run starts from an image:
   `CLAUDE_CODE_VERSION` in a short container of its own, into the shared
   `deckhand-claude-code` volume; later runs reuse it.
 - **The repo's image**, when `dockerfile` is set: built `FROM` the base image, by the
-  listener, from the default branch. Name the base with a build argument, so the
+  listener, from the default branch, with normal network access (not through the egress
+  proxy: install the toolchain there rather than in `setup`). Name the base with a build argument, so the
   operator's image name isn't written in the repo:
 
   ```dockerfile

@@ -126,8 +126,10 @@ export function createImages({
         [
           "run",
           "--rm",
+          // npm's registry, outside the sandboxes' network: no repo or Claude input runs here.
           "--network",
-          config.network,
+          config.installNetwork,
+          ...["--cap-drop", "ALL", "--security-opt", "no-new-privileges"],
           "-e",
           `CLAUDE_CODE_VERSION=${version}`,
           "-v",
@@ -182,6 +184,8 @@ export function createImages({
       "none",
       "--user",
       "0",
+      // Root for chown, and nothing else.
+      ...["--cap-drop", "ALL", "--cap-add", "CHOWN", "--security-opt", "no-new-privileges"],
       "--entrypoint",
       "chown",
       "-v",

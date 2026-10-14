@@ -53,6 +53,12 @@
 // workflow_run deliveries (previews.mjs). A config with errors stops runs, and the reply
 // says why.
 //
+// Sandboxes run with no capabilities, no-new-privileges and CPU, memory and pids limits, on
+// an internal network (checked before each run) whose only way out is the egress proxy
+// (../proxy/proxy.mjs): it asks the broker's port, for each connection, whether the sandbox
+// at that address may reach that host (egress.mjs). Host mounts only happen under roots the
+// operator grants the repo (grants.mjs, GRANTS_FILE). See ../docs/security.md.
+//
 // Only comments from ALLOWED_USERS, on repos where the App is installed (narrowed by
 // ALLOWED_REPOS if set), are acted on: the sandbox runs without permission prompts and can
 // push. No dependencies: node:http, node:crypto, docker CLI.
@@ -73,14 +79,17 @@ import {
   writeFileSync,
   rmSync,
 } from "node:fs";
+import { lookup } from "node:dns/promises";
 import { createServer } from "node:http";
 import { join } from "node:path";
 import { createBroker } from "./broker.mjs";
 import { checkout } from "./checkout.mjs";
 import { ConfigError, loadConfig } from "./config.mjs";
 import { docker } from "./docker.mjs";
+import { matchHost, proxyEnv, runHosts } from "./egress.mjs";
 import { MARKER, previewEvent, takeOptions, verified, workItem } from "./events.mjs";
 import { createGitHubApp, loadCredentials, saveCredentials } from "./github-app.mjs";
+import { grantFor, hardeningArgs, loadGrants, mountArgs, resolveMounts } from "./grants.mjs";
 import { createImages, imageRef } from "./images.mjs";
 import { createPreviews } from "./previews.mjs";
 import {
@@ -96,6 +105,8 @@ const env = process.env;
 let config;
 try {
   config = loadConfig(env);
+  // Read again at each run; a broken file at start is the operator's to fix now.
+  loadGrants(config);
 } catch (error) {
   if (!(error instanceof ConfigError)) throw error;
   console.error(error.message);
@@ -632,6 +643,7 @@ async function run(task) {
       );
     if (errors.length) throw new RunError(configErrors(task.base, errors));
     for (const warning of warnings) note(`${CONFIG_FILE}: ${warning}`);
+    const access = grantedAccess(task.repo, settings, note);
     const prepared = await prepare(task, items, settings, record, note, logFile);
 
     // A fresh, unguessable folder per run: its screenshots are public once linked on GitHub.
@@ -643,6 +655,9 @@ async function run(task) {
       key,
       mode,
       open: false,
+      // What the egress proxy lets it reach (egressAnswer()), and its address once known.
+      hosts: access.hosts,
+      ip: null,
       logFile,
       record,
       replyTo,
@@ -651,7 +666,10 @@ async function run(task) {
       handled: [], // every comment delivered to it, for their reactions
     };
     const prompt = talk ? brainstormPrompt(task) : initialPrompt(task);
-    const result = await sandbox(task, prompt, message, logFile, shots, record, secret, prepared);
+    const result = await sandbox(task, prompt, message, logFile, shots, record, secret, {
+      ...prepared,
+      ...access,
+    });
     const live = task.live;
     task.live = null;
     handled.push(...(live?.handled ?? []));
@@ -723,12 +741,59 @@ async function run(task) {
   }
 }
 
+// What the operator grants the repo, with its config's requests: the hosts its sandbox may
+// reach, its host mounts (refused ones stop the run, and the reply lists them) and limits.
+function grantedAccess(repo, settings, note) {
+  let grant;
+  try {
+    grant = grantFor(loadGrants(config), config, repo);
+  } catch (error) {
+    log(`${repo}: ${error.message}`);
+    throw new RunError(
+      "Claude can't run here: the operator's grants file has errors (see the listener's logs).",
+    );
+  }
+  const { mounts, refused, notes } = resolveMounts(settings.mounts, grant, {
+    caches: settings.caches,
+  });
+  if (refused.length) {
+    throw new RunError(
+      `Claude can't run here: host mounts requested by \`${CONFIG_FILE}\` are refused.\n\n${refused.map((r) => `- ${r}`).join("\n")}\n\nOnly paths under a root the operator grants this repository can be mounted.`,
+    );
+  }
+  for (const text of notes) note(text);
+  for (const m of mounts) note(`Host mount ${m.target}${m.readOnly ? " (read-only)" : ""}`);
+  return { hosts: runHosts(config, grant, settings), mounts, limits: grant.limits };
+}
+
+// Sandboxes reach the outside through the egress proxy only: their network must have no
+// route out. Checked until it passes once, so a fixed network needs no restart.
+let internalNetwork = false;
+
+async function checkNetwork() {
+  if (internalNetwork) return;
+  const { code, out } = await docker([
+    "network",
+    "inspect",
+    "--format",
+    "{{.Internal}}",
+    config.network,
+  ]);
+  if (code !== 0 || out !== "true") {
+    throw new Error(
+      `the sandboxes' network ${config.network} is ${code === 0 ? "not internal" : "missing"}: sandboxes would bypass the egress proxy (see docs/security.md)`,
+    );
+  }
+  internalNetwork = true;
+}
+
 // The run's image (built first if the repo's Dockerfile changed), Claude Code and the repo's
 // cache volumes. While an image builds, the dashboard shows the run as "building image".
 async function prepare(task, items, settings, record, note, logFile) {
   const base = task.base || "main";
   const output = (chunk) => logFile.write(chunk);
   try {
+    await checkNetwork();
     // A comment on a pull request may run on the image of its own branch (imageRef()).
     const pr = items.at(-1).replyTo;
     let source = { ref: base, branch: false };
@@ -777,7 +842,7 @@ function sandbox(
   shots,
   { kind, model, effort },
   secret,
-  { image, cacheArgs, settings },
+  { image, cacheArgs, settings, mounts, limits },
 ) {
   const talk = kind === "brainstorm";
   const live = task.live;
@@ -794,6 +859,7 @@ function sandbox(
     `deckhand.task=${task.repo}#${task.id}`,
     "--network",
     config.network,
+    ...hardeningArgs(limits),
     // Values come from the environment below, so they never show in `ps`.
     ...[
       "CLAUDE_CODE_OAUTH_TOKEN",
@@ -816,13 +882,16 @@ function sandbox(
       "SANDBOX_INSTRUCTIONS",
       "SANDBOX_MODEL",
       "SANDBOX_EFFORT",
+      ...Object.keys(proxyEnv(config)),
     ].flatMap((k) => ["-e", k]),
     ...["-e", "TASK_INPUT=stream", "-e", "TASK_OUTPUT=json"],
     "-e",
-    `SCREENSHOT_DIR=/screenshots/${shots}`,
+    "SCREENSHOT_DIR=/screenshots",
     "-e",
     `SCREENSHOT_URL=${publicUrl()}/shots/${shots}`,
-    ...["-v", `${config.shotsVolume}:/screenshots`],
+    // Its own folder of the screenshots volume only: no run sees another's.
+    "--mount",
+    `type=volume,src=${config.shotsVolume},dst=/screenshots,volume-subpath=${shots}`,
     // Claude Code, installed by the first run that needs this version (../sandbox/entrypoint.sh).
     ...["-v", `${config.claudeCodeVolume}:/opt/claude-code`],
     // The issue's clone and Claude session, kept between its runs.
@@ -830,6 +899,8 @@ function sandbox(
     ...["-v", `${n}-claude:/home/node/.claude`],
     // The repo's caches (its config's `caches`), one volume per path, kept across its runs.
     ...cacheArgs,
+    // Host paths the operator grants the repo and its config asks for (grantedAccess()).
+    ...mountArgs(mounts),
     image,
   ];
   // Only what is named in `args` reaches the container. The App's credentials are not in
@@ -858,6 +929,7 @@ function sandbox(
     SANDBOX_INSTRUCTIONS: settings.instructions ?? "",
     SANDBOX_MODEL: model,
     SANDBOX_EFFORT: effort,
+    ...proxyEnv(config),
   };
   return new Promise((resolve) => {
     const child = spawn("docker", args, {
@@ -1340,8 +1412,62 @@ createServer((req, res) => {
   res.end();
 }).listen(config.port, () => log(`Listening on :${config.port}`));
 
-// Sandboxes only: compose.yaml doesn't publish this port.
+// --- Egress: the proxy asks, for each connection, whether a sandbox may reach a host ------
+
+// The running task whose sandbox has this address on the sandboxes' network. Addresses are
+// looked up once per run, the first time its sandbox connects.
+async function taskAt(ip) {
+  for (const task of tasks.values()) {
+    const live = task.live;
+    if (!live?.hosts) continue;
+    if (!live.ip) {
+      const { code, out } = await docker([
+        "inspect",
+        "--format",
+        "{{json .NetworkSettings.Networks}}",
+        task.name,
+      ]);
+      const net = code === 0 ? parse(out)?.[config.network] : null;
+      if (net?.IPAddress) live.ip = [net.IPAddress, net.GlobalIPv6Address].filter(Boolean);
+    }
+    if (task.live === live && live.ip?.includes(ip)) return task;
+  }
+  return null;
+}
+
+// Only the proxy may ask: it is the one that knows the connection's source address.
+async function fromProxy(req) {
+  const caller = req.socket.remoteAddress.replace(/^::ffff:/, "");
+  const host = new URL(config.egressProxy).hostname;
+  try {
+    return (await lookup(host, { all: true })).some((a) => a.address === caller);
+  } catch {
+    return false;
+  }
+}
+
+async function egressAnswer(req, res) {
+  const url = new URL(req.url, "http://broker");
+  const ip = url.searchParams.get("ip") ?? "";
+  const host = url.searchParams.get("host") ?? "";
+  if (!(await fromProxy(req))) {
+    res.writeHead(403, { "content-type": "application/json" });
+    return res.end(JSON.stringify({ allowed: false }));
+  }
+  const task = await taskAt(ip);
+  const match = task ? matchHost(host, task.live.hosts) : null;
+  if (!match) log(`Egress: refused ${host} for ${task ? `${task.repo}#${task.id}` : ip}`);
+  sendJson(res, { allowed: !!match, private: !!match && match !== "any" });
+}
+
+// Sandboxes and the egress proxy only: compose.yaml doesn't publish this port.
 createServer((req, res) => {
+  if (req.method === "GET" && req.url.startsWith("/egress?")) {
+    return egressAnswer(req, res).catch((error) => {
+      log(`Egress: ${error.stack ?? error}`);
+      if (!res.headersSent) res.writeHead(500).end();
+    });
+  }
   broker.handle(req, res).catch((error) => {
     log(`Broker: ${error.stack ?? error}`);
     if (!res.headersSent) res.writeHead(500).end();

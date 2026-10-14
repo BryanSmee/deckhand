@@ -155,6 +155,8 @@ test("Claude Code installs once per version, in a container of its own", async (
     installs[0],
     /-e CLAUDE_CODE_VERSION=9\.9\.9 -v deckhand-claude-code:\/opt\/claude-code/,
   );
+  // npm's registry is outside the sandboxes' internal network.
+  assert.match(installs[0], /^run --rm --network bridge --cap-drop ALL /);
 });
 
 test("cache volumes: created once per repo and path, owned by the sandbox's user", async () => {
@@ -166,7 +168,7 @@ test("cache volumes: created once per repo and path, owned by the sandbox's user
   assert.equal(calls.filter((c) => c.startsWith("volume create")).length, 1);
   assert.match(
     calls.find((c) => c.includes("chown")),
-    /--user 0 --entrypoint chown -v \S+:\/home\/node\/\.npm img:1 1000:1000/,
+    /--user 0 --cap-drop ALL --cap-add CHOWN --security-opt no-new-privileges --entrypoint chown -v \S+:\/home\/node\/\.npm img:1 1000:1000/,
   );
   // Another repo, same path: its own volume.
   const other = await images.caches("org/b", ["/home/node/.npm"], "img:1");
