@@ -282,9 +282,12 @@
         const ms = (r.finishedAt ?? Date.now()) - r.startedAt;
         return `${Math.round(ms / 6000) / 10} min`;
       };
-      const label = (r) => (r.kind === "brainstorm" ? "💬 " : "") + r.key;
+      const icons = { brainstorm: "💬 ", discussion: "🗨️ ", idea: "💡 ", bug: "🐞 " };
+      const label = (r) => (icons[r.kind] ?? "") + r.key;
       const link = (r) =>
-        r.repo && r.replyTo ? `https://github.com/${r.repo}/issues/${r.replyTo}` : null;
+        r.repo && r.replyTo
+          ? `https://github.com/${r.repo}/${r.kind === "discussion" ? "discussions" : "issues"}/${r.replyTo}`
+          : null;
       const dot = {
         running: "●",
         ok: "✓",

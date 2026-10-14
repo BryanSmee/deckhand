@@ -4,7 +4,7 @@
 # from the listener's broker, git-credential-deckhand), opens the task's branch and draft
 # pull request (draft-pr.sh, for TASK_ISSUE), runs the repo's setup command (SANDBOX_SETUP),
 # then runs Claude without permission prompts: the container is the sandbox. SANDBOX_LIGHT=1
-# (brainstorms) skips the branch and the setup.
+# (brainstorms, inbox entries, discussions) skips the branch and the setup.
 #
 #   (no arguments)      interactive claude
 #   -p "<task>" …       arguments for claude, e.g. a headless task
@@ -36,7 +36,7 @@ cd /workspace
 cp /usr/local/share/git-hooks/pre-push /workspace/.git/hooks/pre-push
 
 if [ -n "${SANDBOX_LIGHT:-}" ]; then
-  # A brainstorm reads the code and doesn't run it, so it answers quickly. Fresh
+  # A light run reads the code and doesn't run it, so it answers quickly. Fresh
   # origin/<base> to read, and the base branch itself when nothing is in progress on it.
   git fetch --quiet origin
   if [ "$(git branch --show-current)" = "$BASE_BRANCH" ] && git diff --quiet HEAD; then
@@ -87,11 +87,13 @@ if [ $# -eq 0 ] && [ -n "${TASK_PROMPT:-}" ]; then
   # The volumes keep the session between runs: the first run starts on TASK_PROMPT, later
   # ones continue with TASK_MESSAGE, or interactively without one. TASK_MODE is "work"
   # (implement, the default) or "brainstorm" (discuss, no code); both share the issue's
-  # session, so an implementation starts with what a brainstorm settled.
+  # session, so an implementation starts with what a brainstorm settled. "discussion" keeps
+  # its own session; "idea" and "bug" (inbox entries) start a new one every time.
   mode=${TASK_MODE:-work}
   resume=()
   prompt=$TASK_PROMPT
-  if compgen -G "$CLAUDE_CONFIG_DIR/projects/-workspace/*.jsonl" > /dev/null; then
+  if [ "$mode" != idea ] && [ "$mode" != bug ] &&
+    compgen -G "$CLAUDE_CONFIG_DIR/projects/-workspace/*.jsonl" > /dev/null; then
     resume=(--continue)
     if [ -z "${TASK_MESSAGE:-}" ]; then
       exec claude --dangerously-skip-permissions "${model[@]}" --continue
@@ -108,6 +110,10 @@ Also take this into account: $TASK_MESSAGE"
       prompt="New comment on the issue: $TASK_MESSAGE
 
 (Still a brainstorm: no code, branch, commit, pull request or new issue.)"
+    elif [ "$mode" = discussion ]; then
+      prompt="New comment in the discussion: $TASK_MESSAGE
+
+(Still the discussion: no code, branch, commit or pull request.)"
     else
       prompt="New feedback on this issue: $TASK_MESSAGE
 

@@ -6,8 +6,8 @@ import { createBroker } from "../listener/broker.mjs";
 async function serve(app) {
   const asked = [];
   const github = app && {
-    repoToken: async (repo) => {
-      asked.push(repo);
+    repoToken: async (repo, extra) => {
+      asked.push(extra ? `${repo} +${Object.keys(extra)}` : repo);
       return {
         token: `token-for-${repo}`,
         expiresAt: Date.parse("2026-10-14T13:00:00Z"),
@@ -43,6 +43,13 @@ test("a run's secret gets a token for its repo, until the run ends", async (t) =
   broker.revoke(a);
   assert.equal((await get("/token", a)).status, 401);
   assert.equal(broker.size(), 1);
+});
+
+test("a run's extra permissions go with its tokens", async (t) => {
+  const { broker, asked, get, close } = await serve(true);
+  t.after(close);
+  await get("/token", broker.register("org/a", { discussions: "write" }));
+  assert.deepEqual(asked, ["org/a +discussions"]);
 });
 
 test("no secret, a wrong one or another path: nothing", async (t) => {

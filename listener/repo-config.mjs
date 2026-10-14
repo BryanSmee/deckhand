@@ -42,9 +42,10 @@ export function defaultSettings(config) {
 // The operator's config as seen from one repo: what events.mjs and the runs read.
 export function effectiveConfig(config, settings) {
   const { users, trigger, brainstormTrigger, stopTrigger, maxParallel } = settings;
-  const { model, effort, brainstormModel, brainstormEffort } = settings;
+  const { model, effort, brainstormModel, brainstormEffort, inbox } = settings;
   return {
     ...config,
+    inbox,
     users,
     trigger,
     brainstormTrigger,
@@ -187,14 +188,20 @@ export function parseRepoConfig(text, config) {
         break;
       case "inbox":
         if (!isMap(value)) {
-          fail(key, "expected ideas, bugs and discussions issue numbers");
+          fail(key, "expected ideas and bugs issue numbers, and a discussions category");
           break;
         }
-        for (const [name, number] of Object.entries(value)) {
-          if (!["ideas", "bugs", "discussions"].includes(name)) {
+        for (const [name, entry] of Object.entries(value)) {
+          if (entry === null) continue;
+          if (name === "discussions") {
+            // A category of the repo's GitHub Discussions, compared loosely like trigger lines.
+            if (typeof entry === "string" && normalize(entry))
+              settings.inbox[name] = normalize(entry);
+            else fail(`inbox.${name}`, "expected the name of a discussion category");
+          } else if (!["ideas", "bugs"].includes(name)) {
             warnings.push(`inbox.${name}: unknown, ignored`);
-          } else if (Number.isInteger(number) && number > 0) settings.inbox[name] = number;
-          else if (number !== null) fail(`inbox.${name}`, "expected an issue number");
+          } else if (Number.isInteger(entry) && entry > 0) settings.inbox[name] = entry;
+          else fail(`inbox.${name}`, "expected an issue number");
         }
         break;
       case "preview": {

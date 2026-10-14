@@ -76,6 +76,98 @@ test("pull request comments go to the linked issue's session", () => {
   assert.equal(workItem(config, "issue_comment", brainstorm), null);
 });
 
+test("inbox issues: every comment is an entry, trigger lines or not", () => {
+  const repoConfig = { ...config, inbox: { ideas: 12, bugs: 13 } };
+  const payload = comment("Claude work on this\nDark mode", { login: "alice" });
+  payload.comment.html_url = "https://github.com/Org/Repo/issues/12#issuecomment-99";
+  const item = workItem(repoConfig, "issue_comment", payload);
+  assert.equal(item.trigger, "idea");
+  assert.equal(item.replyTo, 12);
+  assert.equal(
+    item.text,
+    "From @alice (https://github.com/Org/Repo/issues/12#issuecomment-99):\n\nClaude work on this\nDark mode",
+  );
+  // Another issue of the same repo: the usual trigger lines.
+  payload.issue.number = 14;
+  assert.equal(workItem(repoConfig, "issue_comment", payload).trigger, "work");
+  // Still only allowed users.
+  assert.equal(workItem(repoConfig, "issue_comment", comment("idea", { login: "mallory" })), null);
+});
+
+function discussion(event, { category = "Ask Claude", login = "alice", parent = null } = {}) {
+  const d = {
+    id: 5,
+    node_id: "D_5",
+    number: 8,
+    title: "How do runs restart?",
+    body: "Is the queue kept?",
+    html_url: "https://github.com/Org/Repo/discussions/8",
+    category: { name: category },
+    user: { login, type: "User" },
+  };
+  return {
+    action: "created",
+    installation: { id: 7 },
+    repository: { full_name: "Org/Repo", default_branch: "main" },
+    discussion: d,
+    ...(event === "discussion_comment" && {
+      comment: {
+        id: 41,
+        node_id: "DC_41",
+        parent_id: parent,
+        body: "And the reactions?",
+        html_url: "https://github.com/Org/Repo/discussions/8#discussioncomment-41",
+        user: { login, type: "User" },
+      },
+    }),
+  };
+}
+
+test("discussions: only in the repo's category, only from allowed users", () => {
+  const repoConfig = { ...config, inbox: { discussions: "ask claude" } };
+  const opened = workItem(repoConfig, "discussion", discussion("discussion"));
+  assert.deepEqual(
+    { ...opened, text: undefined },
+    {
+      repo: "Org/Repo",
+      id: "discussion-8",
+      kind: "discussion",
+      number: 8,
+      trigger: "discussion",
+      text: undefined,
+      replyTo: 8,
+      discussionId: "D_5",
+      comment: { id: 5, node_id: "D_5", discussion: true },
+    },
+  );
+  assert.match(
+    opened.text,
+    /^From @alice .*\n\nIs the queue kept\?\n\n\(Title: How do runs restart\?\)$/,
+  );
+  const answer = workItem(repoConfig, "discussion_comment", discussion("discussion_comment"));
+  assert.equal(answer.id, "discussion-8");
+  assert.deepEqual(answer.comment, {
+    id: 41,
+    node_id: "DC_41",
+    parent_id: null,
+    discussion: true,
+  });
+
+  const reasons = [];
+  const skip = (reason) => (reasons.push(reason), null);
+  const other = discussion("discussion", { category: "General" });
+  assert.equal(workItem(repoConfig, "discussion", other, skip), null);
+  assert.match(reasons[0], /category "General"/);
+  // No category in the repo's config: no discussion calls Claude.
+  assert.equal(workItem({ ...config, inbox: {} }, "discussion", discussion("discussion")), null);
+  const stranger = discussion("discussion_comment", { login: "mallory" });
+  assert.equal(workItem(repoConfig, "discussion_comment", stranger), null);
+  const edited = { ...discussion("discussion"), action: "edited" };
+  assert.equal(workItem(repoConfig, "discussion", edited), null);
+  // The operator's check, before the repo's config is read, lets it through.
+  assert.equal(workItem(config, "discussion", other).kind, "discussion");
+});
+
 test("trigger lines and options", () => {
   assert.deepEqual(splitTrigger(config, "/stop"), {
     trigger: "stop",

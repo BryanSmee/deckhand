@@ -467,3 +467,78 @@ test("a sandboxes' network with a route out stops the run", async (t) => {
   );
   assert.match(JSON.parse(reply.body).body, /deckhand-sandboxes is not internal/);
 });
+
+test("a comment on the ideas inbox is a light run with the idea prompt, answered there", async (t) => {
+  const { dir, github, send } = await listen(t, {
+    ".deckhand.yaml": "inbox: { ideas: 12 }\nsetup: npm ci\n",
+  });
+  const payload = comment("alice", "A dark mode");
+  payload.comment.html_url = "https://github.com/org/repo/issues/12#issuecomment-99";
+  assert.equal((await send(payload)).status, 202);
+  const reply = await github.waitFor(
+    (r) => r.method === "POST" && r.path === "/repos/org/repo/issues/12/comments",
+  );
+  assert.match(JSON.parse(reply.body).body, /^All done\./);
+  const runEnv = readFileSync(join(dir, "run-env"), "utf8");
+  assert.match(runEnv, /^TASK_MODE=idea$/m);
+  assert.match(runEnv, /^SANDBOX_LIGHT=1$/m);
+  // No branch, no setup, and the entry comes with the prompt of a new session.
+  assert.match(runEnv, /^TASK_ISSUE=$/m);
+  assert.match(runEnv, /^SANDBOX_SETUP=$/m);
+  assert.match(runEnv, /^TASK_MESSAGE=$/m);
+  assert.match(runEnv, /^TASK_PROMPT=New on the ideas inbox of org\/repo \(issue #12\)/m);
+  assert.match(runEnv, /--label idea/);
+  assert.match(
+    runEnv,
+    /From @alice \(https:\/\/github\.com\/org\/repo\/issues\/12#issuecomment-99\):\n\nA dark mode/,
+  );
+});
+
+function discussion(category, login = "alice") {
+  return {
+    action: "created",
+    installation: { id: 7 },
+    repository: { full_name: "org/repo", default_branch: "trunk" },
+    discussion: {
+      id: 5,
+      node_id: "D_5",
+      number: 8,
+      title: "How do restarts work?",
+      body: "Is the queue kept?",
+      category: { name: category },
+      user: { login, type: "User" },
+    },
+    sender: { login },
+  };
+}
+
+test("a discussion in the repo's category is answered in it, with a discussions token", async (t) => {
+  const { dir, github, listener, send } = await listen(t, {
+    ".deckhand.yaml": "inbox:\n  discussions: Ask Claude\n",
+  });
+  await send(discussion("General"), "discussion");
+  await listener.until(`category "General" doesn't call Claude`);
+  assert.equal((await send(discussion("Ask Claude"), "discussion")).status, 202);
+  const graphql = (text) => (r) => r.path === "/graphql" && r.body.includes(text);
+  const posted = await github.waitFor(graphql("addDiscussionComment"));
+  const { variables } = JSON.parse(posted.body);
+  assert.equal(variables.id, "D_5");
+  // The discussion itself: a top-level comment.
+  assert.equal(variables.thread, null);
+  assert.match(variables.body, /^All done\.[\s\S]*reply in this discussion to continue/);
+  const eyes = await github.waitFor(graphql("addReaction"));
+  assert.deepEqual(JSON.parse(eyes.body).variables, { id: "D_5", content: "EYES" });
+  // Nothing is posted to an issue of the same number.
+  assert.equal(
+    github.requests.some((r) => r.path.endsWith("/issues/8/comments")),
+    false,
+  );
+  const mint = github.requests.find((r) => r.body.includes("repositories"));
+  assert.equal(JSON.parse(mint.body).permissions.discussions, "write");
+  const runEnv = readFileSync(join(dir, "run-env"), "utf8");
+  assert.match(runEnv, /^TASK_MODE=discussion$/m);
+  assert.match(runEnv, /^SANDBOX_LIGHT=1$/m);
+  assert.match(runEnv, /^TASK_PROMPT=New on discussion #8 of org\/repo/m);
+  const args = readFileSync(join(dir, "run-args"), "utf8").split("\n");
+  assert.ok(args.includes("deckhand.task=org/repo#discussion-8"));
+});

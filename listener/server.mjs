@@ -88,7 +88,12 @@ import { ConfigError, loadConfig } from "./config.mjs";
 import { docker } from "./docker.mjs";
 import { matchHost, proxyEnv, runHosts } from "./egress.mjs";
 import { MARKER, previewEvent, takeOptions, verified, workItem } from "./events.mjs";
-import { createGitHubApp, loadCredentials, saveCredentials } from "./github-app.mjs";
+import {
+  createGitHubApp,
+  DISCUSSION_PERMISSIONS,
+  loadCredentials,
+  saveCredentials,
+} from "./github-app.mjs";
 import { grantFor, hardeningArgs, loadGrants, mountArgs, resolveMounts } from "./grants.mjs";
 import { createImages, imageRef } from "./images.mjs";
 import { createPreviews } from "./previews.mjs";
@@ -173,6 +178,16 @@ async function github(repo, method, path, body, expected = []) {
   return app.request(repo, method, path, body, expected);
 }
 
+// Discussions are written to through GraphQL only. Its errors come with a 200: thrown here.
+async function graphql(repo, query, variables) {
+  const res = await github(repo, "POST", "/graphql", { query, variables });
+  const answer = await res.json().catch(() => ({}));
+  if (!res.ok || answer.errors) {
+    throw new Error(`GraphQL: ${res.status} ${JSON.stringify(answer.errors ?? answer)}`);
+  }
+  return answer.data;
+}
+
 // GitHub's reactions have no ✅: 🚀 reads as "shipped" and isn't mistaken for a manual 👍.
 // A wrap-up ("/stop") only loses its 👀.
 const REACTIONS = {
@@ -182,10 +197,22 @@ const REACTIONS = {
   stopped: null,
 };
 
+// GraphQL's names for the reactions above.
+const REACTION_ENUM = { eyes: "EYES", rocket: "ROCKET", confused: "CONFUSED", "-1": "THUMBS_DOWN" };
+
 // Reaction failures (already removed, 403, 404…) are logged and never break a run.
 async function react(repo, comment, content) {
   const kind = comment.review ? "pulls/comments" : "issues/comments";
   try {
+    if (comment.discussion) {
+      // Removed by content rather than id (settle()): any truthy value will do.
+      await graphql(
+        repo,
+        "mutation($id: ID!, $content: ReactionContent!) { addReaction(input: {subjectId: $id, content: $content}) { clientMutationId } }",
+        { id: comment.node_id, content: REACTION_ENUM[content] },
+      );
+      return content;
+    }
     const res = await github(repo, "POST", `/repos/${repo}/${kind}/${comment.id}/reactions`, {
       content,
     });
@@ -209,7 +236,13 @@ async function settle(item, status) {
   const kind = comment.review ? "pulls/comments" : "issues/comments";
   try {
     const eyes = await item.eyes;
-    if (eyes) {
+    if (eyes && comment.discussion) {
+      await graphql(
+        repo,
+        "mutation($id: ID!) { removeReaction(input: {subjectId: $id, content: EYES}) { clientMutationId } }",
+        { id: comment.node_id },
+      );
+    } else if (eyes) {
       await github(
         repo,
         "DELETE",
@@ -229,6 +262,32 @@ function reply(repo, number, text) {
   return github(repo, "POST", `/repos/${repo}/issues/${number}/comments`, {
     body: `${body}\n\n${MARKER}`,
   });
+}
+
+// Where a run's answer goes: a comment on the issue or pull request `target.replyTo`, or in
+// the discussion, in the thread of the comment it answers (`target.comment`; GitHub threads
+// are one level deep, so a reply to a reply goes to the same thread).
+async function answer(target, text) {
+  if (target.kind !== "discussion") return reply(target.repo, target.replyTo, text);
+  const body = text.length > 60000 ? text.slice(0, 60000) + "\n\n…" : text;
+  const c = target.comment;
+  let thread = null;
+  if (c?.discussion && c.node_id !== target.discussionId) {
+    thread = c.node_id;
+    if (c.parent_id) {
+      const data = await graphql(
+        target.repo,
+        "query($id: ID!) { node(id: $id) { ... on DiscussionComment { replyTo { id } } } }",
+        { id: c.node_id },
+      );
+      thread = data.node?.replyTo?.id ?? null;
+    }
+  }
+  return graphql(
+    target.repo,
+    "mutation($id: ID!, $thread: ID, $body: String!) { addDiscussionComment(input: {discussionId: $id, replyToId: $thread, body: $body}) { comment { url } } }",
+    { id: target.discussionId, thread, body: `${body}\n\n${MARKER}` },
+  );
 }
 
 // Adding a label that doesn't exist yet creates it.
@@ -279,8 +338,11 @@ async function admit(first, event, payload) {
   const { settings, errors } = await repoSettings(first.repo, first.base);
   if (errors.length) {
     log(`${first.repo}: ${CONFIG_FILE} has errors: ${errors.join("; ")}`);
-    // Only to someone asking for a run: other comments can't tell a broken config from none.
-    if (first.trigger) await reply(first.repo, first.replyTo, configErrors(first.base, errors));
+    // Only to someone asking for a run: other comments can't tell a broken config from none,
+    // and discussions can't tell whether they are in the category that calls Claude.
+    if (first.trigger && first.kind !== "discussion") {
+      await reply(first.repo, first.replyTo, configErrors(first.base, errors));
+    }
     return;
   }
   const item = workItem(effectiveConfig(config, settings), event, payload, skip);
@@ -356,6 +418,8 @@ async function accept(item) {
 // What a comment asks for: "work", "brainstorm" or "stop" (wrap a brainstorm up); null when
 // it doesn't reach Claude. Keeps the issue's brainstorm state up to date.
 async function modeOf(item, key, name) {
+  // The inbox issue or the discussion category is the trigger (workItem()).
+  if (INBOX.has(item.trigger)) return item.trigger;
   const b = brainstorms.get(key);
   if (item.trigger === "work") {
     // Same session: the implementation starts from what the brainstorm settled.
@@ -397,10 +461,23 @@ async function modeOf(item, key, name) {
   return "work";
 }
 
-// A brainstorm reply (or wrap-up) is what the task's next run will be.
+// Runs that read the code and answer, without a branch or the repo's setup: brainstorms (and
+// their wrap-up), inbox entries and discussions.
+const INBOX = new Set(["idea", "bug", "discussion"]);
+const LIGHT = new Set(["brainstorm", "stop", ...INBOX]);
+
+// Each inbox entry starts a fresh session (the inbox issue collects unrelated entries); a
+// discussion keeps its own, like a brainstorm.
+const FRESH = new Set(["idea", "bug"]);
+
+// A light run is what the task's next run will be: it goes first, after a shorter pause.
 function talking(task) {
-  const mode = task.pending.at(-1)?.mode;
-  return mode === "brainstorm" || mode === "stop";
+  return LIGHT.has(task.pending.at(-1)?.mode);
+}
+
+// What the dashboard shows a run or queued task as.
+function kindOf(mode, kind) {
+  return mode === "brainstorm" || mode === "stop" ? "brainstorm" : INBOX.has(mode) ? mode : kind;
 }
 
 function debounce(task) {
@@ -455,9 +532,14 @@ function deliver(task) {
 function liveMessage(mode, text) {
   const reply =
     "Your final message is still posted as the single reply for this run: make it cover this comment too. (Don't post comments on GitHub yourself.)";
-  return mode === "brainstorm"
-    ? `New comment on the issue: ${text}\n\n(Still a brainstorm: no code, branch, commit, pull request or new issue. ${reply})`
-    : `New comment on this issue while you are working:\n\n${text}\n\nTake it into account from here on. ${reply}`;
+  if (mode === "brainstorm") {
+    return `New comment on the issue: ${text}\n\n(Still a brainstorm: no code, branch, commit, pull request or new issue. ${reply})`;
+  }
+  if (FRESH.has(mode)) {
+    return `Another entry arrived on the inbox while you were working:\n\n${text}\n\nHandle it like the others, as its own entry. ${reply}`;
+  }
+  if (mode === "discussion") return `New comment in the discussion:\n\n${text}\n\n${reply}`;
+  return `New comment on this issue while you are working:\n\n${text}\n\nTake it into account from here on. ${reply}`;
 }
 
 function schedule() {
@@ -516,10 +598,42 @@ function armIdle(key, b) {
 
 // --- Prompts -------------------------------------------------------------------------------
 
-const brainstormInstructions = readFileSync(
-  new URL("../prompts/brainstorm.md", import.meta.url),
-  "utf8",
-);
+const instructions = (name) => readFileSync(new URL(`../prompts/${name}`, import.meta.url), "utf8");
+const brainstormInstructions = instructions("brainstorm.md");
+const inboxInstructions = {
+  idea: instructions("idea.md"),
+  bug: instructions("bug.md"),
+  discussion: instructions("discussion.md"),
+};
+
+// Inbox entries and discussions: the entries come with the prompt, as the session is new.
+function inboxPrompt(task, mode, text) {
+  const { repo, number } = task;
+  const where = {
+    idea: `the ideas inbox of ${repo} (issue #${number})`,
+    bug: `the bug reports inbox of ${repo} (issue #${number})`,
+    discussion: `discussion #${number} of ${repo}`,
+  }[mode];
+  const read =
+    mode === "discussion"
+      ? `Read the whole discussion with:
+
+\`\`\`sh
+gh api graphql -F owner=${repo.split("/")[0]} -F name=${repo.split("/")[1]} -F number=${number} -f query='
+  query($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) {
+    discussion(number: $number) { title body url author { login } comments(last: 50) { nodes {
+      author { login } body url replies(last: 50) { nodes { author { login } body url } } } } } } }'
+\`\`\``
+      : `The latest comments of the inbox give the context of a follow-up:
+\`gh issue view ${number} --comments\`.`;
+  return `New on ${where}. ${read}
+
+${inboxInstructions[mode]}
+
+${mode === "discussion" ? "The message" : "The entries, each its own"}:
+
+${text}`;
+}
 
 function brainstormPrompt(task) {
   return `Brainstorm GitHub issue #${task.number} of ${task.repo} with the maintainer. Read it with
@@ -579,6 +693,7 @@ async function run(task) {
   // The last comment decides: a work trigger after a brainstorm comment means work.
   const mode = items.at(-1).mode;
   const talk = mode === "brainstorm" || mode === "stop";
+  const light = LIGHT.has(mode);
   const key = `${task.repo}#${task.id}`;
   const id = `${task.name}-${Date.now()}`;
   const logPath = join(logDir, `${id}.log`);
@@ -586,7 +701,7 @@ async function run(task) {
   const record = {
     id,
     key,
-    kind: talk ? "brainstorm" : task.kind,
+    kind: kindOf(mode, task.kind),
     repo: task.repo,
     replyTo,
     mode: null,
@@ -599,15 +714,22 @@ async function run(task) {
   // This run's comments, and those delivered to it while it works (see deliver()).
   const handled = [...items];
   // The sandbox's only way to GitHub: tokens for this repo, while this run lasts.
-  const secret = broker.register(task.repo);
+  const secret = broker.register(
+    task.repo,
+    mode === "discussion" ? DISCUSSION_PERMISSIONS : undefined,
+  );
   try {
     // Left over from a listener restart: wait for it.
     if ((await docker(["ps", "-q", "--filter", `name=^${task.name}$`])).out) {
       await docker(["wait", task.name]);
     }
-    const started = (await docker(["volume", "inspect", `${task.name}-claude`])).code === 0;
+    // Inbox entries start afresh: the sandbox doesn't resume their session (entrypoint.sh).
+    const started =
+      !FRESH.has(mode) && (await docker(["volume", "inspect", `${task.name}-claude`])).code === 0;
     // A new comment answers the questions, if any: the issue no longer waits for input.
-    if (config.needsInputLabel) await label(task.repo, task.number, false);
+    if (config.needsInputLabel && task.kind !== "discussion") {
+      await label(task.repo, task.number, false);
+    }
     // "/model" and "/effort" sent during the previous run, unless these comments say otherwise.
     const options = task.next;
     task.next = {};
@@ -618,13 +740,16 @@ async function run(task) {
     const restored = items.some((i) => i.restored);
     const body = talk ? brainstormMessage(mode, text, restored) : text;
     // An empty follow-up (only "/model …", say) would open an interactive session instead.
+    // A new inbox session reads its entries in the prompt (inboxPrompt()).
     const message = started
       ? `${body || "Continue."}\n\n(Don't post comments on GitHub yourself: your final message is posted as a reply.)`
-      : body;
+      : INBOX.has(mode)
+        ? ""
+        : body;
     // Fresh from the default branch: a config merged since the comment applies.
     const { settings, errors, warnings } = await repoSettings(task.repo, task.base);
     task.settings = settings;
-    const defaults = talk
+    const defaults = light
       ? [settings.brainstormModel, settings.brainstormEffort]
       : [settings.model, settings.effort];
     record.model = options.model ?? defaults[0];
@@ -665,7 +790,11 @@ async function run(task) {
       unanswered: [], // delivered since Claude's last result
       handled: [], // every comment delivered to it, for their reactions
     };
-    const prompt = talk ? brainstormPrompt(task) : initialPrompt(task);
+    const prompt = talk
+      ? brainstormPrompt(task)
+      : INBOX.has(mode)
+        ? inboxPrompt(task, mode, text)
+        : initialPrompt(task);
     const result = await sandbox(task, prompt, message, logFile, shots, record, secret, {
       ...prepared,
       ...access,
@@ -675,7 +804,12 @@ async function run(task) {
     handled.push(...(live?.handled ?? []));
     // Claude exited before answering a delivered comment (a crash): the next run gets it.
     if (live?.unanswered.length) task.pending.unshift(...live.unanswered);
-    const target = live?.replyTo ?? replyTo;
+    // The comment answered last decides where the reply goes (a discussion's thread).
+    const target = {
+      ...task,
+      replyTo: live?.replyTo ?? replyTo,
+      comment: (live?.handled.at(-1) ?? items.at(-1)).comment,
+    };
     if (!readdirSync(join(shotsDir, shots)).length) rmdirSync(join(shotsDir, shots));
     const minutes = result ? Math.round(result.duration_ms / 6000) / 10 : null;
     // On a phone, the reply is where the next step is read.
@@ -684,7 +818,9 @@ async function run(task) {
         ? " · 💬 brainstorm ended: a trigger line starts it again"
         : talk
           ? " · 💬 brainstorm: reply to continue, `/stop` to wrap up"
-          : "";
+          : mode === "discussion"
+            ? " · 💬 reply in this discussion to continue"
+            : "";
     const later = Object.entries(live?.later ?? {})
       .map(([k, v]) => `\`/${k} ${v}\``)
       .join(" ");
@@ -692,14 +828,14 @@ async function run(task) {
     const footer = `<sub>🤖 Claude ${record.model} · ${record.effort} effort${minutes !== null ? ` · ${minutes} min` : ""}${hint}${next}</sub>`;
     const status = outcome(result);
     if (status !== "error") {
-      await reply(task.repo, target, `${result.result}\n\n${footer}`);
-      // A brainstorm asks questions all along: no label for those.
-      if (status === "needs-input" && config.needsInputLabel && !talk) {
+      await answer(target, `${result.result}\n\n${footer}`);
+      // Light runs ask questions all along: no label for those.
+      if (status === "needs-input" && config.needsInputLabel && !light) {
         await label(task.repo, task.number, true);
       }
     } else {
       const detail = result?.result ?? "No result: see the listener logs.";
-      await reply(task.repo, target, `Claude stopped with an error.\n\n> ${detail}\n\n${footer}`);
+      await answer(target, `Claude stopped with an error.\n\n> ${detail}\n\n${footer}`);
     }
     log(`${key}: done (${status})`);
     record.status = status;
@@ -707,7 +843,9 @@ async function run(task) {
     log(`${key}: ${error.stack ?? error}`);
     record.status = "error";
     if (error instanceof RunError) {
-      await reply(task.repo, replyTo, error.message).catch((e) => log(`${key}: ${e}`));
+      await answer({ ...task, replyTo, comment: items.at(-1).comment }, error.message).catch((e) =>
+        log(`${key}: ${e}`),
+      );
     }
   } finally {
     record.phase = null;
@@ -718,10 +856,10 @@ async function run(task) {
     task.live = null;
     task.running = false;
     running--;
-    // Comments put back for the next run keep their 👀 until that one is over. A brainstorm
-    // asks questions all along, like for the label: its replies are "done".
+    // Comments put back for the next run keep their 👀 until that one is over. Light runs
+    // ask questions all along, like for the label: their replies are "done".
     const status =
-      !talk || record.status === "error" ? record.status : mode === "stop" ? "stopped" : "ok";
+      !light || record.status === "error" ? record.status : mode === "stop" ? "stopped" : "ok";
     for (const item of handled) if (!task.pending.includes(item)) track(settle(item, status));
     const b = brainstorms.get(key);
     if (talk && b?.status === "active") {
@@ -840,12 +978,13 @@ function sandbox(
   message,
   logFile,
   shots,
-  { kind, model, effort },
+  { model, effort },
   secret,
   { image, cacheArgs, settings, mounts, limits },
 ) {
-  const talk = kind === "brainstorm";
   const live = task.live;
+  const mode = live.mode === "stop" ? "brainstorm" : live.mode;
+  const light = LIGHT.has(mode);
   const n = task.name;
   const bot = app.identity();
   const args = [
@@ -918,13 +1057,14 @@ function sandbox(
     BASE_BRANCH: task.base || "main",
     TASK_PROMPT: prompt,
     TASK_MESSAGE: message,
-    TASK_MODE: talk ? "brainstorm" : "work",
+    // work, brainstorm, idea, bug or discussion.
+    TASK_MODE: mode,
     // The sandbox opens the issue's branch and draft pull request (../sandbox/draft-pr.sh);
     // not for pull requests without an issue.
-    TASK_ISSUE: task.kind === "issue" && !talk ? String(task.number) : "",
-    // Talking needs no project setup.
-    SANDBOX_LIGHT: talk ? "1" : "",
-    SANDBOX_SETUP: talk ? "" : (settings.setup ?? ""),
+    TASK_ISSUE: task.kind === "issue" && !light ? String(task.number) : "",
+    // Reading and answering needs no project setup.
+    SANDBOX_LIGHT: light ? "1" : "",
+    SANDBOX_SETUP: light ? "" : (settings.setup ?? ""),
     // Read by the sandbox from its default branch (origin/BASE_BRANCH), like the config.
     SANDBOX_INSTRUCTIONS: settings.instructions ?? "",
     SANDBOX_MODEL: model,
@@ -1036,6 +1176,9 @@ async function saveQueue() {
           id: comment.id,
           html_url: comment.html_url,
           review: comment.review,
+          node_id: comment.node_id,
+          parent_id: comment.parent_id,
+          discussion: comment.discussion,
         },
         eyes: (await eyes?.catch(() => null)) ?? null,
       });
@@ -1046,8 +1189,8 @@ async function saveQueue() {
   log(`Saved ${saved.length} task(s) with queued comments`);
 }
 
-function pick({ repo, id, kind, number, name, base }) {
-  return { repo, id, kind, number, name, base };
+function pick({ repo, id, kind, number, name, base, discussionId }) {
+  return { repo, id, kind, number, name, base, discussionId };
 }
 
 function loadQueue() {
@@ -1130,6 +1273,13 @@ function clip(text, lines, chars) {
   return out.length < String(text).length ? out + "\n…" : out;
 }
 
+const STARTING = {
+  brainstorm: "Starting a brainstorm",
+  idea: "New idea",
+  bug: "New bug report",
+  discussion: "Answering a discussion",
+};
+
 // One log line (stream-json, or setup output) → entries for the dashboard.
 function format(line) {
   if (!line.trim()) return [];
@@ -1151,8 +1301,9 @@ function format(line) {
         "wrap-up": "Wrapping up the brainstorm",
         restore: "Restoring the session after a pause",
         continue: "Continuing the session",
-      }[e.mode] ?? (e.kind === "brainstorm" ? "Starting a brainstorm" : "Starting")) +
-      (e.model ? ` (${e.model}, ${e.effort} effort)` : "");
+      }[e.mode] ??
+        STARTING[e.kind] ??
+        "Starting") + (e.model ? ` (${e.model}, ${e.effort} effort)` : "");
     return [{ kind: "meta", text: what + (e.message ? `: ${e.message}` : "") }];
   }
   if (e.type === "system" && e.subtype === "init") {
@@ -1208,7 +1359,7 @@ function state() {
     .filter((t) => t.pending.length > (t.running ? deliverable(t) : 0))
     .map((t) => ({
       key: `${t.repo}#${t.id}`,
-      kind: talking(t) ? "brainstorm" : t.kind,
+      kind: kindOf(t.pending.at(-1).mode, t.kind),
       title: null,
       repo: t.repo,
       replyTo: t.pending.at(-1).replyTo,
