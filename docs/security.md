@@ -63,16 +63,16 @@ installation, revokes its tokens at once.
 
 A sandbox only gets Docker named volumes:
 
-| Volume                                               | What                                         |
-| ---------------------------------------------------- | -------------------------------------------- |
-| `<prefix>-<owner>-<repo>-<n>-<hash>-workspace`       | the issue's clone, kept between its runs     |
-| `<prefix>-<owner>-<repo>-<n>-<hash>-claude`          | the issue's Claude session                   |
-| `<prefix>-<owner>-<repo>-<n>-<hash>-light-workspace` | the clone of the issue's light runs          |
-| `<prefix>-<owner>-<repo>-<n>-<hash>-light-claude`    | the Claude session of its light runs         |
-| `deckhand-claude-code`, **read-only**                | Claude Code, installed by the listener       |
-| `deckhand-cache-<owner>-<repo>-<path>-…`             | the repo's `caches`, its own                 |
-| `deckhand-screenshots`, **its run's folder only**    | screenshots, served under `/shots/<folder>/` |
-| `deckhand-runs`, **its run's folder, read-only**     | its inbox: comments that arrive mid-run      |
+| Volume                                               | What                                                              |
+| ---------------------------------------------------- | ----------------------------------------------------------------- |
+| `<prefix>-<owner>-<repo>-<n>-<hash>-workspace`       | the issue's clone, kept between its runs                          |
+| `<prefix>-<owner>-<repo>-<n>-<hash>-claude`          | the issue's Claude session                                        |
+| `<prefix>-<owner>-<repo>-<n>-<hash>-light-workspace` | the clone of the issue's light runs                               |
+| `<prefix>-<owner>-<repo>-<n>-<hash>-light-claude`    | the Claude session of its light runs                              |
+| `deckhand-claude-code`, **read-only**                | Claude Code, installed by the listener                            |
+| `deckhand-cache-<owner>-<repo>-<path>-…`             | the repo's `caches`, its own                                      |
+| `deckhand-screenshots`, **its run's folder only**    | screenshots, served under `/shots/<folder>/` (regular files only) |
+| `deckhand-runs`, **its run's folder, read-only**     | its inbox: comments that arrive mid-run                           |
 
 `<hash>` (10 hex digits of the repository and task) keeps apart names that would otherwise
 be the same, such as `acme/x` pull request 5 and `acme/x-pr` issue 5. Tasks whose session
@@ -88,6 +88,9 @@ after a brainstorm starts a new session, from the issue and its comments.
 
 Each run mounts only its own folder of the screenshots volume (`volume-subpath`, Docker
 Engine 26 or later), named with 24 random hex digits: it can't list or read another run's.
+The listener serves only the regular files of that folder: a symbolic link (opened with
+`O_NOFOLLOW`), a hard link or a path that resolves elsewhere is a 404, so a run can't link
+`/screenshots/a.png` to the listener's own files (`app.json`, its private key).
 Its inbox folder is mounted the same way, read-only: the listener writes the comments
 delivered to the run there (a file rather than the container's stdin, so a run outlives a
 listener restart).

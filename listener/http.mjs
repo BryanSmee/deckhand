@@ -1,7 +1,7 @@
 // The listener's two HTTP servers. The public one: GitHub's webhooks, /setup, sign-in, the
 // dashboard and its API, /status and the runs' screenshots. The broker's, on the sandboxes'
 // network only: installation tokens (broker.mjs) and the egress proxy's questions.
-import { createReadStream, statSync } from "node:fs";
+import { closeSync, constants, createReadStream, fstatSync, openSync, realpathSync } from "node:fs";
 import { lookup } from "node:dns/promises";
 import { createServer } from "node:http";
 import { join } from "node:path";
@@ -129,10 +129,8 @@ export function createHttp(ctx, { dashboardDir }) {
   // Public, like any image in a GitHub comment; the folder token is the only protection.
   function serveShot(req, res) {
     const match = /^\/shots\/([0-9a-f]{24})\/([\w.-]+\.(png|jpe?g|webp))$/.exec(req.url);
-    const path = match && join(ctx.shotsDir, match[1], match[2]);
-    try {
-      if (!path || !statSync(path).isFile()) throw new Error();
-    } catch {
+    const fd = match && openShot(match[1], match[2]);
+    if (fd === null) {
       res.statusCode = 404;
       return res.end();
     }
@@ -140,7 +138,26 @@ export function createHttp(ctx, { dashboardDir }) {
       "content-type": imageTypes[match[3]],
       "cache-control": "public, max-age=31536000, immutable",
     });
-    createReadStream(path).pipe(res);
+    createReadStream(null, { fd }).pipe(res);
+  }
+
+  // The sandbox writes its folder and the listener runs as root: a link there would serve
+  // any file of the listener's (app.json, its private key). Only a regular file, opened
+  // without following a link (O_NOFOLLOW, so swapping one in after the check doesn't help),
+  // whose real path is in the run's own folder.
+  function openShot(folder, name) {
+    let fd = null;
+    try {
+      const path = join(ctx.shotsDir, folder, name);
+      if (realpathSync(path) !== join(realpathSync(ctx.shotsDir), folder, name)) return null;
+      fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+      const stat = fstatSync(fd);
+      if (stat.isFile() && stat.nlink === 1) return fd;
+    } catch {
+      // Missing, a link, or unreadable: all a 404.
+    }
+    if (fd !== null) closeSync(fd);
+    return null;
   }
 
   // Bodies being read before their signature can be checked: a public port, so capped.
