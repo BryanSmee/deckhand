@@ -18,7 +18,9 @@ test("webhook signatures: only the App's secret passes", () => {
   assert.equal(verified("", sign("", body), body), false);
 });
 
-function comment(body, { login = "alice", type = "User", installation = 7, pr } = {}) {
+// `pr`: the pull request's body, when the comment is on one; `by`: its author's association
+// with the repo (the App's bot opened it by default).
+function comment(body, { login = "alice", type = "User", installation = 7, pr, by } = {}) {
   return {
     action: "created",
     installation: installation && { id: installation },
@@ -28,6 +30,10 @@ function comment(body, { login = "alice", type = "User", installation = 7, pr } 
       title: "Fix the queue",
       body: pr,
       ...(pr !== undefined && { pull_request: {} }),
+      ...(pr !== undefined &&
+        (by
+          ? { user: { login: "outsider", type: "User" }, author_association: by }
+          : { user: { login: "deckhand-x[bot]", type: "Bot" }, author_association: "NONE" })),
     },
     comment: { id: 99, body, user: { login, type } },
   };
@@ -80,6 +86,31 @@ test("pull request comments go to the linked issue's session", () => {
   assert.equal(alone.title, "Fix the queue");
   const brainstorm = comment("Deckhand\n/mode brainstorm", { pr: "" });
   assert.equal(workItem(config, "issue_comment", brainstorm), null);
+  // A maintainer's own pull request is linked too.
+  const own = comment("fix it", { pr: "Closes #3", by: "COLLABORATOR" });
+  assert.equal(workItem(config, "issue_comment", own).id, "3");
+});
+
+test("an outsider's pull request saying Closes #N doesn't reach issue N's session", () => {
+  // Issue comments: the payload has no head, its author's association decides.
+  for (const by of ["CONTRIBUTOR", "FIRST_TIME_CONTRIBUTOR", "NONE"]) {
+    const item = workItem(config, "issue_comment", comment("fix it", { pr: "Closes #3", by }));
+    assert.equal(item.id, "pr-12", by);
+    assert.equal(item.kind, "pr");
+  }
+  // Reviews and review comments: its head branch must be in the repo, not a fork.
+  const review = (head) => ({
+    action: "submitted",
+    installation: { id: 7 },
+    repository: { full_name: "Org/Repo", default_branch: "main" },
+    pull_request: { number: 12, title: "Fix", body: "Closes #3", head },
+    review: { id: 5, body: "Looks good", user: { login: "alice", type: "User" } },
+  });
+  const fork = { ref: "issue-3-fix", repo: { full_name: "mallory/repo" } };
+  assert.equal(workItem(config, "pull_request_review", review(fork)).id, "pr-12");
+  assert.equal(workItem(config, "pull_request_review", review({ ref: "x", repo: null })).id, "pr-12");
+  const own = { ref: "issue-3-fix", repo: { full_name: "org/repo" } };
+  assert.equal(workItem(config, "pull_request_review", review(own)).id, "3");
 });
 
 test("inbox issues: every comment is an entry, trigger lines or not", () => {

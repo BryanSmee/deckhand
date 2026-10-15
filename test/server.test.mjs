@@ -1304,6 +1304,7 @@ test("the dashboard and its logs are for allowed users signed in with GitHub", a
       body: "Closes #12",
       state: "open",
       draft,
+      head: { ref: "issue-12-fix", repo: { full_name: "org/repo" } },
     },
     sender: { login: "deckhand[bot]" },
   });

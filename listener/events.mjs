@@ -15,9 +15,27 @@ export function verified(secret, signature, body) {
 }
 
 // The issue a pull request belongs to, from the "Closes #12" Claude puts in its description.
-export function linkedIssue(prBody) {
-  const match = /\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)/i.exec(prBody ?? "");
+// `pr`: as GitHub describes it ({ body, head, user, author_association }). Only a pull request
+// that may speak for the issue is linked to it: anyone can open one from a fork saying
+// "Closes #12", and its comments would then go on in issue 12's session.
+export function linkedIssue(pr, repo) {
+  if (!pr || !trustedPull(pr, repo)) return null;
+  const match = /\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)/i.exec(pr.body ?? "");
   return match ? Number(match[1]) : null;
+}
+
+// Who can push to the repo: its head branch is in it, or (an issue comment's payload has no
+// head) its author has write access there or is a bot (the App's opens Claude's).
+const WRITERS = ["OWNER", "MEMBER", "COLLABORATOR"];
+function trustedPull(pr, repo) {
+  if (pr.head) return sameRepo(pr, repo);
+  return pr.user?.type === "Bot" || WRITERS.includes(pr.author_association);
+}
+
+// Whether a pull request's head branch is in `repo`, not a fork (whose head repo may be gone).
+export function sameRepo(pr, repo) {
+  const head = pr.head?.repo?.full_name;
+  return !!head && head.toLowerCase() === repo.toLowerCase();
 }
 
 // The command on the first line ("work" for the trigger, "stop" for "/stop"), the mode a
@@ -123,8 +141,7 @@ function issueCommentItem(config, event, p, skip) {
   const body = p.comment.body ?? "";
   const { trigger, mode, text } = splitTrigger(config, body);
   if (p.issue.pull_request) {
-    const pr = { number: p.issue.number, title: p.issue.title, body: p.issue.body };
-    return prItem(skip, repo, pr, { trigger, mode }, text, p.comment);
+    return prItem(skip, repo, p.issue, { trigger, mode }, text, p.comment);
   }
   const n = p.issue.number;
   const issue = {
@@ -247,7 +264,7 @@ export function pullRequest(config, event, p, now, skip = () => null) {
   if (config.repos.length && !config.repos.includes(repo.toLowerCase())) {
     return skip(`${repo} not in ALLOWED_REPOS`);
   }
-  const issue = linkedIssue(pr.body);
+  const issue = linkedIssue(pr, repo);
   const state = prState(pr);
   const turnedReady =
     p.action === "ready_for_review" ||
@@ -258,13 +275,15 @@ export function pullRequest(config, event, p, now, skip = () => null) {
   };
 }
 
-// `pr`: { number, title, body }. A pull request that closes an issue is that issue's task,
-// whose title the payload doesn't have (the dashboard fetches it, titles.mjs).
-function prItem(skip, repo, { number: pr, title, body: prBody }, { trigger, mode }, text, comment) {
+// `pull`: the pull request, or its issue for an issue comment. A pull request that closes an
+// issue (linkedIssue()) is that issue's task, whose title the payload doesn't have (the
+// dashboard fetches it, titles.mjs).
+function prItem(skip, repo, pull, { trigger, mode }, text, comment) {
   if (trigger === "stop" || mode === "brainstorm" || mode === "onboarding") {
     return skip(`${mode ?? "brainstorm"}s are on issues: pull request comments are about the code`);
   }
-  const issue = linkedIssue(prBody);
+  const { number: pr, title } = pull;
+  const issue = linkedIssue(pull, repo);
   return issue
     ? {
         repo,

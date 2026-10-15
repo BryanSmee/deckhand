@@ -2,7 +2,7 @@
 // { number, url, state, readyAt }. `pull_request` webhooks keep it current (events.mjs
 // pullRequest()); tasks older than that are looked up once per listener start, from the
 // repo's recent pull requests. Kept in pulls.json, so a restart neither forgets nor asks again.
-import { linkedIssue, prState } from "./events.mjs";
+import { linkedIssue, prState, sameRepo } from "./events.mjs";
 import { readJson, writeJsonAtomic } from "./store.mjs";
 import { parseKey } from "./titles.mjs";
 
@@ -58,7 +58,7 @@ export function createPulls({ path, listPulls, log = () => {} }) {
           continue;
         }
         for (const t of missing.filter((m) => m.repo === repo)) {
-          const pr = match(list, t);
+          const pr = match(list, repo, t);
           if (!pr || pulls.has(t.key)) continue;
           // readyAt unknown: the dashboard doesn't notify for what it finds this way.
           pulls.set(t.key, {
@@ -82,11 +82,11 @@ export function createPulls({ path, listPulls, log = () => {} }) {
 }
 
 // A task's pull request in a listing, newest first: itself for "#pr-n"; for an issue, the
-// one on its branch (issue-<n>-…) or that closes it.
-function match(list, { kind, number }) {
+// one on its branch (issue-<n>-…, not a fork's) or that closes it.
+function match(list, repo, { kind, number }) {
   if (kind === "pr") return list.find((p) => p.number === number);
   return (
-    list.find((p) => p.head?.ref?.startsWith(`issue-${number}-`)) ??
-    list.find((p) => linkedIssue(p.body) === number)
+    list.find((p) => sameRepo(p, repo) && p.head.ref?.startsWith(`issue-${number}-`)) ??
+    list.find((p) => linkedIssue(p, repo) === number)
   );
 }
