@@ -1,7 +1,8 @@
 // The open task: its repo and title, the last reply's first line, its runs, and the log of
 // the run shown (the latest unless one was picked). Waiting for input: its open questions, as
-// a form to answer them.
+// a form to answer them. Its last run failed: a button to run it again.
 import { useState } from "preact/hooks";
+import { sendRerun } from "./api";
 import { ago, duration, githubUrl, kindName, numberOf, ownMode, runName, titleOf } from "./format";
 import { Log } from "./Log";
 import { PrLink } from "./PullRequest";
@@ -18,13 +19,15 @@ interface Props {
   now: number;
   // api/state's githubUrl.
   github: string;
-  // Reads api/state again (answers sent).
+  // Reads api/state again (answers sent, a rerun queued).
   refresh?: () => Promise<void>;
 }
 
 export function Detail({ task: t, run: r, onRun, onBack, now, github, refresh }: Props) {
-  // What the listener said of the answers sent last, on that task's page.
-  const [sent, setSent] = useState<{ key: string; message: string } | null>(null);
+  // What the listener said of the answers sent or the rerun asked last, on that task's page.
+  const [sent, setSent] = useState<{ key: string; message: string; error?: boolean } | null>(null);
+  // The run whose rerun is on its way.
+  const [rerunning, setRerunning] = useState<string | null>(null);
   if (!t) {
     return (
       <div class={styles.detail}>
@@ -37,6 +40,15 @@ export function Detail({ task: t, run: r, onRun, onBack, now, github, refresh }:
   // The last reply: from the latest run that has one.
   const reply = t.runs.find((x) => x.summary);
   const asked = t.state === "needs-input" ? t.questions : undefined;
+  // The latest run only, and only when it is the one shown.
+  const failed = t.rerunnable && r && r.id === t.runs[0]?.id ? r : null;
+  const again = async (run: Run) => {
+    setRerunning(run.id);
+    const said = await sendRerun(t.repo, run.id);
+    setSent({ key: t.key, message: said.error ?? "Rerun queued.", error: !!said.error });
+    if (!said.error) await refresh?.();
+    setRerunning(null);
+  };
   return (
     <div class={styles.detail}>
       <header class={styles.head}>
@@ -87,6 +99,17 @@ export function Detail({ task: t, run: r, onRun, onBack, now, github, refresh }:
               Replies on #{t.replyTo}
             </a>
           )}
+          {failed && (
+            <button
+              type="button"
+              class={styles.rerun}
+              disabled={rerunning === failed.id}
+              title="Runs it again with the same comments and mode"
+              onClick={() => again(failed)}
+            >
+              {rerunning === failed.id ? "Rerunning…" : "Rerun"}
+            </button>
+          )}
         </div>
         {reply && (
           <p class={styles.summary}>
@@ -113,7 +136,7 @@ export function Detail({ task: t, run: r, onRun, onBack, now, github, refresh }:
         </nav>
       )}
       {sent?.key === t.key && (
-        <p class={styles.sent} role="status">
+        <p class={sent.error ? styles.refused : styles.sent} role="status">
           {sent.message}
         </p>
       )}

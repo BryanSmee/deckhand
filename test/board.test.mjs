@@ -244,3 +244,32 @@ test("the graph's arrows: a wait's blockers, pull requests on the board by their
   });
   assert.deepEqual(waitEdges(shown, []), { edges: [], blockers: [] });
 });
+
+test("rerunnable: the latest run failed or was lost, work on an issue or pull request", () => {
+  const items = [{ id: "1", kind: "issue", number: 1, trigger: "work", modeLine: null, text: "" }];
+  const failed = (key, startedAt, extra = {}) =>
+    run(key, startedAt, { status: "error", taskMode: "work", items, ...extra });
+  const tasks = board({
+    runs: [
+      failed("a/b#1", 100),
+      failed("a/b#2", 100, { status: "interrupted", taskMode: "review" }),
+      failed("a/b#pr-3", 100, { kind: "pr" }),
+      failed("a/b#4", 100, { status: "ok" }),
+      failed("a/b#5", 100, { status: "needs-input" }),
+      failed("a/b#6", 100, { status: "running" }),
+      failed("a/b#7", 100),
+      failed("a/b#8", 100, { kind: "brainstorm", taskMode: "brainstorm" }),
+      failed("a/b#9", 100, { items: undefined }),
+      failed("a/b#10", 100),
+      failed("a/b#11", 100, { status: "ok" }),
+      failed("a/b#11", 50),
+      failed("a/b#12", 100),
+    ],
+    queued: [{ key: "a/b#7", kind: "issue", repo: "a/b", replyTo: 7 }],
+    brainstorms: [],
+    waits: [{ key: "a/b#10", repo: "a/b", kind: "issue", blockers: [1], since: 1 }],
+    inputs: [{ key: "a/b#12", repo: "a/b", since: 1 }],
+  });
+  const yes = tasks.filter((t) => t.rerunnable).map((t) => t.key);
+  assert.deepEqual(yes.sort(), ["a/b#1", "a/b#2", "a/b#pr-3"]);
+});

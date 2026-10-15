@@ -231,3 +231,23 @@ test(
     assert.ok(!written.some((w) => w.startsWith("event: end")));
   },
 );
+
+test("runs: the comments a run ran on come back from its log, for a rerun, not for the dashboard", () => {
+  const dir = mkdtempSync(join(tmpdir(), "deckhand-"));
+  const items = [
+    { id: "4", kind: "issue", number: 4, trigger: "work", modeLine: null, text: "Fix it" },
+  ];
+  writeFileSync(
+    join(dir, "deckhand-org-repo-4-1000.log"),
+    line({ type: "listener", key: "org/repo#4", repo: "org/repo", startedAt: 1000, items }),
+  );
+  writeFileSync(
+    join(dir, "deckhand-org-repo-5-900.log"),
+    line({ type: "listener", key: "org/repo#5", repo: "org/repo", startedAt: 900 }),
+  );
+  const [run, old] = loadRuns(dir);
+  assert.equal(run.status, "interrupted");
+  assert.deepEqual(run.items, items);
+  assert.equal(old.items, null);
+  assert.equal("items" in publicRun(run), false);
+});

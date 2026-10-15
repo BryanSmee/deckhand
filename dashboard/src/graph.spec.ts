@@ -15,6 +15,7 @@ const task = (n: number, extra: Partial<Task> = {}): Task => ({
   since: 0,
   closed: null,
   pr: null,
+  rerunnable: false,
   runs: [],
   ...extra,
 });

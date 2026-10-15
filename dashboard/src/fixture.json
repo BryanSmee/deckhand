@@ -19,6 +19,7 @@
         "state": "draft",
         "readyAt": null
       },
+      "rerunnable": false,
       "runs": [
         {
           "id": "acme-app-22-1791989580000",
@@ -88,6 +89,7 @@
         "state": "ready",
         "readyAt": null
       },
+      "rerunnable": false,
       "runs": [
         {
           "id": "acme-api-pr-141-1791989880000",
@@ -121,6 +123,7 @@
       "since": 0,
       "closed": null,
       "pr": null,
+      "rerunnable": false,
       "runs": []
     },
     {
@@ -137,6 +140,7 @@
       "waitingFor": [23, 22],
       "closed": null,
       "pr": null,
+      "rerunnable": false,
       "runs": []
     },
     {
@@ -152,6 +156,7 @@
       "since": 1791979200000,
       "closed": null,
       "pr": null,
+      "rerunnable": false,
       "questions": {
         "source": "run",
         "runId": "acme-api-138-1791979200000",
@@ -160,16 +165,28 @@
             "title": "Debounce",
             "text": "How long should the search wait after the last keystroke?",
             "options": [
-              { "label": "150 ms: snappier, more requests", "recommended": false },
-              { "label": "300 ms: fewer requests, still feels instant", "recommended": true }
+              {
+                "label": "150 ms: snappier, more requests",
+                "recommended": false
+              },
+              {
+                "label": "300 ms: fewer requests, still feels instant",
+                "recommended": true
+              }
             ]
           },
           {
             "title": null,
             "text": "Should a search in flight be cancelled when a new one starts?",
             "options": [
-              { "label": "Yes, abort it", "recommended": true },
-              { "label": "No, drop its results when they arrive", "recommended": false }
+              {
+                "label": "Yes, abort it",
+                "recommended": true
+              },
+              {
+                "label": "No, drop its results when they arrive",
+                "recommended": false
+              }
             ]
           },
           {
@@ -213,6 +230,7 @@
       "deadline": 1791990360000,
       "closed": null,
       "pr": null,
+      "rerunnable": false,
       "runs": [
         {
           "id": "acme-app-20-1791989760000",
@@ -245,6 +263,7 @@
       "since": 1791896400000,
       "closed": null,
       "pr": null,
+      "rerunnable": false,
       "runs": [
         {
           "id": "acme-notes-discussion-8-1791896400000",
@@ -282,6 +301,7 @@
         "state": "ready",
         "readyAt": null
       },
+      "rerunnable": false,
       "runs": [
         {
           "id": "acme-api-131-1791972000000",
@@ -314,6 +334,7 @@
       "since": 1791961200000,
       "closed": null,
       "pr": null,
+      "rerunnable": false,
       "runs": [
         {
           "id": "acme-app-16-1791961200000",
@@ -351,6 +372,7 @@
         "state": "merged",
         "readyAt": null
       },
+      "rerunnable": true,
       "runs": [
         {
           "id": "acme-api-127-1791882000000",
@@ -384,6 +406,7 @@
       "deadline": 1791987000000,
       "closed": null,
       "pr": null,
+      "rerunnable": false,
       "runs": [
         {
           "id": "acme-notes-4-1791985800000",
