@@ -213,3 +213,29 @@
   stroke-width: 3px;
   stroke-dasharray: 5 3;
 }
+
+/* "Show closed": with the legend, a little apart from it. */
+.toggle {
+  margin-left: auto;
+}
+
+.toggle label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  cursor: pointer;
+}
+
+.toggle input {
+  margin: 0;
+}
+
+.show {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}

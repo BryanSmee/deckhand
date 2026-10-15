@@ -146,6 +146,13 @@ or its pull request merged. Whether an issue is closed comes with the `issues` a
 and what was open is asked again once per start. A node opens its task; one Deckhand never
 worked on opens on GitHub.
 
+By default the graph leaves closed issues out: implemented (closed as completed, or merged)
+and closed as not planned, with their arrows, so what still needs something stays on top. An
+issue whose only blocker is hidden stands in the grid. A closed issue stays while an issue that
+waited for it is running. **Show closed**, by the legend, brings them back; your browser keeps
+the choice. Runs on the ideas and bugs inboxes and discussions are never drawn: they have no
+pull request and no `/after`. On a repository's tab, only the issues drawn can be queued after.
+
 Each task shows its listener's state:
 
 | State             | What                                                                    |

@@ -144,6 +144,63 @@ test("the issues tasks wait for are nodes too, even off the board", () => {
   expect(edges).toHaveLength(1);
 });
 
+test("closed issues are hidden, with their arrows, unless shown", () => {
+  const pr = { number: 9, url: "", state: "merged" as const, readyAt: null };
+  const tasks = [
+    task(1, { closed: "completed" }),
+    task(2, { state: "waiting", waitingFor: [1] }),
+    task(3, { pr }),
+    task(4, { closed: "not_planned" }),
+    task(5),
+  ];
+  const edges = [after(1, 2)];
+  const { nodes, edges: drawn, hidden } = graphOf(tasks, edges, []);
+  expect(nodes.map((n) => n.number)).toEqual([2, 5]);
+  expect(drawn).toEqual([]);
+  expect(hidden).toBe(3);
+  // #2 no longer waits for anything: it goes in the grid.
+  const l = layout(
+    nodes.map((n) => n.key),
+    drawn,
+    wide,
+  );
+  expect(l.gridTop).toBe(0);
+
+  const all = graphOf(tasks, edges, [], { showClosed: true });
+  expect(all.nodes.map((n) => n.number)).toEqual([1, 2, 3, 4, 5]);
+  expect(all.edges).toEqual(edges);
+  expect(all.hidden).toBe(0);
+});
+
+test("a closed issue stays while an issue that waited for it runs", () => {
+  const tasks = [task(2, { state: "working", waitingFor: [1] }), task(3, { state: "waiting" })];
+  const blockers = [
+    { key: "org/app#1", repo: "org/app", number: 1, title: "Done", closed: "completed" as const },
+    { key: "org/app#4", repo: "org/app", number: 4, title: "Gone", closed: "completed" as const },
+  ];
+  const { nodes, edges } = graphOf(tasks, [after(1, 2), after(4, 3)], blockers);
+  expect(nodes.map((n) => n.number)).toEqual([2, 3, 1]);
+  expect(edges).toEqual([after(1, 2)]);
+  // A run on a closed issue is still a run.
+  const running = graphOf([task(5, { state: "working", closed: "not_planned" })], [], []);
+  expect(running.nodes).toHaveLength(1);
+});
+
+test("inbox runs and discussions are never nodes", () => {
+  const tasks = [
+    task(1, { kind: "idea" }),
+    task(2, { kind: "bug" }),
+    task(3, { kind: "discussion" }),
+    task(4, { kind: "brainstorm" }),
+    task(5, { kind: "pr" }),
+  ];
+  for (const showClosed of [false, true]) {
+    const { nodes, hidden } = graphOf(tasks, [], [], { showClosed });
+    expect(nodes.map((n) => n.number)).toEqual([4, 5]);
+    expect(hidden).toBe(0);
+  }
+});
+
 test("dropTarget: on a node or in the gap after it, else the open", () => {
   const l = layout(["org/app#2", "org/app#1"], [after(1, 2)], wide);
   const one = at(l, 1);

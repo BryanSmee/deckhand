@@ -192,7 +192,10 @@ test("the graph: a node per issue, arrows for /after, a node opens its task", ()
   expect(nodes.map((n) => n.getAttribute("aria-label"))).toContain(
     "#24 Per-repo budgets in the dashboard: Waiting, waits for 2 issues",
   );
-  expect(nodes).toHaveLength(state.tasks.filter((t) => t.repo === "acme/app").length);
+  // Not the bugs inbox's run (#16).
+  expect(nodes).toHaveLength(
+    state.tasks.filter((t) => t.repo === "acme/app" && t.kind !== "bug").length,
+  );
   expect(document.querySelectorAll("path[marker-end]")).toHaveLength(2);
   expect(screen.getByRole("list", { name: "Legend" }).textContent).toMatch(/Ready for review/);
 
@@ -202,4 +205,44 @@ test("the graph: a node per issue, arrows for /after, a node opens its task", ()
   fireEvent.click(screen.getByRole("tab", { name: /^All/ }));
   expect(location.hash).toBe("#/graph");
   expect(screen.getByRole("list", { name: "Issues" })).toBeTruthy();
+});
+
+test("the graph hides closed issues until Show closed, which is kept", () => {
+  const closed = {
+    ...state,
+    tasks: state.tasks.map((t) =>
+      t.key === "acme/app#23" ? { ...t, state: "done" as const, closed: "completed" as const } : t,
+    ),
+  };
+  history.replaceState(null, "", "#/graph/acme/app");
+  const view = render(<Dashboard state={closed} error={null} />);
+  const labels = () =>
+    within(screen.getByRole("list", { name: "Issues of acme/app" }))
+      .getAllByRole("listitem")
+      .map((n) => n.getAttribute("aria-label"));
+  expect(labels().some((l) => l!.startsWith("#23"))).toBe(false);
+  expect(labels()).toContain("#24 Per-repo budgets in the dashboard: Waiting, waits for 1 issue");
+  expect(document.querySelectorAll("path[marker-end]")).toHaveLength(1);
+
+  fireEvent.click(screen.getByRole("checkbox", { name: "Show closed" }));
+  expect(labels().some((l) => l!.startsWith("#23"))).toBe(true);
+  expect(document.querySelectorAll("path[marker-end]")).toHaveLength(2);
+  view.unmount();
+  render(<Dashboard state={closed} error={null} />);
+  expect(screen.getByRole("checkbox", { name: "Show closed" })).toHaveProperty("checked", true);
+});
+
+test("the graph with nothing open says so, and offers the closed ones", () => {
+  const done = {
+    ...state,
+    tasks: state.tasks
+      .filter((t) => t.key === "acme/app#23")
+      .map((t) => ({ ...t, state: "done" as const, closed: "completed" as const })),
+    edges: [],
+  };
+  history.replaceState(null, "", "#/graph/acme/app");
+  render(<Dashboard state={done} error={null} />);
+  expect(screen.getByText(/Nothing open here/)).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Show closed issues" }));
+  expect(screen.getByRole("list", { name: "Issues of acme/app" })).toBeTruthy();
 });
