@@ -15,7 +15,8 @@ export const APP_PERMISSIONS = {
   actions: "read",
   discussions: "write",
 };
-// What workItem() routes, plus the previews' events (handled by a later hook).
+// What workItem() routes, plus the previews' events (handled by a later hook), and pushes,
+// which tell the dashboard's repository list (repos.mjs) a default branch changed.
 export const APP_EVENTS = [
   "issue_comment",
   "discussion",
@@ -24,6 +25,7 @@ export const APP_EVENTS = [
   "pull_request_review",
   "pull_request_review_comment",
   "workflow_run",
+  "push",
 ];
 // A sandbox gets less than the App: no deployments, nothing outside its repo.
 export const SANDBOX_PERMISSIONS = {
@@ -179,6 +181,21 @@ export function createGitHubApp({
     return res;
   }
 
+  // As the App itself (its JWT): what lists its installations.
+  async function asApp(method, path) {
+    const res = await call(method, path, jwt());
+    if (!res.ok) log(`GitHub ${method} ${path}: ${res.status} ${await res.clone().text()}`);
+    return res;
+  }
+
+  // As one installation, with the App's permissions: what lists its repos.
+  async function asInstallation(installationId, method, path) {
+    const { token: t } = await token(installationId);
+    const res = await call(method, path, t);
+    if (!res.ok) log(`GitHub ${method} ${path}: ${res.status} ${await res.clone().text()}`);
+    return res;
+  }
+
   // Commits come from the App's bot, as GitHub shows them for its own commits.
   function identity() {
     const name = `${credentials.slug}[bot]`;
@@ -195,6 +212,8 @@ export function createGitHubApp({
     token,
     repoToken,
     request,
+    asApp,
+    asInstallation,
     identity,
     credentials,
   };

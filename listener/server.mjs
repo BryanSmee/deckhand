@@ -130,6 +130,7 @@ import {
   onboardingTargets,
   triggerWord,
 } from "./onboarding.mjs";
+import { createRepoApi, createRepoList, refreshFor } from "./repos.mjs";
 import { createPreviews } from "./previews.mjs";
 import {
   CONFIG_FILE,
@@ -427,32 +428,57 @@ async function admit(first, event, payload) {
   await accept(item);
 }
 
-// An installation delivery: an onboarding issue per repo that needs one, each starting an
-// onboarding run, as a "/mode onboarding" comment on it would.
-async function onboard(repos, sender) {
-  for (const repo of repos) {
-    const issue = await onboarding.open(repo, sender).catch((error) => {
-      log(`  onboarding ${repo}: ${error.stack ?? error}`);
-      return null;
-    });
-    if (!issue) continue;
-    const { settings } = await repoSettings(repo, issue.base);
-    await accept({
-      repo,
-      id: String(issue.number),
-      kind: "issue",
-      number: issue.number,
-      title: issue.title,
-      trigger: null,
-      modeLine: "onboarding",
-      text: "",
-      replyTo: issue.number,
-      comment: null,
-      base: issue.base,
-      settings,
-    });
-  }
+// An onboarding issue for the repo, if it needs one, starting an onboarding run on it as a
+// "/mode onboarding" comment would. Resolves to the issue, or null (the reason logged).
+// `byHand`: started from the dashboard's repository list.
+async function onboardRepo(repo, sender, byHand = false) {
+  const issue = await onboarding.open(repo, sender, byHand).catch((error) => {
+    log(`  onboarding ${repo}: ${error.stack ?? error}`);
+    return null;
+  });
+  if (!issue) return null;
+  const { settings } = await repoSettings(repo, issue.base);
+  await accept({
+    repo,
+    id: String(issue.number),
+    kind: "issue",
+    number: issue.number,
+    title: issue.title,
+    trigger: null,
+    modeLine: "onboarding",
+    text: "",
+    replyTo: issue.number,
+    comment: null,
+    base: issue.base,
+    settings,
+  });
+  return issue;
 }
+
+// An installation delivery: an onboarding issue per repo that needs one.
+async function onboard(repos, sender) {
+  for (const repo of repos) await onboardRepo(repo, sender);
+}
+
+// The dashboard's repository list (repos.mjs), refreshed by the deliveries that change it.
+const repoList = createRepoList({
+  app: {
+    asApp: (...args) => app.asApp(...args),
+    asInstallation: (...args) => app.asInstallation(...args),
+    request: github,
+    remember: (...args) => app.remember(...args),
+  },
+  config,
+  store: onboarded,
+  log,
+});
+const repoApi = createRepoApi({
+  config,
+  list: repoList,
+  publicUrl,
+  start: (repo, login) => onboardRepo(repo, login, true),
+  log,
+});
 
 async function previewHook({ repo, base, event }, payload) {
   const { settings, errors } = await repoSettings(repo, base);
@@ -2027,6 +2053,9 @@ function webhook(req, res) {
     const event = req.headers["x-github-event"];
     log(`Delivery: ${event} ${payload.action ?? ""} from ${payload.sender?.login ?? "?"}`);
     app.remember(payload.repository?.full_name, payload.installation?.id);
+    refreshFor(event, payload, repoList.refresh);
+    // Only the repository list's: nothing runs on a push.
+    if (event === "push") return;
     if (event === "installation" || event === "installation_repositories") {
       const added = [...(payload.repositories ?? []), ...(payload.repositories_added ?? [])];
       for (const r of added) app.remember(r.full_name, payload.installation?.id);
@@ -2063,6 +2092,10 @@ createServer((req, res) => {
     return sendJson(res, status());
   }
   if (req.method === "POST" && req.url === "/webhook") return webhook(req, res);
+  if (req.url.startsWith("/api/repos")) {
+    if (!app) return res.writeHead(503).end();
+    if (repoApi.handle(req, res, auth.user(req))) return;
+  }
   // GitHub only ever POSTs to /webhook; everything a browser asks for is the dashboard.
   if (req.method === "GET") return serveDashboard(req, res);
   res.statusCode = 404;

@@ -1,5 +1,6 @@
 // The contract with the listener: what GET api/state returns (listener/server.mjs state(),
-// listener/board.mjs) and what api/runs/<id>/stream sends (server.mjs format()).
+// listener/board.mjs), what api/runs/<id>/stream sends (server.mjs format()), and the
+// repositories' api/repos (listener/repos.mjs).
 
 export type TaskState =
   | "building-image"
@@ -77,3 +78,29 @@ export type Entry =
   | { kind: "tool"; name: string; text: string }
   | { kind: "output"; text: string; error: boolean }
   | { kind: "result"; status: "ok" | "needs-input" | "error"; text: string; minutes: number };
+
+// configured: its default branch has .deckhand.yaml; onboarding: its onboarding issue is open;
+// unknown: GitHub didn't say.
+export type RepoStatus = "configured" | "onboarding" | "not-onboarded" | "unknown";
+
+export interface Repo {
+  repo: string;
+  url: string;
+  private: boolean;
+  // false: its issues are disabled, so it can't be onboarded.
+  issues: boolean;
+  status: RepoStatus;
+  issue: { number: number; url: string } | null;
+}
+
+// GET api/repos
+export interface Repos {
+  repos: Repo[];
+}
+
+// POST api/repos/<owner>/<repo>/onboard
+export interface Onboarded {
+  repo?: Repo;
+  opened?: boolean;
+  error?: string;
+}

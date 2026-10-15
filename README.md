@@ -25,7 +25,8 @@ operator, across as many repositories as the App is installed on.
     it switches modes and keeps the conversation.
 - **Onboarding.** Installing the App on a repository without a `.deckhand.yaml` opens an
   issue there where Claude proposes one, grounded in the repository; your comments refine it
-  and `Deckhand` turns it into a pull request. `/mode onboarding` starts it on any issue.
+  and `Deckhand` turns it into a pull request. `/mode onboarding` starts it on any issue, and
+  the dashboard lists the repositories not onboarded yet, with a button that starts it.
 - **Live feedback.** The comment gets 👀 when it is received, then 🚀 (done), 😕 (needs
   input) or 👎 (error). A burst of comments is one message, and one that arrives while
   Claude works reaches the running session. The final message comes back as a comment from
