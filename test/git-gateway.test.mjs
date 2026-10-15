@@ -4,12 +4,19 @@ import assert from "node:assert/strict";
 import { execFile, execFileSync, spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { createServer } from "node:http";
+import { createServer, request } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { branchAllowed, createBroker } from "../listener/broker.mjs";
-import { createGitGateway, readCommands, refusal, rejection } from "../listener/git-gateway.mjs";
+import {
+  commandReader,
+  createGitGateway,
+  MAX_COMMANDS,
+  readCommands,
+  refusal,
+  rejection,
+} from "../listener/git-gateway.mjs";
 
 const ZERO = "0".repeat(40);
 const A = "a".repeat(40);
@@ -35,6 +42,26 @@ test("the ref updates of a push are read up to the flush", () => {
   assert.equal(readCommands(head.subarray(0, head.indexOf("0000"))), null);
   // Shallow lines are skipped, an empty push has no refs.
   assert.deepEqual(readCommands(Buffer.from(pkt(`shallow ${A}\n`) + "0000")).refs, []);
+});
+
+test("ref updates sent a byte at a time read the same, each byte once; past the cap, refused", () => {
+  const head = Buffer.from(
+    pkt(`${A} ${B} refs/heads/topic\0report-status side-band-64k\n`) +
+      pkt(`${ZERO} ${B} refs/heads/other\n`) +
+      "0000PACK...",
+  );
+  const reader = commandReader();
+  let parsed = null;
+  for (let i = 0; !parsed; i++) parsed = reader.push(head.subarray(i, i + 1));
+  assert.deepEqual(parsed, readCommands(head));
+  // Shallow lines up to the cap, a few bytes at a time: refused once past it, quickly.
+  const shallow = Buffer.from(pkt(`shallow ${A}\n`).repeat(Math.ceil(MAX_COMMANDS / 40) + 10));
+  const slow = commandReader();
+  const started = Date.now();
+  assert.throws(() => {
+    for (let i = 0; i < shallow.length; i += 3) slow.push(shallow.subarray(i, i + 3));
+  }, /not a git push/);
+  assert.ok(Date.now() - started < 2000);
 });
 
 test("anything else in place of ref updates is refused", () => {
@@ -166,7 +193,7 @@ function issueRun(b, branches = ["issue-1-*"]) {
   return secret;
 }
 
-async function setup(t, { register = issueRun, app = true } = {}) {
+async function setup(t, { register = issueRun, app = true, headMs, drainMs } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "gateway-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const root = join(dir, "github");
@@ -193,6 +220,8 @@ async function setup(t, { register = issueRun, app = true } = {}) {
     githubUrl: "https://github.test",
     fetch: backendFetch(root, seen),
     log: (line) => logs.push(line),
+    headMs,
+    drainMs,
   });
   const server = createServer((req, res) => gateway.handle(req, res));
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -417,6 +446,39 @@ test("without the default branch, or with a compressed body, nothing is forwarde
     body: "nope",
   });
   assert.equal(garbage.status, 400);
+  assert.deepEqual(seen, []);
+});
+
+// A push whose body starts with `head` and never ends: resolves once the gateway drops it,
+// with its answer's status if it sent one.
+function stalled(port, secret, head) {
+  return new Promise((resolve) => {
+    const auth = `Basic ${Buffer.from(`deckhand:${secret}`).toString("base64")}`;
+    const req = request({
+      port,
+      method: "POST",
+      path: "/git/org/repo.git/git-receive-pack",
+      headers: { authorization: auth, "transfer-encoding": "chunked" },
+    });
+    let status = null;
+    req.on("response", (res) => {
+      status = res.statusCode;
+      res.resume();
+      res.on("close", () => resolve(status));
+    });
+    req.on("error", () => resolve(status));
+    req.on("close", () => resolve(status));
+    req.write(head);
+  });
+}
+
+test("a push whose ref updates or refused pack come too slowly is dropped", async (t) => {
+  const { remote, port, seen } = await setup(t, { headMs: 100, drainMs: 100 });
+  const secret = new URL(remote()).password;
+  // Half a pkt-line, then nothing.
+  await stalled(port, secret, "00a0" + A);
+  // A refused push whose pack never ends: dropped, never forwarded.
+  await stalled(port, secret, pkt(`${ZERO} ${B} refs/heads/main\0report-status\n`) + "0000PACK");
   assert.deepEqual(seen, []);
 });
 
