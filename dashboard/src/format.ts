@@ -104,10 +104,11 @@ export function numberOf(t: Task): string {
   return t.kind === "pr" ? `PR #${t.number}` : `#${t.number}`;
 }
 
-export function githubUrl(t: Task): string | null {
+// `base`: the listener's GitHub (api/state's githubUrl), GitHub Enterprise's included.
+export function githubUrl(t: Task, base: string): string | null {
   if (!t.repo || !t.replyTo) return null;
   const path = t.kind === "discussion" ? "discussions" : "issues";
-  return `https://github.com/${t.repo}/${path}/${t.replyTo}`;
+  return `${base}/${t.repo}/${path}/${t.replyTo}`;
 }
 
 export function ago(ms: number, now: number): string {

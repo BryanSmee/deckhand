@@ -65,6 +65,15 @@ test("the hook runs with the event on stdin and the Docker socket, and is busy u
   await new Promise((resolve) => setTimeout(resolve, 10));
   assert.equal(previews.status().length, 1);
   assert.equal(previews.status()[0].state, "running");
+  // dashboard/src/types.ts's Preview: change both together.
+  assert.deepEqual(Object.keys(previews.status()[0]).sort(), [
+    "action",
+    "event",
+    "name",
+    "repo",
+    "since",
+    "state",
+  ]);
   const create = calls.find((c) => c[0] === "create");
   assert.ok(create.join(" ").includes("-v /run/docker.sock:/var/run/docker.sock"));
   assert.ok(create.join(" ").includes("-e GITHUB_EVENT_NAME=pull_request"));

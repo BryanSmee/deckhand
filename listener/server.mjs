@@ -1913,6 +1913,8 @@ function state(user) {
     queued: queued.length,
     maxParallel: config.maxParallel,
     previews: previews.status(),
+    // GitHub Enterprise: the dashboard's links go where the listener's do.
+    githubUrl: config.githubUrl,
     now: Date.now(),
   };
 }

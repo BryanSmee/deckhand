@@ -1,10 +1,10 @@
 {
-  "user": "BryanSmee",
+  "user": "octocat",
   "tasks": [
     {
-      "key": "BryanSmee/deckhand#22",
-      "repo": "BryanSmee/deckhand",
-      "project": "BryanSmee",
+      "key": "acme/app#22",
+      "repo": "acme/app",
+      "project": "acme",
       "number": 22,
       "title": "Dashboard on a frontend framework, built at image build time",
       "kind": "issue",
@@ -14,17 +14,17 @@
       "since": 1791989580000,
       "pr": {
         "number": 25,
-        "url": "https://github.com/BryanSmee/deckhand/pull/25",
+        "url": "https://github.example.com/acme/app/pull/25",
         "state": "draft",
         "readyAt": null
       },
       "runs": [
         {
-          "id": "BryanSmee-deckhand-22-1791989580000",
-          "key": "BryanSmee/deckhand#22",
+          "id": "acme-app-22-1791989580000",
+          "key": "acme/app#22",
           "kind": "issue",
           "title": "Dashboard on a frontend framework, built at image build time",
-          "repo": "BryanSmee/deckhand",
+          "repo": "acme/app",
           "replyTo": 22,
           "mode": "continue",
           "taskMode": "work",
@@ -36,11 +36,11 @@
           "summary": null
         },
         {
-          "id": "BryanSmee-deckhand-22-1791987600000",
-          "key": "BryanSmee/deckhand#22",
+          "id": "acme-app-22-1791987600000",
+          "key": "acme/app#22",
           "kind": "issue",
           "title": "Dashboard on a frontend framework, built at image build time",
-          "repo": "BryanSmee/deckhand",
+          "repo": "acme/app",
           "replyTo": 22,
           "mode": "start",
           "taskMode": "work",
@@ -52,11 +52,11 @@
           "summary": "The sandbox can't reach registry.npmjs.org: npm installs get a 403 from the egress proxy."
         },
         {
-          "id": "BryanSmee-deckhand-22-1791984600000",
-          "key": "BryanSmee/deckhand#22",
+          "id": "acme-app-22-1791984600000",
+          "key": "acme/app#22",
           "kind": "issue",
           "title": "Dashboard on a frontend framework, built at image build time",
-          "repo": "BryanSmee/deckhand",
+          "repo": "acme/app",
           "replyTo": 22,
           "mode": "start",
           "taskMode": "brainstorm",
@@ -70,9 +70,9 @@
       ]
     },
     {
-      "key": "BryanSmee/shiny-piece#pr-141",
-      "repo": "BryanSmee/shiny-piece",
-      "project": "BryanSmee",
+      "key": "acme/api#pr-141",
+      "repo": "acme/api",
+      "project": "acme",
       "number": 141,
       "title": "Offline sync for the reading list",
       "kind": "pr",
@@ -82,17 +82,17 @@
       "since": 1791989880000,
       "pr": {
         "number": 141,
-        "url": "https://github.com/BryanSmee/shiny-piece/pull/141",
+        "url": "https://github.example.com/acme/api/pull/141",
         "state": "ready",
         "readyAt": null
       },
       "runs": [
         {
-          "id": "BryanSmee-shiny-piece-pr-141-1791989880000",
-          "key": "BryanSmee/shiny-piece#pr-141",
+          "id": "acme-api-pr-141-1791989880000",
+          "key": "acme/api#pr-141",
           "kind": "pr",
           "title": "Offline sync for the reading list",
-          "repo": "BryanSmee/shiny-piece",
+          "repo": "acme/api",
           "replyTo": 141,
           "mode": "start",
           "taskMode": "work",
@@ -107,9 +107,9 @@
       ]
     },
     {
-      "key": "BryanSmee/deckhand#23",
-      "repo": "BryanSmee/deckhand",
-      "project": "BryanSmee",
+      "key": "acme/app#23",
+      "repo": "acme/app",
+      "project": "acme",
       "number": 23,
       "title": "Per-repo budgets for runs",
       "kind": "issue",
@@ -121,9 +121,9 @@
       "runs": []
     },
     {
-      "key": "BryanSmee/shiny-piece#138",
-      "repo": "BryanSmee/shiny-piece",
-      "project": "BryanSmee",
+      "key": "acme/api#138",
+      "repo": "acme/api",
+      "project": "acme",
       "number": 138,
       "title": "Search results flicker when typing fast",
       "kind": "issue",
@@ -134,11 +134,11 @@
       "pr": null,
       "runs": [
         {
-          "id": "BryanSmee-shiny-piece-138-1791979200000",
-          "key": "BryanSmee/shiny-piece#138",
+          "id": "acme-api-138-1791979200000",
+          "key": "acme/api#138",
           "kind": "issue",
           "title": "Search results flicker when typing fast",
-          "repo": "BryanSmee/shiny-piece",
+          "repo": "acme/api",
           "replyTo": 138,
           "mode": "start",
           "taskMode": "review",
@@ -152,9 +152,9 @@
       ]
     },
     {
-      "key": "BryanSmee/deckhand#20",
-      "repo": "BryanSmee/deckhand",
-      "project": "BryanSmee",
+      "key": "acme/app#20",
+      "repo": "acme/app",
+      "project": "acme",
       "number": 20,
       "title": "Egress proxy: allow wildcard ports",
       "kind": "brainstorm",
@@ -166,11 +166,11 @@
       "pr": null,
       "runs": [
         {
-          "id": "BryanSmee-deckhand-20-1791989760000",
-          "key": "BryanSmee/deckhand#20",
+          "id": "acme-app-20-1791989760000",
+          "key": "acme/app#20",
           "kind": "brainstorm",
           "title": "Egress proxy: allow wildcard ports",
-          "repo": "BryanSmee/deckhand",
+          "repo": "acme/app",
           "replyTo": 20,
           "mode": "start",
           "taskMode": "brainstorm",
@@ -184,9 +184,9 @@
       ]
     },
     {
-      "key": "BryanSmee/notes#discussion-8",
-      "repo": "BryanSmee/notes",
-      "project": "BryanSmee",
+      "key": "acme/notes#discussion-8",
+      "repo": "acme/notes",
+      "project": "acme",
       "number": 8,
       "title": "How do runs restart after an update?",
       "kind": "discussion",
@@ -197,11 +197,11 @@
       "pr": null,
       "runs": [
         {
-          "id": "BryanSmee-notes-discussion-8-1791896400000",
-          "key": "BryanSmee/notes#discussion-8",
+          "id": "acme-notes-discussion-8-1791896400000",
+          "key": "acme/notes#discussion-8",
           "kind": "discussion",
           "title": "How do runs restart after an update?",
-          "repo": "BryanSmee/notes",
+          "repo": "acme/notes",
           "replyTo": 8,
           "mode": "start",
           "taskMode": "discussion",
@@ -215,9 +215,9 @@
       ]
     },
     {
-      "key": "BryanSmee/shiny-piece#131",
-      "repo": "BryanSmee/shiny-piece",
-      "project": "BryanSmee",
+      "key": "acme/api#131",
+      "repo": "acme/api",
+      "project": "acme",
       "number": 131,
       "title": "Dark mode for the settings page",
       "kind": "issue",
@@ -227,17 +227,17 @@
       "since": 1791972000000,
       "pr": {
         "number": 132,
-        "url": "https://github.com/BryanSmee/shiny-piece/pull/132",
+        "url": "https://github.example.com/acme/api/pull/132",
         "state": "ready",
         "readyAt": null
       },
       "runs": [
         {
-          "id": "BryanSmee-shiny-piece-131-1791972000000",
-          "key": "BryanSmee/shiny-piece#131",
+          "id": "acme-api-131-1791972000000",
+          "key": "acme/api#131",
           "kind": "issue",
           "title": "Dark mode for the settings page",
-          "repo": "BryanSmee/shiny-piece",
+          "repo": "acme/api",
           "replyTo": 131,
           "mode": "start",
           "taskMode": "work",
@@ -251,9 +251,9 @@
       ]
     },
     {
-      "key": "BryanSmee/deckhand#16",
-      "repo": "BryanSmee/deckhand",
-      "project": "BryanSmee",
+      "key": "acme/app#16",
+      "repo": "acme/app",
+      "project": "acme",
       "number": 16,
       "title": "Bugs",
       "kind": "bug",
@@ -264,11 +264,11 @@
       "pr": null,
       "runs": [
         {
-          "id": "BryanSmee-deckhand-16-1791961200000",
-          "key": "BryanSmee/deckhand#16",
+          "id": "acme-app-16-1791961200000",
+          "key": "acme/app#16",
           "kind": "bug",
           "title": "Bugs",
-          "repo": "BryanSmee/deckhand",
+          "repo": "acme/app",
           "replyTo": 16,
           "mode": "start",
           "taskMode": "bug",
@@ -282,9 +282,9 @@
       ]
     },
     {
-      "key": "BryanSmee/shiny-piece#127",
-      "repo": "BryanSmee/shiny-piece",
-      "project": "BryanSmee",
+      "key": "acme/api#127",
+      "repo": "acme/api",
+      "project": "acme",
       "number": 127,
       "title": null,
       "kind": "issue",
@@ -294,17 +294,17 @@
       "since": 1791882000000,
       "pr": {
         "number": 128,
-        "url": "https://github.com/BryanSmee/shiny-piece/pull/128",
+        "url": "https://github.example.com/acme/api/pull/128",
         "state": "merged",
         "readyAt": null
       },
       "runs": [
         {
-          "id": "BryanSmee-shiny-piece-127-1791882000000",
-          "key": "BryanSmee/shiny-piece#127",
+          "id": "acme-api-127-1791882000000",
+          "key": "acme/api#127",
           "kind": "issue",
           "title": null,
-          "repo": "BryanSmee/shiny-piece",
+          "repo": "acme/api",
           "replyTo": 127,
           "mode": "start",
           "taskMode": "work",
@@ -318,9 +318,9 @@
       ]
     },
     {
-      "key": "BryanSmee/notes#4",
-      "repo": "BryanSmee/notes",
-      "project": "BryanSmee",
+      "key": "acme/notes#4",
+      "repo": "acme/notes",
+      "project": "acme",
       "number": 4,
       "title": "Weekly digest of merged pull requests",
       "kind": "brainstorm",
@@ -332,11 +332,11 @@
       "pr": null,
       "runs": [
         {
-          "id": "BryanSmee-notes-4-1791985800000",
-          "key": "BryanSmee/notes#4",
+          "id": "acme-notes-4-1791985800000",
+          "key": "acme/notes#4",
           "kind": "brainstorm",
           "title": "Weekly digest of merged pull requests",
-          "repo": "BryanSmee/notes",
+          "repo": "acme/notes",
           "replyTo": 4,
           "mode": "start",
           "taskMode": "brainstorm",
@@ -366,5 +366,6 @@
   "queued": 1,
   "maxParallel": 4,
   "previews": [],
+  "githubUrl": "https://github.example.com",
   "now": 1791990000000
 }

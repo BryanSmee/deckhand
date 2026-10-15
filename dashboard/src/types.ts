@@ -37,6 +37,8 @@ export interface Run {
   status: RunStatus;
   // The first line of its reply.
   summary?: string | null;
+  // How many comments reached it while it ran.
+  delivered?: number;
 }
 
 // draft, ready for review, merged, or closed without merging.
@@ -68,8 +70,16 @@ export interface Task {
   runs: Run[]; // newest first
 }
 
+// A preview hook waiting or running (listener/previews.mjs status()).
 export interface Preview {
+  // Its container's name.
   name: string;
+  repo: string;
+  // pull_request or workflow_run, and the payload's action.
+  event: string;
+  action: string | null;
+  state: "waiting" | "running";
+  since: number;
 }
 
 export interface State {
@@ -80,6 +90,8 @@ export interface State {
   queued: number;
   maxParallel: number;
   previews?: Preview[];
+  // GITHUB_URL, without a trailing slash: where links go.
+  githubUrl: string;
   // The server's clock: run times are compared with it.
   now: number;
 }

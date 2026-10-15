@@ -185,6 +185,7 @@ export function Dashboard({ state, error, repos }: Props) {
                 onRun={(id) => task && go({ ...route, task: task.key, run: id }, true)}
                 onBack={() => go({ ...route, task: null, run: null }, true)}
                 now={now}
+                github={state?.githubUrl ?? "https://github.com"}
               />
             </main>
           </div>

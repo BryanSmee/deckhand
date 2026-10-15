@@ -1057,12 +1057,12 @@ test("installing the App on a repo without a config: an onboarding issue and con
   await listener.until("done (ok)");
 
   // A comment without a trigger line: the same conversation, nothing pushed.
-  await send(onIssue30Comment(100, "Looks good, but use pnpm."));
+  await send(onIssue30Comment(100, "Looks good, but run the linter too."));
   await until(() => onIssue30(github).length === 2, "the updated proposal");
   assert.equal(lastRun(dir), "onboarding 1");
   assert.match(
     readFileSync(join(dir, "run-env"), "utf8"),
-    /^TASK_MESSAGE=Looks good, but use pnpm\./m,
+    /^TASK_MESSAGE=Looks good, but run the linter too\./m,
   );
   assert.equal(JSON.parse(mints().at(-1).body).permissions.contents, "read");
 
@@ -1182,6 +1182,13 @@ test("the dashboard and its logs are for allowed users signed in with GitHub", a
   }
   const board = await (await get("/api/state", session)).json();
   assert.equal(board.user, "alice");
+  assert.equal(board.githubUrl, github.url);
+  // The shape dashboard/src/types.ts expects: change both together.
+  assertShape(board, STATE_KEYS, "State");
+  for (const t of board.tasks) {
+    assertShape(t, TASK_KEYS, "Task");
+    for (const r of t.runs) assertShape(r, RUN_KEYS, "Run");
+  }
   const [task] = board.tasks;
   assert.deepEqual(
     [task.key, task.project, task.state, task.title],
@@ -1241,6 +1248,53 @@ test("the dashboard and its logs are for allowed users signed in with GitHub", a
   assert.match(await stream.text(), /event: end/);
   assert.equal((await get(`/api/runs/${task.runs[0].id}/stream`)).status, 401);
 });
+
+// dashboard/src/types.ts, key by key: [required, optional].
+const STATE_KEYS = [
+  ["user", "tasks", "states", "running", "queued", "maxParallel", "githubUrl", "now"],
+  ["previews"],
+];
+const TASK_KEYS = [
+  [
+    "key",
+    "repo",
+    "project",
+    "number",
+    "title",
+    "kind",
+    "mode",
+    "replyTo",
+    "state",
+    "since",
+    "pr",
+    "runs",
+  ],
+  ["deadline"],
+];
+const RUN_KEYS = [
+  [
+    "id",
+    "key",
+    "kind",
+    "title",
+    "repo",
+    "replyTo",
+    "mode",
+    "taskMode",
+    "startedAt",
+    "finishedAt",
+    "status",
+  ],
+  ["model", "effort", "phase", "summary", "delivered"],
+];
+
+function assertShape(value, [required, optional], name) {
+  const keys = Object.keys(value);
+  const unknown = keys.filter((k) => !required.includes(k) && !optional.includes(k));
+  assert.deepEqual(unknown, [], `${name}: keys types.ts doesn't have`);
+  const missing = required.filter((k) => !keys.includes(k));
+  assert.deepEqual(missing, [], `${name}: keys types.ts requires`);
+}
 
 test("/status answers calls from inside the container without a session", async (t) => {
   const { port } = await listen(t);
