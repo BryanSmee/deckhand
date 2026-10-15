@@ -24,6 +24,12 @@ const imageTypes = {
   webp: "image/webp",
 };
 
+// GitHub caps its deliveries at 25 MB.
+const MAX_DELIVERY = 25 * 1024 * 1024;
+// Deliveries read at once before their signature is checked: GitHub sends a few at a time.
+const MAX_UNVERIFIED = 16;
+const BODY_MS = 10000;
+
 // Health checks and scripts call from inside the container (docker compose exec).
 function local(req) {
   return ["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(req.socket.remoteAddress);
@@ -137,38 +143,67 @@ export function createHttp(ctx, { dashboardDir }) {
     createReadStream(path).pipe(res);
   }
 
+  // Bodies being read before their signature can be checked: a public port, so capped.
+  let unverified = 0;
+
   function webhook(req, res) {
-    readBody(req, 25 * 1024 * 1024).then(
-      (body) => {
-        if (refused(req, res, body)) return;
-        // Answer at once: GitHub gives up after 10 seconds, runs take minutes.
-        res.statusCode = 202;
-        res.end();
-        let payload;
-        try {
-          payload = JSON.parse(body.toString("utf8"));
-        } catch {
-          return;
-        }
-        dispatch(req.headers["x-github-event"], payload);
-      },
-      (error) => log(`Rejected a delivery: ${error.message}`),
-    );
+    if (refusedEarly(req, res)) return;
+    unverified++;
+    // GitHub sends its body at once: a slow one would hold a place.
+    const timer = setTimeout(() => req.destroy(new Error("body not received in time")), BODY_MS);
+    readBody(req, MAX_DELIVERY)
+      .finally(() => {
+        unverified--;
+        clearTimeout(timer);
+      })
+      .then(
+        (body) => {
+          if (refused(req, res, body)) return;
+          // Answer at once: GitHub gives up after 10 seconds, runs take minutes.
+          res.statusCode = 202;
+          res.end();
+          let payload;
+          try {
+            payload = JSON.parse(body.toString("utf8"));
+          } catch {
+            return;
+          }
+          dispatch(req.headers["x-github-event"], payload);
+        },
+        (error) => log(`Rejected a delivery: ${error.message}`),
+      );
+  }
+
+  const refuse = (res, status, why, text) => {
+    log(`Rejected a delivery: ${why}`);
+    // The body isn't read: the connection isn't reused for another request.
+    res.writeHead(status, { connection: "close" });
+    res.end(text);
+    return true;
+  };
+
+  // What can be refused from the headers alone, before reading the body: answered and true.
+  function refusedEarly(req, res) {
+    // Failed on GitHub's side, where it can be redelivered, rather than lost.
+    if (ctx.stopping) return refuse(res, 503, "stopping", "restarting");
+    if (!ctx.app) return refuse(res, 503, "no GitHub App yet (open /setup)", "not set up");
+    if (!req.headers["x-hub-signature-256"]) {
+      return refuse(res, 401, "no signature (not from this listener's App)", "bad signature");
+    }
+    if (Number(req.headers["content-length"]) > MAX_DELIVERY) {
+      return refuse(res, 413, `over ${MAX_DELIVERY} bytes`, "too large");
+    }
+    if (unverified >= MAX_UNVERIFIED) {
+      return refuse(res, 503, `${MAX_UNVERIFIED} deliveries being read already`, "busy");
+    }
+    return false;
   }
 
   // A delivery the listener can't take now, or that isn't from its App: answered and true.
   function refused(req, res, body) {
-    const refuse = (status, why, text) => {
-      log(`Rejected a delivery: ${why}`);
-      res.statusCode = status;
-      res.end(text);
-      return true;
-    };
-    // Failed on GitHub's side, where it can be redelivered, rather than lost.
-    if (ctx.stopping) return refuse(503, "stopping", "restarting");
-    if (!ctx.app) return refuse(503, "no GitHub App yet (open /setup)", "not set up");
+    if (ctx.stopping) return refuse(res, 503, "stopping", "restarting");
     if (!verified(ctx.app.credentials.webhook_secret, req.headers["x-hub-signature-256"], body)) {
-      return refuse(401, "bad signature (not from this listener's App)", "bad signature");
+      return refuse(res, 401, "bad signature (not from this listener's App)", "bad signature");
     }
     return false;
   }

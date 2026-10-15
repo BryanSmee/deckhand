@@ -12,7 +12,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { createServer } from "node:http";
+import { createServer, request } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
@@ -64,7 +64,8 @@ case "$1" in
       *) echo '{"deckhand-sandboxes":{"IPAddress":"10.9.0.5"}}' ;;
     esac ;;
   volume)
-    [ "$2" = inspect ] && exit 1
+    # The volumes a test says exist (one name per line in ${dir}/volumes).
+    if [ "$2" = inspect ]; then grep -qx -- "\${@: -1}" "${dir}/volumes" 2> /dev/null; exit; fi
     echo "$*" >> "${dir}/docker-calls" ;;
   image)
     # The base image exists; repo images don't, until built.
@@ -184,7 +185,13 @@ async function fakeGitHub(files = {}) {
       }
       if (req.url === "/repos/org/repo/pulls?state=open&per_page=100") {
         return res.end(
-          JSON.stringify([{ number: 31, head: { ref: "issue-30-deckhand-config" }, body: "" }]),
+          JSON.stringify([
+            {
+              number: 31,
+              head: { ref: "issue-30-deckhand-config", repo: { full_name: "org/repo" } },
+              body: "",
+            },
+          ]),
         );
       }
       // A listener that restarted looks the installation up instead of reading it from a
@@ -365,6 +372,77 @@ function comment(login, body = "Deckhand") {
     sender: { login },
   };
 }
+
+test("sandbox names: a hash keeps colliding repos apart, sessions from before keep theirs", async (t) => {
+  const { dir, github, send, listener } = await listen(t);
+  // Issue 12 has a session from before names had a hash; issue 14 has none.
+  writeFileSync(join(dir, "volumes"), "deckhand-org-repo-12-claude\n");
+  const name = () => {
+    const args = readFileSync(join(dir, "run-args"), "utf8").split("\n");
+    return [args[args.indexOf("--name") + 1], args.filter((a) => a.endsWith(":/workspace"))[0]];
+  };
+  // No trigger line: it goes on in the session issue 12 has.
+  await send(comment("alice", "And the tests?"));
+  await github.waitFor((r) => r.path === "/repos/org/repo/issues/12/comments");
+  assert.deepEqual(name(), ["deckhand-org-repo-12", "deckhand-org-repo-12-workspace:/workspace"]);
+  await listener.until("done (ok)");
+  await send({ ...comment("alice"), issue: { number: 14 } });
+  await github.waitFor((r) => r.path === "/repos/org/repo/issues/14/comments");
+  const [fresh, workspace] = name();
+  assert.match(fresh, /^deckhand-org-repo-14-[0-9a-f]{10}$/);
+  assert.equal(workspace, `${fresh}-workspace:/workspace`);
+});
+
+// Sends a delivery's headers and holds its body back: the answer comes from the headers alone.
+function headersOnly(port, headers) {
+  return new Promise((resolve, reject) => {
+    const req = request({ port, method: "POST", path: "/webhook", headers }, (res) => {
+      resolve(res.statusCode);
+      res.resume();
+      req.destroy();
+    });
+    req.on("error", reject);
+    req.flushHeaders();
+  });
+}
+
+test("unsigned or oversized deliveries are refused before their body is read", async (t) => {
+  const { port, listener } = await listen(t);
+  const signed = { "x-github-event": "issue_comment", "x-hub-signature-256": "sha256=00" };
+  assert.equal(
+    await headersOnly(port, { "x-github-event": "issue_comment", "content-length": "100" }),
+    401,
+  );
+  assert.equal(
+    await headersOnly(port, { ...signed, "content-length": String(26 * 1024 * 1024) }),
+    413,
+  );
+  await listener.until("Rejected a delivery: over 26214400 bytes");
+  assert.match(listener.output(), /Rejected a delivery: no signature/);
+  // At most 16 bodies being read: the 17th is refused until one of them is done.
+  const held = [];
+  for (let i = 0; i < 16; i++) {
+    const req = request({ port, method: "POST", path: "/webhook", headers: signed });
+    req.on("error", () => {});
+    req.write("{");
+    held.push(req);
+  }
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  assert.equal(await headersOnly(port, signed), 503);
+  await listener.until("16 deliveries being read already");
+  for (const req of held) req.destroy();
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  const body = JSON.stringify(comment("mallory"));
+  const res = await fetch(`http://127.0.0.1:${port}/webhook`, {
+    method: "POST",
+    headers: {
+      "x-github-event": "issue_comment",
+      "x-hub-signature-256": `sha256=${createHmac("sha256", SECRET).update(body).digest("hex")}`,
+    },
+    body,
+  });
+  assert.equal(res.status, 202);
+});
 
 test("a webhook from the App runs a sandbox that gets its repo's token from the broker", async (t) => {
   const { dir, github, listener, port, brokerPort } = await listen(t);
@@ -717,7 +795,7 @@ test("a restart during a run: it goes on, a new comment reaches it, one reply", 
   const { code, output } = await ctx.restart();
   assert.equal(code, 0);
   assert.match(output, /Stopping: running sandboxes go on/);
-  await ctx.listener.until("picked up deckhand-org-repo-12 again");
+  await ctx.listener.until("picked up deckhand-org-repo-12-0e9572aae2 again");
 
   // Its token still works, through the new listener's broker.
   const secret = readFileSync(join(dir, "run-secret"), "utf8").trim();
@@ -804,7 +882,7 @@ test("a restart after Claude answered once: nothing is read twice", async (t) =>
   await until(() => exists(join(dir, "delivered")), "Claude reading the comment");
   await new Promise((resolve) => setTimeout(resolve, 200));
   await ctx.restart();
-  await ctx.listener.until("picked up deckhand-org-repo-12 again");
+  await ctx.listener.until("picked up deckhand-org-repo-12-0e9572aae2 again");
   writeFileSync(join(dir, "answer"), "");
   await ctx.listener.until("done (ok)");
   await new Promise((resolve) => setTimeout(resolve, 300));
@@ -1304,6 +1382,7 @@ test("the dashboard and its logs are for allowed users signed in with GitHub", a
       body: "Closes #12",
       state: "open",
       draft,
+      head: { ref: "issue-12-fix", repo: { full_name: "org/repo" } },
     },
     sender: { login: "deckhand[bot]" },
   });

@@ -22,6 +22,7 @@ function delivery(action, pr, { repo = "Org/Repo", installation = 7 } = {}) {
       state: "open",
       draft: true,
       merged: false,
+      head: { ref: "issue-30-fix", repo: { full_name: repo } },
       ...pr,
     },
   };
@@ -37,6 +38,10 @@ test("pull_request deliveries: the linked issue's task, else the pull request's"
   });
   assert.equal(map("opened", { body: "A fix" }).key, "Org/Repo#pr-31");
   assert.equal(map("opened", { body: null }).key, "Org/Repo#pr-31");
+  // A fork's (or one whose fork is gone) is its own task, whatever it says it closes.
+  const fork = { head: { ref: "issue-30-fix", repo: { full_name: "mallory/repo" } } };
+  assert.equal(map("opened", fork).key, "Org/Repo#pr-31");
+  assert.equal(map("opened", { head: { ref: "x", repo: null } }).key, "Org/Repo#pr-31");
 });
 
 test("pull_request states: ready, draft again, merged or closed", () => {
@@ -114,7 +119,7 @@ test("pulls: older tasks looked up once per repo, by branch, link or number", as
         body: "Closes #4",
         state: "open",
         draft: false,
-        head: { ref: "x" },
+        head: { ref: "x", repo: { full_name: "org/repo" } },
       },
       {
         number: 8,
@@ -122,7 +127,15 @@ test("pulls: older tasks looked up once per repo, by branch, link or number", as
         body: "",
         state: "closed",
         merged_at: "2026-01-01",
-        head: { ref: "issue-5-fix" },
+        head: { ref: "issue-5-fix", repo: { full_name: "org/repo" } },
+      },
+      // A fork's: neither its branch nor its link count.
+      {
+        number: 10,
+        html_url: "u10",
+        body: "Closes #6",
+        state: "open",
+        head: { ref: "issue-6-x", repo: { full_name: "mallory/repo" } },
       },
       { number: 7, html_url: "u7", body: "", state: "closed", merged_at: null, head: { ref: "y" } },
     ];

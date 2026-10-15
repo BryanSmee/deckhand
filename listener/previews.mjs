@@ -3,10 +3,22 @@
 // branch, with the event's JSON on stdin and the host's Docker socket, so it can start or
 // remove a preview deployment. One hook at a time per repo, in delivery order.
 //
+// Anyone can open pull requests, forks included, and each hook downloads the repo and runs a
+// container: a repo has at most MAX_WAITING hooks waiting, and a newer event for the same pull
+// request (or workflow run) replaces the one still waiting, as it describes its latest state.
+//
 // A hook is busy while its container runs: the listener's /status reports it, so a restart
 // waits for it. A hook that starts something long-lived should run until it is done.
 import { createWriteStream, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
+
+export const MAX_WAITING = 3;
+
+// What a newer event replaces: the same pull request's, or the same workflow run's.
+function subject(event, payload) {
+  const id = event === "workflow_run" ? payload.workflow_run?.id : payload.pull_request?.number;
+  return id == null ? null : `${event}#${id}`;
+}
 
 export function createPreviews({
   config,
@@ -17,26 +29,56 @@ export function createPreviews({
   now = Date.now,
 }) {
   const hooks = new Map(); // container name → { repo, event, action, state, since }
-  const chains = new Map(); // repo → the last hook's promise
+  const queues = new Map(); // repo → { running, waiting: [{ name, entry, job, subject, resolve }] }
   let count = 0;
   mkdirSync(logDir, { recursive: true });
 
-  // `hook`: { command, image, timeoutMinutes }; `image`: what it runs in.
-  function run({ repo, event, payload, ref, hook, image }) {
+  // `hook`: { command, image, timeoutMinutes }; `image`: what it runs in. Resolves to the
+  // hook's exit code once it ran, or null when it was dropped or replaced.
+  function run(job) {
+    const { repo, event, payload } = job;
     const slug = repo.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+    const queue = queues.get(repo) ?? { running: false, waiting: [] };
+    queues.set(repo, queue);
+    const about = subject(event, payload);
+    const replaced = about ? queue.waiting.findIndex((w) => w.subject === about) : -1;
+    if (replaced >= 0) {
+      const [old] = queue.waiting.splice(replaced, 1);
+      log(`${repo}: preview hook for ${about} ${old.entry.action ?? ""} replaced by a newer event`);
+      hooks.delete(old.name);
+      old.resolve(null);
+    } else if (queue.waiting.length >= MAX_WAITING) {
+      log(`${repo}: ${MAX_WAITING} preview hooks waiting already: ${event} dropped`);
+      return Promise.resolve(null);
+    }
     const name = `${config.prefix}-preview-${slug}-${now()}-${++count}`;
     const entry = { repo, event, action: payload.action ?? null, state: "waiting", since: now() };
     hooks.set(name, entry);
-    const previous = chains.get(repo) ?? Promise.resolve();
-    const done = previous
-      .then(() => start(name, entry, { repo, event, payload, ref, hook, image }))
-      .catch((error) => log(`${repo}: preview hook: ${error.message ?? error}`))
-      .finally(() => {
-        hooks.delete(name);
-        if (chains.get(repo) === done) chains.delete(repo);
-      });
-    chains.set(repo, done);
+    const done = new Promise((resolve) =>
+      queue.waiting.push({ name, entry, job, subject: about, resolve }),
+    );
+    next(repo);
     return done;
+  }
+
+  // Starts the repo's next waiting hook, if none runs.
+  function next(repo) {
+    const queue = queues.get(repo);
+    if (!queue || queue.running) return;
+    const hook = queue.waiting.shift();
+    if (!hook) return queues.delete(repo);
+    queue.running = true;
+    start(hook.name, hook.entry, hook.job)
+      .catch((error) => {
+        log(`${repo}: preview hook: ${error.message ?? error}`);
+        return null;
+      })
+      .then((code) => {
+        hooks.delete(hook.name);
+        queue.running = false;
+        hook.resolve(code);
+        next(repo);
+      });
   }
 
   async function start(name, entry, { repo, event, payload, ref, hook, image }) {

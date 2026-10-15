@@ -31,18 +31,42 @@ required) is still worth adding: it also covers people and other tools. A sandbo
 branches still reach the default branch through pull requests that a maintainer merges:
 review those that touch `.deckhand.yaml`, the Dockerfile or the preview hook's script.
 
+## Tokens
+
+A run's secret only lives as long as the run: the listener revokes it when the run ends, and
+the broker then refuses it. The installation tokens a sandbox already got are another matter:
+
+- GitHub makes them valid for **one hour** from when they are minted, and the listener can't
+  shorten that. The broker hands out a cached token while it has more than 10 minutes left,
+  so a token a sandbox fetched stays valid for up to an hour, including after its run ended.
+- Tokens are cached per repository and permission set, and shared by that repository's runs
+  with the same permissions: a run may get the very token another run of the same repository
+  got before.
+- A token only reaches the run's repository, with the sandbox's permissions: it reads the
+  code, can't push (pushes go through the gateway, with the run's secret), and can write
+  issues and pull requests (and discussions, for discussion runs) there.
+
+So what a run copied out (through an allowed host) can be used against its own repository,
+with those permissions, for up to an hour. Uninstalling the App, or suspending its
+installation, revokes its tokens at once.
+
 ## Mounts
 
 A sandbox only gets Docker named volumes:
 
 | Volume                                            | What                                         |
 | ------------------------------------------------- | -------------------------------------------- |
-| `<prefix>-<owner>-<repo>-<n>-workspace`           | the issue's clone, kept between its runs     |
-| `<prefix>-<owner>-<repo>-<n>-claude`              | the issue's Claude session                   |
+| `<prefix>-<owner>-<repo>-<n>-<hash>-workspace`    | the issue's clone, kept between its runs     |
+| `<prefix>-<owner>-<repo>-<n>-<hash>-claude`       | the issue's Claude session                   |
 | `deckhand-claude-code`, **read-only**             | Claude Code, installed by the listener       |
 | `deckhand-cache-<owner>-<repo>-<path>-…`          | the repo's `caches`, its own                 |
 | `deckhand-screenshots`, **its run's folder only** | screenshots, served under `/shots/<folder>/` |
 | `deckhand-runs`, **its run's folder, read-only**  | its inbox: comments that arrive mid-run      |
+
+`<hash>` (10 hex digits of the repository and task) keeps apart names that would otherwise
+be the same, such as `acme/x` pull request 5 and `acme/x-pr` issue 5. Tasks whose session
+dates from before it (`<prefix>-<owner>-<repo>-<n>-claude` exists) keep that name and their
+volumes.
 
 Each run mounts only its own folder of the screenshots volume (`volume-subpath`, Docker
 Engine 26 or later), named with 24 random hex digits: it can't list or read another run's.
@@ -273,3 +297,5 @@ listener's logs (`Egress: refused <host> for <repo>#<n>`).
 - The listener's own port (8080: dashboard, webhook) is reachable from sandboxes; it needs
   a dashboard session (a signed-in allowed user, see [Setup](setup.md#4-the-dashboard)) or
   the webhook's signature. `/status` also answers calls from inside the listener's container.
+  Deliveries without a signature or over 25 MB are refused before their body is read, at
+  most 16 are read at once, each within 10 seconds.

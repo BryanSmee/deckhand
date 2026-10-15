@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { loadConfig } from "../listener/config.mjs";
 import { previewEvent } from "../listener/events.mjs";
-import { createPreviews } from "../listener/previews.mjs";
+import { createPreviews, MAX_WAITING } from "../listener/previews.mjs";
 
 const config = loadConfig({ ALLOWED_USERS: "a", DOCKER_SOCKET: "/run/docker.sock" });
 const hook = { command: "./preview.sh", image: "docker:cli", timeoutMinutes: 1 };
@@ -110,4 +110,47 @@ test("a repo's hooks run one at a time, in order", async () => {
   release();
   await both;
   assert.equal(calls.filter((c) => c[0] === "start").length, 2);
+});
+
+test("a repo's waiting hooks are capped, and a newer event replaces its pull request's", async () => {
+  const { previews, calls, inputs, release } = setup();
+  const run = (number, action, repo = "org/a") =>
+    previews.run({
+      repo,
+      event: "pull_request",
+      payload: { action, pull_request: { number } },
+      ref: "trunk",
+      hook,
+      image: "x",
+    });
+  const first = run(1, "opened");
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  // #2 opened, then pushed to while it waits: only its latest event runs.
+  const opened = run(2, "opened");
+  const pushed = run(2, "synchronize");
+  assert.equal(await opened, null);
+  const third = run(3, "opened");
+  const fourth = run(4, "opened");
+  assert.equal(MAX_WAITING, 3);
+  // Full: a fifth pull request's event is dropped, another repo's isn't.
+  assert.equal(await run(5, "opened"), null);
+  const other = run(5, "opened", "org/b");
+  assert.deepEqual(
+    previews.status().map((h) => `${h.repo} ${h.action} ${h.state}`),
+    [
+      "org/a opened running",
+      "org/a synchronize waiting",
+      "org/a opened waiting",
+      "org/a opened waiting",
+      "org/b opened running",
+    ],
+  );
+  release();
+  assert.deepEqual(await Promise.all([first, pushed, third, fourth, other]), [0, 0, 0, 0, 0]);
+  assert.deepEqual(
+    inputs.map((i) => JSON.parse(i)).map((p) => `${p.pull_request.number} ${p.action}`),
+    ["1 opened", "5 opened", "2 synchronize", "3 opened", "4 opened"],
+  );
+  assert.equal(calls.filter((c) => c[0] === "start").length, 5);
+  assert.deepEqual(previews.status(), []);
 });

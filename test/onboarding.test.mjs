@@ -166,7 +166,18 @@ test("no onboarding issue with a config on the default branch, or issues disable
 
 const PULLS = [
   200,
-  [{ number: 31, head: { ref: "issue-30-deckhand-config" }, body: "Closes #30" }],
+  [
+    {
+      number: 32,
+      head: { ref: "issue-30-evil", repo: { full_name: "mallory/app" } },
+      body: "Closes #30",
+    },
+    {
+      number: 31,
+      head: { ref: "issue-30-deckhand-config", repo: { full_name: "org/app" } },
+      body: "Closes #30",
+    },
+  ],
 ];
 
 test("the config on the onboarding pull request's branch: errors, warnings, missing files", async () => {

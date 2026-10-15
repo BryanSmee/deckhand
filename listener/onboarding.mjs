@@ -2,7 +2,7 @@
 // opens an issue there and Claude proposes the file in an "onboarding" conversation, which
 // the trigger line turns into a pull request (tasks.mjs, runs.mjs). The decisions and the issue are
 // here, with GitHub injected, so they are tested on their own (../test/onboarding.test.mjs).
-import { linkedIssue } from "./events.mjs";
+import { linkedIssue, sameRepo } from "./events.mjs";
 import { CONFIG_FILE, parseRepoConfig, readRepoFile } from "./repo-config.mjs";
 import { readJson, writeJsonAtomic } from "./store.mjs";
 
@@ -137,15 +137,16 @@ export function createOnboarding({ request, store, config, log = () => {} }) {
   return { open };
 }
 
-// The open pull request of issue `number`: its branch (issue-<n>-…) or its "Closes #n".
+// The open pull request of issue `number`: its branch (issue-<n>-…) or its "Closes #n", not
+// a fork's.
 async function issuePullRequest(request, repo, number) {
   const res = await request(repo, "GET", `/repos/${repo}/pulls?state=open&per_page=100`);
   if (!res.ok) return null;
   const pulls = await res.json();
   if (!Array.isArray(pulls)) return null;
   return (
-    pulls.find((p) => p.head?.ref?.startsWith(`issue-${number}-`)) ??
-    pulls.find((p) => linkedIssue(p.body) === number) ??
+    pulls.find((p) => sameRepo(p, repo) && p.head.ref?.startsWith(`issue-${number}-`)) ??
+    pulls.find((p) => linkedIssue(p, repo) === number) ??
     null
   );
 }
