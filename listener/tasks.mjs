@@ -4,7 +4,15 @@
 import { commentsText, workItem } from "./events.mjs";
 import { INBOX, isLight } from "./modes.mjs";
 import { liveMessage } from "./prompts.mjs";
-import { CONFIG_FILE, customMode, effectiveConfig, modeNames, startable } from "./repo-config.mjs";
+import {
+  CONFIG_FILE,
+  customMode,
+  effectiveConfig,
+  legacySandboxName,
+  modeNames,
+  sandboxName,
+  startable,
+} from "./repo-config.mjs";
 import { configErrors } from "./runs.mjs";
 
 // `ctx` (server.mjs): the listener's state and services, read at call time. Tasks are
@@ -14,8 +22,13 @@ import { configErrors } from "./runs.mjs";
 export function createTasks(ctx) {
   const { config, log, skip, tasks } = ctx;
 
-  function containerName(repo, id) {
-    return `${config.prefix}-${repo}-${id}`.toLowerCase().replace(/[^a-z0-9_.-]+/g, "-");
+  // A task's sandbox name. Tasks with a session from before names had a hash keep their old
+  // name, so they still find their volumes; the others get the new one.
+  async function containerName(repo, id) {
+    const key = `${repo}#${id}`;
+    if (tasks.has(key)) return tasks.get(key).name;
+    const legacy = legacySandboxName(config, repo, id);
+    return (await ctx.runner.hasSession(legacy)) ? legacy : sandboxName(config, repo, id);
   }
 
   // A comment that passed the operator's checks, checked again with its repo's settings
@@ -71,7 +84,7 @@ export function createTasks(ctx) {
   }
 
   async function accept(item) {
-    const name = containerName(item.repo, item.id);
+    const name = await containerName(item.repo, item.id);
     const key = `${item.repo}#${item.id}`;
     item.mode = await modeOf(item, key, name);
     if (!item.mode) return;

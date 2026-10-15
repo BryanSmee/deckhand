@@ -108,7 +108,10 @@ test("an outsider's pull request saying Closes #N doesn't reach issue N's sessio
   });
   const fork = { ref: "issue-3-fix", repo: { full_name: "mallory/repo" } };
   assert.equal(workItem(config, "pull_request_review", review(fork)).id, "pr-12");
-  assert.equal(workItem(config, "pull_request_review", review({ ref: "x", repo: null })).id, "pr-12");
+  assert.equal(
+    workItem(config, "pull_request_review", review({ ref: "x", repo: null })).id,
+    "pr-12",
+  );
   const own = { ref: "issue-3-fix", repo: { full_name: "org/repo" } };
   assert.equal(workItem(config, "pull_request_review", review(own)).id, "3");
 });

@@ -355,6 +355,17 @@ export function cacheVolume(config, repo, path) {
   );
 }
 
+// A task's container, and the prefix of its volumes (`-workspace`, `-claude`). The hash keeps
+// "acme/x" #pr-5 and "acme/x-pr" #5 apart: the readable part alone is the same.
+export function sandboxName(config, repo, id) {
+  return `${legacySandboxName(config, repo, id).slice(0, 80)}-${shortHash(repo.toLowerCase(), id)}`;
+}
+
+// The name before the hash: still the one of tasks whose volumes have it (tasks.mjs).
+export function legacySandboxName(config, repo, id) {
+  return `${config.prefix}-${repo}-${id}`.toLowerCase().replace(/[^a-z0-9_.-]+/g, "-");
+}
+
 // The image a repo's Dockerfile builds (its tags are hashes, see images.mjs).
 export function repoImage(config, repo) {
   return `${slug(config.prefix)}-repo-${slug(repo)}`;

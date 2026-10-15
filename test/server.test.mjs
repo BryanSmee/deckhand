@@ -64,7 +64,8 @@ case "$1" in
       *) echo '{"deckhand-sandboxes":{"IPAddress":"10.9.0.5"}}' ;;
     esac ;;
   volume)
-    [ "$2" = inspect ] && exit 1
+    # The volumes a test says exist (one name per line in ${dir}/volumes).
+    if [ "$2" = inspect ]; then grep -qx -- "\${@: -1}" "${dir}/volumes" 2> /dev/null; exit; fi
     echo "$*" >> "${dir}/docker-calls" ;;
   image)
     # The base image exists; repo images don't, until built.
@@ -365,6 +366,26 @@ function comment(login, body = "Deckhand") {
     sender: { login },
   };
 }
+
+test("sandbox names: a hash keeps colliding repos apart, sessions from before keep theirs", async (t) => {
+  const { dir, github, send, listener } = await listen(t);
+  // Issue 12 has a session from before names had a hash; issue 14 has none.
+  writeFileSync(join(dir, "volumes"), "deckhand-org-repo-12-claude\n");
+  const name = () => {
+    const args = readFileSync(join(dir, "run-args"), "utf8").split("\n");
+    return [args[args.indexOf("--name") + 1], args.filter((a) => a.endsWith(":/workspace"))[0]];
+  };
+  // No trigger line: it goes on in the session issue 12 has.
+  await send(comment("alice", "And the tests?"));
+  await github.waitFor((r) => r.path === "/repos/org/repo/issues/12/comments");
+  assert.deepEqual(name(), ["deckhand-org-repo-12", "deckhand-org-repo-12-workspace:/workspace"]);
+  await listener.until("done (ok)");
+  await send({ ...comment("alice"), issue: { number: 14 } });
+  await github.waitFor((r) => r.path === "/repos/org/repo/issues/14/comments");
+  const [fresh, workspace] = name();
+  assert.match(fresh, /^deckhand-org-repo-14-[0-9a-f]{10}$/);
+  assert.equal(workspace, `${fresh}-workspace:/workspace`);
+});
 
 // Sends a delivery's headers and holds its body back: the answer comes from the headers alone.
 function headersOnly(port, headers) {
@@ -768,7 +789,7 @@ test("a restart during a run: it goes on, a new comment reaches it, one reply", 
   const { code, output } = await ctx.restart();
   assert.equal(code, 0);
   assert.match(output, /Stopping: running sandboxes go on/);
-  await ctx.listener.until("picked up deckhand-org-repo-12 again");
+  await ctx.listener.until("picked up deckhand-org-repo-12-0e9572aae2 again");
 
   // Its token still works, through the new listener's broker.
   const secret = readFileSync(join(dir, "run-secret"), "utf8").trim();
@@ -855,7 +876,7 @@ test("a restart after Claude answered once: nothing is read twice", async (t) =>
   await until(() => exists(join(dir, "delivered")), "Claude reading the comment");
   await new Promise((resolve) => setTimeout(resolve, 200));
   await ctx.restart();
-  await ctx.listener.until("picked up deckhand-org-repo-12 again");
+  await ctx.listener.until("picked up deckhand-org-repo-12-0e9572aae2 again");
   writeFileSync(join(dir, "answer"), "");
   await ctx.listener.until("done (ok)");
   await new Promise((resolve) => setTimeout(resolve, 300));

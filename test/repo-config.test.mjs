@@ -8,10 +8,12 @@ import {
   customMode,
   defaultSettings,
   effectiveConfig,
+  legacySandboxName,
   loadRepoSettings,
   modeNames,
   parseRepoConfig,
   repoPath,
+  sandboxName,
   startable,
 } from "../listener/repo-config.mjs";
 
@@ -163,6 +165,17 @@ test("one cache volume per repo and path", () => {
   assert.match(a, /^deckhand-cache-org-api-a-b-[0-9a-f]{10}$/);
   assert.notEqual(a, cacheVolume(config, "org/api", "/a/b"));
   assert.notEqual(a, cacheVolume(config, "org/web", "/a-b"));
+});
+
+test("sandbox names: repos that collide without the hash are distinct", () => {
+  assert.equal(
+    legacySandboxName(config, "acme/x", "pr-5"),
+    legacySandboxName(config, "acme/x-pr", "5"),
+  );
+  assert.notEqual(sandboxName(config, "acme/x", "pr-5"), sandboxName(config, "acme/x-pr", "5"));
+  assert.match(sandboxName(config, "acme/x", "5"), /^deckhand-acme-x-5-[0-9a-f]{10}$/);
+  // GitHub's names aren't case-sensitive: the same task.
+  assert.equal(sandboxName(config, "Acme/X", "5"), sandboxName(config, "acme/x", "5"));
 });
 
 test("parallel caps: the operator's overall, each repo's within it", () => {
