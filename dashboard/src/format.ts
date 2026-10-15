@@ -1,5 +1,5 @@
 // Names, groups and times the views share.
-import type { Run, RunStatus, Task, TaskState } from "./types";
+import type { PrState, Run, RunStatus, Task, TaskState } from "./types";
 
 export const STATE_NAMES: Record<TaskState, string> = {
   "building-image": "Building image",
@@ -22,12 +22,21 @@ export const RUN_NAMES: Record<RunStatus, string> = {
   interrupted: "Interrupted",
 };
 
+export const PR_NAMES: Record<PrState, string> = {
+  draft: "Draft",
+  ready: "Ready for review",
+  merged: "Merged",
+  closed: "Closed",
+};
+
 // The state chips: each groups states. A brainstorm waiting for its next comment waits for
-// the maintainer, like a run that stopped to ask.
+// the maintainer, like a run that stopped to ask. "Ready for review" is the pull request's
+// state, whatever the task's: what waits for the maintainer's review.
 export const CHIPS = [
   { id: "all", name: "All", states: null },
   { id: "running", name: "Running", states: ["building-image", "working", "stopping", "queued"] },
   { id: "input", name: "Needs input", states: ["needs-input", "brainstorm", "idle-brainstorm"] },
+  { id: "review", name: "Ready for review", states: null },
   { id: "done", name: "Done", states: ["done"] },
   { id: "error", name: "Error", states: ["error", "interrupted"] },
 ] as const satisfies readonly { id: string; name: string; states: readonly TaskState[] | null }[];
@@ -35,9 +44,12 @@ export const CHIPS = [
 export type ChipId = (typeof CHIPS)[number]["id"];
 
 export function inChip(chip: ChipId, t: Task): boolean {
+  if (chip === "review") return isReady(t);
   const states: readonly TaskState[] | null = CHIPS.find((c) => c.id === chip)?.states ?? null;
   return !states || states.includes(t.state);
 }
+
+export const isReady = (t: Task) => t.pr?.state === "ready";
 
 // What a state looks like: its colour family.
 export type Tone = "run" | "input" | "ok" | "err" | "idle";

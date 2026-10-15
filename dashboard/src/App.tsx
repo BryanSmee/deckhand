@@ -5,6 +5,7 @@ import { useEffect, useState } from "preact/hooks";
 import { type RepoList, useAppState, useRepos } from "./api";
 import { Detail } from "./Detail";
 import { type ChipId, CHIPS, inChip, isLive } from "./format";
+import { useReadyNotifications } from "./notify";
 import { notOnboarded, Repos } from "./Repos";
 import { formatRoute, parseRoute, type Route } from "./route";
 import { Tabs } from "./Tabs";
@@ -117,6 +118,7 @@ export function Dashboard({ state, error, repos }: Props) {
         (hooks ? ` · ${hooks} preview hook${hooks > 1 ? "s" : ""}` : "")
       : "Loading…";
   const waiting = notOnboarded(repos?.repos ?? null);
+  const notify = useReadyNotifications(state);
 
   return (
     <div class={`${styles.app} ${task ? styles.reading : ""}`}>
@@ -133,6 +135,16 @@ export function Dashboard({ state, error, repos }: Props) {
             Repositories
             {waiting > 0 && <span class={styles.waiting}>{waiting}</span>}
           </a>
+        )}
+        {notify.permission === "default" && (
+          <button
+            type="button"
+            class={styles.notify}
+            title="A browser notification when a pull request is ready for review, while this page is open"
+            onClick={notify.ask}
+          >
+            Notify me
+          </button>
         )}
         {state && (
           <form class={styles.who} method="post" action="auth/logout">

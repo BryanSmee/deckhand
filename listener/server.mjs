@@ -113,7 +113,7 @@ import { checkout } from "./checkout.mjs";
 import { ConfigError, loadConfig } from "./config.mjs";
 import { docker } from "./docker.mjs";
 import { mandatoryHosts, matchHost, proxyEnv, runHosts } from "./egress.mjs";
-import { MARKER, previewEvent, takeOptions, verified, workItem } from "./events.mjs";
+import { MARKER, previewEvent, pullRequest, takeOptions, verified, workItem } from "./events.mjs";
 import {
   createGitHubApp,
   DISCUSSION_PERMISSIONS,
@@ -144,6 +144,7 @@ import {
 import { createDockerRunner } from "./runner/docker.mjs";
 import { createSetup } from "./setup.mjs";
 import { serveAsset } from "./static.mjs";
+import { createPulls } from "./pulls.mjs";
 import { createTitles } from "./titles.mjs";
 
 const env = process.env;
@@ -258,6 +259,22 @@ const titles = createTitles({
     // Pull requests are issues too, for their title.
     const res = await github(repo, "GET", `/repos/${repo}/issues/${number}`, undefined, [404]);
     return res.ok ? ((await res.json()).title ?? null) : null;
+  },
+});
+
+// Each task's pull request: from webhooks, else looked up once (pulls.mjs).
+const pulls = createPulls({
+  path: join(config.dataDir, "pulls.json"),
+  log,
+  listPulls: async (repo) => {
+    const res = await github(
+      repo,
+      "GET",
+      `/repos/${repo}/pulls?state=all&sort=updated&direction=desc&per_page=100`,
+    );
+    const list = res.ok ? await res.json() : null;
+    if (!Array.isArray(list)) throw new Error(`no list (${res.status})`);
+    return list;
   },
 });
 
@@ -1878,11 +1895,19 @@ function state(user) {
   const talks = [...brainstorms].map(([key, { timer, ...b }]) => ({ key, ...b }));
   const shown = board({ runs, queued, brainstorms: talks }).slice(0, 200);
   // Titles the listener doesn't have yet show on a later poll.
-  if (app) titles.fill(shown.map((t) => t.key));
+  if (app) {
+    titles.fill(shown.map((t) => t.key));
+    pulls.fill(shown.map((t) => t.key));
+  }
   // `now`: the dashboard compares run start times with the server clock, not its own.
   return {
     user,
-    tasks: shown.map((t) => ({ ...t, title: titles.get(t.key), runs: t.runs.map(publicRun) })),
+    tasks: shown.map((t) => ({
+      ...t,
+      title: titles.get(t.key),
+      pr: pulls.get(t.key),
+      runs: t.runs.map(publicRun),
+    })),
     states: STATES,
     running,
     queued: queued.length,
@@ -2066,6 +2091,9 @@ function webhook(req, res) {
       started.finally(() => admitting.delete(started));
       return;
     }
+    const pr = pullRequest(config, event, payload, Date.now(), skip);
+    if (pr && pulls.record(pr.key, pr.pr))
+      log(`${pr.key}: pull request #${pr.pr.number} ${pr.pr.state}`);
     const preview = previewEvent(config, event, payload, skip);
     if (preview) {
       previewHook(preview, payload).catch((error) => log(error.stack ?? error));

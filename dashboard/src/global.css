@@ -18,6 +18,7 @@
   --err-soft: #fbe9e9;
   --idle: #8a837d;
   --idle-soft: #efedeb;
+  --merged: #8250df;
   --radius: 8px;
   --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   color-scheme: light;
@@ -43,6 +44,7 @@
     --err-soft: #361819;
     --idle: #8f8883;
     --idle-soft: #26221f;
+    --merged: #a371f7;
     color-scheme: dark;
   }
 }

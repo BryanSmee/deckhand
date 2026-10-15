@@ -168,6 +168,11 @@ async function fakeGitHub(files = {}) {
       if (req.method === "GET" && req.url === "/repos/org/repo/issues/3") {
         return res.end(JSON.stringify({ title: "An older pull request" }));
       }
+      // A task from before pull requests were kept: looked up once.
+      if (req.url === "/repos/org/repo/pulls?state=all&sort=updated&direction=desc&per_page=100") {
+        const url = "https://github.com/org/repo/pull/3";
+        return res.end(JSON.stringify([{ number: 3, html_url: url, state: "open", draft: false }]));
+      }
       // Onboarding: the repo, its new issue, and the pull request the work run opened.
       if (req.method === "GET" && req.url === "/repos/org/repo") {
         return res.end(JSON.stringify({ default_branch: "trunk", has_issues: true }));
@@ -1195,6 +1200,42 @@ test("the dashboard and its logs are for allowed users signed in with GitHub", a
   }
   assert.equal(fetched.title, "An older pull request");
   assert.equal(fetched.runs[0].summary, "The typo.");
+  // Its pull request too, without a readyAt: nothing to notify.
+  for (let i = 0; i < 100 && !fetched.pr; i++) {
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    fetched = await older();
+  }
+  assert.deepEqual(fetched.pr, {
+    number: 3,
+    url: "https://github.com/org/repo/pull/3",
+    state: "ready",
+    readyAt: null,
+  });
+
+  // A pull request that closes #12, from its webhooks: draft, then ready for review.
+  const pr = (action, draft) => ({
+    action,
+    installation: { id: 7 },
+    repository: { full_name: "org/repo", default_branch: "trunk" },
+    pull_request: {
+      number: 13,
+      html_url: "https://github.com/org/repo/pull/13",
+      body: "Closes #12",
+      state: "open",
+      draft,
+    },
+    sender: { login: "deckhand[bot]" },
+  });
+  await send(pr("opened", true), "pull_request");
+  await listener.until("org/repo#12: pull request #13 draft");
+  await send(pr("ready_for_review", false), "pull_request");
+  await listener.until("org/repo#12: pull request #13 ready");
+  const ready = (await (await get("/api/state", session)).json()).tasks.find(
+    (x) => x.key === "org/repo#12",
+  );
+  assert.equal(ready.pr.number, 13);
+  assert.equal(ready.pr.state, "ready");
+  assert.ok(ready.pr.readyAt > 0);
   const stream = await get(`/api/runs/${task.runs[0].id}/stream`, session);
   assert.equal(stream.status, 200);
   assert.match(await stream.text(), /event: end/);

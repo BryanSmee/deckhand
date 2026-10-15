@@ -203,6 +203,45 @@ export function previewEvent(config, event, p, skip = () => null) {
   return { repo, base: p.repository.default_branch || "main", event };
 }
 
+// A pull request, as webhooks and the REST API describe it → its state on the dashboard.
+export function prState(pr) {
+  if (pr.merged || pr.merged_at) return "merged";
+  if (pr.state === "closed") return "closed";
+  return pr.draft ? "draft" : "ready";
+}
+
+const PR_ACTIONS = [
+  "opened",
+  "reopened",
+  "ready_for_review",
+  "converted_to_draft",
+  "closed",
+  "edited",
+];
+
+// A `pull_request` delivery → { key, pr: { number, url, state, readyAt } } for the dashboard
+// (pulls.mjs), or null. Its task is the issue it closes, else the pull request itself.
+// `readyAt`: when it turned ready for review, which the dashboard notifies about; an edit
+// or a close keeps the one recorded before (pulls.mjs).
+export function pullRequest(config, event, p, now, skip = () => null) {
+  if (event !== "pull_request" || !PR_ACTIONS.includes(p.action)) return null;
+  const repo = p.repository?.full_name;
+  const pr = p.pull_request;
+  if (!p.installation?.id || !repo || !pr) return skip("not from an installation of the App");
+  if (config.repos.length && !config.repos.includes(repo.toLowerCase())) {
+    return skip(`${repo} not in ALLOWED_REPOS`);
+  }
+  const issue = linkedIssue(pr.body);
+  const state = prState(pr);
+  const turnedReady =
+    p.action === "ready_for_review" ||
+    (["opened", "reopened"].includes(p.action) && state === "ready");
+  return {
+    key: `${repo}#${issue ?? `pr-${pr.number}`}`,
+    pr: { number: pr.number, url: pr.html_url, state, readyAt: turnedReady ? now : null },
+  };
+}
+
 // `pr`: { number, title, body }. A pull request that closes an issue is that issue's task,
 // whose title the payload doesn't have (the dashboard fetches it, titles.mjs).
 function prItem(skip, repo, { number: pr, title, body: prBody }, { trigger, mode }, text, comment) {

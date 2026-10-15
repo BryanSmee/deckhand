@@ -131,6 +131,21 @@
   color: var(--ink);
 }
 
+.notify {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.notify:hover {
+  color: var(--ink);
+}
+
 .waiting {
   min-width: 1.25rem;
   padding: 0 0.35rem;
