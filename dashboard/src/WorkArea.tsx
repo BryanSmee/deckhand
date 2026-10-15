@@ -17,14 +17,24 @@ export interface Target {
 // The drag's payload from the backlog: the issue's number (its link goes along, as text).
 export const ISSUE_TYPE = "application/x-deckhand-issue";
 
+// An issue card's drag, onto the graph (or its link elsewhere).
+const dragOf = (number: number, url: string) => (e: DragEvent) => {
+  e.dataTransfer?.setData(ISSUE_TYPE, String(number));
+  e.dataTransfer?.setData("text/uri-list", url);
+  if (e.dataTransfer) e.dataTransfer.effectAllowed = "copyMove";
+};
+
 interface Props {
   repo: string;
   work: Work;
   targets: Target[];
   // The repo's tasks that wait for others ("/after").
   waiting: Task[];
-  // Its issues waiting for answers: starting or queueing one asks them first.
+  // Its issues waiting for answers, or in a brainstorm: starting or queueing one asks its
+  // questions first.
   answering?: Task[];
+  // GitHub's address, for the links the drag of a task's card carries.
+  github?: string;
   mode: string;
   onMode: (mode: string) => void;
   // What a drop that couldn't be sent says (a link from another repo).
@@ -93,6 +103,7 @@ export function WorkArea({
   targets,
   waiting,
   answering = [],
+  github = "https://github.com",
   mode,
   onMode,
   notice,
@@ -153,7 +164,8 @@ export function WorkArea({
       </div>
       <p class={styles.note}>
         Drag an issue (or a GitHub link to one) onto the graph to start it, next to an issue to
-        queue it after that one. Drag a waiting issue away to cancel its wait.
+        queue it after that one; one waiting for answers too, which asks them first. Drag a waiting
+        issue away to cancel its wait.
       </p>
       {said && (
         <p class={`${styles.said} ${failed ? styles.failed : ""}`} role="status">
@@ -179,11 +191,7 @@ export function WorkArea({
                 key={i.number}
                 class={styles.issue}
                 draggable={!blocked}
-                onDragStart={(e) => {
-                  e.dataTransfer?.setData(ISSUE_TYPE, String(i.number));
-                  e.dataTransfer?.setData("text/uri-list", i.url);
-                  if (e.dataTransfer) e.dataTransfer.effectAllowed = "copyMove";
-                }}
+                onDragStart={dragOf(i.number, i.url)}
               >
                 <div class={styles.row}>
                   <a class={styles.ref} href={i.url} target="_blank" rel="noreferrer">
@@ -214,11 +222,19 @@ export function WorkArea({
           <h2 class={styles.title}>Waiting for answers</h2>
           <ul class={styles.list} aria-label="Issues waiting for answers">
             {answering.map((t) => (
-              <li key={t.key} class={styles.issue}>
+              <li
+                key={t.key}
+                class={styles.issue}
+                draggable={!blocked}
+                onDragStart={dragOf(t.number!, `${github}/${t.repo}/issues/${t.number}`)}
+              >
                 <div class={styles.row}>
                   <span class={styles.ref}>#{t.number}</span>
                   <span class={styles.name}>{t.title ?? `Issue #${t.number}`}</span>
                 </div>
+                {t.state !== "needs-input" && (
+                  <span class={styles.note}>Starting it ends its brainstorm with a work run.</span>
+                )}
                 {t.questions && (
                   <span class={styles.note}>Its open questions are asked before it starts.</span>
                 )}

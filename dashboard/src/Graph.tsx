@@ -2,12 +2,12 @@
 // ("/after"), coloured by where it stands (graph.ts). A node opens its task. On a repo's tab
 // it is a work area too (WorkArea.tsx): an issue dropped on it starts, dropped next to a node
 // it waits for that one; a waiting node dragged away stops waiting, onto another node waits
-// for that one instead. An issue waiting for answers moves too, once they are in: the drag
-// opens its open questions first (Questions.tsx).
+// for that one instead. An issue waiting for answers (or in a brainstorm) moves too, once they
+// are in: the drag opens its open questions first (Questions.tsx).
 import type { JSX } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
 import { useWorkArea } from "./api";
-import { kindName } from "./format";
+import { inChip, kindName } from "./format";
 import {
   dropTarget,
   graphOf,
@@ -57,6 +57,10 @@ interface NodeDrag {
   dy: number;
   moved: boolean;
 }
+
+// An issue waiting for the maintainer ("Needs input": its questions, or a brainstorm's next
+// comment): starting it answers them first, or ends the brainstorm with a work run.
+const answers = (t: Task) => inChip("input", t) && (t.kind === "issue" || t.kind === "brainstorm");
 
 // Past this many pixels a press on a waiting node is a drag, not a click.
 const DRAG_PX = 6;
@@ -114,14 +118,15 @@ export function Graph({ state, refresh, repo, narrow, showClosed, onShowClosed }
   const modes = work.backlog?.modes ?? [];
   const picked = mode === "work" || !modes.includes(mode) ? {} : { mode };
   const blocked = !!work.backlog?.errors;
-  // Only a repo's issues move: what runs or ran stays where it is.
+  // Only a repo's issues move: what runs or ran stays where it is. Those waiting for answers
+  // move whatever their last run was (a brainstorm's kind is "brainstorm"): not a pull request.
   const movable = (n: GraphNode) =>
     !!repo &&
     !blocked &&
     n.look !== "pending" &&
-    (n.task?.state === "waiting" || n.task?.state === "needs-input") &&
-    n.kind === "issue" &&
-    n.number !== null;
+    n.number !== null &&
+    !!n.task &&
+    (n.task.state === "waiting" ? n.kind === "issue" : answers(n.task));
   const targets: Target[] = repo
     ? nodes
         .filter((n) => n.number !== null)
@@ -137,9 +142,7 @@ export function Graph({ state, refresh, repo, narrow, showClosed, onShowClosed }
   const waiting = tasks.filter(
     (t) => t.state === "waiting" && t.kind === "issue" && t.number && !leaving.has(t.number),
   );
-  const answering = tasks.filter(
-    (t) => t.state === "needs-input" && t.kind === "issue" && t.number && !sentFor(t.number),
-  );
+  const answering = tasks.filter((t) => answers(t) && t.number && !sentFor(t.number));
 
   // The node under the pointer, in the drawing's units (the viewBox starts at -4).
   const targetAt = (clientX: number, clientY: number) => {
@@ -194,7 +197,9 @@ export function Graph({ state, refresh, repo, narrow, showClosed, onShowClosed }
     const link = data?.getData("text/uri-list") || data?.getData("text/plain") || "";
     const number = own || (repo && issueOfLink(link, github, repo));
     if (!number) {
-      setNotice(`That isn't a link to one of ${repo}'s issues.`);
+      setNotice(
+        `That isn't a link to one of ${repo}'s issues: drag an issue's card from the work area, or its link.`,
+      );
       return;
     }
     dropped(number, targetAt(e.clientX, e.clientY), false);
@@ -399,6 +404,7 @@ export function Graph({ state, refresh, repo, narrow, showClosed, onShowClosed }
             targets={targets}
             waiting={waiting}
             answering={answering}
+            github={github}
             mode={modes.includes(mode) ? mode : "work"}
             onMode={setMode}
             notice={notice}
