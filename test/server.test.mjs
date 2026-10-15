@@ -9,6 +9,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  rmSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -193,6 +194,15 @@ async function fakeGitHub(files = {}) {
             },
           ]),
         );
+      }
+      // Pull requests a comment can come from: a maintainer's branch, a fork's.
+      if (req.method === "GET" && req.url === "/repos/org/repo/pulls/40") {
+        const head = { ref: "feature/maintainer", repo: { full_name: "org/repo" } };
+        return res.end(JSON.stringify({ number: 40, head }));
+      }
+      if (req.method === "GET" && req.url === "/repos/org/repo/pulls/41") {
+        const head = { ref: "feature/x", repo: { full_name: "someone/repo" } };
+        return res.end(JSON.stringify({ number: 41, head }));
       }
       // A listener that restarted looks the installation up instead of reading it from a
       // delivery.
@@ -1571,4 +1581,89 @@ test("/status answers calls from inside the container without a session", async 
   const res = await fetch(`http://127.0.0.1:${port}/status`);
   assert.equal(res.status, 200);
   assert.equal((await res.json()).idle, true);
+});
+
+// What the git gateway answers a push of `ref` with the run's secret: refused pushes are
+// answered by the gateway itself, the others reach the fake GitHub.
+async function pushProbe(brokerPort, secret, ref) {
+  const line = `${"0".repeat(40)} ${"a".repeat(40)} ${ref}\0report-status\n`;
+  const body = `${(line.length + 4).toString(16).padStart(4, "0")}${line}0000`;
+  const res = await fetch(`http://127.0.0.1:${brokerPort}/git/org/repo.git/git-receive-pack`, {
+    method: "POST",
+    headers: { authorization: `Basic ${Buffer.from(`deckhand:${secret}`).toString("base64")}` },
+    body,
+  });
+  return res.text();
+}
+
+// The branches a running run may push, from its saved state.
+async function savedBranches(dir) {
+  const live = await until(
+    () => readdirSync(join(dir, "logs")).find((f) => f.endsWith(".live.json")),
+    "the run's saved state",
+  );
+  return JSON.parse(readFileSync(join(dir, "logs", live), "utf8")).branches;
+}
+
+test("a run on an issue pushes issue-<n>-* only, before and after a restart", async (t) => {
+  const ctx = await listen(t, {}, (dir, github) => {
+    writeFileSync(join(dir, "hold"), "");
+    return { GITHUB_URL: github.url };
+  });
+  const { dir, github, brokerPort } = ctx;
+  await ctx.send(comment("alice"));
+  await until(() => exists(join(dir, "egress"))?.trim().split("\n").length === 9, "the sandbox");
+  assert.deepEqual(await savedBranches(dir), ["issue-12-*"]);
+  const secret = readFileSync(join(dir, "run-secret"), "utf8").trim();
+  const forwarded = () =>
+    github.requests.filter((r) => r.path === "/org/repo.git/git-receive-pack").length;
+
+  for (const round of ["before", "after"]) {
+    for (const ref of ["refs/heads/issue-13-x", "refs/heads/gh-pages"]) {
+      assert.match(
+        await pushProbe(brokerPort, secret, ref),
+        /ng refs\/heads\/[\w-]+ Deckhand: this run can only push issue-12-\*/,
+        `${round}: ${ref}`,
+      );
+    }
+    assert.equal(forwarded(), round === "before" ? 0 : 1);
+    await pushProbe(brokerPort, secret, "refs/heads/issue-12-x");
+    assert.equal(forwarded(), round === "before" ? 1 : 2);
+    if (round === "before") {
+      await ctx.restart();
+      await ctx.listener.until("picked up");
+    }
+  }
+  writeFileSync(join(dir, "go"), "");
+  await ctx.listener.until("done (ok)");
+});
+
+test("a run on a pull request pushes its head branch, a maintainer's included, never a fork's", async (t) => {
+  const ctx = await listen(t, {}, (dir) => {
+    writeFileSync(join(dir, "hold"), "");
+    return {};
+  });
+  const { dir } = ctx;
+  const onPull = (number) => {
+    const payload = comment("alice");
+    payload.issue = { number, pull_request: {} };
+    return payload;
+  };
+  await ctx.send(onPull(40));
+  await until(() => exists(join(dir, "egress"))?.trim().split("\n").length === 9, "the sandbox");
+  assert.deepEqual(await savedBranches(dir), ["feature/maintainer"]);
+  assert.match(
+    readFileSync(join(dir, "run-env"), "utf8"),
+    /push to its branch, `feature\/maintainer`: Deckhand refuses pushes to any other/,
+  );
+  writeFileSync(join(dir, "go"), "");
+  await ctx.listener.until("done (ok)");
+  rmSync(join(dir, "egress"));
+  rmSync(join(dir, "go"));
+
+  await ctx.send(onPull(41));
+  await until(() => exists(join(dir, "egress"))?.trim().split("\n").length === 9, "the sandbox");
+  assert.deepEqual(await savedBranches(dir), []);
+  assert.match(readFileSync(join(dir, "run-env"), "utf8"), /its branch is in a fork/);
+  writeFileSync(join(dir, "go"), "");
 });

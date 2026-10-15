@@ -17,13 +17,25 @@ instructions. A sandbox that could write to it could grant itself all of that, s
 - Pushes go through the listener's **git gateway** (`listener/git-gateway.mjs`), on the
   broker's port: the sandbox's git sends them there (`url.<broker>/git/.pushInsteadOf`),
   with the run's secret. The gateway reads the ref updates at the start of the push and
-  forwards it to GitHub with a token of its own only when every one is a branch other than
-  the default one, looked up from GitHub on each push (case-insensitively). Tags, the
-  default branch (update, force or delete), signed and compressed pushes are refused, and
-  the refusal shows in git's output as `[remote rejected] … (Deckhand: …)`. Only work runs
-  push: the broker registers every light run (brainstorms, onboarding, inbox entries,
-  discussions, a repo's light modes) as one that can't, so the gateway refuses it whatever its
-  token, and the same holds for a run a restarted listener picks up again.
+  forwards it to GitHub with a token of its own only when every one is one of **the run's
+  own branches**, and never the default one, looked up from GitHub on each push
+  (case-insensitively). A run's branches are set when it starts:
+  - a work run on an issue: `issue-<n>-*`, the branch the sandbox opens for issue `n` (named
+    from its title, so a glob rather than a fixed name: the title may change);
+  - a work run on a pull request, or a comment on an issue's pull request: that pull
+    request's head branch, read from GitHub when the run starts, a maintainer's included
+    (they asked for the run); none when it is a fork's;
+  - light runs (brainstorms, onboarding, inbox entries, discussions, a repo's light modes):
+    none. The broker registers every one as a run that can't push, so the gateway refuses
+    it whatever its token, and the same holds for a run a restarted listener picks up again.
+
+  Anything else is refused, whether an update, a force-push or a delete: another issue's
+  branch (which that issue's next run checks out), another pull request's (which its author
+  may merge without reading it again, or whose Dockerfile a repo with
+  `allow_branch_docker_images` would build on the host), long-lived branches such as
+  `gh-pages` or `release/*`, tags, signed and compressed pushes. The refusal shows in git's
+  output as `[remote rejected] … (Deckhand: …)`.
+
 - The sandbox's `pre-push` hook only gives an earlier, clearer message: the gateway doesn't
   rely on it.
 - Marking a pull request ready for review, or back to draft, also takes `contents: write`
@@ -31,8 +43,9 @@ instructions. A sandbox that could write to it could grant itself all of that, s
   `convertPullRequestToDraft`). The sandbox's `gh` wrapper sends `gh pr ready [--undo]` to
   the listener instead (`POST /pr/<owner>/<repo>/<number>/ready` or `/draft` on the
   broker's port, `listener/pr-ready.mjs`), with the run's secret. The listener checks that
-  the run is live and a work run, that the pull request belongs to the run's repository
-  and that its head branch is in that repository too (not a fork), then calls
+  the run is live and a work run, that the pull request belongs to the run's repository,
+  that its head branch is in that repository too (not a fork) and is one the run may push
+  (above): another task's pull request is refused. Then it calls
   that one mutation with a token of its own, which the sandbox never sees. That token does
   nothing else. A pull request that conflicts with its base (`mergeable_state: dirty`) is
   refused ready with a 409 until the run rebases it.

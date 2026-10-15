@@ -13,6 +13,7 @@ function pull({
   base = "org/repo",
   head = base,
   mergeable_state = "clean",
+  ref = "issue-1-x",
 } = {}) {
   return {
     number,
@@ -20,8 +21,15 @@ function pull({
     mergeable_state,
     node_id: `PR_${number}`,
     base: { ref: "main", repo: { full_name: base } },
-    head: { repo: head && { full_name: head } },
+    head: { ref, repo: head && { full_name: head } },
   };
+}
+
+// A work run on issue 1, whose branches are issue-1-*.
+function issueRun(broker, repo = "org/repo", branches = ["issue-1-*"]) {
+  const secret = broker.register(repo, undefined, { push: true });
+  broker.allow(secret, branches);
+  return secret;
 }
 
 async function serve({ pulls = { 7: pull() }, app = true, graphql = {} } = {}) {
@@ -71,7 +79,7 @@ async function serve({ pulls = { 7: pull() }, app = true, graphql = {} } = {}) {
 test("a work run marks its pull request ready, and back to draft, with the gateway's token", async (t) => {
   const { broker, seen, post, close } = await serve();
   t.after(close);
-  const secret = broker.register("Org/Repo", undefined, { push: true });
+  const secret = issueRun(broker, "Org/Repo");
   const ready = await post("/pr/org/repo/7/ready", secret);
   assert.equal(ready.status, 200);
   assert.deepEqual(ready.body, { message: "org/repo#7 is marked as ready for review" });
@@ -90,10 +98,7 @@ test("a work run marks its pull request ready, and back to draft, with the gatew
 test("--undo converts a ready pull request back to draft", async (t) => {
   const { broker, seen, post, close } = await serve({ pulls: { 7: pull({ draft: false }) } });
   t.after(close);
-  const res = await post(
-    "/pr/Org/Repo/7/draft",
-    broker.register("org/repo", undefined, { push: true }),
-  );
+  const res = await post("/pr/Org/Repo/7/draft", issueRun(broker));
   assert.equal(res.status, 200);
   assert.equal(seen.mutations[0].name, "convertPullRequestToDraft");
 });
@@ -101,10 +106,7 @@ test("--undo converts a ready pull request back to draft", async (t) => {
 test("a pull request already in that state is left alone", async (t) => {
   const { broker, seen, post, close } = await serve({ pulls: { 7: pull({ draft: false }) } });
   t.after(close);
-  const res = await post(
-    "/pr/org/repo/7/ready",
-    broker.register("org/repo", undefined, { push: true }),
-  );
+  const res = await post("/pr/org/repo/7/ready", issueRun(broker));
   assert.deepEqual(res, {
     status: 200,
     body: { message: "org/repo#7 is already ready for review" },
@@ -118,7 +120,7 @@ test("a pull request that conflicts with its base is refused ready, until it is 
   states.forEach((state, i) => (pulls[20 + i] = pull({ number: 20 + i, mergeable_state: state })));
   const { broker, seen, post, close } = await serve({ pulls });
   t.after(close);
-  const secret = broker.register("org/repo", undefined, { push: true });
+  const secret = issueRun(broker);
   const dirty = await post("/pr/org/repo/7/ready", secret);
   assert.equal(dirty.status, 409);
   assert.match(dirty.body.error, /org\/repo#7 conflicts with main: rebase on origin\/main first/);
@@ -155,7 +157,7 @@ test("unknown or finished runs, other repos and runs that can't write are refuse
     assert.equal((await post("/pr/org/repo/7/draft", light)).status, 403);
   }
   // Wrong method or path.
-  const secret = broker.register("org/repo", undefined, { push: true });
+  const secret = issueRun(broker);
   assert.equal((await post("/pr/org/repo/7/ready", secret, "GET")).status, 405);
   assert.equal((await post("/pr/org/repo/7/merge", secret)).status, 404);
   assert.deepEqual(seen.lookups, []);
@@ -172,7 +174,7 @@ test("a fork's pull request, or one of another base, is never changed", async (t
     },
   });
   t.after(close);
-  const secret = broker.register("org/repo", undefined, { push: true });
+  const secret = issueRun(broker);
   const fork = await post("/pr/org/repo/7/ready", secret);
   assert.equal(fork.status, 403);
   assert.match(fork.body.error, /fork/);
@@ -186,10 +188,7 @@ test("a fork's pull request, or one of another base, is never changed", async (t
 test("GitHub's GraphQL errors and a missing App are reported", async (t) => {
   const failing = await serve({ graphql: { errors: [{ message: "Resource not accessible" }] } });
   t.after(failing.close);
-  const res = await failing.post(
-    "/pr/org/repo/7/ready",
-    failing.broker.register("org/repo", undefined, { push: true }),
-  );
+  const res = await failing.post("/pr/org/repo/7/ready", issueRun(failing.broker));
   assert.equal(res.status, 502);
   assert.match(res.body.error, /refused to mark org\/repo#7/);
 
@@ -203,5 +202,36 @@ test("GitHub's GraphQL errors and a missing App are reported", async (t) => {
       )
     ).status,
     503,
+  );
+});
+
+test("only a pull request on one of the run's branches is changed", async (t) => {
+  const { broker, seen, post, close } = await serve({
+    pulls: {
+      7: pull({ ref: "issue-12-x" }),
+      8: pull({ number: 8, ref: "issue-13-y" }),
+      9: pull({ number: 9, ref: "feature/maintainer" }),
+    },
+  });
+  t.after(close);
+  const work = issueRun(broker, "org/repo", ["issue-12-*"]);
+  assert.equal((await post("/pr/org/repo/7/ready", work)).status, 200);
+  const other = await post("/pr/org/repo/8/ready", work);
+  assert.equal(other.status, 403);
+  assert.match(other.body.error, /org\/repo#8's branch, issue-13-y, is not this run's/);
+  assert.equal((await post("/pr/org/repo/9/ready", work)).status, 403);
+  // A pull request's run: its own head only.
+  const onPr = issueRun(broker, "org/repo", ["feature/maintainer"]);
+  assert.equal((await post("/pr/org/repo/9/ready", onPr)).status, 200);
+  assert.equal((await post("/pr/org/repo/7/draft", onPr)).status, 403);
+  // A run with no branch at all.
+  assert.equal(
+    (await post("/pr/org/repo/7/draft", broker.register("org/repo", undefined, { push: true })))
+      .status,
+    403,
+  );
+  assert.deepEqual(
+    seen.mutations.map((m) => m.id),
+    ["PR_7", "PR_9"],
   );
 });

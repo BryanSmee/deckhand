@@ -8,7 +8,7 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { createBroker } from "../listener/broker.mjs";
+import { branchAllowed, createBroker } from "../listener/broker.mjs";
 import { createGitGateway, readCommands, refusal, rejection } from "../listener/git-gateway.mjs";
 
 const ZERO = "0".repeat(40);
@@ -49,14 +49,43 @@ test("anything else in place of ref updates is refused", () => {
   }
 });
 
-test("branches may be pushed, never the default one, nor tags or other refs", () => {
-  assert.equal(refusal("refs/heads/issue-34-x", "main"), null);
-  assert.equal(refusal("refs/heads/main-ish", "main"), null);
-  assert.match(refusal("refs/heads/main", "main"), /default branch/);
-  assert.match(refusal("refs/heads/Main", "main"), /default branch/);
-  assert.match(refusal("refs/heads/trunk", "trunk"), /default branch/);
-  assert.match(refusal("refs/tags/v1", "main"), /only branches/);
-  assert.match(refusal("refs/notes/x", "main"), /only branches/);
+test("the run's branches may be pushed, never the default one, nor tags or other refs", () => {
+  const own = ["issue-34-*"];
+  assert.equal(refusal("refs/heads/issue-34-x", "main", own), null);
+  assert.equal(refusal("refs/heads/main-ish", "main", ["main-ish"]), null);
+  assert.match(refusal("refs/heads/main", "main", ["main"]), /default branch/);
+  assert.match(refusal("refs/heads/Main", "main", ["*"]), /default branch/);
+  assert.match(refusal("refs/heads/trunk", "trunk", own), /default branch/);
+  assert.match(refusal("refs/tags/v1", "main", own), /only branches/);
+  assert.match(refusal("refs/notes/x", "main", own), /only branches/);
+});
+
+test("a run's branches: its issue's glob or exact names, case-sensitive, nothing by default", () => {
+  const own = ["issue-12-*", "feature/x"];
+  for (const branch of ["issue-12-x", "issue-12-a/b", "feature/x"]) {
+    assert.equal(branchAllowed(own, branch), true, branch);
+  }
+  for (const branch of [
+    "issue-12-",
+    "issue-12",
+    "issue-123-x",
+    "issue-13-x",
+    "Issue-12-x",
+    "feature/x2",
+    "feature",
+    "gh-pages",
+    "release/1.0",
+    "",
+    undefined,
+  ]) {
+    assert.equal(branchAllowed(own, branch), false, String(branch));
+  }
+  assert.equal(branchAllowed([], "issue-12-x"), false);
+  assert.match(
+    refusal("refs/heads/issue-13-x", "main", own),
+    /can only push issue-12-\*, feature\/x, not issue-13-x/,
+  );
+  assert.match(refusal("refs/heads/x", "main", []), /no branch to push/);
 });
 
 test("a refused push gets a status report git can show, on the side band if asked", () => {
@@ -130,10 +159,14 @@ const gitEnv = {
   GIT_COMMITTER_EMAIL: "t@t",
 };
 
-async function setup(
-  t,
-  { register = (b) => b.register("org/repo", undefined, { push: true }), app = true } = {},
-) {
+// A work run on issue 1 by default.
+function issueRun(b, branches = ["issue-1-*"]) {
+  const secret = b.register("org/repo", undefined, { push: true });
+  b.allow(secret, branches);
+  return secret;
+}
+
+async function setup(t, { register = issueRun, app = true } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "gateway-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const root = join(dir, "github");
@@ -180,7 +213,19 @@ async function setup(
     ])
       .toString()
       .trim();
-  return { work, remote, seen, minted, lookups, logs, upstream, port };
+  // Branches someone else pushed straight to GitHub: another issue's, a maintainer's pull
+  // request, a published site.
+  const seed = (...branches) =>
+    execFileSync(
+      "git",
+      ["push", "-q", join(root, "org/repo.git"), ...branches.map((b) => `HEAD:refs/heads/${b}`)],
+      { cwd: work, env: gitEnv },
+    );
+  const sha = (ref) =>
+    execFileSync("git", ["-C", join(root, "org/repo.git"), "rev-parse", "--verify", "-q", ref])
+      .toString()
+      .trim();
+  return { work, remote, seen, minted, lookups, logs, upstream, seed, sha, port };
 }
 
 test("a branch is pushed to GitHub with the gateway's token, not the sandbox's", async (t) => {
@@ -218,13 +263,90 @@ test("a push to the default branch is refused, even with --no-verify, and says w
   assert.match(logs.join("\n"), /refused a push to org\/repo: pushing to main/);
 });
 
+test("a work run on issue 12 pushes issue-12-…, and nothing else, even forced or deleted", async (t) => {
+  const { work, remote, upstream, seed, sha } = await setup(t, {
+    register: (b) => issueRun(b, ["issue-12-*"]),
+  });
+  seed("issue-13-other", "feature/maintainer", "gh-pages");
+  const before = ["issue-13-other", "feature/maintainer", "gh-pages"].map((b) =>
+    sha(`refs/heads/${b}`),
+  );
+  // A commit unrelated to theirs: pushing it there would need --force.
+  execFileSync("git", ["commit", "-q", "--amend", "--allow-empty", "-m", "rewritten"], {
+    cwd: work,
+    env: gitEnv,
+  });
+  for (const args of [
+    ["HEAD:refs/heads/issue-13-x"],
+    ["--force", "HEAD:refs/heads/issue-13-other"],
+    ["--force", "HEAD:refs/heads/feature/maintainer"],
+    [":refs/heads/feature/maintainer"],
+    [":refs/heads/gh-pages"],
+    ["HEAD:refs/heads/release/1.0"],
+    ["HEAD:refs/heads/issue-123-x"],
+    // One of its own with another: the whole push is refused.
+    ["HEAD:refs/heads/issue-12-x", "HEAD:refs/heads/issue-13-x"],
+  ]) {
+    const res = await git(work, "push", remote(), ...args);
+    assert.equal(res.ok, false, args.join(" "));
+    assert.match(
+      res.stderr,
+      /\[remote rejected\] .*\(Deckhand: this run can only push issue-12-\*/,
+    );
+  }
+  assert.deepEqual(
+    ["issue-13-other", "feature/maintainer", "gh-pages"].map((b) => sha(`refs/heads/${b}`)),
+    before,
+  );
+  assert.equal(upstream("refs/heads/issue-1*"), "refs/heads/issue-13-other");
+  assert.equal(upstream("refs/heads/release"), "");
+
+  // Its own branch: pushed, force-pushed, deleted.
+  assert.ok((await git(work, "push", remote(), "HEAD:refs/heads/issue-12-x")).ok);
+  execFileSync("git", ["commit", "-q", "--amend", "--allow-empty", "-m", "again"], {
+    cwd: work,
+    env: gitEnv,
+  });
+  const forced = await git(work, "push", "--force", remote(), "HEAD:refs/heads/issue-12-x");
+  assert.ok(forced.ok, forced.stderr);
+  assert.ok((await git(work, "push", remote(), ":refs/heads/issue-12-x")).ok);
+  assert.equal(upstream("refs/heads/issue-12-x"), "");
+});
+
+test("a pull request's run pushes its head branch only", async (t) => {
+  const { work, remote, seed, sha } = await setup(t, {
+    register: (b) => issueRun(b, ["feature/maintainer"]),
+  });
+  seed("feature/maintainer", "feature/other", "issue-1-x");
+  execFileSync("git", ["commit", "-q", "--allow-empty", "-m", "review fix"], {
+    cwd: work,
+    env: gitEnv,
+  });
+  const res = await git(work, "push", remote(), "HEAD:refs/heads/feature/maintainer");
+  assert.ok(res.ok, res.stderr);
+  const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: work }).toString().trim();
+  assert.equal(sha("refs/heads/feature/maintainer"), head);
+  for (const ref of ["feature/other", "issue-1-x", "feature/maintainer2"]) {
+    const refused = await git(work, "push", remote(), `HEAD:refs/heads/${ref}`);
+    assert.equal(refused.ok, false, ref);
+    assert.match(refused.stderr, /can only push feature\/maintainer, not /);
+  }
+});
+
+test("a run with no branch can't push any", async (t) => {
+  const { work, remote, seen } = await setup(t, { register: (b) => issueRun(b, []) });
+  const res = await git(work, "push", remote(), "HEAD:refs/heads/issue-1-x");
+  assert.equal(res.ok, false);
+  assert.match(res.stderr, /no branch to push/);
+  assert.ok(seen.every((s) => s.method === "GET"));
+});
+
 test("deleting the default branch is refused too", async (t) => {
   const { work, remote, upstream } = await setup(t);
-  // As if a maintainer had pushed it.
-  assert.ok((await git(work, "push", remote(), "HEAD:refs/heads/topic")).ok);
+  assert.ok((await git(work, "push", remote(), "HEAD:refs/heads/issue-1-topic")).ok);
   const res = await git(work, "push", remote(), ":refs/heads/main");
   assert.equal(res.ok, false);
-  assert.equal(upstream("refs/heads/topic"), "refs/heads/topic");
+  assert.equal(upstream("refs/heads/issue-1-topic"), "refs/heads/issue-1-topic");
 });
 
 test("no secret, another run's repo or a finished run: no push", async (t) => {
@@ -316,8 +438,8 @@ test("a push bigger than git's post buffer is streamed through, after git's prob
     "http.postBuffer=1024",
     "push",
     remote(),
-    "HEAD:refs/heads/big",
+    "HEAD:refs/heads/issue-1-big",
   );
   assert.ok(res.ok, res.stderr);
-  assert.equal(upstream("refs/heads/big"), "refs/heads/big");
+  assert.equal(upstream("refs/heads/issue-1-big"), "refs/heads/issue-1-big");
 });

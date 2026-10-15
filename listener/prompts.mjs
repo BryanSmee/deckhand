@@ -122,7 +122,15 @@ changed the same behaviour, say), stop and ask instead of guessing (see "Stoppin
 CLAUDE.md).`;
 }
 
-export function initialPrompt(task) {
+// Where a pull request's run may push: its branch (`branches`, runs.mjs pushBranches()), or
+// nowhere when that branch is in a fork.
+function prPush(branches) {
+  return branches.length
+    ? `push to its branch, \`${branches.at(-1)}\`: Deckhand refuses pushes to any other`
+    : `you can't push: its branch is in a fork, so describe the changes in your reply instead`;
+}
+
+export function initialPrompt(task, branches = []) {
   const base = task.base || "main";
   const common = `Follow the repository's AGENTS.md and CLAUDE.md if it has them, with tests where the
 code has them, and run the checks they list before pushing. Never push to ${base}. When
@@ -134,7 +142,7 @@ end with a short summary (what you did, the pull request link, anything left ope
   if (task.kind === "pr") {
     return `Work on pull request #${task.number} of ${task.repo}: check it out with
 \`gh pr checkout ${task.number}\`, read it with \`gh pr view ${task.number} --comments\`, do what
-is asked below, and push to the same branch. Before marking it ready with \`gh pr ready\`, or
+is asked below, and ${prPush(branches)}. Before marking it ready with \`gh pr ready\`, or
 when it conflicts with its base (\`gh pr view ${task.number} --json baseRefName\`),
 ${rebaseStep("<its base>")}
 ${common}`;
@@ -146,7 +154,7 @@ ${common}`;
    request (\`Closes #${task.number}\`; \`gh pr view\` shows it): work on that branch. If you
    are still on ${base}, it couldn't: create a branch from ${base} named
    \`issue-${task.number}-<short-slug>\` and push it, and the draft pull request is opened for
-   you.
+   you. Deckhand refuses pushes to branches not named \`issue-${task.number}-…\`.
 3. Implement it, pushing to the same branch as you go.
 4. When the checks pass, update the pull request with \`gh pr edit\`: final title, and a
    description with \`Closes #${task.number}\`, what changed and why, any choice you made, and
@@ -159,7 +167,7 @@ ${common}`;
 // A run in one of the repo's own modes: its instructions (`instructions`, the file's text
 // from the default branch) after what every run of that kind is told. CLAUDE.md has the
 // generic rules, as for work.
-export function modePrompt(task, own, instructions) {
+export function modePrompt(task, own, instructions, branches = []) {
   const { number: n, repo } = task;
   const base = task.base || "main";
   const where =
@@ -173,11 +181,11 @@ pull request or create issues (your GitHub token can only read). The clone in /w
 set up for reading, not running: the project's setup was skipped. The base branch was
 fetched from \`origin\` at the start of this run.`
     : task.kind === "pr"
-      ? `Check the pull request out with \`gh pr checkout ${n}\` if you change code, and push to its
-branch. Never push to ${base}.`
+      ? `Check the pull request out with \`gh pr checkout ${n}\` if you change code, and ${prPush(branches)}.
+Never push to ${base}.`
       : `The sandbox has already checked out the issue's branch, pushed it and opened a draft pull
-request (\`gh pr view\` shows it): if you change code, commit and push to that branch. Never
-push to ${base}.`;
+request (\`gh pr view\` shows it): if you change code, commit and push to that branch
+(Deckhand refuses pushes to branches not named \`issue-${n}-…\`). Never push to ${base}.`;
   return `You are in the "${own.name}" mode of this repository, on ${where}.
 
 ${rules}
@@ -189,16 +197,16 @@ ${instructions.trim()}`;
 }
 // The run's prompt, by what it is. `own`: the repo's mode, with its `instructions` text;
 // `onboardingWork`: a work run on an onboarding issue; `grant`: what the operator grants the
-// repo (grantFor()).
+// repo (grantFor()); `branches`: what the run may push (runs.mjs pushBranches()).
 export function promptFor(
   task,
-  { mode, text, settings, own, instructions, onboardingWork, config, grant },
+  { mode, text, settings, own, instructions, onboardingWork, config, grant, branches },
 ) {
   if (mode === "brainstorm" || mode === "stop") return brainstormPrompt(task);
   if (INBOX.has(mode)) return inboxPrompt(task, mode, text);
   if (mode === "onboarding") return onboardingPrompt(task, settings, config, grant);
-  if (own) return modePrompt(task, own, instructions);
-  return onboardingWork ? onboardingWorkPrompt(task) : initialPrompt(task);
+  if (own) return modePrompt(task, own, instructions, branches);
+  return onboardingWork ? onboardingWorkPrompt(task) : initialPrompt(task, branches);
 }
 
 // The run's first message, after its prompt: the comments. `started`: the session goes on.
