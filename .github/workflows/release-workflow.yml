@@ -3,8 +3,9 @@
 # ghcr.io/<owner>/deckhand-{listener,egress,sandbox}:
 # - each tag (v1.2.3): tagged 1.2.3, 1.2 and latest, for amd64 and arm64 (a pre-release such
 #   as v1.3.0-rc.1: only its own tag);
-# - each push to main: tagged edge, amd64 only, showing edge-<short sha> as its version. A push
-#   waits 3 minutes first, and a newer push cancels it: merges close together build once.
+# - each push to main: tagged edge, amd64 only, showing edge-<short sha> as its version. It
+#   builds straight away, and a newer push cancels it: a burst of merges ends with one build of
+#   the last commit.
 # Operators pull them with compose: see "Updating" in docs/setup.md.
 name: Release
 
@@ -13,8 +14,9 @@ on:
     branches: [main]
     tags: ["v*"]
 
-# A newer push to main cancels the edge build still waiting or running; a release (its own
-# ref, never a branch) is never cancelled.
+# A newer push to main cancels the edge build still pending or running (GitHub keeps at most
+# one pending run per group); a release (its own ref, never a branch) is never cancelled. No
+# job sleeps to debounce: a sleeping job holds a runner, and its minutes are billed.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.ref_type == 'branch' }}
@@ -24,17 +26,7 @@ permissions:
   packages: write
 
 jobs:
-  # The debounce: only the last of the pushes landing within 3 minutes gets past it.
-  wait:
-    if: github.ref_type == 'branch'
-    runs-on: ubuntu-latest
-    steps:
-      - run: sleep 180
-
   images:
-    needs: wait
-    # Runs after the wait on main, and straight away for a tag (the wait is skipped).
-    if: ${{ !cancelled() && (needs.wait.result == 'success' || needs.wait.result == 'skipped') }}
     runs-on: ubuntu-latest
     strategy:
       matrix:
