@@ -1,6 +1,6 @@
 # What an operator runs: the listener, the egress proxy, and the sandbox image runs start
-# from. Sandboxes sit on an internal network: the proxy is their only way out (see
-# docs/security.md).
+# from. Each sandbox sits on an internal network of its own, which the listener creates and
+# joins itself and the egress proxy to: the proxy is their only way out (see docs/security.md).
 #
 #   cp .env.example .env    # then set ALLOWED_USERS and a Claude credential
 #   cp config.example.yaml config.yaml   # optional: the other settings, see below
@@ -83,14 +83,15 @@ services:
       # Wiring, environment only. Names of what the listener creates on the host's Docker,
       # matching the ones below.
       SANDBOX_IMAGE: *sandbox-image
-      SANDBOX_NETWORK: ${SANDBOX_NETWORK:-deckhand-sandboxes}
       SHOTS_VOLUME: ${SHOTS_VOLUME:-deckhand-screenshots}
       RUNS_VOLUME: ${RUNS_VOLUME:-deckhand-runs}
       # The host's path of the socket mounted below: preview hooks get it too.
       DOCKER_SOCKET: ${DOCKER_SOCKET:-/var/run/docker.sock}
-      # How sandboxes reach the token broker: this service, on the sandboxes' network.
+      # How sandboxes reach the token broker: this service, joined to each run's network
+      # under this name.
       BROKER_URL: http://listener:8081
-      # Their only way out: the egress service below.
+      # Their only way out: the egress service below (its deckhand.role label), joined the same
+      # way.
       EGRESS_PROXY: http://egress:3128
     volumes:
       - ${DOCKER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock
@@ -108,7 +109,6 @@ services:
       # Each mount root you grant, at the same path and read-only: the listener resolves the
       # paths repos ask for (.., symlinks) in it before mounting them into a sandbox.
       # - /nfs/work:/nfs/work:ro
-    networks: [default, sandboxes]
 
   # The sandboxes' egress proxy: asks the listener, for each connection, whether that
   # sandbox may reach that host.
@@ -120,7 +120,9 @@ services:
     restart: unless-stopped
     environment:
       POLICY_URL: http://listener:8081/egress
-    networks: [default, sandboxes]
+    # How the listener finds it, to join it to each run's network.
+    labels:
+      deckhand.role: egress
     read_only: true
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
@@ -135,13 +137,6 @@ services:
     entrypoint: ["true"]
     restart: "no"
     network_mode: none
-
-networks:
-  # Sandboxes, the listener's broker and the egress proxy. Fixed name: the listener attaches
-  # runs to it. Internal: no route out, the listener refuses to start runs otherwise.
-  sandboxes:
-    name: ${SANDBOX_NETWORK:-deckhand-sandboxes}
-    internal: true
 
 volumes:
   data:

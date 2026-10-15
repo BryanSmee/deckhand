@@ -1,7 +1,7 @@
 // Token broker: a run lasts longer than an installation token (1 h), so a sandbox never
 // gets one up front. Its git credential helper and gh wrapper (../sandbox/) ask here, with
 // the run's secret, for a fresh token limited to the run's repo. The secret dies with the
-// run. Served on its own port, which only the sandboxes' network reaches.
+// run. Served on its own port, which only the runs' networks reach.
 //
 // Those tokens only read the code: pushes go through the listener's git gateway
 // (git-gateway.mjs), which finds the run here by the same secret, with the branches it may

@@ -9,7 +9,7 @@
 // gh-pages stay out of reach.
 //
 // Only the smart HTTP push service: fetches go straight to GitHub with the read token.
-// Served on the broker's port, which only the sandboxes' network reaches.
+// Served on the broker's port, which only the runs' networks reach.
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { branchAllowed } from "./broker.mjs";

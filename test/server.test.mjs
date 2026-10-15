@@ -27,6 +27,9 @@ const RW_MOUNT = "/usr";
 
 // Sandboxes run detached: `run` starts the fake sandbox in the background (its output in
 // containers/<name>/out), `logs --follow` tails it, `ps`, `inspect`, `wait` and `rm` see it.
+// Each run's network is a file in nets/, listing the containers joined to it: the sandbox,
+// the listener (whatever its host name) and the egress proxy, `egress-1`, whose address is
+// 127.0.0.1 (the fake sandbox asks the egress policy from there).
 // The fake sandbox asks the broker and the egress policy, prints a result (once
 // ${dir}/go exists, if ${dir}/hold does), then answers each comment of its inbox, through
 // the image's own deckhand-inbox, until the listener closes it.
@@ -41,6 +44,7 @@ c="${dir}/containers"
 alive() { [ -f "$c/$1/pid" ] && kill -0 "$(cat "$c/$1/pid")" 2> /dev/null; }
 case "$1" in
   ps)
+    case "$*" in *deckhand.role=egress*) echo egress-1; exit ;; esac
     for d in "$c"/*/; do
       [ -d "$d" ] || continue
       n=$(basename "$d")
@@ -50,30 +54,71 @@ case "$1" in
   wait)
     while alive "\${@: -1}"; do sleep 0.05; done ;;
   rm)
-    rm -rf "$c/\${@: -1}" ;;
+    n=\${@: -1}
+    [ -f "$c/$n/run" ] && sed -i "/^$n\$/d" "${dir}/nets/$(cat "$c/$n/run")" 2> /dev/null
+    rm -rf "$c/$n" ;;
   logs)
     n=\${@: -1}
     [ -d "$c/$n" ] || exit 1
     exec tail -n +1 -f --pid="$(cat "$c/$n/pid")" -s 0.05 "$c/$n/out" ;;
   network)
-    # The sandboxes' network: internal unless the test says otherwise. Checked while the run
-    # is prepared, so a test can change things then.
-    [ -x "${dir}/while-preparing" ] && "${dir}/while-preparing"
-    cat "${dir}/network-internal" 2> /dev/null || echo true ;;
+    n=\${@: -1}
+    net=\${@: -2:1}
+    case "$2" in
+      create)
+        echo "$*" >> "${dir}/docker-calls"
+        mkdir -p "${dir}/nets" && : > "${dir}/nets/$n" ;;
+      inspect)
+        [ -f "${dir}/nets/$n" ] || exit 1
+        case "$*" in
+          *Containers*) tr '\n' ' ' < "${dir}/nets/$n" ;;
+          # Internal unless the test says otherwise.
+          *) cat "${dir}/network-internal" 2> /dev/null || echo true ;;
+        esac ;;
+      connect)
+        echo "$*" >> "${dir}/docker-calls"
+        [ -f "${dir}/nets/$net" ] || exit 1
+        echo "$n" >> "${dir}/nets/$net" ;;
+      disconnect)
+        sed -i "/^$n\$/d" "${dir}/nets/$net" ;;
+      rm)
+        echo "$*" >> "${dir}/docker-calls"
+        rm -f "${dir}/nets/$n" ;;
+      ls)
+        ls "${dir}/nets" 2> /dev/null ;;
+    esac ;;
   inspect)
     n=\${@: -1}
     case "$3" in
       *State*)
         [ -d "$c/$n" ] || exit 1
         alive "$n" && echo running || echo exited ;;
-      # The sandbox's address on that network, for the egress proxy's questions.
-      *) echo '{"deckhand-sandboxes":{"IPAddress":"10.9.0.5"}}' ;;
+      *compose.project*) echo deckhand ;;
+      *deckhand.run*)
+        [ -d "$c/$n" ] || exit 1
+        cat "$c/$n/run" ;;
+      # A sandbox's address on its network, for the egress proxy's questions; the listener's
+      # and the proxy's on each network they are joined to.
+      *)
+        if [ -d "$c/$n" ]; then
+          printf '{"%s":{"IPAddress":"10.9.0.5"}}\\n' "$(cat "$c/$n/run")"
+          exit
+        fi
+        ip=10.9.0.1
+        [ "$n" = egress-1 ] && ip=127.0.0.1
+        printf '{"deckhand_default":{"IPAddress":"%s"}' "$ip"
+        for f in "${dir}"/nets/*; do
+          [ -f "$f" ] && grep -qx -- "$n" "$f" && printf ',"%s":{"IPAddress":"%s"}' "$(basename "$f")" "$ip"
+        done
+        echo "}" ;;
     esac ;;
   volume)
     # The volumes a test says exist (one name per line in ${dir}/volumes).
     if [ "$2" = inspect ]; then grep -qx -- "\${@: -1}" "${dir}/volumes" 2> /dev/null; exit; fi
     echo "$*" >> "${dir}/docker-calls" ;;
   image)
+    # Asked while the run is prepared, so a test can change things then.
+    [ "$2" = inspect ] && [ -x "${dir}/while-preparing" ] && "${dir}/while-preparing"
     # The base image exists; repo images don't, until built.
     [ "$2" = inspect ] && case "$*" in *-repo-*) exit 1 ;; *) echo sha256:base ;; esac ;;
   create|cp|start)
@@ -85,15 +130,17 @@ case "$1" in
     cp "\${@: -1}/docker/Dockerfile" "${dir}/built-dockerfile" ;;
   run)
     case "$*" in *--entrypoint*) echo "$*" >> "${dir}/docker-calls"; exit 0 ;; esac
+    name=$(printf '%s\\n' "$@" | grep -A1 -x -- --name | tail -1)
+    run=$(printf '%s\\n' "$@" | sed -n 's/^deckhand\\.run=//p')
+    mkdir -p "$c/$name"
+    echo "$run" > "$c/$name/run"
+    # On its run's network before run-args tells a test it started.
+    echo "$name" >> "${dir}/nets/$run"
     # Each file renamed into place, so a test never reads one half-written; run-args last:
     # tests wait for it, then read the others. (Not .tmp: tests look for leftover state writes.)
     echo "$DECKHAND_RUN_SECRET" > "${dir}/run-secret.part" && mv "${dir}/run-secret.part" "${dir}/run-secret"
     env > "${dir}/run-env.part" && mv "${dir}/run-env.part" "${dir}/run-env"
     printf '%s\\n' "$@" > "${dir}/run-args.part" && mv "${dir}/run-args.part" "${dir}/run-args"
-    name=$(printf '%s\\n' "$@" | grep -A1 -x -- --name | tail -1)
-    run=$(printf '%s\\n' "$@" | sed -n 's/^deckhand\\.run=//p')
-    mkdir -p "$c/$name"
-    echo "$run" > "$c/$name/run"
     setsid bash -c '
       curl -fsS -H "Authorization: Bearer $DECKHAND_RUN_SECRET" "$DECKHAND_BROKER_URL/token" \\
         > "${dir}/broker-answer"
@@ -978,8 +1025,8 @@ test("a mount that resolves elsewhere once the run is prepared stops it", async 
   assert.throws(() => readFileSync(join(dir, "run-args")));
 });
 
-test("a sandboxes' network with a route out stops the run", async (t) => {
-  const { github, send } = await listen(t, {}, (dir) => {
+test("a run's network with a route out stops the run", async (t) => {
+  const { dir, github, send } = await listen(t, {}, (dir) => {
     writeFileSync(join(dir, "network-internal"), "false\n");
     return {};
   });
@@ -987,7 +1034,13 @@ test("a sandboxes' network with a route out stops the run", async (t) => {
   const reply = await github.waitFor(
     (r) => r.method === "POST" && r.path === "/repos/org/repo/issues/12/comments",
   );
-  assert.match(JSON.parse(reply.body).body, /deckhand-sandboxes is not internal/);
+  assert.match(
+    JSON.parse(reply.body).body,
+    /^Claude couldn't start: the run's network deckhand-org-repo-12-\S+ is not internal/,
+  );
+  // Neither the sandbox nor its network is left.
+  assert.throws(() => readFileSync(join(dir, "run-args")));
+  assert.deepEqual(readdirSync(join(dir, "nets")), []);
 });
 
 // Polls until `check()` is truthy.
@@ -1121,6 +1174,38 @@ test("a restart during a run: it goes on, a new comment reaches it, one reply", 
   );
   // Its state was written whole each time (store.mjs).
   assert.deepEqual(leftovers(dir), []);
+});
+
+test("a recreated listener and proxy join the running sandbox's network again", async (t) => {
+  const ctx = await holding(t);
+  const { dir } = ctx;
+  const [net] = readdirSync(join(dir, "nets"));
+  const joined = () =>
+    readFileSync(join(dir, "nets", net), "utf8")
+      .split("\n")
+      .filter(Boolean);
+  // Its own network: the sandbox, the listener (its host name) and the proxy.
+  assert.equal(joined().length, 3);
+  assert.ok(joined().includes("egress-1"));
+  // Left by a run nobody knows about any more.
+  writeFileSync(join(dir, "nets", "deckhand-gone-1"), "egress-1\n");
+  // `docker compose up -d`: new containers, on none of the runs' networks.
+  writeFileSync(join(dir, "nets", net), joined()[0] + "\n");
+  await ctx.restart({ LISTENER_CONTAINER: "listener-2", EGRESS_CONTAINER: "egress-2" });
+  await ctx.listener.until("picked up deckhand-org-repo-12-0e9572aae2 again");
+  assert.ok(joined().includes("listener-2"));
+  assert.ok(joined().includes("egress-2"));
+  const calls = readFileSync(join(dir, "docker-calls"), "utf8");
+  assert.match(calls, new RegExp(`^network connect ${net} listener-2$`, "m"));
+  assert.deepEqual(readdirSync(join(dir, "nets")), [net]);
+  writeFileSync(join(dir, "go"), "");
+  await ctx.listener.until("done (ok)");
+  // The run's network goes with it.
+  await until(() => !readdirSync(join(dir, "nets")).length, "the network's removal");
+  assert.match(
+    calls + readFileSync(join(dir, "docker-calls"), "utf8"),
+    new RegExp(`^network rm ${net}$`, "m"),
+  );
 });
 
 test("a listener killed mid-run: Claude answers meanwhile, the next one replies once", async (t) => {

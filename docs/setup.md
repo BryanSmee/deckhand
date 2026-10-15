@@ -21,7 +21,7 @@ docker compose logs listener
 
 Compose runs three images, published for each release (`DECKHAND_VERSION`, default
 `latest`): the listener's, the egress proxy's (the only way out of the sandboxes' internal
-network, see [Security model](security.md)), and the base sandbox image runs start from
+networks, see [Security model](security.md)), and the base sandbox image runs start from
 (the `sandbox` service only pulls it and exits). A repository can bring its own image
 `FROM` that base: see [Per-repo config](repo-config.md). The listener publishes port 8080
 (`PORT` to change it); point your reverse proxy at it.
@@ -267,7 +267,15 @@ needs_input_label: needs-input
 | `DOCKER_SOCKET`                                                                                   | none: compose's                                                                                   | `/var/run/docker.sock`             | the host's Docker socket, as preview hooks mount it                                                        |
 | `DECKHAND_VERSION`                                                                                | none: compose's                                                                                   | `latest`                           | the release compose runs (`1.2.3`, `1.2`), or `edge` to follow `main`: see [Updating](#updating)           |
 | `DECKHAND_REGISTRY`                                                                               | none: compose's                                                                                   | `ghcr.io/bryansmee`                | where compose pulls the images from                                                                        |
-| `SANDBOX_NETWORK`, `SHOTS_VOLUME`, `RUNS_VOLUME`                                                  | none: compose's                                                                                   | `deckhand-…`                       | names of the network and volumes compose creates and the listener uses                                     |
+| `SHOTS_VOLUME`, `RUNS_VOLUME`                                                                     | none: compose's                                                                                   | `deckhand-…`                       | names of the volumes compose creates and the listener uses                                                 |
+
+Each running sandbox has a Docker network of its own (see
+[Security model](security.md#network)). Docker's default address pools hold about 30
+networks, shared with your other projects: past that, runs fail to start with `could not find
+an available, non-overlapping IPv4 address pool`. Keep `MAX_PARALLEL` under it, or give
+Docker smaller networks in `/etc/docker/daemon.json`, for example
+`"default-address-pools": [{"base": "10.200.0.0/16", "size": 28}]` (4096 networks of 16
+addresses), then restart Docker.
 
 A model, in `SANDBOX_MODEL`, `BRAINSTORM_MODEL`, a repository's `model` or a comment's
 `/model`, is a tier the run's agent maps to one of its models, `best`, `balanced` or `fast`
@@ -323,9 +331,11 @@ else set it in the service's `environment`, for example in a `compose.override.y
 | `DATA_DIR`                        | none                       | `/data`                                        | the listener's state: the App's credentials, logs, queue, runs (the `data` volume)                                       |
 | `DASHBOARD_DIR`                   | none                       | the image's `dashboard/dist`                   | the built dashboard the listener serves                                                                                  |
 | `SANDBOX_IMAGE`                   | none                       | `<NAME_PREFIX>-sandbox`                        | the base image runs start from; compose sets the release's                                                               |
-| `BROKER_PORT`                     | none                       | `8081`                                         | port of the token broker, git gateway and egress policy, on the sandboxes' network                                       |
+| `BROKER_PORT`                     | none                       | `8081`                                         | port of the token broker, git gateway and egress policy, on the runs' networks                                           |
 | `BROKER_URL`                      | none                       | `http://listener:<BROKER_PORT>`                | the broker, as sandboxes reach it; compose sets it                                                                       |
 | `EGRESS_PROXY`                    | none                       | `http://egress:3128`                           | the egress proxy, as sandboxes reach it; compose sets it                                                                 |
+| `LISTENER_CONTAINER`              | none                       | the container's host name (its id)             | the listener's container, which joins each run's network                                                                 |
+| `EGRESS_CONTAINER`                | none                       | labelled `deckhand.role=egress`                | the egress proxy's container, which joins each run's network; by default, the one in the listener's compose project      |
 | `POLICY_URL` (egress proxy)       | none                       | `http://listener:8081/egress`                  | where the proxy asks whether a sandbox may reach a host; compose sets it                                                 |
 | `PORT` (in the containers)        | none                       | `8080`, egress proxy: `3128`                   | port the listener and the proxy listen on; the `PORT` above only changes the published one                               |
 | `GITHUB_URL`, `GITHUB_API`        | `github_url`, `github_api` | `https://github.com`, `https://api.github.com` | GitHub's web and API addresses, always allowed through the egress proxy                                                  |
@@ -367,7 +377,7 @@ No sandbox gets a long-lived token, an SSH key or the host's git configuration:
 
 - Each run gets a random secret, valid while the run lasts.
 - Its git credential helper and `gh` wrapper send that secret to the listener's token
-  broker (port 8081, on the `deckhand-sandboxes` network only, not published) on every
+  broker (port 8081, on the runs' networks only, not published) on every
   call, and get back an installation token limited to the run's repository, with issues
   and pull requests (read and write), contents, actions and metadata (read); discussions
   too (read and write) for runs answering a discussion, and only those. Installation tokens
@@ -403,9 +413,12 @@ unless you grant one, and reach only Anthropic, GitHub and the hosts you or the 
 allow, through the egress proxy. See [Security model](security.md): the grants folder, host
 mounts, the mandatory hosts, and what isn't covered.
 
-Upgrading from a version whose `deckhand-sandboxes` network wasn't internal: stop the stack,
-`docker network rm deckhand-sandboxes`, and start it again so compose creates it internal.
-Until then the listener refuses to start runs.
+Upgrading from a version where all sandboxes shared the `deckhand-sandboxes` network: runs
+started before the update go on (the new listener joins itself and the proxy to that network
+again). Once they are over, `docker network rm deckhand-sandboxes`: compose no longer
+creates it, and `SANDBOX_NETWORK` is no longer read. Keep the `deckhand.role: egress` label
+of `compose.yaml`'s `egress` service if you copied the file: the listener finds the proxy
+by it.
 
 Upgrading from a version with a single grants file (`GRANTS_FILE`, `grants.yaml`): the
 listener reads a folder now, `GRANTS_DIR`, and refuses to start while `GRANTS_FILE` is set.

@@ -27,7 +27,6 @@ test("allowed users and repos are lowercase lists", () => {
 test("names come from settings, with a neutral default", () => {
   const defaults = loadConfig({ ALLOWED_USERS: "a" });
   assert.equal(defaults.image, "deckhand-sandbox");
-  assert.equal(defaults.network, "deckhand-sandboxes");
   assert.equal(defaults.shotsVolume, "deckhand-screenshots");
   assert.equal(defaults.claudeCodeVolume, "deckhand-claude-code");
   assert.equal(defaults.publicUrl, null);
@@ -38,7 +37,6 @@ test("names come from settings, with a neutral default", () => {
     PUBLIC_URL: "https://hooks.example.com/",
   });
   assert.equal(custom.image, "registry/img:1");
-  assert.equal(custom.network, "ops-sandboxes");
   assert.equal(custom.publicUrl, "https://hooks.example.com");
 });
 

@@ -184,7 +184,6 @@ function sandboxConfig(env, { setting, label, number }, prefix, hosts) {
   return {
     prefix,
     image: env.SANDBOX_IMAGE || `${prefix}-sandbox`,
-    network: env.SANDBOX_NETWORK || `${prefix}-sandboxes`,
     shotsVolume: env.SHOTS_VOLUME || `${prefix}-screenshots`,
     // Each run's inbox (runner/docker.mjs), mounted by the listener at <dataDir>/runs.
     runsVolume: env.RUNS_VOLUME || `${prefix}-runs`,
@@ -203,12 +202,16 @@ function sandboxConfig(env, { setting, label, number }, prefix, hosts) {
       {},
       (key) => label(`SANDBOX_${key.toUpperCase()}`),
     ),
-    // The only way out of the sandboxes' network (../proxy/proxy.mjs).
+    // The only way out of the runs' networks (../proxy/proxy.mjs).
     egressProxy: (env.EGRESS_PROXY || "http://egress:3128").replace(/\/$/, ""),
+    // The containers joined to each run's network (runner/docker.mjs): by default, the one
+    // the listener runs in and the one compose.yaml labels deckhand.role=egress.
+    listenerContainer: env.LISTENER_CONTAINER || "",
+    egressContainer: env.EGRESS_CONTAINER || "",
     // What the operator grants each repo, one file per repo: hosts, host mounts, limits
     // (grants.mjs).
     grantsDir: setting("GRANTS_DIR") || "/etc/deckhand/grants",
-    // Claude Code's install container downloads from npm, outside the sandboxes' network.
+    // Claude Code's install container downloads from npm, outside the runs' networks.
     installNetwork: setting("INSTALL_NETWORK") || "bridge",
     // The host's Docker socket, as preview hooks mount it.
     dockerSocket: env.DOCKER_SOCKET || "/var/run/docker.sock",

@@ -464,24 +464,38 @@ for repositories granted `allow_dockerfile`.
 socket proxy (for example `tecnativa/docker-socket-proxy`) through `DOCKER_HOST` instead of
 the socket itself. It needs: `CONTAINERS`, `IMAGES`, `BUILD`, `VOLUMES`, `NETWORKS`, `POST`
 and `DELETE` (`docker run`, `ps`, `logs`, `inspect`, `wait`, `rm`, `cp`, `build`, `image ls/rm`,
-`volume create/inspect/rm`, `network inspect`). Preview hooks still need the real socket
+`volume create/inspect/rm`, `network create/inspect/connect/disconnect/ls/rm`). Preview hooks still need the real socket
 (`DOCKER_SOCKET`): leave `preview` out of your repos' configs if you go this way.
 
 ## Network
 
 ```
-sandbox ──(deckhand-sandboxes, internal: no route out)──▶ egress proxy ──▶ allowed hosts
-   └──────────────────────────────────────────────────▶ listener (broker, Claude's API calls)
+sandbox ──(its run's network, internal: no route out)──▶ egress proxy ──▶ allowed hosts
+   └─────────────────────────────────────────────────▶ listener (broker, Claude's API calls)
 ```
 
-- The sandboxes' network is **internal**: Docker gives it no route out. The listener checks
-  it (`docker network inspect`) before starting runs and refuses to start any while it
-  isn't.
-- The **egress proxy** (`proxy/proxy.mjs`, the `egress` service) is on that network and the
-  outside one. It handles HTTP `CONNECT` (HTTPS, and anything tunnelled) and plain HTTP
+- Each run has a **network of its own**, named after the run and labelled with the
+  deployment's `NAME_PREFIX`: the listener creates it before the sandbox and removes it with
+  the sandbox. Only three containers are on it: the sandbox, the listener and the egress
+  proxy, which the listener joins to it under the names sandboxes call them by (the host
+  names of `BROKER_URL` and `EGRESS_PROXY`). Sandboxes can't reach each other, nor what
+  another run's setup started (a dev server, a database).
+- That network is **internal**: Docker gives it no route out. The listener creates it with
+  `--internal`, checks it (`docker network inspect`) and refuses to start the run otherwise.
+- The listener finds its own container by its host name (Docker's default: the container's
+  id) and the proxy's by its `deckhand.role=egress` label in the same compose project
+  (`LISTENER_CONTAINER`, `EGRESS_CONTAINER` to name them instead). A new listener joins
+  both again to the running sandboxes' networks when it starts, and checks every minute
+  (`docker compose up -d` recreates either without the networks it was joined to); networks
+  of this deployment whose run is gone are removed then.
+- The **egress proxy** (`proxy/proxy.mjs`, the `egress` service) is on every run's network
+  and the outside one. Being on all of them, it is the only path between two runs: it
+  connects to the hosts a run may reach only, and to a private address only for a host you
+  list by name (below). It handles HTTP `CONNECT` (HTTPS, and anything tunnelled) and plain HTTP
   requests. For each one, it asks the listener whether the sandbox at that source address
   may reach that host; the listener matches the address to the running sandbox (`docker
-inspect`) and answers from that run's list. An unknown address, an unknown host, or a
+inspect`) and answers from that run's list. Only the proxy may ask: the listener compares
+  the caller with the proxy's addresses on all of its networks (`docker inspect`). An unknown address, an unknown host, or a
   listener that doesn't answer: refused, with a `403` saying why.
 - The proxy resolves names itself and connects to the address it checked. Loopback,
   link-local (cloud metadata, `169.254.169.254`), multicast and unspecified addresses are
@@ -569,7 +583,7 @@ listener's logs (`Egress: refused <host> for <repo>#<n>`).
 
 - **Image builds** (a repo's `dockerfile`, with `allow_dockerfile`) and the **Claude Code
   install** run with normal network access: they run on the host's Docker, outside the
-  sandboxes' network. Builds run the repo's Dockerfile from its default branch (or its pull
+  sandboxes' networks. Builds run the repo's Dockerfile from its default branch (or its pull
   requests' branches with `allow_branch_docker_images`). A branch's image gets a tag of its
   own (`branch-…`, hashing its commit), so the default branch's runs and preview hooks never
   use an image built from a branch.
@@ -578,10 +592,9 @@ listener's logs (`Egress: refused <host> for <repo>#<n>`).
 - **DNS**: Docker's embedded resolver may forward lookups from the internal network to the
   host's resolvers, so a lookup of a made-up name could carry data out to that domain's DNS
   server.
-- **Sandboxes can reach each other**: they share one bridge network, so one repository's
-  sandbox can reach the dev servers or databases another one's setup started.
-  `enable_icc=false` on that network would cut them off from the proxy and the listener
-  too; a network per run is #118.
+- **The listener and the proxy are on every run's network**: a sandbox reaches the
+  listener's two ports (below) and the proxy's, as every other sandbox does, but not the
+  other sandboxes behind them.
 - **Allowed hosts are trusted entirely**: anything a sandbox can write to on one is a way
   out: its own repository on GitHub, a bucket or paste service behind `*`.
 - The listener's own port (8080: dashboard, webhook) is reachable from sandboxes; it needs

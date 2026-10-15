@@ -6,7 +6,7 @@
 // may push (broker.mjs allow()), and calls the mutation with a token of its own that the
 // sandbox never sees.
 //
-// Served on the broker's port, which only the sandboxes' network reaches.
+// Served on the broker's port, which only the runs' networks reach.
 import { branchAllowed } from "./broker.mjs";
 import { GITHUB_HEADERS, PUSH_PERMISSIONS } from "./github-app.mjs";
 import { sendJson } from "./web.mjs";

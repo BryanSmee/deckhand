@@ -206,8 +206,10 @@ export function createRestart(ctx) {
 
   // Follows each restored run's sandbox to its end, as if the listener had never stopped. A
   // run whose sandbox never started gives its comments back to the queue. Sandboxes nobody
-  // knows about any more are told to finish (their next run waits for them).
+  // knows about any more are told to finish (their next run waits for them). First, this
+  // listener joins the running sandboxes' networks: a new container isn't on them.
   async function reattach(restored) {
+    await relink();
     const sandboxes = await listSandboxes();
     for (const task of restored) {
       const live = task.live;
@@ -224,6 +226,16 @@ export function createRestart(ctx) {
       log(`${s.name}: no saved state for it: ${s.running ? "closing its input" : "removing it"}`);
       if (s.running) ctx.runner.close(s.run);
       else await ctx.runner.remove(s.name, s.run);
+    }
+  }
+
+  // Also every minute (server.mjs): the egress proxy may be recreated on its own. A failure
+  // is logged; the next one tries again.
+  async function relink() {
+    try {
+      await ctx.runner.relink();
+    } catch (error) {
+      log(`Joining the runs' networks: ${error.message}`);
     }
   }
 
@@ -253,5 +265,15 @@ export function createRestart(ctx) {
     ctx.startLater(task);
   }
 
-  return { track, status, saveQueue, loadQueue, livePath, saveLive, restoreRuns, reattach };
+  return {
+    track,
+    status,
+    saveQueue,
+    loadQueue,
+    livePath,
+    saveLive,
+    restoreRuns,
+    reattach,
+    relink,
+  };
 }

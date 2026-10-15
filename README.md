@@ -150,7 +150,8 @@ on it, where Claude proposes the file. See [docs/repo-config.md](docs/repo-confi
 
 Out of the box, without any configuration:
 
-- **Network:** sandboxes sit on an internal Docker network; the egress proxy lets them reach
+- **Network:** each sandbox sits on an internal Docker network of its own, out of the
+  others' reach; the egress proxy lets them reach
   `api.anthropic.com`, GitHub and nothing else. You add hosts for every repository
   (`ALLOWED_HOSTS`) or for one (the grants folder); a repository's own `hosts` only count
   when you allow it (`allow_repo_hosts` in its grants file), and never `*`.
@@ -180,9 +181,9 @@ Read this before installing Deckhand on a repository.
   anything a sandbox can write to there (its own repository on GitHub, a bucket behind `*`)
   is a way out. Keep the list short.
 - **What isn't covered:** image builds, the Claude Code install and preview hooks run
-  outside the sandboxes' network, and preview hooks get the Docker socket (root on the
+  outside the sandboxes' networks, and preview hooks get the Docker socket (root on the
   host): a repository only gets its own Dockerfile built or preview hook run when its grants
-  say so (`allow_dockerfile`, `allow_preview`). DNS lookups may leave the internal network.
+  say so (`allow_dockerfile`, `allow_preview`). DNS lookups may leave the internal networks.
 
 All of it, with the grants folder and the limits of each measure:
 [docs/security.md](docs/security.md).

@@ -95,7 +95,7 @@ Reactions on the triggering comment follow its run: 👀 when it is received, th
 
 - **GitHub**: the operator's private App, created at `/setup` and stored in the data volume.
   The listener calls GitHub with installation tokens; sandboxes get none up front and ask the
-  broker (`BROKER_PORT`, only on the sandboxes' network) for a fresh token limited to their
+  broker (`BROKER_PORT`, only on the runs' networks) for a fresh token limited to their
   repo, with a secret that dies with the run. Those tokens only read the code: pushes go
   through the git gateway on the same port, which only lets through the run's own branches,
   and `gh pr ready [--undo]` asks the listener on that port to mark the run's pull request
@@ -113,9 +113,10 @@ Reactions on the triggering comment follow its run: 👀 when it is received, th
   Dockerfile and the hook only with the operator's grant, `grants.mjs`). A config with
   errors stops runs, and the reply says why.
 - **Isolation**: sandboxes run with no capabilities, `no-new-privileges` and CPU, memory and
-  pids limits, on an internal network (checked before each run) whose only way out is the
-  egress proxy (`proxy/proxy.mjs`): it asks the broker's port, for each connection, whether
-  the sandbox at that address may reach that host. Host mounts only happen under roots the
+  pids limits, each on an internal network of its own (created with the run, checked, and
+  removed with it), shared only with the listener and the egress proxy (`proxy/proxy.mjs`),
+  its only way out: the proxy asks the broker's port, for each connection, whether the
+  sandbox at that address may reach that host. Sandboxes can't reach each other. Host mounts only happen under roots the
   operator grants the repo (`GRANTS_DIR`, one file per repo).
 - **Who may run**: only comments from `ALLOWED_USERS`, on repos where the App is installed
   (narrowed by `ALLOWED_REPOS` if set), are acted on: the sandbox runs without permission
@@ -174,7 +175,10 @@ Sandboxes run detached, through the runner (`runner/docker.mjs`): on SIGTERM the
 starts no more runs and saves the comments still waiting for one to `queue.json`; each run's
 state is in `logs/<run>.live.json` all along. The next listener reads both, finds the
 sandboxes by their labels, follows their output from where the previous one stopped, and
-posts each reply once. Queued comments whose author or repository is no longer allowed are
+posts each reply once. A recreated container isn't on the networks the old one was joined
+to: the new listener joins itself and the egress proxy to the running sandboxes' networks
+first (`runner.relink()`), and again every minute, for a proxy recreated on its own; the
+networks of runs that are gone are removed then. Queued comments whose author or repository is no longer allowed are
 dropped then; each run checks its comments' authors against the repository's `users` again
 when it begins.
 
