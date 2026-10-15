@@ -45,6 +45,11 @@ fi
 cd /workspace
 # Every start, not just the clone's: the hook may change with the image.
 cp /usr/local/share/git-hooks/pre-push /workspace/.git/hooks/pre-push
+# The broker's tokens only read: pushes go through the listener's git gateway, which refuses
+# the base branch whatever the hook above says (../listener/git-gateway.mjs).
+if [ -n "${DECKHAND_BROKER_URL:-}" ]; then
+  git config --global "url.$DECKHAND_BROKER_URL/git/.pushInsteadOf" "${REPO_URL%/*/*}/"
+fi
 
 if [ -n "${SANDBOX_LIGHT:-}" ]; then
   # A light run reads the code and doesn't run it, so it answers quickly. Fresh

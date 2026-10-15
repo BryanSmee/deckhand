@@ -208,13 +208,15 @@ No sandbox gets a long-lived token, an SSH key or the host's git configuration:
 - Each run gets a random secret, valid while the run lasts.
 - Its git credential helper and `gh` wrapper send that secret to the listener's token
   broker (port 8081, on the `deckhand-sandboxes` network only, not published) on every
-  call, and get back an installation token limited to the run's repository, with
-  contents, issues and pull requests (read and write), actions and metadata (read);
-  discussions too (read and write) for runs answering a discussion, and only those.
-  Installation tokens last an hour; the broker renews them before that, so a run can go on
-  for hours.
-- Git pushes over HTTPS; commits and comments come from the App's bot
-  (`<app>[bot]`, identity set through `GIT_AUTHOR_*` and `GIT_COMMITTER_*`).
+  call, and get back an installation token limited to the run's repository, with issues
+  and pull requests (read and write), contents, actions and metadata (read); discussions
+  too (read and write) for runs answering a discussion, and only those. Installation tokens
+  last an hour; the broker renews them before that, so a run can go on for hours.
+- Git fetches from GitHub over HTTPS with that token, and pushes through the listener's git
+  gateway (same port, with the run's secret), which pushes any branch but the default one
+  with a token of its own (see [Security model](security.md#the-default-branch)). Commits
+  and comments come from the App's bot (`<app>[bot]`, identity set through `GIT_AUTHOR_*`
+  and `GIT_COMMITTER_*`).
 
 Claude Code is not part of any image: before the first run that needs it, the listener
 installs the pinned `CLAUDE_CODE_VERSION` into the `deckhand-claude-code` volume, in a

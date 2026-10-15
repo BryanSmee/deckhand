@@ -152,7 +152,8 @@ Out of the box, without any configuration:
   CPU, memory and pids limits (`SANDBOX_CPUS`, `SANDBOX_MEMORY`, `SANDBOX_PIDS`).
 - **GitHub:** no long-lived token or SSH key. Each run asks the listener's token broker for
   an installation token limited to its own repository, with a secret that dies with the
-  run.
+  run. That token only reads the code: pushes go through the listener, which refuses the
+  default branch, where Deckhand reads its config.
 
 ## Security model
 

@@ -96,3 +96,17 @@ test(
     assert.match(result.stderr, /run it as root/);
   },
 );
+
+test("for the broker's host, git gets the run's secret: what the git gateway takes", async (t) => {
+  const { b, url, close } = await broker();
+  t.after(close);
+  const secret = b.register("org/repo");
+  const env = {
+    DECKHAND_BROKER_URL: url,
+    DECKHAND_RUN_SECRET: secret,
+    REPO_URL: "https://github.com/org/repo.git",
+  };
+  const host = new URL(url).host;
+  const res = await helper(env, `protocol=http\nhost=${host}\n\n`);
+  assert.equal(res.stdout, `username=deckhand\npassword=${secret}\n`);
+});

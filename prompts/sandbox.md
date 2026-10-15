@@ -85,7 +85,9 @@ Skip screenshots for changes with nothing visible (API, tests, tooling).
 - `git` and `gh` get a short-lived token for this repository from Deckhand on every call:
   no `gh auth login`, no SSH. It covers this repository only.
 - Commits and comments come from the GitHub App's bot; the git identity is already set.
-- Pushing to the base branch is refused: push a branch.
+- Pushes go through Deckhand, which only lets branches through, never the base branch: push
+  a branch. Your token only reads the code: no tags, no merging pull requests, no writing
+  files through the API.
 
 ## Network
 

@@ -10,6 +10,7 @@ import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { createAuth, sessionKey } from "./auth.mjs";
 import { createBroker } from "./broker.mjs";
+import { createGitGateway } from "./git-gateway.mjs";
 import { createBrainstorms, createIssueModes } from "./brainstorms.mjs";
 import { checkout } from "./checkout.mjs";
 import { createComments } from "./comments.mjs";
@@ -221,10 +222,19 @@ Object.assign(ctx, {
     logDir: join(config.dataDir, "previews"),
     log,
   }),
-  // The sandboxes' only way to GitHub: short-lived tokens for their run's repo.
+  // The sandboxes' only way to GitHub: short-lived tokens for their run's repo, which only
+  // read the code.
   broker: createBroker({ app: () => ctx.app, log }),
   // Sandboxes are started, followed and removed through it; they run detached.
   runner: createDockerRunner({ config, docker, inboxDir: runsDir, log }),
+});
+
+// Their pushes, on the broker's port: never to the default branch.
+ctx.gitGateway = createGitGateway({
+  broker: ctx.broker,
+  app: () => ctx.app,
+  githubUrl: config.githubUrl,
+  log,
 });
 
 // --- Tasks, runs and restarts --------------------------------------------------------------

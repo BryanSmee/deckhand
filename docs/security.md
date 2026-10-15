@@ -3,8 +3,33 @@
 Sandboxes run Claude Code without permission prompts, on issues anyone may have written.
 Deckhand assumes that whatever runs inside one may try to read what it shouldn't or send it
 out, and limits what it can reach: GitHub tokens for its own repository only (see
-[Setup](setup.md#how-sandboxes-reach-github)), no host paths unless you grant them, a
-restricted network, and no privileges.
+[Setup](setup.md#how-sandboxes-reach-github)), no pushes to its default branch, no host
+paths unless you grant them, a restricted network, and no privileges.
+
+## The default branch
+
+Deckhand trusts a repository's default branch: its `.deckhand.yaml` (hosts, the preview
+hook, which runs with the Docker socket, the Dockerfile built on the host), its sandbox
+instructions. A sandbox that could write to it could grant itself all of that, so none can:
+
+- Sandbox tokens only **read** the code (`contents: read`). They can't push, write files
+  through the API or merge a pull request, whatever the repo's settings.
+- Pushes go through the listener's **git gateway** (`listener/git-gateway.mjs`), on the
+  broker's port: the sandbox's git sends them there (`url.<broker>/git/.pushInsteadOf`),
+  with the run's secret. The gateway reads the ref updates at the start of the push and
+  forwards it to GitHub with a token of its own only when every one is a branch other than
+  the default one, looked up from GitHub on each push (case-insensitively). Tags, the
+  default branch (update, force or delete), signed and compressed pushes are refused, and
+  the refusal shows in git's output as `[remote rejected] … (Deckhand: …)`. A run whose token
+  can't write pull requests (onboarding, a repo's light modes) can't push at all.
+- The sandbox's `pre-push` hook only gives an earlier, clearer message: the gateway doesn't
+  rely on it.
+
+This doesn't depend on GitHub: branch protection and rulesets aren't enforced on private
+repositories of free plans. Where they are, a ruleset on the default branch (pull request
+required) is still worth adding: it also covers people and other tools. A sandbox's
+branches still reach the default branch through pull requests that a maintainer merges:
+review those that touch `.deckhand.yaml`, the Dockerfile or the preview hook's script.
 
 ## Mounts
 
