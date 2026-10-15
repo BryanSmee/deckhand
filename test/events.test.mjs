@@ -381,10 +381,18 @@ test("closed issues and pull requests: done when completed or merged", () => {
   assert.deepEqual(closedItem(config, "issues", delivery("issues", issue)), {
     repo: "Org/Repo",
     number: 77,
+    key: "Org/Repo#77",
     state: "done",
   });
   const pr = { number: 5, state: "closed", merged: true, merged_at: "2026" };
   assert.equal(closedItem(config, "pull_request", delivery("pull_request", pr)).state, "done");
+  assert.equal(
+    closedItem(config, "pull_request", delivery("pull_request", pr)).key,
+    "Org/Repo#pr-5",
+  );
+  // Reopened: open again, for the dashboard's graph.
+  const reopened = delivery("issues", { ...issue, state: "open" }, { action: "reopened" });
+  assert.equal(closedItem(config, "issues", reopened).state, "open");
   const dropped = { ...pr, merged: false, merged_at: null };
   assert.equal(
     closedItem(config, "pull_request", delivery("pull_request", dropped)).state,

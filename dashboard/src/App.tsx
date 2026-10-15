@@ -1,9 +1,11 @@
-// The dashboard: repo tabs, the tab's tasks filtered by state, the open task and its log; or
-// the repositories page, where onboarding starts and each one's config shows.
+// The dashboard: repo tabs, the tab's tasks filtered by state, the open task and its log; the
+// graph of what waits for what; or the repositories page, where onboarding starts and each
+// one's config shows.
 // What is shown lives in the address (route.ts); the state chip is kept on this device.
 import { useEffect, useState } from "preact/hooks";
 import { type RepoList, useAppState, useRepos } from "./api";
 import { Detail } from "./Detail";
+import { Graph } from "./Graph";
 import { type ChipId, CHIPS, inChip, isLive } from "./format";
 import { useReadyNotifications } from "./notify";
 import { notOnboarded, Repos } from "./Repos";
@@ -96,10 +98,11 @@ export function Dashboard({ state, error, repos }: Props) {
   const visible = inTab.filter((t) => inChip(chip, t));
   const first = visible.find(isLive) ?? visible[0];
   const onRepos = route.page === "repositories";
+  const onGraph = route.page === "graph";
   useEffect(() => {
-    if (wide && !onRepos && !route.task && first)
+    if (wide && !route.page && !route.task && first)
       go({ ...route, task: first.key, run: null }, true);
-  }, [wide, onRepos, route.task, first?.key]);
+  }, [wide, route.page, route.task, first?.key]);
 
   const selectTab = (repo: string | null) => {
     store("tab", repo ?? "");
@@ -125,17 +128,27 @@ export function Dashboard({ state, error, repos }: Props) {
       <header class={styles.top}>
         <h1 class={styles.brand}>Deckhand</h1>
         <span class={`${styles.status} ${error ? styles.error : ""}`}>{status}</span>
-        {repos && (
+        <nav class={styles.pages} aria-label="Pages">
           <a
-            class={styles.repos}
-            href="#/repositories"
-            aria-current={onRepos ? "page" : undefined}
-            title={waiting ? `${waiting} not onboarded` : "Repositories"}
+            class={styles.link}
+            href={formatRoute({ repo: route.repo, task: null, run: null, page: "graph" })}
+            aria-current={onGraph ? "page" : undefined}
+            title="What waits for what"
           >
-            Repositories
-            {waiting > 0 && <span class={styles.waiting}>{waiting}</span>}
+            Graph
           </a>
-        )}
+          {repos && (
+            <a
+              class={styles.link}
+              href="#/repositories"
+              aria-current={onRepos ? "page" : undefined}
+              title={waiting ? `${waiting} not onboarded` : "Repositories"}
+            >
+              Repositories
+              {waiting > 0 && <span class={styles.waiting}>{waiting}</span>}
+            </a>
+          )}
+        </nav>
         {notify.permission === "default" && (
           <button
             type="button"
@@ -153,7 +166,20 @@ export function Dashboard({ state, error, repos }: Props) {
           </form>
         )}
       </header>
-      {onRepos && repos ? (
+      {onGraph ? (
+        <>
+          <div class={styles.tabs}>
+            <Tabs
+              tasks={tasks}
+              repo={route.repo}
+              onSelect={(repo) => go({ repo, task: null, run: null, page: "graph" })}
+            />
+          </div>
+          <main class={styles.page}>
+            <Graph state={state} repo={route.repo} vertical={!wide} />
+          </main>
+        </>
+      ) : onRepos && repos ? (
         <main class={styles.page}>
           <Repos
             list={repos}

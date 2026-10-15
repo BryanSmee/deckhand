@@ -71,8 +71,29 @@ export interface Task {
   deadline?: number;
   // The issues or pull requests its next run waits for ("/after #77", listener/waits.mjs).
   waitingFor?: number[];
+  // Its issue or pull request closed: as completed (merged), not planned (closed without
+  // merging), or null while open or not known yet (listener/titles.mjs).
+  closed: Closed;
   pr: PullRequest | null;
   runs: Run[]; // newest first
+}
+
+export type Closed = "completed" | "not_planned" | null;
+
+// An arrow of the graph: `to` waits for `from` ("/after", listener/waits.mjs).
+export interface Edge {
+  from: string;
+  to: string;
+  kind: "after";
+}
+
+// An issue a task waits for that isn't on the board.
+export interface Blocker {
+  key: string;
+  repo: string;
+  number: number;
+  title: string | null;
+  closed: Closed;
 }
 
 // A preview hook waiting or running (listener/previews.mjs status()).
@@ -90,6 +111,8 @@ export interface Preview {
 export interface State {
   user: string;
   tasks: Task[];
+  edges: Edge[];
+  blockers: Blocker[];
   states: TaskState[];
   running: number;
   queued: number;

@@ -19,6 +19,7 @@ import { createComments } from "./comments.mjs";
 import { createConflicts } from "./conflicts.mjs";
 import { ConfigError, loadConfig, readConfigFile } from "./config.mjs";
 import { docker } from "./docker.mjs";
+import { outcome } from "./events.mjs";
 import { createGitHubApp, loadCredentials, saveCredentials } from "./github-app.mjs";
 import { grantErrors, loadGrants } from "./grants.mjs";
 import { createHttp } from "./http.mjs";
@@ -35,7 +36,7 @@ import { createDockerRunner } from "./runner/docker.mjs";
 import { createRuns } from "./runs.mjs";
 import { createSetup } from "./setup.mjs";
 import { createTasks } from "./tasks.mjs";
-import { createTitles } from "./titles.mjs";
+import { closedAs, createTitles } from "./titles.mjs";
 import { createWaits } from "./waits.mjs";
 
 const env = process.env;
@@ -140,9 +141,10 @@ const auth = createAuth({
   log,
 });
 
-// The dashboard's titles: from webhooks, else fetched once (titles.mjs).
+// The dashboard's titles and closed states: from webhooks, else fetched (titles.mjs).
 const titles = createTitles({
   path: join(config.dataDir, "titles.json"),
+  closedPath: join(config.dataDir, "closed.json"),
   log,
   fetchTitle: async (repo, kind, number) => {
     if (kind === "discussion") {
@@ -152,11 +154,13 @@ const titles = createTitles({
         "query($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) { discussion(number: $number) { title } } }",
         { owner, name, number },
       );
-      return data.repository?.discussion?.title ?? null;
+      return { title: data.repository?.discussion?.title ?? null };
     }
-    // Pull requests are issues too, for their title.
+    // Pull requests are issues too, for their title and whether they are merged.
     const res = await github(repo, "GET", `/repos/${repo}/issues/${number}`, undefined, [404]);
-    return res.ok ? ((await res.json()).title ?? null) : null;
+    if (!res.ok) return null;
+    const issue = await res.json();
+    return { title: issue.title ?? null, closed: closedAs(outcome(issue)) };
   },
 });
 // Logs that have their title (newest first: the latest wins).

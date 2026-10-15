@@ -181,3 +181,25 @@ test("an issue waiting for answers without a run: listed under Needs input, no l
   const row = screen.getByRole("button", { name: /Tags for notes/ });
   expect(row.textContent).toContain("2 h ago");
 });
+
+test("the graph: a node per issue, arrows for /after, a node opens its task", () => {
+  history.replaceState(null, "", "#/graph/acme/app");
+  render(<Dashboard state={state} error={null} />);
+  expect(screen.getByRole("link", { name: "Graph" }).getAttribute("aria-current")).toBe("page");
+  const nodes = within(screen.getByRole("list", { name: "Issues of acme/app" })).getAllByRole(
+    "listitem",
+  );
+  expect(nodes.map((n) => n.getAttribute("aria-label"))).toContain(
+    "#24 Per-repo budgets in the dashboard: Waiting, waits for 2 issues",
+  );
+  expect(nodes).toHaveLength(state.tasks.filter((t) => t.repo === "acme/app").length);
+  expect(document.querySelectorAll("path[marker-end]")).toHaveLength(2);
+  expect(screen.getByRole("list", { name: "Legend" }).textContent).toMatch(/Ready for review/);
+
+  const node = nodes.find((n) => n.getAttribute("aria-label")!.startsWith("#24"))!;
+  expect(node.getAttribute("href")).toBe("#/acme/app?task=acme%2Fapp%2324");
+  // The tabs stay on the graph.
+  fireEvent.click(screen.getByRole("tab", { name: /^All/ }));
+  expect(location.hash).toBe("#/graph");
+  expect(screen.getByRole("list", { name: "Issues" })).toBeTruthy();
+});

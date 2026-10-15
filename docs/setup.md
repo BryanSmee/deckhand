@@ -134,6 +134,18 @@ them ("(2) Deckhand"). **Notify me** (top right) asks your browser for notificat
 dashboard tab is open, a pull request that turns ready for review raises one, which opens it
 when clicked.
 
+**Graph** (top right, `#/graph`, or `#/graph/<owner>/<repo>` for one tab) draws the same
+tasks as a graph: an arrow goes from an issue to each one waiting for it (`/after`), drawn left
+to right (top to bottom on a phone), and the issues a task waits for show even when Deckhand
+never worked on them. Issues with no arrow stand in a grid below. A node is gray while it
+waits or nothing runs, outlined in orange when it needs your input, blue while it runs, red
+after an error (dashed red arrows: what waits for it keeps waiting), filled orange when its
+pull request is ready for review, and green once implemented: the issue closed as completed,
+or its pull request merged. Whether an issue is closed comes with the `issues` and
+`pull_request` webhooks; the rest is asked of GitHub with its title, kept in `closed.json`,
+and what was open is asked again once per start. A node opens its task; one Deckhand never
+worked on opens on GitHub.
+
 Each task shows its listener's state:
 
 | State             | What                                                                    |

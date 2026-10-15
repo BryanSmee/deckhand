@@ -12,6 +12,7 @@
       "replyTo": 25,
       "state": "working",
       "since": 1791989580000,
+      "closed": null,
       "pr": {
         "number": 25,
         "url": "https://github.example.com/acme/app/pull/25",
@@ -80,6 +81,7 @@
       "replyTo": 141,
       "state": "building-image",
       "since": 1791989880000,
+      "closed": null,
       "pr": {
         "number": 141,
         "url": "https://github.example.com/acme/api/pull/141",
@@ -117,6 +119,7 @@
       "replyTo": 23,
       "state": "queued",
       "since": 0,
+      "closed": null,
       "pr": null,
       "runs": []
     },
@@ -132,6 +135,7 @@
       "state": "waiting",
       "since": 0,
       "waitingFor": [23, 22],
+      "closed": null,
       "pr": null,
       "runs": []
     },
@@ -146,6 +150,7 @@
       "replyTo": 138,
       "state": "needs-input",
       "since": 1791979200000,
+      "closed": null,
       "pr": null,
       "runs": [
         {
@@ -178,6 +183,7 @@
       "state": "brainstorm",
       "since": 1791990360000,
       "deadline": 1791990360000,
+      "closed": null,
       "pr": null,
       "runs": [
         {
@@ -209,6 +215,7 @@
       "replyTo": 8,
       "state": "done",
       "since": 1791896400000,
+      "closed": null,
       "pr": null,
       "runs": [
         {
@@ -240,6 +247,7 @@
       "replyTo": 131,
       "state": "done",
       "since": 1791972000000,
+      "closed": null,
       "pr": {
         "number": 132,
         "url": "https://github.example.com/acme/api/pull/132",
@@ -276,6 +284,7 @@
       "replyTo": 16,
       "state": "error",
       "since": 1791961200000,
+      "closed": null,
       "pr": null,
       "runs": [
         {
@@ -307,6 +316,7 @@
       "replyTo": 127,
       "state": "interrupted",
       "since": 1791882000000,
+      "closed": null,
       "pr": {
         "number": 128,
         "url": "https://github.example.com/acme/api/pull/128",
@@ -344,6 +354,7 @@
       "state": "idle-brainstorm",
       "since": 1791987000000,
       "deadline": 1791987000000,
+      "closed": null,
       "pr": null,
       "runs": [
         {
@@ -365,6 +376,19 @@
       ]
     }
   ],
+  "edges": [
+    {
+      "from": "acme/app#23",
+      "to": "acme/app#24",
+      "kind": "after"
+    },
+    {
+      "from": "acme/app#22",
+      "to": "acme/app#24",
+      "kind": "after"
+    }
+  ],
+  "blockers": [],
   "states": [
     "building-image",
     "working",

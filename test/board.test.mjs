@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { waitEdges } from "../listener/http.mjs";
 import { board } from "../listener/board.mjs";
 
 const run = (key, startedAt, extra = {}) => ({
@@ -194,4 +195,22 @@ test("issues labelled needs-input show as such, with or without a run, unless on
     [filed.project, filed.repo, filed.number, filed.kind, filed.replyTo, filed.since, filed.runs],
     ["solo", "solo/tool", 9, "issue", 9, 40, []],
   );
+});
+
+test("the graph's arrows: a wait's blockers, pull requests on the board by their own key", () => {
+  const shown = [{ key: "org/repo#24" }, { key: "org/repo#22" }, { key: "org/repo#pr-30" }];
+  const waits = [
+    { key: "org/repo#24", repo: "org/repo", blockers: [22, 23, 30] },
+    // Not on the board (past the first 200): no arrow.
+    { key: "org/repo#99", repo: "org/repo", blockers: [22] },
+  ];
+  assert.deepEqual(waitEdges(shown, waits), {
+    edges: [
+      { from: "org/repo#22", to: "org/repo#24", kind: "after" },
+      { from: "org/repo#23", to: "org/repo#24", kind: "after" },
+      { from: "org/repo#pr-30", to: "org/repo#24", kind: "after" },
+    ],
+    blockers: ["org/repo#23"],
+  });
+  assert.deepEqual(waitEdges(shown, []), { edges: [], blockers: [] });
 });

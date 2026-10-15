@@ -1742,6 +1742,25 @@ test("the dashboard and its logs are for allowed users signed in with GitHub", a
   assert.equal(ready.pr.number, 13);
   assert.equal(ready.pr.state, "ready");
   assert.ok(ready.pr.readyAt > 0);
+  assert.equal(ready.closed, null);
+  // #12 closed as completed: the graph shows it implemented.
+  await send(
+    {
+      action: "closed",
+      installation: { id: 7 },
+      repository: { full_name: "org/repo", default_branch: "trunk" },
+      issue: { number: 12, state: "closed", state_reason: "completed" },
+      sender: { login: "alice" },
+    },
+    "issues",
+  );
+  let closed = null;
+  for (let i = 0; i < 100 && !closed; i++) {
+    const all = (await (await get("/api/state", session)).json()).tasks;
+    closed = all.find((x) => x.key === "org/repo#12").closed;
+    if (!closed) await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  assert.equal(closed, "completed");
   const stream = await get(`/api/runs/${task.runs[0].id}/stream`, session);
   assert.equal(stream.status, 200);
   assert.match(await stream.text(), /event: end/);
@@ -1750,7 +1769,18 @@ test("the dashboard and its logs are for allowed users signed in with GitHub", a
 
 // dashboard/src/types.ts, key by key: [required, optional].
 const STATE_KEYS = [
-  ["user", "tasks", "states", "running", "queued", "maxParallel", "githubUrl", "now"],
+  [
+    "user",
+    "tasks",
+    "edges",
+    "blockers",
+    "states",
+    "running",
+    "queued",
+    "maxParallel",
+    "githubUrl",
+    "now",
+  ],
   ["previews"],
 ];
 const TASK_KEYS = [
@@ -1765,10 +1795,11 @@ const TASK_KEYS = [
     "replyTo",
     "state",
     "since",
+    "closed",
     "pr",
     "runs",
   ],
-  ["deadline"],
+  ["deadline", "waitingFor"],
 ];
 const RUN_KEYS = [
   [
