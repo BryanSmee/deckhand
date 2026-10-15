@@ -32,6 +32,11 @@ sandbox_pids: 2048
 # podman or auto (docs/setup.md#container-engine). None by default.
 # sandbox_engine: sysbox
 
+# Where the runs' networks take their subnets from, instead of Docker's default address
+# pools (docs/setup.md): blocks of /28 by default (sandbox_subnet_size). Empty: Docker's.
+# sandbox_subnets: 10.200.0.0/16
+# sandbox_subnet_size: 28
+
 conflict_check_minutes: 5
 waits_check_minutes: 5
 onboarding: true

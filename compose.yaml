@@ -75,6 +75,10 @@ services:
       SANDBOX_PIDS: ${SANDBOX_PIDS:-}
       # A container engine for repos granted allow_docker: sysbox, podman or auto. Empty: none.
       SANDBOX_ENGINE: ${SANDBOX_ENGINE:-}
+      # A range for the runs' networks (10.200.0.0/16), in blocks of SANDBOX_SUBNET_SIZE
+      # (28). Empty: Docker's default address pools.
+      SANDBOX_SUBNETS: ${SANDBOX_SUBNETS:-}
+      SANDBOX_SUBNET_SIZE: ${SANDBOX_SUBNET_SIZE:-}
       TRIGGER: ${TRIGGER:-}
       ONBOARDING: ${ONBOARDING:-}
       BRAINSTORM_IDLE_MINUTES: ${BRAINSTORM_IDLE_MINUTES:-}

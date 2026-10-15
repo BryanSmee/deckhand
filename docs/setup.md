@@ -238,6 +238,7 @@ max_parallel: 2
 sandbox_cpus: 2
 sandbox_memory: 4g
 sandbox_pids: 2048
+sandbox_subnets: 10.200.0.0/16
 conflict_check_minutes: 5
 onboarding: true
 needs_input_label: needs-input
@@ -259,6 +260,7 @@ needs_input_label: needs-input
 | `MAX_PARALLEL`                                                                                    | `max_parallel`                                                                                    | `2`                                | sandboxes running at once (a repo's `max_parallel` within it)                                                                                  |
 | `ALLOWED_HOSTS`                                                                                   | `allowed_hosts`                                                                                   | none                               | hosts every sandbox may reach besides Anthropic and GitHub                                                                                     |
 | `SANDBOX_CPUS`, `SANDBOX_MEMORY`, `SANDBOX_PIDS`                                                  | `sandbox_cpus`, `sandbox_memory`, `sandbox_pids`                                                  | `2`, `4g`, `2048`                  | each sandbox's limits (per repo: the grants folder)                                                                                            |
+| `SANDBOX_SUBNETS`, `SANDBOX_SUBNET_SIZE`                                                          | `sandbox_subnets`, `sandbox_subnet_size`                                                          | none (Docker's pools), `28`        | an IPv4 range the runs' networks take their subnets from, in blocks of that size (below the table)                                             |
 | `SANDBOX_ENGINE`                                                                                  | `sandbox_engine`                                                                                  | none                               | the container engine runs of repositories granted `allow_docker` get: `sysbox`, `podman` or `auto` (see [Container engine](#container-engine)) |
 | `TRIGGER`                                                                                         | `trigger`                                                                                         | `Deckhand`                         | first line of a comment that starts a run                                                                                                      |
 | `ONBOARDING`                                                                                      | `onboarding`                                                                                      | on                                 | `off`: no onboarding issue when the App is installed on a repo without a config                                                                |
@@ -272,12 +274,22 @@ needs_input_label: needs-input
 | `SHOTS_VOLUME`, `RUNS_VOLUME`                                                                     | none: compose's                                                                                   | `deckhand-…`                       | names of the volumes compose creates and the listener uses                                                                                     |
 
 Each running sandbox has a Docker network of its own (see
-[Security model](security.md#network)). Docker's default address pools hold about 30
-networks, shared with your other projects: past that, runs fail to start with `could not find
-an available, non-overlapping IPv4 address pool`. Keep `MAX_PARALLEL` under it, or give
-Docker smaller networks in `/etc/docker/daemon.json`, for example
-`"default-address-pools": [{"base": "10.200.0.0/16", "size": 28}]` (4096 networks of 16
-addresses), then restart Docker.
+[Security model](security.md#network)). By default Docker takes their subnets from its default
+address pools, which hold about 30 networks shared with your other projects: past that, runs
+fail to start with `all predefined address pools have been fully subnetted` (or `could not
+find an available, non-overlapping IPv4 address pool`). Set aside a range of your own instead,
+`SANDBOX_SUBNETS=10.200.0.0/16` (`sandbox_subnets` in `config.yaml`): the listener cuts it
+into blocks of `SANDBOX_SUBNET_SIZE` (`/28` by default, 16 addresses: 4096 networks in a
+`/16`) and gives each run's network the lowest block no network on the host uses, so your
+other projects keep Docker's pools. Pick a range none of your networks or LANs use. When it is
+full, runs fail to start with an error naming `SANDBOX_SUBNETS`: set a larger range or a lower
+`MAX_PARALLEL`.
+
+The alternative changes the whole daemon, your other projects' networks included: give Docker
+more, smaller networks in `/etc/docker/daemon.json`, then restart Docker. The setting replaces
+Docker's own pools, so list those first and add yours after them, for example
+`"default-address-pools": [{"base": "172.16.0.0/12", "size": 16}, {"base": "192.168.0.0/16", "size": 20}, {"base": "10.200.0.0/16", "size": 28}]`
+(the last one: 4096 networks of 16 addresses).
 
 A model, in `SANDBOX_MODEL`, `BRAINSTORM_MODEL`, a repository's `model` or a comment's
 `/model`, is a tier the run's agent maps to one of its models, `best`, `balanced` or `fast`
