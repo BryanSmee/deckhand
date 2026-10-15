@@ -123,6 +123,8 @@ export interface Layout {
   height: number;
   w: number;
   h: number;
+  // Between two columns (rows on a phone): where an arrow runs.
+  gap: number;
 }
 
 // `keys` in the order they come (the board's: most recent first); `vertical`: a phone's
@@ -209,7 +211,7 @@ export function layout(
 
   const width_ = Math.max(0, ...boxes.map((b) => b.x + w));
   const height = Math.max(0, ...boxes.map((b) => b.y + h));
-  return { boxes, arrows, gridTop, width: width_, height, w, h };
+  return { boxes, arrows, gridTop, width: width_, height, w, h, gap: layerGap };
 }
 
 // The groups of issues linked to each other, in the board's order of their first issue.
@@ -265,4 +267,35 @@ function layersOf(group: string[], preds: Map<string, string[]>, order: Map<stri
 // "#12 · Fix the queue" shortened to fit a node; a pull request's "PR #3".
 export function shorten(text: string, max: number): string {
   return text.length > max ? `${text.slice(0, max - 1).trimEnd()}…` : text;
+}
+
+// The issue a drop at (x, y) queues after: the one it lands on, or the one whose right side
+// (the gap below it, top to bottom) it lands in, where what waits for it goes. Null: dropped
+// in the open, it starts (or stops waiting).
+export function dropTarget(
+  l: Pick<Layout, "boxes" | "w" | "h" | "gap">,
+  vertical: boolean,
+  x: number,
+  y: number,
+): string | null {
+  const hit = l.boxes.find((b) =>
+    vertical
+      ? x >= b.x && x <= b.x + l.w && y >= b.y && y <= b.y + l.h + l.gap
+      : x >= b.x && x <= b.x + l.w + l.gap && y >= b.y && y <= b.y + l.h,
+  );
+  return hit?.key ?? null;
+}
+
+// The issue number a dragged GitHub link names, if it is one of `repo`'s issues (or pull
+// requests): "https://github.com/org/app/issues/12", with GitHub Enterprise's own address.
+export function issueOfLink(text: string, github: string, repo: string): number | null {
+  for (const line of text.split(/\r?\n/)) {
+    const url = line.trim();
+    if (!url || url.startsWith("#")) continue;
+    const base = `${github.replace(/\/$/, "")}/${repo}/`.toLowerCase();
+    if (!url.toLowerCase().startsWith(base)) continue;
+    const match = /^(?:issues|pull)\/(\d+)(?:[/?#]|$)/.exec(url.slice(base.length));
+    if (match) return Number(match[1]);
+  }
+  return null;
 }

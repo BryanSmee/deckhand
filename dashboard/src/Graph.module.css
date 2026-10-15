@@ -150,3 +150,66 @@
 .heldHead {
   fill: var(--err);
 }
+
+/* The work area: the backlog beside the graph (above it on a phone), the graph a drop zone. */
+.work {
+  display: grid;
+  grid-template-columns: minmax(15rem, 18rem) minmax(0, 1fr);
+  gap: 1rem;
+  align-items: start;
+}
+
+.work > section {
+  position: sticky;
+  top: 0;
+  max-height: calc(100vh - 9rem);
+  overflow: auto;
+}
+
+.area {
+  min-height: 14rem;
+  padding: 0.75rem;
+  border: 1.5px dashed var(--line);
+  border-radius: var(--radius);
+  overflow: auto;
+}
+
+.area.over {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.hint {
+  margin: 0 0 1rem;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+@media (max-width: 760px) {
+  .work {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .work > section {
+    position: static;
+    max-height: 45vh;
+  }
+}
+
+/* A waiting issue, which can be dragged away or onto another one. */
+.movable {
+  cursor: grab;
+  touch-action: none;
+}
+
+.moving {
+  cursor: grabbing;
+  opacity: 0.85;
+}
+
+/* The issue a drop would queue after. */
+.node.target rect {
+  stroke: var(--accent);
+  stroke-width: 3px;
+  stroke-dasharray: 5 3;
+}

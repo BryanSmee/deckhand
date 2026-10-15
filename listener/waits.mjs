@@ -103,15 +103,13 @@ export function createWaits({
       refused("missing", "isn't an issue or pull request of this repository") ??
       refused("not-done", "was closed without being done");
     if (why) return answer(item, why).then(() => true);
-    // A new "/after" replaces the list.
-    if (drop(key)) log(`${key}: its wait is replaced`);
     const blockers = after.numbers.filter((_, i) => states[i] === "open");
-    if (!blockers.length) return false;
-    received(item);
-    const { settings, after: _, ...rest } = item;
-    waits.set(key, { repo: item.repo, blockers, item: await plain(rest), since: now() });
-    save();
-    log(`${key}: waits for ${issueList(blockers)}`);
+    if (!blockers.length) {
+      // A new "/after" replaces the list.
+      if (drop(key)) log(`${key}: its wait is replaced`);
+      return false;
+    }
+    await hold(item, blockers);
     const they = blockers.length > 1 ? "they are" : "it is";
     await answer(
       item,
@@ -120,10 +118,24 @@ export function createWaits({
     return true;
   }
 
-  // A trigger comment without "/after" replaces the wait: it runs now.
-  function cancel(key) {
+  // Makes the task of `item` wait for `blockers` (open issues of its repo), replacing its wait,
+  // without a reply: request()'s, or the dashboard's own comment (work.mjs).
+  async function hold(item, blockers) {
+    const key = keyOf(item);
+    if (drop(key)) log(`${key}: its wait is replaced`);
+    received(item);
+    const { settings, after: _, ...rest } = item;
+    waits.set(key, { repo: item.repo, blockers, item: await plain(rest), since: now() });
+    save();
+    log(`${key}: waits for ${issueList(blockers)}`);
+  }
+
+  // A trigger comment without "/after" replaces the wait: it runs now. `why`: who drops it, for
+  // the log. Returns the wait dropped, or null.
+  function cancel(key, why = "a new comment replaces it") {
     const wait = drop(key);
-    if (wait) log(`${key}: a new comment replaces its wait for ${issueList(wait.blockers)}`);
+    if (wait) log(`${key}: no longer waits for ${issueList(wait.blockers)}, ${why}`);
+    return wait;
   }
 
   // Issue or pull request `number` of `repo` is closed, done or not ("missing": gone).
@@ -208,5 +220,16 @@ export function createWaits({
     }));
   }
 
-  return { request, cancel, closed, check, start, stop, list, get: (key) => waits.get(key) };
+  return {
+    request,
+    hold,
+    cancel,
+    closed,
+    check,
+    start,
+    stop,
+    list,
+    stateOf,
+    get: (key) => waits.get(key),
+  };
 }

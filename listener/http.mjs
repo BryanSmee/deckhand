@@ -70,8 +70,8 @@ export function createHttp(ctx, { dashboardDir }) {
     return local(req) || ctx.auth.user(req) !== null;
   }
 
-  // What the dashboard shows `user`: each issue and pull request with its state (board.mjs).
-  function state(user) {
+  // The dashboard's tasks: each issue and pull request with its state (board.mjs).
+  function shownTasks() {
     // A running task's comments are queued only when they wait for a follow-up run: the others
     // are on their way to the live session.
     const queued = [...tasks.values()]
@@ -91,6 +91,12 @@ export function createHttp(ctx, { dashboardDir }) {
       // Stored before the label was turned off: not listed.
       inputs: config.needsInputLabel ? ctx.inputs.list() : [],
     }).slice(0, 200);
+    return { shown, queued };
+  }
+
+  // What the dashboard shows `user`.
+  function state(user) {
+    const { shown, queued } = shownTasks();
     const { edges, blockers } = waitEdges(shown, ctx.waits.list());
     // Titles the listener doesn't have yet show on a later poll.
     if (ctx.app) {
@@ -364,7 +370,9 @@ export function createHttp(ctx, { dashboardDir }) {
     if (req.method === "POST" && req.url === "/webhook") return webhook(req, res);
     if (req.url.startsWith("/api/repos")) {
       if (!ctx.app) return res.writeHead(503).end();
-      if (ctx.repoApi.handle(req, res, ctx.auth.user(req))) return;
+      const user = ctx.auth.user(req);
+      if (ctx.workApi.handle(req, res, user)) return;
+      if (ctx.repoApi.handle(req, res, user)) return;
     }
     // GitHub only ever POSTs to /webhook; everything a browser asks for is the dashboard.
     if (req.method === "GET") return serveDashboard(req, res);
@@ -467,5 +475,8 @@ export function createHttp(ctx, { dashboardDir }) {
     return server;
   }
 
-  return { listen, listenBroker, admitting };
+  // The keys of the tasks on the dashboard: the work area's backlog leaves them out.
+  const boardKeys = () => new Set(shownTasks().shown.map((t) => t.key));
+
+  return { listen, listenBroker, admitting, boardKeys };
 }

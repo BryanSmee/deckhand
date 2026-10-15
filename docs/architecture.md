@@ -147,6 +147,15 @@ start. One closed without being done drops the wait, with a reply saying so. A n
 `/mode` comment without `/after` replaces the wait; `/after` again replaces the list;
 `/after none` cancels it. The dashboard shows the task as `waiting`, with what it waits for.
 
+The dashboard's graph does the same by drag and drop (`work.mjs`): on a repo's tab, its open
+issues with no task yet are a backlog; one dropped on the graph starts (in the mode picked),
+dropped next to an issue it waits for that one; a waiting issue dragged away stops waiting,
+onto another issue waits for that one instead. Each has a button too. The listener writes
+each action on the issue as the App's comment, which reactions follow like a trigger
+comment's, and queues the work (`accept()`) or holds it (`waits.hold()`) itself: the App's
+own comments never reach `admit()`. The checks are `resume()`'s, see
+[security.md](security.md#the-dashboards-actions).
+
 ## Restarts
 
 The listener can restart at any time (an update is `docker compose pull && up -d`).
@@ -188,6 +197,7 @@ which starts runs.
 | `onboarding.mjs`, `previews.mjs`                                  | Onboarding issues; preview hooks.                                                                  |
 | `conflicts.mjs`                                                   | The conflict watcher: open task pull requests in conflict get a rebase run (`conflicts.json`).     |
 | `waits.mjs`                                                       | Comments waiting for other issues to be done (`/after`, `waits.json`).                             |
+| `work.mjs`                                                        | The graph's work area: the backlog, and starting or queueing issues from the dashboard.            |
 | `board.mjs`, `titles.mjs`, `pulls.mjs`, `repos.mjs`, `static.mjs` | The dashboard's tasks, titles and closed states, pull requests, repository list and files.         |
 | `repo-view.mjs`                                                   | A repository's config as the dashboard shows it: what its runs get, from the runs' own checks.     |
 | `store.mjs`, `html.mjs`, `web.mjs`                                | Shared helpers: JSON state files written atomically; the small HTML pages; `sendJson`, `readBody`. |
