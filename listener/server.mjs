@@ -38,6 +38,7 @@ import { createSetup } from "./setup.mjs";
 import { createTasks } from "./tasks.mjs";
 import { closedAs, createTitles } from "./titles.mjs";
 import { createWaits } from "./waits.mjs";
+import { createWorkApi } from "./work.mjs";
 
 const env = process.env;
 let config;
@@ -325,6 +326,20 @@ ctx.repoApi = createRepoApi({
   list: repoList,
   publicUrl,
   start: (repo, login) => ctx.onboardRepo(repo, login, true),
+  log,
+});
+
+// The graph's work area: the backlog, and starting or queueing issues by dragging them.
+ctx.workApi = createWorkApi({
+  config,
+  github,
+  repoSettings,
+  reply: ctx.reply,
+  waits: ctx.waits,
+  accept: (item) => ctx.accept(item),
+  boardKeys: () => http.boardKeys(),
+  busy: taskBusy,
+  publicUrl,
   log,
 });
 
