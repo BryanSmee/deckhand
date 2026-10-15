@@ -147,7 +147,10 @@ inspect`) and answers from that run's list. An unknown address, an unknown host,
 - The proxy resolves names itself and connects to the address it checked. Loopback,
   link-local (cloud metadata, `169.254.169.254`), multicast and unspecified addresses are
   always refused; private ones (`10/8`, `172.16/12`, `192.168/16`, `100.64/10`, `fc00::/7`)
-  only when the host is allowed by name or `*.domain`, never through `*` alone.
+  only when the host is allowed by name or `*.domain`, never through `*` alone. IPv6
+  addresses are compared as bytes, and those standing for an IPv4 one (`::ffff:0:0/96`,
+  `::/96`, NAT64's `64:ff9b::/96`) are checked as that IPv4 address, so
+  `[::ffff:a9fe:a9fe]` is the metadata service too.
 - Sandboxes get `HTTP_PROXY`, `HTTPS_PROXY` (both cases), `NO_PROXY` (`localhost`, the
   listener) and `NODE_USE_ENV_PROXY=1`: without it, Node's `fetch` ignores the proxy (and
   fails, as nothing else goes out). The Playwright browser gets the proxy as flags. A tool
