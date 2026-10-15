@@ -114,7 +114,7 @@ conflicts:
 | `inbox.discussions`                     | none                                    | GitHub Discussions category whose discussions Claude answers (see Inboxes)               |
 | `preview.command`                       | none                                    | preview hook command (`preview: ./x.sh` works too); needs the operator's `allow_preview` |
 | `preview.image`                         | the repo's image                        | image the hook runs in; it needs a Docker client                                         |
-| `preview.timeout_minutes`               | `30`                                    | the hook is stopped after that                                                           |
+| `preview.timeout_minutes`               | `30`                                    | the hook is stopped after that (120 at most)                                             |
 | `conflicts.check_minutes`               | none: off                               | minutes between conflict checks; at least `CONFLICT_CHECK_MINUTES` (see Conflicts)       |
 
 ## Network and mounts

@@ -20,7 +20,9 @@ that file asks for, so none can:
   through the API or merge a pull request, whatever the repo's settings.
 - Pushes go through the listener's **git gateway** (`listener/git-gateway.mjs`), on the
   broker's port: the sandbox's git sends them there (`url.<broker>/git/.pushInsteadOf`),
-  with the run's secret. The gateway reads the ref updates at the start of the push and
+  with the run's secret. The gateway reads the ref updates at the start of the push (at most
+  64 KiB of them, within 30 seconds; a refused push's pack is read and dropped for a minute
+  at most, so git shows the refusal) and
   forwards it to GitHub with a token of its own only when every one is one of **the run's
   own branches**, and never the default one, looked up from GitHub on each push
   (case-insensitively). A run's branches are set when it starts:
@@ -160,7 +162,9 @@ A sandbox only gets Docker named volumes:
 `<hash>` (10 hex digits of the repository and task) keeps apart names that would otherwise
 be the same, such as `acme/x` pull request 5 and `acme/x-pr` issue 5. Tasks whose session
 dates from before it (`<prefix>-<owner>-<repo>-<n>-claude` exists) keep that name and their
-volumes.
+volumes, but only when one of the task's own runs had that name (its log is in `logs/`):
+otherwise a new task could take over the session and workspace of another repository's task
+whose old name is the same.
 
 Light runs (brainstorms, onboarding, inbox entries, discussions, the repo's light modes) read
 and comment; work runs push. The git gateway and `gh pr ready` refuse light runs, and their
@@ -352,6 +356,66 @@ whose default branch you trust as much as the host itself. `allow_branch_docker_
 is a grant too, not a `.deckhand.yaml` key: it lets anyone who can push a branch of the
 repository change what is built.
 
+## Who reaches a session
+
+A comment reaches Claude when its author is in `ALLOWED_USERS` and the repository's own
+`users`, and those are checked again later, not only when it arrives:
+
+- a comment queued when the listener stops keeps its author in `queue.json`: the next
+  listener drops it (and takes its 👀 off) when its author or repository is no longer
+  allowed;
+- every queued comment is checked again against the repository's `users`, read from its
+  default branch, when its run begins: a `.deckhand.yaml` that removes a user while their
+  comment waits out the pause, or behind a busy repository, stops it;
+- a comment that waits for other issues (`/after`) is checked again when it starts.
+
+A comment on a pull request goes on in the session of the issue the pull request closes
+(`Closes #12` in its description) only when the pull request's head branch is in the
+repository, as for the branches a run may push: anyone can open a pull request from a fork
+saying `Closes #12`, and an allowed user's comment on it would otherwise go on in issue 12's
+session. An issue comment's payload doesn't have the head: the listener trusts the App's own
+pull requests (`<slug>[bot]`, Claude's) and looks the others up, whoever opened them
+(another App, `github-actions[bot]`, a collaborator). Anything else is the pull request's
+own task.
+
+GitHub may send a delivery again (by hand from the App's settings, or after a timeout on its
+side): the listener remembers the last 500 delivery ids (`X-GitHub-Delivery`) and handles
+each once. A restart forgets them.
+
+## The dashboard
+
+Only `ALLOWED_USERS` sign in. Each repository's tasks, runs and live logs (whose tool output
+may hold what a run read) are shown to the users in its own `users` too, as the listener last
+read them (for a run or a comment, or for the repositories tab); a repository whose
+`.deckhand.yaml` hasn't been read since the listener started is shown to every allowed user
+until it is. The repositories tab and its configs are shown to every allowed user.
+
+A session is a signed cookie, valid for 7 days, with the login and its **epoch**. Signing out
+bumps the login's epoch (`/data/sessions.json`): every session of that login ends, in any
+browser, including a copied cookie. Removing a user from `ALLOWED_USERS` and restarting also
+signs them out; rotating `/data/session.key` signs everyone out.
+
+`/status` answers calls from inside the listener's container without a session. A reverse
+proxy on the host's network calls from loopback too: a request carrying `Forwarded`,
+`X-Forwarded-For`, `X-Forwarded-Host` or `X-Real-IP` needs a session. If your proxy adds none
+of them, keep `/status` from it.
+
+## The listener's data
+
+The data volume (`/data`) holds what the listener keeps; whoever reads it has the App. The
+files holding secrets are the owner's only (`0600`):
+
+| File                   | What                                                          |
+| ---------------------- | ------------------------------------------------------------- |
+| `app.json`             | the App's private key, client and webhook secrets             |
+| `session.key`          | signs dashboard sessions                                      |
+| `sessions.json`        | each login's session epoch                                    |
+| `logs/<run>.live.json` | a running run's state, with its secret (gone once it is over) |
+| `queue.json`           | comments queued when the listener stopped, with their authors |
+
+Run logs (`logs/<run>.log`) have the Claude credential and the run's secret redacted (see
+[The Claude credential](#the-claude-credential)).
+
 ## The dashboard's actions
 
 The dashboard is read-only but for two kinds of POST: starting a repository's onboarding
@@ -522,7 +586,8 @@ listener's logs (`Egress: refused <host> for <repo>#<n>`).
   out: its own repository on GitHub, a bucket or paste service behind `*`.
 - The listener's own port (8080: dashboard, webhook) is reachable from sandboxes; it needs
   a dashboard session (a signed-in allowed user, see [Setup](setup.md#4-the-dashboard)) or
-  the webhook's signature. `/status` also answers calls from inside the listener's container.
+  the webhook's signature. `/status` also answers calls from inside the listener's container
+  (see [The dashboard](#the-dashboard)).
   Deliveries without a signature or over 5 MB are refused before their body is read (a push
   that large only delays a config's refresh). At most 16 are read at once, 4 per client
   address (per /64 for IPv6), each within 10 seconds and dropped after 2 seconds without

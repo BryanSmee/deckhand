@@ -15,40 +15,89 @@ import { pipeline } from "node:stream/promises";
 import { branchAllowed } from "./broker.mjs";
 import { PUSH_PERMISSIONS } from "./github-app.mjs";
 
-// The ref updates come first in a push; anything bigger than this before them is not git.
-const MAX_COMMANDS = 1 << 20;
+// The ref updates come first in a push: anything bigger than this before them is not git. A
+// ref update is a hundred bytes or so; a push of hundreds of branches still fits.
+export const MAX_COMMANDS = 64 * 1024;
+// How long a sandbox may take to send them, and to send the rest of a refused push.
+const HEAD_MS = 30_000;
+const DRAIN_MS = 60_000;
 
 const PATH = /^\/git\/([\w.-]+)\/([\w.-]+?)(?:\.git)?\/(info\/refs|git-receive-pack)$/;
 
-// The ref updates at the start of a receive-pack request (pkt-lines up to a flush):
-// { refs, caps, end } with `caps` the client's capabilities (after the first one) and `end`
-// the offset of what follows, null while `buffer` is too short, or throws on anything else.
-// Signed pushes (push-cert) are refused rather than parsed.
-export function readCommands(buffer) {
+// Reads the ref updates at the start of a receive-pack request (pkt-lines up to a flush) as
+// its chunks come: push(chunk) returns null while they are incomplete, then { refs, caps, end }
+// with `caps` the client's capabilities (after the first one) and `end` the offset of what
+// follows; it throws on anything else, or past `limit` bytes. Each byte is looked at once, and
+// copied at most once (a pkt-line split across chunks): a client sending a few bytes at a
+// time costs no more than one sending it all. Signed pushes (push-cert) are refused rather than
+// parsed.
+export function commandReader(limit = MAX_COMMANDS) {
+  const chunks = []; // received, not parsed yet
+  let buffered = 0;
+  let consumed = 0;
+  let length = null; // of the pkt-line being read, once its header is in
   const refs = [];
   let caps = [];
-  let pos = 0;
-  for (;;) {
-    if (buffer.length < pos + 4) return null;
-    const hex = buffer.subarray(pos, pos + 4).toString("latin1");
-    if (!/^[0-9a-f]{4}$/i.test(hex)) throw new Error("not a git push");
-    const length = parseInt(hex, 16);
-    if (length === 0) return { refs, caps, end: pos + 4 };
-    if (length < 5) throw new Error("not a git push");
-    if (buffer.length < pos + length) return null;
-    const [line, extra] = buffer
-      .subarray(pos + 4, pos + length)
-      .toString("utf8")
-      .replace(/\n$/, "")
-      .split("\0");
-    pos += length;
-    if (line.startsWith("shallow ")) continue;
-    if (line.startsWith("push-cert")) throw new Error("signed pushes are not supported");
-    const match = /^[0-9a-f]{40,64} [0-9a-f]{40,64} (\S+)$/.exec(line);
+
+  // The next `n` buffered bytes, removed from the buffer.
+  function take(n) {
+    buffered -= n;
+    if (chunks[0].length >= n) {
+      const out = chunks[0].subarray(0, n);
+      chunks[0] = chunks[0].subarray(n);
+      if (!chunks[0].length) chunks.shift();
+      return out;
+    }
+    const parts = [];
+    for (let got = 0; got < n;) {
+      const c = chunks[0];
+      const k = Math.min(c.length, n - got);
+      parts.push(c.subarray(0, k));
+      got += k;
+      if (k === c.length) chunks.shift();
+      else chunks[0] = c.subarray(k);
+    }
+    return Buffer.concat(parts, n);
+  }
+
+  function line(data) {
+    const [text, extra] = data.toString("utf8").replace(/\n$/, "").split("\0");
+    if (text.startsWith("shallow ")) return;
+    if (text.startsWith("push-cert")) throw new Error("signed pushes are not supported");
+    const match = /^[0-9a-f]{40,64} [0-9a-f]{40,64} (\S+)$/.exec(text);
     if (!match) throw new Error("not a git push");
     if (!refs.length && extra) caps = extra.trim().split(/\s+/);
     refs.push(match[1]);
   }
+
+  function push(chunk) {
+    chunks.push(chunk);
+    buffered += chunk.length;
+    for (;;) {
+      if (length === null) {
+        if (buffered < 4) break;
+        const hex = take(4).toString("latin1");
+        consumed += 4;
+        if (!/^[0-9a-f]{4}$/i.test(hex)) throw new Error("not a git push");
+        length = parseInt(hex, 16);
+        if (length === 0) return { refs, caps, end: consumed };
+        if (length < 5) throw new Error("not a git push");
+      }
+      if (buffered < length - 4) break;
+      line(take(length - 4));
+      consumed += length - 4;
+      length = null;
+    }
+    if (consumed + buffered > limit) throw new Error("not a git push");
+    return null;
+  }
+
+  return { push };
+}
+
+// The ref updates of a whole buffer (commandReader()): null while it is too short.
+export function readCommands(buffer) {
+  return commandReader(Infinity).push(buffer);
 }
 
 function pkt(data) {
@@ -101,6 +150,8 @@ export function createGitGateway({
   githubUrl = "https://github.com",
   fetch = globalThis.fetch,
   log = () => {},
+  headMs = HEAD_MS,
+  drainMs = DRAIN_MS,
 }) {
   // Git shows a text/plain error body as "remote: …" lines.
   function fail(res, status, message, headers = {}) {
@@ -124,20 +175,26 @@ export function createGitGateway({
   }
 
   // Reads the request until its ref updates are complete: { refs, caps, body } with `body` the
-  // whole request again, read so far and then the rest as it comes.
+  // whole request again, read so far and then the rest as it comes. Within `headMs`, or the
+  // request is dropped.
   async function commands(req) {
     const chunks = req[Symbol.asyncIterator]();
-    let head = Buffer.alloc(0);
-    let parsed = readCommands(head);
-    while (!parsed) {
-      const { value, done } = await chunks.next();
-      if (done) throw new Error("not a git push");
-      head = Buffer.concat([head, value]);
-      if (head.length > MAX_COMMANDS) throw new Error("not a git push");
-      parsed = readCommands(head);
+    const reader = commandReader();
+    const seen = [];
+    const timer = setTimeout(() => req.destroy(new Error("ref updates too slow")), headMs);
+    let parsed = null;
+    try {
+      while (!parsed) {
+        const { value, done } = await chunks.next();
+        if (done) throw new Error("not a git push");
+        seen.push(value);
+        parsed = reader.push(value);
+      }
+    } finally {
+      clearTimeout(timer);
     }
     async function* body() {
-      yield head;
+      yield* seen;
       for (let next = await chunks.next(); !next.done; next = await chunks.next()) {
         yield next.value;
       }
@@ -145,11 +202,16 @@ export function createGitGateway({
     return { refs: parsed.refs, caps: parsed.caps, body: body() };
   }
 
-  async function drain(body) {
+  // The rest of a refused push, read and dropped, so the client reads the answer. Not for
+  // longer than `drainMs`: the request is then dropped.
+  async function drain(req, body) {
+    const timer = setTimeout(() => req.destroy(new Error("refused push too slow")), drainMs);
     try {
       for await (const _ of body);
     } catch {
-      // The client gave up: nothing to do.
+      // The client gave up, or took too long: nothing to do.
+    } finally {
+      clearTimeout(timer);
     }
   }
 
@@ -212,7 +274,7 @@ export function createGitGateway({
       if (reasons.size) {
         log(`Git gateway: refused a push to ${repo}: ${[...reasons.values()].join("; ")}`);
         // The pack is not forwarded: let the client finish sending it.
-        await drain(parsed.body);
+        await drain(req, parsed.body);
         const report = rejection(parsed.refs, parsed.caps, reasons);
         if (!report) {
           return fail(res, 403, [...reasons.values()].map((r) => `Deckhand: ${r}`).join("\n"));

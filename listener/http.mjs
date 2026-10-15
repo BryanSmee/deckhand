@@ -49,10 +49,18 @@ const GRACE_MS = 1000;
 const IDLE_MS = 2000;
 const BODY_MS = 10000;
 
-// Health checks and scripts call from inside the container (docker compose exec).
-function local(req) {
+// Health checks and scripts call from inside the container (docker compose exec). A reverse
+// proxy on the host's network calls from loopback too, for anyone: a request it forwarded
+// (it says so in a header) isn't local.
+const FORWARDED = ["forwarded", "x-forwarded-for", "x-forwarded-host", "x-real-ip"];
+export function local(req) {
+  if (FORWARDED.some((h) => req.headers[h] !== undefined)) return false;
   return ["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(req.socket.remoteAddress);
 }
+
+// GitHub's delivery ids remembered, newest last: a redelivery of one of them (by hand, or after
+// a timeout on GitHub's side) would queue its comment twice.
+const RECENT_DELIVERIES = 500;
 
 // The graph's arrows, blocker → waiting task, for the waits of the tasks `shown`, and the keys
 // of the blockers that aren't shown. A wait names numbers: a pull request on the board is
@@ -80,17 +88,41 @@ export function createHttp(ctx, { dashboardDir }) {
 
   // Comments on their way to the queue: a listener that stops saves them too.
   const admitting = new Set();
+  const deliveries = new Set();
+
+  // True the first time a delivery id is seen; deliveries without one are taken.
+  function firstTime(id) {
+    if (!id) return true;
+    if (deliveries.has(id)) return false;
+    deliveries.add(id);
+    // A Set iterates in insertion order: the oldest goes.
+    if (deliveries.size > RECENT_DELIVERIES) deliveries.delete(deliveries.values().next().value);
+    return true;
+  }
 
   function trusted(req) {
     return local(req) || ctx.auth.user(req) !== null;
   }
 
-  // The dashboard's tasks: each issue and pull request with its state (board.mjs).
-  function shownTasks() {
+  // Whether `user` may see a repo's tasks and logs: the repo's own `users`, where the listener
+  // knows them (ctx.usersOf()), narrow ALLOWED_USERS. Tool output in the logs may hold the
+  // repo's secrets.
+  function sees(user, repo) {
+    const users = ctx.usersOf(repo);
+    return !users || users.includes(user);
+  }
+
+  const repoOf = (key) => key.slice(0, key.lastIndexOf("#"));
+
+  // The dashboard's tasks: each issue and pull request with its state (board.mjs). `user`:
+  // only the repos they may see; all of them without one.
+  function shownTasks(user = null) {
+    const mine = (list) => (user ? list.filter((x) => sees(user, repoOf(x.key))) : list);
     // A running task's comments are queued only when they wait for a follow-up run: the others
     // are on their way to the live session.
     const queued = [...tasks.values()]
       .filter((t) => t.pending.length > (t.running ? ctx.deliverable(t) : 0))
+      .filter((t) => !user || sees(user, t.repo))
       .map((t) => ({
         key: `${t.repo}#${t.id}`,
         kind: kindOf(t.pending.at(-1).mode, t.kind),
@@ -99,19 +131,19 @@ export function createHttp(ctx, { dashboardDir }) {
         replyTo: t.pending.at(-1).replyTo,
       }));
     const shown = board({
-      runs: ctx.runs,
+      runs: mine(ctx.runs),
       queued,
-      brainstorms: ctx.brainstorms.list(),
-      waits: ctx.waits.list(),
+      brainstorms: mine(ctx.brainstorms.list()),
+      waits: mine(ctx.waits.list()),
       // Stored before the label was turned off: not listed.
-      inputs: config.needsInputLabel ? ctx.inputs.list() : [],
+      inputs: config.needsInputLabel ? mine(ctx.inputs.list()) : [],
     }).slice(0, 200);
     return { shown, queued };
   }
 
   // What the dashboard shows `user`.
   function state(user) {
-    const { shown, queued } = shownTasks();
+    const { shown, queued } = shownTasks(user);
     const { edges, blockers } = waitEdges(shown, ctx.waits.list());
     // Titles the listener doesn't have yet show on a later poll.
     if (ctx.app) {
@@ -141,7 +173,7 @@ export function createHttp(ctx, { dashboardDir }) {
       running: ctx.running,
       queued: queued.length,
       maxParallel: config.maxParallel,
-      previews: ctx.previews.status(),
+      previews: ctx.previews.status().filter((h) => sees(user, h.repo)),
       // GitHub Enterprise: the dashboard's links go where the listener's do.
       githubUrl: config.githubUrl,
       now: Date.now(),
@@ -180,7 +212,7 @@ export function createHttp(ctx, { dashboardDir }) {
     if (url.pathname === "/api/state") return sendJson(res, state(user));
     const match = /^\/api\/runs\/([\w.-]+)\/stream$/.exec(url.pathname);
     const run = match && ctx.runs.find((r) => r.id === match[1]);
-    if (run) return stream(req, res, run);
+    if (run && sees(user, run.repo ?? repoOf(run.key))) return stream(req, res, run);
     res.statusCode = 404;
     res.end();
   }
@@ -243,6 +275,8 @@ export function createHttp(ctx, { dashboardDir }) {
           // Answer at once: GitHub gives up after 10 seconds, runs take minutes.
           res.statusCode = 202;
           res.end();
+          const id = req.headers["x-github-delivery"];
+          if (!firstTime(id)) return log(`Delivery ${id} again: already handled`);
           let payload;
           try {
             payload = JSON.parse(body.toString("utf8"));

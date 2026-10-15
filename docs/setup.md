@@ -116,8 +116,11 @@ Open the listener's public address (`/`) and sign in with GitHub: the App's sign
 (user-to-server OAuth) tells the listener who you are, and only `ALLOWED_USERS` get in; anyone
 else sees who they are signed in as and a refusal. The token GitHub returns is only used to
 read your login, then revoked; the session is a signed cookie valid for 7 days, checked
-against `ALLOWED_USERS` on every request (the key is `/data/session.key`). `/status` also
-answers calls from inside the container (`docker compose exec listener …`) without a session.
+against `ALLOWED_USERS` on every request (the key is `/data/session.key`). Signing out ends
+all your sessions, in every browser. A repository's tasks and logs show to the users in its
+own `users` (see [Security model](security.md#the-dashboard)). `/status` also answers calls
+from inside the container (`docker compose exec listener …`) without a session, but not
+those a reverse proxy forwarded.
 
 Apps created by `/setup` before the dashboard had sign-in have no callback URL: on the App's
 page on GitHub (Settings → Developer settings → GitHub Apps → your App → General), add

@@ -10,6 +10,7 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -84,9 +85,10 @@ case "$1" in
     cp "\${@: -1}/docker/Dockerfile" "${dir}/built-dockerfile" ;;
   run)
     case "$*" in *--entrypoint*) echo "$*" >> "${dir}/docker-calls"; exit 0 ;; esac
-    printf '%s\\n' "$@" > "${dir}/run-args"
+    # run-args last: tests wait for it, then read the others.
     echo "$DECKHAND_RUN_SECRET" > "${dir}/run-secret"
     env > "${dir}/run-env"
+    printf '%s\\n' "$@" > "${dir}/run-args"
     name=$(printf '%s\\n' "$@" | grep -A1 -x -- --name | tail -1)
     run=$(printf '%s\\n' "$@" | sed -n 's/^deckhand\\.run=//p')
     mkdir -p "$c/$name"
@@ -227,6 +229,15 @@ async function fakeGitHub(files = {}) {
       if (req.method === "GET" && req.url === "/repos/org/repo/pulls/41") {
         const head = { ref: "feature/x", repo: { full_name: "someone/repo" } };
         return res.end(JSON.stringify({ number: 41, head }));
+      }
+      // Pull requests saying they close #3: from a branch of the repo, from a fork.
+      if (req.method === "GET" && req.url === "/repos/org/repo/pulls/42") {
+        const head = { ref: "issue-3-fix", repo: { full_name: "org/repo" } };
+        return res.end(JSON.stringify({ number: 42, body: "Closes #3", head }));
+      }
+      if (req.method === "GET" && req.url === "/repos/org/repo/pulls/43") {
+        const head = { ref: "issue-3-fix", repo: { full_name: "mallory/repo" } };
+        return res.end(JSON.stringify({ number: 43, body: "Closes #3", head }));
       }
       // A listener that restarted looks the installation up instead of reading it from a
       // delivery.
@@ -421,9 +432,23 @@ function comment(login, body = "Deckhand") {
 }
 
 test("sandbox names: a hash keeps colliding repos apart, sessions from before keep theirs", async (t) => {
-  const { dir, github, send, listener } = await listen(t);
-  // Issue 12 has a session from before names had a hash; issue 14 has none.
-  writeFileSync(join(dir, "volumes"), "deckhand-org-repo-12-claude\n");
+  // Issue 12 has a session from before names had a hash, and a run that had that name;
+  // issue 14 has none. org/repo-pr #5 had one too, whose old name is org/repo #pr-5's.
+  const { dir, github, send, listener } = await listen(t, {}, (dir) => {
+    mkdirSync(join(dir, "logs"));
+    for (const [key, id] of [
+      ["org/repo#12", "deckhand-org-repo-12-1000"],
+      ["org/repo-pr#5", "deckhand-org-repo-pr-5-1000"],
+    ]) {
+      const meta = { type: "listener", key, repo: key.split("#")[0], startedAt: 1000 };
+      writeFileSync(join(dir, "logs", `${id}.log`), `${JSON.stringify(meta)}\n`);
+    }
+    return {};
+  });
+  writeFileSync(
+    join(dir, "volumes"),
+    ["deckhand-org-repo-12-claude", "deckhand-org-repo-pr-5-claude", ""].join("\n"),
+  );
   const name = () => {
     const args = readFileSync(join(dir, "run-args"), "utf8").split("\n");
     return [args[args.indexOf("--name") + 1], args.filter((a) => a.endsWith(":/workspace"))[0]];
@@ -438,6 +463,11 @@ test("sandbox names: a hash keeps colliding repos apart, sessions from before ke
   const [fresh, workspace] = name();
   assert.match(fresh, /^deckhand-org-repo-14-[0-9a-f]{10}$/);
   assert.equal(workspace, `${fresh}-workspace:/workspace`);
+  await listener.until(/org\/repo#14: done/);
+  // Pull request 5 of org/repo: the other repo's session isn't its own.
+  await send({ ...comment("alice"), issue: { number: 5, pull_request: {} } });
+  await github.waitFor((r) => r.path === "/repos/org/repo/issues/5/comments");
+  assert.match(name()[0], /^deckhand-org-repo-pr-5-[0-9a-f]{10}$/);
 });
 
 // Sends a delivery's headers and holds its body back: the answer comes from the headers alone.
@@ -1129,6 +1159,70 @@ test("comments queued when the listener stops run after it starts", async (t) =>
   assert.deepEqual(leftovers(ctx.dir), []);
 });
 
+test("a comment queued before a restart doesn't run once its author left ALLOWED_USERS", async (t) => {
+  const ctx = await listen(t, {}, { DEBOUNCE_MS: "60000" });
+  await ctx.send(comment("alice"));
+  await ctx.listener.until("queued (work");
+  await ctx.github.waitFor((r) => r.path === "/repos/org/repo/issues/comments/99/reactions");
+  // Stopped first, to see what it leaves: the queue, the owner's only.
+  const { child } = ctx.listener;
+  const exited = new Promise((resolve) => child.on("exit", resolve));
+  child.kill("SIGTERM");
+  await exited;
+  assert.equal(statSync(join(ctx.dir, "queue.json")).mode & 0o777, 0o600);
+  await ctx.restart({ DEBOUNCE_MS: "0", ALLOWED_USERS: "bob" });
+  await ctx.listener.until("dropped: alice is no longer an allowed user");
+  // Its 👀 goes, and nothing runs.
+  await ctx.github.waitFor(
+    (r) => r.method === "DELETE" && r.path === "/repos/org/repo/issues/comments/99/reactions/1",
+  );
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  assert.equal(exists(join(ctx.dir, "run-args")), null);
+  assert.equal(replies(ctx.github).length, 0);
+});
+
+test("a comment whose author leaves the repo's users while it waits doesn't run", async (t) => {
+  const files = { ".deckhand.yaml": "users: [alice, bob]\n" };
+  const ctx = await listen(t, files, { DEBOUNCE_MS: "300" });
+  await ctx.send(comment("alice"));
+  await ctx.listener.until("queued (work");
+  files[".deckhand.yaml"] = "users: [bob]\n";
+  await ctx.listener.until("a queued comment dropped: alice is no longer an allowed user");
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  assert.equal(exists(join(ctx.dir, "run-args")), null);
+  // The queue goes on: bob's comment runs.
+  await ctx.send({
+    ...comment("bob"),
+    comment: { id: 100, body: "Deckhand", user: { login: "bob", type: "User" } },
+  });
+  await ctx.listener.until("done (ok)");
+});
+
+test("a comment on a pull request saying Closes #3 joins #3 only from a branch of the repo", async (t) => {
+  const { github, send, listener } = await listen(t);
+  const onPull = (number, id) => {
+    const payload = comment("alice");
+    // Opened by someone else than the App: its head is looked up.
+    payload.issue = {
+      number,
+      body: "Closes #3",
+      pull_request: {},
+      user: { login: "github-actions[bot]", type: "Bot" },
+      author_association: "NONE",
+    };
+    payload.comment = { ...payload.comment, id };
+    return payload;
+  };
+  await send(onPull(42, 101));
+  await listener.until("org/repo#3: queued");
+  await listener.until("done (ok)");
+  await send(onPull(43, 102));
+  await listener.until("org/repo#pr-43: queued");
+  assert.match(listener.output(), /org\/repo#pr-43: says it closes #3, not linked/);
+  await listener.until(/org\/repo#pr-43: done \(ok\)/);
+  assert.ok(github.requests.some((r) => r.path === "/repos/org/repo/pulls/43"));
+});
+
 test("a restart after Claude answered once: nothing is read twice", async (t) => {
   const ctx = await holding(t);
   const { dir, github, send } = ctx;
@@ -1772,6 +1866,40 @@ test("/mode onboarding alone on an issue starts the conversation by hand", async
   });
 });
 
+test("the dashboard shows a repo's tasks and logs to its own users, once they are known", async (t) => {
+  const files = { ".deckhand.yaml": "users: [bob]\n" };
+  const { port, send, listener } = await listen(t, files, (dir, github) => {
+    mkdirSync(join(dir, "logs"));
+    const meta = { type: "listener", key: "org/repo#pr-3", repo: "org/repo", startedAt: 1000 };
+    writeFileSync(join(dir, "logs", "org-repo-pr-3-1000.log"), `${JSON.stringify(meta)}\n`);
+    return { GITHUB_URL: github.url };
+  });
+  const base = `http://127.0.0.1:${port}`;
+  const get = (path, cookie) =>
+    fetch(base + path, { redirect: "manual", headers: cookie ? { cookie } : {} });
+  // alice (the fake GitHub's browser) signs in: she is in ALLOWED_USERS.
+  const login = await get("/auth/login");
+  const to = new URL(login.headers.get("location"));
+  const state = login.headers.getSetCookie()[0].split(";")[0];
+  const back = await get(`/auth/callback?code=c&state=${to.searchParams.get("state")}`, state);
+  const session = back.headers
+    .getSetCookie()
+    .find((c) => c.startsWith("deckhand_session="))
+    .split(";")[0];
+  const keys = async () =>
+    (await (await get("/api/state", session)).json()).tasks.map((task) => task.key);
+  // The repo's users aren't known yet: ALLOWED_USERS decides.
+  assert.deepEqual(await keys(), ["org/repo#pr-3"]);
+  const open = await get("/api/runs/org-repo-pr-3-1000/stream", session);
+  assert.equal(open.status, 200);
+  await open.body.cancel();
+  // bob's comment reads the repo's config, whose users leave alice out.
+  await send(comment("bob"));
+  await listener.until("done (ok)");
+  assert.deepEqual(await keys(), []);
+  assert.equal((await get("/api/runs/org-repo-pr-3-1000/stream", session)).status, 404);
+});
+
 test("the dashboard and its logs are for allowed users signed in with GitHub", async (t) => {
   // GitHub's sign-in pages are the fake GitHub too. A built dashboard, and an older log with
   // no title.
@@ -1984,6 +2112,33 @@ test("/status answers calls from inside the container without a session", async 
   const res = await fetch(`http://127.0.0.1:${port}/status`);
   assert.equal(res.status, 200);
   assert.equal((await res.json()).idle, true);
+  // Forwarded by a reverse proxy on the host's network: from anyone, so not trusted.
+  for (const header of ["x-forwarded-for", "forwarded", "x-real-ip"]) {
+    const proxied = await fetch(`http://127.0.0.1:${port}/status`, {
+      headers: { [header]: "203.0.113.9" },
+    });
+    assert.equal(proxied.status, 401, header);
+  }
+});
+
+test("a delivery GitHub sends again is handled once", async (t) => {
+  const { port, listener } = await listen(t, {}, { DEBOUNCE_MS: "60000" });
+  const body = JSON.stringify(comment("alice"));
+  const deliver = () =>
+    fetch(`http://127.0.0.1:${port}/webhook`, {
+      method: "POST",
+      headers: {
+        "x-github-event": "issue_comment",
+        "x-github-delivery": "d-1",
+        "x-hub-signature-256": `sha256=${createHmac("sha256", SECRET).update(body).digest("hex")}`,
+      },
+      body,
+    });
+  assert.equal((await deliver()).status, 202);
+  await listener.until("queued (work");
+  assert.equal((await deliver()).status, 202);
+  await listener.until("Delivery d-1 again: already handled");
+  assert.equal(listener.output().match(/queued \(work/g).length, 1);
 });
 
 // What the git gateway answers a push of `ref` with the run's secret: refused pushes are
@@ -2005,6 +2160,8 @@ async function savedBranches(dir) {
     () => readdirSync(join(dir, "logs")).find((f) => f.endsWith(".live.json")),
     "the run's saved state",
   );
+  // The run's secret is in it: the owner's only.
+  assert.equal(statSync(join(dir, "logs", live)).mode & 0o777, 0o600);
   return JSON.parse(readFileSync(join(dir, "logs", live), "utf8")).branches;
 }
 

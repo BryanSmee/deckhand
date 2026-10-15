@@ -4,6 +4,7 @@ import { test } from "node:test";
 import { loadConfig, normalize } from "../listener/config.mjs";
 import {
   closedItem,
+  linkTo,
   MARKER,
   outcome,
   parseAfter,
@@ -14,7 +15,8 @@ import {
   workItem,
 } from "../listener/events.mjs";
 
-const config = loadConfig({ ALLOWED_USERS: "alice" });
+// The App's bot, as server.mjs sets it once the App is known.
+const config = { ...loadConfig({ ALLOWED_USERS: "alice" }), bot: "Deckhand-X[bot]" };
 const sign = (secret, body) => "sha256=" + createHmac("sha256", secret).update(body).digest("hex");
 
 test("webhook signatures: only the App's secret passes", () => {
@@ -29,8 +31,11 @@ test("webhook signatures: only the App's secret passes", () => {
 });
 
 // `pr`: the pull request's body, when the comment is on one; `by`: its author's association
-// with the repo (the App's bot opened it by default).
-function comment(body, { login = "alice", type = "User", installation = 7, pr, by } = {}) {
+// with the repo, `author` its login (the App's bot opened it by default).
+function comment(
+  body,
+  { login = "alice", type = "User", installation = 7, pr, by, author = "outsider" } = {},
+) {
   return {
     action: "created",
     installation: installation && { id: installation },
@@ -42,7 +47,10 @@ function comment(body, { login = "alice", type = "User", installation = 7, pr, b
       ...(pr !== undefined && { pull_request: {} }),
       ...(pr !== undefined &&
         (by
-          ? { user: { login: "outsider", type: "User" }, author_association: by }
+          ? {
+              user: { login: author, type: author.endsWith("[bot]") ? "Bot" : "User" },
+              author_association: by,
+            }
           : { user: { login: "deckhand-x[bot]", type: "Bot" }, author_association: "NONE" })),
     },
     comment: { id: 99, body, user: { login, type } },
@@ -98,16 +106,37 @@ test("pull request comments go to the linked issue's session", () => {
   assert.equal(alone.title, "Fix the queue");
   const brainstorm = comment("Deckhand\n/mode brainstorm", { pr: "" });
   assert.equal(workItem(config, "issue_comment", brainstorm), null);
-  // A maintainer's own pull request is linked too.
+  // Anyone else's, a maintainer's included: the payload has no head, which tasks.mjs looks up
+  // (`claims`) before linking it.
   const own = comment("fix it", { pr: "Closes #3", by: "COLLABORATOR" });
-  assert.equal(workItem(config, "issue_comment", own).id, "3");
+  const claimed = workItem(config, "issue_comment", own);
+  assert.equal(claimed.id, "pr-12");
+  assert.equal(claimed.claims, 3);
+  const relinked = linkTo(claimed, 3);
+  assert.equal(relinked.id, "3");
+  assert.equal(relinked.kind, "issue");
+  assert.equal(relinked.replyTo, 12);
+  assert.equal("claims" in relinked, false);
+  // No App known yet: no bot is trusted.
+  const noBot = { ...config, bot: null };
+  const byApp = comment("fix the typo", { pr: "Closes #3" });
+  assert.equal(workItem(noBot, "issue_comment", byApp).id, "pr-12");
 });
 
 test("an outsider's pull request saying Closes #N doesn't reach issue N's session", () => {
-  // Issue comments: the payload has no head, its author's association decides.
-  for (const by of ["CONTRIBUTOR", "FIRST_TIME_CONTRIBUTOR", "NONE"]) {
-    const item = workItem(config, "issue_comment", comment("fix it", { pr: "Closes #3", by }));
-    assert.equal(item.id, "pr-12", by);
+  // Issue comments: the payload has no head; only the App's own pull requests are trusted
+  // from it, not any bot, nor a collaborator's (whose head may be a fork's).
+  const authors = [
+    ["CONTRIBUTOR", "outsider"],
+    ["FIRST_TIME_CONTRIBUTOR", "outsider"],
+    ["NONE", "github-actions[bot]"],
+    ["NONE", "other-app[bot]"],
+    ["COLLABORATOR", "bob"],
+  ];
+  for (const [by, author] of authors) {
+    const p = comment("fix it", { pr: "Closes #3", by, author });
+    const item = workItem(config, "issue_comment", p);
+    assert.equal(item.id, "pr-12", author);
     assert.equal(item.kind, "pr");
   }
   // Reviews and review comments: its head branch must be in the repo, not a fork.
@@ -439,7 +468,8 @@ test("touchedItems: what a delivery is about, and the issue a merged pull reques
   });
   assert.deepEqual(touched("issues", { action: "edited", issue: { number: 77 } }).numbers, [77]);
   // A comment on a pull request: the issue its author's "Closes #77" names too.
-  const onPr = { number: 90, body: "Fixes #77", pull_request: {}, author_association: "OWNER" };
+  // Anyone's: GitHub's answer about #77 decides, not the pull request.
+  const onPr = { number: 90, body: "Fixes #77", pull_request: {}, author_association: "NONE" };
   assert.deepEqual(touched("issue_comment", { action: "created", issue: onPr }).numbers, [90, 77]);
   assert.equal(touched("push", { action: "x" }), null);
   const narrowed = loadConfig({ ALLOWED_USERS: "alice", ALLOWED_REPOS: "org/other" });

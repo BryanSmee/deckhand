@@ -12,7 +12,8 @@ model in [security.md](security.md).
 - **On an issue**: `Deckhand` (`TRIGGER`) as the first line starts the work; the other lines
   are extra instructions. Once started, any comment continues the session. The sandbox opens
   the branch and draft pull request (`sandbox/draft-pr.sh`).
-- **On its pull request**: any comment, review or review comment continues the same session.
+- **On its pull request**: any comment, review or review comment continues the same session
+  (a pull request whose head branch is in the repository; a fork's is a task of its own).
 - **Anywhere**: `/model sonnet` or `/effort high` lines pick the model or thinking effort for
   that run (defaults: `SANDBOX_MODEL`, `SANDBOX_EFFORT`).
 - **Later**: `/after #77` (or `/after #77 #80`), with a trigger or `/mode` line, holds the
@@ -169,7 +170,9 @@ Sandboxes run detached, through the runner (`runner/docker.mjs`): on SIGTERM the
 starts no more runs and saves the comments still waiting for one to `queue.json`; each run's
 state is in `logs/<run>.live.json` all along. The next listener reads both, finds the
 sandboxes by their labels, follows their output from where the previous one stopped, and
-posts each reply once.
+posts each reply once. Queued comments whose author or repository is no longer allowed are
+dropped then; each run checks its comments' authors against the repository's `users` again
+when it begins.
 
 ## Modules
 

@@ -15,21 +15,27 @@ export function verified(secret, signature, body) {
 }
 
 // The issue a pull request belongs to, from the "Closes #12" Claude puts in its description.
-// `pr`: as GitHub describes it ({ body, head, user, author_association }). Only a pull request
-// that may speak for the issue is linked to it: anyone can open one from a fork saying
-// "Closes #12", and its comments would then go on in issue 12's session.
-export function linkedIssue(pr, repo) {
-  if (!pr || !trustedPull(pr, repo)) return null;
-  const match = /\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)/i.exec(pr.body ?? "");
+// `pr`: as GitHub describes it ({ body, head, user }). Only a pull request that may speak for
+// the issue is linked to it: anyone can open one from a fork saying "Closes #12", and its
+// comments would then go on in issue 12's session. `bot`: the App's own login ("<slug>[bot]").
+export function linkedIssue(pr, repo, bot = null) {
+  if (!pr || !trustedPull(pr, repo, bot)) return null;
+  return closesIssue(pr);
+}
+
+// The issue a pull request's description says it closes, trusted or not.
+export function closesIssue(pr) {
+  const match = /\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)/i.exec(pr?.body ?? "");
   return match ? Number(match[1]) : null;
 }
 
-// Who can push to the repo: its head branch is in it, or (an issue comment's payload has no
-// head) its author has write access there or is a bot (the App's opens Claude's).
-const WRITERS = ["OWNER", "MEMBER", "COLLABORATOR"];
-function trustedPull(pr, repo) {
+// Its head branch is in the repo, not a fork. An issue comment's payload has no head: only the
+// App's own pull requests (Claude's, always on a branch of the repo) are trusted from it, the
+// others are looked up (tasks.mjs admit()). Not any bot: github-actions or another App may
+// open pull requests from outsiders' input.
+function trustedPull(pr, repo, bot) {
   if (pr.head) return sameRepo(pr, repo);
-  return pr.user?.type === "Bot" || WRITERS.includes(pr.author_association);
+  return !!bot && pr.user?.login?.toLowerCase() === bot.toLowerCase();
 }
 
 // Whether a pull request's head branch is in `repo`, not a fork (whose head repo may be gone).
@@ -184,7 +190,7 @@ function issueCommentItem(config, event, p, skip) {
   const body = p.comment.body ?? "";
   const { trigger, mode, after, text } = splitTrigger(config, body);
   if (p.issue.pull_request) {
-    return prItem(skip, repo, p.issue, { trigger, mode, after }, text, p.comment);
+    return prItem(config, skip, repo, p.issue, { trigger, mode, after }, text, p.comment);
   }
   const n = p.issue.number;
   const issue = {
@@ -212,7 +218,7 @@ function reviewCommentItem(config, event, p, skip) {
   const c = p.comment;
   const cmd = splitTrigger(config, c.body ?? "");
   const where = `Review comment on \`${c.path}\` line ${c.line ?? c.original_line}:\n\`\`\`diff\n${c.diff_hunk}\n\`\`\`\n`;
-  return prItem(skip, p.repository.full_name, p.pull_request, cmd, where + cmd.text, {
+  return prItem(config, skip, p.repository.full_name, p.pull_request, cmd, where + cmd.text, {
     ...c,
     review: true,
   });
@@ -223,7 +229,7 @@ function reviewItem(config, event, p, skip) {
   const body = p.review.body ?? "";
   if (p.action !== "submitted" || !body.trim()) return undefined;
   const cmd = splitTrigger(config, body);
-  return prItem(skip, p.repository.full_name, p.pull_request, cmd, `Review: ${cmd.text}`);
+  return prItem(config, skip, p.repository.full_name, p.pull_request, cmd, `Review: ${cmd.text}`);
 }
 
 // Each event's work item; undefined: that action isn't handled.
@@ -305,7 +311,8 @@ export function closedItem(config, event, p, skip = () => null) {
 
 // What an `issues`, `issue_comment` or `pull_request` delivery is about, in an allowed repo →
 // { repo, numbers, merged } or null: the issue or pull request, and the issue a pull request
-// closes (linkedIssue()). Comments waiting for one of them ask GitHub about it again
+// closes (linkedIssue(); from a comment's payload, without the head, the one it names: asking
+// GitHub about it is harmless). Comments waiting for one of them ask GitHub about it again
 // (waits.mjs recheck()). `merged`: the issue a pull request just merged closes.
 export function touchedItems(config, event, p) {
   if (!["issues", "issue_comment", "pull_request"].includes(event)) return null;
@@ -314,7 +321,7 @@ export function touchedItems(config, event, p) {
   if (!p.installation?.id || !repo || !target?.number) return null;
   if (config.repos.length && !config.repos.includes(repo.toLowerCase())) return null;
   const pull = event === "pull_request" || target.pull_request;
-  const issue = pull ? linkedIssue(target, repo) : null;
+  const issue = !pull ? null : target.head ? linkedIssue(target, repo) : closesIssue(target);
   const numbers = [target.number, ...(issue && issue !== target.number ? [issue] : [])];
   const justMerged = event === "pull_request" && p.action === "closed" && !!target.merged_at;
   return { repo, numbers, merged: justMerged ? issue : null };
@@ -371,38 +378,35 @@ export function pullRequest(config, event, p, now, skip = () => null) {
 
 // `pull`: the pull request, or its issue for an issue comment. A pull request that closes an
 // issue (linkedIssue()) is that issue's task, whose title the payload doesn't have (the
-// dashboard fetches it, titles.mjs).
-function prItem(skip, repo, pull, { trigger, mode, after = null }, text, comment) {
+// dashboard fetches it, titles.mjs). One that only says it does, from an issue comment's
+// payload without its head, is the pull request's own until its head is looked up
+// (`claims`, see linkTo()).
+function prItem(config, skip, repo, pull, { trigger, mode, after = null }, text, comment) {
   if (trigger === "stop" || mode === "brainstorm" || mode === "onboarding") {
     return skip(`${mode ?? "brainstorm"}s are on issues: pull request comments are about the code`);
   }
   const { number: pr, title } = pull;
-  const issue = linkedIssue(pull, repo);
-  return issue
-    ? {
-        repo,
-        id: String(issue),
-        kind: "issue",
-        number: issue,
-        title: null,
-        trigger,
-        modeLine: mode,
-        after,
-        text,
-        replyTo: pr,
-        comment,
-      }
-    : {
-        repo,
-        id: `pr-${pr}`,
-        kind: "pr",
-        number: pr,
-        title: title ?? null,
-        trigger,
-        modeLine: mode,
-        after,
-        text,
-        replyTo: pr,
-        comment,
-      };
+  const item = {
+    repo,
+    id: `pr-${pr}`,
+    kind: "pr",
+    number: pr,
+    title: title ?? null,
+    trigger,
+    modeLine: mode,
+    after,
+    text,
+    replyTo: pr,
+    comment,
+  };
+  const issue = linkedIssue(pull, repo, config.bot);
+  if (issue) return linkTo(item, issue);
+  const claims = pull.head ? null : closesIssue(pull);
+  return claims ? { ...item, claims } : item;
+}
+
+// A pull request's item → that of the issue it closes, once trusted (linkedIssue()).
+export function linkTo(item, issue) {
+  const { claims: _, ...rest } = item;
+  return { ...rest, id: String(issue), kind: "issue", number: issue, title: null };
 }

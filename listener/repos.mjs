@@ -218,10 +218,26 @@ export function createRepoList({
     configs.clear();
   }
 
+  // The repo's `users` as last read for the list, { users, at }, or null when it wasn't
+  // (http.mjs sees()).
+  function usersOf(repo) {
+    const known = configs.get(repo.toLowerCase());
+    return known?.settings ? { users: known.settings.users, at: known.at } : null;
+  }
+
   // The repos' names, without reading their configs.
   const names = async () => (await repos()).map((r) => r.full_name);
 
-  return { list, get, readConfig, refresh, refreshAll, names, listedAt: () => listedAt };
+  return {
+    list,
+    get,
+    readConfig,
+    refresh,
+    refreshAll,
+    names,
+    usersOf,
+    listedAt: () => listedAt,
+  };
 }
 
 // Which deliveries make the list stale: refresh(repo) for a repo whose default branch moved,

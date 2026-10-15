@@ -4,16 +4,18 @@
 //   GET  /auth/login     to GitHub's authorize page, with a state bound to this browser
 //   GET  /auth/callback  the code becomes a user token, used once to read the login, then
 //                        revoked; an allowed login gets a session cookie, others a refusal
-//   POST /auth/logout    clears the cookie
+//   POST /auth/logout    clears the cookie, and ends the login's sessions everywhere
 //
-// The session is a signed cookie (login and expiry, HMAC with a key kept in the data volume),
-// so it survives a restart. The allowlist is checked again on every request: removing a user
-// from ALLOWED_USERS and restarting signs them out.
+// The session is a signed cookie (login, expiry and the login's epoch, HMAC with a key kept in
+// the data volume), so it survives a restart. The allowlist is checked again on every request:
+// removing a user from ALLOWED_USERS and restarting signs them out. Signing out bumps the
+// login's epoch (sessions.json): a cookie copied before then no longer works.
 import { createHmac, randomBytes } from "node:crypto";
 import { chmodSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { GITHUB_HEADERS } from "./github-app.mjs";
 import { escape, page as html, same } from "./html.mjs";
+import { readJson, writeJsonAtomic } from "./store.mjs";
 
 export const SESSION_COOKIE = "deckhand_session";
 const STATE_COOKIE = "deckhand_oauth_state";
@@ -56,12 +58,16 @@ export function createAuth({
   app, // () => the GitHub App, or null before /setup
   publicUrl, // () => where GitHub sends the browser back
   key, // signs session cookies (sessionKey())
+  epochsPath = null, // each login's session epoch (sessions.json); null: kept in memory
   fetch = globalThis.fetch,
   now = Date.now,
   random = () => randomBytes(16).toString("hex"),
   log = () => {},
 }) {
   const secure = () => publicUrl().startsWith("https:");
+  // login → epoch; a login without one is at 0.
+  const epochs = (epochsPath && readJson(epochsPath, {})) || {};
+  const epochOf = (login) => epochs[login] ?? 0;
 
   function cookie(name, value, maxAgeMs) {
     return [
@@ -79,9 +85,8 @@ export function createAuth({
   }
 
   function issue(login) {
-    const payload = Buffer.from(JSON.stringify({ login, exp: now() + SESSION_MS })).toString(
-      "base64url",
-    );
+    const session = { login, exp: now() + SESSION_MS, epoch: epochOf(login.toLowerCase()) };
+    const payload = Buffer.from(JSON.stringify(session)).toString("base64url");
     return `${payload}.${sign(payload)}`;
   }
 
@@ -99,6 +104,8 @@ export function createAuth({
     }
     const login = String(session.login ?? "").toLowerCase();
     if (!(session.exp > now()) || !config.users.includes(login)) return null;
+    // Cookies from before epochs were kept are at 0.
+    if ((session.epoch ?? 0) !== epochOf(login)) return null;
     return login;
   }
 
@@ -237,7 +244,15 @@ GitHub and sign in here with another account.</p>`,
     }).catch((error) => log(`Login: revoking the user token: ${error}`));
   }
 
-  function logout(res) {
+  // The cookie goes, and so does every other session of that login: a copied cookie or one
+  // left in another browser stops working too.
+  function logout(req, res) {
+    const login = user(req);
+    if (login) {
+      epochs[login] = epochOf(login) + 1;
+      if (epochsPath) writeJsonAtomic(epochsPath, epochs, { mode: 0o600 });
+      log(`Login: ${login} signed out, their sessions end`);
+    }
     res.writeHead(303, {
       location: "/",
       "set-cookie": cookie(SESSION_COOKIE, "", 0),
@@ -255,7 +270,7 @@ GitHub and sign in here with another account.</p>`,
       if (req.method === "GET" && url.pathname === "/auth/callback") {
         return callback(req, res, url);
       }
-      if (req.method === "POST" && url.pathname === "/auth/logout") return logout(res);
+      if (req.method === "POST" && url.pathname === "/auth/logout") return logout(req, res);
       res.writeHead(404).end();
     };
     run().catch((error) => {

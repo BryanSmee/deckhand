@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { permissionsFor } from "./modes.mjs";
 import { openLog } from "./runlog.mjs";
 import { readJson, writeJsonAtomic } from "./store.mjs";
+import { noLongerAllowed } from "./tasks.mjs";
 
 // A comment as saved to disk: the id of its 👀 rather than the promise of it.
 export async function plain({ eyes, comment, ...item }) {
@@ -80,7 +81,8 @@ export function createRestart(ctx) {
       const pending = await Promise.all(t.pending.map(plain));
       saved.push({ ...pick(t), pending, next: t.next });
     }
-    if (saved.length) writeJsonAtomic(queuePath, saved);
+    // The comments' text and authors: the owner's only, like the runs' state.
+    if (saved.length) writeJsonAtomic(queuePath, saved, { mode: 0o600 });
     log(`Saved ${saved.length} task(s) with queued comments`);
   }
 
@@ -90,6 +92,16 @@ export function createRestart(ctx) {
     rmSync(queuePath, { force: true });
     for (const t of saved) {
       const key = `${t.repo}#${t.id}`;
+      // ALLOWED_REPOS or ALLOWED_USERS may have changed with the restart. The repo's own
+      // users are checked when the run begins (runs.mjs).
+      t.pending = t.pending.filter((item) => {
+        const refused = noLongerAllowed(config, item);
+        if (!refused) return true;
+        log(`${key}: a comment queued before the restart dropped: ${refused}`);
+        // Its 👀 off: nothing will answer it.
+        ctx.track(ctx.settle(revive(item), "refused"));
+        return false;
+      });
       // Its run may have gone on through the restart (restoreRuns()).
       let task = tasks.get(key);
       if (!task) {
@@ -126,7 +138,8 @@ export function createRestart(ctx) {
         // Delivered comments are among the handled ones.
         unanswered: live.unanswered.map((i) => live.handled.indexOf(i)),
       };
-      writeJsonAtomic(livePath(live.id), state);
+      // The run's secret is in it: the owner's only.
+      writeJsonAtomic(livePath(live.id), state, { mode: 0o600 });
     };
     live.saving = (live.saving ?? Promise.resolve())
       .then(write)

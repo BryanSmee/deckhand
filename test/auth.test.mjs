@@ -10,7 +10,7 @@ import { loadConfig } from "../listener/config.mjs";
 const credentials = { client_id: "Iv1.x", client_secret: "cs" };
 
 // An auth handler behind a server, with GitHub answering that the browser is `login`.
-async function serve({ login = "Alice", app = { credentials } } = {}) {
+async function serve({ login = "Alice", app = { credentials }, epochsPath } = {}) {
   const config = loadConfig({
     ALLOWED_USERS: "alice",
     GITHUB_URL: "https://gh.test",
@@ -34,6 +34,7 @@ async function serve({ login = "Alice", app = { credentials } } = {}) {
     app: () => app,
     publicUrl: () => "https://deck.example.com",
     key: Buffer.alloc(32, 1),
+    epochsPath,
     fetch,
     now: () => clock,
     random: () => "state1",
@@ -144,6 +145,33 @@ test("sign-out clears the session cookie", async (t) => {
   });
   assert.equal(res.status, 303);
   assert.match(value(res, SESSION_COOKIE), /^deckhand_session=$/);
+});
+
+test("sign-out ends the login's sessions everywhere, through a restart", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "deckhand-sessions-"));
+  const epochsPath = join(dir, "sessions.json");
+  const s = await serve({ epochsPath });
+  t.after(s.close);
+  const here = `${SESSION_COOKIE}=${s.auth.issue("alice")}`;
+  const there = `${SESSION_COOKIE}=${s.auth.issue("alice")}`;
+  assert.equal((await s.get("/", there)).status, 200);
+  const res = await fetch(new URL("/auth/logout", (await s.get("/auth/login")).url), {
+    method: "POST",
+    redirect: "manual",
+    headers: { cookie: here },
+  });
+  assert.equal(res.status, 303);
+  // The other browser's cookie no longer works, nor a copy of this one.
+  assert.equal((await s.get("/", there)).status, 401);
+  assert.equal((await s.get("/", here)).status, 401);
+  assert.equal(statSync(epochsPath).mode & 0o777, 0o600);
+  // A new sign-in works, and the epoch survives a restart.
+  const again = `${SESSION_COOKIE}=${s.auth.issue("alice")}`;
+  assert.equal((await s.get("/", again)).status, 200);
+  const next = await serve({ epochsPath });
+  t.after(next.close);
+  assert.equal((await next.get("/", again)).status, 200);
+  assert.equal((await next.get("/", there)).status, 401);
 });
 
 test("without an App, sign-in says to set it up first", async (t) => {

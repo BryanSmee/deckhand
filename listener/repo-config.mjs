@@ -187,6 +187,9 @@ function parseInbox(value, { key, settings, fail, warn }) {
   }
 }
 
+// A hook runs as root on the host's Docker, and a restart waits for it: two hours at most.
+export const MAX_PREVIEW_MINUTES = 120;
+
 function parsePreview(value, { settings, fail, warn }) {
   const preview = isMap(value) ? value : { command: value };
   const command = text("preview.command", preview.command, fail);
@@ -195,8 +198,8 @@ function parsePreview(value, { settings, fail, warn }) {
   if (image !== null && (typeof image !== "string" || !/^[\w./:@-]+$/.test(image))) {
     fail("preview.image", "expected an image name");
   }
-  if (!Number.isInteger(minutes) || minutes <= 0) {
-    fail("preview.timeout_minutes", "expected a whole number above 0");
+  if (!Number.isInteger(minutes) || minutes <= 0 || minutes > MAX_PREVIEW_MINUTES) {
+    fail("preview.timeout_minutes", `expected a whole number from 1 to ${MAX_PREVIEW_MINUTES}`);
   }
   for (const other of Object.keys(preview)) {
     if (!["command", "image", "timeout_minutes"].includes(other)) {

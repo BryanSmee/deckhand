@@ -14,6 +14,7 @@ import { firstMessage, promptFor } from "./prompts.mjs";
 import { CREDENTIALS } from "./anthropic.mjs";
 import { CONFIG_FILE, customMode } from "./repo-config.mjs";
 import { openLog, outcome, parse, summaryOf } from "./runlog.mjs";
+import { noLongerAllowed } from "./tasks.mjs";
 import { redact } from "./secrets.mjs";
 
 // A run that can't start for a reason the maintainer can fix: the reply says it.
@@ -75,6 +76,14 @@ export function createRuns(ctx) {
     task.running = true;
     task.ready = false;
     ctx.running++;
+    // Still in the queue meanwhile: a listener that stops now saves them.
+    await dropRefused(task);
+    if (ctx.stopping || !task.pending.length) {
+      task.running = false;
+      ctx.running--;
+      if (!ctx.stopping) ctx.schedule();
+      return;
+    }
     const items = task.pending.splice(0);
     task.live = newLive(task, items);
     ctx.runs.unshift(task.live.record);
@@ -85,6 +94,26 @@ export function createRuns(ctx) {
       return end(task, error);
     }
     await follow(task);
+  }
+
+  // Comments whose author may no longer run Claude here, checked against the repo's settings as
+  // they are now: its `users` may have narrowed while they waited (the pause, a restart, a
+  // busy repo). Dropped, their 👀 off. Settings that can't be read are begin()'s to report.
+  async function dropRefused(task) {
+    let settings = null;
+    try {
+      const read = await ctx.repoSettings(task.repo, task.base);
+      if (!read.errors.length) settings = read.settings;
+    } catch {
+      // begin() reads them again, and fails the run with the error.
+    }
+    task.pending = task.pending.filter((item) => {
+      const refused = noLongerAllowed(config, item, settings);
+      if (!refused) return true;
+      log(`${task.repo}#${task.id}: a queued comment dropped: ${refused}`);
+      ctx.track(ctx.settle(item, "refused"));
+      return false;
+    });
   }
 
   // What the dashboard lists for a run.
