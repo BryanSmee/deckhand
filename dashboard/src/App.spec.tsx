@@ -55,7 +55,7 @@ test("the tasks with their titles, tabs per repo, and the first live one open", 
     "api",
     "notes",
   ]);
-  expect(rows()).toHaveLength(10);
+  expect(rows()).toHaveLength(11);
   expect(rows()).toContain("How do runs restart after an update?");
   // No title known yet: the kind and number.
   expect(rows()).toContain("Issue #127");
@@ -92,6 +92,18 @@ test("a repo's tab and the state chips filter the list", () => {
   expect(localStorage.getItem("deckhand.tab")).toBe("acme/api");
   fireEvent.click(screen.getByRole("button", { name: /^Done/ }));
   expect(rows()).toEqual(["Dark mode for the settings page"]);
+});
+
+test("a task waiting for other issues links them", () => {
+  history.replaceState(null, "", "#/all?task=acme%2Fapp%2324");
+  render(<Dashboard state={state} error={null} />);
+  expect(
+    screen.getByRole("heading", { level: 1, name: /Per-repo budgets in the dashboard/ }),
+  ).toBeTruthy();
+  expect(screen.getByText("after #23 and #22")).toBeTruthy();
+  expect(screen.getByRole("link", { name: "#22" }).getAttribute("href")).toBe(
+    "https://github.example.com/acme/app/issues/22",
+  );
 });
 
 test("old links open their task and run", () => {

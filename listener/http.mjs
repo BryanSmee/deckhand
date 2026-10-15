@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { page } from "./auth.mjs";
 import { board, STATES } from "./board.mjs";
 import { matchHost } from "./egress.mjs";
-import { previewEvent, pullRequest, verified, workItem } from "./events.mjs";
+import { closedItem, previewEvent, pullRequest, verified, workItem } from "./events.mjs";
 import { grantFor, loadGrants, ungranted } from "./grants.mjs";
 import { kindOf } from "./modes.mjs";
 import { onboardingTargets } from "./onboarding.mjs";
@@ -61,10 +61,12 @@ export function createHttp(ctx, { dashboardDir }) {
         repo: t.repo,
         replyTo: t.pending.at(-1).replyTo,
       }));
-    const shown = board({ runs: ctx.runs, queued, brainstorms: ctx.brainstorms.list() }).slice(
-      0,
-      200,
-    );
+    const shown = board({
+      runs: ctx.runs,
+      queued,
+      brainstorms: ctx.brainstorms.list(),
+      waits: ctx.waits.list(),
+    }).slice(0, 200);
     // Titles the listener doesn't have yet show on a later poll.
     if (ctx.app) {
       ctx.titles.fill(shown.map((t) => t.key));
@@ -244,6 +246,10 @@ export function createHttp(ctx, { dashboardDir }) {
     const pr = pullRequest(config, event, payload, Date.now(), skip);
     if (pr && ctx.pulls.record(pr.key, pr.pr))
       log(`${pr.key}: pull request #${pr.pr.number} ${pr.pr.state}`);
+    // What comments wait for ("/after #12"): closed issues, merged pull requests.
+    const closed = closedItem(config, event, payload, skip);
+    if (closed) admitted(ctx.waits.closed(closed.repo, closed.number, closed.state));
+    if (event === "issues") return;
     const preview = previewEvent(config, event, payload, skip);
     if (preview) {
       previewHook(preview, payload).catch((error) => log(error.stack ?? error));

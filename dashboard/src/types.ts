@@ -7,6 +7,7 @@ export type TaskState =
   | "working"
   | "stopping"
   | "queued"
+  | "waiting"
   | "brainstorm"
   | "idle-brainstorm"
   | "needs-input"
@@ -68,6 +69,8 @@ export interface Task {
   since: number;
   // A brainstorm's: when it goes idle, or went.
   deadline?: number;
+  // The issues or pull requests its next run waits for ("/after #77", listener/waits.mjs).
+  waitingFor?: number[];
   pr: PullRequest | null;
   runs: Run[]; // newest first
 }

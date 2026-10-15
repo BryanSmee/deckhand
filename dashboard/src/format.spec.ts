@@ -21,7 +21,7 @@ describe("repo tabs", () => {
 test("state chips group states: a waiting brainstorm needs input", () => {
   const states = (chip: Parameters<typeof inChip>[0]) =>
     state.tasks.filter((t) => inChip(chip, t)).map((t) => t.state);
-  expect(states("running").sort()).toEqual(["building-image", "queued", "working"]);
+  expect(states("running").sort()).toEqual(["building-image", "queued", "waiting", "working"]);
   expect(states("input").sort()).toEqual(["brainstorm", "idle-brainstorm", "needs-input"]);
   expect(states("error").sort()).toEqual(["error", "interrupted"]);
   expect(states("all")).toHaveLength(state.tasks.length);
@@ -40,6 +40,7 @@ test("what a row says besides its state", () => {
   const now = state.now;
   expect(when(task("acme/app#22"), now)).toBe("7 min");
   expect(when(task("acme/app#23"), now)).toBe("reply on #23");
+  expect(when(task("acme/app#24"), now)).toBe("after #23 and #22");
   expect(when(task("acme/app#20"), now)).toBe("idle in 6 min");
   expect(when(task("acme/api#138"), now)).toBe("3 h ago");
 });

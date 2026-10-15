@@ -2,7 +2,16 @@ import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
 import { test } from "node:test";
 import { loadConfig, normalize } from "../listener/config.mjs";
-import { MARKER, splitTrigger, takeOptions, verified, workItem } from "../listener/events.mjs";
+import {
+  closedItem,
+  MARKER,
+  outcome,
+  parseAfter,
+  splitTrigger,
+  takeOptions,
+  verified,
+  workItem,
+} from "../listener/events.mjs";
 
 const config = loadConfig({ ALLOWED_USERS: "alice" });
 const sign = (secret, body) => "sha256=" + createHmac("sha256", secret).update(body).digest("hex");
@@ -51,9 +60,11 @@ test("issue comments: trigger, text and reply target", () => {
       title: "Fix the queue",
       trigger: "work",
       modeLine: null,
+      after: null,
       text: "Use X.",
       replyTo: 12,
       comment: undefined,
+      author: "alice",
     },
   );
 });
@@ -179,6 +190,7 @@ test("discussions: only in the repo's category, only from allowed users", () => 
       replyTo: 8,
       discussionId: "D_5",
       comment: { id: 5, node_id: "D_5", discussion: true },
+      author: "alice",
     },
   );
   assert.match(
@@ -213,11 +225,13 @@ test("trigger lines and options", () => {
   assert.deepEqual(splitTrigger(config, "/stop"), {
     trigger: "stop",
     mode: null,
+    after: null,
     text: "",
   });
   assert.deepEqual(splitTrigger(config, "just text"), {
     trigger: null,
     mode: null,
+    after: null,
     text: "just text",
   });
   // The default trigger, compared loosely; the lines after it are the instructions.
@@ -225,6 +239,7 @@ test("trigger lines and options", () => {
     assert.deepEqual(splitTrigger(config, `${line}\nFix it.`), {
       trigger: "work",
       mode: null,
+      after: null,
       text: "Fix it.",
     });
   }
@@ -249,12 +264,14 @@ test("a /mode line picks the mode, and is never taken for /model", () => {
   assert.deepEqual(splitTrigger(config, "Deckhand\n/mode Review\nLook at X."), {
     trigger: "work",
     mode: "review",
+    after: null,
     text: "Look at X.",
   });
   // On the trigger's line too.
   assert.deepEqual(splitTrigger(config, "@deckhand /mode Brainstorm\nIdeas?"), {
     trigger: "work",
     mode: "brainstorm",
+    after: null,
     text: "Ideas?",
   });
   assert.equal(splitTrigger(config, "Deckhand /model sonnet").trigger, null);
@@ -263,6 +280,7 @@ test("a /mode line picks the mode, and is never taken for /model", () => {
   assert.deepEqual(splitTrigger(config, "/mode work\nGo ahead."), {
     trigger: null,
     mode: "work",
+    after: null,
     text: "Go ahead.",
   });
   const model = splitTrigger(config, "Deckhand\n/model sonnet");
@@ -288,4 +306,96 @@ test("a /mode line reaches the item; brainstorms stay off pull requests", () => 
   const brainstorm = comment("/mode brainstorm", { pr: "Closes #3" });
   assert.equal(workItem(config, "issue_comment", brainstorm, skip), null);
   assert.match(reasons[0], /brainstorms are on issues/);
+});
+
+test("/after: on the trigger line or its own, with /mode, /model, /effort and the text kept", () => {
+  assert.deepEqual(splitTrigger(config, "Deckhand /after #77"), {
+    trigger: "work",
+    mode: null,
+    after: { numbers: [77] },
+    text: "",
+  });
+  const body =
+    "Deckhand\n/after #77 #80\n/mode work\n/effort high\nDo it on top of the new parser.";
+  assert.deepEqual(splitTrigger(config, body), {
+    trigger: "work",
+    mode: "work",
+    after: { numbers: [77, 80] },
+    text: "/effort high\nDo it on top of the new parser.",
+  });
+  // Both on the trigger line, either order.
+  for (const line of [
+    "@deckhand /after #7, #8 /mode review",
+    "Deckhand /mode review /after #7 #8",
+  ]) {
+    const cmd = splitTrigger(config, line);
+    assert.equal(cmd.trigger, "work");
+    assert.equal(cmd.mode, "review");
+    assert.deepEqual(cmd.after, { numbers: [7, 8] });
+  }
+  // Anything else on the line: not the trigger line.
+  assert.equal(splitTrigger(config, "Deckhand /mode brainstorm please").trigger, null);
+  // On its own: parsed, refused later (waits.mjs).
+  assert.deepEqual(splitTrigger(config, "/after none").after, { none: true });
+  assert.equal(splitTrigger(config, "/after #3").trigger, null);
+  assert.equal(splitTrigger(config, "do it /after #3 is merged").after, null);
+  // Not "/afterwards".
+  assert.equal(splitTrigger(config, "Deckhand\n/afterwards").after, null);
+});
+
+test("/after takes this repo's numbers or none; anything else is an error", () => {
+  assert.deepEqual(parseAfter("#77 #77, #80"), { numbers: [77, 80] });
+  assert.deepEqual(parseAfter("None"), { none: true });
+  assert.match(parseAfter("").error, /needs an issue/);
+  assert.match(parseAfter("org/other#3").error, /this repository only .*`org\/other#3`/);
+  assert.match(parseAfter("#3 77").error, /not `77`/);
+  assert.match(parseAfter("#3 none").error, /not `none`/);
+  const item = workItem(config, "issue_comment", comment("Deckhand /after acme/x#2"));
+  assert.match(item.after.error, /acme\/x#2/);
+  const onPr = workItem(
+    config,
+    "issue_comment",
+    comment("Deckhand /after #2", { pr: "Closes #3" }),
+  );
+  assert.deepEqual(onPr.after, { numbers: [2] });
+  assert.equal(onPr.author, "alice");
+});
+
+test("closed issues and pull requests: done when completed or merged", () => {
+  assert.equal(outcome({ state: "open" }), "open");
+  assert.equal(outcome({ state: "closed", state_reason: "completed" }), "done");
+  assert.equal(outcome({ state: "closed", state_reason: null }), "done");
+  assert.equal(outcome({ state: "closed", state_reason: "not_planned" }), "not-done");
+  assert.equal(outcome({ state: "closed", state_reason: "duplicate" }), "not-done");
+  assert.equal(outcome({ state: "closed", pull_request: { merged_at: "2026" } }), "done");
+  assert.equal(outcome({ state: "closed", pull_request: { merged_at: null } }), "not-done");
+
+  const delivery = (event, target, fields = {}) => ({
+    action: "closed",
+    installation: { id: 7 },
+    repository: { full_name: "Org/Repo" },
+    [event === "issues" ? "issue" : "pull_request"]: target,
+    ...fields,
+  });
+  const issue = { number: 77, state: "closed", state_reason: "completed" };
+  assert.deepEqual(closedItem(config, "issues", delivery("issues", issue)), {
+    repo: "Org/Repo",
+    number: 77,
+    state: "done",
+  });
+  const pr = { number: 5, state: "closed", merged: true, merged_at: "2026" };
+  assert.equal(closedItem(config, "pull_request", delivery("pull_request", pr)).state, "done");
+  const dropped = { ...pr, merged: false, merged_at: null };
+  assert.equal(
+    closedItem(config, "pull_request", delivery("pull_request", dropped)).state,
+    "not-done",
+  );
+  // Not a close, not the App's, not an allowed repo.
+  const opened = delivery("issues", issue, { action: "opened" });
+  assert.equal(closedItem(config, "issues", opened), null);
+  const foreign = delivery("issues", issue, { installation: null });
+  assert.equal(closedItem(config, "issues", foreign), null);
+  const narrowed = loadConfig({ ALLOWED_USERS: "alice", ALLOWED_REPOS: "org/other" });
+  assert.equal(closedItem(narrowed, "issues", delivery("issues", issue)), null);
+  assert.equal(closedItem(config, "issue_comment", delivery("issues", issue)), null);
 });

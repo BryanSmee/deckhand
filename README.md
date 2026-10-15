@@ -23,6 +23,10 @@ operator, across as many repositories as the App is installed on.
   - `/mode <name>` picks a mode: `work`, `brainstorm` or one the repository declares in its
     `.deckhand.yaml` (a review that only comments, say). Alone on an issue with a session,
     it switches modes and keeps the conversation (light modes keep theirs apart from work's).
+  - `/after #77` (on the trigger line or its own, `/after #77 #80` for several) holds the
+    comment back until those issues are closed as completed, or those pull requests merged,
+    then runs it as if just posted. A new trigger comment starts now instead; `/after none`
+    cancels.
 - **Onboarding.** Installing the App on a repository without a `.deckhand.yaml` opens an
   issue there where Claude proposes one, grounded in the repository; your comments refine it
   and `Deckhand` turns it into a pull request. `/mode onboarding` starts it on any issue, and

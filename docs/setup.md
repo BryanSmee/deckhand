@@ -44,7 +44,7 @@ What the App asks for:
 
 | Permissions                                     | Events                                        |
 | ----------------------------------------------- | --------------------------------------------- |
-| Issues, Pull requests, Contents: read and write | `issue_comment`, `pull_request`               |
+| Issues, Pull requests, Contents: read and write | `issues`, `issue_comment`, `pull_request`     |
 | Deployments, Discussions: read and write        | `pull_request_review`                         |
 | Actions, Metadata: read                         | `pull_request_review_comment`, `workflow_run` |
 |                                                 | `discussion`, `discussion_comment`            |
@@ -56,6 +56,11 @@ the new permissions on its installation. Everything else works without them. `pu
 tells the dashboard's repository list that a default branch changed; an App without it
 (created before the list) sees a config pushed straight to the default branch within half an
 hour, and one merged through a pull request at once.
+
+An App created before `/after` lacks the `issues` event: turn on **Issues** under _Subscribe
+to events_ in its settings. Without it, a comment waiting for an issue (`/after #77`) still
+starts, at the listener's next check of what it waits for (every 15 minutes, and at each
+start), rather than at once; a pull request that merges is seen either way.
 
 ## 3. Use it
 
@@ -111,7 +116,7 @@ page on GitHub (Settings → Developer settings → GitHub Apps → your App →
 
 The dashboard lists every issue, pull request and discussion Deckhand worked on, by title,
 with a tab per repository (the most recently active first; each counts its running tasks and
-those waiting for you) and chips by state: running, needs input (a brainstorm waiting for your
+those waiting for you) and chips by state: running (queued and `/after` waits too), needs input (a brainstorm waiting for your
 comment too), ready for review, done, error. Titles come with the webhooks; for tasks from before the dashboard
 had them, the listener asks GitHub once and keeps them in `titles.json` in its data volume.
 

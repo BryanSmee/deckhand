@@ -34,6 +34,7 @@ import { createRuns } from "./runs.mjs";
 import { createSetup } from "./setup.mjs";
 import { createTasks } from "./tasks.mjs";
 import { createTitles } from "./titles.mjs";
+import { createWaits } from "./waits.mjs";
 
 const env = process.env;
 let config;
@@ -274,6 +275,16 @@ ctx.conflicts = createConflicts({
   accept: (item) => ctx.accept(item),
   log,
 });
+// Comments that wait for other issues to be done ("/after #12").
+ctx.waits = createWaits({
+  path: join(config.dataDir, "waits.json"),
+  github,
+  reply: ctx.reply,
+  received: ctx.received,
+  settle: ctx.settle,
+  resume: (item) => ctx.resume(item),
+  log,
+});
 ctx.repoApi = createRepoApi({
   config,
   list: repoList,
@@ -299,6 +310,7 @@ const restored = ctx.restoreRuns();
 ctx.loadQueue();
 ctx.reattach(restored).catch((error) => log(`Re-attaching: ${error.stack ?? error}`));
 ctx.conflicts.start();
+ctx.waits.start();
 
 // `docker compose up`, `restart` or an update stops the listener with SIGTERM, and kills it
 // after the stop grace period. Sandboxes go on: no run starts any more, what is queued is
@@ -306,6 +318,7 @@ ctx.conflicts.start();
 process.on("SIGTERM", () => {
   ctx.stopping = true;
   ctx.conflicts.stop();
+  ctx.waits.stop();
   log("Stopping: running sandboxes go on, the next listener picks them up");
   // Replies being posted and comments being admitted first, then what they leave.
   Promise.allSettled([...ctx.ending, ...http.admitting])

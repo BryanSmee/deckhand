@@ -74,6 +74,46 @@ test("a running run wins over comments queued for the next one", () => {
   assert.equal(task.state, "working");
 });
 
+test("a comment waiting for other issues: its state and what it waits for", () => {
+  const wait = (key, fields = {}) => ({
+    key,
+    repo: "acme/api",
+    kind: "issue",
+    mode: "work",
+    replyTo: Number(key.split("#")[1]),
+    blockers: [77, 80],
+    since: 50,
+    ...fields,
+  });
+  const tasks = board({
+    runs: [
+      run("acme/api#1", 10, { status: "running" }),
+      run("acme/api#2", 20),
+      run("acme/api#3", 30),
+    ],
+    queued: [{ key: "acme/api#3", kind: "issue", repo: "acme/api", replyTo: 3 }],
+    brainstorms: [],
+    waits: [
+      wait("acme/api#1"),
+      wait("acme/api#2"),
+      wait("acme/api#3"),
+      wait("acme/api#4", { mode: "review" }),
+    ],
+  });
+  const byKey = Object.fromEntries(tasks.map((t) => [t.key, t]));
+  // Its run goes on, or its queued comments go first: the wait is for the run after.
+  assert.equal(byKey["acme/api#1"].state, "working");
+  assert.equal(byKey["acme/api#3"].state, "queued");
+  assert.equal(byKey["acme/api#2"].state, "waiting");
+  assert.equal(byKey["acme/api#2"].since, 50);
+  assert.deepEqual(byKey["acme/api#1"].waitingFor, [77, 80]);
+  // Only a wait: a task of its own.
+  assert.equal(byKey["acme/api#4"].state, "waiting");
+  assert.equal(byKey["acme/api#4"].mode, "review");
+  assert.equal(byKey["acme/api#4"].kind, "issue");
+  assert.equal(byKey["acme/api#4"].replyTo, 4);
+});
+
 test("a stopped brainstorm shows how its last run ended", () => {
   const [task] = board({
     runs: [run("acme/api#1", 10, { kind: "brainstorm", mode: "wrap-up" })],

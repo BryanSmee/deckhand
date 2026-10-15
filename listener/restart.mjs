@@ -9,7 +9,7 @@ import { openLog } from "./runlog.mjs";
 import { readJson, writeJsonAtomic } from "./store.mjs";
 
 // A comment as saved to disk: the id of its 👀 rather than the promise of it.
-async function plain({ eyes, comment, ...item }) {
+export async function plain({ eyes, comment, ...item }) {
   return {
     ...item,
     comment: comment && {
@@ -24,7 +24,7 @@ async function plain({ eyes, comment, ...item }) {
   };
 }
 
-function revive(item) {
+export function revive(item) {
   return { ...item, eyes: Promise.resolve(item.eyes) };
 }
 

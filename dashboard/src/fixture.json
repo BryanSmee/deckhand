@@ -121,6 +121,21 @@
       "runs": []
     },
     {
+      "key": "acme/app#24",
+      "repo": "acme/app",
+      "project": "acme",
+      "number": 24,
+      "title": "Per-repo budgets in the dashboard",
+      "kind": "issue",
+      "mode": "work",
+      "replyTo": 24,
+      "state": "waiting",
+      "since": 0,
+      "waitingFor": [23, 22],
+      "pr": null,
+      "runs": []
+    },
+    {
       "key": "acme/api#138",
       "repo": "acme/api",
       "project": "acme",
@@ -355,6 +370,7 @@
     "working",
     "stopping",
     "queued",
+    "waiting",
     "brainstorm",
     "idle-brainstorm",
     "needs-input",
