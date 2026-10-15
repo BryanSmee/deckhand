@@ -174,7 +174,10 @@ export function createRepoList({ app, config, store, now = Date.now, log = () =>
     configs.clear();
   }
 
-  return { list, get, readConfig, refresh, refreshAll, listedAt: () => listedAt };
+  // The repos' names, without reading their configs.
+  const names = async () => (await repos()).map((r) => r.full_name);
+
+  return { list, get, readConfig, refresh, refreshAll, names, listedAt: () => listedAt };
 }
 
 // Which deliveries make the list stale: refresh(repo) for a repo whose default branch moved,

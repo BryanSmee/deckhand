@@ -12,7 +12,8 @@ import { closedItem, previewEvent, pullRequest, verified, workItem } from "./eve
 import { grantFor, loadGrants, ungranted } from "./grants.mjs";
 import { kindOf } from "./modes.mjs";
 import { onboardingTargets } from "./onboarding.mjs";
-import { CONFIG_FILE } from "./repo-config.mjs";
+import { inputEvent } from "./questions.mjs";
+import { CONFIG_FILE, effectiveConfig } from "./repo-config.mjs";
 import { refreshFor } from "./repos.mjs";
 import { publicRun, stream } from "./runlog.mjs";
 import { serveAsset } from "./static.mjs";
@@ -66,6 +67,8 @@ export function createHttp(ctx, { dashboardDir }) {
       queued,
       brainstorms: ctx.brainstorms.list(),
       waits: ctx.waits.list(),
+      // Stored before the label was turned off: not listed.
+      inputs: config.needsInputLabel ? ctx.inputs.list() : [],
     }).slice(0, 200);
     // Titles the listener doesn't have yet show on a later poll.
     if (ctx.app) {
@@ -249,6 +252,10 @@ export function createHttp(ctx, { dashboardDir }) {
     // What comments wait for ("/after #12"): closed issues, merged pull requests.
     const closed = closedItem(config, event, payload, skip);
     if (closed) admitted(ctx.waits.closed(closed.repo, closed.number, closed.state));
+    // Open questions and answers to them: the needs-input label (questions.mjs).
+    const input = inputEvent(config, event, payload, app.identity().name);
+    if (input) admitted(questions(input));
+    // Nothing runs for an issue being opened, edited, labelled or closed.
     if (event === "issues") return;
     const preview = previewEvent(config, event, payload, skip);
     if (preview) {
@@ -267,6 +274,26 @@ export function createHttp(ctx, { dashboardDir }) {
     const done = promise.catch((error) => log(error.stack ?? error));
     admitting.add(done);
     done.finally(() => admitting.delete(done));
+  }
+
+  // Open questions in an issue, or an answer to them: the needs-input label and the
+  // dashboard's list of issues waiting for input (questions.mjs, inputs.mjs).
+  async function questions({ repo, key, number, title, base, label, by, track }) {
+    if (title) ctx.titles.set(key, title);
+    if (label !== undefined && by) {
+      // The repo's own users narrow the operator's.
+      const { settings, errors } = await ctx.repoSettings(repo, base);
+      if (errors.length) return skip(`${key}: ${CONFIG_FILE} of ${repo} has errors`);
+      if (!effectiveConfig(config, settings).users.includes(by.toLowerCase())) {
+        return skip(`${key}: ${by} not among ${repo}'s users`);
+      }
+    }
+    if (label !== undefined) {
+      const res = await ctx.label(repo, number, label);
+      if (!res.ok && res.status !== 404) return log(`${key}: label: ${res.status}`);
+      log(`${key}: ${label ? "open questions, labelled" : "answered, label removed"}`);
+    }
+    if (track !== undefined) ctx.inputs.set(key, track);
   }
 
   async function previewHook({ repo, base, event }, payload) {

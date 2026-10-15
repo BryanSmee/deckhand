@@ -157,3 +157,27 @@ test("signed out of reach: the error instead of the counts", () => {
   render(<Dashboard state={null} error="502" />);
   expect(screen.getByText("Can't reach the listener (502)")).toBeTruthy();
 });
+
+test("an issue waiting for answers without a run: listed under Needs input, no log", () => {
+  const filed = {
+    ...state.tasks.find((t) => t.key === "acme/notes#4")!,
+    key: "acme/notes#9",
+    number: 9,
+    replyTo: 9,
+    title: "Tags for notes",
+    kind: "issue" as const,
+    mode: null,
+    state: "needs-input" as const,
+    since: state.now - 2 * 3600000,
+    pr: null,
+    runs: [],
+  };
+  history.replaceState(null, "", "#/all?task=acme%2Fnotes%239");
+  render(<Dashboard state={{ ...state, tasks: [...state.tasks, filed] }} error={null} />);
+  fireEvent.click(screen.getByRole("button", { name: /^Needs input/ }));
+  expect(rows()).toContain("Tags for notes");
+  expect(screen.getByRole("heading", { level: 1, name: /Tags for notes/ })).toBeTruthy();
+  expect(screen.getByText(/Waiting for answers to its open questions/)).toBeTruthy();
+  const row = screen.getByRole("button", { name: /Tags for notes/ });
+  expect(row.textContent).toContain("2 h ago");
+});

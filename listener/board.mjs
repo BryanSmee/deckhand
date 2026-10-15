@@ -9,7 +9,8 @@
 //   waiting         a comment waits for other issues to be done ("/after #12", waits.mjs)
 //   brainstorm      a brainstorm waits for the maintainer's next comment
 //   idle-brainstorm a brainstorm without a comment for a while; the next one restores it
-//   needs-input     the last run stopped to ask (the issue carries the needs-input label)
+//   needs-input     the last run stopped to ask, or the issue carries the needs-input label
+//                   (open questions in its body, inputs.mjs), with or without a run
 //   done, error, interrupted   how the last run ended (interrupted: the listener restarted)
 export const STATES = [
   "building-image",
@@ -37,8 +38,9 @@ function runState(r) {
   return r.status; // needs-input, error, interrupted
 }
 
-// `runs`: newest first; `queued`, `brainstorms`, `waits`: as http.mjs's state() has them.
-export function board({ runs, queued, brainstorms, waits = [] }) {
+// `runs`: newest first; `queued`, `brainstorms`, `waits`: as http.mjs's state() has them;
+// `inputs`: the open issues labelled needs-input (inputs.mjs list()).
+export function board({ runs, queued, brainstorms, waits = [], inputs = [] }) {
   const tasks = new Map();
   const entry = (key, repo) => {
     if (!tasks.has(key)) {
@@ -70,6 +72,8 @@ export function board({ runs, queued, brainstorms, waits = [] }) {
   for (const b of brainstorms) entry(b.key, b.repo);
   const held = new Map(waits.map((w) => [w.key, w]));
   for (const w of waits) entry(w.key, w.repo);
+  const labelled = new Map(inputs.map((i) => [i.key, i]));
+  for (const i of inputs) entry(i.key, i.repo);
 
   for (const t of tasks.values()) {
     const last = t.runs[0];
@@ -89,6 +93,13 @@ export function board({ runs, queued, brainstorms, waits = [] }) {
     else if (b?.status === "active") t.state = "brainstorm";
     else if (b?.status === "idle") t.state = "idle-brainstorm";
     else t.state = last ? runState(last) : "done";
+    // The label outlasts how the last run ended (a run starting takes it off), not a live one.
+    const input = labelled.get(t.key);
+    if (input && ["done", "error", "interrupted"].includes(t.state)) {
+      t.state = "needs-input";
+      t.kind ??= "issue";
+      t.since = Math.max(t.since, input.since ?? 0);
+    }
     if (b && b.status !== "stopped") {
       t.kind = "brainstorm";
       t.mode = "brainstorm";

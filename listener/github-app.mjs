@@ -17,8 +17,10 @@ export const APP_PERMISSIONS = {
 };
 // What workItem() routes, plus the previews' events (handled by a later hook), pushes,
 // which tell the dashboard's repository list (repos.mjs) a default branch changed, and
-// issues, whose closing starts the comments waiting for them (waits.mjs).
+// issues: their closing starts the comments waiting for them (waits.mjs), and their open
+// questions label them needs-input (questions.mjs).
 export const APP_EVENTS = [
+  "issues",
   "issue_comment",
   "issues",
   "discussion",

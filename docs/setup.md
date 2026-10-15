@@ -60,7 +60,9 @@ hour, and one merged through a pull request at once.
 An App created before `/after` lacks the `issues` event: turn on **Issues** under _Subscribe
 to events_ in its settings. Without it, a comment waiting for an issue (`/after #77`) still
 starts, at the listener's next check of what it waits for (every 15 minutes, and at each
-start), rather than at once; a pull request that merges is seen either way.
+start), rather than at once; a pull request that merges is seen either way. Issues opened with an **Open questions** section aren't labelled
+`NEEDS_INPUT_LABEL`, answering them doesn't take the label off unless a run starts, and the
+dashboard only sees the label change when the listener restarts.
 
 ## 3. Use it
 
@@ -185,7 +187,7 @@ All in `.env`, read by `compose.yaml`:
 | `SANDBOX_CPUS`, `SANDBOX_MEMORY`, `SANDBOX_PIDS`                                      | `2`, `4g`, `2048`                 | each sandbox's limits (per repo: the grants file)                               |
 | `TRIGGER`                                                                             | `Deckhand`                        | first line of a comment that starts a run                                       |
 | `ONBOARDING`                                                                          | on                                | `off`: no onboarding issue when the App is installed on a repo without a config |
-| `NEEDS_INPUT_LABEL`                                                                   | `needs-input`                     | label while a run waits for answers (empty: none)                               |
+| `NEEDS_INPUT_LABEL`                                                                   | `needs-input`                     | label while a run or an issue waits for answers (empty: none)                   |
 | `CONFLICT_CHECK_MINUTES`                                                              | `5`                               | shortest interval of a repo's `conflicts.check_minutes`; `0` turns it off       |
 | `DOCKER_SOCKET`                                                                       | `/var/run/docker.sock`            | the host's Docker socket, as preview hooks mount it                             |
 | `DECKHAND_VERSION`                                                                    | `latest`                          | the release compose runs (`1.2.3`, `1.2`): see [Updating](#updating)            |

@@ -1016,6 +1016,44 @@ test("a restart after Claude answered once: nothing is read twice", async (t) =>
   assert.match(JSON.parse(replies(github)[0].body).body, / · 1\.1 min/);
 });
 
+test("open questions label an issue; an allowed user's answer takes the label off", async (t) => {
+  const { github, send, listener } = await listen(t, {});
+  const labels = "/repos/org/repo/issues/12/labels";
+  const issue = (body, labelled) => ({
+    action: "opened",
+    installation: { id: 7 },
+    repository: { full_name: "org/repo", default_branch: "trunk" },
+    issue: {
+      number: 12,
+      title: "An idea",
+      state: "open",
+      body,
+      user: { login: "deckhand-x[bot]", type: "Bot" },
+      labels: labelled ? [{ name: "needs-input" }] : [],
+    },
+    sender: { login: "deckhand-x[bot]", type: "Bot" },
+  });
+  // Filed by an inbox run: "None" labels nothing, questions do.
+  await send(issue("## Open questions\n\nNone.", false), "issues");
+  await listener.until("Delivery: issues opened");
+  await send(issue("## Open questions\n\n1. Which one?", false), "issues");
+  const added = await github.waitFor((r) => r.method === "POST" && r.path === labels);
+  assert.deepEqual(JSON.parse(added.body), { labels: ["needs-input"] });
+  await listener.until("org/repo#12: open questions, labelled");
+  // Someone not allowed answering doesn't count; alice does.
+  const answer = (login) => {
+    const c = comment(login, "1. That one");
+    c.issue = { ...issue("", true).issue };
+    return c;
+  };
+  await send(answer("mallory"));
+  await listener.until("mallory not in ALLOWED_USERS");
+  await send(answer("alice"));
+  await github.waitFor((r) => r.method === "DELETE" && r.path === `${labels}/needs-input`);
+  await listener.until("org/repo#12: answered, label removed");
+  assert.equal(github.requests.filter((r) => r.path.startsWith(labels)).length, 2);
+});
+
 test("a comment on the ideas inbox is a light run with the idea prompt, answered there", async (t) => {
   const { dir, github, send } = await listen(t, {
     ".deckhand.yaml": "inbox: { ideas: 12 }\nsetup: npm ci\n",

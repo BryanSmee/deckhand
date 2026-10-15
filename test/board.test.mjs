@@ -160,3 +160,38 @@ test("each entry names its mode, the repo's own ones included", () => {
     "acme/api#4": "brainstorm",
   });
 });
+
+test("issues labelled needs-input show as such, with or without a run, unless one is live", () => {
+  const tasks = board({
+    runs: [
+      run("acme/api#1", 30),
+      run("acme/api#2", 20, { status: "running" }),
+      run("acme/api#3", 10, { status: "error" }),
+    ],
+    queued: [{ key: "acme/api#4", kind: "issue", repo: "acme/api", replyTo: 4 }],
+    brainstorms: [{ key: "acme/api#5", repo: "acme/api", number: 5, status: "active" }],
+    inputs: [
+      "acme/api#1",
+      "acme/api#2",
+      "acme/api#3",
+      "acme/api#4",
+      "acme/api#5",
+      "solo/tool#9",
+    ].map((key) => ({ key, repo: key.split("#")[0], since: 40 })),
+  });
+  const states = Object.fromEntries(tasks.map((t) => [t.key, t.state]));
+  assert.deepEqual(states, {
+    "acme/api#1": "needs-input",
+    "acme/api#2": "working",
+    "acme/api#3": "needs-input",
+    "acme/api#4": "queued",
+    "acme/api#5": "brainstorm",
+    "solo/tool#9": "needs-input",
+  });
+  // Filed by an inbox run: no run of its own.
+  const filed = tasks.find((t) => t.key === "solo/tool#9");
+  assert.deepEqual(
+    [filed.project, filed.repo, filed.number, filed.kind, filed.replyTo, filed.since, filed.runs],
+    ["solo", "solo/tool", 9, "issue", 9, 40, []],
+  );
+});
