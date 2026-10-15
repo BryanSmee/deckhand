@@ -88,7 +88,8 @@ cp .env.example .env
 
 In `.env`, set `ALLOWED_USERS` to your GitHub login (comma-separated for several: nobody
 else can start a run, and with none set nothing starts), and `CLAUDE_CODE_OAUTH_TOKEN` or
-`ANTHROPIC_API_KEY`. Then:
+`ANTHROPIC_API_KEY`. The other settings can go in a `config.yaml` you commit with your
+deployment, `.env` overriding it: see [Settings](docs/setup.md#settings). Then:
 
 ```sh
 docker compose pull
@@ -199,7 +200,8 @@ meanwhile and posts each final reply once. Comments still waiting for a run and 
 between replies are kept. Pin a release with `DECKHAND_VERSION` in `.env` (for Renovate), or
 leave it on `latest` (for Watchtower). See [Updating](docs/setup.md#updating).
 
-Claude Code's version is pinned by `CLAUDE_CODE_VERSION`: change it in `.env` to move to
+Claude Code's version is pinned by `CLAUDE_CODE_VERSION`: change it in `.env` (or
+`claude_code_version` in `config.yaml`) to move to
 another one, and the next run installs it.
 
 ## Claude Code and naming

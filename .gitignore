@@ -2,3 +2,4 @@
 node_modules/
 compose.override.yaml
 grants.yaml
+config.yaml

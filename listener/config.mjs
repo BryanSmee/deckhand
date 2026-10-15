@@ -1,7 +1,9 @@
-// The operator's settings, from the environment. Names of images, volumes and networks come
-// from here so nothing in the listener is tied to one deployment. What the operator grants
-// one repo (hosts, mounts, limits) is in its grants file instead (grants.mjs).
+// The operator's settings, from the environment and config.yaml. Names of images, volumes and
+// networks come from here so nothing in the listener is tied to one deployment. What the
+// operator grants one repo (hosts, mounts, limits) is in its grants file instead (grants.mjs).
+import { readFileSync } from "node:fs";
 import { hostProblem } from "./egress.mjs";
+import { isMap, parseYaml } from "./yaml.mjs";
 
 export class ConfigError extends Error {}
 
@@ -47,8 +49,124 @@ const LIMIT_FORMAT = {
   pids: "a whole number",
 };
 
+// What config.yaml may set: each setting's environment variable, in lowercase as the key,
+// with the YAML it takes. Secrets and the wiring compose.yaml sets to match its own services
+// stay in the environment only.
+export const FILE_SETTINGS = {
+  ALLOWED_USERS: "list",
+  ALLOWED_REPOS: "list",
+  ALLOWED_HOSTS: "list",
+  PUBLIC_URL: "scalar",
+  TRIGGER: "scalar",
+  CLAUDE_CODE_VERSION: "scalar",
+  SANDBOX_MODEL: "scalar",
+  SANDBOX_EFFORT: "scalar",
+  BRAINSTORM_MODEL: "scalar",
+  BRAINSTORM_EFFORT: "scalar",
+  BRAINSTORM_IDLE_MINUTES: "scalar",
+  MAX_PARALLEL: "scalar",
+  SANDBOX_CPUS: "scalar",
+  SANDBOX_MEMORY: "scalar",
+  SANDBOX_PIDS: "scalar",
+  ONBOARDING: "boolean",
+  NEEDS_INPUT_LABEL: "scalar",
+  CONFLICT_CHECK_MINUTES: "scalar",
+  NAME_PREFIX: "scalar",
+  CLAUDE_CODE_VOLUME: "scalar",
+  GRANTS_FILE: "scalar",
+  INSTALL_NETWORK: "scalar",
+  DEBOUNCE_MS: "scalar",
+  BRAINSTORM_DEBOUNCE_MS: "scalar",
+  GITHUB_URL: "scalar",
+  GITHUB_API: "scalar",
+};
+
+const SECRETS = ["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"];
+
+// Where an empty value means something (no label): set in the environment, even empty, wins.
+const EMPTY_MEANS = new Set(["NEEDS_INPUT_LABEL"]);
+
+const TYPE_FORMAT = {
+  list: "a list",
+  scalar: "a value (not a list or a mapping)",
+  boolean: "true or false",
+};
+
+// One value of config.yaml as the environment would hold it, or undefined when it has the
+// wrong type: loadConfig() then checks it as it checks the variable.
+function fileValue(value, type) {
+  const scalar = (v) => typeof v === "string" || typeof v === "number";
+  if (type === "list" && Array.isArray(value) && value.every(scalar)) return value.join(",");
+  if (type === "boolean" && typeof value === "boolean") return value ? "on" : "off";
+  if (scalar(value)) return String(value);
+}
+
+// config.yaml's text → { path, settings: { ALLOWED_USERS: "a,b", … } }. Fails closed: any
+// unknown key, wrong type or secret refuses to start, every one named.
+export function parseConfigFile(text, path) {
+  let raw;
+  try {
+    raw = parseYaml(text);
+  } catch (error) {
+    throw new ConfigError(`${path}: ${error.message}`);
+  }
+  if (raw === null) return { path, settings: {} };
+  if (!isMap(raw))
+    throw new ConfigError(`${path}: expected settings (key: value) at the top level`);
+  const settings = {};
+  const errors = [];
+  for (const [key, value] of Object.entries(raw)) {
+    const name = key.toUpperCase();
+    const type = key === name.toLowerCase() ? FILE_SETTINGS[name] : undefined;
+    if (SECRETS.includes(name)) {
+      errors.push(`${key}: a secret, keep it in the environment (.env), not in a file`);
+    } else if (!type) {
+      errors.push(`${key}: unknown (secrets and compose.yaml's wiring are environment only)`);
+    } else if (value !== null) {
+      const text = fileValue(value, type);
+      if (text === undefined) errors.push(`${key}: expected ${TYPE_FORMAT[type]}`);
+      else settings[name] = text;
+    }
+  }
+  if (errors.length) throw new ConfigError(`${path}: ${errors.join("; ")}`);
+  return { path, settings };
+}
+
+// CONFIG_FILE, read once at start (a restart applies an edit). No file: no settings, unless
+// CONFIG_FILE names one, which then has to be there.
+export function readConfigFile(env, read = (path) => readFileSync(path, "utf8")) {
+  const path = env.CONFIG_FILE || "/etc/deckhand/config.yaml";
+  let text;
+  try {
+    text = read(path);
+  } catch (error) {
+    if (error.code === "ENOENT" && !env.CONFIG_FILE) return NO_FILE;
+    throw new ConfigError(`reading ${path}: ${error.message}`);
+  }
+  return parseConfigFile(text, path);
+}
+
+const NO_FILE = { path: null, settings: {} };
+
+// A set, non-empty environment variable, else config.yaml's key; and how an error names it.
+function settings(env, file) {
+  const fromEnv = (name) => env[name] != null && (env[name] !== "" || EMPTY_MEANS.has(name));
+  const setting = (name) => (fromEnv(name) ? env[name] : file.settings[name]);
+  const label = (name) =>
+    fromEnv(name) || !(name in file.settings) ? name : `${file.path}: ${name.toLowerCase()}`;
+  const number = (name, fallback, what) => wholeNumber(setting(name), fallback, label(name), what);
+  return { setting, label, number };
+}
+
+// "15" → 15, or a ConfigError naming the setting: NaN would be a silent 0 or forever.
+function wholeNumber(value, fallback, label, what) {
+  const text = String(value ?? fallback).trim();
+  if (!/^\d+$/.test(text)) throw new ConfigError(`${label}: expected ${what}, got ${value}`);
+  return Number(text);
+}
+
 // Where sandboxes run, what they get and what they may reach.
-function sandboxConfig(env, prefix, hosts) {
+function sandboxConfig(env, { setting, label, number }, prefix, hosts) {
   return {
     prefix,
     image: env.SANDBOX_IMAGE || `${prefix}-sandbox`,
@@ -57,83 +175,90 @@ function sandboxConfig(env, prefix, hosts) {
     // Each run's inbox (runner/docker.mjs), mounted by the listener at <dataDir>/runs.
     runsVolume: env.RUNS_VOLUME || `${prefix}-runs`,
     // Claude Code is not in the image: the first run installs this version into the volume.
-    claudeCodeVolume: env.CLAUDE_CODE_VOLUME || `${prefix}-claude-code`,
-    claudeCodeVersion: env.CLAUDE_CODE_VERSION || "2.1.300",
-    maxParallel: Number(env.MAX_PARALLEL ?? 2),
+    claudeCodeVolume: setting("CLAUDE_CODE_VOLUME") || `${prefix}-claude-code`,
+    claudeCodeVersion: setting("CLAUDE_CODE_VERSION") || "2.1.300",
+    maxParallel: number("MAX_PARALLEL", 2, "a whole number of sandboxes"),
     hosts,
     // Per sandbox; a repo's grants may set its own.
     limits: parseLimits(
       {
-        cpus: env.SANDBOX_CPUS || "2",
-        memory: env.SANDBOX_MEMORY || "4g",
-        pids: env.SANDBOX_PIDS || "2048",
+        cpus: setting("SANDBOX_CPUS") || "2",
+        memory: setting("SANDBOX_MEMORY") || "4g",
+        pids: setting("SANDBOX_PIDS") || "2048",
       },
       {},
-      (key) => `SANDBOX_${key.toUpperCase()}`,
+      (key) => label(`SANDBOX_${key.toUpperCase()}`),
     ),
     // The only way out of the sandboxes' network (../proxy/proxy.mjs).
     egressProxy: (env.EGRESS_PROXY || "http://egress:3128").replace(/\/$/, ""),
     // What the operator grants each repo: hosts, host mounts, limits (grants.mjs).
-    grantsFile: env.GRANTS_FILE || "/etc/deckhand/grants.yaml",
+    grantsFile: setting("GRANTS_FILE") || "/etc/deckhand/grants.yaml",
     // Claude Code's install container downloads from npm, outside the sandboxes' network.
-    installNetwork: env.INSTALL_NETWORK || "bridge",
+    installNetwork: setting("INSTALL_NETWORK") || "bridge",
     // The host's Docker socket, as preview hooks mount it.
     dockerSocket: env.DOCKER_SOCKET || "/var/run/docker.sock",
   };
 }
 
-export function loadConfig(env) {
+// The environment, over config.yaml's settings (readConfigFile()), over the defaults.
+export function loadConfig(env, file = NO_FILE) {
+  const from = settings(env, file);
+  const { setting, label, number } = from;
   // Fail closed: the sandbox runs without permission prompts and can push, so nobody may
   // trigger it until the operator names who can.
-  const users = list(env.ALLOWED_USERS);
+  const users = list(setting("ALLOWED_USERS"));
   if (!users.length) {
-    throw new ConfigError("ALLOWED_USERS is empty: name the GitHub users who may start runs");
-  }
-  const port = Number(env.PORT ?? 8080);
-  const prefix = env.NAME_PREFIX || "deckhand";
-  // Hosts every sandbox may reach, besides the mandatory ones (egress.mjs).
-  const hosts = list(env.ALLOWED_HOSTS);
-  const badHost = hosts.find(hostProblem);
-  if (badHost) throw new ConfigError(`ALLOWED_HOSTS: ${badHost}: ${hostProblem(badHost)}`);
-  const conflictMinutes = (env.CONFLICT_CHECK_MINUTES ?? "5").trim();
-  if (!/^\d+$/.test(conflictMinutes)) {
     throw new ConfigError(
-      `CONFLICT_CHECK_MINUTES: expected a whole number of minutes (0: off), got ${conflictMinutes}`,
+      "ALLOWED_USERS is empty: name the GitHub users who may start runs (or allowed_users in config.yaml)",
     );
+  }
+  const port = wholeNumber(env.PORT, 8080, "PORT", "a port");
+  const brokerPort = wholeNumber(env.BROKER_PORT, 8081, "BROKER_PORT", "a port");
+  const prefix = setting("NAME_PREFIX") || "deckhand";
+  // Hosts every sandbox may reach, besides the mandatory ones (egress.mjs).
+  const hosts = list(setting("ALLOWED_HOSTS"));
+  const badHost = hosts.find(hostProblem);
+  if (badHost) {
+    throw new ConfigError(`${label("ALLOWED_HOSTS")}: ${badHost}: ${hostProblem(badHost)}`);
+  }
+  const ms = "a whole number of milliseconds";
+  const onboarding = (setting("ONBOARDING") ?? "on").trim().toLowerCase();
+  if (!["on", "true", "1", "yes", "", "off", "false", "0", "no"].includes(onboarding)) {
+    throw new ConfigError(`${label("ONBOARDING")}: expected on or off, got ${onboarding}`);
   }
   return {
     port,
     // Internal only: sandboxes ask it for tokens. Not published by compose.yaml.
-    brokerPort: Number(env.BROKER_PORT ?? 8081),
+    brokerPort,
     // How sandboxes reach the broker on their network (compose service name by default).
-    brokerUrl: (env.BROKER_URL || `http://listener:${env.BROKER_PORT ?? 8081}`).replace(/\/$/, ""),
-    githubApi: (env.GITHUB_API || "https://api.github.com").replace(/\/$/, ""),
-    githubUrl: (env.GITHUB_URL || "https://github.com").replace(/\/$/, ""),
+    brokerUrl: (env.BROKER_URL || `http://listener:${brokerPort}`).replace(/\/$/, ""),
+    githubApi: (setting("GITHUB_API") || "https://api.github.com").replace(/\/$/, ""),
+    githubUrl: (setting("GITHUB_URL") || "https://github.com").replace(/\/$/, ""),
     users,
     // Optional: narrows the repos where the App is installed. Empty: all of them.
-    repos: list(env.ALLOWED_REPOS),
+    repos: list(setting("ALLOWED_REPOS")),
     // The first line of a comment that calls Deckhand; "/mode <name>" picks another mode.
-    trigger: normalize(env.TRIGGER || "Deckhand"),
-    ...sandboxConfig(env, prefix, hosts),
+    trigger: normalize(setting("TRIGGER") || "Deckhand"),
+    ...sandboxConfig(env, from, prefix, hosts),
     // Batches the comments of one review (each arrives as its own webhook) into one run.
-    debounceMs: Number(env.DEBOUNCE_MS ?? 15000),
+    debounceMs: number("DEBOUNCE_MS", 15000, ms),
     // A brainstorm comment comes alone, and someone is waiting for the answer.
-    brainstormDebounceMs: Number(env.BRAINSTORM_DEBOUNCE_MS ?? 3000),
-    brainstormIdleMs: Number(env.BRAINSTORM_IDLE_MINUTES ?? 10) * 60000,
+    brainstormDebounceMs: number("BRAINSTORM_DEBOUNCE_MS", 3000, ms),
+    brainstormIdleMs: number("BRAINSTORM_IDLE_MINUTES", 10, "a whole number of minutes") * 60000,
     dataDir: env.DATA_DIR || "/data",
     // Where GitHub sends webhooks and screenshots are served. Optional: /setup detects it
     // and stores it with the App.
-    publicUrl: env.PUBLIC_URL ? env.PUBLIC_URL.replace(/\/$/, "") : null,
-    model: env.SANDBOX_MODEL || "opus",
-    effort: env.SANDBOX_EFFORT || "medium",
-    brainstormModel: env.BRAINSTORM_MODEL || env.SANDBOX_MODEL || "opus",
-    brainstormEffort: env.BRAINSTORM_EFFORT || env.SANDBOX_EFFORT || "medium",
-    needsInputLabel: env.NEEDS_INPUT_LABEL ?? "needs-input",
+    publicUrl: setting("PUBLIC_URL") ? setting("PUBLIC_URL").replace(/\/$/, "") : null,
+    model: setting("SANDBOX_MODEL") || "opus",
+    effort: setting("SANDBOX_EFFORT") || "medium",
+    brainstormModel: setting("BRAINSTORM_MODEL") || setting("SANDBOX_MODEL") || "opus",
+    brainstormEffort: setting("BRAINSTORM_EFFORT") || setting("SANDBOX_EFFORT") || "medium",
+    needsInputLabel: setting("NEEDS_INPUT_LABEL") ?? "needs-input",
     // The shortest interval at which a repo's `conflicts.check_minutes` may look at its open
     // pull requests (conflicts.mjs); each conflict found is a run. 0: the watcher is off.
-    conflictCheckMinutes: Number(conflictMinutes),
+    conflictCheckMinutes: number("CONFLICT_CHECK_MINUTES", 5, "a whole number of minutes (0: off)"),
     // An issue proposing a .deckhand.yaml when the App is installed on a repo without one
     // (onboarding.mjs). "/mode onboarding" works either way.
-    onboarding: !["off", "false", "0", "no"].includes((env.ONBOARDING ?? "").trim().toLowerCase()),
+    onboarding: !["off", "false", "0", "no"].includes(onboarding),
   };
 }
