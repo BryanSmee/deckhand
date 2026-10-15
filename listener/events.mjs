@@ -177,7 +177,7 @@ const ITEMS = {
 
 // A new discussion, or a comment on one, in the repo's discussions category: one session per
 // discussion, like a brainstorm. Discussions only exist in GraphQL for writing, so the item
-// keeps the node ids its reply and reactions need (server.mjs).
+// keeps the node ids its reply and reactions need (comments.mjs).
 function discussionItem(config, event, p, skip) {
   const d = p.discussion;
   if (p.action !== "created") return skip(`${event} ${p.action ?? ""} is not handled`);
@@ -199,7 +199,7 @@ function discussionItem(config, event, p, skip) {
     text,
     replyTo: d.number,
     discussionId: d.node_id,
-    // What the reply answers: the discussion itself, or a comment (its thread, see server.mjs).
+    // What the reply answers: the discussion itself, or a comment (its thread, see comments.mjs).
     comment: c
       ? { id: c.id, node_id: c.node_id, parent_id: c.parent_id ?? null, discussion: true }
       : { id: d.id, node_id: d.node_id, discussion: true },

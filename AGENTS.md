@@ -31,7 +31,8 @@ could not run.
 ## Layout (target; build it as the issues land)
 
 ```
-listener/     server.mjs (webhooks, queue, runs, dashboard API), runner/ (Docker backend)
+listener/     server.mjs (wiring), http.mjs (webhooks, dashboard API), tasks.mjs (queue),
+              runs.mjs, restart.mjs, … (docs/architecture.md), runner/ (Docker backend)
 dashboard/    the dashboard: Preact + Vite + TypeScript, built to dist/ in the listener's image
 sandbox/      base image: Dockerfile, entrypoint.sh, draft-pr.sh, pre-push, progress.jq,
               managed-settings.json, git credential helper and gh wrapper
@@ -39,7 +40,7 @@ prompts/      sandbox.md (generic rules), idea.md, bug.md, discussion.md, brains
               onboarding.md (followed by docs/repo-config.md, copied into the image)
 proxy/        egress proxy for sandboxes
 compose.yaml  what an operator runs (publishes a port; no reverse-proxy labels)
-docs/         setup, per-repo config reference, security model
+docs/         setup, per-repo config reference, security model, architecture
 ```
 
 ## Conventions
@@ -50,7 +51,7 @@ docs/         setup, per-repo config reference, security model
   with hand-written CSS Modules, no UI or chart library. Its packages are build-time only: the
   image's build stage turns them into static files in `dashboard/dist/`, which the listener
   serves; the released image has no `node_modules`. `src/types.ts` is the contract with
-  `server.mjs` (`api/state`, the log stream): change both together. Tests: Vitest and
+  `http.mjs` (`api/state`) and `runlog.mjs` (the log stream): change them together. Tests: Vitest and
   Testing Library, named `*.spec.ts(x)`: Node 22 runs `*.test.ts` files itself, and
   `node --test` must leave them alone.
 - **ESM** (`.mjs`), small functions, comments that explain _why_, briefly.

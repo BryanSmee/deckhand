@@ -1,5 +1,5 @@
-// The contract with the listener: what GET api/state returns (listener/server.mjs state(),
-// listener/board.mjs), what api/runs/<id>/stream sends (server.mjs format()), and the
+// The contract with the listener: what GET api/state returns (listener/http.mjs state(),
+// listener/board.mjs), what api/runs/<id>/stream sends (runlog.mjs format()), and the
 // repositories' api/repos (listener/repos.mjs).
 
 export type TaskState =

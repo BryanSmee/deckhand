@@ -1,6 +1,6 @@
 // Onboarding: when the App is installed on a repo without a .deckhand.yaml, the listener
 // opens an issue there and Claude proposes the file in an "onboarding" conversation, which
-// the trigger line turns into a pull request (server.mjs). The decisions and the issue are
+// the trigger line turns into a pull request (tasks.mjs, runs.mjs). The decisions and the issue are
 // here, with GitHub injected, so they are tested on their own (../test/onboarding.test.mjs).
 import { readFileSync, renameSync, writeFileSync } from "node:fs";
 import { linkedIssue } from "./events.mjs";
