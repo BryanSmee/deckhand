@@ -45,6 +45,10 @@ function secretOf(req) {
   return scheme === "Bearer" ? value : req.headers["x-api-key"];
 }
 
+// Anthropic's API under /v1, nothing else: no "//host", "https://host", "\\host" or ".." that
+// would send the credential to another host, or out of a gateway's base path.
+const API_PATH = /^\/anthropic\/(v1(?:\/[A-Za-z0-9_-]+)+)$/;
+
 // Errors in Anthropic's shape, so Claude Code shows them as such.
 function fail(res, status, type, message) {
   sendJson(res, { type: "error", error: { type, message: `Deckhand: ${message}` } }, status);
@@ -61,15 +65,19 @@ export function createAnthropicProxy({
   const send = base.protocol === "https:" ? httpsRequest : httpRequest;
 
   async function handle(req, res) {
-    const url = new URL(req.url, "http://broker");
+    const path = API_PATH.exec(req.url.split("?")[0])?.[1];
     if (!broker.runOf(secretOf(req))) {
       return fail(res, 401, "authentication_error", "unknown or finished run");
     }
     if (!name || !credential) {
       return fail(res, 503, "api_error", "the operator set no Claude credential");
     }
+    if (!path) return fail(res, 404, "not_found_error", "not an Anthropic API path");
     // /anthropic/v1/messages?beta=true → <upstream>/v1/messages?beta=true
-    const target = new URL(url.pathname.replace(/^\/anthropic\/?/, "") + url.search, base);
+    const target = new URL(base.href + path + new URL(req.url, "http://broker").search);
+    if (target.origin !== base.origin || !target.pathname.startsWith(base.pathname)) {
+      return fail(res, 404, "not_found_error", "not an Anthropic API path");
+    }
     const headers = forwarded(req.headers, ["authorization", "x-api-key"]);
     if (name === "ANTHROPIC_API_KEY") headers["x-api-key"] = credential;
     else headers.authorization = `Bearer ${credential}`;

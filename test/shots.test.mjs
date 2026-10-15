@@ -1,6 +1,7 @@
 // /shots serves a run's screenshots, from a folder the sandbox writes: only its regular files,
 // never what a link there points to.
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { linkSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -22,6 +23,7 @@ before(async () => {
   symlinkSync("page.png", join(dir, "sibling.png"));
   symlinkSync(dataDir, join(dir, "dir.png"));
   linkSync(join(dataDir, "app.json"), join(dir, "hard.png"));
+  execFileSync("mkfifo", [join(dir, "fifo.png")]);
   // The folder itself as a link: the run can't do that, but nothing should follow it either.
   symlinkSync(dir, join(shotsDir, "fedcba9876543210fedcba98"));
 
@@ -48,6 +50,11 @@ test("a link in a run's folder is a 404, wherever it points", async () => {
   }
   const res = await fetch(`${base}/fedcba9876543210fedcba98/page.png`);
   assert.equal(res.status, 404);
+});
+
+// A blocking open would wait for a writer, with the whole listener (a regression hangs here).
+test("a FIFO in a run's folder is a 404, and doesn't block the listener", async () => {
+  assert.equal((await fetch(`${base}/${folder}/fifo.png`)).status, 404);
 });
 
 test("missing files and other names are a 404", async () => {

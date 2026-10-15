@@ -20,27 +20,43 @@ export function sourceOf(address = "") {
     .join(":")}::/64`;
 }
 
-// At most `total` places, `share` of them per source. A source past its share, or a full
-// listener, takes the place of the oldest reader (its own first) once that one has had
-// `graceMs`: GitHub sends a body in milliseconds, so the readers that old are slow ones, and a
-// delivery still gets in behind a reverse proxy, where every delivery has the proxy's address.
+// At most `total` places, `share` of them per source. A source past its share takes the place
+// of its own oldest reader once that one has had `graceMs`: GitHub sends a body in
+// milliseconds, so the readers that old are slow ones, and a delivery still gets in behind a
+// reverse proxy, where every delivery has the proxy's address. A full listener makes room the
+// same way; when no reader is that old, a source holding fewer places than another takes the
+// oldest place of the source holding the most, however young. Otherwise a few sources
+// reopening a stalled body every few hundred milliseconds would keep every place young, and
+// every delivery out.
 // `take(source, drop)`: a function releasing the place, or null when there is none; `drop()`
 // is called when another delivery takes it.
 export function createSlots({ total, share, graceMs, now = Date.now }) {
   const held = new Set();
 
-  function evict(slots) {
+  function evict(slots, grace = graceMs) {
     const oldest = slots.reduce((a, b) => (b.since < a.since ? b : a));
-    if (now() - oldest.since < graceMs) return false;
+    if (now() - oldest.since < grace) return false;
     held.delete(oldest);
     oldest.drop();
     return true;
   }
 
+  const countOf = (source) => [...held].filter((s) => s.source === source).length;
+
+  function makeRoom(source) {
+    if (evict([...held])) return true;
+    const most = Math.max(...[...held].map((s) => countOf(s.source)));
+    if (countOf(source) >= most) return false;
+    return evict(
+      [...held].filter((s) => countOf(s.source) === most),
+      0,
+    );
+  }
+
   function take(source, drop) {
     const mine = [...held].filter((s) => s.source === source);
     if (mine.length >= share && !evict(mine)) return null;
-    if (held.size >= total && !evict([...held])) return null;
+    if (held.size >= total && !makeRoom(source)) return null;
     const slot = { source, since: now(), drop };
     held.add(slot);
     return () => held.delete(slot);

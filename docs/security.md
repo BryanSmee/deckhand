@@ -235,13 +235,15 @@ when the run builds an image first. Two things keep a sandbox from redirecting i
   sandbox with a read-write mount could otherwise swap a directory on the way (`/nfs/work/api`
   for a symlink to `/`) after both checks, even when that directory is under another
   repository's root, or above every root. So a read-write path is refused when any directory
-  from `/` down to its parent can be written by the sandbox's user, uid 1000 (owner with
-  write permission, group 1000 with group write, or writable by anyone). In a sticky
+  from `/` down to its parent can be written by the sandbox's user, uid 1000 (its owner,
+  with or without write permission, since an owner can `chmod` it back; group 1000 with group
+  write; or writable by anyone). In a sticky
   directory (`/tmp`), only its owner and the entry's can rename an entry: there it counts
   only when uid 1000 owns either. The mounted directory itself may be writable: its own entry
   lives in its parent. With repo A granted `/nfs/work/api` read-write and repo B `/nfs/work`,
   A's read-write mounts are refused while uid 1000 can write `/nfs/work`: make it (and every
-  directory above what you mount) read-only for uid 1000, or ask for the path read-only.
+  directory above what you mount) owned by another user and read-only for uid 1000, or ask
+  for the path read-only.
 
 What isn't guaranteed: ACLs and NFS server-side permissions aren't read, only the mode bits,
 owner and group the listener sees. Read-only requests aren't checked this way, so a path
@@ -660,7 +662,9 @@ listener's logs (`Egress: refused <host> for <repo>#<n>`).
   that large only delays a config's refresh). At most 16 are read at once, 4 per client
   address (per /64 for IPv6), each within 10 seconds and dropped after 2 seconds without
   data. A reader older than a second loses its place to a new delivery when its address's
-  share, or the listener, is full: GitHub sends a body in milliseconds, so a stalled client
+  share, or the listener, is full: GitHub sends a body in milliseconds. When the listener is
+  full of younger readers, a delivery from an address holding fewer places than another takes
+  the oldest place of the address holding the most, so a few clients reopening stalled bodies
   can delay deliveries but not keep them out. Behind a reverse proxy every delivery has the
   proxy's address, so they all share those 4 places: restrict `/webhook` to GitHub's `hooks`
   ranges (`https://api.github.com/meta`) at the proxy, and let it buffer request bodies, to

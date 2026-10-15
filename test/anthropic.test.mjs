@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { createServer } from "node:http";
+import { createServer, request } from "node:http";
 import { test } from "node:test";
 import { createAnthropicProxy, credentialName } from "../listener/anthropic.mjs";
 import { createBroker } from "../listener/broker.mjs";
@@ -133,6 +133,41 @@ test("a gateway's token goes as a bearer, under the gateway's own path", async (
   assert.equal(sent.url, "/api/v1/messages?beta=true");
   assert.equal(sent.headers.authorization, "Bearer sk-or-v1-real");
   assert.equal(sent.headers["x-api-key"], undefined);
+});
+
+// A raw request line, since fetch() would normalise these paths before sending them.
+const raw = (url, path, secret) =>
+  new Promise((resolve, reject) => {
+    const req = request(`${url}/`, { path, method: "POST", headers: { "x-api-key": secret } });
+    req.on("response", (res) => res.resume().on("end", () => resolve(res.statusCode)));
+    req.on("error", reject);
+    req.end("{}");
+  });
+
+test("only Anthropic's /v1 paths go on: the credential never reaches another host", async (t) => {
+  const elsewhere = await fakeAnthropic(t);
+  elsewhere.release();
+  const host = new URL(elsewhere.url).host;
+  const { url, broker, upstream } = await serve(t, {
+    name: "ANTHROPIC_API_KEY",
+    credential: "sk-ant-api03-real",
+  });
+  const secret = broker.register("org/repo");
+  for (const path of [
+    `/anthropic///${host}/steal`,
+    `/anthropic//${host}/steal`,
+    `/anthropic/http://${host}/steal`,
+    `/anthropic/\\${host}/steal`,
+    `/anthropic/v1/../../steal`,
+    `/anthropic/v1/./messages`,
+    `/anthropic/v1//messages`,
+    `/anthropic/v1`,
+    `/anthropic/oauth/token`,
+  ]) {
+    assert.equal(await raw(url, path, secret), 404, path);
+  }
+  assert.equal(elsewhere.requests.length, 0);
+  assert.equal(upstream.requests.length, 0);
 });
 
 test("no secret, a wrong one or a finished run's: refused, and Anthropic never asked", async (t) => {
