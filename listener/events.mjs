@@ -64,6 +64,15 @@ export function takeOptions(text, options) {
     .trim();
 }
 
+// Comments as Claude reads them, one after the other, without their "/model" and "/effort"
+// lines (collected in `options`).
+export function commentsText(items, options) {
+  return items
+    .map((i) => takeOptions(i.text, options))
+    .filter(Boolean)
+    .join("\n\n---\n\n");
+}
+
 // An inbox entry, as Claude reads it: who wrote it and where, so its reply can link back.
 function entry(author, url, body) {
   return `From @${author.login}${url ? ` (${url})` : ""}:\n\n${body.trim()}`;
