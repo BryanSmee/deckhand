@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { connect } from "node:net";
 import { test } from "node:test";
-import { blockedAddress, createProxy, listenerPolicy, target } from "../proxy/proxy.mjs";
+import { blockedAddress, createProxy, listenerPolicy, target, v6Bytes } from "../proxy/proxy.mjs";
 
 async function listening(server) {
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -134,6 +134,66 @@ test("address check: loopback, link-local, metadata always; private only by name
     assert.equal(blockedAddress(ip, false), false, ip);
   }
   assert.equal(blockedAddress("not-an-ip", true), true);
+});
+
+test("address check: IPv6 forms of refused addresses are refused", () => {
+  for (const ip of [
+    "::ffff:a9fe:a9fe",
+    "::ffff:7f00:1",
+    "::FFFF:7F00:0001",
+    "0:0:0:0:0:0:0:1",
+    "0000:0000:0000:0000:0000:0000:0000:0000",
+    "0:0:0:0:0:ffff:7f00:1",
+    "::7f00:1",
+    "::127.0.0.1",
+    "64:ff9b::a9fe:a9fe",
+    "64:ff9b::127.0.0.1",
+    "fe80::1%eth0",
+    "febf::1",
+    "fec0::1",
+    "ff02::1",
+  ]) {
+    assert.equal(blockedAddress(ip, true), true, ip);
+  }
+  for (const ip of [
+    "::ffff:0a00:0001",
+    "::ffff:c0a8:101",
+    "64:ff9b::a00:1",
+    "64:ff9b:1::1",
+    "fc00::1",
+    "FD12:3456::1",
+  ]) {
+    assert.equal(blockedAddress(ip, false), true, ip);
+    assert.equal(blockedAddress(ip, true), false, ip);
+  }
+  for (const ip of [
+    "2606:4700::1",
+    "2001:4860:4860:0:0:0:0:8888",
+    "2a00:1450:4007:80e::200e",
+    "::ffff:808:808",
+    "64:ff9b::808:808",
+    "fe00::1",
+  ]) {
+    assert.equal(blockedAddress(ip, false), false, ip);
+  }
+});
+
+test("IPv6 addresses as bytes", () => {
+  const loopback = [...Array(15).fill(0), 1];
+  assert.deepEqual(v6Bytes("::1"), loopback);
+  assert.deepEqual(v6Bytes("0:0:0:0:0:0:0:1"), loopback);
+  assert.deepEqual(v6Bytes("::ffff:a9fe:a9fe"), v6Bytes("::ffff:169.254.169.254"));
+  assert.deepEqual(v6Bytes("1::"), [0, 1, ...Array(14).fill(0)]);
+  assert.equal(v6Bytes("127.0.0.1"), null);
+  assert.equal(v6Bytes("not-an-ip"), null);
+});
+
+test("CONNECT to a hex IPv4-mapped literal is refused", async (t) => {
+  const proxy = createProxy({ policy: async () => ({ allowed: true, private: false }) });
+  await listening(proxy);
+  t.after(() => proxy.close());
+  const answer = await raw(proxy.address().port, "CONNECT [::ffff:7f00:1]:80 HTTP/1.1\r\n\r\n");
+  assert.match(answer, /^HTTP\/1\.1 403[^]*private address/);
 });
 
 test("CONNECT targets", () => {
