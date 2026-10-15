@@ -58,6 +58,7 @@ function runOf(logDir, file) {
     replyTo: meta.replyTo ?? null,
     mode: meta.mode ?? null,
     taskMode: meta.taskMode ?? null,
+    reason: meta.reason ?? null,
     model: meta.model ?? null,
     effort: meta.effort ?? null,
     startedAt: meta.startedAt ?? Number(id.match(/-(\d+)$/)?.[1] ?? 0),
@@ -107,6 +108,11 @@ const GOING_ON = {
   continue: "Continuing the session",
 };
 
+// Runs the listener started itself (conflicts.mjs).
+const REASONS = {
+  conflict: "Rebasing a pull request in conflict",
+};
+
 // The listener's own lines: a run's first line (what it is), notes and delivered comments.
 function listenerEntries(e) {
   if (e.event === "note") return [{ kind: "meta", text: e.message }];
@@ -116,7 +122,7 @@ function listenerEntries(e) {
   }
   const own = e.taskMode && e.taskMode !== "work" ? `Starting the ${e.taskMode} mode` : null;
   const what =
-    (GOING_ON[e.mode] ?? STARTING[e.kind] ?? own ?? "Starting") +
+    (REASONS[e.reason] ?? GOING_ON[e.mode] ?? STARTING[e.kind] ?? own ?? "Starting") +
     (e.model ? ` (${e.model}, ${e.effort} effort)` : "");
   return [{ kind: "meta", text: what + (e.message ? `: ${e.message}` : "") }];
 }

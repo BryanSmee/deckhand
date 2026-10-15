@@ -88,6 +88,10 @@ preview:
   command: ./deploy/preview.sh
   image: docker:27-cli
   timeout_minutes: 30
+
+# Rebase this repo's open Deckhand pull requests that conflict with their base (see below).
+conflicts:
+  check_minutes: 15
 ```
 
 ## Keys
@@ -112,6 +116,7 @@ preview:
 | `preview.command`                       | none                                    | preview hook command (a plain string `preview: ./x.sh` works too)                        |
 | `preview.image`                         | the repo's image                        | image the hook runs in; it needs a Docker client                                         |
 | `preview.timeout_minutes`               | `30`                                    | the hook is stopped after that                                                           |
+| `conflicts.check_minutes`               | none: off                               | minutes between conflict checks; at least `CONFLICT_CHECK_MINUTES` (see Conflicts)       |
 
 ## Network and mounts
 
@@ -325,3 +330,29 @@ long as its command runs: the listener's `/status` lists it and isn't idle meanw
 restart that waits for it doesn't cut a deployment short. A hook that starts something
 should wait until it is up before exiting. Its output is kept in the data volume, under
 `previews/`.
+
+## Conflicts
+
+When the base branch moves, a pull request can go into conflict and stay there until someone
+notices. With `conflicts.check_minutes`, the listener looks at the repository's open pull
+requests every that many minutes, and starts a work run on any that conflicts with its base.
+It is off without the key, and each conflict found is a run, so a bill.
+
+- Only Deckhand's own pull requests are checked: those of its tasks (an issue's pull request,
+  or a pull request it was asked to work on), never every pull request of the repository,
+  and never one from a fork.
+- A conflict is GitHub's `mergeable: false` (`mergeable_state: dirty`). A pull request that
+  is only behind its base, or blocked, or whose checks fail, is left alone. While GitHub is
+  still computing it, the pull request is asked again a minute later.
+- The run goes on in the task's session, as if a maintainer had asked: rebase on the base
+  branch, resolve the conflicts, rerun the checks and push with `--force-with-lease`, or stop
+  and ask. Its reply goes on the pull request; the dashboard names it "Conflict".
+- A task with a run going or comments waiting is skipped, and so is a pull request (or its
+  issue) labelled `NEEDS_INPUT_LABEL`.
+- Each pull request is tried once per pair of its head commit and its base branch's latest
+  commit, across listener restarts: a rebase that failed or stopped to ask isn't tried again
+  until someone pushes to the pull request or the base branch moves.
+- The operator's `CONFLICT_CHECK_MINUTES` (default 5) is the shortest interval: a smaller
+  `check_minutes` gets that one (with a warning in the run logs), and `0` turns conflict
+  checks off for every repository. `check_minutes` must be a whole number above 0; any
+  other key under `conflicts` is an error.

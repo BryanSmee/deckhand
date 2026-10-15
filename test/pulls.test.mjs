@@ -167,3 +167,15 @@ test("pulls: older tasks looked up once per repo, by branch, link or number", as
   await pulls.fill([...keys, "org/repo#10"]);
   assert.equal(asked.length, 2);
 });
+
+test("pulls: the open ones, for the conflict watcher", () => {
+  const pulls = createPulls({ path: tempPath(), listPulls: async () => [] });
+  pulls.record("org/repo#30", pr(31, "draft"));
+  pulls.record("org/repo#32", pr(33, "ready", NOW));
+  pulls.record("org/repo#34", pr(35, "merged"));
+  pulls.record("org/repo#pr-36", pr(36, "closed"));
+  assert.deepEqual(
+    pulls.open().map(([key]) => key),
+    ["org/repo#30", "org/repo#32"],
+  );
+});

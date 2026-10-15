@@ -104,6 +104,17 @@ Reactions on the triggering comment follow its run: 👀 when it is received, th
   (narrowed by `ALLOWED_REPOS` if set), are acted on: the sandbox runs without permission
   prompts and can push.
 
+## Conflicts
+
+The `pull_request` webhook doesn't fire when a base branch moves, so `conflicts.mjs` polls.
+Every minute it takes the open pull requests `pulls.mjs` knows as tasks', in the repos whose
+`.deckhand.yaml` sets `conflicts.check_minutes` (never more often than
+`CONFLICT_CHECK_MINUTES`; `0` stops it), and asks GitHub whether each still merges. One in
+conflict, whose task has no run going or queued and no needs-input label, gets a work item as
+if from a comment (`trigger: "work"`, no comment, no sender, `reason: "conflict"`), queued in
+its task's session through `tasks.accept()`. The `(head, base)` commits of each attempt are
+kept in `conflicts.json`, so the same pair never starts a second run, even after a restart.
+
 ## Restarts
 
 The listener can restart at any time (an update is `docker compose pull && up -d`).
@@ -141,5 +152,6 @@ which starts runs.
 | `setup.mjs`, `auth.mjs`                                           | `/setup` (creating the App) and signing in with GitHub.                                            |
 | `images.mjs`, `checkout.mjs`, `runner/`                           | Repo images, Claude Code's install, caches; checkouts; the Docker runner.                          |
 | `onboarding.mjs`, `previews.mjs`                                  | Onboarding issues; preview hooks.                                                                  |
+| `conflicts.mjs`                                                   | The conflict watcher: open task pull requests in conflict get a rebase run (`conflicts.json`).     |
 | `board.mjs`, `titles.mjs`, `pulls.mjs`, `repos.mjs`, `static.mjs` | The dashboard's tasks, titles, pull requests, repository list and files.                           |
 | `store.mjs`, `html.mjs`, `web.mjs`                                | Shared helpers: JSON state files written atomically; the small HTML pages; `sendJson`, `readBody`. |

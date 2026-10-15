@@ -1555,7 +1555,7 @@ const RUN_KEYS = [
     "finishedAt",
     "status",
   ],
-  ["model", "effort", "phase", "summary", "delivered"],
+  ["reason", "model", "effort", "phase", "summary", "delivered"],
 ];
 
 function assertShape(value, [required, optional], name) {

@@ -47,6 +47,7 @@ export function defaultSettings(config) {
     inbox: {},
     modes: {},
     preview: null,
+    conflicts: null,
   };
 }
 
@@ -206,6 +207,31 @@ function parsePreview(value, { settings, fail, warn }) {
   if (command) settings.preview = { command, image, timeoutMinutes: minutes };
 }
 
+// Opt-in: how often the conflict watcher (conflicts.mjs) looks at the repo's open pull
+// requests. Never more often than the operator's CONFLICT_CHECK_MINUTES, and not at all when
+// that is 0. Every key is checked: a mistyped one would leave the watcher off unnoticed.
+function parseConflicts(value, { key, settings, config, fail, warn }) {
+  if (!isMap(value)) return fail(key, "expected check_minutes");
+  let ok = true;
+  for (const other of Object.keys(value)) {
+    if (other !== "check_minutes") {
+      ok = false;
+      fail(`conflicts.${other}`, "unknown key (expected check_minutes)");
+    }
+  }
+  const minutes = value.check_minutes;
+  if (minutes === undefined || minutes === null) return;
+  if (!Number.isInteger(minutes) || minutes <= 0) {
+    return fail("conflicts.check_minutes", "expected a whole number above 0");
+  }
+  const floor = config.conflictCheckMinutes;
+  if (!floor) return warn("conflicts: the operator turned the conflict watcher off, ignored");
+  if (minutes < floor) {
+    warn(`conflicts.check_minutes: below CONFLICT_CHECK_MINUTES, checked every ${floor} minutes`);
+  }
+  if (ok) settings.conflicts = { checkMinutes: Math.max(minutes, floor) };
+}
+
 // Each top-level key's parser, into `settings`; any other key is unknown (a warning).
 const KEYS = {
   users: parseUsers,
@@ -242,6 +268,7 @@ const KEYS = {
     for (const [name, mode] of Object.entries(value)) parseMode(name, mode, settings, fail);
   },
   preview: parsePreview,
+  conflicts: parseConflicts,
 };
 
 // One of `modes:`, into settings.modes. Every key is checked: a mistyped one would otherwise

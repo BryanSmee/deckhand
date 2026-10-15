@@ -29,6 +29,8 @@ export interface Run {
   mode: string | null;
   // work, brainstorm, idea, bug, discussion or one of the repo's own modes
   taskMode: string | null;
+  // Why the listener started it itself ("conflict": a pull request to rebase); null for comments.
+  reason?: string | null;
   model?: string | null;
   effort?: string | null;
   phase?: string | null;

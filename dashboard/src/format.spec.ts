@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vitest";
 import fixture from "./fixture.json";
-import { inChip, ownMode, repoTabs, titleOf, when } from "./format";
-import type { State, Task } from "./types";
+import { inChip, ownMode, repoTabs, runName, titleOf, when } from "./format";
+import type { Run, State, Task } from "./types";
 
 const state = fixture as State;
 const task = (key: string) => state.tasks.find((t) => t.key === key)!;
@@ -50,4 +50,10 @@ test("own modes: the repo's, never one of the listener's", () => {
     expect(ownMode(mode)).toBeNull();
   }
   expect(ownMode(null)).toBeNull();
+});
+
+test("run names: why the listener started a run itself", () => {
+  const run = { mode: "continue", taskMode: "work", reason: null } as Run;
+  expect(runName(run)).toBe("Continue");
+  expect(runName({ ...run, reason: "conflict" })).toBe("Conflict · Continue");
 });

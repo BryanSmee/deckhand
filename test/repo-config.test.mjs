@@ -305,3 +305,37 @@ modes:
     "name",
   ]);
 });
+
+test("conflicts: opt-in, never more often than the operator's floor", () => {
+  const parse = (text, c = config) => parseRepoConfig(text, c);
+  assert.equal(parse("trigger: go").settings.conflicts, null);
+  assert.deepEqual(parse("conflicts:\n  check_minutes: 10").settings.conflicts, {
+    checkMinutes: 10,
+  });
+  // Below the floor (5 by default): the floor.
+  const slow = parse("conflicts:\n  check_minutes: 2");
+  assert.deepEqual(slow.settings.conflicts, { checkMinutes: 5 });
+  assert.match(slow.warnings.join(), /below CONFLICT_CHECK_MINUTES/);
+  // 0: off for every repo.
+  const off = loadConfig({ ALLOWED_USERS: "alice", CONFLICT_CHECK_MINUTES: "0" });
+  const ignored = parse("conflicts:\n  check_minutes: 10", off);
+  assert.equal(ignored.settings.conflicts, null);
+  assert.deepEqual(ignored.errors, []);
+  assert.match(ignored.warnings.join(), /turned the conflict watcher off/);
+  // Nothing to check: off.
+  assert.equal(parse("conflicts: {}").settings.conflicts, null);
+});
+
+test("conflicts: invalid values and unknown keys are errors", () => {
+  const errors = (text) => parseRepoConfig(text, config).errors;
+  assert.match(errors("conflicts: 5").join(), /conflicts: expected check_minutes/);
+  for (const bad of ["0", "-3", "2.5", "soon"]) {
+    assert.match(
+      errors(`conflicts:\n  check_minutes: ${bad}`).join(),
+      /conflicts.check_minutes: expected a whole number above 0/,
+    );
+  }
+  const typo = parseRepoConfig("conflicts:\n  check_minute: 5", config);
+  assert.match(typo.errors.join(), /conflicts.check_minute: unknown key/);
+  assert.equal(typo.settings.conflicts, null);
+});
