@@ -6,6 +6,7 @@ import { CREDENTIALS, credentialName } from "./anthropic.mjs";
 import { hostProblem } from "./egress.mjs";
 import { MODEL_NAME } from "./events.mjs";
 import { ENGINES } from "./runner/engine.mjs";
+import { parseCidr } from "./subnets.mjs";
 import { isMap, parseYaml } from "./yaml.mjs";
 
 export class ConfigError extends Error {}
@@ -76,6 +77,8 @@ export const FILE_SETTINGS = {
   SANDBOX_MEMORY: "scalar",
   SANDBOX_PIDS: "scalar",
   SANDBOX_ENGINE: "scalar",
+  SANDBOX_SUBNETS: "scalar",
+  SANDBOX_SUBNET_SIZE: "scalar",
   ONBOARDING: "boolean",
   NEEDS_INPUT_LABEL: "scalar",
   CONFLICT_CHECK_MINUTES: "scalar",
@@ -181,8 +184,35 @@ function wholeNumber(value, fallback, label, what) {
   return Number(text);
 }
 
+// SANDBOX_SUBNETS cut into blocks of SANDBOX_SUBNET_SIZE (subnets.mjs): { range, base, prefix,
+// size }, or null (empty: Docker's own address pools). A /29 is the smallest block that holds
+// a sandbox, the listener, the proxy and a container engine besides the gateway.
+function sandboxSubnets({ setting, label, number }) {
+  const size = number("SANDBOX_SUBNET_SIZE", 28, "a prefix length (28 for blocks of 16 addresses)");
+  if (size < 1 || size > 29) {
+    throw new ConfigError(
+      `${label("SANDBOX_SUBNET_SIZE")}: expected a prefix length from 1 to 29, got ${size}`,
+    );
+  }
+  const range = (setting("SANDBOX_SUBNETS") ?? "").trim();
+  if (!range) return null;
+  const cidr = parseCidr(range);
+  if (!cidr) {
+    throw new ConfigError(
+      `${label("SANDBOX_SUBNETS")}: expected an IPv4 range with its host bits at zero (10.200.0.0/16), got ${range}`,
+    );
+  }
+  if (cidr.prefix > size) {
+    throw new ConfigError(
+      `${label("SANDBOX_SUBNETS")}: ${range} is smaller than one block of /${size} (${label("SANDBOX_SUBNET_SIZE")})`,
+    );
+  }
+  return { range, ...cidr, size };
+}
+
 // Where sandboxes run, what they get and what they may reach.
-function sandboxConfig(env, { setting, label, number }, prefix, hosts) {
+function sandboxConfig(env, from, prefix, hosts) {
+  const { setting, label, number } = from;
   return {
     prefix,
     image: env.SANDBOX_IMAGE || `${prefix}-sandbox`,
@@ -194,6 +224,8 @@ function sandboxConfig(env, { setting, label, number }, prefix, hosts) {
     claudeCodeVersion: setting("CLAUDE_CODE_VERSION") || "2.1.300",
     maxParallel: number("MAX_PARALLEL", 2, "a whole number of sandboxes"),
     hosts,
+    // Where the runs' networks take their subnets from (runner/docker.mjs).
+    subnets: sandboxSubnets(from),
     // Per sandbox; a repo's grants may set its own.
     limits: parseLimits(
       {

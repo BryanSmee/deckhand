@@ -74,6 +74,54 @@ test("conflict watcher floor: 5 minutes by default, 0 turns it off, junk refused
 
 const file = (text) => parseConfigFile(text, "/etc/deckhand/config.yaml");
 
+test("SANDBOX_SUBNETS: an IPv4 range cut into /28 blocks by default, checked, off when empty", () => {
+  const base = { ALLOWED_USERS: "a" };
+  assert.equal(loadConfig(base).subnets, null);
+  assert.equal(loadConfig({ ...base, SANDBOX_SUBNETS: " " }).subnets, null);
+  assert.deepEqual(loadConfig({ ...base, SANDBOX_SUBNETS: "10.200.0.0/16" }).subnets, {
+    range: "10.200.0.0/16",
+    base: 10 * 2 ** 24 + 200 * 2 ** 16,
+    prefix: 16,
+    size: 28,
+  });
+  const sized = loadConfig({
+    ...base,
+    SANDBOX_SUBNETS: "172.30.0.0/24",
+    SANDBOX_SUBNET_SIZE: "29",
+  });
+  assert.equal(sized.subnets.size, 29);
+  // One block is enough.
+  assert.equal(loadConfig({ ...base, SANDBOX_SUBNETS: "10.9.9.0/28" }).subnets.prefix, 28);
+  const bad = [
+    [{ SANDBOX_SUBNETS: "10.200.0.0" }, /SANDBOX_SUBNETS: expected an IPv4 range/],
+    [{ SANDBOX_SUBNETS: "10.200.1.0/16" }, /SANDBOX_SUBNETS: expected an IPv4 range/],
+    [{ SANDBOX_SUBNETS: "10.300.0.0/16" }, /SANDBOX_SUBNETS: expected an IPv4 range/],
+    [{ SANDBOX_SUBNETS: "10.0.0.0/33" }, /SANDBOX_SUBNETS: expected an IPv4 range/],
+    [{ SANDBOX_SUBNETS: "fd00::/64" }, /SANDBOX_SUBNETS: expected an IPv4 range/],
+    [{ SANDBOX_SUBNETS: "10.9.9.0/29" }, /10\.9\.9\.0\/29 is smaller than one block of \/28/],
+    [{ SANDBOX_SUBNET_SIZE: "30" }, /SANDBOX_SUBNET_SIZE: expected a prefix length from 1 to 29/],
+    [{ SANDBOX_SUBNET_SIZE: "0" }, /SANDBOX_SUBNET_SIZE: expected a prefix length from 1 to 29/],
+    [{ SANDBOX_SUBNET_SIZE: "/28" }, /SANDBOX_SUBNET_SIZE: expected a prefix length/],
+  ];
+  for (const [env, pattern] of bad) {
+    assert.throws(() => loadConfig({ ...base, ...env }), pattern);
+  }
+  // From config.yaml, named by its key.
+  const yaml = parseConfigFile(
+    "allowed_users: [a]\nsandbox_subnets: 10.200.0.0/16\nsandbox_subnet_size: 26",
+    "c.yaml",
+  );
+  assert.equal(loadConfig({}, yaml).subnets.size, 26);
+  assert.throws(
+    () =>
+      loadConfig(
+        {},
+        parseConfigFile("allowed_users: [a]\nsandbox_subnets: 10.200.0.1/16", "c.yaml"),
+      ),
+    /c\.yaml: sandbox_subnets: expected an IPv4 range/,
+  );
+});
+
 test("config.yaml sets what the environment leaves out, as YAML lists and values", () => {
   const config = loadConfig(
     {},

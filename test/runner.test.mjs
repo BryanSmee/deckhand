@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { test } from "node:test";
 import { aliasOf, CLOSE, createDockerRunner } from "../listener/runner/docker.mjs";
+import { overlaps, parseCidr } from "../listener/subnets.mjs";
 
 const config = {
   prefix: "dh",
@@ -26,8 +27,11 @@ const config = {
 // `containers` a container to its run label and state. `answers`: canned answers by
 // subcommand (or a function of the arguments giving one, or nothing), over the fake's own.
 // `runtimes`: the host's Docker's (`docker info`). `volumes` maps a volume to its labels.
-function fakeDocker({ answers = {}, routeOut = false, runtimes = ["runc"] } = {}) {
+// `subnets` maps a network to its subnet; `taken`: subnets Docker refuses as overlapping
+// though no network it lists has them (another project's, created meanwhile).
+function fakeDocker({ answers = {}, routeOut = false, runtimes = ["runc"], taken = [] } = {}) {
   const nets = new Map();
+  const subnets = new Map();
   const internal = new Set();
   const volumes = new Map();
   const containers = new Map([
@@ -50,10 +54,26 @@ function fakeDocker({ answers = {}, routeOut = false, runtimes = ["runc"] } = {}
     switch (key) {
       case "network create":
         if (nets.has(last)) return { code: 1, out: "", err: "already exists" };
+        if (args.includes("--subnet")) {
+          const subnet = args[args.indexOf("--subnet") + 1];
+          if ([...subnets.values(), ...taken].some((s) => overlaps(s, subnet))) {
+            return { code: 1, out: "", err: "Pool overlaps with other one on this address space" };
+          }
+          subnets.set(last, subnet);
+        }
         nets.set(last, new Set());
         if (args.includes("--internal") && !routeOut) internal.add(last);
         return ok();
       case "network inspect":
+        if (args.join(" ").includes("IPAM")) {
+          return ok(
+            args
+              .slice(4)
+              .filter((n) => nets.has(n))
+              .map((n) => (subnets.has(n) ? `${subnets.get(n)} ` : ""))
+              .join("\n"),
+          );
+        }
         if (!nets.has(last)) return missing;
         return args.join(" ").includes("Containers")
           ? ok([...nets.get(last)].map((c) => `${c} `).join(""))
@@ -70,8 +90,10 @@ function fakeDocker({ answers = {}, routeOut = false, runtimes = ["runc"] } = {}
       case "network rm":
         if (nets.get(last)?.size) return { code: 1, out: "", err: "has active endpoints" };
         nets.delete(last);
+        subnets.delete(last);
         return ok();
       case "network ls":
+        if (args.includes("--quiet")) return ok([...nets.keys()].join("\n"));
         return ok([...nets.keys()].filter((n) => n.startsWith("dh-")).join("\n"));
       case "run": {
         const name = args[args.indexOf("--name") + 1];
@@ -156,7 +178,7 @@ function fakeDocker({ answers = {}, routeOut = false, runtimes = ["runc"] } = {}
         return ok();
     }
   };
-  return { docker, nets, internal, containers, volumes };
+  return { docker, nets, subnets, internal, containers, volumes };
 }
 
 // `before(args)`: may hold a call back (a promise) before the fake answers it.
@@ -164,20 +186,28 @@ function runner({
   answers = {},
   routeOut,
   runtimes,
+  taken,
+  subnets,
   spawn,
   now,
   before = () => {},
   engine = config.engine,
 } = {}) {
   const calls = [];
-  const fake = fakeDocker({ answers, routeOut, runtimes });
+  const fake = fakeDocker({ answers, routeOut, runtimes, taken });
   const docker = async (args, opts = {}) => {
     calls.push({ args, env: opts.env });
     await before(args);
     return fake.docker(args);
   };
   const inboxDir = mkdtempSync(join(tmpdir(), "deckhand-runs-"));
-  const r = createDockerRunner({ config: { ...config, engine }, docker, spawn, inboxDir, now });
+  const r = createDockerRunner({
+    config: { ...config, engine, subnets: subnets ?? null },
+    docker,
+    spawn,
+    inboxDir,
+    now,
+  });
   return { r, calls, inboxDir, ...fake };
 }
 
@@ -235,6 +265,66 @@ test("start: the run's own internal network, with the listener and the proxy on 
   // Two sandboxes never share a network.
   assert.deepEqual([...nets.get("dh-a-1")].sort(), ["dh-a", "egress-id", "me"]);
   assert.deepEqual([...nets.get("dh-b-1")].sort(), ["dh-b", "egress-id", "me"]);
+});
+
+// SANDBOX_SUBNETS, as config.mjs gives it.
+const range = (cidr, size = 28) => ({ range: cidr, ...parseCidr(cidr), size });
+
+test("start: with SANDBOX_SUBNETS, each run's network on its own block of the range", async () => {
+  const { r, calls, subnets } = runner({ subnets: range("10.200.0.0/16") });
+  await r.start({ run: "dh-a-1", name: "dh-a", image: "i" });
+  await r.start({ run: "dh-b-1", name: "dh-b", image: "i" });
+  assert.deepEqual(callOf(calls, "network", "create").slice(-3), [
+    "--subnet",
+    "10.200.0.0/28",
+    "dh-a-1",
+  ]);
+  assert.ok(callOf(calls, "network", "create").includes("--internal"));
+  assert.equal(subnets.get("dh-b-1"), "10.200.0.16/28");
+  // A block freed by a run that ended is used again.
+  await r.remove("dh-a", "dh-a-1");
+  await r.start({ run: "dh-c-1", name: "dh-c", image: "i" });
+  assert.equal(subnets.get("dh-c-1"), "10.200.0.0/28");
+});
+
+test("start: blocks any network on the host uses are skipped", async () => {
+  const { r, nets, subnets } = runner({ subnets: range("10.200.0.0/24", 28) });
+  // Another project's /27 covers the first two blocks.
+  nets.set("other", new Set());
+  subnets.set("other", "10.200.0.0/27");
+  nets.set("host", new Set()); // no subnet
+  await r.start({ run: "dh-a-1", name: "dh-a", image: "i" });
+  assert.equal(subnets.get("dh-a-1"), "10.200.0.32/28");
+});
+
+test("start: a block Docker says overlaps moves on to the next one, a few times", async () => {
+  const { r, subnets } = runner({
+    subnets: range("10.200.0.0/24"),
+    taken: ["10.200.0.0/28", "10.200.0.16/28"],
+  });
+  await r.start({ run: "dh-a-1", name: "dh-a", image: "i" });
+  assert.equal(subnets.get("dh-a-1"), "10.200.0.32/28");
+  // Not forever: past a few overlaps, Docker's error.
+  const crowded = runner({ subnets: range("10.200.0.0/16"), taken: ["10.200.0.0/24"] });
+  await assert.rejects(
+    crowded.r.start({ run: "dh-a-1", name: "dh-a", image: "i" }),
+    /the run's network dh-a-1 wasn't created: Pool overlaps/,
+  );
+  assert.equal(crowded.calls.filter((c) => c.args[1] === "create").length, 5);
+  assert.equal(callOf(crowded.calls, "run"), undefined);
+});
+
+test("start: a full SANDBOX_SUBNETS says so, and what to change", async () => {
+  const { r, calls, nets, subnets } = runner({ subnets: range("10.200.0.0/27", 28) });
+  nets.set("other", new Set());
+  subnets.set("other", "10.200.0.0/28");
+  await r.start({ run: "dh-a-1", name: "dh-a", image: "i" });
+  await assert.rejects(
+    r.start({ run: "dh-b-1", name: "dh-b", image: "i" }),
+    /no free block of \/28 left in SANDBOX_SUBNETS \(10\.200\.0\.0\/27\)\. Set a larger range or a lower MAX_PARALLEL/,
+  );
+  assert.equal(nets.has("dh-b-1"), false);
+  assert.equal(calls.filter((c) => c.args[1] === "create").length, 1);
 });
 
 test("start: a network with a route out stops the run, and goes", async () => {

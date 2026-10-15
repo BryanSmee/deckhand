@@ -43,6 +43,7 @@ import {
   engineName,
   engineVolume,
 } from "./engine.mjs";
+import { freeBlocks } from "../subnets.mjs";
 
 // The inbox's last line once the listener is done with it.
 export const CLOSE = JSON.stringify({ type: "deckhand", event: "close" });
@@ -55,6 +56,10 @@ const INBOX = "inbox.jsonl";
 // may make the runner look again (a sandbox could ask the broker's port in a loop).
 const PROXY_TTL_MS = 10000;
 const PROXY_RETRY_MS = 2000;
+
+// How many free-looking blocks of SANDBOX_SUBNETS a run's network tries when Docker says
+// each overlaps (another project took it since the listener looked).
+const SUBNET_TRIES = 5;
 
 // What compose.yaml labels the egress proxy with, so the listener finds it.
 const ROLE = "deckhand.role";
@@ -227,13 +232,7 @@ export function createDockerRunner({
   // The run's own network: internal, so the proxy is its only way out (checked rather than
   // assumed), with the listener and the proxy on it. Docker refuses a name already taken.
   async function createNetwork(run) {
-    const created = await docker([
-      "network",
-      "create",
-      "--internal",
-      ...["--label", `deckhand.owner=${config.prefix}`, "--label", `deckhand.run=${run}`],
-      run,
-    ]);
+    const created = await newNetwork(run);
     if (created.code !== 0) {
       throw new Error(`the run's network ${run} wasn't created: ${created.err || created.code}`);
     }
@@ -244,6 +243,47 @@ export function createDockerRunner({
       );
     }
     for (const peer of await peers()) await connect(run, peer);
+  }
+
+  // With SANDBOX_SUBNETS, on the lowest block no network on the host uses; Docker's own
+  // pools otherwise.
+  async function newNetwork(run) {
+    const args = [
+      "network",
+      "create",
+      "--internal",
+      ...["--label", `deckhand.owner=${config.prefix}`, "--label", `deckhand.run=${run}`],
+    ];
+    const { subnets } = config;
+    if (!subnets) return docker([...args, run]);
+    let tries = 0;
+    for (const block of freeBlocks(subnets, await usedSubnets())) {
+      const created = await docker([...args, "--subnet", block, run]);
+      if (created.code === 0 || !/overlap/i.test(created.err) || ++tries >= SUBNET_TRIES) {
+        return created;
+      }
+      log(`The network ${run}: ${block} is taken, trying the next block`);
+    }
+    throw new Error(
+      `the run's network ${run} wasn't created: no free block of /${subnets.size} left in SANDBOX_SUBNETS (${subnets.range}). Set a larger range or a lower MAX_PARALLEL (docs/setup.md)`,
+    );
+  }
+
+  // Every network's subnets, Deckhand's or not.
+  async function usedSubnets() {
+    const ids = await docker(["network", "ls", "--quiet", "--no-trunc"]);
+    if (ids.code !== 0) throw new Error(`docker network ls: ${ids.err || `exit ${ids.code}`}`);
+    const all = ids.out.split("\n").filter(Boolean);
+    if (!all.length) return [];
+    // One removed meanwhile makes Docker exit 1 after printing the others: those still count.
+    const { out } = await docker([
+      "network",
+      "inspect",
+      "--format",
+      "{{range .IPAM.Config}}{{.Subnet}} {{end}}",
+      ...all,
+    ]);
+    return out.split(/\s+/).filter(Boolean);
   }
 
   // Disconnects whatever is still on it first: Docker refuses to remove a network in use.

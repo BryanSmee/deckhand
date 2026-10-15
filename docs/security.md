@@ -524,6 +524,9 @@ sandbox ──(its run's network, internal: no route out)──▶ egress proxy 
   another run's setup started (a dev server, a database).
 - That network is **internal**: Docker gives it no route out. The listener creates it with
   `--internal`, checks it (`docker network inspect`) and refuses to start the run otherwise.
+  Its subnet comes from Docker's address pools, or from `SANDBOX_SUBNETS` when set (a block
+  no other network on the host uses, [Setup](setup.md#settings)): either way the network is
+  internal, so the range changes addresses, not what a sandbox can reach.
 - The listener finds its own container by its host name (Docker's default: the container's
   id) and the proxy's by its `deckhand.role=egress` label in the same compose project
   (`LISTENER_CONTAINER`, `EGRESS_CONTAINER` to name them instead). A new listener joins
