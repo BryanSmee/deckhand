@@ -164,6 +164,18 @@ test("a run's questions: after its needs-input heading, up to the next heading",
   ]);
   assert.equal(replyQuestions("Done.\n\n1. A?"), null);
   assert.equal(replyQuestions("<!-- needs-input -->\n## Needs your input\n\nNone."), null);
+  // Under an "Open questions" heading of their own: that section.
+  const titled = reply.replace(
+    "## Needs your input\n",
+    "## Needs your input\n\n### Open questions\n",
+  );
+  assert.deepEqual(replyQuestions(titled), replyQuestions(reply));
+  assert.equal(
+    replyQuestions(
+      "<!-- needs-input -->\n## Needs your input\n### Open questions\nNone\n## Checked",
+    ),
+    null,
+  );
   assert.equal(replyQuestions(null), null);
 });
 
