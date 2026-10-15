@@ -218,11 +218,13 @@ export function createRepoList({
     configs.clear();
   }
 
-  // The repo's `users` as last read for the list, { users, at }, or null when it wasn't
-  // (http.mjs sees()).
+  // The repo's `users` and `wait_for_answers` as last read for the list,
+  // { users, waitForAnswers, at }, or null when it wasn't (http.mjs sees()).
   function usersOf(repo) {
     const known = configs.get(repo.toLowerCase());
-    return known?.settings ? { users: known.settings.users, at: known.at } : null;
+    if (!known?.settings) return null;
+    const { users, waitForAnswers } = known.settings;
+    return { users, waitForAnswers, at: known.at };
   }
 
   // The repos' names, without reading their configs.

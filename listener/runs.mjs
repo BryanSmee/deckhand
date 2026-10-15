@@ -252,8 +252,10 @@ export function createRuns(ctx) {
     // Inbox entries start afresh: the sandbox doesn't resume their session (entrypoint.sh).
     const started =
       !isFresh(task, mode) && (await ctx.runner.hasSession(sessionName(task.name, light), agent));
-    // A new comment answers the questions, if any: the issue no longer waits for input.
-    if (config.needsInputLabel && task.kind !== "discussion") {
+    // A new comment answers the questions, if any: the issue no longer waits for input. With
+    // the repo's `wait_for_answers`, a light run only helps answer them: the label stays.
+    const helps = light && task.settings?.waitForAnswers;
+    if (config.needsInputLabel && task.kind !== "discussion" && !helps) {
       await ctx.label(task.repo, task.number, false);
     }
     // "/model" and "/effort" sent during the previous run, unless these comments say otherwise.

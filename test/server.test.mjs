@@ -1438,6 +1438,113 @@ mounts:
     assert.equal(github.requests.filter((r) => r.path.startsWith(labels)).length, 2);
   });
 
+  // A comment on issue 12, labelled for the open questions in its body.
+  function onAsking(id, body, labelled = true) {
+    const payload = followUp(id, body);
+    payload.issue = {
+      number: 12,
+      title: "An idea",
+      state: "open",
+      body: "Do it.\n\n## Open questions\n\n1. Which one?",
+      labels: labelled ? [{ name: "needs-input" }] : [],
+    };
+    return payload;
+  }
+
+  const unlabelled = (github) =>
+    github.requests.some(
+      (r) => r.method === "DELETE" && r.path === "/repos/org/repo/issues/12/labels/needs-input",
+    );
+
+  test("wait_for_answers: a trigger line alone starts nothing on an issue with open questions; an answer does", async (t) => {
+    const { dir, github, send, listener } = await listen(t, {});
+    await send(onAsking(99, "Deckhand\n/effort high"));
+    await until(() => replies(github).length === 1, "the reply");
+    const text = JSON.parse(replies(github)[0].body).body;
+    assert.match(text, /^#12 has open questions: nothing starts until they are answered\./);
+    assert.match(text, /\(https:\/\/hooks\.example\.com\/#\/org\/repo\?task=org%2Frepo%2312\)/);
+    const reaction = await github.waitFor(
+      (r) => r.method === "POST" && r.path === "/repos/org/repo/issues/comments/99/reactions",
+    );
+    assert.deepEqual(JSON.parse(reaction.body), { content: "confused" });
+    await listener.until("org/repo#12: alice's comment answers nothing, the label stays");
+    // A brainstorm still runs, and leaves the label on.
+    await send(onAsking(100, "Deckhand /mode brainstorm"));
+    await until(() => replies(github).length === 2, "the brainstorm's reply");
+    assert.match(lastRun(dir), /^brainstorm/);
+    assert.equal(unlabelled(github), false);
+    rmSync(join(dir, "run-args"));
+    // Text is the answer: the label comes off and work starts.
+    await send(onAsking(101, "Deckhand\n1. The first one"));
+    await until(() => exists(join(dir, "run-args")), "the work run");
+    assert.match(readFileSync(join(dir, "run-env"), "utf8"), /^TASK_MESSAGE=1\. The first one$/m);
+    await until(() => unlabelled(github), "the label off");
+    // The bare trigger never reached Claude.
+    assert.doesNotMatch(readFileSync(join(dir, "run-env"), "utf8"), /^SANDBOX_EFFORT=high$/m);
+  });
+
+  test("wait_for_answers: false: a trigger line alone starts work on an issue with open questions", async (t) => {
+    const { dir, github, send } = await listen(t, {
+      ".deckhand.yaml": "wait_for_answers: false\n",
+    });
+    await send(onAsking(99, "Deckhand"));
+    await until(() => exists(join(dir, "run-args")), "the run");
+    await until(() => unlabelled(github), "the label off");
+  });
+
+  test("wait_for_answers: /after done with the questions open waits for the answers, then starts", async (t) => {
+    const asking = (labelled) =>
+      JSON.stringify({
+        number: 12,
+        state: "open",
+        body: "## Open questions\n\n1. Which one?",
+        labels: labelled ? [{ name: "needs-input" }] : [],
+      });
+    const files = { "issue:77": JSON.stringify({ state: "open" }), "issue:12": asking(true) };
+    const { dir, github, send, listener } = await listen(t, files);
+    await send(onAsking(99, "Deckhand /after #77"));
+    await until(() => replies(github).length === 1, "the waiting reply");
+    await listener.until("alice's comment answers nothing, the label stays");
+    files["issue:77"] = JSON.stringify({ state: "closed", state_reason: "completed" });
+    const event = (action, state = "open") => ({
+      action,
+      installation: { id: 7 },
+      repository: { full_name: "org/repo", default_branch: "trunk" },
+      issue: { number: 77, state, state_reason: "completed" },
+      sender: { login: "bob" },
+    });
+    await send(event("closed", "closed"), "issues");
+    await until(() => replies(github).length === 2, "the reply that it waits");
+    assert.match(
+      JSON.parse(replies(github)[1].body).body,
+      /^#77 is done, but this issue's open questions aren't answered yet: I'll start once they are\./,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    assert.equal(exists(join(dir, "run-args")), null);
+    assert.equal(
+      JSON.parse(readFileSync(join(dir, "waits.json"), "utf8"))["org/repo#12"].answers,
+      true,
+    );
+    // The label comes off: it starts.
+    files["issue:12"] = asking(false);
+    const off = {
+      action: "unlabeled",
+      installation: { id: 7 },
+      repository: { full_name: "org/repo", default_branch: "trunk" },
+      issue: { number: 12, title: "An idea", state: "open", body: "", labels: [] },
+      label: { name: "needs-input" },
+      sender: { login: "bob", type: "User" },
+    };
+    await send(off, "issues");
+    await until(() => exists(join(dir, "run-args")), "the run");
+    await until(() => replies(github).length >= 3, "the starting reply");
+    assert.match(
+      JSON.parse(replies(github)[2].body).body,
+      /^The open questions are answered: starting\./,
+    );
+    await listener.until("done (ok)");
+  });
+
   test("a comment on the ideas inbox is a light run with the idea prompt, answered there", async (t) => {
     const { dir, github, send } = await listen(t, {
       ".deckhand.yaml": "inbox: { ideas: 12 }\nsetup: npm ci\n",
@@ -2317,7 +2424,7 @@ mounts:
       "rerunnable",
       "runs",
     ],
-    ["deadline", "waitingFor", "questions"],
+    ["deadline", "waitingFor", "questions", "waitForAnswers"],
   ];
   const QUESTIONS_KEYS = [["source", "items", "raw"], ["runId"]];
   const RUN_KEYS = [

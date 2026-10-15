@@ -97,6 +97,9 @@ preview:
 # Rebase this repo's open Deckhand pull requests that conflict with their base (see below).
 conflicts:
   check_minutes: 15
+
+# Start work on an issue with open questions only once they are answered (see below).
+wait_for_answers: true
 ```
 
 ## Keys
@@ -122,6 +125,7 @@ conflicts:
 | `preview.image`                         | the repo's image                        | image the hook runs in; it needs a Docker client                                         |
 | `preview.timeout_minutes`               | `30`                                    | the hook is stopped after that (120 at most)                                             |
 | `conflicts.check_minutes`               | none: off                               | minutes between conflict checks; at least `CONFLICT_CHECK_MINUTES` (see Conflicts)       |
+| `wait_for_answers`                      | `true`                                  | an issue's work runs wait until its open questions are answered (see Open questions)     |
 
 ## Network and mounts
 
@@ -406,3 +410,26 @@ It is off without the key, and each conflict found is a run, so a bill.
   `check_minutes` gets that one (with a warning in the run logs), and `0` turns conflict
   checks off for every repository. `check_minutes` must be a whole number above 0; any
   other key under `conflicts` is an error.
+
+## Open questions
+
+An issue whose body has an `## Open questions` section that asks something is labelled
+`NEEDS_INPUT_LABEL` (default `needs-input`), and an allowed user's comment takes the label
+off: they answered. With `wait_for_answers: true` (the default), work doesn't start on an
+issue while it carries the label:
+
+- A comment that is only the trigger line (with `/mode`, `/model`, `/effort` or `/after`
+  lines at most) starts nothing: the App replies that the issue has open questions, points
+  to the dashboard's form, and the label stays. A trigger comment with text is the answer:
+  the label comes off and the run starts.
+- A comment waiting for other issues (`/after`) whose last one is done keeps waiting until
+  the questions are answered (the label is removed), then starts by itself.
+- The dashboard's Start and Queue open the questions first: the issue starts with the
+  answers.
+
+Only work runs and the repository's modes that aren't `light` wait: brainstorms, onboarding
+and light modes still run, as they can help answer, and leave the label on. A run that stopped
+to ask, pull requests, inbox issues and discussions aren't affected. With
+`wait_for_answers: false`, trigger comments, waits and the dashboard start the issue as they
+would without questions (the dashboard's form is still there to answer from the task's
+panel).

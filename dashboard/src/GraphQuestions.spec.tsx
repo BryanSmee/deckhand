@@ -34,8 +34,8 @@ afterEach(() => {
   document.body.replaceChildren();
 });
 
-const area = async () => {
-  render(<Dashboard state={state} error={null} />);
+const area = async (shown: State = state) => {
+  render(<Dashboard state={shown} error={null} />);
   const work = screen.getByRole("region", { name: "Work area" });
   await within(work).findByText("No open issue left to start.");
   return within(work).getByRole("list", { name: "Issues waiting for answers" });
@@ -163,4 +163,19 @@ test("Cancel or Escape closes the questions: nothing is sent", async () => {
   fireEvent.keyDown(window, { key: "Escape" });
   await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   expect(posted).toEqual([]);
+});
+
+test("a repo that doesn't wait for answers: Start goes without the questions", async () => {
+  const off = {
+    ...state,
+    tasks: state.tasks.map((t) => (t.key === "acme/api#138" ? { ...t, waitForAnswers: false } : t)),
+  };
+  const list = await area(off);
+  fireEvent.click(within(list).getByRole("button", { name: "Start #138" }));
+  expect(screen.queryByRole("dialog")).toBeNull();
+  await waitFor(() =>
+    expect(posted).toEqual([
+      { url: "api/repos/acme/api/work", body: { action: "start", number: 138 } },
+    ]),
+  );
 });

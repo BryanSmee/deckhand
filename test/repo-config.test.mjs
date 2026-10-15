@@ -352,6 +352,18 @@ test("conflicts: invalid values and unknown keys are errors", () => {
   assert.equal(typo.settings.conflicts, null);
 });
 
+test("wait_for_answers: on by default, a boolean or an error", () => {
+  assert.equal(defaultSettings(config).waitForAnswers, true);
+  assert.equal(parseRepoConfig("trigger: go", config).settings.waitForAnswers, true);
+  assert.equal(parseRepoConfig("wait_for_answers: false", config).settings.waitForAnswers, false);
+  assert.equal(parseRepoConfig("wait_for_answers: true", config).settings.waitForAnswers, true);
+  for (const bad of ["no", "0", '"false"', "[true]"]) {
+    const { settings, errors } = parseRepoConfig(`wait_for_answers: ${bad}`, config);
+    assert.match(errors.join(), /wait_for_answers: expected true or false/, bad);
+    assert.equal(settings.waitForAnswers, true);
+  }
+});
+
 test("a gateway's model names, with a slash, at the top and in a mode", () => {
   const { settings, errors } = parseRepoConfig(
     `model: openai/gpt-5

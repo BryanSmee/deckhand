@@ -197,6 +197,28 @@ test("issues labelled needs-input show as such, with or without a run, unless on
   );
 });
 
+test("a wait whose issues are done shows as needs-input while its issue is labelled", () => {
+  const wait = (key, fields) => ({ key, repo: "acme/api", kind: "issue", mode: "work", ...fields });
+  const tasks = board({
+    runs: [],
+    queued: [],
+    brainstorms: [],
+    waits: [
+      wait("acme/api#1", { replyTo: 1, blockers: [], answers: true, since: 5 }),
+      wait("acme/api#2", { replyTo: 2, blockers: [77], answers: false, since: 5 }),
+      wait("acme/api#3", { replyTo: 3, blockers: [], answers: true, since: 5 }),
+    ],
+    inputs: ["acme/api#1", "acme/api#2"].map((key) => ({ key, repo: "acme/api", since: 9 })),
+  });
+  const states = Object.fromEntries(tasks.map((t) => [t.key, t.state]));
+  // #3's label came off: the check starts it soon.
+  assert.deepEqual(states, {
+    "acme/api#1": "needs-input",
+    "acme/api#2": "waiting",
+    "acme/api#3": "waiting",
+  });
+});
+
 test("a task waiting for input carries its questions: its last run's, else its issue's", () => {
   const asked = (raw) => ({ items: null, raw });
   const tasks = board({

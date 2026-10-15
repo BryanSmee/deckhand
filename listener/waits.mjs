@@ -3,7 +3,9 @@
 // comment had just been posted. One wait per task, kept in waits.json so a restart forgets
 // none. Anything about an issue waited for (a delivery, a run on it ending) asks GitHub about
 // that issue again; and every wait is checked at start and every few minutes, so a webhook
-// missed while the listener was down, or never subscribed to, still starts the work.
+// missed while the listener was down, or never subscribed to, still starts the work. Once
+// they are done, an issue whose open questions aren't answered yet (the repo's
+// `wait_for_answers`) waits for its answers too: `blockers` empty, `answers` true.
 import { outcome } from "./events.mjs";
 import { plain, revive } from "./restart.mjs";
 import { readJson, writeJsonAtomic } from "./store.mjs";
@@ -15,6 +17,11 @@ export const CHECK_MS = 5 * 60_000;
 // the merge: still open then, it is asked about once more after this long.
 export const MERGE_SETTLE_MS = 30_000;
 
+// What a wait is for: "#77", "#77 and #80", "#77, #80 and #81", or the issue's answers.
+export function waitsFor(wait) {
+  return wait.blockers.length ? issueList(wait.blockers) : "the answers to its open questions";
+}
+
 // "#77", "#77 and #80", "#77, #80 and #81".
 export function issueList(numbers) {
   const refs = numbers.map((n) => `#${n}`);
@@ -23,7 +30,8 @@ export function issueList(numbers) {
 
 // `github(repo, method, path, body, expected)`: the App's calls. `reply(repo, number, text)`,
 // `received(item)` (👀) and `settle(item, status)`: comments.mjs's. `resume(item)`: checks the
-// comment again and queues it (tasks.mjs), resolving to false when it may no longer run.
+// comment again and queues it (tasks.mjs), resolving to false when it may no longer run, and
+// to "answers" when it waits for the issue's open questions to be answered.
 export function createWaits({
   path,
   github,
@@ -82,11 +90,9 @@ export function createWaits({
     if (after.error) return answer(item, `${after.error} Nothing waits.`).then(() => true);
     if (after.none) {
       const wait = drop(key);
-      if (wait) log(`${key}: no longer waits for ${issueList(wait.blockers)}`);
+      if (wait) log(`${key}: no longer waits for ${waitsFor(wait)}`);
       if (starts) return false;
-      const text = wait
-        ? `No longer waiting for ${issueList(wait.blockers)}.`
-        : "Nothing waits here.";
+      const text = wait ? `No longer waiting for ${waitsFor(wait)}.` : "Nothing waits here.";
       return answer(item, text).then(() => true);
     }
     if (!starts) {
@@ -145,7 +151,7 @@ export function createWaits({
   // the log. Returns the wait dropped, or null.
   function cancel(key, why = "a new comment replaces it") {
     const wait = drop(key);
-    if (wait) log(`${key}: no longer waits for ${issueList(wait.blockers)}, ${why}`);
+    if (wait) log(`${key}: no longer waits for ${waitsFor(wait)}, ${why}`);
     return wait;
   }
 
@@ -181,9 +187,43 @@ export function createWaits({
       waits.delete(key);
       save();
       log(`${key}: #${number} done, starting`);
-      if (await resume(item)) await answer(item, `#${number} is done: starting.`);
+      const started = await resume(item);
+      if (started === "answers") {
+        await keep(key, wait);
+        await answer(
+          item,
+          `#${number} is done, but this issue's open questions aren't answered yet: I'll start once they are.`,
+        );
+      } else if (started) await answer(item, `#${number} is done: starting.`);
       else settle(item, "stopped").catch(() => {});
     }
+  }
+
+  // A wait whose issues are done, kept until the issue's questions are answered, unless a
+  // new comment replaced it meanwhile.
+  async function keep(key, wait) {
+    if (waits.has(key)) return;
+    waits.set(key, { ...wait, blockers: [], answers: true, since: now() });
+    save();
+    log(`${key}: waits for the answers to its open questions`);
+  }
+
+  // Issue `number` of `repo` may have had its questions answered (its label came off): its
+  // wait for them, if any, starts the comment, as resume() checks again.
+  async function answered(repo, number) {
+    const key = [...waits.keys()].find(
+      (k) => k.toLowerCase() === `${repo}#${number}`.toLowerCase(),
+    );
+    const wait = key && waits.get(key);
+    if (!wait?.answers) return;
+    const item = revive(wait.item);
+    waits.delete(key);
+    save();
+    const started = await resume(item);
+    if (started === "answers") return keep(key, wait);
+    log(`${key}: ${started ? "answered, starting" : "answered, not started"}`);
+    if (started) await answer(item, "The open questions are answered: starting.");
+    else settle(item, "stopped").catch(() => {});
   }
 
   // Asks GitHub about every issue a wait is for. Overlapping checks share the one under way.
@@ -199,6 +239,14 @@ export function createWaits({
         } catch (error) {
           log(`Waits: ${repo}#${n}: ${error.message ?? error}`);
         }
+      }
+      // A label taken off while the listener was down.
+      for (const [key, w] of [...waits]) {
+        if (!w.answers) continue;
+        const number = Number(key.slice(key.lastIndexOf("#") + 1));
+        await answered(w.repo, number).catch((error) => {
+          log(`Waits: ${key}: ${error.message ?? error}`);
+        });
       }
     })().finally(() => (checking = null));
     return checking;
@@ -271,6 +319,8 @@ export function createWaits({
       mode: w.item.modeLine ?? "work",
       replyTo: w.item.replyTo,
       blockers: [...w.blockers],
+      // Its issues are done: it waits for the answers to its open questions.
+      answers: !!w.answers,
       since: w.since,
     }));
   }
@@ -280,6 +330,7 @@ export function createWaits({
     hold,
     cancel,
     closed,
+    answered,
     recheck,
     merged,
     check,

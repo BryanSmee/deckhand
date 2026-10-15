@@ -9,6 +9,7 @@ import {
   outcome,
   parseAfter,
   splitTrigger,
+  saysMore,
   takeOptions,
   touchedItems,
   verified,
@@ -478,4 +479,23 @@ test("touchedItems: what a delivery is about, and the issue a merged pull reques
     touchedItems(config, "issues", { repository: base.repository, issue: { number: 77 } }),
     null,
   );
+});
+
+test("saysMore: only text besides the trigger and command lines answers open questions", () => {
+  const config = loadConfig({ ALLOWED_USERS: "alice", TRIGGER: "Deckhand" });
+  for (const bare of [
+    "Deckhand",
+    "@deckhand:",
+    "Deckhand /mode review",
+    "Deckhand\n/mode review\n/model sonnet\n/effort high\n",
+    "Deckhand /after #7",
+    "",
+  ]) {
+    assert.equal(saysMore(config, bare), false, bare);
+  }
+  assert.equal(saysMore(config, "Deckhand\n1. The first"), true);
+  assert.equal(saysMore(config, "Deckhand /mode review\nYes"), true);
+  assert.equal(saysMore(config, "The first one"), true);
+  // Not the trigger line: the whole comment is text.
+  assert.equal(saysMore(config, "Deckhand please"), true);
 });

@@ -7,6 +7,7 @@
 //   stopping        a brainstorm is wrapping up ("/stop")
 //   queued          comments wait for a run (a free slot, or the running one to finish)
 //   waiting         a comment waits for other issues to be done ("/after #12", waits.mjs)
+//                   (needs-input once they are, while its open questions aren't answered)
 //   brainstorm      a brainstorm waits for the maintainer's next comment
 //   idle-brainstorm a brainstorm without a comment for a while; the next one restores it
 //   needs-input     the last run stopped to ask, or the issue carries the needs-input label
@@ -127,9 +128,11 @@ export function board({ runs, queued, brainstorms, waits = [], inputs = [] }) {
     else if (b?.status === "active") t.state = "brainstorm";
     else if (b?.status === "idle") t.state = "idle-brainstorm";
     else t.state = last ? runState(last) : "done";
-    // The label outlasts how the last run ended (a run starting takes it off), not a live one.
+    // The label outlasts how the last run ended (a run starting takes it off), not a live one,
+    // and is what a wait whose issues are done still waits for (waits.mjs).
     const input = labelled.get(t.key);
-    if (input && ["done", "error", "interrupted"].includes(t.state)) {
+    const answers = t.state === "waiting" && w.answers;
+    if (input && (answers || ["done", "error", "interrupted"].includes(t.state))) {
       t.state = "needs-input";
       t.kind ??= "issue";
       t.since = Math.max(t.since, input.since ?? 0);

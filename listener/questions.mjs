@@ -142,12 +142,14 @@ const has = (labels, name) =>
   (labels ?? []).some((l) => (l.name ?? l).toLowerCase() === name.toLowerCase());
 
 // An `issues` or `issue_comment` delivery → what it changes for the label, or null:
-//   { repo, key, number, title, base, label, by, track, questions }
+//   { repo, key, number, title, base, label, by, track, questions, comment, answered }
 // `label`: true to add it, false to take it off, undefined to leave it. `by`: the allowed
 // user whose action it is (checked again against the repo's own users), null for the App's
 // bot. `track`: whether the dashboard lists the issue as waiting (undefined: unchanged).
 // `bot`: the App's bot login ("<slug>[bot]"), whose issues (the inbox runs') count as allowed.
-// `questions`: parseQuestions() of the body, when the issue is or stays listed.
+// `questions`: parseQuestions() of the body, when the issue is or stays listed. `comment`: the
+// body of an issue's comment that would take the label off, which only an answer does when the
+// repo's `wait_for_answers` is on (http.mjs). `answered`: the label came off an open issue.
 export function inputEvent(config, event, p, bot) {
   const name = config.needsInputLabel;
   if (!name || (event !== "issues" && event !== "issue_comment")) return null;
@@ -179,7 +181,7 @@ export function inputEvent(config, event, p, bot) {
     // Pull requests carry the label too (a run on one stopped to ask); only issues are listed,
     // and a pull request's task key isn't its number.
     if (issue.pull_request) return { ...change, title: null, label: false, by: c.user.login };
-    return { ...change, label: false, by: c.user.login, track: false };
+    return { ...change, label: false, by: c.user.login, track: false, comment: c.body ?? "" };
   }
 
   switch (p.action) {
@@ -206,7 +208,8 @@ export function inputEvent(config, event, p, bot) {
     case "labeled":
     case "unlabeled":
       if (!has([p.label], name)) return null;
-      if (p.action === "unlabeled" || issue.state === "closed") return { ...change, track: false };
+      if (issue.state === "closed") return { ...change, track: false };
+      if (p.action === "unlabeled") return { ...change, track: false, answered: true };
       return { ...change, track: true, questions: questions() };
     case "reopened":
       return labelled ? { ...change, track: true, questions: questions() } : null;

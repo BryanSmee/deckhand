@@ -180,10 +180,12 @@ export function Graph({ state, refresh, repo, narrow, showClosed, onShowClosed }
     );
   };
 
-  // An action, unless its issue has open questions: they are answered first, in a form.
+  // An action, unless its issue has open questions: they are answered first, in a form (unless
+  // its repo doesn't wait for answers).
   const request = (action: WorkAction) => {
     const task = tasks.find((t) => t.key === `${repo}#${action.number}`);
-    if (action.action !== "dequeue" && task?.state === "needs-input" && task.questions) {
+    const asks = task?.state === "needs-input" && task.questions && task.waitForAnswers !== false;
+    if (action.action !== "dequeue" && asks) {
       setAsking({ task, action });
       return;
     }

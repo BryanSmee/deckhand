@@ -21,7 +21,7 @@
 //                                         its mode and comments (board.mjs rerunnable())
 import { MAX_TEXT, Refused, answersComment, parseAnswers, refuse } from "./answers.mjs";
 import { parseQuestions, questionsSection } from "./questions.mjs";
-import { issueList } from "./waits.mjs";
+import { waitsFor } from "./waits.mjs";
 import { CONFIG_FILE, modeNames } from "./repo-config.mjs";
 import { sameOrigin } from "./repos.mjs";
 import { readBody, sendJson } from "./web.mjs";
@@ -292,15 +292,22 @@ export function createWorkApi({
 
   // `answers`: the answers to its open questions (answersComment()), sent along from the form
   // the drag opened; they go in the App's comment and are the run's text. Without them, an
-  // issue with open questions doesn't move: they are answered first.
+  // issue with open questions doesn't move: they are answered first, unless the repo's
+  // `wait_for_answers` is off.
   async function act(repo, user, { action, number, after, mode }, answers = null) {
     const key = `${repo}#${number}`;
+    const { settings, base, issue } = await checked(repo, user, number);
     const asking = taskOf(key);
     const asks = action === "start" || action === "queue";
-    if (!answers && asks && asking?.state === "needs-input" && asking.questions) {
+    if (
+      !answers &&
+      asks &&
+      settings.waitForAnswers &&
+      asking?.state === "needs-input" &&
+      asking.questions
+    ) {
       refuse(409, `#${number} has open questions: answer them first.`);
     }
-    const { settings, base, issue } = await checked(repo, user, number);
     const wait = waits.get(key);
     const also = answers ? `\n\n${answers}` : "";
     if (action === "dequeue") {
@@ -309,7 +316,7 @@ export function createWorkApi({
       await comment(
         repo,
         number,
-        `No longer waiting for ${issueList(wait.blockers)}: cancelled from the dashboard by @${user}. Nothing starts until a trigger comment or the dashboard says so.`,
+        `No longer waiting for ${waitsFor(wait)}: cancelled from the dashboard by @${user}. Nothing starts until a trigger comment or the dashboard says so.`,
       );
       return `#${number} no longer waits.`;
     }
@@ -332,7 +339,7 @@ export function createWorkApi({
           return `#${number} already waits for #${after}.`;
         }
         const text = wait
-          ? `Moved from the dashboard by @${user}: now after #${after}${inMode(wanted)} (it waited for ${issueList(wait.blockers)}).`
+          ? `Moved from the dashboard by @${user}: now after #${after}${inMode(wanted)} (it waited for ${waitsFor(wait)}).`
           : `Queued from the dashboard by @${user}, after #${after}${inMode(wanted)}.`;
         item.comment = await comment(
           repo,
@@ -346,8 +353,7 @@ export function createWorkApi({
     }
     waits.cancel(key, `started from the dashboard by @${user}`);
     const why = action === "queue" ? `: #${after} is done already` : "";
-    const was =
-      wait && action === "start" ? ` It no longer waits for ${issueList(wait.blockers)}.` : "";
+    const was = wait && action === "start" ? ` It no longer waits for ${waitsFor(wait)}.` : "";
     item.comment = await comment(
       repo,
       number,

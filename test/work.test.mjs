@@ -91,7 +91,7 @@ function setup({
     config,
     github,
     repoSettings: async () => ({
-      settings: { users: config.users, modes: {}, ...settings },
+      settings: { users: config.users, modes: {}, waitForAnswers: true, ...settings },
       errors,
     }),
     reply,
@@ -728,6 +728,24 @@ test("start or queue an issue with open questions: refused until they are answer
   );
   assert.equal((await answer(w, { number: 5, text: "x", then: { action: "fly" } })).status, 400);
   assert.deepEqual([w.comments, w.accepted, w.labels], [[], [], []]);
+});
+
+test("wait_for_answers off: an issue with open questions starts and queues without them", async () => {
+  const w = setup({
+    settings: { waitForAnswers: false },
+    issues: { 5: open("Five"), 7: open("Seven") },
+    tasks: { "org/app#5": asking(5, "issue") },
+  });
+  const start = await post(w, { action: "start", number: 5 });
+  assert.equal(start.status, 200);
+  assert.equal(start.body.message, "#5 started.");
+  assert.equal(w.accepted.length, 1);
+  assert.equal(w.accepted[0].text, "");
+  const queue = await post(w, { action: "queue", number: 5, after: 7 });
+  assert.equal(queue.status, 200);
+  assert.equal(queue.body.message, "#5 waits for #7.");
+  // The label stays: nothing answered the questions.
+  assert.deepEqual(w.labels, []);
 });
 
 test("answer then queue: one App comment with the answers, held after the other issue, label off", async () => {
