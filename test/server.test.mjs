@@ -490,6 +490,8 @@ test("a webhook from the App runs a sandbox that gets its repo's token from the 
   // Hardened, limited, and only its own screenshots folder.
   const joined = args.join(" ");
   assert.match(joined, /--cap-drop ALL --security-opt no-new-privileges/);
+  // uid 1000 whatever the image's USER says.
+  assert.match(joined, /--user 1000:1000/);
   assert.match(joined, /--cpus 2 --memory 4g --memory-swap 4g --pids-limit 2048/);
   const shots = runEnv.match(/^SCREENSHOT_URL=https:\/\/hooks\.example\.com\/shots\/(\w+)$/m)[1];
   assert.ok(

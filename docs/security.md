@@ -203,7 +203,9 @@ as an alias. See [A repository's own hosts](#a-repositorys-own-hosts) for
 
 Every sandbox runs:
 
-- as `node` (uid 1000), with `--cap-drop ALL` and `--security-opt no-new-privileges`;
+- as `node` (uid 1000), with `--user 1000:1000` whatever the image's `USER` says (a repo
+  or branch image ending in `USER root` still runs as uid 1000), `--cap-drop ALL` and
+  `--security-opt no-new-privileges`;
 - with `--cpus`, `--memory` (and as much `--memory-swap`: no swap on top) and
   `--pids-limit`: `SANDBOX_CPUS` (2), `SANDBOX_MEMORY` (`4g`), `SANDBOX_PIDS` (2048), or
   the repo's `limits` in the grants file.
@@ -312,7 +314,9 @@ listener's logs (`Egress: refused <host> for <repo>#<n>`).
 - **Image builds** (a repo's `dockerfile`) and the **Claude Code install** run with normal
   network access: they run on the host's Docker, outside the sandboxes' network. Builds run
   the repo's Dockerfile from its default branch (or trusted branches with
-  `allow_branch_docker_images`).
+  `allow_branch_docker_images`). A branch's image gets a tag of its own (`branch-…`, hashing
+  its commit), so the default branch's runs and preview hooks never use an image built from
+  a branch.
 - **Preview hooks** run on Docker's default network with the Docker socket.
 - **DNS**: Docker's embedded resolver may forward lookups from the internal network to the
   host's resolvers, so a lookup of a made-up name could carry data out to that domain's DNS

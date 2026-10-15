@@ -5,7 +5,9 @@
 // A repo image is built from the default branch (or, with allow_branch_docker_images, from
 // a pull request's own branch, never a fork's) and tagged with a hash of the base image's id
 // and the Dockerfile's blob: a new base or a changed Dockerfile builds a new tag, the same
-// ones reuse it. Old tags are pruned, keeping the most recent few.
+// ones reuse it. A branch's image is tagged apart (`branch-…`, its commit in the hash): the
+// default branch's runs and preview hooks never pick up what a branch built. Old tags are
+// pruned, keeping the default branch's newest and the most recent few.
 import { createHash } from "node:crypto";
 import { rmSync } from "node:fs";
 import { join } from "node:path";
@@ -13,6 +15,9 @@ import { cacheVolume, repoImage } from "./repo-config.mjs";
 
 // Tags kept per repo image: the default branch's and those of a few branches in flight.
 export const KEEP_TAGS = 3;
+
+// What a branch image's tag starts with.
+const BRANCH = "branch-";
 
 // Which ref a run's image is built from: the default branch, or a pull request's head when
 // the repo allows branch images and the pull request's branch lives in the repo itself.
@@ -24,9 +29,12 @@ export function imageRef(settings, repo, base, pr) {
   return { ref: base, branch: false };
 }
 
-export function imageTag(config, repo, baseId, dockerfile, blob) {
-  const hash = createHash("sha256").update([baseId, dockerfile, blob].join("\0")).digest("hex");
-  return `${repoImage(config, repo)}:${hash.slice(0, 16)}`;
+// A branch's tag also hashes its commit (`ref`): its build context (what the Dockerfile
+// COPYs or RUNs) may differ from the default branch's with the same Dockerfile.
+export function imageTag(config, repo, baseId, dockerfile, blob, branchRef = null) {
+  const parts = [baseId, dockerfile, blob, ...(branchRef ? ["branch", branchRef] : [])];
+  const hash = createHash("sha256").update(parts.join("\0")).digest("hex");
+  return `${repoImage(config, repo)}:${branchRef ? BRANCH : ""}${hash.slice(0, 16)}`;
 }
 
 export function createImages({
@@ -50,14 +58,14 @@ export function createImages({
 
   // The image to run: the base without a Dockerfile, else the repo's, built if needed.
   // `onBuild(tag)` is called when a build starts or is already under way; `output` gets its
-  // log (the first caller's only).
-  async function imageFor({ repo, ref, dockerfile, onBuild = () => {}, output }) {
+  // log (the first caller's only). `branch`: `ref` is a pull request's head (imageRef()).
+  async function imageFor({ repo, ref, branch = false, dockerfile, onBuild = () => {}, output }) {
     const id = await baseId();
     if (!dockerfile) return config.image;
     const file = await readFile(repo, dockerfile, ref);
     if (!file)
       throw new Error(`${dockerfile} (the config's dockerfile) is not in ${repo} at ${ref}`);
-    const tag = imageTag(config, repo, id, dockerfile, file.sha);
+    const tag = imageTag(config, repo, id, dockerfile, file.sha, branch ? ref : null);
     if ((await docker(["image", "inspect", "--format", "{{.Id}}", tag])).code === 0) return tag;
     if (!builds.has(tag)) {
       const build = buildImage(repo, ref, dockerfile, tag, output).finally(() =>
@@ -106,12 +114,15 @@ export function createImages({
   }
 
   // Newest first (docker's order); a tag still used by a container refuses to go, and stays.
+  // The default branch's newest tag stays first: branch builds in a row don't push it out.
   async function prune(repo, keep) {
     const name = repoImage(config, repo);
     const { code, out } = await docker(["image", "ls", "--format", "{{.Tag}}", name]);
     if (code !== 0) return;
     const tags = out.split("\n").filter((t) => t && t !== "<none>");
-    const kept = new Set([keep.split(":")[1], ...tags.slice(0, KEEP_TAGS)]);
+    const main = tags.find((t) => !t.startsWith(BRANCH));
+    const kept = new Set([keep.split(":")[1], ...(main ? [main] : [])]);
+    for (const tag of tags) if (kept.size < KEEP_TAGS) kept.add(tag);
     for (const tag of tags) {
       if (!kept.has(tag)) await docker(["image", "rm", `${name}:${tag}`]);
     }
