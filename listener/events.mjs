@@ -274,23 +274,28 @@ export function previewEvent(config, event, p, skip = () => null) {
   return { repo, base: p.repository.default_branch || "main", event };
 }
 
-// An issue closed, or a pull request closed or merged, in an allowed repo → { repo, number,
-// state } for the comments waiting for it (waits.mjs), or null. Anyone may close an issue:
-// what then starts is the waiting comment's run, whose author is checked again.
+// An issue closed or reopened, or a pull request closed, merged or reopened, in an allowed
+// repo → { repo, number, key, state } for the comments waiting for it (waits.mjs) and the
+// dashboard's graph (titles.mjs), or null. `key`: its task's, "org/repo#12" or
+// "org/repo#pr-5". Anyone may close an issue: what then starts is the waiting comment's run,
+// whose author is checked again.
 export function closedItem(config, event, p, skip = () => null) {
-  if (p.action !== "closed" || (event !== "issues" && event !== "pull_request")) return null;
+  if (!["closed", "reopened"].includes(p.action)) return null;
+  if (event !== "issues" && event !== "pull_request") return null;
   const repo = p.repository?.full_name;
   const target = event === "issues" ? p.issue : p.pull_request;
   if (!p.installation?.id || !repo || !target) return skip("not from an installation of the App");
   if (config.repos.length && !config.repos.includes(repo.toLowerCase())) {
     return skip(`${repo} not in ALLOWED_REPOS`);
   }
+  const key = `${repo}#${event === "issues" ? "" : "pr-"}${target.number}`;
+  if (p.action === "reopened") return { repo, number: target.number, key, state: "open" };
   // The pull_request event's own shape → the issues API's, which outcome() reads.
   const issue =
     event === "issues"
       ? target
       : { state: "closed", pull_request: { merged_at: target.merged_at ?? target.merged ?? null } };
-  return { repo, number: target.number, state: outcome(issue) };
+  return { repo, number: target.number, key, state: outcome(issue) };
 }
 
 // What an issue (GET /repos/{repo}/issues/{n}, or an `issues` payload's) means to a comment

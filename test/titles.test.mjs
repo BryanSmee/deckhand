@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { createTitles, parseKey } from "../listener/titles.mjs";
+import { closedAs, createTitles, parseKey } from "../listener/titles.mjs";
 
 test("task keys: issues, pull requests and discussions", () => {
   assert.deepEqual(parseKey("org/repo#12"), { repo: "org/repo", kind: "issue", number: 12 });
@@ -22,7 +22,7 @@ test("titles: webhooks first, the rest fetched once and kept across a restart", 
   const fetchTitle = async (repo, kind, number) => {
     asked.push(`${repo} ${kind} ${number}`);
     if (number === 404) throw new Error("Not Found");
-    return `Title ${number}`;
+    return { title: `Title ${number}` };
   };
   const titles = createTitles({ path, fetchTitle });
   titles.set("org/repo#1", "From the webhook");
@@ -47,4 +47,38 @@ test("titles: webhooks first, the rest fetched once and kept across a restart", 
   assert.equal(JSON.parse(readFileSync(path, "utf8"))["org/repo#discussion-8"], "Title 8");
   const next = createTitles({ path, fetchTitle });
   assert.equal(next.get("org/repo#pr-3"), "Title 3");
+});
+
+test("closed states: from webhooks and the lookup; what was open is asked again by the next listener", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "deckhand-"));
+  const path = join(dir, "titles.json");
+  const closedPath = join(dir, "closed.json");
+  const asked = [];
+  const states = { 1: "done", 2: "open", 3: "not-done" };
+  const fetchTitle = async (repo, kind, number) => {
+    asked.push(number);
+    if (kind === "discussion") return { title: "A talk" };
+    return { title: `Title ${number}`, closed: closedAs(states[number]) };
+  };
+  const titles = createTitles({ path, closedPath, fetchTitle });
+  const keys = ["org/repo#1", "org/repo#2", "org/repo#pr-3", "org/repo#discussion-4"];
+  await titles.fill(keys);
+  assert.deepEqual(
+    keys.map((k) => titles.closed(k)),
+    ["completed", null, "not_planned", null],
+  );
+  // A webhook: #2 closed, then reopened.
+  titles.setClosed("org/repo#2", "completed");
+  assert.equal(titles.closed("org/repo#2"), "completed");
+  titles.setClosed("org/repo#2", null);
+  await titles.fill(keys);
+  assert.deepEqual(asked, [1, 2, 3, 4]);
+
+  // The next listener asks only about what was open: a close may have been missed meanwhile.
+  states[2] = "done";
+  const next = createTitles({ path, closedPath, fetchTitle });
+  assert.equal(next.closed("org/repo#1"), "completed");
+  await next.fill(keys);
+  assert.deepEqual(asked, [1, 2, 3, 4, 2]);
+  assert.equal(next.closed("org/repo#2"), "completed");
 });

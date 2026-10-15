@@ -111,8 +111,8 @@
   .notify {
     display: none;
   }
-  /* Room for the repositories link on the brand's line: the login is in GitHub's menu. */
-  .repos {
+  /* Room for the page links on the brand's line: the login is in GitHub's menu. */
+  .pages {
     margin-left: auto;
   }
   .who span {
@@ -120,7 +120,12 @@
   }
 }
 
-.repos {
+.pages {
+  display: flex;
+  gap: 1rem;
+}
+
+.link {
   display: inline-flex;
   align-items: center;
   gap: 0.4rem;
@@ -131,8 +136,8 @@
   white-space: nowrap;
 }
 
-.repos:hover,
-.repos[aria-current="page"] {
+.link:hover,
+.link[aria-current="page"] {
   color: var(--ink);
 }
 

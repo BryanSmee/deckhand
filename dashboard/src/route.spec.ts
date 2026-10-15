@@ -41,3 +41,12 @@ test("a repository's config on the repositories page", () => {
   expect(formatRoute(route)).toBe("#/repositories/org/app");
   expect(parseRoute("#/repositories/org/app")).toEqual(route);
 });
+
+test("the graph, of every repo or one", () => {
+  const all = { repo: null, task: null, run: null, page: "graph" as const };
+  expect(formatRoute(all)).toBe("#/graph");
+  expect(parseRoute("#/graph")).toEqual(all);
+  const one = { ...all, repo: "org/app" };
+  expect(formatRoute(one)).toBe("#/graph/org/app");
+  expect(parseRoute("#/graph/org/app")).toEqual(one);
+});

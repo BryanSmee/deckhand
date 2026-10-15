@@ -44,7 +44,8 @@ operator, across as many repositories as the App is installed on.
 - **Preview hook.** A command of the repository run on `pull_request` and `workflow_run`
   events, to deploy or remove previews.
 - **Dashboard.** Every issue, pull request and discussion Deckhand worked on, grouped by
-  project and repository, with its state and the live log of its runs. Sign-in with GitHub.
+  project and repository, with its state and the live log of its runs, and a graph of what
+  waits for what (`/after`). Sign-in with GitHub.
 
 ## How it works
 

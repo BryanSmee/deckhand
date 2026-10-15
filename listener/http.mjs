@@ -17,6 +17,7 @@ import { CONFIG_FILE, effectiveConfig } from "./repo-config.mjs";
 import { refreshFor } from "./repos.mjs";
 import { publicRun, stream } from "./runlog.mjs";
 import { serveAsset } from "./static.mjs";
+import { closedAs } from "./titles.mjs";
 import { readBody, sendJson } from "./web.mjs";
 
 const imageTypes = {
@@ -35,6 +36,25 @@ const BODY_MS = 10000;
 // Health checks and scripts call from inside the container (docker compose exec).
 function local(req) {
   return ["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(req.socket.remoteAddress);
+}
+
+// The graph's arrows, blocker → waiting task, for the waits of the tasks `shown`, and the keys
+// of the blockers that aren't shown. A wait names numbers: a pull request on the board is
+// "#pr-n", anything else "#n" (pull requests are issues to GitHub's API).
+export function waitEdges(shown, waits) {
+  const keys = new Set(shown.map((t) => t.key));
+  const edges = [];
+  const blockers = new Set();
+  for (const w of waits) {
+    if (!keys.has(w.key)) continue;
+    for (const n of w.blockers) {
+      const pr = `${w.repo}#pr-${n}`;
+      const from = keys.has(pr) ? pr : `${w.repo}#${n}`;
+      edges.push({ from, to: w.key, kind: "after" });
+      if (!keys.has(from)) blockers.add(from);
+    }
+  }
+  return { edges, blockers: [...blockers] };
 }
 
 // `ctx` (server.mjs): the listener's state and services, read at call time. `dashboardDir`:
@@ -70,9 +90,10 @@ export function createHttp(ctx, { dashboardDir }) {
       // Stored before the label was turned off: not listed.
       inputs: config.needsInputLabel ? ctx.inputs.list() : [],
     }).slice(0, 200);
+    const { edges, blockers } = waitEdges(shown, ctx.waits.list());
     // Titles the listener doesn't have yet show on a later poll.
     if (ctx.app) {
-      ctx.titles.fill(shown.map((t) => t.key));
+      ctx.titles.fill([...shown.map((t) => t.key), ...blockers]);
       ctx.pulls.fill(shown.map((t) => t.key));
     }
     // `now`: the dashboard compares run start times with the server clock, not its own.
@@ -81,8 +102,18 @@ export function createHttp(ctx, { dashboardDir }) {
       tasks: shown.map((t) => ({
         ...t,
         title: ctx.titles.get(t.key),
+        closed: ctx.titles.closed(t.key),
         pr: ctx.pulls.get(t.key),
         runs: t.runs.map(publicRun),
+      })),
+      // The graph's arrows, and the issues they come from that aren't on the board.
+      edges,
+      blockers: blockers.map((key) => ({
+        key,
+        repo: key.slice(0, key.lastIndexOf("#")),
+        number: Number(key.slice(key.lastIndexOf("#") + 1)),
+        title: ctx.titles.get(key),
+        closed: ctx.titles.closed(key),
       })),
       states: STATES,
       running: ctx.running,
@@ -251,7 +282,10 @@ export function createHttp(ctx, { dashboardDir }) {
       log(`${pr.key}: pull request #${pr.pr.number} ${pr.pr.state}`);
     // What comments wait for ("/after #12"): closed issues, merged pull requests.
     const closed = closedItem(config, event, payload, skip);
-    if (closed) admitted(ctx.waits.closed(closed.repo, closed.number, closed.state));
+    if (closed) {
+      ctx.titles.setClosed(closed.key, closedAs(closed.state));
+      admitted(ctx.waits.closed(closed.repo, closed.number, closed.state));
+    }
     // Open questions and answers to them: the needs-input label (questions.mjs).
     const input = inputEvent(config, event, payload, app.identity().name);
     if (input) admitted(questions(input));
