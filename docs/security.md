@@ -54,19 +54,28 @@ installation, revokes its tokens at once.
 
 A sandbox only gets Docker named volumes:
 
-| Volume                                            | What                                         |
-| ------------------------------------------------- | -------------------------------------------- |
-| `<prefix>-<owner>-<repo>-<n>-<hash>-workspace`    | the issue's clone, kept between its runs     |
-| `<prefix>-<owner>-<repo>-<n>-<hash>-claude`       | the issue's Claude session                   |
-| `deckhand-claude-code`, **read-only**             | Claude Code, installed by the listener       |
-| `deckhand-cache-<owner>-<repo>-<path>-…`          | the repo's `caches`, its own                 |
-| `deckhand-screenshots`, **its run's folder only** | screenshots, served under `/shots/<folder>/` |
-| `deckhand-runs`, **its run's folder, read-only**  | its inbox: comments that arrive mid-run      |
+| Volume                                               | What                                         |
+| ---------------------------------------------------- | -------------------------------------------- |
+| `<prefix>-<owner>-<repo>-<n>-<hash>-workspace`       | the issue's clone, kept between its runs     |
+| `<prefix>-<owner>-<repo>-<n>-<hash>-claude`          | the issue's Claude session                   |
+| `<prefix>-<owner>-<repo>-<n>-<hash>-light-workspace` | the clone of the issue's light runs          |
+| `<prefix>-<owner>-<repo>-<n>-<hash>-light-claude`    | the Claude session of its light runs         |
+| `deckhand-claude-code`, **read-only**                | Claude Code, installed by the listener       |
+| `deckhand-cache-<owner>-<repo>-<path>-…`             | the repo's `caches`, its own                 |
+| `deckhand-screenshots`, **its run's folder only**    | screenshots, served under `/shots/<folder>/` |
+| `deckhand-runs`, **its run's folder, read-only**     | its inbox: comments that arrive mid-run      |
 
 `<hash>` (10 hex digits of the repository and task) keeps apart names that would otherwise
 be the same, such as `acme/x` pull request 5 and `acme/x-pr` issue 5. Tasks whose session
 dates from before it (`<prefix>-<owner>-<repo>-<n>-claude` exists) keep that name and their
 volumes.
+
+Light runs (brainstorms, onboarding, inbox entries, discussions, the repo's light modes) read
+and comment; work runs push. They never share a writable volume: what a light run could leave
+in a clone or a session (git hooks, Claude's hooks and settings, code) would otherwise run in
+the issue's next work run, with its token. So light runs get their own `-light-` clone and
+session, no cache volumes (they run no setup), and granted host paths read-only. A work run
+after a brainstorm starts a new session, from the issue and its comments.
 
 Each run mounts only its own folder of the screenshots volume (`volume-subpath`, Docker
 Engine 26 or later), named with 24 random hex digits: it can't list or read another run's.

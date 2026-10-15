@@ -127,7 +127,8 @@ is asked below, and push to the same branch.
 ${common}`;
   }
   return `Work on GitHub issue #${task.number} of ${task.repo} until it is ready for review.
-1. Read it with \`gh issue view ${task.number} --comments\`.
+1. Read it with \`gh issue view ${task.number} --comments\`. If it was brainstormed there, build
+   on what was settled.
 2. The sandbox has already checked out the issue's branch, pushed it and opened a draft pull
    request (\`Closes #${task.number}\`; \`gh pr view\` shows it): work on that branch. If you
    are still on ${base}, it couldn't: create a branch from ${base} named

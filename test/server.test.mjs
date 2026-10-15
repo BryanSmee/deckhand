@@ -1098,12 +1098,83 @@ test("Deckhand /mode brainstorm discusses; /stop wraps up; Deckhand then works",
   await until(() => replies(github).length === 3, "the wrap-up");
   assert.equal(lastRun(dir), "brainstorm 1");
   assert.equal(brainstormOf(dir).status, "stopped");
-  // The trigger alone implements, in the same session.
+  // The trigger alone implements, in a session of its own (the brainstorm's is light).
   await send(followUp(102, "Deckhand\nGo with the second option."));
   await until(() => replies(github).length === 4, "the work reply");
   assert.equal(lastRun(dir), "work full");
   assert.match(readFileSync(join(dir, "run-env"), "utf8"), /^TASK_SESSION=$/m);
   assert.equal(brainstormOf(dir), undefined);
+});
+
+test("a brainstorm and the issue's work share no writable volume", async (t) => {
+  const { dir, github, listener, send } = await listen(
+    t,
+    (dir) => ({
+      ".deckhand.yaml": `caches: [/home/node/.npm]
+mounts:
+  - path: ${dir}/nfs/api
+    read_only: false
+`,
+    }),
+    (dir) => {
+      mkdirSync(join(dir, "nfs", "api"), { recursive: true });
+      chmodSync(join(dir, "nfs"), 0o555);
+      writeFileSync(
+        join(dir, "grants.yaml"),
+        `org/repo:\n  mounts:\n    - root: ${join(dir, "nfs")}\n      read_only: false\n`,
+      );
+      return { BRAINSTORM_DEBOUNCE_MS: "0" };
+    },
+  );
+  // Volumes and bind mounts of the last run, with ",ro" or ",readonly" when read-only.
+  const mounted = () => {
+    const args = readFileSync(join(dir, "run-args"), "utf8").split("\n");
+    return args.flatMap((a, i) => (["-v", "--mount"].includes(args[i - 1]) ? [a] : []));
+  };
+  const writable = (mounts) => mounts.filter((m) => !/(:ro|,readonly)$/.test(m));
+  const api = join(dir, "nfs", "api");
+
+  await send(comment("alice", "Deckhand\n/mode brainstorm\nWhat about dark mode?"));
+  await until(() => replies(github).length === 1, "the brainstorm's reply");
+  assert.equal(lastRun(dir), "brainstorm 1");
+  const light = mounted();
+  assert.ok(light.includes("deckhand-org-repo-12-0e9572aae2-light-workspace:/workspace"));
+  assert.ok(light.includes("deckhand-org-repo-12-0e9572aae2-light-claude:/home/node/.claude"));
+  // No caches (no setup to fill them), granted host paths read-only.
+  assert.equal(
+    light.some((m) => m.includes("deckhand-cache-")),
+    false,
+  );
+  assert.ok(light.includes(`type=bind,src=${api},dst=${api},readonly`));
+  await listener.until("done (ok)");
+
+  await send(followUp(100, "Deckhand\nGo with the second option."));
+  await until(() => replies(github).length === 2, "the work reply");
+  assert.equal(lastRun(dir), "work full");
+  const work = mounted();
+  assert.ok(work.includes("deckhand-org-repo-12-0e9572aae2-workspace:/workspace"));
+  assert.ok(work.includes("deckhand-org-repo-12-0e9572aae2-claude:/home/node/.claude"));
+  assert.ok(
+    work.some((m) => /^deckhand-cache-org-repo-home-node-npm-\w+:\/home\/node\/\.npm$/.test(m)),
+  );
+  assert.ok(work.includes(`type=bind,src=${api},dst=${api}`));
+  // Nothing the brainstorm could write is mounted by the work.
+  // A volume's source, with its subfolder when only that is mounted (screenshots).
+  const source = (m) =>
+    m.startsWith("type=")
+      ? `${/src=([^,]+)/.exec(m)[1]}/${/volume-subpath=([^,]+)/.exec(m)?.[1] ?? ""}`
+      : m.split(":")[0];
+  const lightSources = new Set(writable(light).map(source));
+  assert.deepEqual(
+    writable(work)
+      .map(source)
+      .filter((s) => lightSources.has(s)),
+    [],
+  );
+  // A fresh session, from the issue: it reads what the brainstorm settled there.
+  const runEnv = readFileSync(join(dir, "run-env"), "utf8");
+  assert.match(runEnv, /^TASK_PROMPT=Work on GitHub issue #12 of org\/repo/m);
+  assert.match(runEnv, /gh issue view 12 --comments`\. If it was brainstormed there/);
 });
 
 test("/mode work alone moves a brainstorm to work", async (t) => {

@@ -2,7 +2,7 @@
 // A comment that passed the checks is queued under its task's key ("org/repo#12"); after a
 // pause (so a burst is one run) it starts a run, or goes to the running one (deliver()).
 import { commentsText, workItem } from "./events.mjs";
-import { INBOX, isLight } from "./modes.mjs";
+import { INBOX, isLight, sessionName } from "./modes.mjs";
 import { liveMessage } from "./prompts.mjs";
 import {
   CONFIG_FILE,
@@ -138,7 +138,8 @@ export function createTasks(ctx) {
     if (wanted === "onboarding") return startOnboarding(item, key);
     const own = customMode(item.settings, wanted);
     if (wanted === "work" || (own && !own.fresh)) {
-      // Same session: the work (or the repo's mode) starts from what the brainstorm settled.
+      // The work (or the repo's mode) takes over from the brainstorm. Light and work runs keep
+      // separate sessions (sessionName()): work reads what was settled from the issue.
       ctx.brainstorms.end(key);
       ctx.issueModes.set(key, own ? wanted : null);
       return wanted;
@@ -149,15 +150,20 @@ export function createTasks(ctx) {
     if (wanted === "brainstorm" || (!wanted && ctx.brainstorms.get(key) && onIssue(item))) {
       return brainstorm(item, key, wanted);
     }
-    // Without a trigger line, a comment only continues work Claude already started.
-    if (!item.trigger && !(await hasSession(key, name))) {
+    // Without a trigger line, a comment only continues work Claude already started (a
+    // brainstorm's session is not work's: sessionName()).
+    if (!item.trigger && !(await hasSession(key, name, false))) {
       return skip(`#${item.replyTo} has no Claude session and no trigger line`);
     }
     return "work";
   }
 
-  function hasSession(key, name) {
-    return tasks.has(key) || ctx.runner.hasSession(name);
+  // That of its work runs or of its light ones; either when `light` is undefined.
+  async function hasSession(key, name, light) {
+    if (tasks.has(key)) return true;
+    const kinds = light === undefined ? [false, true] : [light];
+    for (const l of kinds) if (await ctx.runner.hasSession(sessionName(name, l))) return true;
+    return false;
   }
 
   function onIssue(item) {

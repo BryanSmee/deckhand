@@ -104,7 +104,9 @@ if [ $# -eq 0 ] && [ -n "${TASK_PROMPT:-}" ]; then
   # ones continue with TASK_MESSAGE, or interactively without one. TASK_MODE is "work"
   # (implement, the default), "brainstorm" (discuss, no code) or one of the repo's own modes
   # (its config's `modes:`); they share the issue's session, so each starts with what the
-  # previous one settled. "discussion" keeps its own session. TASK_SESSION=fresh ("idea" and
+  # previous one settled. Light runs (SANDBOX_LIGHT) get volumes of their own from the
+  # listener, so they never continue work's session, nor work theirs. "discussion" keeps its
+  # own session. TASK_SESSION=fresh ("idea" and
   # "bug", the inbox entries, and the repo's fresh modes) starts a new one every time, and
   # doesn't keep it: the issue's session stays the one the next run continues.
   mode=${TASK_MODE:-work}
