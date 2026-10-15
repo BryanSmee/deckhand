@@ -75,6 +75,8 @@ services:
       NEEDS_INPUT_LABEL:
       # Shortest interval at which repos that opt in are checked for conflicts (0: off).
       CONFLICT_CHECK_MINUTES: ${CONFLICT_CHECK_MINUTES:-}
+      # How often comments waiting for other issues ("/after #77") ask GitHub again.
+      WAITS_CHECK_MINUTES: ${WAITS_CHECK_MINUTES:-}
       NAME_PREFIX: ${NAME_PREFIX:-}
       CLAUDE_CODE_VOLUME: ${CLAUDE_CODE_VOLUME:-}
       # Wiring, environment only. Names of what the listener creates on the host's Docker,

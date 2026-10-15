@@ -303,6 +303,23 @@ export function closedItem(config, event, p, skip = () => null) {
   return { repo, number: target.number, key, state: outcome(issue) };
 }
 
+// What an `issues`, `issue_comment` or `pull_request` delivery is about, in an allowed repo →
+// { repo, numbers, merged } or null: the issue or pull request, and the issue a pull request
+// closes (linkedIssue()). Comments waiting for one of them ask GitHub about it again
+// (waits.mjs recheck()). `merged`: the issue a pull request just merged closes.
+export function touchedItems(config, event, p) {
+  if (!["issues", "issue_comment", "pull_request"].includes(event)) return null;
+  const repo = p.repository?.full_name;
+  const target = event === "pull_request" ? p.pull_request : p.issue;
+  if (!p.installation?.id || !repo || !target?.number) return null;
+  if (config.repos.length && !config.repos.includes(repo.toLowerCase())) return null;
+  const pull = event === "pull_request" || target.pull_request;
+  const issue = pull ? linkedIssue(target, repo) : null;
+  const numbers = [target.number, ...(issue && issue !== target.number ? [issue] : [])];
+  const justMerged = event === "pull_request" && p.action === "closed" && !!target.merged_at;
+  return { repo, numbers, merged: justMerged ? issue : null };
+}
+
 // What an issue (GET /repos/{repo}/issues/{n}, or an `issues` payload's) means to a comment
 // waiting for it: "open", "done" (closed as completed; a pull request: merged) or "not-done"
 // (not planned, a duplicate; a pull request closed without merging). Issues closed before

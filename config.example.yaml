@@ -29,4 +29,5 @@ sandbox_memory: 4g
 sandbox_pids: 2048
 
 conflict_check_minutes: 5
+waits_check_minutes: 5
 onboarding: true

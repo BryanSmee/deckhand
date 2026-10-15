@@ -138,8 +138,14 @@ the comment keeps its 👀, the reply says what it waits for, and the task's one
 → the issues left and the comment, as `restart.mjs` saves it) goes to `waits.json`.
 
 An `issues` or `pull_request` `closed` delivery for an allowed repo (`closedItem()`) updates
-the waits on it; GitHub is also asked at every start and every 15 minutes, so a delivery
-missed while the listener was down still counts. When the last one is done, `tasks.resume()`
+the waits on it. Any other `issues`, `issue_comment` or `pull_request` delivery about an issue
+or pull request waited for, or about the issue a pull request closes (`touchedItems()`), and
+the end of a run on one, ask GitHub about that one only (`recheck()`, nothing when no wait is
+for it): a pull request merged into the default branch closes its issue without an `issues`
+delivery to an App that lacks that event, so its issue is asked about at once, and again 30
+seconds later if GitHub hasn't closed it yet (`merged()`). GitHub is also asked about every
+wait at each start and every `WAITS_CHECK_MINUTES` (5), so a delivery missed while the
+listener was down still counts. When the last one is done, `tasks.resume()`
 checks the comment again as `admit()` would (the repo still allowed, its config without
 errors, its author still in both allowlists) and queues it through `accept()`, as if just
 posted, with its text, `/mode`, `/model` and `/effort`; the reply says which issue made it

@@ -319,6 +319,7 @@ ctx.waits = createWaits({
   received: ctx.received,
   settle: ctx.settle,
   resume: (item) => ctx.resume(item),
+  checkMs: config.waitsCheckMinutes * 60_000,
   log,
 });
 ctx.repoApi = createRepoApi({

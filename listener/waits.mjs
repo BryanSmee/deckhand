@@ -1,14 +1,19 @@
 // Comments that wait for other issues ("Deckhand /after #77"): the run they ask for starts
 // once the last of those is done (closed as completed, or its pull request merged), as if the
 // comment had just been posted. One wait per task, kept in waits.json so a restart forgets
-// none. GitHub is asked again at start and every few minutes: a webhook missed while the
-// listener was down still starts the work.
+// none. Anything about an issue waited for (a delivery, a run on it ending) asks GitHub about
+// that issue again; and every wait is checked at start and every few minutes, so a webhook
+// missed while the listener was down, or never subscribed to, still starts the work.
 import { outcome } from "./events.mjs";
 import { plain, revive } from "./restart.mjs";
 import { readJson, writeJsonAtomic } from "./store.mjs";
 
-// How often GitHub is asked about what the waits wait for.
-export const CHECK_MS = 15 * 60_000;
+// How often GitHub is asked about what the waits wait for (the operator's WAITS_CHECK_MINUTES).
+export const CHECK_MS = 5 * 60_000;
+
+// GitHub closes the issue a merged pull request closes on its own, maybe after telling us of
+// the merge: still open then, it is asked about once more after this long.
+export const MERGE_SETTLE_MS = 30_000;
 
 // "#77", "#77 and #80", "#77, #80 and #81".
 export function issueList(numbers) {
@@ -28,12 +33,17 @@ export function createWaits({
   resume,
   log = () => {},
   now = Date.now,
+  checkMs = CHECK_MS,
+  later = (fn, ms) => setTimeout(fn, ms).unref?.(),
 }) {
   // Task key ("org/repo#78") → { repo, blockers: [77, …], item, since }; `item`: the comment
   // as restart.mjs saves it.
   const waits = new Map(Object.entries(readJson(path, {})));
   let timer = null;
   let checking = null;
+  // "org/repo#77" → recheck() not started yet, and the last one started or queued.
+  const queued = new Map();
+  const latest = new Map();
 
   function save() {
     writeJsonAtomic(path, Object.fromEntries(waits));
@@ -193,12 +203,56 @@ export function createWaits({
     return checking;
   }
 
+  // Whether a wait of `repo` is for its issue or pull request `number`.
+  const waitedFor = (repo, number) =>
+    [...waits.values()].some(
+      (w) => w.repo.toLowerCase() === repo.toLowerCase() && w.blockers.includes(number),
+    );
+
+  // Something happened to `number` of `repo` (a delivery, a run on it ended): GitHub is asked
+  // about that one only, and nothing when no wait is for it. Resolves to its state, or null.
+  // One that comes while another is under way runs after it, not alongside: that one may
+  // have read the state before this change. Those that come before it starts share it.
+  function recheck(repo, number) {
+    if (!number || !waitedFor(repo, number)) return Promise.resolve(null);
+    const id = `${repo.toLowerCase()}#${number}`;
+    const once = async () => {
+      const state = await stateOf(repo, number);
+      await closed(repo, number, state);
+      return state;
+    };
+    if (queued.has(id)) return queued.get(id);
+    const run = (latest.get(id) ?? Promise.resolve())
+      .catch(() => {})
+      .then(() => {
+        queued.delete(id);
+        return once();
+      });
+    queued.set(id, run);
+    latest.set(id, run);
+    run.catch(() => {}).finally(() => latest.get(id) === run && latest.delete(id));
+    return run;
+  }
+
+  // A pull request that closes issue `number` was merged: GitHub closes the issue when the
+  // merge went to the default branch. Asked now, and once more a little later if still open.
+  async function merged(repo, number) {
+    const state = await recheck(repo, number);
+    if (state !== "open") return state;
+    later(() => {
+      recheck(repo, number).catch((error) =>
+        log(`Waits: ${repo}#${number}: ${error.message ?? error}`),
+      );
+    }, MERGE_SETTLE_MS);
+    return state;
+  }
+
   function start() {
     if (timer) return;
     check().catch((error) => log(`Waits: ${error.stack ?? error}`));
     timer = setInterval(() => {
       check().catch((error) => log(`Waits: ${error.stack ?? error}`));
-    }, CHECK_MS);
+    }, checkMs);
     timer.unref?.();
   }
 
@@ -225,6 +279,8 @@ export function createWaits({
     hold,
     cancel,
     closed,
+    recheck,
+    merged,
     check,
     start,
     stop,

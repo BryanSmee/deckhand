@@ -38,7 +38,16 @@ function item(after, fields = {}) {
 // Waits with a fake GitHub (`issues`: number → issue, missing ones 404), a fake clock and
 // fake comments. `allowed`: what resume() answers.
 function setup({ issues = { 77: open, 80: open }, path = tempPath(), allowed = true } = {}) {
-  const w = { issues, replies: [], resumed: [], settled: [], eyes: [], calls: [], path };
+  const w = {
+    issues,
+    replies: [],
+    resumed: [],
+    settled: [],
+    eyes: [],
+    calls: [],
+    timers: [],
+    path,
+  };
   w.waits = createWaits({
     path,
     github: async (repo, method, url) => {
@@ -58,6 +67,7 @@ function setup({ issues = { 77: open, 80: open }, path = tempPath(), allowed = t
     settle: async (i, status) => w.settled.push([i.comment.id, status, await i.eyes]),
     resume: async (i) => (w.resumed.push(i), allowed),
     now: () => 1000,
+    later: (fn, ms) => w.timers.push([fn, ms]),
   });
   return w;
 }
@@ -230,4 +240,61 @@ test("waits survive a restart; the check catches what closed meanwhile", async (
     ["79", "78"],
   );
   assert.equal(after.waits.list().length, 0);
+});
+
+test("recheck: asks about that one issue only, nothing when no wait is for it", async () => {
+  const w = setup();
+  await w.waits.request(item({ numbers: [77, 80] }));
+  w.calls.length = 0;
+  assert.equal(await w.waits.recheck("org/repo", 81), null);
+  assert.equal(await w.waits.recheck("org/other", 77), null);
+  assert.deepEqual(w.calls, []);
+  assert.equal(await w.waits.recheck("org/repo", 77), "open");
+  assert.deepEqual(w.calls, ["/repos/org/repo/issues/77"]);
+  w.issues[77] = completed;
+  assert.equal(await w.waits.recheck("Org/Repo", 77), "done");
+  assert.deepEqual(w.waits.get("org/repo#78").blockers, [80]);
+  w.issues[80] = merged;
+  await w.waits.recheck("org/repo", 80);
+  assert.equal(w.resumed.length, 1);
+  assert.match(w.replies.at(-1)[1], /^#80 is done: starting\.$/);
+});
+
+test("recheck: one coming while another is under way asks again after it", async () => {
+  const w = setup();
+  await w.waits.request(item({ numbers: [77] }));
+  w.calls.length = 0;
+  const first = w.waits.recheck("org/repo", 77);
+  // Before the first one starts: they share it.
+  assert.equal(w.waits.recheck("org/repo", 77), first);
+  await Promise.resolve();
+  await Promise.resolve();
+  // The first one has asked: the state may have changed since, so this one asks again.
+  w.issues[77] = completed;
+  const second = w.waits.recheck("org/repo", 77);
+  assert.notEqual(second, first);
+  assert.equal(w.waits.recheck("org/repo", 77), second);
+  assert.equal(await first, "open");
+  assert.equal(await second, "done");
+  assert.equal(w.calls.length, 2);
+  assert.equal(w.resumed.length, 1);
+});
+
+test("merged: the issue a merged pull request closes, asked again later while still open", async () => {
+  const w = setup();
+  await w.waits.request(item({ numbers: [77] }));
+  // Merged into another branch, or GitHub hasn't closed #77 yet: the wait stays.
+  assert.equal(await w.waits.merged("org/repo", 77), "open");
+  assert.equal(w.resumed.length, 0);
+  assert.equal(w.timers.length, 1);
+  assert.equal(w.timers[0][1], 30_000);
+  w.issues[77] = completed;
+  w.timers[0][0]();
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(w.resumed.length, 1);
+  // Closed already: no later check.
+  await w.waits.request(item({ numbers: [80] }, { id: "79", number: 79, replyTo: 79 }));
+  w.issues[80] = completed;
+  assert.equal(await w.waits.merged("org/repo", 80), "done");
+  assert.equal(w.timers.length, 1);
 });

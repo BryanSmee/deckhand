@@ -10,7 +10,14 @@ import { page } from "./auth.mjs";
 import { board, STATES } from "./board.mjs";
 import { matchHost } from "./egress.mjs";
 import { createSlots, readDelivery, sourceOf } from "./deliveries.mjs";
-import { closedItem, previewEvent, pullRequest, verified, workItem } from "./events.mjs";
+import {
+  closedItem,
+  previewEvent,
+  pullRequest,
+  touchedItems,
+  verified,
+  workItem,
+} from "./events.mjs";
 import { grantFor, loadGrants, ungranted } from "./grants.mjs";
 import { kindOf } from "./modes.mjs";
 import { onboardingTargets } from "./onboarding.mjs";
@@ -302,6 +309,15 @@ export function createHttp(ctx, { dashboardDir }) {
     if (closed) {
       ctx.titles.setClosed(closed.key, closedAs(closed.state));
       admitted(ctx.waits.closed(closed.repo, closed.number, closed.state));
+    }
+    // Anything else about what comments wait for, or about the issue a pull request closes,
+    // asks GitHub about it again: a merge closes that issue without an `issues` delivery to an
+    // App that has no such subscription.
+    const touched = touchedItems(config, event, payload);
+    for (const n of touched?.numbers ?? []) {
+      if (n === closed?.number) continue;
+      const { repo } = touched;
+      admitted(n === touched.merged ? ctx.waits.merged(repo, n) : ctx.waits.recheck(repo, n));
     }
     // Open questions and answers to them: the needs-input label (questions.mjs).
     const input = inputEvent(config, event, payload, app.identity().name);

@@ -1435,6 +1435,85 @@ test("/after: an issues webhook starts the run; closed as not planned drops the 
   await listener.until("done (ok)");
 });
 
+// A pull request closed by a merge into `base`, saying "Closes #77", from the repo's branch.
+const mergedPull = (base = "trunk") => ({
+  action: "closed",
+  installation: { id: 7 },
+  repository: { full_name: "org/repo", default_branch: "trunk" },
+  pull_request: {
+    number: 90,
+    state: "closed",
+    merged: true,
+    merged_at: "2026-10-15T00:00:00Z",
+    body: "Closes #77",
+    base: { ref: base },
+    head: { ref: "issue-77-parser", repo: { full_name: "org/repo" } },
+    html_url: "https://github.com/org/repo/pull/90",
+  },
+  sender: { login: "bob" },
+});
+
+test("/after: a merged pull request that closes #77 starts the run, with no issues delivery", async (t) => {
+  const files = { "issue:77": JSON.stringify({ state: "open" }) };
+  const { dir, github, send, listener } = await listen(t, files);
+  await send(comment("alice", "Deckhand /after #77\nOn top of it."));
+  await until(() => replies(github).length === 1, "the waiting reply");
+  // The merge went to the default branch: GitHub closed #77 as completed.
+  files["issue:77"] = JSON.stringify({ state: "closed", state_reason: "completed" });
+  await send(mergedPull(), "pull_request");
+  await until(() => exists(join(dir, "run-args")), "the run");
+  assert.match(readFileSync(join(dir, "run-env"), "utf8"), /^TASK_MESSAGE=On top of it\.$/m);
+  assert.match(JSON.parse(replies(github)[1].body).body, /^#77 is done: starting\./);
+  assert.deepEqual(JSON.parse(readFileSync(join(dir, "waits.json"), "utf8")), {});
+  await listener.until("done (ok)");
+});
+
+test("/after: a merge into another branch leaves #77 open, and the wait in place", async (t) => {
+  const files = { "issue:77": JSON.stringify({ state: "open" }) };
+  const { dir, github, send } = await listen(t, files);
+  await send(comment("alice", "Deckhand /after #77\nOn top of it."));
+  await until(() => replies(github).length === 1, "the waiting reply");
+  const asked = () => github.requests.filter((r) => r.path === "/repos/org/repo/issues/77").length;
+  const before = asked();
+  await send(mergedPull("release"), "pull_request");
+  await until(() => asked() > before, "GitHub asked about #77");
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  assert.equal(exists(join(dir, "run-args")), null);
+  assert.deepEqual(
+    JSON.parse(readFileSync(join(dir, "waits.json"), "utf8"))["org/repo#12"].blockers,
+    [77],
+  );
+});
+
+test("/after: a run on #77 ending asks GitHub about #77 only", async (t) => {
+  const files = {
+    "issue:77": JSON.stringify({ state: "open" }),
+    "issue:80": JSON.stringify({ state: "open" }),
+  };
+  // The run on #77 waits for `go` before its answer.
+  const { dir, github, send, listener } = await listen(t, (dir) => {
+    writeFileSync(join(dir, "hold"), "");
+    return files;
+  });
+  await send(comment("alice", "Deckhand /after #77 #80\nOn top of them."));
+  await until(() => replies(github).length === 1, "the waiting reply");
+  await send({ ...followUp(101, "Deckhand"), issue: { number: 77 } });
+  await until(() => exists(join(dir, "run-args")), "the run on #77");
+  // Its run closes #77 (its pull request merged, say), and no delivery says so.
+  files["issue:77"] = JSON.stringify({ state: "closed", state_reason: "completed" });
+  const asked = (n) =>
+    github.requests.filter((r) => r.method === "GET" && r.path === `/repos/org/repo/issues/${n}`)
+      .length;
+  const [on77, on80] = [asked(77), asked(80)];
+  writeFileSync(join(dir, "go"), "");
+  await listener.until("done (ok)");
+  const waiting = () => JSON.parse(readFileSync(join(dir, "waits.json"), "utf8"))["org/repo#12"];
+  await until(() => waiting().blockers.length === 1, "#77 done");
+  assert.deepEqual(waiting().blockers, [80]);
+  assert.equal(asked(77), on77 + 1);
+  assert.equal(asked(80), on80);
+});
+
 test("a brainstorm and the issue's work share no writable volume", async (t) => {
   const { dir, github, listener, send } = await listen(
     t,
