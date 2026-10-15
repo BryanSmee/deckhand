@@ -105,8 +105,8 @@ export function createRuns(ctx) {
     await follow(task);
   }
 
-  // Comments whose author may no longer run the agent here, checked against the repo's settings as
-  // they are now: its `users` may have narrowed while they waited (the pause, a restart, a
+  // Comments whose author may no longer run the agent here, checked against the repo's settings
+  // as they are now: its `users` may have narrowed while they waited (the pause, a restart, a
   // busy repo). Dropped, their 👀 off. Settings that can't be read are begin()'s to report.
   async function dropRefused(task) {
     let settings = null;
