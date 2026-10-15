@@ -437,7 +437,8 @@ Run logs (`logs/<run>.log`) have the Claude credential and the run's secret reda
 The dashboard is read-only but for two kinds of POST: starting a repository's onboarding
 (`/api/repos/<owner>/<repo>/onboard`) and the graph's work area
 (`/api/repos/<owner>/<repo>/work`, `listener/work.mjs`), which starts an issue, queues it
-after another (`/after #n`), moves its wait or cancels it (`/after none`). The work area
+after another (`/after #n`), moves its wait or cancels it (`/after none`), or stops a
+brainstorm (`/stop`, refused unless it is active or idle). The work area
 starts runs, so it is checked as a comment that waited is (`tasks.resume()`), at each request:
 
 - a signed-in dashboard session, and an `Origin` header naming this listener (its

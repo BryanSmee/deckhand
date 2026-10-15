@@ -1,4 +1,5 @@
-// The graph page's model: what each issue looks like, and where it goes. A layered layout
+// The graph page's model: what each issue looks like, and where it goes: the graph, or the
+// Brainstorm column beside it (brainstormsOf()). A layered layout
 // drawn by hand: each issue that waits for others ("/after") goes in a column after theirs,
 // left to right at every width; issues with no arrow stand alone in one column below, top to
 // bottom in the board's order, like the list.
@@ -63,18 +64,88 @@ function statusOf(look: Look, t: { state?: Task["state"] | null; closed: Task["c
 // issues an inbox files show once someone works on them.
 const NOT_WORK: Task["kind"][] = ["idea", "bug", "discussion"];
 
+// A brainstorm, from a reply on its way to its wrap-up: in the Brainstorm column, not on the
+// graph. Its kind says it until "/stop", its mode after (board.mjs).
+const BRAINSTORMING: Task["state"][] = [
+  "queued",
+  "building-image",
+  "working",
+  "stopping",
+  "brainstorm",
+  "idle-brainstorm",
+];
+const brainstorming = (t: Task) =>
+  (t.kind === "brainstorm" || t.mode === "brainstorm") && BRAINSTORMING.includes(t.state);
+
+// A brainstorm that is over, wrapped up: its issue is back in the backlog, not on the graph.
+const brainstormed = (t: Task) =>
+  t.mode === "brainstorm" && ["done", "error", "interrupted"].includes(t.state);
+
+// A card of the Brainstorm column. `task`: null for one just started from the backlog.
+export interface BrainstormCard {
+  key: string;
+  repo: string;
+  number: number;
+  title: string | null;
+  task: Task | null;
+  // An action on it is on its way: Sending….
+  sending: boolean;
+}
+
 // A work area action sent and not confirmed yet (api.ts useWorkArea()): the graph shows what
 // it will do at once.
 export type Pending = WorkAction & { repo: string; title: string | null };
 
+// Where issue `key` goes once the last action sent on it is done: a brainstorm started or
+// stopped stays in the column, any other action takes it to the graph. Undefined: none sent.
+function columnOnceSent(key: string, pending: Pending[]): boolean | undefined {
+  const p = pending.filter((p) => `${p.repo}#${p.number}` === key).at(-1);
+  if (!p) return undefined;
+  return p.action === "stop" || (p.action === "start" && p.mode === "brainstorm");
+}
+
+// The Brainstorm column's cards, in the board's order (most recent first): `tasks`' brainstorms
+// as they will be once `pending` is done. One started from the backlog shows at once.
+export function brainstormsOf(tasks: Task[], pending: Pending[] = []): BrainstormCard[] {
+  const sent = (key: string) => pending.some((p) => `${p.repo}#${p.number}` === key);
+  const cards: BrainstormCard[] = tasks
+    .filter((t) => t.number !== null && (columnOnceSent(t.key, pending) ?? brainstorming(t)))
+    .map((t) => ({
+      key: t.key,
+      repo: t.repo,
+      number: t.number!,
+      title: t.title,
+      task: t,
+      sending: sent(t.key),
+    }));
+  const known = new Set(tasks.map((t) => t.key));
+  for (const p of pending) {
+    const key = `${p.repo}#${p.number}`;
+    if (known.has(key) || cards.some((c) => c.key === key) || !columnOnceSent(key, pending)) {
+      continue;
+    }
+    cards.unshift({
+      key,
+      repo: p.repo,
+      number: p.number,
+      title: p.title,
+      task: null,
+      sending: true,
+    });
+  }
+  return cards;
+}
+
 // The tasks and arrows as they will be once `pending` is done: a queued issue gets an arrow
 // from what it waits for, a started one none, a dequeued one leaves (unless it ran before:
-// then it stays, without its arrows). The keys it touches come back too.
+// then it stays, without its arrows). A stopped brainstorm doesn't move. The keys it touches
+// come back too.
 function withPending(tasks: Task[], edges: Edge[], pending: Pending[]) {
   const touched = new Set<string>();
   for (const p of pending) {
     const key = `${p.repo}#${p.number}`;
     touched.add(key);
+    if (p.action === "stop") continue;
     edges = edges.filter((e) => e.to !== key);
     const task = tasks.find((t) => t.key === key);
     if (p.action === "dequeue") {
@@ -93,7 +164,7 @@ function withPending(tasks: Task[], edges: Edge[], pending: Pending[]) {
         number: p.number,
         title: p.title,
         kind: "issue",
-        mode: null,
+        mode: p.mode ?? null,
         replyTo: p.number,
         state: p.action === "queue" ? "waiting" : "queued",
         since: 0,
@@ -114,7 +185,8 @@ function isClosed(n: GraphNode): boolean {
 }
 
 // The nodes of `tasks` (one tab's, or all) and the issues they wait for, with the arrows
-// between them. Closed ones are left out unless `showClosed`, or an issue waiting for one
+// between them. Brainstorms are the column's (brainstormsOf()), and those over the backlog's,
+// unless an arrow touches them: what waits for one, or what it waits for, stays in sight. Closed ones are left out unless `showClosed`, or an issue waiting for one
 // still runs; `hidden` counts them. A hidden node takes its arrows with it. `pending`: the
 // actions on their way, drawn as done already, their nodes "Sending…".
 export function graphOf(
@@ -124,12 +196,17 @@ export function graphOf(
   { showClosed = false, pending = [] }: { showClosed?: boolean; pending?: Pending[] } = {},
 ): { nodes: GraphNode[]; edges: Edge[]; hidden: number } {
   const real = new Set(tasks);
+  const column = new Set(brainstormsOf(tasks, pending).map((c) => c.key));
   const expected = withPending(tasks, edges, pending);
   tasks = expected.tasks;
   edges = expected.edges;
+  const linked = (key: string) => edges.some((e) => e.from === key || e.to === key);
+  const elsewhere = (t: Task) =>
+    column.has(t.key) || (brainstormed(t) && columnOnceSent(t.key, pending) === undefined);
   const nodes = new Map<string, GraphNode>();
   for (const t of tasks) {
     if (NOT_WORK.includes(t.kind)) continue;
+    if (elsewhere(t) && !linked(t.key)) continue;
     const sending = expected.touched.has(t.key);
     const look = sending ? "pending" : lookOf(t);
     nodes.set(t.key, {

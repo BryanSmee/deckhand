@@ -366,6 +366,7 @@ ctx.workApi = createWorkApi({
   waits: ctx.waits,
   accept: (item) => ctx.accept(item),
   boardKeys: () => http.boardKeys(),
+  liveKeys: () => http.liveKeys(),
   busy: taskBusy,
   taskOf: (key) => http.taskOf(key),
   label: (repo, number, on) => ctx.label(repo, number, on),

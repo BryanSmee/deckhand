@@ -1,5 +1,14 @@
 import { expect, test } from "vitest";
-import { dropTarget, graphOf, issueOfLink, layout, lookOf, type Pending, SIZES } from "./graph";
+import {
+  brainstormsOf,
+  dropTarget,
+  graphOf,
+  issueOfLink,
+  layout,
+  lookOf,
+  type Pending,
+  SIZES,
+} from "./graph";
 import type { Task, WorkAction } from "./types";
 
 const task = (n: number, extra: Partial<Task> = {}): Task => ({
@@ -335,4 +344,46 @@ test("issueOfLink: an issue or pull request link of the repo, on the listener's 
   expect(issueOfLink(`${gh}/org/app/issues/12x`, gh, "org/app")).toBe(null);
   expect(issueOfLink(`${gh}/org/app-two/issues/12`, gh, "org/app")).toBe(null);
   expect(issueOfLink("#12", gh, "org/app")).toBe(null);
+});
+
+test("brainstorms go to the column, from a reply on its way to the wrap-up; over, they leave both", () => {
+  const b = (n: number, state: Task["state"], extra: Partial<Task> = {}) =>
+    task(n, { kind: "brainstorm", mode: "brainstorm", state, ...extra });
+  const tasks = [
+    b(1, "brainstorm"),
+    b(2, "idle-brainstorm"),
+    b(3, "queued"),
+    // "/stop": the kind is the run's again, the mode stays.
+    b(4, "stopping", { kind: "issue" }),
+    b(5, "done", { kind: "issue" }),
+    b(6, "needs-input", { kind: "issue" }),
+    task(7, { state: "working" }),
+  ];
+  expect(brainstormsOf(tasks).map((c) => c.number)).toEqual([1, 2, 3, 4]);
+  // #5 is back in the backlog; #6 waits for answers on the graph.
+  expect(graphOf(tasks, [], []).nodes.map((n) => n.number)).toEqual([6, 7]);
+  // An arrow keeps one on the graph too.
+  const linked = graphOf(tasks, [after(1, 7), after(5, 7)], []);
+  expect(linked.nodes.map((n) => n.number)).toEqual([1, 5, 6, 7]);
+  expect(linked.nodes[0].task?.key).toBe("org/app#1");
+});
+
+test("brainstorms pending: a start in brainstorm mode or a stop stays in the column, work leaves it", () => {
+  const sent = (p: WorkAction): Pending => ({ repo: "org/app", title: "From the backlog", ...p });
+  const tasks = [
+    task(1, { kind: "brainstorm", mode: "brainstorm", state: "brainstorm" }),
+    task(2, { kind: "brainstorm", mode: "brainstorm", state: "idle-brainstorm" }),
+  ];
+  const pending = [
+    sent({ action: "start", number: 9, mode: "brainstorm" }),
+    sent({ action: "stop", number: 1 }),
+    sent({ action: "start", number: 2 }),
+  ];
+  const cards = brainstormsOf(tasks, pending);
+  expect(cards.map((c) => [c.number, c.sending, c.task?.key ?? null, c.title])).toEqual([
+    [9, true, null, "From the backlog"],
+    [1, true, "org/app#1", "Issue 1"],
+  ]);
+  const g = graphOf(tasks, [], [], { pending });
+  expect(g.nodes.map((n) => [n.number, n.status])).toEqual([[2, "Sending…"]]);
 });

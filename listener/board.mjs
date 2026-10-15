@@ -29,6 +29,10 @@ export const STATES = [
   "interrupted",
 ];
 
+// Whether something is going on or waits on the task: what ended (done, error, interrupted)
+// isn't. The work area's backlog lists an open issue again once its task isn't live.
+export const isLive = (t) => !["done", "error", "interrupted"].includes(t.state);
+
 // Runs kept per entry: older ones stay in the logs.
 const RUNS_PER_TASK = 20;
 

@@ -1,14 +1,16 @@
-// The graph's work area (the dashboard's Graph page): a repo's backlog, its open issues with no
-// task yet, and what dragging one does: start it, queue it after another issue ("/after #n"),
-// move its wait or cancel it. Each action is what a comment would do, checked as a comment
-// that waited is (tasks.mjs resume()), and written on the issue as the App's comment: bot
-// comments never reach admit(), so the listener queues or holds the work itself.
+// The graph's work area (the dashboard's Graph page): a repo's backlog, its open issues with
+// nothing live (board.mjs isLive()), and what dragging one does: start it, queue it after
+// another issue ("/after #n"), move its wait or cancel it, or stop its brainstorm ("/stop").
+// Each action is what a comment would do, checked as a comment that waited is (tasks.mjs
+// resume()), and written on the issue as the App's comment: bot comments never reach admit(),
+// so the listener queues or holds the work itself.
 //
 //   GET  /api/repos/<owner>/<repo>/issues the backlog and the repo's modes (GitHub asked at
 //                                         most once per ISSUES_MS)
 //   POST /api/repos/<owner>/<repo>/work   { action: "start", number, mode? }
 //                                         { action: "queue", number, after, mode? }
 //                                         { action: "dequeue", number }
+//                                         { action: "stop", number }: a brainstorm's wrap-up
 //   POST /api/repos/<owner>/<repo>/answer { number, pr?, answers: [{ options: [i], text }] }
 //                                         { number, pr?, text }
 //                                         answers to a task's open questions (answers.mjs);
@@ -29,7 +31,7 @@ export const ISSUES_MS = 30_000;
 const MAX_BODY = 4096;
 // The answers' text, and the JSON around it (escapes, indexes).
 const MAX_ANSWER_BODY = 4 * MAX_TEXT;
-const ACTIONS = ["start", "queue", "dequeue"];
+const ACTIONS = ["start", "queue", "dequeue", "stop"];
 
 const send = (res, status, value) => sendJson(res, value, status);
 
@@ -75,7 +77,8 @@ export function leadsTo(get, repo, from, to) {
 // `github(repo, method, path, body, expected)`: the App's calls. `repoSettings(repo, base)`:
 // the default branch's config. `reply(repo, number, text)`: the App's comment (comments.mjs).
 // `waits` (waits.mjs), `accept(item)` (tasks.mjs). `boardKeys()`: the keys of the tasks on the
-// dashboard; `busy(key)`: a run going or queued, which can't be moved.
+// dashboard; `liveKeys()`: those with something live, which the backlog leaves out;
+// `busy(key)`: a run going or queued, which can't be moved.
 // `taskOf(key)`: the dashboard's task (board.mjs, with its `questions`), or null.
 // `label(repo, number, on)`: the needs-input label; `inputs` (inputs.mjs), which the backlog
 // also fills (seedInputs()).
@@ -88,6 +91,7 @@ export function createWorkApi({
   waits,
   accept,
   boardKeys,
+  liveKeys = boardKeys,
   busy,
   taskOf = () => null,
   label = async () => new Response(null, { status: 204 }),
@@ -215,8 +219,9 @@ export function createWorkApi({
     if (users && !users.includes(user.toLowerCase())) {
       refuse(404, `${user} is not among ${repo}'s users.`);
     }
-    // The tasks change between two reads: an issue started a moment ago leaves at once.
-    const keys = boardKeys();
+    // The tasks change between two reads: an issue started a moment ago leaves at once. One
+    // whose task is over (a run done, a brainstorm stopped) is back.
+    const keys = liveKeys();
     send(res, 200, {
       issues: issues.filter((i) => !keys.has(`${repo}#${i.number}`)),
       modes,
@@ -291,7 +296,8 @@ export function createWorkApi({
   async function act(repo, user, { action, number, after, mode }, answers = null) {
     const key = `${repo}#${number}`;
     const asking = taskOf(key);
-    if (!answers && action !== "dequeue" && asking?.state === "needs-input" && asking.questions) {
+    const asks = action === "start" || action === "queue";
+    if (!answers && asks && asking?.state === "needs-input" && asking.questions) {
       refuse(409, `#${number} has open questions: answer them first.`);
     }
     const { settings, base, issue } = await checked(repo, user, number);
@@ -307,6 +313,7 @@ export function createWorkApi({
       );
       return `#${number} no longer waits.`;
     }
+    if (action === "stop") return stop(repo, user, issue, base, settings);
     // Moving a wait keeps its mode, unless another one is picked.
     const wanted = mode ?? wait?.item.modeLine ?? "work";
     if (!modeNames(settings).includes(wanted)) refuse(422, `${repo} has no mode \`${wanted}\`.`);
@@ -348,6 +355,25 @@ export function createWorkApi({
     );
     await accept(item);
     return `#${number} started.`;
+  }
+
+  // What a "/stop" comment does: the brainstorm wraps up (tasks.mjs stopBrainstorm()), in a
+  // run that posts its summary and updates the issue. Only an active or idle one: checked()
+  // refused a reply on its way.
+  async function stop(repo, user, issue, base, settings) {
+    const { number } = issue;
+    const state = taskOf(`${repo}#${number}`)?.state;
+    if (state !== "brainstorm" && state !== "idle-brainstorm") {
+      refuse(409, `#${number} has no brainstorm to stop.`);
+    }
+    const item = { ...itemOf(repo, issue, "work", user, base, settings), trigger: "stop" };
+    item.comment = await comment(
+      repo,
+      number,
+      `Brainstorm stopped from the dashboard by @${user}: a summary and the issue's update follow.`,
+    );
+    await accept(item);
+    return `#${number}'s brainstorm wraps up.`;
   }
 
   // Answers to the open questions of the task of issue (or pull request) `number`, as one App
@@ -401,7 +427,7 @@ export function createWorkApi({
   // Answered, it no longer waits for input, whoever asked.
   async function answerThen(repo, user, task, asked) {
     const then = checkAction({ ...asked.then, number: asked.number });
-    if (asked.pr || then.action === "dequeue") {
+    if (asked.pr || then.action === "dequeue" || then.action === "stop") {
       refuse(422, "Only an issue starts or queues once its questions are answered.");
     }
     const { comment: text, open } = answersComment(user, task.questions?.items ?? null, asked);

@@ -1,7 +1,8 @@
-// The graph's work area panel: the repo's backlog (open issues with no task yet), its waiting
-// issues and those waiting for answers, with a button for each drag the graph takes (Start,
-// Queue after…, Remove), for phones and keyboards. The drags themselves are the graph's
-// (Graph.tsx), and so is the form an issue's open questions open first.
+// The graph's work area panel: the repo's backlog (open issues with nothing live), its waiting
+// issues and those waiting for answers, with a button for each drag the graph and the
+// Brainstorm column take (Start, Brainstorm, Queue after…, Remove), for phones and keyboards.
+// The drags themselves are the graph's (Graph.tsx) and the column's (Brainstorms.tsx), and so
+// is the form an issue's open questions open first. A brainstorm dropped here stops.
 import { useState } from "preact/hooks";
 import type { WorkArea as Work } from "./api";
 import type { Task, WorkAction } from "./types";
@@ -16,6 +17,9 @@ export interface Target {
 
 // The drag's payload from the backlog: the issue's number (its link goes along, as text).
 export const ISSUE_TYPE = "application/x-deckhand-issue";
+// A brainstorm card's (Brainstorms.tsx): its issue number. Not ISSUE_TYPE: the column doesn't
+// take its own cards back, and a drop elsewhere knows it is a brainstorm.
+export const BRAINSTORM_TYPE = "application/x-deckhand-brainstorm";
 
 // An issue card's drag, onto the graph (or its link elsewhere).
 const dragOf = (number: number, url: string) => (e: DragEvent) => {
@@ -30,8 +34,7 @@ interface Props {
   targets: Target[];
   // The repo's tasks that wait for others ("/after").
   waiting: Task[];
-  // Its issues waiting for answers, or in a brainstorm: starting or queueing one asks its
-  // questions first.
+  // Its issues waiting for answers: starting or queueing one asks its questions first.
   answering?: Task[];
   // GitHub's address, for the links the drag of a task's card carries.
   github?: string;
@@ -44,7 +47,7 @@ interface Props {
 }
 
 // "Queue after…": the graph's issues to pick from, then Queue.
-function Chooser({
+export function Chooser({
   number,
   targets,
   disabled,
@@ -111,6 +114,8 @@ export function WorkArea({
 }: Props) {
   // The issue whose "Queue after…" is open.
   const [choosing, setChoosing] = useState<number | null>(null);
+  // A brainstorm's card is dragged over the panel: let go, it stops.
+  const [over, setOver] = useState(false);
   const { backlog, busy, result } = work;
   // Those an action on its way takes: they come back if it fails.
   const sent = new Set(work.pending.map((p) => p.number));
@@ -118,9 +123,29 @@ export function WorkArea({
   const modes = backlog?.modes.length ? backlog.modes : ["work"];
   const blocked = !!backlog?.errors;
   const picked = mode === "work" ? {} : { mode };
+  const brainstorms = modes.includes("brainstorm");
   const act = (action: WorkAction) => {
     setChoosing(null);
     onAct(action);
+  };
+  const stops = (e: DragEvent) =>
+    !blocked && [...(e.dataTransfer?.types ?? [])].includes(BRAINSTORM_TYPE);
+  const onDragOver = (e: DragEvent) => {
+    if (!stops(e)) return;
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+    setOver(true);
+  };
+  const onDragLeave = (e: DragEvent) => {
+    if ((e.currentTarget as Node).contains(e.relatedTarget as Node | null)) return;
+    setOver(false);
+  };
+  const onDrop = (e: DragEvent) => {
+    if (!stops(e)) return;
+    e.preventDefault();
+    setOver(false);
+    const number = Number(e.dataTransfer?.getData(BRAINSTORM_TYPE));
+    if (number) act({ action: "stop", number });
   };
   const said = notice ?? result?.error ?? result?.message ?? null;
   const failed = !!(notice || result?.error);
@@ -148,7 +173,13 @@ export function WorkArea({
   );
 
   return (
-    <section class={styles.panel} aria-label="Work area">
+    <section
+      class={`${styles.panel} ${over ? styles.over : ""}`}
+      aria-label="Work area"
+      onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
+      onDrop={onDrop}
+    >
       <div class={styles.head}>
         <h2 class={styles.title}>Backlog</h2>
         <label class={styles.mode}>
@@ -164,8 +195,8 @@ export function WorkArea({
       </div>
       <p class={styles.note}>
         Drag an issue (or a GitHub link to one) onto the graph to start it, next to an issue to
-        queue it after that one; one waiting for answers too, which asks them first. Drag a waiting
-        issue away to cancel its wait.
+        queue it after that one, or onto the Brainstorm column to brainstorm it; one waiting for
+        answers too, which asks them first. Drag a waiting issue away to cancel its wait.
       </p>
       {said && (
         <p class={`${styles.said} ${failed ? styles.failed : ""}`} role="status">
@@ -209,6 +240,17 @@ export function WorkArea({
                   >
                     Start
                   </button>
+                  {brainstorms && (
+                    <button
+                      type="button"
+                      class={styles.button}
+                      disabled={busy || blocked}
+                      aria-label={`Brainstorm #${i.number}`}
+                      onClick={() => act({ action: "start", number: i.number, mode: "brainstorm" })}
+                    >
+                      Brainstorm
+                    </button>
+                  )}
                   {afterButton(i.number)}
                 </div>
                 {chooser(i.number, false)}
@@ -232,9 +274,6 @@ export function WorkArea({
                   <span class={styles.ref}>#{t.number}</span>
                   <span class={styles.name}>{t.title ?? `Issue #${t.number}`}</span>
                 </div>
-                {t.state !== "needs-input" && (
-                  <span class={styles.note}>Starting it ends its brainstorm with a work run.</span>
-                )}
                 {t.questions && (
                   <span class={styles.note}>Its open questions are asked before it starts.</span>
                 )}

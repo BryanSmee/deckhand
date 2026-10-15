@@ -24,6 +24,7 @@ function setup({
   issues = {},
   busy = [],
   board = [],
+  live = board,
   tasks = {},
   runs = {},
   events = {},
@@ -97,6 +98,7 @@ function setup({
     waits: w.waits,
     accept: async (item) => w.accepted.push(item),
     boardKeys: () => new Set(board),
+    liveKeys: () => new Set(live),
     busy: (key) => busy.includes(key),
     taskOf: (key) =>
       w.tasks[key] ??
@@ -225,6 +227,19 @@ test("GET issues: the open issues without a task or pull request, and the repo's
   w.clock += ISSUES_MS;
   await call(w.api, "GET", "/api/repos/org/app/issues");
   assert.equal(listed(), 2);
+});
+
+test("GET issues: an issue whose task is over is back, one with something live isn't", async () => {
+  const w = setup({
+    issues: { 1: open("Brainstorm stopped"), 2: open("Brainstorming"), 3: open("Run done") },
+    board: ["org/app#1", "org/app#2", "org/app#3"],
+    live: ["org/app#2"],
+  });
+  const res = await call(w.api, "GET", "/api/repos/org/app/issues");
+  assert.deepEqual(
+    res.body.issues.map((i) => i.number),
+    [1, 3],
+  );
 });
 
 // #144's body: an inbox issue with three questions in the format.
@@ -438,6 +453,47 @@ test("dequeue: the wait is cancelled, with the App's comment; start drops it too
     w.comments.at(-1)[1],
     "Started from the dashboard by @alice. It no longer waits for #7.",
   );
+});
+
+test("stop: an active or idle brainstorm wraps up, with the App's comment", async () => {
+  for (const state of ["brainstorm", "idle-brainstorm"]) {
+    const w = setup({ issues: { 5: open("Five") }, tasks: { "org/app#5": { state } } });
+    const res = await post(w, { action: "stop", number: 5 });
+    assert.equal(res.status, 200);
+    assert.match(res.body.message, /#5's brainstorm wraps up/);
+    assert.deepEqual(w.comments, [
+      [
+        5,
+        "Brainstorm stopped from the dashboard by @alice: a summary and the issue's update follow.",
+      ],
+    ]);
+    const [item] = w.accepted;
+    // What a "/stop" comment is: tasks.mjs modeOf() turns it into the wrap-up.
+    assert.equal(item.trigger, "stop");
+    assert.equal(item.modeLine, null);
+    assert.equal(item.author, "alice");
+    assert.equal(item.comment.id, 501);
+  }
+});
+
+test("stop refused: no brainstorm, one stopped or busy, users, a broken config", async () => {
+  const cases = [
+    [{}, 409],
+    [{ tasks: { "org/app#5": { state: "done" } } }, 409],
+    [{ tasks: { "org/app#5": { state: "stopping" } } }, 409],
+    [{ tasks: { "org/app#5": { state: "brainstorm" } }, busy: ["org/app#5"] }, 409],
+    [{ tasks: { "org/app#5": { state: "brainstorm" } }, settings: { users: ["bob"] } }, 403],
+    [{ tasks: { "org/app#5": { state: "brainstorm" } }, errors: ["bad"] }, 409],
+  ];
+  for (const [opts, status] of cases) {
+    const w = setup({ issues: { 5: open("Five") }, ...opts });
+    const res = await post(w, { action: "stop", number: 5 });
+    assert.equal(res.status, status, JSON.stringify(opts));
+    assert.deepEqual([w.comments, w.accepted], [[], []]);
+  }
+  const w = setup({ issues: { 5: open("Five") }, tasks: { "org/app#5": { state: "brainstorm" } } });
+  assert.equal((await post(w, { action: "stop", number: 5 }, { user: "mallory" })).status, 403);
+  assert.equal((await post(w, { action: "stop", number: 5 }, { origin: "https://x" })).status, 403);
 });
 
 test("refused: other origins, repos, users, a broken config, pull requests, closed or busy issues", async () => {

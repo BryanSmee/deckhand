@@ -163,6 +163,17 @@ waited for it is running. **Show closed**, by the legend, brings them back; your
 the choice. Runs on the ideas and bugs inboxes and discussions are never drawn: they have no
 pull request and no `/after`. On a repository's tab, only the issues drawn can be queued after.
 
+On a repository's tab the graph is also a work area, with two columns beside it (above it on
+a phone). The **backlog** lists the open issues with nothing live (running, queued, waiting,
+brainstorming or needing input): drop one on the graph to start it (in the mode picked in
+**Start in**), next to a node to queue it after that one. The **Brainstorm** column lists the
+issues being brainstormed, with their state; they leave the graph unless an arrow touches
+them. Drop a backlog issue on the column to brainstorm it, a brainstorm on the graph to start
+work on it (the brainstorm ends), or back on the backlog to stop it: the wrap-up a `/stop`
+comment runs, its summary posted and the issue updated. Once it is over, the issue is back in
+the backlog. Each card has buttons that do the same, for phones and keyboards. Each action is
+written on the issue as the App's comment. On the All tab, the column only lists them.
+
 Each task shows its listener's state:
 
 | State             | What                                                                    |
