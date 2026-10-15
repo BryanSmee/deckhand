@@ -28,8 +28,7 @@ listener restart).
 The Claude Code volume is shared by every repository, so it is read-only in sandboxes: a run
 that could replace `claude` there would run its code in the next sandbox of any repository,
 with that run's broker secret and grants. The listener installs each version before the
-first run that needs it, as root, so its files don't belong to the sandboxes' user (uid
-1000) either. An install that finds the volume owned by uid 1000 (from an older Deckhand)
+first run that needs it, as root, so its files don't belong to the sandboxes' user (uid 1000) either. An install that finds the volume owned by uid 1000 (from an older Deckhand)
 takes it over and reinstalls from npm rather than keep what a sandbox could have changed. A
 sandbox whose version isn't installed stops with a message instead of installing it.
 
