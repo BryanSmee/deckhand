@@ -6,3 +6,6 @@ inbox:
 
 hosts:
   - registry.npmjs.org
+
+conflicts:
+  check_minutes: 5
