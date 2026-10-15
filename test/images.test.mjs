@@ -3,6 +3,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import { claude } from "../listener/agents/claude.mjs";
 import { loadConfig } from "../listener/config.mjs";
 import { KEEP_TAGS, createImages, imageRef, imageTag } from "../listener/images.mjs";
 
@@ -211,10 +212,10 @@ test("branch images: with the operator's grant, a pull request's own branch, nev
   });
 });
 
-test("Claude Code installs once per version, in a container of its own", async () => {
+test("an agent installs once per version, in a container of its own", async () => {
   const { images, calls } = setup();
-  await Promise.all([images.installClaudeCode(), images.installClaudeCode()]);
-  await images.installClaudeCode();
+  await Promise.all([images.installAgent(claude), images.installAgent(claude)]);
+  await images.installAgent(claude);
   const installs = calls.filter((c) => c.includes("deckhand-install-claude-code"));
   assert.equal(installs.length, 1);
   assert.match(

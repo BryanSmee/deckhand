@@ -4,6 +4,7 @@
 import { randomBytes } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readdirSync, rmdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
+import { agentFor, effortOf, modelOf } from "./agents/index.mjs";
 import { operatorHosts, proxyEnv, runHosts } from "./egress.mjs";
 import { commentsText, sameRepo } from "./events.mjs";
 import { grantCheck, hardeningArgs, mountArgs, resolveMounts } from "./grants.mjs";
@@ -11,32 +12,36 @@ import { imageRef } from "./images.mjs";
 import { BUILT_IN, isFresh, isLight, kindOf, permissionsFor, sessionName } from "./modes.mjs";
 import { branchConfigReport, triggerWord } from "./onboarding.mjs";
 import { firstMessage, promptFor } from "./prompts.mjs";
-import { CREDENTIALS } from "./anthropic.mjs";
 import { CONFIG_FILE, customMode } from "./repo-config.mjs";
-import { openLog, outcome, parse, summaryOf } from "./runlog.mjs";
+import { lastResult, openLog, outcome, summaryOf } from "./runlog.mjs";
 import { noLongerAllowed } from "./tasks.mjs";
 import { redact } from "./secrets.mjs";
 
 // A run that can't start for a reason the maintainer can fix: the reply says it.
 export class RunError extends Error {}
 
-export function configErrors(base, errors) {
-  return `Claude can't run here: \`${CONFIG_FILE}\` on \`${base || "main"}\` has errors.\n\n${errors.map((e) => `- ${e}`).join("\n")}`;
+// `name`: the run's agent's (agents/).
+export function configErrors(base, errors, name = agentFor().displayName) {
+  return `${name} can't run here: \`${CONFIG_FILE}\` on \`${base || "main"}\` has errors.\n\n${errors.map((e) => `- ${e}`).join("\n")}`;
 }
 
-function refusedMounts(refused) {
-  return `Claude can't run here: host mounts requested by \`${CONFIG_FILE}\` are refused.\n\n${refused.map((r) => `- ${r}`).join("\n")}\n\nOnly paths under a root the operator grants this repository can be mounted.`;
+function refusedMounts(refused, name) {
+  return `${name} can't run here: host mounts requested by \`${CONFIG_FILE}\` are refused.\n\n${refused.map((r) => `- ${r}`).join("\n")}\n\nOnly paths under a root the operator grants this repository can be mounted.`;
 }
 
 // The model and effort of a run: the comments' "/model" and "/effort" (`options`), else the
-// repo's mode's, else those of light runs or work.
-export function modelFor(settings, own, light, options) {
+// repo's mode's, else those of light runs or work. Tiers (`best`…) and efforts as the run's
+// agent names them.
+export function modelFor(settings, own, light, options, agent = agentFor()) {
   const defaults = own
     ? [own.model, own.effort]
     : light
       ? [settings.brainstormModel, settings.brainstormEffort]
       : [settings.model, settings.effort];
-  return [options.model ?? defaults[0], options.effort ?? defaults[1]];
+  return [
+    modelOf(agent, options.model ?? defaults[0]),
+    effortOf(agent, options.effort ?? defaults[1]),
+  ];
 }
 
 // On a phone, the reply is where the next step is read.
@@ -53,20 +58,24 @@ export function nextStep(mode, { talk, fresh, trigger }) {
   return "";
 }
 
-// The line under each reply: model, effort, duration, the next step and options that came
-// too late for the run.
+// The line under each reply: agent, model, effort, duration, the next step and options that
+// came too late for the run.
 export function replyFooter(record, result, hint, later) {
-  const minutes = result ? Math.round(result.duration_ms / 6000) / 10 : null;
+  const minutes = result ? Math.round(result.durationMs / 6000) / 10 : null;
   const late = Object.entries(later)
     .map(([k, v]) => `\`/${k} ${v}\``)
     .join(" ");
   const next = late ? ` · ${late} came mid-run: it applies to the next run` : "";
-  return `<sub>🤖 Claude ${record.model} · ${record.effort} effort${minutes !== null ? ` · ${minutes} min` : ""}${hint}${next}</sub>`;
+  return `<sub>🤖 ${agentFor(record.agent).displayName} ${record.model} · ${record.effort} effort${minutes !== null ? ` · ${minutes} min` : ""}${hint}${next}</sub>`;
 }
 
 // `ctx` (server.mjs): the listener's state and services, read at call time.
 export function createRuns(ctx) {
   const { config, log } = ctx;
+
+  // The run's agent (agents/), by the name its record keeps across a restart.
+  const agentOf = (task) => agentFor(task.live.record.agent);
+  const cantRun = (task) => `${agentOf(task).displayName} can't run here`;
 
   // Ends under way: a listener that stops lets them post their reply first, so the next one
   // doesn't post it again.
@@ -96,7 +105,7 @@ export function createRuns(ctx) {
     await follow(task);
   }
 
-  // Comments whose author may no longer run Claude here, checked against the repo's settings as
+  // Comments whose author may no longer run the agent here, checked against the repo's settings as
   // they are now: its `users` may have narrowed while they waited (the pause, a restart, a
   // busy repo). Dropped, their 👀 off. Settings that can't be read are begin()'s to report.
   async function dropRefused(task) {
@@ -127,6 +136,8 @@ export function createRuns(ctx) {
       repo: task.repo,
       title: ctx.titles.get(key),
       replyTo,
+      // What runs it: the only agent until a deployment can pick one.
+      agent: agentFor().name,
       // Why the listener started it itself ("conflict": conflicts.mjs); null for comments.
       reason,
       mode: null,
@@ -173,7 +184,7 @@ export function createRuns(ctx) {
       lines: { out: 0, err: 0 }, // of its output read so far, so a restart skips them
       result: null, // its last result, with the duration of all
       later: {}, // "/model" and "/effort" that came too late for this run
-      unanswered: [], // delivered since Claude's last result
+      unanswered: [], // delivered since the agent's last result
       handled: [...items], // its comments and those delivered to it, for their reactions
       saving: null,
     };
@@ -204,9 +215,9 @@ export function createRuns(ctx) {
       grant: access.grant,
       branches: live.branches,
     });
-    recheckMounts(settings, access);
+    recheckMounts(task, settings, access);
     await ctx.runner.start(sandboxSpec(task, prompt, message, { ...prepared, ...access }));
-    // Written before Claude starts (setup takes a while), a message waits in the inbox.
+    // Written before the agent starts (setup takes a while), a message waits in the inbox.
     live.open = true;
     ctx.saveLive(task);
     return true;
@@ -216,10 +227,11 @@ export function createRuns(ctx) {
   // config with errors, or a mode no longer in it, stops the run there.
   async function begin(task, items) {
     const { key, mode, light, record, logFile } = task.live;
+    const agent = agentOf(task);
     await makeRoom(task);
     // Inbox entries start afresh: the sandbox doesn't resume their session (entrypoint.sh).
     const started =
-      !isFresh(task, mode) && (await ctx.runner.hasSession(sessionName(task.name, light)));
+      !isFresh(task, mode) && (await ctx.runner.hasSession(sessionName(task.name, light), agent));
     // A new comment answers the questions, if any: the issue no longer waits for input.
     if (config.needsInputLabel && task.kind !== "discussion") {
       await ctx.label(task.repo, task.number, false);
@@ -234,7 +246,7 @@ export function createRuns(ctx) {
     const { settings, errors, warnings } = await ctx.repoSettings(task.repo, task.base);
     task.settings = settings;
     const own = customMode(settings, mode);
-    [record.model, record.effort] = modelFor(settings, own, light, options);
+    [record.model, record.effort] = modelFor(settings, own, light, options, agent);
     record.mode =
       mode === "stop" ? "wrap-up" : restored ? "restore" : started ? "continue" : "start";
     log(
@@ -247,11 +259,11 @@ export function createRuns(ctx) {
       logFile.write(
         JSON.stringify({ type: "listener", event: "note", at: Date.now(), message }) + "\n",
       );
-    if (errors.length) throw new RunError(configErrors(task.base, errors));
+    if (errors.length) throw new RunError(configErrors(task.base, errors, agent.displayName));
     for (const warning of warnings) note(`${CONFIG_FILE}: ${warning}`);
     if (!own && !BUILT_IN.has(mode)) {
       throw new RunError(
-        `Claude can't run here: the \`${mode}\` mode is no longer in \`${CONFIG_FILE}\` on \`${task.base || "main"}\`.`,
+        `${cantRun(task)}: the \`${mode}\` mode is no longer in \`${CONFIG_FILE}\` on \`${task.base || "main"}\`.`,
       );
     }
     return { text, message, settings, own, note };
@@ -275,7 +287,7 @@ export function createRuns(ctx) {
   // The instructions file of the repo's mode, from its default branch like the config.
   async function modeInstructions(task, own) {
     const base = task.base || "main";
-    const missing = `Claude can't run here: the \`${own.name}\` mode's instructions, \`${own.instructions}\`, are not on \`${base}\`.`;
+    const missing = `${cantRun(task)}: the \`${own.name}\` mode's instructions, \`${own.instructions}\`, are not on \`${base}\`.`;
     let file;
     try {
       file = await ctx.repoFile(task.repo, own.instructions, base);
@@ -297,22 +309,22 @@ export function createRuns(ctx) {
       const where = check.error.file
         ? `\`${check.error.file}\` in the operator's grants folder has errors`
         : "the operator's grants folder has errors";
-      throw new RunError(`Claude can't run here: ${where} (see the listener's logs).`);
+      throw new RunError(`${cantRun(task)}: ${where} (see the listener's logs).`);
     }
     const { grant, hosts, missing } = check;
     if (hosts.length) {
       throw new RunError(
-        `${configErrors(task.base, hosts)}\n\nA repository's \`hosts\` only count when the operator's grants set \`allow_repo_hosts: true\` for it; hosts the operator already allows can stay.`,
+        `${configErrors(task.base, hosts, agentOf(task).displayName)}\n\nA repository's \`hosts\` only count when the operator's grants set \`allow_repo_hosts: true\` for it; hosts the operator already allows can stay.`,
       );
     }
     if (missing.length) {
       log(`${repo}: ${CONFIG_FILE} asks for what its grant doesn't allow: ${missing.join("; ")}`);
       throw new RunError(
-        `${configErrors(task.base, missing)}\n\nThe operator can add these to the repository's file in the grants folder (see Deckhand's docs/security.md), or the repository can remove them from \`${CONFIG_FILE}\`.`,
+        `${configErrors(task.base, missing, agentOf(task).displayName)}\n\nThe operator can add these to the repository's file in the grants folder (see Deckhand's docs/security.md), or the repository can remove them from \`${CONFIG_FILE}\`.`,
       );
     }
     const { mounts, refused, notes } = check.mounts;
-    if (refused.length) throw new RunError(refusedMounts(refused));
+    if (refused.length) throw new RunError(refusedMounts(refused, agentOf(task).displayName));
     for (const text of notes) note(text);
     const { light } = task.live;
     for (const m of mounts) {
@@ -329,20 +341,22 @@ export function createRuns(ctx) {
 
   // Resolved again as late as possible: preparing the run can take minutes, during which a
   // path's parts may have changed. Anything different from what was checked stops the run.
-  function recheckMounts(settings, { grant, mounts }) {
+  function recheckMounts(task, settings, { grant, mounts }) {
     const now = resolveMounts(settings.mounts, grant, { caches: settings.caches });
-    if (now.refused.length) throw new RunError(refusedMounts(now.refused));
+    if (now.refused.length) {
+      throw new RunError(refusedMounts(now.refused, agentOf(task).displayName));
+    }
     const changed = mounts.filter(
       (m, i) => now.mounts[i]?.source !== m.source || now.mounts[i]?.readOnly !== m.readOnly,
     );
     if (changed.length || now.mounts.length !== mounts.length) {
       throw new RunError(
-        `Claude can't run here: host mounts changed while the run was being prepared.\n\n${changed.map((m) => `- \`${m.target}\` no longer resolves to \`${m.source}\``).join("\n")}\n\nComment again to retry once they are stable.`,
+        `${cantRun(task)}: host mounts changed while the run was being prepared.\n\n${changed.map((m) => `- \`${m.target}\` no longer resolves to \`${m.source}\``).join("\n")}\n\nComment again to retry once they are stable.`,
       );
     }
   }
 
-  // The run's image (built first if the repo's Dockerfile changed), Claude Code and the repo's
+  // The run's image (built first if the repo's Dockerfile changed), its agent and the repo's
   // cache volumes. While an image builds, the dashboard shows the run as "building image".
   async function prepare(task, items, settings, grant, note) {
     const { record, logFile } = task.live;
@@ -367,7 +381,7 @@ export function createRuns(ctx) {
       record.phase = null;
       if (image !== config.image)
         note(`Image ${image}${source.branch ? " (pull request branch)" : ""}`);
-      await ctx.images.installClaudeCode(output);
+      await ctx.images.installAgent(agentOf(task), output);
       // A light run runs no setup: no caches, which work runs trust.
       const cacheArgs = task.live.light
         ? []
@@ -375,7 +389,7 @@ export function createRuns(ctx) {
       return { image, cacheArgs, settings };
     } catch (error) {
       throw new RunError(
-        `Claude couldn't start: ${error.message}\n\nThe run's log on the dashboard has the details.`,
+        `${agentOf(task).displayName} couldn't start: ${error.message}\n\nThe run's log on the dashboard has the details.`,
       );
     }
   }
@@ -397,7 +411,7 @@ export function createRuns(ctx) {
         pr = await res.json();
       } catch (error) {
         throw new RunError(
-          `Claude couldn't start: pull request #${number} couldn't be looked up (${error.message ?? error}). Comment again to retry.`,
+          `${agentOf(task).displayName} couldn't start: pull request #${number} couldn't be looked up (${error.message ?? error}). Comment again to retry.`,
         );
       }
       const ref = pr.head?.ref;
@@ -421,13 +435,15 @@ export function createRuns(ctx) {
     return { ref: base, branch: false };
   }
 
-  // What the runner starts: the sandbox's image, environment, volumes and limits. Claude's
+  // What the runner starts: the sandbox's image, environment, volumes and limits. The agent's
   // first message is TASK_PROMPT (and TASK_MESSAGE); comments that arrive during the run reach
   // it through its inbox (deliver()).
   function sandboxSpec(task, prompt, message, { image, cacheArgs, settings, mounts, limits }) {
     const { live } = task;
     const n = task.name;
     const volumes = sessionName(n, live.light);
+    const agent = agentOf(task);
+    const install = agent.install(config);
     const args = [
       "--network",
       config.network,
@@ -439,14 +455,14 @@ export function createRuns(ctx) {
       // Its own folder of the screenshots volume only: no run sees another's.
       "--mount",
       `type=volume,src=${config.shotsVolume},dst=/screenshots,volume-subpath=${live.shots}`,
-      // Claude Code, installed by the listener before the run (images.installClaudeCode()).
+      // The agent, installed by the listener before the run (images.installAgent()).
       // Read-only: shared by every repository, so a run that could rewrite it would run its
       // code in the next sandbox of any repository, with that run's broker secret.
-      ...["-v", `${config.claudeCodeVolume}:/opt/claude-code:ro`],
-      // The issue's clone and Claude session, kept between its runs: those of its light runs
+      ...["-v", `${install.volume}:${install.mount}:ro`],
+      // The issue's clone and agent session, kept between its runs: those of its light runs
       // apart from those of its work (sessionName()).
       ...["-v", `${volumes}-workspace:/workspace`],
-      ...["-v", `${volumes}-claude:/home/node/.claude`],
+      ...["-v", `${volumes}-${agent.session.volume}:${agent.session.path}`],
       // The repo's caches (its config's `caches`), one volume per path, kept across its runs.
       ...cacheArgs,
       // Host paths the operator grants the repo and its config asks for (grantedAccess()),
@@ -458,20 +474,22 @@ export function createRuns(ctx) {
   }
 
   // Values reach the container by name only: they never show in `ps`. The App's credentials
-  // are not among them: they stay in the data volume. Nor is the Claude credential: Claude
-  // Code calls the listener (anthropic.mjs) with the run's secret in its place.
+  // are not among them: they stay in the data volume. Nor is the agent's credential: the
+  // agent's env (agents/) gives it the run's secret in its place.
   function sandboxEnv(task, prompt, message, settings) {
     const { live } = task;
     const mode = live.mode === "stop" ? "brainstorm" : live.mode;
     const { light } = live;
     const bot = ctx.app.identity();
+    const agent = agentOf(task);
+    const install = agent.install(config);
     return {
-      ...(config.claudeCredential && { [config.claudeCredential]: live.secret }),
-      ANTHROPIC_BASE_URL: `${config.brokerUrl}/anthropic`,
-      ...config.modelAliases,
+      ...agent.env(config, live.secret),
       DECKHAND_RUN_SECRET: live.secret,
       DECKHAND_BROKER_URL: config.brokerUrl,
-      CLAUDE_CODE_VERSION: config.claudeCodeVersion,
+      // Which of ../sandbox/agents/ runs, and its version.
+      SANDBOX_AGENT: agent.name,
+      [install.versionVar]: install.version,
       GIT_AUTHOR_NAME: bot.name,
       GIT_AUTHOR_EMAIL: bot.email,
       GIT_COMMITTER_NAME: bot.name,
@@ -484,7 +502,7 @@ export function createRuns(ctx) {
       TASK_MODE: mode,
       // A new session each time, which doesn't replace the issue's (inbox entries, fresh modes).
       TASK_SESSION: isFresh(task, mode) ? "fresh" : "",
-      // Comments as stream-json messages (the runner's inbox), raw stream-json out.
+      // Comments as the agent's messages (the runner's inbox), its raw output out.
       TASK_INPUT: "stream",
       TASK_OUTPUT: "json",
       // The sandbox opens the issue's branch and draft pull request (../sandbox/draft-pr.sh);
@@ -503,8 +521,8 @@ export function createRuns(ctx) {
     };
   }
 
-  // Reads the sandbox's output until it exits. At each result Claude gives, the comments
-  // waiting for it go to its inbox, or the inbox closes so Claude exits; a message written
+  // Reads the sandbox's output until it exits. At each result the agent gives, the comments
+  // waiting for it go to its inbox, or the inbox closes so the agent exits; a message written
   // before the close is still answered (one more result), so nothing delivered is dropped.
   // Also how a restarted listener picks a run up: what it already read is skipped.
   async function follow(task) {
@@ -514,7 +532,7 @@ export function createRuns(ctx) {
         await ctx.runner.follow(task.name, {
           skip: { ...live.lines },
           onOut: (line) => output(task, line),
-          // Setup output (clone, install) before Claude starts.
+          // Setup output (clone, install) before the agent starts.
           onErr: (line) => {
             if (ctx.stopping) return; // left for the next listener
             live.logFile.write(hidden(live, line) + "\n");
@@ -534,7 +552,8 @@ export function createRuns(ctx) {
   // A line of the sandbox's output without the secrets it must not publish (secrets.mjs):
   // what is stored is what the dashboard shows, and the result is what gets posted.
   function hidden(live, line) {
-    return redact(line, [live.secret, ...CREDENTIALS.map((name) => process.env[name])]);
+    const names = agentFor(live.record.agent).secrets;
+    return redact(line, [live.secret, ...names.map((name) => process.env[name])]);
   }
 
   function output(task, raw) {
@@ -543,13 +562,10 @@ export function createRuns(ctx) {
     const line = hidden(live, raw);
     live.logFile.write(line + "\n");
     live.lines.out++;
-    const event = parse(line);
-    if (event?.type !== "result") return;
+    const event = lastResult([line], agentOf(task));
+    if (!event) return;
     // One result per turn: a comment answered after the first adds a turn.
-    live.result = {
-      ...event,
-      duration_ms: (live.result?.duration_ms ?? 0) + event.duration_ms,
-    };
+    live.result = { ...event, durationMs: (live.result?.durationMs ?? 0) + event.durationMs };
     live.unanswered = [];
     // Comments still in their pause go now, rather than to a new container.
     clearTimeout(task.timer);
@@ -557,7 +573,7 @@ export function createRuns(ctx) {
     ctx.saveLive(task);
   }
 
-  // No more comments for this run: Claude exits once it has answered.
+  // No more comments for this run: the agent exits once it has answered.
   function close(task) {
     const live = task.live;
     if (!live.open) return;
@@ -590,7 +606,7 @@ export function createRuns(ctx) {
     live.ip = null;
     try {
       if (error) throw error;
-      // Claude exited before answering a delivered comment (a crash): the next run gets it.
+      // The agent exited before answering a delivered comment (a crash): the next run gets it.
       if (live.unanswered.length) task.pending.unshift(...live.unanswered);
       const shots = live.shots && join(ctx.shotsDir, live.shots);
       if (shots && existsSync(shots) && !readdirSync(shots).length) rmdirSync(shots);
@@ -623,8 +639,8 @@ export function createRuns(ctx) {
     const check = status !== "error" && mode === "work" ? await configCheck(task) : null;
     const text =
       status !== "error"
-        ? `${result.result}\n\n${check ? `${check}\n\n` : ""}${footer}`
-        : `Claude stopped with an error.\n\n> ${result?.result ?? "No result: see the listener logs."}\n\n${footer}`;
+        ? `${result.text}\n\n${check ? `${check}\n\n` : ""}${footer}`
+        : `${agentOf(task).displayName} stopped with an error.\n\n> ${result?.text || "No result: see the listener logs."}\n\n${footer}`;
     // Already redacted line by line; again, as a result saved by an older listener wasn't.
     await ctx.answer(target(task, live.replyTo), hidden(live, text));
     live.replied = true;

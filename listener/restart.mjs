@@ -4,10 +4,18 @@
 // output from where the previous one stopped, and posts each reply once.
 import { readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
+import { agentFor } from "./agents/index.mjs";
 import { permissionsFor } from "./modes.mjs";
 import { openLog } from "./runlog.mjs";
 import { readJson, writeJsonAtomic } from "./store.mjs";
 import { noLongerAllowed } from "./tasks.mjs";
+
+// A result saved by a listener from before the agent seam is Claude Code's raw stream-json
+// `result` event: Deckhand's own from it, with the duration of all its turns.
+export function savedResult(result) {
+  if (!result || "ok" in result) return result ?? null;
+  return agentFor("claude").normalize(JSON.stringify(result))[0];
+}
 
 // A comment as saved to disk: the id of its 👀 rather than the promise of it.
 export async function plain({ eyes, comment, ...item }) {
@@ -175,6 +183,7 @@ export function createRestart(ctx) {
       ...saved,
       key,
       record,
+      result: savedResult(saved.result),
       logFile: openLog(logPath),
       open: !ctx.runner.closed(saved.id),
       ip: null,

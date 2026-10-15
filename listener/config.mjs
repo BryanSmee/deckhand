@@ -307,9 +307,10 @@ export function loadConfig(env, file = NO_FILE) {
     // Where GitHub sends webhooks and screenshots are served. Optional: /setup detects it
     // and stores it with the App.
     publicUrl: setting("PUBLIC_URL") ? setting("PUBLIC_URL").replace(/\/$/, "") : null,
-    model: setting("SANDBOX_MODEL") || "opus",
+    // A tier (best, balanced, fast) each agent maps to one of its models, or a model's name.
+    model: setting("SANDBOX_MODEL") || "best",
     effort: setting("SANDBOX_EFFORT") || "medium",
-    brainstormModel: setting("BRAINSTORM_MODEL") || setting("SANDBOX_MODEL") || "opus",
+    brainstormModel: setting("BRAINSTORM_MODEL") || setting("SANDBOX_MODEL") || "best",
     brainstormEffort: setting("BRAINSTORM_EFFORT") || setting("SANDBOX_EFFORT") || "medium",
     needsInputLabel: setting("NEEDS_INPUT_LABEL") ?? "needs-input",
     // The shortest interval at which a repo's `conflicts.check_minutes` may look at its open

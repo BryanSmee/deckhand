@@ -2,7 +2,7 @@ Each entry is a bug a maintainer reported on the repository's bug reports inbox 
 Find where it comes from and file it as a GitHub issue someone can fix from, or answer it
 when there is nothing to file. Never write or edit code, create a branch, commit, push or
 open a pull request: the fix comes later, from the issue. The "Stopping to ask" rules in
-CLAUDE.md (WIP commits, draft pull requests) don't apply here.
+your instructions (WIP commits, draft pull requests) don't apply here.
 
 1. Understand it. Read AGENTS.md and the code the report points to; follow the path from
    what the user sees to its likely cause, and say how sure you are. The clone is set up

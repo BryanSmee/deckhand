@@ -104,7 +104,11 @@ const modelKey =
   (field) =>
   (value, { key, settings, fail }) => {
     if (typeof value === "string" && MODEL_NAME.test(value)) settings[field] = value;
-    else fail(key, "expected a model name (opus, sonnet, claude-…, openai/gpt-…)");
+    else
+      fail(
+        key,
+        "expected a model tier (best, balanced, fast) or name (opus, claude-…, openai/gpt-…)",
+      );
   };
 
 // A thinking effort, into settings[field].
@@ -308,7 +312,11 @@ function parseMode(name, mode, settings, fail) {
       else bad(key, "expected issue or fresh");
     } else if (key === "model") {
       if (typeof value === "string" && MODEL_NAME.test(value)) own.model = value;
-      else bad(key, "expected a model name (opus, sonnet, claude-…, openai/gpt-…)");
+      else
+        bad(
+          key,
+          "expected a model tier (best, balanced, fast) or name (opus, claude-…, openai/gpt-…)",
+        );
     } else if (EFFORTS.includes(String(value).toLowerCase())) {
       own.effort = String(value).toLowerCase();
     } else bad(key, `expected one of ${EFFORTS.join(", ")}`);

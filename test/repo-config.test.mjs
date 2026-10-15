@@ -368,6 +368,6 @@ modes:
   assert.equal(customMode(settings, "cheap").model, "anthropic/claude-haiku-4.5");
   const bad = parseRepoConfig("model: two words\n", config);
   assert.deepEqual(bad.errors, [
-    "model: expected a model name (opus, sonnet, claude-…, openai/gpt-…)",
+    "model: expected a model tier (best, balanced, fast) or name (opus, claude-…, openai/gpt-…)",
   ]);
 });

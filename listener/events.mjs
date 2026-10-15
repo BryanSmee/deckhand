@@ -107,8 +107,9 @@ export function parseAfter(text) {
 
 export const EFFORTS = ["low", "medium", "high", "xhigh", "max"];
 
-// A model name: an alias (opus), an id (claude-opus-5-5[1m]) or a gateway's
-// (anthropic/claude-opus-5.5, openai/gpt-5, meta-llama/llama-4:free).
+// A model: a tier (best, balanced, fast: agents/), an alias (opus), an id
+// (claude-opus-5-5[1m]) or a gateway's (anthropic/claude-opus-5.5, openai/gpt-5,
+// meta-llama/llama-4:free).
 export const MODEL_NAME = /^[\w.[\]/:-]+$/;
 
 // Removes "/model <name>" and "/effort <level>" lines from a comment, recording them in options.
