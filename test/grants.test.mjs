@@ -29,6 +29,7 @@ test("the operator's grants, per repo", () => {
   );
   assert.deepEqual(grantFor(grants, config, "org/repo"), {
     hosts: ["*.example.com", "pypi.org"],
+    allowRepoHosts: false,
     limits: { cpus: "4", memory: "2g", pids: 4096 },
     mounts: [
       { root: "/nfs/work", readOnly: false },
@@ -38,9 +39,21 @@ test("the operator's grants, per repo", () => {
   // Any other repo: nothing extra, the operator's limits.
   assert.deepEqual(grantFor(grants, config, "org/other"), {
     hosts: [],
+    allowRepoHosts: false,
     mounts: [],
     limits: config.limits,
   });
+});
+
+test('allow_repo_hosts: per repo, for every repo with "*", a repo\'s own entry first', () => {
+  const allows = (text, repo) => grantFor(parseGrants(text, config), config, repo).allowRepoHosts;
+  assert.equal(allows("org/repo:\n  allow_repo_hosts: true\n", "Org/Repo"), true);
+  assert.equal(allows("org/repo:\n  allow_repo_hosts: true\n", "org/other"), false);
+  const every = '"*":\n  allow_repo_hosts: true\norg/closed:\n  allow_repo_hosts: false\n';
+  assert.equal(allows(every, "org/any"), true);
+  assert.equal(allows(every, "org/closed"), false);
+  // An entry that doesn't say keeps what "*" says.
+  assert.equal(allows(`${every}org/mounts:\n  hosts: [pypi.org]\n`, "org/mounts"), true);
 });
 
 test("a broken grants file grants nothing and says what is wrong", () => {
@@ -52,6 +65,10 @@ test("a broken grants file grants nothing and says what is wrong", () => {
   bad("org/repo:\n  limits: { disk: 1 }\n", /limits\.disk: unknown/);
   bad("org/repo:\n  network: host\n", /network: unknown/);
   bad("just-a-name:\n  hosts: []\n", /expected an owner\/repo key/);
+  bad("org/repo:\n  allow_repo_hosts: yes\n", /allow_repo_hosts: expected true or false/);
+  // "*" only says whether repos may add hosts: nothing else is granted to every repo at once.
+  bad('"*":\n  hosts: [pypi.org]\n', /\*: hosts: only allow_repo_hosts applies to every repo/);
+  bad('"*":\n  mounts: [/srv]\n', /\*: mounts: only allow_repo_hosts/);
   assert.throws(() => parseGrants("[a]", config), ConfigError);
 });
 

@@ -166,7 +166,7 @@ All in `.env`, read by `compose.yaml`:
 | `MAX_PARALLEL`                                                                        | `2`                            | sandboxes running at once (a repo's `max_parallel` within it)                   |
 | `ALLOWED_HOSTS`                                                                       | none                           | hosts every sandbox may reach besides Anthropic and GitHub                      |
 | `SANDBOX_CPUS`, `SANDBOX_MEMORY`, `SANDBOX_PIDS`                                      | `2`, `4g`, `2048`              | each sandbox's limits (per repo: the grants file)                               |
-| `GRANTS_FILE`                                                                         | `/etc/deckhand/grants.yaml`    | what you grant each repo: hosts, host mounts, limits                            |
+| `GRANTS_FILE`                                                                         | `/etc/deckhand/grants.yaml`    | what you grant each repo: hosts, its own hosts, host mounts, limits             |
 | `EGRESS_PROXY`                                                                        | `http://egress:3128`           | the egress proxy, as sandboxes reach it                                         |
 | `INSTALL_NETWORK`                                                                     | `bridge`                       | network of the Claude Code install container (needs npm)                        |
 | `TRIGGER`                                                                             | `Deckhand`                     | first line of a comment that starts a run                                       |

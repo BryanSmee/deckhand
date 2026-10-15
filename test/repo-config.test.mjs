@@ -132,12 +132,13 @@ max_parallel: 0
 dockerfile: ../outside/Dockerfile
 allow_branch_docker_images: "yes"
 caches: [relative/path, /workspace/node_modules, /home/node/../root]
-hosts: ["bad host"]
+hosts: ["bad host", "*"]
 inbox: { ideas: three, discussions: 5 }
 `,
     config,
   );
-  assert.equal(errors.length, 10);
+  assert.equal(errors.length, 11);
+  assert.match(errors.join("\n"), /hosts: "\*": a repository can't open that much/);
   assert.match(errors.join("\n"), /inbox\.ideas: expected an issue number/);
   assert.match(errors.join("\n"), /inbox\.discussions: expected the name of a discussion category/);
   assert.match(errors.join("\n"), /effort: expected one of low/);

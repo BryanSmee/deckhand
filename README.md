@@ -143,8 +143,8 @@ Out of the box, without any configuration:
 
 - **Network:** sandboxes sit on an internal Docker network; the egress proxy lets them reach
   `api.anthropic.com`, GitHub and nothing else. You add hosts for every repository
-  (`ALLOWED_HOSTS`) or for one (the grants file); a repository can ask for more in its
-  config.
+  (`ALLOWED_HOSTS`) or for one (the grants file); a repository's own `hosts` only count
+  when you allow it (`allow_repo_hosts` in the grants file), and never `*`.
 - **Host paths:** none. No `~/.ssh`, `~/.gitconfig`, Docker socket or source tree. A host
   path is only mounted when you grant the repository a root that holds it, and read-only
   unless you say otherwise.

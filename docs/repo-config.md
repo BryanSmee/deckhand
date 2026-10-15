@@ -104,7 +104,7 @@ preview:
 | `dockerfile`                            | none: the base image                    | Dockerfile of the repo for its runs' image                                               |
 | `allow_branch_docker_images`            | `false`                                 | runs on a pull request use the Dockerfile of its branch; never for forks                 |
 | `caches`                                | none                                    | absolute paths in the sandbox kept in a volume per repo and path                         |
-| `hosts`                                 | none                                    | extra hosts the sandbox may reach through the egress proxy (`name`, `"*.domain"`, `"*"`) |
+| `hosts`                                 | none                                    | extra hosts the sandbox may reach (`name`, `"*.domain"`); only if the operator allows it |
 | `mounts`                                | none                                    | host paths requested (`- path: /nfs/work/api`, `read_only`); only under granted roots    |
 | `modes.<name>`                          | none                                    | the repo's own modes, picked with `/mode <name>` (see Modes)                             |
 | `inbox.ideas`, `inbox.bugs`             | none                                    | issue numbers whose comments are ideas or bug reports to file (see Inboxes)              |
@@ -117,12 +117,26 @@ preview:
 
 Sandboxes reach the outside through an egress proxy only: Anthropic's API, GitHub, the
 operator's `ALLOWED_HOSTS` and what the operator grants the repository, plus the repo's
-`hosts`. Anything else is refused with a `403` saying so. Quote patterns that start with
-`*`: YAML reads a bare `*` as an alias.
+`hosts` when the operator allows it. Anything else is refused with a `403` saying so. Quote
+patterns that start with `*`: YAML reads a bare `*` as an alias.
 
 ```yaml
 hosts: [registry.npmjs.org, "*.pythonhosted.org", pypi.org]
 ```
+
+Like `mounts`, `hosts` is a request: anyone who can push to the default branch could
+otherwise open the sandbox's network.
+
+- When the operator sets `allow_repo_hosts: true` for the repository in their grants file,
+  its `hosts` are added to what its sandboxes reach.
+- Otherwise its `hosts` may only list what the operator already allows it (they change
+  nothing); any other host stops the runs, and the reply lists it with the file's errors.
+  Ask the operator to grant it, or to set `allow_repo_hosts`.
+- `"*"` and whole top-level domains (`"*.com"`) are always errors here: only the operator
+  can open that much.
+
+The onboarding issue says which case applies. See
+[Security model](security.md#a-repositorys-own-hosts).
 
 A `mounts` entry is only a request: it is mounted when the operator grants the repository a
 root holding it, after resolving `..` and symlinks. Otherwise the run stops and the reply
@@ -253,8 +267,8 @@ error, listed in the reply:
 - **Fresh modes** (`session: fresh`) start a new session on every run and don't keep it:
   the issue stays in the mode it was in, and its next run continues its own session.
 - **A mode narrows, never widens**: the hosts, mounts and limits of every run of the repo
-  are the same whatever the mode (the operator's grants and the repo's `hosts` and
-  `mounts`). A mode has no key for them.
+  are the same whatever the mode (the operator's grants and what they let the repo's
+  `hosts` and `mounts` add). A mode has no key for them.
 
 The dashboard names the repo's modes next to the issue, and in each run.
 

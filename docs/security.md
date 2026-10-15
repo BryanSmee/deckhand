@@ -74,10 +74,16 @@ with errors grants nothing: the listener won't start, and runs started after a b
 stop (the details are in the listener's logs, not on GitHub).
 
 ```yaml
-# grants.yaml: one key per repository (owner/repo)
+# grants.yaml: one key per repository (owner/repo), and "*" for every repository
+"*":
+  # The hosts in each repo's own .deckhand.yaml count (default: false). The only key "*"
+  # takes: hosts and limits for every repo are ALLOWED_HOSTS and SANDBOX_*.
+  allow_repo_hosts: false
 acme/api:
   # Reachable by its sandboxes, besides the mandatory hosts and ALLOWED_HOSTS.
   hosts: ["*.acme.dev", pypi.org]
+  # Its .deckhand.yaml may add hosts of its own (never "*"); overrides "*" above.
+  allow_repo_hosts: true
   # Its own limits; missing ones keep SANDBOX_CPUS, SANDBOX_MEMORY, SANDBOX_PIDS.
   limits: { cpus: 4, memory: 8g, pids: 4096 }
   # Roots it may mount from (read-only unless read_only: false).
@@ -87,7 +93,9 @@ acme/api:
     - /srv/datasets
 ```
 
-Quote patterns starting with `*` (`"*.acme.dev"`): YAML reads a bare `*` as an alias.
+Quote patterns starting with `*` (`"*.acme.dev"`, `"*"` as a key): YAML reads a bare `*`
+as an alias. See [A repository's own hosts](#a-repositorys-own-hosts) for
+`allow_repo_hosts`.
 
 ## Hardening
 
@@ -143,10 +151,32 @@ inspect`) and answers from that run's list. An unknown address, an unknown host,
 
 - `ALLOWED_HOSTS`: yours, for every repository;
 - the repo's `hosts` in the grants file;
-- the repo's own `hosts` in its `.deckhand.yaml` (default branch only).
+- the repo's own `hosts` in its `.deckhand.yaml` (default branch only), **only when you
+  allow it** with `allow_repo_hosts: true` in the grants file (see below).
 
 Each entry is a host name (`registry.npmjs.org`), `*.domain` (any subdomain, at any depth,
 not the domain itself: list both if you need both), or `*` (anything). Any port.
+
+### A repository's own hosts
+
+A repository's `.deckhand.yaml` is written by whoever can push to its default branch, and
+a run can open a pull request that someone merges. If its `hosts` counted on their own, a
+sandbox could get its way out by changing that file. So the rule is the same as for
+mounts: the repository asks, you decide.
+
+- **Without `allow_repo_hosts`** (the default), a repo's `hosts` can only repeat what you
+  already allow it: the mandatory hosts, `ALLOWED_HOSTS` and its `hosts` in the grants file
+  (`files.example.com` is fine under a granted `*.example.com`). Any other entry stops its
+  runs, and the reply on the issue lists each refused host with the config's other errors.
+- **With `allow_repo_hosts: true`** for the repo (or for every repo, under `"*"`), its
+  `hosts` are added to what its sandboxes may reach. Give it to repositories whose default
+  branch you trust as much as your own grants file: protected, reviewed merges.
+- **Never `*` or a whole top-level domain** (`"*.com"`) from a repository, granted or not:
+  that is a config error. Only you can open that much, in `ALLOWED_HOSTS` or the grants
+  file.
+
+A mode can't change any of this: the hosts of every run of a repo are the same whatever the
+mode.
 
 **Mandatory hosts**, always allowed:
 

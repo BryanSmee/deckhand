@@ -90,9 +90,10 @@ Skip screenshots for changes with nothing visible (API, tests, tooling).
 ## Network
 
 The sandbox reaches the outside through an egress proxy, which only lets through the hosts
-this repository is allowed (Anthropic's API, GitHub, and those its `.deckhand.yaml` or the
-operator adds). Any other host fails with `403` from "Deckhand's egress proxy". Don't try
-to get around it. If the task needs a host that is refused (a package registry, an API),
-finish what you can without it and say in your final message which host is missing, so the
-maintainer can add it to `hosts` in `.deckhand.yaml`; stop and ask when nothing useful can
-be done without it.
+this repository is allowed (Anthropic's API, GitHub, those the operator adds, and those its
+`.deckhand.yaml` adds when the operator allows it). Any other host fails with `403` from
+"Deckhand's egress proxy". Don't try to get around it. If the task needs a host that is
+refused (a package registry, an API), finish what you can without it and say in your final
+message which host is missing, so the maintainer can add it to `hosts` in `.deckhand.yaml`
+(when the operator lets this repository add hosts) or ask the operator to grant it; stop and
+ask when nothing useful can be done without it.

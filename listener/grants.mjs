@@ -1,11 +1,14 @@
-// What the operator grants each repo, beyond what every sandbox gets: extra hosts, host
-// mounts under allowed roots, and its own CPU, memory and pids limits. It lives in the
-// operator's GRANTS_FILE, never in a repo: a repo's .deckhand.yaml may request a mount, but
-// only a root granted here makes it happen. Read again at each run, so an edit applies
-// without a restart. Format: ../docs/security.md.
+// What the operator grants each repo, beyond what every sandbox gets: extra hosts, whether
+// its own .deckhand.yaml may add hosts, host mounts under allowed roots, and its own CPU,
+// memory and pids limits. It lives in the operator's GRANTS_FILE, never in a repo: a repo's
+// .deckhand.yaml may request a mount or a host, but only a grant here makes it happen. Read
+// again at each run, so an edit applies without a restart. Format: ../docs/security.md.
 //
+//   "*":
+//     allow_repo_hosts: true   # every repo's own `hosts` count (default: false)
 //   org/repo:
 //     hosts: ["*.example.com"]
+//     allow_repo_hosts: false  # overrides "*" for this repo
 //     limits: { cpus: 4, memory: 8g, pids: 4096 }
 //     mounts:
 //       - root: /nfs/work
@@ -24,8 +27,10 @@ function isMap(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-// The file's text → Map of lowercase "owner/repo" → { hosts, mounts, limits }. Any error
-// throws a ConfigError listing them all: a broken grants file grants nothing.
+// The file's text → Map of lowercase "owner/repo" (or "*", every repo) → { hosts,
+// allowRepoHosts, mounts, limits }; allowRepoHosts is null when the entry doesn't say, so
+// "*" decides (grantFor). Any error throws a ConfigError listing them all: a broken grants
+// file grants nothing.
 export function parseGrants(text, config) {
   const errors = [];
   const grants = new Map();
@@ -38,13 +43,21 @@ export function parseGrants(text, config) {
   if (!isMap(raw)) throw new ConfigError("grants: expected owner/repo keys at the top level");
   for (const [repo, value] of Object.entries(raw)) {
     const fail = (what) => errors.push(`${repo}: ${what}`);
-    if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) {
-      fail("expected an owner/repo key");
+    const everyRepo = repo === "*";
+    if (!everyRepo && !/^[\w.-]+\/[\w.-]+$/.test(repo)) {
+      fail('expected an owner/repo key (or "*" for every repo)');
       continue;
     }
-    const grant = { hosts: [], mounts: [], limits: config.limits };
+    const grant = { hosts: [], allowRepoHosts: null, mounts: [], limits: config.limits };
     for (const [key, v] of Object.entries(value ?? {})) {
-      if (key === "hosts") {
+      if (key === "allow_repo_hosts") {
+        if (typeof v === "boolean") grant.allowRepoHosts = v;
+        else fail("allow_repo_hosts: expected true or false");
+      } else if (everyRepo) {
+        // Hosts and limits for every repo are ALLOWED_HOSTS and SANDBOX_*; mounts for every
+        // repo would be too broad to grant by accident.
+        fail(`${key}: only allow_repo_hosts applies to every repo`);
+      } else if (key === "hosts") {
         if (!Array.isArray(v)) fail("hosts: expected a list of host names");
         else
           for (const host of v) {
@@ -77,7 +90,7 @@ export function parseGrants(text, config) {
             });
           }
         }
-      } else fail(`${key}: unknown (hosts, limits or mounts)`);
+      } else fail(`${key}: unknown (hosts, allow_repo_hosts, limits or mounts)`);
     }
     grants.set(repo.toLowerCase(), grant);
   }
@@ -98,8 +111,16 @@ export function loadGrants(config, read = (path) => readFileSync(path, "utf8")) 
 }
 
 // What one repo gets: nothing extra and the operator's limits, unless it is granted more.
+// Its own config's hosts count when its entry, or else "*", says allow_repo_hosts: true.
 export function grantFor(grants, config, repo) {
-  return grants.get(repo.toLowerCase()) ?? { hosts: [], mounts: [], limits: config.limits };
+  const own = grants.get(repo.toLowerCase()) ?? {
+    hosts: [],
+    allowRepoHosts: null,
+    mounts: [],
+    limits: config.limits,
+  };
+  const allowRepoHosts = own.allowRepoHosts ?? grants.get("*")?.allowRepoHosts ?? false;
+  return { ...own, allowRepoHosts };
 }
 
 function within(path, root) {
