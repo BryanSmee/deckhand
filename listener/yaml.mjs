@@ -9,6 +9,11 @@ export class YamlError extends Error {
   }
 }
 
+// A mapping, as parseYaml() returns them: not null, not a list.
+export function isMap(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
 export function parseYaml(text) {
   const lines = String(text)
     .replace(/^﻿/, "")

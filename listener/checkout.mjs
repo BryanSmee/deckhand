@@ -20,7 +20,7 @@ export async function checkout(request, repo, ref, { tmp = tmpdir() } = {}) {
   return dir;
 }
 
-export function untar(stream, dir) {
+function untar(stream, dir) {
   return new Promise((resolve, reject) => {
     const tar = spawn("tar", ["-xzf", "-", "--strip-components=1", "-C", dir], {
       stdio: ["pipe", "ignore", "pipe"],

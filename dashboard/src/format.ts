@@ -78,8 +78,17 @@ export function toneOf(state: TaskState | RunStatus): Tone {
 export const isLive = (t: Task) => ["building-image", "working", "stopping"].includes(t.state);
 
 const KIND_NAMES: Record<string, string> = { pr: "Pull request", discussion: "Discussion" };
-// The kinds and built-in modes the kind already names; the repo's own modes are shown.
-const PLAIN = ["work", "brainstorm", "idea", "bug", "discussion"];
+// The listener's own modes (RESERVED_MODES in listener/repo-config.mjs, which a test keeps
+// in step): the kind already names them, only the repo's own modes are shown.
+export const BUILT_IN_MODES = [
+  "work",
+  "brainstorm",
+  "onboarding",
+  "stop",
+  "idea",
+  "bug",
+  "discussion",
+];
 
 export function kindName(t: Pick<Task, "kind">): string {
   if (t.kind === "brainstorm") return "Brainstorm";
@@ -90,7 +99,7 @@ export function kindName(t: Pick<Task, "kind">): string {
 
 // The repo's own mode, if any: "review".
 export function ownMode(mode: string | null | undefined): string | null {
-  return mode && !PLAIN.includes(mode) ? mode : null;
+  return mode && !BUILT_IN_MODES.includes(mode) ? mode : null;
 }
 
 // What a task is called: its title, or its kind and number until the title is known.

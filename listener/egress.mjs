@@ -6,7 +6,7 @@
 // says allow_repo_hosts. Security model: ../docs/security.md.
 
 // "name", "*.domain" (any subdomain, not the domain itself) or "*" (anything).
-export const HOST_PATTERN = /^(\*|(\*\.)?[a-z0-9_-]+(\.[a-z0-9_-]+)*)$/;
+const HOST_PATTERN = /^(\*|(\*\.)?[a-z0-9_-]+(\.[a-z0-9_-]+)*)$/;
 
 export function hostProblem(name) {
   return typeof name === "string" && HOST_PATTERN.test(name.toLowerCase())

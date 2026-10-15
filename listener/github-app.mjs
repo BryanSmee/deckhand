@@ -2,8 +2,8 @@
 // installation tokens. The listener calls GitHub with them, and the broker (broker.mjs)
 // hands sandboxes tokens limited to their run's repo.
 import { createSign } from "node:crypto";
-import { chmodSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { readJson, writeJsonAtomic } from "./store.mjs";
 
 // What the App asks for when /setup creates it (manifest flow).
 export const APP_PERMISSIONS = {
@@ -54,25 +54,25 @@ export const READ_ONLY_PERMISSIONS = {
 // whoever gets it can use it for at least that long.
 export const REFRESH_MS = 10 * 60000;
 
+// What every call to GitHub sends (auth.mjs and setup.mjs add to it).
+export const GITHUB_HEADERS = Object.freeze({
+  accept: "application/vnd.github+json",
+  "user-agent": "deckhand",
+  "x-github-api-version": "2022-11-28",
+});
+
 // --- Credentials: written by /setup, in the data volume ----------------------------------
 
 const FILE = "app.json";
 
+// Null before /setup created it.
 export function loadCredentials(dir) {
-  try {
-    return JSON.parse(readFileSync(join(dir, FILE), "utf8"));
-  } catch {
-    return null; // Not set up yet: /setup creates it.
-  }
+  return readJson(join(dir, FILE));
 }
 
 // The private key and webhook secret are in there: owner-only, written whole or not at all.
 export function saveCredentials(dir, credentials) {
-  const path = join(dir, FILE);
-  const tmp = `${path}.${process.pid}.tmp`;
-  writeFileSync(tmp, JSON.stringify(credentials, null, 2), { mode: 0o600 });
-  chmodSync(tmp, 0o600);
-  renameSync(tmp, path);
+  writeJsonAtomic(join(dir, FILE), credentials, { mode: 0o600 });
 }
 
 // --- The App -----------------------------------------------------------------------------
@@ -112,11 +112,9 @@ export function createGitHubApp({
     return fetch(api + path, {
       method,
       headers: {
+        ...GITHUB_HEADERS,
         authorization: `Bearer ${auth}`,
-        accept: "application/vnd.github+json",
         "content-type": "application/json",
-        "user-agent": "deckhand",
-        "x-github-api-version": "2022-11-28",
       },
       body: body && JSON.stringify(body),
     });

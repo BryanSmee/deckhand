@@ -9,8 +9,10 @@
 //
 // Whoever creates the App decides where webhooks come from, so the form needs the one-time
 // token the listener prints in its logs, and the whole flow closes once an App is stored.
-import { randomBytes, timingSafeEqual, createHash } from "node:crypto";
-import { APP_EVENTS, APP_PERMISSIONS } from "./github-app.mjs";
+import { randomBytes } from "node:crypto";
+import { APP_EVENTS, APP_PERMISSIONS, GITHUB_HEADERS } from "./github-app.mjs";
+import { escape, page as html, same } from "./html.mjs";
+import { readBody } from "./web.mjs";
 
 const STATE_TTL_MS = 60 * 60000;
 
@@ -29,47 +31,16 @@ export function manifest({ name, publicUrl }) {
   };
 }
 
-function escape(text) {
-  return String(text).replace(
-    /[&<>"']/g,
-    (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c],
-  );
-}
-
-function same(a, b) {
-  const digest = (s) => createHash("sha256").update(String(s)).digest();
-  return timingSafeEqual(digest(a), digest(b));
-}
-
-function page(res, status, title, body) {
-  res.writeHead(status, {
-    "content-type": "text/html; charset=utf-8",
-    "cache-control": "no-store",
-    "referrer-policy": "no-referrer",
-  });
-  res.end(`<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>${escape(title)} · Deckhand</title>
-    <style>
-      :root { color-scheme: light dark; --line: #d6d3d1; --accent: #c2410c; --muted: #78716c; }
-      body { font: 15px/1.5 system-ui, sans-serif; max-width: 34rem; margin: 3rem auto; padding: 0 1rem; }
+const CSS = `body { max-width: 34rem; }
       label { display: block; margin: 1rem 0 0.25rem; font-weight: 600; }
       input { width: 100%; box-sizing: border-box; padding: 0.5rem; font: inherit; border: 1px solid var(--line); border-radius: 6px; }
       button { margin-top: 1.5rem; padding: 0.6rem 1.2rem; font: inherit; border: 0; border-radius: 6px; background: var(--accent); color: #fff; cursor: pointer; }
-      small, .muted { color: var(--muted); }
-      small { display: block; margin-top: 0.25rem; }
+      small { color: var(--muted); display: block; margin-top: 0.25rem; }
       .warn { border-left: 3px solid var(--accent); padding-left: 0.75rem; }
-      code { font-size: 0.9em; }
-    </style>
-  </head>
-  <body>
-    <h1>${escape(title)}</h1>
-    ${body}
-  </body>
-</html>`);
+      code { font-size: 0.9em; }`;
+
+function page(res, status, title, body) {
+  return html(res, status, title, body, { css: CSS });
 }
 
 // PUBLIC_URL, or what the browser used to get here (through the operator's reverse proxy).
@@ -92,16 +63,8 @@ function publicUrlOf(value) {
   }
 }
 
-function readForm(req) {
-  return new Promise((resolve, reject) => {
-    let body = "";
-    req.on("data", (chunk) => {
-      body += chunk;
-      if (body.length > 10000) req.destroy();
-    });
-    req.on("end", () => resolve(Object.fromEntries(new URLSearchParams(body))));
-    req.on("error", reject);
-  });
+async function readForm(req) {
+  return Object.fromEntries(new URLSearchParams((await readBody(req, 10000)).toString("utf8")));
 }
 
 export function createSetup({
@@ -219,10 +182,7 @@ back here to install it.</p>
     }
     const res1 = await fetch(`${config.githubApi}/app-manifests/${code}/conversions`, {
       method: "POST",
-      headers: {
-        accept: "application/vnd.github+json",
-        "user-agent": "deckhand",
-      },
+      headers: GITHUB_HEADERS,
     });
     if (!res1.ok) {
       log(`Setup: GitHub refused the manifest code: ${res1.status} ${await res1.text()}`);
@@ -239,12 +199,7 @@ back here to install it.</p>
     try {
       const bot = await fetch(
         `${config.githubApi}/users/${encodeURIComponent(`${app.slug}[bot]`)}`,
-        {
-          headers: {
-            accept: "application/vnd.github+json",
-            "user-agent": "deckhand",
-          },
-        },
+        { headers: GITHUB_HEADERS },
       );
       if (bot.ok) botId = (await bot.json()).id;
     } catch {

@@ -113,23 +113,24 @@ services); each reads `ctx` when it is called rather than when it is created, so
 call one created after it: a finished run (`runs.mjs`) schedules the next one (`tasks.mjs`),
 which starts runs.
 
-| Module                                                            | What it does                                                                                      |
-| ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
-| `server.mjs`                                                      | Settings, the GitHub App, `ctx`, the modules; starts the servers, restores runs, handles SIGTERM. |
-| `http.mjs`                                                        | Webhook deliveries, dashboard and its API, `/status`, screenshots; the broker's egress answers.   |
-| `tasks.mjs`                                                       | One queue per issue: which mode a comment asks for, the pause, delivery to a running session.     |
-| `runs.mjs`                                                        | A run from start to reply: settings, image, grants, the sandbox, its output, reactions, label.    |
-| `restart.mjs`                                                     | `queue.json` and `logs/<run>.live.json`: what a listener leaves to the next one; `/status`.       |
-| `brainstorms.mjs`                                                 | Each issue's brainstorm (`brainstorms.json`) and repo mode (`modes.json`).                        |
-| `comments.mjs`                                                    | Replies (comments, discussion threads), reactions, the needs-input label.                         |
-| `prompts.mjs`                                                     | What Claude reads: each run's prompt and first message, comments delivered mid-run. Pure.         |
-| `modes.mjs`                                                       | Built-in modes: light, fresh, their token's permissions, the dashboard's kind. Pure.              |
-| `runlog.mjs`                                                      | Run logs: the list rebuilt after a restart, the dashboard's entries per line, the live stream.    |
-| `events.mjs`                                                      | Deliveries → work items, trigger and `/mode` lines, pull request states. Pure.                    |
-| `repo-config.mjs`, `yaml.mjs`                                     | `.deckhand.yaml`, read from the default branch and parsed.                                        |
-| `grants.mjs`, `egress.mjs`                                        | The operator's grants (hosts, mounts, limits) and the egress policy.                              |
-| `github-app.mjs`, `broker.mjs`, `git-gateway.mjs`                 | The App's tokens; the sandboxes' token broker; their pushes, never to the default branch.         |
-| `setup.mjs`, `auth.mjs`                                           | `/setup` (creating the App) and signing in with GitHub.                                           |
-| `images.mjs`, `checkout.mjs`, `runner/`                           | Repo images, Claude Code's install, caches; checkouts; the Docker runner.                         |
-| `onboarding.mjs`, `previews.mjs`                                  | Onboarding issues; preview hooks.                                                                 |
-| `board.mjs`, `titles.mjs`, `pulls.mjs`, `repos.mjs`, `static.mjs` | The dashboard's tasks, titles, pull requests, repository list and files.                          |
+| Module                                                            | What it does                                                                                       |
+| ----------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `server.mjs`                                                      | Settings, the GitHub App, `ctx`, the modules; starts the servers, restores runs, handles SIGTERM.  |
+| `http.mjs`                                                        | Webhook deliveries, dashboard and its API, `/status`, screenshots; the broker's egress answers.    |
+| `tasks.mjs`                                                       | One queue per issue: which mode a comment asks for, the pause, delivery to a running session.      |
+| `runs.mjs`                                                        | A run from start to reply: settings, image, grants, the sandbox, its output, reactions, label.     |
+| `restart.mjs`                                                     | `queue.json` and `logs/<run>.live.json`: what a listener leaves to the next one; `/status`.        |
+| `brainstorms.mjs`                                                 | Each issue's brainstorm (`brainstorms.json`) and repo mode (`modes.json`).                         |
+| `comments.mjs`                                                    | Replies (comments, discussion threads), reactions, the needs-input label.                          |
+| `prompts.mjs`                                                     | What Claude reads: each run's prompt and first message, comments delivered mid-run. Pure.          |
+| `modes.mjs`                                                       | Built-in modes: light, fresh, their token's permissions, the dashboard's kind. Pure.               |
+| `runlog.mjs`                                                      | Run logs: the list rebuilt after a restart, the dashboard's entries per line, the live stream.     |
+| `events.mjs`                                                      | Deliveries → work items, trigger and `/mode` lines, pull request states. Pure.                     |
+| `repo-config.mjs`, `yaml.mjs`                                     | `.deckhand.yaml`, read from the default branch and parsed.                                         |
+| `grants.mjs`, `egress.mjs`                                        | The operator's grants (hosts, mounts, limits) and the egress policy.                               |
+| `github-app.mjs`, `broker.mjs`, `git-gateway.mjs`                 | The App's tokens; the sandboxes' token broker; their pushes, never to the default branch.          |
+| `setup.mjs`, `auth.mjs`                                           | `/setup` (creating the App) and signing in with GitHub.                                            |
+| `images.mjs`, `checkout.mjs`, `runner/`                           | Repo images, Claude Code's install, caches; checkouts; the Docker runner.                          |
+| `onboarding.mjs`, `previews.mjs`                                  | Onboarding issues; preview hooks.                                                                  |
+| `board.mjs`, `titles.mjs`, `pulls.mjs`, `repos.mjs`, `static.mjs` | The dashboard's tasks, titles, pull requests, repository list and files.                           |
+| `store.mjs`, `html.mjs`, `web.mjs`                                | Shared helpers: JSON state files written atomically; the small HTML pages; `sendJson`, `readBody`. |

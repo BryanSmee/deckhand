@@ -2,19 +2,18 @@
 // ("org/repo#12", "org/repo#pr-3", "org/repo#discussion-8"). Webhooks bring most of them;
 // tasks older than that (logs written before titles were kept) are fetched once from GitHub
 // and kept in titles.json, so a restart doesn't ask again.
-import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { readJson, writeJsonAtomic } from "./store.mjs";
 
 // `fetchTitle(repo, kind, number)`: the title on GitHub, or null.
 export function createTitles({ path, fetchTitle, log = () => {} }) {
-  const titles = new Map(existsSync(path) ? Object.entries(load(path)) : []);
+  const titles = new Map(Object.entries(readJson(path, {})));
   // Fetched once per listener: a failure (a deleted issue, no access) isn't retried until
   // the next start.
   const tried = new Set();
   let fetching = null;
 
   function save() {
-    writeFileSync(`${path}.tmp`, JSON.stringify(Object.fromEntries(titles), null, 2));
-    renameSync(`${path}.tmp`, path);
+    writeJsonAtomic(path, Object.fromEntries(titles));
   }
 
   function set(key, title) {
@@ -54,14 +53,6 @@ export function createTitles({ path, fetchTitle, log = () => {} }) {
   }
 
   return { get: (key) => titles.get(key) ?? null, set, seed, fill };
-}
-
-function load(path) {
-  try {
-    return JSON.parse(readFileSync(path, "utf8"));
-  } catch {
-    return {};
-  }
 }
 
 // "org/repo#pr-3" → { repo: "org/repo", kind: "pr", number: 3 }.

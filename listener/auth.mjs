@@ -9,9 +9,11 @@
 // The session is a signed cookie (login and expiry, HMAC with a key kept in the data volume),
 // so it survives a restart. The allowlist is checked again on every request: removing a user
 // from ALLOWED_USERS and restarting signs them out.
-import { createHmac, randomBytes, timingSafeEqual, createHash } from "node:crypto";
+import { createHmac, randomBytes } from "node:crypto";
 import { chmodSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { GITHUB_HEADERS } from "./github-app.mjs";
+import { escape, page as html, same } from "./html.mjs";
 
 export const SESSION_COOKIE = "deckhand_session";
 const STATE_COOKIE = "deckhand_oauth_state";
@@ -33,7 +35,7 @@ export function sessionKey(dir) {
   return key;
 }
 
-export function cookies(req) {
+function cookies(req) {
   const out = {};
   for (const part of String(req.headers.cookie ?? "").split(";")) {
     const at = part.indexOf("=");
@@ -42,44 +44,11 @@ export function cookies(req) {
   return out;
 }
 
-function same(a, b) {
-  const digest = (s) => createHash("sha256").update(String(s)).digest();
-  return timingSafeEqual(digest(a), digest(b));
-}
+const CSS = `.button { display: inline-block; margin-top: 1rem; padding: 0.6rem 1.2rem; font: inherit; border: 0; border-radius: 6px; background: var(--accent); color: #fff; cursor: pointer; text-decoration: none; }`;
 
-function escape(text) {
-  return String(text).replace(
-    /[&<>"']/g,
-    (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c],
-  );
-}
-
-// A small page of its own, like /setup's: the dashboard itself needs a session.
+// The sign-in pages, and the dashboard's before it (http.mjs).
 export function page(res, status, title, body, headers = {}) {
-  res.writeHead(status, {
-    "content-type": "text/html; charset=utf-8",
-    "cache-control": "no-store",
-    "referrer-policy": "no-referrer",
-    ...headers,
-  });
-  res.end(`<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>${escape(title)} · Deckhand</title>
-    <style>
-      :root { color-scheme: light dark; --accent: #c2410c; --muted: #78716c; }
-      body { font: 15px/1.5 system-ui, sans-serif; max-width: 30rem; margin: 3rem auto; padding: 0 1rem; }
-      .button { display: inline-block; margin-top: 1rem; padding: 0.6rem 1.2rem; font: inherit; border: 0; border-radius: 6px; background: var(--accent); color: #fff; cursor: pointer; text-decoration: none; }
-      .muted { color: var(--muted); }
-    </style>
-  </head>
-  <body>
-    <h1>${escape(title)}</h1>
-    ${body}
-  </body>
-</html>`);
+  return html(res, status, title, body, { headers, css: CSS });
 }
 
 export function createAuth({
@@ -222,10 +191,11 @@ GitHub and sign in here with another account.</p>`,
   async function exchange(credentials, code) {
     const res = await fetch(`${config.githubUrl}/login/oauth/access_token`, {
       method: "POST",
+      // Not the REST API: JSON only when asked for it.
       headers: {
+        ...GITHUB_HEADERS,
         accept: "application/json",
         "content-type": "application/json",
-        "user-agent": "deckhand",
       },
       body: JSON.stringify({
         client_id: credentials.client_id,
@@ -243,11 +213,7 @@ GitHub and sign in here with another account.</p>`,
   async function whoIs(credentials, token) {
     const me = await json(
       await fetch(`${config.githubApi}/user`, {
-        headers: {
-          authorization: `Bearer ${token}`,
-          accept: "application/vnd.github+json",
-          "user-agent": "deckhand",
-        },
+        headers: { ...GITHUB_HEADERS, authorization: `Bearer ${token}` },
       }),
       "user",
     );
@@ -263,10 +229,9 @@ GitHub and sign in here with another account.</p>`,
     fetch(`${config.githubApi}/applications/${credentials.client_id}/token`, {
       method: "DELETE",
       headers: {
+        ...GITHUB_HEADERS,
         authorization: `Basic ${basic}`,
-        accept: "application/vnd.github+json",
         "content-type": "application/json",
-        "user-agent": "deckhand",
       },
       body: JSON.stringify({ access_token: token }),
     }).catch((error) => log(`Login: revoking the user token: ${error}`));

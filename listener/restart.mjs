@@ -2,10 +2,11 @@
 // still waiting for a run go to queue.json; each run's state is in logs/<run>.live.json all
 // along. The next listener reads both, finds the sandboxes by their labels, follows their
 // output from where the previous one stopped, and posts each reply once.
-import { readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { permissionsFor } from "./modes.mjs";
 import { openLog } from "./runlog.mjs";
+import { readJson, writeJsonAtomic } from "./store.mjs";
 
 // A comment as saved to disk: the id of its 👀 rather than the promise of it.
 async function plain({ eyes, comment, ...item }) {
@@ -79,17 +80,13 @@ export function createRestart(ctx) {
       const pending = await Promise.all(t.pending.map(plain));
       saved.push({ ...pick(t), pending, next: t.next });
     }
-    if (saved.length) writeFileSync(queuePath, JSON.stringify(saved, null, 2));
+    if (saved.length) writeJsonAtomic(queuePath, saved);
     log(`Saved ${saved.length} task(s) with queued comments`);
   }
 
   function loadQueue() {
-    let saved = [];
-    try {
-      saved = JSON.parse(readFileSync(queuePath, "utf8"));
-    } catch {
-      return; // Nothing was waiting.
-    }
+    const saved = readJson(queuePath);
+    if (!Array.isArray(saved)) return; // Nothing was waiting.
     rmSync(queuePath, { force: true });
     for (const t of saved) {
       const key = `${t.repo}#${t.id}`;
@@ -129,9 +126,7 @@ export function createRestart(ctx) {
         // Delivered comments are among the handled ones.
         unanswered: live.unanswered.map((i) => live.handled.indexOf(i)),
       };
-      const path = livePath(live.id);
-      writeFileSync(`${path}.tmp`, JSON.stringify(state, null, 2));
-      renameSync(`${path}.tmp`, path);
+      writeJsonAtomic(livePath(live.id), state);
     };
     live.saving = (live.saving ?? Promise.resolve())
       .then(write)
@@ -144,13 +139,8 @@ export function createRestart(ctx) {
   function restoreRuns() {
     const restored = [];
     for (const file of readdirSync(ctx.logDir).filter((f) => f.endsWith(".live.json"))) {
-      let saved;
-      try {
-        saved = JSON.parse(readFileSync(join(ctx.logDir, file), "utf8"));
-      } catch {
-        continue;
-      }
-      restored.push(restoreRun(saved));
+      const saved = readJson(join(ctx.logDir, file));
+      if (saved) restored.push(restoreRun(saved));
     }
     return restored;
   }
