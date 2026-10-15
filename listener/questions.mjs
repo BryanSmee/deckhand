@@ -114,13 +114,17 @@ function question(line) {
   return { title: titled ? titled[1].trim() : null, text, options: [] };
 }
 
-// The questions of a run's reply that starts with NEEDS_INPUT: what follows its "Needs your
-// input" heading, up to the next heading. Null when it asks nothing.
+// The questions of a run's reply that starts with NEEDS_INPUT: its "Open questions" section
+// when it has one (under "Needs your input", as the prompt's wording invites), else what
+// follows its "Needs your input" heading, up to the next heading. Null when it asks nothing.
 export function replyQuestions(text) {
   const reply = text ?? "";
   const at = reply.indexOf(NEEDS_INPUT);
   if (at < 0) return null;
-  const lines = reply.slice(at + NEEDS_INPUT.length).split(/\r?\n/);
+  const after = reply.slice(at + NEEDS_INPUT.length);
+  const titled = questionsSection(after);
+  if (titled !== null) return parseQuestions(titled);
+  const lines = after.split(/\r?\n/);
   const section = [];
   let fenced = false;
   let started = false;
