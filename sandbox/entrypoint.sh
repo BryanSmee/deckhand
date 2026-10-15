@@ -1,40 +1,42 @@
 #!/bin/bash
-# Finds Claude Code (CLAUDE_CODE_VERSION, in the shared /opt/claude-code volume, read-only:
-# no image ships it, the listener installs it with install-claude-code), clones the
-# repository over HTTPS (tokens from the listener's broker, git-credential-deckhand), opens
-# the task's branch and draft pull request (draft-pr.sh, for TASK_ISSUE), runs the repo's
-# setup command (SANDBOX_SETUP), then runs Claude without permission prompts: the container
-# is the sandbox. SANDBOX_LIGHT=1 (brainstorms, inbox entries, discussions) skips the branch
-# and the setup.
+# Loads the run's agent (SANDBOX_AGENT, by default claude: agents/<name>.sh, which finds its
+# CLI in its shared, read-only volume, installed by the listener), clones the repository over
+# HTTPS (tokens from the listener's broker, git-credential-deckhand), opens the task's branch
+# and draft pull request (draft-pr.sh, for TASK_ISSUE), runs the repo's setup command
+# (SANDBOX_SETUP), then runs the agent without permission prompts: the container is the
+# sandbox. SANDBOX_LIGHT=1 (brainstorms, inbox entries, discussions) skips the branch and the
+# setup.
 #
-#   (no arguments)      interactive claude
-#   -p "<task>" …       arguments for claude, e.g. a headless task
+#   (no arguments)      the agent, interactive
+#   -p "<task>" …       arguments for the agent's CLI, e.g. a headless task
 #   bash, git log…      any other command, run in the clone
 set -euo pipefail
 
 : "${REPO_URL:?REPO_URL: the repository to clone (https://github.com/owner/repo.git)}"
 : "${BASE_BRANCH:=main}"
-: "${CLAUDE_CODE_VERSION:?CLAUDE_CODE_VERSION: the Claude Code version to run}"
 
-# TASK_INPUT=stream (the webhook listener): comments that arrive while Claude works, as
-# stream-json user messages, from the run's inbox (TASK_INBOX, followed by deckhand-inbox
-# until the listener closes it) or else stdin. Stdin is set aside on fd 3 so no setup
-# command reads it.
+# TASK_INPUT=stream (the webhook listener): comments that arrive while the agent works, as
+# its messages, from the run's inbox (TASK_INBOX, followed by deckhand-inbox until the
+# listener closes it) or else stdin. Stdin is set aside on fd 3 so no setup command reads it.
 if [ "${TASK_INPUT:-}" = "stream" ]; then
   exec 3<&0 < /dev/null
 fi
+deckhand_messages() {
+  if [ -n "${TASK_INBOX:-}" ]; then deckhand-inbox "$TASK_INBOX"; else cat <&3; fi
+}
 
-# Installed by the listener before the run. The volume is read-only here, so a sandbox
-# started by hand can't install it: say so rather than fail later on a missing command.
-claude_bin=/opt/claude-code/$CLAUDE_CODE_VERSION/node_modules/.bin
-if [ ! -x "$claude_bin/claude" ]; then
-  echo "Claude Code $CLAUDE_CODE_VERSION is not installed in /opt/claude-code. The listener" \
-    "installs it before a run; by hand, run deckhand-install-claude-code as root" \
-    "(docker run --user 0 --entrypoint deckhand-install-claude-code" \
-    "-e CLAUDE_CODE_VERSION=$CLAUDE_CODE_VERSION -v <volume>:/opt/claude-code <image>)." >&2
+# Everything that is the agent's own, in the image or, run from a checkout, next to this file.
+: "${SANDBOX_AGENT:=claude}"
+agents=/usr/local/share/deckhand-agents
+[ -d "$agents" ] || agents=$(dirname "$(readlink -f "$0")")/agents
+if [[ ! "$SANDBOX_AGENT" =~ ^[a-z0-9-]+$ ]] || [ ! -f "$agents/$SANDBOX_AGENT.sh" ]; then
+  echo "Unknown agent $SANDBOX_AGENT (SANDBOX_AGENT): no $agents/$SANDBOX_AGENT.sh" >&2
   exit 1
 fi
-export PATH=$claude_bin:$PATH
+AGENT_FILES=$agents/$SANDBOX_AGENT
+# shellcheck source=agents/claude.sh
+source "$agents/$SANDBOX_AGENT.sh"
+agent_check
 
 if [ ! -d /workspace/.git ]; then
   # Blobless clone: full history for git log/blame, file contents fetched on demand. The
@@ -65,7 +67,7 @@ else
   # seconds (does nothing outside work runs on an issue).
   sandbox-draft-pr start
   # The repo's own setup (its config's `setup`: dependencies, services…), on stderr so its
-  # output never reads as Claude's. A failure doesn't stop the run: Claude is told.
+  # output never reads as the agent's. A failure doesn't stop the run: the agent is told.
   if [ -n "${SANDBOX_SETUP:-}" ]; then
     echo "Setup: $SANDBOX_SETUP" >&2
     if ! bash -c "$SANDBOX_SETUP" >&2; then
@@ -76,30 +78,27 @@ Check what it should have prepared before relying on it."
   fi
 fi
 
-# Copied on every start rather than baked into ~/.claude: that directory is a per-issue
-# volume, which would keep an old copy forever.
-cp /usr/local/share/deckhand-sandbox.md "$CLAUDE_CONFIG_DIR/CLAUDE.md"
-# The project's part (its config's `instructions`), from the default branch like the config:
-# a branch can't rewrite the rules it runs under.
+# Deckhand's rules, then the project's part (its config's `instructions`), from the default
+# branch like the config: a branch can't rewrite the rules it runs under.
+instructions=$(mktemp)
+cp /usr/local/share/deckhand-sandbox.md "$instructions"
 if [ -n "${SANDBOX_INSTRUCTIONS:-}" ]; then
   git fetch --quiet origin "$BASE_BRANCH" 2> /dev/null || true
   if extra=$(git show "origin/$BASE_BRANCH:$SANDBOX_INSTRUCTIONS" 2> /dev/null); then
-    printf '\n# This project\n\n%s\n' "$extra" >> "$CLAUDE_CONFIG_DIR/CLAUDE.md"
+    printf '\n# This project\n\n%s\n' "$extra" >> "$instructions"
   else
     echo "Instructions file $SANDBOX_INSTRUCTIONS not found on $BASE_BRANCH" >&2
   fi
 fi
+agent_instructions "$instructions"
+rm -f "$instructions"
 # Added again on every start: the proxy settings may change between runs. Chromium gets the
 # egress proxy as flags rather than from HTTP(S)_PROXY, which it doesn't reliably read.
 browser=(--headless --isolated --browser chromium --output-dir /tmp/playwright)
 if [ -n "${HTTPS_PROXY:-}" ]; then
   browser+=(--proxy-server "$HTTPS_PROXY" --proxy-bypass "${NO_PROXY:-localhost}")
 fi
-claude mcp remove --scope user playwright > /dev/null 2>&1 || true
-claude mcp add --scope user playwright -- playwright-mcp "${browser[@]}" > /dev/null
-
-# Model and thinking effort, from the listener's defaults or a comment's /model and /effort.
-model=(--model "${SANDBOX_MODEL:-opus}" --effort "${SANDBOX_EFFORT:-medium}")
+agent_mcp playwright playwright-mcp "${browser[@]}"
 
 if [ $# -eq 0 ] && [ -n "${TASK_PROMPT:-}" ]; then
   # The volumes keep the session between runs: the first run starts on TASK_PROMPT, later
@@ -112,20 +111,17 @@ if [ $# -eq 0 ] && [ -n "${TASK_PROMPT:-}" ]; then
   # "bug", the inbox entries, and the repo's fresh modes) starts a new one every time, and
   # doesn't keep it: the issue's session stays the one the next run continues.
   mode=${TASK_MODE:-work}
-  resume=() # session options: --continue, or none kept for a fresh one
+  session=new # new, continue, or fresh: not kept
   prompt=$TASK_PROMPT
-  fresh=
   if [ "${TASK_SESSION:-}" = fresh ] || [ "$mode" = idea ] || [ "$mode" = bug ]; then
-    fresh=1
-    resume=(--no-session-persistence)
+    session=fresh
   fi
-  if [ -z "$fresh" ] &&
-    compgen -G "$CLAUDE_CONFIG_DIR/projects/-workspace/*.jsonl" > /dev/null; then
-    resume=(--continue)
+  if [ "$session" = new ] && agent_has_session; then
+    session=continue
     if [ -z "${TASK_MESSAGE:-}" ]; then
-      exec claude --dangerously-skip-permissions "${model[@]}" --continue
+      agent_interactive continue
     fi
-    previous=$(cat "$CLAUDE_CONFIG_DIR/sandbox-mode" 2> /dev/null || echo work)
+    previous=$(cat "$AGENT_STATE/sandbox-mode" 2> /dev/null || echo work)
     if [ "$previous" != "$mode" ]; then
       prompt="Until now this session was in $previous mode on this issue. New task, building on
 that conversation:
@@ -156,7 +152,7 @@ still a draft and the work is done, update its description and mark it ready wit
 \`git rebase origin/$BASE_BRANCH\`, resolve any conflicts, run the checks again, then
 \`git push --force-with-lease\` (rewriting history is fine on this branch only). If a
 conflict can't be resolved safely (both sides changed the same behaviour, say), or the
-feedback raises a blocker only the maintainer can resolve (contradictory feedback, say), stop and ask instead: see \"Stopping to ask\" in CLAUDE.md."
+feedback raises a blocker only the maintainer can resolve (contradictory feedback, say), stop and ask instead: see \"Stopping to ask\" in your instructions."
     fi
   elif [ -n "${TASK_MESSAGE:-}" ]; then
     prompt+="
@@ -168,30 +164,11 @@ Also take this into account: $TASK_MESSAGE"
 
 $setup_failed"
   fi
-  [ -n "$fresh" ] || echo "$mode" > "$CLAUDE_CONFIG_DIR/sandbox-mode"
-  # TASK_OUTPUT=json (the webhook listener) reads the raw events; people get progress lines.
-  if [ "${TASK_OUTPUT:-}" = "json" ] && [ "${TASK_INPUT:-}" = "stream" ]; then
-    # The prompt is the first message, then each comment the listener writes; closing the
-    # inbox (or stdin) ends the session once Claude has answered. A process substitution
-    # rather than a pipe: if Claude exits early, the container stops instead of waiting.
-    exec claude --dangerously-skip-permissions "${model[@]}" "${resume[@]}" -p \
-      --input-format stream-json --output-format stream-json --verbose \
-      < <(
-        jq -nc --arg text "$prompt" '{type: "user", message: {role: "user", content: $text}}'
-        if [ -n "${TASK_INBOX:-}" ]; then deckhand-inbox "$TASK_INBOX"; else cat <&3; fi
-      )
-  fi
-  if [ "${TASK_OUTPUT:-}" = "json" ]; then
-    exec claude --dangerously-skip-permissions "${model[@]}" "${resume[@]}" -p "$prompt" \
-      --output-format stream-json --verbose
-  fi
-  claude --dangerously-skip-permissions "${model[@]}" "${resume[@]}" -p "$prompt" \
-    --output-format stream-json --verbose |
-    jq -Rrj --unbuffered -f /usr/local/share/deckhand-progress.jq
-  exit "${PIPESTATUS[0]}"
+  [ "$session" = fresh ] || echo "$mode" > "$AGENT_STATE/sandbox-mode"
+  agent_run "$session" "$prompt"
 fi
 
 if [ $# -eq 0 ] || [[ "$1" == -* ]]; then
-  exec claude --dangerously-skip-permissions "${model[@]}" "$@"
+  agent_interactive new "$@"
 fi
 exec "$@"

@@ -55,10 +55,10 @@ export function onboardingBody(sender, trigger, byHand = false) {
     : `@${sender} installed Deckhand on this repository.`;
   return `${who} It has no \`${CONFIG_FILE}\` yet, so its runs use the operator's settings and the bare sandbox image: no toolchain beyond Node, no setup command, no project hosts.
 
-Claude is reading the repository and replies here with a proposed \`${CONFIG_FILE}\` (and a Dockerfile or instructions file when they help), each key with its reason.
+Deckhand is reading the repository and replies here with a proposed \`${CONFIG_FILE}\` (and a Dockerfile or instructions file when they help), each key with its reason.
 
 - **Change it** by replying here: every comment goes on in the same conversation, no trigger line needed. Nothing is pushed meanwhile.
-- **Confirm it** with a comment whose first line is \`${trigger}\`: Claude opens a pull request with only the agreed files.
+- **Confirm it** with a comment whose first line is \`${trigger}\`: Deckhand opens a pull request with only the agreed files.
 - **Merge** that pull request: the next runs read the config from the default branch.`;
 }
 

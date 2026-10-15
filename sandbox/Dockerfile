@@ -1,15 +1,17 @@
-# Deckhand's base sandbox image: a container per issue that clones the repository, runs
-# Claude Code without permission prompts, and pushes a branch. Built from the repository
-# root (compose.yaml), as it also takes ../prompts/sandbox.md.
+# Deckhand's base sandbox image: a container per issue that clones the repository, runs an
+# agent (Claude Code) without permission prompts, and pushes a branch. Built from the
+# repository root (compose.yaml), as it also takes ../prompts/sandbox.md.
 #
 # The harness only: no project toolchain. A repo brings its own with a Dockerfile FROM this
 # image (`ARG DECKHAND_BASE` / `FROM $DECKHAND_BASE`, see ../docs/repo-config.md), which the
 # listener builds; without one, its runs use this image as is.
 #
-# Claude Code is not in the image: install-claude-code puts the pinned CLAUDE_CODE_VERSION
-# into the /opt/claude-code volume, shared by all runs, before the first run that needs it. GitHub access goes
-# through the listener's token broker (git-credential-deckhand, the gh wrapper): no token or
-# SSH key is ever mounted.
+# No agent is in the image: each installs per version into a shared volume before the first
+# run that needs it (Claude Code: agents/claude/install puts the pinned CLAUDE_CODE_VERSION
+# into the /opt/claude-code volume). One image for every agent: what is an agent's own is in
+# agents/<name>.sh and agents/<name>/, copied to /usr/local/share/deckhand-agents. GitHub
+# access goes through the listener's token broker (git-credential-deckhand, the gh wrapper):
+# no token or SSH key is ever mounted.
 
 FROM node:22-bookworm
 
@@ -47,29 +49,26 @@ COPY sandbox/deckhand-token sandbox/git-credential-deckhand sandbox/gh /usr/loca
 RUN git config --system credential.helper deckhand \
     && git config --system credential.useHttpPath false
 
-# Run as `node` (uid 1000): Claude refuses --dangerously-skip-permissions as root anyway.
-# Claude Code's non-essential traffic (telemetry, updates) off: the version is pinned.
-ENV CLAUDE_CONFIG_DIR=/home/node/.claude \
-    DISABLE_AUTOUPDATER=1 \
-    CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 \
-    GH_PROMPT_DISABLED=1
+ENV GH_PROMPT_DISABLED=1
 
-# Pre-accepted onboarding, workspace trust and bypass mode: nobody is there to click.
-COPY --chown=node:node sandbox/claude/ /home/node/.claude/
 COPY sandbox/pre-push /usr/local/share/git-hooks/pre-push
-COPY sandbox/progress.jq /usr/local/share/deckhand-progress.jq
 COPY prompts/sandbox.md /usr/local/share/deckhand-sandbox.md
 COPY sandbox/entrypoint.sh /usr/local/bin/deckhand-entrypoint
 COPY sandbox/deckhand-inbox /usr/local/bin/deckhand-inbox
-COPY sandbox/install-claude-code /usr/local/bin/deckhand-install-claude-code
 COPY sandbox/draft-pr.sh /usr/local/bin/sandbox-draft-pr
-# Its hooks: managed settings, because ~/.claude is a per-issue volume that would keep an
-# old copy of a settings.json forever.
-COPY sandbox/managed-settings.json /etc/claude-code/managed-settings.json
+COPY sandbox/agents/ /usr/local/share/deckhand-agents/
+
+# Claude Code's: pre-accepted onboarding, workspace trust and bypass mode (nobody is there to
+# click), its installer, and its hooks: managed settings, because ~/.claude is a per-issue
+# volume that would keep an old copy of a settings.json forever.
+COPY --chown=node:node sandbox/agents/claude/home/ /home/node/.claude/
+COPY sandbox/agents/claude/install /usr/local/bin/deckhand-install-claude-code
+COPY sandbox/agents/claude/managed-settings.json /etc/claude-code/managed-settings.json
 # /opt/claude-code: a new volume mounted there takes this owner, root: the listener installs
 # Claude Code as root and sandboxes mount it read-only (../docs/security.md).
 RUN install -d -o node -g node /workspace && install -d /opt/claude-code
 
+# Run as `node` (uid 1000): Claude Code refuses --dangerously-skip-permissions as root anyway.
 USER node
 WORKDIR /workspace
 ENTRYPOINT ["deckhand-entrypoint"]

@@ -250,7 +250,7 @@ function discussionItem(config, event, p, skip) {
   if (p.action !== "created") return skip(`${event} ${p.action ?? ""} is not handled`);
   const category = d?.category?.name ?? "";
   if (config.inbox && normalize(category) !== config.inbox.discussions) {
-    return skip(`discussion category "${category}" doesn't call Claude`);
+    return skip(`discussion category "${category}" doesn't call Deckhand`);
   }
   const c = event === "discussion" ? null : p.comment;
   const text = c

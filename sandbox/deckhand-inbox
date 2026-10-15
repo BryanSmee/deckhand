@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // Prints the lines the listener appends to a run's inbox (TASK_INBOX, in a volume mounted
-// read-only) as they come, until its close line: Claude's stream-json input, fed through a
-// file rather than stdin so that it survives a restart of the listener (runner/docker.mjs).
+// read-only) as they come, until its close line: the agent's input (deckhand_messages in
+// entrypoint.sh; Claude Code's stream-json), fed through a file rather than stdin so that it
+// survives a restart of the listener (runner/docker.mjs).
 "use strict";
 const { closeSync, openSync, readSync } = require("node:fs");
 

@@ -133,7 +133,7 @@ export function createImages({
   // the first run that needs it (the base image ships without it). As root, so the files
   // aren't the sandbox user's (uid 1000) to change: sandboxes mount the volume read-only,
   // and this still holds if a mount ever isn't. CHOWN only to take over a volume uid 1000
-  // owned before (../sandbox/install-claude-code). `agent`: agents/.
+  // owned before (../sandbox/agents/claude/install). `agent`: agents/.
   function installAgent(agent, output) {
     const { volume, mount, version, versionVar, command } = agent.install(config);
     const key = `${agent.name}@${version}`;
