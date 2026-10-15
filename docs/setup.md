@@ -154,7 +154,7 @@ configuration every 30 minutes, or at once after a push or a merged pull request
 default branch. **Refresh** reads everything again, in case a webhook was missed.
 
 A repository's name opens its configuration, read from its default branch then: what stops
-its runs (errors, hosts and mounts the operator doesn't grant) and its warnings first, then
+its runs (errors, and what it asks for that the operator doesn't grant) and its warnings first, then
 what its runs get (each value from the repository, from the operator, or refused), its entry
 in the grants file, and the raw file. Anyone signed in to the dashboard sees it, grants
 included. Its **Refresh** reads it again (at most every 5 seconds); changing it is a commit on

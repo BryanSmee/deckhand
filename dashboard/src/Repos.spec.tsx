@@ -63,6 +63,9 @@ const CONFIG: RepoConfig = {
     grant: {
       entry: null,
       allowRepoHosts: false,
+      allowPreview: false,
+      allowDockerfile: false,
+      allowBranchDockerImages: false,
       hosts: [],
       mounts: [],
       limits: { cpus: "2", memory: "4g", pids: 2048 },

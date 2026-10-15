@@ -31,7 +31,8 @@ export function ConfigPanel({ repo, row, onRow, onBack, now }: Props) {
   const status = (config?.repo ?? row)?.status;
   const refusedHosts = config?.effective.hosts.filter((h) => h.source === "refused") ?? [];
   const refusedMounts = config?.effective.mounts.filter((m) => m.source === "refused") ?? [];
-  const refused = refusedHosts.length + refusedMounts.length;
+  const refusedSettings = config?.effective.settings.filter((s) => s.source === "refused") ?? [];
+  const refused = refusedSettings.length + refusedHosts.length + refusedMounts.length;
   return (
     <div class={styles.panel}>
       <div class={styles.head}>
@@ -88,6 +89,11 @@ export function ConfigPanel({ repo, row, onRow, onBack, now }: Props) {
                   <li key={e}>{e}</li>
                 ))}
                 {config.grantsError && <li>{config.grantsError}</li>}
+                {refusedSettings.map((s) => (
+                  <li key={s.key}>
+                    {s.key}: {s.note}
+                  </li>
+                ))}
                 {refusedHosts.map((h) => (
                   <li key={h.host}>
                     hosts: <code>{h.host}</code>: {h.note}
@@ -210,6 +216,9 @@ function GrantTable({ grant }: { grant: Grant }) {
   const rows: [string, string][] = [
     ["entry", entry],
     ["allow_repo_hosts", String(grant.allowRepoHosts)],
+    ["allow_dockerfile", String(grant.allowDockerfile)],
+    ["allow_branch_docker_images", String(grant.allowBranchDockerImages)],
+    ["allow_preview", String(grant.allowPreview)],
     ["hosts", grant.hosts.join(", ") || "none"],
     [
       "mounts",

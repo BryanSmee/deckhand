@@ -141,10 +141,11 @@ export interface Onboarded {
 export type Source = "repo" | "operator" | "refused";
 
 // One setting a run reads (listener/repo-view.mjs settingRows()); `key` is its YAML key.
+// Refused: it needs a grant the operator doesn't give (dockerfile, preview).
 export interface SettingRow {
   key: string;
   value: string;
-  source: Exclude<Source, "refused">;
+  source: Source;
   note: string | null;
 }
 
@@ -166,6 +167,9 @@ export interface MountRow {
 export interface Grant {
   entry: string | null;
   allowRepoHosts: boolean;
+  allowPreview: boolean;
+  allowDockerfile: boolean;
+  allowBranchDockerImages: boolean;
   hosts: string[];
   mounts: { root: string; readOnly: boolean }[];
   limits: { cpus: string; memory: string; pids: number };

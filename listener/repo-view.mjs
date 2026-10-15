@@ -4,10 +4,13 @@
 // panel can't say something a run wouldn't do.
 import { realpathSync, statSync } from "node:fs";
 import { mandatoryHosts, refusedRepoHosts } from "./egress.mjs";
-import { grantFor, resolveMounts } from "./grants.mjs";
+import { grantFor, resolveMounts, ungranted } from "./grants.mjs";
 import { customMode, defaultSettings } from "./repo-config.mjs";
 
 const none = (values) => (values.length ? values.join(", ") : "none");
+
+// The runs' reasons are Markdown for GitHub replies; the panel shows text.
+const plain = (text) => text.replaceAll("`", "");
 
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
@@ -20,10 +23,16 @@ function limitsText({ cpus, memory, pids }) {
   return `${cpus} CPUs, ${memory} memory, ${pids} processes`;
 }
 
-// The settings a run reads, as rows of the panel's table.
+// The settings a run reads, as rows of the panel's table. What the repo asks for that only a
+// grant allows (ungranted()) is refused: it stops every run.
 export function settingRows(config, settings, grant) {
   const base = defaultSettings(config);
   const changed = (field) => !same(settings[field], base[field]);
+  const missing = ungranted(grant, settings);
+  const refusedRow = (key, value) => {
+    const why = missing.find((m) => m.startsWith(`${key}: `));
+    return why && { key, value, source: "refused", note: plain(why.slice(key.length + 2)) };
+  };
   const rows = [
     row(
       "users",
@@ -44,19 +53,24 @@ export function settingRows(config, settings, grant) {
     ),
     row("setup", settings.setup ?? "none", changed("setup")),
     row("instructions", settings.instructions ?? "none", changed("instructions")),
-    row(
-      "dockerfile",
-      settings.dockerfile ?? `none: the base image ${config.image}`,
-      changed("dockerfile"),
-    ),
+    refusedRow("dockerfile", settings.dockerfile) ??
+      row(
+        "dockerfile",
+        settings.dockerfile ?? `none: the base image ${config.image}`,
+        changed("dockerfile"),
+      ),
     row(
       "allow_branch_docker_images",
-      String(settings.allowBranchDockerImages),
-      changed("allowBranchDockerImages"),
+      String(grant.allowBranchDockerImages && !!settings.dockerfile),
+      false,
+      grant.allowBranchDockerImages && !settings.dockerfile
+        ? "granted, but the repository has no dockerfile"
+        : "the grants file",
     ),
     row("caches", none(settings.caches), changed("caches")),
     row("inbox", inboxText(settings.inbox), changed("inbox")),
-    row("preview", previewText(settings.preview), changed("preview")),
+    refusedRow("preview", previewText(settings.preview)) ??
+      row("preview", previewText(settings.preview), changed("preview")),
     row(
       "conflicts",
       settings.conflicts ? `every ${settings.conflicts.checkMinutes} minutes` : "off",
@@ -134,7 +148,7 @@ export function mountRows(settings, grant, fs = {}) {
       ...fs,
     });
     if (refused.length) {
-      const why = refused[0].replace(/^`[^`]*`: /, "");
+      const why = plain(refused[0].replace(/^`[^`]*`: /, ""));
       return { path: request.path, source: "refused", readOnly: request.readOnly, note: why };
     }
     const [m] = mounts;
@@ -156,6 +170,9 @@ export function grantRows(grants, config, repo) {
   return {
     entry,
     allowRepoHosts: grant.allowRepoHosts,
+    allowPreview: grant.allowPreview,
+    allowDockerfile: grant.allowDockerfile,
+    allowBranchDockerImages: grant.allowBranchDockerImages,
     hosts: grant.hosts,
     mounts: grant.mounts.map(({ root, readOnly }) => ({ root, readOnly })),
     limits: grant.limits,

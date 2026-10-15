@@ -46,7 +46,10 @@ test("settings: the repo's values tagged as such, the operator's otherwise", () 
   );
   assert.equal(byKey(settings, "effort").source, "operator");
   assert.equal(byKey(settings, "max_parallel").note, "MAX_PARALLEL is 3");
+  // Not granted: it stops runs, and says which grant is missing.
   assert.equal(byKey(settings, "dockerfile").value, "docker/Dockerfile");
+  assert.equal(byKey(settings, "dockerfile").source, "refused");
+  assert.match(byKey(settings, "dockerfile").note, /allow_dockerfile: true/);
   // A light mode takes the brainstorms' model and effort by default (customMode()).
   assert.equal(byKey(settings, "modes.review").value, ".github/review.md · opus/medium · light");
   assert.deepEqual(byKey(settings, "limits"), {
@@ -118,4 +121,20 @@ test("a broken grants file: the defaults, and no grant shown", () => {
   const v = effectiveView(config, "org/app", settings, null);
   assert.equal(v.grant, null);
   assert.equal(v.hosts.find((h) => h.host === "pypi.org").source, "refused");
+});
+
+test("dockerfile and preview: from the repo once granted", () => {
+  const yaml = "dockerfile: Dockerfile\npreview: ./preview.sh\n";
+  const { settings, grant } = view(
+    yaml,
+    "org/app:\n  allow_dockerfile: true\n  allow_preview: true\n  allow_branch_docker_images: true\n",
+  );
+  assert.equal(byKey(settings, "dockerfile").source, "repo");
+  assert.deepEqual(
+    [byKey(settings, "preview").value, byKey(settings, "preview").source],
+    ["./preview.sh (30 min)", "repo"],
+  );
+  assert.equal(byKey(settings, "allow_branch_docker_images").value, "true");
+  assert.equal(grant.allowPreview, true);
+  assert.equal(byKey(view("preview: ./preview.sh\n").settings, "preview").source, "refused");
 });
