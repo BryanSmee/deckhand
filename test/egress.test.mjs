@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { claude } from "../listener/agents/claude.mjs";
+import { codex } from "../listener/agents/codex.mjs";
 import { loadConfig } from "../listener/config.mjs";
 import {
   egressPolicy,
@@ -40,6 +42,25 @@ test("mandatory hosts: Anthropic's API and the configured GitHub", () => {
     "git.corp.example",
     "*.githubusercontent.com",
   ]);
+});
+
+test("a Codex run's hosts: GitHub's and its grant's, neither Anthropic's nor OpenAI's", () => {
+  const grant = grantFor(grants, config, "org/web");
+  const hosts = operatorHosts(config, grant, codex);
+  assert.deepEqual(hosts, [
+    "github.com",
+    "api.github.com",
+    "*.githubusercontent.com",
+    "registry.npmjs.org",
+  ]);
+  for (const host of ["api.anthropic.com", "api.openai.com", "chatgpt.com"]) {
+    assert.equal(egressPolicy(host, hosts, hosts).allowed, false, host);
+  }
+  // Claude Code's keep Anthropic's, for WebFetch's domain check.
+  assert.ok(operatorHosts(config, grant, claude).includes("api.anthropic.com"));
+  // Without an agent, the operator's: its mandatory hosts are SANDBOX_AGENT's.
+  const operator = loadConfig({ ALLOWED_USERS: "a", OPENAI_API_KEY: "k", SANDBOX_AGENT: "codex" });
+  assert.ok(!mandatoryHosts(operator).includes("api.anthropic.com"));
 });
 
 test("a run's hosts: mandatory, default.yaml's for every repo, the repo's own grant's", () => {

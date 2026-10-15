@@ -147,6 +147,14 @@ and end up in a public comment.
   it, as `[redacted]`. Only the exact value: an encoded or split one gets through, which is
   why the credential isn't there to begin with.
 
+Codex's `OPENAI_API_KEY` is kept out the same way (`listener/openai.mjs`): a sandbox's Codex
+has `<broker>/openai` as its provider's base URL and the run's secret as its key, sent as
+`Authorization: Bearer`; the listener checks it, puts your key in its place and forwards the
+call to OpenAI (or the operator's `OPENAI_BASE_URL`), under its base path only: a path with
+`//host`, a scheme or `..` is refused, so the key can't be sent elsewhere. Both agents'
+credentials are redacted
+from every run's log and reply, whichever agent ran.
+
 ## Mounts
 
 A sandbox only gets Docker named volumes:
@@ -605,13 +613,13 @@ instructions and the dashboard's repository panel all name these files.
 
 **Mandatory hosts**, always allowed:
 
-| Host                      | For                                         |
-| ------------------------- | ------------------------------------------- |
-| `api.anthropic.com`       | Claude Code: WebFetch's domain check        |
-| `github.com`              | git over HTTPS (`GITHUB_URL`)               |
-| `api.github.com`          | `gh` and the API (`GITHUB_API`)             |
-| `*.githubusercontent.com` | raw files, release downloads, avatars       |
-| the listener              | the broker and Claude's API calls, directly |
+| Host                      | For                                              |
+| ------------------------- | ------------------------------------------------ |
+| `api.anthropic.com`       | Claude Code's runs only: WebFetch's domain check |
+| `github.com`              | git over HTTPS (`GITHUB_URL`)                    |
+| `api.github.com`          | `gh` and the API (`GITHUB_API`)                  |
+| `*.githubusercontent.com` | raw files, release downloads, avatars            |
+| the listener              | the broker and the agent's API calls, directly   |
 
 That list was checked against Claude Code 2.1.300 (the pinned version) by reading the hosts
 in its binary. With `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` (set in the image) and the
@@ -628,6 +636,14 @@ check to `api.anthropic.com`:
 
 Check it again when you change `CLAUDE_CODE_VERSION`. A refused host shows up in the
 listener's logs (`Egress: refused <host> for <repo>#<n>`).
+
+A Codex run's mandatory hosts are GitHub's and the listener only: no `api.anthropic.com`,
+and no `api.openai.com` either. Checked against Codex 0.162.1 (the pinned `CODEX_VERSION`)
+through a proxy that logged every connection: with its calls sent to the listener and the
+settings `sandbox/agents/codex.sh` writes (analytics, update check, plugins, apps and remote
+plugins off), it opens none. Without them it reaches `chatgpt.com`, `ab.chatgpt.com`,
+`github.com` and `api.github.com` for its plugin marketplace and analytics. Its web search
+runs on OpenAI's side, in the API call. Check it again when you change `CODEX_VERSION`.
 
 ### Not covered
 

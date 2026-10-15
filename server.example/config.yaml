@@ -12,6 +12,8 @@ allowed_repos: []
 # What every sandbox may reach and its limits are in grants/default.yaml.
 
 trigger: Deckhand
+# claude (Claude Code) or codex (with OPENAI_API_KEY in .env: docs/setup.md#codex).
+sandbox_agent: claude
 sandbox_model: opus
 # Through an Anthropic-compatible gateway (docs/setup.md#through-a-gateway), with
 # ANTHROPIC_AUTH_TOKEN in .env:

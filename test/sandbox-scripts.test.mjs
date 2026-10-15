@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { execFile, spawnSync } from "node:child_process";
 import {
   chmodSync,
+  existsSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
@@ -97,7 +98,7 @@ test("a sandbox without its Claude Code version stops with a clear message", () 
 });
 
 test("an unknown agent stops the sandbox before anything runs", () => {
-  for (const agent of ["codex", "../claude", "Claude"]) {
+  for (const agent of ["gemini", "../claude", "Claude"]) {
     const result = spawnSync(`${bin}entrypoint.sh`, [], {
       env: { PATH: process.env.PATH, REPO_URL: "https://x/o/r.git", SANDBOX_AGENT: agent },
       encoding: "utf8",
@@ -189,6 +190,191 @@ test("Claude Code's session: its transcripts in the issue's volume, instructions
   );
   assert.equal(some.stdout, `yes\n# Rules\n${some.dir}\n`);
 });
+
+// The entrypoint takes an image's agents over the checkout's: in a sandbox of an image from
+// before Codex (Deckhand working on itself), there is no codex.sh to find.
+const imageAgents = "/usr/local/share/deckhand-agents";
+const olderImage = existsSync(imageAgents) && !existsSync(`${imageAgents}/codex.sh`);
+
+test(
+  "a sandbox without its Codex version stops with a clear message",
+  { skip: olderImage && "this sandbox's image has no codex.sh" },
+  () => {
+    const result = spawnSync(`${bin}entrypoint.sh`, [], {
+      env: {
+        PATH: process.env.PATH,
+        REPO_URL: "https://github.com/org/repo.git",
+        SANDBOX_AGENT: "codex",
+        CODEX_VERSION: "0.0.0-missing",
+      },
+      encoding: "utf8",
+    });
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /Codex 0\.0\.0-missing is not installed in \/opt\/codex/);
+  },
+);
+
+// agents/codex.sh, sourced as entrypoint.sh does, with a `codex` that prints what it got,
+// then the JSONL of a turn (`turn`: completed or failed) and exits as Codex would.
+function codexScript(t, script, env = {}) {
+  const dir = mkdtempSync(join(tmpdir(), "deckhand-codex-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  writeFileSync(
+    join(dir, "codex"),
+    `#!/bin/bash
+printf 'arg %s\\n' "$@" >&2
+[ -t 0 ] || [ -z "$(cat)" ] || echo "stdin not empty" >&2
+echo '{"type":"thread.started","thread_id":"t1"}'
+echo '{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"Done it."}}'
+if [ "\${TURN:-completed}" = completed ]; then
+  echo '{"type":"turn.completed","usage":{}}'
+else
+  echo '{"type":"turn.failed","error":{"message":"rate limit exceeded"}}'
+  exit 1
+fi
+`,
+  );
+  chmodSync(join(dir, "codex"), 0o755);
+  const result = spawnSync(
+    "bash",
+    ["-c", `set -euo pipefail; source "${bin}agents/codex.sh"; ${script}`],
+    {
+      env: {
+        PATH: `${dir}:${process.env.PATH}`,
+        CODEX_VERSION: "9.9.9",
+        CODEX_HOME: join(dir, "home"),
+        AGENT_FILES: `${bin}agents/codex`,
+        ...env,
+      },
+      input: "",
+      encoding: "utf8",
+    },
+  );
+  const args = result.stderr
+    .split("\n")
+    .filter((l) => l.startsWith("arg "))
+    .map((l) => l.slice(4));
+  return { ...result, dir, args };
+}
+
+test("Codex's run: exec, resume --last or ephemeral, with the model and effort, no prompts", (t) => {
+  const env = { TASK_OUTPUT: "json", SANDBOX_MODEL: "gpt-6.1-sol", SANDBOX_EFFORT: "high" };
+  const args = (session) => codexScript(t, `agent_run ${session} "Do it"`, env).args;
+  const flags = [
+    "--json",
+    "--dangerously-bypass-approvals-and-sandbox",
+    "--dangerously-bypass-hook-trust",
+    ...["-m", "gpt-6.1-sol", "-c", 'model_reasoning_effort="high"'],
+    "Do it",
+  ];
+  assert.deepEqual(args("new"), ["exec", ...flags]);
+  assert.deepEqual(args("continue"), ["exec", "resume", "--last", ...flags]);
+  assert.deepEqual(args("fresh"), ["exec", "--ephemeral", ...flags]);
+});
+
+test("Codex's run: its JSONL, then Deckhand's result line, and its exit status", (t) => {
+  const ok = codexScript(t, `agent_run new "Do it"`, { TASK_OUTPUT: "json" });
+  assert.equal(ok.status, 0);
+  assert.doesNotMatch(ok.stderr, /stdin not empty/);
+  const lines = ok.stdout
+    .trim()
+    .split("\n")
+    .map((l) => JSON.parse(l));
+  assert.deepEqual(
+    lines.map((l) => l.type),
+    ["thread.started", "item.completed", "turn.completed", "deckhand.result"],
+  );
+  const result = lines.at(-1);
+  assert.deepEqual(
+    { ...result, duration_ms: 0 },
+    {
+      type: "deckhand.result",
+      ok: true,
+      text: "Done it.",
+      duration_ms: 0,
+    },
+  );
+  assert.ok(Number.isInteger(result.duration_ms));
+
+  const failed = codexScript(t, `agent_run continue "Again"`, {
+    TASK_OUTPUT: "json",
+    TURN: "failed",
+  });
+  assert.equal(failed.status, 1);
+  const last = JSON.parse(failed.stdout.trim().split("\n").at(-1));
+  assert.equal(last.ok, false);
+  assert.equal(last.text, "rate limit exceeded");
+
+  // By hand, progress lines rather than the raw events.
+  const human = codexScript(t, `agent_run new "Do it"`);
+  assert.match(human.stdout, /^\nDone it\.\n\nDone in 0 min\n$/);
+});
+
+test("Codex's home: its provider the listener, no analytics or plugins, hooks and MCP", (t) => {
+  const { stdout, dir } = codexScript(
+    t,
+    `codex_home
+     codex_home
+     agent_mcp playwright playwright-mcp --headless --proxy-server "http://egress:3128"
+     cat "$CODEX_HOME/config.toml"; echo ---; cat "$CODEX_HOME/hooks.json"`,
+    { OPENAI_BASE_URL: "http://listener:8081/openai" },
+  );
+  const [config, hooks] = stdout.split("---\n");
+  // Written again on every start: one provider, one MCP server.
+  assert.equal(config.match(/\[model_providers\.deckhand\]/g).length, 1);
+  assert.match(config, /^model_provider = "deckhand"$/m);
+  assert.match(config, /^base_url = "http:\/\/listener:8081\/openai"$/m);
+  assert.match(config, /^env_key = "OPENAI_API_KEY"$/m);
+  assert.match(config, /^check_for_update_on_startup = false$/m);
+  assert.match(config, /\[analytics\]\nenabled = false/);
+  assert.match(config, /^plugins = false\napps = false\nremote_plugin = false$/m);
+  assert.match(
+    config,
+    /\[mcp_servers\.playwright\]\ncommand = "playwright-mcp"\nargs = \["--headless","--proxy-server","http:\/\/egress:3128"\]\n$/,
+  );
+  // Its hooks open the draft pull request, as Claude Code's do.
+  const commands = JSON.stringify(JSON.parse(hooks));
+  assert.match(
+    commands,
+    /"PostToolUse":\[\{"matcher":"Bash","hooks":\[\{"type":"command","command":"sandbox-draft-pr hook"/,
+  );
+  assert.match(
+    commands,
+    /"Stop":\[\{"hooks":\[\{"type":"command","command":"sandbox-draft-pr hook"/,
+  );
+  // Without the listener (by hand): OpenAI's own provider.
+  const plain = codexScript(t, `codex_home; cat "$CODEX_HOME/config.toml"`).stdout;
+  assert.doesNotMatch(plain, /model_provider/);
+  assert.ok(dir);
+});
+
+test("Codex's session: its rollouts in the issue's volume, instructions beside", (t) => {
+  const none = codexScript(t, "agent_has_session && echo yes || echo no");
+  assert.equal(none.stdout, "no\n");
+  const some = codexScript(
+    t,
+    `mkdir -p "$CODEX_HOME/sessions/2026/10/15"
+     touch "$CODEX_HOME/sessions/2026/10/15/rollout-2026-10-15T18-20-35-01a1.jsonl"
+     agent_has_session && echo yes || echo no
+     echo "# Rules" > "$CODEX_HOME/rules.md"
+     agent_instructions "$CODEX_HOME/rules.md"
+     cat "$CODEX_HOME/AGENTS.md"; echo "$AGENT_STATE $AGENT_NAME"`,
+  );
+  assert.equal(some.stdout, `yes\n# Rules\n${some.dir}/home Codex\n`);
+});
+
+test(
+  "installing Codex refuses to run as the sandbox's user",
+  { skip: process.getuid() === 0 },
+  () => {
+    const result = spawnSync(`${bin}agents/codex/install`, [], {
+      env: { PATH: process.env.PATH, CODEX_VERSION: "9.9.9" },
+      encoding: "utf8",
+    });
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /run it as root/);
+  },
+);
 
 // The work feedback prompt can't run here (it needs Claude Code): its text, as bash has it.
 test("work feedback rebases on the base and force-pushes with a lease before gh pr ready", () => {

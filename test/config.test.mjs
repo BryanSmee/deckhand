@@ -322,3 +322,77 @@ test("SANDBOX_ENGINE: none by default, sysbox, podman or auto; a typo is an erro
   const file = parseConfigFile("sandbox_engine: podman\n", "config.yaml");
   assert.equal(loadConfig({ ALLOWED_USERS: "a" }, file).engine, "podman");
 });
+
+test("agents: Claude Code by default; Codex with OPENAI_API_KEY, for work or light runs", () => {
+  const plain = loadConfig({ ALLOWED_USERS: "a" });
+  assert.equal(plain.agent, "claude");
+  assert.equal(plain.brainstormAgent, "claude");
+  assert.deepEqual(plain.agents, ["claude"]);
+  assert.equal(plain.openaiCredential, null);
+  assert.equal(plain.openaiUrl, "https://api.openai.com/v1");
+  assert.equal(plain.codexVersion, "0.162.1");
+  assert.equal(plain.codexVolume, "deckhand-codex");
+  assert.deepEqual(plain.codexModels, {});
+
+  // A key makes Codex one a repo may pick; Claude Code stays the default.
+  const both = loadConfig({
+    ALLOWED_USERS: "a",
+    CLAUDE_CODE_OAUTH_TOKEN: "t",
+    OPENAI_API_KEY: "sk-proj-1",
+  });
+  assert.equal(both.agent, "claude");
+  assert.deepEqual(both.agents, ["claude", "codex"]);
+  assert.equal(both.openaiCredential, "OPENAI_API_KEY");
+
+  // Codex for everything: Claude Code, without a credential, isn't one a repo may pick.
+  const codex = loadConfig(
+    { OPENAI_API_KEY: "sk-proj-1" },
+    file(`allowed_users: [a]
+sandbox_agent: Codex
+openai_base_url: https://gateway.example/openai/v1/
+codex_fast_model: gpt-6-mini
+codex_version: 0.170.0
+`),
+  );
+  assert.equal(codex.agent, "codex");
+  assert.equal(codex.brainstormAgent, "codex");
+  assert.deepEqual(codex.agents, ["codex"]);
+  assert.equal(codex.openaiUrl, "https://gateway.example/openai/v1");
+  assert.deepEqual(codex.codexModels, { fast: "gpt-6-mini" });
+  assert.equal(codex.codexVersion, "0.170.0");
+  // Light runs on Claude Code, work on Codex.
+  const split = loadConfig({
+    ALLOWED_USERS: "a",
+    OPENAI_API_KEY: "k",
+    SANDBOX_AGENT: "codex",
+    BRAINSTORM_AGENT: "claude",
+  });
+  assert.deepEqual(
+    [split.agent, split.brainstormAgent, split.agents],
+    ["codex", "claude", ["claude", "codex"]],
+  );
+});
+
+test("agents: an unknown one, or Codex without its key, stops the listener", () => {
+  assert.throws(
+    () => loadConfig({ ALLOWED_USERS: "a", SANDBOX_AGENT: "gemini" }),
+    /SANDBOX_AGENT: expected claude or codex, got gemini/,
+  );
+  assert.throws(
+    () => loadConfig({ ALLOWED_USERS: "a", SANDBOX_AGENT: "codex" }),
+    /SANDBOX_AGENT is codex, which needs OPENAI_API_KEY in the environment/,
+  );
+  assert.throws(
+    () => loadConfig({}, file("allowed_users: [a]\nbrainstorm_agent: codex")),
+    /config\.yaml: brainstorm_agent is codex, which needs OPENAI_API_KEY/,
+  );
+  assert.throws(() => file("openai_api_key: sk-1"), /openai_api_key: a secret/);
+  assert.throws(
+    () => loadConfig({ ALLOWED_USERS: "a", CODEX_BEST_MODEL: "two words" }),
+    /CODEX_BEST_MODEL: expected a model name/,
+  );
+  assert.throws(
+    () => loadConfig({ ALLOWED_USERS: "a", OPENAI_BASE_URL: "api.openai.com" }),
+    /OPENAI_BASE_URL: expected an http\(s\) URL/,
+  );
+});

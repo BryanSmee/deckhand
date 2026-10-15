@@ -1,7 +1,7 @@
 // The listener's two HTTP servers. The public one: GitHub's webhooks, /setup, sign-in, the
 // dashboard and its API, /status and the runs' screenshots. The broker's, on the runs'
-// networks only: installation tokens (broker.mjs), the egress proxy's questions and Claude's
-// API calls (anthropic.mjs).
+// networks only: installation tokens (broker.mjs), the egress proxy's questions and the
+// agents' API calls (anthropic.mjs, openai.mjs).
 import { closeSync, constants, createReadStream, fstatSync, openSync, realpathSync } from "node:fs";
 import { createServer } from "node:http";
 import { join } from "node:path";
@@ -514,7 +514,7 @@ export function createHttp(ctx, { dashboardDir }) {
 
   // Sandboxes and the egress proxy only: compose.yaml doesn't publish this port. Egress
   // answers, the token broker, the git gateway (git-gateway.mjs), ready for review
-  // (pr-ready.mjs) and the Anthropic endpoint (anthropic.mjs).
+  // (pr-ready.mjs) and the agents' API endpoints (anthropic.mjs, openai.mjs).
   function listenBroker() {
     const server = createServer((req, res) => {
       if (req.method === "GET" && req.url.startsWith("/egress?")) {
@@ -533,6 +533,13 @@ export function createHttp(ctx, { dashboardDir }) {
       if (req.url.startsWith("/anthropic/")) {
         return ctx.anthropic.handle(req, res).catch((error) => {
           log(`Anthropic: ${error.stack ?? error}`);
+          if (!res.headersSent) res.writeHead(500).end();
+          else res.destroy();
+        });
+      }
+      if (req.url.startsWith("/openai/")) {
+        return ctx.openai.handle(req, res).catch((error) => {
+          log(`OpenAI: ${error.stack ?? error}`);
           if (!res.headersSent) res.writeHead(500).end();
           else res.destroy();
         });

@@ -83,7 +83,9 @@ export const claude = {
   // Comments that arrive mid-run reach it as stream-json user messages (its inbox).
   takesMessages: true,
   message: (text) => JSON.stringify({ type: "user", message: { role: "user", content: text } }),
-  models: MODELS,
+  models: () => MODELS,
+  // Any name passes: a gateway's models have names of their own (openai/gpt-…).
+  modelProblem: () => null,
   efforts: EFFORTS,
   // One line of its output (stream-json) → Deckhand's events: started{model}, text,
   // tool{name, detail}, toolOutput{text, error}, result{ok, text, durationMs}. Lines that

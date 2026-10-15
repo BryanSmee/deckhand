@@ -1,7 +1,7 @@
 # Setting up Deckhand
 
 Deckhand runs on your own server with your own private GitHub App and your own Claude
-credential. You need Docker Engine 26 or later with the compose plugin, and an HTTPS address
+credential (or OpenAI key, for [Codex](#codex)). You need Docker Engine 26 or later with the compose plugin, and an HTTPS address
 that GitHub can reach (your reverse proxy, or a tunnel) forwarding to the listener's port.
 
 ## 1. Start the listener
@@ -9,7 +9,8 @@ that GitHub can reach (your reverse proxy, or a tunnel) forwarding to the listen
 ```sh
 cp .env.example .env
 # CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-token`) or ANTHROPIC_API_KEY (or a gateway's
-#   ANTHROPIC_AUTH_TOKEN: see Through a gateway below): the secrets stay in .env
+#   ANTHROPIC_AUTH_TOKEN: see Through a gateway below), or OPENAI_API_KEY for Codex (see
+#   Codex below): the secrets stay in .env
 cp -r server.example server
 # server/config.yaml: allowed_users, the GitHub logins allowed to start runs (required: no
 #   start without it), and the other settings; server/grants/: what you grant each
@@ -257,7 +258,7 @@ team its own repositories' grants (see [Security model](security.md#the-grants-f
 Each setting can come from the environment (`.env`, read by `compose.yaml`) or from
 `config.yaml` in [the server folder](#the-server-folder), a file you commit in your
 deployment's repository and review line by line.
-Secrets (the Claude credential) stay in `.env`; the App's are in `/data/app.json`.
+Secrets (the Claude credential, `OPENAI_API_KEY`) stay in `.env`; the App's are in `/data/app.json`.
 
 - **Keys:** each setting's environment variable in lowercase (`ALLOWED_USERS` →
   `allowed_users`), lists as YAML lists, `onboarding` as `true` or `false`.
@@ -293,32 +294,37 @@ What every sandbox may reach and its limits aren't settings: they go in
 `grants/default.yaml`, read at each run (see
 [Where a sandbox's hosts come from](security.md#where-a-sandboxs-hosts-come-from)).
 
-| Setting                                                                                           | `config.yaml` key                                                                                 | Default                            | What                                                                                                                                           |
-| ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- | ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ALLOWED_USERS`                                                                                   | `allowed_users`                                                                                   | none: required                     | GitHub logins that can start runs                                                                                                              |
-| `ALLOWED_REPOS`                                                                                   | `allowed_repos`                                                                                   | all where the App is installed     | narrows the repos (`owner/repo`, comma-separated in `.env`)                                                                                    |
-| `CLAUDE_CODE_OAUTH_TOKEN` / `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN`                          | none: a secret, `.env` only                                                                       |                                    | Claude credential, added by the listener to the sandboxes' API calls (`ANTHROPIC_AUTH_TOKEN`: a gateway's)                                     |
-| `ANTHROPIC_BASE_URL`                                                                              | `anthropic_base_url`                                                                              | `https://api.anthropic.com`        | where the listener sends the sandboxes' API calls: a [gateway](#through-a-gateway), say                                                        |
-| `ANTHROPIC_DEFAULT_OPUS_MODEL`, `ANTHROPIC_DEFAULT_SONNET_MODEL`, `ANTHROPIC_DEFAULT_HAIKU_MODEL` | `anthropic_default_opus_model`, `anthropic_default_sonnet_model`, `anthropic_default_haiku_model` | Claude Code's                      | the models `opus`, `sonnet` and `haiku` stand for in the sandboxes (a gateway's names)                                                         |
-| `PUBLIC_URL`                                                                                      | `public_url`                                                                                      | stored by `/setup`                 | the listener's public address                                                                                                                  |
-| `PORT`                                                                                            | none: compose's                                                                                   | `8080`                             | the host port compose publishes the listener on                                                                                                |
-| `CLAUDE_CODE_VERSION`                                                                             | `claude_code_version`                                                                             | `2.1.300`                          | Claude Code version the sandboxes install on first use                                                                                         |
-| `SANDBOX_MODEL`, `SANDBOX_EFFORT`                                                                 | `sandbox_model`, `sandbox_effort`                                                                 | `best`, `medium`                   | defaults; a comment's `/model` and `/effort` lines override them (models: below the table)                                                     |
-| `BRAINSTORM_MODEL`, `BRAINSTORM_EFFORT`                                                           | `brainstorm_model`, `brainstorm_effort`                                                           | `SANDBOX_MODEL`, `SANDBOX_EFFORT`  | the same for brainstorms, inbox entries and discussions                                                                                        |
-| `BRAINSTORM_IDLE_MINUTES`                                                                         | `brainstorm_idle_minutes`                                                                         | `10`                               | minutes without a comment before a brainstorm shows as idle                                                                                    |
-| `MAX_PARALLEL`                                                                                    | `max_parallel`                                                                                    | `2`                                | sandboxes running at once (a repo's `max_parallel` within it)                                                                                  |
-| `SANDBOX_SUBNETS`, `SANDBOX_SUBNET_SIZE`                                                          | `sandbox_subnets`, `sandbox_subnet_size`                                                          | none (Docker's pools), `28`        | an IPv4 range the runs' networks take their subnets from, in blocks of that size (below the table)                                             |
-| `SANDBOX_ENGINE`                                                                                  | `sandbox_engine`                                                                                  | none                               | the container engine runs of repositories granted `allow_docker` get: `sysbox`, `podman` or `auto` (see [Container engine](#container-engine)) |
-| `TRIGGER`                                                                                         | `trigger`                                                                                         | `Deckhand`                         | first line of a comment that starts a run                                                                                                      |
-| `ONBOARDING`                                                                                      | `onboarding`                                                                                      | on                                 | `off`: no onboarding issue when the App is installed on a repo without a config                                                                |
-| `NEEDS_INPUT_LABEL`                                                                               | `needs_input_label`                                                                               | `needs-input`                      | label while a run or an issue waits for answers (empty: none)                                                                                  |
-| `CONFLICT_CHECK_MINUTES`                                                                          | `conflict_check_minutes`                                                                          | `5`                                | shortest interval of a repo's `conflicts.check_minutes`; `0` turns it off                                                                      |
-| `WAITS_CHECK_MINUTES`                                                                             | `waits_check_minutes`                                                                             | `5`                                | how often comments waiting for other issues (`/after`) ask GitHub again                                                                        |
-| `NAME_PREFIX`, `CLAUDE_CODE_VOLUME`                                                               | `name_prefix`, `claude_code_volume`                                                               | `deckhand`, `deckhand-claude-code` | names of what the listener creates on Docker                                                                                                   |
-| `DOCKER_SOCKET`                                                                                   | none: compose's                                                                                   | `/var/run/docker.sock`             | the host's Docker socket, as preview hooks mount it                                                                                            |
-| `DECKHAND_VERSION`                                                                                | none: compose's                                                                                   | `latest`                           | the release compose runs (`1.2.3`, `1.2`), or `edge` to follow `main`: see [Updating](#updating)                                               |
-| `DECKHAND_REGISTRY`                                                                               | none: compose's                                                                                   | `ghcr.io/bryansmee`                | where compose pulls the images from                                                                                                            |
-| `SHOTS_VOLUME`, `RUNS_VOLUME`                                                                     | none: compose's                                                                                   | `deckhand-…`                       | names of the volumes compose creates and the listener uses                                                                                     |
+| Setting                                                                                           | `config.yaml` key                                                                                 | Default                                              | What                                                                                                                                           |
+| ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- | ---------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ALLOWED_USERS`                                                                                   | `allowed_users`                                                                                   | none: required                                       | GitHub logins that can start runs                                                                                                              |
+| `ALLOWED_REPOS`                                                                                   | `allowed_repos`                                                                                   | all where the App is installed                       | narrows the repos (`owner/repo`, comma-separated in `.env`)                                                                                    |
+| `CLAUDE_CODE_OAUTH_TOKEN` / `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN`                          | none: a secret, `.env` only                                                                       |                                                      | Claude credential, added by the listener to the sandboxes' API calls (`ANTHROPIC_AUTH_TOKEN`: a gateway's)                                     |
+| `ANTHROPIC_BASE_URL`                                                                              | `anthropic_base_url`                                                                              | `https://api.anthropic.com`                          | where the listener sends the sandboxes' API calls: a [gateway](#through-a-gateway), say                                                        |
+| `ANTHROPIC_DEFAULT_OPUS_MODEL`, `ANTHROPIC_DEFAULT_SONNET_MODEL`, `ANTHROPIC_DEFAULT_HAIKU_MODEL` | `anthropic_default_opus_model`, `anthropic_default_sonnet_model`, `anthropic_default_haiku_model` | Claude Code's                                        | the models `opus`, `sonnet` and `haiku` stand for in the sandboxes (a gateway's names)                                                         |
+| `SANDBOX_AGENT`, `BRAINSTORM_AGENT`                                                               | `sandbox_agent`, `brainstorm_agent`                                                               | `claude`, `SANDBOX_AGENT`                            | the agent of work runs, and of brainstorms, inbox entries and discussions: `claude` or `codex` (see [Codex](#codex))                           |
+| `OPENAI_API_KEY`                                                                                  | none: a secret, `.env` only                                                                       |                                                      | Codex's OpenAI API key, added by the listener to the sandboxes' API calls                                                                      |
+| `OPENAI_BASE_URL`                                                                                 | `openai_base_url`                                                                                 | `https://api.openai.com/v1`                          | where the listener sends Codex's API calls                                                                                                     |
+| `CODEX_BEST_MODEL`, `CODEX_BALANCED_MODEL`, `CODEX_FAST_MODEL`                                    | `codex_best_model`, `codex_balanced_model`, `codex_fast_model`                                    | `gpt-6-astra`, `gpt-6.1-sol`, `gpt-6-luna`           | the models the tiers `best`, `balanced` and `fast` stand for with Codex                                                                        |
+| `PUBLIC_URL`                                                                                      | `public_url`                                                                                      | stored by `/setup`                                   | the listener's public address                                                                                                                  |
+| `PORT`                                                                                            | none: compose's                                                                                   | `8080`                                               | the host port compose publishes the listener on                                                                                                |
+| `CLAUDE_CODE_VERSION`                                                                             | `claude_code_version`                                                                             | `2.1.300`                                            | Claude Code version the sandboxes install on first use                                                                                         |
+| `CODEX_VERSION`                                                                                   | `codex_version`                                                                                   | `0.162.1`                                            | Codex version the sandboxes install on first use                                                                                               |
+| `SANDBOX_MODEL`, `SANDBOX_EFFORT`                                                                 | `sandbox_model`, `sandbox_effort`                                                                 | `best`, `medium`                                     | defaults; a comment's `/model` and `/effort` lines override them (models: below the table)                                                     |
+| `BRAINSTORM_MODEL`, `BRAINSTORM_EFFORT`                                                           | `brainstorm_model`, `brainstorm_effort`                                                           | `SANDBOX_MODEL`, `SANDBOX_EFFORT`                    | the same for brainstorms, inbox entries and discussions                                                                                        |
+| `BRAINSTORM_IDLE_MINUTES`                                                                         | `brainstorm_idle_minutes`                                                                         | `10`                                                 | minutes without a comment before a brainstorm shows as idle                                                                                    |
+| `MAX_PARALLEL`                                                                                    | `max_parallel`                                                                                    | `2`                                                  | sandboxes running at once (a repo's `max_parallel` within it)                                                                                  |
+| `SANDBOX_SUBNETS`, `SANDBOX_SUBNET_SIZE`                                                          | `sandbox_subnets`, `sandbox_subnet_size`                                                          | none (Docker's pools), `28`                          | an IPv4 range the runs' networks take their subnets from, in blocks of that size (below the table)                                             |
+| `SANDBOX_ENGINE`                                                                                  | `sandbox_engine`                                                                                  | none                                                 | the container engine runs of repositories granted `allow_docker` get: `sysbox`, `podman` or `auto` (see [Container engine](#container-engine)) |
+| `TRIGGER`                                                                                         | `trigger`                                                                                         | `Deckhand`                                           | first line of a comment that starts a run                                                                                                      |
+| `ONBOARDING`                                                                                      | `onboarding`                                                                                      | on                                                   | `off`: no onboarding issue when the App is installed on a repo without a config                                                                |
+| `NEEDS_INPUT_LABEL`                                                                               | `needs_input_label`                                                                               | `needs-input`                                        | label while a run or an issue waits for answers (empty: none)                                                                                  |
+| `CONFLICT_CHECK_MINUTES`                                                                          | `conflict_check_minutes`                                                                          | `5`                                                  | shortest interval of a repo's `conflicts.check_minutes`; `0` turns it off                                                                      |
+| `WAITS_CHECK_MINUTES`                                                                             | `waits_check_minutes`                                                                             | `5`                                                  | how often comments waiting for other issues (`/after`) ask GitHub again                                                                        |
+| `NAME_PREFIX`, `CLAUDE_CODE_VOLUME`, `CODEX_VOLUME`                                               | `name_prefix`, `claude_code_volume`, `codex_volume`                                               | `deckhand`, `deckhand-claude-code`, `deckhand-codex` | names of what the listener creates on Docker                                                                                                   |
+| `DOCKER_SOCKET`                                                                                   | none: compose's                                                                                   | `/var/run/docker.sock`                               | the host's Docker socket, as preview hooks mount it                                                                                            |
+| `DECKHAND_VERSION`                                                                                | none: compose's                                                                                   | `latest`                                             | the release compose runs (`1.2.3`, `1.2`), or `edge` to follow `main`: see [Updating](#updating)                                               |
+| `DECKHAND_REGISTRY`                                                                               | none: compose's                                                                                   | `ghcr.io/bryansmee`                                  | where compose pulls the images from                                                                                                            |
+| `SHOTS_VOLUME`, `RUNS_VOLUME`                                                                     | none: compose's                                                                                   | `deckhand-…`                                         | names of the volumes compose creates and the listener uses                                                                                     |
 
 Each running sandbox has a Docker network of its own (see
 [Security model](security.md#network)). By default Docker takes their subnets from its default
@@ -341,7 +347,10 @@ Docker's own pools, so list those first and add yours after them, for example
 A model, in `SANDBOX_MODEL`, `BRAINSTORM_MODEL`, a repository's `model` or a comment's
 `/model`, is a tier the run's agent maps to one of its models, `best`, `balanced` or `fast`
 (Claude Code: `opus`, `sonnet`, `haiku`, which `ANTHROPIC_DEFAULT_*_MODEL` can point
-elsewhere), or a model's own name (`sonnet`, `claude-opus-5-5`).
+elsewhere; Codex: `gpt-6-astra`, `gpt-6.1-sol`, `gpt-6-luna`, or `CODEX_*_MODEL`), or a
+model's own name (`sonnet`, `claude-opus-5-5`, `gpt-6.1-sol`). Efforts (`low` to `max`) are
+the same for both. A run whose model belongs to another agent (`/model opus` on a Codex run)
+doesn't start: the reply says why.
 
 ### Through a gateway
 
@@ -376,6 +385,50 @@ model on a small issue before giving it real work. Restart the listener after ch
 settings; switching back to Anthropic is emptying `anthropic_base_url` and setting your
 Anthropic credential.
 
+### Codex
+
+Deckhand can run [Codex](https://github.com/openai/codex) (OpenAI's CLI) instead of Claude
+Code, with an OpenAI API key. In `.env`:
+
+```sh
+OPENAI_API_KEY=sk-proj-…
+```
+
+and in `config.yaml`, to make it the default:
+
+```yaml
+sandbox_agent: codex # brainstorm_agent follows unless you set it
+sandbox_model: best # gpt-6-astra; balanced and fast are gpt-6.1-sol and gpt-6-luna
+```
+
+Or keep Claude Code as the default and let repositories pick Codex: with both a Claude
+credential and `OPENAI_API_KEY` set, a repository's `.deckhand.yaml` may say `agent: codex`
+(per repository, or per mode: [Per-repo config](repo-config.md#agent)). A repository can only
+pick an agent you have a credential for, or the one you chose as default. `SANDBOX_AGENT=codex`
+without `OPENAI_API_KEY` stops the listener at start.
+
+As with Claude Code, the key never enters a sandbox: Codex calls the listener
+(`OPENAI_BASE_URL=<broker>/openai`) with the run's secret as its key, and the listener
+forwards the call to OpenAI (or your `OPENAI_BASE_URL`) with yours. The sandbox turns off
+Codex's analytics, update check and plugins, so it needs no host besides GitHub's: not
+`api.openai.com`, and not `api.anthropic.com` either.
+
+What differs from Claude Code:
+
+- **Comments that arrive mid-run** wait for the run to end: `codex exec` takes no more input
+  once started. The next run starts right after and resumes the same session
+  (`codex exec resume --last`), so nothing is dropped, only answered in a second reply.
+- **Sessions** are in a volume per issue, `<sandbox>-codex` (`~/.codex`), apart from Claude
+  Code's: a repository that switches agent starts the issue afresh with the other one.
+- **Instructions:** Deckhand's rules and the repository's `instructions` file go to
+  `~/.codex/AGENTS.md`; Codex reads the repository's own `AGENTS.md` itself.
+- **Draft pull request:** Codex's hooks call the same `sandbox-draft-pr hook` after a push and
+  when it stops.
+- **Its own sandbox is off** (`--dangerously-bypass-approvals-and-sandbox`): the container is
+  the sandbox, as with Claude Code.
+
+A ChatGPT plan's login isn't supported yet: only an API key.
+
 ### Advanced settings
 
 The listener and the egress proxy also read these. `compose.yaml` doesn't take them from
@@ -386,7 +439,7 @@ else set it in the service's `environment`, for example in a `compose.override.y
 | Setting                               | Key                        | Default                                               | What                                                                                                                |
 | ------------------------------------- | -------------------------- | ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
 | `GRANTS_DIR`                          | `grants_dir`               | `/etc/deckhand/grants`                                | what you grant each repo, one file each: hosts, host mounts, limits, preview hook, Dockerfile (the server folder's) |
-| `INSTALL_NETWORK`                     | `install_network`          | `bridge`                                              | network of the Claude Code install container (needs npm)                                                            |
+| `INSTALL_NETWORK`                     | `install_network`          | `bridge`                                              | network of the agents' install containers (they need npm)                                                           |
 | `DEBOUNCE_MS`                         | `debounce_ms`              | `15000`                                               | pause after a comment before its run starts, so that comments posted together go in one run                         |
 | `BRAINSTORM_DEBOUNCE_MS`              | `brainstorm_debounce_ms`   | `3000`                                                | the same before a light run (brainstorms, onboarding, light modes)                                                  |
 | `DATA_DIR`                            | none                       | `/data`                                               | the listener's state: the App's credentials, logs, queue, runs (the `data` volume)                                  |
@@ -513,11 +566,12 @@ environments with required reviewers: see
 Nor does a sandbox get your Claude credential. Its Claude Code calls the listener (same port,
 `ANTHROPIC_BASE_URL=<broker>/anthropic`) with the run's secret where the credential would
 be; the listener checks the secret, puts your credential in its place and forwards the call
-to Anthropic, streaming the answer back (see [Security model](security.md#tokens)).
+to Anthropic, streaming the answer back (see [Security model](security.md#tokens)). Codex
+does the same with `OPENAI_BASE_URL=<broker>/openai` and your `OPENAI_API_KEY`.
 
-Claude Code is not part of any image: before the first run that needs it, the listener
-installs the pinned `CLAUDE_CODE_VERSION` into the `deckhand-claude-code` volume, in a
-container of its own, and later runs reuse it, read-only.
+No agent is part of any image: before the first run that needs it, the listener installs the
+pinned `CLAUDE_CODE_VERSION` into the `deckhand-claude-code` volume (Codex: `CODEX_VERSION`,
+`deckhand-codex`), in a container of its own, and later runs reuse it, read-only.
 
 ## Isolation
 

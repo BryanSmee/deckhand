@@ -1,10 +1,13 @@
-// The agent seam: Claude Code's stream-json, as recorded from its runs, becomes Deckhand's own
-// events, and its tiers and efforts resolve to its own names.
+// The agent seam: Claude Code's stream-json and Codex's JSONL, as recorded from their runs,
+// become Deckhand's own events, and their tiers and efforts resolve to their own names.
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { AGENTS, agentFor, effortOf, modelOf } from "../listener/agents/index.mjs";
+import { AGENT_SECRETS, AGENTS, agentFor, effortOf, modelOf } from "../listener/agents/index.mjs";
 import { claude } from "../listener/agents/claude.mjs";
-import { modelFor } from "../listener/runs.mjs";
+import { codex } from "../listener/agents/codex.mjs";
+import { lastResult, outcome } from "../listener/runlog.mjs";
+import { agentNameFor, modelFor } from "../listener/runs.mjs";
 
 const line = (event) => JSON.stringify(event);
 
@@ -118,7 +121,7 @@ test("normalize: what isn't Claude Code's JSON gives nothing", () => {
 });
 
 test("agents: Claude Code is the default, also for unknown names", () => {
-  assert.deepEqual(Object.keys(AGENTS), ["claude"]);
+  assert.deepEqual(Object.keys(AGENTS), ["claude", "codex"]);
   assert.equal(agentFor(), claude);
   assert.equal(agentFor("claude"), claude);
   assert.equal(agentFor("toString"), claude);
@@ -181,4 +184,166 @@ test("Claude Code's env: the run's secret in place of the credential, calls to t
     versionVar: "CLAUDE_CODE_VERSION",
     command: "deckhand-install-claude-code",
   });
+});
+
+// Codex's JSONL, recorded from Codex 0.162.1 run through sandbox/agents/codex.sh (so with its
+// closing deckhand.result line) against a scripted Responses API: a work turn (message,
+// commands, an edit, a Playwright call, a needs-input answer) and one that failed.
+const fixture = (name) =>
+  readFileSync(new URL(`fixtures/${name}`, import.meta.url), "utf8")
+    .trim()
+    .split("\n");
+
+test("normalize: a Codex turn, from its recorded JSONL", () => {
+  const events = fixture("codex-work.jsonl").flatMap((l) => codex.normalize(l));
+  assert.deepEqual(events, [
+    { type: "started" },
+    { type: "text", text: "Looking at the files first." },
+    { type: "tool", name: "command", detail: "ls -a" },
+    { type: "toolOutput", error: false, text: ".\n..\n.git\nhello.txt\n" },
+    { type: "tool", name: "command", detail: "cat missing.txt" },
+    { type: "toolOutput", error: true, text: "cat: missing.txt: No such file or directory\n" },
+    { type: "tool", name: "edit", detail: "add /workspace/hello.txt" },
+    {
+      type: "tool",
+      name: "mcp__playwright__browser_navigate",
+      detail: '{"url":"http://localhost:5173"}',
+    },
+    { type: "toolOutput", error: false, text: "Navigated to http://localhost:5173" },
+    { type: "text", text: "<!-- needs-input -->\n## Needs your input\n\n1. Which?" },
+    {
+      type: "result",
+      ok: true,
+      text: "<!-- needs-input -->\n## Needs your input\n\n1. Which?",
+      durationMs: 309,
+    },
+  ]);
+  // The result is the last message: the needs-input check reads it as with Claude Code.
+  assert.equal(outcome(lastResult(fixture("codex-work.jsonl"), codex)), "needs-input");
+});
+
+test("normalize: a failed Codex turn is a failed result with Codex's error", () => {
+  const lines = fixture("codex-failed.jsonl");
+  // Its retries ("Reconnecting... 1/5") and turn.failed say nothing of their own.
+  assert.deepEqual(
+    lines.flatMap((l) => codex.normalize(l)),
+    [
+      { type: "started" },
+      {
+        type: "result",
+        ok: false,
+        text: "rate limit exceeded: Rate limit reached for gpt-5.5",
+        durationMs: 5950,
+      },
+    ],
+  );
+  assert.equal(outcome(lastResult(lines, codex)), "error");
+});
+
+test("normalize: Codex's other items, failed edits and MCP errors, and what isn't its JSON", () => {
+  const completed = (item) => line({ type: "item.completed", item });
+  assert.deepEqual(
+    codex.normalize(
+      completed({
+        type: "file_change",
+        changes: [{ path: "a.md", kind: "update" }],
+        status: "failed",
+      }),
+    ),
+    [
+      { type: "tool", name: "edit", detail: "update a.md" },
+      { type: "toolOutput", error: true, text: "Not applied" },
+    ],
+  );
+  assert.deepEqual(
+    codex.normalize(
+      completed({ type: "mcp_tool_call", status: "failed", error: { message: "No browser" } }),
+    ),
+    [{ type: "toolOutput", error: true, text: "No browser" }],
+  );
+  assert.deepEqual(codex.normalize(completed({ type: "web_search", query: "codex hooks" })), [
+    { type: "tool", name: "web_search", detail: "codex hooks" },
+  ]);
+  // A command with a quote in it, unwrapped from Codex's shell.
+  assert.deepEqual(
+    codex.normalize(
+      line({
+        type: "item.started",
+        item: { type: "command_execution", command: "/bin/bash -lc 'echo '\\''hi'\\'''" },
+      }),
+    ),
+    [{ type: "tool", name: "command", detail: "echo 'hi'" }],
+  );
+  // Reasoning, todo lists, warnings and usage say nothing.
+  for (const item of [
+    { type: "reasoning", text: "Hm" },
+    { type: "todo_list" },
+    { type: "error" },
+  ]) {
+    assert.deepEqual(codex.normalize(completed(item)), [], item.type);
+  }
+  for (const raw of ["Cloning into 'x'...", "", "42", "null", '"text"', "[1]"]) {
+    assert.deepEqual(codex.normalize(raw), [], raw);
+  }
+  assert.deepEqual(codex.normalize(line({ type: "turn.completed", usage: {} })), []);
+  assert.deepEqual(codex.normalize(line({ type: "item.completed" })), []);
+  assert.deepEqual(codex.normalize(line({ type: "constructor" })), []);
+});
+
+test("Codex: installed like Claude Code, the run's secret as its key, no mid-run messages", () => {
+  const config = {
+    brokerUrl: "http://listener:8081",
+    codexVolume: "deckhand-codex",
+    codexVersion: "0.162.1",
+  };
+  assert.equal(agentFor("codex"), codex);
+  assert.deepEqual(codex.install(config), {
+    volume: "deckhand-codex",
+    mount: "/opt/codex",
+    version: "0.162.1",
+    versionVar: "CODEX_VERSION",
+    command: "deckhand-install-codex",
+  });
+  assert.deepEqual(codex.env(config, "run-secret"), {
+    OPENAI_API_KEY: "run-secret",
+    OPENAI_BASE_URL: "http://listener:8081/openai",
+  });
+  assert.deepEqual(codex.secrets, ["OPENAI_API_KEY"]);
+  assert.deepEqual(codex.hosts, []);
+  assert.deepEqual(codex.session, { volume: "codex", path: "/home/node/.codex" });
+  assert.equal(codex.takesMessages, false);
+  // Every agent's credential is redacted, whichever ran.
+  for (const name of [...claude.secrets, ...codex.secrets]) assert.ok(AGENT_SECRETS.includes(name));
+});
+
+test("Codex's tiers: its catalog's, or the operator's; Claude's names are refused", () => {
+  assert.equal(modelOf(codex, "best"), "gpt-6-astra");
+  assert.equal(modelOf(codex, "balanced"), "gpt-6.1-sol");
+  assert.equal(modelOf(codex, "fast"), "gpt-6-luna");
+  assert.equal(modelOf(codex, "fast", { codexModels: { fast: "gpt-6-mini" } }), "gpt-6-mini");
+  assert.equal(modelOf(codex, "best", { codexModels: { fast: "gpt-6-mini" } }), "gpt-6-astra");
+  assert.equal(modelOf(codex, "gpt-5.5"), "gpt-5.5");
+  assert.equal(effortOf(codex, "xhigh"), "xhigh");
+  for (const model of ["opus", "sonnet", "haiku", "opus[1m]", "claude-opus-5-5", "Claude-x"]) {
+    assert.match(codex.modelProblem(model), /is a Claude model, not one of Codex's/, model);
+  }
+  for (const model of ["gpt-6.1-sol", "o3", "gpt-5.5", "opus-like"]) {
+    assert.equal(codex.modelProblem(model), null, model);
+  }
+  // Claude Code takes any name: a gateway's are its own.
+  assert.equal(claude.modelProblem("openai/gpt-5"), null);
+  // A run's model with Codex: the comment's tier, resolved by Codex.
+  const settings = { model: "best", effort: "medium", brainstormModel: "fast" };
+  assert.deepEqual(modelFor(settings, null, false, {}, codex), ["gpt-6-astra", "medium"]);
+  assert.deepEqual(
+    modelFor(settings, null, true, {}, codex, { codexModels: { fast: "gpt-6-mini" } }),
+    ["gpt-6-mini", undefined],
+  );
+});
+
+test("a run's agent: the repo's mode's, else light runs' or work's", () => {
+  const settings = { agent: "codex", brainstormAgent: "claude" };
+  assert.equal(agentNameFor(settings, null, false), "codex");
+  assert.equal(agentNameFor(settings, null, true), "claude");
+  assert.equal(agentNameFor(settings, { agent: "claude" }, false), "claude");
 });

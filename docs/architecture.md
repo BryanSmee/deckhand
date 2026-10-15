@@ -1,6 +1,6 @@
 # How the listener works
 
-The listener (`listener/`) receives the GitHub App's webhooks, runs an agent (Claude Code, see
+The listener (`listener/`) receives the GitHub App's webhooks, runs an agent (Claude Code or Codex, see
 [Agents](#agents)) in a sandbox container (`sandbox/`) for issue, pull request and discussion
 comments, one container and one set of volumes per issue, and posts the agent's final message
 back as a comment. This page is
@@ -255,8 +255,14 @@ when it begins, and so does the next listener for comments queued for a run stil
 
 ## Agents
 
-Claude Code is the one agent today, behind a seam that keeps what is its own in two files, so
-another agent (Codex, say) is two more files rather than an `if` across the listener:
+Two agents, Claude Code (`claude`) and Codex (`codex`), behind a seam that keeps what is each
+one's own in two files, so another agent is two more files rather than an `if` across the
+listener. Which one runs: the repo's mode's `agent`, else the repo's `agent` (or
+`brainstorm_agent` for light runs), else the operator's `SANDBOX_AGENT` (`BRAINSTORM_AGENT`).
+A repo only picks among the agents the operator configured (`config.agents`: those it has a
+credential for, and its defaults), checked when its config is read (`repo-config.mjs`).
+`runs.mjs` settles it once the repo's settings are read, at the start of each run, and keeps
+it in the run's record:
 
 - **In the sandbox**, `sandbox/agents/<name>.sh`, sourced by `sandbox/entrypoint.sh` for
   `SANDBOX_AGENT` (the listener sets it; `claude` by default). The entrypoint does what every
@@ -266,7 +272,9 @@ another agent (Codex, say) is two more files rather than an `if` across the list
   `~/.claude/CLAUDE.md`), `agent_mcp` (Playwright), `agent_has_session`, `agent_run` (a new,
   continued or fresh session, its raw output, mid-run messages read from
   `deckhand_messages`) and `agent_interactive`. Its other files are in
-  `sandbox/agents/<name>/` (Claude Code: its installer, settings, hooks, progress filter).
+  `sandbox/agents/<name>/` (Claude Code: its installer, settings, hooks, progress filter;
+  Codex: its installer, hooks, progress filter and `result.jq`, which adds the
+  `deckhand.result` line its JSONL lacks).
   One base image serves every agent: no CLI is in it, each is installed per version into a
   shared volume.
 - **In the listener**, `listener/agents/<name>.mjs`, listed in `listener/agents/index.mjs`:
@@ -274,12 +282,15 @@ another agent (Codex, say) is two more files rather than an `if` across the list
   - `env(config, secret)` and `secrets`: its environment, with the run's secret where its
     credential would be, and the variables redacted from logs and replies;
   - `hosts`: what the egress proxy always lets it reach (`egress.mjs`);
-  - `session`: the volume (`<sandbox>-claude`) and path of its sessions, which
-    `runner.hasSession()` checks;
-  - `takesMessages` and `message(text)`: whether comments reach it mid-run, and as what;
+  - `session`: the volume (`<sandbox>-claude`, `<sandbox>-codex`) and path of its sessions,
+    which `runner.hasSession()` checks;
+  - `takesMessages` and `message(text)`: whether comments reach it mid-run, and as what
+    (Codex takes none: they wait for the next run, which resumes its session);
   - `models` and `efforts`: the tiers and effort levels, in its own names (Claude Code:
     `best` → `opus`, `balanced` → `sonnet`, `fast` → `haiku`; what those mean is the
-    operator's `ANTHROPIC_DEFAULT_*_MODEL`);
+    operator's `ANTHROPIC_DEFAULT_*_MODEL`; Codex: the pinned version's catalog, or the
+    operator's `CODEX_*_MODEL`), and `modelProblem(model)`, a model it can't run (another
+    agent's), which stops the run with a reply;
   - `normalize(line)`: a line of its output → Deckhand's own events, `started{model}`,
     `text{text}`, `tool{name, detail}`, `toolOutput{text, error}` and
     `result{ok, text, durationMs}`.

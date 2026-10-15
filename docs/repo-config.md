@@ -42,6 +42,10 @@ users: [alice, bob]
 # The first line of a comment that starts a run, compared loosely ("@Deckhand:" matches).
 trigger: Deckhand
 
+# The agent of work runs and of light ones, among those the operator configured (see Agent).
+agent: claude
+brainstorm_agent: claude
+
 # Defaults; a comment's /model and /effort lines still override them.
 model: opus
 effort: high
@@ -79,7 +83,8 @@ modes:
     instructions: .deckhand/review.md # path in the repo, default branch
     light: true # comments only: no branch, no setup, a read-only token
     session: issue # issue: kept, like a brainstorm | fresh: a new one each time
-    model: sonnet
+    agent: codex # only if the operator configured it
+    model: balanced
     effort: medium
 
 # Where ideas, bug reports and questions go (see Inboxes below).
@@ -108,11 +113,12 @@ wait_for_answers: true
 | --------------------------------------- | --------------------------------------- | ---------------------------------------------------------------------------------------- |
 | `users`                                 | `ALLOWED_USERS`                         | GitHub logins that may start runs here; those not in `ALLOWED_USERS` are ignored         |
 | `trigger`                               | `TRIGGER`                               | the whole first line of a comment that starts a run; `/mode` picks another mode          |
+| `agent`, `brainstorm_agent`             | `SANDBOX_AGENT`, `BRAINSTORM_AGENT`     | the agent of work runs, and of brainstorms, inbox entries and discussions (see Agent)    |
 | `model`, `effort`                       | `SANDBOX_MODEL`, `SANDBOX_EFFORT`       | work runs' model (`best`, `balanced`, `fast` or a name) and effort (`low` … `max`)       |
 | `brainstorm_model`, `brainstorm_effort` | `BRAINSTORM_MODEL`, `BRAINSTORM_EFFORT` | the same for brainstorms, inbox entries and discussions                                  |
 | `max_parallel`                          | `MAX_PARALLEL`                          | runs of this repo at once; capped by `MAX_PARALLEL`                                      |
-| `setup`                                 | none                                    | shell command run in `/workspace` before Claude, on work runs                            |
-| `instructions`                          | none                                    | Markdown file of the repo, appended to Claude's instructions                             |
+| `setup`                                 | none                                    | shell command run in `/workspace` before the agent, on work runs                         |
+| `instructions`                          | none                                    | Markdown file of the repo, appended to the agent's instructions                          |
 | `dockerfile`                            | none: the base image                    | Dockerfile of the repo for its runs' image; needs the operator's `allow_dockerfile`      |
 | `docker`                                | none                                    | a container engine for work runs (`true`, or `cache: true`); needs `allow_docker`        |
 | `caches`                                | none                                    | absolute paths in the sandbox kept in a volume per repo and path                         |
@@ -248,6 +254,27 @@ goes to the run's log. If it fails, the run goes on and Claude is told.
 Brainstorms are light runs: no branch, no setup command, so the answer comes quickly. So
 are the repo's modes with `light: true`.
 
+## Agent
+
+`agent` picks what runs the repository's work: `claude` (Claude Code) or `codex` (OpenAI's
+Codex), `brainstorm_agent` that of its light runs (brainstorms, inbox entries, discussions),
+and a mode's `agent` that of the mode. Without them, the operator's `SANDBOX_AGENT` and
+`BRAINSTORM_AGENT` (a light mode takes `brainstorm_agent`, a full one `agent`).
+
+Only an agent the operator has configured: one it holds a credential for, or its default. Any
+other name is an error, listed in the reply, and nothing runs:
+
+```text
+agent: the operator hasn't configured codex (configured: claude)
+```
+
+Models are the agent's: `best`, `balanced` and `fast` work with either. A model name of the
+other agent's (`model: opus` with `agent: codex`) stops the run, and the reply says why.
+Each agent keeps its own session for an issue: switching agent starts the issue afresh with
+the new one, which reads the issue and its comments like any first run. With Codex, comments
+posted while a run works wait for it to end, and the next run answers them in the same
+session (see [Codex](setup.md#codex)).
+
 ## Instructions
 
 The file named by `instructions` is read from the default branch and appended to the
@@ -288,11 +315,13 @@ error, listed in the reply:
 | `instructions` | required                                  | Markdown file of the repo, read from the default branch, like `instructions` |
 | `light`        | `false`                                   | `true`: no branch, no `setup`, a read-only token: it can only comment        |
 | `session`      | `issue`                                   | `issue`: the issue's session, kept; `fresh`: a new one each run, not kept    |
+| `agent`        | `agent`, or `brainstorm_agent` if light   | its agent, among the operator's (see [Agent](#agent))                        |
 | `model`        | `model`, or `brainstorm_model` if light   | its model                                                                    |
 | `effort`       | `effort`, or `brainstorm_effort` if light | its thinking effort                                                          |
 
 - **Names**: letters, digits, `-` and `_`. `work` and `brainstorm` can't be redefined (set
-  their model with `model`/`effort` and `brainstorm_model`/`brainstorm_effort`);
+  their agent and model with `agent`/`model`/`effort` and `brainstorm_agent`/
+  `brainstorm_model`/`brainstorm_effort`);
   `onboarding`, `stop`, `idea`, `bug` and `discussion` are reserved.
 - **Prompt**: the generic sandbox instructions (`prompts/sandbox.md`, and the repo's
   `instructions`) as for every run, then a short frame (the issue or pull request to read,

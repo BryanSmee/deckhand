@@ -10,6 +10,7 @@ import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { createAuth, sessionKey } from "./auth.mjs";
 import { createAnthropicProxy } from "./anthropic.mjs";
+import { createOpenAiProxy } from "./openai.mjs";
 import { createBroker } from "./broker.mjs";
 import { createGitGateway } from "./git-gateway.mjs";
 import { createPrReady } from "./pr-ready.mjs";
@@ -304,6 +305,13 @@ ctx.anthropic = createAnthropicProxy({
   upstream: config.anthropicUrl,
   log,
 });
+// Their Codex's, likewise.
+ctx.openai = createOpenAiProxy({
+  broker: ctx.broker,
+  credential: config.openaiCredential && env[config.openaiCredential],
+  upstream: config.openaiUrl,
+  log,
+});
 // Their pull requests ready for review (or back to draft): their own token can't.
 ctx.prReady = createPrReady({
   broker: ctx.broker,
@@ -391,6 +399,9 @@ http.listen();
 http.listenBroker();
 
 log(`Deckhand ${ctx.version}`);
+log(
+  `Agents: ${config.agent} for work, ${config.brainstormAgent} for light runs; repos may pick ${config.agents.join(", ")}`,
+);
 if (!ctx.app) log(`No GitHub App yet. Set it up at ${setup.link()}`);
 
 // Before any request is served: runs still going since the previous listener, then what it

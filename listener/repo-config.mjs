@@ -1,11 +1,12 @@
 // Per-repo settings: a repo's .deckhand.yaml, always read from its default branch so a pull
 // request can't change its own permissions. It can only narrow the operator's settings
 // (users, parallel runs), requests what the operator must grant (mounts, preview hook,
-// Dockerfile, container engine: grants.mjs), and brings what is the project's own: trigger word, models, setup
-// command, extra instructions, its own modes, caches. Format and example:
-// ../docs/repo-config.md.
+// Dockerfile, container engine: grants.mjs), and brings what is the project's own: trigger
+// word, agent (among the operator's), models, setup command, extra instructions, its own
+// modes, caches. Format and example: ../docs/repo-config.md.
 import { createHash } from "node:crypto";
 import { posix } from "node:path";
+import { AGENTS } from "./agents/index.mjs";
 import { EFFORTS, MODEL_NAME } from "./events.mjs";
 import { list, normalize } from "./config.mjs";
 import { isMap, parseYaml } from "./yaml.mjs";
@@ -13,7 +14,14 @@ import { isMap, parseYaml } from "./yaml.mjs";
 export const CONFIG_FILE = ".deckhand.yaml";
 
 // What the sandbox mounts itself: a cache can't take these over.
-export const RESERVED = ["/workspace", "/home/node/.claude", "/opt/claude-code", "/screenshots"];
+export const RESERVED = [
+  "/workspace",
+  "/home/node/.claude",
+  "/opt/claude-code",
+  "/home/node/.codex",
+  "/opt/codex",
+  "/screenshots",
+];
 
 // Docker's --mount is comma-separated: host and cache paths stay within these characters.
 export const PLAIN_PATH = /^\/[\w./@+-]*$/;
@@ -24,13 +32,15 @@ export const PLAIN_PATH = /^\/[\w./@+-]*$/;
 // and "/stop". The dashboard has a copy (format.ts), checked by a test.
 const PICKED_MODES = ["work", "brainstorm", "onboarding"];
 export const RESERVED_MODES = [...PICKED_MODES, "stop", "idea", "bug", "discussion"];
-const MODE_KEYS = ["instructions", "light", "session", "model", "effort"];
+const MODE_KEYS = ["instructions", "light", "session", "agent", "model", "effort"];
 
 // What a repo gets without a config file: the operator's settings as they are.
 export function defaultSettings(config) {
   return {
     users: config.users,
     trigger: config.trigger,
+    agent: config.agent,
+    brainstormAgent: config.brainstormAgent,
     model: config.model,
     effort: config.effort,
     brainstormModel: config.brainstormModel,
@@ -61,6 +71,8 @@ export function effectiveConfig(config, settings) {
     inbox,
     users,
     trigger,
+    agent: settings.agent,
+    brainstormAgent: settings.brainstormAgent,
     model,
     effort,
     brainstormModel,
@@ -111,6 +123,28 @@ const modelKey =
         key,
         "expected a model tier (best, balanced, fast) or name (opus, claude-…, openai/gpt-…)",
       );
+  };
+
+// One of the agents the operator configured (config.agents), or null with `fail` called:
+// a repo picks among them, it can't add one.
+function agentName(value, key, config, fail) {
+  const name = typeof value === "string" ? value.trim().toLowerCase() : "";
+  if (config.agents.includes(name)) return name;
+  const known = Object.hasOwn(AGENTS, name);
+  fail(
+    key,
+    known
+      ? `the operator hasn't configured ${name} (configured: ${config.agents.join(", ")})`
+      : `expected one of ${config.agents.join(", ")}`,
+  );
+  return null;
+}
+
+const agentKey =
+  (field) =>
+  (value, { key, settings, config, fail }) => {
+    const name = agentName(value, key, config, fail);
+    if (name) settings[field] = name;
   };
 
 // A thinking effort, into settings[field].
@@ -258,6 +292,8 @@ const KEYS = {
     if (typeof value === "string" && normalize(value)) settings.trigger = normalize(value);
     else fail(key, "expected a line of text");
   },
+  agent: agentKey("agent"),
+  brainstorm_agent: agentKey("brainstormAgent"),
   model: modelKey("model"),
   brainstorm_model: modelKey("brainstormModel"),
   effort: effortKey("effort"),
@@ -285,9 +321,11 @@ const KEYS = {
   },
   mounts: parseMounts,
   inbox: parseInbox,
-  modes: (value, { key, settings, fail }) => {
+  modes: (value, { key, settings, config, fail }) => {
     if (!isMap(value)) return fail(key, "expected modes by name, each with its instructions");
-    for (const [name, mode] of Object.entries(value)) parseMode(name, mode, settings, fail);
+    for (const [name, mode] of Object.entries(value)) {
+      parseMode(name, mode, settings, config, fail);
+    }
   },
   preview: parsePreview,
   conflicts: parseConflicts,
@@ -301,20 +339,32 @@ const KEYS = {
 
 // One of `modes:`, into settings.modes. Every key is checked: a mistyped one would otherwise
 // change what the mode does without anyone noticing. Nothing here touches the repo's grants.
-function parseMode(name, mode, settings, fail) {
+function parseMode(name, mode, settings, config, fail) {
   const where = `modes.${name}`;
   const id = name.toLowerCase();
   if (id === "work" || id === "brainstorm") {
-    const keys = id === "work" ? "model and effort" : "brainstorm_model and brainstorm_effort";
-    return fail(where, `${id} is built in: set its model with ${keys} instead`);
+    const keys =
+      id === "work"
+        ? "agent, model and effort"
+        : "brainstorm_agent, brainstorm_model and brainstorm_effort";
+    return fail(where, `${id} is built in: set it with ${keys} instead`);
   }
   if (RESERVED_MODES.includes(id)) return fail(where, `${id} is reserved by Deckhand`);
   if (!/^[a-z][a-z0-9_-]{0,31}$/.test(id)) {
     return fail(where, "expected a name of letters, digits, - and _ (32 at most)");
   }
-  if (!isMap(mode)) return fail(where, "expected instructions, light, session, model, effort");
+  if (!isMap(mode)) {
+    return fail(where, "expected instructions, light, session, agent, model, effort");
+  }
   const before = settings.modes[id];
-  const own = { instructions: null, light: false, session: "issue", model: null, effort: null };
+  const own = {
+    instructions: null,
+    light: false,
+    session: "issue",
+    agent: null,
+    model: null,
+    effort: null,
+  };
   let ok = true;
   const bad = (key, what) => {
     ok = false;
@@ -332,6 +382,8 @@ function parseMode(name, mode, settings, fail) {
     } else if (key === "session") {
       if (["issue", "fresh"].includes(value)) own.session = value;
       else bad(key, "expected issue or fresh");
+    } else if (key === "agent") {
+      own.agent = agentName(value, `${where}.${key}`, config, (k, what) => bad(key, what));
     } else if (key === "model") {
       if (typeof value === "string" && MODEL_NAME.test(value)) own.model = value;
       else
@@ -351,19 +403,21 @@ function parseMode(name, mode, settings, fail) {
 // What a run in the repo's own mode `name` gets, or null when the repo has no such mode
 // (work, brainstorm and the inbox are the listener's): light (no branch, no setup, a read-only
 // token: it can only comment), fresh (a new session each time, the issue's kept as it is),
-// its instructions file, and its model and effort, by default those of work or brainstorms.
+// its instructions file, and its agent, model and effort, by default those of work or
+// brainstorms.
 // No hosts, mounts or limits: those are the repo's grants, the same in every mode.
 export function customMode(settings, name) {
   const own = settings?.modes?.[name];
   if (!own) return null;
-  const [model, effort] = own.light
-    ? [settings.brainstormModel, settings.brainstormEffort]
-    : [settings.model, settings.effort];
+  const [agent, model, effort] = own.light
+    ? [settings.brainstormAgent, settings.brainstormModel, settings.brainstormEffort]
+    : [settings.agent, settings.model, settings.effort];
   return {
     name,
     light: own.light,
     fresh: own.session === "fresh",
     instructions: own.instructions,
+    agent: own.agent ?? agent,
     model: own.model ?? model,
     effort: own.effort ?? effort,
   };

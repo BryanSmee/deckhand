@@ -1,0 +1,17 @@
+{"type":"thread.started","thread_id":"01a140d4-c5ce-70b3-8e35-5c27c1fe55a7"}
+{"type":"item.completed","item":{"id":"item_0","type":"error","message":"`--dangerously-bypass-hook-trust` is enabled. Enabled hooks may run without review for this invocation."}}
+{"type":"item.completed","item":{"id":"item_1","type":"error","message":"`--dangerously-bypass-hook-trust` is enabled. Enabled hooks may run without review for this invocation."}}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_2","type":"reasoning","text":"**Looking around**"}}
+{"type":"item.completed","item":{"id":"item_3","type":"agent_message","text":"Looking at the files first."}}
+{"type":"item.started","item":{"id":"item_4","type":"command_execution","command":"/bin/bash -lc 'ls -a'","aggregated_output":"","exit_code":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_4","type":"command_execution","command":"/bin/bash -lc 'ls -a'","aggregated_output":".\n..\n.git\nhello.txt\n","exit_code":0,"status":"completed"}}
+{"type":"item.started","item":{"id":"item_5","type":"command_execution","command":"/bin/bash -lc 'cat missing.txt'","aggregated_output":"","exit_code":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_5","type":"command_execution","command":"/bin/bash -lc 'cat missing.txt'","aggregated_output":"cat: missing.txt: No such file or directory\n","exit_code":1,"status":"failed"}}
+{"type":"item.started","item":{"id":"item_6","type":"file_change","changes":[{"path":"/workspace/hello.txt","kind":"add"}],"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_6","type":"file_change","changes":[{"path":"/workspace/hello.txt","kind":"add"}],"status":"completed"}}
+{"type":"item.started","item":{"id":"item_7","type":"mcp_tool_call","server":"playwright","tool":"browser_navigate","arguments":{"url":"http://localhost:5173"},"result":null,"error":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_7","type":"mcp_tool_call","server":"playwright","tool":"browser_navigate","arguments":{"url":"http://localhost:5173"},"result":{"content":[{"type":"text","text":"Navigated to http://localhost:5173"}],"structured_content":null},"error":null,"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_8","type":"agent_message","text":"<!-- needs-input -->\n## Needs your input\n\n1. Which?"}}
+{"type":"turn.completed","usage":{"input_tokens":60,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":30,"reasoning_output_tokens":0}}
+{"type":"deckhand.result","ok":true,"text":"<!-- needs-input -->\n## Needs your input\n\n1. Which?","duration_ms":309}

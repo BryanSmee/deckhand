@@ -230,6 +230,7 @@ test("modes: parsed, with the defaults of work or brainstorms", () => {
     light: true,
     fresh: false,
     instructions: ".deckhand/review.md",
+    agent: "claude",
     model: "sonnet",
     effort: "low",
   });
@@ -238,6 +239,7 @@ test("modes: parsed, with the defaults of work or brainstorms", () => {
     light: false,
     fresh: true,
     instructions: ".deckhand/triage.md",
+    agent: "claude",
     model: "opus",
     effort: "high",
   });
@@ -265,8 +267,8 @@ test("modes: built-in names, wrong names, unknown keys and bad paths are errors"
     config,
   );
   assert.deepEqual(errors, [
-    "modes.work: work is built in: set its model with model and effort instead",
-    "modes.Brainstorm: brainstorm is built in: set its model with brainstorm_model and brainstorm_effort instead",
+    "modes.work: work is built in: set it with agent, model and effort instead",
+    "modes.Brainstorm: brainstorm is built in: set it with brainstorm_agent, brainstorm_model and brainstorm_effort instead",
     "modes.stop: stop is reserved by Deckhand",
     "modes.onboarding: onboarding is reserved by Deckhand",
     "modes.a b: expected a name of letters, digits, - and _ (32 at most)",
@@ -297,10 +299,10 @@ modes:
     config,
   );
   assert.deepEqual(errors, [
-    "modes.wide.hosts: unknown key (expected instructions, light, session, model, effort)",
-    "modes.wide.mounts: unknown key (expected instructions, light, session, model, effort)",
-    "modes.wide.limits: unknown key (expected instructions, light, session, model, effort)",
-    "modes.wide.allow_branch_docker_images: unknown key (expected instructions, light, session, model, effort)",
+    "modes.wide.hosts: unknown key (expected instructions, light, session, agent, model, effort)",
+    "modes.wide.mounts: unknown key (expected instructions, light, session, agent, model, effort)",
+    "modes.wide.limits: unknown key (expected instructions, light, session, agent, model, effort)",
+    "modes.wide.allow_branch_docker_images: unknown key (expected instructions, light, session, agent, model, effort)",
   ]);
   // Refused as a whole, and the repo's own grants are untouched.
   assert.equal(customMode(settings, "wide"), null);
@@ -308,6 +310,7 @@ modes:
   // What a valid mode's run gets: nothing about access.
   const { settings: valid } = parseRepoConfig(MODES, config);
   assert.deepEqual(Object.keys(customMode(valid, "review")).sort(), [
+    "agent",
     "effort",
     "fresh",
     "instructions",
@@ -407,4 +410,58 @@ test("one engine cache volume per repo, apart from the sandbox's caches", () => 
   assert.match(a, /^deckhand-engine-cache-org-repo-[0-9a-f]{10}$/);
   assert.equal(engineCacheVolume(config, "org/repo"), a);
   assert.notEqual(engineCacheVolume(config, "org/repo-x"), a);
+});
+
+test("agent: a repo picks among the operator's agents, per repo, light runs and mode", () => {
+  const both = loadConfig({
+    ALLOWED_USERS: "alice",
+    CLAUDE_CODE_OAUTH_TOKEN: "t",
+    OPENAI_API_KEY: "k",
+  });
+  const { settings, errors } = parseRepoConfig(
+    `agent: Codex
+brainstorm_agent: claude
+modes:
+  review:
+    instructions: review.md
+    light: true
+  audit:
+    instructions: audit.md
+    agent: claude
+`,
+    both,
+  );
+  assert.deepEqual(errors, []);
+  assert.equal(settings.agent, "codex");
+  assert.equal(settings.brainstormAgent, "claude");
+  // A light mode takes the light runs' agent, a full one work's, unless it names its own.
+  assert.equal(customMode(settings, "review").agent, "claude");
+  assert.equal(customMode(settings, "audit").agent, "claude");
+  assert.equal(effectiveConfig(both, settings).agent, "codex");
+  // Without the keys, the operator's.
+  assert.equal(parseRepoConfig("", both).settings.agent, "claude");
+});
+
+test("agent: one the operator hasn't configured is an error, at the top or in a mode", () => {
+  // The operator has no OpenAI key: Codex isn't theirs to give.
+  const { settings, errors } = parseRepoConfig(
+    `agent: codex
+brainstorm_agent: gemini
+modes:
+  review:
+    instructions: review.md
+    agent: codex
+`,
+    config,
+  );
+  assert.deepEqual(errors, [
+    "agent: the operator hasn't configured codex (configured: claude)",
+    "brainstorm_agent: expected one of claude",
+    "modes.review.agent: the operator hasn't configured codex (configured: claude)",
+  ]);
+  assert.equal(settings.agent, "claude");
+  assert.equal(customMode(settings, "review"), null);
+  assert.deepEqual(parseRepoConfig("agent: [codex]", config).errors, [
+    "agent: expected one of claude",
+  ]);
 });
