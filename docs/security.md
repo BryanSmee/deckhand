@@ -260,9 +260,11 @@ see grants nothing.
 ## The grants folder
 
 What you give a repository beyond what every sandbox gets lives in `GRANTS_DIR`
-(`/etc/deckhand/grants` in the listener; mount it read-only from the host, see
-`compose.yaml`): one file per repository, and `default.yaml` for every repository. It is
-optional and read again at each run, so an edit applies without a restart.
+(`/etc/deckhand/grants` in the listener: `grants/` in the
+[server folder](setup.md#the-server-folder) `compose.yaml` mounts read-only, with
+[`server.example/grants/`](../server.example/grants) to start from): one file per
+repository, and `default.yaml` for every repository. It is optional and read again at each
+run, so an edit applies without a restart.
 
 ```
 grants/
@@ -336,14 +338,14 @@ requests, and a `CODEOWNERS` giving each team its own repositories' files, while
 folder's root (`default.yaml`, `CODEOWNERS` itself) stays with you:
 
 ```
-# CODEOWNERS of the grants repository
-*                @acme/platform
-/acme/api.yaml   @acme/api-team
-/globex/         @globex/admins
+# CODEOWNERS of your deployment's repository
+*                              @acme/platform
+/server/grants/acme/api.yaml   @acme/api-team
+/server/grants/globex/         @globex/admins
 ```
 
-Mount it read-only into the listener (`- ./grants:/etc/deckhand/grants:ro`) and pull it on
-the host; the next run reads the change.
+`compose.yaml` mounts the server folder read-only into the listener; pull it on the host and
+the next run reads the change.
 
 Quote patterns starting with `*` (`"*.acme.dev"`): YAML reads a bare `*` as an alias. See [A repository's own hosts](#a-repositorys-own-hosts) for
 `allow_repo_hosts`.

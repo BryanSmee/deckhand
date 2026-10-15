@@ -8,12 +8,12 @@ that GitHub can reach (your reverse proxy, or a tunnel) forwarding to the listen
 
 ```sh
 cp .env.example .env
-# ALLOWED_USERS: the GitHub logins allowed to start runs (required: no start without it)
 # CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-token`) or ANTHROPIC_API_KEY (or a gateway's
-#   ANTHROPIC_AUTH_TOKEN: see Through a gateway below)
-# Optional: the other settings in a file you can commit (see Settings below); then
-# uncomment its line under the listener's volumes in compose.yaml
-cp config.example.yaml config.yaml
+#   ANTHROPIC_AUTH_TOKEN: see Through a gateway below): the secrets stay in .env
+cp -r server.example server
+# server/config.yaml: allowed_users, the GitHub logins allowed to start runs (required: no
+#   start without it), and the other settings; server/grants/: what you grant each
+#   repository. See The server folder below.
 docker compose pull
 docker compose up -d
 docker compose logs listener
@@ -202,10 +202,46 @@ the raw file. Anyone signed in to the dashboard sees it, grants
 included. Its **Refresh** reads it again (at most every 5 seconds); changing it is a commit on
 the default branch.
 
+## The server folder
+
+Everything you configure but the secrets is in one folder, which `compose.yaml` mounts
+read-only at `/etc/deckhand` in the listener: `./server` by default (`DECKHAND_SERVER_DIR`
+in `.env` to move it). Keep it in git, in your deployment's own repository, so each change is
+a reviewed commit:
+
+```
+server/                   # → /etc/deckhand, read-only
+  config.yaml             # your settings (Settings below); .env overrides each key
+  grants/
+    default.yaml          # what every repository gets
+    acme/api.yaml         # what acme/api gets, one file per repository
+```
+
+[`server.example/`](../server.example) is one to copy: `config.yaml` with the usual
+settings, and a grants folder that grants nothing until you uncomment it (rename
+`your-org/your-repo.yaml` to a repository of yours). Both parts are optional: without
+`config.yaml`, settings come from `.env`; without `grants/`, no repository gets more than
+a sandbox. A missing folder is created empty by Docker.
+
+Deckhand only reads it: getting it onto the host is yours. A checkout next to `compose.yaml`
+pulled on the host (or by a cron job, git-sync or your CI) works:
+
+```sh
+git clone git@github.com:acme/deckhand-config.git
+echo DECKHAND_SERVER_DIR=./deckhand-config/server >> .env
+docker compose up -d
+```
+
+The grants are read again at each run, so a pull applies to the next run; `config.yaml` is
+read at start, so restart the listener after changing it. Whoever can change the folder can
+grant root on the host: protect it like the deployment itself, with `CODEOWNERS` giving each
+team its own repositories' grants (see [Security model](security.md#the-grants-folder)).
+
 ## Settings
 
 Each setting can come from the environment (`.env`, read by `compose.yaml`) or from
-`config.yaml`, a file you can commit in your deployment's repository and review line by line.
+`config.yaml` in [the server folder](#the-server-folder), a file you commit in your
+deployment's repository and review line by line.
 Secrets (the Claude credential) stay in `.env`; the App's are in `/data/app.json`.
 
 - **Keys:** each setting's environment variable in lowercase (`ALLOWED_USERS` →
@@ -220,11 +256,11 @@ Secrets (the Claude credential) stay in `.env`; the App's are in `/data/app.json
 expected a whole number of sandboxes, got lots`). The file is optional; `ALLOWED_USERS`
   is required from one or the other.
 
-The listener reads `/etc/deckhand/config.yaml` (`CONFIG_FILE` to change it). Copy
-`config.example.yaml` to `config.yaml` and uncomment its line in `compose.yaml`'s `volumes`:
+The listener reads `/etc/deckhand/config.yaml` (`CONFIG_FILE` to change it): `config.yaml`
+in [the server folder](#the-server-folder), for example:
 
 ```yaml
-# config.yaml
+# server/config.yaml
 allowed_users: [alice, bob]
 allowed_repos: [acme/api, acme/web]
 allowed_hosts:
@@ -336,26 +372,26 @@ The listener and the egress proxy also read these. `compose.yaml` doesn't take t
 others to their defaults. To change one, set its key in `config.yaml` when it has one, or
 else set it in the service's `environment`, for example in a `compose.override.yaml`.
 
-| Setting                               | Key                        | Default                                               | What                                                                                                                     |
-| ------------------------------------- | -------------------------- | ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| `GRANTS_DIR`                          | `grants_dir`               | `/etc/deckhand/grants`                                | what you grant each repo, one file each: hosts, host mounts, limits, preview hook, Dockerfile (`compose.yaml` mounts it) |
-| `INSTALL_NETWORK`                     | `install_network`          | `bridge`                                              | network of the Claude Code install container (needs npm)                                                                 |
-| `DEBOUNCE_MS`                         | `debounce_ms`              | `15000`                                               | pause after a comment before its run starts, so that comments posted together go in one run                              |
-| `BRAINSTORM_DEBOUNCE_MS`              | `brainstorm_debounce_ms`   | `3000`                                                | the same before a light run (brainstorms, onboarding, light modes)                                                       |
-| `DATA_DIR`                            | none                       | `/data`                                               | the listener's state: the App's credentials, logs, queue, runs (the `data` volume)                                       |
-| `DASHBOARD_DIR`                       | none                       | the image's `dashboard/dist`                          | the built dashboard the listener serves                                                                                  |
-| `SANDBOX_IMAGE`                       | none                       | `<NAME_PREFIX>-sandbox`                               | the base image runs start from; compose sets the release's                                                               |
-| `ENGINE_IMAGE`, `ENGINE_PODMAN_IMAGE` | none                       | `<NAME_PREFIX>-engine`, `<NAME_PREFIX>-engine-podman` | the [container engine](#container-engine)'s images, for Sysbox and for Podman; compose sets the release's                |
-| `BROKER_PORT`                         | none                       | `8081`                                                | port of the token broker, git gateway and egress policy, on the runs' networks                                           |
-| `BROKER_URL`                          | none                       | `http://listener:<BROKER_PORT>`                       | the broker, as sandboxes reach it; compose sets it                                                                       |
-| `EGRESS_PROXY`                        | none                       | `http://egress:3128`                                  | the egress proxy, as sandboxes reach it; compose sets it                                                                 |
-| `LISTENER_CONTAINER`                  | none                       | the container's host name (its id)                    | the listener's container, which joins each run's network                                                                 |
-| `EGRESS_CONTAINER`                    | none                       | labelled `deckhand.role=egress`                       | the egress proxy's container, which joins each run's network; by default, the one in the listener's compose project      |
-| `POLICY_URL` (egress proxy)           | none                       | `http://listener:8081/egress`                         | where the proxy asks whether a sandbox may reach a host; compose sets it                                                 |
-| `PORT` (in the containers)            | none                       | `8080`, egress proxy: `3128`                          | port the listener and the proxy listen on; the `PORT` above only changes the published one                               |
-| `GITHUB_URL`, `GITHUB_API`            | `github_url`, `github_api` | `https://github.com`, `https://api.github.com`        | GitHub's web and API addresses, always allowed through the egress proxy                                                  |
-| `CONFIG_FILE`                         | none                       | `/etc/deckhand/config.yaml`                           | the settings file above; set on purpose, it has to exist                                                                 |
-| `DECKHAND_VERSION` (in the image)     | none                       | set when the image is built                           | the version the dashboard shows                                                                                          |
+| Setting                               | Key                        | Default                                               | What                                                                                                                |
+| ------------------------------------- | -------------------------- | ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `GRANTS_DIR`                          | `grants_dir`               | `/etc/deckhand/grants`                                | what you grant each repo, one file each: hosts, host mounts, limits, preview hook, Dockerfile (the server folder's) |
+| `INSTALL_NETWORK`                     | `install_network`          | `bridge`                                              | network of the Claude Code install container (needs npm)                                                            |
+| `DEBOUNCE_MS`                         | `debounce_ms`              | `15000`                                               | pause after a comment before its run starts, so that comments posted together go in one run                         |
+| `BRAINSTORM_DEBOUNCE_MS`              | `brainstorm_debounce_ms`   | `3000`                                                | the same before a light run (brainstorms, onboarding, light modes)                                                  |
+| `DATA_DIR`                            | none                       | `/data`                                               | the listener's state: the App's credentials, logs, queue, runs (the `data` volume)                                  |
+| `DASHBOARD_DIR`                       | none                       | the image's `dashboard/dist`                          | the built dashboard the listener serves                                                                             |
+| `SANDBOX_IMAGE`                       | none                       | `<NAME_PREFIX>-sandbox`                               | the base image runs start from; compose sets the release's                                                          |
+| `ENGINE_IMAGE`, `ENGINE_PODMAN_IMAGE` | none                       | `<NAME_PREFIX>-engine`, `<NAME_PREFIX>-engine-podman` | the [container engine](#container-engine)'s images, for Sysbox and for Podman; compose sets the release's           |
+| `BROKER_PORT`                         | none                       | `8081`                                                | port of the token broker, git gateway and egress policy, on the runs' networks                                      |
+| `BROKER_URL`                          | none                       | `http://listener:<BROKER_PORT>`                       | the broker, as sandboxes reach it; compose sets it                                                                  |
+| `EGRESS_PROXY`                        | none                       | `http://egress:3128`                                  | the egress proxy, as sandboxes reach it; compose sets it                                                            |
+| `LISTENER_CONTAINER`                  | none                       | the container's host name (its id)                    | the listener's container, which joins each run's network                                                            |
+| `EGRESS_CONTAINER`                    | none                       | labelled `deckhand.role=egress`                       | the egress proxy's container, which joins each run's network; by default, the one in the listener's compose project |
+| `POLICY_URL` (egress proxy)           | none                       | `http://listener:8081/egress`                         | where the proxy asks whether a sandbox may reach a host; compose sets it                                            |
+| `PORT` (in the containers)            | none                       | `8080`, egress proxy: `3128`                          | port the listener and the proxy listen on; the `PORT` above only changes the published one                          |
+| `GITHUB_URL`, `GITHUB_API`            | `github_url`, `github_api` | `https://github.com`, `https://api.github.com`        | GitHub's web and API addresses, always allowed through the egress proxy                                             |
+| `CONFIG_FILE`                         | none                       | `/etc/deckhand/config.yaml`                           | the settings file above; set on purpose, it has to exist                                                            |
+| `DECKHAND_VERSION` (in the image)     | none                       | set when the image is built                           | the version the dashboard shows                                                                                     |
 
 ## Updating
 
@@ -486,11 +522,16 @@ creates it, and `SANDBOX_NETWORK` is no longer read. Keep the `deckhand.role: eg
 of `compose.yaml`'s `egress` service if you copied the file: the listener finds the proxy
 by it.
 
+Upgrading from a version where `compose.yaml` mounted `config.yaml` and `grants/` one by
+one: move them into the server folder (`mkdir -p server && mv config.yaml grants server/`),
+and drop their lines from your `compose.yaml` or `compose.override.yaml` if you added them
+there; the new `compose.yaml` mounts the folder.
+
 Upgrading from a version with a single grants file (`GRANTS_FILE`, `grants.yaml`): the
 listener reads a folder now, `GRANTS_DIR`, and refuses to start while `GRANTS_FILE` is set.
 Move each `owner/repo:` entry to its own file, `owner/repo.yaml`, with its keys one level
 up; `"*"` becomes `default.yaml`. Then mount the folder instead of the file
-(`- ./grants:/etc/deckhand/grants:ro`) and remove `GRANTS_FILE`. For example:
+(`server/grants/`, see [the server folder](#the-server-folder)) and remove `GRANTS_FILE`. For example:
 
 ```yaml
 # grants.yaml, before
@@ -500,7 +541,7 @@ acme/api:
 ```
 
 ```yaml
-# grants/acme/api.yaml, after
+# server/grants/acme/api.yaml, after
 hosts: [pypi.org]
 allow_preview: true
 ```

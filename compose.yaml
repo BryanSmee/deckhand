@@ -2,8 +2,8 @@
 # from. Each sandbox sits on an internal network of its own, which the listener creates and
 # joins itself and the egress proxy to: the proxy is their only way out (see docs/security.md).
 #
-#   cp .env.example .env    # then set ALLOWED_USERS and a Claude credential
-#   cp config.example.yaml config.yaml   # optional: the other settings, see below
+#   cp .env.example .env    # then set a Claude credential (and ALLOWED_USERS, or in config.yaml)
+#   cp -r server.example server   # your settings and grants, mounted below: keep it in git
 #   docker compose pull && docker compose up -d
 #   docker compose logs listener   # prints the one-time /setup link
 #
@@ -113,11 +113,11 @@ services:
       - screenshots:/data/shots
       # Each run's inbox: comments for a running sandbox, which reads its own folder only.
       - runs:/data/runs
-      # Optional: your settings (config.example.yaml), read at start.
-      # - ./config.yaml:/etc/deckhand/config.yaml:ro
-      # Optional: what you grant each repo (hosts, whether its .deckhand.yaml may add hosts,
-      # host mounts, limits), one file per repo and default.yaml: docs/security.md.
-      # - ./grants:/etc/deckhand/grants:ro
+      # Your configuration, one folder you keep in git (server.example/ to start from), read
+      # only: config.yaml, your settings, read at start (docs/setup.md#settings); grants/,
+      # what you grant each repo (hosts, preview hook, Dockerfile, host mounts, limits), one
+      # file per repo and default.yaml, read at each run (docs/security.md). Both optional.
+      - ${DECKHAND_SERVER_DIR:-./server}:/etc/deckhand:ro
       # Each mount root you grant, at the same path and read-only: the listener resolves the
       # paths repos ask for (.., symlinks) in it before mounting them into a sandbox.
       # - /nfs/work:/nfs/work:ro

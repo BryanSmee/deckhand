@@ -280,10 +280,12 @@ test("without config.yaml, the environment alone, as before", () => {
   assert.equal(readConfigFile({}, () => "").settings.ALLOWED_USERS, undefined);
 });
 
-test("config.example.yaml is a valid config.yaml", () => {
-  const text = readFileSync(new URL("../config.example.yaml", import.meta.url), "utf8");
-  const config = loadConfig({}, parseConfigFile(text, "config.example.yaml"));
-  assert.ok(config.users.length);
+test("server.example/config.yaml is a valid config.yaml", () => {
+  const text = readFileSync(new URL("../server.example/config.yaml", import.meta.url), "utf8");
+  const file = parseConfigFile(text, "server.example/config.yaml");
+  // No login of its own: copied as is, it allows nobody until the operator adds theirs.
+  assert.throws(() => loadConfig({}, file), /ALLOWED_USERS/);
+  assert.deepEqual(loadConfig({ ALLOWED_USERS: "alice" }, file).users, ["alice"]);
 });
 
 test("SANDBOX_ENGINE: none by default, sysbox, podman or auto; a typo is an error", () => {
