@@ -136,6 +136,7 @@
 }
 
 .error {
+  flex: 1 0 100%;
   max-width: 48rem;
   margin: 0;
   padding: 0.4rem 0.6rem;
@@ -144,11 +145,17 @@
   font-size: 0.82rem;
 }
 
+/* Always in reach while the questions scroll. */
 .actions {
+  position: sticky;
+  bottom: -1rem;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 0.4rem 0.75rem;
+  margin: -0.5rem 0 -1rem;
+  padding: 0.5rem 0 1rem;
+  background: var(--raised);
 }
 
 .send {
@@ -176,6 +183,11 @@
 @media (max-width: 760px) {
   .form {
     padding: 0.75rem 1rem;
+  }
+  .actions {
+    bottom: -0.75rem;
+    margin-bottom: -0.75rem;
+    padding-bottom: 0.75rem;
   }
   .send {
     flex: 1;

@@ -113,12 +113,12 @@ export function Questions({ task: t, questions: q, onSent }: Props) {
           </>
         )}
       </fieldset>
-      {error && (
-        <p class={styles.error} role="alert">
-          {error}
-        </p>
-      )}
       <div class={styles.actions}>
+        {error && (
+          <p class={styles.error} role="alert">
+            {error}
+          </p>
+        )}
         <button type="submit" class={styles.send} disabled={empty || sending}>
           {sending ? "Sending…" : "Send answers"}
         </button>
