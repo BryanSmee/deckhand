@@ -33,8 +33,13 @@ brainstorm run starts light (`SANDBOX_LIGHT`) after a short pause (`BRAINSTORM_D
 and goes before queued work. `/stop` ends it: Claude posts a summary and updates the issue's
 description, then comments no longer reach it until a trigger line. After
 `BRAINSTORM_IDLE_MINUTES` (10) without a comment it shows as idle; a comment then restores it
-from the issue's session volume. `Deckhand` or `/mode work` afterwards implements in the same
-session, so the decisions carry over. Issues only.
+from the issue's session volume. `Deckhand` or `/mode work` afterwards implements in a session
+of its own, which starts from the issue: the brainstorm's comments and the description its
+wrap-up updated. Light runs (brainstorms, onboarding, the repo's light modes) never share a
+writable volume with the issue's work runs: they have their own clone and session
+(`<name>-light-workspace`, `<name>-light-claude`), no caches, and host mounts read-only, so
+nothing they leave behind (git hooks, Claude settings) runs with a work run's token. Issues
+only.
 
 ### Modes
 

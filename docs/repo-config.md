@@ -233,7 +233,9 @@ Focus on the error handling.
 
 - **With the trigger line**, it starts that mode. Without one, on an issue that already has
   a session, it **switches**: the new mode goes on in the same session, so it starts from
-  the conversation so far (a review, then `/mode work` to fix what it found).
+  the conversation so far, as long as both modes are light or neither is. A light run has
+  a clone and session of its own, apart from work's: `/mode work` after a light review starts
+  from the issue and its comments, where the review posted what it found.
 - **A comment with neither** goes on in the issue's current mode. The trigger line alone,
   or `/mode work`, goes back to work; `/mode brainstorm` to a brainstorm, which `/stop` wraps
   up. Brainstorms stay on issues: `/mode brainstorm` on a pull request is ignored.

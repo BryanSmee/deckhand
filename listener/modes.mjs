@@ -25,6 +25,13 @@ export function isFresh(task, mode) {
   return FRESH.has(mode) || !!customMode(task.settings, mode)?.fresh;
 }
 
+// The name of an issue's volumes for a run: light runs get their own clone and Claude session.
+// Their token may not write the repo, but what they leave in a volume (git hooks, Claude's
+// hooks and settings) would run in the issue's next work run, with a token that may.
+export function sessionName(name, light) {
+  return light ? `${name}-light` : name;
+}
+
 // What the dashboard shows a run or queued task as.
 export function kindOf(mode, kind) {
   return mode === "brainstorm" || mode === "stop" ? "brainstorm" : INBOX.has(mode) ? mode : kind;

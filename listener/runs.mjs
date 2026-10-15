@@ -8,7 +8,7 @@ import { proxyEnv, refusedRepoHosts, runHosts } from "./egress.mjs";
 import { commentsText } from "./events.mjs";
 import { grantFor, hardeningArgs, loadGrants, mountArgs, resolveMounts } from "./grants.mjs";
 import { imageRef } from "./images.mjs";
-import { BUILT_IN, isFresh, isLight, kindOf, permissionsFor } from "./modes.mjs";
+import { BUILT_IN, isFresh, isLight, kindOf, permissionsFor, sessionName } from "./modes.mjs";
 import { branchConfigReport, triggerWord } from "./onboarding.mjs";
 import { firstMessage, promptFor } from "./prompts.mjs";
 import { CONFIG_FILE, customMode } from "./repo-config.mjs";
@@ -176,7 +176,8 @@ export function createRuns(ctx) {
     const { key, mode, light, record, logFile } = task.live;
     await makeRoom(task);
     // Inbox entries start afresh: the sandbox doesn't resume their session (entrypoint.sh).
-    const started = !isFresh(task, mode) && (await ctx.runner.hasSession(task.name));
+    const started =
+      !isFresh(task, mode) && (await ctx.runner.hasSession(sessionName(task.name, light)));
     // A new comment answers the questions, if any: the issue no longer waits for input.
     if (config.needsInputLabel && task.kind !== "discussion") {
       await ctx.label(task.repo, task.number, false);
@@ -268,7 +269,10 @@ export function createRuns(ctx) {
     });
     if (refused.length) throw new RunError(refusedMounts(refused));
     for (const text of notes) note(text);
-    for (const m of mounts) note(`Host mount ${m.target}${m.readOnly ? " (read-only)" : ""}`);
+    const { light } = task.live;
+    for (const m of mounts) {
+      note(`Host mount ${m.target}${m.readOnly || light ? " (read-only)" : ""}`);
+    }
     return { grant, hosts: runHosts(config, grant, settings), mounts, limits: grant.limits };
   }
 
@@ -312,7 +316,10 @@ export function createRuns(ctx) {
       if (image !== config.image)
         note(`Image ${image}${source.branch ? " (pull request branch)" : ""}`);
       await ctx.images.installClaudeCode(output);
-      const cacheArgs = await ctx.images.caches(task.repo, settings.caches, image);
+      // A light run runs no setup: no caches, which work runs trust.
+      const cacheArgs = task.live.light
+        ? []
+        : await ctx.images.caches(task.repo, settings.caches, image);
       return { image, cacheArgs, settings };
     } catch (error) {
       throw new RunError(
@@ -342,6 +349,7 @@ export function createRuns(ctx) {
   function sandboxSpec(task, prompt, message, { image, cacheArgs, settings, mounts, limits }) {
     const { live } = task;
     const n = task.name;
+    const volumes = sessionName(n, live.light);
     const args = [
       "--network",
       config.network,
@@ -353,13 +361,15 @@ export function createRuns(ctx) {
       // Read-only: shared by every repository, so a run that could rewrite it would run its
       // code in the next sandbox of any repository, with that run's broker secret.
       ...["-v", `${config.claudeCodeVolume}:/opt/claude-code:ro`],
-      // The issue's clone and Claude session, kept between its runs.
-      ...["-v", `${n}-workspace:/workspace`],
-      ...["-v", `${n}-claude:/home/node/.claude`],
+      // The issue's clone and Claude session, kept between its runs: those of its light runs
+      // apart from those of its work (sessionName()).
+      ...["-v", `${volumes}-workspace:/workspace`],
+      ...["-v", `${volumes}-claude:/home/node/.claude`],
       // The repo's caches (its config's `caches`), one volume per path, kept across its runs.
       ...cacheArgs,
-      // Host paths the operator grants the repo and its config asks for (grantedAccess()).
-      ...mountArgs(mounts),
+      // Host paths the operator grants the repo and its config asks for (grantedAccess()),
+      // read-only for a light run: a work run may trust what is there.
+      ...mountArgs(live.light ? mounts.map((m) => ({ ...m, readOnly: true })) : mounts),
     ];
     const env = sandboxEnv(task, prompt, message, settings);
     return { run: live.id, name: n, image, labels: { "deckhand.task": live.key }, env, args };
