@@ -2,10 +2,8 @@
 # file per repository, so CODEOWNERS can give each team its own. Every key:
 # docs/security.md#the-grants-folder.
 
-# Reachable by its sandboxes, besides default.yaml's.
-# hosts: ["*.example.com"]
-# Its .deckhand.yaml may add hosts of its own (never "*").
-# allow_repo_hosts: true
+# Reachable by its sandboxes, besides default.yaml's: the registries and APIs it needs.
+# hosts: ["*.example.com", registry.npmjs.org]
 # Its .deckhand.yaml's `dockerfile` is built on the host's Docker.
 # allow_dockerfile: true
 # Its .deckhand.yaml's `preview` hook runs, with the Docker socket: root on the host.

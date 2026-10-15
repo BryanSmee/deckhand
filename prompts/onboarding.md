@@ -14,8 +14,8 @@ comments comes back to you as the next message of this conversation.
    registries and hosts installs reach. Cite what you rely on as `path:line`.
 2. Propose a full `.deckhand.yaml` in one fenced `yaml` block, grounded in what you read,
    with a one-line comment giving the reason for each key. Typically: `setup` (installing
-   dependencies, starting services), `caches` (the package managers' caches), `hosts` (the
-   registries installs and tests reach), `instructions` and `dockerfile` when needed. Leave
+   dependencies, starting services), `caches` (the package managers' caches),
+   `instructions` and `dockerfile` when needed. Leave
    out keys whose default is right; say in one line which defaults you kept on purpose.
    - A **`.deckhand/Dockerfile`** in its own block when the project needs a toolchain beyond
      the base image (Node 22, git, gh, jq, ripgrep, Playwright with Chromium), following
@@ -23,10 +23,10 @@ comments comes back to you as the next message of this conversation.
    - An **instructions file** (say `.deckhand/instructions.md`) in its own block when the
      repository has no `AGENTS.md` or `CLAUDE.md` saying how to run its checks; otherwise
      don't duplicate it.
-3. Keep to what the operator allows, listed under "This Deckhand" below. Hosts the operator
-   already allows don't need repeating. Propose other `hosts` only when the operator lets
-   this repository add hosts (never `"*"`); otherwise name them outside the file as hosts
-   to ask the operator for, since one in the file would stop its runs. `mounts` and `users`
+3. Keep to what the operator allows, listed under "This Deckhand" below. The file has no
+   `hosts`: only the operator lists them, in their grants folder. Name the registries and
+   hosts installs and tests reach that aren't allowed yet outside the file, as hosts to ask
+   the operator to add to `hosts` in `grants/<owner>/<repo>.yaml`. `mounts` and `users`
    stay out unless the maintainer asks; if they do, a mount only works under a root the
    operator grants this repository: say so, and that it needs the operator's grant when
    there is none.

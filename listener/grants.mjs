@@ -1,31 +1,32 @@
-// What the operator grants each repo, beyond what every sandbox gets: extra hosts, whether
-// its own .deckhand.yaml may add hosts, run a preview hook, build its Dockerfile (and that of
-// its pull requests' branches), have a container engine next to its sandboxes, host mounts under allowed roots, and its own CPU, memory and
-// pids limits. It lives in the operator's GRANTS_DIR, never in a repo: a repo's .deckhand.yaml
-// may request a mount, a host, a preview hook, a Dockerfile or an engine, but only a grant here makes it
+// What the operator grants each repo, beyond what every sandbox gets: the hosts its sandboxes
+// may reach (the only place they are listed), whether its own .deckhand.yaml may run a preview
+// hook, build its Dockerfile (and that of its pull requests' branches), have a container
+// engine next to its sandboxes, host mounts under allowed roots, and its CPU, memory and pids
+// limits. It lives in the operator's GRANTS_DIR, never in a repo: a repo's .deckhand.yaml may
+// request a mount, a preview hook, a Dockerfile or an engine, but only a grant here makes it
 // happen. One file per repo, so a team can own its repos' files (CODEOWNERS), and a mistake
 // in one stops that repo's runs only. Read again at each run, so an edit applies without a
 // restart. Format: ../docs/security.md.
 //
 //   grants/
 //     default.yaml       # every repo: the flags, hosts added to each repo's, base limits
-//       allow_repo_hosts: true
 //       hosts: [pypi.org]
-//       limits: { memory: 8g }
+//       allow_dockerfile: true
+//       limits: { memory: 8g }   # over the built-in 2 CPUs, 4g, 2048 pids
 //     acme/api.yaml      # acme/api, matched case-insensitively
 //       hosts: ["*.example.com"]
-//       allow_repo_hosts: false  # overrides default.yaml for this repo
+//       allow_dockerfile: false  # overrides default.yaml for this repo
 //       allow_preview: true      # its `preview` hook runs, with the Docker socket (root)
 //       allow_branch_docker_images: true  # a pull request's runs build its branch's Dockerfile
 //       allow_docker: true       # its `docker` runs get a container engine (per repo only)
-//       limits: { cpus: 4 }      # over default.yaml's, over SANDBOX_*
+//       limits: { cpus: 4 }      # over default.yaml's, over the built-in ones
 //       mounts:                  # per repo only
 //         - root: /nfs/work
 //           read_only: false     # default: read-only
 import { readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { join, posix } from "node:path";
 import { ConfigError, parseLimits } from "./config.mjs";
-import { hostProblem, refusedRepoHosts } from "./egress.mjs";
+import { hostProblem } from "./egress.mjs";
 import { PLAIN_PATH, RESERVED } from "./repo-config.mjs";
 import { isMap, parseYaml } from "./yaml.mjs";
 
@@ -50,7 +51,6 @@ export class GrantsError extends ConfigError {
 
 // The yes-or-no grants, by key: per repo or in default.yaml, all false by default.
 const FLAGS = {
-  allow_repo_hosts: "allowRepoHosts",
   allow_preview: "allowPreview",
   allow_dockerfile: "allowDockerfile",
   allow_branch_docker_images: "allowBranchDockerImages",
@@ -78,7 +78,10 @@ export function parseGrant(text, file, base, { isDefault = false } = {}) {
   if (!isMap(value)) throw new GrantsError(`${file}: expected a mapping of grants`, file);
   const grant = { hosts: [], ...NO_FLAGS, mounts: [], limits: null };
   for (const [key, v] of Object.entries(value)) {
-    if (REPO_ONLY.has(key) && isDefault) {
+    if (key === "allow_repo_hosts") {
+      // Ignoring it would quietly take away the hosts the repo's .deckhand.yaml added.
+      fail(`${key}: gone, list the hosts its sandboxes may reach under hosts here`);
+    } else if (REPO_ONLY.has(key) && isDefault) {
       fail(`${key}: only a repository's own file grants it`);
     } else if (Object.hasOwn(FLAGS, key)) {
       if (typeof v === "boolean") grant[FLAGS[key]] = v;
@@ -288,7 +291,7 @@ export function grantErrors(grants) {
 
 // What one repo gets: default.yaml's grants and its own file's, else nothing extra and the
 // operator's limits. Each flag is what its own file says, or else default.yaml, or else
-// false; hosts add up; limits are its own over default.yaml's over SANDBOX_*. `files`: where
+// false; hosts add up; limits are its own over default.yaml's over the built-in ones. `files`: where
 // it comes from; `hostFiles` and `limitsFile` too, for the dashboard. Throws its file's
 // GrantsError when that file has errors.
 export function grantFor(grants, config, repo) {
@@ -341,8 +344,8 @@ export function ungranted(grant, settings) {
 }
 
 // What the operator's grants refuse in a repo's settings, checked as a run checks them before
-// it starts: { error } when its grants have errors (a GrantsError), else { grant, hosts,
-// missing, mounts } (refusedRepoHosts(), ungranted(), resolveMounts()). Shared by the run's preflight and the
+// it starts: { error } when its grants have errors (a GrantsError), else { grant, missing,
+// mounts } (ungranted(), resolveMounts()). Shared by the run's preflight and the
 // dashboard's repo list, so the list can't call a repo configured when no run starts there.
 // `load`: the grants folder (loadGrants(); throws when its layout has errors); `fs`: realpath
 // and stat.
@@ -361,7 +364,6 @@ export function grantCheck(
   return {
     error: null,
     grant,
-    hosts: refusedRepoHosts(config, grant, settings),
     missing: ungranted(grant, settings),
     mounts: resolveMounts(settings.mounts, grant, { caches: settings.caches, ...fs }),
   };
@@ -369,7 +371,7 @@ export function grantCheck(
 
 // Whether grantCheck() found anything that stops every run.
 export const refusedByGrants = (check) =>
-  !!check.error || check.hosts.length + check.missing.length + check.mounts.refused.length > 0;
+  !!check.error || check.missing.length + check.mounts.refused.length > 0;
 
 function within(path, root) {
   return path === root || path.startsWith(root === "/" ? "/" : `${root}/`);

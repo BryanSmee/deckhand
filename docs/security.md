@@ -9,8 +9,8 @@ paths unless you grant them, a restricted network, and no privileges.
 ## The default branch
 
 Deckhand trusts a repository's default branch: its `.deckhand.yaml`, its sandbox
-instructions. What that file can ask for beyond a sandbox (hosts, mounts, the preview hook,
-which runs with the Docker socket, the Dockerfile built on the host) only happens when your
+instructions. What that file can ask for beyond a sandbox (mounts, the preview hook, which
+runs with the Docker socket, the Dockerfile built on the host) only happens when your
 grants folder allows it for that repository (see [The grants folder](#the-grants-folder)): with
 the App on many repositories, whoever can push one's default branch must not get root on the
 host through it. A sandbox that could write to a default branch could still change what
@@ -284,10 +284,8 @@ grant that repository:
 
 ```yaml
 # acme/api.yaml
-# Reachable by its sandboxes, besides the mandatory hosts, ALLOWED_HOSTS and default.yaml's.
+# Reachable by its sandboxes, besides the mandatory hosts and default.yaml's.
 hosts: ["*.acme.dev", pypi.org]
-# Its .deckhand.yaml may add hosts of its own (never "*"); overrides default.yaml.
-allow_repo_hosts: true
 # Its .deckhand.yaml's `preview` hook runs, with the Docker socket: root on the host.
 allow_preview: true
 # Its .deckhand.yaml's `dockerfile` is built on the host's Docker, with its network.
@@ -298,8 +296,7 @@ allow_branch_docker_images: true
 # Its work runs get a container engine next to their sandbox (see Container engine below),
 # when its .deckhand.yaml asks with `docker` and SANDBOX_ENGINE is set. Per repository only.
 allow_docker: true
-# Its own limits; missing ones keep default.yaml's, else SANDBOX_CPUS, SANDBOX_MEMORY,
-# SANDBOX_PIDS.
+# Its own limits; missing ones keep default.yaml's, else the built-in 2 CPUs, 4g, 2048.
 limits: { cpus: 4, memory: 8g, pids: 4096 }
 # Roots it may mount from (read-only unless read_only: false).
 mounts:
@@ -313,11 +310,11 @@ mounts:
 ```yaml
 # default.yaml
 # The yes-or-no grants (all false by default); a repository's own file overrides each one.
-allow_repo_hosts: false
 allow_dockerfile: false
-# Added to every repository's hosts, alongside ALLOWED_HOSTS.
+# Hosts every repository's sandboxes may reach, added to its own file's.
 hosts: [pypi.org]
-# The base each repository's own limits start from, instead of SANDBOX_*.
+# Every sandbox's limits, over the built-in 2 CPUs, 4g and 2048 processes; a repository's
+# own file overrides each one.
 limits: { memory: 8g }
 ```
 
@@ -352,15 +349,16 @@ folder's root (`default.yaml`, `CODEOWNERS` itself) stays with you:
 `compose.yaml` mounts the server folder read-only into the listener; pull it on the host and
 the next run reads the change.
 
-Quote patterns starting with `*` (`"*.acme.dev"`): YAML reads a bare `*` as an alias. See [A repository's own hosts](#a-repositorys-own-hosts) for
-`allow_repo_hosts`.
+Quote patterns starting with `*` (`"*.acme.dev"`): YAML reads a bare `*` as an alias. See
+[Where a sandbox's hosts come from](#where-a-sandboxs-hosts-come-from) for how `hosts`
+apply.
 
 **Preview hooks and Dockerfiles** are the most powerful things a `.deckhand.yaml` asks for:
 a preview hook holds the Docker socket, so it is root on the host (the App's key in
 `/data`, the Claude credential, every repository's volumes); a Dockerfile is built on the
 host's Docker with its network. A repository whose config has `preview` without
 `allow_preview`, or `dockerfile` without `allow_dockerfile`, gets neither: its runs stop
-and the reply on the issue says which grant is missing, like refused hosts, and its preview
+and the reply on the issue says which grant is missing, like refused mounts, and its preview
 hook doesn't run (the listener's logs say why:
 `ignored: pull_request: preview hook of <repo> not run: …`). Grant them to repositories
 whose default branch you trust as much as the host itself. `allow_branch_docker_images`
@@ -470,8 +468,8 @@ Every sandbox runs:
   or branch image ending in `USER root` still runs as uid 1000), `--cap-drop ALL` and
   `--security-opt no-new-privileges`;
 - with `--cpus`, `--memory` (and as much `--memory-swap`: no swap on top) and
-  `--pids-limit`: `SANDBOX_CPUS` (2), `SANDBOX_MEMORY` (`4g`), `SANDBOX_PIDS` (2048), or
-  `limits` in `default.yaml` and the repo's grants file.
+  `--pids-limit`: `limits` in the repo's grants file, else in `default.yaml`, else 2 CPUs,
+  `4g` and 2048 processes.
 
 The containers the listener starts around runs get the same treatment where they can: the
 Claude Code install runs as root with only `CHOWN` (to take over an older volume); the one
@@ -511,7 +509,7 @@ in the engine only:
   capabilities, seccomp and AppArmor unconfined, SELinux labels off, `/dev/fuse` and
   `/dev/net/tun`: what user namespaces, fuse-overlayfs and its network need. See
   [Not covered](#not-covered).
-- **Its limits** are the repository's (`limits` in its grants, else `SANDBOX_*`), on top of
+- **Its limits** are the repository's (`limits` in its grants, else the built-in ones), on top of
   the sandbox's: a run can use twice its limits, half in each container.
 - **Its network** is the run's: internal, with the sandbox, the listener and the proxy. Its
   address counts as the sandbox's for the egress proxy, so its pulls, its builds' steps and
@@ -564,8 +562,7 @@ inspect`) and answers from that run's list. Only the proxy may ask: the listener
   link-local (cloud metadata, `169.254.169.254`), multicast and unspecified addresses are
   always refused, and so is `198.18/15` (benchmarking); private ones (`10/8`, `172.16/12`,
   `192.168/16`, `100.64/10`, `fc00::/7`) only when the host is one you allow by name or
-  `*.domain` (`ALLOWED_HOSTS`, the grants folder), never through `*` alone nor for a
-  repository's own `hosts`. IPv6 addresses are compared as bytes, and those standing for an
+  `*.domain` in the grants folder, never through `*` alone. IPv6 addresses are compared as bytes, and those standing for an
   IPv4 one (`::ffff:0:0/96`, `::ffff:0:0:0/96`, `::/96`, NAT64's `64:ff9b::/96`, 6to4's
   `2002::/16`) are checked as that IPv4 address, so `[::ffff:a9fe:a9fe]` is the metadata
   service too.
@@ -577,44 +574,34 @@ inspect`) and answers from that run's list. Only the proxy may ask: the listener
   fails, as nothing else goes out). The Playwright browser gets the proxy as flags. A tool
   that ignores proxy settings fails closed: it has no route out.
 
-### What a sandbox may reach
+### Where a sandbox's hosts come from
 
-**Restricted by default**: the mandatory hosts, plus
+**Restricted by default**: a sandbox reaches the mandatory hosts (below) and the hosts you
+grant its repository, nothing else. You list them in one place per scope, the grants
+folder, read again at each run:
 
-- `ALLOWED_HOSTS`: yours, for every repository;
-- `hosts` in `default.yaml` and the repo's grants file;
-- the repo's own `hosts` in its `.deckhand.yaml` (default branch only), **only when you
-  allow it** with `allow_repo_hosts: true` in its grants file (see below).
+| For        | Where                                   | Read        |
+| ---------- | --------------------------------------- | ----------- |
+| every repo | the mandatory hosts (below)             | built in    |
+| every repo | `hosts` in `grants/default.yaml`        | at each run |
+| one repo   | `hosts` in `grants/<owner>/<repo>.yaml` | at each run |
+
+They add up: a run of `acme/api` reaches the mandatory hosts, then `default.yaml`'s, then
+`acme/api.yaml`'s. Nothing narrows them: a repository's `.deckhand.yaml` has no `hosts` (one
+there is ignored, with a warning in the dashboard and the run's log), and a mode has no key
+for them, so every run of a repository reaches the same hosts.
 
 Each entry is a host name (`registry.npmjs.org`), `*.domain` (any subdomain, at any depth,
-not the domain itself: list both if you need both), or `*` (anything). Any port.
+not the domain itself: list both if you need both), or `*` (anything). Any port. An IP
+address or a name without a domain (`172.17.0.1`, `listener`) works too: you decide what sits
+next to the sandboxes. Hosts you list may resolve to private addresses (`*` alone doesn't
+count, see above).
 
-### A repository's own hosts
-
-A repository's `.deckhand.yaml` is written by whoever can push to its default branch, and
-a run can open a pull request that someone merges. If its `hosts` counted on their own, a
-sandbox could get its way out by changing that file. So the rule is the same as for
-mounts: the repository asks, you decide.
-
-- **Without `allow_repo_hosts`** (the default), a repo's `hosts` can only repeat what you
-  already allow it: the mandatory hosts, `ALLOWED_HOSTS` and `hosts` in its grants
-  (`files.example.com` is fine under a granted `*.example.com`). Any other entry stops its
-  runs, and the reply on the issue lists each refused host with the config's other errors.
-- **With `allow_repo_hosts: true`** for the repo (or for every repo, in `default.yaml`), its
-  `hosts` are added to what its sandboxes may reach. Give it to repositories whose default
-  branch you trust as much as your own grants: protected, reviewed merges.
-- **Never `*`, a whole top-level domain** (`"*.com"`) **or a public suffix** (`"*.co.uk"`,
-  `"*.github.io"`, `"*.nip.io"`: a short built-in list, not the whole public suffix list)
-  from a repository, granted or not, **nor an IP address or a name without a domain**
-  (`172.17.0.1`, `listener`): those are config errors. Only you can list them, in
-  `ALLOWED_HOSTS` or the grants folder.
-- **A repository's own hosts reach public addresses only.** One that resolves to a private
-  address is refused, even when it matches by name: `*.example.com` from a repo can't be
-  pointed at your LAN, the Docker bridge or the listener. Hosts you list may resolve to
-  private addresses.
-
-A mode can't change any of this: the hosts of every run of a repo are the same whatever the
-mode.
+Why not the repository: its `.deckhand.yaml` is written by whoever can push to its default
+branch, and a run can open a pull request that someone merges. If its own `hosts` counted, a
+sandbox could get its way out by changing that file. A repository says what it needs in its
+docs or onboarding issue; you add it to its grants file. The proxy's `403`, the sandbox's
+instructions and the dashboard's repository panel all name these files.
 
 **Mandatory hosts**, always allowed:
 

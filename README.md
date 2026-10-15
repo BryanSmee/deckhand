@@ -129,9 +129,9 @@ states, every setting and how sandboxes reach GitHub.
 
 A repository can add a `.deckhand.yaml` at its root: its own users (narrowing
 `ALLOWED_USERS`), trigger word, models, parallel runs, a setup command, project
-instructions, a Dockerfile for its image, caches, extra hosts, host mounts, inboxes and a
-preview hook. Its Dockerfile, preview hook, extra hosts and host mounts only count once the
-operator grants them to it in its grants file.
+instructions, a Dockerfile for its image, caches, host mounts, inboxes and a preview hook.
+Its Dockerfile, preview hook and host mounts only count once the operator grants them to it
+in its grants file, which also lists the hosts its sandboxes may reach.
 
 ```yaml
 users: [alice]
@@ -141,7 +141,6 @@ setup: npm ci
 instructions: AGENTS.md
 dockerfile: .deckhand/Dockerfile
 caches: [/home/node/.npm]
-hosts: [registry.npmjs.org]
 ```
 
 It is read from the **default branch** only, at every run, and can only narrow what you, the
@@ -154,14 +153,15 @@ Out of the box, without any configuration:
 
 - **Network:** each sandbox sits on an internal Docker network of its own, out of the
   others' reach; the egress proxy lets them reach
-  `api.anthropic.com`, GitHub and nothing else. You add hosts for every repository
-  (`ALLOWED_HOSTS`) or for one (the grants folder); a repository's own `hosts` only count
-  when you allow it (`allow_repo_hosts` in its grants file), and never `*`.
+  `api.anthropic.com`, GitHub and nothing else. You add hosts in the grants folder, for
+  every repository (`grants/default.yaml`) or for one (`grants/<owner>/<repo>.yaml`); a
+  repository can't add its own (see
+  [Where a sandbox's hosts come from](docs/security.md#where-a-sandboxs-hosts-come-from)).
 - **Host paths:** none. No `~/.ssh`, `~/.gitconfig`, Docker socket or source tree. A host
   path is only mounted when you grant the repository a root that holds it, and read-only
   unless you say otherwise.
 - **Privileges:** containers run as `node` with `--cap-drop ALL`, `no-new-privileges`, and
-  CPU, memory and pids limits (`SANDBOX_CPUS`, `SANDBOX_MEMORY`, `SANDBOX_PIDS`).
+  CPU, memory and pids limits (2 CPUs, `4g`, 2048 processes; `limits` in the grants folder).
 - **GitHub:** no long-lived token or SSH key. Each run asks the listener's token broker for
   an installation token limited to its own repository, with a secret that dies with the
   run. That token only reads the code: pushes go through the listener, which refuses the

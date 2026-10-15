@@ -916,11 +916,11 @@ caches:
     assert.match(JSON.parse(reply.body).body, /max_parallel: expected a whole number/);
   });
 
-  test("hosts from the operator, its grants and the repo; granted mounts and limits", async (t) => {
+  test("hosts from default.yaml and the repo's grant, not the repo; granted mounts and limits", async (t) => {
     const { dir, github, send } = await listen(
       t,
       (dir) => ({
-        ".deckhand.yaml": `hosts: ["*.example.com"]
+        ".deckhand.yaml": `hosts: [lan.internal, example.com]
 mounts:
   - path: ${RW_MOUNT}
     read_only: false
@@ -931,8 +931,7 @@ mounts:
         mkdirSync(join(dir, "nfs", "docs"), { recursive: true });
         writeGrant(
           dir,
-          `hosts: [pypi.org]
-allow_repo_hosts: true
+          `hosts: [pypi.org, "*.example.com"]
 limits: { memory: 8g }
 mounts:
   - root: ${RW_MOUNT}
@@ -940,7 +939,8 @@ mounts:
   - ${join(dir, "nfs")}
 `,
         );
-        return { ALLOWED_HOSTS: "registry.npmjs.org" };
+        writeFileSync(join(dir, "grants", "default.yaml"), "hosts: [registry.npmjs.org]\n");
+        return {};
       },
     );
     assert.equal((await send(comment("alice"))).status, 202);
@@ -956,9 +956,11 @@ mounts:
       "pypi.org",
       "a.b.example.com",
     ]);
-    // The operator's hosts may resolve to private addresses; the repo's own may not (proxy.mjs).
+    // Every host is the operator's: each may resolve to a private address (proxy.mjs), those
+    // of default.yaml too, as ALLOWED_HOSTS's did.
+    assert.equal(egress["registry.npmjs.org"].private, true);
     assert.equal(egress["pypi.org"].private, true);
-    assert.equal(egress["a.b.example.com"].private, false);
+    assert.equal(egress["a.b.example.com"].private, true);
     const args = readFileSync(join(dir, "run-args"), "utf8").split("\n");
     const joined = args.join(" ");
     assert.match(joined, /--cpus 2 --memory 8g --memory-swap 8g --pids-limit 2048/);
@@ -983,13 +985,13 @@ mounts:
     release();
   });
 
-  test("a repo's hosts without allow_repo_hosts: refused on the issue, unless already allowed", async (t) => {
+  test("a grant still saying allow_repo_hosts stops the repo's runs, naming its file", async (t) => {
     const { dir, github, send } = await listen(
       t,
-      { ".deckhand.yaml": 'hosts: [registry.npmjs.org, pypi.org, "*.evil.net"]\n' },
+      { ".deckhand.yaml": "hosts: [pypi.org]\n" },
       (dir) => {
-        writeGrant(dir, "hosts: [pypi.org]\n");
-        return { ALLOWED_HOSTS: "registry.npmjs.org" };
+        writeGrant(dir, "allow_repo_hosts: true\n");
+        return {};
       },
     );
     await send(comment("alice"));
@@ -997,13 +999,7 @@ mounts:
       (r) => r.method === "POST" && r.path === "/repos/org/repo/issues/12/comments",
     );
     const body = JSON.parse(reply.body).body;
-    assert.match(body, /`\.deckhand\.yaml` on `trunk` has errors/);
-    assert.match(
-      body,
-      /- hosts: `\*\.evil\.net`: the operator doesn't let this repository add hosts/,
-    );
-    assert.doesNotMatch(body, /pypi\.org`|registry\.npmjs\.org`/);
-    assert.match(body, /allow_repo_hosts: true/);
+    assert.match(body, /`org\/repo\.yaml` in the operator's grants folder has errors/);
     assert.throws(() => readFileSync(join(dir, "run-args")));
   });
 
@@ -1515,7 +1511,6 @@ mounts:
 
   const MODES = `setup: npm ci
 model: opus
-hosts: [registry.npmjs.org]
 modes:
   review:
     instructions: .deckhand/review.md
@@ -1529,7 +1524,7 @@ modes:
       t,
       { ".deckhand.yaml": MODES, ".deckhand/review.md": "Read the diff and list the risks." },
       (dir) => {
-        writeGrant(dir, "hosts: [pypi.org]\nallow_repo_hosts: true\n");
+        writeGrant(dir, "hosts: [registry.npmjs.org, pypi.org]\n");
         return {};
       },
     );
@@ -1560,7 +1555,7 @@ modes:
       metadata: "read",
       actions: "read",
     });
-    // The same hosts as any run of the repo: the operator's, its grant's and its config's.
+    // The same hosts as any run of the repo: the mandatory ones and its grant's.
     assert.deepEqual(allowedHosts(egressAnswers(dir)), [
       "api.anthropic.com",
       "github.com",
@@ -1919,7 +1914,11 @@ mounts:
         "issue-30-deckhand-config:.deckhand.yaml":
           "effort: huge\ndockerfile: .deckhand/Dockerfile\n",
       },
-      { ALLOWED_HOSTS: "registry.npmjs.org" },
+      (dir) => {
+        mkdirSync(join(dir, "grants"), { recursive: true });
+        writeFileSync(join(dir, "grants", "default.yaml"), "hosts: [registry.npmjs.org]\n");
+        return {};
+      },
     );
     const { dir, github, listener, send, restart } = ctx;
     assert.equal((await send(installed(), "installation")).status, 202);
@@ -1943,7 +1942,10 @@ mounts:
     const env = readFileSync(join(dir, "run-env"), "utf8");
     assert.match(env, /^TASK_ISSUE=$/m);
     assert.match(env, /^TASK_PROMPT=Onboard org\/repo with the maintainer, on GitHub issue #30/m);
-    assert.match(env, /operator's `ALLOWED_HOSTS`: `registry\.npmjs\.org`/);
+    assert.match(
+      env,
+      /Hosts the operator grants this repository \([^)]*\): `registry\.npmjs\.org`/,
+    );
     assert.match(env, /Host mount roots granted to this repository: none/);
     assert.match(env, /## Reference: `\.deckhand\.yaml`[\s\S]*# Per-repo config/);
     const mints = () => github.requests.filter((r) => r.body.includes("repositories"));

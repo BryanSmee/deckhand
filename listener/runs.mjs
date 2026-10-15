@@ -5,7 +5,7 @@ import { randomBytes } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readdirSync, rmdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { agentFor, effortOf, modelOf } from "./agents/index.mjs";
-import { operatorHosts, proxyEnv, runHosts } from "./egress.mjs";
+import { operatorHosts, proxyEnv } from "./egress.mjs";
 import { commentsText, sameRepo } from "./events.mjs";
 import { grantCheck, hardeningArgs, mountArgs, resolveMounts } from "./grants.mjs";
 import { imageRef } from "./images.mjs";
@@ -319,8 +319,8 @@ export function createRuns(ctx) {
   }
 
   // What the operator grants the repo, with its config's requests: the hosts its sandbox may
-  // reach, its host mounts and limits. Refused hosts or mounts, and a preview hook or
-  // Dockerfile without their grant, stop the run, and the reply lists them.
+  // reach, its host mounts and limits. Refused mounts, and a preview hook or Dockerfile
+  // without their grant, stop the run, and the reply lists them.
   function grantedAccess(task, settings, note) {
     const { repo } = task;
     const check = grantCheck(config, repo, settings);
@@ -331,12 +331,7 @@ export function createRuns(ctx) {
         : "the operator's grants folder has errors";
       throw new RunError(`${cantRun(task)}: ${where} (see the listener's logs).`);
     }
-    const { grant, hosts, missing } = check;
-    if (hosts.length) {
-      throw new RunError(
-        `${configErrors(task.base, hosts, agentOf(task).displayName)}\n\nA repository's \`hosts\` only count when the operator's grants set \`allow_repo_hosts: true\` for it; hosts the operator already allows can stay.`,
-      );
-    }
+    const { grant, missing } = check;
     if (missing.length) {
       log(`${repo}: ${CONFIG_FILE} asks for what its grant doesn't allow: ${missing.join("; ")}`);
       throw new RunError(
@@ -352,7 +347,8 @@ export function createRuns(ctx) {
     }
     return {
       grant,
-      hosts: runHosts(config, grant, settings),
+      // All the operator's: each may resolve to a private address.
+      hosts: operatorHosts(config, grant),
       trusted: operatorHosts(config, grant),
       mounts,
       limits: grant.limits,

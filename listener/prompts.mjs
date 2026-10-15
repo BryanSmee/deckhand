@@ -67,9 +67,8 @@ ${onboardingInstructions}
 
 - Trigger (confirms the proposal, alone on the first line of a comment): \`${triggerWord(settings.trigger)}\`
 - Users who may start runs (\`ALLOWED_USERS\`; \`users\` can only narrow it): ${none(config.users)}
-- Hosts every sandbox reaches: ${none(mandatoryHosts(config))}, and the operator's \`ALLOWED_HOSTS\`: ${none(config.hosts)}
-- Hosts the operator grants this repository: ${none(grant.hosts)}
-- \`hosts\` in \`.deckhand.yaml\`: ${grant.allowRepoHosts ? "allowed: the operator lets this repository add hosts (never `*`)" : "only hosts listed above count; any other is refused and stops runs until the operator sets `allow_repo_hosts` for this repository"}
+- Hosts every sandbox reaches: ${none(mandatoryHosts(config))}
+- Hosts the operator grants this repository (\`grants/default.yaml\` and \`grants/${repo.toLowerCase()}.yaml\`): ${none(grant.hosts)}; any other is refused until the operator adds it there (\`.deckhand.yaml\` has no \`hosts\`)
 - Host mount roots granted to this repository: ${roots.length ? none(roots) : "none: a \`mounts\` entry would be refused until the operator grants a root"}
 - \`preview\` in \`.deckhand.yaml\`: ${grant.allowPreview ? "allowed: the operator grants this repository a preview hook" : "not granted: a \`preview\` hook stops runs until the operator sets \`allow_preview\` for this repository"}
 - \`docker\` in \`.deckhand.yaml\`: ${grant.allowDocker ? (config.engine ? "allowed: its work runs get a container engine" : "granted, but the operator hasn't set up a container engine (SANDBOX_ENGINE): runs start without one") : "not granted: \`docker\` stops runs until the operator sets \`allow_docker\` for this repository"}

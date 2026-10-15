@@ -1,13 +1,14 @@
 # What every repository gets beyond a sandbox (docs/security.md#the-grants-folder). Read
 # again at each run: an edit applies without a restart. Nothing set: nothing granted.
 
-# Hosts every repository's sandboxes may reach, besides the mandatory ones and
-# ALLOWED_HOSTS. Quote patterns starting with "*".
+# Hosts every repository's sandboxes may reach, besides Anthropic and GitHub: the place for
+# hosts every repository needs (docs/security.md#where-a-sandboxs-hosts-come-from). Quote
+# patterns starting with "*".
 # hosts: [pypi.org]
 
 # The yes-or-no grants, all false by default; a repository's own file overrides each one.
-# allow_repo_hosts: false
 # allow_dockerfile: false
 
-# The base each repository's own limits start from, instead of SANDBOX_*.
-# limits: { memory: 8g }
+# Every sandbox's limits, instead of the built-in 2 CPUs, 4g of memory and 2048 processes;
+# a repository's own file can set its own.
+# limits: { cpus: 2, memory: 8g, pids: 2048 }

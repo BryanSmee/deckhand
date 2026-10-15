@@ -3,7 +3,6 @@
 // operator grants one repo (hosts, mounts, limits) is in its grants folder instead (grants.mjs).
 import { readFileSync } from "node:fs";
 import { CREDENTIALS, credentialName } from "./anthropic.mjs";
-import { hostProblem } from "./egress.mjs";
 import { MODEL_NAME } from "./events.mjs";
 import { ENGINES } from "./runner/engine.mjs";
 import { parseCidr } from "./subnets.mjs";
@@ -59,7 +58,6 @@ const LIMIT_FORMAT = {
 export const FILE_SETTINGS = {
   ALLOWED_USERS: "list",
   ALLOWED_REPOS: "list",
-  ALLOWED_HOSTS: "list",
   PUBLIC_URL: "scalar",
   TRIGGER: "scalar",
   CLAUDE_CODE_VERSION: "scalar",
@@ -73,9 +71,6 @@ export const FILE_SETTINGS = {
   BRAINSTORM_EFFORT: "scalar",
   BRAINSTORM_IDLE_MINUTES: "scalar",
   MAX_PARALLEL: "scalar",
-  SANDBOX_CPUS: "scalar",
-  SANDBOX_MEMORY: "scalar",
-  SANDBOX_PIDS: "scalar",
   SANDBOX_ENGINE: "scalar",
   SANDBOX_SUBNETS: "scalar",
   SANDBOX_SUBNET_SIZE: "scalar",
@@ -92,6 +87,18 @@ export const FILE_SETTINGS = {
   GITHUB_URL: "scalar",
   GITHUB_API: "scalar",
 };
+
+// Settings that moved to the grants folder (grants.mjs), and where: ignoring one would quietly
+// take hosts away or change every sandbox's limits.
+export const MOVED_TO_GRANTS = {
+  ALLOWED_HOSTS: "hosts in grants/default.yaml",
+  SANDBOX_CPUS: "limits.cpus in grants/default.yaml",
+  SANDBOX_MEMORY: "limits.memory in grants/default.yaml",
+  SANDBOX_PIDS: "limits.pids in grants/default.yaml",
+};
+
+// A sandbox's limits when the grants folder sets none.
+export const DEFAULT_LIMITS = { cpus: "2", memory: "4g", pids: 2048 };
 
 // Where an empty value means something (no label): set in the environment, even empty, wins.
 const EMPTY_MEANS = new Set(["NEEDS_INPUT_LABEL"]);
@@ -132,6 +139,8 @@ export function parseConfigFile(text, path) {
       errors.push(`${key}: a secret, keep it in the environment (.env), not in a file`);
     } else if (name === "GRANTS_FILE") {
       errors.push(`${key}: gone, one file per repository in grants_dir instead (docs/security.md)`);
+    } else if (key === name.toLowerCase() && MOVED_TO_GRANTS[name]) {
+      errors.push(`${key}: gone, set ${MOVED_TO_GRANTS[name]} instead (docs/security.md)`);
     } else if (!type) {
       errors.push(`${key}: unknown (secrets and compose.yaml's wiring are environment only)`);
     } else if (value !== null) {
@@ -211,7 +220,7 @@ function sandboxSubnets({ setting, label, number }) {
 }
 
 // Where sandboxes run, what they get and what they may reach.
-function sandboxConfig(env, from, prefix, hosts) {
+function sandboxConfig(env, from, prefix) {
   const { setting, label, number } = from;
   return {
     prefix,
@@ -223,19 +232,10 @@ function sandboxConfig(env, from, prefix, hosts) {
     claudeCodeVolume: setting("CLAUDE_CODE_VOLUME") || `${prefix}-claude-code`,
     claudeCodeVersion: setting("CLAUDE_CODE_VERSION") || "2.1.300",
     maxParallel: number("MAX_PARALLEL", 2, "a whole number of sandboxes"),
-    hosts,
     // Where the runs' networks take their subnets from (runner/docker.mjs).
     subnets: sandboxSubnets(from),
-    // Per sandbox; a repo's grants may set its own.
-    limits: parseLimits(
-      {
-        cpus: setting("SANDBOX_CPUS") || "2",
-        memory: setting("SANDBOX_MEMORY") || "4g",
-        pids: setting("SANDBOX_PIDS") || "2048",
-      },
-      {},
-      (key) => label(`SANDBOX_${key.toUpperCase()}`),
-    ),
+    // Per sandbox, under the grants folder's: default.yaml's limits, then a repo's own.
+    limits: DEFAULT_LIMITS,
     // The container engine sidecar of runs whose repo is granted allow_docker
     // (runner/engine.mjs), and its images; none until the operator picks one.
     engine: engineSetting(setting("SANDBOX_ENGINE"), label("SANDBOX_ENGINE")),
@@ -305,15 +305,17 @@ export function loadConfig(env, file = NO_FILE) {
       "GRANTS_FILE is gone: move each repository's entry to its own file in GRANTS_DIR (docs/security.md)",
     );
   }
+  // Moved to the grants folder, read at each run: one place for what every sandbox gets.
+  const moved = Object.keys(MOVED_TO_GRANTS).filter((name) => env[name]);
+  if (moved.length) {
+    const where = moved.map((name) => `${name}: set ${MOVED_TO_GRANTS[name]}`).join("; ");
+    throw new ConfigError(
+      `${moved.join(", ")} ${moved.length > 1 ? "are" : "is"} gone (${where} instead, docs/security.md)`,
+    );
+  }
   const port = wholeNumber(env.PORT, 8080, "PORT", "a port");
   const brokerPort = wholeNumber(env.BROKER_PORT, 8081, "BROKER_PORT", "a port");
   const prefix = setting("NAME_PREFIX") || "deckhand";
-  // Hosts every sandbox may reach, besides the mandatory ones (egress.mjs).
-  const hosts = list(setting("ALLOWED_HOSTS"));
-  const badHost = hosts.find(hostProblem);
-  if (badHost) {
-    throw new ConfigError(`${label("ALLOWED_HOSTS")}: ${badHost}: ${hostProblem(badHost)}`);
-  }
   const ms = "a whole number of milliseconds";
   const onboarding = (setting("ONBOARDING") ?? "on").trim().toLowerCase();
   if (!["on", "true", "1", "yes", "", "off", "false", "0", "no"].includes(onboarding)) {
@@ -350,7 +352,7 @@ export function loadConfig(env, file = NO_FILE) {
     repos: list(setting("ALLOWED_REPOS")),
     // The first line of a comment that calls Deckhand; "/mode <name>" picks another mode.
     trigger: normalize(setting("TRIGGER") || "Deckhand"),
-    ...sandboxConfig(env, from, prefix, hosts),
+    ...sandboxConfig(env, from, prefix),
     // Batches the comments of one review (each arrives as its own webhook) into one run.
     debounceMs: number("DEBOUNCE_MS", 15000, ms),
     // A brainstorm comment comes alone, and someone is waiting for the answer.

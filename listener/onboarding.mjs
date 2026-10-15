@@ -53,7 +53,7 @@ export function onboardingBody(sender, trigger, byHand = false) {
   const who = byHand
     ? `@${sender} started Deckhand's setup for this repository from the dashboard.`
     : `@${sender} installed Deckhand on this repository.`;
-  return `${who} It has no \`${CONFIG_FILE}\` yet, so its runs use the operator's settings and the bare sandbox image: no toolchain beyond Node, no setup command, no project hosts.
+  return `${who} It has no \`${CONFIG_FILE}\` yet, so its runs use the operator's settings and the bare sandbox image: no toolchain beyond Node, no setup command.
 
 Deckhand is reading the repository and replies here with a proposed \`${CONFIG_FILE}\` (and a Dockerfile or instructions file when they help), each key with its reason.
 

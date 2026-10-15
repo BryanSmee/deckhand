@@ -110,8 +110,10 @@ allowed users' questions. See [Inboxes](repo-config.md#inboxes).
 Each repository can add a `.deckhand.yaml` on its default branch: its own users (narrowing
 `ALLOWED_USERS`), trigger word, models, parallel cap, setup command, instructions,
 Dockerfile, caches and preview hook. See [Per-repo config](repo-config.md). A Dockerfile, a
-preview hook, extra hosts and host mounts only take effect once you grant them to that
-repository in your grants folder (see [Security model](security.md#the-grants-folder)).
+preview hook and host mounts only take effect once you grant them to that repository in your
+grants folder (see [Security model](security.md#the-grants-folder)), which is also where you
+list the hosts its sandboxes may reach (see
+[Where a sandbox's hosts come from](security.md#where-a-sandboxs-hosts-come-from)).
 
 ## 4. The dashboard
 
@@ -200,7 +202,7 @@ onboard repositories installed before onboarding existed, by someone not in `ALL
 or with `ONBOARDING=off`. A repository with issues disabled shows why it can't be onboarded.
 A repository shows `invalid config` when no run starts there: its `.deckhand.yaml` has
 errors, or asks for what the operator's grants refuse (a `dockerfile` or `preview`
-without its grant, `hosts` without `allow_repo_hosts`, a mount outside the granted roots), or
+without its grant, a mount outside the granted roots), or
 its grants have errors (its own file, or the folder's `default.yaml` and layout, for every
 repository). The list is cached: the installations' repositories are
 read again every 5 minutes, each configuration every 30 minutes, or at once after a push or a
@@ -276,22 +278,20 @@ in [the server folder](#the-server-folder), for example:
 # server/config.yaml
 allowed_users: [alice, bob]
 allowed_repos: [acme/api, acme/web]
-allowed_hosts:
-  - registry.npmjs.org
-  - "*.pypi.org"
 trigger: Deckhand
 sandbox_model: opus
 sandbox_effort: medium
 brainstorm_model: sonnet
 max_parallel: 2
-sandbox_cpus: 2
-sandbox_memory: 4g
-sandbox_pids: 2048
 sandbox_subnets: 10.200.0.0/16
 conflict_check_minutes: 5
 onboarding: true
 needs_input_label: needs-input
 ```
+
+What every sandbox may reach and its limits aren't settings: they go in
+`grants/default.yaml`, read at each run (see
+[Where a sandbox's hosts come from](security.md#where-a-sandboxs-hosts-come-from)).
 
 | Setting                                                                                           | `config.yaml` key                                                                                 | Default                            | What                                                                                                                                           |
 | ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- | ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -307,8 +307,6 @@ needs_input_label: needs-input
 | `BRAINSTORM_MODEL`, `BRAINSTORM_EFFORT`                                                           | `brainstorm_model`, `brainstorm_effort`                                                           | `SANDBOX_MODEL`, `SANDBOX_EFFORT`  | the same for brainstorms, inbox entries and discussions                                                                                        |
 | `BRAINSTORM_IDLE_MINUTES`                                                                         | `brainstorm_idle_minutes`                                                                         | `10`                               | minutes without a comment before a brainstorm shows as idle                                                                                    |
 | `MAX_PARALLEL`                                                                                    | `max_parallel`                                                                                    | `2`                                | sandboxes running at once (a repo's `max_parallel` within it)                                                                                  |
-| `ALLOWED_HOSTS`                                                                                   | `allowed_hosts`                                                                                   | none                               | hosts every sandbox may reach besides Anthropic and GitHub                                                                                     |
-| `SANDBOX_CPUS`, `SANDBOX_MEMORY`, `SANDBOX_PIDS`                                                  | `sandbox_cpus`, `sandbox_memory`, `sandbox_pids`                                                  | `2`, `4g`, `2048`                  | each sandbox's limits (per repo: the grants folder)                                                                                            |
 | `SANDBOX_SUBNETS`, `SANDBOX_SUBNET_SIZE`                                                          | `sandbox_subnets`, `sandbox_subnet_size`                                                          | none (Docker's pools), `28`        | an IPv4 range the runs' networks take their subnets from, in blocks of that size (below the table)                                             |
 | `SANDBOX_ENGINE`                                                                                  | `sandbox_engine`                                                                                  | none                               | the container engine runs of repositories granted `allow_docker` get: `sysbox`, `podman` or `auto` (see [Container engine](#container-engine)) |
 | `TRIGGER`                                                                                         | `trigger`                                                                                         | `Deckhand`                         | first line of a comment that starts a run                                                                                                      |
@@ -350,7 +348,7 @@ elsewhere), or a model's own name (`sonnet`, `claude-opus-5-5`).
 Claude Code can go through an Anthropic-compatible gateway instead of Anthropic:
 [OpenRouter](https://openrouter.ai), your company's LLM gateway. Sandboxes still call the
 listener, which forwards their calls to `ANTHROPIC_BASE_URL` with your credential: they never
-reach the gateway themselves, so it needs no host in `ALLOWED_HOSTS`. Only you set it; a
+reach the gateway themselves, so it needs no host in the grants folder. Only you set it; a
 repository's config can't. With OpenRouter, in `.env`:
 
 ```sh
@@ -467,12 +465,12 @@ Three steps, all off by default:
 3. **Grant it per repository**: `allow_docker: true` in its file of the grants folder
    (`default.yaml` can't grant it), and the repository asks for it with `docker: true` in its
    `.deckhand.yaml` ([Per-repo config](repo-config.md#container-engine)). Add the registries
-   it pulls from to its hosts, by the grant or its own `hosts`: Docker Hub is
+   it pulls from to `hosts` in its grants file: Docker Hub is
    `registry-1.docker.io`, `auth.docker.io` and `production.cloudflare.docker.com`; GHCR is
    `ghcr.io` and `pkg-containers.githubusercontent.com` (already allowed). A pull from any
    other registry fails at the proxy.
 
-The engine has the repository's limits (its grant's, else `SANDBOX_*`) on top of the
+The engine has the repository's limits (its grant's, else the built-in ones) on top of the
 sandbox's, and its storage is a volume of the run's own, removed with it. A repository can
 keep that storage between its runs instead (`docker: { cache: true }`): one volume per
 repository and backend, `deckhand-engine-cache-<repo>-…-<backend>`, which you remove by hand
@@ -524,8 +522,8 @@ container of its own, and later runs reuse it, read-only.
 ## Isolation
 
 Sandboxes run without capabilities and with CPU, memory and pids limits, get no host path
-unless you grant one, and reach only Anthropic, GitHub and the hosts you or the repository
-allow, through the egress proxy. A [container engine](#container-engine), when you grant one,
+unless you grant one, and reach only Anthropic, GitHub and the hosts you grant in the grants
+folder, through the egress proxy. A [container engine](#container-engine), when you grant one,
 runs next to the sandbox rather than in it. See [Security model](security.md): the grants folder, host
 mounts, the mandatory hosts, and what isn't covered.
 
@@ -567,3 +565,28 @@ that uses them (or every one, in `default.yaml`), with `allow_preview: true`,
 repository's runs stop with a reply naming the missing grant, its preview hook doesn't run
 (the listener's logs say why), and `allow_branch_docker_images` in its `.deckhand.yaml` is
 ignored with a warning in the run's log.
+
+Upgrading from a version with `ALLOWED_HOSTS` or `SANDBOX_CPUS`, `SANDBOX_MEMORY`,
+`SANDBOX_PIDS`: what every sandbox gets is in the grants folder now, read at each run, and
+the listener refuses to start while any of them is set (in `.env` or `config.yaml`, where
+`allowed_hosts: []` counts too). Move them to `grants/default.yaml`, then remove them:
+
+```sh
+# .env, before
+ALLOWED_HOSTS=registry.npmjs.org,*.pypi.org
+SANDBOX_MEMORY=8g
+```
+
+```yaml
+# server/grants/default.yaml, after
+hosts: [registry.npmjs.org, "*.pypi.org"]
+limits: { memory: 8g }
+```
+
+Upgrading from a version where a repository's `.deckhand.yaml` could add `hosts`: only the
+grants folder lists hosts now (see
+[Where a sandbox's hosts come from](security.md#where-a-sandboxs-hosts-come-from)). A
+repository's `hosts` are ignored with a warning, and a grants file still saying
+`allow_repo_hosts` has an error that stops that repository's runs (or every run, in
+`default.yaml`) until you remove it. Copy the hosts those repositories listed into their
+grants file, `hosts: [...]` in `grants/<owner>/<repo>.yaml`, then remove `allow_repo_hosts`.

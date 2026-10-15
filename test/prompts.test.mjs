@@ -94,7 +94,11 @@ test("prompts: onboarding lists what this Deckhand allows the repo", () => {
   assert.match(text, /^Onboard org\/repo with the maintainer, on GitHub issue #12/);
   assert.match(text, /alone on the first line of a comment\): `Deckhand`/);
   assert.match(text, /\(`ALLOWED_USERS`; `users` can only narrow it\): `alice`/);
-  assert.match(text, /Hosts the operator grants this repository: `registry.npmjs.org`/);
+  assert.match(
+    text,
+    /Hosts the operator grants this repository \(`grants\/default\.yaml` and `grants\/org\/repo\.yaml`\): `registry.npmjs.org`; any other is refused until the operator adds it there/,
+  );
+  assert.doesNotMatch(text, /ALLOWED_HOSTS|allow_repo_hosts/);
   assert.match(text, /Host mount roots granted to this repository: `\/srv\/data \(read-write\)`/);
   assert.match(text, /`preview` in `.deckhand.yaml`: not granted: .* sets `allow_preview`/);
   assert.match(text, /`dockerfile` in `.deckhand.yaml`: not granted: .* sets `allow_dockerfile`/);

@@ -7,7 +7,7 @@
 // The proxy resolves the name itself and connects to the address it checked, so a name
 // can't be pointed at the host or the cloud's metadata service once allowed: loopback,
 // link-local and unspecified addresses are always refused, private ones unless the operator
-// allowed the host by name or domain (not only through "*", nor a repo's own hosts).
+// allowed the host by name or domain (not only through "*").
 import { lookup as dnsLookup } from "node:dns/promises";
 import { createServer, request as httpRequest } from "node:http";
 import { connect, isIP } from "node:net";
@@ -126,7 +126,7 @@ export function createProxy({
       log(`refused ${host} for ${ip}`);
       throw new Refused(
         `Deckhand's egress proxy refused ${host}: it is not among the hosts this sandbox may reach. ` +
-          "A repository adds hosts with `hosts` in its .deckhand.yaml; the operator with ALLOWED_HOSTS.",
+          "The operator adds it to `hosts` in their grants folder: grants/<owner>/<repo>.yaml for one repository, grants/default.yaml for all.",
       );
     }
     let addresses;

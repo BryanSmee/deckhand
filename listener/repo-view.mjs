@@ -1,9 +1,9 @@
 // What a repo's runs get, for the dashboard's config panel: its .deckhand.yaml's settings
 // against the operator's, each value tagged "repo", "operator" or "refused". Built from the
-// same checks a run makes (grantFor, refusedRepoHosts, resolveMounts, customMode) so the
+// same checks a run makes (grantFor, operatorHosts, resolveMounts, customMode) so the
 // panel can't say something a run wouldn't do.
 import { realpathSync, statSync } from "node:fs";
-import { mandatoryHosts, refusedRepoHosts } from "./egress.mjs";
+import { mandatoryHosts } from "./egress.mjs";
 import { grantFor, grantsFrom, resolveMounts, ungranted } from "./grants.mjs";
 import { customMode, defaultSettings } from "./repo-config.mjs";
 
@@ -100,7 +100,7 @@ export function settingRows(config, settings, grant) {
       "limits",
       limitsText(grant.limits),
       false,
-      grant.limitsFile ? `grants: ${grant.limitsFile}` : "SANDBOX_*",
+      grant.limitsFile ? `grants/${grant.limitsFile}` : "built in",
     ),
   );
   return rows;
@@ -125,30 +125,18 @@ function previewText(preview) {
   return `${preview.command} (${preview.timeoutMinutes} min${image})`;
 }
 
-// Every host its sandboxes may reach, and the repo's own that a run would refuse (which stops
-// the run), each with why.
-export function hostRows(config, grant, settings) {
+// Every host its sandboxes may reach, each with the file that grants it: the operator's grants
+// folder is the only place hosts are listed (operatorHosts()).
+export function hostRows(config, grant) {
   const rows = [];
   const seen = new Set();
-  const add = (host, source, note) => {
+  const add = (host, note) => {
     if (seen.has(host)) return;
     seen.add(host);
-    rows.push({ host, source, note });
+    rows.push({ host, source: "operator", note });
   };
-  for (const host of mandatoryHosts(config)) add(host, "operator", "always");
-  for (const host of config.hosts) add(host, "operator", "ALLOWED_HOSTS");
-  for (const host of grant.hosts) add(host, "operator", `grants: ${grant.hostFiles[host]}`);
-  for (const host of settings.hosts) {
-    const [refused] = refusedRepoHosts(config, grant, { hosts: [host] });
-    if (refused) {
-      add(
-        host,
-        "refused",
-        "the operator doesn't let this repository add hosts (allow_repo_hosts in its grants)",
-      );
-    } else if (grant.allowRepoHosts) add(host, "repo", null);
-    else add(host, "operator", "already allowed by the operator");
-  }
+  for (const host of mandatoryHosts(config)) add(host, "always");
+  for (const host of grant.hosts) add(host, `grants/${grant.hostFiles[host]}`);
   return rows;
 }
 
@@ -179,7 +167,6 @@ export function mountRows(settings, grant, fs = {}) {
 export function grantRows(grant) {
   return {
     files: grant.files,
-    allowRepoHosts: grant.allowRepoHosts,
     allowPreview: grant.allowPreview,
     allowDockerfile: grant.allowDockerfile,
     allowBranchDockerImages: grant.allowBranchDockerImages,
@@ -202,7 +189,7 @@ export function effectiveView(
   const shown = grant ?? grantFor(grantsFrom({}, config), config, repo);
   return {
     settings: settingRows(config, settings, shown),
-    hosts: hostRows(config, shown, settings),
+    hosts: hostRows(config, shown),
     mounts: mountRows(settings, shown, fs),
     grant: grant ? grantRows(grant) : null,
   };

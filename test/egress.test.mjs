@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { ConfigError, loadConfig } from "../listener/config.mjs";
+import { loadConfig } from "../listener/config.mjs";
 import {
   egressPolicy,
   hostProblem,
@@ -8,12 +8,20 @@ import {
   matchHost,
   operatorHosts,
   proxyEnv,
-  refusedRepoHosts,
-  runHosts,
 } from "../listener/egress.mjs";
+import { grantFor, grantsFrom } from "../listener/grants.mjs";
 import { parseRepoConfig } from "../listener/repo-config.mjs";
 
-const config = loadConfig({ ALLOWED_USERS: "a", ALLOWED_HOSTS: "Registry.npmjs.org" });
+const config = loadConfig({ ALLOWED_USERS: "a" });
+
+// The grants folder's default.yaml and one repo's file, as grantFor() reads them.
+const grants = grantsFrom(
+  {
+    "default.yaml": "hosts: [Registry.npmjs.org]\n",
+    "org/api.yaml": 'hosts: ["*.lan.example", pypi.org, registry.npmjs.org]\n',
+  },
+  config,
+);
 
 test("mandatory hosts: Anthropic's API and the configured GitHub", () => {
   assert.deepEqual(mandatoryHosts(config), [
@@ -34,84 +42,53 @@ test("mandatory hosts: Anthropic's API and the configured GitHub", () => {
   ]);
 });
 
-test("a run's hosts: mandatory, the operator's, its grant's, its repo's with allow_repo_hosts", () => {
-  const { settings } = parseRepoConfig('hosts: ["*.example.com", pypi.org]\n', config);
-  const operator = [
+test("a run's hosts: mandatory, default.yaml's for every repo, the repo's own grant's", () => {
+  const mandatory = [
     "api.anthropic.com",
     "github.com",
     "api.github.com",
     "*.githubusercontent.com",
-    "registry.npmjs.org",
-    "pypi.org",
   ];
-  const granted = { hosts: ["pypi.org"], allowRepoHosts: true };
-  assert.deepEqual(runHosts(config, granted, settings), [...operator, "*.example.com"]);
-  assert.deepEqual(refusedRepoHosts(config, granted, settings), []);
-  // Without the operator's permission the repo's own hosts never reach the list.
-  const plain = { hosts: ["pypi.org"], allowRepoHosts: false };
-  assert.deepEqual(runHosts(config, plain, settings), operator);
+  assert.deepEqual(operatorHosts(config, grantFor(grants, config, "org/web")), [
+    ...mandatory,
+    "registry.npmjs.org",
+  ]);
+  // Once each, default.yaml's first.
+  assert.deepEqual(operatorHosts(config, grantFor(grants, config, "Org/API")), [
+    ...mandatory,
+    "registry.npmjs.org",
+    "*.lan.example",
+    "pypi.org",
+  ]);
 });
 
-test("without allow_repo_hosts, a repo's hosts that widen egress are refused", () => {
-  const hosts = (list) => parseRepoConfig(`hosts: [${list}]\n`, config).settings;
-  const grant = { hosts: ["*.example.com", "pypi.org"], allowRepoHosts: false };
-  // Already allowed by the operator, mandatory or granted: nothing widens, nothing refused.
-  const covered = hosts(
-    'registry.npmjs.org, api.github.com, "*.githubusercontent.com", raw.githubusercontent.com, pypi.org, a.example.com, "*.a.example.com", "*.example.com"',
+test("a repo's own hosts are ignored, with a warning naming the grants file", () => {
+  const { errors, warnings, settings } = parseRepoConfig('hosts: ["*", evil.net]\n', config);
+  assert.deepEqual(errors, []);
+  assert.match(
+    warnings[0],
+    /^hosts: ignored, the operator lists the hosts in grants\/<owner>\/<repo>\.yaml/,
   );
-  assert.deepEqual(refusedRepoHosts(config, grant, covered), []);
-  // Wider than what the operator allows: each named.
-  const wider = hosts('example.com, files.pypi.org, "*.pypi.org", evil.net');
-  assert.deepEqual(
-    refusedRepoHosts(config, grant, wider).map((r) => r.match(/`(.+)`/)[1]),
-    ["example.com", "files.pypi.org", "*.pypi.org", "evil.net"],
-  );
-  assert.match(refusedRepoHosts(config, grant, wider)[0], /doesn't let this repository add hosts/);
-  // An operator who allows "*" allows everything a repo could list.
-  const open = loadConfig({ ALLOWED_USERS: "a", ALLOWED_HOSTS: "*" });
-  assert.deepEqual(refusedRepoHosts(open, { hosts: [], allowRepoHosts: false }, wider), []);
+  assert.equal("hosts" in settings, false);
 });
 
-test("a repo can never open every host, granted or not", () => {
-  for (const host of ['"*"', '"*.com"', '"*.Dev"', '"*.co.uk"', '"*.github.io"', '"*.NIP.io"']) {
-    const { errors, settings } = parseRepoConfig(`hosts: [pypi.org, ${host}]\n`, config);
-    assert.match(errors[0], /a repository can't open that much: only the operator can/, host);
-    assert.deepEqual(settings.hosts, ["pypi.org"]);
-  }
-  const ok = 'hosts: ["*.example.com", "*.me.github.io", example.co.uk, github.io]\n';
-  assert.deepEqual(parseRepoConfig(ok, config).errors, []);
+test("the operator can name an address or a host without a domain", () => {
+  const own = grantsFrom({ "org/api.yaml": 'hosts: [listener, 172.17.0.1, "*"]\n' }, config);
+  assert.deepEqual(grantFor(own, config, "org/api").hosts, ["listener", "172.17.0.1", "*"]);
 });
 
-test("a repo can't name an address or a host without a domain", () => {
-  const cases = {
-    "172.17.0.1": /can't name an address/,
-    "10.0.0.1": /can't name an address/,
-    '"*.0.1"': /can't name an address/,
-    listener: /can't name a host without a domain/,
-    localhost: /can't name a host without a domain/,
-  };
-  for (const [host, problem] of Object.entries(cases)) {
-    const { errors, settings } = parseRepoConfig(`hosts: [${host}]\n`, config);
-    assert.match(errors[0], problem, host);
-    assert.deepEqual(settings.hosts, []);
-  }
-  // The operator still can.
-  const operator = loadConfig({ ALLOWED_USERS: "a", ALLOWED_HOSTS: "listener, 172.17.0.1" });
-  assert.deepEqual(operator.hosts, ["listener", "172.17.0.1"]);
-});
-
-test("private addresses only for the operator's named hosts, not a repo's or *", () => {
-  const { settings } = parseRepoConfig('hosts: ["*.example.com", repo.dev]\n', config);
-  const grant = { hosts: ["*.lan.example"], allowRepoHosts: true };
-  const hosts = [...runHosts(config, grant, settings), "*"];
-  const trusted = [...operatorHosts(config, grant), "*"];
-  const answer = (host) => egressPolicy(host, hosts, trusted);
+test("private addresses only for hosts the operator named, default.yaml's too, not through *", () => {
+  const hosts = [...operatorHosts(config, grantFor(grants, config, "org/api")), "*"];
+  const answer = (host) => egressPolicy(host, hosts, hosts);
+  // default.yaml's, as ALLOWED_HOSTS was.
   assert.deepEqual(answer("registry.npmjs.org"), { allowed: true, private: true });
   assert.deepEqual(answer("nas.lan.example"), { allowed: true, private: true });
-  // The repo's own hosts reach public addresses only, whatever they resolve to.
-  assert.deepEqual(answer("a.example.com"), { allowed: true, private: false });
-  assert.deepEqual(answer("repo.dev"), { allowed: true, private: false });
   assert.deepEqual(answer("anything.net"), { allowed: true, private: false });
+  // A run restored from before repos lost their own hosts: those stay public.
+  assert.deepEqual(egressPolicy("repo.dev", ["github.com", "repo.dev"], ["github.com"]), {
+    allowed: true,
+    private: false,
+  });
   assert.deepEqual(egressPolicy("x.net", ["github.com"], ["github.com"]), {
     allowed: false,
     private: false,
@@ -139,7 +116,7 @@ test("host matching: names, subdomain wildcards, *", () => {
   assert.equal(matchHost("a.example.com", [...hosts, "*"]), "wildcard");
 });
 
-test("host patterns are checked, in the operator's settings and a repo's config", () => {
+test("host patterns are checked, in the grants folder", () => {
   for (const ok of ["github.com", "*.example.com", "*", "localhost", "10.0.0.1", "a_b.lan"]) {
     assert.equal(hostProblem(ok), null, ok);
   }
@@ -147,11 +124,9 @@ test("host patterns are checked, in the operator's settings and a repo's config"
     assert.ok(hostProblem(bad), String(bad));
   }
   assert.throws(
-    () => loadConfig({ ALLOWED_USERS: "a", ALLOWED_HOSTS: "x.com, a.*.b" }),
-    ConfigError,
+    () => grantsFrom({ "default.yaml": 'hosts: [x.com, "a.*.b"]\n' }, config),
+    /default\.yaml: hosts: "a\.\*\.b": expected a host name/,
   );
-  const { errors } = parseRepoConfig('hosts: ["*.ok.com", "not ok"]\n', config);
-  assert.match(errors[0], /hosts: "not ok": expected a host name/);
 });
 
 test("proxy settings for every kind of tool, the broker reached directly", () => {
@@ -166,15 +141,16 @@ test("proxy settings for every kind of tool, the broker reached directly", () =>
   });
 });
 
-test("limits: defaults, and checked", () => {
+test("limits: built in, under default.yaml's, and checked", () => {
   assert.deepEqual(config.limits, { cpus: "2", memory: "4g", pids: 2048 });
-  const set = loadConfig({
-    ALLOWED_USERS: "a",
-    SANDBOX_CPUS: "0.5",
-    SANDBOX_MEMORY: "512M",
-    SANDBOX_PIDS: "100",
+  const set = grantsFrom({ "default.yaml": "limits: { cpus: 0.5, memory: 512M }\n" }, config);
+  assert.deepEqual(grantFor(set, config, "org/web").limits, {
+    cpus: "0.5",
+    memory: "512m",
+    pids: 2048,
   });
-  assert.deepEqual(set.limits, { cpus: "0.5", memory: "512m", pids: 100 });
-  assert.throws(() => loadConfig({ ALLOWED_USERS: "a", SANDBOX_CPUS: "-1" }), /SANDBOX_CPUS/);
-  assert.throws(() => loadConfig({ ALLOWED_USERS: "a", SANDBOX_PIDS: "1.5" }), /SANDBOX_PIDS/);
+  assert.throws(
+    () => grantsFrom({ "default.yaml": "limits: { cpus: -1 }\n" }, config),
+    /default\.yaml: limits\.cpus: expected/,
+  );
 });

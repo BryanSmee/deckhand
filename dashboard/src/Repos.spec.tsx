@@ -34,7 +34,7 @@ const CONFIG: RepoConfig = {
   repo: repo("org/api", { status: "invalid", readAt: Date.now() }),
   base: "main",
   file: {
-    text: "users: [alice]\nhosts: [pypi.org]\neffort: loud\n",
+    text: "users: [alice]\neffort: loud\n",
     sha: "abcdef1234",
     url: "https://github.com/org/api/blob/main/.deckhand.yaml",
   },
@@ -53,21 +53,16 @@ const CONFIG: RepoConfig = {
     ],
     hosts: [
       { host: "api.anthropic.com", source: "operator", note: "always" },
-      {
-        host: "pypi.org",
-        source: "refused",
-        note: "the operator doesn't let this repository add hosts",
-      },
+      { host: "pypi.org", source: "operator", note: "grants/org/api.yaml" },
     ],
     mounts: [],
     grant: {
-      files: [],
-      allowRepoHosts: false,
+      files: ["org/api.yaml"],
       allowPreview: false,
       allowDockerfile: false,
       allowBranchDockerImages: false,
       allowDocker: false,
-      hosts: [],
+      hosts: ["pypi.org"],
       mounts: [],
       limits: { cpus: "2", memory: "4g", pids: 2048 },
     },
@@ -192,18 +187,15 @@ test("a repository's panel: errors first, then what runs get, then the file", as
   const alert = await screen.findByRole("alert");
   expect(alert.textContent).toContain("No run starts until these are fixed");
   expect(alert.textContent).toContain("effort: expected one of low, medium, high");
-  // A refused host stops runs too: it is listed with the errors.
-  expect(alert.textContent).toContain("pypi.org");
   expect(screen.getByText("colour: unknown, ignored")).toBeTruthy();
   const users = screen.getByText("users").closest("tr")!;
   expect(within(users).getByText("from repo")).toBeTruthy();
   expect(within(users).getByText(/narrowed from ALLOWED_USERS/)).toBeTruthy();
   expect(within(screen.getByText("effort").closest("tr")!).getByText("from operator")).toBeTruthy();
-  expect(
-    within(screen.getByText("pypi.org", { selector: "th code" }).closest("tr")!).getByText(
-      "refused",
-    ),
-  ).toBeTruthy();
+  // Each host names the grants file it comes from.
+  const pypi = screen.getByText("pypi.org", { selector: "th code" }).closest("tr")!;
+  expect(within(pypi).getByText("grants/org/api.yaml")).toBeTruthy();
+  expect(within(pypi).getByText("from operator")).toBeTruthy();
   expect(screen.getByText(/users: \[alice\]/, { selector: "pre" })).toBeTruthy();
   expect(screen.getByRole("link", { name: "on GitHub" }).getAttribute("href")).toBe(
     "https://github.com/org/api/blob/main/.deckhand.yaml",
