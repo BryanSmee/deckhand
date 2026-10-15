@@ -156,7 +156,13 @@ test("Claude Code installs once per version, in a container of its own", async (
     /-e CLAUDE_CODE_VERSION=9\.9\.9 -v deckhand-claude-code:\/opt\/claude-code/,
   );
   // npm's registry is outside the sandboxes' internal network.
-  assert.match(installs[0], /^run --rm --network bridge --cap-drop ALL /);
+  assert.match(installs[0], /^run --rm --network bridge /);
+  // As root, so uid 1000 (the sandbox's user) can't change the files; CHOWN only, to take
+  // over a volume an older install left to uid 1000.
+  assert.match(
+    installs[0],
+    / --user 0 --cap-drop ALL --cap-add CHOWN --security-opt no-new-privileges /,
+  );
 });
 
 test("cache volumes: created once per repo and path, owned by the sandbox's user", async () => {

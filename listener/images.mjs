@@ -118,7 +118,10 @@ export function createImages({
   }
 
   // Claude Code in the shared volume, once per version: a short container of its own before
-  // the first run that needs it (the base image ships without it).
+  // the first run that needs it (the base image ships without it). As root, so the files
+  // aren't the sandbox user's (uid 1000) to change: sandboxes mount the volume read-only,
+  // and this still holds if a mount ever isn't. CHOWN only to take over a volume uid 1000
+  // owned before (../sandbox/install-claude-code).
   function installClaudeCode(output) {
     const version = config.claudeCodeVersion;
     if (!installs.has(version)) {
@@ -129,7 +132,8 @@ export function createImages({
           // npm's registry, outside the sandboxes' network: no repo or Claude input runs here.
           "--network",
           config.installNetwork,
-          ...["--cap-drop", "ALL", "--security-opt", "no-new-privileges"],
+          ...["--user", "0"],
+          ...["--cap-drop", "ALL", "--cap-add", "CHOWN", "--security-opt", "no-new-privileges"],
           "-e",
           `CLAUDE_CODE_VERSION=${version}`,
           "-v",

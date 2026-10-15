@@ -1330,8 +1330,10 @@ function sandboxSpec(task, prompt, message, { image, cacheArgs, settings, mounts
     // Its own folder of the screenshots volume only: no run sees another's.
     "--mount",
     `type=volume,src=${config.shotsVolume},dst=/screenshots,volume-subpath=${live.shots}`,
-    // Claude Code, installed by the first run that needs this version (../sandbox/entrypoint.sh).
-    ...["-v", `${config.claudeCodeVolume}:/opt/claude-code`],
+    // Claude Code, installed by the listener before the run (images.installClaudeCode()).
+    // Read-only: shared by every repository, so a run that could rewrite it would run its
+    // code in the next sandbox of any repository, with that run's broker secret.
+    ...["-v", `${config.claudeCodeVolume}:/opt/claude-code:ro`],
     // The issue's clone and Claude session, kept between its runs.
     ...["-v", `${n}-workspace:/workspace`],
     ...["-v", `${n}-claude:/home/node/.claude`],

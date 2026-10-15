@@ -66,8 +66,9 @@ COPY sandbox/draft-pr.sh /usr/local/bin/sandbox-draft-pr
 # Its hooks: managed settings, because ~/.claude is a per-issue volume that would keep an
 # old copy of a settings.json forever.
 COPY sandbox/managed-settings.json /etc/claude-code/managed-settings.json
-# /opt/claude-code: a new volume mounted there takes this owner.
-RUN install -d -o node -g node /workspace /opt/claude-code
+# /opt/claude-code: a new volume mounted there takes this owner, root: the listener installs
+# Claude Code as root and sandboxes mount it read-only (../docs/security.md).
+RUN install -d -o node -g node /workspace && install -d /opt/claude-code
 
 USER node
 WORKDIR /workspace
