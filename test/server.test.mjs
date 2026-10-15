@@ -19,6 +19,10 @@ import { dirname, join } from "node:path";
 import { test } from "node:test";
 
 const SECRET = "webhook-secret";
+// A read-write mount needs every directory from / to its parent out of the sandbox's user's
+// reach (uid 1000, maybe the tests' own), which a temp dir isn't: /usr is root's everywhere.
+// The fake docker mounts nothing.
+const RW_MOUNT = "/usr";
 
 // Sandboxes run detached: `run` starts the fake sandbox in the background (its output in
 // containers/<name>/out), `logs --follow` tails it, `ps`, `inspect`, `wait` and `rm` see it.
@@ -802,23 +806,22 @@ test("hosts from the operator, its grants and the repo; granted mounts and limit
     (dir) => ({
       ".deckhand.yaml": `hosts: ["*.example.com"]
 mounts:
-  - path: ${dir}/nfs/api
+  - path: ${RW_MOUNT}
     read_only: false
   - path: ${dir}/nfs/docs
 `,
     }),
     (dir) => {
-      mkdirSync(join(dir, "nfs", "api"), { recursive: true });
       mkdirSync(join(dir, "nfs", "docs"), { recursive: true });
-      chmodSync(join(dir, "nfs"), 0o555); // not writable by the sandbox's user: api may be read-write
       writeGrant(
         dir,
         `hosts: [pypi.org]
 allow_repo_hosts: true
 limits: { memory: 8g }
 mounts:
-  - root: ${join(dir, "nfs")}
+  - root: ${RW_MOUNT}
     read_only: false
+  - ${join(dir, "nfs")}
 `,
       );
       return { ALLOWED_HOSTS: "registry.npmjs.org" };
@@ -842,9 +845,7 @@ mounts:
   const args = readFileSync(join(dir, "run-args"), "utf8").split("\n");
   const joined = args.join(" ");
   assert.match(joined, /--cpus 2 --memory 8g --memory-swap 8g --pids-limit 2048/);
-  assert.ok(
-    args.includes(`type=bind,src=${join(dir, "nfs", "api")},dst=${join(dir, "nfs", "api")}`),
-  );
+  assert.ok(args.includes(`type=bind,src=${RW_MOUNT},dst=${RW_MOUNT}`));
   assert.ok(
     args.includes(
       `type=bind,src=${join(dir, "nfs", "docs")},dst=${join(dir, "nfs", "docs")},readonly`,
@@ -1520,14 +1521,12 @@ test("a brainstorm and the issue's work share no writable volume", async (t) => 
     (dir) => ({
       ".deckhand.yaml": `caches: [/home/node/.npm]
 mounts:
-  - path: ${dir}/nfs/api
+  - path: ${RW_MOUNT}
     read_only: false
 `,
     }),
     (dir) => {
-      mkdirSync(join(dir, "nfs", "api"), { recursive: true });
-      chmodSync(join(dir, "nfs"), 0o555);
-      writeGrant(dir, `mounts:\n  - root: ${join(dir, "nfs")}\n    read_only: false\n`);
+      writeGrant(dir, `mounts:\n  - root: ${RW_MOUNT}\n    read_only: false\n`);
       return { BRAINSTORM_DEBOUNCE_MS: "0" };
     },
   );
@@ -1537,7 +1536,7 @@ mounts:
     return args.flatMap((a, i) => (["-v", "--mount"].includes(args[i - 1]) ? [a] : []));
   };
   const writable = (mounts) => mounts.filter((m) => !/(:ro|,readonly)$/.test(m));
-  const api = join(dir, "nfs", "api");
+  const api = RW_MOUNT;
 
   await send(comment("alice", "Deckhand\n/mode brainstorm\nWhat about dark mode?"));
   await until(() => replies(github).length === 1, "the brainstorm's reply");
