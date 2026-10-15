@@ -182,7 +182,7 @@ function send(res, status, value) {
 }
 
 // The /api/repos routes. `user`: the signed-in login or null; `start(repo, login)` opens the
-// repo's onboarding issue and its run, resolving to the issue or null (server.mjs).
+// repo's onboarding issue and its run, resolving to the issue or null (tasks.mjs).
 export function createRepoApi({ config, list, publicUrl = () => null, start, log = () => {} }) {
   async function onboard(req, res, user, repo) {
     if (!user) return send(res, 401, { error: "Sign in first." });

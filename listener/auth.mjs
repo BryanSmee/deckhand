@@ -179,23 +179,8 @@ from the listener's logs.</p>`,
         { "set-cookie": clear },
       );
     }
-    const exchange = await fetch(`${config.githubUrl}/login/oauth/access_token`, {
-      method: "POST",
-      headers: {
-        accept: "application/json",
-        "content-type": "application/json",
-        "user-agent": "deckhand",
-      },
-      body: JSON.stringify({
-        client_id: credentials.client_id,
-        client_secret: credentials.client_secret,
-        code,
-        redirect_uri: `${publicUrl()}/auth/callback`,
-      }),
-    });
-    const grant = await json(exchange, "code exchange");
-    if (!grant?.access_token) {
-      if (grant) log(`Login: code exchange: ${grant.error ?? "no token"}`);
+    const token = await exchange(credentials, code);
+    if (!token) {
       return page(
         res,
         502,
@@ -204,30 +189,20 @@ from the listener's logs.</p>`,
         { "set-cookie": clear },
       );
     }
-    const me = await json(
-      await fetch(`${config.githubApi}/user`, {
-        headers: {
-          authorization: `Bearer ${grant.access_token}`,
-          accept: "application/vnd.github+json",
-          "user-agent": "deckhand",
-        },
-      }),
-      "user",
-    );
-    revoke(credentials, grant.access_token);
-    if (!me?.login) {
+    const me = await whoIs(credentials, token);
+    if (!me) {
       return page(res, 502, "GitHub didn't say who you are", `<p>See the listener's logs.</p>`, {
         "set-cookie": clear,
       });
     }
-    const login = me.login.toLowerCase();
+    const login = me.toLowerCase();
     if (!config.users.includes(login)) {
-      log(`Login: refused ${me.login}: not in ALLOWED_USERS`);
+      log(`Login: refused ${me}: not in ALLOWED_USERS`);
       return page(
         res,
         403,
         "Not allowed",
-        `<p>You are signed in on GitHub as <strong>${escape(me.login)}</strong>, who isn't one of
+        `<p>You are signed in on GitHub as <strong>${escape(me)}</strong>, who isn't one of
 this Deckhand's allowed users.</p>
 <p class="muted">Ask its operator to add you to <code>ALLOWED_USERS</code>, or sign out of
 GitHub and sign in here with another account.</p>`,
@@ -241,6 +216,43 @@ GitHub and sign in here with another account.</p>`,
       "cache-control": "no-store",
     });
     res.end();
+  }
+
+  // The code GitHub sent back → the user's token; null (logged) when GitHub refuses it.
+  async function exchange(credentials, code) {
+    const res = await fetch(`${config.githubUrl}/login/oauth/access_token`, {
+      method: "POST",
+      headers: {
+        accept: "application/json",
+        "content-type": "application/json",
+        "user-agent": "deckhand",
+      },
+      body: JSON.stringify({
+        client_id: credentials.client_id,
+        client_secret: credentials.client_secret,
+        code,
+        redirect_uri: `${publicUrl()}/auth/callback`,
+      }),
+    });
+    const grant = await json(res, "code exchange");
+    if (grant && !grant.access_token) log(`Login: code exchange: ${grant.error ?? "no token"}`);
+    return grant?.access_token ?? null;
+  }
+
+  // The login the token is for, or null (logged). The token is revoked right after.
+  async function whoIs(credentials, token) {
+    const me = await json(
+      await fetch(`${config.githubApi}/user`, {
+        headers: {
+          authorization: `Bearer ${token}`,
+          accept: "application/vnd.github+json",
+          "user-agent": "deckhand",
+        },
+      }),
+      "user",
+    );
+    revoke(credentials, token);
+    return me?.login ?? null;
   }
 
   // The token only served to read the login: nothing keeps it, GitHub forgets it.

@@ -35,7 +35,7 @@ function runState(r) {
   return r.status; // needs-input, error, interrupted
 }
 
-// `runs`: newest first; `queued`, `brainstorms`: as server.mjs's state() has them.
+// `runs`: newest first; `queued`, `brainstorms`: as http.mjs's state() has them.
 export function board({ runs, queued, brainstorms }) {
   const tasks = new Map();
   const entry = (key, repo) => {
