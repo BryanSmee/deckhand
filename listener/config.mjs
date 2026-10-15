@@ -47,32 +47,9 @@ const LIMIT_FORMAT = {
   pids: "a whole number",
 };
 
-export function loadConfig(env) {
-  // Fail closed: the sandbox runs without permission prompts and can push, so nobody may
-  // trigger it until the operator names who can.
-  const users = list(env.ALLOWED_USERS);
-  if (!users.length) {
-    throw new ConfigError("ALLOWED_USERS is empty: name the GitHub users who may start runs");
-  }
-  const port = Number(env.PORT ?? 8080);
-  const prefix = env.NAME_PREFIX || "deckhand";
-  // Hosts every sandbox may reach, besides the mandatory ones (egress.mjs).
-  const hosts = list(env.ALLOWED_HOSTS);
-  const badHost = hosts.find(hostProblem);
-  if (badHost) throw new ConfigError(`ALLOWED_HOSTS: ${badHost}: ${hostProblem(badHost)}`);
+// Where sandboxes run, what they get and what they may reach.
+function sandboxConfig(env, prefix, hosts) {
   return {
-    port,
-    // Internal only: sandboxes ask it for tokens. Not published by compose.yaml.
-    brokerPort: Number(env.BROKER_PORT ?? 8081),
-    // How sandboxes reach the broker on their network (compose service name by default).
-    brokerUrl: (env.BROKER_URL || `http://listener:${env.BROKER_PORT ?? 8081}`).replace(/\/$/, ""),
-    githubApi: (env.GITHUB_API || "https://api.github.com").replace(/\/$/, ""),
-    githubUrl: (env.GITHUB_URL || "https://github.com").replace(/\/$/, ""),
-    users,
-    // Optional: narrows the repos where the App is installed. Empty: all of them.
-    repos: list(env.ALLOWED_REPOS),
-    // The first line of a comment that calls Deckhand; "/mode <name>" picks another mode.
-    trigger: normalize(env.TRIGGER || "Deckhand"),
     prefix,
     image: env.SANDBOX_IMAGE || `${prefix}-sandbox`,
     network: env.SANDBOX_NETWORK || `${prefix}-sandboxes`,
@@ -102,6 +79,36 @@ export function loadConfig(env) {
     installNetwork: env.INSTALL_NETWORK || "bridge",
     // The host's Docker socket, as preview hooks mount it.
     dockerSocket: env.DOCKER_SOCKET || "/var/run/docker.sock",
+  };
+}
+
+export function loadConfig(env) {
+  // Fail closed: the sandbox runs without permission prompts and can push, so nobody may
+  // trigger it until the operator names who can.
+  const users = list(env.ALLOWED_USERS);
+  if (!users.length) {
+    throw new ConfigError("ALLOWED_USERS is empty: name the GitHub users who may start runs");
+  }
+  const port = Number(env.PORT ?? 8080);
+  const prefix = env.NAME_PREFIX || "deckhand";
+  // Hosts every sandbox may reach, besides the mandatory ones (egress.mjs).
+  const hosts = list(env.ALLOWED_HOSTS);
+  const badHost = hosts.find(hostProblem);
+  if (badHost) throw new ConfigError(`ALLOWED_HOSTS: ${badHost}: ${hostProblem(badHost)}`);
+  return {
+    port,
+    // Internal only: sandboxes ask it for tokens. Not published by compose.yaml.
+    brokerPort: Number(env.BROKER_PORT ?? 8081),
+    // How sandboxes reach the broker on their network (compose service name by default).
+    brokerUrl: (env.BROKER_URL || `http://listener:${env.BROKER_PORT ?? 8081}`).replace(/\/$/, ""),
+    githubApi: (env.GITHUB_API || "https://api.github.com").replace(/\/$/, ""),
+    githubUrl: (env.GITHUB_URL || "https://github.com").replace(/\/$/, ""),
+    users,
+    // Optional: narrows the repos where the App is installed. Empty: all of them.
+    repos: list(env.ALLOWED_REPOS),
+    // The first line of a comment that calls Deckhand; "/mode <name>" picks another mode.
+    trigger: normalize(env.TRIGGER || "Deckhand"),
+    ...sandboxConfig(env, prefix, hosts),
     // Batches the comments of one review (each arrives as its own webhook) into one run.
     debounceMs: Number(env.DEBOUNCE_MS ?? 15000),
     // A brainstorm comment comes alone, and someone is waiting for the answer.
