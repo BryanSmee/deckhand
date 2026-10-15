@@ -152,7 +152,8 @@ export function runName(r: Run): string {
   const what = { start: "Start", continue: "Continue", restore: "Restore", "wrap-up": "Wrap-up" }[
     r.mode ?? ""
   ];
-  return [own, what ?? "Run"].filter(Boolean).join(" · ");
+  const why = r.reason === "conflict" ? "Conflict" : null;
+  return [why, own, what ?? "Run"].filter(Boolean).join(" · ");
 }
 
 // The repos' tabs: the most recently active first. Repo names alone, unless they come from

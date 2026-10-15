@@ -171,6 +171,7 @@ All in `.env`, read by `compose.yaml`:
 | `TRIGGER`                                                                             | `Deckhand`                        | first line of a comment that starts a run                                       |
 | `ONBOARDING`                                                                          | on                                | `off`: no onboarding issue when the App is installed on a repo without a config |
 | `NEEDS_INPUT_LABEL`                                                                   | `needs-input`                     | label while a run waits for answers (empty: none)                               |
+| `CONFLICT_CHECK_MINUTES`                                                              | `5`                               | shortest interval of a repo's `conflicts.check_minutes`; `0` turns it off       |
 | `DOCKER_SOCKET`                                                                       | `/var/run/docker.sock`            | the host's Docker socket, as preview hooks mount it                             |
 | `DECKHAND_VERSION`                                                                    | `latest`                          | the release compose runs (`1.2.3`, `1.2`): see [Updating](#updating)            |
 | `DECKHAND_REGISTRY`                                                                   | `ghcr.io/bryansmee`               | where compose pulls the images from                                             |

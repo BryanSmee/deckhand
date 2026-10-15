@@ -56,6 +56,8 @@ services:
       TRIGGER: ${TRIGGER:-Deckhand}
       BRAINSTORM_IDLE_MINUTES: ${BRAINSTORM_IDLE_MINUTES:-10}
       NEEDS_INPUT_LABEL: ${NEEDS_INPUT_LABEL-needs-input}
+      # Shortest interval at which repos that opt in are checked for conflicts (0: off).
+      CONFLICT_CHECK_MINUTES: ${CONFLICT_CHECK_MINUTES:-5}
       # Names of what the listener creates on the host's Docker, matching the ones below.
       SANDBOX_IMAGE: *sandbox-image
       SANDBOX_NETWORK: ${SANDBOX_NETWORK:-deckhand-sandboxes}

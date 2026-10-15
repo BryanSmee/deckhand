@@ -86,7 +86,7 @@ export function createRuns(ctx) {
   }
 
   // What the dashboard lists for a run.
-  function newRecord(task, { id, key, mode, replyTo }) {
+  function newRecord(task, { id, key, mode, replyTo, reason }) {
     return {
       id,
       key,
@@ -96,6 +96,8 @@ export function createRuns(ctx) {
       repo: task.repo,
       title: ctx.titles.get(key),
       replyTo,
+      // Why the listener started it itself ("conflict": conflicts.mjs); null for comments.
+      reason,
       mode: null,
       startedAt: Date.now(),
       finishedAt: null,
@@ -113,7 +115,8 @@ export function createRuns(ctx) {
     const light = isLight(task, mode);
     const key = `${task.repo}#${task.id}`;
     const id = `${task.name}-${Date.now()}`;
-    const record = newRecord(task, { id, key, mode, replyTo });
+    const reason = items.at(-1).reason ?? null;
+    const record = newRecord(task, { id, key, mode, replyTo, reason });
     return {
       id,
       key,

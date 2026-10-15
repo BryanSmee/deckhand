@@ -315,6 +315,7 @@ export function createTasks(ctx) {
 
   return {
     admit,
+    accept,
     onboardRepo,
     onboard,
     deliverable,

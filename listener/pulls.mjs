@@ -78,7 +78,10 @@ export function createPulls({ path, listPulls, log = () => {} }) {
     return fetching;
   }
 
-  return { get: (key) => pulls.get(key) ?? null, record, fill };
+  // [key, pr] of the tasks whose pull request is open, for the conflict watcher.
+  const openPulls = () => [...pulls].filter(([, pr]) => open(pr));
+
+  return { get: (key) => pulls.get(key) ?? null, record, fill, open: openPulls };
 }
 
 // A task's pull request in a listing, newest first: itself for "#pr-n"; for an issue, the

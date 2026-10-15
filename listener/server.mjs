@@ -15,6 +15,7 @@ import { createPrReady } from "./pr-ready.mjs";
 import { createBrainstorms, createIssueModes } from "./brainstorms.mjs";
 import { checkout } from "./checkout.mjs";
 import { createComments } from "./comments.mjs";
+import { createConflicts } from "./conflicts.mjs";
 import { ConfigError, loadConfig } from "./config.mjs";
 import { docker } from "./docker.mjs";
 import { createGitHubApp, loadCredentials, saveCredentials } from "./github-app.mjs";
@@ -244,21 +245,35 @@ ctx.prReady = createPrReady({
 
 // --- Tasks, runs and restarts --------------------------------------------------------------
 
+// A task with a run going or comments waiting for one.
+function taskBusy(key) {
+  const task = ctx.tasks.get(key);
+  return !!(task?.running || task?.pending.length);
+}
+
 Object.assign(ctx, {
   brainstorms: createBrainstorms({
     path: join(config.dataDir, "brainstorms.json"),
     idleMs: config.brainstormIdleMs,
     // A reply still on its way: posting it arms the timer again.
-    busy: (key) => {
-      const task = ctx.tasks.get(key);
-      return !!(task?.running || task?.pending.length);
-    },
+    busy: taskBusy,
     log,
   }),
   // The issues whose session is in one of their repo's own modes.
   issueModes: createIssueModes(join(config.dataDir, "modes.json")),
 });
 Object.assign(ctx, createTasks(ctx), createRuns(ctx), createRestart(ctx));
+// Open pull requests of opted-in repos that conflict with their base get a rebase run.
+ctx.conflicts = createConflicts({
+  path: join(config.dataDir, "conflicts.json"),
+  config,
+  pulls,
+  github,
+  repoSettings,
+  busy: taskBusy,
+  accept: (item) => ctx.accept(item),
+  log,
+});
 ctx.repoApi = createRepoApi({
   config,
   list: repoList,
@@ -283,12 +298,14 @@ if (!ctx.app) log(`No GitHub App yet. Set it up at ${setup.link()}`);
 const restored = ctx.restoreRuns();
 ctx.loadQueue();
 ctx.reattach(restored).catch((error) => log(`Re-attaching: ${error.stack ?? error}`));
+ctx.conflicts.start();
 
 // `docker compose up`, `restart` or an update stops the listener with SIGTERM, and kills it
 // after the stop grace period. Sandboxes go on: no run starts any more, what is queued is
 // saved with the 👀 ids, the runs' state is written, and the next listener carries on.
 process.on("SIGTERM", () => {
   ctx.stopping = true;
+  ctx.conflicts.stop();
   log("Stopping: running sandboxes go on, the next listener picks them up");
   // Replies being posted and comments being admitted first, then what they leave.
   Promise.allSettled([...ctx.ending, ...http.admitting])

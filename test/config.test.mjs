@@ -44,3 +44,13 @@ test("the default trigger is Deckhand", () => {
   assert.equal(loadConfig({ ALLOWED_USERS: "alice" }).trigger, "deckhand");
   assert.equal(loadConfig({ ALLOWED_USERS: "alice", TRIGGER: "Hey Bot!" }).trigger, "hey bot");
 });
+
+test("conflict watcher floor: 5 minutes by default, 0 turns it off, junk refused", () => {
+  const base = { ALLOWED_USERS: "alice" };
+  assert.equal(loadConfig(base).conflictCheckMinutes, 5);
+  assert.equal(loadConfig({ ...base, CONFLICT_CHECK_MINUTES: "0" }).conflictCheckMinutes, 0);
+  assert.equal(loadConfig({ ...base, CONFLICT_CHECK_MINUTES: " 15 " }).conflictCheckMinutes, 15);
+  for (const bad of ["-1", "2.5", "soon", ""]) {
+    assert.throws(() => loadConfig({ ...base, CONFLICT_CHECK_MINUTES: bad }), ConfigError);
+  }
+});

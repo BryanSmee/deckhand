@@ -95,6 +95,12 @@ export function loadConfig(env) {
   const hosts = list(env.ALLOWED_HOSTS);
   const badHost = hosts.find(hostProblem);
   if (badHost) throw new ConfigError(`ALLOWED_HOSTS: ${badHost}: ${hostProblem(badHost)}`);
+  const conflictMinutes = (env.CONFLICT_CHECK_MINUTES ?? "5").trim();
+  if (!/^\d+$/.test(conflictMinutes)) {
+    throw new ConfigError(
+      `CONFLICT_CHECK_MINUTES: expected a whole number of minutes (0: off), got ${conflictMinutes}`,
+    );
+  }
   return {
     port,
     // Internal only: sandboxes ask it for tokens. Not published by compose.yaml.
@@ -123,6 +129,9 @@ export function loadConfig(env) {
     brainstormModel: env.BRAINSTORM_MODEL || env.SANDBOX_MODEL || "opus",
     brainstormEffort: env.BRAINSTORM_EFFORT || env.SANDBOX_EFFORT || "medium",
     needsInputLabel: env.NEEDS_INPUT_LABEL ?? "needs-input",
+    // The shortest interval at which a repo's `conflicts.check_minutes` may look at its open
+    // pull requests (conflicts.mjs); each conflict found is a run. 0: the watcher is off.
+    conflictCheckMinutes: Number(conflictMinutes),
     // An issue proposing a .deckhand.yaml when the App is installed on a repo without one
     // (onboarding.mjs). "/mode onboarding" works either way.
     onboarding: !["off", "false", "0", "no"].includes((env.ONBOARDING ?? "").trim().toLowerCase()),
