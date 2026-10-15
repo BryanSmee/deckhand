@@ -2,12 +2,12 @@
 // opens an issue there and Claude proposes the file in an "onboarding" conversation, which
 // the trigger line turns into a pull request (tasks.mjs, runs.mjs). The decisions and the issue are
 // here, with GitHub injected, so they are tested on their own (../test/onboarding.test.mjs).
-import { readFileSync, renameSync, writeFileSync } from "node:fs";
 import { linkedIssue } from "./events.mjs";
 import { CONFIG_FILE, parseRepoConfig, readRepoFile } from "./repo-config.mjs";
+import { readJson, writeJsonAtomic } from "./store.mjs";
 
 export const ONBOARDING_LABEL = "deckhand-onboarding";
-export const ONBOARDING_TITLE = "Set up Deckhand for this repository";
+const ONBOARDING_TITLE = "Set up Deckhand for this repository";
 
 // The repos an installation delivery onboards, each checked like a comment would be: the
 // operator's ALLOWED_REPOS, and who installed the App against ALLOWED_USERS. Fail closed:
@@ -70,16 +70,8 @@ export function triggerWord(trigger) {
 // onboarding.json: repo → { issue, at }. A repo is recorded once its issue exists (or a
 // "/mode onboarding" started one), so a reinstall or a restart opens no second issue.
 export function createOnboardingStore(path) {
-  let repos = {};
-  try {
-    repos = JSON.parse(readFileSync(path, "utf8"));
-  } catch {
-    // None yet.
-  }
-  const save = () => {
-    writeFileSync(`${path}.tmp`, JSON.stringify(repos, null, 2));
-    renameSync(`${path}.tmp`, path);
-  };
+  const repos = readJson(path, {});
+  const save = () => writeJsonAtomic(path, repos);
   return {
     get: (repo) => repos[repo.toLowerCase()] ?? null,
     // Whether `number` is the repo's onboarding issue.
@@ -146,7 +138,7 @@ export function createOnboarding({ request, store, config, log = () => {} }) {
 }
 
 // The open pull request of issue `number`: its branch (issue-<n>-…) or its "Closes #n".
-export async function issuePullRequest(request, repo, number) {
+async function issuePullRequest(request, repo, number) {
   const res = await request(repo, "GET", `/repos/${repo}/pulls?state=open&per_page=100`);
   if (!res.ok) return null;
   const pulls = await res.json();

@@ -683,6 +683,10 @@ function exists(path) {
   }
 }
 
+// Temporary files of state writes, in the data volume and its logs.
+const leftovers = (dir) =>
+  [...readdirSync(dir), ...readdirSync(join(dir, "logs"))].filter((f) => f.endsWith(".tmp"));
+
 const replies = (github) =>
   github.requests.filter(
     (r) => r.method === "POST" && r.path === "/repos/org/repo/issues/12/comments",
@@ -746,6 +750,8 @@ test("a restart during a run: it goes on, a new comment reaches it, one reply", 
     readdirSync(join(dir, "logs")).filter((f) => f.endsWith(".live.json")),
     [],
   );
+  // Its state was written whole each time (store.mjs).
+  assert.deepEqual(leftovers(dir), []);
 });
 
 test("a listener killed mid-run: Claude answers meanwhile, the next one replies once", async (t) => {
@@ -782,6 +788,7 @@ test("comments queued when the listener stops run after it starts", async (t) =>
   await ctx.github.waitFor(
     (r) => r.method === "DELETE" && r.path === "/repos/org/repo/issues/comments/99/reactions/1",
   );
+  assert.deepEqual(leftovers(ctx.dir), []);
 });
 
 test("a restart after Claude answered once: nothing is read twice", async (t) => {

@@ -17,20 +17,13 @@ import { readFileSync, realpathSync, statSync } from "node:fs";
 import { posix } from "node:path";
 import { ConfigError, parseLimits } from "./config.mjs";
 import { hostProblem } from "./egress.mjs";
-import { RESERVED } from "./repo-config.mjs";
-import { parseYaml } from "./yaml.mjs";
+import { PLAIN_PATH, RESERVED } from "./repo-config.mjs";
+import { isMap, parseYaml } from "./yaml.mjs";
 
 // The sandbox's user (sandbox/Dockerfile): who must not be able to rewrite a read-write
 // mount's path.
 export const SANDBOX_UID = 1000;
 export const SANDBOX_GID = 1000;
-
-// Docker's --mount is comma-separated: paths stay within these characters.
-const PLAIN_PATH = /^\/[\w./@+-]*$/;
-
-function isMap(value) {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
 
 // The file's text → Map of lowercase "owner/repo" (or "*", every repo) → { hosts,
 // allowRepoHosts, mounts, limits }; allowRepoHosts is null when the entry doesn't say, so

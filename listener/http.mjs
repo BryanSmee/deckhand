@@ -15,6 +15,7 @@ import { CONFIG_FILE } from "./repo-config.mjs";
 import { refreshFor } from "./repos.mjs";
 import { publicRun, stream } from "./runlog.mjs";
 import { serveAsset } from "./static.mjs";
+import { readBody, sendJson } from "./web.mjs";
 
 const imageTypes = {
   png: "image/png",
@@ -26,11 +27,6 @@ const imageTypes = {
 // Health checks and scripts call from inside the container (docker compose exec).
 function local(req) {
   return ["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(req.socket.remoteAddress);
-}
-
-function sendJson(res, value) {
-  res.setHeader("content-type", "application/json");
-  res.end(JSON.stringify(value));
 }
 
 // `ctx` (server.mjs): the listener's state and services, read at call time. `dashboardDir`:
@@ -142,27 +138,22 @@ export function createHttp(ctx, { dashboardDir }) {
   }
 
   function webhook(req, res) {
-    const chunks = [];
-    let size = 0;
-    req.on("data", (chunk) => {
-      size += chunk.length;
-      if (size > 25 * 1024 * 1024) req.destroy();
-      else chunks.push(chunk);
-    });
-    req.on("end", () => {
-      const body = Buffer.concat(chunks);
-      if (refused(req, res, body)) return;
-      // Answer at once: GitHub gives up after 10 seconds, runs take minutes.
-      res.statusCode = 202;
-      res.end();
-      let payload;
-      try {
-        payload = JSON.parse(body.toString("utf8"));
-      } catch {
-        return;
-      }
-      dispatch(req.headers["x-github-event"], payload);
-    });
+    readBody(req, 25 * 1024 * 1024).then(
+      (body) => {
+        if (refused(req, res, body)) return;
+        // Answer at once: GitHub gives up after 10 seconds, runs take minutes.
+        res.statusCode = 202;
+        res.end();
+        let payload;
+        try {
+          payload = JSON.parse(body.toString("utf8"));
+        } catch {
+          return;
+        }
+        dispatch(req.headers["x-github-event"], payload);
+      },
+      (error) => log(`Rejected a delivery: ${error.message}`),
+    );
   }
 
   // A delivery the listener can't take now, or that isn't from its App: answered and true.
@@ -288,8 +279,7 @@ export function createHttp(ctx, { dashboardDir }) {
     const ip = url.searchParams.get("ip") ?? "";
     const host = url.searchParams.get("host") ?? "";
     if (!(await fromProxy(req))) {
-      res.writeHead(403, { "content-type": "application/json" });
-      return res.end(JSON.stringify({ allowed: false }));
+      return sendJson(res, { allowed: false }, 403);
     }
     const task = await taskAt(ip);
     const match = task ? matchHost(host, task.live.hosts) : null;

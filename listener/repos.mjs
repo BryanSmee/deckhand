@@ -10,6 +10,7 @@
 // it may have changed (refresh()). The onboarding status comes from onboarding.json, so it
 // shows at once.
 import { CONFIG_FILE, readRepoFile } from "./repo-config.mjs";
+import { sendJson } from "./web.mjs";
 
 export const LIST_MS = 5 * 60000;
 export const CONFIG_MS = 30 * 60000;
@@ -176,10 +177,7 @@ export function sameOrigin(req, publicUrl) {
   return !!req.headers.host && url.host === req.headers.host;
 }
 
-function send(res, status, value) {
-  res.writeHead(status, { "content-type": "application/json", "cache-control": "no-store" });
-  res.end(JSON.stringify(value));
-}
+const send = (res, status, value) => sendJson(res, value, status);
 
 // The /api/repos routes. `user`: the signed-in login or null; `start(repo, login)` opens the
 // repo's onboarding issue and its run, resolving to the issue or null (tasks.mjs).

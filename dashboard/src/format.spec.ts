@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import fixture from "./fixture.json";
-import { inChip, repoTabs, titleOf, when } from "./format";
+import { inChip, ownMode, repoTabs, titleOf, when } from "./format";
 import type { State, Task } from "./types";
 
 const state = fixture as State;
@@ -42,4 +42,12 @@ test("what a row says besides its state", () => {
   expect(when(task("acme/app#23"), now)).toBe("reply on #23");
   expect(when(task("acme/app#20"), now)).toBe("idle in 6 min");
   expect(when(task("acme/api#138"), now)).toBe("3 h ago");
+});
+
+test("own modes: the repo's, never one of the listener's", () => {
+  expect(ownMode("review")).toBe("review");
+  for (const mode of ["work", "brainstorm", "onboarding", "stop", "idea", "bug", "discussion"]) {
+    expect(ownMode(mode)).toBeNull();
+  }
+  expect(ownMode(null)).toBeNull();
 });

@@ -13,6 +13,7 @@ import {
   createRepoApi,
   createRepoList,
   refreshFor,
+  repoStatus,
   sameOrigin,
 } from "../listener/repos.mjs";
 
@@ -33,6 +34,30 @@ const info = (full_name, extra = {}) => ({
 
 // A fake GitHub behind the real App client: two installations, the first with 150 repos
 // (two pages), and `configured` the repos whose default branch has a .deckhand.yaml.
+test("repoStatus: configured wins, then onboarding, then unknown, else not onboarded", () => {
+  const repo = info("org/a", { private: false, has_issues: false });
+  const row = {
+    repo: "org/a",
+    url: "https://github.com/org/a",
+    private: false,
+    issues: false,
+    status: "not-onboarded",
+    issue: null,
+  };
+  const onboarded = { issue: 4, at: 1 };
+  assert.deepEqual(repoStatus(repo, false, null), row);
+  assert.deepEqual(repoStatus(repo, true, onboarded), { ...row, status: "configured" });
+  const onboarding = {
+    ...row,
+    status: "onboarding",
+    issue: { number: 4, url: "https://github.com/org/a/issues/4" },
+  };
+  assert.deepEqual(repoStatus(repo, false, onboarded), onboarding);
+  // Its config couldn't be read: its onboarding issue still shows.
+  assert.deepEqual(repoStatus(repo, null, onboarded), onboarding);
+  assert.deepEqual(repoStatus(repo, null, null), { ...row, status: "unknown" });
+});
+
 function fakeGitHub({ first = [], second = [], configured = [] } = {}) {
   const calls = [];
   const fetch = async (url, init) => {

@@ -2,22 +2,21 @@
 // { number, url, state, readyAt }. `pull_request` webhooks keep it current (events.mjs
 // pullRequest()); tasks older than that are looked up once per listener start, from the
 // repo's recent pull requests. Kept in pulls.json, so a restart neither forgets nor asks again.
-import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { linkedIssue, prState } from "./events.mjs";
+import { readJson, writeJsonAtomic } from "./store.mjs";
 import { parseKey } from "./titles.mjs";
 
 const open = (pr) => pr?.state === "draft" || pr?.state === "ready";
 
 // `listPulls(repo)`: the repo's recent pull requests, as GET /repos/{repo}/pulls has them.
 export function createPulls({ path, listPulls, log = () => {} }) {
-  const pulls = new Map(existsSync(path) ? Object.entries(load(path)) : []);
+  const pulls = new Map(Object.entries(readJson(path, {})));
   // Listed once per listener: tasks after that get theirs from webhooks.
   const listed = new Set();
   let fetching = null;
 
   function save() {
-    writeFileSync(`${path}.tmp`, JSON.stringify(Object.fromEntries(pulls), null, 2));
-    renameSync(`${path}.tmp`, path);
+    writeJsonAtomic(path, Object.fromEntries(pulls));
   }
 
   // Records `pr` on task `key`, the latest event winning: the same pull request leaves the
@@ -90,12 +89,4 @@ function match(list, { kind, number }) {
     list.find((p) => p.head?.ref?.startsWith(`issue-${number}-`)) ??
     list.find((p) => linkedIssue(p.body) === number)
   );
-}
-
-function load(path) {
-  try {
-    return JSON.parse(readFileSync(path, "utf8"));
-  } catch {
-    return {};
-  }
 }

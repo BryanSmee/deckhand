@@ -1,0 +1,27 @@
+// The listener's JSON state files (queue, live runs, brainstorms, modes, titles, pull
+// requests, onboarding, the App's credentials), read and written the same way.
+import { chmodSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+
+// The file's value, or `fallback` when it is missing or unreadable.
+export function readJson(path, fallback = null) {
+  try {
+    return JSON.parse(readFileSync(path, "utf8"));
+  } catch {
+    return fallback;
+  }
+}
+
+// Written whole or not at all: a crash mid-write leaves the previous file, never half of one.
+// The temporary name is per process, so two writers never share it. `mode`: for secrets.
+export function writeJsonAtomic(path, value, { mode } = {}) {
+  const tmp = `${path}.${process.pid}.tmp`;
+  try {
+    writeFileSync(tmp, JSON.stringify(value, null, 2), mode === undefined ? {} : { mode });
+    // writeFileSync's mode only applies to a new file, and the umask narrows it.
+    if (mode !== undefined) chmodSync(tmp, mode);
+    renameSync(tmp, path);
+  } catch (error) {
+    rmSync(tmp, { force: true });
+    throw error;
+  }
+}

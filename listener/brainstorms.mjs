@@ -1,6 +1,6 @@
 // Each issue's conversation state, kept across listener restarts: its brainstorm
 // (brainstorms.json) and the repo's own mode its session is in (modes.json).
-import { readFileSync, writeFileSync } from "node:fs";
+import { readJson, writeJsonAtomic } from "./store.mjs";
 
 // Claude's reply keeps a brainstorm active at least this long, so an answer can follow it.
 export const REPLY_GRACE_MS = 2 * 60000;
@@ -13,12 +13,7 @@ export function createBrainstorms({ path, idleMs, busy, log, now = Date.now }) {
   const brainstorms = load();
 
   function load() {
-    let saved = {};
-    try {
-      saved = JSON.parse(readFileSync(path, "utf8"));
-    } catch {
-      // None yet.
-    }
+    const saved = readJson(path, {});
     const map = new Map(Object.entries(saved).map(([key, b]) => [key, { ...b, timer: null }]));
     for (const [key, b] of map) if (b.status === "active") armIdle(key, b);
     return map;
@@ -26,7 +21,7 @@ export function createBrainstorms({ path, idleMs, busy, log, now = Date.now }) {
 
   function save() {
     const plain = Object.fromEntries([...brainstorms].map(([key, { timer, ...b }]) => [key, b]));
-    writeFileSync(path, JSON.stringify(plain, null, 2));
+    writeJsonAtomic(path, plain);
   }
 
   function armIdle(key, b) {
@@ -92,17 +87,12 @@ export function createBrainstorms({ path, idleMs, busy, log, now = Date.now }) {
 // key → mode name: a comment without a trigger or "/mode" line goes on in that mode
 // (modeOf()). Fresh modes don't change it; work, a brainstorm or another "/mode" do.
 export function createIssueModes(path) {
-  let modes;
-  try {
-    modes = new Map(Object.entries(JSON.parse(readFileSync(path, "utf8"))));
-  } catch {
-    modes = new Map(); // None yet.
-  }
+  const modes = new Map(Object.entries(readJson(path, {})));
   function set(key, mode) {
     if ((modes.get(key) ?? null) === mode) return;
     if (mode) modes.set(key, mode);
     else modes.delete(key);
-    writeFileSync(path, JSON.stringify(Object.fromEntries(modes), null, 2));
+    writeJsonAtomic(path, Object.fromEntries(modes));
   }
   return { get: (key) => modes.get(key), has: (key) => modes.has(key), set };
 }

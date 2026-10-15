@@ -9,18 +9,22 @@ import { posix } from "node:path";
 import { hostProblem, repoHostProblem } from "./egress.mjs";
 import { EFFORTS } from "./events.mjs";
 import { list, normalize } from "./config.mjs";
-import { parseYaml } from "./yaml.mjs";
+import { isMap, parseYaml } from "./yaml.mjs";
 
 export const CONFIG_FILE = ".deckhand.yaml";
 
 // What the sandbox mounts itself: a cache can't take these over.
 export const RESERVED = ["/workspace", "/home/node/.claude", "/opt/claude-code", "/screenshots"];
 
-// The listener's own modes: a repo's `modes:` can't take these names. Work, brainstorm and
-// onboarding (proposing this file, onboarding.mjs) are the ones "/mode" picks; the others
-// come from the inbox, discussions and "/stop".
-export const BUILTIN_MODES = ["work", "brainstorm", "onboarding"];
-const RESERVED_MODES = [...BUILTIN_MODES, "stop", "idea", "bug", "discussion"];
+// Docker's --mount is comma-separated: host and cache paths stay within these characters.
+export const PLAIN_PATH = /^\/[\w./@+-]*$/;
+
+// The listener's own modes: a repo's `modes:` can't take these names, and any other mode is
+// one of the repo's own (modes.mjs). Work, brainstorm and onboarding (proposing this file,
+// onboarding.mjs) are the ones "/mode" picks; the others come from the inbox, discussions
+// and "/stop". The dashboard has a copy (format.ts), checked by a test.
+const PICKED_MODES = ["work", "brainstorm", "onboarding"];
+export const RESERVED_MODES = [...PICKED_MODES, "stop", "idea", "bug", "discussion"];
 const MODE_KEYS = ["instructions", "light", "session", "model", "effort"];
 
 // What a repo gets without a config file: the operator's settings as they are.
@@ -308,11 +312,7 @@ export function customMode(settings, name) {
 
 // The modes "/mode" can pick in a repo, for the reply to an unknown one.
 export function modeNames(settings) {
-  return [...BUILTIN_MODES, ...Object.keys(settings?.modes ?? {})];
-}
-
-function isMap(value) {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
+  return [...PICKED_MODES, ...Object.keys(settings?.modes ?? {})];
 }
 
 // "docker/Dockerfile" → itself; absolute paths, "..", odd characters → null.
@@ -327,7 +327,7 @@ export function repoPath(value) {
 // decide the rules.
 export function cacheProblem(path) {
   if (typeof path !== "string") return "expected an absolute path";
-  if (!/^\/[\w./@+-]*$/.test(path)) return "expected an absolute path (letters, digits, ./@+-_)";
+  if (!PLAIN_PATH.test(path)) return "expected an absolute path (letters, digits, ./@+-_)";
   const clean = path.replace(/\/$/, "");
   if (!clean || posix.normalize(clean) !== clean) return "expected a plain path (no .., //)";
   const clash = RESERVED.find(

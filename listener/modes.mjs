@@ -1,7 +1,7 @@
 // What each kind of run is: the built-in modes, and the repo's own (its config's `modes:`,
 // customMode()) that add their `light` and `fresh` to them. Pure: no state, no I/O.
 import { DISCUSSION_PERMISSIONS, READ_ONLY_PERMISSIONS } from "./github-app.mjs";
-import { customMode } from "./repo-config.mjs";
+import { customMode, RESERVED_MODES } from "./repo-config.mjs";
 
 // Inbox issues and discussion categories are their own trigger (workItem()).
 export const INBOX = new Set(["idea", "bug", "discussion"]);
@@ -15,7 +15,7 @@ export const LIGHT = new Set(["brainstorm", "stop", "onboarding", ...INBOX]);
 export const FRESH = new Set(["idea", "bug"]);
 
 // Any other mode is one of the repo's own.
-export const BUILT_IN = new Set(["work", "brainstorm", "stop", "onboarding", ...INBOX]);
+export const BUILT_IN = new Set(RESERVED_MODES);
 
 export function isLight(task, mode) {
   return LIGHT.has(mode) || !!customMode(task.settings, mode)?.light;
