@@ -16,7 +16,7 @@ import { createBrainstorms, createIssueModes } from "./brainstorms.mjs";
 import { checkout } from "./checkout.mjs";
 import { createComments } from "./comments.mjs";
 import { createConflicts } from "./conflicts.mjs";
-import { ConfigError, loadConfig } from "./config.mjs";
+import { ConfigError, loadConfig, readConfigFile } from "./config.mjs";
 import { docker } from "./docker.mjs";
 import { createGitHubApp, loadCredentials, saveCredentials } from "./github-app.mjs";
 import { loadGrants } from "./grants.mjs";
@@ -40,7 +40,7 @@ import { createWaits } from "./waits.mjs";
 const env = process.env;
 let config;
 try {
-  config = loadConfig(env);
+  config = loadConfig(env, readConfigFile(env));
   // Read again at each run; a broken file at start is the operator's to fix now.
   loadGrants(config);
 } catch (error) {

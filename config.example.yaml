@@ -1,0 +1,26 @@
+# Deckhand's settings: copy to config.yaml (git-ignored here; commit it in your own
+# deployment's repository) and uncomment the line that mounts it in compose.yaml.
+# Each key is a setting's environment variable in lowercase; a variable set (non-empty) in
+# .env wins over it. Read at start: restart the listener after an edit. Secrets stay in
+# .env. Every key: docs/setup.md#settings.
+
+# GitHub logins allowed to start runs (required, here or in ALLOWED_USERS).
+allowed_users:
+  - your-github-login
+# Only these repos, among those where the App is installed. Empty: all of them.
+allowed_repos: []
+# Hosts every sandbox may reach besides Anthropic and GitHub (*.domain and * work).
+allowed_hosts: []
+
+trigger: Deckhand
+sandbox_model: opus
+sandbox_effort: medium
+max_parallel: 2
+
+# Each sandbox's limits; the grants file can set them per repo.
+sandbox_cpus: 2
+sandbox_memory: 4g
+sandbox_pids: 2048
+
+conflict_check_minutes: 5
+onboarding: true
