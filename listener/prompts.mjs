@@ -93,8 +93,8 @@ export function onboardingWorkPrompt(task) {
    if they were part of it), exactly as last proposed with the changes agreed since. Change
    nothing else in the repository.
 4. Commit, push, then update the pull request with \`gh pr edit\`: title "Set up Deckhand", a
-   description with \`Closes #${n}\` and a line per file, and mark it ready with
-   \`gh pr ready\`.
+   description with \`Closes #${n}\` and a line per file. Before marking it ready with
+   \`gh pr ready\`, ${rebaseStep(base)}
 Never push to ${base}. The listener checks the branch's \`.deckhand.yaml\` once you are done
 and adds the result to your reply.
 Don't post comments on GitHub yourself: your final message is posted for you as a reply, so
@@ -111,6 +111,17 @@ export function brainstormMessage(mode, text, restored) {
     : text;
 }
 
+// Before `gh pr ready`: the base may have moved during the run, and a pull request marked
+// ready with conflicts isn't ready (pr-ready.mjs refuses it too). `base`: a branch name, or
+// how to find it.
+export function rebaseStep(base) {
+  return `bring the branch up to date: \`git fetch origin\`, \`git rebase origin/${base}\`,
+resolve any conflicts, run the checks again, then \`git push --force-with-lease\` (rewriting
+history is fine on this branch only). If a conflict can't be resolved safely (both sides
+changed the same behaviour, say), stop and ask instead of guessing (see "Stopping to ask" in
+CLAUDE.md).`;
+}
+
 export function initialPrompt(task) {
   const base = task.base || "main";
   const common = `Follow the repository's AGENTS.md and CLAUDE.md if it has them, with tests where the
@@ -123,7 +134,9 @@ end with a short summary (what you did, the pull request link, anything left ope
   if (task.kind === "pr") {
     return `Work on pull request #${task.number} of ${task.repo}: check it out with
 \`gh pr checkout ${task.number}\`, read it with \`gh pr view ${task.number} --comments\`, do what
-is asked below, and push to the same branch.
+is asked below, and push to the same branch. Before marking it ready with \`gh pr ready\`, or
+when it conflicts with its base (\`gh pr view ${task.number} --json baseRefName\`),
+${rebaseStep("<its base>")}
 ${common}`;
   }
   return `Work on GitHub issue #${task.number} of ${task.repo} until it is ready for review.
@@ -137,8 +150,9 @@ ${common}`;
 3. Implement it, pushing to the same branch as you go.
 4. When the checks pass, update the pull request with \`gh pr edit\`: final title, and a
    description with \`Closes #${task.number}\`, what changed and why, any choice you made, and
-   screenshots if the UI changed (see "Screenshots" in CLAUDE.md). Then mark it ready for
-   review with \`gh pr ready\`.
+   screenshots if the UI changed (see "Screenshots" in CLAUDE.md).
+5. Before marking it ready for review with \`gh pr ready\`,
+${rebaseStep(base)}
 ${common}`;
 }
 

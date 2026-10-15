@@ -152,8 +152,11 @@ Also take this into account: $TASK_MESSAGE"
 Address it, run the checks again, then commit and push to the same branch so the pull
 request updates (the sandbox opens a draft one for a pushed branch that has none). If it is
 still a draft and the work is done, update its description and mark it ready with
-\`gh pr ready\`. If it raises a blocker only the maintainer can resolve (contradictory
-feedback, say), stop and ask instead: see \"Stopping to ask\" in CLAUDE.md."
+\`gh pr ready\`. Before marking it ready, bring the branch up to date: \`git fetch origin\`,
+\`git rebase origin/$BASE_BRANCH\`, resolve any conflicts, run the checks again, then
+\`git push --force-with-lease\` (rewriting history is fine on this branch only). If a
+conflict can't be resolved safely (both sides changed the same behaviour, say), or the
+feedback raises a blocker only the maintainer can resolve (contradictory feedback, say), stop and ask instead: see \"Stopping to ask\" in CLAUDE.md."
     fi
   elif [ -n "${TASK_MESSAGE:-}" ]; then
     prompt+="

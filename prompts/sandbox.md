@@ -88,6 +88,9 @@ Skip screenshots for changes with nothing visible (API, tests, tooling).
 - Pushes go through Deckhand, which only lets branches through, never the base branch: push
   a branch. Your token only reads the code: no tags, no merging pull requests, no writing
   files through the API.
+- Rewriting history (rebase, `git push --force-with-lease`) is fine on the task's own branch,
+  never on any other branch. Rebase it on the base branch before `gh pr ready`: Deckhand
+  refuses to mark a pull request with conflicts ready.
 
 ## Network
 

@@ -76,6 +76,19 @@ test("prompts: each kind of run gets its own", () => {
   );
 });
 
+test("prompts: work rebases on the base and force-pushes with a lease before gh pr ready", () => {
+  const prompt = (task, extra = {}) =>
+    promptFor(task, { mode: "work", text: "", settings, config, grant, ...extra });
+  for (const text of [prompt(issue), prompt(issue, { onboardingWork: true })]) {
+    assert.match(text, /Before marking it ready[^]*`git rebase origin\/main`/);
+    assert.match(text, /run the checks again, then `git push --force-with-lease`/);
+    assert.match(text, /can't be resolved safely[^]*stop and ask/);
+  }
+  assert.match(prompt({ ...issue, base: "trunk" }), /`git rebase origin\/trunk`/);
+  assert.match(prompt(pr), /--json baseRefName[^]*`git rebase origin\/<its base>`/);
+  assert.match(prompt(pr), /--force-with-lease/);
+});
+
 test("prompts: onboarding lists what this Deckhand allows the repo", () => {
   const text = promptFor(issue, { mode: "onboarding", settings, config, grant });
   assert.match(text, /^Onboard org\/repo with the maintainer, on GitHub issue #12/);

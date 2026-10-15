@@ -7,12 +7,19 @@ import { createBroker } from "../listener/broker.mjs";
 import { PUSH_PERMISSIONS } from "../listener/github-app.mjs";
 import { createPrReady } from "../listener/pr-ready.mjs";
 
-function pull({ number = 7, draft = true, base = "org/repo", head = base } = {}) {
+function pull({
+  number = 7,
+  draft = true,
+  base = "org/repo",
+  head = base,
+  mergeable_state = "clean",
+} = {}) {
   return {
     number,
     draft,
+    mergeable_state,
     node_id: `PR_${number}`,
-    base: { repo: { full_name: base } },
+    base: { ref: "main", repo: { full_name: base } },
     head: { repo: head && { full_name: head } },
   };
 }
@@ -103,6 +110,26 @@ test("a pull request already in that state is left alone", async (t) => {
     body: { message: "org/repo#7 is already ready for review" },
   });
   assert.deepEqual(seen.mutations, []);
+});
+
+test("a pull request that conflicts with its base is refused ready, until it is rebased", async (t) => {
+  const states = ["clean", "unstable", "blocked", "unknown", "behind", null];
+  const pulls = { 7: pull({ mergeable_state: "dirty" }) };
+  states.forEach((state, i) => (pulls[20 + i] = pull({ number: 20 + i, mergeable_state: state })));
+  const { broker, seen, post, close } = await serve({ pulls });
+  t.after(close);
+  const secret = broker.register("org/repo", undefined, { push: true });
+  const dirty = await post("/pr/org/repo/7/ready", secret);
+  assert.equal(dirty.status, 409);
+  assert.match(dirty.body.error, /org\/repo#7 conflicts with main: rebase on origin\/main first/);
+  assert.deepEqual(seen.mutations, []);
+  for (let i = 0; i < states.length; i++) {
+    assert.equal((await post(`/pr/org/repo/${20 + i}/ready`, secret)).status, 200, states[i]);
+  }
+  assert.equal(seen.mutations.length, states.length);
+  // Back to draft is always fine.
+  pulls[7].draft = false;
+  assert.equal((await post("/pr/org/repo/7/draft", secret)).status, 200);
 });
 
 test("unknown or finished runs, other repos and runs that can't write are refused before GitHub", async (t) => {

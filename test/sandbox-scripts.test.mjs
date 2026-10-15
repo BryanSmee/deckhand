@@ -96,6 +96,15 @@ test("a sandbox without its Claude Code version stops with a clear message", () 
   assert.match(result.stderr, /Claude Code 0\.0\.0-missing is not installed in \/opt\/claude-code/);
 });
 
+// The work feedback prompt can't run here (it needs Claude Code): its text, as bash has it.
+test("work feedback rebases on the base and force-pushes with a lease before gh pr ready", () => {
+  const script = readFileSync(`${bin}entrypoint.sh`, "utf8");
+  const feedback = /prompt="New feedback on this issue: [^]*?"\n/.exec(script)[0];
+  assert.match(feedback, /Before marking it ready[^]*\\`git rebase origin\/\$BASE_BRANCH\\`/);
+  assert.match(feedback, /run the checks again, then\s+\\`git push --force-with-lease\\`/);
+  assert.match(feedback, /can't be resolved safely[^]*stop\s+and ask/);
+});
+
 test(
   "installing Claude Code refuses to run as the sandbox's user",
   { skip: process.getuid() === 0 },
