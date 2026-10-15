@@ -20,6 +20,7 @@ WORKDIR /app
 COPY listener/*.mjs listener/
 COPY --from=dashboard /dashboard/dist/ dashboard/dist/
 COPY listener/runner/ listener/runner/
+COPY listener/agents/ listener/agents/
 COPY prompts/brainstorm.md prompts/idea.md prompts/bug.md prompts/discussion.md prompts/onboarding.md prompts/
 # The onboarding prompt ends with the config's reference.
 COPY docs/repo-config.md docs/
