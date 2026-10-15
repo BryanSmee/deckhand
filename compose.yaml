@@ -19,6 +19,10 @@ name: deckhand
 # The base image sandboxes run from: the `sandbox` service below pulls or builds it, the
 # listener starts runs from it.
 x-sandbox-image: &sandbox-image ${DECKHAND_REGISTRY:-ghcr.io/bryansmee}/deckhand-sandbox:${DECKHAND_VERSION:-latest}
+# The container engines runs of repositories granted allow_docker get (SANDBOX_ENGINE): the
+# `engine` profile pulls or builds them (COMPOSE_PROFILES=engine in .env), docs/setup.md.
+x-engine-image: &engine-image ${DECKHAND_REGISTRY:-ghcr.io/bryansmee}/deckhand-engine:${DECKHAND_VERSION:-latest}
+x-engine-podman-image: &engine-podman-image ${DECKHAND_REGISTRY:-ghcr.io/bryansmee}/deckhand-engine-podman:${DECKHAND_VERSION:-latest}
 
 services:
   listener:
@@ -69,6 +73,8 @@ services:
       SANDBOX_CPUS: ${SANDBOX_CPUS:-}
       SANDBOX_MEMORY: ${SANDBOX_MEMORY:-}
       SANDBOX_PIDS: ${SANDBOX_PIDS:-}
+      # A container engine for repos granted allow_docker: sysbox, podman or auto. Empty: none.
+      SANDBOX_ENGINE: ${SANDBOX_ENGINE:-}
       TRIGGER: ${TRIGGER:-}
       ONBOARDING: ${ONBOARDING:-}
       BRAINSTORM_IDLE_MINUTES: ${BRAINSTORM_IDLE_MINUTES:-}
@@ -83,6 +89,8 @@ services:
       # Wiring, environment only. Names of what the listener creates on the host's Docker,
       # matching the ones below.
       SANDBOX_IMAGE: *sandbox-image
+      ENGINE_IMAGE: *engine-image
+      ENGINE_PODMAN_IMAGE: *engine-podman-image
       SHOTS_VOLUME: ${SHOTS_VOLUME:-deckhand-screenshots}
       RUNS_VOLUME: ${RUNS_VOLUME:-deckhand-runs}
       # The host's path of the socket mounted below: preview hooks get it too.
@@ -134,6 +142,28 @@ services:
       context: .
       dockerfile: sandbox/Dockerfile
     image: *sandbox-image
+    entrypoint: ["true"]
+    restart: "no"
+    network_mode: none
+
+  # The container engines, pulled or built like the sandbox image, with the `engine` profile
+  # only: the listener starts them next to granted runs' sandboxes.
+  engine:
+    profiles: [engine]
+    build:
+      context: .
+      dockerfile: engine/Dockerfile
+    image: *engine-image
+    entrypoint: ["true"]
+    restart: "no"
+    network_mode: none
+
+  engine-podman:
+    profiles: [engine]
+    build:
+      context: .
+      dockerfile: engine/podman/Dockerfile
+    image: *engine-podman-image
     entrypoint: ["true"]
     restart: "no"
     network_mode: none

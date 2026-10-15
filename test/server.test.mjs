@@ -115,6 +115,7 @@ case "$1" in
   volume)
     # The volumes a test says exist (one name per line in ${dir}/volumes).
     if [ "$2" = inspect ]; then grep -qx -- "\${@: -1}" "${dir}/volumes" 2> /dev/null; exit; fi
+    [ "$2" = ls ] && exit
     echo "$*" >> "${dir}/docker-calls" ;;
   image)
     # Asked while the run is prepared, so a test can change things then.
@@ -128,8 +129,12 @@ case "$1" in
     echo "$*" >> "${dir}/docker-calls"
     # The build context is the repo's checkout.
     cp "\${@: -1}/docker/Dockerfile" "${dir}/built-dockerfile" ;;
+  info)
+    echo '{"runc":{}}' ;;
   run)
     case "$*" in *--entrypoint*) echo "$*" >> "${dir}/docker-calls"; exit 0 ;; esac
+    # A run's container engine: its arguments, one per line, and nothing runs.
+    case "$*" in *"--network-alias engine"*) printf '%s\n' "$@" > "${dir}/engine-args"; exit 0 ;; esac
     name=$(printf '%s\\n' "$@" | grep -A1 -x -- --name | tail -1)
     run=$(printf '%s\\n' "$@" | sed -n 's/^deckhand\\.run=//p')
     mkdir -p "$c/$name"
@@ -827,6 +832,9 @@ caches:
     // Shared by every repository: no run may change what the next one runs.
     assert.ok(args.includes("deckhand-claude-code:/opt/claude-code:ro"));
     const runEnv = readFileSync(join(dir, "run-env"), "utf8");
+    // No engine without `docker`: no DOCKER_HOST either.
+    assert.throws(() => readFileSync(join(dir, "engine-args")));
+    assert.doesNotMatch(args.join("\n"), /DOCKER_HOST/);
     assert.match(runEnv, /^SANDBOX_SETUP=npm ci$/m);
     assert.match(runEnv, /^SANDBOX_INSTRUCTIONS=docs\/agents\.md$/m);
     assert.match(runEnv, /^SANDBOX_MODEL=sonnet$/m);
@@ -834,7 +842,7 @@ caches:
 
   test("a Dockerfile or preview hook without its grant stops the run, and nothing is built", async (t) => {
     const { dir, github, listener, send } = await listen(t, {
-      ".deckhand.yaml": `${CONFIG}preview: ./preview.sh\n`,
+      ".deckhand.yaml": `${CONFIG}preview: ./preview.sh\ndocker: true\n`,
       "docker/Dockerfile": "ARG DECKHAND_BASE\nFROM $DECKHAND_BASE\nRUN true\n",
     });
     await send(comment("alice"));
@@ -845,6 +853,7 @@ caches:
     assert.match(body, /`\.deckhand\.yaml` on `trunk` has errors/);
     assert.match(body, /- preview: .* don't set `allow_preview: true` for this repository/);
     assert.match(body, /- dockerfile: .* don't set `allow_dockerfile: true` for this repository/);
+    assert.match(body, /- docker: .* don't set `allow_docker: true` for this repository/);
     await listener.until("asks for what its grant doesn't allow");
     // No build, no sandbox: no docker call was even logged.
     assert.throws(() => readFileSync(join(dir, "docker-calls")));
@@ -2340,5 +2349,63 @@ mounts:
     assert.deepEqual(await savedBranches(dir), []);
     assert.match(readFileSync(join(dir, "run-env"), "utf8"), /its branch is in a fork/);
     writeFileSync(join(dir, "go"), "");
+  });
+
+  test("a granted repo's work runs get a container engine, never for a fork's pull request", async (t) => {
+    const ctx = await listen(t, { ".deckhand.yaml": "docker:\n  cache: true\n" }, (dir) => {
+      writeGrant(dir, "allow_docker: true\nlimits: { cpus: 3 }\n");
+      return { SANDBOX_ENGINE: "podman" };
+    });
+    const { dir, github } = ctx;
+    await ctx.send(comment("alice"));
+    await github.waitFor(
+      (r) => r.method === "POST" && r.path === "/repos/org/repo/issues/12/comments",
+    );
+    await ctx.listener.until("done (ok)");
+    const joined = readFileSync(join(dir, "engine-args"), "utf8").split("\n").join(" ");
+    assert.match(joined, /--network-alias engine /);
+    assert.match(joined, /--cpus 3 --memory 4g --memory-swap 4g --pids-limit 2048 /);
+    assert.match(joined, /src=deckhand-engine-cache-org-repo-[0-9a-f]+-podman,/);
+    assert.match(joined, /--label deckhand\.task=org\/repo#12/);
+    assert.doesNotMatch(joined, /--privileged|docker\.sock/);
+    const args = readFileSync(join(dir, "run-args"), "utf8").split("\n");
+    assert.ok(args.includes("DOCKER_HOST=tcp://engine:2375"));
+    assert.ok(args.includes("DOCKER_BUILDKIT=0"));
+    // The sandbox keeps its hardening.
+    assert.match(
+      args.join(" "),
+      /--user 1000:1000 --cap-drop ALL --security-opt no-new-privileges/,
+    );
+    assert.match(readFileSync(join(dir, "run-env"), "utf8"), /^NO_PROXY=.*,engine$/m);
+    const logs = readdirSync(join(dir, "logs")).filter((f) => f.endsWith(".log"));
+    assert.match(
+      readFileSync(join(dir, "logs", logs[0]), "utf8"),
+      /Container engine: podman, the repository's cache/,
+    );
+
+    // A fork's pull request: no engine.
+    rmSync(join(dir, "engine-args"));
+    const payload = comment("alice");
+    payload.issue = { number: 41, pull_request: {} };
+    await ctx.send(payload);
+    await ctx.listener.until("org/repo#pr-41: done (ok)");
+    assert.throws(() => readFileSync(join(dir, "engine-args")));
+    assert.doesNotMatch(readFileSync(join(dir, "run-args"), "utf8"), /DOCKER_HOST/);
+  });
+
+  test("granted, but no SANDBOX_ENGINE: runs start as before, without an engine", async (t) => {
+    const { dir, github, send, listener } = await listen(
+      t,
+      { ".deckhand.yaml": "docker: true\n" },
+      (dir) => (writeGrant(dir, "allow_docker: true\n"), {}),
+    );
+    await send(comment("alice"));
+    await github.waitFor(
+      (r) => r.method === "POST" && r.path === "/repos/org/repo/issues/12/comments",
+    );
+    await listener.until("done (ok)");
+    assert.throws(() => readFileSync(join(dir, "engine-args")));
+    assert.doesNotMatch(readFileSync(join(dir, "run-args"), "utf8"), /DOCKER_HOST/);
+    assert.doesNotMatch(readFileSync(join(dir, "run-env"), "utf8"), /engine/);
   });
 });

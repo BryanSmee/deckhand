@@ -46,6 +46,7 @@ const NOTHING = {
   allowPreview: false,
   allowDockerfile: false,
   allowBranchDockerImages: false,
+  allowDocker: false,
   mounts: [],
   limits: config.limits,
   files: [],
@@ -69,6 +70,7 @@ mounts:
     allowPreview: false,
     allowDockerfile: false,
     allowBranchDockerImages: false,
+    allowDocker: false,
     limits: { cpus: "4", memory: "2g", pids: 4096 },
     mounts: [
       { root: "/nfs/work", readOnly: false },
@@ -514,4 +516,29 @@ test("docker arguments: bind mounts, no capabilities, limits", () => {
     "--pids-limit",
     "512",
   ]);
+});
+
+test("allow_docker: a repository's own file only, and `docker` without it is refused", () => {
+  assert.equal(grantOf({ "org/repo.yaml": "allow_docker: true\n" }, "org/repo").allowDocker, true);
+  assert.equal(
+    grantOf({ "org/other.yaml": "allow_docker: true\n" }, "org/repo").allowDocker,
+    false,
+  );
+  // An engine for every repository would be too broad to grant by accident.
+  assert.throws(
+    () => grantsFrom({ "default.yaml": "allow_docker: true\n" }, config),
+    (error) =>
+      error instanceof GrantsError &&
+      /default\.yaml: allow_docker: only a repository's own file grants it/.test(error.message),
+  );
+  assert.throws(
+    () => grantOf({ "org/repo.yaml": "allow_docker: yes please\n" }, "org/repo"),
+    /allow_docker: expected true or false/,
+  );
+  const none = grantOf({}, "org/repo");
+  const settings = { preview: null, dockerfile: null, docker: { cache: false } };
+  assert.deepEqual(ungranted(none, settings), [
+    "docker: the operator's grants don't set `allow_docker: true` for this repository",
+  ]);
+  assert.deepEqual(ungranted({ ...none, allowDocker: true }, settings), []);
 });

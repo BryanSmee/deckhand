@@ -4,7 +4,8 @@
 # HTTPS (tokens from the listener's broker, git-credential-deckhand), opens the task's branch
 # and draft pull request (draft-pr.sh, for TASK_ISSUE), runs the repo's setup command
 # (SANDBOX_SETUP), then runs the agent without permission prompts: the container is the
-# sandbox. SANDBOX_LIGHT=1 (brainstorms, inbox entries, discussions) skips the branch and the
+# sandbox. With DOCKER_HOST (a run granted a container engine), the docker CLI goes through
+# the egress proxy and waits for the engine before the setup. SANDBOX_LIGHT=1 (brainstorms, inbox entries, discussions) skips the branch and the
 # setup.
 #
 #   (no arguments)      the agent, interactive
@@ -53,6 +54,30 @@ cp /usr/local/share/git-hooks/pre-push /workspace/.git/hooks/pre-push
 # with GitHub's clear "permission denied".
 if [ -n "${DECKHAND_BROKER_URL:-}" ] && [ -z "${SANDBOX_LIGHT:-}" ]; then
   git config --global "url.$DECKHAND_BROKER_URL/git/.pushInsteadOf" "${REPO_URL%/*/*}/"
+fi
+
+# The run's container engine (../listener/runner/engine.mjs): the containers it builds and
+# runs get the egress proxy by address (from the docker CLI's config), since they can't
+# resolve names on the run's network. Then the engine gets a minute to come up, so the
+# setup can use it.
+if [ -n "${DOCKER_HOST:-}" ]; then
+  if [ -n "${HTTPS_PROXY:-}" ]; then
+    rest=${HTTPS_PROXY#*://}
+    host=${rest%%[:/]*}
+    address=$(getent hosts "$host" | awk '{ print $1; exit }') || true
+    proxy=${HTTPS_PROXY/"$host"/${address:-$host}}
+    proxy=${proxy%/}
+    mkdir -p "$HOME/.docker"
+    jq -n --arg proxy "$proxy" \
+      '{ proxies: { default: { httpProxy: $proxy, httpsProxy: $proxy, noProxy: "localhost,127.0.0.1" } } }' \
+      > "$HOME/.docker/config.json"
+  fi
+  for _ in $(seq 60); do
+    docker version > /dev/null 2>&1 && break
+    sleep 1
+  done
+  docker version > /dev/null 2>&1 \
+    || echo "The container engine at $DOCKER_HOST doesn't answer yet" >&2
 fi
 
 if [ -n "${SANDBOX_LIGHT:-}" ]; then

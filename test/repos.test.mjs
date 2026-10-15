@@ -531,6 +531,7 @@ test("GET config: raw text, errors, warnings and what runs get; its row updated"
     allowPreview: false,
     allowDockerfile: false,
     allowBranchDockerImages: false,
+    allowDocker: false,
     hosts: [],
     mounts: [],
     limits: { cpus: "2", memory: "4g", pids: 2048 },

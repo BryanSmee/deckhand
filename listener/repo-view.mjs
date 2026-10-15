@@ -67,6 +67,13 @@ export function settingRows(config, settings, grant) {
         ? "granted, but the repository has no dockerfile"
         : "the operator's grants",
     ),
+    refusedRow("docker", dockerText(settings.docker)) ??
+      row(
+        "docker",
+        dockerText(settings.docker),
+        changed("docker"),
+        settings.docker && !config.engine ? "the operator hasn't set SANDBOX_ENGINE" : null,
+      ),
     row("caches", none(settings.caches), changed("caches")),
     row("inbox", inboxText(settings.inbox), changed("inbox")),
     refusedRow("preview", previewText(settings.preview)) ??
@@ -105,6 +112,11 @@ function inboxText(inbox) {
   if (inbox.bugs) parts.push(`bugs #${inbox.bugs}`);
   if (inbox.discussions) parts.push(`discussions "${inbox.discussions}"`);
   return none(parts);
+}
+
+function dockerText(docker) {
+  if (!docker) return "none";
+  return docker.cache ? "a container engine, its cache kept" : "a container engine";
 }
 
 function previewText(preview) {
@@ -171,6 +183,7 @@ export function grantRows(grant) {
     allowPreview: grant.allowPreview,
     allowDockerfile: grant.allowDockerfile,
     allowBranchDockerImages: grant.allowBranchDockerImages,
+    allowDocker: grant.allowDocker,
     hosts: grant.hosts,
     mounts: grant.mounts.map(({ root, readOnly }) => ({ root, readOnly })),
     limits: grant.limits,

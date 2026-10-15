@@ -1,8 +1,8 @@
 // What the operator grants each repo, beyond what every sandbox gets: extra hosts, whether
 // its own .deckhand.yaml may add hosts, run a preview hook, build its Dockerfile (and that of
-// its pull requests' branches), host mounts under allowed roots, and its own CPU, memory and
+// its pull requests' branches), have a container engine next to its sandboxes, host mounts under allowed roots, and its own CPU, memory and
 // pids limits. It lives in the operator's GRANTS_DIR, never in a repo: a repo's .deckhand.yaml
-// may request a mount, a host, a preview hook or a Dockerfile, but only a grant here makes it
+// may request a mount, a host, a preview hook, a Dockerfile or an engine, but only a grant here makes it
 // happen. One file per repo, so a team can own its repos' files (CODEOWNERS), and a mistake
 // in one stops that repo's runs only. Read again at each run, so an edit applies without a
 // restart. Format: ../docs/security.md.
@@ -17,6 +17,7 @@
 //       allow_repo_hosts: false  # overrides default.yaml for this repo
 //       allow_preview: true      # its `preview` hook runs, with the Docker socket (root)
 //       allow_branch_docker_images: true  # a pull request's runs build its branch's Dockerfile
+//       allow_docker: true       # its `docker` runs get a container engine (per repo only)
 //       limits: { cpus: 4 }      # over default.yaml's, over SANDBOX_*
 //       mounts:                  # per repo only
 //         - root: /nfs/work
@@ -53,7 +54,12 @@ const FLAGS = {
   allow_preview: "allowPreview",
   allow_dockerfile: "allowDockerfile",
   allow_branch_docker_images: "allowBranchDockerImages",
+  allow_docker: "allowDocker",
 };
+
+// Flags only a repository's own file grants: an engine runs that repo's code with more of the
+// kernel exposed (runner/engine.mjs), so every repo at once would be too broad by accident.
+const REPO_ONLY = new Set(["allow_docker"]);
 
 const NO_FLAGS = Object.fromEntries(Object.values(FLAGS).map((f) => [f, null]));
 
@@ -72,7 +78,9 @@ export function parseGrant(text, file, base, { isDefault = false } = {}) {
   if (!isMap(value)) throw new GrantsError(`${file}: expected a mapping of grants`, file);
   const grant = { hosts: [], ...NO_FLAGS, mounts: [], limits: null };
   for (const [key, v] of Object.entries(value)) {
-    if (Object.hasOwn(FLAGS, key)) {
+    if (REPO_ONLY.has(key) && isDefault) {
+      fail(`${key}: only a repository's own file grants it`);
+    } else if (Object.hasOwn(FLAGS, key)) {
       if (typeof v === "boolean") grant[FLAGS[key]] = v;
       else fail(`${key}: expected true or false`);
     } else if (key === "hosts") {
@@ -309,8 +317,8 @@ export function grantFor(grants, config, repo) {
 }
 
 // What the repo's config asks for that only a grant allows: a preview hook (run with the
-// Docker socket, so root on the host) and a Dockerfile (built on the host's Docker, with its
-// network). One line each, naming the grant to add; they stop its runs and preview hooks
+// Docker socket, so root on the host), a Dockerfile (built on the host's Docker, with its
+// network) and a container engine (runner/engine.mjs). One line each, naming the grant to add; they stop its runs and preview hooks
 // like errors in the config.
 export function ungranted(grant, settings) {
   const missing = [];
@@ -322,6 +330,11 @@ export function ungranted(grant, settings) {
   if (settings.dockerfile && !grant.allowDockerfile) {
     missing.push(
       "dockerfile: the operator's grants don't set `allow_dockerfile: true` for this repository",
+    );
+  }
+  if (settings.docker && !grant.allowDocker) {
+    missing.push(
+      "docker: the operator's grants don't set `allow_docker: true` for this repository",
     );
   }
   return missing;

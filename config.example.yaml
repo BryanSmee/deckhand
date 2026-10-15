@@ -28,6 +28,10 @@ sandbox_cpus: 2
 sandbox_memory: 4g
 sandbox_pids: 2048
 
+# A container engine next to the sandboxes of repositories granted allow_docker: sysbox,
+# podman or auto (docs/setup.md#container-engine). None by default.
+# sandbox_engine: sysbox
+
 conflict_check_minutes: 5
 waits_check_minutes: 5
 onboarding: true

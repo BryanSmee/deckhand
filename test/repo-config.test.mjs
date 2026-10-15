@@ -7,6 +7,7 @@ import {
   cacheVolume,
   customMode,
   defaultSettings,
+  engineCacheVolume,
   effectiveConfig,
   legacySandboxName,
   loadRepoSettings,
@@ -370,4 +371,29 @@ modes:
   assert.deepEqual(bad.errors, [
     "model: expected a model tier (best, balanced, fast) or name (opus, claude-…, openai/gpt-…)",
   ]);
+});
+
+test("docker: true, false, or a cache kept; anything else is an error", () => {
+  const docker = (text) => parseRepoConfig(text, config);
+  assert.equal(defaultSettings(config).docker, null);
+  assert.deepEqual(docker("docker: true\n").settings.docker, { cache: false });
+  assert.equal(docker("docker: false\n").settings.docker, null);
+  assert.deepEqual(docker("docker:\n  cache: true\n").settings.docker, { cache: true });
+  assert.deepEqual(docker("docker: { cache: false }\n").settings.docker, { cache: false });
+  assert.deepEqual(docker("docker: yes\n").errors, [
+    "docker: expected true, false or { cache: true }",
+  ]);
+  const wrong = docker("docker:\n  cache: always\n  pull: true\n");
+  assert.deepEqual(wrong.errors, [
+    "docker.cache: expected true or false",
+    "docker.pull: unknown key (expected cache)",
+  ]);
+  assert.equal(wrong.settings.docker, null);
+});
+
+test("one engine cache volume per repo, apart from the sandbox's caches", () => {
+  const a = engineCacheVolume(config, "Org/Repo");
+  assert.match(a, /^deckhand-engine-cache-org-repo-[0-9a-f]{10}$/);
+  assert.equal(engineCacheVolume(config, "org/repo"), a);
+  assert.notEqual(engineCacheVolume(config, "org/repo-x"), a);
 });

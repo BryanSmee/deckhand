@@ -200,6 +200,7 @@ export interface Grant {
   allowPreview: boolean;
   allowDockerfile: boolean;
   allowBranchDockerImages: boolean;
+  allowDocker: boolean;
   hosts: string[];
   mounts: { root: string; readOnly: boolean }[];
   limits: { cpus: string; memory: string; pids: number };

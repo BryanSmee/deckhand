@@ -12,7 +12,8 @@ import { imageRef } from "./images.mjs";
 import { BUILT_IN, isFresh, isLight, kindOf, permissionsFor, sessionName } from "./modes.mjs";
 import { branchConfigReport, triggerWord } from "./onboarding.mjs";
 import { firstMessage, promptFor } from "./prompts.mjs";
-import { CONFIG_FILE, customMode } from "./repo-config.mjs";
+import { CONFIG_FILE, customMode, engineCacheVolume } from "./repo-config.mjs";
+import { ENGINE_HOST } from "./runner/engine.mjs";
 import { lastResult, openLog, outcome, summaryOf } from "./runlog.mjs";
 import { noLongerAllowed } from "./tasks.mjs";
 import { redact } from "./secrets.mjs";
@@ -195,10 +196,12 @@ export function createRuns(ctx) {
   async function start(task, items) {
     const { live } = task;
     const { text, message, settings, own, note } = await begin(task, items);
-    live.branches = await pushBranches(task, items);
+    const { branches, fork } = await pushBranches(task, items);
+    live.branches = branches;
     ctx.broker.allow(live.secret, live.branches);
     const instructions = own && (await modeInstructions(task, own));
     const access = grantedAccess(task, settings, note);
+    const engine = engineFor(task, settings, access, fork, note);
     const prepared = await prepare(task, items, settings, access.grant, note);
     live.shots = shotsFolder();
     live.hosts = access.hosts;
@@ -217,7 +220,9 @@ export function createRuns(ctx) {
     });
     recheckMounts(task, settings, access);
     try {
-      await ctx.runner.start(sandboxSpec(task, prompt, message, { ...prepared, ...access }));
+      const spec = sandboxSpec(task, prompt, message, { ...prepared, ...access, engine });
+      const started = await ctx.runner.start(spec);
+      if (started?.engine) note(engineNote(started.engine, engine));
     } catch (error) {
       // Its network (not internal, no proxy to join), or Docker refusing the container.
       throw new RunError(`${agentOf(task).displayName} couldn't start: ${error.message}`);
@@ -344,6 +349,33 @@ export function createRuns(ctx) {
     };
   }
 
+  // The container engine (runner/engine.mjs) a run gets, or null: only with the operator's
+  // SANDBOX_ENGINE, the repo's `docker` and its grant (grantedAccess() stopped the run when
+  // that is missing), for work runs whose comments came from no fork's pull request: a
+  // fork's code never runs in one.
+  function engineFor(task, settings, { grant, limits }, fork, note) {
+    if (!settings.docker || !grant.allowDocker || task.live.light) return null;
+    if (!config.engine) {
+      note("No container engine: the operator hasn't set SANDBOX_ENGINE");
+      return null;
+    }
+    if (fork) {
+      note("No container engine: a pull request from a fork");
+      return null;
+    }
+    const cache = settings.docker.cache ? engineCacheVolume(config, task.repo) : null;
+    return { limits, cache };
+  }
+
+  function engineNote({ backend, cached }, { cache }) {
+    const storage = cached
+      ? "the repository's cache"
+      : cache
+        ? "fresh storage: another run has the repository's cache"
+        : "fresh storage";
+    return `Container engine: ${backend}, ${storage}`;
+  }
+
   // Resolved again as late as possible: preparing the run can take minutes, during which a
   // path's parts may have changed. Anything different from what was checked stops the run.
   function recheckMounts(task, settings, { grant, mounts }) {
@@ -401,9 +433,11 @@ export function createRuns(ctx) {
   // The branches the run may push (git-gateway.mjs) and whose pull requests it may mark ready
   // (pr-ready.mjs): an issue's own, issue-<n>-* (draft-pr.sh names it from the title, which
   // may change), and the head of each pull request its comments came from, a maintainer's
-  // included, but not a fork's. None for a run that can't push.
+  // included, but not a fork's. None for a run that can't push. `fork`: whether one of them
+  // is a fork's.
   async function pushBranches(task, items) {
-    if (!ctx.broker.runOf(task.live.secret)?.push) return [];
+    if (!ctx.broker.runOf(task.live.secret)?.push) return { branches: [], fork: false };
+    let fork = false;
     const branches = task.kind === "issue" ? [`issue-${task.number}-*`] : [];
     const pulls = new Set(items.map((i) => i.replyTo));
     if (task.kind !== "pr") pulls.delete(task.number);
@@ -419,9 +453,10 @@ export function createRuns(ctx) {
         );
       }
       const ref = pr.head?.ref;
-      if (sameRepo(pr, task.repo) && ref && !branches.includes(ref)) branches.push(ref);
+      if (!sameRepo(pr, task.repo)) fork = true;
+      else if (ref && !branches.includes(ref)) branches.push(ref);
     }
-    return branches;
+    return { branches, fork };
   }
 
   // A comment on a pull request may run on the image of its own branch (imageRef()).
@@ -442,7 +477,12 @@ export function createRuns(ctx) {
   // What the runner starts: the sandbox's image, environment, volumes and limits. The agent's
   // first message is TASK_PROMPT (and TASK_MESSAGE); comments that arrive during the run reach
   // it through its inbox (deliver()).
-  function sandboxSpec(task, prompt, message, { image, cacheArgs, settings, mounts, limits }) {
+  function sandboxSpec(
+    task,
+    prompt,
+    message,
+    { image, cacheArgs, settings, mounts, limits, engine },
+  ) {
     const { live } = task;
     const n = task.name;
     const volumes = sessionName(n, live.light);
@@ -472,14 +512,16 @@ export function createRuns(ctx) {
       // read-only for a light run: a work run may trust what is there.
       ...mountArgs(live.light ? mounts.map((m) => ({ ...m, readOnly: true })) : mounts),
     ];
-    const env = sandboxEnv(task, prompt, message, settings);
-    return { run: live.id, name: n, image, labels: { "deckhand.task": live.key }, env, args };
+    const env = sandboxEnv(task, prompt, message, settings, engine);
+    const labels = { "deckhand.task": live.key };
+    // Its engine, if any, is the runner's to start: DOCKER_HOST comes from it.
+    return { run: live.id, name: n, image, labels, env, args, engine: engine ?? undefined };
   }
 
   // Values reach the container by name only: they never show in `ps`. The App's credentials
   // are not among them: they stay in the data volume. Nor is the agent's credential: the
   // agent's env (agents/) gives it the run's secret in its place.
-  function sandboxEnv(task, prompt, message, settings) {
+  function sandboxEnv(task, prompt, message, settings, engine) {
     const { live } = task;
     const mode = live.mode === "stop" ? "brainstorm" : live.mode;
     const { light } = live;
@@ -520,7 +562,8 @@ export function createRuns(ctx) {
       SANDBOX_EFFORT: live.record.effort,
       SCREENSHOT_DIR: "/screenshots",
       SCREENSHOT_URL: `${ctx.publicUrl()}/shots/${live.shots}`,
-      ...proxyEnv(config),
+      // The engine is reached directly, on the run's network.
+      ...proxyEnv(config, engine ? [ENGINE_HOST] : []),
     };
   }
 

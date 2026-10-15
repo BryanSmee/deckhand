@@ -17,14 +17,19 @@ const config = {
   egressProxy: "http://egress:3128",
   listenerContainer: "me",
   egressContainer: "",
+  engine: "auto",
+  engineImage: "dh-engine",
+  enginePodmanImage: "dh-engine-podman",
 };
 
 // A Docker that keeps networks and containers: `nets` maps a network to its containers,
 // `containers` a container to its run label and state. `answers`: canned answers by
-// subcommand, over the fake's own.
-function fakeDocker({ answers = {}, routeOut = false } = {}) {
+// subcommand (or a function of the arguments giving one, or nothing), over the fake's own.
+// `runtimes`: the host's Docker's (`docker info`). `volumes` maps a volume to its labels.
+function fakeDocker({ answers = {}, routeOut = false, runtimes = ["runc"] } = {}) {
   const nets = new Map();
   const internal = new Set();
+  const volumes = new Map();
   const containers = new Map([
     ["me", { project: "deckhand", ip: "10.0.0.1" }],
     ["egress-id", { project: "deckhand", ip: "10.0.0.3", role: "egress" }],
@@ -38,8 +43,9 @@ function fakeDocker({ answers = {}, routeOut = false } = {}) {
         .map(([n]) => [n, { IPAddress: containers.get(name).ip }]),
     );
   const docker = async (args) => {
-    const key = args[0] === "network" ? `network ${args[1]}` : args[0];
-    if (answers[key]) return answers[key];
+    const key = ["network", "volume"].includes(args[0]) ? `${args[0]} ${args[1]}` : args[0];
+    const answer = typeof answers[key] === "function" ? answers[key](args) : answers[key];
+    if (answer) return answer;
     const last = args.at(-1);
     switch (key) {
       case "network create":
@@ -69,9 +75,13 @@ function fakeDocker({ answers = {}, routeOut = false } = {}) {
         return ok([...nets.keys()].filter((n) => n.startsWith("dh-")).join("\n"));
       case "run": {
         const name = args[args.indexOf("--name") + 1];
-        const run = args.find((a) => a.startsWith("deckhand.run=")).slice("deckhand.run=".length);
+        if (containers.has(name)) return { code: 125, out: "", err: "name already in use" };
+        const label = (key) => args.find((a) => a.startsWith(`${key}=`))?.slice(key.length + 1);
         const net = args[args.indexOf("--network") + 1];
-        containers.set(name, { run, running: true, ip: "10.1.0.2" });
+        const volume = args.find((a) => a.startsWith("type=volume,src="))?.split(/[=,]/)[3];
+        const engine = label("deckhand.engine");
+        const ip = engine ? "10.1.0.3" : "10.1.0.2";
+        containers.set(name, { run: label("deckhand.run"), engine, volume, running: true, ip });
         nets.get(net)?.add(name);
         return ok();
       }
@@ -79,7 +89,46 @@ function fakeDocker({ answers = {}, routeOut = false } = {}) {
         for (const on of nets.values()) on.delete(last);
         containers.delete(last);
         return ok();
+      case "info":
+        return ok(JSON.stringify(Object.fromEntries(runtimes.map((r) => [r, {}]))));
+      case "volume create":
+        if (!volumes.has(last)) {
+          const labels = args.filter((a, i) => args[i - 1] === "--label");
+          volumes.set(last, Object.fromEntries(labels.map((l) => l.split("="))));
+        }
+        return ok(last);
+      case "volume inspect":
+        return volumes.has(last) ? ok("[]") : missing;
+      case "volume rm":
+        if ([...containers.values()].some((c) => c.volume === last)) {
+          return { code: 1, out: "", err: "volume is in use" };
+        }
+        return volumes.delete(last) ? ok() : missing;
+      case "volume ls":
+        return ok(
+          [...volumes]
+            .filter(([, l]) => l["deckhand.engine"])
+            .map(([v, l]) => `${v}\t${l["deckhand.engine"]}`)
+            .join("\n"),
+        );
       case "ps":
+        if (args.join(" ").includes("label=deckhand.engine")) {
+          return ok(
+            [...containers]
+              .filter(([, c]) => c.engine)
+              .map(([n, c]) => `${n}\t${c.engine}`)
+              .join("\n"),
+          );
+        }
+        if (args.some((a) => a.startsWith("volume="))) {
+          const volume = args.find((a) => a.startsWith("volume=")).slice("volume=".length);
+          return ok(
+            [...containers]
+              .filter(([, c]) => c.volume === volume)
+              .map(([n]) => n)
+              .join("\n"),
+          );
+        }
         if (args.join(" ").includes("deckhand.role=egress")) {
           return ok(
             [...containers]
@@ -107,20 +156,28 @@ function fakeDocker({ answers = {}, routeOut = false } = {}) {
         return ok();
     }
   };
-  return { docker, nets, internal, containers };
+  return { docker, nets, internal, containers, volumes };
 }
 
 // `before(args)`: may hold a call back (a promise) before the fake answers it.
-function runner({ answers = {}, routeOut, spawn, now, before = () => {} } = {}) {
+function runner({
+  answers = {},
+  routeOut,
+  runtimes,
+  spawn,
+  now,
+  before = () => {},
+  engine = config.engine,
+} = {}) {
   const calls = [];
-  const fake = fakeDocker({ answers, routeOut });
+  const fake = fakeDocker({ answers, routeOut, runtimes });
   const docker = async (args, opts = {}) => {
     calls.push({ args, env: opts.env });
     await before(args);
     return fake.docker(args);
   };
   const inboxDir = mkdtempSync(join(tmpdir(), "deckhand-runs-"));
-  const r = createDockerRunner({ config, docker, spawn, inboxDir, now });
+  const r = createDockerRunner({ config: { ...config, engine }, docker, spawn, inboxDir, now });
   return { r, calls, inboxDir, ...fake };
 }
 
@@ -286,12 +343,13 @@ test("state and address: null when there is no such sandbox", async () => {
   assert.equal(await r.address("x"), null);
   const found = runner({
     answers: {
-      inspect: {
-        code: 0,
-        // A sandbox an older listener started is on the shared network: found there too.
-        out: '{"deckhand-sandboxes":{"IPAddress":"10.0.0.2","GlobalIPv6Address":"fd00::2"}}',
-        err: "",
-      },
+      // A sandbox an older listener started is on the shared network: found there too.
+      inspect: (args) =>
+        args.at(-1) === "x" && {
+          code: 0,
+          out: '{"deckhand-sandboxes":{"IPAddress":"10.0.0.2","GlobalIPv6Address":"fd00::2"}}',
+          err: "",
+        },
     },
   });
   assert.deepEqual(await found.r.address("x"), ["10.0.0.2", "fd00::2"]);
@@ -410,4 +468,188 @@ test("follow: whole lines of each stream, skipping what was already read", async
   // A line cut short isn't read: the next follow() reads it whole.
   assert.deepEqual(out, ['{"a":3}']);
   assert.deepEqual(err, ["new"]);
+});
+
+// --- The container engine (engine.mjs) -------------------------------------------------
+
+const limits = { cpus: "2", memory: "4g", pids: 2048 };
+const withEngine = (engine = {}) => ({
+  run: "dh-a-1",
+  name: "dh-a",
+  image: "i",
+  labels: { "deckhand.task": "org/repo#1" },
+  engine: { limits, cache: null, ...engine },
+});
+
+test("start: no engine asked for, none started and no DOCKER_HOST", async () => {
+  const { r, calls, containers } = runner();
+  assert.deepEqual(await r.start({ run: "dh-a-1", name: "dh-a", image: "i" }), { engine: null });
+  assert.equal(containers.has("dh-a-engine"), false);
+  assert.ok(!calls.some((c) => c.args[0] === "info" || c.args[0] === "volume"));
+  assert.doesNotMatch(callOf(calls, "run").join(" "), /DOCKER_HOST/);
+});
+
+test("start: the engine first, on the run's network as `engine`, then the sandbox pointed at it", async () => {
+  const { r, calls, nets, containers, volumes } = runner({ runtimes: ["runc", "sysbox-runc"] });
+  const started = await r.start(withEngine());
+  assert.deepEqual(started, {
+    engine: { backend: "sysbox", volume: "dh-a-1-engine", cached: false },
+  });
+  const runs = calls.filter((c) => c.args[0] === "run").map((c) => c.args);
+  assert.equal(runs.length, 2);
+  const [engine, sandbox] = runs;
+  const joined = engine.join(" ");
+  assert.match(joined, /--name dh-a-engine /);
+  assert.match(joined, /--network dh-a-1 --network-alias engine /);
+  assert.match(joined, /--runtime sysbox-runc /);
+  assert.match(joined, /--cpus 2 --memory 4g --memory-swap 4g --pids-limit 2048 /);
+  assert.match(joined, /type=volume,src=dh-a-1-engine,dst=\/var\/lib\/docker/);
+  assert.match(joined, /-e EGRESS_PROXY=http:\/\/egress:3128 /);
+  assert.equal(engine.at(-1), "dh-engine");
+  // Labelled as the run's engine, never as a sandbox: list() doesn't see it.
+  assert.match(joined, /--label deckhand\.engine=dh-a-1 --label deckhand\.task=org\/repo#1/);
+  assert.doesNotMatch(joined, /deckhand\.run=/);
+  assert.deepEqual(await r.list(), [{ name: "dh-a", run: "dh-a-1", running: true }]);
+  // Never privileged, never the host's socket.
+  assert.doesNotMatch(joined, /--privileged|docker\.sock/);
+  assert.match(sandbox.join(" "), /-e DOCKER_HOST=tcp:\/\/engine:2375 /);
+  assert.doesNotMatch(sandbox.join(" "), /DOCKER_BUILDKIT/);
+  assert.deepEqual([...nets.get("dh-a-1")].sort(), ["dh-a", "dh-a-engine", "egress-id", "me"]);
+  assert.deepEqual(volumes.get("dh-a-1-engine"), {
+    "deckhand.owner": "dh",
+    "deckhand.engine": "dh-a-1",
+  });
+  assert.equal(containers.get("dh-a-engine").volume, "dh-a-1-engine");
+  // The engine's address is the run's too, for the egress proxy.
+  assert.deepEqual(await r.address("dh-a"), ["10.1.0.2", "10.1.0.3"]);
+});
+
+test("start: auto without Sysbox is Podman, with what it relaxes and no BuildKit", async () => {
+  const { r, calls } = runner();
+  const { engine } = await r.start(withEngine());
+  assert.equal(engine.backend, "podman");
+  const [run, sandbox] = calls.filter((c) => c.args[0] === "run").map((c) => c.args.join(" "));
+  assert.match(run, /--security-opt seccomp=unconfined --security-opt apparmor=unconfined /);
+  assert.match(run, /--device \/dev\/fuse --device \/dev\/net\/tun /);
+  assert.match(run, /dst=\/home\/podman\/\.local\/share\/containers dh-engine-podman$/);
+  assert.doesNotMatch(run, /--privileged|docker\.sock|sysbox/);
+  assert.match(sandbox, /-e DOCKER_HOST=tcp:\/\/engine:2375 -e DOCKER_BUILDKIT=0 /);
+});
+
+test("start: SANDBOX_ENGINE=sysbox without its runtime starts nothing and leaves nothing", async () => {
+  const { r, calls, nets, containers, volumes } = runner({ engine: "sysbox" });
+  await assert.rejects(r.start(withEngine()), /no sysbox-runc runtime/);
+  assert.equal(calls.filter((c) => c.args[0] === "run").length, 0);
+  assert.equal(nets.has("dh-a-1"), false);
+  assert.equal(containers.has("dh-a-engine"), false);
+  assert.equal(volumes.size, 0);
+  // Podman asks Docker nothing about runtimes.
+  const podman = runner({ engine: "podman" });
+  await podman.r.start(withEngine());
+  assert.ok(!podman.calls.some((c) => c.args[0] === "info"));
+});
+
+test("start: a sandbox that doesn't start takes its engine and volume with it", async () => {
+  const { r, nets, containers, volumes } = runner({
+    answers: {
+      run: (args) => args.includes("dh-a") && { code: 125, out: "", err: "no such image" },
+    },
+  });
+  await assert.rejects(r.start(withEngine()), /no such image/);
+  assert.equal(containers.has("dh-a-engine"), false);
+  assert.equal(volumes.size, 0);
+  assert.equal(nets.has("dh-a-1"), false);
+});
+
+test("start: an engine that doesn't start stops the run", async () => {
+  const { r, calls } = runner({
+    answers: {
+      run: (args) => args.includes("dh-a-engine") && { code: 125, out: "", err: "no such image" },
+    },
+  });
+  await assert.rejects(r.start(withEngine()), /its container engine didn't start: no such image/);
+  assert.equal(calls.filter((c) => c.args[0] === "run").length, 1);
+});
+
+test("start: the repo's cache volume when free, fresh storage while another run has it", async () => {
+  const { r, volumes } = runner();
+  const cache = "dh-engine-cache-org-repo-abc";
+  const first = await r.start(withEngine({ cache }));
+  assert.deepEqual(first.engine, {
+    backend: "podman",
+    volume: `${cache}-podman`,
+    cached: true,
+  });
+  // Kept, and not swept: it has no run.
+  assert.deepEqual(volumes.get(`${cache}-podman`), { "deckhand.owner": "dh" });
+  const second = await r.start({ ...withEngine({ cache }), run: "dh-b-1", name: "dh-b" });
+  assert.deepEqual(second.engine, { backend: "podman", volume: "dh-b-1-engine", cached: false });
+  await r.remove("dh-a", "dh-a-1");
+  assert.ok(volumes.has(`${cache}-podman`));
+  const third = await r.start({ ...withEngine({ cache }), run: "dh-c-1", name: "dh-c" });
+  assert.equal(third.engine.cached, true);
+});
+
+test("start: a cache volume a container still holds (a previous listener's) isn't shared", async () => {
+  const { r, containers } = runner();
+  const cache = "dh-engine-cache-org-repo-abc";
+  containers.set("dh-z-engine", { engine: "dh-z-1", volume: `${cache}-podman`, running: true });
+  const { engine } = await r.start(withEngine({ cache }));
+  assert.equal(engine.cached, false);
+});
+
+test("remove: the sandbox, its engine and the run's volume, then its network", async () => {
+  const { r, nets, containers, volumes } = runner();
+  await r.start(withEngine());
+  await r.remove("dh-a", "dh-a-1");
+  assert.equal(containers.has("dh-a"), false);
+  assert.equal(containers.has("dh-a-engine"), false);
+  assert.equal(volumes.has("dh-a-1-engine"), false);
+  assert.equal(nets.has("dh-a-1"), false);
+  // A leftover sandbox (no run given): its run is the one its label names.
+  await r.start(withEngine());
+  await r.remove("dh-a");
+  assert.equal(containers.has("dh-a-engine"), false);
+  assert.equal(volumes.has("dh-a-1-engine"), false);
+});
+
+test("relink: engines and volumes whose run is gone are removed, not those of live runs", async () => {
+  const { r, containers, volumes, calls } = runner();
+  await r.start(withEngine());
+  // A listener that stopped mid-removal: the sandbox went, its engine and volume didn't.
+  containers.set("dh-z-engine", { engine: "dh-z-1", volume: "dh-z-1-engine", running: true });
+  volumes.set("dh-z-1-engine", { "deckhand.owner": "dh", "deckhand.engine": "dh-z-1" });
+  volumes.set("dh-y-1-engine", { "deckhand.owner": "dh", "deckhand.engine": "dh-y-1" });
+  await r.relink();
+  assert.equal(containers.has("dh-z-engine"), false);
+  assert.equal(volumes.has("dh-z-1-engine"), false);
+  assert.equal(volumes.has("dh-y-1-engine"), false);
+  assert.ok(containers.has("dh-a-engine"));
+  assert.ok(volumes.has("dh-a-1-engine"));
+  assert.match(
+    callOf(calls, "ps", "--all", "--filter", "label=deckhand.owner=dh").join(" "),
+    /label=deckhand\.owner=dh/,
+  );
+});
+
+test("relink: an engine of a run still starting stays", async () => {
+  let release;
+  const held = new Promise((resolve) => (release = resolve));
+  const { r, containers } = runner({
+    // The sandbox's own `docker run` waits until relink() has looked.
+    before: (args) => args[0] === "run" && args.includes("dh-a") && held,
+  });
+  const starting = r.start(withEngine());
+  while (!containers.has("dh-a-engine")) await new Promise((resolve) => setImmediate(resolve));
+  await r.relink();
+  assert.ok(containers.has("dh-a-engine"));
+  release();
+  await starting;
+});
+
+test("start: an engine a previous run of the task left behind goes first", async () => {
+  const { r, containers } = runner();
+  containers.set("dh-a-engine", { engine: "dh-a-0", running: true });
+  await r.start(withEngine());
+  assert.equal(containers.get("dh-a-engine").engine, "dh-a-1");
 });

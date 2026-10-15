@@ -149,3 +149,24 @@ test("dockerfile and preview: from the repo once granted", () => {
   assert.equal(grant.allowPreview, true);
   assert.equal(byKey(view("preview: ./preview.sh\n").settings, "preview").source, "refused");
 });
+
+test("docker: refused without allow_docker; granted, its engine noted when there is none", () => {
+  const refused = byKey(view("docker: true\n").settings, "docker");
+  assert.equal(refused.source, "refused");
+  assert.match(refused.note, /allow_docker: true/);
+  const grants = { "org/app.yaml": "allow_docker: true\n" };
+  const granted = view("docker: { cache: true }\n", grants);
+  assert.deepEqual(byKey(granted.settings, "docker"), {
+    key: "docker",
+    value: "a container engine, its cache kept",
+    source: "repo",
+    note: "the operator hasn't set SANDBOX_ENGINE",
+  });
+  assert.equal(granted.grant.allowDocker, true);
+  const withEngine = { ...config, engine: "sysbox" };
+  const { settings } = parseRepoConfig("docker: true\n", withEngine);
+  const grant = grantFor(grantsFrom(grants, withEngine), withEngine, "org/app");
+  const row = byKey(effectiveView(withEngine, "org/app", settings, grant).settings, "docker");
+  assert.equal(row.note, null);
+  assert.equal(byKey(view("").settings, "docker").value, "none");
+});
