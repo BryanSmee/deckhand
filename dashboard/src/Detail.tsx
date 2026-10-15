@@ -61,6 +61,19 @@ export function Detail({ task: t, run: r, onRun, onBack, now, github }: Props) {
             </span>
           )}
           {t.pr && <PrLink pr={t.pr} />}
+          {!!t.waitingFor?.length && (
+            <span>
+              Next run after{" "}
+              {t.waitingFor.map((n, i) => (
+                <span key={n}>
+                  {i > 0 && (i === t.waitingFor!.length - 1 ? " and " : ", ")}
+                  <a href={`${github}/${t.repo}/issues/${n}`} target="_blank" rel="noreferrer">
+                    #{n}
+                  </a>
+                </span>
+              ))}
+            </span>
+          )}
           {url && t.replyTo !== t.number && t.replyTo !== t.pr?.number && (
             <a href={url} target="_blank" rel="noreferrer">
               Replies on #{t.replyTo}

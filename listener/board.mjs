@@ -6,6 +6,7 @@
 //   working         a run is in progress
 //   stopping        a brainstorm is wrapping up ("/stop")
 //   queued          comments wait for a run (a free slot, or the running one to finish)
+//   waiting         a comment waits for other issues to be done ("/after #12", waits.mjs)
 //   brainstorm      a brainstorm waits for the maintainer's next comment
 //   idle-brainstorm a brainstorm without a comment for a while; the next one restores it
 //   needs-input     the last run stopped to ask (the issue carries the needs-input label)
@@ -15,6 +16,7 @@ export const STATES = [
   "working",
   "stopping",
   "queued",
+  "waiting",
   "brainstorm",
   "idle-brainstorm",
   "needs-input",
@@ -35,8 +37,8 @@ function runState(r) {
   return r.status; // needs-input, error, interrupted
 }
 
-// `runs`: newest first; `queued`, `brainstorms`: as http.mjs's state() has them.
-export function board({ runs, queued, brainstorms }) {
+// `runs`: newest first; `queued`, `brainstorms`, `waits`: as http.mjs's state() has them.
+export function board({ runs, queued, brainstorms, waits = [] }) {
   const tasks = new Map();
   const entry = (key, repo) => {
     if (!tasks.has(key)) {
@@ -66,18 +68,24 @@ export function board({ runs, queued, brainstorms }) {
   for (const q of queued) entry(q.key, q.repo);
   const talks = new Map(brainstorms.map((b) => [b.key, b]));
   for (const b of brainstorms) entry(b.key, b.repo);
+  const held = new Map(waits.map((w) => [w.key, w]));
+  for (const w of waits) entry(w.key, w.repo);
 
   for (const t of tasks.values()) {
     const last = t.runs[0];
     const q = waiting.get(t.key);
     const b = talks.get(t.key);
-    t.kind = q?.kind ?? last?.kind ?? (b ? "brainstorm" : null);
-    t.mode = (q?.mode === "stop" ? "brainstorm" : q?.mode) ?? last?.taskMode ?? null;
-    t.replyTo = q?.replyTo ?? last?.replyTo ?? t.number;
-    t.since = Math.max(last?.startedAt ?? 0, b?.deadline ?? 0);
+    const w = held.get(t.key);
+    t.kind = q?.kind ?? last?.kind ?? w?.kind ?? (b ? "brainstorm" : null);
+    t.mode = (q?.mode === "stop" ? "brainstorm" : q?.mode) ?? w?.mode ?? last?.taskMode ?? null;
+    t.replyTo = q?.replyTo ?? w?.replyTo ?? last?.replyTo ?? t.number;
+    t.since = Math.max(last?.startedAt ?? 0, b?.deadline ?? 0, w?.since ?? 0);
+    // What its next run waits for, whatever it is doing now.
+    if (w) t.waitingFor = w.blockers;
     // A running run first: comments for a follow-up wait behind it anyway.
     if (last?.status === "running") t.state = runState(last);
     else if (q) t.state = "queued";
+    else if (w) t.state = "waiting";
     else if (b?.status === "active") t.state = "brainstorm";
     else if (b?.status === "idle") t.state = "idle-brainstorm";
     else t.state = last ? runState(last) : "done";

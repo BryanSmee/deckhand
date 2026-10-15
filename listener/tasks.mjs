@@ -48,7 +48,42 @@ export function createTasks(ctx) {
     if (!item) return;
     item.base = first.base;
     item.settings = settings;
+    if (item.after) {
+      // A mode it can't run is said now, not once what it waits for is done.
+      if (item.modeLine && !modeNames(settings).includes(item.modeLine)) {
+        return unknownMode(item, `Unknown mode \`${item.modeLine}\`.`);
+      }
+      if (await ctx.waits.request(item)) return;
+    } else if (item.trigger === "work" || item.modeLine) {
+      ctx.waits.cancel(`${item.repo}#${item.id}`);
+    }
     await accept(item);
+  }
+
+  // A comment that waited for other issues (waits.mjs), checked again as if it had just come:
+  // the operator's repos and the repo's users or config may have changed since. False when
+  // it may no longer run (the reason logged).
+  async function resume(item) {
+    const key = `${item.repo}#${item.id}`;
+    if (config.repos.length && !config.repos.includes(item.repo.toLowerCase())) {
+      log(`${key}: not started, ${item.repo} is no longer in ALLOWED_REPOS`);
+      return false;
+    }
+    const { settings, errors } = await ctx.repoSettings(item.repo, item.base);
+    if (errors.length) {
+      log(`${key}: not started, ${CONFIG_FILE} has errors: ${errors.join("; ")}`);
+      await ctx
+        .reply(item.repo, item.replyTo, configErrors(item.base, errors))
+        .catch((error) => log(`${key}: ${error}`));
+      return false;
+    }
+    const login = item.author?.toLowerCase();
+    if (!login || !config.users.includes(login) || !settings.users.includes(login)) {
+      log(`${key}: not started, ${item.author ?? "its author"} is no longer an allowed user`);
+      return false;
+    }
+    await accept({ ...item, settings });
+    return true;
   }
 
   // An onboarding issue for the repo, if it needs one, starting an onboarding run on it as a
@@ -105,7 +140,8 @@ export function createTasks(ctx) {
     }
     // The latest settings decide the repo's parallel cap.
     if (item.settings) task.settings = item.settings;
-    ctx.received(item);
+    // A comment that waited (resume()) has its 👀 already.
+    if (!item.eyes) ctx.received(item);
     task.pending.push(item);
     if (task.running) {
       const live = deliverable(task) === task.pending.length;
@@ -316,6 +352,7 @@ export function createTasks(ctx) {
   return {
     admit,
     accept,
+    resume,
     onboardRepo,
     onboard,
     deliverable,

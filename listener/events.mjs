@@ -39,29 +39,64 @@ export function sameRepo(pr, repo) {
 }
 
 // The command on the first line ("work" for the trigger, "stop" for "/stop"), the mode a
-// "/mode <name>" line asks for (lowercase, or null) and the rest of the comment; trigger null
-// and the whole comment when there is none. The trigger is the whole first line, so "Deckhand
-// is down" starts nothing; "/mode" may follow it there ("Deckhand /mode brainstorm").
+// "/mode <name>" line asks for (lowercase, or null), what an "/after #12" line waits for
+// (parseAfter(), or null) and the rest of the comment; trigger null and the whole comment when
+// there is none. The trigger is the whole first line, so "Deckhand is down" starts nothing;
+// "/mode" and "/after" may follow it there ("Deckhand /mode brainstorm", "Deckhand /after #7").
 export function splitTrigger(config, body) {
   const [first, ...rest] = body.split(/\r?\n/);
-  if (first.trim().toLowerCase() === "/stop") return takeMode(rest.join("\n"), "stop");
-  const inline = /^(.*?)\s+(\/mode\s+[\w-]+)\s*$/i.exec(first);
+  if (first.trim().toLowerCase() === "/stop") return takeCommands(rest.join("\n"), "stop");
+  const inline = /^(.*?)\s+(\/(?:mode|after)\s.*)$/i.exec(first);
   if (inline && normalize(inline[1]) === config.trigger) {
-    return takeMode([inline[2], ...rest].join("\n"), "work");
+    // Each command its own line, as if written below; anything else on the line and it isn't
+    // the trigger line ("Deckhand /mode brainstorm please").
+    const lines = inline[2].trim().split(/\s+(?=\/(?:mode|after)\s)/i);
+    const known = (l) => /^\/mode\s+[\w-]+$/i.test(l) || /^\/after\s/i.test(l);
+    if (lines.every(known)) return takeCommands([...lines, ...rest].join("\n"), "work");
   }
-  if (normalize(first) === config.trigger) return takeMode(rest.join("\n"), "work");
-  return takeMode(body, null);
+  if (normalize(first) === config.trigger) return takeCommands(rest.join("\n"), "work");
+  return takeCommands(body, null);
 }
 
-// Removes a "/mode <name>" line. Its own line, like "/model": the space keeps the two apart.
-function takeMode(text, trigger) {
+// Removes the "/mode <name>" and "/after …" lines. Their own lines, like "/model": the space
+// keeps "/mode" and "/model" apart. The last of each wins.
+function takeCommands(text, trigger) {
   let mode = null;
+  let after = null;
   const kept = text.split(/\r?\n/).filter((line) => {
     const match = /^\s*\/mode\s+([\w-]+)\s*$/i.exec(line);
     if (match) mode = match[1].toLowerCase();
-    return !match;
+    const wait = /^\s*\/after(?:\s+(.*?))?\s*$/i.exec(line);
+    if (wait) after = parseAfter(wait[1] ?? "");
+    return !match && !wait;
   });
-  return { trigger, mode, text: kept.join("\n").trim() };
+  return { trigger, mode, after, text: kept.join("\n").trim() };
+}
+
+// What follows "/after": { numbers } (issues or pull requests of the same repo), { none: true }
+// (stop waiting) or { error } (what the reply says). Other repos are refused: their state
+// isn't this repo's to watch, and failing closed costs a comment.
+export function parseAfter(text) {
+  const words = text.split(/[\s,]+/).filter(Boolean);
+  if (words.length === 1 && words[0].toLowerCase() === "none") return { none: true };
+  if (!words.length) return { error: "`/after` needs an issue: `/after #12`." };
+  const numbers = [];
+  for (const word of words) {
+    const match = /^#(\d+)$/.exec(word);
+    if (match) {
+      if (!numbers.includes(Number(match[1]))) numbers.push(Number(match[1]));
+      continue;
+    }
+    if (/^[\w.-]+\/[\w.-]+#\d+$/.test(word)) {
+      return {
+        error: `\`/after\` takes issues of this repository only (\`#12\`), not \`${word}\`.`,
+      };
+    }
+    return {
+      error: `\`/after\` takes issue numbers (\`/after #12 #15\`) or \`none\`, not \`${word}\`.`,
+    };
+  }
+  return { numbers };
 }
 
 export const EFFORTS = ["low", "medium", "high", "xhigh", "max"];
@@ -131,7 +166,10 @@ export function workItem(config, event, p, skip = () => null) {
 
   // null: skipped there, the reason logged.
   const item = Object.hasOwn(ITEMS, event) ? ITEMS[event](config, event, p, skip) : undefined;
-  return item === undefined ? skip(`${event} ${p.action ?? ""} is not handled`) : item;
+  if (item === undefined) return skip(`${event} ${p.action ?? ""} is not handled`);
+  // Checked again when a comment that waited ("/after") starts its run (waits.mjs).
+  if (item) item.author = author.login;
+  return item;
 }
 
 // A comment on an issue or a pull request (pull requests are issues to that event).
@@ -139,9 +177,9 @@ function issueCommentItem(config, event, p, skip) {
   if (p.action !== "created") return undefined;
   const repo = p.repository.full_name;
   const body = p.comment.body ?? "";
-  const { trigger, mode, text } = splitTrigger(config, body);
+  const { trigger, mode, after, text } = splitTrigger(config, body);
   if (p.issue.pull_request) {
-    return prItem(skip, repo, p.issue, { trigger, mode }, text, p.comment);
+    return prItem(skip, repo, p.issue, { trigger, mode, after }, text, p.comment);
   }
   const n = p.issue.number;
   const issue = {
@@ -160,7 +198,7 @@ function issueCommentItem(config, event, p, skip) {
   ].find(([, number]) => number === n)?.[0];
   if (inbox)
     return { ...issue, trigger: inbox, text: entry(p.comment.user, p.comment.html_url, body) };
-  return { ...issue, trigger, modeLine: mode, text };
+  return { ...issue, trigger, modeLine: mode, after, text };
 }
 
 // A comment on a line of a pull request's diff: Claude gets the line and its hunk.
@@ -236,6 +274,35 @@ export function previewEvent(config, event, p, skip = () => null) {
   return { repo, base: p.repository.default_branch || "main", event };
 }
 
+// An issue closed, or a pull request closed or merged, in an allowed repo → { repo, number,
+// state } for the comments waiting for it (waits.mjs), or null. Anyone may close an issue:
+// what then starts is the waiting comment's run, whose author is checked again.
+export function closedItem(config, event, p, skip = () => null) {
+  if (p.action !== "closed" || (event !== "issues" && event !== "pull_request")) return null;
+  const repo = p.repository?.full_name;
+  const target = event === "issues" ? p.issue : p.pull_request;
+  if (!p.installation?.id || !repo || !target) return skip("not from an installation of the App");
+  if (config.repos.length && !config.repos.includes(repo.toLowerCase())) {
+    return skip(`${repo} not in ALLOWED_REPOS`);
+  }
+  // The pull_request event's own shape → the issues API's, which outcome() reads.
+  const issue =
+    event === "issues"
+      ? target
+      : { state: "closed", pull_request: { merged_at: target.merged_at ?? target.merged ?? null } };
+  return { repo, number: target.number, state: outcome(issue) };
+}
+
+// What an issue (GET /repos/{repo}/issues/{n}, or an `issues` payload's) means to a comment
+// waiting for it: "open", "done" (closed as completed; a pull request: merged) or "not-done"
+// (not planned, a duplicate; a pull request closed without merging). Issues closed before
+// GitHub recorded a reason have none: completed was the only way to close one then.
+export function outcome(issue) {
+  if (issue.state !== "closed") return "open";
+  if (issue.pull_request) return issue.pull_request.merged_at ? "done" : "not-done";
+  return [null, undefined, "completed"].includes(issue.state_reason) ? "done" : "not-done";
+}
+
 // A pull request, as webhooks and the REST API describe it → its state on the dashboard.
 export function prState(pr) {
   if (pr.merged || pr.merged_at) return "merged";
@@ -278,7 +345,7 @@ export function pullRequest(config, event, p, now, skip = () => null) {
 // `pull`: the pull request, or its issue for an issue comment. A pull request that closes an
 // issue (linkedIssue()) is that issue's task, whose title the payload doesn't have (the
 // dashboard fetches it, titles.mjs).
-function prItem(skip, repo, pull, { trigger, mode }, text, comment) {
+function prItem(skip, repo, pull, { trigger, mode, after = null }, text, comment) {
   if (trigger === "stop" || mode === "brainstorm" || mode === "onboarding") {
     return skip(`${mode ?? "brainstorm"}s are on issues: pull request comments are about the code`);
   }
@@ -293,6 +360,7 @@ function prItem(skip, repo, pull, { trigger, mode }, text, comment) {
         title: null,
         trigger,
         modeLine: mode,
+        after,
         text,
         replyTo: pr,
         comment,
@@ -305,6 +373,7 @@ function prItem(skip, repo, pull, { trigger, mode }, text, comment) {
         title: title ?? null,
         trigger,
         modeLine: mode,
+        after,
         text,
         replyTo: pr,
         comment,

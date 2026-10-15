@@ -171,6 +171,11 @@ async function fakeGitHub(files = {}) {
         return res.end(JSON.stringify({ access_token: "user-token" }));
       }
       if (req.url === "/user") return res.end(JSON.stringify({ login: "alice" }));
+      // What a comment waits for ("/after #77"): the test sets its state, as JSON.
+      const waitedFor = /^\/repos\/org\/repo\/issues\/(\d+)$/.exec(req.url);
+      if (req.method === "GET" && waitedFor && files[`issue:${waitedFor[1]}`]) {
+        return res.end(files[`issue:${waitedFor[1]}`]);
+      }
       // A task from before titles were kept: the dashboard asks for its title once.
       if (req.method === "GET" && req.url === "/repos/org/repo/issues/3") {
         return res.end(JSON.stringify({ title: "An older pull request" }));
@@ -1219,6 +1224,65 @@ test("Deckhand /mode brainstorm discusses; /stop wraps up; Deckhand then works",
   assert.equal(lastRun(dir), "work full");
   assert.match(readFileSync(join(dir, "run-env"), "utf8"), /^TASK_SESSION=$/m);
   assert.equal(brainstormOf(dir), undefined);
+});
+
+test("/after #77: waits, through a restart, and runs the comment once #77 is done", async (t) => {
+  const files = { "issue:77": JSON.stringify({ state: "open" }) };
+  const { dir, github, send, restart } = await listen(t, files);
+  await send(
+    comment("alice", "Deckhand /after #77\n/effort high\nDo it on top of the new parser."),
+  );
+  await until(() => replies(github).length === 1, "the waiting reply");
+  assert.match(
+    JSON.parse(replies(github)[0].body).body,
+    /^Waiting for #77: I'll start when it is done/,
+  );
+  // 👀 on the comment, and no run yet.
+  assert.ok(github.requests.some((r) => r.path === "/repos/org/repo/issues/comments/99/reactions"));
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  assert.equal(exists(join(dir, "run-args")), null);
+  assert.deepEqual(
+    JSON.parse(readFileSync(join(dir, "waits.json"), "utf8"))["org/repo#12"].blockers,
+    [77],
+  );
+
+  // #77 is merged while the listener is down: the next one asks GitHub when it starts.
+  files["issue:77"] = JSON.stringify({ state: "closed", pull_request: { merged_at: "2026" } });
+  await restart();
+  await until(() => exists(join(dir, "run-args")), "the run");
+  const env = readFileSync(join(dir, "run-env"), "utf8");
+  assert.match(env, /^TASK_MESSAGE=Do it on top of the new parser\.$/m);
+  assert.match(env, /^SANDBOX_EFFORT=high$/m);
+  await until(() => replies(github).length === 3, "the starting reply and the run's");
+  assert.match(JSON.parse(replies(github)[1].body).body, /^#77 is done: starting\./);
+  assert.deepEqual(JSON.parse(readFileSync(join(dir, "waits.json"), "utf8")), {});
+});
+
+test("/after: an issues webhook starts the run; closed as not planned drops the wait", async (t) => {
+  const files = { "issue:77": JSON.stringify({ state: "open" }) };
+  const { dir, github, send, listener } = await listen(t, files);
+  const closed = (number, state_reason) =>
+    send(
+      {
+        action: "closed",
+        installation: { id: 7 },
+        repository: { full_name: "org/repo", default_branch: "trunk" },
+        issue: { number, state: "closed", state_reason },
+        sender: { login: "bob" },
+      },
+      "issues",
+    );
+  await send(comment("alice", "Deckhand\n/after #77\nFirst."));
+  await until(() => replies(github).length === 1, "the waiting reply");
+  await closed(77, "not_planned");
+  await until(() => replies(github).length === 2, "the reply that drops it");
+  assert.match(JSON.parse(replies(github)[1].body).body, /^#77 was closed without being done/);
+  await send(followUp(100, "Deckhand /after #77\nSecond."));
+  await until(() => replies(github).length === 3, "the second waiting reply");
+  await closed(77, "completed");
+  await until(() => exists(join(dir, "run-args")), "the run");
+  assert.match(readFileSync(join(dir, "run-env"), "utf8"), /^TASK_MESSAGE=Second\.$/m);
+  await listener.until("done (ok)");
 });
 
 test("a brainstorm and the issue's work share no writable volume", async (t) => {

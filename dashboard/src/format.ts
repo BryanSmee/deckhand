@@ -6,6 +6,7 @@ export const STATE_NAMES: Record<TaskState, string> = {
   working: "Working",
   stopping: "Stopping",
   queued: "Queued",
+  waiting: "Waiting",
   brainstorm: "Brainstorm",
   "idle-brainstorm": "Idle brainstorm",
   "needs-input": "Needs input",
@@ -29,12 +30,17 @@ export const PR_NAMES: Record<PrState, string> = {
   closed: "Closed",
 };
 
-// The state chips: each groups states. A brainstorm waiting for its next comment waits for
+// The state chips: each groups states. A task waiting for other issues ("/after") is on its
+// way to a run, like a queued one. A brainstorm waiting for its next comment waits for
 // the maintainer, like a run that stopped to ask. "Ready for review" is the pull request's
 // state, whatever the task's: what waits for the maintainer's review.
 export const CHIPS = [
   { id: "all", name: "All", states: null },
-  { id: "running", name: "Running", states: ["building-image", "working", "stopping", "queued"] },
+  {
+    id: "running",
+    name: "Running",
+    states: ["building-image", "working", "stopping", "queued", "waiting"],
+  },
   { id: "input", name: "Needs input", states: ["needs-input", "brainstorm", "idle-brainstorm"] },
   { id: "review", name: "Ready for review", states: null },
   { id: "done", name: "Done", states: ["done"] },
@@ -139,11 +145,18 @@ export function when(t: Task, now: number): string {
   const last = t.runs[0];
   if (isLive(t) && last) return duration(last, now);
   if (t.state === "queued") return t.replyTo ? `reply on #${t.replyTo}` : "";
+  if (t.state === "waiting" && t.waitingFor?.length) return `after ${issueList(t.waitingFor)}`;
   if (t.state === "brainstorm" && t.deadline) {
     return `idle in ${Math.max(0, Math.ceil((t.deadline - now) / 60000))} min`;
   }
   if (t.state === "idle-brainstorm" && t.deadline) return `since ${ago(t.deadline, now)}`;
   return last ? ago(last.startedAt, now) : "";
+}
+
+// "#77", "#77 and #80", "#77, #80 and #81".
+export function issueList(numbers: number[]): string {
+  const refs = numbers.map((n) => `#${n}`);
+  return refs.length > 1 ? `${refs.slice(0, -1).join(", ")} and ${refs.at(-1)}` : (refs[0] ?? "");
 }
 
 // "Continue", "Wrap-up"…: what a run did, for its button in the run history.

@@ -15,6 +15,8 @@ model in [security.md](security.md).
 - **On its pull request**: any comment, review or review comment continues the same session.
 - **Anywhere**: `/model sonnet` or `/effort high` lines pick the model or thinking effort for
   that run (defaults: `SANDBOX_MODEL`, `SANDBOX_EFFORT`).
+- **Later**: `/after #77` (or `/after #77 #80`), with a trigger or `/mode` line, holds the
+  comment back; see [Waiting for other issues](#waiting-for-other-issues).
 
 A comment that arrives while its issue's run is working goes to that run: after the usual
 pause (so a burst is one message), the listener writes it to the run's inbox (stream-json
@@ -116,6 +118,26 @@ if from a comment (`trigger: "work"`, no comment, no sender, `reason: "conflict"
 its task's session through `tasks.accept()`. The `(head, base)` commits of each attempt are
 kept in `conflicts.json`, so the same pair never starts a second run, even after a restart.
 
+## Waiting for other issues
+
+`/after #77 #80` (on the trigger line or its own line, same repo only; `events.mjs`
+`parseAfter()`) holds a trigger comment back until each of those is done: an issue closed as
+completed (or before GitHub recorded reasons), a pull request merged. `waits.mjs` asks GitHub
+for their state at once: all done, the comment runs now; one closed without being done (not
+planned, a duplicate, a pull request closed unmerged) or missing, it is refused. Otherwise
+the comment keeps its 👀, the reply says what it waits for, and the task's one wait (task key
+→ the issues left and the comment, as `restart.mjs` saves it) goes to `waits.json`.
+
+An `issues` or `pull_request` `closed` delivery for an allowed repo (`closedItem()`) updates
+the waits on it; GitHub is also asked at every start and every 15 minutes, so a delivery
+missed while the listener was down still counts. When the last one is done, `tasks.resume()`
+checks the comment again as `admit()` would (the repo still allowed, its config without
+errors, its author still in both allowlists) and queues it through `accept()`, as if just
+posted, with its text, `/mode`, `/model` and `/effort`; the reply says which issue made it
+start. One closed without being done drops the wait, with a reply saying so. A new trigger or
+`/mode` comment without `/after` replaces the wait; `/after` again replaces the list;
+`/after none` cancels it. The dashboard shows the task as `waiting`, with what it waits for.
+
 ## Restarts
 
 The listener can restart at any time (an update is `docker compose pull && up -d`).
@@ -145,7 +167,7 @@ which starts runs.
 | `prompts.mjs`                                                     | What Claude reads: each run's prompt and first message, comments delivered mid-run. Pure.          |
 | `modes.mjs`                                                       | Built-in modes: light, fresh, their token's permissions, the dashboard's kind. Pure.               |
 | `runlog.mjs`                                                      | Run logs: the list rebuilt after a restart, the dashboard's entries per line, the live stream.     |
-| `events.mjs`                                                      | Deliveries → work items, trigger and `/mode` lines, pull request states. Pure.                     |
+| `events.mjs`                                                      | Deliveries → work items, trigger, `/mode` and `/after` lines, pull request states. Pure.           |
 | `repo-config.mjs`, `yaml.mjs`                                     | `.deckhand.yaml`, read from the default branch and parsed.                                         |
 | `grants.mjs`, `egress.mjs`                                        | The operator's grants (hosts, mounts, limits) and the egress policy.                               |
 | `github-app.mjs`, `broker.mjs`, `git-gateway.mjs`                 | The App's tokens; the sandboxes' token broker; their pushes, to the run's own branches only.       |
@@ -154,6 +176,7 @@ which starts runs.
 | `images.mjs`, `checkout.mjs`, `runner/`                           | Repo images, Claude Code's install, caches; checkouts; the Docker runner.                          |
 | `onboarding.mjs`, `previews.mjs`                                  | Onboarding issues; preview hooks.                                                                  |
 | `conflicts.mjs`                                                   | The conflict watcher: open task pull requests in conflict get a rebase run (`conflicts.json`).     |
+| `waits.mjs`                                                       | Comments waiting for other issues to be done (`/after`, `waits.json`).                             |
 | `board.mjs`, `titles.mjs`, `pulls.mjs`, `repos.mjs`, `static.mjs` | The dashboard's tasks, titles, pull requests, repository list and files.                           |
 | `repo-view.mjs`                                                   | A repository's config as the dashboard shows it: what its runs get, from the runs' own checks.     |
 | `store.mjs`, `html.mjs`, `web.mjs`                                | Shared helpers: JSON state files written atomically; the small HTML pages; `sendJson`, `readBody`. |
