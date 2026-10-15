@@ -382,7 +382,7 @@ export function createHttp(ctx, { dashboardDir }) {
 
   // Open questions in an issue, or an answer to them: the needs-input label and the
   // dashboard's list of issues waiting for input (questions.mjs, inputs.mjs).
-  async function questions({ repo, key, number, title, base, label, by, track }) {
+  async function questions({ repo, key, number, title, base, label, by, track, questions: asked }) {
     if (title) ctx.titles.set(key, title);
     if (label !== undefined && by) {
       // The repo's own users narrow the operator's.
@@ -397,7 +397,8 @@ export function createHttp(ctx, { dashboardDir }) {
       if (!res.ok && res.status !== 404) return log(`${key}: label: ${res.status}`);
       log(`${key}: ${label ? "open questions, labelled" : "answered, label removed"}`);
     }
-    if (track !== undefined) ctx.inputs.set(key, track);
+    if (track !== undefined) ctx.inputs.set(key, track, asked);
+    else if (asked !== undefined) ctx.inputs.update(key, asked);
   }
 
   async function previewHook({ repo, base, event }, payload) {

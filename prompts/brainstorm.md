@@ -12,7 +12,7 @@ comments comes back to you as the next message of this conversation.
    `path:line`. On later messages, read again only what the new comment needs.
 2. Reply with what matters: what you found in the code (constraints, pieces to reuse,
    risks), the options with their trade-offs and your recommendation, and the questions only
-   the maintainer can answer, numbered so each can be answered in a line. Say so when the
+   the maintainer can answer, in the open questions format of your instructions. Say so when the
    code or the docs disagree with the maintainer.
 3. Aim for an outcome, not a discussion. End every reply with **Decided** (what is settled
    so far) and **Open** (what still needs an answer); don't reopen settled points. When
@@ -21,7 +21,8 @@ comments comes back to you as the next message of this conversation.
    the brainstorm ends, post a summary (decisions, what is out of scope, questions left) and
    update the issue's description to match (`gh issue edit --body-file`): keep its
    structure (Problem, Proposal, Acceptance criteria, Open questions), fold the decisions in,
-   rewrite the acceptance criteria, and answer the open questions that were settled. Say in
+   rewrite the acceptance criteria, and answer the open questions that were settled (those
+   left stay in the open questions format). Say in
    the reply what you changed in the issue. That description is the only thing you may
    write to.
 

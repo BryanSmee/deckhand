@@ -88,6 +88,14 @@ answered. The dashboard lists the open issues carrying the label as `needs-input
 or not (`inputs.json`, kept by `issues` deliveries, whoever adds or removes the label, and one
 lookup per repo when the listener starts); a closed issue leaves the list.
 
+The questions themselves have one format, set once in `prompts/sandbox.md` (the other prompts
+point to it): numbered, an optional `**Title**:`, options as an indented task list with one
+`(recommended)`. `parseQuestions()` (`questions.mjs`) reads them, all or nothing: a section in
+another shape comes as its markdown only (`items: null`). A task waiting for input carries
+them in `api/state` (`questions`): from the reply of its last run when that run stopped to ask
+(kept on the run, and read again from its log after a restart), else from its issue's body
+(kept in `inputs.json` with the entry, from the `issues` deliveries and the startup lookup).
+
 Reactions on the triggering comment follow its run: 👀 when it is received, then 🚀 (done),
 😕 (needs input) or 👎 (error) once the run that handled it is over.
 
@@ -243,7 +251,7 @@ which starts runs.
 | `restart.mjs`                                                     | `queue.json` and `logs/<run>.live.json`: what a listener leaves to the next one; `/status`.        |
 | `brainstorms.mjs`                                                 | Each issue's brainstorm (`brainstorms.json`) and repo mode (`modes.json`).                         |
 | `comments.mjs`                                                    | Replies (comments, discussion threads), reactions, the needs-input label.                          |
-| `questions.mjs`, `inputs.mjs`                                     | Open questions in an issue → the needs-input label (pure); the issues waiting for input.           |
+| `questions.mjs`, `inputs.mjs`                                     | Open questions → the needs-input label, parsed questions (pure); the issues waiting for input.     |
 | `prompts.mjs`                                                     | What the agent reads: each run's prompt and first message, comments delivered mid-run. Pure.       |
 | `agents/`                                                         | Each agent's specifics: install, env, hosts, session, tiers, `normalize()` ([Agents](#agents)).    |
 | `modes.mjs`                                                       | Built-in modes: light, fresh, their token's permissions, the dashboard's kind. Pure.               |

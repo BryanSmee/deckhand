@@ -78,6 +78,33 @@ export interface Task {
   closed: Closed;
   pr: PullRequest | null;
   runs: Run[]; // newest first
+  // What a task waiting for input asks (listener/questions.mjs, board.mjs).
+  questions?: Questions;
+}
+
+// An option of a question; one at most is `recommended` (the agent's pick). One option per
+// question, plus a free-text answer.
+export interface QuestionOption {
+  label: string;
+  recommended: boolean;
+}
+
+// No options: a free-text question.
+export interface Question {
+  title: string | null;
+  // The question, then its explanation lines.
+  text: string;
+  options: QuestionOption[];
+}
+
+// From the reply of its last run (`runId`) when it stopped to ask, else from its issue's
+// "Open questions" section. `items`: null when they aren't in the format (prompts/sandbox.md),
+// so only `raw`, the markdown, can be shown.
+export interface Questions {
+  source: "issue" | "run";
+  runId?: string;
+  items: Question[] | null;
+  raw: string;
 }
 
 export type Closed = "completed" | "not_planned" | null;

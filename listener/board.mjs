@@ -38,8 +38,19 @@ function runState(r) {
   return r.status; // needs-input, error, interrupted
 }
 
+function questionsFor(t, last, input) {
+  if (t.state !== "needs-input") return null;
+  // The run's are the latest: one starting takes the label off.
+  if (last?.status === "needs-input" && last.questions) {
+    return { source: "run", runId: last.id, ...last.questions };
+  }
+  return input?.questions ? { source: "issue", ...input.questions } : null;
+}
+
 // `runs`: newest first; `queued`, `brainstorms`, `waits`: as http.mjs's state() has them;
 // `inputs`: the open issues labelled needs-input (inputs.mjs list()).
+// A task waiting for input carries `questions`: { source, runId?, items, raw }, from the reply
+// of its last run when it stopped to ask, else from its issue's body (questions.mjs).
 export function board({ runs, queued, brainstorms, waits = [], inputs = [] }) {
   const tasks = new Map();
   const entry = (key, repo) => {
@@ -100,6 +111,8 @@ export function board({ runs, queued, brainstorms, waits = [], inputs = [] }) {
       t.kind ??= "issue";
       t.since = Math.max(t.since, input.since ?? 0);
     }
+    const asked = questionsFor(t, last, input);
+    if (asked) t.questions = asked;
     if (b && b.status !== "stopped") {
       t.kind = "brainstorm";
       t.mode = "brainstorm";

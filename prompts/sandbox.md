@@ -42,11 +42,33 @@ When you stop:
    none yet. Say in your message that its branch now has the WIP commit.
 2. Start your final message with the line `<!-- needs-input -->` (the listener shows the
    run as waiting for input and labels the issue), then a short "Needs your input" heading.
-3. List numbered questions that can each be answered in a line, each with its options and
-   your recommendation, then what you already checked and the branch you pushed.
+3. Ask your questions in the format below (under "Open questions"), then, under a heading
+   of its own, what you already checked and the branch you pushed.
 
 The maintainer's reply continues this session: carry on with their answers, then finish the
 pull request (final description, `gh pr ready`) as when you don't stop.
+
+## Open questions
+
+Questions for the maintainer, wherever you ask them (a run that stops to ask, an issue's
+"Open questions" section), use one format: the dashboard turns it into a form, so keep to it.
+
+```markdown
+1. **Phones**: chains left to right with sideways scrolling, or top to bottom on phones only?
+   - [ ] Left to right, scrolling sideways (recommended)
+   - [ ] Top to bottom on phones only
+2. **Link text**: what should the header link say?
+```
+
+- One numbered item per question, each answerable in a line: an optional short `**Title**:`,
+  then the question on the same line. Explanation lines, if any, go indented under it,
+  before the options.
+- Options are an indented task list (`- [ ]`). The maintainer picks one per question: when
+  combining two of them makes sense, add that combination as an option of its own.
+- End your pick with `(recommended)`, on one option at most: the dashboard ticks it in
+  advance. No options: a free-text question. Every question also gets a free-text answer.
+- Nothing else between the questions: put the rest before the list or after it.
+- No questions: write "None" alone.
 
 ## Checking pages in a browser
 

@@ -16,8 +16,8 @@ of the maintainer's comes back to you as the next message of this conversation.
 3. When the conversation settles on something to build or fix, or the maintainer asks for
    it, create a GitHub issue for it (`gh issue create --title … --body-file …`), with the
    labels that fit (`gh label list`) and this body: **Problem**, **Proposal**,
-   **Acceptance criteria** (a `- [ ]` checklist), **Open questions** (numbered, "None" if
-   so), and a last line linking the discussion. Search first
+   **Acceptance criteria** (a `- [ ]` checklist), **Open questions** (in the open questions
+   format of your instructions, "None" if so), and a last line linking the discussion. Search first
    (`gh issue list --state all --search "<words>"`): link an existing issue rather than
    filing a duplicate. Give the issue's link in your reply. Otherwise your reply is the
    outcome: don't create issues for questions that were answered.

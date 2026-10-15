@@ -179,7 +179,24 @@ test("runs: rebuilt from their log files, newest first, without their path for t
   // No listener line and no result: an old log, interrupted.
   writeFileSync(join(dir, "deckhand-org-repo-2-2000.log"), "Cloning\n");
   writeFileSync(join(dir, "deckhand-org-repo-1-1000.live.json"), "{}");
-  const runs = loadRuns(dir);
+  // Stopped to ask: its questions, for the task rather than the run.
+  const asked = "<!-- needs-input -->\n## Needs your input\n\n1. **Name**: which one?";
+  writeFileSync(
+    join(dir, "deckhand-org-repo-3-500.log"),
+    [
+      line({ ...meta, key: "org/repo#3", startedAt: 500 }),
+      line({ type: "result", result: asked }),
+    ].join("\n"),
+  );
+  const runs = loadRuns(dir).filter((r) => r.key !== "org/repo#3");
+  const stopped = loadRuns(dir).find((r) => r.key === "org/repo#3");
+  assert.equal(stopped.status, "needs-input");
+  assert.deepEqual(stopped.questions, {
+    items: [{ title: "Name", text: "which one?", options: [] }],
+    raw: "1. **Name**: which one?",
+  });
+  assert.equal("questions" in publicRun(stopped), false);
+  assert.equal(runs[1].questions, null);
   assert.deepEqual(
     runs.map((r) => [r.id, r.key, r.status, r.summary, r.title]),
     [

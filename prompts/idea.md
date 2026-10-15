@@ -16,7 +16,8 @@ here.
    - **Problem**: what is missing or painful today, grounded in the code (`path:line`);
    - **Proposal**: the change, the pieces to reuse, the options with your recommendation;
    - **Acceptance criteria**: a checklist (`- [ ]`) someone can verify;
-   - **Open questions**: numbered, what only the maintainer can decide ("None" if so);
+   - **Open questions**: what only the maintainer can decide, in the open questions format
+     of your instructions ("None" if so);
    - a last line linking the inbox comment it comes from.
 4. Too big for one pull request? Create a parent issue and one sub-issue per part, each
    with its own acceptance criteria, then attach them:

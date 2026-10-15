@@ -23,16 +23,36 @@ test("issues waiting for input: from webhooks, kept across a restart", () => {
   inputs.set("org/repo#2", true);
   inputs.set("org/repo#2", false);
   inputs.set("org/repo#3", false);
-  assert.deepEqual(inputs.list(), [{ key: "org/repo#1", repo: "org/repo", since: 1000 }]);
-  assert.deepEqual(JSON.parse(readFileSync(path, "utf8")), { "org/repo#1": { since: 1000 } });
+  assert.deepEqual(inputs.list(), [
+    { key: "org/repo#1", repo: "org/repo", since: 1000, questions: null },
+  ]);
+  assert.deepEqual(JSON.parse(readFileSync(path, "utf8")), {
+    "org/repo#1": { since: 1000, questions: null },
+  });
+  // Its questions, then an edit to them; an issue not listed isn't added by one.
+  const asked = { items: null, raw: "Which one?" };
+  inputs.set("org/repo#1", true, asked);
+  inputs.set("org/repo#1", true);
+  inputs.update("org/repo#5", asked);
+  assert.deepEqual(inputs.list(), [
+    { key: "org/repo#1", repo: "org/repo", since: 1000, questions: asked },
+  ]);
+  inputs.update("org/repo#1", null);
+  assert.equal(inputs.list()[0].questions, null);
+  inputs.update("org/repo#1", asked);
   const again = createInputs({ path, listLabelled: async () => [] });
   assert.equal(again.has("org/repo#1"), true);
+  assert.deepEqual(again.list()[0].questions, asked);
 });
 
 test("the startup lookup adds labels added meanwhile and drops those removed", async () => {
   const path = join(mkdtempSync(join(tmpdir(), "deckhand-")), "inputs.json");
   const lists = {
-    "org/repo": [issue(2), issue(3, { pull_request: {} }), issue(4)],
+    "org/repo": [
+      issue(2, { body: "## Open questions\n\n1. Which one?" }),
+      issue(3, { pull_request: {} }),
+      issue(4),
+    ],
     "org/down": new Error("502"),
   };
   const listLabelled = async (repo) => {
@@ -57,5 +77,12 @@ test("the startup lookup adds labels added meanwhile and drops those removed", a
     "org/repo#2": Date.parse("2026-10-15T12:00:00Z"),
   });
   assert.match(logs[0], /org\/down: 502/);
+  // Its questions from the listing's body.
+  const questions = Object.fromEntries(inputs.list().map((i) => [i.key, i.questions]));
+  assert.deepEqual(questions["org/repo#2"], {
+    items: [{ title: null, text: "Which one?", options: [] }],
+    raw: "1. Which one?",
+  });
+  assert.equal(questions["org/repo#4"], null);
   assert.equal(createInputs({ path, listLabelled }).has("org/repo#2"), true);
 });
