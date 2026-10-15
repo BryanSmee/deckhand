@@ -30,6 +30,12 @@ test("open questions: None, its variants and the inbox link after it", () => {
     assert.equal(hasOpenQuestions(`## Open questions\n\n${none}\n`), false, none);
   }
   assert.equal(hasOpenQuestions(`## Open questions\n\n1. Which name?${inbox}`), true);
+  // A brainstorm's wrap-up: settled questions under Decisions, "None" left in Open questions.
+  const wrapped =
+    "## Proposal\n\nX.\n\n## Decisions\n\n1. **Name**: which one?\n   - [x] `deck`\n\n" +
+    "## Open questions\n\nNone\n\nFrom the brainstorm on #150.\n";
+  assert.equal(hasOpenQuestions(wrapped), false);
+  assert.equal(parseQuestions(questionsSection(wrapped)), null);
   // Any heading level, a colon, a hand-written intro before the list.
   assert.equal(hasOpenQuestions("### Open Questions:\n\nTwo things:\n\n- A?\n- B?"), true);
   // Empty, only a comment, or no such section.

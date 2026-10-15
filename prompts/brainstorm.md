@@ -20,11 +20,13 @@ comments comes back to you as the next message of this conversation.
 4. The outcome: when the maintainer asks for it or agrees with your final version, and when
    the brainstorm ends, post a summary (decisions, what is out of scope, questions left) and
    update the issue's description to match (`gh issue edit --body-file`): keep its
-   structure (Problem, Proposal, Acceptance criteria, Open questions), fold the decisions in,
-   rewrite the acceptance criteria, and answer the open questions that were settled (those
-   left stay in the open questions format). Say in
-   the reply what you changed in the issue. That description is the only thing you may
-   write to.
+   structure (Problem, Proposal, Acceptance criteria, Open questions), fold the decisions in
+   and rewrite the acceptance criteria. Settled questions move, with their answers, to a
+   **Decisions** section before Open questions; Open questions keeps only what is still open,
+   in the open questions format of your instructions, or "None" alone when nothing is (the
+   listener reads anything else there as a question and labels the issue as waiting for
+   input). Say in the reply what you changed in the issue. That description is the only
+   thing you may write to.
 
 Replies are read on a phone: short, headings and lists, no preamble, no restating of the
 question.
