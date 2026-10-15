@@ -777,17 +777,61 @@ function followUp(id, body) {
   return payload;
 }
 
-// A listener whose sandbox waits (`hold`) before Claude's first answer, with a run started.
-async function holding(t) {
+// A listener whose sandbox waits (`hold`) before Claude's first answer, with a run started by
+// a comment saying `body`.
+async function holding(t, body) {
   const ctx = await listen(t, {}, (dir) => {
     writeFileSync(join(dir, "hold"), "");
     return {};
   });
-  await ctx.send(comment("alice"));
+  await ctx.send(comment("alice", body));
   const egress = join(ctx.dir, "egress");
   await until(() => exists(egress)?.trim().split("\n").length === 9, "the sandbox");
   return ctx;
 }
+
+// What the running sandbox's secret gets from the git gateway and from `gh pr ready`.
+async function pushAndReady({ dir, brokerPort }) {
+  const secret = readFileSync(join(dir, "run-secret"), "utf8").trim();
+  const basic = Buffer.from(`deckhand:${secret}`).toString("base64");
+  const push = await fetch(
+    `http://127.0.0.1:${brokerPort}/git/org/repo.git/info/refs?service=git-receive-pack`,
+    { headers: { authorization: `Basic ${basic}` } },
+  );
+  const ready = await fetch(`http://127.0.0.1:${brokerPort}/pr/org/repo/13/ready`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${secret}` },
+  });
+  return [`${push.status} ${await push.text()}`, `${ready.status} ${await ready.text()}`];
+}
+
+test("a brainstorm can't push or mark a pull request ready, before or after a restart", async (t) => {
+  const ctx = await holding(t, "Deckhand\n/mode brainstorm\nWhat about dark mode?");
+  const refused = [/^403 Deckhand: this run can't push/, /^403 .*can't change pull requests/];
+  const check = async () => {
+    const answers = await pushAndReady(ctx);
+    answers.forEach((answer, i) => assert.match(answer, refused[i]));
+  };
+  await check();
+  assert.match(readFileSync(join(ctx.dir, "run-env"), "utf8"), /^SANDBOX_LIGHT=1$/m);
+  await ctx.restart();
+  await ctx.listener.until("again");
+  await check();
+});
+
+test("a work run still pushes and marks ready, before and after a restart", async (t) => {
+  const ctx = await holding(t);
+  // Past the run checks: on to GitHub (here, a fake one that knows neither).
+  const check = async () => {
+    for (const answer of await pushAndReady(ctx)) {
+      assert.doesNotMatch(answer, /^401|can't push|can't change pull requests/);
+    }
+  };
+  await check();
+  await ctx.restart();
+  await ctx.listener.until("picked up deckhand-org-repo-12-0e9572aae2 again");
+  await check();
+});
 
 test("a restart during a run: it goes on, a new comment reaches it, one reply", async (t) => {
   const ctx = await holding(t);

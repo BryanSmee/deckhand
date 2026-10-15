@@ -61,7 +61,7 @@ export function createPrReady({
     if (run.repo !== repo) {
       return send(res, 403, { error: `this run can only change ${run.repo}'s pull requests` });
     }
-    // Onboarding and light modes: their token can't write pull requests either.
+    // Light runs (brainstorms, inbox entries, onboarding, a repo's light modes) only comment.
     if (!run.push) return send(res, 403, { error: "this run can't change pull requests" });
 
     const github = app();

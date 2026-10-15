@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { DISCUSSION_PERMISSIONS, READ_ONLY_PERMISSIONS } from "../listener/github-app.mjs";
+import {
+  DISCUSSION_PERMISSIONS,
+  LIGHT_PERMISSIONS,
+  READ_ONLY_PERMISSIONS,
+} from "../listener/github-app.mjs";
 import { isFresh, isLight, kindOf, permissionsFor } from "../listener/modes.mjs";
 import { firstMessage, liveMessage, promptFor } from "../listener/prompts.mjs";
 
@@ -43,9 +47,13 @@ test("modes: discussions may write them, onboarding and light repo modes only re
   assert.equal(permissionsFor("discussion", true), DISCUSSION_PERMISSIONS);
   assert.equal(permissionsFor("onboarding", true), READ_ONLY_PERMISSIONS);
   assert.equal(permissionsFor("review", true), READ_ONLY_PERMISSIONS);
-  // Brainstorms keep the sandbox's usual token, as before repo modes.
-  assert.equal(permissionsFor("brainstorm", true), undefined);
+  // Brainstorms and inbox entries comment and create issues, never touch a pull request.
+  for (const mode of ["brainstorm", "stop", "idea", "bug"]) {
+    assert.equal(permissionsFor(mode, true), LIGHT_PERMISSIONS, mode);
+  }
+  assert.equal(DISCUSSION_PERMISSIONS.pull_requests, "read");
   assert.equal(permissionsFor("work", false), undefined);
+  assert.equal(permissionsFor("triage", false), undefined);
 });
 
 test("prompts: each kind of run gets its own", () => {

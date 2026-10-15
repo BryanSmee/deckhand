@@ -20,8 +20,10 @@ instructions. A sandbox that could write to it could grant itself all of that, s
   forwards it to GitHub with a token of its own only when every one is a branch other than
   the default one, looked up from GitHub on each push (case-insensitively). Tags, the
   default branch (update, force or delete), signed and compressed pushes are refused, and
-  the refusal shows in git's output as `[remote rejected] … (Deckhand: …)`. A run whose token
-  can't write pull requests (onboarding, a repo's light modes) can't push at all.
+  the refusal shows in git's output as `[remote rejected] … (Deckhand: …)`. Only work runs
+  push: the broker registers every light run (brainstorms, onboarding, inbox entries,
+  discussions, a repo's light modes) as one that can't, so the gateway refuses it whatever its
+  token, and the same holds for a run a restarted listener picks up again.
 - The sandbox's `pre-push` hook only gives an earlier, clearer message: the gateway doesn't
   rely on it.
 - Marking a pull request ready for review, or back to draft, also takes `contents: write`
@@ -29,8 +31,8 @@ instructions. A sandbox that could write to it could grant itself all of that, s
   `convertPullRequestToDraft`). The sandbox's `gh` wrapper sends `gh pr ready [--undo]` to
   the listener instead (`POST /pr/<owner>/<repo>/<number>/ready` or `/draft` on the
   broker's port, `listener/pr-ready.mjs`), with the run's secret. The listener checks that
-  the run is live and may write pull requests, that the pull request belongs to the run's
-  repository and that its head branch is in that repository too (not a fork), then calls
+  the run is live and a work run, that the pull request belongs to the run's repository
+  and that its head branch is in that repository too (not a fork), then calls
   that one mutation with a token of its own, which the sandbox never sees. That token does
   nothing else.
 
@@ -53,7 +55,8 @@ the broker then refuses it. The installation tokens a sandbox already got are an
   got before.
 - A token only reaches the run's repository, with the sandbox's permissions: it reads the
   code, can't push (pushes go through the gateway, with the run's secret), and can write
-  issues and pull requests (and discussions, for discussion runs) there.
+  issues and, for work runs only, pull requests (and discussions, for discussion runs)
+  there. Onboarding and a repo's light modes only read issues and pull requests.
 
 So what a run copied out (through an allowed host) can be used against its own repository,
 with those permissions, for up to an hour. Uninstalling the App, or suspending its
@@ -80,9 +83,10 @@ dates from before it (`<prefix>-<owner>-<repo>-<n>-claude` exists) keep that nam
 volumes.
 
 Light runs (brainstorms, onboarding, inbox entries, discussions, the repo's light modes) read
-and comment; work runs push. They never share a writable volume: what a light run could leave
-in a clone or a session (git hooks, Claude's hooks and settings, code) would otherwise run in
-the issue's next work run, with its token. So light runs get their own `-light-` clone and
+and comment; work runs push. The git gateway and `gh pr ready` refuse light runs, and their
+tokens can't write pull requests. They never share a writable volume: what a light run could
+leave in a clone or a session (git hooks, Claude's hooks and settings, code) would otherwise
+run in the issue's next work run, with its token. So light runs get their own `-light-` clone and
 session, no cache volumes (they run no setup), and granted host paths read-only. A work run
 after a brainstorm starts a new session, from the issue and its comments.
 

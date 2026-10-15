@@ -67,3 +67,14 @@ test("before the App is set up, no token", async (t) => {
   t.after(close);
   assert.equal((await get("/token", broker.register("org/a"))).status, 503);
 });
+
+test("only runs registered as work push; a restarted run's secret keeps its own", () => {
+  const broker = createBroker({ app: () => null });
+  assert.equal(broker.runOf(broker.register("org/a")).push, false);
+  assert.equal(broker.runOf(broker.register("org/a", { pull_requests: "write" })).push, false);
+  assert.equal(broker.runOf(broker.register("org/a", undefined, { push: "yes" })).push, false);
+  assert.equal(broker.runOf(broker.register("org/a", undefined, { push: true })).push, true);
+  const secret = broker.register("org/a", undefined, { push: true, secret: "kept" });
+  assert.equal(secret, "kept");
+  assert.equal(broker.runOf("kept").push, true);
+});

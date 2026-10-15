@@ -130,7 +130,10 @@ const gitEnv = {
   GIT_COMMITTER_EMAIL: "t@t",
 };
 
-async function setup(t, { register = (b) => b.register("org/repo"), app = true } = {}) {
+async function setup(
+  t,
+  { register = (b) => b.register("org/repo", undefined, { push: true }), app = true } = {},
+) {
   const dir = mkdtempSync(join(tmpdir(), "gateway-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const root = join(dir, "github");
@@ -234,10 +237,27 @@ test("no secret, another run's repo or a finished run: no push", async (t) => {
   assert.deepEqual(seen, []);
 });
 
-test("a run whose token only reads can't push", async (t) => {
+// Light runs: brainstorms and inbox entries keep a token that writes issues, onboarding and
+// a repo's light modes one that only reads. Neither decides: the kind of run does.
+for (const [what, extra] of [
+  ["a brainstorm", { pull_requests: "read" }],
+  ["a light repo mode", { contents: "read", issues: "read", pull_requests: "read" }],
+  ["a run registered without saying", undefined],
+]) {
+  test(`${what} can't push`, async (t) => {
+    const { work, remote, seen } = await setup(t, {
+      register: (b) => b.register("org/repo", extra),
+    });
+    const res = await git(work, "push", remote(), "HEAD:refs/heads/x");
+    assert.equal(res.ok, false);
+    assert.match(res.stderr, /this run can't push/);
+    assert.deepEqual(seen, []);
+  });
+}
+
+test("a light run can't push even with a token that writes pull requests", async (t) => {
   const { work, remote, seen } = await setup(t, {
-    register: (b) =>
-      b.register("org/repo", { contents: "read", issues: "read", pull_requests: "read" }),
+    register: (b) => b.register("org/repo", { pull_requests: "write" }, { push: false }),
   });
   const res = await git(work, "push", remote(), "HEAD:refs/heads/x");
   assert.equal(res.ok, false);

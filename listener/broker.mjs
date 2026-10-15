@@ -6,7 +6,6 @@
 // Those tokens only read the code: pushes go through the listener's git gateway
 // (git-gateway.mjs), which finds the run here by the same secret.
 import { createHash, randomBytes } from "node:crypto";
-import { SANDBOX_PERMISSIONS } from "./github-app.mjs";
 import { sendJson } from "./web.mjs";
 
 // Kept by hash: the map never holds a usable secret, and lookups don't compare secrets.
@@ -21,12 +20,12 @@ export function createBroker({
 }) {
   const runs = new Map(); // hash(secret) → { repo, extra, push }
 
-  // `extra`: permissions this run needs beyond the sandbox's usual ones (discussions).
-  // `secret`: a run's own again, when a restarted listener picks it up.
-  function register(repo, extra, secret = random()) {
-    // A run that may not write pull requests (onboarding, light modes) has no branch to push.
-    const push = { ...SANDBOX_PERMISSIONS, ...extra }.pull_requests === "write";
-    runs.set(hash(secret), { repo: repo.toLowerCase(), extra, push });
+  // `extra`: permissions this run's token gets beyond or instead of the sandbox's usual ones.
+  // `push`: whether it may push and change its pull requests, which only work runs do (light
+  // runs' pushes would run in the issue's next work run). Decided by the kind of run, not
+  // its token: fail closed. `secret`: a run's own again, when a restarted listener picks it up.
+  function register(repo, extra, { push = false, secret = random() } = {}) {
+    runs.set(hash(secret), { repo: repo.toLowerCase(), extra, push: push === true });
     return secret;
   }
 

@@ -64,7 +64,7 @@ async function serve({ pulls = { 7: pull() }, app = true, graphql = {} } = {}) {
 test("a work run marks its pull request ready, and back to draft, with the gateway's token", async (t) => {
   const { broker, seen, post, close } = await serve();
   t.after(close);
-  const secret = broker.register("Org/Repo");
+  const secret = broker.register("Org/Repo", undefined, { push: true });
   const ready = await post("/pr/org/repo/7/ready", secret);
   assert.equal(ready.status, 200);
   assert.deepEqual(ready.body, { message: "org/repo#7 is marked as ready for review" });
@@ -83,7 +83,10 @@ test("a work run marks its pull request ready, and back to draft, with the gatew
 test("--undo converts a ready pull request back to draft", async (t) => {
   const { broker, seen, post, close } = await serve({ pulls: { 7: pull({ draft: false }) } });
   t.after(close);
-  const res = await post("/pr/Org/Repo/7/draft", broker.register("org/repo"));
+  const res = await post(
+    "/pr/Org/Repo/7/draft",
+    broker.register("org/repo", undefined, { push: true }),
+  );
   assert.equal(res.status, 200);
   assert.equal(seen.mutations[0].name, "convertPullRequestToDraft");
 });
@@ -91,7 +94,10 @@ test("--undo converts a ready pull request back to draft", async (t) => {
 test("a pull request already in that state is left alone", async (t) => {
   const { broker, seen, post, close } = await serve({ pulls: { 7: pull({ draft: false }) } });
   t.after(close);
-  const res = await post("/pr/org/repo/7/ready", broker.register("org/repo"));
+  const res = await post(
+    "/pr/org/repo/7/ready",
+    broker.register("org/repo", undefined, { push: true }),
+  );
   assert.deepEqual(res, {
     status: 200,
     body: { message: "org/repo#7 is already ready for review" },
@@ -102,20 +108,27 @@ test("a pull request already in that state is left alone", async (t) => {
 test("unknown or finished runs, other repos and runs that can't write are refused before GitHub", async (t) => {
   const { broker, seen, post, close } = await serve();
   t.after(close);
-  const finished = broker.register("org/repo");
+  const finished = broker.register("org/repo", undefined, { push: true });
   broker.revoke(finished);
   assert.equal((await post("/pr/org/repo/7/ready")).status, 401);
   assert.equal((await post("/pr/org/repo/7/ready", "guess")).status, 401);
   assert.equal((await post("/pr/org/repo/7/ready", finished)).status, 401);
-  const other = await post("/pr/org/other/7/ready", broker.register("org/repo"));
+  const other = await post(
+    "/pr/org/other/7/ready",
+    broker.register("org/repo", undefined, { push: true }),
+  );
   assert.equal(other.status, 403);
   assert.match(other.body.error, /only change org\/repo's/);
-  // Onboarding and light modes: their token can't write pull requests.
-  const light = broker.register("org/repo", { pull_requests: "read" });
-  assert.equal((await post("/pr/org/repo/7/ready", light)).status, 403);
-  assert.equal((await post("/pr/org/repo/7/draft", light)).status, 403);
+  // Light runs (brainstorms, inbox entries, onboarding, light modes), whatever their token.
+  for (const light of [
+    broker.register("org/repo", { pull_requests: "read" }),
+    broker.register("org/repo", { pull_requests: "write" }, { push: false }),
+  ]) {
+    assert.equal((await post("/pr/org/repo/7/ready", light)).status, 403);
+    assert.equal((await post("/pr/org/repo/7/draft", light)).status, 403);
+  }
   // Wrong method or path.
-  const secret = broker.register("org/repo");
+  const secret = broker.register("org/repo", undefined, { push: true });
   assert.equal((await post("/pr/org/repo/7/ready", secret, "GET")).status, 405);
   assert.equal((await post("/pr/org/repo/7/merge", secret)).status, 404);
   assert.deepEqual(seen.lookups, []);
@@ -132,7 +145,7 @@ test("a fork's pull request, or one of another base, is never changed", async (t
     },
   });
   t.after(close);
-  const secret = broker.register("org/repo");
+  const secret = broker.register("org/repo", undefined, { push: true });
   const fork = await post("/pr/org/repo/7/ready", secret);
   assert.equal(fork.status, 403);
   assert.match(fork.body.error, /fork/);
@@ -146,14 +159,22 @@ test("a fork's pull request, or one of another base, is never changed", async (t
 test("GitHub's GraphQL errors and a missing App are reported", async (t) => {
   const failing = await serve({ graphql: { errors: [{ message: "Resource not accessible" }] } });
   t.after(failing.close);
-  const res = await failing.post("/pr/org/repo/7/ready", failing.broker.register("org/repo"));
+  const res = await failing.post(
+    "/pr/org/repo/7/ready",
+    failing.broker.register("org/repo", undefined, { push: true }),
+  );
   assert.equal(res.status, 502);
   assert.match(res.body.error, /refused to mark org\/repo#7/);
 
   const none = await serve({ app: false });
   t.after(none.close);
   assert.equal(
-    (await none.post("/pr/org/repo/7/ready", none.broker.register("org/repo"))).status,
+    (
+      await none.post(
+        "/pr/org/repo/7/ready",
+        none.broker.register("org/repo", undefined, { push: true }),
+      )
+    ).status,
     503,
   );
 });

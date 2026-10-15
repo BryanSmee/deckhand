@@ -38,8 +38,11 @@ export const SANDBOX_PERMISSIONS = {
   metadata: "read",
   actions: "read",
 };
+// Built-in light runs (brainstorms, inbox entries, discussions) comment and create issues, and
+// never touch a pull request: they can't push either (the broker's `push`).
+export const LIGHT_PERMISSIONS = { pull_requests: "read" };
 // Added for discussion runs only: an App created before discussions keeps working elsewhere.
-export const DISCUSSION_PERMISSIONS = { discussions: "write" };
+export const DISCUSSION_PERMISSIONS = { ...LIGHT_PERMISSIONS, discussions: "write" };
 // The git gateway's own token for a push it lets through: never handed to a sandbox.
 export const PUSH_PERMISSIONS = { contents: "write" };
 // A repo's light modes (its config's `modes:`) only comment, and the listener posts their
