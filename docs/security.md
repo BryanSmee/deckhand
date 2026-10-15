@@ -500,5 +500,12 @@ listener's logs (`Egress: refused <host> for <repo>#<n>`).
 - The listener's own port (8080: dashboard, webhook) is reachable from sandboxes; it needs
   a dashboard session (a signed-in allowed user, see [Setup](setup.md#4-the-dashboard)) or
   the webhook's signature. `/status` also answers calls from inside the listener's container.
-  Deliveries without a signature or over 25 MB are refused before their body is read, at
-  most 16 are read at once, each within 10 seconds.
+  Deliveries without a signature or over 5 MB are refused before their body is read (a push
+  that large only delays a config's refresh). At most 16 are read at once, 4 per client
+  address (per /64 for IPv6), each within 10 seconds and dropped after 2 seconds without
+  data. A reader older than a second loses its place to a new delivery when its address's
+  share, or the listener, is full: GitHub sends a body in milliseconds, so a stalled client
+  can delay deliveries but not keep them out. Behind a reverse proxy every delivery has the
+  proxy's address, so they all share those 4 places: restrict `/webhook` to GitHub's `hooks`
+  ranges (`https://api.github.com/meta`) at the proxy, and let it buffer request bodies, to
+  keep slow clients away from the listener.

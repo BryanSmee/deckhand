@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { page } from "./auth.mjs";
 import { board, STATES } from "./board.mjs";
 import { matchHost } from "./egress.mjs";
+import { createSlots, readDelivery, sourceOf } from "./deliveries.mjs";
 import { closedItem, previewEvent, pullRequest, verified, workItem } from "./events.mjs";
 import { grantFor, loadGrants, ungranted } from "./grants.mjs";
 import { kindOf } from "./modes.mjs";
@@ -19,7 +20,7 @@ import { refreshFor } from "./repos.mjs";
 import { publicRun, stream } from "./runlog.mjs";
 import { serveAsset } from "./static.mjs";
 import { closedAs } from "./titles.mjs";
-import { readBody, sendJson } from "./web.mjs";
+import { sendJson } from "./web.mjs";
 
 const imageTypes = {
   png: "image/png",
@@ -28,10 +29,17 @@ const imageTypes = {
   webp: "image/webp",
 };
 
-// GitHub caps its deliveries at 25 MB.
-const MAX_DELIVERY = 25 * 1024 * 1024;
-// Deliveries read at once before their signature is checked: GitHub sends a few at a time.
+// GitHub's own cap is 25 MB, far above the events Deckhand takes: comments, pull requests,
+// workflow runs. Only a push with many commits could be larger, and a push refused only delays
+// a config's refresh (repos.mjs reads it again within 30 minutes).
+const MAX_DELIVERY = 5 * 1024 * 1024;
+// Deliveries read at once before their signature is checked: GitHub sends a few at a time, from
+// many addresses. One address gets a share of the places (deliveries.mjs).
 const MAX_UNVERIFIED = 16;
+const PER_SOURCE = 4;
+// A reader this old may lose its place to a new delivery: GitHub's bodies take milliseconds.
+const GRACE_MS = 1000;
+const IDLE_MS = 2000;
 const BODY_MS = 10000;
 
 // Health checks and scripts call from inside the container (docker compose exec).
@@ -205,18 +213,23 @@ export function createHttp(ctx, { dashboardDir }) {
   }
 
   // Bodies being read before their signature can be checked: a public port, so capped.
-  let unverified = 0;
+  const unverified = createSlots({
+    total: MAX_UNVERIFIED,
+    share: PER_SOURCE,
+    graceMs: GRACE_MS,
+  });
 
   function webhook(req, res) {
     if (refusedEarly(req, res)) return;
-    unverified++;
-    // GitHub sends its body at once: a slow one would hold a place.
-    const timer = setTimeout(() => req.destroy(new Error("body not received in time")), BODY_MS);
-    readBody(req, MAX_DELIVERY)
-      .finally(() => {
-        unverified--;
-        clearTimeout(timer);
-      })
+    const source = sourceOf(req.socket.remoteAddress);
+    const release = unverified.take(source, () =>
+      req.destroy(new Error("its place taken by a newer delivery")),
+    );
+    if (!release) {
+      return refuse(res, 503, `no place to read a delivery from ${source}`, "busy");
+    }
+    readDelivery(req, { limit: MAX_DELIVERY, idleMs: IDLE_MS, totalMs: BODY_MS })
+      .finally(release)
       .then(
         (body) => {
           if (refused(req, res, body)) return;
@@ -253,9 +266,6 @@ export function createHttp(ctx, { dashboardDir }) {
     }
     if (Number(req.headers["content-length"]) > MAX_DELIVERY) {
       return refuse(res, 413, `over ${MAX_DELIVERY} bytes`, "too large");
-    }
-    if (unverified >= MAX_UNVERIFIED) {
-      return refuse(res, 503, `${MAX_UNVERIFIED} deliveries being read already`, "busy");
     }
     return false;
   }
