@@ -185,7 +185,13 @@ async function fakeGitHub(files = {}) {
       }
       if (req.url === "/repos/org/repo/pulls?state=open&per_page=100") {
         return res.end(
-          JSON.stringify([{ number: 31, head: { ref: "issue-30-deckhand-config" }, body: "" }]),
+          JSON.stringify([
+            {
+              number: 31,
+              head: { ref: "issue-30-deckhand-config", repo: { full_name: "org/repo" } },
+              body: "",
+            },
+          ]),
         );
       }
       // A listener that restarted looks the installation up instead of reading it from a
