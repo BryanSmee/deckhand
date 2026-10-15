@@ -84,9 +84,10 @@ case "$1" in
     cp "\${@: -1}/docker/Dockerfile" "${dir}/built-dockerfile" ;;
   run)
     case "$*" in *--entrypoint*) echo "$*" >> "${dir}/docker-calls"; exit 0 ;; esac
-    printf '%s\\n' "$@" > "${dir}/run-args"
+    # run-args last: tests wait for it, then read the others.
     echo "$DECKHAND_RUN_SECRET" > "${dir}/run-secret"
     env > "${dir}/run-env"
+    printf '%s\\n' "$@" > "${dir}/run-args"
     name=$(printf '%s\\n' "$@" | grep -A1 -x -- --name | tail -1)
     run=$(printf '%s\\n' "$@" | sed -n 's/^deckhand\\.run=//p')
     mkdir -p "$c/$name"
@@ -227,6 +228,15 @@ async function fakeGitHub(files = {}) {
       if (req.method === "GET" && req.url === "/repos/org/repo/pulls/41") {
         const head = { ref: "feature/x", repo: { full_name: "someone/repo" } };
         return res.end(JSON.stringify({ number: 41, head }));
+      }
+      // Pull requests saying they close #3: from a branch of the repo, from a fork.
+      if (req.method === "GET" && req.url === "/repos/org/repo/pulls/42") {
+        const head = { ref: "issue-3-fix", repo: { full_name: "org/repo" } };
+        return res.end(JSON.stringify({ number: 42, body: "Closes #3", head }));
+      }
+      if (req.method === "GET" && req.url === "/repos/org/repo/pulls/43") {
+        const head = { ref: "issue-3-fix", repo: { full_name: "mallory/repo" } };
+        return res.end(JSON.stringify({ number: 43, body: "Closes #3", head }));
       }
       // A listener that restarted looks the installation up instead of reading it from a
       // delivery.
@@ -1127,6 +1137,64 @@ test("comments queued when the listener stops run after it starts", async (t) =>
     (r) => r.method === "DELETE" && r.path === "/repos/org/repo/issues/comments/99/reactions/1",
   );
   assert.deepEqual(leftovers(ctx.dir), []);
+});
+
+test("a comment queued before a restart doesn't run once its author left ALLOWED_USERS", async (t) => {
+  const ctx = await listen(t, {}, { DEBOUNCE_MS: "60000" });
+  await ctx.send(comment("alice"));
+  await ctx.listener.until("queued (work");
+  await ctx.github.waitFor((r) => r.path === "/repos/org/repo/issues/comments/99/reactions");
+  await ctx.restart({ DEBOUNCE_MS: "0", ALLOWED_USERS: "bob" });
+  await ctx.listener.until("dropped: alice is no longer an allowed user");
+  // Its 👀 goes, and nothing runs.
+  await ctx.github.waitFor(
+    (r) => r.method === "DELETE" && r.path === "/repos/org/repo/issues/comments/99/reactions/1",
+  );
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  assert.equal(exists(join(ctx.dir, "run-args")), null);
+  assert.equal(replies(ctx.github).length, 0);
+});
+
+test("a comment whose author leaves the repo's users while it waits doesn't run", async (t) => {
+  const files = { ".deckhand.yaml": "users: [alice, bob]\n" };
+  const ctx = await listen(t, files, { DEBOUNCE_MS: "300" });
+  await ctx.send(comment("alice"));
+  await ctx.listener.until("queued (work");
+  files[".deckhand.yaml"] = "users: [bob]\n";
+  await ctx.listener.until("a queued comment dropped: alice is no longer an allowed user");
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  assert.equal(exists(join(ctx.dir, "run-args")), null);
+  // The queue goes on: bob's comment runs.
+  await ctx.send({
+    ...comment("bob"),
+    comment: { id: 100, body: "Deckhand", user: { login: "bob", type: "User" } },
+  });
+  await ctx.listener.until("done (ok)");
+});
+
+test("a comment on a pull request saying Closes #3 joins #3 only from a branch of the repo", async (t) => {
+  const { github, send, listener } = await listen(t);
+  const onPull = (number, id) => {
+    const payload = comment("alice");
+    // Opened by someone else than the App: its head is looked up.
+    payload.issue = {
+      number,
+      body: "Closes #3",
+      pull_request: {},
+      user: { login: "github-actions[bot]", type: "Bot" },
+      author_association: "NONE",
+    };
+    payload.comment = { ...payload.comment, id };
+    return payload;
+  };
+  await send(onPull(42, 101));
+  await listener.until("org/repo#3: queued");
+  await listener.until("done (ok)");
+  await send(onPull(43, 102));
+  await listener.until("org/repo#pr-43: queued");
+  assert.match(listener.output(), /org\/repo#pr-43: says it closes #3, not linked/);
+  await listener.until(/org\/repo#pr-43: done \(ok\)/);
+  assert.ok(github.requests.some((r) => r.path === "/repos/org/repo/pulls/43"));
 });
 
 test("a restart after Claude answered once: nothing is read twice", async (t) => {

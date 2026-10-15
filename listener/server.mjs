@@ -96,6 +96,8 @@ const ctx = {
 
 function useApp(credentials) {
   ctx.app = createGitHubApp({ credentials, api: config.githubApi, log });
+  // The App's own login: its pull requests are Claude's (events.mjs linkedIssue()).
+  config.bot = ctx.app.identity().name;
 }
 
 {

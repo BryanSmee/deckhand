@@ -1,7 +1,7 @@
 // Tasks: one queue per issue, pull request or discussion, at most maxParallel containers.
 // A comment that passed the checks is queued under its task's key ("org/repo#12"); after a
 // pause (so a burst is one run) it starts a run, or goes to the running one (deliver()).
-import { commentsText, workItem } from "./events.mjs";
+import { commentsText, linkedIssue, linkTo, workItem } from "./events.mjs";
 import { INBOX, isLight, sessionName } from "./modes.mjs";
 import { liveMessage } from "./prompts.mjs";
 import {
@@ -14,6 +14,22 @@ import {
   startable,
 } from "./repo-config.mjs";
 import { configErrors } from "./runs.mjs";
+
+// Why a queued comment may no longer run, or null: its repo left ALLOWED_REPOS, or its author
+// left ALLOWED_USERS or (`settings`, when known) the repo's `users`. Checked again when it was
+// queued before a restart, and when its run begins. Items the listener makes itself
+// (onboarding, conflicts) have no comment and no author; a comment without one is refused.
+export function noLongerAllowed(config, item, settings = null) {
+  if (config.repos.length && !config.repos.includes(item.repo.toLowerCase())) {
+    return `${item.repo} is no longer in ALLOWED_REPOS`;
+  }
+  if (!item.author) return item.comment ? "its author isn't known" : null;
+  const login = item.author.toLowerCase();
+  if (!config.users.includes(login) || (settings && !settings.users.includes(login))) {
+    return `${item.author} is no longer an allowed user`;
+  }
+  return null;
+}
 
 // `ctx` (server.mjs): the listener's state and services, read at call time. Tasks are
 // `ctx.tasks`: key → { repo, id, kind, number, base, name, settings, pending: [], running,
@@ -44,8 +60,9 @@ export function createTasks(ctx) {
       }
       return;
     }
-    const item = workItem(effectiveConfig(config, settings), event, payload, skip);
-    if (!item) return;
+    const found = workItem(effectiveConfig(config, settings), event, payload, skip);
+    if (!found) return;
+    const item = await linked(found);
     item.base = first.base;
     item.settings = settings;
     if (item.after) {
@@ -60,13 +77,36 @@ export function createTasks(ctx) {
     await accept(item);
   }
 
+  // A comment on a pull request that says it closes an issue, from a payload without the pull
+  // request's head (events.mjs prItem()): the issue's only when that head is in the repo.
+  // Unknown is the pull request's own.
+  async function linked(item) {
+    if (!item.claims) return item;
+    const { claims: _, ...own } = item;
+    const res = await ctx.github(
+      item.repo,
+      "GET",
+      `/repos/${item.repo}/pulls/${item.number}`,
+      undefined,
+      [404],
+    );
+    const pr = res.ok ? await res.json() : null;
+    const issue = pr && linkedIssue(pr, item.repo, config.bot);
+    if (!issue) {
+      const why = pr ? "its head isn't a branch of the repo" : `lookup: ${res.status}`;
+      log(`${item.repo}#${own.id}: says it closes #${item.claims}, not linked (${why})`);
+    }
+    return issue ? linkTo(item, issue) : own;
+  }
+
   // A comment that waited for other issues (waits.mjs), checked again as if it had just come:
   // the operator's repos and the repo's users or config may have changed since. False when
   // it may no longer run (the reason logged).
   async function resume(item) {
     const key = `${item.repo}#${item.id}`;
-    if (config.repos.length && !config.repos.includes(item.repo.toLowerCase())) {
-      log(`${key}: not started, ${item.repo} is no longer in ALLOWED_REPOS`);
+    const repoGone = noLongerAllowed(config, { repo: item.repo });
+    if (repoGone) {
+      log(`${key}: not started, ${repoGone}`);
       return false;
     }
     const { settings, errors } = await ctx.repoSettings(item.repo, item.base);
@@ -77,9 +117,9 @@ export function createTasks(ctx) {
         .catch((error) => log(`${key}: ${error}`));
       return false;
     }
-    const login = item.author?.toLowerCase();
-    if (!login || !config.users.includes(login) || !settings.users.includes(login)) {
-      log(`${key}: not started, ${item.author ?? "its author"} is no longer an allowed user`);
+    const refused = noLongerAllowed(config, item, settings);
+    if (refused) {
+      log(`${key}: not started, ${refused}`);
       return false;
     }
     await accept({ ...item, settings });
