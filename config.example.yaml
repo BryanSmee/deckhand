@@ -17,7 +17,7 @@ sandbox_model: opus
 sandbox_effort: medium
 max_parallel: 2
 
-# Each sandbox's limits; the grants file can set them per repo.
+# Each sandbox's limits; the grants folder can set them per repo.
 sandbox_cpus: 2
 sandbox_memory: 4g
 sandbox_pids: 2048

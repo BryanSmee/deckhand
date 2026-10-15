@@ -109,7 +109,7 @@ colour: blue
   );
   assert.deepEqual(errors, []);
   assert.deepEqual(warnings, [
-    "allow_branch_docker_images: ignored here, the operator's grants file sets it for this repository",
+    "allow_branch_docker_images: ignored here, the operator's grants folder sets it for this repository",
     "colour: unknown, ignored",
   ]);
   assert.equal(settings.model, "sonnet");

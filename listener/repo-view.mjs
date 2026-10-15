@@ -4,7 +4,7 @@
 // panel can't say something a run wouldn't do.
 import { realpathSync, statSync } from "node:fs";
 import { mandatoryHosts, refusedRepoHosts } from "./egress.mjs";
-import { grantFor, resolveMounts, ungranted } from "./grants.mjs";
+import { grantFor, grantsFrom, resolveMounts, ungranted } from "./grants.mjs";
 import { customMode, defaultSettings } from "./repo-config.mjs";
 
 const none = (values) => (values.length ? values.join(", ") : "none");
@@ -65,7 +65,7 @@ export function settingRows(config, settings, grant) {
       false,
       grant.allowBranchDockerImages && !settings.dockerfile
         ? "granted, but the repository has no dockerfile"
-        : "the grants file",
+        : "the operator's grants",
     ),
     row("caches", none(settings.caches), changed("caches")),
     row("inbox", inboxText(settings.inbox), changed("inbox")),
@@ -93,7 +93,7 @@ export function settingRows(config, settings, grant) {
       "limits",
       limitsText(grant.limits),
       false,
-      same(grant.limits, config.limits) ? "SANDBOX_*" : "the grants file",
+      grant.limitsFile ? `grants: ${grant.limitsFile}` : "SANDBOX_*",
     ),
   );
   return rows;
@@ -125,14 +125,14 @@ export function hostRows(config, grant, settings) {
   };
   for (const host of mandatoryHosts(config)) add(host, "operator", "always");
   for (const host of config.hosts) add(host, "operator", "ALLOWED_HOSTS");
-  for (const host of grant.hosts) add(host, "operator", "the grants file");
+  for (const host of grant.hosts) add(host, "operator", `grants: ${grant.hostFiles[host]}`);
   for (const host of settings.hosts) {
     const [refused] = refusedRepoHosts(config, grant, { hosts: [host] });
     if (refused) {
       add(
         host,
         "refused",
-        "the operator doesn't let this repository add hosts (allow_repo_hosts in the grants file)",
+        "the operator doesn't let this repository add hosts (allow_repo_hosts in its grants)",
       );
     } else if (grant.allowRepoHosts) add(host, "repo", null);
     else add(host, "operator", "already allowed by the operator");
@@ -163,12 +163,10 @@ export function mountRows(settings, grant, fs = {}) {
   });
 }
 
-// The repo's entry of the grants file (or "*"'s), as the panel shows it.
-export function grantRows(grants, config, repo) {
-  const grant = grantFor(grants, config, repo);
-  const entry = grants.has(repo.toLowerCase()) ? repo : grants.has("*") ? "*" : null;
+// What the operator grants the repo, as the panel shows it, with the files it comes from.
+export function grantRows(grant) {
   return {
-    entry,
+    files: grant.files,
     allowRepoHosts: grant.allowRepoHosts,
     allowPreview: grant.allowPreview,
     allowDockerfile: grant.allowDockerfile,
@@ -179,21 +177,20 @@ export function grantRows(grants, config, repo) {
   };
 }
 
-// Everything the panel shows under the file's errors and warnings. `grants`: the parsed
-// grants file, or null when it has errors (no run starts then; the defaults are shown).
+// Everything the panel shows under the file's errors and warnings. `grant`: grantFor()'s, or
+// null when the repo's grants have errors (no run starts then; the defaults are shown).
 export function effectiveView(
   config,
   repo,
   settings,
-  grants,
+  grant,
   fs = { realpath: realpathSync, stat: statSync },
 ) {
-  const known = grants ?? new Map();
-  const grant = grantFor(known, config, repo);
+  const shown = grant ?? grantFor(grantsFrom({}, config), config, repo);
   return {
-    settings: settingRows(config, settings, grant),
-    hosts: hostRows(config, grant, settings),
-    mounts: mountRows(settings, grant, fs),
-    grant: grants ? grantRows(known, config, repo) : null,
+    settings: settingRows(config, settings, shown),
+    hosts: hostRows(config, shown, settings),
+    mounts: mountRows(settings, shown, fs),
+    grant: grant ? grantRows(grant) : null,
   };
 }

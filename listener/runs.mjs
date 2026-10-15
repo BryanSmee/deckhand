@@ -260,20 +260,21 @@ export function createRuns(ctx) {
     const check = grantCheck(config, repo, settings);
     if (check.error) {
       log(`${repo}: ${check.error.message}`);
-      throw new RunError(
-        "Claude can't run here: the operator's grants file has errors (see the listener's logs).",
-      );
+      const where = check.error.file
+        ? `\`${check.error.file}\` in the operator's grants folder has errors`
+        : "the operator's grants folder has errors";
+      throw new RunError(`Claude can't run here: ${where} (see the listener's logs).`);
     }
     const { grant, hosts, missing } = check;
     if (hosts.length) {
       throw new RunError(
-        `${configErrors(task.base, hosts)}\n\nA repository's \`hosts\` only count when the operator's grants file sets \`allow_repo_hosts: true\` for it; hosts the operator already allows can stay.`,
+        `${configErrors(task.base, hosts)}\n\nA repository's \`hosts\` only count when the operator's grants set \`allow_repo_hosts: true\` for it; hosts the operator already allows can stay.`,
       );
     }
     if (missing.length) {
       log(`${repo}: ${CONFIG_FILE} asks for what its grant doesn't allow: ${missing.join("; ")}`);
       throw new RunError(
-        `${configErrors(task.base, missing)}\n\nThe operator can add these to the repository's entry in the grants file (see Deckhand's docs/security.md), or the repository can remove them from \`${CONFIG_FILE}\`.`,
+        `${configErrors(task.base, missing)}\n\nThe operator can add these to the repository's file in the grants folder (see Deckhand's docs/security.md), or the repository can remove them from \`${CONFIG_FILE}\`.`,
       );
     }
     const { mounts, refused, notes } = check.mounts;

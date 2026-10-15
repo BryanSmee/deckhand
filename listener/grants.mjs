@@ -1,25 +1,28 @@
 // What the operator grants each repo, beyond what every sandbox gets: extra hosts, whether
 // its own .deckhand.yaml may add hosts, run a preview hook, build its Dockerfile (and that of
 // its pull requests' branches), host mounts under allowed roots, and its own CPU, memory and
-// pids limits. It lives in the operator's GRANTS_FILE, never in a repo: a repo's
-// .deckhand.yaml may request a mount, a host, a preview hook or a Dockerfile, but only a grant
-// here makes it happen. Read again at each run, so an edit applies without a restart. Format:
-// ../docs/security.md.
+// pids limits. It lives in the operator's GRANTS_DIR, never in a repo: a repo's .deckhand.yaml
+// may request a mount, a host, a preview hook or a Dockerfile, but only a grant here makes it
+// happen. One file per repo, so a team can own its repos' files (CODEOWNERS), and a mistake
+// in one stops that repo's runs only. Read again at each run, so an edit applies without a
+// restart. Format: ../docs/security.md.
 //
-//   "*":
-//     allow_repo_hosts: true   # every repo's own `hosts` count (default: false)
-//     allow_dockerfile: true   # every repo's own `dockerfile` is built (default: false)
-//   org/repo:
-//     hosts: ["*.example.com"]
-//     allow_repo_hosts: false  # overrides "*" for this repo
-//     allow_preview: true      # its `preview` hook runs, with the Docker socket (root)
-//     allow_branch_docker_images: true  # a pull request's runs build its branch's Dockerfile
-//     limits: { cpus: 4, memory: 8g, pids: 4096 }
-//     mounts:
-//       - root: /nfs/work
-//         read_only: false     # default: read-only
-import { readFileSync, realpathSync, statSync } from "node:fs";
-import { posix } from "node:path";
+//   grants/
+//     default.yaml       # every repo: the flags, hosts added to each repo's, base limits
+//       allow_repo_hosts: true
+//       hosts: [pypi.org]
+//       limits: { memory: 8g }
+//     acme/api.yaml      # acme/api, matched case-insensitively
+//       hosts: ["*.example.com"]
+//       allow_repo_hosts: false  # overrides default.yaml for this repo
+//       allow_preview: true      # its `preview` hook runs, with the Docker socket (root)
+//       allow_branch_docker_images: true  # a pull request's runs build its branch's Dockerfile
+//       limits: { cpus: 4 }      # over default.yaml's, over SANDBOX_*
+//       mounts:                  # per repo only
+//         - root: /nfs/work
+//           read_only: false     # default: read-only
+import { readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { join, posix } from "node:path";
 import { ConfigError, parseLimits } from "./config.mjs";
 import { hostProblem, refusedRepoHosts } from "./egress.mjs";
 import { PLAIN_PATH, RESERVED } from "./repo-config.mjs";
@@ -30,7 +33,21 @@ import { isMap, parseYaml } from "./yaml.mjs";
 export const SANDBOX_UID = 1000;
 export const SANDBOX_GID = 1000;
 
-// The yes-or-no grants, by key: per repo or for every repo ("*"), all false by default.
+export const DEFAULT_FILE = "default.yaml";
+
+// "acme/api.yaml": a repo's file, with GitHub's characters for owners and repos.
+const REPO_FILE = /^([\w.-]+)\/([\w.-]+)\.yaml$/;
+
+// A grants error, with the file it comes from (relative to GRANTS_DIR) when there is one, so
+// the dashboard can name the file to edit.
+export class GrantsError extends ConfigError {
+  constructor(message, file = null) {
+    super(message);
+    this.file = file;
+  }
+}
+
+// The yes-or-no grants, by key: per repo or in default.yaml, all false by default.
 const FLAGS = {
   allow_repo_hosts: "allowRepoHosts",
   allow_preview: "allowPreview",
@@ -40,102 +57,255 @@ const FLAGS = {
 
 const NO_FLAGS = Object.fromEntries(Object.values(FLAGS).map((f) => [f, null]));
 
-// The file's text → Map of lowercase "owner/repo" (or "*", every repo) → { hosts, mounts,
-// limits, and FLAGS }; a flag is null when the entry doesn't say, so "*" decides (grantFor).
-// Any error throws a ConfigError listing them all: a broken grants file grants nothing.
-export function parseGrants(text, config) {
+// One file's text → { hosts, mounts, limits, and FLAGS }; a flag is null when the file doesn't
+// say, so default.yaml decides (grantFor), and limits null unless it sets them. `file` names it
+// in errors; `base`: the limits its own start from. Throws a GrantsError listing every error.
+export function parseGrant(text, file, base, { isDefault = false } = {}) {
   const errors = [];
-  const grants = new Map();
-  let raw;
+  const fail = (what) => errors.push(what);
+  let value;
   try {
-    raw = parseYaml(text) ?? {};
+    value = parseYaml(text) ?? {};
   } catch (error) {
-    throw new ConfigError(`grants: ${error.message}`);
+    throw new GrantsError(`${file}: ${error.message}`, file);
   }
-  if (!isMap(raw)) throw new ConfigError("grants: expected owner/repo keys at the top level");
-  for (const [repo, value] of Object.entries(raw)) {
-    const fail = (what) => errors.push(`${repo}: ${what}`);
-    const everyRepo = repo === "*";
-    if (!everyRepo && !/^[\w.-]+\/[\w.-]+$/.test(repo)) {
-      fail('expected an owner/repo key (or "*" for every repo)');
+  if (!isMap(value)) throw new GrantsError(`${file}: expected a mapping of grants`, file);
+  const grant = { hosts: [], ...NO_FLAGS, mounts: [], limits: null };
+  for (const [key, v] of Object.entries(value)) {
+    if (Object.hasOwn(FLAGS, key)) {
+      if (typeof v === "boolean") grant[FLAGS[key]] = v;
+      else fail(`${key}: expected true or false`);
+    } else if (key === "hosts") {
+      if (!Array.isArray(v)) fail("hosts: expected a list of host names");
+      else
+        for (const host of v) {
+          if (hostProblem(host)) fail(`hosts: ${JSON.stringify(host)}: ${hostProblem(host)}`);
+          else grant.hosts.push(host.toLowerCase());
+        }
+    } else if (key === "limits") {
+      try {
+        if (!isMap(v)) throw new ConfigError("limits: expected cpus, memory, pids");
+        grant.limits = parseLimits(v, base, (k) => `limits.${k}`);
+      } catch (error) {
+        fail(error.message);
+      }
+    } else if (key === "mounts" && isDefault) {
+      // A root for every repo would be too broad to grant by accident.
+      fail("mounts: only a repository's own file grants mounts");
+    } else if (key === "mounts") {
+      if (!Array.isArray(v)) {
+        fail("mounts: expected a list of { root, read_only }");
+        continue;
+      }
+      for (const mount of v) {
+        const root = isMap(mount) ? mount.root : mount;
+        const clean = typeof root === "string" ? root.replace(/(.)\/$/, "$1") : null;
+        if (!clean || !PLAIN_PATH.test(clean) || posix.normalize(clean) !== clean) {
+          fail(`mounts: expected a plain absolute root, got ${JSON.stringify(root)}`);
+        } else if (isMap(mount) && ![undefined, true, false].includes(mount.read_only)) {
+          fail(`mounts: ${clean}: read_only: expected true or false`);
+        } else {
+          grant.mounts.push({
+            root: clean,
+            readOnly: !isMap(mount) || mount.read_only !== false,
+          });
+        }
+      }
+    } else {
+      const keys = ["hosts", "limits", ...(isDefault ? [] : ["mounts"])];
+      fail(`${key}: unknown (${keys.join(", ")} or ${Object.keys(FLAGS).join(", ")})`);
+    }
+  }
+  if (errors.length) throw new GrantsError(`${file}: ${errors.join("; ")}`, file);
+  return grant;
+}
+
+// The folder's files, by path relative to it ("acme/api.yaml") → text, or a function reading
+// it (read when a run needs it), as loadGrants() finds them, into what grantFor() reads.
+// `problems`: what the scan found wrong outside a repo's file. default.yaml is parsed now;
+// a repo's file when first asked for, and its errors stop that repo only. A broken
+// default.yaml or a file that isn't <owner>/<repo>.yaml throws: it stops every run.
+export function grantsFrom(files, config, problems = []) {
+  const errors = [...problems];
+  const culprits = new Set(problems.map((p) => p.file));
+  const wrong = (file, what) => {
+    errors.push({ file, what });
+    culprits.add(file);
+  };
+  const text = (value) => (typeof value === "function" ? value() : value);
+  const found = new Map(); // lowercase "owner/repo" → its file
+  let defaults = null;
+  for (const [file, value] of Object.entries(files)) {
+    if (file === DEFAULT_FILE) {
+      try {
+        defaults = parseGrant(text(value), file, config.limits, { isDefault: true });
+      } catch (error) {
+        wrong(file, error.message.replace(/^(grants: )?default\.yaml: /, ""));
+      }
       continue;
     }
-    const grant = { hosts: [], ...NO_FLAGS, mounts: [], limits: config.limits };
-    for (const [key, v] of Object.entries(value ?? {})) {
-      if (Object.hasOwn(FLAGS, key)) {
-        if (typeof v === "boolean") grant[FLAGS[key]] = v;
-        else fail(`${key}: expected true or false`);
-      } else if (everyRepo) {
-        // Hosts and limits for every repo are ALLOWED_HOSTS and SANDBOX_*; mounts for every
-        // repo would be too broad to grant by accident.
-        fail(`${key}: only ${Object.keys(FLAGS).join(", ")} apply to every repo`);
-      } else if (key === "hosts") {
-        if (!Array.isArray(v)) fail("hosts: expected a list of host names");
-        else
-          for (const host of v) {
-            if (hostProblem(host)) fail(`hosts: ${JSON.stringify(host)}: ${hostProblem(host)}`);
-            else grant.hosts.push(host.toLowerCase());
-          }
-      } else if (key === "limits") {
+    const match = REPO_FILE.exec(file);
+    if (!match) {
+      const hint = /\.yml$/i.test(file) ? "; name it .yaml" : "";
+      wrong(file, `not a grant: expected ${DEFAULT_FILE} or <owner>/<repo>.yaml${hint}`);
+      continue;
+    }
+    const repo = `${match[1]}/${match[2]}`.toLowerCase();
+    const twin = found.get(repo);
+    if (twin) {
+      wrong(file, `the same repository as ${twin.file} (names are case-insensitive)`);
+      continue;
+    }
+    found.set(repo, { file, value });
+  }
+  if (errors.length) {
+    const file = culprits.size === 1 ? [...culprits][0] : null;
+    const list = errors.map(({ file, what }) => (file ? `${file}: ${what}` : what));
+    throw new GrantsError(`grants: ${list.join("; ")}`, file);
+  }
+  const base = defaults?.limits ?? config.limits;
+  const repos = new Map();
+  for (const [repo, { file, value }] of found) {
+    let result = null;
+    const load = () => {
+      if (!result) {
         try {
-          if (!isMap(v)) throw new ConfigError(`${repo}: limits: expected cpus, memory, pids`);
-          grant.limits = parseLimits(v, config.limits, (k) => `${repo}: limits.${k}`);
+          result = { grant: parseGrant(text(value), file, base) };
         } catch (error) {
-          errors.push(error.message);
+          const message = `grants: ${error instanceof GrantsError ? error.message : `${file}: ${error.message}`}`;
+          result = { error: new GrantsError(message, file) };
         }
-      } else if (key === "mounts") {
-        if (!Array.isArray(v)) {
-          fail("mounts: expected a list of { root, read_only }");
+      }
+      if (result.error) throw result.error;
+      return result.grant;
+    };
+    repos.set(repo, { file, load });
+  }
+  return { defaults, repos, config };
+}
+
+// GRANTS_DIR, scanned: { files, problems } for grantsFrom(). Dot entries (.git, .github) and
+// files that aren't YAML (README.md, CODEOWNERS) are skipped. Symlinks are followed only when
+// they stay in the folder (a mounted git checkout can hold any): a repo file leading out is
+// that repo's error, a folder leading out everyone's.
+function scanGrants(dir, read) {
+  let top;
+  try {
+    top = realpathSync(dir);
+  } catch (error) {
+    if (error.code === "ENOENT") return { files: {}, problems: [] };
+    throw new GrantsError(`grants: GRANTS_DIR ${dir}: ${error.code ?? error.message}`);
+  }
+  if (!statSync(top).isDirectory()) {
+    throw new GrantsError(`grants: GRANTS_DIR ${dir}: expected a folder`);
+  }
+  const files = {};
+  const problems = [];
+  const seen = new Set([top]);
+  const refuse = (file, what) => () => {
+    throw new GrantsError(`grants: ${file}: ${what}`, file);
+  };
+  const walk = (real, rel) => {
+    let entries;
+    try {
+      entries = readdirSync(real, { withFileTypes: true });
+    } catch (error) {
+      problems.push({ file: rel, what: `can't be read (${error.code ?? error.message})` });
+      return;
+    }
+    for (const entry of entries) {
+      if (entry.name.startsWith(".")) continue;
+      const file = rel ? `${rel}/${entry.name}` : entry.name;
+      const yaml = /\.ya?ml$/i.test(entry.name);
+      let path = join(real, entry.name);
+      let folder = entry.isDirectory();
+      if (entry.isSymbolicLink()) {
+        let resolved = null;
+        try {
+          resolved = realpathSync(path);
+          folder = statSync(resolved).isDirectory();
+        } catch {
+          // Leads nowhere: an error for a grant, nothing for anything else.
+        }
+        if (!resolved || !within(resolved, top)) {
+          const what = resolved
+            ? "a symlink leading outside the grants folder"
+            : "a broken symlink";
+          if (yaml && !folder) files[file] = refuse(file, what);
+          else if (folder) problems.push({ file, what });
           continue;
         }
-        for (const mount of v) {
-          const root = isMap(mount) ? mount.root : mount;
-          const clean = typeof root === "string" ? root.replace(/(.)\/$/, "$1") : null;
-          if (!clean || !PLAIN_PATH.test(clean) || posix.normalize(clean) !== clean) {
-            fail(`mounts: expected a plain absolute root, got ${JSON.stringify(root)}`);
-          } else if (isMap(mount) && ![undefined, true, false].includes(mount.read_only)) {
-            fail(`mounts: ${clean}: read_only: expected true or false`);
-          } else {
-            grant.mounts.push({
-              root: clean,
-              readOnly: !isMap(mount) || mount.read_only !== false,
-            });
+        path = resolved;
+      }
+      if (folder) {
+        if (seen.has(path)) continue;
+        seen.add(path);
+        walk(path, file);
+      } else if (yaml && (entry.isFile() || entry.isSymbolicLink())) {
+        files[file] = () => {
+          try {
+            return read(path);
+          } catch (error) {
+            return refuse(file, `can't be read (${error.code ?? error.message})`)();
           }
-        }
-      } else fail(`${key}: unknown (hosts, limits, mounts or ${Object.keys(FLAGS).join(", ")})`);
+        };
+      }
     }
-    grants.set(repo.toLowerCase(), grant);
-  }
-  if (errors.length) throw new ConfigError(`grants: ${errors.join("; ")}`);
-  return grants;
-}
-
-// The grants file, or no grants when there is none.
-export function loadGrants(config, read = (path) => readFileSync(path, "utf8")) {
-  let text;
-  try {
-    text = read(config.grantsFile);
-  } catch (error) {
-    if (error.code === "ENOENT") return new Map();
-    throw new ConfigError(`grants: reading ${config.grantsFile}: ${error.message}`);
-  }
-  return parseGrants(text, config);
-}
-
-// What one repo gets: nothing extra and the operator's limits, unless it is granted more.
-// Each flag is what its entry says, or else "*", or else false.
-export function grantFor(grants, config, repo) {
-  const own = grants.get(repo.toLowerCase()) ?? {
-    hosts: [],
-    ...NO_FLAGS,
-    mounts: [],
-    limits: config.limits,
   };
-  const every = grants.get("*") ?? NO_FLAGS;
+  walk(top, "");
+  return { files, problems };
+}
+
+// The grants folder, read now: throws a GrantsError when its layout or default.yaml has
+// errors (no run starts); a repo's file is read when grantFor() asks for it. No folder: no
+// grants. `read(path)`: a file's text.
+export function loadGrants(config, read = (path) => readFileSync(path, "utf8")) {
+  const { files, problems } = scanGrants(config.grantsDir, read);
+  return grantsFrom(files, config, problems);
+}
+
+// Every repo file's error: the listener starts without them (they stop that repo's runs
+// only), but says so at start.
+export function grantErrors(grants) {
+  const errors = [];
+  for (const { load } of grants.repos.values()) {
+    try {
+      load();
+    } catch (error) {
+      errors.push(error);
+    }
+  }
+  return errors;
+}
+
+// What one repo gets: default.yaml's grants and its own file's, else nothing extra and the
+// operator's limits. Each flag is what its own file says, or else default.yaml, or else
+// false; hosts add up; limits are its own over default.yaml's over SANDBOX_*. `files`: where
+// it comes from; `hostFiles` and `limitsFile` too, for the dashboard. Throws its file's
+// GrantsError when that file has errors.
+export function grantFor(grants, config, repo) {
+  const defaults = grants.defaults;
+  const entry = grants.repos.get(repo.toLowerCase());
+  const own = entry?.load() ?? null;
+  const hostFiles = {};
+  for (const [file, grant] of [
+    [DEFAULT_FILE, defaults],
+    [entry?.file, own],
+  ]) {
+    for (const host of grant?.hosts ?? []) hostFiles[host] ??= file;
+  }
   const flags = Object.fromEntries(
-    Object.values(FLAGS).map((f) => [f, own[f] ?? every[f] ?? false]),
+    Object.values(FLAGS).map((f) => [f, own?.[f] ?? defaults?.[f] ?? false]),
   );
-  return { ...own, ...flags };
+  return {
+    hosts: Object.keys(hostFiles),
+    ...flags,
+    mounts: own?.mounts ?? [],
+    limits: own?.limits ?? defaults?.limits ?? config.limits,
+    files: [defaults && DEFAULT_FILE, entry?.file].filter(Boolean),
+    hostFiles,
+    limitsFile: own?.limits ? entry.file : defaults?.limits ? DEFAULT_FILE : null,
+  };
 }
 
 // What the repo's config asks for that only a grant allows: a preview hook (run with the
@@ -146,22 +316,23 @@ export function ungranted(grant, settings) {
   const missing = [];
   if (settings.preview && !grant.allowPreview) {
     missing.push(
-      "preview: the operator's grants file doesn't set `allow_preview: true` for this repository",
+      "preview: the operator's grants don't set `allow_preview: true` for this repository",
     );
   }
   if (settings.dockerfile && !grant.allowDockerfile) {
     missing.push(
-      "dockerfile: the operator's grants file doesn't set `allow_dockerfile: true` for this repository",
+      "dockerfile: the operator's grants don't set `allow_dockerfile: true` for this repository",
     );
   }
   return missing;
 }
 
 // What the operator's grants refuse in a repo's settings, checked as a run checks them before
-// it starts: { error } when the grants file has errors, else { grant, hosts, missing, mounts }
-// (refusedRepoHosts(), ungranted(), resolveMounts()). Shared by the run's preflight and the
+// it starts: { error } when its grants have errors (a GrantsError), else { grant, hosts,
+// missing, mounts } (refusedRepoHosts(), ungranted(), resolveMounts()). Shared by the run's preflight and the
 // dashboard's repo list, so the list can't call a repo configured when no run starts there.
-// `load`: the parsed grants file (throws when it has errors); `fs`: realpath and stat.
+// `load`: the grants folder (loadGrants(); throws when its layout has errors); `fs`: realpath
+// and stat.
 export function grantCheck(
   config,
   repo,

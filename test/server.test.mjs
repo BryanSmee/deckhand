@@ -299,6 +299,12 @@ async function ports(listener) {
 // A listener with an App, a fake Docker and a fake GitHub serving `files`; `extra`: more
 // settings. Either may be a function of the listener's temp dir (and `extra`, of the fake
 // GitHub).
+// The operator's grant for org/repo, in the test's grants folder.
+function writeGrant(dir, text) {
+  mkdirSync(join(dir, "grants", "org"), { recursive: true });
+  writeFileSync(join(dir, "grants", "org", "repo.yaml"), text);
+}
+
 async function listen(t, files, extra = {}) {
   const dir = mkdtempSync(join(tmpdir(), "deckhand-"));
   fakeDocker(dir);
@@ -329,7 +335,7 @@ async function listen(t, files, extra = {}) {
     DEBOUNCE_MS: "0",
     // The egress proxy asks from here: in the tests, the fake sandbox itself.
     EGRESS_PROXY: "http://127.0.0.1:3128",
-    GRANTS_FILE: join(dir, "grants.yaml"),
+    GRANTS_DIR: join(dir, "grants"),
     ...(typeof extra === "function" ? extra(dir, github) : extra),
   };
   let listener = start(settings);
@@ -579,7 +585,7 @@ test("a repo's config: its image, caches, setup and model", async (t) => {
       "docker/Dockerfile": "ARG DECKHAND_BASE\nFROM $DECKHAND_BASE\nRUN true\n",
     },
     (dir) => {
-      writeFileSync(join(dir, "grants.yaml"), "org/repo:\n  allow_dockerfile: true\n");
+      writeGrant(dir, "allow_dockerfile: true\n");
       return {};
     },
   );
@@ -633,8 +639,8 @@ test("a Dockerfile or preview hook without its grant stops the run, and nothing 
   );
   const body = JSON.parse(reply.body).body;
   assert.match(body, /`\.deckhand\.yaml` on `trunk` has errors/);
-  assert.match(body, /- preview: .* doesn't set `allow_preview: true` for this repository/);
-  assert.match(body, /- dockerfile: .* doesn't set `allow_dockerfile: true` for this repository/);
+  assert.match(body, /- preview: .* don't set `allow_preview: true` for this repository/);
+  assert.match(body, /- dockerfile: .* don't set `allow_dockerfile: true` for this repository/);
   await listener.until("asks for what its grant doesn't allow");
   // No build, no sandbox: no docker call was even logged.
   assert.throws(() => readFileSync(join(dir, "docker-calls")));
@@ -662,13 +668,30 @@ test("a preview hook runs only with allow_preview", async (t) => {
   };
   assert.equal((await send(delivery, "pull_request")).status, 202);
   await listener.until(
-    "preview hook of org/repo not run: preview: the operator's grants file doesn't set `allow_preview: true`",
+    "preview hook of org/repo not run: preview: the operator's grants don't set `allow_preview: true`",
   );
   assert.doesNotMatch(calls(), /^create /m);
-  writeFileSync(join(dir, "grants.yaml"), "org/repo:\n  allow_preview: true\n");
+  writeGrant(dir, "allow_preview: true\n");
   await send({ ...delivery, action: "synchronize" }, "pull_request");
   await listener.until("preview hook deckhand-preview-org-repo-");
   assert.match(calls(), /^create .*docker\.sock.* docker:cli .*\.\/preview\.sh$/m);
+});
+
+test("a broken grant file stops that repo's runs, not the listener", async (t) => {
+  const { github, listener, send } = await listen(t, {}, (dir) => {
+    writeGrant(dir, "hosts: [bad host]\n");
+    return {};
+  });
+  // Said at start; the listener starts anyway.
+  await listener.until("grants: org/repo.yaml: hosts:");
+  await send(comment("alice"));
+  const reply = await github.waitFor(
+    (r) => r.method === "POST" && r.path === "/repos/org/repo/issues/12/comments",
+  );
+  const { body } = JSON.parse(reply.body);
+  assert.match(body, /`org\/repo\.yaml` in the operator's grants folder has errors/);
+  // The details stay in the listener's logs.
+  assert.doesNotMatch(body, /bad host/);
 });
 
 test("a config with errors stops the run and the reply says why", async (t) => {
@@ -695,15 +718,14 @@ mounts:
       mkdirSync(join(dir, "nfs", "api"), { recursive: true });
       mkdirSync(join(dir, "nfs", "docs"), { recursive: true });
       chmodSync(join(dir, "nfs"), 0o555); // not writable by the sandbox's user: api may be read-write
-      writeFileSync(
-        join(dir, "grants.yaml"),
-        `org/repo:
-  hosts: [pypi.org]
-  allow_repo_hosts: true
-  limits: { memory: 8g }
-  mounts:
-    - root: ${join(dir, "nfs")}
-      read_only: false
+      writeGrant(
+        dir,
+        `hosts: [pypi.org]
+allow_repo_hosts: true
+limits: { memory: 8g }
+mounts:
+  - root: ${join(dir, "nfs")}
+    read_only: false
 `,
       );
       return { ALLOWED_HOSTS: "registry.npmjs.org" };
@@ -742,7 +764,7 @@ test("a repo's hosts without allow_repo_hosts: refused on the issue, unless alre
     t,
     { ".deckhand.yaml": 'hosts: [registry.npmjs.org, pypi.org, "*.evil.net"]\n' },
     (dir) => {
-      writeFileSync(join(dir, "grants.yaml"), "org/repo:\n  hosts: [pypi.org]\n");
+      writeGrant(dir, "hosts: [pypi.org]\n");
       return { ALLOWED_HOSTS: "registry.npmjs.org" };
     },
   );
@@ -768,7 +790,7 @@ test("a mount outside the granted root, through a symlink, is refused on the iss
     (dir) => {
       mkdirSync(join(dir, "nfs"), { recursive: true });
       symlinkSync("/etc", join(dir, "nfs", "escape"));
-      writeFileSync(join(dir, "grants.yaml"), `org/repo:\n  mounts: [${join(dir, "nfs")}]\n`);
+      writeGrant(dir, `mounts: [${join(dir, "nfs")}]\n`);
       return {};
     },
   );
@@ -793,7 +815,7 @@ test("a mount that resolves elsewhere once the run is prepared stops it", async 
       symlinkSync("a", join(dir, "nfs", "api"));
       writeFileSync(join(dir, "while-preparing"), `#!/bin/sh\nln -sfn b "${dir}/nfs/api"\n`);
       chmodSync(join(dir, "while-preparing"), 0o755);
-      writeFileSync(join(dir, "grants.yaml"), `org/repo:\n  mounts: [${join(dir, "nfs")}]\n`);
+      writeGrant(dir, `mounts: [${join(dir, "nfs")}]\n`);
       return {};
     },
   );
@@ -1145,10 +1167,7 @@ test("/mode review: the repo's light mode, its instructions and model, the repo'
     t,
     { ".deckhand.yaml": MODES, ".deckhand/review.md": "Read the diff and list the risks." },
     (dir) => {
-      writeFileSync(
-        join(dir, "grants.yaml"),
-        "org/repo:\n  hosts: [pypi.org]\n  allow_repo_hosts: true\n",
-      );
+      writeGrant(dir, "hosts: [pypi.org]\nallow_repo_hosts: true\n");
       return {};
     },
   );
@@ -1336,10 +1355,7 @@ mounts:
     (dir) => {
       mkdirSync(join(dir, "nfs", "api"), { recursive: true });
       chmodSync(join(dir, "nfs"), 0o555);
-      writeFileSync(
-        join(dir, "grants.yaml"),
-        `org/repo:\n  mounts:\n    - root: ${join(dir, "nfs")}\n      read_only: false\n`,
-      );
+      writeGrant(dir, `mounts:\n  - root: ${join(dir, "nfs")}\n    read_only: false\n`);
       return { BRAINSTORM_DEBOUNCE_MS: "0" };
     },
   );

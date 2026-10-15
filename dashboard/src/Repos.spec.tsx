@@ -61,7 +61,7 @@ const CONFIG: RepoConfig = {
     ],
     mounts: [],
     grant: {
-      entry: null,
+      files: [],
       allowRepoHosts: false,
       allowPreview: false,
       allowDockerfile: false,
@@ -218,6 +218,30 @@ test("a repository's panel: errors first, then what runs get, then the file", as
   expect(within(await screen.findByRole("list")).getAllByText("Invalid config")).toHaveLength(2);
 });
 
+test("a repository's broken grant: the file to fix, and only this repository stopped", async () => {
+  const listed = fetch;
+  vi.stubGlobal("fetch", async (url: string, init?: RequestInit) => {
+    if (url !== "api/repos/org/api/config") return listed(url, init);
+    return Response.json({
+      ...CONFIG,
+      errors: [],
+      grantsError: {
+        file: "org/api.yaml",
+        message: 'hosts: "bad host": not a host name',
+        everyRepo: false,
+      },
+      effective: { ...CONFIG.effective, hosts: [], grant: null },
+    });
+  });
+  render(<Page />);
+  fireEvent.click(await screen.findByRole("button", { name: "org/api" }));
+  const alert = await screen.findByRole("alert");
+  expect(alert.textContent).toContain(
+    'org/api.yaml in the operator\'s grants folder has errors, so no run starts in this repository: hosts: "bad host"',
+  );
+  expect(screen.getByText("Unknown: the operator's grants have errors.")).toBeTruthy();
+});
+
 test("a config that parses but asks for what isn't granted: Invalid config, not Configured", async () => {
   const listed = fetch;
   vi.stubGlobal("fetch", async (url: string, init?: RequestInit) => {
@@ -234,7 +258,7 @@ test("a config that parses but asks for what isn't granted: Invalid config, not 
             key: "dockerfile",
             value: ".deckhand/Dockerfile",
             source: "refused",
-            note: "the operator's grants file doesn't set allow_dockerfile: true for this repository",
+            note: "the operator's grants don't set allow_dockerfile: true for this repository",
           },
         ],
         hosts: [],
@@ -245,7 +269,7 @@ test("a config that parses but asks for what isn't granted: Invalid config, not 
   expect(within(await screen.findByRole("list")).getAllByText("Configured")).toHaveLength(1);
   fireEvent.click(screen.getByRole("button", { name: "org/api" }));
   const alert = await screen.findByRole("alert");
-  expect(alert.textContent).toContain("dockerfile: the operator's grants file");
+  expect(alert.textContent).toContain("dockerfile: the operator's grants");
   const heading = screen.getByRole("heading", { name: /org\/api/ }).textContent;
   expect(heading).toContain("Invalid config");
   expect(heading).not.toContain("Configured");

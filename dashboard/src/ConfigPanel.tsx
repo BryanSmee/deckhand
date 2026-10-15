@@ -4,7 +4,7 @@
 // on Refresh; changing it is a commit on the default branch.
 import { useRepoConfig } from "./api";
 import { ago, REPO_LABELS as LABELS } from "./format";
-import type { Grant, Repo, Source } from "./types";
+import type { Grant, Repo, RepoConfig, Source } from "./types";
 import styles from "./ConfigPanel.module.css";
 
 const TAGS: Record<Source, string> = {
@@ -88,7 +88,7 @@ export function ConfigPanel({ repo, row, onRow, onBack, now }: Props) {
                 {config.errors.map((e) => (
                   <li key={e}>{e}</li>
                 ))}
-                {config.grantsError && <li>{config.grantsError}</li>}
+                {config.grantsError && <GrantsErrorItem error={config.grantsError} />}
                 {refusedSettings.map((s) => (
                   <li key={s.key}>
                     {s.key}: {s.note}
@@ -188,7 +188,7 @@ export function ConfigPanel({ repo, row, onRow, onBack, now }: Props) {
           {config.effective.grant ? (
             <GrantTable grant={config.effective.grant} />
           ) : (
-            <p class={styles.muted}>Unknown: the grants file has errors.</p>
+            <p class={styles.muted}>Unknown: the operator's grants have errors.</p>
           )}
 
           {config.file && (
@@ -205,16 +205,30 @@ export function ConfigPanel({ repo, row, onRow, onBack, now }: Props) {
   );
 }
 
+// Which grant to fix, and whether it stops this repository's runs or every one.
+function GrantsErrorItem({ error }: { error: NonNullable<RepoConfig["grantsError"]> }) {
+  const where = error.everyRepo ? "any repository" : "this repository";
+  return (
+    <li>
+      {error.file ? (
+        <>
+          <code>{error.file}</code> in the operator's grants folder
+        </>
+      ) : (
+        "The operator's grants folder"
+      )}{" "}
+      has errors, so no run starts in {where}: {error.message}
+    </li>
+  );
+}
+
 function GrantTable({ grant }: { grant: Grant }) {
   const { cpus, memory, pids } = grant.limits;
-  const entry =
-    grant.entry === null
-      ? "none: nothing beyond what every repository gets"
-      : grant.entry === "*"
-        ? '"*" (every repository)'
-        : grant.entry;
+  const files = grant.files.length
+    ? grant.files.join(", ")
+    : "none: nothing beyond what every repository gets";
   const rows: [string, string][] = [
-    ["entry", entry],
+    ["files", files],
     ["allow_repo_hosts", String(grant.allowRepoHosts)],
     ["allow_dockerfile", String(grant.allowDockerfile)],
     ["allow_branch_docker_images", String(grant.allowBranchDockerImages)],

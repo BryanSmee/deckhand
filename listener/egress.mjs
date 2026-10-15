@@ -33,10 +33,10 @@ export function mandatoryHosts(config) {
 }
 
 // Too broad for a repo to ask for itself: "*" and a whole top-level domain ("*.com"). Only
-// the operator can open those (ALLOWED_HOSTS, the grants file).
+// the operator can open those (ALLOWED_HOSTS, the grants folder).
 export function repoHostProblem(name) {
   return name === "*" || /^\*\.[^.]+$/.test(name)
-    ? "a repository can't open that much: only the operator can (ALLOWED_HOSTS, the grants file)"
+    ? "a repository can't open that much: only the operator can (ALLOWED_HOSTS, the grants folder)"
     : null;
 }
 

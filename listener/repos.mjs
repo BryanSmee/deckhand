@@ -11,9 +11,9 @@
 //
 // GitHub is asked as little as possible: the installations' repos are listed again every
 // LIST_MS, and each repo's config is read once per CONFIG_MS, or again after a delivery says
-// it may have changed (refresh()), or the dashboard asks. The operator's grants file and the
+// it may have changed (refresh()), or the dashboard asks. The operator's grants and the
 // onboarding status are read at each list, so their changes show at once.
-import { grantCheck, loadGrants, refusedByGrants } from "./grants.mjs";
+import { GrantsError, grantCheck, grantFor, loadGrants, refusedByGrants } from "./grants.mjs";
 import { CONFIG_FILE, defaultSettings, parseRepoConfig, readRepoFile } from "./repo-config.mjs";
 import { effectiveView } from "./repo-view.mjs";
 import { sendJson } from "./web.mjs";
@@ -68,7 +68,7 @@ export function repoStatus(info, found, onboarded) {
 
 // `app`: asApp(), asInstallation(), request() and remember() (github-app.mjs). `store`: the
 // onboarding store (onboarding.mjs). `grants()` and `fs` (realpath, stat): what a run reads
-// too, the operator's grants file and the listener's filesystem.
+// too, the operator's grants folder and the listener's filesystem.
 export function createRepoList({
   app,
   config,
@@ -119,7 +119,7 @@ export function createRepoList({
     return listing;
   }
 
-  // The grants file once per list: a function that returns it, or throws its error.
+  // The grants folder once per list: a function that returns it, or throws its error.
   function grantsOnce() {
     try {
       const parsed = grants();
@@ -133,7 +133,7 @@ export function createRepoList({
 
   // What the row shows: { has, invalid, at }. Invalid when no run would start: the file's
   // errors, or what the operator's grants refuse in it (as grantCheck() is the run's
-  // preflight). Checked at each call: an edited grants file shows without reading GitHub.
+  // preflight). Checked at each call: an edited grant shows without reading GitHub.
   function judged(info, known, load) {
     if (!known) return null;
     const { at, has, errors, settings } = known;
@@ -262,9 +262,28 @@ export function sameOrigin(req, publicUrl) {
 
 const send = (res, status, value) => sendJson(res, value, status);
 
+// A grants error as the config panel shows it: { file, message, everyRepo }, the file to edit
+// (relative to GRANTS_DIR) when there is one. Only a GrantsError's details are shown: they
+// name files in the folder and their values; anything else may name the host's paths, and
+// the listener's logs have it.
+export function grantsErrorView(error, everyRepo) {
+  if (!(error instanceof GrantsError)) {
+    return {
+      file: null,
+      message: "the grants folder can't be read (see the listener's logs)",
+      everyRepo,
+    };
+  }
+  let message = error.message.replace(/^grants: /, "");
+  if (error.file && message.startsWith(`${error.file}: `)) {
+    message = message.slice(error.file.length + 2);
+  }
+  return { file: error.file, message, everyRepo };
+}
+
 // The /api/repos routes. `user`: the signed-in login or null; `start(repo, login)` opens the
 // repo's onboarding issue and its run, resolving to the issue or null (tasks.mjs). `grants()`
-// and `fs` (realpath, stat) are what a run reads too: the operator's grants file and the
+// and `fs` (realpath, stat) are what a run reads too: the operator's grants folder and the
 // listener's filesystem.
 export function createRepoApi({
   config,
@@ -345,15 +364,16 @@ export function createRepoApi({
     if (!read) return send(res, 404, { error: `The App is not installed on ${repo}.` });
     const { info, file, parsed, row } = read;
     const base = info.default_branch || "main";
-    let parsedGrants = null;
+    let grant = null;
     let grantsError = null;
+    let everyRepo = true;
     try {
-      parsedGrants = grants();
+      const all = grants();
+      everyRepo = false;
+      grant = grantFor(all, config, info.full_name);
     } catch (error) {
-      // No run starts: say so, without the file's details (the listener's logs have them).
       log(`Repositories: ${error.message ?? error}`);
-      grantsError =
-        "The operator's grants file has errors: no run starts (see the listener's logs).";
+      grantsError = grantsErrorView(error, everyRepo);
     }
     const settings = parsed?.settings ?? defaultSettings(config);
     send(res, 200, {
@@ -367,7 +387,7 @@ export function createRepoApi({
       errors: parsed?.errors ?? [],
       warnings: parsed?.warnings ?? [],
       grantsError,
-      effective: effectiveView(config, info.full_name, settings, parsedGrants, fs),
+      effective: effectiveView(config, info.full_name, settings, grant, fs),
       readAt: row.readAt,
     });
   }

@@ -19,7 +19,7 @@ import { createConflicts } from "./conflicts.mjs";
 import { ConfigError, loadConfig, readConfigFile } from "./config.mjs";
 import { docker } from "./docker.mjs";
 import { createGitHubApp, loadCredentials, saveCredentials } from "./github-app.mjs";
-import { loadGrants } from "./grants.mjs";
+import { grantErrors, loadGrants } from "./grants.mjs";
 import { createHttp } from "./http.mjs";
 import { createImages } from "./images.mjs";
 import { createInputs } from "./inputs.mjs";
@@ -41,8 +41,11 @@ const env = process.env;
 let config;
 try {
   config = loadConfig(env, readConfigFile(env));
-  // Read again at each run; a broken file at start is the operator's to fix now.
-  loadGrants(config);
+  // Read again at each run. A broken layout or default.yaml at start is the operator's to fix
+  // now; a broken repo file stops that repo's runs only, so the others start.
+  for (const error of grantErrors(loadGrants(config))) {
+    console.error(`${error.message} (no run starts in that repository until it is fixed)`);
+  }
 } catch (error) {
   if (!(error instanceof ConfigError)) throw error;
   console.error(error.message);
