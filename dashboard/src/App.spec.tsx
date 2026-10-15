@@ -1,6 +1,7 @@
 // The dashboard from a fixture api/state, with a fake EventSource for the log stream.
-import { fireEvent, render, screen, within } from "@testing-library/preact";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/preact";
 import { afterEach, beforeEach, expect, test } from "vitest";
+import type { RepoList } from "./api";
 import { Dashboard } from "./App";
 import fixture from "./fixture.json";
 import type { Entry, State } from "./types";
@@ -245,4 +246,37 @@ test("the graph with nothing open says so, and offers the closed ones", () => {
   expect(screen.getByText(/Nothing open here/)).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "Show closed issues" }));
   expect(screen.getByRole("list", { name: "Issues of acme/app" })).toBeTruthy();
+});
+
+test("Home and the brand go back to the tasks, in the graph's repo", () => {
+  history.replaceState(null, "", "#/graph/acme/app");
+  render(<Dashboard state={state} error={null} />);
+  const home = screen.getByRole("link", { name: "Home" });
+  expect(home.getAttribute("aria-current")).toBeNull();
+  expect(home.getAttribute("href")).toBe("#/acme/app");
+  expect(screen.getByRole("link", { name: "Deckhand" }).getAttribute("href")).toBe("#/acme/app");
+});
+
+test("Home from the repositories page opens the tab last open, and is current there", async () => {
+  localStorage.setItem("deckhand.tab", "acme/api");
+  history.replaceState(null, "", "#/repositories");
+  const repos: RepoList = {
+    repos: [],
+    listedAt: null,
+    error: null,
+    starting: null,
+    failed: null,
+    onboard: async () => {},
+    refreshing: false,
+    refreshError: null,
+    refresh: async () => {},
+    update: () => {},
+  };
+  render(<Dashboard state={state} error={null} repos={repos} />);
+  const home = screen.getByRole("link", { name: "Home" });
+  expect(home.getAttribute("href")).toBe("#/acme/api");
+  expect(home.getAttribute("aria-current")).toBeNull();
+  fireEvent.click(home);
+  await waitFor(() => screen.getByRole("tab", { name: /^api/, selected: true }));
+  expect(screen.getByRole("link", { name: "Home" }).getAttribute("aria-current")).toBe("page");
 });

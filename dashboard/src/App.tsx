@@ -130,13 +130,32 @@ export function Dashboard({ state, error, repos, refresh }: Props) {
       : "Loading…";
   const waiting = notOnboarded(repos?.repos ?? null);
   const notify = useReadyNotifications(state);
+  // Home is the tasks, in the tab shown (the graph's repo), or from the repositories page the
+  // tab last open here.
+  const home = formatRoute({
+    repo: onRepos ? stored("tab") || null : route.repo,
+    task: null,
+    run: null,
+  });
 
   return (
     <div class={`${styles.app} ${task ? styles.reading : ""}`}>
       <header class={styles.top}>
-        <h1 class={styles.brand}>Deckhand</h1>
+        <h1 class={styles.brand}>
+          <a href={home} title="Home">
+            Deckhand
+          </a>
+        </h1>
         <span class={`${styles.status} ${error ? styles.error : ""}`}>{status}</span>
         <nav class={styles.pages} aria-label="Pages">
+          <a
+            class={`${styles.link} ${styles.home}`}
+            href={home}
+            aria-current={!onGraph && !onRepos ? "page" : undefined}
+            title="The tasks"
+          >
+            Home
+          </a>
           <a
             class={styles.link}
             href={formatRoute({ repo: route.repo, task: null, run: null, page: "graph" })}
