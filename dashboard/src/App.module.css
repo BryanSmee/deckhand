@@ -17,12 +17,17 @@
   margin: 0;
   font-size: 1rem;
   font-weight: 700;
+}
+
+.brand a {
   display: flex;
   align-items: center;
   gap: 0.5rem;
+  color: inherit;
+  text-decoration: none;
 }
 
-.brand::before {
+.brand a::before {
   content: "";
   width: 0.85rem;
   height: 0.85rem;
@@ -114,6 +119,10 @@
   /* Room for the page links on the brand's line: the login is in GitHub's menu. */
   .pages {
     margin-left: auto;
+  }
+  /* No room for it next to the others: the brand is the way home. */
+  .link.home {
+    display: none;
   }
   .who span {
     display: none;
