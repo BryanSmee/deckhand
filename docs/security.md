@@ -60,6 +60,43 @@ required) is still worth adding: it also covers people and other tools. A sandbo
 branches still reach the default branch through pull requests that a maintainer merges:
 review those that touch `.deckhand.yaml`, the Dockerfile or the preview hook's script.
 
+### GitHub Actions on Deckhand's branches
+
+The gateway controls what a sandbox pushes, not what runs on what it pushes. A branch a
+sandbox pushes, and the pull request it opens, are ordinary same-repository events:
+workflows triggered `on: push` or `on: pull_request` (most CI) run that branch's code
+(`npm test`, build scripts, a Makefile) with the repository's secrets and a `GITHUB_TOKEN`,
+and pushes made with an App's token do trigger them. Code a sandbox wrote can then:
+
+- push to the default branch, around the gateway, when that `GITHUB_TOKEN` can write: the
+  repository's (or organization's) default workflow permissions are "Read and write" (the
+  default for older repositories and organizations), or a workflow asks for
+  `contents: write`;
+- read any secret those workflows get and send it anywhere: Actions runners aren't behind
+  the egress proxy.
+
+The workflow files themselves can't change: neither the sandbox's token nor the gateway's
+has the `workflows` permission, so GitHub refuses a push that adds or edits one. What they
+run can.
+
+This is GitHub's model for any tool or person that pushes branches, not something Deckhand
+changes: your workflows are yours to set up. On each repository the App is installed on:
+
+- set **Settings → Actions → General → Workflow permissions** to "Read repository contents
+  and packages permissions" (or the organization's default), and give `contents: write`
+  only to workflows that don't run a branch's code;
+- keep deploy and publishing secrets out of `push` and `pull_request` workflows that run on
+  any branch: put them in an
+  [environment](https://docs.github.com/en/actions/deployment/targeting-different-environments/using-environments-for-deployment)
+  with required reviewers, or limit those workflows to the default branch;
+- treat pull requests from the App's bot (`<app>[bot]`) like an outsider's in workflows
+  and in the [preview hook](repo-config.md#preview-hook): they are same-repository and look
+  trusted, but their code comes from a sandbox.
+
+Not checked yet: whether a sandbox could push the head of a fork's pull request
+(`refs/pull/<n>/head`) that changes a workflow, as its own branch, without `workflows`.
+Assume it could, and keep secrets away from workflows on `issue-*` branches as above.
+
 ## Tokens
 
 A run's secret only lives as long as the run: the listener revokes it when the run ends, and

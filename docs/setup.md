@@ -322,6 +322,12 @@ No sandbox gets a long-lived token, an SSH key or the host's git configuration:
   and comments come from the App's bot (`<app>[bot]`, identity set through `GIT_AUTHOR_*`
   and `GIT_COMMITTER_*`).
 
+The branches and pull requests a sandbox pushes run the repository's GitHub Actions like
+anyone's, with its secrets and a `GITHUB_TOKEN`. Before installing the App on a repository,
+set its default workflow permissions to read-only and keep deploy secrets behind
+environments with required reviewers: see
+[GitHub Actions on Deckhand's branches](security.md#github-actions-on-deckhands-branches).
+
 Nor does a sandbox get your Claude credential. Its Claude Code calls the listener (same port,
 `ANTHROPIC_BASE_URL=<broker>/anthropic`) with the run's secret where the credential would
 be; the listener checks the secret, puts your credential in its place and forwards the call
