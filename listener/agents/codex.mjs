@@ -93,6 +93,8 @@ export const codex = {
     OPENAI_BASE_URL: `${config.brokerUrl}/openai`,
   }),
   secrets: OPENAI_CREDENTIALS,
+  providers: { openai: { secrets: OPENAI_CREDENTIALS } },
+  defaultProvider: "openai",
   // Its model calls go to the listener, and the sandbox turns off its analytics, update check
   // and plugins (agents/codex.sh): nothing else to reach.
   hosts: [],

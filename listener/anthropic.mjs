@@ -38,18 +38,30 @@ export function createAnthropicProxy({
   name, // credentialName(): which header the credential goes in
   credential, // its value
   upstream = "https://api.anthropic.com", // the listener's ANTHROPIC_BASE_URL, if any
+  // Other providers (agents/claude.mjs), for runs the broker gives one: { openrouter: { name,
+  // credential, upstream } }.
+  providers = {},
   log = () => {},
 }) {
-  const base = baseOf(upstream);
+  const own = { name, credential, upstream };
 
   async function handle(req, res) {
     const path = API_PATH.exec(req.url.split("?")[0])?.[1];
-    if (!broker.runOf(secretOf(req))) {
-      return fail(res, 401, "authentication_error", "unknown or finished run");
-    }
+    const run = broker.runOf(secretOf(req));
+    if (!run) return fail(res, 401, "authentication_error", "unknown or finished run");
+    const provider = run.provider && run.provider !== "anthropic" ? run.provider : null;
+    const { name, credential, upstream } = provider ? (providers[provider] ?? {}) : own;
     if (!name || !credential) {
-      return fail(res, 503, "api_error", "the operator set no Claude credential");
+      return fail(
+        res,
+        503,
+        "api_error",
+        provider
+          ? `the operator set no credential for ${provider}`
+          : "the operator set no Claude credential",
+      );
     }
+    const base = baseOf(upstream);
     if (!path) return fail(res, 404, "not_found_error", "not an Anthropic API path");
     // /anthropic/v1/messages?beta=true → <upstream>/v1/messages?beta=true
     const target = new URL(base.href + path + new URL(req.url, "http://broker").search);
@@ -60,12 +72,14 @@ export function createAnthropicProxy({
     if (name === "ANTHROPIC_API_KEY") headers["x-api-key"] = credential;
     else headers.authorization = `Bearer ${credential}`;
 
+    const what = provider ?? "Anthropic";
     await forward(req, res, {
       target,
       headers,
-      unreachable: () => fail(res, 502, "api_error", "Anthropic can't be reached"),
+      unreachable: () => fail(res, 502, "api_error", `${what} can't be reached`),
       log,
-      what: "Anthropic",
+      what,
+      answered: (status) => (run.apiStatus = status),
     });
   }
 

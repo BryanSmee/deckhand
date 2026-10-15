@@ -4,14 +4,22 @@
 import { randomBytes } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readdirSync, rmdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { AGENT_SECRETS, agentFor, effortOf, modelOf } from "./agents/index.mjs";
+import {
+  AGENT_SECRETS,
+  agentFor,
+  effortOf,
+  entryName,
+  entryOf,
+  modelOf,
+  providerError,
+} from "./agents/index.mjs";
 import { operatorHosts, proxyEnv } from "./egress.mjs";
 import { commentsText, sameRepo } from "./events.mjs";
 import { grantCheck, hardeningArgs, mountArgs, resolveMounts } from "./grants.mjs";
 import { imageRef } from "./images.mjs";
 import { BUILT_IN, isFresh, isLight, kindOf, permissionsFor, sessionName } from "./modes.mjs";
 import { branchConfigReport, triggerWord } from "./onboarding.mjs";
-import { firstMessage, promptFor } from "./prompts.mjs";
+import { firstMessage, handoffMessage, promptFor, retryNote } from "./prompts.mjs";
 import { CONFIG_FILE, customMode, engineCacheVolume } from "./repo-config.mjs";
 import { ENGINE_HOST } from "./runner/engine.mjs";
 import { lastResult, openLog, outcome, questionsOf, summaryOf } from "./runlog.mjs";
@@ -34,6 +42,43 @@ function refusedMounts(refused, name) {
 // the operator's, else the operator's).
 export function agentNameFor(settings, own, light) {
   return own?.agent ?? (light ? settings.brainstormAgent : settings.agent);
+}
+
+// "codex@openai" → "Codex (openai)": an agent on a provider, as replies name it.
+export function entryLabel(name) {
+  const entry = entryOf(name);
+  return entry ? `${agentFor(entry.agent).displayName} (${entry.provider})` : name;
+}
+
+// The agent and provider of a run (`fallback` on the record: why it isn't the usual one): the
+// fallback its comments carry (finish()), else the one the task's previous run fell back to
+// (`previous`: an agent sticks to an issue once it took over), else the agent the settings
+// pick (`chosen`) on its default provider. Only entries still in FALLBACKS.
+export function entryFor(config, chosen, fallback, previous) {
+  if (fallback && config.fallbacks.includes(fallback.entry)) {
+    const { from, reason, tried, result } = fallback;
+    return { ...entryOf(fallback.entry), fallback: { from, reason, tried }, result };
+  }
+  const stuck = previous?.fallback && entryName(previous.agent, previous.provider);
+  if (stuck && config.fallbacks.includes(stuck)) {
+    const { from, reason } = previous.fallback;
+    return { ...entryOf(stuck), fallback: { from, reason, sticky: true } };
+  }
+  return { agent: chosen, provider: agentFor(chosen).defaultProvider, fallback: null };
+}
+
+// Where a run whose provider failed goes next: the first entry of FALLBACKS it hasn't been
+// on yet (each at most once per run, across the runs of one fallback chain), or null when
+// it failed for another reason or none is left. `apiStatus`: the provider's last answer.
+export function nextFallback(config, record, result, apiStatus) {
+  if (!config.fallbacks.length) return null;
+  const reason = providerError(result, apiStatus);
+  if (!reason) return null;
+  const from = entryName(record.agent, record.provider);
+  const own = record.fallback && !record.fallback.sticky ? record.fallback.tried : [];
+  const tried = [...own, from];
+  const entry = config.fallbacks.find((e) => !tried.includes(e));
+  return entry ? { entry, from, reason, tried } : null;
 }
 
 // The model and effort of a run: the comments' "/model" and "/effort" (`options`), else the
@@ -67,13 +112,24 @@ export function nextStep(mode, { talk, fresh, trigger }) {
 
 // The line under each reply: agent, model, effort, duration, the next step and options that
 // came too late for the run.
+// The provider shows when it isn't the agent's default, or after a fallback, with why.
 export function replyFooter(record, result, hint, later) {
   const minutes = result ? Math.round(result.durationMs / 6000) / 10 : null;
   const late = Object.entries(later)
     .map(([k, v]) => `\`/${k} ${v}\``)
     .join(" ");
   const next = late ? ` · ${late} came mid-run: it applies to the next run` : "";
-  return `<sub>🤖 ${agentFor(record.agent).displayName} ${record.model} · ${record.effort} effort${minutes !== null ? ` · ${minutes} min` : ""}${hint}${next}</sub>`;
+  const agent = agentFor(record.agent);
+  const { fallback } = record;
+  const provider =
+    record.provider && (fallback || record.provider !== agent.defaultProvider)
+      ? ` (${record.provider})`
+      : "";
+  const switched =
+    fallback && !fallback.sticky
+      ? ` · fell back from ${entryLabel(fallback.from)}: ${fallback.reason}`
+      : "";
+  return `<sub>🤖 ${agent.displayName}${provider} ${record.model} · ${record.effort} effort${minutes !== null ? ` · ${minutes} min` : ""}${switched}${hint}${next}</sub>`;
 }
 
 // `ctx` (server.mjs): the listener's state and services, read at call time.
@@ -143,8 +199,13 @@ export function createRuns(ctx) {
       repo: task.repo,
       title: ctx.titles.get(key),
       replyTo,
-      // What runs it: the operator's until the repo's settings are read (begin()).
+      // What runs it: the operator's until the repo's settings are read (begin()), on which
+      // provider, and why when it is a fallback's (entryFor()).
       agent: light ? config.brainstormAgent : config.agent,
+      provider: null,
+      fallback: null,
+      // Whether it is a light run: an issue's light runs and its work have their own sessions.
+      light,
       // Why the listener started it itself ("conflict": conflicts.mjs); null for comments.
       reason,
       // What it was asked to act on, kept in its log's first line: a run that fails can run
@@ -211,8 +272,11 @@ export function createRuns(ctx) {
   // next one queues these comments again).
   async function start(task, items) {
     const { live } = task;
-    const { text, message, settings, own, note } = await begin(task, items);
+    const { text, settings, own, note, handoff, ...first } = await begin(task, items);
     const { branches, fork } = await pushBranches(task, items);
+    // Another agent takes over: the branches are part of what it is handed.
+    const message = handoff ? handoffMessage({ ...handoff, branches }) : first.message;
+    live.handoff = !!handoff;
     live.branches = branches;
     ctx.broker.allow(live.secret, live.branches);
     const instructions = own && (await modeInstructions(task, own));
@@ -258,11 +322,24 @@ export function createRuns(ctx) {
     const { settings, errors, warnings } = await ctx.repoSettings(task.repo, task.base);
     task.settings = settings;
     const own = customMode(settings, mode);
-    record.agent = agentFor(agentNameFor(settings, own, light)).name;
+    const chosen = agentFor(agentNameFor(settings, own, light)).name;
+    const previous = ctx.runs.find(
+      (r) => r !== record && r.key === key && !!r.light === light && r.status !== "running",
+    );
+    const entry = entryFor(config, chosen, items.findLast((i) => i.fallback)?.fallback, previous);
+    record.agent = entry.agent;
+    record.provider = entry.provider;
+    record.fallback = entry.fallback;
+    ctx.broker.provide(task.live.secret, entry.provider);
     const agent = agentOf(task);
+    // Another agent than the one that failed: a new session, handed what it left.
+    const switched = entry.fallback && !entry.fallback.sticky ? entry.fallback : null;
+    const takeOver = switched && entryOf(switched.from)?.agent !== agent.name;
     // Inbox entries start afresh: the sandbox doesn't resume their session (entrypoint.sh).
     const started =
-      !isFresh(task, mode) && (await ctx.runner.hasSession(sessionName(task.name, light), agent));
+      !isFresh(task, mode) &&
+      !takeOver &&
+      (await ctx.runner.hasSession(sessionName(task.name, light), agent));
     // A new comment answers the questions, if any: the issue no longer waits for input. With
     // the repo's `wait_for_answers`, a light run only helps answer them: the label stays.
     const helps = light && task.settings?.waitForAnswers;
@@ -274,12 +351,27 @@ export function createRuns(ctx) {
     task.next = {};
     const text = commentsText(items, options);
     const restored = items.some((i) => i.restored);
-    const message = firstMessage({ mode, text, restored, started });
+    // The same agent on another provider: its session goes on, told why.
+    const retry = switched && !takeOver;
+    const said = retry
+      ? `${retryNote({ ...switched, provider: entry.provider })}\n\n${text}`
+      : text;
+    const message = firstMessage({ mode, text: said, restored, started });
+    const handoff = takeOver && {
+      from: entryLabel(switched.from),
+      reason: switched.reason,
+      result: entry.result,
+      body: firstMessage({ mode, text, restored, started: false }),
+    };
     [record.model, record.effort] = modelFor(settings, own, light, options, agent, config);
+    // A model of the agent that failed (`/model opus` before a fall back to Codex): its best.
+    const foreign = takeOver && agent.modelProblem(record.model);
+    if (foreign) record.model = modelOf(agent, "best", config);
     record.mode =
       mode === "stop" ? "wrap-up" : restored ? "restore" : started ? "continue" : "start";
+    const on = record.fallback ? `@${record.provider}` : "";
     log(
-      `${key}: running ${task.name} (${mode}, ${record.mode}, ${agent.name} ${record.model}/${record.effort}), log ${record.logPath}`,
+      `${key}: running ${task.name} (${mode}, ${record.mode}, ${agent.name}${on} ${record.model}/${record.effort}), log ${record.logPath}`,
     );
     // First line of every log: what the dashboard needs to list it after a restart.
     const { logPath: _, ...meta } = record;
@@ -288,6 +380,7 @@ export function createRuns(ctx) {
       logFile.write(
         JSON.stringify({ type: "listener", event: "note", at: Date.now(), message }) + "\n",
       );
+    if (foreign) note(`${foreign}: ${agent.displayName} runs its best model instead`);
     if (errors.length) throw new RunError(configErrors(task.base, errors, agent.displayName));
     for (const warning of warnings) note(`${CONFIG_FILE}: ${warning}`);
     if (!own && !BUILT_IN.has(mode)) {
@@ -302,7 +395,7 @@ export function createRuns(ctx) {
         `${cantRun(task)}: ${wrongModel}. Use a tier (\`/model best\`, \`balanced\` or \`fast\`) or one of its models.`,
       );
     }
-    return { text, message, settings, own, note };
+    return { text, message, settings, own, note, handoff };
   }
 
   // Left over from a listener that lost track of it: wait for it, then make room.
@@ -551,11 +644,12 @@ export function createRuns(ctx) {
     const agent = agentOf(task);
     const install = agent.install(config);
     return {
-      ...agent.env(config, live.secret),
+      ...agent.env(config, live.secret, live.record.provider ?? agent.defaultProvider),
       DECKHAND_RUN_SECRET: live.secret,
       DECKHAND_BROKER_URL: config.brokerUrl,
       // Which of ../sandbox/agents/ runs, and its version.
       SANDBOX_AGENT: agent.name,
+      SANDBOX_PROVIDER: live.record.provider ?? agent.defaultProvider,
       [install.versionVar]: install.version,
       GIT_AUTHOR_NAME: bot.name,
       GIT_AUTHOR_EMAIL: bot.email,
@@ -567,8 +661,9 @@ export function createRuns(ctx) {
       TASK_MESSAGE: message,
       // work, brainstorm, idea, bug, discussion or one of the repo's own modes.
       TASK_MODE: mode,
-      // A new session each time, which doesn't replace the issue's (inbox entries, fresh modes).
-      TASK_SESSION: isFresh(task, mode) ? "fresh" : "",
+      // A new session each time, which doesn't replace the issue's (inbox entries, fresh modes),
+      // or a new one that does: another agent taking over after a fallback.
+      TASK_SESSION: isFresh(task, mode) ? "fresh" : live.handoff ? "new" : "",
       // Comments as the agent's messages (the runner's inbox), its raw output out.
       TASK_INPUT: "stream",
       TASK_OUTPUT: "json",
@@ -678,11 +773,17 @@ export function createRuns(ctx) {
       const shots = live.shots && join(ctx.shotsDir, live.shots);
       if (shots && existsSync(shots) && !readdirSync(shots).length) rmdirSync(shots);
       const status = outcome(live.result);
+      const apiStatus = ctx.broker.runOf(live.secret)?.apiStatus;
+      const fallback =
+        status === "error" && !live.replied
+          ? nextFallback(config, record, live.result, apiStatus)
+          : null;
+      if (fallback) fallBack(task, fallback);
       // Once: a listener restarting from here on doesn't post it again.
-      if (!live.replied) await postReply(task, status);
+      else if (!live.replied) await postReply(task, status);
       log(`${key}: done (${status})`);
       record.status = status;
-      record.summary = summaryOf(live.result);
+      record.summary = fallback ? fallback.summary : summaryOf(live.result);
       record.questions = questionsOf(live.result);
     } catch (error) {
       log(`${key}: ${error.stack ?? error}`);
@@ -693,6 +794,21 @@ export function createRuns(ctx) {
     } finally {
       await cleanUp(task);
     }
+  }
+
+  // The provider failed: the run's comments go back in the queue, marked for the next entry of
+  // FALLBACKS (entryFor()), with the last result for the agent that takes over. No reply:
+  // the next run's says what happened. Queued, they keep their 👀 and survive a restart.
+  function fallBack(task, fallback) {
+    const { live } = task;
+    const result = (live.result?.text ?? "").slice(0, 4000);
+    fallback.summary = `${entryLabel(fallback.from)}'s provider failed: ${fallback.reason}. Falling back to ${entryLabel(fallback.entry)}`;
+    log(`${live.key}: ${fallback.summary}`);
+    const event = { type: "listener", event: "note", at: Date.now(), message: fallback.summary };
+    live.logFile.write(JSON.stringify(event) + "\n");
+    const { summary: _, ...marker } = fallback;
+    for (const item of live.handled) item.fallback = { ...marker, result };
+    task.pending.unshift(...live.handled.filter((item) => !task.pending.includes(item)));
   }
 
   async function postReply(task, status) {

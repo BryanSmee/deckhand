@@ -83,6 +83,15 @@ test("format: the listener's lines", () => {
     start({ mode: "continue", kind: "issue", reason: "conflict" }),
     "Rebasing a pull request in conflict",
   );
+  // A fallback's run says where it came from; one that stuck to it doesn't again.
+  const fallback = { from: "claude@anthropic", reason: "overloaded (529)", tried: [] };
+  const fell = { mode: "start", kind: "issue", agent: "codex", provider: "openai", fallback };
+  assert.equal(
+    format(line({ type: "listener", ...fell }), agentFor("codex"))[0].text,
+    "Falling back to Codex (openai) from claude@anthropic, whose provider failed: overloaded (529). Starting",
+  );
+  const stuck = { ...fell, mode: "continue", fallback: { ...fallback, sticky: true } };
+  assert.equal(start(stuck), "Continuing the session");
 });
 
 test("format: Claude's lines", () => {

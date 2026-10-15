@@ -63,6 +63,11 @@ function runOf(logDir, file) {
   return {
     id,
     agent: agent.name,
+    // Its provider, and why when it is a fallback's (runs.mjs entryFor()): a later run of the
+    // task sticks to it. None in logs from before fallbacks.
+    provider: meta.provider ?? null,
+    fallback: meta.fallback ?? null,
+    light: meta.light ?? null,
     key: meta.key ?? id.replace(/-\d+$/, ""),
     kind: meta.kind ?? null,
     title: meta.title ?? null,
@@ -86,9 +91,10 @@ function runOf(logDir, file) {
 }
 
 // A run as the dashboard gets it: without where its log is on disk, its questions (the task
-// carries those, board.mjs) nor the comments it ran on (their text is in its log).
+// carries those, board.mjs), the comments it ran on (their text is in its log) nor whether it
+// was light (its kind says it).
 export function publicRun(r) {
-  const { logPath, questions, items, ...rest } = r;
+  const { logPath, questions, items, light, ...rest } = r;
   return rest;
 }
 
@@ -146,7 +152,12 @@ function listenerEntries(e, agent) {
   const what =
     (REASONS[e.reason] ?? GOING_ON[e.mode] ?? STARTING[e.kind] ?? own ?? "Starting") +
     (e.model ? ` (${e.model}, ${e.effort} effort)` : "");
-  return [{ kind: "meta", text: what + (e.message ? `: ${e.message}` : "") }];
+  // A fallback's run (runs.mjs): what it took over from, and why.
+  const fell = e.fallback && !e.fallback.sticky;
+  const from = fell
+    ? `Falling back to ${agent.displayName} (${e.provider}) from ${e.fallback.from}, whose provider failed: ${e.fallback.reason}. `
+    : "";
+  return [{ kind: "meta", text: from + what + (e.message ? `: ${e.message}` : "") }];
 }
 
 // The agent's events (its normalize()) → the dashboard's entries.

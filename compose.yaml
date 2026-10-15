@@ -61,6 +61,10 @@ services:
       # Codex's OpenAI API key (docs/setup.md#codex), kept out of sandboxes the same way.
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
+      # OpenRouter's key, for claude@openrouter in FALLBACKS (docs/setup.md#fallbacks), and
+      # where a run goes when its provider fails (or fallbacks in config.yaml).
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      FALLBACKS: ${FALLBACKS:-}
       # The agent of work runs, and of light runs (empty: SANDBOX_AGENT): claude or codex.
       SANDBOX_AGENT: ${SANDBOX_AGENT:-}
       BRAINSTORM_AGENT: ${BRAINSTORM_AGENT:-}

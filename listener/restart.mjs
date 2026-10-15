@@ -209,6 +209,8 @@ export function createRestart(ctx) {
     });
     // State saved before runs had branches: none, rather than any.
     ctx.broker.allow(saved.secret, saved.branches ?? []);
+    // Its agent's calls go on to the provider it started on (a fallback's).
+    ctx.broker.provide(saved.secret, record.provider ?? null);
     return task;
   }
 

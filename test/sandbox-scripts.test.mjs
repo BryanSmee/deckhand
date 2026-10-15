@@ -158,6 +158,18 @@ test("Claude Code's run: a new, continued or fresh session, with the model and e
   assert.deepEqual(args("fresh"), [...common, "--no-session-persistence", "-p", ...out]);
 });
 
+test("Claude Code's own fallback model: headless only, and never the run's model", (t) => {
+  const env = { TASK_OUTPUT: "json", SANDBOX_MODEL: "opus", SANDBOX_FALLBACK_MODEL: "sonnet" };
+  const run = claudeScript(t, 'agent_run new "Do it"', env).stdout.split("\nstdin:")[0];
+  assert.match(run, /^--fallback-model\nsonnet$/m);
+  const same = { ...env, SANDBOX_FALLBACK_MODEL: "opus" };
+  assert.doesNotMatch(claudeScript(t, 'agent_run new "Do it"', same).stdout, /--fallback-model/);
+  const none = { TASK_OUTPUT: "json", SANDBOX_MODEL: "opus" };
+  assert.doesNotMatch(claudeScript(t, 'agent_run new "Do it"', none).stdout, /--fallback-model/);
+  // By hand, Claude Code would refuse it.
+  assert.doesNotMatch(claudeScript(t, "agent_interactive new", env).stdout, /--fallback-model/);
+});
+
 test("Claude Code's run with messages: the prompt, then the inbox, as stream-json", (t) => {
   const { stdout } = claudeScript(
     t,

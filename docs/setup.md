@@ -305,6 +305,11 @@ What every sandbox may reach and its limits aren't settings: they go in
 | `OPENAI_API_KEY`                                                                                  | none: a secret, `.env` only                                                                       |                                                      | Codex's OpenAI API key, added by the listener to the sandboxes' API calls                                                                      |
 | `OPENAI_BASE_URL`                                                                                 | `openai_base_url`                                                                                 | `https://api.openai.com/v1`                          | where the listener sends Codex's API calls                                                                                                     |
 | `CODEX_BEST_MODEL`, `CODEX_BALANCED_MODEL`, `CODEX_FAST_MODEL`                                    | `codex_best_model`, `codex_balanced_model`, `codex_fast_model`                                    | `gpt-6-astra`, `gpt-6.1-sol`, `gpt-6-luna`           | the models the tiers `best`, `balanced` and `fast` stand for with Codex                                                                        |
+| `FALLBACKS`                                                                                       | `fallbacks`                                                                                       | none                                                 | where a run goes when its provider fails, in order: `claude@anthropic`, `claude@openrouter`, `codex@openai` (see [Fallbacks](#fallbacks))      |
+| `OPENROUTER_API_KEY`                                                                              | none: a secret, `.env` only                                                                       |                                                      | OpenRouter key of `claude@openrouter`, added by the listener to those runs' API calls                                                          |
+| `OPENROUTER_BASE_URL`                                                                             | `openrouter_base_url`                                                                             | `https://openrouter.ai/api`                          | where the listener sends the API calls of `claude@openrouter` runs                                                                             |
+| `OPENROUTER_OPUS_MODEL`, `OPENROUTER_SONNET_MODEL`, `OPENROUTER_HAIKU_MODEL`                      | `openrouter_opus_model`, `openrouter_sonnet_model`, `openrouter_haiku_model`                      | `ANTHROPIC_DEFAULT_*_MODEL`                          | what `opus`, `sonnet` and `haiku` stand for on `claude@openrouter` (OpenRouter's names)                                                        |
+| `CLAUDE_FALLBACK_MODEL`                                                                           | `claude_fallback_model`                                                                           | none                                                 | Claude Code's own `--fallback-model`, when the run's model is overloaded: a tier or a model's name                                             |
 | `PUBLIC_URL`                                                                                      | `public_url`                                                                                      | stored by `/setup`                                   | the listener's public address                                                                                                                  |
 | `PORT`                                                                                            | none: compose's                                                                                   | `8080`                                               | the host port compose publishes the listener on                                                                                                |
 | `CLAUDE_CODE_VERSION`                                                                             | `claude_code_version`                                                                             | `2.1.300`                                            | Claude Code version the sandboxes install on first use                                                                                         |
@@ -428,6 +433,60 @@ What differs from Claude Code:
   the sandbox, as with Claude Code.
 
 A ChatGPT plan's login isn't supported yet: only an API key.
+
+### Fallbacks
+
+When the model's API fails, a run can go on elsewhere instead of ending with "Claude stopped
+with an error". List where, in order, as `agent@provider` (`agent` alone is its default
+provider):
+
+| Entry               | What                                                                   | Needs                |
+| ------------------- | ---------------------------------------------------------------------- | -------------------- |
+| `claude@anthropic`  | Claude Code on your `ANTHROPIC_BASE_URL` (Anthropic, unless a gateway) | a Claude credential  |
+| `claude@openrouter` | Claude Code through OpenRouter, at `OPENROUTER_BASE_URL`               | `OPENROUTER_API_KEY` |
+| `codex@openai`      | Codex on your `OPENAI_BASE_URL` (OpenAI)                               | `OPENAI_API_KEY`     |
+
+In `.env`, the credentials, and in `config.yaml`:
+
+```yaml
+fallbacks: [claude@openrouter, codex@openai]
+# OpenRouter's names for what opus, sonnet and haiku mean there.
+openrouter_opus_model: anthropic/claude-opus-4.1
+openrouter_sonnet_model: anthropic/claude-sonnet-4.5
+openrouter_haiku_model: anthropic/claude-haiku-4.5
+```
+
+An entry without its credential stops the listener at start. Without `FALLBACKS`, nothing
+changes: a run whose provider fails ends with an error, as before.
+
+**Which errors count:** only the provider's. The run's agent ended with an error that says
+overloaded (529), rate limited (429), a usage limit or quota reached (402, a plan's limit, no
+credit left), invalid or expired credentials (401, 403), or a server error (5xx), in its
+message or as the last answer the listener got from the provider. A failing test, a task the
+agent gave up on or any other error ends the run as before. A plan's usage limit
+counts: with a Claude plan first and an API key or OpenRouter after it, runs go on, paid per
+token, only on the entries you list.
+
+**What happens:** the run's comments are queued again for the first entry the run hasn't
+been on yet, each entry at most once (the run's own included, wherever it is in the list). The
+same agent on another provider continues its session. Another agent starts a new session,
+handed the task, the branch and the previous agent's last message; it works in the same clone,
+so it sees what was left uncommitted. The run's log on the dashboard says where it switched
+and why, and the reply's footer names the agent and provider that answered:
+`🤖 Codex (openai) gpt-6-astra · medium effort · 3 min · fell back from Claude (anthropic): overloaded (529)`.
+When no entry is left, the run ends with the error.
+
+**Later runs** of the issue stay on the entry that took over, as long as it is in `FALLBACKS`:
+switching back would continue the session of the agent that failed, without what the other
+one did.
+
+A model's own name (`/model claude-opus-5-5`) may mean nothing on another provider: use
+tiers (`best`) with fallbacks. A Claude model on a run that falls back to Codex runs Codex's
+`best`.
+
+Claude Code also has a fallback of its own, within one provider: `CLAUDE_FALLBACK_MODEL`
+(`claude_fallback_model: sonnet`) is the model it switches to when the run's model is
+overloaded, before its provider counts as failed.
 
 ### Advanced settings
 

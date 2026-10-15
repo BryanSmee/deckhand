@@ -396,3 +396,49 @@ test("agents: an unknown one, or Codex without its key, stops the listener", () 
     /OPENAI_BASE_URL: expected an http\(s\) URL/,
   );
 });
+
+test("FALLBACKS: none by default; agent@provider entries in order, each with its credential", () => {
+  assert.deepEqual(loadConfig({ ALLOWED_USERS: "a" }).fallbacks, []);
+  const config = loadConfig(
+    { CLAUDE_CODE_OAUTH_TOKEN: "t", OPENROUTER_API_KEY: "sk-or-1", OPENAI_API_KEY: "sk-proj-1" },
+    file(`allowed_users: [a]
+fallbacks: [Claude@OpenRouter, codex, claude, codex@openai]
+openrouter_base_url: https://gateway.example/api/
+openrouter_opus_model: anthropic/claude-opus-4.1
+claude_fallback_model: sonnet
+`),
+  );
+  // An agent alone is its default provider; each entry once.
+  assert.deepEqual(config.fallbacks, ["claude@openrouter", "codex@openai", "claude@anthropic"]);
+  assert.equal(config.openrouterUrl, "https://gateway.example/api");
+  assert.deepEqual(config.openrouterAliases, {
+    ANTHROPIC_DEFAULT_OPUS_MODEL: "anthropic/claude-opus-4.1",
+  });
+  assert.equal(config.claudeFallbackModel, "sonnet");
+  assert.equal(loadConfig({ ALLOWED_USERS: "a" }).openrouterUrl, "https://openrouter.ai/api");
+});
+
+test("FALLBACKS: an unknown entry, or one without its credential, stops the listener", () => {
+  assert.throws(
+    () => loadConfig({ ALLOWED_USERS: "a", FALLBACKS: "gemini" }),
+    /FALLBACKS: expected agent@provider \(claude@anthropic, claude@openrouter, codex@openai\), got gemini/,
+  );
+  assert.throws(
+    () => loadConfig({ ALLOWED_USERS: "a", OPENAI_API_KEY: "k", FALLBACKS: "codex@openrouter" }),
+    /FALLBACKS: expected agent@provider .*got codex@openrouter/,
+  );
+  assert.throws(
+    () =>
+      loadConfig({
+        ALLOWED_USERS: "a",
+        CLAUDE_CODE_OAUTH_TOKEN: "t",
+        FALLBACKS: "claude@openrouter",
+      }),
+    /FALLBACKS: claude@openrouter needs OPENROUTER_API_KEY in the environment/,
+  );
+  assert.throws(
+    () => loadConfig({}, file("allowed_users: [a]\nfallbacks: [codex]")),
+    /config\.yaml: fallbacks: codex@openai needs OPENAI_API_KEY/,
+  );
+  assert.throws(() => file("openrouter_api_key: sk-or-1"), /openrouter_api_key: a secret/);
+});

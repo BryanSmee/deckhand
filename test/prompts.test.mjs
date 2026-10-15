@@ -6,7 +6,14 @@ import {
   READ_ONLY_PERMISSIONS,
 } from "../listener/github-app.mjs";
 import { isFresh, isLight, kindOf, permissionsFor } from "../listener/modes.mjs";
-import { firstMessage, liveMessage, promptFor } from "../listener/prompts.mjs";
+import {
+  firstMessage,
+  handoffMessage,
+  liveMessage,
+  promptFor,
+  retryNote,
+} from "../listener/prompts.mjs";
+import { entryFor, nextFallback, replyFooter } from "../listener/runs.mjs";
 
 const settings = {
   model: "opus",
@@ -178,4 +185,126 @@ test("live messages: what Claude reads for a comment delivered mid-run", () => {
   assert.match(liveMessage("discussion", "Hi"), /^New comment in the discussion/);
   assert.match(liveMessage("onboarding", "Hi"), /\(Still onboarding/);
   assert.match(liveMessage("work", "Hi"), /^New comment on this issue while you are working/);
+});
+
+test("a fallback to another agent: the hand-off says who stopped, why, what it left and the task", () => {
+  const body = firstMessage({ mode: "work", text: "Fix the login", started: false });
+  const text = handoffMessage({
+    from: "Claude (anthropic)",
+    reason: "overloaded (529)",
+    result: "API Error: 529\nOverloaded",
+    body,
+    branches: ["issue-12-*", "feature/x"],
+  });
+  assert.match(
+    text,
+    /^Claude \(anthropic\) was working on this and stopped, as its provider failed: overloaded \(529\)\. You take over, in a new session/,
+  );
+  assert.match(text, /\/workspace is the clone it worked in, with what it hadn't committed/);
+  assert.match(text, /its branch, and yours: `issue-12-…` or `feature\/x`/);
+  assert.match(text, /Its last message:\n\n> API Error: 529\n> Overloaded/);
+  assert.match(text, /What it was asked:\n\nFix the login$/);
+  // No result, no branch, no message (an inbox entry's are in its prompt): none of those.
+  const bare = handoffMessage({ from: "Codex (openai)", reason: "rate limited (429)", body: "" });
+  assert.doesNotMatch(bare, /last message|What it was asked|its branch/);
+  assert.match(
+    retryNote({ reason: "rate limited (429)", provider: "openrouter" }),
+    /through openrouter/,
+  );
+});
+
+test("a run's entry: a fallback's, then the one the task stuck to, then the settings' agent", () => {
+  const config = { fallbacks: ["claude@openrouter", "codex@openai"] };
+  assert.deepEqual(entryFor(config, "claude", undefined, undefined), {
+    agent: "claude",
+    provider: "anthropic",
+    fallback: null,
+  });
+  const marker = {
+    entry: "codex@openai",
+    from: "claude@anthropic",
+    reason: "overloaded (529)",
+    tried: ["claude@anthropic"],
+    result: "API Error: 529",
+  };
+  assert.deepEqual(entryFor(config, "claude", marker), {
+    agent: "codex",
+    provider: "openai",
+    fallback: { from: "claude@anthropic", reason: "overloaded (529)", tried: ["claude@anthropic"] },
+    result: "API Error: 529",
+  });
+  // The issue's previous run fell back: later runs stay there.
+  const previous = {
+    agent: "codex",
+    provider: "openai",
+    fallback: { from: "claude@anthropic", reason: "x" },
+  };
+  assert.deepEqual(entryFor(config, "claude", undefined, previous), {
+    agent: "codex",
+    provider: "openai",
+    fallback: { from: "claude@anthropic", reason: "x", sticky: true },
+  });
+  // Unless the operator took the entry out of FALLBACKS since.
+  const none = { fallbacks: [] };
+  assert.equal(entryFor(none, "claude", marker, previous).agent, "claude");
+});
+
+test("the next fallback: each entry once per chain, only for a provider's error", () => {
+  const config = { fallbacks: ["claude@anthropic", "claude@openrouter", "codex@openai"] };
+  const failed = { ok: false, text: "API Error: 529 overloaded_error" };
+  const first = { agent: "claude", provider: "anthropic", fallback: null };
+  assert.deepEqual(nextFallback(config, first, failed), {
+    entry: "claude@openrouter",
+    from: "claude@anthropic",
+    reason: "overloaded (529)",
+    tried: ["claude@anthropic"],
+  });
+  const second = {
+    agent: "claude",
+    provider: "openrouter",
+    fallback: { tried: ["claude@anthropic"] },
+  };
+  assert.equal(nextFallback(config, second, failed).entry, "codex@openai");
+  const third = {
+    agent: "codex",
+    provider: "openai",
+    fallback: { tried: ["claude@anthropic", "claude@openrouter"] },
+  };
+  assert.equal(nextFallback(config, third, failed), null);
+  // A run that stuck to an entry starts a chain of its own.
+  const stuck = { ...third, fallback: { sticky: true } };
+  assert.equal(nextFallback(config, stuck, failed).entry, "claude@anthropic");
+  // Another error, an ok run, or no FALLBACKS: nowhere.
+  assert.equal(nextFallback(config, first, { ok: false, text: "The tests fail." }), null);
+  assert.equal(nextFallback(config, first, { ok: true, text: "Done." }, 529), null);
+  assert.equal(nextFallback({ fallbacks: [] }, first, failed), null);
+});
+
+test("the reply's footer: the provider when not the default or after a fallback, and why", () => {
+  const record = { agent: "claude", provider: "anthropic", model: "opus", effort: "medium" };
+  const result = { durationMs: 60000 };
+  assert.equal(
+    replyFooter({ ...record, fallback: null }, result, "", {}),
+    "<sub>🤖 Claude opus · medium effort · 1 min</sub>",
+  );
+  const fell = {
+    ...record,
+    agent: "codex",
+    provider: "openai",
+    model: "gpt-6-astra",
+    fallback: { from: "claude@anthropic", reason: "overloaded (529)", tried: [] },
+  };
+  assert.equal(
+    replyFooter(fell, result, "", {}),
+    "<sub>🤖 Codex (openai) gpt-6-astra · medium effort · 1 min · fell back from Claude (anthropic): overloaded (529)</sub>",
+  );
+  assert.equal(
+    replyFooter({ ...fell, fallback: { ...fell.fallback, sticky: true } }, result, "", {}),
+    "<sub>🤖 Codex (openai) gpt-6-astra · medium effort · 1 min</sub>",
+  );
+  // Records from before providers: as before.
+  assert.equal(
+    replyFooter({ agent: "claude", model: "opus", effort: "high" }, null, "", {}),
+    "<sub>🤖 Claude opus · high effort</sub>",
+  );
 });

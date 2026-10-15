@@ -279,8 +279,10 @@ it in the run's record:
   shared volume.
 - **In the listener**, `listener/agents/<name>.mjs`, listed in `listener/agents/index.mjs`:
   - `install(config)`: its volume, mount, version and installer (`images.installAgent()`);
-  - `env(config, secret)` and `secrets`: its environment, with the run's secret where its
-    credential would be, and the variables redacted from logs and replies;
+  - `env(config, secret, provider)` and `secrets`: its environment, with the run's secret
+    where its credential would be, and the variables redacted from logs and replies;
+  - `providers` and `defaultProvider`: where its API calls can go, and the credentials each
+    takes (see [Providers and fallbacks](#providers-and-fallbacks));
   - `hosts`: what the egress proxy always lets it reach (`egress.mjs`);
   - `session`: the volume (`<sandbox>-claude`, `<sandbox>-codex`) and path of its sessions,
     which `runner.hasSession()` checks;
@@ -300,6 +302,33 @@ duration, needs-input), `runlog.mjs` all of them (the dashboard's entries). Logs
 agent's raw lines and each run's first line names its agent (`claude` for logs from before
 the seam), so old logs still render. The reply's footer and the listener's messages name the
 run's agent (`displayName`).
+
+### Providers and fallbacks
+
+An agent calls a provider: Claude Code `anthropic` (the operator's `ANTHROPIC_BASE_URL`) or
+`openrouter`, Codex `openai` (each agent's `providers` and `defaultProvider`; `env(config,
+secret, provider)` gives the variables for one). Sandboxes always call the listener: the broker
+keeps each run's provider (`broker.provide()`), and the listener's endpoint
+(`anthropic.mjs`) forwards to that provider's URL with its credential. The endpoints also keep
+the provider's last status on the run (`apiStatus`).
+
+The operator's `FALLBACKS` lists `agent@provider` entries in order. When a run ends with an
+error result, `runs.mjs` asks `providerError()` (`agents/index.mjs`) whether the provider failed
+it: the result's text (`API Error: 529`, `unexpected status 429`, overloaded, rate limit, quota,
+invalid key) or the endpoint's last status (429, 529, 402, 401, 403, 5xx). If so, and an entry
+the run's chain hasn't been on is left (`nextFallback()`), no reply is posted: the run's
+comments go back in the queue, each carrying a `fallback` marker (the next entry, the one that
+failed, why, the entries tried, its last message), so it survives a restart like any queued
+comment. The next run takes its entry from the marker (`entryFor()`):
+
+- **The same agent on another provider** continues the session, told why (`retryNote()`).
+- **Another agent** starts a new session (`TASK_SESSION=new`, which the entrypoint never
+  continues an older one for), handed the task, the branches and the last message
+  (`handoffMessage()`); the workspace volume is the issue's, with what the first agent left.
+
+The run's record keeps `provider` and `fallback`. The reply's footer names the agent and
+provider and why it switched; the log's first line says it. Later runs of the task stick to
+the entry that took over (`previous.fallback`), as long as it is still in `FALLBACKS`.
 
 ## Modules
 

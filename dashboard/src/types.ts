@@ -35,6 +35,10 @@ export interface Run {
   reason?: string | null;
   // What ran it (listener/agents/): "claude", also for runs from before agents had names.
   agent?: string;
+  // Where its agent's API calls went (listener/agents/), and why when a fallback picked it:
+  // the entry that failed (`from`, "claude@anthropic"), and how ("overloaded (529)").
+  provider?: string | null;
+  fallback?: { from: string; reason: string; tried?: string[]; sticky?: boolean } | null;
   model?: string | null;
   effort?: string | null;
   phase?: string | null;
