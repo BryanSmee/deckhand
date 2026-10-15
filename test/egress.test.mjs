@@ -2,9 +2,11 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ConfigError, loadConfig } from "../listener/config.mjs";
 import {
+  egressPolicy,
   hostProblem,
   mandatoryHosts,
   matchHost,
+  operatorHosts,
   proxyEnv,
   refusedRepoHosts,
   runHosts,
@@ -71,12 +73,54 @@ test("without allow_repo_hosts, a repo's hosts that widen egress are refused", (
 });
 
 test("a repo can never open every host, granted or not", () => {
-  for (const host of ['"*"', '"*.com"', '"*.Dev"']) {
+  for (const host of ['"*"', '"*.com"', '"*.Dev"', '"*.co.uk"', '"*.github.io"', '"*.NIP.io"']) {
     const { errors, settings } = parseRepoConfig(`hosts: [pypi.org, ${host}]\n`, config);
     assert.match(errors[0], /a repository can't open that much: only the operator can/, host);
     assert.deepEqual(settings.hosts, ["pypi.org"]);
   }
-  assert.deepEqual(parseRepoConfig('hosts: ["*.example.com"]\n', config).errors, []);
+  const ok = 'hosts: ["*.example.com", "*.me.github.io", example.co.uk, github.io]\n';
+  assert.deepEqual(parseRepoConfig(ok, config).errors, []);
+});
+
+test("a repo can't name an address or a host without a domain", () => {
+  const cases = {
+    "172.17.0.1": /can't name an address/,
+    "10.0.0.1": /can't name an address/,
+    '"*.0.1"': /can't name an address/,
+    listener: /can't name a host without a domain/,
+    localhost: /can't name a host without a domain/,
+  };
+  for (const [host, problem] of Object.entries(cases)) {
+    const { errors, settings } = parseRepoConfig(`hosts: [${host}]\n`, config);
+    assert.match(errors[0], problem, host);
+    assert.deepEqual(settings.hosts, []);
+  }
+  // The operator still can.
+  const operator = loadConfig({ ALLOWED_USERS: "a", ALLOWED_HOSTS: "listener, 172.17.0.1" });
+  assert.deepEqual(operator.hosts, ["listener", "172.17.0.1"]);
+});
+
+test("private addresses only for the operator's named hosts, not a repo's or *", () => {
+  const { settings } = parseRepoConfig('hosts: ["*.example.com", repo.dev]\n', config);
+  const grant = { hosts: ["*.lan.example"], allowRepoHosts: true };
+  const hosts = [...runHosts(config, grant, settings), "*"];
+  const trusted = [...operatorHosts(config, grant), "*"];
+  const answer = (host) => egressPolicy(host, hosts, trusted);
+  assert.deepEqual(answer("registry.npmjs.org"), { allowed: true, private: true });
+  assert.deepEqual(answer("nas.lan.example"), { allowed: true, private: true });
+  // The repo's own hosts reach public addresses only, whatever they resolve to.
+  assert.deepEqual(answer("a.example.com"), { allowed: true, private: false });
+  assert.deepEqual(answer("repo.dev"), { allowed: true, private: false });
+  assert.deepEqual(answer("anything.net"), { allowed: true, private: false });
+  assert.deepEqual(egressPolicy("x.net", ["github.com"], ["github.com"]), {
+    allowed: false,
+    private: false,
+  });
+  // A run saved before `trusted` was: nothing private.
+  assert.deepEqual(egressPolicy("github.com", ["github.com"], undefined), {
+    allowed: true,
+    private: false,
+  });
 });
 
 test("host matching: names, subdomain wildcards, *", () => {

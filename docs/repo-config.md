@@ -136,8 +136,12 @@ otherwise open the sandbox's network.
 - Otherwise its `hosts` may only list what the operator already allows it (they change
   nothing); any other host stops the runs, and the reply lists it with the file's errors.
   Ask the operator to grant it, or to set `allow_repo_hosts`.
-- `"*"` and whole top-level domains (`"*.com"`) are always errors here: only the operator
-  can open that much.
+- `"*"`, whole top-level domains (`"*.com"`) and common public suffixes (`"*.co.uk"`,
+  `"*.github.io"`, `"*.nip.io"`), IP addresses (`172.17.0.1`) and names without a domain
+  (`listener`) are always errors here: only the operator can list those.
+- A repository's own hosts only ever reach public addresses: one that resolves to a private
+  one (`10.0.0.0/8`, `192.168.0.0/16`…) is refused. Ask the operator to list it if it
+  is a service on their network.
 
 The onboarding issue says which case applies. See
 [Security model](security.md#a-repositorys-own-hosts).

@@ -118,7 +118,7 @@ export function createRestart(ctx) {
         task: pick(task),
         ...Object.fromEntries(
           ["id", "mode", "talk", "light", "secret", "asked", "replyTo", "replied", "hosts", "shots"]
-            .concat(["branches", "lines", "result", "later"])
+            .concat(["trusted", "branches", "lines", "result", "later"])
             .map((k) => [k, live[k]]),
         ),
         record,

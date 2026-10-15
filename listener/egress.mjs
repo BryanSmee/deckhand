@@ -33,16 +33,39 @@ export function mandatoryHosts(config) {
   ];
 }
 
-// Too broad for a repo to ask for itself: "*" and a whole top-level domain ("*.com"). Only
-// the operator can open those (ALLOWED_HOSTS, the grants folder).
+// Suffixes under which anyone can have a name: a wildcard over one opens many owners' hosts
+// (`*.github.io`), or any address (`*.nip.io` resolves `10-0-0-1.nip.io` to 10.0.0.1). Not
+// the whole public suffix list: the common ones, top-level domains being refused anyway.
+const PUBLIC_SUFFIXES = new Set([
+  ...["co.uk", "org.uk", "ac.uk", "gov.uk", "me.uk", "com.au", "net.au", "org.au"],
+  ...["co.jp", "ne.jp", "or.jp", "co.nz", "co.za", "co.in", "com.br", "com.cn", "com.mx"],
+  ...["github.io", "gitlab.io", "pages.dev", "workers.dev", "vercel.app", "netlify.app"],
+  ...["herokuapp.com", "appspot.com", "web.app", "firebaseapp.com", "azurewebsites.net"],
+  ...["cloudfront.net", "amazonaws.com", "ngrok.io", "ngrok-free.app", "trycloudflare.com"],
+  ...["nip.io", "sslip.io", "xip.io", "localtest.me", "lvh.me", "duckdns.org"],
+]);
+
+// What a repo can't ask for itself, granted or not; only the operator can (ALLOWED_HOSTS,
+// the grants folder): "*", a whole top-level domain ("*.com") or public suffix
+// ("*.co.uk"), an IP address or a single-label name (`listener`, `localhost`): those name
+// what sits next to the sandboxes, not a service on the internet.
 export function repoHostProblem(name) {
-  return name === "*" || /^\*\.[^.]+$/.test(name)
-    ? "a repository can't open that much: only the operator can (ALLOWED_HOSTS, the grants folder)"
-    : null;
+  const only = "only the operator can (ALLOWED_HOSTS, the grants folder)";
+  const suffix = name.replace(/^\*\./, "");
+  if (
+    name === "*" ||
+    (name.startsWith("*.") && (!suffix.includes(".") || PUBLIC_SUFFIXES.has(suffix)))
+  ) {
+    return `a repository can't open that much: ${only}`;
+  }
+  // A name's last label is never all digits: "10.0.0.1", or "*.0.1" matching addresses.
+  if (/(^|\.)\d+$/.test(name)) return `a repository can't name an address: ${only}`;
+  if (!name.includes(".")) return `a repository can't name a host without a domain: ${only}`;
+  return null;
 }
 
 // What the operator allows a repo without its config: mandatory, ALLOWED_HOSTS, its grant.
-function operatorHosts(config, grant) {
+export function operatorHosts(config, grant) {
   return [...mandatoryHosts(config), ...config.hosts, ...grant.hosts].map((h) => h.toLowerCase());
 }
 
@@ -75,13 +98,21 @@ export function runHosts(config, grant, settings) {
 }
 
 // How `host` matches `patterns`: "exact", "wildcard", "any" (only through "*"), or null.
-// The proxy lets private addresses through only for a named host or domain, never for "*".
 export function matchHost(host, patterns) {
   const name = String(host).toLowerCase().replace(/\.$/, "");
   if (!name) return null;
   if (patterns.includes(name)) return "exact";
   if (patterns.some((p) => p.startsWith("*.") && name.endsWith(p.slice(1)))) return "wildcard";
   return patterns.includes("*") ? "any" : null;
+}
+
+// The proxy's answer for `host` in a run. Private addresses only for a host or domain the
+// operator named (`trusted`: operatorHosts()), never through "*" alone nor for a repo's own
+// hosts: whoever pushes to its default branch could point those at the LAN or the listener.
+export function egressPolicy(host, hosts, trusted) {
+  const allowed = matchHost(host, hosts) !== null;
+  const named = matchHost(host, trusted ?? []);
+  return { allowed, private: allowed && (named === "exact" || named === "wildcard") };
 }
 
 // The proxy settings a sandbox gets. Both cases, as tools disagree (curl only reads the

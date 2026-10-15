@@ -8,7 +8,7 @@ import { createServer } from "node:http";
 import { join } from "node:path";
 import { page } from "./auth.mjs";
 import { board, STATES } from "./board.mjs";
-import { matchHost } from "./egress.mjs";
+import { egressPolicy } from "./egress.mjs";
 import { createSlots, readDelivery, sourceOf } from "./deliveries.mjs";
 import {
   closedItem,
@@ -418,13 +418,14 @@ export function createHttp(ctx, { dashboardDir }) {
   // --- Egress: the proxy asks, for each connection, whether a sandbox may reach a host ----
 
   // The running task whose sandbox has this address on the sandboxes' network. Addresses are
-  // looked up once per run, the first time its sandbox connects.
+  // looked up once per run, the first time its sandbox connects, and forgotten once it exits
+  // (runs.mjs finish()): Docker may give the address to another sandbox.
   async function taskAt(ip) {
     for (const task of tasks.values()) {
       const live = task.live;
       if (!live?.hosts) continue;
       if (!live.ip) live.ip = await ctx.runner.address(task.name);
-      if (task.live === live && live.ip?.includes(ip)) return task;
+      if (task.live === live && live.hosts && live.ip?.includes(ip)) return task;
     }
     return null;
   }
@@ -448,9 +449,12 @@ export function createHttp(ctx, { dashboardDir }) {
       return sendJson(res, { allowed: false }, 403);
     }
     const task = await taskAt(ip);
-    const match = task ? matchHost(host, task.live.hosts) : null;
-    if (!match) log(`Egress: refused ${host} for ${task ? `${task.repo}#${task.id}` : ip}`);
-    sendJson(res, { allowed: !!match, private: !!match && match !== "any" });
+    const answer = task
+      ? egressPolicy(host, task.live.hosts, task.live.trusted)
+      : { allowed: false, private: false };
+    if (!answer.allowed)
+      log(`Egress: refused ${host} for ${task ? `${task.repo}#${task.id}` : ip}`);
+    sendJson(res, answer);
   }
 
   // Sandboxes and the egress proxy only: compose.yaml doesn't publish this port. Egress

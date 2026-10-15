@@ -4,7 +4,7 @@
 import { randomBytes } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readdirSync, rmdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { proxyEnv, runHosts } from "./egress.mjs";
+import { operatorHosts, proxyEnv, runHosts } from "./egress.mjs";
 import { commentsText, sameRepo } from "./events.mjs";
 import { grantCheck, hardeningArgs, mountArgs, resolveMounts } from "./grants.mjs";
 import { imageRef } from "./images.mjs";
@@ -133,8 +133,10 @@ export function createRuns(ctx) {
       replyTo, // where the reply goes: the issue or pull request of the last comment it took
       open: false, // whether its inbox takes comments
       replied: false,
-      // What the egress proxy lets it reach (egressAnswer()), and its address once known.
+      // What the egress proxy lets it reach (egressAnswer()), those of them that may resolve to
+      // private addresses (the operator's), and its address once known. Until it exits.
       hosts: null,
+      trusted: null,
       ip: null,
       // What it may push (pushBranches()), once it starts.
       branches: [],
@@ -160,6 +162,7 @@ export function createRuns(ctx) {
     const prepared = await prepare(task, items, settings, access.grant, note);
     live.shots = shotsFolder();
     live.hosts = access.hosts;
+    live.trusted = access.trusted;
     if (ctx.stopping) return false;
     const prompt = promptFor(task, {
       mode: live.mode,
@@ -286,7 +289,13 @@ export function createRuns(ctx) {
     for (const m of mounts) {
       note(`Host mount ${m.target}${m.readOnly || light ? " (read-only)" : ""}`);
     }
-    return { grant, hosts: runHosts(config, grant, settings), mounts, limits: grant.limits };
+    return {
+      grant,
+      hosts: runHosts(config, grant, settings),
+      trusted: operatorHosts(config, grant),
+      mounts,
+      limits: grant.limits,
+    };
   }
 
   // Resolved again as late as possible: preparing the run can take minutes, during which a
@@ -545,6 +554,11 @@ export function createRuns(ctx) {
     const live = task.live;
     const { key, record } = live;
     live.open = false;
+    // Its address goes back to Docker, which may give it to another sandbox before the
+    // reply is posted: the egress proxy's answers for it stop now.
+    live.hosts = null;
+    live.trusted = null;
+    live.ip = null;
     try {
       if (error) throw error;
       // Claude exited before answering a delivered comment (a crash): the next run gets it.
