@@ -7,13 +7,16 @@ import { loadConfig } from "../listener/config.mjs";
 import { createWaits } from "../listener/waits.mjs";
 import { ISSUES_MS, createWorkApi, leadsTo, parseAction } from "../listener/work.mjs";
 import { MAX_TEXT } from "../listener/answers.mjs";
+import { board as boardOf } from "../listener/board.mjs";
 
 const ORIGIN = "https://deckhand.example.com";
 
 // The work area with a fake GitHub behind it: `issues` by number (GET /issues/{n}, and the
 // open ones listed), `repoSettings` as the default branch's config says, real waits in a temp
 // dir.
-// `tasks`: the board's, by key (api/state's, with their questions).
+// `tasks`: the board's, by key (api/state's, with their questions). `events`: an issue's
+// timeline, by number. Issues the backlog lists as waiting for input are in `w.listed`, and on
+// the board as board.mjs makes them.
 function setup({
   env = {},
   settings = {},
@@ -23,12 +26,14 @@ function setup({
   board = [],
   tasks = {},
   runs = {},
+  events = {},
 } = {}) {
   const config = loadConfig({
     ALLOWED_USERS: "alice,bob",
     DATA_DIR: mkdtempSync(join(tmpdir(), "deckhand-")),
     ...env,
   });
+  config.bot = "deckhand[bot]";
   const w = {
     calls: [],
     comments: [],
@@ -40,6 +45,9 @@ function setup({
     issues,
     tasks,
     runs,
+    events,
+    listed: new Map(),
+    logs: [],
     clock: 1000,
   };
   let commentId = 500;
@@ -57,6 +65,8 @@ function setup({
           .map(([n, i]) => ({ number: Number(n), html_url: `u/${n}`, ...i })),
       );
     }
+    const timeline = /\/issues\/(\d+)\/events\?/.exec(path)?.[1];
+    if (timeline) return Response.json(w.events[timeline] ?? []);
     const n = /\/issues\/(\d+)$/.exec(path)?.[1];
     const issue = w.issues[n];
     return issue
@@ -88,15 +98,31 @@ function setup({
     accept: async (item) => w.accepted.push(item),
     boardKeys: () => new Set(board),
     busy: (key) => busy.includes(key),
-    taskOf: (key) => w.tasks[key] ?? null,
+    taskOf: (key) =>
+      w.tasks[key] ??
+      boardOf({
+        runs: [],
+        queued: [],
+        brainstorms: [],
+        inputs: [...w.listed].map(([k, questions]) => ({ key: k, since: 1, questions })),
+      }).find((t) => t.key === key) ??
+      null,
     label: async (repo, number, on) => {
       w.labels.push([number, on]);
       return new Response(null, { status: 200 });
     },
-    inputs: { set: (key, on) => w.untracked.push([key, on]) },
+    inputs: {
+      set: (key, on, questions) => {
+        w.untracked.push([key, on]);
+        if (on) w.listed.set(key, questions);
+        else w.listed.delete(key);
+      },
+      has: (key) => w.listed.has(key),
+    },
     runOf: (id) => w.runs[id] ?? null,
     publicUrl: () => ORIGIN,
     now: () => w.clock,
+    log: (line) => w.logs.push(line),
   });
   return w;
 }
@@ -199,6 +225,88 @@ test("GET issues: the open issues without a task or pull request, and the repo's
   w.clock += ISSUES_MS;
   await call(w.api, "GET", "/api/repos/org/app/issues");
   assert.equal(listed(), 2);
+});
+
+// #144's body: an inbox issue with three questions in the format.
+const BODY_144 = `## Problem
+
+Something.
+
+## Open questions
+
+1. **Label from the backlog**: should the listener also add the label?
+   - [ ] Yes, so GitHub and the dashboard agree (recommended)
+   - [ ] No, only list it on the dashboard
+2. **Where**: which page?
+   - [ ] The graph (recommended)
+   - [ ] The task list
+3. **Wording**: what should the notice say?
+
+From the ideas inbox: https://github.com/org/app/issues/16#issuecomment-1`;
+const BOT = { login: "deckhand[bot]", type: "Bot" };
+const asked = (body, extra = {}) => ({ ...open("Asks"), user: BOT, labels: [], body, ...extra });
+
+test("GET issues: open questions without the label are listed and labelled, then a start is refused", async () => {
+  const w = setup({ issues: { 144: asked(BODY_144) } });
+  const res = await call(w.api, "GET", "/api/repos/org/app/issues");
+  assert.equal(res.status, 200);
+  assert.deepEqual(w.labels, [[144, true]]);
+  const questions = w.listed.get("org/app#144");
+  assert.equal(questions.items.length, 3);
+  assert.equal(questions.items[0].title, "Label from the backlog");
+  // Read again: nothing asked twice.
+  w.clock += ISSUES_MS;
+  await call(w.api, "GET", "/api/repos/org/app/issues");
+  assert.deepEqual(w.labels, [[144, true]]);
+  assert.equal(w.calls.filter((c) => c.includes("/events?")).length, 1);
+  // The graph's form opens for it, and the API holds a start without answers.
+  const start = await post(w, { action: "start", number: 144 });
+  assert.equal(start.status, 409);
+  assert.deepEqual(w.accepted, []);
+});
+
+test("GET issues: an issue already labelled is listed without a label call or timeline", async () => {
+  const w = setup({ issues: { 144: asked(BODY_144, { labels: [{ name: "needs-input" }] }) } });
+  await call(w.api, "GET", "/api/repos/org/app/issues");
+  assert.equal(w.listed.get("org/app#144").items.length, 3);
+  assert.deepEqual(w.labels, []);
+  assert.equal(w.calls.filter((c) => c.includes("/events?")).length, 0);
+});
+
+test("GET issues: no seeding once the label was taken off, nor for the board, other authors or no questions", async () => {
+  const w = setup({
+    issues: {
+      1: asked(BODY_144),
+      2: asked(BODY_144),
+      3: asked(BODY_144, { user: { login: "mallory", type: "User" } }),
+      4: asked("## Open questions\n\nNone"),
+      5: asked("## Open questions\n\nWhat colour, and why?"),
+      6: asked(BODY_144, { user: { login: "alice", type: "User" } }),
+    },
+    events: { 1: [{ event: "unlabeled", label: { name: "Needs-Input" } }] },
+    board: ["org/app#2"],
+  });
+  await call(w.api, "GET", "/api/repos/org/app/issues");
+  // A section not in the format: listed, with the text box (no items).
+  assert.deepEqual([...w.listed.keys()].sort(), ["org/app#5", "org/app#6"]);
+  assert.equal(w.listed.get("org/app#5").items, null);
+  assert.deepEqual(w.labels, [
+    [5, true],
+    [6, true],
+  ]);
+  // The removed label is remembered: its timeline isn't read again.
+  w.clock += ISSUES_MS;
+  await call(w.api, "GET", "/api/repos/org/app/issues");
+  assert.equal(w.calls.filter((c) => c.includes("/issues/1/events?")).length, 1);
+});
+
+test("GET issues: no seeding without a label name or with config errors", async () => {
+  const off = setup({ env: { NEEDS_INPUT_LABEL: "" }, issues: { 144: asked(BODY_144) } });
+  await call(off.api, "GET", "/api/repos/org/app/issues");
+  assert.equal(off.listed.size, 0);
+  const broken = setup({ errors: ["bad"], issues: { 144: asked(BODY_144) } });
+  await call(broken.api, "GET", "/api/repos/org/app/issues");
+  assert.equal(broken.listed.size, 0);
 });
 
 test("GET issues: signed in, for allowed repos the App is installed on", async () => {

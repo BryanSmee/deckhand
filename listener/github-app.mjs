@@ -22,7 +22,6 @@ export const APP_PERMISSIONS = {
 export const APP_EVENTS = [
   "issues",
   "issue_comment",
-  "issues",
   "discussion",
   "discussion_comment",
   "pull_request",
@@ -31,6 +30,22 @@ export const APP_EVENTS = [
   "workflow_run",
   "push",
 ];
+// The App's settings, read at start (`asApp`, the App's own calls): a warning for each event of
+// APP_EVENTS it isn't subscribed to. An App created before a feature lacks its events, and
+// nothing else tells the operator (docs/setup.md). Resolves to the missing ones.
+export async function checkAppEvents(asApp, log) {
+  const res = await asApp("GET", "/app");
+  if (!res.ok) return [];
+  const { events = [] } = await res.json();
+  const missing = APP_EVENTS.filter((e) => !events.includes(e));
+  if (missing.length) {
+    log(
+      `The GitHub App isn't subscribed to ${missing.join(", ")}: turn ${missing.length > 1 ? "them" : "it"} on under Subscribe to events in its settings (docs/setup.md)`,
+    );
+  }
+  return missing;
+}
+
 // A sandbox gets less than the App: no deployments, nothing outside its repo, and its code
 // read-only. It pushes through the listener's git gateway (git-gateway.mjs), which refuses
 // the default branch: GitHub can't be asked to (rulesets aren't enforced on free private

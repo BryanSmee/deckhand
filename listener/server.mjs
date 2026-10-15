@@ -20,7 +20,12 @@ import { createConflicts } from "./conflicts.mjs";
 import { ConfigError, loadConfig, readConfigFile } from "./config.mjs";
 import { docker } from "./docker.mjs";
 import { outcome } from "./events.mjs";
-import { createGitHubApp, loadCredentials, saveCredentials } from "./github-app.mjs";
+import {
+  checkAppEvents,
+  createGitHubApp,
+  loadCredentials,
+  saveCredentials,
+} from "./github-app.mjs";
 import { grantErrors, loadGrants } from "./grants.mjs";
 import { createHttp } from "./http.mjs";
 import { createImages } from "./images.mjs";
@@ -389,6 +394,12 @@ ctx.reattach(restored).catch((error) => log(`Re-attaching: ${error.stack ?? erro
 const relinking = setInterval(ctx.relink, RELINK_MS);
 ctx.conflicts.start();
 ctx.waits.start();
+// Events the App's settings miss: without `issues`, open questions get no label.
+if (ctx.app) {
+  checkAppEvents(ctx.app.asApp, log).catch((error) =>
+    log(`The GitHub App's events: ${error.message ?? error}`),
+  );
+}
 // Labels added or removed while the listener was down.
 if (ctx.app && config.needsInputLabel) {
   repoList

@@ -101,6 +101,59 @@ test("Queue after… sends the queue along; a refusal stays in the form", async 
   expect(posted[0].body).toMatchObject({ number: 138, then: { action: "queue", after: 141 } });
 });
 
+test("An issue the backlog found open questions in, with no run, opens its form too", async () => {
+  // As board.mjs lists an issue inputs.mjs knows of (the backlog's seeding): no run, its
+  // body's questions.
+  const seeded = {
+    key: "acme/api#144",
+    repo: "acme/api",
+    project: "acme",
+    number: 144,
+    title: "Graph: open questions without the label",
+    kind: "issue",
+    mode: null,
+    replyTo: 144,
+    state: "needs-input",
+    since: 1791979300000,
+    closed: null,
+    pr: null,
+    runs: [],
+    questions: {
+      source: "issue",
+      items: [
+        {
+          title: "Label",
+          text: "Should the listener add the label?",
+          options: [
+            { label: "Yes", recommended: true },
+            { label: "No", recommended: false },
+          ],
+        },
+      ],
+      raw: "1. **Label**: Should the listener add the label?",
+    },
+  } as unknown as State["tasks"][number];
+  answer = () => Response.json({ message: "Answers sent: #144 started." });
+  render(<Dashboard state={{ ...state, tasks: [...state.tasks, seeded] }} error={null} />);
+  const work = screen.getByRole("region", { name: "Work area" });
+  await within(work).findByText("No open issue left to start.");
+  const list = within(work).getByRole("list", { name: "Issues waiting for answers" });
+  fireEvent.click(within(list).getByRole("button", { name: "Start #144" }));
+  const dialog = screen.getByRole("dialog", { name: "Answer #144's questions" });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Send answers and start" }));
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  expect(posted).toEqual([
+    {
+      url: "api/repos/acme/api/answer",
+      body: { number: 144, answers: [{ options: [0], text: "" }], then: { action: "start" } },
+    },
+  ]);
+  expect(await screen.findByRole("status")).toHaveProperty(
+    "textContent",
+    "Answers sent: #144 started.",
+  );
+});
+
 test("Cancel or Escape closes the questions: nothing is sent", async () => {
   const list = await area();
   fireEvent.click(within(list).getByRole("button", { name: "Start #138" }));
