@@ -340,8 +340,9 @@ docker compose up -d
 - **A pinned version**: set `DECKHAND_VERSION=1.2.3` in `.env`, change it to update (by
   hand, or with Renovate's docker-compose or regex manager), then the same two commands.
 - **`edge`**: set `DECKHAND_VERSION=edge` in `.env` to follow `main`, unreleased and for
-  amd64 only. It is published about 3 minutes after a push (merges closer together build
-  once), and the dashboard shows the commit it runs as `edge-<short sha>`. The same two
+  amd64 only. It is built as soon as a push lands (a newer push cancels the build in
+  progress, so a burst of merges builds once), and the dashboard shows the commit it runs as
+  `edge-<short sha>`. The same two
   commands (or Watchtower) update it.
 
 You can update at any time, runs in progress included. The listener stops within its grace
