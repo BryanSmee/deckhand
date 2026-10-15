@@ -517,7 +517,7 @@ listener's logs (`Egress: refused <host> for <repo>#<n>`).
 - **Sandboxes can reach each other**: they share one bridge network, so one repository's
   sandbox can reach the dev servers or databases another one's setup started.
   `enable_icc=false` on that network would cut them off from the proxy and the listener
-  too (#68).
+  too; a network per run is #118.
 - **Allowed hosts are trusted entirely**: anything a sandbox can write to on one is a way
   out: its own repository on GitHub, a bucket or paste service behind `*`.
 - The listener's own port (8080: dashboard, webhook) is reachable from sandboxes; it needs
