@@ -1,12 +1,12 @@
-# Deckhand's settings: copy to config.yaml (git-ignored here; commit it in your own
-# deployment's repository) and uncomment the line that mounts it in compose.yaml.
+# Deckhand's settings, in the folder compose.yaml mounts at /etc/deckhand (server/, a copy
+# of server.example/: git-ignored here, commit it in your own deployment's repository).
 # Each key is a setting's environment variable in lowercase; a variable set (non-empty) in
 # .env wins over it. Read at start: restart the listener after an edit. Secrets stay in
 # .env. Every key: docs/setup.md#settings.
 
-# GitHub logins allowed to start runs (required, here or in ALLOWED_USERS).
-allowed_users:
-  - your-github-login
+# GitHub logins allowed to start runs (required, here or in ALLOWED_USERS): add yours.
+# Empty in both: no start.
+allowed_users: []
 # Only these repos, among those where the App is installed. Empty: all of them.
 allowed_repos: []
 # Hosts every sandbox may reach besides Anthropic and GitHub (*.domain and * work).

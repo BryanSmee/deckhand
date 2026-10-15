@@ -542,3 +542,13 @@ test("allow_docker: a repository's own file only, and `docker` without it is ref
   ]);
   assert.deepEqual(ungranted({ ...none, allowDocker: true }, settings), []);
 });
+
+test("server.example/grants is a valid grants folder that grants nothing", () => {
+  const dir = new URL("../server.example/grants", import.meta.url).pathname;
+  const config = loadConfig({ ALLOWED_USERS: "a", GRANTS_DIR: dir });
+  const grants = loadGrants(config);
+  assert.deepEqual(grantErrors(grants), []);
+  const grant = grantFor(grants, config, "your-org/your-repo");
+  assert.deepEqual(grant.hosts, []);
+  assert.equal(grant.allowPreview, false);
+});

@@ -91,10 +91,12 @@ cp .env.example .env
 
 In `.env`, set `ALLOWED_USERS` to your GitHub login (comma-separated for several: nobody
 else can start a run, and with none set nothing starts), and `CLAUDE_CODE_OAUTH_TOKEN` or
-`ANTHROPIC_API_KEY`. The other settings can go in a `config.yaml` you commit with your
-deployment, `.env` overriding it: see [Settings](docs/setup.md#settings). Then:
+`ANTHROPIC_API_KEY`. The other settings, and what you grant each repository, go in one
+folder you keep in git and `compose.yaml` mounts, `.env` overriding its settings: see
+[The server folder](docs/setup.md#the-server-folder). Then:
 
 ```sh
+cp -r server.example server
 docker compose pull
 docker compose up -d
 docker compose logs listener
