@@ -156,3 +156,26 @@ a.ref:hover {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
+
+/* A drop zone with something over it: the backlog (a brainstorm stops), the column. */
+.panel.over {
+  outline: 1.5px dashed var(--accent);
+  outline-offset: 4px;
+  border-radius: var(--radius);
+  background: var(--accent-soft);
+}
+
+/* The Brainstorm column: a drop zone even when empty. */
+.column {
+  min-height: 8rem;
+}
+
+.state {
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.issue.sending {
+  border-style: dashed;
+  opacity: 0.75;
+}

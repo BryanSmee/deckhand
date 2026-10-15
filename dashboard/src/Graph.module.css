@@ -184,10 +184,11 @@
   fill: var(--err);
 }
 
-/* The work area: the backlog beside the graph (above it on a phone), the graph a drop zone. */
+/* The work area: the backlog, the Brainstorm column and the graph side by side (one above the
+   other on a phone), each a drop zone. The All tab has no backlog. */
 .work {
   display: grid;
-  grid-template-columns: minmax(15rem, 18rem) minmax(0, 1fr);
+  grid-template-columns: minmax(15rem, 18rem) minmax(12rem, 14rem) minmax(0, 1fr);
   gap: 1rem;
   align-items: start;
 }
@@ -218,8 +219,13 @@
   font-size: 0.8rem;
 }
 
+.overview {
+  grid-template-columns: minmax(12rem, 14rem) minmax(0, 1fr);
+}
+
 @media (max-width: 760px) {
-  .work {
+  .work,
+  .overview {
     grid-template-columns: minmax(0, 1fr);
   }
 

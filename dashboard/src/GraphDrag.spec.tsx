@@ -1,5 +1,5 @@
 // Dragging issues waiting for answers onto the graph: the work area's cards, and the graph's
-// own nodes, brainstorms included (fetch mocked).
+// own nodes (fetch mocked). Brainstorms are the column's: Brainstorms.spec.tsx.
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/preact";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { Dashboard } from "./App";
@@ -111,34 +111,11 @@ test("a card waiting for answers carries its issue; dropped, it opens the questi
   expect(posted).toEqual([]);
 });
 
-test("a brainstorm's card is in the list; dropped with no questions, it starts", async () => {
-  const { list, area } = await show([task(150, "brainstorm", "idle-brainstorm")]);
-  const card = cardOf(list, 150);
-  expect(within(card).getByText(/ends its brainstorm/)).toBeTruthy();
-  dragCard(card, area);
-  expect(screen.queryByRole("dialog")).toBeNull();
+test("a needs-input node after a brainstorm run can be dragged", async () => {
+  await show([task(152, "brainstorm", "needs-input")]);
+  dragNode(screen.getByRole("listitem", { name: /^#152 / }));
   await waitFor(() =>
-    expect(posted).toEqual([
-      { url: "api/repos/acme/api/work", body: { action: "start", number: 150 } },
-    ]),
-  );
-});
-
-test("brainstorm nodes and a needs-input node after a brainstorm run can be dragged", async () => {
-  await show([
-    task(150, "brainstorm", "brainstorm"),
-    task(151, "brainstorm", "idle-brainstorm"),
-    task(152, "brainstorm", "needs-input"),
-  ]);
-  for (const number of [150, 151, 152]) {
-    dragNode(screen.getByRole("listitem", { name: new RegExp(`^#${number} `) }));
-  }
-  await waitFor(() =>
-    expect(posted.map((p) => p.body)).toEqual([
-      { action: "start", number: 150 },
-      { action: "start", number: 151 },
-      { action: "start", number: 152 },
-    ]),
+    expect(posted.map((p) => p.body)).toEqual([{ action: "start", number: 152 }]),
   );
 });
 

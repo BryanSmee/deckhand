@@ -7,7 +7,7 @@ import { createServer } from "node:http";
 import { join } from "node:path";
 import { pipeline } from "node:stream";
 import { page } from "./auth.mjs";
-import { board, STATES } from "./board.mjs";
+import { board, isLive, STATES } from "./board.mjs";
 import { egressPolicy } from "./egress.mjs";
 import { createSlots, readDelivery, sourceOf } from "./deliveries.mjs";
 import {
@@ -545,10 +545,17 @@ export function createHttp(ctx, { dashboardDir }) {
     return server;
   }
 
-  // The keys of the tasks on the dashboard: the work area's backlog leaves them out.
+  // The keys of the tasks on the dashboard, and of those with something live: the work area's
+  // backlog leaves these out.
   const boardKeys = () => new Set(shownTasks().shown.map((t) => t.key));
+  const liveKeys = () =>
+    new Set(
+      shownTasks()
+        .shown.filter(isLive)
+        .map((t) => t.key),
+    );
   // A task as the dashboard has it (questions and all), or null.
   const taskOf = (key) => shownTasks().shown.find((t) => t.key === key) ?? null;
 
-  return { listen, listenBroker, admitting, boardKeys, taskOf };
+  return { listen, listenBroker, admitting, boardKeys, liveKeys, taskOf };
 }

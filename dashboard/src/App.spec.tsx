@@ -194,10 +194,17 @@ test("the graph: a node per issue, arrows for /after, a node opens its task", ()
   expect(nodes.map((n) => n.getAttribute("aria-label"))).toContain(
     "#24 Per-repo budgets in the dashboard: Waiting, waits for 2 issues",
   );
-  // Not the bugs inbox's run (#16).
+  // Not the bugs inbox's run (#16), nor the brainstorm (#20): it is in the column.
   expect(nodes).toHaveLength(
-    state.tasks.filter((t) => t.repo === "acme/app" && t.kind !== "bug").length,
+    state.tasks.filter((t) => t.repo === "acme/app" && t.kind !== "bug" && t.kind !== "brainstorm")
+      .length,
   );
+  const column = screen.getByRole("list", { name: "Issues being brainstormed" });
+  expect(
+    within(column)
+      .getAllByRole("listitem")
+      .map((c) => c.textContent),
+  ).toEqual([expect.stringMatching(/^#20.*Brainstorm/)]);
   expect(document.querySelectorAll("path[marker-end]")).toHaveLength(2);
   expect(screen.getByRole("list", { name: "Legend" }).textContent).toMatch(/Ready for review/);
 
@@ -207,6 +214,11 @@ test("the graph: a node per issue, arrows for /after, a node opens its task", ()
   fireEvent.click(screen.getByRole("tab", { name: /^All/ }));
   expect(location.hash).toBe("#/graph");
   expect(screen.getByRole("list", { name: "Issues" })).toBeTruthy();
+  // The column lists every repo's brainstorms, without a button: nothing moves on All.
+  const all = screen.getByRole("region", { name: "Brainstorms" });
+  expect(within(all).getAllByRole("listitem").length).toBeGreaterThan(0);
+  expect(within(all).queryByRole("button")).toBeNull();
+  expect(within(all).getAllByRole("listitem")[0].getAttribute("draggable")).toBe("false");
 });
 
 test("the graph hides closed issues until Show closed, which is kept", () => {

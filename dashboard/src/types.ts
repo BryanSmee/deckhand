@@ -274,12 +274,13 @@ export interface Backlog {
   readAt: number;
 }
 
-// POST api/repos/<owner>/<repo>/work: start an issue, queue it after another ("/after"), or
-// cancel its wait ("/after none").
+// POST api/repos/<owner>/<repo>/work: start an issue, queue it after another ("/after"),
+// cancel its wait ("/after none"), or stop its brainstorm ("/stop": the wrap-up).
 export type WorkAction =
   | { action: "start"; number: number; mode?: string }
   | { action: "queue"; number: number; after: number; mode?: string }
-  | { action: "dequeue"; number: number };
+  | { action: "dequeue"; number: number }
+  | { action: "stop"; number: number };
 
 // POST api/repos/<owner>/<repo>/answer: one answer per parsed question (the options ticked, by
 // index, and a note), or one text for questions not in the format. `pr`: a pull request's task.

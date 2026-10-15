@@ -2,13 +2,16 @@
 // ("/after"), coloured by where it stands (graph.ts). A node opens its task. On a repo's tab
 // it is a work area too (WorkArea.tsx): an issue dropped on it starts, dropped next to a node
 // it waits for that one; a waiting node dragged away stops waiting, onto another node waits
-// for that one instead. An issue waiting for answers (or in a brainstorm) moves too, once they
-// are in: the drag opens its open questions first (Questions.tsx).
+// for that one instead. An issue waiting for answers moves too, once they are in: the drag
+// opens its open questions first (Questions.tsx). Brainstorms have a column of their own
+// between the backlog and the graph (Brainstorms.tsx): one dropped on the graph starts work.
 import type { JSX } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
 import { useWorkArea } from "./api";
+import { Brainstorms } from "./Brainstorms";
 import { inChip, kindName } from "./format";
 import {
+  brainstormsOf,
   dropTarget,
   graphOf,
   type GraphNode,
@@ -21,7 +24,7 @@ import {
 import { Questions } from "./Questions";
 import { formatRoute } from "./route";
 import type { State, Task, WorkAction } from "./types";
-import { ISSUE_TYPE, type Target, WorkArea } from "./WorkArea";
+import { BRAINSTORM_TYPE, ISSUE_TYPE, type Target, WorkArea } from "./WorkArea";
 import styles from "./Graph.module.css";
 
 interface Props {
@@ -59,8 +62,14 @@ interface NodeDrag {
 }
 
 // An issue waiting for the maintainer ("Needs input": its questions, or a brainstorm's next
-// comment): starting it answers them first, or ends the brainstorm with a work run.
+// comment, on the graph when an arrow touches it): starting it answers them first, or ends the
+// brainstorm with a work run.
 const answers = (t: Task) => inChip("input", t) && (t.kind === "issue" || t.kind === "brainstorm");
+
+// What is dragged onto the graph: a card from the backlog (or a node waiting for answers), a
+// brainstorm (Start in doesn't apply: it starts work), a waiting node (let go in the open, it
+// stops waiting).
+type Dragged = "new" | "brainstorm" | "waits";
 
 // Past this many pixels a press on a waiting node is a drag, not a click.
 const DRAG_PX = 6;
@@ -95,6 +104,7 @@ export function Graph({ state, refresh, repo, narrow, showClosed, onShowClosed }
     return () => removeEventListener("keydown", close);
   }, [asking]);
   const tasks = (state?.tasks ?? []).filter((t) => !repo || t.repo === repo);
+  const brainstorms = brainstormsOf(tasks, work.pending);
   const { nodes, edges, hidden } = graphOf(tasks, state?.edges ?? [], state?.blockers ?? [], {
     showClosed,
     pending: work.pending,
@@ -142,7 +152,10 @@ export function Graph({ state, refresh, repo, narrow, showClosed, onShowClosed }
   const waiting = tasks.filter(
     (t) => t.state === "waiting" && t.kind === "issue" && t.number && !leaving.has(t.number),
   );
-  const answering = tasks.filter((t) => answers(t) && t.number && !sentFor(t.number));
+  // Brainstorms are the column's.
+  const answering = tasks.filter(
+    (t) => answers(t) && t.state === "needs-input" && t.number && !sentFor(t.number),
+  );
 
   // The node under the pointer, in the drawing's units (the viewBox starts at -4).
   const targetAt = (clientX: number, clientY: number) => {
@@ -151,16 +164,20 @@ export function Graph({ state, refresh, repo, narrow, showClosed, onShowClosed }
     return dropTarget(shape, clientX - box.left - 4, clientY - box.top - 4);
   };
 
-  // Issue `number` let go on the area, after `onto` (a node) or in the open. `waits`: it is a
-  // waiting node, which the open cancels rather than starts, and which keeps its mode.
-  const dropped = (number: number, onto: string | null, waits: boolean) => {
+  // Issue `number` let go on the area, after `onto` (a node) or in the open. A waiting node
+  // keeps its mode, and the open cancels its wait rather than starts it; a brainstorm starts
+  // work.
+  const dropped = (number: number, onto: string | null, what: Dragged) => {
     setNotice(null);
     const node = onto ? byKey.get(onto) : null;
     if (node?.number === number && node.repo === repo) return;
+    const mode = what === "new" ? picked : {};
     if (node?.number != null) {
-      return request({ action: "queue", number, after: node.number, ...(waits ? {} : picked) });
+      return request({ action: "queue", number, after: node.number, ...mode });
     }
-    request(waits ? { action: "dequeue", number } : { action: "start", number, ...picked });
+    request(
+      what === "waits" ? { action: "dequeue", number } : { action: "start", number, ...mode },
+    );
   };
 
   // An action, unless its issue has open questions: they are answered first, in a form.
@@ -175,7 +192,8 @@ export function Graph({ state, refresh, repo, narrow, showClosed, onShowClosed }
 
   const onDragOver = (e: DragEvent) => {
     const types = [...(e.dataTransfer?.types ?? [])];
-    if (blocked || !types.some((t) => [ISSUE_TYPE, "text/uri-list", "text/plain"].includes(t))) {
+    const ours = [ISSUE_TYPE, BRAINSTORM_TYPE, "text/uri-list", "text/plain"];
+    if (blocked || !types.some((t) => ours.includes(t))) {
       return;
     }
     e.preventDefault();
@@ -193,7 +211,8 @@ export function Graph({ state, refresh, repo, narrow, showClosed, onShowClosed }
     setOver(false);
     setTarget(null);
     const data = e.dataTransfer;
-    const own = Number(data?.getData(ISSUE_TYPE));
+    const brainstorm = Number(data?.getData(BRAINSTORM_TYPE));
+    const own = brainstorm || Number(data?.getData(ISSUE_TYPE));
     const link = data?.getData("text/uri-list") || data?.getData("text/plain") || "";
     const number = own || (repo && issueOfLink(link, github, repo));
     if (!number) {
@@ -202,7 +221,7 @@ export function Graph({ state, refresh, repo, narrow, showClosed, onShowClosed }
       );
       return;
     }
-    dropped(number, targetAt(e.clientX, e.clientY), false);
+    dropped(number, targetAt(e.clientX, e.clientY), brainstorm ? "brainstorm" : "new");
   };
 
   // A waiting node follows the pointer once it moved past DRAG_PX.
@@ -237,7 +256,7 @@ export function Graph({ state, refresh, repo, narrow, showClosed, onShowClosed }
       setTarget(null);
       if (!nodeDrag.moved) return;
       dragEnded.current = true;
-      dropped(nodeDrag.number, targetAt(e.clientX, e.clientY), nodeDrag.waits);
+      dropped(nodeDrag.number, targetAt(e.clientX, e.clientY), nodeDrag.waits ? "waits" : "new");
     },
     onPointerCancel: () => {
       setNodeDrag(null);
@@ -410,6 +429,16 @@ export function Graph({ state, refresh, repo, narrow, showClosed, onShowClosed }
             notice={notice}
             onAct={request}
           />
+          <Brainstorms
+            repo={repo}
+            cards={brainstorms}
+            targets={targets}
+            busy={work.busy}
+            blocked={blocked}
+            github={github}
+            onAct={request}
+            onNotice={setNotice}
+          />
           <div
             class={`${styles.area} ${over || nodeDrag?.moved ? styles.over : ""}`}
             onDragOver={onDragOver}
@@ -452,7 +481,19 @@ export function Graph({ state, refresh, repo, narrow, showClosed, onShowClosed }
       ) : (
         <>
           <p class={styles.hint}>Open a repository's tab to start or queue its issues here.</p>
-          {drawing}
+          <div class={`${styles.work} ${styles.overview}`}>
+            <Brainstorms
+              repo={null}
+              cards={brainstorms}
+              targets={[]}
+              busy={false}
+              blocked={false}
+              github={github}
+              onAct={() => {}}
+              onNotice={() => {}}
+            />
+            <div>{drawing}</div>
+          </div>
         </>
       )}
     </div>

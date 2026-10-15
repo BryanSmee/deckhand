@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { waitEdges } from "../listener/http.mjs";
-import { board } from "../listener/board.mjs";
+import { board, isLive } from "../listener/board.mjs";
 
 const run = (key, startedAt, extra = {}) => ({
   id: `${key}-${startedAt}`,
@@ -272,4 +272,30 @@ test("rerunnable: the latest run failed or was lost, work on an issue or pull re
   });
   const yes = tasks.filter((t) => t.rerunnable).map((t) => t.key);
   assert.deepEqual(yes.sort(), ["a/b#1", "a/b#2", "a/b#pr-3"]);
+});
+
+test("isLive: a stopped brainstorm whose wrap-up is done is over, an idle one isn't", () => {
+  const tasks = board({
+    runs: [
+      run("o/r#1", 10, { taskMode: "brainstorm", mode: "wrap-up" }),
+      run("o/r#2", 10, { taskMode: "brainstorm" }),
+      run("o/r#3", 10, { status: "running", mode: "wrap-up", taskMode: "brainstorm" }),
+      run("o/r#4", 10, { status: "error" }),
+    ],
+    queued: [{ key: "o/r#5", repo: "o/r", kind: "issue", mode: "stop", replyTo: 5 }],
+    brainstorms: [
+      { key: "o/r#1", repo: "o/r", number: 1, status: "stopped", deadline: 5 },
+      { key: "o/r#2", repo: "o/r", number: 2, status: "idle", deadline: 5 },
+      { key: "o/r#3", repo: "o/r", number: 3, status: "stopped", deadline: 5 },
+      { key: "o/r#5", repo: "o/r", number: 5, status: "stopped", deadline: 5 },
+    ],
+  });
+  const live = Object.fromEntries(tasks.map((t) => [t.key, isLive(t)]));
+  assert.deepEqual(live, {
+    "o/r#1": false,
+    "o/r#2": true,
+    "o/r#3": true,
+    "o/r#4": false,
+    "o/r#5": true,
+  });
 });

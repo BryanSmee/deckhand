@@ -213,9 +213,14 @@ start. One closed without being done drops the wait, with a reply saying so. A n
 `/after none` cancels it. The dashboard shows the task as `waiting`, with what it waits for.
 
 The dashboard's graph does the same by drag and drop (`work.mjs`): on a repo's tab, its open
-issues with no task yet are a backlog; one dropped on the graph starts (in the mode picked),
-dropped next to an issue it waits for that one; a waiting issue dragged away stops waiting,
-onto another issue waits for that one instead. Each has a button too. The listener writes
+issues with nothing live (running, queued, waiting, brainstorming, needs input) are a backlog;
+one dropped on the graph starts (in the mode picked), dropped next to an issue it waits for
+that one; a waiting issue dragged away stops waiting, onto another issue waits for that one
+instead. Between the backlog and the graph, a Brainstorm column lists the repo's brainstorms
+(active, idle, wrapping up), which leave the graph unless an arrow touches them: a backlog
+issue dropped there starts a brainstorm, a brainstorm dropped on the graph starts work (and
+ends the brainstorm), dropped back on the backlog it stops (`stop`, what a `/stop` comment
+does: the wrap-up run). Each has a button too. The listener writes
 each action on the issue as the App's comment, which reactions follow like a trigger
 comment's, and queues the work (`accept()`) or holds it (`waits.hold()`) itself: the App's
 own comments never reach `admit()`. The checks are `resume()`'s, see
