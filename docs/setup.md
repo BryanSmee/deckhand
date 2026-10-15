@@ -148,9 +148,17 @@ issue) or `not onboarded`. **Start onboarding** on a `not onboarded` row opens i
 issue as an installation would, mentioning you, and starts the conversation: the way to
 onboard repositories installed before onboarding existed, by someone not in `ALLOWED_USERS`,
 or with `ONBOARDING=off`. A repository with issues disabled shows why it can't be onboarded.
+A repository whose `.deckhand.yaml` has errors shows `invalid config`: no run starts there.
 The list is cached: the installations' repositories are read again every 5 minutes, each
 configuration every 30 minutes, or at once after a push or a merged pull request on its
-default branch.
+default branch. **Refresh** reads everything again, in case a webhook was missed.
+
+A repository's name opens its configuration, read from its default branch then: what stops
+its runs (errors, and what it asks for that the operator doesn't grant) and its warnings first, then
+what its runs get (each value from the repository, from the operator, or refused), its entry
+in the grants file, and the raw file. Anyone signed in to the dashboard sees it, grants
+included. Its **Refresh** reads it again (at most every 5 seconds); changing it is a commit on
+the default branch.
 
 ## Settings
 

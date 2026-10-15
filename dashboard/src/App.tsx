@@ -1,5 +1,5 @@
 // The dashboard: repo tabs, the tab's tasks filtered by state, the open task and its log; or
-// the repositories page, where onboarding starts.
+// the repositories page, where onboarding starts and each one's config shows.
 // What is shown lives in the address (route.ts); the state chip is kept on this device.
 import { useEffect, useState } from "preact/hooks";
 import { type RepoList, useAppState, useRepos } from "./api";
@@ -158,6 +158,10 @@ export function Dashboard({ state, error, repos }: Props) {
           <Repos
             list={repos}
             onBack={() => go({ repo: stored("tab") || null, task: null, run: null })}
+            open={route.config ?? null}
+            onOpen={(repo) =>
+              go({ repo: null, task: null, run: null, page: "repositories", config: repo })
+            }
           />
         </main>
       ) : (

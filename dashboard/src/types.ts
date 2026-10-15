@@ -106,9 +106,9 @@ export type Entry =
   | { kind: "output"; text: string; error: boolean }
   | { kind: "result"; status: "ok" | "needs-input" | "error"; text: string; minutes: number };
 
-// configured: its default branch has .deckhand.yaml; onboarding: its onboarding issue is open;
-// unknown: GitHub didn't say.
-export type RepoStatus = "configured" | "onboarding" | "not-onboarded" | "unknown";
+// configured: its default branch has .deckhand.yaml; invalid: it has, with errors (no run
+// starts); onboarding: its onboarding issue is open; unknown: GitHub didn't say.
+export type RepoStatus = "configured" | "invalid" | "onboarding" | "not-onboarded" | "unknown";
 
 export interface Repo {
   repo: string;
@@ -118,11 +118,15 @@ export interface Repo {
   issues: boolean;
   status: RepoStatus;
   issue: { number: number; url: string } | null;
+  // When its config was last read from GitHub; null when it couldn't be.
+  readAt: number | null;
 }
 
-// GET api/repos
+// GET api/repos, and POST api/repos/refresh (429 when refreshed a moment ago).
 export interface Repos {
   repos: Repo[];
+  // When the installations' repositories were last listed.
+  listedAt: number;
 }
 
 // POST api/repos/<owner>/<repo>/onboard
@@ -130,4 +134,62 @@ export interface Onboarded {
   repo?: Repo;
   opened?: boolean;
   error?: string;
+}
+
+// Where a value comes from: the repo's .deckhand.yaml, the operator (environment, grants
+// file), or the repo's, refused (a refused host or mount stops every run).
+export type Source = "repo" | "operator" | "refused";
+
+// One setting a run reads (listener/repo-view.mjs settingRows()); `key` is its YAML key.
+// Refused: it needs a grant the operator doesn't give (dockerfile, preview).
+export interface SettingRow {
+  key: string;
+  value: string;
+  source: Source;
+  note: string | null;
+}
+
+export interface HostRow {
+  host: string;
+  source: Source;
+  note: string | null;
+}
+
+// A mount the repo asks for, at `path` in the sandbox.
+export interface MountRow {
+  path: string;
+  source: Exclude<Source, "operator">;
+  readOnly: boolean;
+  note: string | null;
+}
+
+// The repo's entry of the operator's grants file: its own (entry is the repo), "*"'s, or none.
+export interface Grant {
+  entry: string | null;
+  allowRepoHosts: boolean;
+  allowPreview: boolean;
+  allowDockerfile: boolean;
+  allowBranchDockerImages: boolean;
+  hosts: string[];
+  mounts: { root: string; readOnly: boolean }[];
+  limits: { cpus: string; memory: string; pids: number };
+}
+
+// GET api/repos/<owner>/<repo>/config, read from GitHub at each request, and POST
+// api/repos/<owner>/<repo>/refresh (the same; 429 when refreshed a moment ago).
+export interface RepoConfig {
+  repo: Repo;
+  base: string;
+  // null: no .deckhand.yaml on its default branch, the operator's defaults apply.
+  file: { text: string; sha: string; url: string } | null;
+  errors: string[];
+  warnings: string[];
+  grantsError: string | null;
+  effective: {
+    settings: SettingRow[];
+    hosts: HostRow[];
+    mounts: MountRow[];
+    grant: Grant | null;
+  };
+  readAt: number;
 }

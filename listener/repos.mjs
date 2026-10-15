@@ -1,19 +1,27 @@
 // The dashboard's repository list: every repo the App is installed on that ALLOWED_REPOS
-// lets through, with whether it is set up (a .deckhand.yaml on its default branch), being
-// onboarded (an issue in onboarding.json) or neither, and the button that starts onboarding.
+// lets through, with whether it is set up (a .deckhand.yaml on its default branch), set up
+// with errors, being onboarded (an issue in onboarding.json) or neither, and the button that
+// starts onboarding.
 //
 //   GET  /api/repos                       the list
+//   POST /api/repos/refresh               the list, read again from GitHub
+//   GET  /api/repos/<owner>/<repo>/config its config: raw, errors, what runs get (repo-view.mjs)
+//   POST /api/repos/<owner>/<repo>/refresh the same, from the dashboard's Refresh (rate limited)
 //   POST /api/repos/<owner>/<repo>/onboard opens its onboarding issue (onboarding.mjs)
 //
 // GitHub is asked as little as possible: the installations' repos are listed again every
 // LIST_MS, and each repo's config is read once per CONFIG_MS, or again after a delivery says
-// it may have changed (refresh()). The onboarding status comes from onboarding.json, so it
-// shows at once.
-import { CONFIG_FILE, readRepoFile } from "./repo-config.mjs";
+// it may have changed (refresh()), or the dashboard asks. The onboarding status comes from
+// onboarding.json, so it shows at once.
+import { loadGrants } from "./grants.mjs";
+import { CONFIG_FILE, defaultSettings, parseRepoConfig, readRepoFile } from "./repo-config.mjs";
+import { effectiveView } from "./repo-view.mjs";
 import { sendJson } from "./web.mjs";
 
 export const LIST_MS = 5 * 60000;
 export const CONFIG_MS = 30 * 60000;
+// The dashboard's Refresh buttons: at most one read of a repo (or of the list) this often.
+export const REFRESH_MS = 5000;
 const PER_PAGE = 100;
 // Config reads at once: a large installation is listed without a burst of hundreds.
 const PARALLEL = 8;
@@ -31,9 +39,11 @@ async function paginate(get, path, items) {
   }
 }
 
-// One row: "configured", "onboarding" (with its issue) or "not-onboarded"; "unknown" when
-// its config couldn't be read. `issues: false`: it can't be onboarded, its issues are off.
-export function repoStatus(info, hasConfig, onboarded) {
+// One row: "configured", "invalid" (its config has errors: no run starts), "onboarding"
+// (with its issue) or "not-onboarded"; "unknown" when its config couldn't be read. `found`:
+// { has, invalid, at } as last read, or null. `issues: false`: it can't be onboarded, its
+// issues are off.
+export function repoStatus(info, found, onboarded) {
   const row = {
     repo: info.full_name,
     url: info.html_url,
@@ -41,8 +51,9 @@ export function repoStatus(info, hasConfig, onboarded) {
     issues: info.has_issues !== false,
     status: "not-onboarded",
     issue: null,
+    readAt: found?.at ?? null,
   };
-  if (hasConfig === true) return { ...row, status: "configured" };
+  if (found?.has) return { ...row, status: found.invalid ? "invalid" : "configured" };
   if (onboarded) {
     const number = onboarded.issue;
     return {
@@ -51,7 +62,7 @@ export function repoStatus(info, hasConfig, onboarded) {
       issue: { number, url: `${info.html_url}/issues/${number}` },
     };
   }
-  if (hasConfig === null) return { ...row, status: "unknown" };
+  if (!found) return { ...row, status: "unknown" };
   return row;
 }
 
@@ -60,7 +71,7 @@ export function repoStatus(info, hasConfig, onboarded) {
 export function createRepoList({ app, config, store, now = Date.now, log = () => {} }) {
   let listing = null; // Promise<repo infos>, while fresh
   let listedAt = 0;
-  const configs = new Map(); // "owner/repo" → { at, base, has }
+  const configs = new Map(); // "owner/repo" → { at, base, has, invalid }
 
   const allowed = (repo) => !config.repos.length || config.repos.includes(repo.toLowerCase());
 
@@ -97,16 +108,25 @@ export function createRepoList({ app, config, store, now = Date.now, log = () =>
     return listing;
   }
 
-  // Whether the default branch has the config: true, false, or null when GitHub failed.
-  async function hasConfig(info) {
-    const key = info.full_name.toLowerCase();
+  // The config of the default branch, read now: { file, parsed } (file null without one).
+  // Its text isn't kept, only whether it is there and has errors.
+  async function read(info) {
     const base = info.default_branch || "main";
-    const known = configs.get(key);
-    if (known && known.base === base && now() - known.at < CONFIG_MS) return known.has;
+    const file = await readRepoFile(app.request, info.full_name, CONFIG_FILE, base);
+    const parsed = file ? parseRepoConfig(file.text, config) : null;
+    const found = { at: now(), base, has: !!file, invalid: !!parsed?.errors.length };
+    configs.set(info.full_name.toLowerCase(), found);
+    return { file, parsed, found };
+  }
+
+  // Whether the default branch has the config, and whether it has errors: { has, invalid, at },
+  // or null when GitHub failed.
+  async function configState(info) {
+    const known = configs.get(info.full_name.toLowerCase());
+    const base = info.default_branch || "main";
+    if (known && known.base === base && now() - known.at < CONFIG_MS) return known;
     try {
-      const has = !!(await readRepoFile(app.request, info.full_name, CONFIG_FILE, base));
-      configs.set(key, { at: now(), base, has });
-      return has;
+      return (await read(info)).found;
     } catch (error) {
       log(`Repositories: ${info.full_name}: ${error.message ?? error}`);
       return null;
@@ -120,7 +140,7 @@ export function createRepoList({ app, config, store, now = Date.now, log = () =>
     const worker = async () => {
       while (next < infos.length) {
         const i = next++;
-        rows[i] = repoStatus(infos[i], await hasConfig(infos[i]), store.get(infos[i].full_name));
+        rows[i] = repoStatus(infos[i], await configState(infos[i]), store.get(infos[i].full_name));
       }
     };
     await Promise.all(Array.from({ length: Math.min(PARALLEL, infos.length) }, worker));
@@ -131,6 +151,15 @@ export function createRepoList({ app, config, store, now = Date.now, log = () =>
     return (await list()).find((r) => r.repo.toLowerCase() === repo.toLowerCase()) ?? null;
   }
 
+  // The dashboard's config panel: the repo's config read now (its row too), or null when the
+  // App isn't installed on it. GitHub errors throw.
+  async function readConfig(repo) {
+    const info = (await repos()).find((r) => r.full_name.toLowerCase() === repo.toLowerCase());
+    if (!info) return null;
+    const { file, parsed, found } = await read(info);
+    return { info, file, parsed, row: repoStatus(info, found, store.get(info.full_name)) };
+  }
+
   // A delivery said this repo's config may have changed (a push to its default branch), or,
   // without a repo, which repos are installed did.
   function refresh(repo) {
@@ -138,7 +167,14 @@ export function createRepoList({ app, config, store, now = Date.now, log = () =>
     else listing = null;
   }
 
-  return { list, get, refresh };
+  // The dashboard's Refresh on the list: a delivery may have been missed, everything is read
+  // again.
+  function refreshAll() {
+    listing = null;
+    configs.clear();
+  }
+
+  return { list, get, readConfig, refresh, refreshAll, listedAt: () => listedAt };
 }
 
 // Which deliveries make the list stale: refresh(repo) for a repo whose default branch moved,
@@ -180,21 +216,52 @@ export function sameOrigin(req, publicUrl) {
 const send = (res, status, value) => sendJson(res, value, status);
 
 // The /api/repos routes. `user`: the signed-in login or null; `start(repo, login)` opens the
-// repo's onboarding issue and its run, resolving to the issue or null (tasks.mjs).
-export function createRepoApi({ config, list, publicUrl = () => null, start, log = () => {} }) {
-  async function onboard(req, res, user, repo) {
-    if (!user) return send(res, 401, { error: "Sign in first." });
-    if (!sameOrigin(req, publicUrl())) {
-      log(
-        `Repositories: refused onboarding ${repo} for ${user}: Origin ${req.headers.origin ?? "missing"}`,
-      );
-      return send(res, 403, { error: "Not from this dashboard." });
-    }
+// repo's onboarding issue and its run, resolving to the issue or null (tasks.mjs). `grants()`
+// and `fs` (realpath, stat) are what a run reads too: the operator's grants file and the
+// listener's filesystem.
+export function createRepoApi({
+  config,
+  list,
+  publicUrl = () => null,
+  start,
+  grants = () => loadGrants(config),
+  fs,
+  now = Date.now,
+  log = () => {},
+}) {
+  const refreshed = new Map(); // "owner/repo" or "*" → when last refreshed
+
+  // Not in ALLOWED_REPOS, or the App isn't installed on it: a 404 (sent), else its row.
+  async function known(res, repo) {
     if (config.repos.length && !config.repos.includes(repo.toLowerCase())) {
-      return send(res, 404, { error: `${repo} is not in ALLOWED_REPOS.` });
+      send(res, 404, { error: `${repo} is not in ALLOWED_REPOS.` });
+      return null;
     }
     const row = await list.get(repo);
-    if (!row) return send(res, 404, { error: `The App is not installed on ${repo}.` });
+    if (!row) send(res, 404, { error: `The App is not installed on ${repo}.` });
+    return row;
+  }
+
+  // A POST from elsewhere: refused (sent).
+  function foreign(req, res, user, what) {
+    if (sameOrigin(req, publicUrl())) return false;
+    log(`Repositories: refused ${what} for ${user}: Origin ${req.headers.origin ?? "missing"}`);
+    send(res, 403, { error: "Not from this dashboard." });
+    return true;
+  }
+
+  // At most one refresh of `key` per REFRESH_MS: each reads GitHub.
+  function tooSoon(key) {
+    const last = refreshed.get(key);
+    if (last !== undefined && now() - last < REFRESH_MS) return true;
+    refreshed.set(key, now());
+    return false;
+  }
+
+  async function onboard(req, res, user, repo) {
+    if (foreign(req, res, user, `onboarding ${repo}`)) return;
+    const row = await known(res, repo);
+    if (!row) return;
     // Already set up or being onboarded: nothing to do, the row says why.
     if (row.status !== "not-onboarded") return send(res, 200, { repo: row, opened: false });
     if (!row.issues) return send(res, 409, { repo: row, error: "Its issues are disabled." });
@@ -212,19 +279,71 @@ export function createRepoApi({ config, list, publicUrl = () => null, start, log
     send(res, 200, { repo: after, opened: !!issue });
   }
 
+  async function refresh(req, res, user, repo) {
+    if (foreign(req, res, user, `refreshing ${repo ?? "the list"}`)) return;
+    if (!repo) {
+      if (tooSoon("*")) return send(res, 429, { error: "Refreshed a moment ago." });
+      list.refreshAll();
+      return send(res, 200, { repos: await list.list(), listedAt: list.listedAt() });
+    }
+    if (!(await known(res, repo))) return;
+    if (tooSoon(repo.toLowerCase())) return send(res, 429, { error: "Refreshed a moment ago." });
+    return repoConfig(res, repo, true);
+  }
+
+  // Read from GitHub at each request (the text isn't kept), which refreshes its row too.
+  async function repoConfig(res, repo, checked = false) {
+    if (!checked && !(await known(res, repo))) return;
+    const read = await list.readConfig(repo);
+    if (!read) return send(res, 404, { error: `The App is not installed on ${repo}.` });
+    const { info, file, parsed, row } = read;
+    const base = info.default_branch || "main";
+    let parsedGrants = null;
+    let grantsError = null;
+    try {
+      parsedGrants = grants();
+    } catch (error) {
+      // No run starts: say so, without the file's details (the listener's logs have them).
+      log(`Repositories: ${error.message ?? error}`);
+      grantsError =
+        "The operator's grants file has errors: no run starts (see the listener's logs).";
+    }
+    const settings = parsed?.settings ?? defaultSettings(config);
+    send(res, 200, {
+      repo: row,
+      base,
+      file: file && {
+        text: file.text,
+        sha: file.sha,
+        url: `${info.html_url}/blob/${base.split("/").map(encodeURIComponent).join("/")}/${CONFIG_FILE}`,
+      },
+      errors: parsed?.errors ?? [],
+      warnings: parsed?.warnings ?? [],
+      grantsError,
+      effective: effectiveView(config, info.full_name, settings, parsedGrants, fs),
+      readAt: row.readAt,
+    });
+  }
+
   // Handles /api/repos*; false for any other path.
   function handle(req, res, user) {
     const { pathname } = new URL(req.url, "http://localhost");
-    const action = /^\/api\/repos\/([\w.-]+)\/([\w.-]+)\/onboard$/.exec(pathname);
-    if (pathname !== "/api/repos" && !action) return false;
+    const one = /^\/api\/repos\/([\w.-]+)\/([\w.-]+)\/(onboard|refresh|config)$/.exec(pathname);
+    const all = pathname === "/api/repos" || pathname === "/api/repos/refresh";
+    if (!all && !one) return false;
     const run = async () => {
-      if (!action) {
-        if (req.method !== "GET") return send(res, 405, { error: "GET only." });
-        if (!user) return send(res, 401, { error: "Sign in first." });
-        return send(res, 200, { repos: await list.list() });
+      const post = pathname.endsWith("/onboard") || pathname.endsWith("/refresh");
+      if (post && req.method !== "POST") return send(res, 405, { error: "POST only." });
+      if (!post && req.method !== "GET") return send(res, 405, { error: "GET only." });
+      if (!user) return send(res, 401, { error: "Sign in first." });
+      if (!one) {
+        if (post) return refresh(req, res, user, null);
+        return send(res, 200, { repos: await list.list(), listedAt: list.listedAt() });
       }
-      if (req.method !== "POST") return send(res, 405, { error: "POST only." });
-      return onboard(req, res, user, `${action[1]}/${action[2]}`);
+      const repo = `${one[1]}/${one[2]}`;
+      if (one[3] === "onboard") return onboard(req, res, user, repo);
+      if (one[3] === "refresh") return refresh(req, res, user, repo);
+      return repoConfig(res, repo);
     };
     run().catch((error) => {
       log(`Repositories: ${error.stack ?? error}`);
