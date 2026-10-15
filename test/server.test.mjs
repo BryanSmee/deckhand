@@ -50,7 +50,9 @@ case "$1" in
     [ -d "$c/$n" ] || exit 1
     exec tail -n +1 -f --pid="$(cat "$c/$n/pid")" -s 0.05 "$c/$n/out" ;;
   network)
-    # The sandboxes' network: internal unless the test says otherwise.
+    # The sandboxes' network: internal unless the test says otherwise. Checked while the run
+    # is prepared, so a test can change things then.
+    [ -x "${dir}/while-preparing" ] && "${dir}/while-preparing"
     cat "${dir}/network-internal" 2> /dev/null || echo true ;;
   inspect)
     n=\${@: -1}
@@ -538,6 +540,7 @@ mounts:
     (dir) => {
       mkdirSync(join(dir, "nfs", "api"), { recursive: true });
       mkdirSync(join(dir, "nfs", "docs"), { recursive: true });
+      chmodSync(join(dir, "nfs"), 0o555); // not writable by the sandbox's user: api may be read-write
       writeFileSync(
         join(dir, "grants.yaml"),
         `org/repo:
@@ -623,6 +626,30 @@ test("a mount outside the granted root, through a symlink, is refused on the iss
   assert.match(body, /host mounts requested by `\.deckhand\.yaml` are refused/);
   assert.match(body, /escape`: resolves to \/etc, outside the roots/);
   assert.match(body, /\.\.\/etc`: (resolves to \S+, outside|doesn't exist)/);
+  assert.throws(() => readFileSync(join(dir, "run-args")));
+});
+
+test("a mount that resolves elsewhere once the run is prepared stops it", async (t) => {
+  const { dir, github, send } = await listen(
+    t,
+    (dir) => ({ ".deckhand.yaml": `mounts:\n  - ${dir}/nfs/api\n` }),
+    (dir) => {
+      mkdirSync(join(dir, "nfs", "a"), { recursive: true });
+      mkdirSync(join(dir, "nfs", "b"));
+      symlinkSync("a", join(dir, "nfs", "api"));
+      writeFileSync(join(dir, "while-preparing"), `#!/bin/sh\nln -sfn b "${dir}/nfs/api"\n`);
+      chmodSync(join(dir, "while-preparing"), 0o755);
+      writeFileSync(join(dir, "grants.yaml"), `org/repo:\n  mounts: [${join(dir, "nfs")}]\n`);
+      return {};
+    },
+  );
+  await send(comment("alice"));
+  const reply = await github.waitFor(
+    (r) => r.method === "POST" && r.path === "/repos/org/repo/issues/12/comments",
+  );
+  const body = JSON.parse(reply.body).body;
+  assert.match(body, /host mounts changed while the run was being prepared/);
+  assert.match(body, /`\S+\/nfs\/api` no longer resolves to `\S+\/nfs\/a`/);
   assert.throws(() => readFileSync(join(dir, "run-args")));
 });
 
