@@ -1,7 +1,15 @@
 // The sandbox's side of the broker: git's credential helper asks it for a token per call.
 import assert from "node:assert/strict";
 import { execFile, spawnSync } from "node:child_process";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -243,4 +251,26 @@ test("other gh commands go to the real gh, with a fresh token", async (t) => {
   assert.equal((await gh(env, "issue", "view", "3")).status, 0);
   assert.deepEqual(real.calls(), ["token pr edit 7 --title x", "token issue view 3"]);
   assert.deepEqual(mutations, []);
+});
+
+// AGENTS.md's syntax check names the scripts one by one: a new one must join the list.
+test("AGENTS.md's syntax check covers every script in sandbox/, and they pass it", () => {
+  const agents = readFileSync(new URL("../AGENTS.md", import.meta.url), "utf8");
+  const check = agents.split("\n").find((line) => line.startsWith("| Syntax check"));
+  for (const file of readdirSync(bin)) {
+    if (statSync(join(bin, file)).isDirectory()) continue;
+    const shebang = readFileSync(join(bin, file), "utf8").split("\n")[0];
+    const listed = check.includes(file.endsWith(".sh") ? "sandbox/*.sh" : `sandbox/${file}`);
+    if (shebang === "#!/bin/bash") {
+      assert.ok(listed, `${file} is not in AGENTS.md's syntax check`);
+      assert.equal(spawnSync("bash", ["-n", join(bin, file)]).status, 0, `bash -n ${file}`);
+    } else if (shebang === "#!/usr/bin/env node") {
+      assert.ok(listed, `${file} is not in AGENTS.md's syntax check`);
+      assert.equal(
+        spawnSync("node", ["--check", join(bin, file)]).status,
+        0,
+        `node --check ${file}`,
+      );
+    } else assert.doesNotMatch(shebang, /^#!/, `${file}: a script AGENTS.md doesn't check`);
+  }
 });

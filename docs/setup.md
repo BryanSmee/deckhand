@@ -105,8 +105,7 @@ answers calls from inside the container (`docker compose exec listener …`) wit
 
 Apps created by `/setup` before the dashboard had sign-in have no callback URL: on the App's
 page on GitHub (Settings → Developer settings → GitHub Apps → your App → General), add
-`<public URL>/auth/callback` under **Callback URL** and save. `DASHBOARD_PASSWORD` is no
-longer used.
+`<public URL>/auth/callback` under **Callback URL** and save.
 
 The dashboard lists every issue, pull request and discussion Deckhand worked on, by title,
 with a tab per repository (the most recently active first; each counts its running tasks and
@@ -155,27 +154,51 @@ default branch.
 
 All in `.env`, read by `compose.yaml`:
 
-| Setting                                                                               | Default                        | What                                                                            |
-| ------------------------------------------------------------------------------------- | ------------------------------ | ------------------------------------------------------------------------------- |
-| `ALLOWED_USERS`                                                                       | none: required                 | GitHub logins that can start runs                                               |
-| `ALLOWED_REPOS`                                                                       | all where the App is installed | narrows the repos (`owner/repo`, comma-separated)                               |
-| `CLAUDE_CODE_OAUTH_TOKEN` / `ANTHROPIC_API_KEY`                                       |                                | Claude credential passed to each sandbox                                        |
-| `PUBLIC_URL`                                                                          | stored by `/setup`             | the listener's public address                                                   |
-| `CLAUDE_CODE_VERSION`                                                                 | `2.1.300`                      | Claude Code version the sandboxes install on first use                          |
-| `SANDBOX_MODEL`, `SANDBOX_EFFORT`                                                     | `opus`, `medium`               | defaults; a comment's `/model` and `/effort` lines override them                |
-| `MAX_PARALLEL`                                                                        | `2`                            | sandboxes running at once (a repo's `max_parallel` within it)                   |
-| `ALLOWED_HOSTS`                                                                       | none                           | hosts every sandbox may reach besides Anthropic and GitHub                      |
-| `SANDBOX_CPUS`, `SANDBOX_MEMORY`, `SANDBOX_PIDS`                                      | `2`, `4g`, `2048`              | each sandbox's limits (per repo: the grants file)                               |
-| `GRANTS_FILE`                                                                         | `/etc/deckhand/grants.yaml`    | what you grant each repo: hosts, its own hosts, host mounts, limits             |
-| `EGRESS_PROXY`                                                                        | `http://egress:3128`           | the egress proxy, as sandboxes reach it                                         |
-| `INSTALL_NETWORK`                                                                     | `bridge`                       | network of the Claude Code install container (needs npm)                        |
-| `TRIGGER`                                                                             | `Deckhand`                     | first line of a comment that starts a run                                       |
-| `ONBOARDING`                                                                          | on                             | `off`: no onboarding issue when the App is installed on a repo without a config |
-| `NEEDS_INPUT_LABEL`                                                                   | `needs-input`                  | label while a run waits for answers (empty: none)                               |
-| `DOCKER_SOCKET`                                                                       | `/var/run/docker.sock`         | the host's Docker socket, as preview hooks mount it                             |
-| `DECKHAND_VERSION`                                                                    | `latest`                       | the release compose runs (`1.2.3`, `1.2`): see [Updating](#updating)            |
-| `DECKHAND_REGISTRY`                                                                   | `ghcr.io/bryansmee`            | where compose pulls the images from                                             |
-| `SANDBOX_NETWORK`, `SHOTS_VOLUME`, `RUNS_VOLUME`, `CLAUDE_CODE_VOLUME`, `NAME_PREFIX` | `deckhand-…`                   | names of what the listener creates on Docker                                    |
+| Setting                                                                               | Default                           | What                                                                            |
+| ------------------------------------------------------------------------------------- | --------------------------------- | ------------------------------------------------------------------------------- |
+| `ALLOWED_USERS`                                                                       | none: required                    | GitHub logins that can start runs                                               |
+| `ALLOWED_REPOS`                                                                       | all where the App is installed    | narrows the repos (`owner/repo`, comma-separated)                               |
+| `CLAUDE_CODE_OAUTH_TOKEN` / `ANTHROPIC_API_KEY`                                       |                                   | Claude credential passed to each sandbox                                        |
+| `PUBLIC_URL`                                                                          | stored by `/setup`                | the listener's public address                                                   |
+| `PORT`                                                                                | `8080`                            | the host port compose publishes the listener on                                 |
+| `CLAUDE_CODE_VERSION`                                                                 | `2.1.300`                         | Claude Code version the sandboxes install on first use                          |
+| `SANDBOX_MODEL`, `SANDBOX_EFFORT`                                                     | `opus`, `medium`                  | defaults; a comment's `/model` and `/effort` lines override them                |
+| `BRAINSTORM_MODEL`, `BRAINSTORM_EFFORT`                                               | `SANDBOX_MODEL`, `SANDBOX_EFFORT` | the same for brainstorms, inbox entries and discussions                         |
+| `BRAINSTORM_IDLE_MINUTES`                                                             | `10`                              | minutes without a comment before a brainstorm shows as idle                     |
+| `MAX_PARALLEL`                                                                        | `2`                               | sandboxes running at once (a repo's `max_parallel` within it)                   |
+| `ALLOWED_HOSTS`                                                                       | none                              | hosts every sandbox may reach besides Anthropic and GitHub                      |
+| `SANDBOX_CPUS`, `SANDBOX_MEMORY`, `SANDBOX_PIDS`                                      | `2`, `4g`, `2048`                 | each sandbox's limits (per repo: the grants file)                               |
+| `TRIGGER`                                                                             | `Deckhand`                        | first line of a comment that starts a run                                       |
+| `ONBOARDING`                                                                          | on                                | `off`: no onboarding issue when the App is installed on a repo without a config |
+| `NEEDS_INPUT_LABEL`                                                                   | `needs-input`                     | label while a run waits for answers (empty: none)                               |
+| `DOCKER_SOCKET`                                                                       | `/var/run/docker.sock`            | the host's Docker socket, as preview hooks mount it                             |
+| `DECKHAND_VERSION`                                                                    | `latest`                          | the release compose runs (`1.2.3`, `1.2`): see [Updating](#updating)            |
+| `DECKHAND_REGISTRY`                                                                   | `ghcr.io/bryansmee`               | where compose pulls the images from                                             |
+| `SANDBOX_NETWORK`, `SHOTS_VOLUME`, `RUNS_VOLUME`, `CLAUDE_CODE_VOLUME`, `NAME_PREFIX` | `deckhand-…`                      | names of what the listener creates on Docker                                    |
+
+### Advanced settings
+
+The listener and the egress proxy also read these. `compose.yaml` doesn't take them from
+`.env`: it sets some itself, to match the services and volumes it defines, and leaves the
+others to their defaults. To change one, set it in the service's `environment`, for example
+in a `compose.override.yaml`.
+
+| Setting                           | Default                                        | What                                                                                                    |
+| --------------------------------- | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `GRANTS_FILE`                     | `/etc/deckhand/grants.yaml`                    | what you grant each repo: hosts, its own hosts, host mounts, limits (`compose.yaml` mounts yours there) |
+| `INSTALL_NETWORK`                 | `bridge`                                       | network of the Claude Code install container (needs npm)                                                |
+| `DEBOUNCE_MS`                     | `15000`                                        | pause after a comment before its run starts, so that comments posted together go in one run             |
+| `BRAINSTORM_DEBOUNCE_MS`          | `3000`                                         | the same before a light run (brainstorms, onboarding, light modes)                                      |
+| `DATA_DIR`                        | `/data`                                        | the listener's state: the App's credentials, logs, queue, runs (the `data` volume)                      |
+| `DASHBOARD_DIR`                   | the image's `dashboard/dist`                   | the built dashboard the listener serves                                                                 |
+| `SANDBOX_IMAGE`                   | `<NAME_PREFIX>-sandbox`                        | the base image runs start from; compose sets the release's                                              |
+| `BROKER_PORT`                     | `8081`                                         | port of the token broker, git gateway and egress policy, on the sandboxes' network                      |
+| `BROKER_URL`                      | `http://listener:<BROKER_PORT>`                | the broker, as sandboxes reach it; compose sets it                                                      |
+| `EGRESS_PROXY`                    | `http://egress:3128`                           | the egress proxy, as sandboxes reach it; compose sets it                                                |
+| `POLICY_URL` (egress proxy)       | `http://listener:8081/egress`                  | where the proxy asks whether a sandbox may reach a host; compose sets it                                |
+| `PORT` (in the containers)        | `8080`, egress proxy: `3128`                   | port the listener and the proxy listen on; the `PORT` above only changes the published one              |
+| `GITHUB_URL`, `GITHUB_API`        | `https://github.com`, `https://api.github.com` | GitHub's web and API addresses, always allowed through the egress proxy                                 |
+| `DECKHAND_VERSION` (in the image) | set when the image is built                    | the version the dashboard shows                                                                         |
 
 ## Updating
 

@@ -209,7 +209,8 @@ another one, and the next run installs it.
 ## Development
 
 Node 22; the listener has no dependencies. Tests: `node --test`; syntax: `node --check
-listener/server.mjs` and `bash -n sandbox/*.sh`; format: `npx --yes prettier@3 --check .`.
+listener/server.mjs`, `bash -n` on `sandbox/`'s shell scripts and `node --check
+sandbox/deckhand-inbox` (the list: [AGENTS.md](AGENTS.md#commands)); format: `npx --yes prettier@3 --check .`.
 The dashboard (`dashboard/`, Preact + Vite + TypeScript) is built into the listener's image;
 locally: `cd dashboard && npm ci && npm test && npm run build`, or `npm run dev` against a
 listener on port 8080. See [AGENTS.md](AGENTS.md) for the conventions and security rules.
