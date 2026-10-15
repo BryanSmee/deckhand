@@ -38,7 +38,8 @@ brainstorm instead: Claude discusses the issue (`prompts/brainstorm.md`) without
 code, and each later comment on the issue is the next message of that conversation. A
 brainstorm run starts light (`SANDBOX_LIGHT`) after a short pause (`BRAINSTORM_DEBOUNCE_MS`)
 and goes before queued work. `/stop` ends it: Claude posts a summary and updates the issue's
-description, then comments no longer reach it until a trigger line. After
+description (settled questions in a Decisions section, Open questions keeping what is left),
+then comments no longer reach it until a trigger line. After
 `BRAINSTORM_IDLE_MINUTES` (10) without a comment it shows as idle; a comment then restores it
 from the issue's session volume. `Deckhand` or `/mode work` afterwards implements in a session
 of its own, which starts from the issue: the brainstorm's comments and the description its
@@ -82,7 +83,9 @@ request `NEEDS_INPUT_LABEL` (default `needs-input`) until the next run starts.
 An issue can wait for answers without a run stopping to ask: inbox runs file issues with an
 **Open questions** section, and people write some by hand. When an allowed user or the App's
 bot opens an issue whose `## Open questions` section asks something (its first paragraph isn't
-"None"), the listener labels it; an edit to that section adds or removes the label as it now
+"None"), the listener labels it. So settled questions don't stay there: a brainstorm's wrap-up
+moves them, with their answers, to a **Decisions** section and leaves "None" alone when nothing
+is left (`prompts/brainstorm.md`). An edit to Open questions adds or removes the label as it now
 reads. An allowed user's comment on a labelled issue or pull request takes the label off: they
 answered. The dashboard lists the open issues carrying the label as `needs-input`, with a run
 or not (`inputs.json`, kept by `issues` deliveries, whoever adds or removes the label, and one

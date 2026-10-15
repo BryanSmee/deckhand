@@ -68,7 +68,9 @@ Questions for the maintainer, wherever you ask them (a run that stops to ask, an
 - End your pick with `(recommended)`, on one option at most: the dashboard ticks it in
   advance. No options: a free-text question. Every question also gets a free-text answer.
 - Nothing else between the questions: put the rest before the list or after it.
-- No questions: write "None" alone.
+- Only questions still open: an answered one goes elsewhere (an issue's "Decisions"
+  section), as anything but "None" here marks the issue as waiting for input.
+- No questions: write "None" alone, first in the section.
 
 ## Checking pages in a browser
 
