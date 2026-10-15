@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { createWaits, issueList } from "../listener/waits.mjs";
+import { createWaits, issueList, waitsFor } from "../listener/waits.mjs";
 
 const tempPath = () => join(mkdtempSync(join(tmpdir(), "deckhand-")), "waits.json");
 
@@ -36,7 +36,8 @@ function item(after, fields = {}) {
 }
 
 // Waits with a fake GitHub (`issues`: number → issue, missing ones 404), a fake clock and
-// fake comments. `allowed`: what resume() answers.
+// fake comments. `allowed`: what resume() answers ("answers": the issue's questions are open),
+// changed later through `w.allowed`.
 function setup({ issues = { 77: open, 80: open }, path = tempPath(), allowed = true } = {}) {
   const w = {
     issues,
@@ -47,6 +48,7 @@ function setup({ issues = { 77: open, 80: open }, path = tempPath(), allowed = t
     calls: [],
     timers: [],
     path,
+    allowed,
   };
   w.waits = createWaits({
     path,
@@ -65,7 +67,7 @@ function setup({ issues = { 77: open, 80: open }, path = tempPath(), allowed = t
       i.eyes = Promise.resolve(4242);
     },
     settle: async (i, status) => w.settled.push([i.comment.id, status, await i.eyes]),
-    resume: async (i) => (w.resumed.push(i), allowed),
+    resume: async (i) => (w.resumed.push(i), w.allowed),
     now: () => 1000,
     later: (fn, ms) => w.timers.push([fn, ms]),
   });
@@ -76,6 +78,8 @@ test("issueList", () => {
   assert.equal(issueList([7]), "#7");
   assert.equal(issueList([7, 8]), "#7 and #8");
   assert.equal(issueList([7, 8, 9]), "#7, #8 and #9");
+  assert.equal(waitsFor({ blockers: [7] }), "#7");
+  assert.equal(waitsFor({ blockers: [], answers: true }), "the answers to its open questions");
 });
 
 test("a comment waits for open issues, says so, and keeps its 👀", async () => {
@@ -102,6 +106,7 @@ test("a comment waits for open issues, says so, and keeps its 👀", async () =>
       mode: "work",
       replyTo: 78,
       blockers: [77, 80],
+      answers: false,
       since: 1000,
     },
   ]);
@@ -125,6 +130,53 @@ test("nothing starts until the last one is done; then the saved comment runs", a
   assert.match(w.replies.at(-1)[1], /^#80 is done: starting\.$/);
   assert.equal(w.waits.get("org/repo#78"), undefined);
   assert.deepEqual(JSON.parse(readFileSync(w.path, "utf8")), {});
+});
+
+test("done, but the issue's questions are open: it waits for the answers, then starts", async () => {
+  const w = setup({ allowed: "answers" });
+  await w.waits.request(item({ numbers: [77] }));
+  await w.waits.closed("org/repo", 77, "done");
+  assert.equal(w.resumed.length, 1);
+  assert.match(
+    w.replies.at(-1)[1],
+    /^#77 is done, but this issue's open questions aren't answered/,
+  );
+  assert.deepEqual(w.settled, []);
+  const kept = JSON.parse(readFileSync(w.path, "utf8"))["org/repo#78"];
+  assert.deepEqual([kept.blockers, kept.answers, kept.item.text], [[], true, "Do it."]);
+  assert.equal(w.waits.list()[0].answers, true);
+  // Another issue's label, then a check while still unanswered: it keeps waiting, quietly.
+  await w.waits.answered("org/repo", 79);
+  await w.waits.check();
+  assert.equal(w.resumed.length, 2);
+  assert.equal(w.replies.length, 2);
+  assert.equal(w.waits.get("org/repo#78").answers, true);
+  // Answered: the label came off.
+  w.allowed = true;
+  await w.waits.answered("Org/Repo", 78);
+  assert.equal(w.resumed.length, 3);
+  assert.equal(await w.resumed[2].eyes, 4242);
+  assert.match(w.replies.at(-1)[1], /^The open questions are answered: starting\.$/);
+  assert.equal(w.waits.list().length, 0);
+  assert.deepEqual(JSON.parse(readFileSync(w.path, "utf8")), {});
+  // Nothing waits any more: nothing to start.
+  await w.waits.answered("org/repo", 78);
+  assert.equal(w.resumed.length, 3);
+});
+
+test("a wait for answers: cancelled by a new comment, dropped when it may no longer run", async () => {
+  const w = setup({ allowed: "answers" });
+  await w.waits.request(item({ numbers: [77] }));
+  await w.waits.closed("org/repo", 77, "done");
+  await w.waits.request(item({ none: true }, { trigger: null, text: "" }));
+  assert.match(w.replies.at(-1)[1], /^No longer waiting for the answers to its open questions\.$/);
+  await w.waits.request(item({ numbers: [77] }, { id: "79", number: 79, replyTo: 79 }));
+  w.issues[77] = completed;
+  await w.waits.closed("org/repo", 77, "done");
+  w.allowed = false;
+  await w.waits.answered("org/repo", 79);
+  assert.equal(w.waits.list().length, 0);
+  assert.deepEqual(w.settled.at(-1), [900, "stopped", 4242]);
 });
 
 test("closed without being done: no run, a reply says why, the wait is dropped", async () => {

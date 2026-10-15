@@ -215,16 +215,23 @@ const inputs = createInputs({
 // --- Per-repo settings, images and preview hooks -------------------------------------------
 
 // Each repo's `users` as last read for a run or a comment: the dashboard shows a repo's tasks
-// and logs to them only (http.mjs).
+// and logs to them only (http.mjs). And its `wait_for_answers`, for the dashboard's form.
 const repoUsers = new Map();
 
 // A repo's settings from its default branch; errors in its config file stop its runs.
 async function repoSettings(repo, base) {
   const read = await loadRepoSettings(github, config, repo, base || "main");
   if (!read.errors.length) {
-    repoUsers.set(repo.toLowerCase(), { users: read.settings.users, at: Date.now() });
+    const { users, waitForAnswers } = read.settings;
+    repoUsers.set(repo.toLowerCase(), { users, waitForAnswers, at: Date.now() });
   }
   return read;
+}
+
+// The latest read of a repo's settings, here or for the repository list, or null.
+function latestRead(repo) {
+  const known = [repoUsers.get(repo.toLowerCase()), repoList.usersOf(repo)].filter(Boolean);
+  return known.sort((a, b) => b.at - a.at)[0] ?? null;
 }
 
 const repoFile = (repo, path, ref) => readRepoFile(github, repo, path, ref);
@@ -253,10 +260,9 @@ Object.assign(ctx, {
   repoSettings,
   // The latest read, here or for the repository list; null when not known yet: ALLOWED_USERS
   // alone then.
-  usersOf: (repo) => {
-    const known = [repoUsers.get(repo.toLowerCase()), repoList.usersOf(repo)].filter(Boolean);
-    return known.sort((a, b) => b.at - a.at)[0]?.users ?? null;
-  },
+  usersOf: (repo) => latestRead(repo)?.users ?? null,
+  // Unknown: the default, on.
+  waitsForAnswers: (repo) => latestRead(repo)?.waitForAnswers ?? true,
   repoFile,
   setup,
   auth,

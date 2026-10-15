@@ -129,6 +129,12 @@ export function takeOptions(text, options) {
     .trim();
 }
 
+// Whether a comment says anything besides its trigger and command lines ("/mode", "/after",
+// "/model", "/effort"): only then does it answer an issue's open questions (tasks.mjs).
+export function saysMore(config, body) {
+  return !!takeOptions(splitTrigger(config, body ?? "").text, {});
+}
+
 // Comments as Claude reads them, one after the other, without their "/model" and "/effort"
 // lines (collected in `options`).
 export function commentsText(items, options) {

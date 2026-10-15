@@ -47,6 +47,8 @@ export function defaultSettings(config) {
     modes: {},
     preview: null,
     conflicts: null,
+    // An issue's open questions (the needs-input label) hold its work runs back (tasks.mjs).
+    waitForAnswers: true,
   };
 }
 
@@ -290,6 +292,11 @@ const KEYS = {
   preview: parsePreview,
   conflicts: parseConflicts,
   docker: parseDocker,
+  // A behaviour switch, not a permission: nothing to narrow.
+  wait_for_answers: (value, { key, settings, fail }) => {
+    if (typeof value === "boolean") settings.waitForAnswers = value;
+    else fail(key, "expected true or false");
+  },
 };
 
 // One of `modes:`, into settings.modes. Every key is checked: a mistyped one would otherwise

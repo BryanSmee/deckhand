@@ -14,6 +14,7 @@ import {
   closedItem,
   previewEvent,
   pullRequest,
+  saysMore,
   touchedItems,
   verified,
   workItem,
@@ -160,6 +161,8 @@ export function createHttp(ctx, { dashboardDir }) {
         pr: ctx.pulls.get(t.key),
         // Closed: the listener would refuse it.
         rerunnable: t.rerunnable && !ctx.titles.closed(t.key),
+        // Off: Start and Queue don't open its open questions first (work.mjs act()).
+        ...(t.questions && { waitForAnswers: ctx.waitsForAnswers?.(t.repo) ?? true }),
         runs: t.runs.map(publicRun),
       })),
       // The graph's arrows, and the issues they come from that aren't on the board.
@@ -384,14 +387,24 @@ export function createHttp(ctx, { dashboardDir }) {
 
   // Open questions in an issue, or an answer to them: the needs-input label and the
   // dashboard's list of issues waiting for input (questions.mjs, inputs.mjs).
-  async function questions({ repo, key, number, title, base, label, by, track, questions: asked }) {
+  async function questions(change) {
+    const { repo, key, number, title, base, label, by, track, questions: asked } = change;
     if (title) ctx.titles.set(key, title);
     if (label !== undefined && by) {
       // The repo's own users narrow the operator's.
       const { settings, errors } = await ctx.repoSettings(repo, base);
       if (errors.length) return skip(`${key}: ${CONFIG_FILE} of ${repo} has errors`);
-      if (!effectiveConfig(config, settings).users.includes(by.toLowerCase())) {
+      const seen = effectiveConfig(config, settings);
+      if (!seen.users.includes(by.toLowerCase())) {
         return skip(`${key}: ${by} not among ${repo}'s users`);
+      }
+      // A trigger line alone answers nothing: the issue still waits (tasks.mjs holdBack()).
+      if (
+        settings.waitForAnswers &&
+        change.comment !== undefined &&
+        !saysMore(seen, change.comment)
+      ) {
+        return skip(`${key}: ${by}'s comment answers nothing, the label stays`);
       }
     }
     if (label !== undefined) {
@@ -401,6 +414,8 @@ export function createHttp(ctx, { dashboardDir }) {
     }
     if (track !== undefined) ctx.inputs.set(key, track, asked);
     else if (asked !== undefined) ctx.inputs.update(key, asked);
+    // Answered: a comment that waited for the answers starts (waits.mjs).
+    if (change.answered) admitted(ctx.waits.answered(repo, number));
   }
 
   async function previewHook({ repo, base, event }, payload) {

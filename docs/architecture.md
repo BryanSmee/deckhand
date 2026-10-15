@@ -100,6 +100,19 @@ run starting): that issue is left alone, and remembered until the listener resta
 start the listener also reads the App's settings (`GET /app`) and logs a warning naming any
 event of `APP_EVENTS` it isn't subscribed to.
 
+With the repo's `wait_for_answers` (on by default, `docs/repo-config.md`), the label holds
+work back. `tasks.mjs` `admit()` reads it from the comment's payload: a trigger comment with
+no text besides its command lines (`saysMore()`), asking for work or a non-light mode of the
+repo, on an issue labelled for its body's questions (and whose last run didn't stop to ask),
+starts nothing; the App replies how to answer and swaps its 👀 for the needs-input reaction.
+`questions()` (`http.mjs`) leaves the label on for that comment, and light runs don't take it
+off when they start. A comment that waited (`/after`) asks GitHub for the issue's labels
+before it starts (`resume()`): still labelled, its wait stays with no issues left and
+`answers: true`, shown as `needs-input`, until an `unlabeled` delivery or the periodic check
+starts it (`waits.mjs` `answered()`). The dashboard's `act()` refuses Start and Queue without
+the answers (`409`) only then, and `api/state` carries `waitForAnswers` with a task's
+questions so the graph doesn't open the form when it is off.
+
 The questions themselves have one format, set once in `prompts/sandbox.md` (the other prompts
 point to it): numbered, an optional `**Title**:`, options as an indented task list with one
 `(recommended)`. `parseQuestions()` (`questions.mjs`) reads them, all or nothing: a section in

@@ -281,6 +281,11 @@ test("the dashboard follows the label, added or removed by anyone, and closed is
   assert.deepEqual(listed.questions, { items: [free("A?")], raw: "1. A?" });
   assert.equal(label("labeled", "needs-input").questions, null);
   assert.equal(label("unlabeled", "needs-input").questions, undefined);
+  // What a comment waiting for the answers starts on (waits.mjs).
+  assert.equal(label("unlabeled", "needs-input").answered, true);
+  const closed = issues("unlabeled", { label: { name: "needs-input" } });
+  closed.issue.state = "closed";
+  assert.equal(inputEvent(config, "issues", closed, BOT).answered, undefined);
   for (const change of [map("closed"), label("labeled", "needs-input")]) {
     assert.equal(change.label, undefined);
   }
@@ -301,6 +306,8 @@ test("an allowed user's comment on a labelled issue takes the label off; Deckhan
     { label: comment("alice").label, by: comment("alice").by, track: comment("alice").track },
     { label: false, by: "alice", track: false },
   );
+  // Its body: with the repo's `wait_for_answers`, a trigger line alone answers nothing.
+  assert.equal(comment("alice", { text: "Deckhand" }).comment, "Deckhand");
   assert.equal(comment("alice", { labels: [] }), null);
   assert.equal(comment("mallory"), null);
   assert.equal(comment(BOT), null);
@@ -310,4 +317,5 @@ test("an allowed user's comment on a labelled issue takes the label off; Deckhan
   assert.equal(pr.label, false);
   assert.equal(pr.track, undefined);
   assert.equal(pr.title, null);
+  assert.equal(pr.comment, undefined);
 });

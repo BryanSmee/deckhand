@@ -83,6 +83,9 @@ export interface Task {
   runs: Run[]; // newest first
   // What a task waiting for input asks (listener/questions.mjs, board.mjs).
   questions?: Questions;
+  // With its questions: false when its repo's `wait_for_answers` is off, and Start and Queue
+  // go ahead without them (listener/work.mjs act()).
+  waitForAnswers?: boolean;
 }
 
 // An option of a question; one at most is `recommended` (the agent's pick). One option per

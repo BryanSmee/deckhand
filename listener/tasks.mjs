@@ -2,9 +2,10 @@
 // A comment that passed the checks is queued under its task's key ("org/repo#12"); after a
 // pause (so a burst is one run) it starts a run, or goes to the running one (deliver()).
 import { agentFor } from "./agents/index.mjs";
-import { commentsText, linkedIssue, linkTo, workItem } from "./events.mjs";
+import { commentsText, linkedIssue, linkTo, takeOptions, workItem } from "./events.mjs";
 import { INBOX, isLight, sessionName } from "./modes.mjs";
 import { liveMessage } from "./prompts.mjs";
+import { hasOpenQuestions } from "./questions.mjs";
 import {
   CONFIG_FILE,
   customMode,
@@ -81,10 +82,50 @@ export function createTasks(ctx) {
         return unknownMode(item, `Unknown mode \`${item.modeLine}\`.`);
       }
       if (await ctx.waits.request(item)) return;
-    } else if (item.trigger === "work" || item.modeLine) {
+    }
+    // Only the comment's own issue, as the delivery has it: a pull request's labels are its own.
+    const issue = event === "issue_comment" && !payload.issue?.pull_request ? payload.issue : null;
+    if (!hasAnswer(item) && unanswered(item, issue)) return holdBack(item);
+    if (!item.after && (item.trigger === "work" || item.modeLine)) {
       ctx.waits.cancel(`${item.repo}#${item.id}`);
     }
     await accept(item);
+  }
+
+  // Whether the comment says anything besides its trigger and command lines: then it answers
+  // the issue's open questions (questions.mjs takes the label off).
+  function hasAnswer(item) {
+    return !!takeOptions(item.text ?? "", {});
+  }
+
+  // Whether the repo's `wait_for_answers` holds `item` back: work, or a mode of the repo's that
+  // isn't light, on an issue (`issue`: as GitHub has it) that carries NEEDS_INPUT_LABEL for its
+  // own open questions. Brainstorms and light modes still run: they can help answer. A run
+  // that stopped to ask isn't held either: any comment continues it.
+  function unanswered(item, issue) {
+    if (!item.settings?.waitForAnswers || !config.needsInputLabel || !issue) return false;
+    if (item.kind !== "issue" || item.replyTo !== item.number) return false;
+    const mode = item.modeLine ?? (item.trigger === "work" ? "work" : null);
+    const own = customMode(item.settings, mode);
+    if (mode !== "work" && (!own || own.light)) return false;
+    const name = config.needsInputLabel.toLowerCase();
+    if (!(issue.labels ?? []).some((l) => (l.name ?? l).toLowerCase() === name)) return false;
+    if (!hasOpenQuestions(issue.body)) return false;
+    const key = `${item.repo}#${item.id}`;
+    return ctx.runs.find((r) => r.key === key)?.status !== "needs-input";
+  }
+
+  // A trigger comment on an issue whose questions aren't answered: nothing starts, and the
+  // reply says how to answer. The label stays (http.mjs questions()).
+  async function holdBack(item) {
+    const key = `${item.repo}#${item.id}`;
+    log(`${key}: not started, its open questions aren't answered`);
+    const url = ctx.publicUrl?.();
+    const task = `${url}/#/${item.repo}?task=${encodeURIComponent(key)}`;
+    const form = url ? ` or [on the dashboard](${task})` : "";
+    const text = `#${item.number} has open questions: nothing starts until they are answered. A trigger comment with the answers starts the run with them; answered in a comment${form}, a new trigger comment starts it. (\`wait_for_answers: false\` in \`${CONFIG_FILE}\` turns this off.)`;
+    await ctx.reply(item.repo, item.replyTo, text).catch((error) => log(`${key}: ${error}`));
+    await ctx.settle(item, "needs-input");
   }
 
   // A comment on a pull request that says it closes an issue, from a payload without the pull
@@ -132,8 +173,23 @@ export function createTasks(ctx) {
       log(`${key}: not started, ${refused}`);
       return false;
     }
+    if (await stillAsking({ ...item, settings })) {
+      log(`${key}: not started yet, its open questions aren't answered`);
+      return "answers";
+    }
     await accept({ ...item, settings });
     return true;
+  }
+
+  // Whether the issue of a comment that waited still has open questions (unanswered()), as
+  // GitHub has it now. Not knowing isn't unanswered: the wait was what the comment asked for.
+  async function stillAsking(item) {
+    if (!item.settings.waitForAnswers || !config.needsInputLabel || item.kind !== "issue") {
+      return false;
+    }
+    const path = `/repos/${item.repo}/issues/${item.number}`;
+    const res = await ctx.github(item.repo, "GET", path, undefined, [404, 410]).catch(() => null);
+    return !!res?.ok && unanswered(item, await res.json());
   }
 
   // An onboarding issue for the repo, if it needs one, starting an onboarding run on it as a
