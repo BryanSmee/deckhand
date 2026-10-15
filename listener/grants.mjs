@@ -21,7 +21,7 @@
 import { readFileSync, realpathSync, statSync } from "node:fs";
 import { posix } from "node:path";
 import { ConfigError, parseLimits } from "./config.mjs";
-import { hostProblem } from "./egress.mjs";
+import { hostProblem, refusedRepoHosts } from "./egress.mjs";
 import { PLAIN_PATH, RESERVED } from "./repo-config.mjs";
 import { isMap, parseYaml } from "./yaml.mjs";
 
@@ -156,6 +156,36 @@ export function ungranted(grant, settings) {
   }
   return missing;
 }
+
+// What the operator's grants refuse in a repo's settings, checked as a run checks them before
+// it starts: { error } when the grants file has errors, else { grant, hosts, missing, mounts }
+// (refusedRepoHosts(), ungranted(), resolveMounts()). Shared by the run's preflight and the
+// dashboard's repo list, so the list can't call a repo configured when no run starts there.
+// `load`: the parsed grants file (throws when it has errors); `fs`: realpath and stat.
+export function grantCheck(
+  config,
+  repo,
+  settings,
+  { load = () => loadGrants(config), fs = {} } = {},
+) {
+  let grant;
+  try {
+    grant = grantFor(load(), config, repo);
+  } catch (error) {
+    return { error };
+  }
+  return {
+    error: null,
+    grant,
+    hosts: refusedRepoHosts(config, grant, settings),
+    missing: ungranted(grant, settings),
+    mounts: resolveMounts(settings.mounts, grant, { caches: settings.caches, ...fs }),
+  };
+}
+
+// Whether grantCheck() found anything that stops every run.
+export const refusedByGrants = (check) =>
+  !!check.error || check.hosts.length + check.missing.length + check.mounts.refused.length > 0;
 
 function within(path, root) {
   return path === root || path.startsWith(root === "/" ? "/" : `${root}/`);

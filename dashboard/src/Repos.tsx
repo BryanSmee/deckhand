@@ -127,7 +127,7 @@ export function Repos({ list, onBack, open = null, onOpen = () => {} }: Props) {
                     <span class={styles.note}>Issues are disabled: can't be onboarded</span>
                   ))}
                 {r.status === "invalid" && (
-                  <span class={styles.note}>No run starts: open it to see the errors</span>
+                  <span class={styles.note}>No run starts: open it to see why</span>
                 )}
                 {r.status === "unknown" && (
                   <span class={styles.note}>GitHub didn't answer: see the listener's logs</span>
