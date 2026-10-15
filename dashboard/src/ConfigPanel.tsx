@@ -233,6 +233,7 @@ function GrantTable({ grant }: { grant: Grant }) {
     ["allow_dockerfile", String(grant.allowDockerfile)],
     ["allow_branch_docker_images", String(grant.allowBranchDockerImages)],
     ["allow_preview", String(grant.allowPreview)],
+    ["allow_docker", String(grant.allowDocker)],
     ["hosts", grant.hosts.join(", ") || "none"],
     [
       "mounts",

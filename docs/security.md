@@ -288,6 +288,9 @@ allow_dockerfile: true
 # Runs on its pull requests build the Dockerfile of the pull request's branch (never a
 # fork's) rather than the default branch's. Needs allow_dockerfile too.
 allow_branch_docker_images: true
+# Its work runs get a container engine next to their sandbox (see Container engine below),
+# when its .deckhand.yaml asks with `docker` and SANDBOX_ENGINE is set. Per repository only.
+allow_docker: true
 # Its own limits; missing ones keep default.yaml's, else SANDBOX_CPUS, SANDBOX_MEMORY,
 # SANDBOX_PIDS.
 limits: { cpus: 4, memory: 8g, pids: 4096 }
@@ -298,7 +301,7 @@ mounts:
   - /srv/datasets
 ```
 
-`default.yaml` takes the same keys but `mounts`, for every repository:
+`default.yaml` takes the same keys but `mounts` and `allow_docker`, for every repository:
 
 ```yaml
 # default.yaml
@@ -311,8 +314,9 @@ hosts: [pypi.org]
 limits: { memory: 8g }
 ```
 
-`mounts` in `default.yaml` is an error: a root for every repository is too broad to grant by
-accident, so roots are granted one repository at a time.
+`mounts` and `allow_docker` in `default.yaml` are errors: a root or a container engine for
+every repository is too broad to grant by accident, so they are granted one repository at a
+time.
 
 **Errors stop runs, file by file.** A repository's file with errors grants that repository
 nothing: its runs stop, with a reply naming the file (the details are in the listener's logs,
@@ -457,15 +461,53 @@ that hands a new cache volume to uid 1000 keeps only `CHOWN`, without network.
 
 The Docker socket stays in the listener (and in preview hooks, which a repo's maintainers
 configure and only run with `allow_preview` in its grants file, see
-[Per-repo config](repo-config.md#preview-hook)). No sandbox gets it. Image builds only run
-for repositories granted `allow_dockerfile`.
+[Per-repo config](repo-config.md#preview-hook)). No sandbox gets it, nor does a container
+engine. Image builds only run for repositories granted `allow_dockerfile`.
 
 **Optional: a socket proxy.** The listener only uses the docker CLI, so it can talk to a
 socket proxy (for example `tecnativa/docker-socket-proxy`) through `DOCKER_HOST` instead of
 the socket itself. It needs: `CONTAINERS`, `IMAGES`, `BUILD`, `VOLUMES`, `NETWORKS`, `POST`
 and `DELETE` (`docker run`, `ps`, `logs`, `inspect`, `wait`, `rm`, `cp`, `build`, `image ls/rm`,
-`volume create/inspect/rm`, `network create/inspect/connect/disconnect/ls/rm`). Preview hooks still need the real socket
+`volume create/inspect/ls/rm`, `network create/inspect/connect/disconnect/ls/rm`, and `info`
+with a container engine). Preview hooks still need the real socket
 (`DOCKER_SOCKET`): leave `preview` out of your repos' configs if you go this way.
+
+## Container engine
+
+A run whose repository is granted `allow_docker` (its own grants file only), whose
+`.deckhand.yaml` asks for `docker`, and for which the operator set `SANDBOX_ENGINE`, gets a
+second container next to its sandbox: an engine serving Docker's API
+([Setup](setup.md#container-engine)). The sandbox keeps everything above (uid 1000, no
+capabilities, `no-new-privileges`, its limits); whatever an engine needs relaxed is relaxed
+in the engine only:
+
+- **Never `--privileged`, never the host's Docker socket.** What the agent builds and runs
+  stays in the engine's own storage: a volume of the run's own, removed with the run, or the
+  repository's cache volume when its config keeps one (`docker: { cache: true }`), which only
+  that repository's runs mount, one at a time.
+- **Sysbox** (`sysbox`): `dockerd` under the `sysbox-runc` runtime, with Docker's default
+  capabilities. Root in the engine is an unprivileged range of user ids on the host (a user
+  namespace), and Sysbox virtualises what `dockerd` needs (`/proc`, `/sys`, nested cgroups)
+  without relaxing seccomp or AppArmor.
+- **Podman** (`podman`): rootless Podman as the image's `podman` user, with Docker's default
+  capabilities, seccomp and AppArmor unconfined, SELinux labels off, `/dev/fuse` and
+  `/dev/net/tun`: what user namespaces, fuse-overlayfs and its network need. See
+  [Not covered](#not-covered).
+- **Its limits** are the repository's (`limits` in its grants, else `SANDBOX_*`), on top of
+  the sandbox's: a run can use twice its limits, half in each container.
+- **Its network** is the run's: internal, with the sandbox, the listener and the proxy. Its
+  address counts as the sandbox's for the egress proxy, so its pulls, its builds' steps and
+  its containers reach only the run's hosts, through the proxy (by address: its containers
+  can't resolve names on the run's network). Its containers have no other route out.
+- **Its API** (`tcp://engine:2375`) has no TLS and no authentication: only the run's own
+  network reaches it, and whatever can reach it (the sandbox, the containers it started) is
+  the run's own code anyway.
+- **Who gets one**: work runs only. Light runs (brainstorms, inbox entries, discussions,
+  light modes) never do, and neither does a run with a comment from a fork's pull request,
+  whatever its grant: a fork's code never runs in an engine.
+- **Clean-up**: the engine and its run's volume carry the `deckhand.engine` label (not
+  `deckhand.run`: an engine is never taken for a sandbox). They go with the run, and the
+  listener's check every minute removes those whose run is gone, after a restart too.
 
 ## Network
 
@@ -476,8 +518,8 @@ sandbox ──(its run's network, internal: no route out)──▶ egress proxy 
 
 - Each run has a **network of its own**, named after the run and labelled with the
   deployment's `NAME_PREFIX`: the listener creates it before the sandbox and removes it with
-  the sandbox. Only three containers are on it: the sandbox, the listener and the egress
-  proxy, which the listener joins to it under the names sandboxes call them by (the host
+  the sandbox. Only three containers are on it (four with a
+  [container engine](#container-engine)): the sandbox, the listener and the egress proxy, which the listener joins to it under the names sandboxes call them by (the host
   names of `BROKER_URL` and `EGRESS_PROXY`). Sandboxes can't reach each other, nor what
   another run's setup started (a dev server, a database).
 - That network is **internal**: Docker gives it no route out. The listener creates it with
@@ -581,6 +623,14 @@ listener's logs (`Egress: refused <host> for <repo>#<n>`).
 
 ### Not covered
 
+- **A Podman engine** exposes much more of the host's kernel than a sandbox does: seccomp
+  and AppArmor are off, so every system call (`keyctl`, `bpf` where unprivileged use is
+  allowed, `userfaultfd`…) and mount is open to code running in it, as are `/dev/fuse` and
+  `/dev/net/tun`. A kernel bug reachable that way is a way out of the container. Prefer
+  Sysbox, and grant `allow_docker` only to repositories whose default branch you trust.
+- **An engine's containers** run what the run builds, with the run's hosts: a repository's
+  Dockerfile pulling from a host the run may reach can bring anything in, as its setup
+  command can.
 - **Image builds** (a repo's `dockerfile`, with `allow_dockerfile`) and the **Claude Code
   install** run with normal network access: they run on the host's Docker, outside the
   sandboxes' networks. Builds run the repo's Dockerfile from its default branch (or its pull

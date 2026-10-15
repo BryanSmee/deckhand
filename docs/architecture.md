@@ -109,8 +109,9 @@ Reactions on the triggering comment follow its run: 👀 when it is received, th
 - **Per-repo config**: each repo may bring a `.deckhand.yaml` on its default branch: its own
   trigger word, models, parallel cap and users (only narrowing the operator's), a setup
   command and extra instructions for the sandbox, a Dockerfile `FROM` the base image, cache
-  volumes, and a preview hook run on `pull_request` and `workflow_run` deliveries (the
-  Dockerfile and the hook only with the operator's grant, `grants.mjs`). A config with
+  volumes, a container engine for its work runs, and a preview hook run on `pull_request`
+  and `workflow_run` deliveries (the Dockerfile, the engine and the hook only with the
+  operator's grant, `grants.mjs`). A config with
   errors stops runs, and the reply says why.
 - **Isolation**: sandboxes run with no capabilities, `no-new-privileges` and CPU, memory and
   pids limits, each on an internal network of its own (created with the run, checked, and
@@ -118,6 +119,12 @@ Reactions on the triggering comment follow its run: 👀 when it is received, th
   its only way out: the proxy asks the broker's port, for each connection, whether the
   sandbox at that address may reach that host. Sandboxes can't reach each other. Host mounts only happen under roots the
   operator grants the repo (`GRANTS_DIR`, one file per repo).
+- **Container engine**: a work run of a repo granted `allow_docker` (with `docker` in its
+  config and the operator's `SANDBOX_ENGINE`) gets a second container on its network,
+  `engine` (`runner/engine.mjs`: dockerd under Sysbox, or rootless Podman), started before
+  the sandbox and removed with it; the sandbox's `docker` CLI talks to it (`DOCKER_HOST`),
+  and its address counts as the sandbox's for the egress proxy. Never for light runs or a
+  fork's pull request.
 - **Who may run**: only comments from `ALLOWED_USERS`, on repos where the App is installed
   (narrowed by `ALLOWED_REPOS` if set), are acted on: the sandbox runs without permission
   prompts and can push.
@@ -178,7 +185,7 @@ sandboxes by their labels, follows their output from where the previous one stop
 posts each reply once. A recreated container isn't on the networks the old one was joined
 to: the new listener joins itself and the egress proxy to the running sandboxes' networks
 first (`runner.relink()`), and again every minute, for a proxy recreated on its own; the
-networks of runs that are gone are removed then. Queued comments whose author or repository is no longer allowed are
+networks, container engines and engine volumes of runs that are gone are removed then. Queued comments whose author or repository is no longer allowed are
 dropped then; each run checks its comments' authors against the repository's `users` again
 when it begins.
 
@@ -248,7 +255,7 @@ which starts runs.
 | `pr-ready.mjs`                                                    | The sandboxes' pull requests marked ready for review or back to draft (`gh pr ready`).             |
 | `anthropic.mjs`, `secrets.mjs`                                    | The sandboxes' Claude API calls, with the operator's credential; secrets redacted from replies.    |
 | `setup.mjs`, `auth.mjs`                                           | `/setup` (creating the App) and signing in with GitHub.                                            |
-| `images.mjs`, `checkout.mjs`, `runner/`                           | Repo images, the agent's install, caches; checkouts; the Docker runner.                            |
+| `images.mjs`, `checkout.mjs`, `runner/`                           | Repo images, the agent's install, caches; checkouts; the Docker runner and container engines.      |
 | `onboarding.mjs`, `previews.mjs`                                  | Onboarding issues; preview hooks.                                                                  |
 | `conflicts.mjs`                                                   | The conflict watcher: open task pull requests in conflict get a rebase run (`conflicts.json`).     |
 | `waits.mjs`                                                       | Comments waiting for other issues to be done (`/after`, `waits.json`).                             |

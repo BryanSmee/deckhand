@@ -11,7 +11,7 @@
 //   close(run)           no more messages: the agent exits once it has answered
 //   closed(run)          whether close() was called, for a listener that restarts
 //   wait(name)           until it exits
-//   remove(name, run)    the sandbox, its network and its inbox
+//   remove(name, run)    the sandbox, its engine, its network and its inbox
 //   hasSession(name, agent)  whether its issue has a session of that agent already (a
 //                        previous run)
 //   address(name)        its addresses on its network
@@ -21,7 +21,9 @@
 //
 // Each run has a network of its own, internal (no route out), named after the run: sandboxes
 // can't reach each other. The listener (its broker) and the egress proxy join each one, under
-// the host names sandboxes know them by (BROKER_URL, EGRESS_PROXY).
+// the host names sandboxes know them by (BROKER_URL, EGRESS_PROXY). A run granted a container
+// engine (engine.mjs) has it there too, as `engine`: labelled deckhand.engine rather than
+// deckhand.run, so it is never taken for a sandbox, and removed with its run.
 //
 // Messages go through a file rather than the container's stdin: a pipe dies with the
 // listener, a file in a volume doesn't. Each run has a folder in the runs volume, mounted
@@ -33,6 +35,14 @@ import { appendFileSync, chmodSync, mkdirSync, readFileSync, rmSync, writeFileSy
 import { hostname } from "node:os";
 import { join } from "node:path";
 import { agentFor } from "../agents/index.mjs";
+import {
+  ENGINE_HOST,
+  engineArgs,
+  engineBackend,
+  engineEnv,
+  engineName,
+  engineVolume,
+} from "./engine.mjs";
 
 // The inbox's last line once the listener is done with it.
 export const CLOSE = JSON.stringify({ type: "deckhand", event: "close" });
@@ -62,10 +72,12 @@ export function createDockerRunner({
   // Runs whose network exists before their sandbox does: relink() leaves them alone.
   const starting = new Set();
 
-  // `spec`: { run, name, image, labels, env, args }. `env` values reach the container by
-  // name only (`-e NAME`), so they never show in `ps`; `args`: Docker's own options
-  // (hardening, limits, volumes).
-  async function start({ run, name, image, labels = {}, env: values = {}, args = [] }) {
+  // `spec`: { run, name, image, labels, env, args, engine }. `env` values reach the container
+  // by name only (`-e NAME`), so they never show in `ps`; `args`: Docker's own options
+  // (hardening, limits, volumes); `engine`: { limits, cache } for a run granted a container
+  // engine, `cache` the base name of the repo's cache volume when it keeps one. → { engine:
+  // { backend, volume, cached } } when it has one.
+  async function start({ run, name, image, labels = {}, env: values = {}, args = [], engine }) {
     // Unset values stay unset in the sandbox, as with `-e NAME` and no NAME.
     const env = Object.fromEntries(Object.entries(values).filter(([, v]) => v !== undefined));
     mkdirSync(join(inboxDir, run), { recursive: true });
@@ -77,8 +89,12 @@ export function createDockerRunner({
       ...labels,
     };
     starting.add(run);
+    let started = null;
     try {
       await createNetwork(run);
+      if (engine) started = await startEngine(run, name, labels, engine);
+      // Not secrets: where the engine is, as values.
+      const engineVars = started ? engineEnv(started.backend) : {};
       const { code, err } = await docker(
         [
           "run",
@@ -88,6 +104,7 @@ export function createDockerRunner({
           name,
           ...Object.entries(all).flatMap(([k, v]) => ["--label", `${k}=${v}`]),
           ...Object.keys(env).flatMap((k) => ["-e", k]),
+          ...Object.entries(engineVars).flatMap(([k, v]) => ["-e", `${k}=${v}`]),
           "-e",
           `TASK_INBOX=${INBOX_DIR}/${INBOX}`,
           "--mount",
@@ -101,10 +118,109 @@ export function createDockerRunner({
       );
       if (code !== 0) throw new Error(`the sandbox didn't start: ${err || `docker exit ${code}`}`);
     } catch (error) {
+      if (engine) await removeEngine(name, run);
       await removeNetwork(run);
       throw error;
     } finally {
       starting.delete(run);
+    }
+    return { engine: started };
+  }
+
+  // Which engine this host runs (engine.mjs engineBackend()), asked once; again after a
+  // failure (Sysbox installed meanwhile, say).
+  let backend = null;
+  function backendOf() {
+    backend ??= (async () => {
+      if (config.engine === "podman") return "podman";
+      const { code, out, err } = await docker(["info", "--format", "{{json .Runtimes}}"]);
+      if (code !== 0) throw new Error(`docker info: ${err || `exit ${code}`}`);
+      let runtimes = {};
+      try {
+        runtimes = JSON.parse(out || "{}") ?? {};
+      } catch {
+        // Unreadable: as if it had none.
+      }
+      return engineBackend(config.engine, Object.keys(runtimes));
+    })();
+    backend.catch(() => (backend = null));
+    return backend;
+  }
+
+  // Cache volumes in use, by the run whose engine has them: an engine locks its storage, so a
+  // second run of the repo meanwhile gets a volume of its own. `docker ps` covers engines a
+  // previous listener started.
+  const caches = new Map();
+
+  // The run's engine, on its network before its sandbox starts, so it is there for the
+  // repo's setup. Its storage: the repo's cache volume (one per backend: their layouts
+  // differ) when it keeps one and no other engine has it, else the run's own volume.
+  async function startEngine(run, name, labels, { limits, cache }) {
+    const kind = await backendOf();
+    const shared = cache ? `${cache}-${kind}` : null;
+    let cached = false;
+    if (shared && ![...caches.values()].includes(shared)) {
+      caches.set(run, shared);
+      cached = !(await volumeUsed(shared));
+      if (!cached) caches.delete(run);
+    }
+    const volume = cached ? shared : engineVolume(run);
+    const owner = { "deckhand.owner": config.prefix };
+    // One left by a run that never got its sandbox: a task has one run at a time.
+    await docker(["rm", "--force", "--volumes", engineName(name)]);
+    await createVolume(volume, cached ? owner : { ...owner, "deckhand.engine": run });
+    const { code, err } = await docker([
+      "run",
+      "--detach",
+      "--name",
+      engineName(name),
+      ...Object.entries({ ...owner, "deckhand.engine": run, ...labels }).flatMap(([k, v]) => [
+        "--label",
+        `${k}=${v}`,
+      ]),
+      ...["--network", run, "--network-alias", ENGINE_HOST],
+      // Its only way out, like the sandbox's: pulls, builds and its containers go through it.
+      ...["-e", `EGRESS_PROXY=${config.egressProxy}`],
+      ...engineArgs(kind, { volume, limits }),
+      kind === "sysbox" ? config.engineImage : config.enginePodmanImage,
+    ]);
+    if (code !== 0) {
+      throw new Error(`its container engine didn't start: ${err || `docker exit ${code}`}`);
+    }
+    return { backend: kind, volume, cached };
+  }
+
+  async function volumeUsed(volume) {
+    const { code, out } = await docker([
+      "ps",
+      "--all",
+      "--filter",
+      `volume=${volume}`,
+      "--format",
+      "{{.Names}}",
+    ]);
+    return code !== 0 || out.trim() !== ""; // not knowing isn't "free"
+  }
+
+  async function createVolume(volume, labels) {
+    const { code, err } = await docker([
+      "volume",
+      "create",
+      ...Object.entries(labels).flatMap(([k, v]) => ["--label", `${k}=${v}`]),
+      volume,
+    ]);
+    if (code !== 0) throw new Error(`creating the engine's volume ${volume}: ${err || code}`);
+  }
+
+  // The engine of the sandbox `name` and its run's own volume (with its image's anonymous
+  // ones); the repo's cache volume stays. Either may be missing.
+  async function removeEngine(name, run) {
+    await docker(["rm", "--force", "--volumes", engineName(name)]);
+    if (!run) return;
+    caches.delete(run);
+    const volume = engineVolume(run);
+    if ((await docker(["volume", "inspect", volume])).code === 0) {
+      await docker(["volume", "rm", volume]);
     }
   }
 
@@ -281,6 +397,7 @@ export function createDockerRunner({
   async function remove(name, run) {
     const net = run ?? (await runOf(name));
     await docker(["rm", "--force", name]);
+    await removeEngine(name, net);
     if (net) await removeNetwork(net);
     if (run) rmSync(join(inboxDir, run), { recursive: true, force: true });
   }
@@ -301,12 +418,16 @@ export function createDockerRunner({
   }
 
   // On every network it is on: its own, or the shared one of a sandbox an older listener
-  // started.
+  // started. Its engine's count as its own: the engine's pulls and containers go out under
+  // the run's hosts.
   async function address(name) {
-    const nets = await networksOf(name);
-    if (!nets) return null;
-    const all = Object.values(nets).flatMap((n) => [n?.IPAddress, n?.GlobalIPv6Address]);
-    const found = all.filter(Boolean);
+    const found = [];
+    for (const container of [name, engineName(name)]) {
+      const nets = await networksOf(container);
+      if (!nets) continue;
+      const all = Object.values(nets).flatMap((n) => [n?.IPAddress, n?.GlobalIPv6Address]);
+      found.push(...all.filter(Boolean));
+    }
     return found.length ? found : null;
   }
 
@@ -326,19 +447,23 @@ export function createDockerRunner({
 
   // After a restart of the listener or the proxy (`docker compose up -d` recreates them
   // without the networks they were joined to), each running sandbox's networks get them
-  // back. Networks of this deployment whose run has no sandbox any more are removed.
+  // back. Networks, engines and engine volumes of this deployment whose run has no sandbox
+  // any more are removed.
   async function relink() {
-    // Networks first, then sandboxes, with the runs starting in between: a network listed
-    // here either has its sandbox listed below or belongs to a run still starting.
+    // Networks and engines first, then sandboxes, with the runs starting in between: one
+    // listed here either has its sandbox listed below or belongs to a run still starting.
+    const owned = ["--filter", `label=deckhand.owner=${config.prefix}`];
     const nets = await docker([
-      "network",
-      "ls",
-      "--filter",
-      `label=deckhand.owner=${config.prefix}`,
-      "--filter",
-      "label=deckhand.run",
-      "--format",
-      "{{.Name}}",
+      ...["network", "ls", ...owned, "--filter", "label=deckhand.run"],
+      ...["--format", "{{.Name}}"],
+    ]);
+    const engines = await docker([
+      ...["ps", "--all", ...owned, "--filter", "label=deckhand.engine"],
+      ...["--format", '{{.Names}}\t{{.Label "deckhand.engine"}}'],
+    ]);
+    const volumes = await docker([
+      ...["volume", "ls", ...owned, "--filter", "label=deckhand.engine"],
+      ...["--format", '{{.Name}}\t{{.Label "deckhand.engine"}}'],
     ]);
     const pending = new Set(starting);
     const sandboxes = await list();
@@ -357,8 +482,25 @@ export function createDockerRunner({
         }
       }
     }
-    if (nets.code !== 0) return;
     const runs = new Set(sandboxes.map((s) => s.run));
+    const gone = (result) =>
+      result.code !== 0
+        ? []
+        : result.out
+            .split("\n")
+            .filter(Boolean)
+            .map((line) => line.split("\t"))
+            .filter(([, run]) => run && !runs.has(run) && !pending.has(run));
+    for (const [engine, run] of gone(engines)) {
+      log(`Removing the container engine ${engine}: its run is gone`);
+      await docker(["rm", "--force", "--volumes", engine]);
+      caches.delete(run);
+    }
+    for (const [volume] of gone(volumes)) {
+      log(`Removing the volume ${volume}: its run is gone`);
+      await docker(["volume", "rm", volume]);
+    }
+    if (nets.code !== 0) return;
     for (const net of nets.out.split("\n").filter(Boolean)) {
       if (runs.has(net) || pending.has(net)) continue;
       log(`Removing the network ${net}: its run is gone`);

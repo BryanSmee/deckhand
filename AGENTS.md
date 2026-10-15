@@ -16,13 +16,13 @@ brainstorm sessions). The plan and its decisions: PocketBerry's PB-135 and issue
 Node 22. The listener has no dependencies; the dashboard has build-time ones (see
 Conventions).
 
-| Task            | Command                                                                                                                                                                                                                                |
-| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Tests           | `node --test`                                                                                                                                                                                                                          |
-| Dashboard       | `cd dashboard && npm ci && npm test && npm run build` (types, tests, build)                                                                                                                                                            |
-| Syntax check    | `node --check listener/server.mjs`, `bash -n sandbox/*.sh sandbox/agents/*.sh sandbox/agents/claude/install sandbox/deckhand-token sandbox/gh sandbox/git-credential-deckhand sandbox/pre-push`, `node --check sandbox/deckhand-inbox` |
-| Format          | `npx --yes prettier@3 --check .` (`--write` to fix)                                                                                                                                                                                    |
-| Dashboard (dev) | `cd dashboard && npm run dev` (proxies the API to a listener on `:8080`)                                                                                                                                                               |
+| Task            | Command                                                                                                                                                                                                                                                     |
+| --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Tests           | `node --test`                                                                                                                                                                                                                                               |
+| Dashboard       | `cd dashboard && npm ci && npm test && npm run build` (types, tests, build)                                                                                                                                                                                 |
+| Syntax check    | `node --check listener/server.mjs`, `bash -n sandbox/*.sh sandbox/agents/*.sh sandbox/agents/claude/install sandbox/deckhand-token sandbox/gh sandbox/git-credential-deckhand sandbox/pre-push engine/entrypoint.sh`, `node --check sandbox/deckhand-inbox` |
+| Format          | `npx --yes prettier@3 --check .` (`--write` to fix)                                                                                                                                                                                                         |
+| Dashboard (dev) | `cd dashboard && npm run dev` (proxies the API to a listener on `:8080`)                                                                                                                                                                                    |
 
 Run the first four before pushing (the dashboard's when it changed). The sandbox you run in has **no Docker** and receives no
 webhooks: test through the injectable seams below, and say in the pull request what you
@@ -41,6 +41,7 @@ sandbox/      base image: Dockerfile, entrypoint.sh, draft-pr.sh, pre-push, git 
 prompts/      sandbox.md (generic rules), idea.md, bug.md, discussion.md, brainstorm.md,
               onboarding.md (followed by docs/repo-config.md, copied into the image)
 proxy/        egress proxy for sandboxes
+engine/       container engine sidecar images (dockerd for Sysbox, podman/ for Podman)
 compose.yaml  what an operator runs (publishes a port; no reverse-proxy labels)
 docs/         setup, per-repo config reference, security model, architecture
 ```

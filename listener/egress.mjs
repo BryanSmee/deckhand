@@ -115,8 +115,9 @@ export function egressPolicy(host, hosts, trusted) {
 
 // The proxy settings a sandbox gets. Both cases, as tools disagree (curl only reads the
 // lowercase http_proxy); NODE_USE_ENV_PROXY because Node's fetch ignores them otherwise.
-export function proxyEnv(config) {
-  const direct = new Set(["localhost", "127.0.0.1", "::1", hostOf(config.brokerUrl)]);
+// `others`: more hosts on the run's network (its container engine), reached directly.
+export function proxyEnv(config, others = []) {
+  const direct = new Set(["localhost", "127.0.0.1", "::1", hostOf(config.brokerUrl), ...others]);
   const noProxy = [...direct].join(",");
   return {
     HTTP_PROXY: config.egressProxy,

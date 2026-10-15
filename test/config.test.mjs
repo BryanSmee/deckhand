@@ -237,3 +237,18 @@ test("config.example.yaml is a valid config.yaml", () => {
   const config = loadConfig({}, parseConfigFile(text, "config.example.yaml"));
   assert.ok(config.users.length);
 });
+
+test("SANDBOX_ENGINE: none by default, sysbox, podman or auto; a typo is an error", () => {
+  assert.equal(loadConfig({ ALLOWED_USERS: "a" }).engine, null);
+  assert.equal(loadConfig({ ALLOWED_USERS: "a", SANDBOX_ENGINE: " Sysbox " }).engine, "sysbox");
+  assert.equal(loadConfig({ ALLOWED_USERS: "a", SANDBOX_ENGINE: "auto" }).engine, "auto");
+  assert.throws(
+    () => loadConfig({ ALLOWED_USERS: "a", SANDBOX_ENGINE: "docker" }),
+    /SANDBOX_ENGINE: expected sysbox, podman, auto or nothing, got docker/,
+  );
+  const defaults = loadConfig({ ALLOWED_USERS: "a" });
+  assert.equal(defaults.engineImage, "deckhand-engine");
+  assert.equal(defaults.enginePodmanImage, "deckhand-engine-podman");
+  const file = parseConfigFile("sandbox_engine: podman\n", "config.yaml");
+  assert.equal(loadConfig({ ALLOWED_USERS: "a" }, file).engine, "podman");
+});

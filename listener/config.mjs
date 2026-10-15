@@ -5,6 +5,7 @@ import { readFileSync } from "node:fs";
 import { CREDENTIALS, credentialName } from "./anthropic.mjs";
 import { hostProblem } from "./egress.mjs";
 import { MODEL_NAME } from "./events.mjs";
+import { ENGINES } from "./runner/engine.mjs";
 import { isMap, parseYaml } from "./yaml.mjs";
 
 export class ConfigError extends Error {}
@@ -74,6 +75,7 @@ export const FILE_SETTINGS = {
   SANDBOX_CPUS: "scalar",
   SANDBOX_MEMORY: "scalar",
   SANDBOX_PIDS: "scalar",
+  SANDBOX_ENGINE: "scalar",
   ONBOARDING: "boolean",
   NEEDS_INPUT_LABEL: "scalar",
   CONFLICT_CHECK_MINUTES: "scalar",
@@ -202,6 +204,11 @@ function sandboxConfig(env, { setting, label, number }, prefix, hosts) {
       {},
       (key) => label(`SANDBOX_${key.toUpperCase()}`),
     ),
+    // The container engine sidecar of runs whose repo is granted allow_docker
+    // (runner/engine.mjs), and its images; none until the operator picks one.
+    engine: engineSetting(setting("SANDBOX_ENGINE"), label("SANDBOX_ENGINE")),
+    engineImage: env.ENGINE_IMAGE || `${prefix}-engine`,
+    enginePodmanImage: env.ENGINE_PODMAN_IMAGE || `${prefix}-engine-podman`,
     // The only way out of the runs' networks (../proxy/proxy.mjs).
     egressProxy: (env.EGRESS_PROXY || "http://egress:3128").replace(/\/$/, ""),
     // The containers joined to each run's network (runner/docker.mjs): by default, the one
@@ -216,6 +223,17 @@ function sandboxConfig(env, { setting, label, number }, prefix, hosts) {
     // The host's Docker socket, as preview hooks mount it.
     dockerSocket: env.DOCKER_SOCKET || "/var/run/docker.sock",
   };
+}
+
+// SANDBOX_ENGINE: sysbox, podman, auto, or nothing (null). A typo is an error rather than
+// no engine.
+function engineSetting(value, label) {
+  const engine = String(value ?? "")
+    .trim()
+    .toLowerCase();
+  if (!engine) return null;
+  if (ENGINES.includes(engine)) return engine;
+  throw new ConfigError(`${label}: expected ${ENGINES.join(", ")} or nothing, got ${value}`);
 }
 
 // "https://openrouter.ai/api/" → "https://openrouter.ai/api", or a ConfigError: a typo would

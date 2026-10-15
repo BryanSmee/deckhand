@@ -63,6 +63,11 @@ instructions: docs/agents.md
 # operator's allow_dockerfile grant.
 dockerfile: .deckhand/Dockerfile
 
+# A container engine next to work runs' sandbox, for docker build, run and compose (see
+# below). Only with the operator's allow_docker grant. `docker: true` starts it empty.
+docker:
+  cache: true # keep its images and layers between this repo's runs
+
 # Kept between runs: one Docker volume per path, for this repo only.
 caches:
   - /home/node/.npm
@@ -106,6 +111,7 @@ conflicts:
 | `setup`                                 | none                                    | shell command run in `/workspace` before Claude, on work runs                            |
 | `instructions`                          | none                                    | Markdown file of the repo, appended to Claude's instructions                             |
 | `dockerfile`                            | none: the base image                    | Dockerfile of the repo for its runs' image; needs the operator's `allow_dockerfile`      |
+| `docker`                                | none                                    | a container engine for work runs (`true`, or `cache: true`); needs `allow_docker`        |
 | `caches`                                | none                                    | absolute paths in the sandbox kept in a volume per repo and path                         |
 | `hosts`                                 | none                                    | extra hosts the sandbox may reach (`name`, `"*.domain"`); only if the operator allows it |
 | `mounts`                                | none                                    | host paths requested (`- path: /nfs/work/api`, `read_only`); only under granted roots    |
@@ -207,6 +213,37 @@ too: each new commit builds again (Docker's layer cache helps), and the default 
 runs on an image a branch built. Never for a pull request from a fork: those use the default
 branch's image. Builds run on the host's Docker, so operators only grant this to
 repositories whose branches they trust like the default branch.
+
+## Container engine
+
+A sandbox has no Docker of its own, so a change to a Dockerfile or a compose file would ship
+untested. With `docker: true`, each work run gets a container engine next to its sandbox
+(set up by the operator: [Setup](setup.md#container-engine)), and the sandbox the `docker`
+CLI with buildx and compose, pointed at it (`DOCKER_HOST=tcp://engine:2375`):
+
+```sh
+docker build -t app .
+docker run -d -p 8080:8080 app
+curl engine:8080/health    # published ports answer on the engine, not localhost
+docker compose up -d
+```
+
+- **The grant**: only when the operator sets `allow_docker: true` in this repository's file
+  of the grants folder; `docker` without it is an error that stops the runs, like
+  `dockerfile`. With the grant but no engine set up (`SANDBOX_ENGINE`), runs start without
+  one, and their log says so.
+- **The network**: the engine pulls and its containers connect through the egress proxy,
+  under the run's hosts. Add the registries you pull from to `hosts`: Docker Hub is
+  `registry-1.docker.io`, `auth.docker.io` and `production.cloudflare.docker.com`; GHCR is
+  `ghcr.io` (its blobs come from `*.githubusercontent.com`, always allowed).
+- **Its storage** starts empty and goes with the run. `docker: { cache: true }` keeps it in
+  a volume per repository instead, so images and layers are pulled and built once; a second
+  run of the repository at the same time gets fresh storage (an engine locks its own).
+- **Its limits** are the repository's, as the sandbox's.
+- **Not for** brainstorms, inbox entries, discussions or light modes, nor for comments on a
+  pull request from a fork.
+- **Podman**: when the operator runs Podman rather than Sysbox, `docker build` uses the
+  classic builder (`DOCKER_BUILDKIT=0`), and some buildx and compose features differ.
 
 ## Caches
 

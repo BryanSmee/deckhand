@@ -110,3 +110,15 @@ refused (a package registry, an API), finish what you can without it and say in 
 message which host is missing, so the maintainer can add it to `hosts` in `.deckhand.yaml`
 (when the operator lets this repository add hosts) or ask the operator to grant it; stop and
 ask when nothing useful can be done without it.
+
+## Containers
+
+Only when `DOCKER_HOST` is set: this run has a container engine next to the sandbox, and
+`docker` (with `buildx` and `compose`) talks to it. Build the images a change touches
+(Dockerfiles, compose files, and what they `COPY`) and start them long enough to see them
+come up: their logs, a health check, or `curl engine:<port>` for a published port (they
+answer on `engine`, not `localhost`). An image that builds but doesn't start is a failed
+check. Pulls go through the egress proxy like the rest: a registry that isn't allowed fails
+with `403`, so say which one is missing. Stop what you started before you finish. Without
+`DOCKER_HOST` there is no Docker here: when a change touches a Dockerfile, say in the pull
+request that it wasn't built.

@@ -1,6 +1,6 @@
 # Goes in .github/workflows/release-workflow.yml (Deckhand's own App can't push workflows: move it
-# by hand). Publishes the listener, egress proxy and base sandbox images to GHCR as
-# ghcr.io/<owner>/deckhand-{listener,egress,sandbox}:
+# by hand). Publishes the listener, egress proxy, base sandbox and container engine images to
+# GHCR as ghcr.io/<owner>/deckhand-{listener,egress,sandbox,engine,engine-podman}:
 # - each tag (v1.2.3): tagged 1.2.3, 1.2 and latest, for amd64 and arm64 (a pre-release such
 #   as v1.3.0-rc.1: only its own tag);
 # - each push to main: tagged edge, amd64 only, showing edge-<short sha> as its version. It
@@ -37,6 +37,10 @@ jobs:
             dockerfile: proxy/Dockerfile
           - image: deckhand-sandbox
             dockerfile: sandbox/Dockerfile
+          - image: deckhand-engine
+            dockerfile: engine/Dockerfile
+          - image: deckhand-engine-podman
+            dockerfile: engine/podman/Dockerfile
     steps:
       - uses: actions/checkout@v4
       # Only releases build arm64, through QEMU: edge skips most of the compute.

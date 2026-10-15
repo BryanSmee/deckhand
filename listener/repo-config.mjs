@@ -1,7 +1,7 @@
 // Per-repo settings: a repo's .deckhand.yaml, always read from its default branch so a pull
 // request can't change its own permissions. It can only narrow the operator's settings
 // (users, parallel runs), requests what the operator must grant (hosts, mounts, preview hook,
-// Dockerfile: grants.mjs), and brings what is the project's own: trigger word, models, setup
+// Dockerfile, container engine: grants.mjs), and brings what is the project's own: trigger word, models, setup
 // command, extra instructions, its own modes, caches. Format and example:
 // ../docs/repo-config.md.
 import { createHash } from "node:crypto";
@@ -40,6 +40,8 @@ export function defaultSettings(config) {
     setup: null,
     instructions: null,
     dockerfile: null,
+    // { cache } when its runs get a container engine (runner/engine.mjs), with its grant.
+    docker: null,
     caches: [],
     hosts: [],
     mounts: [],
@@ -213,6 +215,27 @@ function parsePreview(value, { settings, fail, warn }) {
   if (command) settings.preview = { command, image, timeoutMinutes: minutes };
 }
 
+// `docker: true`, or `docker: { cache: true }` to keep the engine's images and layers
+// between the repo's runs. Every key is checked, like conflicts'.
+function parseDocker(value, { key, settings, fail }) {
+  if (typeof value === "boolean") {
+    settings.docker = value ? { cache: false } : null;
+    return;
+  }
+  if (!isMap(value)) return fail(key, "expected true, false or { cache: true }");
+  let ok = true;
+  for (const [other, v] of Object.entries(value)) {
+    if (other !== "cache") {
+      ok = false;
+      fail(`docker.${other}`, "unknown key (expected cache)");
+    } else if (typeof v !== "boolean" && v !== null) {
+      ok = false;
+      fail("docker.cache", "expected true or false");
+    }
+  }
+  if (ok) settings.docker = { cache: value.cache === true };
+}
+
 // Opt-in: how often the conflict watcher (conflicts.mjs) looks at the repo's open pull
 // requests. Never more often than the operator's CONFLICT_CHECK_MINUTES, and not at all when
 // that is 0. Every key is checked: a mistyped one would leave the watcher off unnoticed.
@@ -275,6 +298,7 @@ const KEYS = {
   },
   preview: parsePreview,
   conflicts: parseConflicts,
+  docker: parseDocker,
 };
 
 // One of `modes:`, into settings.modes. Every key is checked: a mistyped one would otherwise
@@ -389,6 +413,15 @@ export function cacheVolume(config, repo, path) {
   return (
     `${config.prefix}-cache-${slug(repo)}-${slug(path)}`.slice(0, 100) +
     `-${shortHash(repo.toLowerCase(), path)}`
+  );
+}
+
+// The base name of the repo's engine cache (its `docker.cache`); the runner adds the
+// engine's backend, whose layouts differ.
+export function engineCacheVolume(config, repo) {
+  return (
+    `${config.prefix}-engine-cache-${slug(repo)}`.slice(0, 100) +
+    `-${shortHash(repo.toLowerCase())}`
   );
 }
 

@@ -15,7 +15,8 @@
 
 FROM node:22-bookworm
 
-# gh from GitHub's apt repository.
+# gh from GitHub's apt repository. The docker CLI with buildx and compose from Docker's, no
+# daemon: a run granted a container engine talks to it (DOCKER_HOST, set by the listener).
 RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends ca-certificates curl gnupg; \
@@ -24,8 +25,12 @@ RUN set -eux; \
       -o /etc/apt/keyrings/githubcli.gpg; \
     echo "deb [signed-by=/etc/apt/keyrings/githubcli.gpg] https://cli.github.com/packages stable main" \
       > /etc/apt/sources.list.d/github-cli.list; \
+    curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc; \
+    echo "deb [signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian bookworm stable" \
+      > /etc/apt/sources.list.d/docker.list; \
     apt-get update; \
-    apt-get install -y --no-install-recommends gh git ripgrep jq less procps unzip; \
+    apt-get install -y --no-install-recommends gh git ripgrep jq less procps unzip \
+      docker-ce-cli docker-buildx-plugin docker-compose-plugin; \
     rm -rf /var/lib/apt/lists/*
 
 # A headless Chromium for checking pages: the Playwright MCP server gives Claude browser
