@@ -104,6 +104,55 @@ test("a new base image or a changed Dockerfile means a new tag", () => {
   assert.notEqual(tag, imageTag(config, "org/a", "sha256:2", "Dockerfile", "blob1"));
   assert.notEqual(tag, imageTag(config, "org/a", "sha256:1", "Dockerfile", "blob2"));
   assert.notEqual(tag, imageTag(config, "org/b", "sha256:1", "Dockerfile", "blob1"));
+  const branch = imageTag(config, "org/a", "sha256:1", "Dockerfile", "blob1", "abc");
+  assert.notEqual(branch, tag);
+  assert.notEqual(branch, imageTag(config, "org/a", "sha256:1", "Dockerfile", "blob1", "def"));
+});
+
+test("a branch build never takes the default branch's tag", async () => {
+  const fake = fakeDocker();
+  const checkouts = [];
+  const images = createImages({
+    config,
+    docker: fake.docker,
+    // The same Dockerfile blob at both refs: only the build context may differ.
+    readFile: async () => ({ sha: "same", text: "" }),
+    checkout: async (repo, ref) => {
+      checkouts.push(ref);
+      return mkdtempSync(join(tmpdir(), "deckhand-ctx-"));
+    },
+  });
+  const ask = (ref, branch) =>
+    images.imageFor({ repo: "org/a", ref, branch, dockerfile: "Dockerfile" });
+  const branch = await ask("abc", true);
+  assert.match(branch, /^deckhand-repo-org-a:branch-[0-9a-f]{16}$/);
+  // Built from the branch first, the default branch still builds its own.
+  const main = await ask("main", false);
+  assert.notEqual(main, branch);
+  assert.doesNotMatch(main, /:branch-/);
+  assert.deepEqual(checkouts, ["abc", "main"]);
+  // Each reused for its own ref; another commit of the branch builds again.
+  assert.equal(await ask("main", false), main);
+  assert.equal(await ask("abc", true), branch);
+  assert.notEqual(await ask("def", true), branch);
+  assert.equal(fake.calls.filter((c) => c.startsWith("build")).length, 3);
+});
+
+test("pruning keeps the default branch's tag through branch builds", async () => {
+  const branches = Array.from({ length: 4 }, (_, k) => `deckhand-repo-org-a:branch-old${k}`);
+  const { images, tags: existing } = setup({
+    images: new Set(["deckhand-repo-org-a:main1", ...branches]),
+  });
+  const tag = await images.imageFor({
+    repo: "org/a",
+    ref: "abc",
+    branch: true,
+    dockerfile: "Dockerfile",
+  });
+  assert.equal(existing.size, KEEP_TAGS);
+  assert.ok(existing.has(tag));
+  assert.ok(existing.has("deckhand-repo-org-a:main1"));
+  assert.ok(existing.has("deckhand-repo-org-a:branch-old3"));
 });
 
 test("old tags are pruned, the most recent kept", async () => {

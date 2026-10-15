@@ -303,6 +303,7 @@ export function createRuns(ctx) {
       const image = await ctx.images.imageFor({
         repo: task.repo,
         ref: source.ref,
+        branch: source.branch,
         dockerfile: settings.dockerfile,
         onBuild: (tag) => {
           record.phase = "building image";
@@ -353,6 +354,10 @@ export function createRuns(ctx) {
     const args = [
       "--network",
       config.network,
+      // The base image's `node`, whatever a repo or branch image ends with: a sandbox as root
+      // would own root-owned files in granted mounts (grants.mjs) and leave root-owned files
+      // in them and in cache volumes. An image that needs root at runtime fails loudly.
+      ...["--user", "1000:1000"],
       ...hardeningArgs(limits),
       // Its own folder of the screenshots volume only: no run sees another's.
       "--mount",
