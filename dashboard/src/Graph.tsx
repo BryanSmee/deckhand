@@ -18,6 +18,9 @@ interface Props {
   repo: string | null;
   // A phone: top to bottom.
   vertical: boolean;
+  // Closed issues (implemented, not planned) are drawn too.
+  showClosed: boolean;
+  onShowClosed: (show: boolean) => void;
 }
 
 // The page's width, for the grid of issues without arrows.
@@ -60,7 +63,7 @@ interface NodeDrag {
 // Past this many pixels a press on a waiting node is a drag, not a click.
 const DRAG_PX = 6;
 
-export function Graph({ state, repo, vertical }: Props) {
+export function Graph({ state, repo, vertical, showClosed, onShowClosed }: Props) {
   const [ref, width] = useWidth();
   const work = useWorkArea(repo);
   const [mode, setMode] = useState("work");
@@ -77,7 +80,9 @@ export function Graph({ state, repo, vertical }: Props) {
     setNotice(null);
   }, [repo]);
   const tasks = (state?.tasks ?? []).filter((t) => !repo || t.repo === repo);
-  const { nodes, edges } = graphOf(tasks, state?.edges ?? [], state?.blockers ?? []);
+  const { nodes, edges, hidden } = graphOf(tasks, state?.edges ?? [], state?.blockers ?? [], {
+    showClosed,
+  });
   const shape = layout(
     nodes.map((n) => n.key),
     edges,
@@ -198,6 +203,13 @@ export function Graph({ state, repo, vertical }: Props) {
   );
   const drawing = !state ? (
     <p class={styles.empty}>Loading…</p>
+  ) : !nodes.length && hidden ? (
+    <p class={styles.empty}>
+      Nothing open here.{" "}
+      <button type="button" class={styles.show} onClick={() => onShowClosed(true)}>
+        Show closed issues
+      </button>
+    </p>
   ) : !nodes.length ? (
     <p class={styles.empty}>No issues here yet.{repo ? " Drop one here to start it." : ""}</p>
   ) : (
@@ -306,6 +318,16 @@ export function Graph({ state, repo, vertical }: Props) {
         <li title="It starts once the issue the arrow comes from is done">
           <span class={styles.arrowKey} aria-hidden="true" />
           waits for
+        </li>
+        <li class={styles.toggle}>
+          <label title="Issues closed as completed or not planned, and merged pull requests">
+            <input
+              type="checkbox"
+              checked={showClosed}
+              onChange={(e) => onShowClosed(e.currentTarget.checked)}
+            />
+            Show closed
+          </label>
         </li>
       </ul>
       {repo ? (

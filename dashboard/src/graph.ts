@@ -27,6 +27,7 @@ export interface GraphNode {
   look: Look;
   // What its aria-label and tooltip say about its state.
   status: string;
+  closed: Task["closed"];
   // The board's task, which a click opens; null for a blocker not on the board.
   task: Task | null;
 }
@@ -56,15 +57,28 @@ function statusOf(look: Look, t: { state?: Task["state"] | null; closed: Task["c
   return t.state ? STATE_NAMES[t.state] : "Open";
 }
 
+// Never on the graph: inbox runs and discussions have no pull request and no "/after"; the
+// issues an inbox files show once someone works on them.
+const NOT_WORK: Task["kind"][] = ["idea", "bug", "discussion"];
+
+// Closed: implemented, or closed as not planned. A run on it isn't.
+function isClosed(n: GraphNode): boolean {
+  if (n.look === "run") return false;
+  return n.look === "done" || n.closed === "not_planned";
+}
+
 // The nodes of `tasks` (one tab's, or all) and the issues they wait for, with the arrows
-// between them.
+// between them. Closed ones are left out unless `showClosed`, or an issue waiting for one
+// still runs; `hidden` counts them. A hidden node takes its arrows with it.
 export function graphOf(
   tasks: Task[],
   edges: Edge[],
   blockers: Blocker[],
-): { nodes: GraphNode[]; edges: Edge[] } {
+  { showClosed = false }: { showClosed?: boolean } = {},
+): { nodes: GraphNode[]; edges: Edge[]; hidden: number } {
   const nodes = new Map<string, GraphNode>();
   for (const t of tasks) {
+    if (NOT_WORK.includes(t.kind)) continue;
     const look = lookOf(t);
     nodes.set(t.key, {
       key: t.key,
@@ -74,6 +88,7 @@ export function graphOf(
       title: t.title,
       look,
       status: statusOf(look, t),
+      closed: t.closed,
       task: t,
     });
   }
@@ -92,10 +107,19 @@ export function graphOf(
       title: b?.title ?? null,
       look,
       status: statusOf(look, { closed: b?.closed ?? null }),
+      closed: b?.closed ?? null,
       task: null,
     });
   }
-  return { nodes: [...nodes.values()], edges: mine };
+  if (showClosed) return { nodes: [...nodes.values()], edges: mine, hidden: 0 };
+  const runs = (key: string) => mine.some((e) => e.from === key && nodes.get(e.to)?.look === "run");
+  const shown = [...nodes.values()].filter((n) => !isClosed(n) || runs(n.key));
+  const keys = new Set(shown.map((n) => n.key));
+  return {
+    nodes: shown,
+    edges: mine.filter((e) => keys.has(e.from) && keys.has(e.to)),
+    hidden: nodes.size - shown.length,
+  };
 }
 
 // Sizes in SVG units (CSS pixels). A phone's columns are narrower: they sit side by side

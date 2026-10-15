@@ -1,7 +1,8 @@
 // The dashboard: repo tabs, the tab's tasks filtered by state, the open task and its log; the
 // graph of what waits for what; or the repositories page, where onboarding starts and each
 // one's config shows.
-// What is shown lives in the address (route.ts); the state chip is kept on this device.
+// What is shown lives in the address (route.ts); the state chip and the graph's "Show closed"
+// are kept on this device.
 import { useEffect, useState } from "preact/hooks";
 import { type RepoList, useAppState, useRepos } from "./api";
 import { Detail } from "./Detail";
@@ -87,6 +88,7 @@ export function Dashboard({ state, error, repos }: Props) {
     const saved = stored("chip");
     return CHIPS.some((c) => c.id === saved) ? (saved as ChipId) : "all";
   });
+  const [showClosed, setShowClosed] = useState(() => stored("graphClosed") === "1");
   const wide = useWide();
   const tasks = state?.tasks ?? [];
   const now = state?.now ?? Date.now();
@@ -107,6 +109,10 @@ export function Dashboard({ state, error, repos }: Props) {
   const selectTab = (repo: string | null) => {
     store("tab", repo ?? "");
     go({ repo, task: null, run: null });
+  };
+  const selectShowClosed = (show: boolean) => {
+    store("graphClosed", show ? "1" : "");
+    setShowClosed(show);
   };
   const selectChip = (next: ChipId) => {
     store("chip", next);
@@ -176,7 +182,13 @@ export function Dashboard({ state, error, repos }: Props) {
             />
           </div>
           <main class={styles.page}>
-            <Graph state={state} repo={route.repo} vertical={!wide} />
+            <Graph
+              state={state}
+              repo={route.repo}
+              vertical={!wide}
+              showClosed={showClosed}
+              onShowClosed={selectShowClosed}
+            />
           </main>
         </>
       ) : onRepos && repos ? (
