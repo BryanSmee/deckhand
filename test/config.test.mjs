@@ -140,6 +140,7 @@ test("config.yaml refuses unknown keys, wrong types and secrets, naming each", (
   refuse("broker_url: http://x", /broker_url: unknown/);
   refuse("anthropic_api_key: sk-1", /anthropic_api_key: a secret/);
   refuse("claude_code_oauth_token: t", /claude_code_oauth_token: a secret/);
+  refuse("anthropic_auth_token: sk-or-1", /anthropic_auth_token: a secret/);
   refuse("allowed_users: alice\nmax_parallel: [1]", /max_parallel: expected a value/);
   refuse("allowed_users: {a: 1}", /allowed_users: expected a list/);
   refuse("[a, b]", /config\.yaml: line 1/);
@@ -148,6 +149,38 @@ test("config.yaml refuses unknown keys, wrong types and secrets, naming each", (
     () => file("trigger: x\nfoo: 1\nanthropic_api_key: k"),
     (error) =>
       error instanceof ConfigError && /foo/.test(error.message) && /anthropic/.test(error.message),
+  );
+});
+
+test("a gateway: its address and model names from config.yaml, checked", () => {
+  const base = "allowed_users: [a]\n";
+  const config = loadConfig(
+    {},
+    file(`${base}anthropic_base_url: https://openrouter.ai/api/
+anthropic_default_opus_model: anthropic/claude-opus-4.1
+anthropic_default_haiku_model: meta-llama/llama-4:free
+sandbox_model: openai/gpt-5
+`),
+  );
+  assert.equal(config.anthropicUrl, "https://openrouter.ai/api");
+  assert.deepEqual(config.modelAliases, {
+    ANTHROPIC_DEFAULT_OPUS_MODEL: "anthropic/claude-opus-4.1",
+    ANTHROPIC_DEFAULT_HAIKU_MODEL: "meta-llama/llama-4:free",
+  });
+  assert.equal(config.model, "openai/gpt-5");
+
+  // Without them, Anthropic and Claude Code's own names.
+  const plain = loadConfig({}, file(base));
+  assert.equal(plain.anthropicUrl, "https://api.anthropic.com");
+  assert.deepEqual(plain.modelAliases, {});
+
+  assert.throws(
+    () => loadConfig({}, file(`${base}anthropic_base_url: openrouter.ai`)),
+    /config\.yaml: anthropic_base_url: expected an http\(s\) URL/,
+  );
+  assert.throws(
+    () => loadConfig({ ANTHROPIC_DEFAULT_SONNET_MODEL: "two words" }, file(base)),
+    /ANTHROPIC_DEFAULT_SONNET_MODEL: expected a model name/,
   );
 });
 

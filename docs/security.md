@@ -119,7 +119,7 @@ installation, revokes its tokens at once.
 
 ### The Claude credential
 
-Your `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY` outlives everything else a sandbox
+Your `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN` outlives everything else a sandbox
 could hold, and works for anyone: **no sandbox gets it**. Runs read text anyone may write
 (issue and discussion comments, a fork's code), and their final message is posted as is: a
 credential in the sandbox's environment could be read by Claude's tools or the repo's setup
@@ -127,12 +127,14 @@ and end up in a public comment.
 
 - A sandbox's Claude Code calls the listener instead of Anthropic (`ANTHROPIC_BASE_URL` set
   to `<broker>/anthropic`, `listener/anthropic.mjs`), with the run's secret in the variable
-  your credential would be in, so it keeps its mode (an OAuth token as
-  `Authorization: Bearer`, an API key as `x-api-key`; the API key wins when you set both,
-  as in Claude Code).
+  your credential would be in, so it keeps its mode (an OAuth token or a gateway's
+  `ANTHROPIC_AUTH_TOKEN` as `Authorization: Bearer`, an API key as `x-api-key`; when you set
+  several, `ANTHROPIC_AUTH_TOKEN` wins, then the API key, as in Claude Code).
 - The listener refuses a secret that isn't a live run's, replaces it with your credential in
   the same header and forwards the call to Anthropic (or to the listener's own
-  `ANTHROPIC_BASE_URL`), streaming the answer back.
+  `ANTHROPIC_BASE_URL`, a gateway such as OpenRouter), streaming the answer back. Only the
+  operator sets that address: a repository can't, since it would send its code and your
+  credential elsewhere. A sandbox never reaches the gateway itself, so it needs no host.
 - So a run's secret can call the API with your credential while the run lasts, and nothing
   after: what a run copied out of its sandbox can't.
 - The listener redacts your credential and the run's secret from the sandbox's output
@@ -468,8 +470,8 @@ mode.
 
 That list was checked against Claude Code 2.1.300 (the pinned version) by reading the hosts
 in its binary. With `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` (set in the image) and the
-credential in `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`) or
-`ANTHROPIC_API_KEY`, Claude Code sends its API calls to the listener (`ANTHROPIC_BASE_URL`,
+credential in `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`), `ANTHROPIC_API_KEY` or
+`ANTHROPIC_AUTH_TOKEN`, Claude Code sends its API calls to the listener (`ANTHROPIC_BASE_URL`,
 see [The Claude credential](#the-claude-credential)) and nothing else but WebFetch's domain
 check to `api.anthropic.com`:
 

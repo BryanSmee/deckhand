@@ -338,3 +338,24 @@ test("conflicts: invalid values and unknown keys are errors", () => {
   assert.match(typo.errors.join(), /conflicts.check_minute: unknown key/);
   assert.equal(typo.settings.conflicts, null);
 });
+
+test("a gateway's model names, with a slash, at the top and in a mode", () => {
+  const { settings, errors } = parseRepoConfig(
+    `model: openai/gpt-5
+brainstorm_model: "meta-llama/llama-4:free"
+modes:
+  cheap:
+    instructions: docs/cheap.md
+    model: anthropic/claude-haiku-4.5
+`,
+    config,
+  );
+  assert.deepEqual(errors, []);
+  assert.equal(settings.model, "openai/gpt-5");
+  assert.equal(settings.brainstormModel, "meta-llama/llama-4:free");
+  assert.equal(customMode(settings, "cheap").model, "anthropic/claude-haiku-4.5");
+  const bad = parseRepoConfig("model: two words\n", config);
+  assert.deepEqual(bad.errors, [
+    "model: expected a model name (opus, sonnet, claude-…, openai/gpt-…)",
+  ]);
+});

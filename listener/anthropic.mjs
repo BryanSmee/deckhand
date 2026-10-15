@@ -2,7 +2,8 @@
 // tools, the repo's setup and a fork's code could read it (and post it on a public issue).
 // A sandbox gets ANTHROPIC_BASE_URL=<broker>/anthropic and the run's secret in the variable
 // the credential would be in (sandboxEnv()), so Claude Code keeps its mode: an OAuth token
-// goes as `Authorization: Bearer`, with its beta, an API key as `x-api-key`. Here the secret
+// goes as `Authorization: Bearer`, with its beta, a gateway's token (ANTHROPIC_AUTH_TOKEN,
+// for OpenRouter say) as `Authorization: Bearer` too, an API key as `x-api-key`. Here the secret
 // is checked against the broker and swapped for the credential, in the same header, and the
 // request goes on to Anthropic; the answer streams back as it comes. The secret dies with the
 // run. Served on the broker's port, which only the sandboxes' network reaches.
@@ -10,8 +11,8 @@ import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 import { sendJson } from "./web.mjs";
 
-// Claude Code's own order: an API key wins over an OAuth token when both are set.
-export const CREDENTIALS = ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"];
+// Claude Code's own order: a bearer token (a gateway's), then an API key, then an OAuth token.
+export const CREDENTIALS = ["ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"];
 
 // The variable that holds the operator's credential, or null.
 export function credentialName(env) {

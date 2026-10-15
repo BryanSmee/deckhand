@@ -58,6 +58,14 @@ test("the credential is the one Claude Code would use: an API key before an OAut
     credentialName({ CLAUDE_CODE_OAUTH_TOKEN: "t", ANTHROPIC_API_KEY: "k" }),
     "ANTHROPIC_API_KEY",
   );
+  assert.equal(
+    credentialName({
+      CLAUDE_CODE_OAUTH_TOKEN: "t",
+      ANTHROPIC_API_KEY: "k",
+      ANTHROPIC_AUTH_TOKEN: "a",
+    }),
+    "ANTHROPIC_AUTH_TOKEN",
+  );
   assert.equal(credentialName({ ANTHROPIC_API_KEY: "" }), null);
 });
 
@@ -103,6 +111,28 @@ test("an API key run's secret is swapped for the key", async (t) => {
   await res.text();
   assert.equal(upstream.requests[0].headers["x-api-key"], "sk-ant-api03-real");
   assert.equal(upstream.requests[0].headers.authorization, undefined);
+});
+
+test("a gateway's token goes as a bearer, under the gateway's own path", async (t) => {
+  const upstream = await fakeAnthropic(t);
+  upstream.release();
+  const broker = createBroker({ app: () => null });
+  const proxy = createAnthropicProxy({
+    broker,
+    name: "ANTHROPIC_AUTH_TOKEN",
+    credential: "sk-or-v1-real",
+    upstream: `${upstream.url}/api`,
+  });
+  const server = createServer((req, res) => proxy.handle(req, res));
+  const url = await listen(server);
+  t.after(() => server.close());
+  const res = await ask(url, { authorization: `Bearer ${broker.register("org/repo")}` });
+  assert.equal(res.status, 200);
+  await res.text();
+  const [sent] = upstream.requests;
+  assert.equal(sent.url, "/api/v1/messages?beta=true");
+  assert.equal(sent.headers.authorization, "Bearer sk-or-v1-real");
+  assert.equal(sent.headers["x-api-key"], undefined);
 });
 
 test("no secret, a wrong one or a finished run's: refused, and Anthropic never asked", async (t) => {
