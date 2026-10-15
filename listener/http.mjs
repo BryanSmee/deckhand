@@ -323,7 +323,8 @@ export function createHttp(ctx, { dashboardDir }) {
   }
 
   // Sandboxes and the egress proxy only: compose.yaml doesn't publish this port. Egress
-  // answers, the token broker and the git gateway (git-gateway.mjs).
+  // answers, the token broker, the git gateway (git-gateway.mjs) and ready for review
+  // (pr-ready.mjs).
   function listenBroker() {
     const server = createServer((req, res) => {
       if (req.method === "GET" && req.url.startsWith("/egress?")) {
@@ -337,6 +338,12 @@ export function createHttp(ctx, { dashboardDir }) {
           log(`Git gateway: ${error.stack ?? error}`);
           if (!res.headersSent) res.writeHead(500).end();
           else res.destroy();
+        });
+      }
+      if (req.url.startsWith("/pr/")) {
+        return ctx.prReady.handle(req, res).catch((error) => {
+          log(`Pull requests: ${error.stack ?? error}`);
+          if (!res.headersSent) res.writeHead(500).end();
         });
       }
       ctx.broker.handle(req, res).catch((error) => {

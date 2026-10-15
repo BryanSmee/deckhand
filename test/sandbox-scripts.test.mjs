@@ -1,9 +1,13 @@
 // The sandbox's side of the broker: git's credential helper asks it for a token per call.
 import assert from "node:assert/strict";
 import { execFile, spawnSync } from "node:child_process";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
 import { createBroker } from "../listener/broker.mjs";
+import { createPrReady } from "../listener/pr-ready.mjs";
 
 const bin = new URL("../sandbox/", import.meta.url).pathname;
 
@@ -109,4 +113,134 @@ test("for the broker's host, git gets the run's secret: what the git gateway tak
   const host = new URL(url).host;
   const res = await helper(env, `protocol=http\nhost=${host}\n\n`);
   assert.equal(res.stdout, `username=deckhand\npassword=${secret}\n`);
+});
+
+// --- gh pr ready, through the listener ---------------------------------------------------------
+
+// A broker that also marks pull requests ready (pr-ready.mjs): `mutations` are its calls to
+// GitHub. Pull request 7 of org/repo is a draft, 8 is ready.
+async function prBroker() {
+  const mutations = [];
+  const github = {
+    repoToken: async () => ({ token: "token", expiresAt: Date.now() + 3600000 }),
+    request: async (repo, method, path) => {
+      const number = Number(path.split("/").pop());
+      return Response.json({
+        draft: number === 7,
+        node_id: `PR_${number}`,
+        base: { repo: { full_name: repo } },
+        head: { repo: { full_name: repo } },
+      });
+    },
+  };
+  const b = createBroker({ app: () => github });
+  const prReady = createPrReady({
+    broker: b,
+    app: () => github,
+    fetch: async (url, { body }) => {
+      const { query, variables } = JSON.parse(body);
+      mutations.push(`${/\{ (\w+)\(/.exec(query)[1]} ${variables.id}`);
+      return Response.json({ data: {} });
+    },
+  });
+  const server = createServer((req, res) =>
+    (req.url.startsWith("/pr/") ? prReady : b).handle(req, res),
+  );
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  return {
+    b,
+    mutations,
+    url: `http://127.0.0.1:${server.address().port}`,
+    close: () => server.close(),
+  };
+}
+
+// The real gh, played by a script: logs its arguments and token, and finds pull request 7 for
+// the current branch, or the number it was given.
+function fakeGh(t) {
+  const dir = mkdtempSync(join(tmpdir(), "deckhand-gh-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const log = join(dir, "calls");
+  const path = join(dir, "gh");
+  writeFileSync(
+    path,
+    `#!/bin/bash
+echo "$GH_TOKEN $*" >> ${JSON.stringify(log)}
+if [ "$1 $2" = "pr view" ]; then
+  n=7
+  case \${3:-} in [0-9]*) n=$3 ;; esac
+  echo "https://github.com/org/repo/pull/$n"
+fi
+`,
+  );
+  chmodSync(path, 0o755);
+  return { path, calls: () => readFileSync(log, "utf8").trim().split("\n") };
+}
+
+function gh(env, ...args) {
+  return new Promise((resolve) => {
+    execFile(
+      `${bin}gh`,
+      args,
+      { env: { PATH: `${bin}:${process.env.PATH}`, ...env }, timeout: 10000 },
+      (error, stdout, stderr) => resolve({ status: error ? (error.code ?? 1) : 0, stdout, stderr }),
+    );
+  });
+}
+
+test("gh pr ready goes to the listener, with or without a number, and --undo too", async (t) => {
+  const { b, mutations, url, close } = await prBroker();
+  t.after(close);
+  const real = fakeGh(t);
+  const env = {
+    DECKHAND_BROKER_URL: url,
+    DECKHAND_RUN_SECRET: b.register("org/repo"),
+    DECKHAND_REAL_GH: real.path,
+  };
+  const current = await gh(env, "pr", "ready");
+  assert.equal(current.status, 0, current.stderr);
+  assert.match(current.stdout, /org\/repo#7 is marked as ready for review/);
+  assert.equal((await gh(env, "pr", "ready", "8", "--undo")).status, 0);
+  assert.equal((await gh(env, "pr", "ready", "--undo", "-R", "org/repo", "8")).status, 0);
+  assert.deepEqual(mutations, [
+    "markPullRequestReadyForReview PR_7",
+    "convertPullRequestToDraft PR_8",
+    "convertPullRequestToDraft PR_8",
+  ]);
+  // The real gh only looked the pull requests up, with a fresh token.
+  assert.deepEqual(real.calls(), [
+    "token pr view --json url --jq .url",
+    "token pr view 8 --json url --jq .url",
+    "token pr view 8 --repo org/repo --json url --jq .url",
+  ]);
+});
+
+test("a refused gh pr ready fails with the listener's reason", async (t) => {
+  const { b, mutations, url, close } = await prBroker();
+  t.after(close);
+  const real = fakeGh(t);
+  const env = {
+    DECKHAND_BROKER_URL: url,
+    DECKHAND_RUN_SECRET: b.register("org/repo", { pull_requests: "read" }),
+    DECKHAND_REAL_GH: real.path,
+  };
+  const res = await gh(env, "pr", "ready", "7");
+  assert.equal(res.status, 1);
+  assert.match(res.stderr, /this run can't change pull requests/);
+  assert.deepEqual(mutations, []);
+});
+
+test("other gh commands go to the real gh, with a fresh token", async (t) => {
+  const { b, mutations, url, close } = await prBroker();
+  t.after(close);
+  const real = fakeGh(t);
+  const env = {
+    DECKHAND_BROKER_URL: url,
+    DECKHAND_RUN_SECRET: b.register("org/repo"),
+    DECKHAND_REAL_GH: real.path,
+  };
+  assert.equal((await gh(env, "pr", "edit", "7", "--title", "x")).status, 0);
+  assert.equal((await gh(env, "issue", "view", "3")).status, 0);
+  assert.deepEqual(real.calls(), ["token pr edit 7 --title x", "token issue view 3"]);
+  assert.deepEqual(mutations, []);
 });
