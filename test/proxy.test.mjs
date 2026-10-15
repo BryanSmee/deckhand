@@ -152,6 +152,13 @@ test("address check: IPv6 forms of refused addresses are refused", () => {
     "febf::1",
     "fec0::1",
     "ff02::1",
+    // Benchmarking, and IPv4 addresses behind IPv4-translated and 6to4 ones.
+    "198.18.0.1",
+    "198.19.255.254",
+    "::ffff:0:a9fe:a9fe",
+    "::ffff:0:127.0.0.1",
+    "2002:7f00:1::",
+    "2002:a9fe:a9fe:1::1",
   ]) {
     assert.equal(blockedAddress(ip, true), true, ip);
   }
@@ -162,6 +169,8 @@ test("address check: IPv6 forms of refused addresses are refused", () => {
     "64:ff9b:1::1",
     "fc00::1",
     "FD12:3456::1",
+    "::ffff:0:a00:1",
+    "2002:ac11:1::1",
   ]) {
     assert.equal(blockedAddress(ip, false), true, ip);
     assert.equal(blockedAddress(ip, true), false, ip);
@@ -173,6 +182,8 @@ test("address check: IPv6 forms of refused addresses are refused", () => {
     "::ffff:808:808",
     "64:ff9b::808:808",
     "fe00::1",
+    "198.20.0.1",
+    "2002:808:808::1",
   ]) {
     assert.equal(blockedAddress(ip, false), false, ip);
   }

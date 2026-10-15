@@ -421,11 +421,16 @@ inspect`) and answers from that run's list. An unknown address, an unknown host,
   listener that doesn't answer: refused, with a `403` saying why.
 - The proxy resolves names itself and connects to the address it checked. Loopback,
   link-local (cloud metadata, `169.254.169.254`), multicast and unspecified addresses are
-  always refused; private ones (`10/8`, `172.16/12`, `192.168/16`, `100.64/10`, `fc00::/7`)
-  only when the host is allowed by name or `*.domain`, never through `*` alone. IPv6
-  addresses are compared as bytes, and those standing for an IPv4 one (`::ffff:0:0/96`,
-  `::/96`, NAT64's `64:ff9b::/96`) are checked as that IPv4 address, so
-  `[::ffff:a9fe:a9fe]` is the metadata service too.
+  always refused, and so is `198.18/15` (benchmarking); private ones (`10/8`, `172.16/12`,
+  `192.168/16`, `100.64/10`, `fc00::/7`) only when the host is one you allow by name or
+  `*.domain` (`ALLOWED_HOSTS`, the grants folder), never through `*` alone nor for a
+  repository's own `hosts`. IPv6 addresses are compared as bytes, and those standing for an
+  IPv4 one (`::ffff:0:0/96`, `::ffff:0:0:0/96`, `::/96`, NAT64's `64:ff9b::/96`, 6to4's
+  `2002::/16`) are checked as that IPv4 address, so `[::ffff:a9fe:a9fe]` is the metadata
+  service too.
+- The listener forgets a sandbox's address as soon as it sees the sandbox exit, before
+  posting its reply: Docker may give the address to another sandbox, which must not get the
+  finished run's hosts.
 - Sandboxes get `HTTP_PROXY`, `HTTPS_PROXY` (both cases), `NO_PROXY` (`localhost`, the
   listener) and `NODE_USE_ENV_PROXY=1`: without it, Node's `fetch` ignores the proxy (and
   fails, as nothing else goes out). The Playwright browser gets the proxy as flags. A tool
@@ -457,9 +462,15 @@ mounts: the repository asks, you decide.
 - **With `allow_repo_hosts: true`** for the repo (or for every repo, in `default.yaml`), its
   `hosts` are added to what its sandboxes may reach. Give it to repositories whose default
   branch you trust as much as your own grants: protected, reviewed merges.
-- **Never `*` or a whole top-level domain** (`"*.com"`) from a repository, granted or not:
-  that is a config error. Only you can open that much, in `ALLOWED_HOSTS` or the grants
-  folder.
+- **Never `*`, a whole top-level domain** (`"*.com"`) **or a public suffix** (`"*.co.uk"`,
+  `"*.github.io"`, `"*.nip.io"`: a short built-in list, not the whole public suffix list)
+  from a repository, granted or not, **nor an IP address or a name without a domain**
+  (`172.17.0.1`, `listener`): those are config errors. Only you can list them, in
+  `ALLOWED_HOSTS` or the grants folder.
+- **A repository's own hosts reach public addresses only.** One that resolves to a private
+  address is refused, even when it matches by name: `*.example.com` from a repo can't be
+  pointed at your LAN, the Docker bridge or the listener. Hosts you list may resolve to
+  private addresses.
 
 A mode can't change any of this: the hosts of every run of a repo are the same whatever the
 mode.
@@ -503,6 +514,10 @@ listener's logs (`Egress: refused <host> for <repo>#<n>`).
 - **DNS**: Docker's embedded resolver may forward lookups from the internal network to the
   host's resolvers, so a lookup of a made-up name could carry data out to that domain's DNS
   server.
+- **Sandboxes can reach each other**: they share one bridge network, so one repository's
+  sandbox can reach the dev servers or databases another one's setup started.
+  `enable_icc=false` on that network would cut them off from the proxy and the listener
+  too (#68).
 - **Allowed hosts are trusted entirely**: anything a sandbox can write to on one is a way
   out: its own repository on GitHub, a bucket or paste service behind `*`.
 - The listener's own port (8080: dashboard, webhook) is reachable from sandboxes; it needs

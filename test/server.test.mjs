@@ -152,10 +152,12 @@ async function fakeGitHub(files = {}) {
   const tarball = files["Dockerfile"] || files["docker/Dockerfile"] ? tarOf(files) : null;
   const requests = [];
   const waiters = [];
+  // Requests left unanswered until the test lets them go (hold()).
+  const holds = [];
   const server = createServer((req, res) => {
     let body = "";
     req.on("data", (c) => (body += c));
-    req.on("end", () => {
+    req.on("end", async () => {
       const entry = {
         method: req.method,
         path: req.url,
@@ -164,6 +166,7 @@ async function fakeGitHub(files = {}) {
       };
       requests.push(entry);
       for (const w of [...waiters]) if (w.match(entry)) w.resolve(entry);
+      for (const h of holds) if (h.match(entry)) await h.released;
       res.setHeader("content-type", "application/json");
       // Other branches' files are keyed "<branch>:<path>".
       const file = /^\/repos\/org\/repo\/contents\/([^?]+)\?ref=(.+)$/.exec(req.url);
@@ -248,10 +251,17 @@ async function fakeGitHub(files = {}) {
       if (found) return resolve(found);
       waiters.push({ match, resolve });
     });
+  // Holds back the answers to requests that `match`, until the returned function is called.
+  const hold = (match) => {
+    let release;
+    holds.push({ match, released: new Promise((resolve) => (release = resolve)) });
+    return () => release();
+  };
   return {
     url: `http://127.0.0.1:${server.address().port}`,
     requests,
     waitFor,
+    hold,
     server,
   };
 }
@@ -840,8 +850,9 @@ mounts:
     "pypi.org",
     "a.b.example.com",
   ]);
-  // Named hosts may resolve to private addresses; only "*" may not (proxy.mjs).
-  assert.equal(egress["a.b.example.com"].private, true);
+  // The operator's hosts may resolve to private addresses; the repo's own may not (proxy.mjs).
+  assert.equal(egress["pypi.org"].private, true);
+  assert.equal(egress["a.b.example.com"].private, false);
   const args = readFileSync(join(dir, "run-args"), "utf8").split("\n");
   const joined = args.join(" ");
   assert.match(joined, /--cpus 2 --memory 8g --memory-swap 8g --pids-limit 2048/);
@@ -851,6 +862,19 @@ mounts:
       `type=bind,src=${join(dir, "nfs", "docs")},dst=${join(dir, "nfs", "docs")},readonly`,
     ),
   );
+});
+
+test("once its sandbox exits, a run's hosts no longer answer for its address", async (t) => {
+  const { github, brokerPort, send } = await listen(t, {});
+  // The reply takes its time: Docker could give the address to another sandbox meanwhile.
+  const reply = (r) => r.method === "POST" && r.path === "/repos/org/repo/issues/12/comments";
+  const release = github.hold(reply);
+  t.after(release);
+  assert.equal((await send(comment("alice"))).status, 202);
+  await github.waitFor(reply);
+  const asked = await fetch(`http://127.0.0.1:${brokerPort}/egress?ip=10.9.0.5&host=github.com`);
+  assert.deepEqual(await asked.json(), { allowed: false, private: false });
+  release();
 });
 
 test("a repo's hosts without allow_repo_hosts: refused on the issue, unless already allowed", async (t) => {

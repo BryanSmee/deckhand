@@ -6,8 +6,8 @@
 //
 // The proxy resolves the name itself and connects to the address it checked, so a name
 // can't be pointed at the host or the cloud's metadata service once allowed: loopback,
-// link-local and unspecified addresses are always refused, private ones unless the host
-// was allowed by name or domain (not only through "*").
+// link-local and unspecified addresses are always refused, private ones unless the operator
+// allowed the host by name or domain (not only through "*", nor a repo's own hosts).
 import { lookup as dnsLookup } from "node:dns/promises";
 import { createServer, request as httpRequest } from "node:http";
 import { connect, isIP } from "node:net";
@@ -41,19 +41,24 @@ export function v6Bytes(address) {
   return all.flatMap((word) => [word >> 8, word & 0xff]);
 }
 
-// The IPv4 address an IPv6 one stands for: IPv4-mapped (`::ffff:0:0/96`), IPv4-compatible
-// (`::/96`, so `::` and `::1` too) and NAT64 (`64:ff9b::/96`), which all reach that IPv4
-// address; null otherwise.
+// The IPv4 address an IPv6 one stands for: IPv4-mapped (`::ffff:0:0/96`), IPv4-translated
+// (`::ffff:0:0:0/96`), IPv4-compatible (`::/96`, so `::` and `::1` too), NAT64
+// (`64:ff9b::/96`) and 6to4 (`2002::/16`, the address in its next 4 bytes), which all reach
+// that IPv4 address through a translator or relay; null otherwise.
 function embeddedV4(bytes) {
+  if (bytes[0] === 0x20 && bytes[1] === 0x02) return bytes.slice(2, 6).join(".");
   const prefix = bytes.slice(0, 12).join(",");
   const mapped = "0,0,0,0,0,0,0,0,0,0,255,255";
+  const translated = "0,0,0,0,0,0,0,0,255,255,0,0";
   const compatible = "0,0,0,0,0,0,0,0,0,0,0,0";
   const nat64 = "0,100,255,155,0,0,0,0,0,0,0,0";
-  return [mapped, compatible, nat64].includes(prefix) ? bytes.slice(12).join(".") : null;
+  return [mapped, translated, compatible, nat64].includes(prefix)
+    ? bytes.slice(12).join(".")
+    : null;
 }
 
-// Whether the proxy refuses to connect to `address`. `privateOk`: the host was allowed by
-// name, so a LAN or Docker address is what the operator meant.
+// Whether the proxy refuses to connect to `address`. `privateOk`: the operator allowed the
+// host by name, so a LAN or Docker address is what they meant.
 export function blockedAddress(address, privateOk) {
   let ip = address.toLowerCase();
   const bytes = v6Bytes(ip);
@@ -61,6 +66,8 @@ export function blockedAddress(address, privateOk) {
   if (isIP(ip) === 4) {
     const [a, b] = v4(ip);
     if (a === 0 || a === 127 || (a === 169 && b === 254) || a >= 224) return true;
+    // Benchmarking (198.18/15): no one's address on the internet.
+    if (a === 198 && (b === 18 || b === 19)) return true;
     const isPrivate =
       a === 10 ||
       (a === 172 && b >= 16 && b < 32) ||
