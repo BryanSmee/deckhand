@@ -27,8 +27,11 @@ const BACKLOG: Backlog = {
 
 let posted: unknown[];
 let backlog: Backlog;
+// Holds the work POST's answer until the test lets it go.
+let hold: Promise<void> | null;
 beforeEach(() => {
   posted = [];
+  hold = null;
   backlog = BACKLOG;
   history.replaceState(null, "", "/");
   Object.assign(globalThis, {
@@ -39,6 +42,7 @@ beforeEach(() => {
     if (url === "api/repos/acme/app/work" && init?.method === "POST") {
       const body = JSON.parse(String(init.body));
       posted.push(body);
+      await hold;
       if (body.number === 30) return Response.json({ error: "#30 is closed." }, { status: 409 });
       return Response.json({ message: `#${body.number} done.` });
     }
@@ -109,4 +113,52 @@ test("a config with errors: nothing to start", async () => {
   open("#/graph/acme/app");
   expect(await screen.findByText(/has errors: nothing starts/)).toBeTruthy();
   expect(screen.getByRole("button", { name: "Start #31" })).toHaveProperty("disabled", true);
+});
+
+test("a Start shows at once: a pending node, the issue out of the backlog; then the real one", async () => {
+  let answer = () => {};
+  hold = new Promise((resolve) => (answer = resolve));
+  const refresh = vi.fn(async () => {});
+  history.replaceState(null, "", "#/graph/acme/app");
+  render(<Dashboard state={state} error={null} refresh={refresh} />);
+  const area = screen.getByRole("region", { name: "Work area" });
+  await within(area).findByText("Export the run log");
+  fireEvent.click(within(area).getByRole("button", { name: "Start #31" }));
+  // Before the listener answers.
+  expect(within(area).queryByText("Export the run log")).toBeNull();
+  const graph = screen.getByRole("list", { name: "Issues of acme/app" });
+  const node = within(graph).getByRole("listitem", { name: /^#31 Export the run log: Sending…/ });
+  expect(refresh).not.toHaveBeenCalled();
+  // Answered: api/state is read again at once, and the pending node goes.
+  answer();
+  await waitFor(() => expect(refresh).toHaveBeenCalledTimes(1));
+  await waitFor(() => expect(node.isConnected).toBe(false));
+});
+
+test("a refused action: its pending node goes, the issue comes back, the error shows", async () => {
+  let answer = () => {};
+  hold = new Promise((resolve) => (answer = resolve));
+  const refresh = vi.fn(async () => {});
+  history.replaceState(null, "", "#/graph/acme/app");
+  render(<Dashboard state={state} error={null} refresh={refresh} />);
+  const area = screen.getByRole("region", { name: "Work area" });
+  await within(area).findByText("Keyboard shortcuts");
+  const item = within(area).getByText("Keyboard shortcuts").closest("li")!;
+  fireEvent.click(within(item).getByRole("button", { name: "After…" }));
+  fireEvent.change(within(item).getByRole("combobox", { name: "Queue #30 after" }), {
+    target: { value: "24" },
+  });
+  fireEvent.click(within(item).getByRole("button", { name: "Queue" }));
+  expect(within(area).queryByText("Keyboard shortcuts")).toBeNull();
+  const graph = screen.getByRole("list", { name: "Issues of acme/app" });
+  expect(
+    within(graph).getByRole("listitem", {
+      name: /^#30 Keyboard shortcuts: Sending…, waits for 1 issue$/,
+    }),
+  ).toBeTruthy();
+  answer();
+  expect(await within(area).findByText("#30 is closed.")).toBeTruthy();
+  expect(within(area).getByText("Keyboard shortcuts")).toBeTruthy();
+  expect(within(graph).queryByRole("listitem", { name: /Sending…/ })).toBeNull();
+  expect(refresh).not.toHaveBeenCalled();
 });

@@ -7,7 +7,16 @@ import type { JSX } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
 import { useWorkArea } from "./api";
 import { kindName } from "./format";
-import { dropTarget, graphOf, type GraphNode, issueOfLink, layout, LOOKS, shorten } from "./graph";
+import {
+  dropTarget,
+  graphOf,
+  type GraphNode,
+  issueOfLink,
+  type Layout,
+  layout,
+  LOOKS,
+  shorten,
+} from "./graph";
 import { formatRoute } from "./route";
 import type { State } from "./types";
 import { ISSUE_TYPE, type Target, WorkArea } from "./WorkArea";
@@ -15,6 +24,8 @@ import styles from "./Graph.module.css";
 
 interface Props {
   state: State | null;
+  // Reads api/state again: an action's node shows without waiting for the next tick.
+  refresh?: () => Promise<void>;
   repo: string | null;
   // A phone: top to bottom.
   vertical: boolean;
@@ -63,15 +74,20 @@ interface NodeDrag {
 // Past this many pixels a press on a waiting node is a drag, not a click.
 const DRAG_PX = 6;
 
-export function Graph({ state, repo, vertical, showClosed, onShowClosed }: Props) {
+export function Graph({ state, refresh, repo, vertical, showClosed, onShowClosed }: Props) {
   const [ref, width] = useWidth();
-  const work = useWorkArea(repo);
+  const work = useWorkArea(repo, refresh);
   const [mode, setMode] = useState("work");
   const [notice, setNotice] = useState<string | null>(null);
   // Something is dragged over the area, and the node a drop there would queue after.
   const [over, setOver] = useState(false);
   const [target, setTarget] = useState<string | null>(null);
   const [nodeDrag, setNodeDrag] = useState<NodeDrag | null>(null);
+  // The node last pressed, drawn last (on top) from then on: moving it back among the others
+  // when it is let go would cut its slide to its new place short.
+  const [onTop, setOnTop] = useState<string | null>(null);
+  // The last drawing, on this tab and in this direction: its places are kept.
+  const last = useRef<{ on: string; shape: Layout } | null>(null);
   // A drag ended on a node: the click that follows doesn't open it.
   const dragEnded = useRef(false);
   const svg = useRef<SVGSVGElement>(null);
@@ -82,12 +98,21 @@ export function Graph({ state, repo, vertical, showClosed, onShowClosed }: Props
   const tasks = (state?.tasks ?? []).filter((t) => !repo || t.repo === repo);
   const { nodes, edges, hidden } = graphOf(tasks, state?.edges ?? [], state?.blockers ?? [], {
     showClosed,
+    pending: work.pending,
   });
+  // An issue just queued goes next to what it now waits for, wherever it was.
+  const queued = new Set(
+    work.pending.filter((p) => p.action === "queue").map((p) => `${p.repo}#${p.number}`),
+  );
+  const on = `${repo} ${vertical}`;
+  const prev = last.current?.on === on ? last.current.shape : null;
   const shape = layout(
     nodes.map((n) => n.key),
     edges,
     { vertical, width },
+    prev && { ...prev, boxes: prev.boxes.filter((b) => !queued.has(b.key)) },
   );
+  last.current = { on, shape };
   const byKey = new Map(nodes.map((n) => [n.key, n]));
   const github = state?.githubUrl ?? "https://github.com";
   const chars = Math.floor((shape.w - 24) / 7);
@@ -96,7 +121,12 @@ export function Graph({ state, repo, vertical, showClosed, onShowClosed }: Props
   const blocked = !!work.backlog?.errors;
   // Only a repo's issues move: what runs or ran stays where it is.
   const movable = (n: GraphNode) =>
-    !!repo && !blocked && n.task?.state === "waiting" && n.kind === "issue" && n.number !== null;
+    !!repo &&
+    !blocked &&
+    n.look !== "pending" &&
+    n.task?.state === "waiting" &&
+    n.kind === "issue" &&
+    n.number !== null;
   const targets: Target[] = repo
     ? nodes
         .filter((n) => n.number !== null)
@@ -106,7 +136,11 @@ export function Graph({ state, repo, vertical, showClosed, onShowClosed }: Props
           label: `${refOf(n, false, 0)} ${shorten(n.title ?? "", 40)}`.trim(),
         }))
     : [];
-  const waiting = tasks.filter((t) => t.state === "waiting" && t.kind === "issue" && t.number);
+  // Less those a Start or Remove on its way takes out of their wait.
+  const leaving = new Set(work.pending.filter((p) => p.action !== "queue").map((p) => p.number));
+  const waiting = tasks.filter(
+    (t) => t.state === "waiting" && t.kind === "issue" && t.number && !leaving.has(t.number),
+  );
 
   // The node under the pointer, in the drawing's units (the viewBox starts at -4).
   const targetAt = (clientX: number, clientY: number) => {
@@ -162,6 +196,7 @@ export function Graph({ state, repo, vertical, showClosed, onShowClosed }: Props
     onPointerDown: (e) => {
       if (e.button !== 0) return;
       (e.currentTarget as Element).setPointerCapture?.(e.pointerId);
+      setOnTop(n.key);
       setNodeDrag({
         key: n.key,
         number: n.number!,
@@ -197,9 +232,12 @@ export function Graph({ state, repo, vertical, showClosed, onShowClosed }: Props
     onDragStart: (e) => e.preventDefault(),
   });
 
-  // The node being dragged goes last: SVG paints in order, so it stays on top.
+  // In an order that doesn't change as nodes come and go, so none is moved in the page (which
+  // would cut its slide short); the one pressed last goes last: SVG paints in order.
   const boxes = [...shape.boxes].sort(
-    (a, b) => Number(a.key === nodeDrag?.key) - Number(b.key === nodeDrag?.key),
+    (a, b) =>
+      Number(a.key === onTop) - Number(b.key === onTop) ||
+      (a.key < b.key ? -1 : a.key > b.key ? 1 : 0),
   );
   const drawing = !state ? (
     <p class={styles.empty}>Loading…</p>
@@ -253,6 +291,8 @@ export function Graph({ state, repo, vertical, showClosed, onShowClosed }: Props
           <path
             key={`${a.from} ${a.to}`}
             d={a.d}
+            // As a style too, where browsers can slide it along with its nodes.
+            style={{ d: `path("${a.d}")` }}
             class={`${styles.arrow} ${held ? styles.held : ""}`}
             marker-end={held ? "url(#arrow-held)" : "url(#arrow)"}
           />
@@ -271,6 +311,9 @@ export function Graph({ state, repo, vertical, showClosed, onShowClosed }: Props
           `: ${n.status}` +
           (waits ? `, waits for ${waits} issue${waits > 1 ? "s" : ""}` : "");
         const moving = nodeDrag?.key === n.key && nodeDrag.moved ? nodeDrag : null;
+        // Placed with a transform, which slides (Graph.module.css) when the place changes.
+        const x = b.x + (moving?.dx ?? 0);
+        const y = b.y + (moving?.dy ?? 0);
         return (
           <a
             key={n.key}
@@ -280,7 +323,7 @@ export function Graph({ state, repo, vertical, showClosed, onShowClosed }: Props
             class={`${styles.node} ${styles[n.look]} ${movable(n) ? styles.movable : ""} ${
               target === n.key && !moving ? styles.target : ""
             } ${moving ? styles.moving : ""}`}
-            style={moving ? { transform: `translate(${moving.dx}px, ${moving.dy}px)` } : undefined}
+            style={{ transform: `translate(${x}px, ${y}px)` }}
             onClick={(e) => {
               if (!dragEnded.current) return;
               dragEnded.current = false;
@@ -290,14 +333,22 @@ export function Graph({ state, repo, vertical, showClosed, onShowClosed }: Props
             {...(n.task ? {} : { target: "_blank", rel: "noreferrer" })}
           >
             <title>{`${title} (${n.status})`}</title>
-            <rect x={b.x} y={b.y} width={shape.w} height={shape.h} rx="8" />
-            <text x={b.x + 12} y={b.y + 21} class={styles.ref}>
+            <rect width={shape.w} height={shape.h} rx="8" />
+            <text x={12} y={21} class={styles.ref}>
               {ref}
             </text>
-            <text x={b.x + shape.w - 12} y={b.y + 21} class={styles.status} text-anchor="end">
+            {n.look === "pending" && (
+              <circle class={styles.spinner} cx={shape.w - 18} cy={17} r={5} aria-hidden="true" />
+            )}
+            <text
+              x={shape.w - (n.look === "pending" ? 30 : 12)}
+              y={21}
+              class={styles.status}
+              text-anchor="end"
+            >
               {n.status}
             </text>
-            <text x={b.x + 12} y={b.y + 41} class={styles.title}>
+            <text x={12} y={41} class={styles.title}>
               {shorten(title, chars)}
             </text>
           </a>

@@ -2,11 +2,12 @@
 // drawn by hand: each issue that waits for others ("/after") goes in a column after theirs,
 // left to right (top to bottom on a phone); issues with no arrow stand alone in a grid below.
 import { STATE_NAMES } from "./format";
-import type { Blocker, Edge, PrState, Task } from "./types";
+import type { Blocker, Edge, PrState, Task, WorkAction } from "./types";
 
 // What a node looks like: the graph's own families, not the list's (format.ts toneOf()).
-// Purple, GitHub's colour for merged, stays out: merged is implemented, green.
-export type Look = "idle" | "input" | "run" | "err" | "ready" | "done";
+// Purple, GitHub's colour for merged, stays out: merged is implemented, green. "pending": an
+// action on it is on its way to the listener; not in the legend, it lasts a few seconds.
+export type Look = "idle" | "input" | "run" | "err" | "ready" | "done" | "pending";
 
 export const LOOKS: { look: Look; name: string; means: string }[] = [
   { look: "idle", name: "Waiting", means: "for a blocker, queued, or nothing started" },
@@ -61,6 +62,49 @@ function statusOf(look: Look, t: { state?: Task["state"] | null; closed: Task["c
 // issues an inbox files show once someone works on them.
 const NOT_WORK: Task["kind"][] = ["idea", "bug", "discussion"];
 
+// A work area action sent and not confirmed yet (api.ts useWorkArea()): the graph shows what
+// it will do at once.
+export type Pending = WorkAction & { repo: string; title: string | null };
+
+// The tasks and arrows as they will be once `pending` is done: a queued issue gets an arrow
+// from what it waits for, a started one none, a dequeued one leaves (unless it ran before:
+// then it stays, without its arrows). The keys it touches come back too.
+function withPending(tasks: Task[], edges: Edge[], pending: Pending[]) {
+  const touched = new Set<string>();
+  for (const p of pending) {
+    const key = `${p.repo}#${p.number}`;
+    touched.add(key);
+    edges = edges.filter((e) => e.to !== key);
+    const task = tasks.find((t) => t.key === key);
+    if (p.action === "dequeue") {
+      if (task && !task.runs.length) tasks = tasks.filter((t) => t !== task);
+      continue;
+    }
+    if (p.action === "queue")
+      edges = [...edges, { from: `${p.repo}#${p.after}`, to: key, kind: "after" }];
+    if (task) continue;
+    tasks = [
+      ...tasks,
+      {
+        key,
+        repo: p.repo,
+        project: "",
+        number: p.number,
+        title: p.title,
+        kind: "issue",
+        mode: null,
+        replyTo: p.number,
+        state: p.action === "queue" ? "waiting" : "queued",
+        since: 0,
+        closed: null,
+        pr: null,
+        runs: [],
+      },
+    ];
+  }
+  return { tasks, edges, touched };
+}
+
 // Closed: implemented, or closed as not planned. A run on it isn't.
 function isClosed(n: GraphNode): boolean {
   if (n.look === "run") return false;
@@ -69,17 +113,23 @@ function isClosed(n: GraphNode): boolean {
 
 // The nodes of `tasks` (one tab's, or all) and the issues they wait for, with the arrows
 // between them. Closed ones are left out unless `showClosed`, or an issue waiting for one
-// still runs; `hidden` counts them. A hidden node takes its arrows with it.
+// still runs; `hidden` counts them. A hidden node takes its arrows with it. `pending`: the
+// actions on their way, drawn as done already, their nodes "Sending…".
 export function graphOf(
   tasks: Task[],
   edges: Edge[],
   blockers: Blocker[],
-  { showClosed = false }: { showClosed?: boolean } = {},
+  { showClosed = false, pending = [] }: { showClosed?: boolean; pending?: Pending[] } = {},
 ): { nodes: GraphNode[]; edges: Edge[]; hidden: number } {
+  const real = new Set(tasks);
+  const expected = withPending(tasks, edges, pending);
+  tasks = expected.tasks;
+  edges = expected.edges;
   const nodes = new Map<string, GraphNode>();
   for (const t of tasks) {
     if (NOT_WORK.includes(t.kind)) continue;
-    const look = lookOf(t);
+    const sending = expected.touched.has(t.key);
+    const look = sending ? "pending" : lookOf(t);
     nodes.set(t.key, {
       key: t.key,
       repo: t.repo,
@@ -87,9 +137,10 @@ export function graphOf(
       kind: t.kind,
       title: t.title,
       look,
-      status: statusOf(look, t),
+      status: sending ? "Sending…" : statusOf(look, t),
       closed: t.closed,
-      task: t,
+      // Not on the board yet: nothing to open.
+      task: real.has(t) ? t : null,
     });
   }
   const mine = edges.filter((e) => nodes.has(e.to));
@@ -152,13 +203,17 @@ export interface Layout {
 }
 
 // `keys` in the order they come (the board's: most recent first); `vertical`: a phone's
-// top-to-bottom layout; `width`: what the page has, for the grid's columns.
+// top-to-bottom layout; `width`: what the page has, for the grid's columns. `prev`: the last
+// drawing, whose places are kept where they still fit (settle()): adding or moving an issue
+// doesn't move the others.
 export function layout(
   keys: string[],
   edges: { from: string; to: string }[],
   { vertical, width }: { vertical: boolean; width: number },
+  prev: Pick<Layout, "boxes" | "gridTop"> | null = null,
 ): Layout {
-  const { w, h, layerGap, rowGap } = vertical ? SIZES.narrow : SIZES.wide;
+  const sizes = vertical ? SIZES.narrow : SIZES.wide;
+  const { w, h, layerGap, rowGap } = sizes;
   const order = new Map(keys.map((k, i) => [k, i]));
   const preds = new Map<string, string[]>(keys.map((k) => [k, []]));
   const succs = new Map<string, string[]>(keys.map((k) => [k, []]));
@@ -171,7 +226,9 @@ export function layout(
   }
   const linked = keys.filter((k) => preds.get(k)!.length || succs.get(k)!.length);
 
-  const boxes: Box[] = [];
+  let boxes: Box[] = [];
+  // Each linked issue's column, which settle() keeps the arrows' direction by.
+  const layerOf = new Map<string, number>();
   let top = 0;
   for (const group of components(linked, preds, succs)) {
     const layers = layersOf(group, preds, order);
@@ -192,6 +249,7 @@ export function layout(
     }
     layers.forEach((layer, l) => {
       layer.forEach((k, r) => {
+        layerOf.set(k, l);
         const along = l * (vertical ? h + layerGap : w + layerGap);
         const across = r * (vertical ? w + rowGap : h + rowGap);
         boxes.push(
@@ -207,7 +265,7 @@ export function layout(
   }
 
   const alone = keys.filter((k) => !preds.get(k)!.length && !succs.get(k)!.length);
-  const gridTop = alone.length ? top : null;
+  let gridTop = alone.length ? top : null;
   const columns = Math.max(1, Math.floor((width + rowGap) / (w + rowGap)));
   alone.forEach((k, i) => {
     boxes.push({
@@ -216,6 +274,14 @@ export function layout(
       y: top + Math.floor(i / columns) * (h + rowGap),
     });
   });
+
+  // Nothing kept (the first drawing, another tab): laid out afresh.
+  const keeps = prev?.boxes.some((b) => order.has(b.key));
+  const kept = keeps && settle(keys, preds, succs, layerOf, prev!, { vertical, columns, ...sizes });
+  if (kept) {
+    boxes = kept.boxes;
+    gridTop = alone.length ? kept.gridTop : null;
+  }
 
   const box = new Map(boxes.map((b) => [b.key, b]));
   const arrows = [...seen].map((pair) => {
@@ -236,6 +302,95 @@ export function layout(
   const width_ = Math.max(0, ...boxes.map((b) => b.x + w));
   const height = Math.max(0, ...boxes.map((b) => b.y + h));
   return { boxes, arrows, gridTop, width: width_, height, w, h, gap: layerGap };
+}
+
+// The last drawing's places, kept for the issues they still fit: each one a column (a row on
+// a phone) after what it waits for, none on another. The others get a place near theirs:
+// after what they wait for, or in a free cell of the grid.
+function settle(
+  keys: string[],
+  preds: Map<string, string[]>,
+  succs: Map<string, string[]>,
+  layerOf: Map<string, number>,
+  prev: Pick<Layout, "boxes" | "gridTop">,
+  s: { vertical: boolean; columns: number; w: number; h: number; layerGap: number; rowGap: number },
+): { boxes: Box[]; gridTop: number } {
+  const { vertical, w, h, layerGap, rowGap } = s;
+  const along = (b: { x: number; y: number }) => (vertical ? b.y : b.x);
+  const across = (b: { x: number; y: number }) => (vertical ? b.x : b.y);
+  const make = (key: string, a: number, c: number): Box =>
+    vertical ? { key, x: c, y: a } : { key, x: a, y: c };
+  const step = (vertical ? h : w) + layerGap;
+  const row = (vertical ? w : h) + rowGap;
+  // An arrow that closes a cycle goes backwards anyway: only the others are kept forward.
+  const forward = (from: string, to: string) => layerOf.get(from)! < layerOf.get(to)!;
+
+  const placed = new Map<string, Box>();
+  const old = new Map(prev.boxes.map((b) => [b.key, b]));
+  for (const k of keys) if (old.has(k)) placed.set(k, { ...old.get(k)!, key: k });
+  // What now comes before what it waits for moves; until nothing does.
+  for (let changed = true; changed;) {
+    changed = false;
+    for (const [k, b] of placed) {
+      const late = preds
+        .get(k)!
+        .some((p) => forward(p, k) && placed.has(p) && along(placed.get(p)!) + step > along(b));
+      if (late) changed = placed.delete(k);
+    }
+  }
+  const clash = (a: Box, b: Box) =>
+    a.key !== b.key && Math.abs(a.x - b.x) < w + rowGap && Math.abs(a.y - b.y) < h + rowGap;
+  const free = (b: Box) => ![...placed.values()].some((o) => clash(o, b));
+  // Two on the same place (the page got narrower, say): the first one in the board's order
+  // keeps it.
+  for (const k of keys) {
+    const b = placed.get(k);
+    if (!b) continue;
+    placed.delete(k);
+    if (free(b)) placed.set(k, b);
+  }
+
+  const bottom = Math.max(-GROUP_GAP, ...[...placed.values()].map((b) => b.y + h));
+  const gridTop = prev.gridTop ?? bottom + GROUP_GAP;
+  // Column by column, in the board's order: what an issue waits for is placed before it. A
+  // kept issue that would now come too soon after it moves too, and goes back in the list.
+  const rest = keys.filter((k) => !placed.has(k));
+  const layer = (k: string) => layerOf.get(k) ?? 0;
+  while (rest.length) {
+    rest.sort((a, b) => layer(a) - layer(b) || keys.indexOf(a) - keys.indexOf(b));
+    const k = rest.shift()!;
+    const before = preds.get(k)!.filter((p) => forward(p, k) && placed.has(p));
+    const lo = before.length ? Math.max(...before.map((p) => along(placed.get(p)!) + step)) : 0;
+    let after = succs.get(k)!.filter((n) => forward(k, n) && placed.has(n));
+    for (const n of after.filter((n) => along(placed.get(n)!) < lo + step)) {
+      placed.delete(n);
+      rest.push(n);
+    }
+    after = after.filter((n) => placed.has(n));
+    let b: Box | undefined;
+    if (before.length || after.length) {
+      // Next to what it is linked to: the same row first, then the nearest free one.
+      const a = before.length ? lo : Math.min(...after.map((n) => along(placed.get(n)!) - step));
+      const c = Math.min(...(before.length ? before : after).map((n) => across(placed.get(n)!)));
+      for (let i = 0; !b; i++) {
+        const offset = (i % 2 ? 1 : -1) * Math.ceil(i / 2) * row;
+        const at = make(k, a, c + offset);
+        if (c + offset >= 0 && free(at)) b = at;
+      }
+    } else {
+      // On its own (or the first of new linked ones): the first free cell of the grid.
+      for (let i = 0; !b; i++) {
+        const at = {
+          key: k,
+          x: (i % s.columns) * (w + rowGap),
+          y: gridTop + Math.floor(i / s.columns) * (h + rowGap),
+        };
+        if (free(at)) b = at;
+      }
+    }
+    placed.set(k, b);
+  }
+  return { boxes: keys.map((k) => placed.get(k)!), gridTop };
 }
 
 // The groups of issues linked to each other, in the board's order of their first issue.

@@ -17,9 +17,9 @@ import type { State } from "./types";
 import styles from "./App.module.css";
 
 export function App() {
-  const { state, error } = useAppState();
+  const { state, error, refresh } = useAppState();
   const repos = useRepos();
-  return <Dashboard state={state} error={error} repos={repos} />;
+  return <Dashboard state={state} error={error} repos={repos} refresh={refresh} />;
 }
 
 const stored = (name: string) => {
@@ -80,9 +80,11 @@ interface Props {
   state: State | null;
   error: string | null;
   repos?: RepoList;
+  // Reads api/state again: after a work area action.
+  refresh?: () => Promise<void>;
 }
 
-export function Dashboard({ state, error, repos }: Props) {
+export function Dashboard({ state, error, repos, refresh }: Props) {
   const [route, go] = useRoute();
   const [chip, setChip] = useState<ChipId>(() => {
     const saved = stored("chip");
@@ -184,6 +186,7 @@ export function Dashboard({ state, error, repos }: Props) {
           <main class={styles.page}>
             <Graph
               state={state}
+              refresh={refresh}
               repo={route.repo}
               vertical={!wide}
               showClosed={showClosed}
