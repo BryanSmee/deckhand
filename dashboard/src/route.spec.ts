@@ -29,3 +29,15 @@ test("the repositories page", () => {
   expect(formatRoute(route)).toBe("#/repositories");
   expect(parseRoute("#/repositories")).toEqual(route);
 });
+
+test("a repository's config on the repositories page", () => {
+  const route = {
+    repo: null,
+    task: null,
+    run: null,
+    page: "repositories" as const,
+    config: "org/app",
+  };
+  expect(formatRoute(route)).toBe("#/repositories/org/app");
+  expect(parseRoute("#/repositories/org/app")).toEqual(route);
+});

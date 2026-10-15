@@ -1,5 +1,5 @@
 // Names, groups and times the views share.
-import type { PrState, Run, RunStatus, Task, TaskState } from "./types";
+import type { PrState, RepoStatus, Run, RunStatus, Task, TaskState } from "./types";
 
 export const STATE_NAMES: Record<TaskState, string> = {
   "building-image": "Building image",
@@ -170,3 +170,12 @@ export function repoTabs(tasks: Task[]): { repo: string; label: string }[] {
     label: owners.size > 1 ? repo : repo.slice(repo.indexOf("/") + 1),
   }));
 }
+
+// A repository's status (api/repos), as its badge says it.
+export const REPO_LABELS: Record<RepoStatus, string> = {
+  configured: "Configured",
+  invalid: "Invalid config",
+  onboarding: "Onboarding",
+  "not-onboarded": "Not onboarded",
+  unknown: "Unknown",
+};

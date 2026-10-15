@@ -10,12 +10,17 @@ import { createOnboardingStore } from "../listener/onboarding.mjs";
 import {
   CONFIG_MS,
   LIST_MS,
+  REFRESH_MS,
   createRepoApi,
   createRepoList,
   refreshFor,
   repoStatus,
   sameOrigin,
 } from "../listener/repos.mjs";
+
+const throwing = (error) => {
+  throw error;
+};
 
 const pem = generateKeyPairSync("rsa", { modulusLength: 2048 }).privateKey.export({
   type: "pkcs1",
@@ -34,7 +39,7 @@ const info = (full_name, extra = {}) => ({
 
 // A fake GitHub behind the real App client: two installations, the first with 150 repos
 // (two pages), and `configured` the repos whose default branch has a .deckhand.yaml.
-test("repoStatus: configured wins, then onboarding, then unknown, else not onboarded", () => {
+test("repoStatus: configured (or invalid) wins, then onboarding, then unknown, else not onboarded", () => {
   const repo = info("org/a", { private: false, has_issues: false });
   const row = {
     repo: "org/a",
@@ -43,22 +48,29 @@ test("repoStatus: configured wins, then onboarding, then unknown, else not onboa
     issues: false,
     status: "not-onboarded",
     issue: null,
+    readAt: 7,
   };
+  const none = { has: false, invalid: false, at: 7 };
+  const has = { has: true, invalid: false, at: 7 };
   const onboarded = { issue: 4, at: 1 };
-  assert.deepEqual(repoStatus(repo, false, null), row);
-  assert.deepEqual(repoStatus(repo, true, onboarded), { ...row, status: "configured" });
+  assert.deepEqual(repoStatus(repo, none, null), row);
+  assert.deepEqual(repoStatus(repo, has, onboarded), { ...row, status: "configured" });
+  assert.deepEqual(repoStatus(repo, { ...has, invalid: true }, onboarded), {
+    ...row,
+    status: "invalid",
+  });
   const onboarding = {
     ...row,
     status: "onboarding",
     issue: { number: 4, url: "https://github.com/org/a/issues/4" },
   };
-  assert.deepEqual(repoStatus(repo, false, onboarded), onboarding);
+  assert.deepEqual(repoStatus(repo, none, onboarded), onboarding);
   // Its config couldn't be read: its onboarding issue still shows.
-  assert.deepEqual(repoStatus(repo, null, onboarded), onboarding);
-  assert.deepEqual(repoStatus(repo, null, null), { ...row, status: "unknown" });
+  assert.deepEqual(repoStatus(repo, null, onboarded), { ...onboarding, readAt: null });
+  assert.deepEqual(repoStatus(repo, null, null), { ...row, status: "unknown", readAt: null });
 });
 
-function fakeGitHub({ first = [], second = [], configured = [] } = {}) {
+function fakeGitHub({ first = [], second = [], configured = [], files = {} } = {}) {
   const calls = [];
   const fetch = async (url, init) => {
     const { pathname, searchParams } = new URL(url);
@@ -78,9 +90,8 @@ function fakeGitHub({ first = [], second = [], configured = [] } = {}) {
     }
     const content = /^\/repos\/([^/]+\/[^/]+)\/contents\/\.deckhand\.yaml$/.exec(pathname);
     if (content) {
-      if (configured.includes(content[1])) {
-        return Response.json({ type: "file", sha: "s", content: btoa("trigger: deckhand\n") });
-      }
+      const text = files[content[1]] ?? (configured.includes(content[1]) && "trigger: deckhand\n");
+      if (text) return Response.json({ type: "file", sha: "s", content: btoa(text) });
       return new Response("Not Found", { status: 404 });
     }
     return new Response("unexpected", { status: 500 });
@@ -238,12 +249,15 @@ async function call(
   });
 }
 
-function apiSetup(opts) {
+function apiSetup({ grants = new Map(), fs, ...opts } = {}) {
   const s = setup(opts);
   const started = [];
   const api = createRepoApi({
     config: s.config,
     list: s.list,
+    grants: () => (grants instanceof Error ? throwing(grants) : grants),
+    fs,
+    now: () => s.clock.now,
     publicUrl: () => "https://deckhand.example.com",
     start: async (repo, login) => {
       started.push(`${repo} by ${login}`);
@@ -318,4 +332,152 @@ test("POST onboard: a no-op when configured or already onboarded, refused when i
   );
   assert.equal((await call(api, "POST", "/api/repos/org/quiet/onboard")).status, 409);
   assert.deepEqual(started, []);
+});
+
+test("an invalid config shows as such in the list", async () => {
+  const { list } = setup({
+    first: [info("org/app"), info("org/bad")],
+    files: { "org/app": "trigger: go\n", "org/bad": "max_parallel: lots\n" },
+  });
+  const rows = await list.list();
+  assert.deepEqual(
+    rows.map((r) => [r.repo, r.status]),
+    [
+      ["org/app", "configured"],
+      ["org/bad", "invalid"],
+    ],
+  );
+  assert.equal(rows[0].readAt, 1_000_000);
+});
+
+test("GET config: raw text, errors, warnings and what runs get; its row updated", async () => {
+  const { api, gh, clock } = apiSetup({
+    env: { ALLOWED_USERS: "alice,bob", ALLOWED_HOSTS: "registry.npmjs.org" },
+    first: [info("org/app")],
+    files: { "org/app": "users: [bob, carol]\nhosts: [pypi.org]\nmax_parallel: 5\n" },
+  });
+  await call(api, "GET", "/api/repos");
+  clock.now += 1000;
+  const res = await call(api, "GET", "/api/repos/org/app/config");
+  assert.equal(res.status, 200);
+  const { body } = res;
+  assert.equal(body.file.text, "users: [bob, carol]\nhosts: [pypi.org]\nmax_parallel: 5\n");
+  assert.equal(body.file.sha, "s");
+  assert.equal(body.file.url, "https://github.com/org/app/blob/main/.deckhand.yaml");
+  assert.equal(body.base, "main");
+  assert.deepEqual(body.errors, []);
+  assert.deepEqual(body.warnings, ["users not in ALLOWED_USERS, ignored: carol"]);
+  assert.equal(body.grantsError, null);
+  assert.equal(body.repo.status, "configured");
+  // Read now, not from the list's cache.
+  assert.equal(body.readAt, 1_001_000);
+  assert.equal(configReads(gh.calls), 2);
+  const users = body.effective.settings.find((r) => r.key === "users");
+  assert.deepEqual(users, {
+    key: "users",
+    value: "bob",
+    source: "repo",
+    note: "narrowed from ALLOWED_USERS (alice, bob)",
+  });
+  // The operator's MAX_PARALLEL (2) stays the ceiling.
+  const parallel = body.effective.settings.find((r) => r.key === "max_parallel");
+  assert.deepEqual([parallel.value, parallel.source], ["2", "operator"]);
+  // No allow_repo_hosts: the repo's own host is refused, and that stops its runs.
+  const pypi = body.effective.hosts.find((h) => h.host === "pypi.org");
+  assert.equal(pypi.source, "refused");
+  assert.match(pypi.note, /allow_repo_hosts/);
+  assert.equal(
+    body.effective.hosts.find((h) => h.host === "registry.npmjs.org").source,
+    "operator",
+  );
+  assert.deepEqual(body.effective.grant, {
+    entry: null,
+    allowRepoHosts: false,
+    hosts: [],
+    mounts: [],
+    limits: { cpus: "2", memory: "4g", pids: 2048 },
+  });
+});
+
+test("GET config: an invalid file shows its errors, and its row turns invalid", async () => {
+  const files = { "org/app": "trigger: go\n" };
+  const { api } = apiSetup({ first: [info("org/app")], files });
+  assert.equal((await call(api, "GET", "/api/repos")).body.repos[0].status, "configured");
+  // The file changed and no webhook said so: reading it for the panel updates the row.
+  files["org/app"] = "effort: loud\n";
+  const res = await call(api, "GET", "/api/repos/org/app/config");
+  assert.equal(res.body.repo.status, "invalid");
+  assert.match(res.body.errors[0], /^effort: expected one of/);
+  assert.equal((await call(api, "GET", "/api/repos")).body.repos[0].status, "invalid");
+});
+
+test("GET config: without a file, the operator's defaults", async () => {
+  const { api } = apiSetup({ first: [info("org/app")] });
+  const { status, body } = await call(api, "GET", "/api/repos/org/app/config");
+  assert.equal(status, 200);
+  assert.equal(body.file, null);
+  assert.equal(body.repo.status, "not-onboarded");
+  assert.ok(body.effective.settings.every((r) => r.source === "operator"));
+  assert.equal(body.effective.settings.find((r) => r.key === "trigger").value, "deckhand");
+});
+
+test("GET config: a broken grants file is said, not detailed", async () => {
+  const { api } = apiSetup({
+    first: [info("org/app")],
+    configured: ["org/app"],
+    grants: new Error("grants: /secret/path: bad"),
+  });
+  const { body } = await call(api, "GET", "/api/repos/org/app/config");
+  assert.match(body.grantsError, /grants file has errors/);
+  assert.doesNotMatch(body.grantsError, /secret/);
+  assert.equal(body.effective.grant, null);
+});
+
+test("GET config: signed in only, for repos allowed and installed", async () => {
+  const { api } = apiSetup({
+    env: { ALLOWED_REPOS: "org/app,org/elsewhere" },
+    first: [info("org/app"), info("org/secret")],
+  });
+  assert.equal((await call(api, "GET", "/api/repos/org/app/config", { user: null })).status, 401);
+  assert.equal((await call(api, "GET", "/api/repos/org/secret/config")).status, 404);
+  assert.equal((await call(api, "GET", "/api/repos/org/elsewhere/config")).status, 404);
+  assert.equal((await call(api, "POST", "/api/repos/org/app/config")).status, 405);
+});
+
+test("POST refresh: same origin only, reads the repo's config again, rate limited", async () => {
+  const { api, gh, clock } = apiSetup({ first: [info("org/app")], configured: ["org/app"] });
+  await call(api, "GET", "/api/repos");
+  assert.equal(configReads(gh.calls), 1);
+  const path = "/api/repos/org/app/refresh";
+  assert.equal((await call(api, "POST", path, { user: null })).status, 401);
+  assert.equal((await call(api, "POST", path, { origin: "https://evil.example" })).status, 403);
+  assert.equal((await call(api, "GET", path)).status, 405);
+  assert.equal(configReads(gh.calls), 1);
+  const res = await call(api, "POST", path);
+  assert.equal(res.status, 200);
+  assert.equal(res.body.repo.status, "configured");
+  assert.equal(configReads(gh.calls), 2);
+  // Again at once: refused, GitHub isn't asked.
+  assert.equal((await call(api, "POST", path)).status, 429);
+  assert.equal(configReads(gh.calls), 2);
+  clock.now += REFRESH_MS;
+  assert.equal((await call(api, "POST", path)).status, 200);
+  assert.equal(configReads(gh.calls), 3);
+  assert.equal((await call(api, "POST", "/api/repos/org/other/refresh")).status, 404);
+});
+
+test("POST /api/repos/refresh: lists the installations' repos again", async () => {
+  const { api, gh, clock } = apiSetup({ first: [info("org/app")] });
+  const listings = () => gh.calls.filter((c) => c.startsWith("GET /app/installations")).length;
+  const before = await call(api, "GET", "/api/repos");
+  assert.equal(before.body.listedAt, 1_000_000);
+  clock.now += 1000;
+  assert.equal((await call(api, "POST", "/api/repos/refresh", { origin: null })).status, 403);
+  const res = await call(api, "POST", "/api/repos/refresh");
+  assert.equal(res.status, 200);
+  assert.equal(res.body.listedAt, 1_001_000);
+  assert.equal(listings(), 2);
+  assert.equal(configReads(gh.calls), 2);
+  assert.equal((await call(api, "POST", "/api/repos/refresh")).status, 429);
+  assert.equal(listings(), 2);
 });

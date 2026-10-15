@@ -1,8 +1,8 @@
 // The listener's API: api/state polled, a run's log streamed (server-sent events), the
-// repositories listed and onboarded.
+// repositories listed, onboarded and their config read.
 // Relative URLs, like the assets: the page works under any path.
-import { useEffect, useState } from "preact/hooks";
-import type { Entry, Onboarded, Repo, Repos, State } from "./types";
+import { useEffect, useRef, useState } from "preact/hooks";
+import type { Entry, Onboarded, Repo, RepoConfig, Repos, State } from "./types";
 
 const POLL_MS = 3000;
 
@@ -65,57 +65,149 @@ const REPOS_POLL_MS = 60000;
 
 export interface RepoList {
   repos: Repo[] | null;
+  // When the listener last listed the installations' repositories.
+  listedAt: number | null;
   error: string | null;
   // The repo whose onboarding is being started, and the last failure to.
   starting: string | null;
   failed: { repo: string; error: string } | null;
   onboard: (repo: string) => Promise<void>;
+  // The tab's Refresh: everything read again from GitHub.
+  refreshing: boolean;
+  refreshError: string | null;
+  refresh: () => Promise<void>;
+  // A row read again elsewhere (the config panel).
+  update: (row: Repo) => void;
 }
+
+// A JSON answer, or { error } from its status.
+async function answer<T>(res: Response): Promise<T & { error?: string }> {
+  const body = (await res.json().catch(() => ({}))) as T & { error?: string };
+  if (!res.ok && !body.error) body.error = String(res.status);
+  return body;
+}
+
+const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 export function useRepos(): RepoList {
   const [repos, setRepos] = useState<Repo[] | null>(null);
+  const [listedAt, setListedAt] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [starting, setStarting] = useState<string | null>(null);
   const [failed, setFailed] = useState<RepoList["failed"]>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
+  const show = (next: Repos) => {
+    setRepos(next.repos);
+    setListedAt(next.listedAt ?? null);
+    setError(null);
+  };
   useEffect(() => {
     let stopped = false;
-    const refresh = async () => {
+    const poll = async () => {
       try {
         const res = await fetch("api/repos", { cache: "no-store" });
         if (res.status === 401) return location.reload();
         if (!res.ok) throw new Error(String(res.status));
         const next = (await res.json()) as Repos;
-        if (!stopped) {
-          setRepos(next.repos);
-          setError(null);
-        }
+        if (!stopped) show(next);
       } catch (e) {
-        if (!stopped) setError(e instanceof Error ? e.message : String(e));
+        if (!stopped) setError(message(e));
       }
     };
-    refresh();
-    const timer = setInterval(refresh, REPOS_POLL_MS);
+    poll();
+    const timer = setInterval(poll, REPOS_POLL_MS);
     return () => {
       stopped = true;
       clearInterval(timer);
     };
   }, []);
 
+  const update = (row: Repo) =>
+    setRepos((all) => all && all.map((r) => (r.repo === row.repo ? row : r)));
+
   const onboard = async (repo: string) => {
     setStarting(repo);
     setFailed(null);
     try {
       const res = await fetch(`api/repos/${repo}/onboard`, { method: "POST" });
-      const answer = (await res.json().catch(() => ({}))) as Onboarded;
-      const row = answer.repo;
-      if (row) setRepos((all) => all && all.map((r) => (r.repo === row.repo ? row : r)));
-      if (!res.ok) setFailed({ repo, error: answer.error ?? String(res.status) });
+      const body = await answer<Onboarded>(res);
+      if (body.repo) update(body.repo);
+      if (body.error) setFailed({ repo, error: body.error });
     } catch (e) {
-      setFailed({ repo, error: e instanceof Error ? e.message : String(e) });
+      setFailed({ repo, error: message(e) });
     } finally {
       setStarting(null);
     }
   };
 
-  return { repos, error, starting, failed, onboard };
+  const refresh = async () => {
+    setRefreshing(true);
+    setRefreshError(null);
+    try {
+      const body = await answer<Repos>(await fetch("api/repos/refresh", { method: "POST" }));
+      if (body.error) setRefreshError(body.error);
+      else show(body);
+    } catch (e) {
+      setRefreshError(message(e));
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
+  return {
+    repos,
+    listedAt,
+    error,
+    starting,
+    failed,
+    onboard,
+    refreshing,
+    refreshError,
+    refresh,
+    update,
+  };
+}
+
+export interface RepoConfigView {
+  config: RepoConfig | null;
+  // Reading it failed: the first read, or a refresh (the last config stays shown).
+  error: string | null;
+  loading: boolean;
+  refresh: () => Promise<void>;
+}
+
+// One repo's config, read from GitHub when the panel opens and on its Refresh. `onRow`: its
+// row, read along with it.
+export function useRepoConfig(repo: string, onRow: (row: Repo) => void): RepoConfigView {
+  const [config, setConfig] = useState<RepoConfig | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  // The repo open now: an answer for another one (opened before) is dropped.
+  const current = useRef(repo);
+  current.current = repo;
+  const load = async (init?: RequestInit) => {
+    setLoading(true);
+    setError(null);
+    const mine = () => current.current === repo;
+    try {
+      const url = `api/repos/${repo}/${init ? "refresh" : "config"}`;
+      const res = await fetch(url, { cache: "no-store", ...init });
+      if (res.status === 401) return location.reload();
+      const body = await answer<RepoConfig>(res);
+      if (!mine()) return;
+      if (body.error) return setError(body.error);
+      setConfig(body);
+      onRow(body.repo);
+    } catch (e) {
+      if (mine()) setError(message(e));
+    } finally {
+      if (mine()) setLoading(false);
+    }
+  };
+  useEffect(() => {
+    setConfig(null);
+    load();
+  }, [repo]);
+  return { config, error, loading, refresh: () => load({ method: "POST" }) };
 }

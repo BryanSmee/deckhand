@@ -16,6 +16,8 @@
   --ok-soft: #e5f4ea;
   --err: #b91c1c;
   --err-soft: #fbe9e9;
+  --warn: #a16207;
+  --warn-soft: #fdf3dc;
   --idle: #8a837d;
   --idle-soft: #efedeb;
   --merged: #8250df;
@@ -42,6 +44,8 @@
     --ok-soft: #142a1c;
     --err: #f87171;
     --err-soft: #361819;
+    --warn: #fbbf24;
+    --warn-soft: #33280f;
     --idle: #8f8883;
     --idle-soft: #26221f;
     --merged: #a371f7;
