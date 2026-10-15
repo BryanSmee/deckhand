@@ -39,12 +39,21 @@ export function createTasks(ctx) {
   const { config, log, skip, tasks } = ctx;
 
   // A task's sandbox name. Tasks with a session from before names had a hash keep their old
-  // name, so they still find their volumes; the others get the new one.
+  // name, so they still find their volumes; the others get the new one. Old names collide
+  // ("acme/x" #pr-5 and "acme/x-pr" #5): a volume of that name is only this task's when one of
+  // its own runs had the name (run ids are "<name>-<start>"), else a new task would take over
+  // another repo's session and workspace.
   async function containerName(repo, id) {
     const key = `${repo}#${id}`;
     if (tasks.has(key)) return tasks.get(key).name;
     const legacy = legacySandboxName(config, repo, id);
-    return (await ctx.runner.hasSession(legacy)) ? legacy : sandboxName(config, repo, id);
+    const ran = ctx.runs.some(
+      (r) =>
+        r.key.toLowerCase() === key.toLowerCase() &&
+        r.id.startsWith(`${legacy}-`) &&
+        /^\d+$/.test(r.id.slice(legacy.length + 1)),
+    );
+    return ran && (await ctx.runner.hasSession(legacy)) ? legacy : sandboxName(config, repo, id);
   }
 
   // A comment that passed the operator's checks, checked again with its repo's settings

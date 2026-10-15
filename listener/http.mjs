@@ -49,10 +49,18 @@ const GRACE_MS = 1000;
 const IDLE_MS = 2000;
 const BODY_MS = 10000;
 
-// Health checks and scripts call from inside the container (docker compose exec).
-function local(req) {
+// Health checks and scripts call from inside the container (docker compose exec). A reverse
+// proxy on the host's network calls from loopback too, for anyone: a request it forwarded
+// (it says so in a header) isn't local.
+const FORWARDED = ["forwarded", "x-forwarded-for", "x-forwarded-host", "x-real-ip"];
+export function local(req) {
+  if (FORWARDED.some((h) => req.headers[h] !== undefined)) return false;
   return ["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(req.socket.remoteAddress);
 }
+
+// GitHub's delivery ids remembered, newest last: a redelivery of one of them (by hand, or after
+// a timeout on GitHub's side) would queue its comment twice.
+const RECENT_DELIVERIES = 500;
 
 // The graph's arrows, blocker → waiting task, for the waits of the tasks `shown`, and the keys
 // of the blockers that aren't shown. A wait names numbers: a pull request on the board is
@@ -80,6 +88,17 @@ export function createHttp(ctx, { dashboardDir }) {
 
   // Comments on their way to the queue: a listener that stops saves them too.
   const admitting = new Set();
+  const deliveries = new Set();
+
+  // True the first time a delivery id is seen; deliveries without one are taken.
+  function firstTime(id) {
+    if (!id) return true;
+    if (deliveries.has(id)) return false;
+    deliveries.add(id);
+    // A Set iterates in insertion order: the oldest goes.
+    if (deliveries.size > RECENT_DELIVERIES) deliveries.delete(deliveries.values().next().value);
+    return true;
+  }
 
   function trusted(req) {
     return local(req) || ctx.auth.user(req) !== null;
@@ -256,6 +275,8 @@ export function createHttp(ctx, { dashboardDir }) {
           // Answer at once: GitHub gives up after 10 seconds, runs take minutes.
           res.statusCode = 202;
           res.end();
+          const id = req.headers["x-github-delivery"];
+          if (!firstTime(id)) return log(`Delivery ${id} again: already handled`);
           let payload;
           try {
             payload = JSON.parse(body.toString("utf8"));

@@ -49,7 +49,7 @@ export function commandReader(limit = MAX_COMMANDS) {
       return out;
     }
     const parts = [];
-    for (let got = 0; got < n; ) {
+    for (let got = 0; got < n;) {
       const c = chunks[0];
       const k = Math.min(c.length, n - got);
       parts.push(c.subarray(0, k));

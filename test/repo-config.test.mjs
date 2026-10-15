@@ -149,6 +149,18 @@ inbox: { ideas: three, discussions: 5 }
   assert.match(parseRepoConfig("- a", config).errors[0], /top level/);
 });
 
+test("a preview hook's timeout: two hours at most", () => {
+  const preview = (minutes) =>
+    parseRepoConfig(`preview:\n  command: ./x.sh\n  timeout_minutes: ${minutes}\n`, config);
+  assert.equal(preview(120).settings.preview.timeoutMinutes, 120);
+  for (const bad of [0, 121, 100000]) {
+    assert.match(
+      preview(bad).errors.join("\n"),
+      /timeout_minutes: expected a whole number from 1 to 120/,
+    );
+  }
+});
+
 test("paths in the repo and cache paths", () => {
   assert.equal(repoPath("docker/Dockerfile"), "docker/Dockerfile");
   for (const bad of ["/etc/passwd", "../x", "a/../../x", ".", "a b", ""]) {
