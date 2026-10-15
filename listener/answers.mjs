@@ -56,7 +56,10 @@ export function parseAnswers(raw) {
       refuse(400, "An answer's `options` are the indexes of the options ticked.");
     }
     if (!text(note)) refuse(400, `An answer's \`text\` is at most ${MAX_TEXT} characters.`);
-    return { options: [...new Set(options)].sort((x, y) => x - y), text: note.trim() };
+    // One option per question, and a note (prompts/sandbox.md "Open questions").
+    const picked = [...new Set(options)];
+    if (picked.length > 1) refuse(400, "One option per question: its note says the rest.");
+    return { options: picked, text: note.trim() };
   });
   const total = checked.reduce((n, a) => n + a.text.length, 0);
   if (total > MAX_TEXT) refuse(413, `The answers are longer than ${MAX_TEXT} characters.`);

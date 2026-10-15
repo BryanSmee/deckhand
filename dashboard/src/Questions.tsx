@@ -1,11 +1,11 @@
 // The open questions of a task waiting for input, as a form: per question its options as
-// checkboxes (the agent's pick marked) and a note; questions not in the set format as written,
+// checkboxes, one at most ticked (the agent's pick, in advance), and a note; questions not in the set format as written,
 // with one text box. Sending posts them as one App comment (listener/work.mjs `answer`). Opened
 // by a drag on the graph (`then`), every question needs an answer, and the issue starts or
 // queues with them.
 import { useState } from "preact/hooks";
 import { sendAnswers } from "./api";
-import type { Answers, Questions as Asked, Task, WorkResult } from "./types";
+import type { Answers, Question, Questions as Asked, Task, WorkResult } from "./types";
 import styles from "./Questions.module.css";
 
 interface Props {
@@ -25,7 +25,12 @@ interface Answer {
   text: string;
 }
 
-const blank = (n: number): Answer[] => Array.from({ length: n }, () => ({ options: [], text: "" }));
+// The recommended option ticked in advance: one tap accepts the agent's picks.
+const initial = (items: Question[] | null): Answer[] =>
+  (items ?? []).map((q) => {
+    const pick = q.options.findIndex((o) => o.recommended);
+    return { options: pick < 0 ? [] : [pick], text: "" };
+  });
 
 export function Questions({
   task: t,
@@ -36,17 +41,16 @@ export function Questions({
   onCancel,
 }: Props) {
   const items = q.items;
-  const [answers, setAnswers] = useState<Answer[]>(() => blank(items?.length ?? 0));
+  const [answers, setAnswers] = useState<Answer[]>(() => initial(items));
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const set = (i: number, change: Partial<Answer>) =>
     setAnswers((all) => all.map((a, j) => (j === i ? { ...a, ...change } : a)));
-  const toggle = (i: number, option: number, on: boolean) => {
-    const picked = answers[i].options.filter((o) => o !== option);
-    set(i, { options: on ? [...picked, option].sort((a, b) => a - b) : picked });
-  };
+  // One option per question: ticking one unticks the others; unticked, the note may answer.
+  const toggle = (i: number, option: number, on: boolean) =>
+    set(i, { options: on ? [option] : [] });
 
   const said = (a: Answer) => a.options.length > 0 || !!a.text.trim();
   const empty = items ? !answers.some(said) : !text.trim();
@@ -65,7 +69,7 @@ export function Questions({
     const result: WorkResult = await submit(body);
     setSending(false);
     if (result.error) return setError(result.error);
-    setAnswers(blank(items?.length ?? 0));
+    setAnswers(initial(items));
     setText("");
     onSent(result.message ?? "Answers sent.");
   };

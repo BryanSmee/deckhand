@@ -41,14 +41,12 @@ const area = async () => {
   return within(work).getByRole("list", { name: "Issues waiting for answers" });
 };
 
-// Every question of the fixture's #138 answered.
-const answerAll = (dialog: HTMLElement) => {
-  fireEvent.click(within(dialog).getByRole("checkbox", { name: /300 ms/ }));
-  fireEvent.click(within(dialog).getByRole("checkbox", { name: /Yes, abort it/ }));
+// Every question of the fixture's #138 answered: its two picks are ticked in advance, the
+// free-text one is left.
+const answerAll = (dialog: HTMLElement) =>
   fireEvent.input(within(dialog).getByRole("textbox", { name: "Answer to question 3" }), {
     target: { value: "No results" },
   });
-};
 
 test("Start on an issue waiting for answers opens its questions; it starts with them", async () => {
   const list = await area();
@@ -56,13 +54,10 @@ test("Start on an issue waiting for answers opens its questions; it starts with 
   const dialog = screen.getByRole("dialog", { name: "Answer #138's questions" });
   expect(within(dialog).getByText("Answer them to start #138")).toBeTruthy();
   const send = within(dialog).getByRole("button", { name: "Send answers and start" });
-  // Nothing went yet, and a partial answer can't go.
+  // Nothing went yet, and a partial answer can't go: the picks ticked in advance answer two.
   expect(posted).toEqual([]);
-  fireEvent.input(within(dialog).getByRole("textbox", { name: "Answer to question 3" }), {
-    target: { value: "No results" },
-  });
   expect((send as HTMLButtonElement).disabled).toBe(true);
-  expect(within(dialog).getByText("Answer every question to start it (2 left).")).toBeTruthy();
+  expect(within(dialog).getByText("Answer every question to start it (1 left).")).toBeTruthy();
   answerAll(dialog);
   expect((send as HTMLButtonElement).disabled).toBe(false);
   fireEvent.click(send);

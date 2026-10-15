@@ -5,11 +5,11 @@ import { MAX_TEXT, answersComment, parseAnswers } from "../listener/answers.mjs"
 const parse = (body) => parseAnswers(JSON.stringify(body));
 
 test("parseAnswers: one answer per question, or one text", () => {
-  assert.deepEqual(parse({ number: 3, answers: [{ options: [2, 0, 2], text: " a " }, {}] }), {
+  assert.deepEqual(parse({ number: 3, answers: [{ options: [2, 2], text: " a " }, {}] }), {
     number: 3,
     pr: false,
     answers: [
-      { options: [0, 2], text: "a" },
+      { options: [2], text: "a" },
       { options: [], text: "" },
     ],
     text: null,
@@ -36,6 +36,7 @@ test("parseAnswers: refuses what isn't an answer", () => {
     JSON.stringify({ number: 3, text: "" }),
     JSON.stringify({ number: 3, answers: {} }),
     JSON.stringify({ number: 3, answers: [{ options: [-1] }] }),
+    JSON.stringify({ number: 3, answers: [{ options: [0, 1] }] }),
     JSON.stringify({ number: 3, answers: [{ options: ["0"] }] }),
     JSON.stringify({ number: 3, answers: [{ text: 1 }] }),
     JSON.stringify({ number: 3, answers: [{}, { options: [] }] }),
