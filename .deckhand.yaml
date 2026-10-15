@@ -10,6 +10,7 @@ hosts:
   - registry-1.docker.io
   - auth.docker.io
   - production.cloudflare.docker.com
+  - production.cloudfront.docker.com
   # quay.io/podman/stable (engine/podman/Dockerfile).
   - quay.io
   - "*.quay.io"
