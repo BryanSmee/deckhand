@@ -112,7 +112,7 @@ import { createBroker } from "./broker.mjs";
 import { checkout } from "./checkout.mjs";
 import { ConfigError, loadConfig } from "./config.mjs";
 import { docker } from "./docker.mjs";
-import { mandatoryHosts, matchHost, proxyEnv, refusedRepoHosts, runHosts } from "./egress.mjs";
+import { matchHost, proxyEnv, refusedRepoHosts, runHosts } from "./egress.mjs";
 import { MARKER, previewEvent, pullRequest, takeOptions, verified, workItem } from "./events.mjs";
 import {
   createGitHubApp,
@@ -123,6 +123,7 @@ import {
 } from "./github-app.mjs";
 import { grantFor, hardeningArgs, loadGrants, mountArgs, resolveMounts } from "./grants.mjs";
 import { createImages, imageRef } from "./images.mjs";
+import { BUILT_IN, INBOX, isFresh, isLight, kindOf, permissionsFor } from "./modes.mjs";
 import {
   branchConfigReport,
   createOnboarding,
@@ -132,6 +133,7 @@ import {
 } from "./onboarding.mjs";
 import { createRepoApi, createRepoList, refreshFor } from "./repos.mjs";
 import { createPreviews } from "./previews.mjs";
+import { firstMessage, liveMessage, promptFor } from "./prompts.mjs";
 import {
   CONFIG_FILE,
   customMode,
@@ -666,35 +668,9 @@ async function unknownMode(item, what) {
   await reply(item.repo, item.replyTo, text).catch((error) => log(`${where}: ${error}`));
 }
 
-// Runs that read the code and answer, without a branch or the repo's setup: brainstorms (and
-// their wrap-up), onboarding, inbox entries and discussions.
-const INBOX = new Set(["idea", "bug", "discussion"]);
-const LIGHT = new Set(["brainstorm", "stop", "onboarding", ...INBOX]);
-
-// Each inbox entry starts a fresh session (the inbox issue collects unrelated entries); a
-// discussion keeps its own, like a brainstorm.
-const FRESH = new Set(["idea", "bug"]);
-
-// Any other mode is one of the repo's own.
-const BUILT_IN = new Set(["work", "brainstorm", "stop", "onboarding", ...INBOX]);
-
-// The repo's own modes (its config's `modes:`, customMode()) add theirs to both.
-function isLight(task, mode) {
-  return LIGHT.has(mode) || !!customMode(task.settings, mode)?.light;
-}
-
-function isFresh(task, mode) {
-  return FRESH.has(mode) || !!customMode(task.settings, mode)?.fresh;
-}
-
 // A light run is what the task's next run will be: it goes first, after a shorter pause.
 function talking(task) {
   return isLight(task, task.pending.at(-1)?.mode);
-}
-
-// What the dashboard shows a run or queued task as.
-function kindOf(mode, kind) {
-  return mode === "brainstorm" || mode === "stop" ? "brainstorm" : INBOX.has(mode) ? mode : kind;
 }
 
 function debounce(task) {
@@ -747,24 +723,6 @@ function deliver(task) {
   live.unanswered.push(...items);
   saveLive(task);
   return true;
-}
-
-// What Claude reads for comments delivered mid-run (the CLI adds that the user sent it while
-// Claude was working).
-function liveMessage(mode, text) {
-  const reply =
-    "Your final message is still posted as the single reply for this run: make it cover this comment too. (Don't post comments on GitHub yourself.)";
-  if (mode === "brainstorm") {
-    return `New comment on the issue: ${text}\n\n(Still a brainstorm: no code, branch, commit, pull request or new issue. ${reply})`;
-  }
-  if (FRESH.has(mode)) {
-    return `Another entry arrived on the inbox while you were working:\n\n${text}\n\nHandle it like the others, as its own entry. ${reply}`;
-  }
-  if (mode === "discussion") return `New comment in the discussion:\n\n${text}\n\n${reply}`;
-  if (mode === "onboarding") {
-    return `New comment on the issue: ${text}\n\n(Still onboarding: no code, branch, commit, pull request or new issue. ${reply})`;
-  }
-  return `New comment on this issue while you are working:\n\n${text}\n\nTake it into account from here on. ${reply}`;
 }
 
 function schedule() {
@@ -845,177 +803,6 @@ function setIssueMode(key, mode) {
   writeFileSync(issueModesPath, JSON.stringify(Object.fromEntries(issueModes), null, 2));
 }
 
-// --- Prompts -------------------------------------------------------------------------------
-
-const instructions = (name) => readFileSync(new URL(`../prompts/${name}`, import.meta.url), "utf8");
-const brainstormInstructions = instructions("brainstorm.md");
-const onboardingInstructions = instructions("onboarding.md");
-// The config's reference, in the image next to the prompts so the two can't drift apart.
-const configReference = readFileSync(new URL("../docs/repo-config.md", import.meta.url), "utf8");
-const inboxInstructions = {
-  idea: instructions("idea.md"),
-  bug: instructions("bug.md"),
-  discussion: instructions("discussion.md"),
-};
-
-// Inbox entries and discussions: the entries come with the prompt, as the session is new.
-function inboxPrompt(task, mode, text) {
-  const { repo, number } = task;
-  const where = {
-    idea: `the ideas inbox of ${repo} (issue #${number})`,
-    bug: `the bug reports inbox of ${repo} (issue #${number})`,
-    discussion: `discussion #${number} of ${repo}`,
-  }[mode];
-  const read =
-    mode === "discussion"
-      ? `Read the whole discussion with:
-
-\`\`\`sh
-gh api graphql -F owner=${repo.split("/")[0]} -F name=${repo.split("/")[1]} -F number=${number} -f query='
-  query($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) {
-    discussion(number: $number) { title body url author { login } comments(last: 50) { nodes {
-      author { login } body url replies(last: 50) { nodes { author { login } body url } } } } } } }'
-\`\`\``
-      : `The latest comments of the inbox give the context of a follow-up:
-\`gh issue view ${number} --comments\`.`;
-  return `New on ${where}. ${read}
-
-${inboxInstructions[mode]}
-
-${mode === "discussion" ? "The message" : "The entries, each its own"}:
-
-${text}`;
-}
-
-function brainstormPrompt(task) {
-  return `Brainstorm GitHub issue #${task.number} of ${task.repo} with the maintainer. Read it with
-\`gh issue view ${task.number} --comments\`.
-
-${brainstormInstructions}`;
-}
-
-// Onboarding: its instructions, what this Deckhand allows the repo (a config can only narrow
-// it, the operator's grants widen it), and the config's reference.
-function onboardingPrompt(task, settings) {
-  const { repo, number } = task;
-  const grant = grantFor(loadGrants(config), config, repo);
-  const none = (items) => (items.length ? items.map((i) => `\`${i}\``).join(", ") : "none");
-  const roots = grant.mounts.map((m) => `${m.root}${m.readOnly === false ? " (read-write)" : ""}`);
-  return `Onboard ${repo} with the maintainer, on GitHub issue #${number}. Read it with
-\`gh issue view ${number} --comments\`.
-
-${onboardingInstructions}
-
-## This Deckhand
-
-- Trigger (confirms the proposal, alone on the first line of a comment): \`${triggerWord(settings.trigger)}\`
-- Users who may start runs (\`ALLOWED_USERS\`; \`users\` can only narrow it): ${none(config.users)}
-- Hosts every sandbox reaches: ${none(mandatoryHosts(config))}, and the operator's \`ALLOWED_HOSTS\`: ${none(config.hosts)}
-- Hosts the operator grants this repository: ${none(grant.hosts)}
-- \`hosts\` in \`.deckhand.yaml\`: ${grant.allowRepoHosts ? "allowed: the operator lets this repository add hosts (never `*`)" : "only hosts listed above count; any other is refused and stops runs until the operator sets `allow_repo_hosts` for this repository"}
-- Host mount roots granted to this repository: ${roots.length ? none(roots) : "none: a \`mounts\` entry would be refused until the operator grants a root"}
-- Models: work \`${settings.model}\` (${settings.effort} effort), brainstorms \`${settings.brainstormModel}\` (${settings.brainstormEffort})
-
-## Reference: \`.deckhand.yaml\` (docs/repo-config.md)
-
-${configReference}`;
-}
-
-// The run the trigger line starts on an onboarding issue: the agreed files, nothing else.
-function onboardingWorkPrompt(task) {
-  const n = task.number;
-  const base = task.base || "main";
-  return `The maintainer confirmed the onboarding proposal on GitHub issue #${n} of ${task.repo}
-(\`gh issue view ${n} --comments\` has the conversation). Open the pull request:
-1. The sandbox has already checked out the issue's branch, pushed it and opened a draft pull
-   request (\`Closes #${n}\`; \`gh pr view\` shows it). If you are still on ${base}, create a
-   branch from ${base} named \`issue-${n}-deckhand-config\` and push it.
-2. If the maintainer agreed to inbox issues, create them now (\`gh issue create\`) and put
-   their numbers in \`inbox\`. Create none they didn't agree to.
-3. Write only the agreed files (\`.deckhand.yaml\`, and the Dockerfile and instructions file
-   if they were part of it), exactly as last proposed with the changes agreed since. Change
-   nothing else in the repository.
-4. Commit, push, then update the pull request with \`gh pr edit\`: title "Set up Deckhand", a
-   description with \`Closes #${n}\` and a line per file, and mark it ready with
-   \`gh pr ready\`.
-Never push to ${base}. The listener checks the branch's \`.deckhand.yaml\` once you are done
-and adds the result to your reply.
-Don't post comments on GitHub yourself: your final message is posted for you as a reply, so
-end with a short summary (the pull request link, the files, the inbox issues created).`;
-}
-
-// What Claude reads for a brainstorm run, besides the comments themselves.
-function brainstormMessage(mode, text, restored) {
-  if (mode === "stop") {
-    return `The maintainer ends the brainstorm here${text ? `, adding:\n\n${text}\n\n` : ". "}Wrap up as in step 4 of your instructions: post the summary and update the issue's description with what was decided.`;
-  }
-  return restored
-    ? `${text}\n\n(The brainstorm resumes after a pause: check the issue for comments you haven't seen.)`
-    : text;
-}
-
-function initialPrompt(task) {
-  const base = task.base || "main";
-  const common = `Follow the repository's AGENTS.md and CLAUDE.md if it has them, with tests where the
-code has them, and run the checks they list before pushing. Never push to ${base}. When
-something is ambiguous, pick the reasonable option and say so rather than stopping, unless it
-is a blocker only the maintainer can resolve: then push your work in progress and end with
-your questions (see "Stopping to ask" in CLAUDE.md).
-Don't post comments on GitHub yourself: your final message is posted for you as a reply, so
-end with a short summary (what you did, the pull request link, anything left open).`;
-  if (task.kind === "pr") {
-    return `Work on pull request #${task.number} of ${task.repo}: check it out with
-\`gh pr checkout ${task.number}\`, read it with \`gh pr view ${task.number} --comments\`, do what
-is asked below, and push to the same branch.
-${common}`;
-  }
-  return `Work on GitHub issue #${task.number} of ${task.repo} until it is ready for review.
-1. Read it with \`gh issue view ${task.number} --comments\`.
-2. The sandbox has already checked out the issue's branch, pushed it and opened a draft pull
-   request (\`Closes #${task.number}\`; \`gh pr view\` shows it): work on that branch. If you
-   are still on ${base}, it couldn't: create a branch from ${base} named
-   \`issue-${task.number}-<short-slug>\` and push it, and the draft pull request is opened for
-   you.
-3. Implement it, pushing to the same branch as you go.
-4. When the checks pass, update the pull request with \`gh pr edit\`: final title, and a
-   description with \`Closes #${task.number}\`, what changed and why, any choice you made, and
-   screenshots if the UI changed (see "Screenshots" in CLAUDE.md). Then mark it ready for
-   review with \`gh pr ready\`.
-${common}`;
-}
-
-// A run in one of the repo's own modes: its instructions (`instructions`, the file's text
-// from the default branch) after what every run of that kind is told. CLAUDE.md has the
-// generic rules, as for work.
-function modePrompt(task, own, instructions) {
-  const { number: n, repo } = task;
-  const base = task.base || "main";
-  const where =
-    task.kind === "pr"
-      ? `pull request #${n} of ${repo}. Read it with \`gh pr view ${n} --comments\` and \`gh pr diff ${n}\``
-      : `GitHub issue #${n} of ${repo}. Read it with \`gh issue view ${n} --comments\`, and its pull
-request if it has one (\`gh pr list --state all --search ${n}\`)`;
-  const rules = own.light
-    ? `This mode only comments: never write or edit code, create a branch, commit, push, open a
-pull request or create issues (your GitHub token can only read). The clone in /workspace is
-set up for reading, not running: the project's setup was skipped. The base branch was
-fetched from \`origin\` at the start of this run.`
-    : task.kind === "pr"
-      ? `Check the pull request out with \`gh pr checkout ${n}\` if you change code, and push to its
-branch. Never push to ${base}.`
-      : `The sandbox has already checked out the issue's branch, pushed it and opened a draft pull
-request (\`gh pr view\` shows it): if you change code, commit and push to that branch. Never
-push to ${base}.`;
-  return `You are in the "${own.name}" mode of this repository, on ${where}.
-
-${rules}
-Don't post comments on GitHub yourself: your final message is posted for you as the reply.
-
-The ${own.name} mode's instructions, from the repository:
-
-${instructions.trim()}`;
-}
-
 // The instructions file of the repo's mode, from its default branch like the config.
 async function modeInstructions(task, own) {
   const base = task.base || "main";
@@ -1031,15 +818,6 @@ async function modeInstructions(task, own) {
 }
 
 // --- Runs ----------------------------------------------------------------------------------
-
-// A discussion run answers through GraphQL: its token needs Discussions too. Onboarding and
-// a light run in one of the repo's own modes only comment: their token only reads.
-function permissionsFor(mode, light) {
-  if (mode === "discussion") return DISCUSSION_PERMISSIONS;
-  // Onboarding proposes: nothing is pushed or created before the trigger line.
-  if (mode === "onboarding") return READ_ONLY_PERMISSIONS;
-  return light && !LIGHT.has(mode) ? READ_ONLY_PERMISSIONS : undefined;
-}
 
 // Sandboxes are started, followed and removed through the runner (runner/docker.mjs). They
 // run detached, so they outlive a listener restart: the next listener picks them up
@@ -1144,14 +922,7 @@ async function start(task, items) {
     .filter(Boolean)
     .join("\n\n---\n\n");
   const restored = items.some((i) => i.restored);
-  const body = talk ? brainstormMessage(mode, text, restored) : text;
-  // An empty follow-up (only "/model …", say) would open an interactive session instead.
-  // A new inbox session reads its entries in the prompt (inboxPrompt()).
-  const message = started
-    ? `${body || "Continue."}\n\n(Don't post comments on GitHub yourself: your final message is posted as a reply.)`
-    : INBOX.has(mode)
-      ? ""
-      : body;
+  const message = firstMessage({ mode, text, restored, started });
   // Fresh from the default branch: a config merged since the comment applies.
   const { settings, errors, warnings } = await repoSettings(task.repo, task.base);
   task.settings = settings;
@@ -1192,17 +963,16 @@ async function start(task, items) {
   live.shots = shots;
   live.hosts = access.hosts;
   if (stopping) return false;
-  const prompt = talk
-    ? brainstormPrompt(task)
-    : INBOX.has(mode)
-      ? inboxPrompt(task, mode, text)
-      : mode === "onboarding"
-        ? onboardingPrompt(task, settings)
-        : own
-          ? modePrompt(task, own, ownInstructions)
-          : onboardingWork(task)
-            ? onboardingWorkPrompt(task)
-            : initialPrompt(task);
+  const prompt = promptFor(task, {
+    mode,
+    text,
+    settings,
+    own,
+    instructions: ownInstructions,
+    onboardingWork: onboardingWork(task),
+    config,
+    grant: access.grant,
+  });
   await runner.start(sandboxSpec(task, prompt, message, { ...prepared, ...access }));
   // Written before Claude starts (setup takes a while), a message waits in the inbox.
   live.open = true;
@@ -1240,7 +1010,7 @@ function grantedAccess(task, settings, note) {
   }
   for (const text of notes) note(text);
   for (const m of mounts) note(`Host mount ${m.target}${m.readOnly ? " (read-only)" : ""}`);
-  return { hosts: runHosts(config, grant, settings), mounts, limits: grant.limits };
+  return { grant, hosts: runHosts(config, grant, settings), mounts, limits: grant.limits };
 }
 
 // The run's image (built first if the repo's Dockerfile changed), Claude Code and the repo's
