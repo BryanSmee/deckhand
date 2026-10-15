@@ -27,28 +27,11 @@ interface Props {
   // Reads api/state again: an action's node shows without waiting for the next tick.
   refresh?: () => Promise<void>;
   repo: string | null;
-  // A phone: top to bottom.
-  vertical: boolean;
+  // A phone: smaller nodes; a long chain scrolls sideways.
+  narrow: boolean;
   // Closed issues (implemented, not planned) are drawn too.
   showClosed: boolean;
   onShowClosed: (show: boolean) => void;
-}
-
-// The page's width, for the grid of issues without arrows.
-function useWidth() {
-  const ref = useRef<HTMLDivElement>(null);
-  const [width, setWidth] = useState(1000);
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    const measure = () => el.clientWidth && setWidth(el.clientWidth - 32);
-    measure();
-    if (typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(measure);
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, []);
-  return [ref, width] as const;
 }
 
 // "#12", "PR #3", with the repo on the All tab when there is room: the number always shows.
@@ -74,8 +57,7 @@ interface NodeDrag {
 // Past this many pixels a press on a waiting node is a drag, not a click.
 const DRAG_PX = 6;
 
-export function Graph({ state, refresh, repo, vertical, showClosed, onShowClosed }: Props) {
-  const [ref, width] = useWidth();
+export function Graph({ state, refresh, repo, narrow, showClosed, onShowClosed }: Props) {
   const work = useWorkArea(repo, refresh);
   const [mode, setMode] = useState("work");
   const [notice, setNotice] = useState<string | null>(null);
@@ -86,7 +68,7 @@ export function Graph({ state, refresh, repo, vertical, showClosed, onShowClosed
   // The node last pressed, drawn last (on top) from then on: moving it back among the others
   // when it is let go would cut its slide to its new place short.
   const [onTop, setOnTop] = useState<string | null>(null);
-  // The last drawing, on this tab and in this direction: its places are kept.
+  // The last drawing, on this tab and at this size: its places are kept.
   const last = useRef<{ on: string; shape: Layout } | null>(null);
   // A drag ended on a node: the click that follows doesn't open it.
   const dragEnded = useRef(false);
@@ -104,12 +86,12 @@ export function Graph({ state, refresh, repo, vertical, showClosed, onShowClosed
   const queued = new Set(
     work.pending.filter((p) => p.action === "queue").map((p) => `${p.repo}#${p.number}`),
   );
-  const on = `${repo} ${vertical}`;
+  const on = `${repo} ${narrow}`;
   const prev = last.current?.on === on ? last.current.shape : null;
   const shape = layout(
     nodes.map((n) => n.key),
     edges,
-    { vertical, width },
+    { narrow },
     prev && { ...prev, boxes: prev.boxes.filter((b) => !queued.has(b.key)) },
   );
   last.current = { on, shape };
@@ -146,7 +128,7 @@ export function Graph({ state, refresh, repo, vertical, showClosed, onShowClosed
   const targetAt = (clientX: number, clientY: number) => {
     const box = svg.current?.getBoundingClientRect();
     if (!box) return null;
-    return dropTarget(shape, vertical, clientX - box.left - 4, clientY - box.top - 4);
+    return dropTarget(shape, clientX - box.left - 4, clientY - box.top - 4);
   };
 
   // Issue `number` let go on the area, after `onto` (a node) or in the open. `waits`: it is a
@@ -358,7 +340,7 @@ export function Graph({ state, refresh, repo, vertical, showClosed, onShowClosed
   );
 
   return (
-    <div class={styles.page} ref={ref}>
+    <div class={styles.page}>
       <ul class={styles.legend} aria-label="Legend">
         {LOOKS.map(({ look, name, means }) => (
           <li key={look} title={means}>

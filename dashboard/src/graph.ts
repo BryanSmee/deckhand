@@ -1,6 +1,7 @@
 // The graph page's model: what each issue looks like, and where it goes. A layered layout
 // drawn by hand: each issue that waits for others ("/after") goes in a column after theirs,
-// left to right (top to bottom on a phone); issues with no arrow stand alone in a grid below.
+// left to right at every width; issues with no arrow stand alone in one column below, top to
+// bottom in the board's order, like the list.
 import { STATE_NAMES } from "./format";
 import type { Blocker, Edge, PrState, Task, WorkAction } from "./types";
 
@@ -173,13 +174,13 @@ export function graphOf(
   };
 }
 
-// Sizes in SVG units (CSS pixels). A phone's columns are narrower: they sit side by side
-// across its width.
+// Sizes in SVG units (CSS pixels). A phone's columns are narrower: a short chain still fits
+// its width, a longer one scrolls sideways.
 export const SIZES = {
   wide: { w: 232, h: 56, layerGap: 56, rowGap: 16 },
-  narrow: { w: 168, h: 56, layerGap: 40, rowGap: 12 },
+  narrow: { w: 148, h: 56, layerGap: 28, rowGap: 12 },
 };
-// Between two groups of linked issues, and before the grid of the others.
+// Between two groups of linked issues, and before the column of the others.
 const GROUP_GAP = 32;
 
 export interface Box {
@@ -192,27 +193,26 @@ export interface Layout {
   boxes: Box[];
   // An SVG path per arrow, ending at the waiting issue.
   arrows: { from: string; to: string; d: string }[];
-  // Where the grid of issues without arrows starts; null when there are none.
+  // Where the column of issues without arrows starts; null when there are none.
   gridTop: number | null;
   width: number;
   height: number;
   w: number;
   h: number;
-  // Between two columns (rows on a phone): where an arrow runs.
+  // Between two columns: where an arrow runs.
   gap: number;
 }
 
-// `keys` in the order they come (the board's: most recent first); `vertical`: a phone's
-// top-to-bottom layout; `width`: what the page has, for the grid's columns. `prev`: the last
-// drawing, whose places are kept where they still fit (settle()): adding or moving an issue
-// doesn't move the others.
+// `keys` in the order they come (the board's: most recent first); `narrow`: a phone's smaller
+// nodes. `prev`: the last drawing, whose places are kept where they still fit (settle()):
+// adding or moving an issue doesn't move the others.
 export function layout(
   keys: string[],
   edges: { from: string; to: string }[],
-  { vertical, width }: { vertical: boolean; width: number },
+  { narrow }: { narrow: boolean },
   prev: Pick<Layout, "boxes" | "gridTop"> | null = null,
 ): Layout {
-  const sizes = vertical ? SIZES.narrow : SIZES.wide;
+  const sizes = narrow ? SIZES.narrow : SIZES.wide;
   const { w, h, layerGap, rowGap } = sizes;
   const order = new Map(keys.map((k, i) => [k, i]));
   const preds = new Map<string, string[]>(keys.map((k) => [k, []]));
@@ -250,34 +250,20 @@ export function layout(
     layers.forEach((layer, l) => {
       layer.forEach((k, r) => {
         layerOf.set(k, l);
-        const along = l * (vertical ? h + layerGap : w + layerGap);
-        const across = r * (vertical ? w + rowGap : h + rowGap);
-        boxes.push(
-          vertical ? { key: k, x: across, y: top + along } : { key: k, x: along, y: top + across },
-        );
+        boxes.push({ key: k, x: l * (w + layerGap), y: top + r * (h + rowGap) });
       });
     });
-    // Groups go one under the other, whichever the direction.
-    const extent = vertical
-      ? layers.length * (h + layerGap) - layerGap
-      : rows * (h + rowGap) - rowGap;
-    top += extent + GROUP_GAP;
+    // Groups go one under the other.
+    top += rows * (h + rowGap) - rowGap + GROUP_GAP;
   }
 
   const alone = keys.filter((k) => !preds.get(k)!.length && !succs.get(k)!.length);
   let gridTop = alone.length ? top : null;
-  const columns = Math.max(1, Math.floor((width + rowGap) / (w + rowGap)));
-  alone.forEach((k, i) => {
-    boxes.push({
-      key: k,
-      x: (i % columns) * (w + rowGap),
-      y: top + Math.floor(i / columns) * (h + rowGap),
-    });
-  });
+  alone.forEach((k, i) => boxes.push({ key: k, x: 0, y: top + i * (h + rowGap) }));
 
   // Nothing kept (the first drawing, another tab): laid out afresh.
   const keeps = prev?.boxes.some((b) => order.has(b.key));
-  const kept = keeps && settle(keys, preds, succs, layerOf, prev!, { vertical, columns, ...sizes });
+  const kept = keeps && settle(keys, preds, succs, layerOf, prev!, sizes);
   if (kept) {
     boxes = kept.boxes;
     gridTop = alone.length ? kept.gridTop : null;
@@ -289,39 +275,29 @@ export function layout(
     const a = box.get(from)!;
     const b = box.get(to)!;
     // An elbow: out of the blocker, along the gap before the waiting issue's column, in.
-    if (vertical) {
-      const y1 = a.y + h;
-      const mid = b.y - layerGap / 2;
-      return { from, to, d: `M${a.x + w / 2} ${y1}V${mid}H${b.x + w / 2}V${b.y}` };
-    }
     const x1 = a.x + w;
     const mid = b.x - layerGap / 2;
     return { from, to, d: `M${x1} ${a.y + h / 2}H${mid}V${b.y + h / 2}H${b.x}` };
   });
 
-  const width_ = Math.max(0, ...boxes.map((b) => b.x + w));
+  const width = Math.max(0, ...boxes.map((b) => b.x + w));
   const height = Math.max(0, ...boxes.map((b) => b.y + h));
-  return { boxes, arrows, gridTop, width: width_, height, w, h, gap: layerGap };
+  return { boxes, arrows, gridTop, width, height, w, h, gap: layerGap };
 }
 
-// The last drawing's places, kept for the issues they still fit: each one a column (a row on
-// a phone) after what it waits for, none on another. The others get a place near theirs:
-// after what they wait for, or in a free cell of the grid.
+// The last drawing's places, kept for the issues they still fit: each one a column after what
+// it waits for, none on another. The others get a place near theirs: after what they wait
+// for, or in a free row of the column of issues without arrows.
 function settle(
   keys: string[],
   preds: Map<string, string[]>,
   succs: Map<string, string[]>,
   layerOf: Map<string, number>,
   prev: Pick<Layout, "boxes" | "gridTop">,
-  s: { vertical: boolean; columns: number; w: number; h: number; layerGap: number; rowGap: number },
+  { w, h, layerGap, rowGap }: { w: number; h: number; layerGap: number; rowGap: number },
 ): { boxes: Box[]; gridTop: number } {
-  const { vertical, w, h, layerGap, rowGap } = s;
-  const along = (b: { x: number; y: number }) => (vertical ? b.y : b.x);
-  const across = (b: { x: number; y: number }) => (vertical ? b.x : b.y);
-  const make = (key: string, a: number, c: number): Box =>
-    vertical ? { key, x: c, y: a } : { key, x: a, y: c };
-  const step = (vertical ? h : w) + layerGap;
-  const row = (vertical ? w : h) + rowGap;
+  const step = w + layerGap;
+  const row = h + rowGap;
   // An arrow that closes a cycle goes backwards anyway: only the others are kept forward.
   const forward = (from: string, to: string) => layerOf.get(from)! < layerOf.get(to)!;
 
@@ -334,14 +310,14 @@ function settle(
     for (const [k, b] of placed) {
       const late = preds
         .get(k)!
-        .some((p) => forward(p, k) && placed.has(p) && along(placed.get(p)!) + step > along(b));
+        .some((p) => forward(p, k) && placed.has(p) && placed.get(p)!.x + step > b.x);
       if (late) changed = placed.delete(k);
     }
   }
   const clash = (a: Box, b: Box) =>
     a.key !== b.key && Math.abs(a.x - b.x) < w + rowGap && Math.abs(a.y - b.y) < h + rowGap;
   const free = (b: Box) => ![...placed.values()].some((o) => clash(o, b));
-  // Two on the same place (the page got narrower, say): the first one in the board's order
+  // Two on the same place (a phone's smaller nodes, say): the first one in the board's order
   // keeps it.
   for (const k of keys) {
     const b = placed.get(k);
@@ -360,9 +336,9 @@ function settle(
     rest.sort((a, b) => layer(a) - layer(b) || keys.indexOf(a) - keys.indexOf(b));
     const k = rest.shift()!;
     const before = preds.get(k)!.filter((p) => forward(p, k) && placed.has(p));
-    const lo = before.length ? Math.max(...before.map((p) => along(placed.get(p)!) + step)) : 0;
+    const lo = before.length ? Math.max(...before.map((p) => placed.get(p)!.x + step)) : 0;
     let after = succs.get(k)!.filter((n) => forward(k, n) && placed.has(n));
-    for (const n of after.filter((n) => along(placed.get(n)!) < lo + step)) {
+    for (const n of after.filter((n) => placed.get(n)!.x < lo + step)) {
       placed.delete(n);
       rest.push(n);
     }
@@ -370,21 +346,17 @@ function settle(
     let b: Box | undefined;
     if (before.length || after.length) {
       // Next to what it is linked to: the same row first, then the nearest free one.
-      const a = before.length ? lo : Math.min(...after.map((n) => along(placed.get(n)!) - step));
-      const c = Math.min(...(before.length ? before : after).map((n) => across(placed.get(n)!)));
+      const a = before.length ? lo : Math.min(...after.map((n) => placed.get(n)!.x - step));
+      const c = Math.min(...(before.length ? before : after).map((n) => placed.get(n)!.y));
       for (let i = 0; !b; i++) {
         const offset = (i % 2 ? 1 : -1) * Math.ceil(i / 2) * row;
-        const at = make(k, a, c + offset);
+        const at = { key: k, x: a, y: c + offset };
         if (c + offset >= 0 && free(at)) b = at;
       }
     } else {
-      // On its own (or the first of new linked ones): the first free cell of the grid.
+      // On its own (or the first of new linked ones): the first free row of the column.
       for (let i = 0; !b; i++) {
-        const at = {
-          key: k,
-          x: (i % s.columns) * (w + rowGap),
-          y: gridTop + Math.floor(i / s.columns) * (h + rowGap),
-        };
+        const at = { key: k, x: 0, y: gridTop + i * row };
         if (free(at)) b = at;
       }
     }
@@ -449,19 +421,14 @@ export function shorten(text: string, max: number): string {
 }
 
 // The issue a drop at (x, y) queues after: the one it lands on, or the one whose right side
-// (the gap below it, top to bottom) it lands in, where what waits for it goes. Null: dropped
-// in the open, it starts (or stops waiting).
+// it lands in, where what waits for it goes. Null: dropped in the open, it starts (or stops
+// waiting).
 export function dropTarget(
   l: Pick<Layout, "boxes" | "w" | "h" | "gap">,
-  vertical: boolean,
   x: number,
   y: number,
 ): string | null {
-  const hit = l.boxes.find((b) =>
-    vertical
-      ? x >= b.x && x <= b.x + l.w && y >= b.y && y <= b.y + l.h + l.gap
-      : x >= b.x && x <= b.x + l.w + l.gap && y >= b.y && y <= b.y + l.h,
-  );
+  const hit = l.boxes.find((b) => x >= b.x && x <= b.x + l.w + l.gap && y >= b.y && y <= b.y + l.h);
   return hit?.key ?? null;
 }
 

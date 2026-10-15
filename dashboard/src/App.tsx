@@ -188,7 +188,7 @@ export function Dashboard({ state, error, repos, refresh }: Props) {
               state={state}
               refresh={refresh}
               repo={route.repo}
-              vertical={!wide}
+              narrow={!wide}
               showClosed={showClosed}
               onShowClosed={selectShowClosed}
             />

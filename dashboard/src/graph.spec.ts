@@ -25,7 +25,8 @@ const after = (from: number, to: number) => ({
 });
 const at = (l: ReturnType<typeof layout>, n: number) =>
   l.boxes.find((b) => b.key === `org/app#${n}`)!;
-const wide = { vertical: false, width: 1200 };
+const wide = { narrow: false };
+const phone = { narrow: true };
 const { w, h, layerGap } = SIZES.wide;
 
 test("a chain: each issue a column to the right of the one it waits for", () => {
@@ -44,13 +45,20 @@ test("a chain: each issue a column to the right of the one it waits for", () => 
     d: `M${w} ${h / 2}H${w + layerGap / 2}V${h / 2}H${w + layerGap}`,
   });
 
-  // On a phone, top to bottom.
-  const phone = layout(keys, [after(1, 2), after(2, 3)], { vertical: true, width: 360 });
-  const ys = [1, 2, 3].map((n) => at(phone, n).y);
-  expect(ys[0]).toBe(0);
-  expect(ys[1]).toBeGreaterThan(ys[0] + SIZES.narrow.h);
-  expect(ys[2]).toBeGreaterThan(ys[1] + SIZES.narrow.h);
-  expect(new Set([1, 2, 3].map((n) => at(phone, n).x))).toEqual(new Set([0]));
+  // On a phone too, left to right with the arrows across: wider than 390 px, it scrolls.
+  const small = layout(keys, [after(1, 2), after(2, 3)], phone);
+  const n = SIZES.narrow;
+  expect([1, 2, 3].map((k) => at(small, k))).toEqual([
+    { key: "org/app#1", x: 0, y: 0 },
+    { key: "org/app#2", x: n.w + n.layerGap, y: 0 },
+    { key: "org/app#3", x: 2 * (n.w + n.layerGap), y: 0 },
+  ]);
+  expect(small.width).toBeGreaterThan(390);
+  expect(small.arrows[0].d).toBe(
+    `M${n.w} ${n.h / 2}H${n.w + n.layerGap / 2}V${n.h / 2}H${n.w + n.layerGap}`,
+  );
+  // A two-step chain still fits a 390 px phone: the work area leaves its drawing 324 px.
+  expect(layout(keys.slice(1), [after(1, 2)], phone).width).toBeLessThanOrEqual(324);
 });
 
 test("a task with two blockers: both in the column before it", () => {
@@ -86,22 +94,20 @@ test("a blocker that failed: red, and what waits for it keeps waiting", () => {
   expect([1, 2, 3].map((n) => at(l, n).x)).toEqual([0, w + layerGap, 2 * (w + layerGap)]);
 });
 
-test("no relations at all: a grid as wide as the page", () => {
-  const keys = [1, 2, 3, 4, 5].map((n) => `org/app#${n}`);
-  const l = layout(keys, [], { vertical: false, width: 2 * w + 16 });
+test("no relations at all: one column, top to bottom in the board's order", () => {
+  const keys = [5, 4, 3, 2, 1].map((n) => `org/app#${n}`);
+  const l = layout(keys, [], wide);
   expect(l.gridTop).toBe(0);
   expect(l.arrows).toEqual([]);
-  expect(l.boxes.map((b) => [b.x, b.y])).toEqual([
-    [0, 0],
-    [w + 16, 0],
-    [0, h + 16],
-    [w + 16, h + 16],
-    [0, 2 * (h + 16)],
-  ]);
+  expect(l.boxes).toEqual(keys.map((key, i) => ({ key, x: 0, y: i * (h + 16) })));
+  // The same on a phone.
+  const small = layout(keys, [], phone);
+  expect(small.boxes.map((b) => b.x)).toEqual([0, 0, 0, 0, 0]);
+  expect(small.boxes.map((b) => b.y)).toEqual(keys.map((_, i) => i * (h + 12)));
   // Below the linked issues when there are some.
   const mixed = layout(keys, [after(1, 2)], wide);
   expect(mixed.gridTop).toBeGreaterThan(h);
-  expect(at(mixed, 3).y).toBe(mixed.gridTop);
+  expect(at(mixed, 5).y).toBe(mixed.gridTop);
 });
 
 test("issues waiting for each other still get a place each", () => {
@@ -263,10 +269,17 @@ test("the last drawing's places are kept: a new issue moves no other", () => {
     at(before, 3).y,
   );
 
-  // Started: a free cell of the grid; one leaving leaves its cell empty.
+  // Started: the next free row of the column; one leaving leaves its row empty.
   const started = layout([...keys, "org/app#7"], edges, wide, before);
-  expect(at(started, 7).y).toBe(at(before, 5).y);
-  expect(at(started, 7).x).toBeGreaterThan(at(before, 5).x);
+  expect(at(started, 7).x).toBe(0);
+  expect(at(started, 7).y).toBe(at(before, 5).y + h + 16);
+  const filled = layout(
+    ["org/app#7", "org/app#1", "org/app#2", "org/app#3", "org/app#4"],
+    edges,
+    wide,
+    before,
+  );
+  expect(at(filled, 7)).toEqual({ ...at(before, 5), key: "org/app#7" });
   const gone = layout(["org/app#1", "org/app#2", "org/app#5"], [after(1, 2)], wide, before);
   expect(at(gone, 5)).toEqual(at(before, 5));
 });
@@ -274,7 +287,7 @@ test("the last drawing's places are kept: a new issue moves no other", () => {
 test("a kept place that no longer fits moves: after what it now waits for", () => {
   const keys = ["org/app#1", "org/app#2", "org/app#3"];
   const before = layout(keys, [after(1, 2)], wide);
-  // #1 now waits for #3, from the grid: #1 can't stay in the first column, so it, and #2
+  // #1 now waits for #3, from the column of the others: #1 can't stay in the first column, so it, and #2
   // after it, move right of #3.
   const l = layout(keys, [after(1, 2), after(3, 1)], wide, before);
   expect(at(l, 3)).toEqual(at(before, 3));
@@ -293,16 +306,20 @@ test("dropTarget: on a node or in the gap after it, else the open", () => {
   const l = layout(["org/app#2", "org/app#1"], [after(1, 2)], wide);
   const one = at(l, 1);
   // On #1, and in the gap to its right: after #1.
-  expect(dropTarget(l, false, one.x + 10, one.y + 10)).toBe("org/app#1");
-  expect(dropTarget(l, false, one.x + w + layerGap - 1, one.y + h / 2)).toBe("org/app#1");
+  expect(dropTarget(l, one.x + 10, one.y + 10)).toBe("org/app#1");
+  expect(dropTarget(l, one.x + w + layerGap - 1, one.y + h / 2)).toBe("org/app#1");
   // Beyond #2, or below both: in the open.
-  expect(dropTarget(l, false, 2 * (w + layerGap) + w + layerGap + 5, 10)).toBe(null);
-  expect(dropTarget(l, false, 10, h + 10)).toBe(null);
-  // On a phone, the gap is below.
-  const v = layout(["org/app#2", "org/app#1"], [after(1, 2)], { vertical: true, width: 390 });
+  expect(dropTarget(l, 2 * (w + layerGap) + w + layerGap + 5, 10)).toBe(null);
+  expect(dropTarget(l, 10, h + 10)).toBe(null);
+  // On a phone, the gap is to the right too.
+  const v = layout(["org/app#2", "org/app#1"], [after(1, 2)], phone);
   const n = SIZES.narrow;
-  expect(dropTarget(v, true, 10, n.h + n.layerGap - 1)).toBe("org/app#1");
-  expect(dropTarget(v, true, n.w + 5, 10)).toBe(null);
+  expect(dropTarget(v, n.w + n.layerGap - 1, 10)).toBe("org/app#1");
+  expect(dropTarget(v, 10, n.h + 5)).toBe(null);
+  // In the column of the others: the row dropped on.
+  const col = layout(["org/app#1", "org/app#2", "org/app#3"], [], phone);
+  expect(dropTarget(col, 10, n.h + n.rowGap + 10)).toBe("org/app#2");
+  expect(dropTarget(col, 10, n.h + n.rowGap / 2)).toBe(null);
 });
 
 test("issueOfLink: an issue or pull request link of the repo, on the listener's GitHub", () => {
