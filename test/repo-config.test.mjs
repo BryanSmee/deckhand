@@ -111,6 +111,8 @@ colour: blue
   assert.deepEqual(errors, []);
   assert.deepEqual(warnings, [
     "allow_branch_docker_images: ignored here, the operator's grants folder sets it for this repository",
+    // Only the operator lists hosts: a repo's are no longer read.
+    "hosts: ignored, the operator lists the hosts in grants/<owner>/<repo>.yaml",
     "colour: unknown, ignored",
   ]);
   assert.equal(settings.model, "sonnet");
@@ -119,7 +121,7 @@ colour: blue
   assert.equal(settings.setup, "npm ci");
   assert.equal(settings.dockerfile, "docker/Dockerfile");
   assert.deepEqual(settings.caches, ["/home/node/.npm", "/home/node/.cache/pip"]);
-  assert.deepEqual(settings.hosts, ["registry.npmjs.org", "*.example.com"]);
+  assert.equal("hosts" in settings, false);
   assert.deepEqual(settings.mounts, [{ path: "/nfs/work/api", readOnly: false }]);
   assert.deepEqual(settings.inbox, { ideas: 3, bugs: 4, discussions: "ask claude" });
   assert.deepEqual(settings.preview, {
@@ -135,13 +137,11 @@ test("wrong values are errors, each named", () => {
 max_parallel: 0
 dockerfile: ../outside/Dockerfile
 caches: [relative/path, /workspace/node_modules, /home/node/../root]
-hosts: ["bad host", "*"]
 inbox: { ideas: three, discussions: 5 }
 `,
     config,
   );
-  assert.equal(errors.length, 10);
-  assert.match(errors.join("\n"), /hosts: "\*": a repository can't open that much/);
+  assert.equal(errors.length, 8);
   assert.match(errors.join("\n"), /inbox\.ideas: expected an issue number/);
   assert.match(errors.join("\n"), /inbox\.discussions: expected the name of a discussion category/);
   assert.match(errors.join("\n"), /effort: expected one of low/);
@@ -285,7 +285,7 @@ test("modes: built-in names, wrong names, unknown keys and bad paths are errors"
 
 test("a mode can't grant anything: hosts, mounts and limits stay the repo's", () => {
   const { settings, errors } = parseRepoConfig(
-    `hosts: [registry.npmjs.org]
+    `mounts: [/nfs/work]
 modes:
   wide:
     instructions: wide.md
@@ -304,8 +304,7 @@ modes:
   ]);
   // Refused as a whole, and the repo's own grants are untouched.
   assert.equal(customMode(settings, "wide"), null);
-  assert.deepEqual(settings.hosts, ["registry.npmjs.org"]);
-  assert.deepEqual(settings.mounts, []);
+  assert.deepEqual(settings.mounts, [{ path: "/nfs/work", readOnly: true }]);
   // What a valid mode's run gets: nothing about access.
   const { settings: valid } = parseRepoConfig(MODES, config);
   assert.deepEqual(Object.keys(customMode(valid, "review")).sort(), [

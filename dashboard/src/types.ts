@@ -210,7 +210,9 @@ export interface SettingRow {
 
 export interface HostRow {
   host: string;
-  source: Source;
+  // Only the operator's grants folder lists hosts.
+  source: "operator";
+  // Where it comes from: "always", or its grants file ("grants/default.yaml").
   note: string | null;
 }
 
@@ -226,7 +228,6 @@ export interface MountRow {
 // (default.yaml, <owner>/<repo>.yaml); none: nothing beyond what every repository gets.
 export interface Grant {
   files: string[];
-  allowRepoHosts: boolean;
   allowPreview: boolean;
   allowDockerfile: boolean;
   allowBranchDockerImages: boolean;

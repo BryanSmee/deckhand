@@ -71,9 +71,9 @@ docs/         setup, per-repo config reference, security model, architecture
 - **Fail closed:** no allowlist, no start. Unknown repos, users or events are ignored.
 - **Per-repo config is read from the default branch only**, and can only narrow the
   operator's settings (users, parallel runs), never widen them. What would widen them is a
-  request the operator's grants folder must grant: `mounts` only under a granted root, `hosts`
-  only with `allow_repo_hosts: true` for that repo (or in `default.yaml`), and never `*` or `*.<tld>`
-  from a repo. A repo's `dockerfile` is built only with `allow_dockerfile`, its `preview`
+  request the operator's grants folder must grant: `mounts` only under a granted root. Hosts
+  are the grants folder's only (`default.yaml`, `<owner>/<repo>.yaml`): a repo can't add
+  any (issue #151). A repo's `dockerfile` is built only with `allow_dockerfile`, its `preview`
   hook runs only with `allow_preview`, branch Dockerfiles only with
   `allow_branch_docker_images` (all three in the grants folder), never for fork pull requests.
 - **No long-lived token in a sandbox:** short-lived installation tokens for that run's repo,

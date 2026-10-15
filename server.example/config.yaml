@@ -9,8 +9,7 @@
 allowed_users: []
 # Only these repos, among those where the App is installed. Empty: all of them.
 allowed_repos: []
-# Hosts every sandbox may reach besides Anthropic and GitHub (*.domain and * work).
-allowed_hosts: []
+# What every sandbox may reach and its limits are in grants/default.yaml.
 
 trigger: Deckhand
 sandbox_model: opus
@@ -22,11 +21,6 @@ sandbox_model: opus
 # anthropic_default_haiku_model: anthropic/claude-haiku-4.5
 sandbox_effort: medium
 max_parallel: 2
-
-# Each sandbox's limits; the grants folder can set them per repo.
-sandbox_cpus: 2
-sandbox_memory: 4g
-sandbox_pids: 2048
 
 # A container engine next to the sandboxes of repositories granted allow_docker: sysbox,
 # podman or auto (docs/setup.md#container-engine). None by default.

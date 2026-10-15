@@ -371,7 +371,6 @@ function refusedCases(root) {
   return {
     dockerfile: ["dockerfile: .deckhand/Dockerfile\n", "allow_dockerfile: true"],
     preview: ["preview:\n  command: ./preview.sh\n", "allow_preview: true"],
-    hosts: ["hosts: [pypi.org]\n", "allow_repo_hosts: true"],
     mounts: [`mounts: [${root}/data]\n`, `mounts: [${root}]`],
   };
 }
@@ -400,7 +399,6 @@ test("a config the operator's grants refuse is invalid: no run starts there", as
   // Each file parses: only the grants refuse it.
   assert.deepEqual(await statuses(api), {
     "org/dockerfile": "invalid",
-    "org/hosts": "invalid",
     "org/mounts": "invalid",
     "org/preview": "invalid",
   });
@@ -420,7 +418,6 @@ test("a fully granted config is configured; editing a grant shows without GitHub
   );
   assert.deepEqual(await statuses(api), {
     "org/dockerfile": "configured",
-    "org/hosts": "configured",
     "org/mounts": "configured",
     "org/preview": "configured",
   });
@@ -471,13 +468,7 @@ test("the list's refused checks are the run preflight's: both go through grantCh
   const body = preflight.slice(0, preflight.indexOf("\n  }\n"));
   assert.match(body, /grantCheck\(config, repo, settings\)/);
   // None of the checks is made on the side, where the list wouldn't see it.
-  for (const piece of [
-    "loadGrants(",
-    "grantFor(",
-    "refusedRepoHosts(",
-    "ungranted(",
-    "resolveMounts(",
-  ]) {
+  for (const piece of ["loadGrants(", "grantFor(", "ungranted(", "resolveMounts("]) {
     assert.ok(!body.includes(piece), piece);
   }
   const repos = readFileSync(new URL("../listener/repos.mjs", import.meta.url), "utf8");
@@ -486,7 +477,8 @@ test("the list's refused checks are the run preflight's: both go through grantCh
 
 test("GET config: raw text, errors, warnings and what runs get; its row updated", async () => {
   const { api, gh, clock } = apiSetup({
-    env: { ALLOWED_USERS: "alice,bob", ALLOWED_HOSTS: "registry.npmjs.org" },
+    env: { ALLOWED_USERS: "alice,bob" },
+    grants: { "default.yaml": "hosts: [registry.npmjs.org]\n" },
     first: [info("org/app")],
     files: { "org/app": "users: [bob, carol]\nhosts: [pypi.org]\nmax_parallel: 5\n" },
   });
@@ -500,10 +492,13 @@ test("GET config: raw text, errors, warnings and what runs get; its row updated"
   assert.equal(body.file.url, "https://github.com/org/app/blob/main/.deckhand.yaml");
   assert.equal(body.base, "main");
   assert.deepEqual(body.errors, []);
-  assert.deepEqual(body.warnings, ["users not in ALLOWED_USERS, ignored: carol"]);
+  assert.deepEqual(body.warnings, [
+    "users not in ALLOWED_USERS, ignored: carol",
+    "hosts: ignored, the operator lists the hosts in grants/<owner>/<repo>.yaml",
+  ]);
   assert.equal(body.grantsError, null);
-  // Its refused host stops every run: the row says so too.
-  assert.equal(body.repo.status, "invalid");
+  // A repo's own hosts are only a warning: its runs start.
+  assert.equal(body.repo.status, "configured");
   // Read now, not from the list's cache.
   assert.equal(body.readAt, 1_001_000);
   assert.equal(configReads(gh.calls), 2);
@@ -517,22 +512,22 @@ test("GET config: raw text, errors, warnings and what runs get; its row updated"
   // The operator's MAX_PARALLEL (2) stays the ceiling.
   const parallel = body.effective.settings.find((r) => r.key === "max_parallel");
   assert.deepEqual([parallel.value, parallel.source], ["2", "operator"]);
-  // No allow_repo_hosts: the repo's own host is refused, and that stops its runs.
-  const pypi = body.effective.hosts.find((h) => h.host === "pypi.org");
-  assert.equal(pypi.source, "refused");
-  assert.match(pypi.note, /allow_repo_hosts/);
+  // Not reachable: only the grants folder lists hosts, each with its file.
   assert.equal(
-    body.effective.hosts.find((h) => h.host === "registry.npmjs.org").source,
-    "operator",
+    body.effective.hosts.find((h) => h.host === "pypi.org"),
+    undefined,
+  );
+  assert.deepEqual(
+    body.effective.hosts.find((h) => h.host === "registry.npmjs.org"),
+    { host: "registry.npmjs.org", source: "operator", note: "grants/default.yaml" },
   );
   assert.deepEqual(body.effective.grant, {
-    files: [],
-    allowRepoHosts: false,
+    files: ["default.yaml"],
     allowPreview: false,
     allowDockerfile: false,
     allowBranchDockerImages: false,
     allowDocker: false,
-    hosts: [],
+    hosts: ["registry.npmjs.org"],
     mounts: [],
     limits: { cpus: "2", memory: "4g", pids: 2048 },
   });

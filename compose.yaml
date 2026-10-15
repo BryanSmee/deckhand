@@ -67,12 +67,7 @@ services:
       BRAINSTORM_MODEL: ${BRAINSTORM_MODEL:-}
       BRAINSTORM_EFFORT: ${BRAINSTORM_EFFORT:-}
       MAX_PARALLEL: ${MAX_PARALLEL:-}
-      # Hosts every sandbox may reach besides Anthropic and GitHub (*.domain and * work).
-      ALLOWED_HOSTS: ${ALLOWED_HOSTS:-}
-      # Each sandbox's limits; the grants folder can set them per repo.
-      SANDBOX_CPUS: ${SANDBOX_CPUS:-}
-      SANDBOX_MEMORY: ${SANDBOX_MEMORY:-}
-      SANDBOX_PIDS: ${SANDBOX_PIDS:-}
+      # What every sandbox may reach and its limits: grants/default.yaml, below.
       # A container engine for repos granted allow_docker: sysbox, podman or auto. Empty: none.
       SANDBOX_ENGINE: ${SANDBOX_ENGINE:-}
       # A range for the runs' networks (10.200.0.0/16), in blocks of SANDBOX_SUBNET_SIZE

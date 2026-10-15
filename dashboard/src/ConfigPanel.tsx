@@ -1,5 +1,5 @@
 // One repository's config, read-only: what stops or worries its runs first (errors, refused
-// hosts and mounts, warnings), then what its runs get, each value tagged with where it comes
+// settings and mounts, warnings), then what its runs get, each value tagged with where it comes
 // from, the operator's grant, and the raw .deckhand.yaml. Read from GitHub when it opens and
 // on Refresh; changing it is a commit on the default branch.
 import { useRepoConfig } from "./api";
@@ -29,10 +29,9 @@ interface Props {
 export function ConfigPanel({ repo, row, onRow, onBack, now }: Props) {
   const { config, error, loading, refresh } = useRepoConfig(repo, onRow);
   const status = (config?.repo ?? row)?.status;
-  const refusedHosts = config?.effective.hosts.filter((h) => h.source === "refused") ?? [];
   const refusedMounts = config?.effective.mounts.filter((m) => m.source === "refused") ?? [];
   const refusedSettings = config?.effective.settings.filter((s) => s.source === "refused") ?? [];
-  const refused = refusedSettings.length + refusedHosts.length + refusedMounts.length;
+  const refused = refusedSettings.length + refusedMounts.length;
   return (
     <div class={styles.panel}>
       <div class={styles.head}>
@@ -92,11 +91,6 @@ export function ConfigPanel({ repo, row, onRow, onBack, now }: Props) {
                 {refusedSettings.map((s) => (
                   <li key={s.key}>
                     {s.key}: {s.note}
-                  </li>
-                ))}
-                {refusedHosts.map((h) => (
-                  <li key={h.host}>
-                    hosts: <code>{h.host}</code>: {h.note}
                   </li>
                 ))}
                 {refusedMounts.map((m) => (
@@ -229,7 +223,6 @@ function GrantTable({ grant }: { grant: Grant }) {
     : "none: nothing beyond what every repository gets";
   const rows: [string, string][] = [
     ["files", files],
-    ["allow_repo_hosts", String(grant.allowRepoHosts)],
     ["allow_dockerfile", String(grant.allowDockerfile)],
     ["allow_branch_docker_images", String(grant.allowBranchDockerImages)],
     ["allow_preview", String(grant.allowPreview)],

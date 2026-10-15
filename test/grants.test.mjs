@@ -25,7 +25,7 @@ import {
   ungranted,
 } from "../listener/grants.mjs";
 
-const config = loadConfig({ ALLOWED_USERS: "a", SANDBOX_MEMORY: "2g" });
+const config = loadConfig({ ALLOWED_USERS: "a" });
 
 // What one repo gets from a grants folder given as { "path/in/it.yaml": text }.
 const grantOf = (files, repo) => grantFor(grantsFrom(files, config), config, repo);
@@ -42,7 +42,6 @@ function folder(files) {
 
 const NOTHING = {
   hosts: [],
-  allowRepoHosts: false,
   allowPreview: false,
   allowDockerfile: false,
   allowBranchDockerImages: false,
@@ -66,12 +65,11 @@ mounts:
   };
   assert.deepEqual(grantOf(files, "org/repo"), {
     hosts: ["*.example.com", "pypi.org"],
-    allowRepoHosts: false,
     allowPreview: false,
     allowDockerfile: false,
     allowBranchDockerImages: false,
     allowDocker: false,
-    limits: { cpus: "4", memory: "2g", pids: 4096 },
+    limits: { cpus: "4", memory: "4g", pids: 4096 },
     mounts: [
       { root: "/nfs/work", readOnly: false },
       { root: "/srv/data", readOnly: true },
@@ -87,38 +85,37 @@ mounts:
 
 test("default.yaml: flags unless a repo's own file says, hosts added, limits as the base", () => {
   const files = {
-    "default.yaml": `allow_repo_hosts: true
-allow_dockerfile: true
+    "default.yaml": `allow_dockerfile: true
 hosts: [pypi.org]
 limits: { memory: 8g, cpus: 3 }
 `,
-    "org/closed.yaml": "allow_repo_hosts: false\nallow_dockerfile: false\n",
+    "org/closed.yaml": "allow_dockerfile: false\n",
     "org/api.yaml":
       "hosts: [files.example.com, pypi.org]\nlimits: { cpus: 4 }\nallow_preview: true\n",
   };
   const api = grantOf(files, "Org/API");
   assert.deepEqual(
-    [api.allowRepoHosts, api.allowDockerfile, api.allowPreview, api.allowBranchDockerImages],
-    [true, true, true, false],
+    [api.allowDockerfile, api.allowPreview, api.allowBranchDockerImages],
+    [true, true, false],
   );
   assert.deepEqual(api.hosts, ["pypi.org", "files.example.com"]);
   assert.deepEqual(api.hostFiles, {
     "pypi.org": "default.yaml",
     "files.example.com": "org/api.yaml",
   });
-  // Its own cpus over default.yaml's memory, over SANDBOX_*.
+  // Its own cpus over default.yaml's memory, over the built-in pids.
   assert.deepEqual(api.limits, { cpus: "4", memory: "8g", pids: 2048 });
   assert.equal(api.limitsFile, "org/api.yaml");
   assert.deepEqual(api.files, ["default.yaml", "org/api.yaml"]);
 
   const closed = grantOf(files, "org/closed");
-  assert.deepEqual([closed.allowRepoHosts, closed.allowDockerfile], [false, false]);
+  assert.equal(closed.allowDockerfile, false);
   assert.deepEqual(closed.hosts, ["pypi.org"]);
   assert.deepEqual(closed.limits, { cpus: "3", memory: "8g", pids: 2048 });
 
   // A repo without a file of its own: default.yaml alone.
   const other = grantOf(files, "elsewhere/any");
-  assert.deepEqual([other.allowRepoHosts, other.allowPreview], [true, false]);
+  assert.deepEqual([other.allowDockerfile, other.allowPreview], [true, false]);
   assert.deepEqual(other.mounts, []);
   assert.equal(other.limitsFile, "default.yaml");
   assert.deepEqual(other.files, ["default.yaml"]);
@@ -179,7 +176,8 @@ test("each repo file's errors, one list per file", () => {
   bad("limits: { memory: lots }\n", /org\/repo\.yaml: limits\.memory: expected an amount/);
   bad("limits: { disk: 1 }\n", /limits\.disk: unknown/);
   bad("network: host\n", /network: unknown/);
-  bad("allow_repo_hosts: yes\n", /allow_repo_hosts: expected true or false/);
+  // Gone with a repo's own hosts: ignoring it would quietly take them away.
+  bad("allow_repo_hosts: true\n", /allow_repo_hosts: gone, list the hosts .* under hosts here/);
   bad("allow_preview: 1\n", /allow_preview: expected true or false/);
   bad("- a\n", /org\/repo\.yaml: expected a mapping/);
   // The old single file's layout, copied as is.
@@ -192,6 +190,11 @@ test("a broken default.yaml or a misplaced file stops every run", () => {
       () => grantsFrom(files, config),
       (error) => error instanceof GrantsError && error.file === file && pattern.test(error.message),
     );
+  broken(
+    { "default.yaml": "allow_repo_hosts: false\n" },
+    /default\.yaml: allow_repo_hosts: gone/,
+    "default.yaml",
+  );
   // mounts for every repo would be too broad to grant by accident.
   broken(
     { "default.yaml": "mounts: [/srv]\n" },

@@ -1,9 +1,8 @@
 // What a sandbox may reach on the network. Each sandbox sits on an internal Docker network,
 // its own, with no route out; the egress proxy (../proxy/proxy.mjs) is their only way out, and asks the
 // listener, for each connection, whether that sandbox may reach that host. The answer comes
-// from here: the mandatory hosts, the operator's ALLOWED_HOSTS, what the operator grants the
-// repo (grants.mjs) and the repo's own `hosts` (repo-config.mjs), these only when the grant
-// says allow_repo_hosts. Security model: ../docs/security.md.
+// from here: the mandatory hosts and what the operator grants the repo in the grants folder
+// (grants.mjs: default.yaml's hosts and its own file's). Security model: ../docs/security.md.
 import { agentFor } from "./agents/index.mjs";
 
 // "name", "*.domain" (any subdomain, not the domain itself) or "*" (anything).
@@ -31,67 +30,10 @@ export function mandatoryHosts(config, agent = agentFor()) {
   ];
 }
 
-// Suffixes under which anyone can have a name: a wildcard over one opens many owners' hosts
-// (`*.github.io`), or any address (`*.nip.io` resolves `10-0-0-1.nip.io` to 10.0.0.1). Not
-// the whole public suffix list: the common ones, top-level domains being refused anyway.
-const PUBLIC_SUFFIXES = new Set([
-  ...["co.uk", "org.uk", "ac.uk", "gov.uk", "me.uk", "com.au", "net.au", "org.au"],
-  ...["co.jp", "ne.jp", "or.jp", "co.nz", "co.za", "co.in", "com.br", "com.cn", "com.mx"],
-  ...["github.io", "gitlab.io", "pages.dev", "workers.dev", "vercel.app", "netlify.app"],
-  ...["herokuapp.com", "appspot.com", "web.app", "firebaseapp.com", "azurewebsites.net"],
-  ...["cloudfront.net", "amazonaws.com", "ngrok.io", "ngrok-free.app", "trycloudflare.com"],
-  ...["nip.io", "sslip.io", "xip.io", "localtest.me", "lvh.me", "duckdns.org"],
-]);
-
-// What a repo can't ask for itself, granted or not; only the operator can (ALLOWED_HOSTS,
-// the grants folder): "*", a whole top-level domain ("*.com") or public suffix
-// ("*.co.uk"), an IP address or a single-label name (`listener`, `localhost`): those name
-// what sits next to the sandboxes, not a service on the internet.
-export function repoHostProblem(name) {
-  const only = "only the operator can (ALLOWED_HOSTS, the grants folder)";
-  const suffix = name.replace(/^\*\./, "");
-  if (
-    name === "*" ||
-    (name.startsWith("*.") && (!suffix.includes(".") || PUBLIC_SUFFIXES.has(suffix)))
-  ) {
-    return `a repository can't open that much: ${only}`;
-  }
-  // A name's last label is never all digits: "10.0.0.1", or "*.0.1" matching addresses.
-  if (/(^|\.)\d+$/.test(name)) return `a repository can't name an address: ${only}`;
-  if (!name.includes(".")) return `a repository can't name a host without a domain: ${only}`;
-  return null;
-}
-
-// What the operator allows a repo without its config: mandatory, ALLOWED_HOSTS, its grant.
+// What the operator allows a repo: the mandatory hosts and its grant's (default.yaml's and
+// its own file's), once each.
 export function operatorHosts(config, grant) {
-  return [...mandatoryHosts(config), ...config.hosts, ...grant.hosts].map((h) => h.toLowerCase());
-}
-
-// Whether `pattern` adds nothing to `patterns`: every host it matches, they match too.
-function covered(pattern, patterns) {
-  if (patterns.includes("*") || patterns.includes(pattern)) return true;
-  if (pattern === "*") return false;
-  // "*.a.example.com" is within "*.example.com": a subdomain of a.example.com is one of it.
-  if (pattern.startsWith("*.")) return matchHost(pattern.slice(2), patterns) === "wildcard";
-  return matchHost(pattern, patterns) !== null;
-}
-
-// The repo's own hosts that would widen what the operator allows it, when its grant doesn't
-// say allow_repo_hosts: those stop its runs (one line each, for the reply). Hosts the
-// operator already allows are fine: listing them narrows nothing and widens nothing.
-export function refusedRepoHosts(config, grant, settings) {
-  if (grant.allowRepoHosts) return [];
-  const allowed = operatorHosts(config, grant);
-  return settings.hosts
-    .filter((host) => !covered(host, allowed))
-    .map((host) => `hosts: \`${host}\`: the operator doesn't let this repository add hosts`);
-}
-
-// The hosts one run may reach, mandatory ones first. The repo's own only with its grant's
-// allow_repo_hosts (refusedRepoHosts stops the run before, this is in case it didn't).
-export function runHosts(config, grant, settings) {
-  const own = grant.allowRepoHosts ? settings.hosts : [];
-  const all = [...operatorHosts(config, grant), ...own];
+  const all = [...mandatoryHosts(config), ...grant.hosts];
   return [...new Set(all.map((h) => h.toLowerCase()))];
 }
 
@@ -105,8 +47,8 @@ export function matchHost(host, patterns) {
 }
 
 // The proxy's answer for `host` in a run. Private addresses only for a host or domain the
-// operator named (`trusted`: operatorHosts()), never through "*" alone nor for a repo's own
-// hosts: whoever pushes to its default branch could point those at the LAN or the listener.
+// operator named (`trusted`: operatorHosts()), never through "*" alone. A run restored from
+// before repos lost their own `hosts` may still list some: those stay public only.
 export function egressPolicy(host, hosts, trusted) {
   const allowed = matchHost(host, hosts) !== null;
   const named = matchHost(host, trusted ?? []);

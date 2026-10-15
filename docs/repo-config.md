@@ -18,8 +18,8 @@ on the dashboard.
 When the App is installed on a repository without this file, the listener opens an
 onboarding issue there (see [Setting up](setup.md#3-use-it)), and Claude proposes the file
 in its comments: it reads the repository (package managers, CI workflows, `AGENTS.md`, test
-and lint commands, services) and gives each key a reason, within the hosts, users and mount
-roots the operator allows. Each comment on the issue goes on in that conversation, with a
+and lint commands, services) and gives each key a reason, within the users and mount roots
+the operator allows, and names the hosts to ask the operator for. Each comment on the issue goes on in that conversation, with a
 read-only token. Claude may suggest inboxes; they are created only if you agree.
 
 The trigger line (`Deckhand`) or `/mode work` confirms: a work run on the issue's branch
@@ -113,7 +113,6 @@ conflicts:
 | `dockerfile`                            | none: the base image                    | Dockerfile of the repo for its runs' image; needs the operator's `allow_dockerfile`      |
 | `docker`                                | none                                    | a container engine for work runs (`true`, or `cache: true`); needs `allow_docker`        |
 | `caches`                                | none                                    | absolute paths in the sandbox kept in a volume per repo and path                         |
-| `hosts`                                 | none                                    | extra hosts the sandbox may reach (`name`, `"*.domain"`); only if the operator allows it |
 | `mounts`                                | none                                    | host paths requested (`- path: /nfs/work/api`, `read_only`); only under granted roots    |
 | `modes.<name>`                          | none                                    | the repo's own modes, picked with `/mode <name>` (see Modes)                             |
 | `inbox.ideas`, `inbox.bugs`             | none                                    | issue numbers whose comments are ideas or bug reports to file (see Inboxes)              |
@@ -125,32 +124,14 @@ conflicts:
 
 ## Network and mounts
 
-Sandboxes reach the outside through an egress proxy only: Anthropic's API, GitHub, the
-operator's `ALLOWED_HOSTS` and what the operator grants the repository, plus the repo's
-`hosts` when the operator allows it. Anything else is refused with a `403` saying so. Quote
-patterns that start with `*`: YAML reads a bare `*` as an alias.
-
-```yaml
-hosts: [registry.npmjs.org, "*.pythonhosted.org", pypi.org]
-```
-
-Like `mounts`, `hosts` is a request: anyone who can push to the default branch could
-otherwise open the sandbox's network.
-
-- When the operator sets `allow_repo_hosts: true` for the repository in their grants folder,
-  its `hosts` are added to what its sandboxes reach.
-- Otherwise its `hosts` may only list what the operator already allows it (they change
-  nothing); any other host stops the runs, and the reply lists it with the file's errors.
-  Ask the operator to grant it, or to set `allow_repo_hosts`.
-- `"*"`, whole top-level domains (`"*.com"`) and common public suffixes (`"*.co.uk"`,
-  `"*.github.io"`, `"*.nip.io"`), IP addresses (`172.17.0.1`) and names without a domain
-  (`listener`) are always errors here: only the operator can list those.
-- A repository's own hosts only ever reach public addresses: one that resolves to a private
-  one (`10.0.0.0/8`, `192.168.0.0/16`…) is refused. Ask the operator to list it if it
-  is a service on their network.
-
-The onboarding issue says which case applies. See
-[Security model](security.md#a-repositorys-own-hosts).
+Sandboxes reach the outside through an egress proxy only: Anthropic's API, GitHub and the
+hosts the operator grants the repository in their grants folder (`hosts` in
+`grants/default.yaml` for every repository, `grants/<owner>/<repo>.yaml` for this one).
+Anything else is refused with a `403` saying so. This file has no `hosts`: anyone who can
+push to the default branch could otherwise open the sandbox's network, so only the operator
+lists them (one here is ignored, with a warning). Ask the operator for the registries and
+APIs the repository needs; the onboarding issue lists them. See
+[Where a sandbox's hosts come from](security.md#where-a-sandboxs-hosts-come-from).
 
 A `mounts` entry is only a request: it is mounted when the operator grants the repository a
 root holding it, after resolving `..` and symlinks. Otherwise the run stops and the reply
@@ -233,7 +214,7 @@ docker compose up -d
   `dockerfile`. With the grant but no engine set up (`SANDBOX_ENGINE`), runs start without
   one, and their log says so.
 - **The network**: the engine pulls and its containers connect through the egress proxy,
-  under the run's hosts. Add the registries you pull from to `hosts`: Docker Hub is
+  under the run's hosts. Ask the operator to grant the registries you pull from: Docker Hub is
   `registry-1.docker.io`, `auth.docker.io` and `production.cloudflare.docker.com`; GHCR is
   `ghcr.io` (its blobs come from `*.githubusercontent.com`, always allowed).
 - **Its storage** starts empty and goes with the run. `docker: { cache: true }` keeps it in
@@ -322,7 +303,7 @@ error, listed in the reply:
   the issue stays in the mode it was in, and its next run continues its own session.
 - **A mode narrows, never widens**: the hosts, mounts and limits of every run of the repo
   are the same whatever the mode (the operator's grants and what they let the repo's
-  `hosts` and `mounts` add). A mode has no key for them.
+  `mounts` add). A mode has no key for them.
 
 The dashboard names the repo's modes next to the issue, and in each run.
 

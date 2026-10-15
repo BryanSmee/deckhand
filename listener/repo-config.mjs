@@ -1,12 +1,11 @@
 // Per-repo settings: a repo's .deckhand.yaml, always read from its default branch so a pull
 // request can't change its own permissions. It can only narrow the operator's settings
-// (users, parallel runs), requests what the operator must grant (hosts, mounts, preview hook,
+// (users, parallel runs), requests what the operator must grant (mounts, preview hook,
 // Dockerfile, container engine: grants.mjs), and brings what is the project's own: trigger word, models, setup
 // command, extra instructions, its own modes, caches. Format and example:
 // ../docs/repo-config.md.
 import { createHash } from "node:crypto";
 import { posix } from "node:path";
-import { hostProblem, repoHostProblem } from "./egress.mjs";
 import { EFFORTS, MODEL_NAME } from "./events.mjs";
 import { list, normalize } from "./config.mjs";
 import { isMap, parseYaml } from "./yaml.mjs";
@@ -43,7 +42,6 @@ export function defaultSettings(config) {
     // { cache } when its runs get a container engine (runner/engine.mjs), with its grant.
     docker: null,
     caches: [],
-    hosts: [],
     mounts: [],
     inbox: {},
     modes: {},
@@ -148,17 +146,6 @@ function parseCaches(value, { key, settings, fail }) {
     else if (!settings.caches.includes(path.replace(/\/$/, ""))) {
       settings.caches.push(path.replace(/\/$/, ""));
     }
-  }
-}
-
-// Added to what its sandboxes may reach through the egress proxy only when the operator's
-// grant says allow_repo_hosts (egress.mjs); "*" never.
-function parseHosts(value, { key, settings, fail }) {
-  if (!Array.isArray(value)) return fail(key, "expected a list of host names");
-  for (const host of value) {
-    const problem = hostProblem(host) ?? repoHostProblem(host.toLowerCase());
-    if (problem) fail(`hosts: ${JSON.stringify(host)}`, problem);
-    else settings.hosts.push(host.toLowerCase());
   }
 }
 
@@ -289,7 +276,11 @@ const KEYS = {
     warn(`${key}: ignored here, the operator's grants folder sets it for this repository`);
   },
   caches: parseCaches,
-  hosts: parseHosts,
+  // Moved to the operator's grants folder (grants.mjs): only the operator lists hosts. Its
+  // runs never counted them unless the grant said allow_repo_hosts, which now stops them.
+  hosts: (value, { key, warn }) => {
+    warn(`${key}: ignored, the operator lists the hosts in grants/<owner>/<repo>.yaml`);
+  },
   mounts: parseMounts,
   inbox: parseInbox,
   modes: (value, { key, settings, fail }) => {

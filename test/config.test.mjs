@@ -130,11 +130,8 @@ allowed_users: [Alice, bob]
 allowed_repos:
   - org/api
   - org/web
-allowed_hosts: [registry.npmjs.org]
 trigger: Hey Bot
 sandbox_model: sonnet
-sandbox_cpus: 0.5
-sandbox_memory: 2g
 max_parallel: 3
 onboarding: false
 needs_input_label: ""
@@ -144,11 +141,11 @@ claude_code_version: 2.1.300
   );
   assert.deepEqual(config.users, ["alice", "bob"]);
   assert.deepEqual(config.repos, ["org/api", "org/web"]);
-  assert.deepEqual(config.hosts, ["registry.npmjs.org"]);
   assert.equal(config.trigger, "hey bot");
   assert.equal(config.model, "sonnet");
   assert.equal(config.brainstormModel, "sonnet");
-  assert.deepEqual(config.limits, { cpus: "0.5", memory: "2g", pids: 2048 });
+  // Limits are the grants folder's (default.yaml), over these.
+  assert.deepEqual(config.limits, { cpus: "2", memory: "4g", pids: 2048 });
   assert.equal(config.maxParallel, 3);
   assert.equal(config.onboarding, false);
   assert.equal(config.needsInputLabel, "");
@@ -244,9 +241,7 @@ test("a bad value in config.yaml names its key, one in the environment its varia
   const base = "allowed_users: [a]\n";
   const bad = [
     ["max_parallel: lots", /config\.yaml: max_parallel: expected/],
-    ["sandbox_cpus: -1", /config\.yaml: sandbox_cpus: expected/],
     ["onboarding: maybe", /config\.yaml: onboarding: expected on or off/],
-    ["allowed_hosts: [a.*.b]", /config\.yaml: allowed_hosts: a\.\*\.b/],
     ["debounce_ms: 1.5", /config\.yaml: debounce_ms: expected/],
   ];
   for (const [line, pattern] of bad) {
@@ -257,6 +252,31 @@ test("a bad value in config.yaml names its key, one in the environment its varia
     /MAX_PARALLEL: expected/,
   );
   assert.throws(() => loadConfig({}, file("trigger: x")), /ALLOWED_USERS is empty/);
+});
+
+test("ALLOWED_HOSTS and SANDBOX_CPUS/MEMORY/PIDS are gone: the listener names grants/default.yaml", () => {
+  const users = { ALLOWED_USERS: "a" };
+  assert.throws(
+    () => loadConfig({ ...users, ALLOWED_HOSTS: "pypi.org" }),
+    /ALLOWED_HOSTS is gone \(ALLOWED_HOSTS: set hosts in grants\/default\.yaml instead/,
+  );
+  assert.throws(
+    () => loadConfig({ ...users, SANDBOX_CPUS: "4", SANDBOX_PIDS: "100" }),
+    /SANDBOX_CPUS, SANDBOX_PIDS are gone \(SANDBOX_CPUS: set limits\.cpus in grants\/default\.yaml; SANDBOX_PIDS: set limits\.pids/,
+  );
+  // Empty, as an older compose.yaml passes them: nothing to move.
+  assert.equal(loadConfig({ ...users, ALLOWED_HOSTS: "", SANDBOX_MEMORY: "" }).users[0], "a");
+  // In config.yaml, even empty: every one named.
+  assert.throws(
+    () => parseConfigFile("allowed_hosts: []\nsandbox_memory: 8g\nsandbox_pids: 10\n", "c.yaml"),
+    (error) =>
+      /c\.yaml: allowed_hosts: gone, set hosts in grants\/default\.yaml instead/.test(
+        error.message,
+      ) &&
+      /sandbox_memory: gone, set limits\.memory in grants\/default\.yaml/.test(error.message) &&
+      /sandbox_pids: gone, set limits\.pids/.test(error.message),
+  );
+  assert.equal("hosts" in loadConfig(users), false);
 });
 
 test("without config.yaml, the environment alone, as before", () => {

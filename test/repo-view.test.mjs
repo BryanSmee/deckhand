@@ -10,7 +10,6 @@ import { effectiveView } from "../listener/repo-view.mjs";
 
 const config = loadConfig({
   ALLOWED_USERS: "alice,bob",
-  ALLOWED_HOSTS: "registry.npmjs.org",
   MAX_PARALLEL: "3",
 });
 
@@ -58,7 +57,7 @@ test("settings: the repo's values tagged as such, the operator's otherwise", () 
     key: "limits",
     value: "2 CPUs, 4g memory, 2048 processes",
     source: "operator",
-    note: "SANDBOX_*",
+    note: "built in",
   });
 });
 
@@ -67,35 +66,29 @@ test("settings: no file, the operator's defaults; limits from the repo's grant",
   assert.ok(settings.every((r) => r.source === "operator"));
   assert.equal(byKey(settings, "dockerfile").value, "none: the base image deckhand-sandbox");
   assert.equal(byKey(settings, "limits").value, "4 CPUs, 4g memory, 2048 processes");
-  assert.equal(byKey(settings, "limits").note, "grants: org/app.yaml");
+  assert.equal(byKey(settings, "limits").note, "grants/org/app.yaml");
   assert.deepEqual(grant.files, ["org/app.yaml"]);
 });
 
-test("hosts: refused without allow_repo_hosts, unless the operator allows them already", () => {
-  const yaml = "hosts: [pypi.org, registry.npmjs.org, files.example.com]\n";
-  const refused = view(yaml, { "org/app.yaml": "hosts: ['*.example.com']\n" }).hosts;
-  const of = (rows, host) => rows.find((h) => h.host === host);
-  assert.equal(of(refused, "api.anthropic.com").note, "always");
-  assert.equal(of(refused, "pypi.org").source, "refused");
-  assert.match(of(refused, "pypi.org").note, /allow_repo_hosts/);
-  assert.equal(of(refused, "*.example.com").note, "grants: org/app.yaml");
-  assert.equal(of(refused, "files.example.com").note, "already allowed by the operator");
-  assert.equal(of(refused, "registry.npmjs.org").note, "ALLOWED_HOSTS");
-
-  // Granted to every repo by default.yaml, with a host of its own.
-  const granted = view(yaml, { "default.yaml": "allow_repo_hosts: true\nhosts: [pypi.org]\n" });
-  assert.deepEqual(of(granted.hosts, "pypi.org"), {
-    host: "pypi.org",
-    source: "operator",
-    note: "grants: default.yaml",
-  });
-  assert.deepEqual(of(granted.hosts, "files.example.com"), {
-    host: "files.example.com",
-    source: "repo",
-    note: null,
-  });
-  assert.deepEqual(granted.grant.files, ["default.yaml"]);
-  assert.equal(granted.grant.allowRepoHosts, true);
+test("hosts: the operator's only, each naming the grants file it comes from", () => {
+  // A repo's own hosts are ignored (a warning), never shown as reachable.
+  const yaml = "hosts: [evil.net]\n";
+  const grants = {
+    "default.yaml": "hosts: [registry.npmjs.org, pypi.org]\n",
+    "org/app.yaml": "hosts: ['*.example.com', pypi.org]\n",
+  };
+  const { hosts, grant } = view(yaml, grants);
+  assert.deepEqual(hosts, [
+    { host: "api.anthropic.com", source: "operator", note: "always" },
+    { host: "github.com", source: "operator", note: "always" },
+    { host: "api.github.com", source: "operator", note: "always" },
+    { host: "*.githubusercontent.com", source: "operator", note: "always" },
+    { host: "registry.npmjs.org", source: "operator", note: "grants/default.yaml" },
+    { host: "pypi.org", source: "operator", note: "grants/default.yaml" },
+    { host: "*.example.com", source: "operator", note: "grants/org/app.yaml" },
+  ]);
+  assert.deepEqual(grant.files, ["default.yaml", "org/app.yaml"]);
+  assert.equal("allowRepoHosts" in grant, false);
 });
 
 test("mounts: as a run resolves them, refused ones with their reason", () => {
@@ -128,10 +121,10 @@ test("mounts: as a run resolves them, refused ones with their reason", () => {
 });
 
 test("broken grants: the defaults, and no grant shown", () => {
-  const { settings } = parseRepoConfig("hosts: [pypi.org]\n", config);
+  const { settings } = parseRepoConfig("", config);
   const v = effectiveView(config, "org/app", settings, null);
   assert.equal(v.grant, null);
-  assert.equal(v.hosts.find((h) => h.host === "pypi.org").source, "refused");
+  assert.ok(v.hosts.every((h) => h.note === "always"));
 });
 
 test("dockerfile and preview: from the repo once granted", () => {
