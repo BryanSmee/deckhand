@@ -12,6 +12,12 @@
       "replyTo": 25,
       "state": "working",
       "since": 1791989580000,
+      "pr": {
+        "number": 25,
+        "url": "https://github.com/BryanSmee/deckhand/pull/25",
+        "state": "draft",
+        "readyAt": null
+      },
       "runs": [
         {
           "id": "BryanSmee-deckhand-22-1791989580000",
@@ -74,6 +80,12 @@
       "replyTo": 141,
       "state": "building-image",
       "since": 1791989880000,
+      "pr": {
+        "number": 141,
+        "url": "https://github.com/BryanSmee/shiny-piece/pull/141",
+        "state": "ready",
+        "readyAt": null
+      },
       "runs": [
         {
           "id": "BryanSmee-shiny-piece-pr-141-1791989880000",
@@ -105,6 +117,7 @@
       "replyTo": 23,
       "state": "queued",
       "since": 0,
+      "pr": null,
       "runs": []
     },
     {
@@ -118,6 +131,7 @@
       "replyTo": 138,
       "state": "needs-input",
       "since": 1791979200000,
+      "pr": null,
       "runs": [
         {
           "id": "BryanSmee-shiny-piece-138-1791979200000",
@@ -149,6 +163,7 @@
       "state": "brainstorm",
       "since": 1791990360000,
       "deadline": 1791990360000,
+      "pr": null,
       "runs": [
         {
           "id": "BryanSmee-deckhand-20-1791989760000",
@@ -179,6 +194,7 @@
       "replyTo": 8,
       "state": "done",
       "since": 1791896400000,
+      "pr": null,
       "runs": [
         {
           "id": "BryanSmee-notes-discussion-8-1791896400000",
@@ -209,6 +225,12 @@
       "replyTo": 131,
       "state": "done",
       "since": 1791972000000,
+      "pr": {
+        "number": 132,
+        "url": "https://github.com/BryanSmee/shiny-piece/pull/132",
+        "state": "ready",
+        "readyAt": null
+      },
       "runs": [
         {
           "id": "BryanSmee-shiny-piece-131-1791972000000",
@@ -239,6 +261,7 @@
       "replyTo": 16,
       "state": "error",
       "since": 1791961200000,
+      "pr": null,
       "runs": [
         {
           "id": "BryanSmee-deckhand-16-1791961200000",
@@ -269,6 +292,12 @@
       "replyTo": 127,
       "state": "interrupted",
       "since": 1791882000000,
+      "pr": {
+        "number": 128,
+        "url": "https://github.com/BryanSmee/shiny-piece/pull/128",
+        "state": "merged",
+        "readyAt": null
+      },
       "runs": [
         {
           "id": "BryanSmee-shiny-piece-127-1791882000000",
@@ -300,6 +329,7 @@
       "state": "idle-brainstorm",
       "since": 1791987000000,
       "deadline": 1791987000000,
+      "pr": null,
       "runs": [
         {
           "id": "BryanSmee-notes-4-1791985800000",

@@ -111,8 +111,18 @@ longer used.
 The dashboard lists every issue, pull request and discussion Deckhand worked on, by title,
 with a tab per repository (the most recently active first; each counts its running tasks and
 those waiting for you) and chips by state: running, needs input (a brainstorm waiting for your
-comment too), done, error. Titles come with the webhooks; for tasks from before the dashboard
+comment too), ready for review, done, error. Titles come with the webhooks; for tasks from before the dashboard
 had them, the listener asks GitHub once and keeps them in `titles.json` in its data volume.
+
+Each task also links to its pull request (the one that closes its issue, or the pull request
+itself), with a badge for its state: draft, ready for review, merged or closed. The
+`pull_request` webhooks keep it current, in `pulls.json`; for tasks from before, the listener
+looks through each repository's 100 most recently updated pull requests once per start. The
+**Ready for review** chip lists the pull requests waiting for you, and the tab's title counts
+them ("(2) Deckhand"). **Notify me** (top right) asks your browser for notifications: while a
+dashboard tab is open, a pull request that turns ready for review raises one, which opens it
+when clicked.
+
 Each task shows its listener's state:
 
 | State             | What                                                                    |

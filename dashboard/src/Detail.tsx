@@ -2,6 +2,7 @@
 // the run shown (the latest unless one was picked).
 import { ago, duration, githubUrl, kindName, numberOf, ownMode, runName, titleOf } from "./format";
 import { Log } from "./Log";
+import { PrLink } from "./PullRequest";
 import { StateBadge, StateDot } from "./State";
 import type { Run, Task } from "./types";
 import styles from "./Detail.module.css";
@@ -62,7 +63,8 @@ export function Detail({ task: t, run: r, onRun, onBack, now }: Props) {
               {r.model && ` · ${r.model}, ${r.effort} effort`}
             </span>
           )}
-          {url && t.replyTo !== t.number && (
+          {t.pr && <PrLink pr={t.pr} />}
+          {url && t.replyTo !== t.number && t.replyTo !== t.pr?.number && (
             <a href={url} target="_blank" rel="noreferrer">
               Replies on #{t.replyTo}
             </a>

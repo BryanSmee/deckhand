@@ -39,6 +39,18 @@ export interface Run {
   summary?: string | null;
 }
 
+// draft, ready for review, merged, or closed without merging.
+export type PrState = "draft" | "ready" | "merged" | "closed";
+
+// A task's pull request (listener/pulls.mjs): the one that closes its issue, or itself.
+export interface PullRequest {
+  number: number;
+  url: string;
+  state: PrState;
+  // When a webhook said it turned ready for review; null when looked up, or never ready.
+  readyAt: number | null;
+}
+
 export interface Task {
   key: string;
   repo: string;
@@ -52,6 +64,7 @@ export interface Task {
   since: number;
   // A brainstorm's: when it goes idle, or went.
   deadline?: number;
+  pr: PullRequest | null;
   runs: Run[]; // newest first
 }
 

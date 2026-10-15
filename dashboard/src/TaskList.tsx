@@ -1,5 +1,6 @@
 // The tab's tasks, filtered by the state chips: title first, then number, repo and mode.
 import { CHIPS, type ChipId, inChip, numberOf, ownMode, repoTabs, titleOf, when } from "./format";
+import { PrBadge } from "./PullRequest";
 import { StateDot, StateLabel } from "./State";
 import type { Task } from "./types";
 import styles from "./TaskList.module.css";
@@ -91,6 +92,12 @@ function Row({
       <span class={styles.when}>{when(t, now)}</span>
       <span class={styles.sub}>
         {numberOf(t)}
+        {t.pr && (
+          <>
+            {" "}
+            <PrBadge pr={t.pr} />
+          </>
+        )}
         {repo && (
           <>
             {" · "}

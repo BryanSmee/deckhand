@@ -1,0 +1,35 @@
+/* GitHub's own colours for a pull request's state, so they read at a glance; "Ready for
+   review" is filled, because it waits for the maintainer. */
+.badge {
+  display: inline-block;
+  padding: 0 0.45rem;
+  border: 1px solid var(--tone);
+  border-radius: 999px;
+  color: var(--tone);
+  font-size: 0.7rem;
+  font-weight: 600;
+  line-height: 1rem;
+  vertical-align: 0.05rem;
+  white-space: nowrap;
+}
+
+.draft {
+  --tone: var(--idle);
+}
+.ready {
+  --tone: var(--accent);
+  background: var(--accent);
+  color: var(--panel);
+}
+.merged {
+  --tone: var(--merged);
+}
+.closed {
+  --tone: var(--err);
+}
+
+.link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
