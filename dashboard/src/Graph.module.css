@@ -91,6 +91,38 @@
   --text: var(--ink);
 }
 
+/* An action on its way: dashed, with a spinner, until the listener confirms it. */
+.pending {
+  --fill: var(--panel);
+  --stroke: var(--accent);
+  --text: var(--ink);
+}
+
+.node.pending rect {
+  stroke-dasharray: 5 3;
+}
+
+.spinner {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2px;
+  stroke-dasharray: 22 10;
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: spin 0.9s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(1turn);
+  }
+}
+
+/* A node, and the arrows into it, slide to a new place rather than jump there. */
+.node {
+  transition: transform 0.3s ease;
+}
+
 .node rect {
   fill: var(--fill);
   stroke: var(--stroke);
@@ -132,6 +164,7 @@
 }
 
 .arrow {
+  transition: d 0.3s ease;
   fill: none;
   stroke: var(--muted);
   stroke-width: 1.5px;
@@ -205,6 +238,19 @@
 .moving {
   cursor: grabbing;
   opacity: 0.85;
+  transition: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .node,
+  .arrow {
+    transition: none;
+  }
+
+  /* A still ring: "Sending…" says it all. */
+  .spinner {
+    animation: none;
+  }
 }
 
 /* The issue a drop would queue after. */

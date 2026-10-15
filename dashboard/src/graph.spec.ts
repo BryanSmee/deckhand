@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
-import { dropTarget, graphOf, issueOfLink, layout, lookOf, SIZES } from "./graph";
-import type { Task } from "./types";
+import { dropTarget, graphOf, issueOfLink, layout, lookOf, type Pending, SIZES } from "./graph";
+import type { Task, WorkAction } from "./types";
 
 const task = (n: number, extra: Partial<Task> = {}): Task => ({
   key: `org/app#${n}`,
@@ -199,6 +199,94 @@ test("inbox runs and discussions are never nodes", () => {
     expect(nodes.map((n) => n.number)).toEqual([4, 5]);
     expect(hidden).toBe(0);
   }
+});
+
+test("pending actions: drawn as done already, their nodes Sending…", () => {
+  const tasks = [
+    task(1, { state: "working" }),
+    task(2, { state: "waiting", waitingFor: [1] }),
+    task(3, { state: "waiting", waitingFor: [1] }),
+  ];
+  const edges = [after(1, 2), after(1, 3)];
+  const sent = (p: WorkAction): Pending => ({ repo: "org/app", title: "From the backlog", ...p });
+  const look = (g: ReturnType<typeof graphOf>) =>
+    g.nodes.map((n) => [n.number, n.look, n.status, n.task?.key ?? null]);
+
+  // Queued from the backlog: a new node with an arrow from what it waits for.
+  const queued = graphOf(tasks, edges, [], {
+    pending: [sent({ action: "queue", number: 9, after: 2 })],
+  });
+  expect(look(queued).at(-1)).toEqual([9, "pending", "Sending…", null]);
+  expect(queued.nodes.at(-1)!.title).toBe("From the backlog");
+  expect(queued.edges).toContainEqual(after(2, 9));
+
+  // Started: a lone node.
+  const started = graphOf(tasks, edges, [], { pending: [sent({ action: "start", number: 9 })] });
+  expect(look(started).at(-1)).toEqual([9, "pending", "Sending…", null]);
+  expect(started.edges).toEqual(edges);
+
+  // A wait moved: its arrow from the new blocker only; the node keeps its task.
+  const moved = graphOf(tasks, edges, [], {
+    pending: [sent({ action: "queue", number: 3, after: 2 })],
+  });
+  expect(moved.edges).toEqual([after(1, 2), after(2, 3)]);
+  expect(look(moved)[2]).toEqual([3, "pending", "Sending…", "org/app#3"]);
+
+  // Dequeued: a wait with no run before leaves; one that ran stays, without its arrows.
+  const dequeued = graphOf(tasks, edges, [], { pending: [sent({ action: "dequeue", number: 3 })] });
+  expect(dequeued.nodes.map((n) => n.number)).toEqual([1, 2]);
+  expect(dequeued.edges).toEqual([after(1, 2)]);
+  const ran = [...tasks.slice(0, 2), task(3, { ...tasks[2], runs: [{} as Task["runs"][0]] })];
+  const kept = graphOf(ran, edges, [], { pending: [sent({ action: "dequeue", number: 3 })] });
+  expect(look(kept)[2]).toEqual([3, "pending", "Sending…", "org/app#3"]);
+  expect(kept.edges).toEqual([after(1, 2)]);
+});
+
+test("the last drawing's places are kept: a new issue moves no other", () => {
+  const keys = [1, 2, 3, 4, 5].map((n) => `org/app#${n}`);
+  const edges = [after(1, 2), after(3, 4)];
+  const before = layout(keys, edges, wide);
+  // Nothing to keep (the drawing before the state came): laid out afresh.
+  expect(layout(keys, edges, wide, { boxes: [], gridTop: null })).toEqual(before);
+  // #6 queued after #1: next to it, #1's group grows, yet the rest stays where it was.
+  const grown = layout([`org/app#6`, ...keys], [...edges, after(1, 6)], wide, before);
+  for (const n of [1, 2, 3, 4, 5]) expect(at(grown, n)).toEqual(at(before, n));
+  expect(at(grown, 6).x).toBe(at(before, 2).x);
+  expect(at(grown, 6).y).not.toBe(at(before, 2).y);
+  // No two issues on the same place.
+  const clash = grown.boxes.some((a) =>
+    grown.boxes.some((b) => a !== b && Math.abs(a.x - b.x) < w && Math.abs(a.y - b.y) < h),
+  );
+  expect(clash).toBe(false);
+  // Without the last drawing, groups are packed again: #3's moves down.
+  expect(at(layout([`org/app#6`, ...keys], [...edges, after(1, 6)], wide), 3).y).toBeGreaterThan(
+    at(before, 3).y,
+  );
+
+  // Started: a free cell of the grid; one leaving leaves its cell empty.
+  const started = layout([...keys, "org/app#7"], edges, wide, before);
+  expect(at(started, 7).y).toBe(at(before, 5).y);
+  expect(at(started, 7).x).toBeGreaterThan(at(before, 5).x);
+  const gone = layout(["org/app#1", "org/app#2", "org/app#5"], [after(1, 2)], wide, before);
+  expect(at(gone, 5)).toEqual(at(before, 5));
+});
+
+test("a kept place that no longer fits moves: after what it now waits for", () => {
+  const keys = ["org/app#1", "org/app#2", "org/app#3"];
+  const before = layout(keys, [after(1, 2)], wide);
+  // #1 now waits for #3, from the grid: #1 can't stay in the first column, so it, and #2
+  // after it, move right of #3.
+  const l = layout(keys, [after(1, 2), after(3, 1)], wide, before);
+  expect(at(l, 3)).toEqual(at(before, 3));
+  expect(at(l, 1).x).toBeGreaterThanOrEqual(at(l, 3).x + w + layerGap);
+  expect(at(l, 2).x).toBeGreaterThanOrEqual(at(l, 1).x + w + layerGap);
+  // What would have to go before the page's edge: the kept one moves after it instead.
+  const back = layout(["org/app#2", "org/app#9"], [after(9, 2)], wide, {
+    boxes: [{ key: "org/app#2", x: 0, y: 0 }],
+    gridTop: null,
+  });
+  expect(at(back, 9).x).toBe(0);
+  expect(at(back, 2)).toEqual({ key: "org/app#2", x: w + layerGap, y: at(back, 9).y });
 });
 
 test("dropTarget: on a node or in the gap after it, else the open", () => {

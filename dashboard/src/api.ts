@@ -2,6 +2,7 @@
 // repositories listed, onboarded and their config read, the graph's backlog and its actions.
 // Relative URLs, like the assets: the page works under any path.
 import { useEffect, useRef, useState } from "preact/hooks";
+import type { Pending } from "./graph";
 import type {
   Backlog,
   Entry,
@@ -16,34 +17,49 @@ import type {
 
 const POLL_MS = 3000;
 
-export function useAppState(): { state: State | null; error: string | null } {
+export interface AppState {
+  state: State | null;
+  error: string | null;
+  // Read it now (after an action), not at the next tick.
+  refresh: () => Promise<void>;
+}
+
+export function useAppState(): AppState {
   const [state, setState] = useState<State | null>(null);
   const [error, setError] = useState<string | null>(null);
-  useEffect(() => {
-    let stopped = false;
-    const refresh = async () => {
-      try {
-        const res = await fetch("api/state", { cache: "no-store" });
-        // Signed out (or no longer an allowed user): the sign-in page.
-        if (res.status === 401) return location.reload();
-        if (!res.ok) throw new Error(String(res.status));
-        const next = (await res.json()) as State;
-        if (!stopped) {
-          setState(next);
-          setError(null);
-        }
-      } catch (e) {
-        if (!stopped) setError(e instanceof Error ? e.message : String(e));
+  // Each read's number, and the last one shown: a slow answer read before another one that
+  // came back already is older, and dropped.
+  const asked = useRef(0);
+  const shown = useRef(0);
+  const stopped = useRef(false);
+  const refresh = async () => {
+    const mine = ++asked.current;
+    try {
+      const res = await fetch("api/state", { cache: "no-store" });
+      // Signed out (or no longer an allowed user): the sign-in page.
+      if (res.status === 401) return location.reload();
+      if (!res.ok) throw new Error(String(res.status));
+      const next = (await res.json()) as State;
+      if (stopped.current || mine < shown.current) return;
+      shown.current = mine;
+      setState(next);
+      setError(null);
+    } catch (e) {
+      if (!stopped.current && mine >= shown.current) {
+        setError(e instanceof Error ? e.message : String(e));
       }
-    };
+    }
+  };
+  useEffect(() => {
+    stopped.current = false;
     refresh();
     const timer = setInterval(refresh, POLL_MS);
     return () => {
-      stopped = true;
+      stopped.current = true;
       clearInterval(timer);
     };
   }, []);
-  return { state, error };
+  return { state, error, refresh };
 }
 
 // A run's log so far, then live until it ends.
@@ -228,17 +244,22 @@ const BACKLOG_POLL_MS = 30000;
 export interface WorkArea {
   backlog: Backlog | null;
   error: string | null;
-  // An action on its way, and what the last one said.
+  // An action on its way (the graph draws them at once), and what the last one said.
   busy: boolean;
+  pending: Pending[];
   result: WorkResult | null;
   act: (action: WorkAction) => Promise<void>;
 }
 
 // One repo's backlog and the actions on its issues; nothing on the All tab (`repo` null).
-export function useWorkArea(repo: string | null): WorkArea {
+// `refresh`: reads api/state again, once an action is done.
+export function useWorkArea(
+  repo: string | null,
+  refresh: () => Promise<void> = async () => {},
+): WorkArea {
   const [backlog, setBacklog] = useState<Backlog | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const [pending, setPending] = useState<Pending[]>([]);
   const [result, setResult] = useState<WorkResult | null>(null);
   const current = useRef(repo);
   current.current = repo;
@@ -268,23 +289,29 @@ export function useWorkArea(repo: string | null): WorkArea {
 
   const act = async (action: WorkAction) => {
     if (!repo) return;
-    setBusy(true);
+    const title = backlog?.issues.find((i) => i.number === action.number)?.title ?? null;
+    const mine: Pending = { ...action, repo, title };
+    setPending((all) => [...all, mine]);
     setResult(null);
+    let done = false;
     try {
       const res = await fetch(`api/repos/${repo}/work`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(action),
       });
-      setResult(await answer<WorkResult>(res));
+      const body = await answer<WorkResult>(res);
+      setResult(body);
+      done = !body.error;
     } catch (e) {
       setResult({ error: message(e) });
-    } finally {
-      setBusy(false);
     }
-    // The issue leaves the backlog (or comes back to it).
-    load();
+    // The real node replaces the pending one, and the issue leaves the backlog for good:
+    // both read again before it goes. A refusal just takes it away.
+    if (done) await Promise.all([refresh(), load()]);
+    setPending((all) => all.filter((p) => p !== mine));
   };
 
-  return { backlog, error, busy, result, act };
+  const mine = pending.filter((p) => p.repo === repo);
+  return { backlog, error, busy: mine.length > 0, pending: mine, result, act };
 }

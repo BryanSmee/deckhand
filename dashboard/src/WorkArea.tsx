@@ -86,6 +86,9 @@ export function WorkArea({ repo, work, targets, waiting, mode, onMode, notice }:
   // The issue whose "Queue after…" is open.
   const [choosing, setChoosing] = useState<number | null>(null);
   const { backlog, busy, result } = work;
+  // Those an action on its way takes: they come back if it fails.
+  const sent = new Set(work.pending.map((p) => p.number));
+  const issues = backlog?.issues.filter((i) => !sent.has(i.number)) ?? [];
   const modes = backlog?.modes.length ? backlog.modes : ["work"];
   const blocked = !!backlog?.errors;
   const picked = mode === "work" ? {} : { mode };
@@ -155,8 +158,8 @@ export function WorkArea({ repo, work, targets, waiting, mode, onMode, notice }:
       ) : (
         backlog && (
           <ul class={styles.list} aria-label="Open issues with no task">
-            {!backlog.issues.length && <li class={styles.note}>No open issue left to start.</li>}
-            {backlog.issues.map((i) => (
+            {!issues.length && <li class={styles.note}>No open issue left to start.</li>}
+            {issues.map((i) => (
               <li
                 key={i.number}
                 class={styles.issue}
