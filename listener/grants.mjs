@@ -1,14 +1,19 @@
 // What the operator grants each repo, beyond what every sandbox gets: extra hosts, whether
-// its own .deckhand.yaml may add hosts, host mounts under allowed roots, and its own CPU,
-// memory and pids limits. It lives in the operator's GRANTS_FILE, never in a repo: a repo's
-// .deckhand.yaml may request a mount or a host, but only a grant here makes it happen. Read
-// again at each run, so an edit applies without a restart. Format: ../docs/security.md.
+// its own .deckhand.yaml may add hosts, run a preview hook, build its Dockerfile (and that of
+// its pull requests' branches), host mounts under allowed roots, and its own CPU, memory and
+// pids limits. It lives in the operator's GRANTS_FILE, never in a repo: a repo's
+// .deckhand.yaml may request a mount, a host, a preview hook or a Dockerfile, but only a grant
+// here makes it happen. Read again at each run, so an edit applies without a restart. Format:
+// ../docs/security.md.
 //
 //   "*":
 //     allow_repo_hosts: true   # every repo's own `hosts` count (default: false)
+//     allow_dockerfile: true   # every repo's own `dockerfile` is built (default: false)
 //   org/repo:
 //     hosts: ["*.example.com"]
 //     allow_repo_hosts: false  # overrides "*" for this repo
+//     allow_preview: true      # its `preview` hook runs, with the Docker socket (root)
+//     allow_branch_docker_images: true  # a pull request's runs build its branch's Dockerfile
 //     limits: { cpus: 4, memory: 8g, pids: 4096 }
 //     mounts:
 //       - root: /nfs/work
@@ -25,10 +30,19 @@ import { isMap, parseYaml } from "./yaml.mjs";
 export const SANDBOX_UID = 1000;
 export const SANDBOX_GID = 1000;
 
-// The file's text → Map of lowercase "owner/repo" (or "*", every repo) → { hosts,
-// allowRepoHosts, mounts, limits }; allowRepoHosts is null when the entry doesn't say, so
-// "*" decides (grantFor). Any error throws a ConfigError listing them all: a broken grants
-// file grants nothing.
+// The yes-or-no grants, by key: per repo or for every repo ("*"), all false by default.
+const FLAGS = {
+  allow_repo_hosts: "allowRepoHosts",
+  allow_preview: "allowPreview",
+  allow_dockerfile: "allowDockerfile",
+  allow_branch_docker_images: "allowBranchDockerImages",
+};
+
+const NO_FLAGS = Object.fromEntries(Object.values(FLAGS).map((f) => [f, null]));
+
+// The file's text → Map of lowercase "owner/repo" (or "*", every repo) → { hosts, mounts,
+// limits, and FLAGS }; a flag is null when the entry doesn't say, so "*" decides (grantFor).
+// Any error throws a ConfigError listing them all: a broken grants file grants nothing.
 export function parseGrants(text, config) {
   const errors = [];
   const grants = new Map();
@@ -46,15 +60,15 @@ export function parseGrants(text, config) {
       fail('expected an owner/repo key (or "*" for every repo)');
       continue;
     }
-    const grant = { hosts: [], allowRepoHosts: null, mounts: [], limits: config.limits };
+    const grant = { hosts: [], ...NO_FLAGS, mounts: [], limits: config.limits };
     for (const [key, v] of Object.entries(value ?? {})) {
-      if (key === "allow_repo_hosts") {
-        if (typeof v === "boolean") grant.allowRepoHosts = v;
-        else fail("allow_repo_hosts: expected true or false");
+      if (Object.hasOwn(FLAGS, key)) {
+        if (typeof v === "boolean") grant[FLAGS[key]] = v;
+        else fail(`${key}: expected true or false`);
       } else if (everyRepo) {
         // Hosts and limits for every repo are ALLOWED_HOSTS and SANDBOX_*; mounts for every
         // repo would be too broad to grant by accident.
-        fail(`${key}: only allow_repo_hosts applies to every repo`);
+        fail(`${key}: only ${Object.keys(FLAGS).join(", ")} apply to every repo`);
       } else if (key === "hosts") {
         if (!Array.isArray(v)) fail("hosts: expected a list of host names");
         else
@@ -88,7 +102,7 @@ export function parseGrants(text, config) {
             });
           }
         }
-      } else fail(`${key}: unknown (hosts, allow_repo_hosts, limits or mounts)`);
+      } else fail(`${key}: unknown (hosts, limits, mounts or ${Object.keys(FLAGS).join(", ")})`);
     }
     grants.set(repo.toLowerCase(), grant);
   }
@@ -109,16 +123,38 @@ export function loadGrants(config, read = (path) => readFileSync(path, "utf8")) 
 }
 
 // What one repo gets: nothing extra and the operator's limits, unless it is granted more.
-// Its own config's hosts count when its entry, or else "*", says allow_repo_hosts: true.
+// Each flag is what its entry says, or else "*", or else false.
 export function grantFor(grants, config, repo) {
   const own = grants.get(repo.toLowerCase()) ?? {
     hosts: [],
-    allowRepoHosts: null,
+    ...NO_FLAGS,
     mounts: [],
     limits: config.limits,
   };
-  const allowRepoHosts = own.allowRepoHosts ?? grants.get("*")?.allowRepoHosts ?? false;
-  return { ...own, allowRepoHosts };
+  const every = grants.get("*") ?? NO_FLAGS;
+  const flags = Object.fromEntries(
+    Object.values(FLAGS).map((f) => [f, own[f] ?? every[f] ?? false]),
+  );
+  return { ...own, ...flags };
+}
+
+// What the repo's config asks for that only a grant allows: a preview hook (run with the
+// Docker socket, so root on the host) and a Dockerfile (built on the host's Docker, with its
+// network). One line each, naming the grant to add; they stop its runs and preview hooks
+// like errors in the config.
+export function ungranted(grant, settings) {
+  const missing = [];
+  if (settings.preview && !grant.allowPreview) {
+    missing.push(
+      "preview: the operator's grants file doesn't set `allow_preview: true` for this repository",
+    );
+  }
+  if (settings.dockerfile && !grant.allowDockerfile) {
+    missing.push(
+      "dockerfile: the operator's grants file doesn't set `allow_dockerfile: true` for this repository",
+    );
+  }
+  return missing;
 }
 
 function within(path, root) {

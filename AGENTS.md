@@ -70,8 +70,9 @@ docs/         setup, per-repo config reference, security model, architecture
   operator's settings (users, parallel runs), never widen them. What would widen them is a
   request the operator's grants file must grant: `mounts` only under a granted root, `hosts`
   only with `allow_repo_hosts: true` for that repo (or `"*"`), and never `*` or `*.<tld>`
-  from a repo. Branch Dockerfiles only with `allow_branch_docker_images`, never for fork
-  pull requests.
+  from a repo. A repo's `dockerfile` is built only with `allow_dockerfile`, its `preview`
+  hook runs only with `allow_preview`, branch Dockerfiles only with
+  `allow_branch_docker_images` (all three in the grants file), never for fork pull requests.
 - **No long-lived token in a sandbox:** short-lived installation tokens for that run's repo,
   through the listener's broker.
 - **No host mounts** unless the operator's config grants a root; requested paths are

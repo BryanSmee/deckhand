@@ -8,9 +8,13 @@ paths unless you grant them, a restricted network, and no privileges.
 
 ## The default branch
 
-Deckhand trusts a repository's default branch: its `.deckhand.yaml` (hosts, the preview
-hook, which runs with the Docker socket, the Dockerfile built on the host), its sandbox
-instructions. A sandbox that could write to it could grant itself all of that, so none can:
+Deckhand trusts a repository's default branch: its `.deckhand.yaml`, its sandbox
+instructions. What that file can ask for beyond a sandbox (hosts, mounts, the preview hook,
+which runs with the Docker socket, the Dockerfile built on the host) only happens when your
+grants file allows it for that repository (see [The grants file](#the-grants-file)): with
+the App on many repositories, whoever can push one's default branch must not get root on the
+host through it. A sandbox that could write to a default branch could still change what
+that file asks for, so none can:
 
 - Sandbox tokens only **read** the code (`contents: read`). They can't push, write files
   through the API or merge a pull request, whatever the repo's settings.
@@ -192,14 +196,22 @@ stop (the details are in the listener's logs, not on GitHub).
 ```yaml
 # grants.yaml: one key per repository (owner/repo), and "*" for every repository
 "*":
-  # The hosts in each repo's own .deckhand.yaml count (default: false). The only key "*"
-  # takes: hosts and limits for every repo are ALLOWED_HOSTS and SANDBOX_*.
+  # The yes-or-no grants below (all false by default) are the only keys "*" takes: hosts
+  # and limits for every repo are ALLOWED_HOSTS and SANDBOX_*. A repo's own entry overrides.
   allow_repo_hosts: false
+  allow_dockerfile: false
 acme/api:
   # Reachable by its sandboxes, besides the mandatory hosts and ALLOWED_HOSTS.
   hosts: ["*.acme.dev", pypi.org]
   # Its .deckhand.yaml may add hosts of its own (never "*"); overrides "*" above.
   allow_repo_hosts: true
+  # Its .deckhand.yaml's `preview` hook runs, with the Docker socket: root on the host.
+  allow_preview: true
+  # Its .deckhand.yaml's `dockerfile` is built on the host's Docker, with its network.
+  allow_dockerfile: true
+  # Runs on its pull requests build the Dockerfile of the pull request's branch (never a
+  # fork's) rather than the default branch's. Needs allow_dockerfile too.
+  allow_branch_docker_images: true
   # Its own limits; missing ones keep SANDBOX_CPUS, SANDBOX_MEMORY, SANDBOX_PIDS.
   limits: { cpus: 4, memory: 8g, pids: 4096 }
   # Roots it may mount from (read-only unless read_only: false).
@@ -212,6 +224,18 @@ acme/api:
 Quote patterns starting with `*` (`"*.acme.dev"`, `"*"` as a key): YAML reads a bare `*`
 as an alias. See [A repository's own hosts](#a-repositorys-own-hosts) for
 `allow_repo_hosts`.
+
+**Preview hooks and Dockerfiles** are the most powerful things a `.deckhand.yaml` asks for:
+a preview hook holds the Docker socket, so it is root on the host (the App's key in
+`/data`, the Claude credential, every repository's volumes); a Dockerfile is built on the
+host's Docker with its network. A repository whose config has `preview` without
+`allow_preview`, or `dockerfile` without `allow_dockerfile`, gets neither: its runs stop
+and the reply on the issue says which grant is missing, like refused hosts, and its preview
+hook doesn't run (the listener's logs say why:
+`ignored: pull_request: preview hook of <repo> not run: …`). Grant them to repositories
+whose default branch you trust as much as the host itself. `allow_branch_docker_images`
+is a grant too, not a `.deckhand.yaml` key: it lets anyone who can push a branch of the
+repository change what is built.
 
 ## Hardening
 
@@ -229,7 +253,9 @@ Claude Code install runs as root with only `CHOWN` (to take over an older volume
 that hands a new cache volume to uid 1000 keeps only `CHOWN`, without network.
 
 The Docker socket stays in the listener (and in preview hooks, which a repo's maintainers
-configure, see [Per-repo config](repo-config.md#preview-hook)). No sandbox gets it.
+configure and only run with `allow_preview` in the grants file, see
+[Per-repo config](repo-config.md#preview-hook)). No sandbox gets it. Image builds only run
+for repositories granted `allow_dockerfile`.
 
 **Optional: a socket proxy.** The listener only uses the docker CLI, so it can talk to a
 socket proxy (for example `tecnativa/docker-socket-proxy`) through `DOCKER_HOST` instead of
@@ -325,13 +351,14 @@ listener's logs (`Egress: refused <host> for <repo>#<n>`).
 
 ### Not covered
 
-- **Image builds** (a repo's `dockerfile`) and the **Claude Code install** run with normal
-  network access: they run on the host's Docker, outside the sandboxes' network. Builds run
-  the repo's Dockerfile from its default branch (or trusted branches with
-  `allow_branch_docker_images`). A branch's image gets a tag of its own (`branch-…`, hashing
-  its commit), so the default branch's runs and preview hooks never use an image built from
-  a branch.
-- **Preview hooks** run on Docker's default network with the Docker socket.
+- **Image builds** (a repo's `dockerfile`, with `allow_dockerfile`) and the **Claude Code
+  install** run with normal network access: they run on the host's Docker, outside the
+  sandboxes' network. Builds run the repo's Dockerfile from its default branch (or its pull
+  requests' branches with `allow_branch_docker_images`). A branch's image gets a tag of its
+  own (`branch-…`, hashing its commit), so the default branch's runs and preview hooks never
+  use an image built from a branch.
+- **Preview hooks** (with `allow_preview`) run on Docker's default network with the Docker
+  socket.
 - **DNS**: Docker's embedded resolver may forward lookups from the internal network to the
   host's resolvers, so a lookup of a made-up name could carry data out to that domain's DNS
   server.

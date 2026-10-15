@@ -9,6 +9,7 @@ import { page } from "./auth.mjs";
 import { board, STATES } from "./board.mjs";
 import { matchHost } from "./egress.mjs";
 import { previewEvent, pullRequest, verified, workItem } from "./events.mjs";
+import { grantFor, loadGrants, ungranted } from "./grants.mjs";
 import { kindOf } from "./modes.mjs";
 import { onboardingTargets } from "./onboarding.mjs";
 import { CONFIG_FILE } from "./repo-config.mjs";
@@ -266,6 +267,17 @@ export function createHttp(ctx, { dashboardDir }) {
     const { settings, errors } = await ctx.repoSettings(repo, base);
     if (errors.length) return skip(`${event}: ${CONFIG_FILE} of ${repo} has errors`);
     if (!settings.preview) return skip(`${event}: ${repo} has no preview hook`);
+    // Root on the host: only when the operator's grants file says so (grants.mjs).
+    let grant;
+    try {
+      grant = grantFor(loadGrants(config), config, repo);
+    } catch (error) {
+      return skip(`${event}: preview hook of ${repo} not run: ${error.message}`);
+    }
+    const missing = ungranted(grant, settings);
+    if (missing.length) {
+      return skip(`${event}: preview hook of ${repo} not run: ${missing.join("; ")}`);
+    }
     const image =
       settings.preview.image ??
       (await ctx.images.imageFor({ repo, ref: base, dockerfile: settings.dockerfile }));

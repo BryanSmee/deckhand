@@ -96,6 +96,12 @@ test("prompts: onboarding lists what this Deckhand allows the repo", () => {
   assert.match(text, /\(`ALLOWED_USERS`; `users` can only narrow it\): `alice`/);
   assert.match(text, /Hosts the operator grants this repository: `registry.npmjs.org`/);
   assert.match(text, /Host mount roots granted to this repository: `\/srv\/data \(read-write\)`/);
+  assert.match(text, /`preview` in `.deckhand.yaml`: not granted: .* sets `allow_preview`/);
+  assert.match(text, /`dockerfile` in `.deckhand.yaml`: not granted: .* sets `allow_dockerfile`/);
+  const granted = { ...grant, allowPreview: true, allowDockerfile: true };
+  const open = promptFor(issue, { mode: "onboarding", settings, config, grant: granted });
+  assert.match(open, /`preview` in `.deckhand.yaml`: allowed/);
+  assert.match(open, /`dockerfile` in `.deckhand.yaml`: allowed\n/);
   assert.match(text, /Models: work `opus` \(high effort\), brainstorms `sonnet` \(low\)/);
   assert.match(text, /## Reference: `.deckhand.yaml`/);
 });

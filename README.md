@@ -120,7 +120,8 @@ states, every setting and how sandboxes reach GitHub.
 A repository can add a `.deckhand.yaml` at its root: its own users (narrowing
 `ALLOWED_USERS`), trigger word, models, parallel runs, a setup command, project
 instructions, a Dockerfile for its image, caches, extra hosts, host mounts, inboxes and a
-preview hook.
+preview hook. Its Dockerfile, preview hook, extra hosts and host mounts only count once the
+operator grants them to it in the grants file.
 
 ```yaml
 users: [alice]
@@ -172,7 +173,8 @@ Read this before installing Deckhand on a repository.
   is a way out. Keep the list short.
 - **What isn't covered:** image builds, the Claude Code install and preview hooks run
   outside the sandboxes' network, and preview hooks get the Docker socket (root on the
-  host). DNS lookups may leave the internal network.
+  host): a repository only gets its own Dockerfile built or preview hook run when the grants
+  file says so (`allow_dockerfile`, `allow_preview`). DNS lookups may leave the internal network.
 
 All of it, with the grants file and the limits of each measure:
 [docs/security.md](docs/security.md).

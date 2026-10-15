@@ -71,6 +71,8 @@ ${onboardingInstructions}
 - Hosts the operator grants this repository: ${none(grant.hosts)}
 - \`hosts\` in \`.deckhand.yaml\`: ${grant.allowRepoHosts ? "allowed: the operator lets this repository add hosts (never `*`)" : "only hosts listed above count; any other is refused and stops runs until the operator sets `allow_repo_hosts` for this repository"}
 - Host mount roots granted to this repository: ${roots.length ? none(roots) : "none: a \`mounts\` entry would be refused until the operator grants a root"}
+- \`preview\` in \`.deckhand.yaml\`: ${grant.allowPreview ? "allowed: the operator grants this repository a preview hook" : "not granted: a \`preview\` hook stops runs until the operator sets \`allow_preview\` for this repository"}
+- \`dockerfile\` in \`.deckhand.yaml\`: ${grant.allowDockerfile ? `allowed${grant.allowBranchDockerImages ? ", from pull requests' own branches too" : ""}` : "not granted: a \`dockerfile\` stops runs until the operator sets \`allow_dockerfile\` for this repository"}
 - Models: work \`${settings.model}\` (${settings.effort} effort), brainstorms \`${settings.brainstormModel}\` (${settings.brainstormEffort})
 
 ## Reference: \`.deckhand.yaml\` (docs/repo-config.md)

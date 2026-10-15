@@ -1,8 +1,8 @@
 // Per-repo settings: a repo's .deckhand.yaml, always read from its default branch so a pull
 // request can't change its own permissions. It can only narrow the operator's settings
-// (users, parallel runs), requests what the operator must grant (hosts, mounts: grants.mjs),
-// and brings what is the project's own: trigger word, models, setup command, extra
-// instructions, its own modes, Dockerfile, caches, preview hook. Format and example:
+// (users, parallel runs), requests what the operator must grant (hosts, mounts, preview hook,
+// Dockerfile: grants.mjs), and brings what is the project's own: trigger word, models, setup
+// command, extra instructions, its own modes, caches. Format and example:
 // ../docs/repo-config.md.
 import { createHash } from "node:crypto";
 import { posix } from "node:path";
@@ -40,7 +40,6 @@ export function defaultSettings(config) {
     setup: null,
     instructions: null,
     dockerfile: null,
-    allowBranchDockerImages: false,
     caches: [],
     hosts: [],
     mounts: [],
@@ -255,9 +254,9 @@ const KEYS = {
   },
   instructions: pathKey,
   dockerfile: pathKey,
-  allow_branch_docker_images: (value, { key, settings, fail }) => {
-    if (typeof value === "boolean") settings.allowBranchDockerImages = value;
-    else fail(key, "expected true or false");
+  // Moved to the operator's grants file (grants.mjs): a repo can't allow itself this.
+  allow_branch_docker_images: (value, { key, warn }) => {
+    warn(`${key}: ignored here, the operator's grants file sets it for this repository`);
   },
   caches: parseCaches,
   hosts: parseHosts,

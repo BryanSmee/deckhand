@@ -93,8 +93,9 @@ Reactions on the triggering comment follow its run: 👀 when it is received, th
 - **Per-repo config**: each repo may bring a `.deckhand.yaml` on its default branch: its own
   trigger word, models, parallel cap and users (only narrowing the operator's), a setup
   command and extra instructions for the sandbox, a Dockerfile `FROM` the base image, cache
-  volumes, and a preview hook run on `pull_request` and `workflow_run` deliveries. A config
-  with errors stops runs, and the reply says why.
+  volumes, and a preview hook run on `pull_request` and `workflow_run` deliveries (the
+  Dockerfile and the hook only with the operator's grant, `grants.mjs`). A config with
+  errors stops runs, and the reply says why.
 - **Isolation**: sandboxes run with no capabilities, `no-new-privileges` and CPU, memory and
   pids limits, on an internal network (checked before each run) whose only way out is the
   egress proxy (`proxy/proxy.mjs`): it asks the broker's port, for each connection, whether
