@@ -2,7 +2,11 @@
 // gets one up front. Its git credential helper and gh wrapper (../sandbox/) ask here, with
 // the run's secret, for a fresh token limited to the run's repo. The secret dies with the
 // run. Served on its own port, which only the sandboxes' network reaches.
+//
+// Those tokens only read the code: pushes go through the listener's git gateway
+// (git-gateway.mjs), which finds the run here by the same secret.
 import { createHash, randomBytes } from "node:crypto";
+import { SANDBOX_PERMISSIONS } from "./github-app.mjs";
 
 // Kept by hash: the map never holds a usable secret, and lookups don't compare secrets.
 function hash(secret) {
@@ -14,13 +18,20 @@ export function createBroker({
   random = () => randomBytes(32).toString("hex"),
   log = () => {},
 }) {
-  const runs = new Map(); // hash(secret) → { repo, extra }
+  const runs = new Map(); // hash(secret) → { repo, extra, push }
 
   // `extra`: permissions this run needs beyond the sandbox's usual ones (discussions).
   // `secret`: a run's own again, when a restarted listener picks it up.
   function register(repo, extra, secret = random()) {
-    runs.set(hash(secret), { repo: repo.toLowerCase(), extra });
+    // A run that may not write pull requests (onboarding, light modes) has no branch to push.
+    const push = { ...SANDBOX_PERMISSIONS, ...extra }.pull_requests === "write";
+    runs.set(hash(secret), { repo: repo.toLowerCase(), extra, push });
     return secret;
+  }
+
+  // The live run a secret belongs to, or undefined.
+  function runOf(secret) {
+    return secret ? runs.get(hash(secret)) : undefined;
   }
 
   function revoke(secret) {
@@ -40,7 +51,7 @@ export function createBroker({
       return send(res, 404, { error: "not found" });
     }
     const [scheme, secret] = (req.headers.authorization ?? "").split(" ");
-    const run = scheme === "Bearer" && secret ? runs.get(hash(secret)) : undefined;
+    const run = scheme === "Bearer" ? runOf(secret) : undefined;
     if (!run) return send(res, 401, { error: "unknown or finished run" });
     const { repo, extra } = run;
     const github = app();
@@ -58,5 +69,5 @@ export function createBroker({
     }
   }
 
-  return { register, revoke, handle, size: () => runs.size };
+  return { register, revoke, runOf, handle, size: () => runs.size };
 }

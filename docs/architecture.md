@@ -75,7 +75,8 @@ Reactions on the triggering comment follow its run: 👀 when it is received, th
 - **GitHub**: the operator's private App, created at `/setup` and stored in the data volume.
   The listener calls GitHub with installation tokens; sandboxes get none up front and ask the
   broker (`BROKER_PORT`, only on the sandboxes' network) for a fresh token limited to their
-  repo, with a secret that dies with the run.
+  repo, with a secret that dies with the run. Those tokens only read the code: pushes go
+  through the git gateway on the same port, which never lets one reach the default branch.
 - **Dashboard**: `GET /` shows every repo's issues and pull requests, their state and live
   logs, to `ALLOWED_USERS` signed in with GitHub through the App, built from `dashboard/`.
   `GET /status` says what is going on, to them and to calls from inside the container.
@@ -127,7 +128,7 @@ which starts runs.
 | `events.mjs`                                                      | Deliveries → work items, trigger and `/mode` lines, pull request states. Pure.                    |
 | `repo-config.mjs`, `yaml.mjs`                                     | `.deckhand.yaml`, read from the default branch and parsed.                                        |
 | `grants.mjs`, `egress.mjs`                                        | The operator's grants (hosts, mounts, limits) and the egress policy.                              |
-| `github-app.mjs`, `broker.mjs`                                    | The App's tokens; the sandboxes' token broker.                                                    |
+| `github-app.mjs`, `broker.mjs`, `git-gateway.mjs`                 | The App's tokens; the sandboxes' token broker; their pushes, never to the default branch.         |
 | `setup.mjs`, `auth.mjs`                                           | `/setup` (creating the App) and signing in with GitHub.                                           |
 | `images.mjs`, `checkout.mjs`, `runner/`                           | Repo images, Claude Code's install, caches; checkouts; the Docker runner.                         |
 | `onboarding.mjs`, `previews.mjs`                                  | Onboarding issues; preview hooks.                                                                 |

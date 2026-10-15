@@ -441,6 +441,14 @@ test("a webhook from the App runs a sandbox that gets its repo's token from the 
     headers: { authorization: `Bearer ${secret}` },
   });
   assert.equal(after.status, 401);
+  // Its pushes went through the broker's port too (git-gateway.mjs): now refused, with the
+  // challenge git needs to ask its credential helper.
+  const push = await fetch(
+    `http://127.0.0.1:${brokerPort}/git/org/repo.git/info/refs?service=git-receive-pack`,
+    { headers: { authorization: `Basic ${Buffer.from(`deckhand:${secret}`).toString("base64")}` } },
+  );
+  assert.equal(push.status, 401);
+  assert.match(push.headers.get("www-authenticate"), /^Basic/);
 });
 
 // "host {json}" lines the fake sandbox wrote → { host: answer }.
@@ -929,7 +937,9 @@ test("/mode review: the repo's light mode, its instructions and model, the repo'
   assert.match(work, /^SANDBOX_MODEL=opus$/m);
   assert.match(work, /^TASK_ISSUE=12$/m);
   const mints = github.requests.filter((r) => r.body.includes("repositories"));
-  assert.equal(JSON.parse(mints.at(-1).body).permissions.contents, "write");
+  // A work run writes pull requests; it pushes through the git gateway, its token only reads.
+  assert.equal(JSON.parse(mints.at(-1).body).permissions.pull_requests, "write");
+  assert.equal(JSON.parse(mints.at(-1).body).permissions.contents, "read");
   assert.deepEqual(JSON.parse(readFileSync(join(dir, "modes.json"), "utf8")), {});
 });
 
@@ -1103,7 +1113,7 @@ test("installing the App on a repo without a config: an onboarding issue and con
   const work = readFileSync(join(dir, "run-env"), "utf8");
   assert.match(work, /^TASK_ISSUE=30$/m);
   assert.match(work, /^TASK_PROMPT=The maintainer confirmed the onboarding proposal/m);
-  assert.equal(JSON.parse(mints().at(-1).body).permissions.contents, "write");
+  assert.equal(JSON.parse(mints().at(-1).body).permissions.pull_requests, "write");
   const done = JSON.parse(onIssue30(github)[2].body).body;
   assert.match(done, /^All done\./);
   assert.match(done, /`\.deckhand\.yaml` on `issue-30-deckhand-config` has errors/);

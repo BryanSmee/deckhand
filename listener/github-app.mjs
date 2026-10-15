@@ -27,9 +27,12 @@ export const APP_EVENTS = [
   "workflow_run",
   "push",
 ];
-// A sandbox gets less than the App: no deployments, nothing outside its repo.
+// A sandbox gets less than the App: no deployments, nothing outside its repo, and its code
+// read-only. It pushes through the listener's git gateway (git-gateway.mjs), which refuses
+// the default branch: GitHub can't be asked to (rulesets aren't enforced on free private
+// repos), and a token that writes contents could also push or merge into it directly.
 export const SANDBOX_PERMISSIONS = {
-  contents: "write",
+  contents: "read",
   issues: "write",
   pull_requests: "write",
   metadata: "read",
@@ -37,6 +40,8 @@ export const SANDBOX_PERMISSIONS = {
 };
 // Added for discussion runs only: an App created before discussions keeps working elsewhere.
 export const DISCUSSION_PERMISSIONS = { discussions: "write" };
+// The git gateway's own token for a push it lets through: never handed to a sandbox.
+export const PUSH_PERMISSIONS = { contents: "write" };
 // A repo's light modes (its config's `modes:`) only comment, and the listener posts their
 // reply: their token can read the code, issues and pull requests, not push or write.
 export const READ_ONLY_PERMISSIONS = {
