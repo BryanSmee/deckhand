@@ -2099,6 +2099,17 @@ mounts:
         join(dir, "logs", "org-repo-pr-3-1000.log"),
         `${JSON.stringify(meta)}\n${JSON.stringify(result)}\n`,
       );
+      // A run that stopped to ask.
+      const asked = {
+        type: "result",
+        result:
+          "<!-- needs-input -->\n## Needs your input\n\n1. **Name**: which one?\n   - [ ] A (recommended)\n   - [ ] B",
+        duration_ms: 6000,
+      };
+      writeFileSync(
+        join(dir, "logs", "org-repo-pr-4-500.log"),
+        `${JSON.stringify({ ...meta, key: "org/repo#pr-4", startedAt: 500 })}\n${JSON.stringify(asked)}\n`,
+      );
       return { GITHUB_URL: github.url, DASHBOARD_DIR: dist };
     });
     const base = `http://127.0.0.1:${port}`;
@@ -2171,6 +2182,46 @@ mounts:
     }
     assert.equal(fetched.title, "An older pull request");
     assert.equal(fetched.runs[0].summary, "The typo.");
+    // Waiting for input: the questions of the run that stopped to ask, and of an issue's body.
+    const tasks = async () => (await (await get("/api/state", session)).json()).tasks;
+    const stopped = (await tasks()).find((x) => x.key === "org/repo#pr-4");
+    assert.equal(stopped.state, "needs-input");
+    assert.deepEqual(stopped.questions, {
+      source: "run",
+      runId: "org-repo-pr-4-500",
+      items: [
+        {
+          title: "Name",
+          text: "which one?",
+          options: [
+            { label: "A", recommended: true },
+            { label: "B", recommended: false },
+          ],
+        },
+      ],
+      raw: "1. **Name**: which one?\n   - [ ] A (recommended)\n   - [ ] B",
+    });
+    await send(
+      {
+        action: "opened",
+        installation: { id: 7 },
+        repository: { full_name: "org/repo", default_branch: "trunk" },
+        issue: {
+          number: 20,
+          title: "An idea",
+          state: "open",
+          body: "## Open questions\n\nWhich colour?",
+          user: { login: "alice", type: "User" },
+          labels: [],
+        },
+        sender: { login: "alice", type: "User" },
+      },
+      "issues",
+    );
+    await listener.until("org/repo#20: open questions, labelled");
+    const filed = (await tasks()).find((x) => x.key === "org/repo#20");
+    assert.deepEqual(filed.questions, { source: "issue", items: null, raw: "Which colour?" });
+    for (const x of [stopped, filed]) assertShape(x.questions, QUESTIONS_KEYS, "Questions");
     // Its pull request too, without a readyAt: nothing to notify.
     for (let i = 0; i < 100 && !fetched.pr; i++) {
       await new Promise((resolve) => setTimeout(resolve, 25));
@@ -2265,8 +2316,9 @@ mounts:
       "pr",
       "runs",
     ],
-    ["deadline", "waitingFor"],
+    ["deadline", "waitingFor", "questions"],
   ];
+  const QUESTIONS_KEYS = [["source", "items", "raw"], ["runId"]];
   const RUN_KEYS = [
     [
       "id",

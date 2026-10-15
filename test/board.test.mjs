@@ -197,6 +197,36 @@ test("issues labelled needs-input show as such, with or without a run, unless on
   );
 });
 
+test("a task waiting for input carries its questions: its last run's, else its issue's", () => {
+  const asked = (raw) => ({ items: null, raw });
+  const tasks = board({
+    runs: [
+      run("acme/api#1", 30, { status: "needs-input", questions: asked("From the run") }),
+      // Stopped to ask without questions in the format's place: the issue's.
+      run("acme/api#2", 20, { status: "needs-input", questions: null }),
+      run("acme/api#3", 10, { status: "running" }),
+    ],
+    queued: [],
+    brainstorms: [],
+    inputs: ["acme/api#1", "acme/api#2", "acme/api#3", "acme/api#4", "acme/api#5"].map((key) => ({
+      key,
+      repo: "acme/api",
+      since: 5,
+      questions: key.endsWith("5") ? null : asked(`From ${key}`),
+    })),
+  });
+  const questions = Object.fromEntries(tasks.map((t) => [t.key, t.questions]));
+  assert.deepEqual(questions, {
+    "acme/api#1": { source: "run", runId: "acme/api#1-30", items: null, raw: "From the run" },
+    "acme/api#2": { source: "issue", items: null, raw: "From acme/api#2" },
+    // Working on it: not waiting.
+    "acme/api#3": undefined,
+    "acme/api#4": { source: "issue", items: null, raw: "From acme/api#4" },
+    // Labelled by hand, nothing in its body.
+    "acme/api#5": undefined,
+  });
+});
+
 test("the graph's arrows: a wait's blockers, pull requests on the board by their own key", () => {
   const shown = [{ key: "org/repo#24" }, { key: "org/repo#22" }, { key: "org/repo#pr-30" }];
   const waits = [

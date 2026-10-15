@@ -1,8 +1,13 @@
 // Issues waiting for the maintainer's answers: an `## Open questions` section in an issue's
 // body labels it NEEDS_INPUT_LABEL, and an allowed user's comment takes the label off (they
 // answered). Inbox runs file their issues with that section (prompts/idea.md, bug.md), and a
-// hand-written issue can have one too. Pure, so tested on its own (../test/questions.test.mjs).
+// hand-written issue can have one too. The questions themselves are parsed for the dashboard
+// (parseQuestions()), from an issue's section or a run's reply that stopped to ask; their
+// format is in ../prompts/sandbox.md. Pure, so tested on its own (../test/questions.test.mjs).
 import { MARKER } from "./events.mjs";
+
+// Starts the final message of a run that stopped to ask the maintainer (../prompts/sandbox.md).
+export const NEEDS_INPUT = "<!-- needs-input -->";
 
 const HEADING = /^ {0,3}(#{1,6})\s+(.*?)(?:\s+#+)?\s*$/;
 const FENCE = /^ {0,3}(```|~~~)/;
@@ -30,9 +35,11 @@ export function questionsSection(body) {
 // Whether the section asks anything. Its first paragraph decides: inbox issues end with a
 // line linking the inbox comment they come from, which falls in the section, after "None".
 export function hasOpenQuestions(body) {
-  const section = questionsSection(body)
-    ?.replace(/<!--[\s\S]*?-->/g, "")
-    .trim();
+  return asks(questionsSection(body));
+}
+
+function asks(text) {
+  const section = text?.replace(/<!--[\s\S]*?-->/g, "").trim();
   if (!section) return false;
   const first = section
     .split(/\n\s*\n/)[0]
@@ -43,15 +50,100 @@ export function hasOpenQuestions(body) {
   return !/^(none|n\/a|no (open )?questions)\b/.test(first);
 }
 
+// At most one space before it: deeper, it is nested under a question.
+const ITEM = /^ ?\d{1,9}[.)]\s+(.*)$/;
+const OPTION = /^\s+[-*+]\s+\[[ xX]\]\s+(.*)$/;
+// A bullet or numbered line under a question that isn't an option: another format.
+const LIST = /^\s*(?:[-*+]|\d{1,9}[.)])(?:\s|$)/;
+const TITLE = /^\*\*([^*]+?)(?::\*\*|\*\*:)\s*(.*)$/;
+const RECOMMENDED = /\s*\(recommended\)\s*$/i;
+
+// An "Open questions" section (or a run's questions) → { items, raw }, null when it asks
+// nothing ("None"). `items`: [{ title, text, options: [{ label, recommended }] }] when every
+// question follows the format, null otherwise: all or nothing, as half a form would be worse
+// than the text. A paragraph before the list (an intro) or after it (the inbox link) is not a
+// question.
+export function parseQuestions(markdown) {
+  const raw = (markdown ?? "").trim();
+  if (!asks(raw)) return null;
+  const other = { items: null, raw };
+  const items = [];
+  let item = null;
+  let blank = false;
+  let over = false;
+  for (const line of raw.replace(/<!--[\s\S]*?-->/g, "").split(/\r?\n/)) {
+    if (!line.trim()) {
+      blank = true;
+      continue;
+    }
+    const start = ITEM.exec(line);
+    if (start) {
+      // A paragraph between two questions: not one list.
+      if (over) return other;
+      item = question(start[1]);
+      if (!item) return other;
+      items.push(item);
+    } else if (item && !over) {
+      const option = OPTION.exec(line);
+      if (option) {
+        const label = option[1].replace(RECOMMENDED, "").trim();
+        if (!label) return other;
+        item.options.push({ label, recommended: RECOMMENDED.test(option[1]) });
+      } else if (item.options.length || LIST.test(line)) {
+        // Explanation lines come before the options; other lists are another format.
+        if (/^\s/.test(line) || !blank) return other;
+        over = true;
+      } else if (/^\s/.test(line) || !blank) {
+        item.text += `\n${line.trim()}`;
+      } else {
+        over = true;
+      }
+    }
+    blank = false;
+  }
+  // Single choice: one pick at most.
+  const picks = (q) => q.options.filter((o) => o.recommended).length;
+  if (!items.length || items.some((q) => picks(q) > 1)) return other;
+  return { items, raw };
+}
+
+function question(line) {
+  const titled = TITLE.exec(line.trim());
+  const text = (titled ? titled[2] : line).trim();
+  if (!text) return null;
+  return { title: titled ? titled[1].trim() : null, text, options: [] };
+}
+
+// The questions of a run's reply that starts with NEEDS_INPUT: what follows its "Needs your
+// input" heading, up to the next heading. Null when it asks nothing.
+export function replyQuestions(text) {
+  const reply = text ?? "";
+  const at = reply.indexOf(NEEDS_INPUT);
+  if (at < 0) return null;
+  const lines = reply.slice(at + NEEDS_INPUT.length).split(/\r?\n/);
+  const section = [];
+  let fenced = false;
+  let started = false;
+  for (const line of lines) {
+    if (FENCE.test(line)) fenced = !fenced;
+    const heading = !fenced && HEADING.test(line);
+    if (heading && started) break;
+    if (heading || line.trim()) started = true;
+    if (!heading) section.push(line);
+  }
+  return parseQuestions(section.join("\n"));
+}
+
 const has = (labels, name) =>
   (labels ?? []).some((l) => (l.name ?? l).toLowerCase() === name.toLowerCase());
 
 // An `issues` or `issue_comment` delivery → what it changes for the label, or null:
-//   { repo, key, number, title, base, label, by, track }
+//   { repo, key, number, title, base, label, by, track, questions }
 // `label`: true to add it, false to take it off, undefined to leave it. `by`: the allowed
 // user whose action it is (checked again against the repo's own users), null for the App's
 // bot. `track`: whether the dashboard lists the issue as waiting (undefined: unchanged).
 // `bot`: the App's bot login ("<slug>[bot]"), whose issues (the inbox runs') count as allowed.
+// `questions`: parseQuestions() of the body, when the issue is or stays listed.
 export function inputEvent(config, event, p, bot) {
   const name = config.needsInputLabel;
   if (!name || (event !== "issues" && event !== "issue_comment")) return null;
@@ -73,6 +165,8 @@ export function inputEvent(config, event, p, bot) {
   const ours = (u) => !!bot && u?.type === "Bot" && u.login?.toLowerCase() === bot.toLowerCase();
   // Who may set it off: an allowed user (`by`) or the App's bot (null).
   const who = (u) => (person(u) ? u.login : ours(u) ? null : undefined);
+  // What the dashboard shows of an issue it lists: its questions as the body has them now.
+  const questions = () => parseQuestions(questionsSection(issue.body));
 
   if (event === "issue_comment") {
     const c = p.comment;
@@ -88,8 +182,9 @@ export function inputEvent(config, event, p, bot) {
     case "opened": {
       const by = who(issue.user);
       if (by === undefined) return null;
-      if (labelled) return { ...change, track: true };
-      return hasOpenQuestions(issue.body) ? { ...change, label: true, by, track: true } : null;
+      if (labelled) return { ...change, track: true, questions: questions() };
+      if (!hasOpenQuestions(issue.body)) return null;
+      return { ...change, label: true, by, track: true, questions: questions() };
     }
     case "edited": {
       // The author's issue, edited by them, another allowed user or the bot. Only a change to
@@ -99,16 +194,18 @@ export function inputEvent(config, event, p, bot) {
       if (who(issue.user) === undefined || by === undefined || !p.changes?.body) return null;
       if (questionsSection(p.changes.body.from) === questionsSection(issue.body)) return null;
       const now = hasOpenQuestions(issue.body);
-      if (now === labelled) return null;
-      return { ...change, label: now, by, track: now };
+      // Still waiting: only what the dashboard shows changes.
+      if (now === labelled) return now ? { ...change, questions: questions() } : null;
+      return { ...change, label: now, by, track: now, ...(now && { questions: questions() }) };
     }
     // Whoever adds or removes it, by hand or not: the dashboard follows the issue's labels.
     case "labeled":
     case "unlabeled":
       if (!has([p.label], name)) return null;
-      return { ...change, track: p.action === "labeled" && issue.state !== "closed" };
+      if (p.action === "unlabeled" || issue.state === "closed") return { ...change, track: false };
+      return { ...change, track: true, questions: questions() };
     case "reopened":
-      return labelled ? { ...change, track: true } : null;
+      return labelled ? { ...change, track: true, questions: questions() } : null;
     case "closed":
     case "deleted":
     case "transferred":

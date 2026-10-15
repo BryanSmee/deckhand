@@ -13,9 +13,7 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { agentFor } from "./agents/index.mjs";
-
-// Starts the final message of a run that stopped to ask the maintainer (../prompts/sandbox.md).
-export const NEEDS_INPUT = "<!-- needs-input -->";
+import { NEEDS_INPUT, replyQuestions } from "./questions.mjs";
 
 // "ok", "needs-input" or "error" for an agent's `result` event (null: no result).
 export function outcome(result) {
@@ -80,14 +78,21 @@ function runOf(logDir, file) {
     // Unfinished and not ours: the listener restarted during the run.
     status: result ? outcome(result) : "interrupted",
     summary: summaryOf(result),
+    questions: questionsOf(result),
     logPath,
   };
 }
 
-// A run as the dashboard gets it: without where its log is on disk.
+// A run as the dashboard gets it: without where its log is on disk, nor its questions (the
+// task carries those, board.mjs).
 export function publicRun(r) {
-  const { logPath, ...rest } = r;
+  const { logPath, questions, ...rest } = r;
   return rest;
+}
+
+// What a run that stopped to ask asks (questions.mjs parseQuestions()), null otherwise.
+export function questionsOf(result) {
+  return result && outcome(result) === "needs-input" ? replyQuestions(result.text) : null;
 }
 
 // The first line of a run's reply, for the dashboard: what the run ended with. Headings

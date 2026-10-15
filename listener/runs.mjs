@@ -14,7 +14,7 @@ import { branchConfigReport, triggerWord } from "./onboarding.mjs";
 import { firstMessage, promptFor } from "./prompts.mjs";
 import { CONFIG_FILE, customMode, engineCacheVolume } from "./repo-config.mjs";
 import { ENGINE_HOST } from "./runner/engine.mjs";
-import { lastResult, openLog, outcome, summaryOf } from "./runlog.mjs";
+import { lastResult, openLog, outcome, questionsOf, summaryOf } from "./runlog.mjs";
 import { noLongerAllowed } from "./tasks.mjs";
 import { redact } from "./secrets.mjs";
 
@@ -662,6 +662,7 @@ export function createRuns(ctx) {
       log(`${key}: done (${status})`);
       record.status = status;
       record.summary = summaryOf(live.result);
+      record.questions = questionsOf(live.result);
     } catch (error) {
       log(`${key}: ${error.stack ?? error}`);
       record.status = "error";
