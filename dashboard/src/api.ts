@@ -1,8 +1,18 @@
 // The listener's API: api/state polled, a run's log streamed (server-sent events), the
-// repositories listed, onboarded and their config read.
+// repositories listed, onboarded and their config read, the graph's backlog and its actions.
 // Relative URLs, like the assets: the page works under any path.
 import { useEffect, useRef, useState } from "preact/hooks";
-import type { Entry, Onboarded, Repo, RepoConfig, Repos, State } from "./types";
+import type {
+  Backlog,
+  Entry,
+  Onboarded,
+  Repo,
+  RepoConfig,
+  Repos,
+  State,
+  WorkAction,
+  WorkResult,
+} from "./types";
 
 const POLL_MS = 3000;
 
@@ -210,4 +220,71 @@ export function useRepoConfig(repo: string, onRow: (row: Repo) => void): RepoCon
     load();
   }, [repo]);
   return { config, error, loading, refresh: () => load({ method: "POST" }) };
+}
+
+// The listener reads GitHub at most every 30 seconds for it: polling costs nothing more.
+const BACKLOG_POLL_MS = 30000;
+
+export interface WorkArea {
+  backlog: Backlog | null;
+  error: string | null;
+  // An action on its way, and what the last one said.
+  busy: boolean;
+  result: WorkResult | null;
+  act: (action: WorkAction) => Promise<void>;
+}
+
+// One repo's backlog and the actions on its issues; nothing on the All tab (`repo` null).
+export function useWorkArea(repo: string | null): WorkArea {
+  const [backlog, setBacklog] = useState<Backlog | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<WorkResult | null>(null);
+  const current = useRef(repo);
+  current.current = repo;
+  const load = async () => {
+    if (!repo) return;
+    try {
+      const res = await fetch(`api/repos/${repo}/issues`, { cache: "no-store" });
+      if (res.status === 401) return location.reload();
+      const body = await answer<Backlog>(res);
+      if (current.current !== repo) return;
+      if (body.error) return setError(body.error);
+      setBacklog(body);
+      setError(null);
+    } catch (e) {
+      if (current.current === repo) setError(message(e));
+    }
+  };
+  useEffect(() => {
+    setBacklog(null);
+    setError(null);
+    setResult(null);
+    if (!repo) return;
+    load();
+    const timer = setInterval(load, BACKLOG_POLL_MS);
+    return () => clearInterval(timer);
+  }, [repo]);
+
+  const act = async (action: WorkAction) => {
+    if (!repo) return;
+    setBusy(true);
+    setResult(null);
+    try {
+      const res = await fetch(`api/repos/${repo}/work`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(action),
+      });
+      setResult(await answer<WorkResult>(res));
+    } catch (e) {
+      setResult({ error: message(e) });
+    } finally {
+      setBusy(false);
+    }
+    // The issue leaves the backlog (or comes back to it).
+    load();
+  };
+
+  return { backlog, error, busy, result, act };
 }

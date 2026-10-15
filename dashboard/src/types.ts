@@ -1,6 +1,6 @@
 // The contract with the listener: what GET api/state returns (listener/http.mjs state(),
 // listener/board.mjs), what api/runs/<id>/stream sends (runlog.mjs format()), and the
-// repositories' api/repos (listener/repos.mjs).
+// repositories' api/repos (listener/repos.mjs) and the graph's work area (listener/work.mjs).
 
 export type TaskState =
   | "building-image"
@@ -222,4 +222,33 @@ export interface RepoConfig {
     grant: Grant | null;
   };
   readAt: number;
+}
+
+// An open issue with no task yet, which the graph's work area can start or queue.
+export interface BacklogIssue {
+  number: number;
+  title: string | null;
+  url: string;
+}
+
+// GET api/repos/<owner>/<repo>/issues
+export interface Backlog {
+  issues: BacklogIssue[];
+  // The modes an issue can start in (work, brainstorm, the repo's own); none when `errors`.
+  modes: string[];
+  // Its .deckhand.yaml has errors: nothing starts there.
+  errors: boolean;
+  readAt: number;
+}
+
+// POST api/repos/<owner>/<repo>/work: start an issue, queue it after another ("/after"), or
+// cancel its wait ("/after none").
+export type WorkAction =
+  | { action: "start"; number: number; mode?: string }
+  | { action: "queue"; number: number; after: number; mode?: string }
+  | { action: "dequeue"; number: number };
+
+export interface WorkResult {
+  message?: string;
+  error?: string;
 }

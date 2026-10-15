@@ -307,6 +307,30 @@ whose default branch you trust as much as the host itself. `allow_branch_docker_
 is a grant too, not a `.deckhand.yaml` key: it lets anyone who can push a branch of the
 repository change what is built.
 
+## The dashboard's actions
+
+The dashboard is read-only but for two kinds of POST: starting a repository's onboarding
+(`/api/repos/<owner>/<repo>/onboard`) and the graph's work area
+(`/api/repos/<owner>/<repo>/work`, `listener/work.mjs`), which starts an issue, queues it
+after another (`/after #n`), moves its wait or cancels it (`/after none`). The work area
+starts runs, so it is checked as a comment that waited is (`tasks.resume()`), at each request:
+
+- a signed-in dashboard session, and an `Origin` header naming this listener (its
+  `PUBLIC_URL`, or the host the browser asked for): a page elsewhere can't post for a
+  signed-in user, on top of the session cookie's `SameSite=Lax`;
+- the repository in `ALLOWED_REPOS` (when set) and the App installed on it;
+- its `.deckhand.yaml` on the default branch without errors, and a mode it has;
+- the user in both `ALLOWED_USERS` and the repository's own `users`;
+- an open issue, not a pull request, with no run going or queued (a running issue doesn't
+  move), and no wait that would loop back to it.
+
+Each action is written on the issue as the App's comment ("Started from the dashboard by
+@alice"), so the issue's history says who started what, as a trigger comment would. The
+App's comments are ignored as triggers, so the listener queues or holds the work itself
+rather than through a webhook. The backlog (`GET /api/repos/<owner>/<repo>/issues`) lists a
+repository's open issues to signed-in users, from GitHub at most once every 30 seconds per
+repository.
+
 ## Hardening
 
 Every sandbox runs:

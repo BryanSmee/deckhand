@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { graphOf, layout, lookOf, SIZES } from "./graph";
+import { dropTarget, graphOf, issueOfLink, layout, lookOf, SIZES } from "./graph";
 import type { Task } from "./types";
 
 const task = (n: number, extra: Partial<Task> = {}): Task => ({
@@ -142,4 +142,34 @@ test("the issues tasks wait for are nodes too, even off the board", () => {
   ]);
   // Arrows into tasks of another tab aren't drawn.
   expect(edges).toHaveLength(1);
+});
+
+test("dropTarget: on a node or in the gap after it, else the open", () => {
+  const l = layout(["org/app#2", "org/app#1"], [after(1, 2)], wide);
+  const one = at(l, 1);
+  // On #1, and in the gap to its right: after #1.
+  expect(dropTarget(l, false, one.x + 10, one.y + 10)).toBe("org/app#1");
+  expect(dropTarget(l, false, one.x + w + layerGap - 1, one.y + h / 2)).toBe("org/app#1");
+  // Beyond #2, or below both: in the open.
+  expect(dropTarget(l, false, 2 * (w + layerGap) + w + layerGap + 5, 10)).toBe(null);
+  expect(dropTarget(l, false, 10, h + 10)).toBe(null);
+  // On a phone, the gap is below.
+  const v = layout(["org/app#2", "org/app#1"], [after(1, 2)], { vertical: true, width: 390 });
+  const n = SIZES.narrow;
+  expect(dropTarget(v, true, 10, n.h + n.layerGap - 1)).toBe("org/app#1");
+  expect(dropTarget(v, true, n.w + 5, 10)).toBe(null);
+});
+
+test("issueOfLink: an issue or pull request link of the repo, on the listener's GitHub", () => {
+  const gh = "https://github.example.com";
+  expect(issueOfLink(`${gh}/org/app/issues/12`, gh, "org/app")).toBe(12);
+  expect(issueOfLink(`${gh}/org/app/issues/12#issuecomment-1`, gh, "org/app")).toBe(12);
+  expect(issueOfLink(`${gh}/Org/App/pull/7/files`, gh, "org/app")).toBe(7);
+  // A uri-list: comments skipped, the first link that fits.
+  expect(issueOfLink(`# from a tab\n${gh}/org/app/issues/3\n`, gh, "org/app")).toBe(3);
+  expect(issueOfLink(`${gh}/org/other/issues/12`, gh, "org/app")).toBe(null);
+  expect(issueOfLink(`https://github.com/org/app/issues/12`, gh, "org/app")).toBe(null);
+  expect(issueOfLink(`${gh}/org/app/issues/12x`, gh, "org/app")).toBe(null);
+  expect(issueOfLink(`${gh}/org/app-two/issues/12`, gh, "org/app")).toBe(null);
+  expect(issueOfLink("#12", gh, "org/app")).toBe(null);
 });

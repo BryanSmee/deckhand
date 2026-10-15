@@ -1,0 +1,158 @@
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  min-width: 0;
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.title {
+  margin: 0;
+  font-size: 0.85rem;
+  font-weight: 700;
+}
+
+.mode {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.mode select,
+.chooser select {
+  min-width: 0;
+  padding: 0.2rem 0.3rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--ink);
+  font: inherit;
+}
+
+.note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.said {
+  margin: 0;
+  padding: 0.4rem 0.6rem;
+  border-radius: 6px;
+  background: var(--ok-soft);
+  color: var(--ink);
+  font-size: 0.8rem;
+}
+
+.said.failed {
+  background: var(--err-soft);
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.issue {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+  font-size: 0.82rem;
+}
+
+.issue[draggable="true"] {
+  cursor: grab;
+}
+
+.row {
+  display: flex;
+  gap: 0.4rem;
+  min-width: 0;
+}
+
+.ref {
+  flex: none;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+a.ref {
+  text-decoration: none;
+}
+
+a.ref:hover {
+  text-decoration: underline;
+}
+
+.name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.buttons,
+.chooser {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.chooser select {
+  flex: 1;
+}
+
+.button,
+.primary {
+  padding: 0.2rem 0.65rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--raised);
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.78rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.primary {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--panel);
+  font-weight: 600;
+}
+
+.button:hover {
+  background: var(--hover);
+}
+
+.button:disabled,
+.primary:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.button:focus-visible,
+.primary:focus-visible,
+.mode select:focus-visible,
+.chooser select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
