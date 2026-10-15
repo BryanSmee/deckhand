@@ -97,6 +97,8 @@ test("a discussion run's token adds discussions, cached apart from the others", 
   const mints = gh.calls.filter((c) => c.path.endsWith("/access_tokens"));
   assert.deepEqual(JSON.parse(mints[1].body).permissions, {
     ...SANDBOX_PERMISSIONS,
+    // A light run: it never writes pull requests.
+    pull_requests: "read",
     discussions: "write",
   });
   assert.equal(SANDBOX_PERMISSIONS.discussions, undefined);

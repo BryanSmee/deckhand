@@ -1,6 +1,6 @@
 // What each kind of run is: the built-in modes, and the repo's own (its config's `modes:`,
 // customMode()) that add their `light` and `fresh` to them. Pure: no state, no I/O.
-import { DISCUSSION_PERMISSIONS, READ_ONLY_PERMISSIONS } from "./github-app.mjs";
+import { DISCUSSION_PERMISSIONS, LIGHT_PERMISSIONS, READ_ONLY_PERMISSIONS } from "./github-app.mjs";
 import { customMode, RESERVED_MODES } from "./repo-config.mjs";
 
 // Inbox issues and discussion categories are their own trigger (workItem()).
@@ -26,8 +26,8 @@ export function isFresh(task, mode) {
 }
 
 // The name of an issue's volumes for a run: light runs get their own clone and Claude session.
-// Their token may not write the repo, but what they leave in a volume (git hooks, Claude's
-// hooks and settings) would run in the issue's next work run, with a token that may.
+// They can't push (the broker refuses them), but what they leave in a volume (git hooks,
+// Claude's hooks and settings) would run in the issue's next work run, which can.
 export function sessionName(name, light) {
   return light ? `${name}-light` : name;
 }
@@ -37,11 +37,13 @@ export function kindOf(mode, kind) {
   return mode === "brainstorm" || mode === "stop" ? "brainstorm" : INBOX.has(mode) ? mode : kind;
 }
 
-// A discussion run answers through GraphQL: its token needs Discussions too. Onboarding and
-// a light run in one of the repo's own modes only comment: their token only reads.
+// No light run writes pull requests. A discussion run answers through GraphQL: its token
+// needs Discussions too. Brainstorms and inbox entries comment and create issues. Onboarding
+// and a light run in one of the repo's own modes only comment: their token only reads.
 export function permissionsFor(mode, light) {
   if (mode === "discussion") return DISCUSSION_PERMISSIONS;
   // Onboarding proposes: nothing is pushed or created before the trigger line.
   if (mode === "onboarding") return READ_ONLY_PERMISSIONS;
-  return light && !LIGHT.has(mode) ? READ_ONLY_PERMISSIONS : undefined;
+  if (LIGHT.has(mode)) return LIGHT_PERMISSIONS;
+  return light ? READ_ONLY_PERMISSIONS : undefined;
 }

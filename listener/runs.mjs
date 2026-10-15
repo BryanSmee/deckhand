@@ -123,7 +123,7 @@ export function createRuns(ctx) {
       record,
       logFile: openLog(record.logPath),
       // The sandbox's only way to GitHub: tokens for this repo, while this run lasts.
-      secret: ctx.broker.register(task.repo, permissionsFor(mode, light)),
+      secret: ctx.broker.register(task.repo, permissionsFor(mode, light), { push: !light }),
       asked: replyTo, // where errors go
       replyTo, // where the reply goes: the issue or pull request of the last comment it took
       open: false, // whether its inbox takes comments

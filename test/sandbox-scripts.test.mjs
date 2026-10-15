@@ -56,7 +56,7 @@ test("git gets a fresh token for the repo's host on each call", async (t) => {
   t.after(close);
   const env = {
     DECKHAND_BROKER_URL: url,
-    DECKHAND_RUN_SECRET: b.register("org/repo"),
+    DECKHAND_RUN_SECRET: b.register("org/repo", undefined, { push: true }),
     REPO_URL: "https://github.com/org/repo.git",
   };
   const ask = "protocol=https\nhost=github.com\n\n";
@@ -69,7 +69,7 @@ test("git gets a fresh token for the repo's host on each call", async (t) => {
 test("a finished run's helper answers nothing, so git fails instead of using a stale token", async (t) => {
   const { b, url, close } = await broker();
   t.after(close);
-  const secret = b.register("org/repo");
+  const secret = b.register("org/repo", undefined, { push: true });
   b.revoke(secret);
   const env = {
     DECKHAND_BROKER_URL: url,
@@ -112,7 +112,7 @@ test(
 test("for the broker's host, git gets the run's secret: what the git gateway takes", async (t) => {
   const { b, url, close } = await broker();
   t.after(close);
-  const secret = b.register("org/repo");
+  const secret = b.register("org/repo", undefined, { push: true });
   const env = {
     DECKHAND_BROKER_URL: url,
     DECKHAND_RUN_SECRET: secret,
@@ -202,7 +202,7 @@ test("gh pr ready goes to the listener, with or without a number, and --undo too
   const real = fakeGh(t);
   const env = {
     DECKHAND_BROKER_URL: url,
-    DECKHAND_RUN_SECRET: b.register("org/repo"),
+    DECKHAND_RUN_SECRET: b.register("org/repo", undefined, { push: true }),
     DECKHAND_REAL_GH: real.path,
   };
   const current = await gh(env, "pr", "ready");
@@ -229,7 +229,7 @@ test("a refused gh pr ready fails with the listener's reason", async (t) => {
   const real = fakeGh(t);
   const env = {
     DECKHAND_BROKER_URL: url,
-    DECKHAND_RUN_SECRET: b.register("org/repo", { pull_requests: "read" }),
+    DECKHAND_RUN_SECRET: b.register("org/repo", { pull_requests: "read" }, { push: false }),
     DECKHAND_REAL_GH: real.path,
   };
   const res = await gh(env, "pr", "ready", "7");
@@ -244,7 +244,7 @@ test("other gh commands go to the real gh, with a fresh token", async (t) => {
   const real = fakeGh(t);
   const env = {
     DECKHAND_BROKER_URL: url,
-    DECKHAND_RUN_SECRET: b.register("org/repo"),
+    DECKHAND_RUN_SECRET: b.register("org/repo", undefined, { push: true }),
     DECKHAND_REAL_GH: real.path,
   };
   assert.equal((await gh(env, "pr", "edit", "7", "--title", "x")).status, 0);

@@ -46,8 +46,10 @@ cd /workspace
 # Every start, not just the clone's: the hook may change with the image.
 cp /usr/local/share/git-hooks/pre-push /workspace/.git/hooks/pre-push
 # The broker's tokens only read: pushes go through the listener's git gateway, which refuses
-# the base branch whatever the hook above says (../listener/git-gateway.mjs).
-if [ -n "${DECKHAND_BROKER_URL:-}" ]; then
+# the base branch whatever the hook above says (../listener/git-gateway.mjs). Not for light
+# runs, which the gateway refuses anyway: their push fails on the read-only token instead,
+# with GitHub's clear "permission denied".
+if [ -n "${DECKHAND_BROKER_URL:-}" ] && [ -z "${SANDBOX_LIGHT:-}" ]; then
   git config --global "url.$DECKHAND_BROKER_URL/git/.pushInsteadOf" "${REPO_URL%/*/*}/"
 fi
 
