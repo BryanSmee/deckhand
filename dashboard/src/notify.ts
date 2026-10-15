@@ -36,14 +36,18 @@ export function useReadyNotifications(state: State | null) {
       if (shown.current.has(id)) continue;
       shown.current.add(id);
       if (!supported() || Notification.permission !== "granted") continue;
-      const n = new Notification(`Ready for review: ${titleOf(t)}`, {
-        body: `${t.repo} · pull request #${pr.number}`,
-        tag: id,
-      });
-      n.onclick = () => {
-        window.open(pr.url, "_blank", "noreferrer");
-        n.close();
-      };
+      try {
+        const n = new Notification(`Ready for review: ${titleOf(t)}`, {
+          body: `${t.repo} · pull request #${pr.number}`,
+          tag: id,
+        });
+        n.onclick = () => {
+          window.open(pr.url, "_blank", "noreferrer");
+          n.close();
+        };
+      } catch {
+        // Android's Chrome only shows them from a service worker: the tab's title still counts.
+      }
     }
   }, [state]);
 

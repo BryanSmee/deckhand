@@ -106,6 +106,11 @@
   .top {
     flex-wrap: wrap;
   }
+  /* Phones don't show a tab's notifications (iOS only an installed app's, Android only a
+     service worker's): no button that does nothing. */
+  .notify {
+    display: none;
+  }
   /* Room for the repositories link on the brand's line: the login is in GitHub's menu. */
   .repos {
     margin-left: auto;

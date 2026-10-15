@@ -8,7 +8,8 @@
   color: var(--tone);
   font-size: 0.7rem;
   font-weight: 600;
-  line-height: 1.35rem;
+  line-height: 1rem;
+  vertical-align: 0.05rem;
   white-space: nowrap;
 }
 
