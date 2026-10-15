@@ -188,7 +188,7 @@
    other on a phone), each a drop zone. The All tab has no backlog. */
 .work {
   display: grid;
-  grid-template-columns: minmax(15rem, 18rem) minmax(12rem, 14rem) minmax(0, 1fr);
+  grid-template-columns: minmax(15rem, 18rem) minmax(14rem, 16rem) minmax(0, 1fr);
   gap: 1rem;
   align-items: start;
 }
@@ -220,7 +220,7 @@
 }
 
 .overview {
-  grid-template-columns: minmax(12rem, 14rem) minmax(0, 1fr);
+  grid-template-columns: minmax(14rem, 16rem) minmax(0, 1fr);
 }
 
 @media (max-width: 760px) {
