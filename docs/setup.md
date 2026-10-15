@@ -63,8 +63,11 @@ hour, and one merged through a pull request at once.
 
 An App created before `/after` lacks the `issues` event: turn on **Issues** under _Subscribe
 to events_ in its settings. Without it, a comment waiting for an issue (`/after #77`) still
-starts, at the listener's next check of what it waits for (every 15 minutes, and at each
-start), rather than at once; a pull request that merges is seen either way. Issues opened with an **Open questions** section aren't labelled
+starts at once when a pull request that closes the issue (`Closes #77`) is merged into the
+default branch, when a run on the issue ends, or on any comment on it: the listener then
+asks GitHub about the issue. An issue closed by hand, with nothing else happening to it, is
+only seen at the listener's next check of every wait (`WAITS_CHECK_MINUTES`, 5 minutes by
+default, and at each start). Issues opened with an **Open questions** section aren't labelled
 `NEEDS_INPUT_LABEL`, answering them doesn't take the label off unless a run starts, and the
 dashboard only sees the label change when the listener restarts.
 
@@ -256,6 +259,7 @@ needs_input_label: needs-input
 | `ONBOARDING`                                                                                      | `onboarding`                                                                                      | on                                 | `off`: no onboarding issue when the App is installed on a repo without a config                            |
 | `NEEDS_INPUT_LABEL`                                                                               | `needs_input_label`                                                                               | `needs-input`                      | label while a run or an issue waits for answers (empty: none)                                              |
 | `CONFLICT_CHECK_MINUTES`                                                                          | `conflict_check_minutes`                                                                          | `5`                                | shortest interval of a repo's `conflicts.check_minutes`; `0` turns it off                                  |
+| `WAITS_CHECK_MINUTES`                                                                             | `waits_check_minutes`                                                                             | `5`                                | how often comments waiting for other issues (`/after`) ask GitHub again                                    |
 | `NAME_PREFIX`, `CLAUDE_CODE_VOLUME`                                                               | `name_prefix`, `claude_code_volume`                                                               | `deckhand`, `deckhand-claude-code` | names of what the listener creates on Docker                                                               |
 | `DOCKER_SOCKET`                                                                                   | none: compose's                                                                                   | `/var/run/docker.sock`             | the host's Docker socket, as preview hooks mount it                                                        |
 | `DECKHAND_VERSION`                                                                                | none: compose's                                                                                   | `latest`                           | the release compose runs (`1.2.3`, `1.2`), or `edge` to follow `main`: see [Updating](#updating)           |

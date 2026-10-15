@@ -614,6 +614,12 @@ export function createRuns(ctx) {
       if (!task.pending.includes(item)) ctx.track(ctx.settle(item, status));
     }
     if (live.talk) ctx.brainstorms.replied(key);
+    // Comments waiting for this task ask GitHub about it again: its run may have closed it.
+    if (task.kind !== "discussion") {
+      ctx.waits
+        ?.recheck(task.repo, task.number)
+        .catch((error) => log(`${key}: what waits for it: ${error.message ?? error}`));
+    }
     // Comments the run could not take go out together, after the usual pause.
     if (task.pending.length) ctx.startLater(task);
     ctx.schedule();

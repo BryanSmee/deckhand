@@ -9,6 +9,7 @@ import {
   parseAfter,
   splitTrigger,
   takeOptions,
+  touchedItems,
   verified,
   workItem,
 } from "../listener/events.mjs";
@@ -413,4 +414,38 @@ test("closed issues and pull requests: done when completed or merged", () => {
   const narrowed = loadConfig({ ALLOWED_USERS: "alice", ALLOWED_REPOS: "org/other" });
   assert.equal(closedItem(narrowed, "issues", delivery("issues", issue)), null);
   assert.equal(closedItem(config, "issue_comment", delivery("issues", issue)), null);
+});
+
+test("touchedItems: what a delivery is about, and the issue a merged pull request closes", () => {
+  const base = { installation: { id: 7 }, repository: { full_name: "org/repo" } };
+  const head = { ref: "issue-77-x", repo: { full_name: "org/repo" } };
+  const pr = { number: 90, body: "Closes #77", head, merged_at: null };
+  const merged = { ...pr, merged: true, merged_at: "2026" };
+  const touched = (event, p) => touchedItems(config, event, { ...base, ...p });
+  assert.deepEqual(touched("pull_request", { action: "ready_for_review", pull_request: pr }), {
+    repo: "org/repo",
+    numbers: [90, 77],
+    merged: null,
+  });
+  assert.deepEqual(touched("pull_request", { action: "closed", pull_request: merged }).merged, 77);
+  // Closed unmerged: nothing merged.
+  assert.equal(touched("pull_request", { action: "closed", pull_request: pr }).merged, null);
+  // A fork's "Closes #77" doesn't speak for #77.
+  const fork = { ...merged, head: { ref: "x", repo: { full_name: "someone/repo" } } };
+  assert.deepEqual(touched("pull_request", { action: "closed", pull_request: fork }), {
+    repo: "org/repo",
+    numbers: [90],
+    merged: null,
+  });
+  assert.deepEqual(touched("issues", { action: "edited", issue: { number: 77 } }).numbers, [77]);
+  // A comment on a pull request: the issue its author's "Closes #77" names too.
+  const onPr = { number: 90, body: "Fixes #77", pull_request: {}, author_association: "OWNER" };
+  assert.deepEqual(touched("issue_comment", { action: "created", issue: onPr }).numbers, [90, 77]);
+  assert.equal(touched("push", { action: "x" }), null);
+  const narrowed = loadConfig({ ALLOWED_USERS: "alice", ALLOWED_REPOS: "org/other" });
+  assert.equal(touchedItems(narrowed, "issues", { ...base, issue: { number: 77 } }), null);
+  assert.equal(
+    touchedItems(config, "issues", { repository: base.repository, issue: { number: 77 } }),
+    null,
+  );
 });

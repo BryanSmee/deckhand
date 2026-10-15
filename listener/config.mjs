@@ -77,6 +77,7 @@ export const FILE_SETTINGS = {
   ONBOARDING: "boolean",
   NEEDS_INPUT_LABEL: "scalar",
   CONFLICT_CHECK_MINUTES: "scalar",
+  WAITS_CHECK_MINUTES: "scalar",
   NAME_PREFIX: "scalar",
   CLAUDE_CODE_VOLUME: "scalar",
   GRANTS_DIR: "scalar",
@@ -162,6 +163,13 @@ function settings(env, file) {
     fromEnv(name) || !(name in file.settings) ? name : `${file.path}: ${name.toLowerCase()}`;
   const number = (name, fallback, what) => wholeNumber(setting(name), fallback, label(name), what);
   return { setting, label, number };
+}
+
+// WAITS_CHECK_MINUTES: the check catches missed deliveries, so it can't be turned off.
+function waitsCheck({ number, label }) {
+  const minutes = number("WAITS_CHECK_MINUTES", 5, "a whole number of minutes above 0");
+  if (!minutes) throw new ConfigError(`${label("WAITS_CHECK_MINUTES")}: expected above 0, got 0`);
+  return minutes;
 }
 
 // "15" → 15, or a ConfigError naming the setting: NaN would be a silent 0 or forever.
@@ -307,6 +315,8 @@ export function loadConfig(env, file = NO_FILE) {
     // The shortest interval at which a repo's `conflicts.check_minutes` may look at its open
     // pull requests (conflicts.mjs); each conflict found is a run. 0: the watcher is off.
     conflictCheckMinutes: number("CONFLICT_CHECK_MINUTES", 5, "a whole number of minutes (0: off)"),
+    // How often every "/after" wait asks GitHub again (waits.mjs), for what no delivery said.
+    waitsCheckMinutes: waitsCheck(from),
     // An issue proposing a .deckhand.yaml when the App is installed on a repo without one
     // (onboarding.mjs). "/mode onboarding" works either way.
     onboarding: !["off", "false", "0", "no"].includes(onboarding),
