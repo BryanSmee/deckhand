@@ -218,7 +218,8 @@ needs_input_label: needs-input
 | ------------------------------------------------ | ------------------------------------------------ | ---------------------------------- | ------------------------------------------------------------------------------- |
 | `ALLOWED_USERS`                                  | `allowed_users`                                  | none: required                     | GitHub logins that can start runs                                               |
 | `ALLOWED_REPOS`                                  | `allowed_repos`                                  | all where the App is installed     | narrows the repos (`owner/repo`, comma-separated in `.env`)                     |
-| `CLAUDE_CODE_OAUTH_TOKEN` / `ANTHROPIC_API_KEY`  | none: a secret, `.env` only                      |                                    | Claude credential passed to each sandbox                                        |
+| `CLAUDE_CODE_OAUTH_TOKEN` / `ANTHROPIC_API_KEY`  | none: a secret, `.env` only                      |                                    | Claude credential, added by the listener to the sandboxes' API calls            |
+| `ANTHROPIC_BASE_URL`                             | none: `.env` only                                | `https://api.anthropic.com`        | where the listener sends the sandboxes' API calls (an API gateway, say)         |
 | `PUBLIC_URL`                                     | `public_url`                                     | stored by `/setup`                 | the listener's public address                                                   |
 | `PORT`                                           | none: compose's                                  | `8080`                             | the host port compose publishes the listener on                                 |
 | `CLAUDE_CODE_VERSION`                            | `claude_code_version`                            | `2.1.300`                          | Claude Code version the sandboxes install on first use                          |
@@ -306,6 +307,11 @@ No sandbox gets a long-lived token, an SSH key or the host's git configuration:
   token can't. Commits
   and comments come from the App's bot (`<app>[bot]`, identity set through `GIT_AUTHOR_*`
   and `GIT_COMMITTER_*`).
+
+Nor does a sandbox get your Claude credential. Its Claude Code calls the listener (same port,
+`ANTHROPIC_BASE_URL=<broker>/anthropic`) with the run's secret where the credential would
+be; the listener checks the secret, puts your credential in its place and forwards the call
+to Anthropic, streaming the answer back (see [Security model](security.md#tokens)).
 
 Claude Code is not part of any image: before the first run that needs it, the listener
 installs the pinned `CLAUDE_CODE_VERSION` into the `deckhand-claude-code` volume, in a

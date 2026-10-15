@@ -11,8 +11,10 @@ import { imageRef } from "./images.mjs";
 import { BUILT_IN, isFresh, isLight, kindOf, permissionsFor, sessionName } from "./modes.mjs";
 import { branchConfigReport, triggerWord } from "./onboarding.mjs";
 import { firstMessage, promptFor } from "./prompts.mjs";
+import { CREDENTIALS } from "./anthropic.mjs";
 import { CONFIG_FILE, customMode } from "./repo-config.mjs";
 import { openLog, outcome, parse, summaryOf } from "./runlog.mjs";
+import { redact } from "./secrets.mjs";
 
 // A run that can't start for a reason the maintainer can fix: the reply says it.
 export class RunError extends Error {}
@@ -417,15 +419,16 @@ export function createRuns(ctx) {
   }
 
   // Values reach the container by name only: they never show in `ps`. The App's credentials
-  // are not among them: they stay in the data volume.
+  // are not among them: they stay in the data volume. Nor is the Claude credential: Claude
+  // Code calls the listener (anthropic.mjs) with the run's secret in its place.
   function sandboxEnv(task, prompt, message, settings) {
     const { live } = task;
     const mode = live.mode === "stop" ? "brainstorm" : live.mode;
     const { light } = live;
     const bot = ctx.app.identity();
     return {
-      CLAUDE_CODE_OAUTH_TOKEN: process.env.CLAUDE_CODE_OAUTH_TOKEN,
-      ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
+      ...(config.claudeCredential && { [config.claudeCredential]: live.secret }),
+      ANTHROPIC_BASE_URL: `${config.brokerUrl}/anthropic`,
       DECKHAND_RUN_SECRET: live.secret,
       DECKHAND_BROKER_URL: config.brokerUrl,
       CLAUDE_CODE_VERSION: config.claudeCodeVersion,
@@ -474,7 +477,7 @@ export function createRuns(ctx) {
           // Setup output (clone, install) before Claude starts.
           onErr: (line) => {
             if (ctx.stopping) return; // left for the next listener
-            live.logFile.write(line + "\n");
+            live.logFile.write(hidden(live, line) + "\n");
             live.lines.err++;
           },
         });
@@ -488,9 +491,16 @@ export function createRuns(ctx) {
     if (!ctx.stopping) await end(task);
   }
 
-  function output(task, line) {
+  // A line of the sandbox's output without the secrets it must not publish (secrets.mjs):
+  // what is stored is what the dashboard shows, and the result is what gets posted.
+  function hidden(live, line) {
+    return redact(line, [live.secret, ...CREDENTIALS.map((name) => process.env[name])]);
+  }
+
+  function output(task, raw) {
     const live = task.live;
     if (ctx.stopping) return; // left for the next listener
+    const line = hidden(live, raw);
     live.logFile.write(line + "\n");
     live.lines.out++;
     const event = parse(line);
@@ -570,7 +580,8 @@ export function createRuns(ctx) {
       status !== "error"
         ? `${result.result}\n\n${check ? `${check}\n\n` : ""}${footer}`
         : `Claude stopped with an error.\n\n> ${result?.result ?? "No result: see the listener logs."}\n\n${footer}`;
-    await ctx.answer(target(task, live.replyTo), text);
+    // Already redacted line by line; again, as a result saved by an older listener wasn't.
+    await ctx.answer(target(task, live.replyTo), hidden(live, text));
     live.replied = true;
     ctx.saveLive(task);
     // Light runs ask questions all along: no label for those.

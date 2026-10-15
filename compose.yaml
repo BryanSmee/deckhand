@@ -41,9 +41,12 @@ services:
       # Optional: only these repos (owner/repo, comma-separated), among those where the App
       # is installed. Empty: all of them.
       ALLOWED_REPOS: ${ALLOWED_REPOS:-}
-      # Claude Code's credential, passed to each sandbox: one of the two. Never in the file.
+      # Claude Code's credential: one of the two. Never in the file, and never in a sandbox:
+      # the listener adds it to the sandboxes' API calls.
       CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      # Optional: where those calls go (an API gateway, say). Default: api.anthropic.com.
+      ANTHROPIC_BASE_URL: ${ANTHROPIC_BASE_URL:-}
       # Optional: /setup detects it from your browser's address and stores it.
       PUBLIC_URL: ${PUBLIC_URL:-}
       CLAUDE_CODE_VERSION: ${CLAUDE_CODE_VERSION:-}

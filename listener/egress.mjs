@@ -20,7 +20,8 @@ function hostOf(url) {
 
 // What Claude Code and GitHub need. Claude Code (with CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC
 // and a CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY credential) only calls api.anthropic.com,
-// WebFetch's domain check included: no OAuth refresh, telemetry or update host. git and gh
+// for WebFetch's domain check: its API calls go to the listener (anthropic.mjs), no OAuth
+// refresh, telemetry or update host. git and gh
 // use the GitHub hosts the listener is configured with; raw files and release downloads come
 // from *.githubusercontent.com. The listener (the broker) is reached directly, on the
 // sandboxes' network.

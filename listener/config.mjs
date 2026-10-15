@@ -2,6 +2,7 @@
 // networks come from here so nothing in the listener is tied to one deployment. What the
 // operator grants one repo (hosts, mounts, limits) is in its grants file instead (grants.mjs).
 import { readFileSync } from "node:fs";
+import { CREDENTIALS, credentialName } from "./anthropic.mjs";
 import { hostProblem } from "./egress.mjs";
 import { isMap, parseYaml } from "./yaml.mjs";
 
@@ -81,8 +82,6 @@ export const FILE_SETTINGS = {
   GITHUB_API: "scalar",
 };
 
-const SECRETS = ["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"];
-
 // Where an empty value means something (no label): set in the environment, even empty, wins.
 const EMPTY_MEANS = new Set(["NEEDS_INPUT_LABEL"]);
 
@@ -118,7 +117,7 @@ export function parseConfigFile(text, path) {
   for (const [key, value] of Object.entries(raw)) {
     const name = key.toUpperCase();
     const type = key === name.toLowerCase() ? FILE_SETTINGS[name] : undefined;
-    if (SECRETS.includes(name)) {
+    if (CREDENTIALS.includes(name)) {
       errors.push(`${key}: a secret, keep it in the environment (.env), not in a file`);
     } else if (!type) {
       errors.push(`${key}: unknown (secrets and compose.yaml's wiring are environment only)`);
@@ -232,6 +231,11 @@ export function loadConfig(env, file = NO_FILE) {
     brokerPort,
     // How sandboxes reach the broker on their network (compose service name by default).
     brokerUrl: (env.BROKER_URL || `http://listener:${brokerPort}`).replace(/\/$/, ""),
+    // Which variable holds the operator's Claude credential (anthropic.mjs): the value stays
+    // in the environment, read by the listener's Anthropic endpoint only.
+    claudeCredential: credentialName(env),
+    // Where that endpoint sends sandboxes' requests: the listener's own ANTHROPIC_BASE_URL.
+    anthropicUrl: (env.ANTHROPIC_BASE_URL || "https://api.anthropic.com").replace(/\/$/, ""),
     githubApi: (setting("GITHUB_API") || "https://api.github.com").replace(/\/$/, ""),
     githubUrl: (setting("GITHUB_URL") || "https://github.com").replace(/\/$/, ""),
     users,
