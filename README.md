@@ -19,7 +19,8 @@ operator, across as many repositories as the App is installed on.
   - `Deckhand` then `/mode brainstorm` (on the next line, or the same one): a discussion of
     the issue in its comments, without code. `/stop` wraps it up; `Deckhand` or `/mode work`
     then implements, in a session of its own that starts from the issue and its comments.
-  - `/model <name>` and `/effort <level>` lines pick the model and thinking effort of that run.
+  - `/model <name>` and `/effort <level>` lines pick the model (`best`, `balanced`, `fast` or a
+    model's name) and thinking effort of that run.
   - `/mode <name>` picks a mode: `work`, `brainstorm` or one the repository declares in its
     `.deckhand.yaml` (a review that only comments, say). Alone on an issue with a session,
     it switches modes and keeps the conversation (light modes keep theirs apart from work's).

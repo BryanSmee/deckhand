@@ -1,29 +1,41 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { clip, format, loadRuns, outcome, publicRun, summaryOf } from "../listener/runlog.mjs";
+import {
+  clip,
+  format,
+  lastResult,
+  loadRuns,
+  outcome,
+  publicRun,
+  summaryOf,
+} from "../listener/runlog.mjs";
+import { agentFor } from "../listener/agents/index.mjs";
 
 const line = (event) => JSON.stringify(event);
 
 test("outcome: ok, needs-input or error", () => {
   assert.equal(outcome(null), "error");
-  assert.equal(outcome({ is_error: true, result: "Oops" }), "error");
-  assert.equal(outcome({ result: "Done." }), "ok");
-  assert.equal(outcome({ result: "\n<!-- needs-input -->\n## Needs your input" }), "needs-input");
+  assert.equal(outcome({ ok: false, text: "Oops" }), "error");
+  assert.equal(outcome({ ok: true, text: "Done." }), "ok");
+  assert.equal(
+    outcome({ ok: true, text: "\n<!-- needs-input -->\n## Needs your input" }),
+    "needs-input",
+  );
 });
 
 test("summary: the first sentence of the reply, not its headings", () => {
   assert.equal(summaryOf(null), null);
-  assert.equal(summaryOf({ result: "" }), null);
+  assert.equal(summaryOf({ text: "" }), null);
   assert.equal(
-    summaryOf({ result: "<!-- needs-input -->\n## Needs your input\n\n1. Which one?" }),
+    summaryOf({ text: "<!-- needs-input -->\n## Needs your input\n\n1. Which one?" }),
     "1. Which one?",
   );
-  assert.equal(summaryOf({ result: "## Only a heading" }), "Only a heading");
-  assert.equal(summaryOf({ result: "> - Quoted item" }), "Quoted item");
-  const long = summaryOf({ result: "x".repeat(300) });
+  assert.equal(summaryOf({ text: "## Only a heading" }), "Only a heading");
+  assert.equal(summaryOf({ text: "> - Quoted item" }), "Quoted item");
+  const long = summaryOf({ text: "x".repeat(300) });
   assert.equal(long.length, 200);
   assert.ok(long.endsWith("…"));
 });
@@ -117,6 +129,38 @@ test("format: Claude's lines", () => {
   assert.deepEqual(format("42"), []);
 });
 
+// A log written before the agent seam, and what the dashboard showed for it then: the
+// same entries now that Claude Code's lines are read through its normalize().
+test("format: a log from before the agent seam renders as it did", () => {
+  const fixture = (name) => new URL(`fixtures/${name}`, import.meta.url);
+  const lines = readFileSync(fixture("claude-run.log"), "utf8").split("\n");
+  const before = JSON.parse(readFileSync(fixture("claude-run.entries.json"), "utf8"));
+  assert.deepEqual(
+    lines.flatMap((l) => format(l)),
+    before,
+  );
+  assert.deepEqual(
+    lines.flatMap((l) => format(l, agentFor("claude"))),
+    before,
+  );
+});
+
+test("lastResult: the agent's last result in a log's lines", () => {
+  const claude = agentFor("claude");
+  assert.equal(lastResult(["Cloning", line({ type: "system", subtype: "init" })], claude), null);
+  assert.deepEqual(
+    lastResult(
+      [
+        line({ type: "result", result: "First", duration_ms: 1000 }),
+        line({ type: "result", is_error: true, result: "Second", duration_ms: 2000 }),
+        "trailing output",
+      ],
+      claude,
+    ),
+    { type: "result", ok: false, text: "Second", durationMs: 2000 },
+  );
+});
+
 test("runs: rebuilt from their log files, newest first, without their path for the dashboard", () => {
   const dir = mkdtempSync(join(tmpdir(), "deckhand-"));
   const meta = {
@@ -142,5 +186,7 @@ test("runs: rebuilt from their log files, newest first, without their path for t
     ],
   );
   assert.equal(runs[1].logPath, join(dir, "deckhand-org-repo-1-1000.log"));
+  // Logs from before agents had names are Claude Code's.
+  assert.equal(runs[1].agent, "claude");
   assert.equal("logPath" in publicRun(runs[1]), false);
 });

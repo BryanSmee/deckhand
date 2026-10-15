@@ -1,0 +1,122 @@
+[
+  {
+    "kind": "meta",
+    "text": "Starting (opus, medium effort): Fix the typo in the README"
+  },
+  {
+    "kind": "meta",
+    "text": "Image deckhand-sandbox:latest"
+  },
+  {
+    "kind": "raw",
+    "text": "Cloning into '/workspace'..."
+  },
+  {
+    "kind": "raw",
+    "text": "Setup: npm ci"
+  },
+  {
+    "kind": "meta",
+    "text": "Claude started (claude-opus-5-5)"
+  },
+  {
+    "kind": "text",
+    "text": "I'll look at the README first."
+  },
+  {
+    "kind": "tool",
+    "name": "Bash",
+    "text": "grep -n teh README.md\nwc -l README.md"
+  },
+  {
+    "kind": "output",
+    "error": false,
+    "text": "3:Fix teh typo\n42 README.md"
+  },
+  {
+    "kind": "tool",
+    "name": "Edit",
+    "text": "/workspace/README.md"
+  },
+  {
+    "kind": "tool",
+    "name": "mcp__playwright__browser_navigate",
+    "text": "http://localhost:5173"
+  },
+  {
+    "kind": "tool",
+    "name": "TodoWrite",
+    "text": "{\"todos\":[{\"content\":\"fix\",\"status\":\"done\"}]}"
+  },
+  {
+    "kind": "tool",
+    "name": "Agent",
+    "text": "Search the docs"
+  },
+  {
+    "kind": "tool",
+    "name": "WebSearch",
+    "text": "deckhand"
+  },
+  {
+    "kind": "tool",
+    "name": "Glob",
+    "text": "**/*.md"
+  },
+  {
+    "kind": "tool",
+    "name": "ExitPlanMode",
+    "text": ""
+  },
+  {
+    "kind": "output",
+    "error": false,
+    "text": "The file was updated."
+  },
+  {
+    "kind": "output",
+    "error": true,
+    "text": "net::ERR_CONNECTION_REFUSED\n"
+  },
+  {
+    "kind": "output",
+    "error": false,
+    "text": ""
+  },
+  {
+    "kind": "result",
+    "status": "ok",
+    "text": "## Fixed\n\nThe typo in the README.",
+    "minutes": 2.1
+  },
+  {
+    "kind": "meta",
+    "text": "New comment delivered to Claude at 08:56:40 UTC: Also the title"
+  },
+  {
+    "kind": "text",
+    "text": "Line one\nline two"
+  },
+  {
+    "kind": "result",
+    "status": "needs-input",
+    "text": "<!-- needs-input -->\n## Needs your input\n\n1. Which title?",
+    "minutes": 0.5
+  },
+  {
+    "kind": "result",
+    "status": "error",
+    "text": "",
+    "minutes": 0
+  },
+  {
+    "kind": "result",
+    "status": "error",
+    "text": "API Error: 529 overloaded",
+    "minutes": 0
+  },
+  {
+    "kind": "raw",
+    "text": "npm warn deprecated"
+  }
+]

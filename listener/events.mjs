@@ -107,8 +107,9 @@ export function parseAfter(text) {
 
 export const EFFORTS = ["low", "medium", "high", "xhigh", "max"];
 
-// A model name: an alias (opus), an id (claude-opus-5-5[1m]) or a gateway's
-// (anthropic/claude-opus-5.5, openai/gpt-5, meta-llama/llama-4:free).
+// A model: a tier (best, balanced, fast: agents/), an alias (opus), an id
+// (claude-opus-5-5[1m]) or a gateway's (anthropic/claude-opus-5.5, openai/gpt-5,
+// meta-llama/llama-4:free).
 export const MODEL_NAME = /^[\w.[\]/:-]+$/;
 
 // Removes "/model <name>" and "/effort <level>" lines from a comment, recording them in options.
@@ -249,7 +250,7 @@ function discussionItem(config, event, p, skip) {
   if (p.action !== "created") return skip(`${event} ${p.action ?? ""} is not handled`);
   const category = d?.category?.name ?? "";
   if (config.inbox && normalize(category) !== config.inbox.discussions) {
-    return skip(`discussion category "${category}" doesn't call Claude`);
+    return skip(`discussion category "${category}" doesn't call Deckhand`);
   }
   const c = event === "discussion" ? null : p.comment;
   const text = c

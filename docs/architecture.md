@@ -1,8 +1,9 @@
 # How the listener works
 
-The listener (`listener/`) receives the GitHub App's webhooks, runs Claude Code in a sandbox
-container (`sandbox/`) for issue, pull request and discussion comments, one container and one
-set of volumes per issue, and posts Claude's final message back as a comment. This page is
+The listener (`listener/`) receives the GitHub App's webhooks, runs an agent (Claude Code, see
+[Agents](#agents)) in a sandbox container (`sandbox/`) for issue, pull request and discussion
+comments, one container and one set of volumes per issue, and posts the agent's final message
+back as a comment. This page is
 the map: what a comment turns into, and which module does what. Setup is in
 [setup.md](setup.md), the per-repo file in [repo-config.md](repo-config.md), the security
 model in [security.md](security.md).
@@ -14,18 +15,21 @@ model in [security.md](security.md).
   the branch and draft pull request (`sandbox/draft-pr.sh`).
 - **On its pull request**: any comment, review or review comment continues the same session
   (a pull request whose head branch is in the repository; a fork's is a task of its own).
-- **Anywhere**: `/model sonnet` or `/effort high` lines pick the model or thinking effort for
-  that run (defaults: `SANDBOX_MODEL`, `SANDBOX_EFFORT`).
+- **Anywhere**: `/model fast` or `/effort high` lines pick the model or thinking effort for
+  that run (defaults: `SANDBOX_MODEL`, `SANDBOX_EFFORT`). A model is a tier, `best`,
+  `balanced` or `fast`, that the run's agent maps to one of its models (see [Agents](#agents)),
+  or a model's own name (`sonnet`, `claude-opus-5-5`).
 - **Later**: `/after #77` (or `/after #77 #80`), with a trigger or `/mode` line, holds the
   comment back; see [Waiting for other issues](#waiting-for-other-issues).
 
 A comment that arrives while its issue's run is working goes to that run: after the usual
-pause (so a burst is one message), the listener writes it to the run's inbox (stream-json
-input, `TASK_INPUT=stream` in `sandbox/entrypoint.sh`), and Claude sees it after its current
-tool call; the run's final message is still the one reply and covers it. `/model` and
+pause (so a burst is one message), the listener writes it to the run's inbox (in the agent's
+input format, `TASK_INPUT=stream` in `sandbox/entrypoint.sh`), and the agent sees it after its
+current tool call; the run's final message is still the one reply and covers it. `/model` and
 `/effort` cannot change a live process: they apply to the next run, and the reply says so.
 Comments the run cannot take (a trigger that switches between work and brainstorm, a wrap-up,
-or one arriving once Claude's input is closed) wait for a follow-up run.
+or one arriving once the agent's input is closed, or any for an agent that takes no messages
+mid-run) wait for a follow-up run.
 
 ### Brainstorms
 
@@ -174,6 +178,43 @@ posts each reply once. Queued comments whose author or repository is no longer a
 dropped then; each run checks its comments' authors against the repository's `users` again
 when it begins.
 
+## Agents
+
+Claude Code is the one agent today, behind a seam that keeps what is its own in two files, so
+another agent (Codex, say) is two more files rather than an `if` across the listener:
+
+- **In the sandbox**, `sandbox/agents/<name>.sh`, sourced by `sandbox/entrypoint.sh` for
+  `SANDBOX_AGENT` (the listener sets it; `claude` by default). The entrypoint does what every
+  agent shares: clone, branch, setup, the instructions (`prompts/sandbox.md` and the
+  project's), the follow-up prompts per mode. The script turns that into its CLI's flags and
+  files: `agent_check` (installed, on `PATH`), `agent_instructions` (Claude Code:
+  `~/.claude/CLAUDE.md`), `agent_mcp` (Playwright), `agent_has_session`, `agent_run` (a new,
+  continued or fresh session, its raw output, mid-run messages read from
+  `deckhand_messages`) and `agent_interactive`. Its other files are in
+  `sandbox/agents/<name>/` (Claude Code: its installer, settings, hooks, progress filter).
+  One base image serves every agent: no CLI is in it, each is installed per version into a
+  shared volume.
+- **In the listener**, `listener/agents/<name>.mjs`, listed in `listener/agents/index.mjs`:
+  - `install(config)`: its volume, mount, version and installer (`images.installAgent()`);
+  - `env(config, secret)` and `secrets`: its environment, with the run's secret where its
+    credential would be, and the variables redacted from logs and replies;
+  - `hosts`: what the egress proxy always lets it reach (`egress.mjs`);
+  - `session`: the volume (`<sandbox>-claude`) and path of its sessions, which
+    `runner.hasSession()` checks;
+  - `takesMessages` and `message(text)`: whether comments reach it mid-run, and as what;
+  - `models` and `efforts`: the tiers and effort levels, in its own names (Claude Code:
+    `best` → `opus`, `balanced` → `sonnet`, `fast` → `haiku`; what those mean is the
+    operator's `ANTHROPIC_DEFAULT_*_MODEL`);
+  - `normalize(line)`: a line of its output → Deckhand's own events, `started{model}`,
+    `text{text}`, `tool{name, detail}`, `toolOutput{text, error}` and
+    `result{ok, text, durationMs}`.
+
+The rest of the listener reads only those events: `runs.mjs` the results (the reply, its
+duration, needs-input), `runlog.mjs` all of them (the dashboard's entries). Logs keep the
+agent's raw lines and each run's first line names its agent (`claude` for logs from before
+the seam), so old logs still render. The reply's footer and the listener's messages name the
+run's agent (`displayName`).
+
 ## Modules
 
 `server.mjs` only wires the listener together. The stateful modules are `createX(ctx)`
@@ -192,7 +233,8 @@ which starts runs.
 | `brainstorms.mjs`                                                 | Each issue's brainstorm (`brainstorms.json`) and repo mode (`modes.json`).                         |
 | `comments.mjs`                                                    | Replies (comments, discussion threads), reactions, the needs-input label.                          |
 | `questions.mjs`, `inputs.mjs`                                     | Open questions in an issue → the needs-input label (pure); the issues waiting for input.           |
-| `prompts.mjs`                                                     | What Claude reads: each run's prompt and first message, comments delivered mid-run. Pure.          |
+| `prompts.mjs`                                                     | What the agent reads: each run's prompt and first message, comments delivered mid-run. Pure.       |
+| `agents/`                                                         | Each agent's specifics: install, env, hosts, session, tiers, `normalize()` ([Agents](#agents)).    |
 | `modes.mjs`                                                       | Built-in modes: light, fresh, their token's permissions, the dashboard's kind. Pure.               |
 | `runlog.mjs`                                                      | Run logs: the list rebuilt after a restart, the dashboard's entries per line, the live stream.     |
 | `events.mjs`                                                      | Deliveries → work items, trigger, `/mode` and `/after` lines, pull request states. Pure.           |
@@ -202,7 +244,7 @@ which starts runs.
 | `pr-ready.mjs`                                                    | The sandboxes' pull requests marked ready for review or back to draft (`gh pr ready`).             |
 | `anthropic.mjs`, `secrets.mjs`                                    | The sandboxes' Claude API calls, with the operator's credential; secrets redacted from replies.    |
 | `setup.mjs`, `auth.mjs`                                           | `/setup` (creating the App) and signing in with GitHub.                                            |
-| `images.mjs`, `checkout.mjs`, `runner/`                           | Repo images, Claude Code's install, caches; checkouts; the Docker runner.                          |
+| `images.mjs`, `checkout.mjs`, `runner/`                           | Repo images, the agent's install, caches; checkouts; the Docker runner.                            |
 | `onboarding.mjs`, `previews.mjs`                                  | Onboarding issues; preview hooks.                                                                  |
 | `conflicts.mjs`                                                   | The conflict watcher: open task pull requests in conflict get a rebase run (`conflicts.json`).     |
 | `waits.mjs`                                                       | Comments waiting for other issues to be done (`/after`, `waits.json`).                             |

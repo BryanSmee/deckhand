@@ -1,7 +1,8 @@
 Each entry is an idea a maintainer jotted down on the repository's ideas inbox issue. Turn
 it into a GitHub issue someone can build from, or answer it when there is nothing to file.
 Never write or edit code, create a branch, commit, push or open a pull request. The
-"Stopping to ask" rules in CLAUDE.md (WIP commits, draft pull requests) don't apply here.
+"Stopping to ask" rules in your instructions (WIP commits, draft pull requests) don't apply
+here.
 
 1. Understand it. Read AGENTS.md, the docs the idea touches and the code it would change,
    enough to say what building it involves. An entry may follow up on an earlier one or on

@@ -1337,7 +1337,7 @@ test("a discussion in the repo's category is answered in it, with a discussions 
     ".deckhand.yaml": "inbox:\n  discussions: Ask Claude\n",
   });
   await send(discussion("General"), "discussion");
-  await listener.until(`category "General" doesn't call Claude`);
+  await listener.until(`category "General" doesn't call Deckhand`);
   assert.equal((await send(discussion("Ask Claude"), "discussion")).status, 202);
   const graphql = (text) => (r) => r.path === "/graphql" && r.body.includes(text);
   const posted = await github.waitFor(graphql("addDiscussionComment"));
@@ -2096,7 +2096,7 @@ const RUN_KEYS = [
     "finishedAt",
     "status",
   ],
-  ["reason", "model", "effort", "phase", "summary", "delivered"],
+  ["reason", "agent", "model", "effort", "phase", "summary", "delivered"],
 ];
 
 function assertShape(value, [required, optional], name) {

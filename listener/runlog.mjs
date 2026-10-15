@@ -1,6 +1,7 @@
 // Runs and their logs, for the dashboard: each run's log file (logs/<run>.log, its first line
-// the listener's, then the sandbox's stream-json), the list rebuilt from them after a restart,
-// and the entries the dashboard shows for each line. Pure, apart from the log files.
+// the listener's, then the agent's raw output), the list rebuilt from them after a restart,
+// and the entries the dashboard shows for each line. The agent's lines are read through its
+// normalize() (agents/), so a log keeps what the agent wrote. Pure, apart from the log files.
 import {
   appendFileSync,
   closeSync,
@@ -11,14 +12,24 @@ import {
   statSync,
 } from "node:fs";
 import { join } from "node:path";
+import { agentFor } from "./agents/index.mjs";
 
 // Starts the final message of a run that stopped to ask the maintainer (../prompts/sandbox.md).
 export const NEEDS_INPUT = "<!-- needs-input -->";
 
-// "ok", "needs-input" or "error" for a stream-json `result` event (null: no result).
+// "ok", "needs-input" or "error" for an agent's `result` event (null: no result).
 export function outcome(result) {
-  if (!result || result.is_error) return "error";
-  return (result.result ?? "").trimStart().startsWith(NEEDS_INPUT) ? "needs-input" : "ok";
+  if (!result?.ok) return "error";
+  return (result.text ?? "").trimStart().startsWith(NEEDS_INPUT) ? "needs-input" : "ok";
+}
+
+// The agent's last result in these log lines, if any.
+export function lastResult(lines, agent) {
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const result = agent.normalize(lines[i]).findLast((e) => e.type === "result");
+    if (result) return result;
+  }
+  return null;
 }
 
 export function parse(line) {
@@ -47,10 +58,13 @@ function runOf(logDir, file) {
   const logPath = join(logDir, file);
   const lines = readFileSync(logPath, "utf8").split("\n");
   const meta = parse(lines[0])?.type === "listener" ? parse(lines[0]) : {};
-  const result = lines.map(parse).findLast((e) => e?.type === "result");
+  // Logs from before agents had names are Claude Code's.
+  const agent = agentFor(meta.agent);
+  const result = lastResult(lines, agent);
   const id = file.slice(0, -4);
   return {
     id,
+    agent: agent.name,
     key: meta.key ?? id.replace(/-\d+$/, ""),
     kind: meta.kind ?? null,
     title: meta.title ?? null,
@@ -79,7 +93,7 @@ export function publicRun(r) {
 // The first line of a run's reply, for the dashboard: what the run ended with. Headings
 // ("## Needs your input") say less than the sentence under them.
 export function summaryOf(result) {
-  const lines = (result?.result ?? "").replace(NEEDS_INPUT, "").split("\n");
+  const lines = (result?.text ?? "").replace(NEEDS_INPUT, "").split("\n");
   const plain = (l) => l.replace(/^[#>*\s-]+/, "").trim();
   const line =
     plain(lines.find((l) => plain(l) && !/^\s*#/.test(l)) ?? "") || plain(lines.find(plain) ?? "");
@@ -114,11 +128,12 @@ const REASONS = {
 };
 
 // The listener's own lines: a run's first line (what it is), notes and delivered comments.
-function listenerEntries(e) {
+function listenerEntries(e, agent) {
   if (e.event === "note") return [{ kind: "meta", text: e.message }];
   if (e.event === "delivered") {
     const time = new Date(e.at).toISOString().slice(11, 19);
-    return [{ kind: "meta", text: `New comment delivered to Claude at ${time} UTC: ${e.message}` }];
+    const text = `New comment delivered to ${agent.displayName} at ${time} UTC: ${e.message}`;
+    return [{ kind: "meta", text }];
   }
   const own = e.taskMode && e.taskMode !== "work" ? `Starting the ${e.taskMode} mode` : null;
   const what =
@@ -127,54 +142,33 @@ function listenerEntries(e) {
   return [{ kind: "meta", text: what + (e.message ? `: ${e.message}` : "") }];
 }
 
-// Claude's text, and its tool calls with what they are about.
-function assistantEntries(e) {
-  return (e.message?.content ?? []).flatMap((c) => {
-    if (c.type === "text") return [{ kind: "text", text: c.text }];
-    if (c.type !== "tool_use") return [];
-    const i = c.input ?? {};
-    const detail =
-      i.command ?? i.file_path ?? i.pattern ?? i.url ?? i.description ?? i.prompt ?? i.query;
-    const text = detail ?? (Object.keys(i).length ? JSON.stringify(i) : "");
-    return [{ kind: "tool", name: c.name, text: clip(text, 6, 600) }];
-  });
+// The agent's events (its normalize()) → the dashboard's entries.
+function agentEntry(e, agent) {
+  switch (e.type) {
+    case "started":
+      return { kind: "meta", text: `${agent.displayName} started (${e.model})` };
+    case "text":
+      return { kind: "text", text: e.text };
+    case "tool":
+      return { kind: "tool", name: e.name, text: clip(e.detail, 6, 600) };
+    case "toolOutput":
+      return { kind: "output", error: e.error, text: clip(e.text, 40, 4000) };
+    case "result": {
+      const minutes = Math.round(e.durationMs / 6000) / 10;
+      return { kind: "result", status: outcome(e), text: e.text, minutes };
+    }
+  }
+  return null;
 }
 
-// What the tools gave back.
-function userEntries(e) {
-  return (e.message?.content ?? [])
-    .filter((c) => c.type === "tool_result")
-    .map((c) => {
-      const text = Array.isArray(c.content)
-        ? c.content.map((p) => p.text ?? "").join("\n")
-        : (c.content ?? "");
-      return { kind: "output", error: !!c.is_error, text: clip(text, 40, 4000) };
-    });
-}
-
-// Each stream-json event type's entries; other types show nothing.
-const ENTRIES = {
-  listener: listenerEntries,
-  system: (e) =>
-    e.subtype === "init" ? [{ kind: "meta", text: `Claude started (${e.model})` }] : [],
-  assistant: assistantEntries,
-  user: userEntries,
-  result: (e) => [
-    {
-      kind: "result",
-      status: outcome(e),
-      text: e.result ?? "",
-      minutes: Math.round((e.duration_ms ?? 0) / 6000) / 10,
-    },
-  ],
-};
-
-// One log line (stream-json, or setup output) → entries for the dashboard.
-export function format(line) {
+// One log line (the listener's, the agent's, or setup output) → entries for the dashboard.
+// `agent`: the run's (agents/), Claude Code for logs from before agents had names.
+export function format(line, agent = agentFor()) {
   if (!line.trim()) return [];
   const e = parse(line);
   if (!e) return [{ kind: "raw", text: line }];
-  return Object.hasOwn(ENTRIES, e.type) ? ENTRIES[e.type](e) : [];
+  if (e.type === "listener") return listenerEntries(e, agent);
+  return agent.normalize(line).flatMap((event) => agentEntry(event, agent) ?? []);
 }
 
 // Server-sent events: the log so far, then new lines as they are written, until the run ends.
@@ -184,6 +178,7 @@ export function stream(req, res, run) {
     "cache-control": "no-cache",
     "x-accel-buffering": "no",
   });
+  const agent = agentFor(run.agent);
   let offset = 0;
   let rest = "";
   const send = (event, data) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
@@ -197,11 +192,11 @@ export function stream(req, res, run) {
       offset = size;
       const lines = (rest + buffer.toString("utf8")).split("\n");
       rest = lines.pop();
-      const entries = lines.flatMap(format);
+      const entries = lines.flatMap((l) => format(l, agent));
       if (entries.length) send("entries", entries);
     }
     if (run.status !== "running") {
-      if (rest) send("entries", format(rest));
+      if (rest) send("entries", format(rest, agent));
       send("end", publicRun(run));
       return stop();
     }

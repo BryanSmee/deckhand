@@ -46,7 +46,7 @@ export function createImages({
   log = () => {},
 }) {
   const builds = new Map(); // tag → Promise, so two runs never build the same image
-  const installs = new Map(); // Claude Code version → Promise
+  const installs = new Map(); // "<agent>@<version>" → Promise
   const volumes = new Map(); // cache volume → Promise
 
   async function baseId() {
@@ -129,41 +129,44 @@ export function createImages({
     }
   }
 
-  // Claude Code in the shared volume, once per version: a short container of its own before
+  // The agent in its shared volume, once per version: a short container of its own before
   // the first run that needs it (the base image ships without it). As root, so the files
   // aren't the sandbox user's (uid 1000) to change: sandboxes mount the volume read-only,
   // and this still holds if a mount ever isn't. CHOWN only to take over a volume uid 1000
-  // owned before (../sandbox/install-claude-code).
-  function installClaudeCode(output) {
-    const version = config.claudeCodeVersion;
-    if (!installs.has(version)) {
+  // owned before (../sandbox/agents/claude/install). `agent`: agents/.
+  function installAgent(agent, output) {
+    const { volume, mount, version, versionVar, command } = agent.install(config);
+    const key = `${agent.name}@${version}`;
+    if (!installs.has(key)) {
       const install = docker(
         [
           "run",
           "--rm",
-          // npm's registry, outside the sandboxes' network: no repo or Claude input runs here.
+          // npm's registry, outside the sandboxes' network: no repo or agent input runs here.
           "--network",
           config.installNetwork,
           ...["--user", "0"],
           ...["--cap-drop", "ALL", "--cap-add", "CHOWN", "--security-opt", "no-new-privileges"],
           "-e",
-          `CLAUDE_CODE_VERSION=${version}`,
+          `${versionVar}=${version}`,
           "-v",
-          `${config.claudeCodeVolume}:/opt/claude-code`,
+          `${volume}:${mount}`,
           "--entrypoint",
-          "deckhand-install-claude-code",
+          command,
           config.image,
         ],
         { onData: output },
       ).then(({ code, err }) => {
-        if (code !== 0)
-          throw new Error(`installing Claude Code ${version} failed: ${err || `exit ${code}`}`);
+        if (code !== 0) {
+          const what = `${agent.displayName} ${version}`;
+          throw new Error(`installing ${what} failed: ${err || `exit ${code}`}`);
+        }
       });
       // A failure is not kept: the next run tries again.
-      install.catch(() => installs.get(version) === install && installs.delete(version));
-      installs.set(version, install);
+      install.catch(() => installs.get(key) === install && installs.delete(key));
+      installs.set(key, install);
     }
-    return installs.get(version);
+    return installs.get(key);
   }
 
   // `-v` arguments for the repo's caches. A new volume is handed to the sandbox's user
@@ -216,5 +219,5 @@ export function createImages({
     }
   }
 
-  return { baseId, imageFor, installClaudeCode, caches, building: () => [...builds.keys()] };
+  return { baseId, imageFor, installAgent, caches, building: () => [...builds.keys()] };
 }

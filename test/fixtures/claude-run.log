@@ -1,0 +1,21 @@
+{"type":"listener","id":"deckhand-org-repo-7-1760000000000","key":"org/repo#7","kind":"issue","taskMode":"work","repo":"org/repo","title":"Fix the typo","replyTo":7,"reason":null,"mode":"start","startedAt":1760000000000,"finishedAt":null,"status":"running","model":"opus","effort":"medium","message":"Fix the typo in the README"}
+{"type":"listener","event":"note","at":1760000001000,"message":"Image deckhand-sandbox:latest"}
+Cloning into '/workspace'...
+Setup: npm ci
+{"type":"system","subtype":"init","cwd":"/workspace","session_id":"a1b2","tools":["Bash","Read","Edit"],"model":"claude-opus-5-5","permissionMode":"bypassPermissions"}
+{"type":"system","subtype":"hook_response","hook_name":"PostToolUse"}
+{"type":"assistant","message":{"id":"m1","role":"assistant","model":"claude-opus-5-5","content":[{"type":"thinking","thinking":"Let me look."},{"type":"text","text":"I'll look at the README first."}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"grep -n teh README.md\nwc -l README.md","description":"Find the typo"}}]}}
+{"type":"user","message":{"role":"user","content":[{"tool_use_id":"t1","type":"tool_result","content":"3:Fix teh typo\n42 README.md","is_error":false}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t2","name":"Edit","input":{"file_path":"/workspace/README.md","old_string":"teh","new_string":"the"}},{"type":"tool_use","id":"t3","name":"mcp__playwright__browser_navigate","input":{"url":"http://localhost:5173"}},{"type":"tool_use","id":"t4","name":"TodoWrite","input":{"todos":[{"content":"fix","status":"done"}]}},{"type":"tool_use","id":"t5","name":"Agent","input":{"prompt":"Search the docs"}},{"type":"tool_use","id":"t6","name":"WebSearch","input":{"query":"deckhand"}},{"type":"tool_use","id":"t7","name":"Glob","input":{"pattern":"**/*.md"}},{"type":"tool_use","id":"t8","name":"ExitPlanMode","input":{}}]}}
+{"type":"user","message":{"content":[{"tool_use_id":"t2","type":"tool_result","content":[{"type":"text","text":"The file was updated."}]},{"tool_use_id":"t3","type":"tool_result","is_error":true,"content":[{"type":"text","text":"net::ERR_CONNECTION_REFUSED"},{"type":"image","source":{}}]},{"type":"tool_result","tool_use_id":"t4"}]}}
+{"type":"rate_limit_event","rate_limit_info":{}}
+{"type":"result","subtype":"success","is_error":false,"duration_ms":125000,"num_turns":9,"result":"## Fixed\n\nThe typo in the README.","session_id":"a1b2","total_cost_usd":0.4}
+{"type":"listener","event":"delivered","at":1760000200000,"message":"Also the title"}
+{"type":"assistant","message":{"content":[{"type":"text","text":"Line one\nline two"}]}}
+{"type":"result","subtype":"success","is_error":false,"duration_ms":30000,"result":"<!-- needs-input -->\n## Needs your input\n\n1. Which title?"}
+{"type":"result","subtype":"error_during_execution","is_error":true,"duration_ms":1000}
+{"type":"result","subtype":"success","is_error":true,"result":"API Error: 529 overloaded"}
+42
+
+npm warn deprecated

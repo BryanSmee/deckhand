@@ -96,6 +96,100 @@ test("a sandbox without its Claude Code version stops with a clear message", () 
   assert.match(result.stderr, /Claude Code 0\.0\.0-missing is not installed in \/opt\/claude-code/);
 });
 
+test("an unknown agent stops the sandbox before anything runs", () => {
+  for (const agent of ["codex", "../claude", "Claude"]) {
+    const result = spawnSync(`${bin}entrypoint.sh`, [], {
+      env: { PATH: process.env.PATH, REPO_URL: "https://x/o/r.git", SANDBOX_AGENT: agent },
+      encoding: "utf8",
+    });
+    assert.equal(result.status, 1, agent);
+    assert.match(result.stderr, /^Unknown agent .* \(SANDBOX_AGENT\)/, agent);
+  }
+});
+
+// Claude Code's commands live in its agent script only: the entrypoint is the same for every
+// agent.
+test("the entrypoint runs no claude command itself", () => {
+  const code = readFileSync(`${bin}entrypoint.sh`, "utf8")
+    .split("\n")
+    .filter((l) => !/^\s*#/.test(l));
+  assert.deepEqual(
+    code.filter((l) => /(^|[\s;(|&])claude(\s|$)/.test(l)),
+    [],
+  );
+});
+
+// agents/claude.sh, sourced as entrypoint.sh does, with a `claude` that prints what it got.
+function claudeScript(t, script, env = {}) {
+  const dir = mkdtempSync(join(tmpdir(), "deckhand-claude-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  writeFileSync(
+    join(dir, "claude"),
+    '#!/bin/bash\nprintf "%s\\n" "$@"\n[ -t 0 ] || { echo "stdin:"; cat; }\n',
+  );
+  chmodSync(join(dir, "claude"), 0o755);
+  const result = spawnSync(
+    "bash",
+    ["-c", `set -euo pipefail; source "${bin}agents/claude.sh"; ${script}`],
+    {
+      env: {
+        PATH: `${dir}:${process.env.PATH}`,
+        CLAUDE_CODE_VERSION: "9.9.9",
+        CLAUDE_CONFIG_DIR: dir,
+        AGENT_FILES: `${bin}agents/claude`,
+        ...env,
+      },
+      input: "",
+      encoding: "utf8",
+    },
+  );
+  return { ...result, dir };
+}
+
+test("Claude Code's run: a new, continued or fresh session, with the model and effort", (t) => {
+  const env = { TASK_OUTPUT: "json", SANDBOX_MODEL: "sonnet", SANDBOX_EFFORT: "high" };
+  const args = (session) =>
+    claudeScript(t, `agent_run ${session} "Do it"`, env).stdout.split("\nstdin:")[0].split("\n");
+  const common = ["--dangerously-skip-permissions", "--model", "sonnet", "--effort", "high"];
+  const out = ["Do it", "--output-format", "stream-json", "--verbose"];
+  assert.deepEqual(args("new"), [...common, "-p", ...out]);
+  assert.deepEqual(args("continue"), [...common, "--continue", "-p", ...out]);
+  assert.deepEqual(args("fresh"), [...common, "--no-session-persistence", "-p", ...out]);
+});
+
+test("Claude Code's run with messages: the prompt, then the inbox, as stream-json", (t) => {
+  const { stdout } = claudeScript(
+    t,
+    `deckhand_messages() { echo '{"type":"user","message":{"role":"user","content":"Later"}}'; }
+     agent_run continue "First"`,
+    { TASK_OUTPUT: "json", TASK_INPUT: "stream" },
+  );
+  const [args, input] = stdout.split("stdin:\n");
+  assert.match(args, /--continue\n-p\n--input-format\nstream-json\n--output-format\nstream-json/);
+  assert.deepEqual(
+    input
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l).message.content),
+    ["First", "Later"],
+  );
+});
+
+test("Claude Code's session: its transcripts in the issue's volume, instructions beside", (t) => {
+  const none = claudeScript(t, "agent_has_session && echo yes || echo no");
+  assert.equal(none.stdout, "no\n");
+  const some = claudeScript(
+    t,
+    `mkdir -p "$CLAUDE_CONFIG_DIR/projects/-workspace"
+     touch "$CLAUDE_CONFIG_DIR/projects/-workspace/a.jsonl"
+     agent_has_session && echo yes || echo no
+     echo "# Rules" > "$CLAUDE_CONFIG_DIR/rules.md"
+     agent_instructions "$CLAUDE_CONFIG_DIR/rules.md"
+     cat "$CLAUDE_CONFIG_DIR/CLAUDE.md"; echo "$AGENT_STATE"`,
+  );
+  assert.equal(some.stdout, `yes\n# Rules\n${some.dir}\n`);
+});
+
 // The work feedback prompt can't run here (it needs Claude Code): its text, as bash has it.
 test("work feedback rebases on the base and force-pushes with a lease before gh pr ready", () => {
   const script = readFileSync(`${bin}entrypoint.sh`, "utf8");
@@ -109,7 +203,7 @@ test(
   "installing Claude Code refuses to run as the sandbox's user",
   { skip: process.getuid() === 0 },
   () => {
-    const result = spawnSync(`${bin}install-claude-code`, [], {
+    const result = spawnSync(`${bin}agents/claude/install`, [], {
       env: { PATH: process.env.PATH, CLAUDE_CODE_VERSION: "9.9.9" },
       encoding: "utf8",
     });

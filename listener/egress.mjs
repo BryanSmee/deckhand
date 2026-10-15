@@ -4,6 +4,7 @@
 // from here: the mandatory hosts, the operator's ALLOWED_HOSTS, what the operator grants the
 // repo (grants.mjs) and the repo's own `hosts` (repo-config.mjs), these only when the grant
 // says allow_repo_hosts. Security model: ../docs/security.md.
+import { agentFor } from "./agents/index.mjs";
 
 // "name", "*.domain" (any subdomain, not the domain itself) or "*" (anything).
 const HOST_PATTERN = /^(\*|(\*\.)?[a-z0-9_-]+(\.[a-z0-9_-]+)*)$/;
@@ -18,16 +19,13 @@ function hostOf(url) {
   return new URL(url).hostname.toLowerCase();
 }
 
-// What Claude Code and GitHub need. Claude Code (with CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC
-// and a credential variable) only calls api.anthropic.com, for WebFetch's domain check: its API
-// calls go to the listener (anthropic.mjs), even with a gateway (ANTHROPIC_BASE_URL), no OAuth
-// refresh, telemetry or update host. git and gh
-// use the GitHub hosts the listener is configured with; raw files and release downloads come
-// from *.githubusercontent.com. The listener (the broker) is reached directly, on the
-// sandboxes' network.
-export function mandatoryHosts(config) {
+// What the agent (its `hosts`, agents/) and GitHub need. git and gh use the GitHub hosts the
+// listener is configured with; raw files and release downloads come from
+// *.githubusercontent.com. The listener (the broker) is reached directly, on the sandboxes'
+// network.
+export function mandatoryHosts(config, agent = agentFor()) {
   return [
-    "api.anthropic.com",
+    ...agent.hosts,
     ...new Set([hostOf(config.githubUrl), hostOf(config.githubApi)]),
     "*.githubusercontent.com",
   ];

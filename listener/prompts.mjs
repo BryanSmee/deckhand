@@ -1,5 +1,5 @@
-// What Claude reads: each run's prompt (TASK_PROMPT), its first message (TASK_MESSAGE) and the
-// comments delivered to it mid-run. Pure, apart from reading ../prompts/ once at start.
+// What the agent reads: each run's prompt (TASK_PROMPT), its first message (TASK_MESSAGE) and
+// the comments delivered to it mid-run. Pure, apart from reading ../prompts/ once at start.
 import { readFileSync } from "node:fs";
 import { mandatoryHosts } from "./egress.mjs";
 import { FRESH, INBOX } from "./modes.mjs";
@@ -103,7 +103,7 @@ Don't post comments on GitHub yourself: your final message is posted for you as 
 end with a short summary (the pull request link, the files, the inbox issues created).`;
 }
 
-// What Claude reads for a brainstorm run, besides the comments themselves.
+// What the agent reads for a brainstorm run, besides the comments themselves.
 export function brainstormMessage(mode, text, restored) {
   if (mode === "stop") {
     return `The maintainer ends the brainstorm here${text ? `, adding:\n\n${text}\n\n` : ". "}Wrap up as in step 4 of your instructions: post the summary and update the issue's description with what was decided.`;
@@ -121,7 +121,7 @@ export function rebaseStep(base) {
 resolve any conflicts, run the checks again, then \`git push --force-with-lease\` (rewriting
 history is fine on this branch only). If a conflict can't be resolved safely (both sides
 changed the same behaviour, say), stop and ask instead of guessing (see "Stopping to ask" in
-CLAUDE.md).`;
+your instructions).`;
 }
 
 // Where a pull request's run may push: its branch (`branches`, runs.mjs pushBranches()), or
@@ -138,7 +138,7 @@ export function initialPrompt(task, branches = []) {
 code has them, and run the checks they list before pushing. Never push to ${base}. When
 something is ambiguous, pick the reasonable option and say so rather than stopping, unless it
 is a blocker only the maintainer can resolve: then push your work in progress and end with
-your questions (see "Stopping to ask" in CLAUDE.md).
+your questions (see "Stopping to ask" in your instructions).
 Don't post comments on GitHub yourself: your final message is posted for you as a reply, so
 end with a short summary (what you did, the pull request link, anything left open).`;
   if (task.kind === "pr") {
@@ -160,15 +160,15 @@ ${common}`;
 3. Implement it, pushing to the same branch as you go.
 4. When the checks pass, update the pull request with \`gh pr edit\`: final title, and a
    description with \`Closes #${task.number}\`, what changed and why, any choice you made, and
-   screenshots if the UI changed (see "Screenshots" in CLAUDE.md).
+   screenshots if the UI changed (see "Screenshots" in your instructions).
 5. Before marking it ready for review with \`gh pr ready\`,
 ${rebaseStep(base)}
 ${common}`;
 }
 
 // A run in one of the repo's own modes: its instructions (`instructions`, the file's text
-// from the default branch) after what every run of that kind is told. CLAUDE.md has the
-// generic rules, as for work.
+// from the default branch) after what every run of that kind is told. The agent's
+// instructions have the generic rules, as for work.
 export function modePrompt(task, own, instructions, branches = []) {
   const { number: n, repo } = task;
   const base = task.base || "main";
@@ -223,8 +223,8 @@ export function firstMessage({ mode, text, restored, started }) {
   return INBOX.has(mode) ? "" : body;
 }
 
-// What Claude reads for comments delivered mid-run (the CLI adds that the user sent it while
-// Claude was working).
+// What the agent reads for comments delivered mid-run (Claude Code adds that the user sent it
+// while it was working).
 export function liveMessage(mode, text) {
   const reply =
     "Your final message is still posted as the single reply for this run: make it cover this comment too. (Don't post comments on GitHub yourself.)";

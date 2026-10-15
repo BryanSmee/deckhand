@@ -7,22 +7,25 @@
 //                        throws when Docker can't tell (rather than "none")
 //   state(name)          "running", "exited"… or null when there is no such sandbox
 //   follow(name, opts)   its output, line by line, until it exits; `skip` what was already read
-//   send(run, text)      a message for Claude (a comment that arrived mid-run)
-//   close(run)           no more messages: Claude exits once it has answered
+//   send(run, text, agent)  a message for the agent (a comment that arrived mid-run)
+//   close(run)           no more messages: the agent exits once it has answered
 //   closed(run)          whether close() was called, for a listener that restarts
 //   wait(name)           until it exits
 //   remove(name, run)    the sandbox and its inbox
-//   hasSession(name)     whether its issue has a Claude session already (a previous run)
+//   hasSession(name, agent)  whether its issue has a session of that agent already (a
+//                        previous run)
 //   address(name)        its addresses on the sandboxes' network
 //   checkNetwork()       throws unless that network is internal
 //
 // Messages go through a file rather than the container's stdin: a pipe dies with the
 // listener, a file in a volume doesn't. Each run has a folder in the runs volume, mounted
-// read-only into its sandbox, where the listener appends stream-json messages and finally a
-// close line; ../sandbox/deckhand-inbox follows it into Claude's input.
+// read-only into its sandbox, where the listener appends the agent's messages (its
+// message()) and finally a close line; ../sandbox/deckhand-inbox follows it into the agent's
+// input.
 import { spawn as nodeSpawn } from "node:child_process";
 import { appendFileSync, chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { agentFor } from "../agents/index.mjs";
 
 // The inbox's last line once the listener is done with it.
 export const CLOSE = JSON.stringify({ type: "deckhand", event: "close" });
@@ -126,11 +129,8 @@ export function createDockerRunner({
     });
   }
 
-  function send(run, text) {
-    appendFileSync(
-      inbox(run),
-      JSON.stringify({ type: "user", message: { role: "user", content: text } }) + "\n",
-    );
+  function send(run, text, agent = agentFor()) {
+    appendFileSync(inbox(run), agent.message(text) + "\n");
   }
 
   function close(run) {
@@ -154,8 +154,9 @@ export function createDockerRunner({
     if (run) rmSync(join(inboxDir, run), { recursive: true, force: true });
   }
 
-  async function hasSession(name) {
-    return (await docker(["volume", "inspect", `${name}-claude`])).code === 0;
+  // The agent's session volume (its `session`), kept by the issue's runs.
+  async function hasSession(name, agent = agentFor()) {
+    return (await docker(["volume", "inspect", `${name}-${agent.session.volume}`])).code === 0;
   }
 
   async function address(name) {

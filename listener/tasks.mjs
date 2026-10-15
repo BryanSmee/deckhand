@@ -1,6 +1,7 @@
 // Tasks: one queue per issue, pull request or discussion, at most maxParallel containers.
 // A comment that passed the checks is queued under its task's key ("org/repo#12"); after a
 // pause (so a burst is one run) it starts a run, or goes to the running one (deliver()).
+import { agentFor } from "./agents/index.mjs";
 import { commentsText, linkedIssue, linkTo, workItem } from "./events.mjs";
 import { INBOX, isLight, sessionName } from "./modes.mjs";
 import { liveMessage } from "./prompts.mjs";
@@ -238,7 +239,7 @@ export function createTasks(ctx) {
     // Without a trigger line, a comment only continues work Claude already started (a
     // brainstorm's session is not work's: sessionName()).
     if (!item.trigger && !(await hasSession(key, name, false))) {
-      return skip(`#${item.replyTo} has no Claude session and no trigger line`);
+      return skip(`#${item.replyTo} has no agent session and no trigger line`);
     }
     return "work";
   }
@@ -271,7 +272,7 @@ export function createTasks(ctx) {
     if (item.trigger || item.modeLine === "onboarding") return true;
     if (ctx.brainstorms.get(key) || ctx.issueModes.has(key)) return true;
     if (await hasSession(key, name)) return true;
-    skip(`#${item.replyTo} has no Claude session and no trigger line`);
+    skip(`#${item.replyTo} has no agent session and no trigger line`);
     return false;
   }
 
@@ -337,6 +338,8 @@ export function createTasks(ctx) {
   function deliverable(task) {
     const live = task.live;
     if (!live?.open || live.mode === "stop") return 0;
+    // An agent that takes no messages mid-run gets them in its next run.
+    if (!agentFor(live.record.agent).takesMessages) return 0;
     const n = task.pending.findIndex((i) => i.mode !== live.mode);
     return n < 0 ? task.pending.length : n;
   }
@@ -356,12 +359,12 @@ export function createTasks(ctx) {
     live.handled.push(...items);
     log(`${live.key}: delivered ${items.length} comment(s) to the running session`);
     live.record.delivered = (live.record.delivered ?? 0) + items.length;
-    // Only "/model …" lines: nothing to tell Claude.
+    // Only "/model …" lines: nothing to tell the agent.
     if (!text) {
       ctx.saveLive(task);
       return false;
     }
-    ctx.runner.send(live.id, liveMessage(live.mode, text));
+    ctx.runner.send(live.id, liveMessage(live.mode, text), agentFor(live.record.agent));
     const event = { type: "listener", event: "delivered", at: Date.now(), message: text };
     live.logFile.write(JSON.stringify(event) + "\n");
     live.unanswered.push(...items);
