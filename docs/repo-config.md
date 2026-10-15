@@ -310,7 +310,11 @@ The hook decides what to do from the event (`action`, the pull request's head, w
 workflow succeeded…): the event's content comes from whoever opened the pull request, so
 treat it as untrusted input. Holding the Docker socket is root on the host.
 
-Hooks of one repository run one at a time, in delivery order. A hook is **busy** for as
+Hooks of one repository run one at a time, in delivery order. At most 3 wait behind the
+running one: deliveries past that are dropped (and logged), since anyone can open pull
+requests. A newer delivery for a pull request (or a workflow run) whose hook still waits
+replaces it, so the hook may not see every event: have it bring the preview to the state the
+event describes (open, updated, closed) rather than react to each action. A hook is **busy** for as
 long as its command runs: the listener's `/status` lists it and isn't idle meanwhile, so a
 restart that waits for it doesn't cut a deployment short. A hook that starts something
 should wait until it is up before exiting. Its output is kept in the data volume, under
