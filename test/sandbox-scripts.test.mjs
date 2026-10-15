@@ -146,7 +146,7 @@ async function prBroker() {
         draft: number === 7,
         node_id: `PR_${number}`,
         base: { repo: { full_name: repo } },
-        head: { repo: { full_name: repo } },
+        head: { ref: "issue-1-x", repo: { full_name: repo } },
       });
     },
   };
@@ -214,6 +214,7 @@ test("gh pr ready goes to the listener, with or without a number, and --undo too
     DECKHAND_RUN_SECRET: b.register("org/repo", undefined, { push: true }),
     DECKHAND_REAL_GH: real.path,
   };
+  b.allow(env.DECKHAND_RUN_SECRET, ["issue-1-*"]);
   const current = await gh(env, "pr", "ready");
   assert.equal(current.status, 0, current.stderr);
   assert.match(current.stdout, /org\/repo#7 is marked as ready for review/);

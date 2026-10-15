@@ -2,10 +2,12 @@
 // `contents: write` (markPullRequestReadyForReview, convertPullRequestToDraft), which a
 // sandbox's token lacks (github-app.mjs, SANDBOX_PERMISSIONS). The sandbox's gh wrapper
 // (../sandbox/gh) sends `gh pr ready [--undo]` here instead, with the run's secret; the
-// listener checks the pull request is the run's repo's own, from a branch of that repo, and
-// calls the mutation with a token of its own that the sandbox never sees.
+// listener checks the pull request is the run's repo's own, from a branch of that repo the run
+// may push (broker.mjs allow()), and calls the mutation with a token of its own that the
+// sandbox never sees.
 //
 // Served on the broker's port, which only the sandboxes' network reaches.
+import { branchAllowed } from "./broker.mjs";
 import { GITHUB_HEADERS, PUSH_PERMISSIONS } from "./github-app.mjs";
 import { sendJson } from "./web.mjs";
 
@@ -89,6 +91,10 @@ export function createPrReady({
     }
     if (pr.head?.repo?.full_name?.toLowerCase() !== repo) {
       return send(res, 403, { error: `${ref} comes from a fork` });
+    }
+    // Another task's pull request, or a maintainer's, is not this run's to change.
+    if (!branchAllowed(run.branches, pr.head.ref)) {
+      return send(res, 403, { error: `${ref}'s branch, ${pr.head.ref}, is not this run's` });
     }
 
     const wanted = action === "draft";

@@ -1,14 +1,18 @@
 // Git gateway: the only way a sandbox pushes. Sandbox tokens only read contents, so git
 // sends pushes here instead (entrypoint.sh: `url.<broker>/git/.pushInsteadOf`), with the
 // run's secret as its password (git-credential-deckhand). The gateway reads the push's ref
-// updates, refuses any to the repo's default branch (the branch Deckhand trusts: its
-// `.deckhand.yaml`, preview hook and Dockerfile come from there) or outside `refs/heads/`,
-// and forwards the rest to GitHub with a token of its own that the sandbox never sees.
+// updates, refuses any outside `refs/heads/`, to the repo's default branch (the branch
+// Deckhand trusts: its `.deckhand.yaml`, preview hook and Dockerfile come from there) or to a
+// branch that isn't the run's own (broker.mjs allow(): its issue's, its pull request's), and
+// forwards the rest to GitHub with a token of its own that the sandbox never sees. Updates,
+// force-pushes and deletes alike: another task's branch, a maintainer's pull request or
+// gh-pages stay out of reach.
 //
 // Only the smart HTTP push service: fetches go straight to GitHub with the read token.
 // Served on the broker's port, which only the sandboxes' network reaches.
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
+import { branchAllowed } from "./broker.mjs";
 import { PUSH_PERMISSIONS } from "./github-app.mjs";
 
 // The ref updates come first in a push; anything bigger than this before them is not git.
@@ -74,12 +78,19 @@ export function rejection(refs, caps, reasons) {
   return Buffer.concat([...out, Buffer.from("0000")]);
 }
 
-// Why a sandbox may not update `ref`, or null when it may: branches only, never the default.
-export function refusal(ref, base) {
+// Why a sandbox may not update `ref`, or null when it may: the run's own branches
+// (`branches`, broker.mjs allow()), never the default one.
+export function refusal(ref, base, branches) {
   if (!ref.startsWith("refs/heads/")) return `only branches can be pushed (${ref})`;
+  const branch = ref.slice("refs/heads/".length);
   // Case-insensitive: "Main" must not pass for a repo whose default is "main".
-  if (ref.slice("refs/heads/".length).toLowerCase() === base.toLowerCase()) {
+  if (branch.toLowerCase() === base.toLowerCase()) {
     return `pushing to ${base}, the default branch, is not allowed from a sandbox; push a branch`;
+  }
+  if (!branchAllowed(branches, branch)) {
+    return branches.length
+      ? `this run can only push ${branches.join(", ")}, not ${branch}`
+      : `this run has no branch to push (${branch})`;
   }
   return null;
 }
@@ -195,7 +206,7 @@ export function createGitGateway({
       }
       const reasons = new Map();
       for (const ref of parsed.refs) {
-        const why = refusal(ref, base);
+        const why = refusal(ref, base, run.branches);
         if (why) reasons.set(ref, why);
       }
       if (reasons.size) {

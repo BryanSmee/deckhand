@@ -228,7 +228,7 @@ Object.assign(ctx, {
   runner: createDockerRunner({ config, docker, inboxDir: runsDir, log }),
 });
 
-// Their pushes, on the broker's port: never to the default branch.
+// Their pushes, on the broker's port: to the run's own branches only, never the default one.
 ctx.gitGateway = createGitGateway({
   broker: ctx.broker,
   app: () => ctx.app,

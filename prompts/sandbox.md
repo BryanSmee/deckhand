@@ -85,9 +85,10 @@ Skip screenshots for changes with nothing visible (API, tests, tooling).
 - `git` and `gh` get a short-lived token for this repository from Deckhand on every call:
   no `gh auth login`, no SSH. It covers this repository only.
 - Commits and comments come from the GitHub App's bot; the git identity is already set.
-- Pushes go through Deckhand, which only lets branches through, never the base branch: push
-  a branch. Your token only reads the code: no tags, no merging pull requests, no writing
-  files through the API.
+- Pushes go through Deckhand, which only lets this task's branch through (the issue's
+  `issue-<n>-…`, or the pull request's own), never the base branch or another one, and
+  `gh pr ready` only works on this task's pull request. Your token only reads the code: no
+  tags, no merging pull requests, no writing files through the API.
 - Rewriting history (rebase, `git push --force-with-lease`) is fine on the task's own branch,
   never on any other branch. Rebase it on the base branch before `gh pr ready`: Deckhand
   refuses to mark a pull request with conflicts ready.

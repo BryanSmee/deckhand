@@ -118,7 +118,7 @@ export function createRestart(ctx) {
         task: pick(task),
         ...Object.fromEntries(
           ["id", "mode", "talk", "light", "secret", "asked", "replyTo", "replied", "hosts", "shots"]
-            .concat(["lines", "result", "later"])
+            .concat(["branches", "lines", "result", "later"])
             .map((k) => [k, live[k]]),
         ),
         record,
@@ -177,6 +177,8 @@ export function createRestart(ctx) {
       push: saved.light === false,
       secret: saved.secret,
     });
+    // State saved before runs had branches: none, rather than any.
+    ctx.broker.allow(saved.secret, saved.branches ?? []);
     return task;
   }
 

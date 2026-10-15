@@ -237,8 +237,9 @@ No sandbox gets a long-lived token, an SSH key or the host's git configuration:
   too (read and write) for runs answering a discussion, and only those. Installation tokens
   last an hour; the broker renews them before that, so a run can go on for hours.
 - Git fetches from GitHub over HTTPS with that token, and pushes through the listener's git
-  gateway (same port, with the run's secret), which pushes any branch but the default one
-  with a token of its own (see [Security model](security.md#the-default-branch)). The
+  gateway (same port, with the run's secret), which pushes the run's own branch only (its
+  issue's `issue-<n>-*`, or its pull request's head), never the default one, with a token of
+  its own (see [Security model](security.md#the-default-branch)). The
   listener also marks a run's pull request ready for review (`gh pr ready`), which that
   token can't. Commits
   and comments come from the App's bot (`<app>[bot]`, identity set through `GIT_AUTHOR_*`

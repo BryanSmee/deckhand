@@ -5,7 +5,7 @@ import { randomBytes } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readdirSync, rmdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { proxyEnv, refusedRepoHosts, runHosts } from "./egress.mjs";
-import { commentsText } from "./events.mjs";
+import { commentsText, sameRepo } from "./events.mjs";
 import { grantFor, hardeningArgs, loadGrants, mountArgs, resolveMounts } from "./grants.mjs";
 import { imageRef } from "./images.mjs";
 import { BUILT_IN, isFresh, isLight, kindOf, permissionsFor, sessionName } from "./modes.mjs";
@@ -134,6 +134,8 @@ export function createRuns(ctx) {
       // What the egress proxy lets it reach (egressAnswer()), and its address once known.
       hosts: null,
       ip: null,
+      // What it may push (pushBranches()), once it starts.
+      branches: [],
       shots: null,
       lines: { out: 0, err: 0 }, // of its output read so far, so a restart skips them
       result: null, // its last result, with the duration of all
@@ -149,6 +151,8 @@ export function createRuns(ctx) {
   async function start(task, items) {
     const { live } = task;
     const { text, message, settings, own, note } = await begin(task, items);
+    live.branches = await pushBranches(task, items);
+    ctx.broker.allow(live.secret, live.branches);
     const instructions = own && (await modeInstructions(task, own));
     const access = grantedAccess(task, settings, note);
     const prepared = await prepare(task, items, settings, note);
@@ -164,6 +168,7 @@ export function createRuns(ctx) {
       onboardingWork: onboardingWork(task),
       config,
       grant: access.grant,
+      branches: live.branches,
     });
     recheckMounts(settings, access);
     await ctx.runner.start(sandboxSpec(task, prompt, message, { ...prepared, ...access }));
@@ -330,6 +335,32 @@ export function createRuns(ctx) {
         `Claude couldn't start: ${error.message}\n\nThe run's log on the dashboard has the details.`,
       );
     }
+  }
+
+  // The branches the run may push (git-gateway.mjs) and whose pull requests it may mark ready
+  // (pr-ready.mjs): an issue's own, issue-<n>-* (draft-pr.sh names it from the title, which
+  // may change), and the head of each pull request its comments came from, a maintainer's
+  // included, but not a fork's. None for a run that can't push.
+  async function pushBranches(task, items) {
+    if (!ctx.broker.runOf(task.live.secret)?.push) return [];
+    const branches = task.kind === "issue" ? [`issue-${task.number}-*`] : [];
+    const pulls = new Set(items.map((i) => i.replyTo));
+    if (task.kind !== "pr") pulls.delete(task.number);
+    for (const number of pulls) {
+      let pr;
+      try {
+        const res = await ctx.github(task.repo, "GET", `/repos/${task.repo}/pulls/${number}`);
+        if (!res.ok) throw new Error(`GitHub answered ${res.status}`);
+        pr = await res.json();
+      } catch (error) {
+        throw new RunError(
+          `Claude couldn't start: pull request #${number} couldn't be looked up (${error.message ?? error}). Comment again to retry.`,
+        );
+      }
+      const ref = pr.head?.ref;
+      if (sameRepo(pr, task.repo) && ref && !branches.includes(ref)) branches.push(ref);
+    }
+    return branches;
   }
 
   // A comment on a pull request may run on the image of its own branch (imageRef()).

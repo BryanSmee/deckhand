@@ -78,3 +78,18 @@ test("only runs registered as work push; a restarted run's secret keeps its own"
   assert.equal(secret, "kept");
   assert.equal(broker.runOf("kept").push, true);
 });
+
+test("a run's branches: none until allowed, and never for a run that can't push", () => {
+  const broker = createBroker({ app: () => null });
+  const work = broker.register("org/a", undefined, { push: true });
+  assert.deepEqual(broker.runOf(work).branches, []);
+  broker.allow(work, ["issue-1-*"]);
+  assert.deepEqual(broker.runOf(work).branches, ["issue-1-*"]);
+  const light = broker.register("org/a");
+  broker.allow(light, ["issue-1-*"]);
+  assert.deepEqual(broker.runOf(light).branches, []);
+  // A finished run stays finished.
+  broker.revoke(work);
+  broker.allow(work, ["x"]);
+  assert.equal(broker.runOf(work), undefined);
+});

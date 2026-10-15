@@ -112,7 +112,27 @@ test("prompts: a repo's mode, light or not, with its instructions", () => {
     instructions: "Triage.",
     settings,
   });
-  assert.match(heavy, /commit and push to that branch\. Never\npush to main\./);
+  assert.match(
+    heavy,
+    /commit and push to that branch\n\(Deckhand refuses pushes to branches not named `issue-12-…`\)\. Never push to main\./,
+  );
+  const onPr = promptFor(pr, {
+    mode: "fix",
+    own: { name: "fix", light: false },
+    instructions: "Fix.",
+    settings,
+    branches: ["feature/x"],
+  });
+  assert.match(onPr, /push to its branch, `feature\/x`: Deckhand refuses pushes to any other/);
+});
+
+test("prompts: a pull request's run is told the one branch it may push, or none for a fork", () => {
+  const own = promptFor(pr, { mode: "work", settings, branches: ["feature/x"] });
+  assert.match(own, /and push to its branch, `feature\/x`: Deckhand refuses pushes to any other\./);
+  const fork = promptFor(pr, { mode: "work", settings, branches: [] });
+  assert.match(fork, /you can't push: its branch is in a fork/);
+  const work = promptFor(issue, { mode: "work", settings, branches: ["issue-12-*"] });
+  assert.match(work, /Deckhand refuses pushes to branches not named `issue-12-…`\./);
 });
 
 test("first message: brainstorms, follow-ups and new inbox sessions", () => {
