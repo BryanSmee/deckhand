@@ -1,5 +1,5 @@
-// What a sandbox may reach on the network. Sandboxes sit on an internal Docker network with
-// no route out; the egress proxy (../proxy/proxy.mjs) is their only way out, and asks the
+// What a sandbox may reach on the network. Each sandbox sits on an internal Docker network,
+// its own, with no route out; the egress proxy (../proxy/proxy.mjs) is their only way out, and asks the
 // listener, for each connection, whether that sandbox may reach that host. The answer comes
 // from here: the mandatory hosts, the operator's ALLOWED_HOSTS, what the operator grants the
 // repo (grants.mjs) and the repo's own `hosts` (repo-config.mjs), these only when the grant
@@ -21,8 +21,8 @@ function hostOf(url) {
 
 // What the agent (its `hosts`, agents/) and GitHub need. git and gh use the GitHub hosts the
 // listener is configured with; raw files and release downloads come from
-// *.githubusercontent.com. The listener (the broker) is reached directly, on the sandboxes'
-// network.
+// *.githubusercontent.com. The listener (the broker) is reached directly, on the
+// run's own network.
 export function mandatoryHosts(config, agent = agentFor()) {
   return [
     ...agent.hosts,

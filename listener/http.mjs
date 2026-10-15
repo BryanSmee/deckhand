@@ -1,9 +1,8 @@
 // The listener's two HTTP servers. The public one: GitHub's webhooks, /setup, sign-in, the
-// dashboard and its API, /status and the runs' screenshots. The broker's, on the sandboxes'
-// network only: installation tokens (broker.mjs), the egress proxy's questions and Claude's
+// dashboard and its API, /status and the runs' screenshots. The broker's, on the runs'
+// networks only: installation tokens (broker.mjs), the egress proxy's questions and Claude's
 // API calls (anthropic.mjs).
 import { closeSync, constants, createReadStream, fstatSync, openSync, realpathSync } from "node:fs";
-import { lookup } from "node:dns/promises";
 import { createServer } from "node:http";
 import { join } from "node:path";
 import { page } from "./auth.mjs";
@@ -451,7 +450,7 @@ export function createHttp(ctx, { dashboardDir }) {
 
   // --- Egress: the proxy asks, for each connection, whether a sandbox may reach a host ----
 
-  // The running task whose sandbox has this address on the sandboxes' network. Addresses are
+  // The running task whose sandbox has this address on its network. Addresses are
   // looked up once per run, the first time its sandbox connects, and forgotten once it exits
   // (runs.mjs finish()): Docker may give the address to another sandbox.
   async function taskAt(ip) {
@@ -464,15 +463,13 @@ export function createHttp(ctx, { dashboardDir }) {
     return null;
   }
 
-  // Only the proxy may ask: it is the one that knows the connection's source address.
+  // Only the proxy may ask: it is the one that knows the connection's source address. It is on
+  // every run's network, so its name may resolve to its address on any of them: the caller is
+  // compared with all of them (`docker inspect`).
   async function fromProxy(req) {
     const caller = req.socket.remoteAddress.replace(/^::ffff:/, "");
-    const host = new URL(config.egressProxy).hostname;
-    try {
-      return (await lookup(host, { all: true })).some((a) => a.address === caller);
-    } catch {
-      return false;
-    }
+    if ((await ctx.runner.proxyAddresses()).includes(caller)) return true;
+    return (await ctx.runner.proxyAddresses({ fresh: true })).includes(caller);
   }
 
   async function egressAnswer(req, res) {

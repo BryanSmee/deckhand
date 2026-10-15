@@ -40,6 +40,10 @@ import { closedAs, createTitles } from "./titles.mjs";
 import { createWaits } from "./waits.mjs";
 import { createWorkApi } from "./work.mjs";
 
+// How often the listener and the egress proxy are joined again to the running sandboxes'
+// networks, should either have been recreated (restart.mjs relink()).
+const RELINK_MS = 60000;
+
 const env = process.env;
 let config;
 try {
@@ -377,6 +381,7 @@ if (!ctx.app) log(`No GitHub App yet. Set it up at ${setup.link()}`);
 const restored = ctx.restoreRuns();
 ctx.loadQueue();
 ctx.reattach(restored).catch((error) => log(`Re-attaching: ${error.stack ?? error}`));
+const relinking = setInterval(ctx.relink, RELINK_MS);
 ctx.conflicts.start();
 ctx.waits.start();
 // Labels added or removed while the listener was down.
@@ -395,6 +400,7 @@ process.on("SIGTERM", () => {
   ctx.stopping = true;
   ctx.conflicts.stop();
   ctx.waits.stop();
+  clearInterval(relinking);
   log("Stopping: running sandboxes go on, the next listener picks them up");
   // Replies being posted and comments being admitted first, then what they leave.
   Promise.allSettled([...ctx.ending, ...http.admitting])

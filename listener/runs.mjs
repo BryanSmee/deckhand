@@ -216,7 +216,12 @@ export function createRuns(ctx) {
       branches: live.branches,
     });
     recheckMounts(task, settings, access);
-    await ctx.runner.start(sandboxSpec(task, prompt, message, { ...prepared, ...access }));
+    try {
+      await ctx.runner.start(sandboxSpec(task, prompt, message, { ...prepared, ...access }));
+    } catch (error) {
+      // Its network (not internal, no proxy to join), or Docker refusing the container.
+      throw new RunError(`${agentOf(task).displayName} couldn't start: ${error.message}`);
+    }
     // Written before the agent starts (setup takes a while), a message waits in the inbox.
     live.open = true;
     ctx.saveLive(task);
@@ -363,7 +368,6 @@ export function createRuns(ctx) {
     const base = task.base || "main";
     const output = (chunk) => logFile.write(chunk);
     try {
-      await ctx.runner.checkNetwork();
       const source = await imageSource(task, items, settings, grant);
       const image = await ctx.images.imageFor({
         repo: task.repo,
@@ -444,9 +448,8 @@ export function createRuns(ctx) {
     const volumes = sessionName(n, live.light);
     const agent = agentOf(task);
     const install = agent.install(config);
+    // Its network is its own (runner/docker.mjs).
     const args = [
-      "--network",
-      config.network,
       // The base image's `node`, whatever a repo or branch image ends with: a sandbox as root
       // would own root-owned files in granted mounts (grants.mjs) and leave root-owned files
       // in them and in cache volumes. An image that needs root at runtime fails loudly.

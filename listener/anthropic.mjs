@@ -6,7 +6,7 @@
 // for OpenRouter say) as `Authorization: Bearer` too, an API key as `x-api-key`. Here the secret
 // is checked against the broker and swapped for the credential, in the same header, and the
 // request goes on to Anthropic; the answer streams back as it comes. The secret dies with the
-// run. Served on the broker's port, which only the sandboxes' network reaches.
+// run. Served on the broker's port, which only the runs' networks reach.
 import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 import { sendJson } from "./web.mjs";

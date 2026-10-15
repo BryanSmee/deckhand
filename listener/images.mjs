@@ -142,7 +142,7 @@ export function createImages({
         [
           "run",
           "--rm",
-          // npm's registry, outside the sandboxes' network: no repo or agent input runs here.
+          // npm's registry, outside the runs' networks: no repo or agent input runs here.
           "--network",
           config.installNetwork,
           ...["--user", "0"],
