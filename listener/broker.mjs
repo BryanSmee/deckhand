@@ -30,7 +30,10 @@ export function createBroker({
   random = () => randomBytes(32).toString("hex"),
   log = () => {},
 }) {
-  const runs = new Map(); // hash(secret) → { repo, extra, push, branches }
+  // hash(secret) → { repo, extra, push, branches, provider, apiStatus }: `provider`, where the
+  // listener sends its agent's API calls (anthropic.mjs; null: the agent's default), and
+  // `apiStatus`, the last status that provider answered.
+  const runs = new Map();
 
   // `extra`: permissions this run's token gets beyond or instead of the sandbox's usual ones.
   // `push`: whether it may push and change its pull requests, which only work runs do (light
@@ -38,8 +41,21 @@ export function createBroker({
   // its token: fail closed. `secret`: a run's own again, when a restarted listener picks it up.
   function register(repo, extra, { push = false, secret = random() } = {}) {
     // No branch until allow() names them: a run that can push still pushes nothing else.
-    runs.set(hash(secret), { repo: repo.toLowerCase(), extra, push: push === true, branches: [] });
+    runs.set(hash(secret), {
+      repo: repo.toLowerCase(),
+      extra,
+      push: push === true,
+      branches: [],
+      provider: null,
+      apiStatus: null,
+    });
     return secret;
+  }
+
+  // The provider of the run's agent (agents/), once its settings are read.
+  function provide(secret, provider) {
+    const run = runOf(secret);
+    if (run) run.provider = provider;
   }
 
   // The branches a run may push and whose pull requests it may mark ready: names, or
@@ -83,5 +99,5 @@ export function createBroker({
     }
   }
 
-  return { register, allow, revoke, runOf, handle, size: () => runs.size };
+  return { register, allow, provide, revoke, runOf, handle, size: () => runs.size };
 }

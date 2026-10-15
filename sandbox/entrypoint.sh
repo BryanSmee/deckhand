@@ -135,13 +135,15 @@ if [ $# -eq 0 ] && [ -n "${TASK_PROMPT:-}" ]; then
   # own session. TASK_SESSION=fresh ("idea" and
   # "bug", the inbox entries, and the repo's fresh modes) starts a new one every time, and
   # doesn't keep it: the issue's session stays the one the next run continues.
+  # TASK_SESSION=new starts a new one that the next run continues: an agent taking over from
+  # another after a fallback, which an older session of its own would mislead.
   mode=${TASK_MODE:-work}
   session=new # new, continue, or fresh: not kept
   prompt=$TASK_PROMPT
   if [ "${TASK_SESSION:-}" = fresh ] || [ "$mode" = idea ] || [ "$mode" = bug ]; then
     session=fresh
   fi
-  if [ "$session" = new ] && agent_has_session; then
+  if [ "$session" = new ] && [ "${TASK_SESSION:-}" != new ] && agent_has_session; then
     session=continue
     if [ -z "${TASK_MESSAGE:-}" ]; then
       agent_interactive continue

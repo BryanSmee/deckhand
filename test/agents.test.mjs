@@ -3,7 +3,16 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { AGENT_SECRETS, AGENTS, agentFor, effortOf, modelOf } from "../listener/agents/index.mjs";
+import {
+  AGENT_SECRETS,
+  AGENTS,
+  agentFor,
+  effortOf,
+  entryName,
+  entryOf,
+  modelOf,
+  providerError,
+} from "../listener/agents/index.mjs";
 import { claude } from "../listener/agents/claude.mjs";
 import { codex } from "../listener/agents/codex.mjs";
 import { lastResult, outcome } from "../listener/runlog.mjs";
@@ -346,4 +355,82 @@ test("a run's agent: the repo's mode's, else light runs' or work's", () => {
   assert.equal(agentNameFor(settings, null, false), "codex");
   assert.equal(agentNameFor(settings, null, true), "claude");
   assert.equal(agentNameFor(settings, { agent: "claude" }, false), "claude");
+});
+
+test("entries: agent@provider, an agent alone on its default provider", () => {
+  assert.deepEqual(entryOf("claude"), { agent: "claude", provider: "anthropic" });
+  assert.deepEqual(entryOf("claude@openrouter"), { agent: "claude", provider: "openrouter" });
+  assert.deepEqual(entryOf("codex"), { agent: "codex", provider: "openai" });
+  for (const bad of ["gemini", "codex@openrouter", "claude@anthropic@x", "", null]) {
+    assert.equal(entryOf(bad), null, String(bad));
+  }
+  assert.equal(entryName("codex"), "codex@openai");
+  // Every provider's credential is redacted, whichever runs.
+  assert.ok(AGENT_SECRETS.includes("OPENROUTER_API_KEY"));
+});
+
+test("providerError: a provider's failure, from the result or the endpoint's last status", () => {
+  const failed = (text) => ({ type: "result", ok: false, text, durationMs: 0 });
+  // Claude Code's API errors.
+  const overloaded =
+    'API Error: 529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}';
+  assert.equal(providerError(failed(overloaded)), "overloaded (529)");
+  assert.equal(
+    providerError(failed('API Error: 429 {"type":"error","error":{"type":"rate_limit_error"}}')),
+    "rate limited (429)",
+  );
+  assert.equal(providerError(failed("Claude AI usage limit reached|1760547600")), "quota reached");
+  assert.equal(providerError(failed("Invalid API key · Please run /login")), "invalid credentials");
+  assert.equal(
+    providerError(failed('API Error: 500 {"type":"error","error":{"type":"api_error"}}')),
+    "server error (500)",
+  );
+  // Codex's.
+  assert.equal(
+    providerError(failed("exceeded retry limit, last status: 429 Too Many Requests")),
+    "rate limited (429)",
+  );
+  assert.equal(
+    providerError(failed("unexpected status 401 Unauthorized: Incorrect API key provided")),
+    "invalid credentials (401)",
+  );
+  assert.equal(
+    providerError(failed("You exceeded your current quota, please check your plan")),
+    "quota reached",
+  );
+  // What the endpoint saw, when the result says nothing of it (or there is none).
+  assert.equal(providerError(failed("Something went wrong"), 529), "overloaded (529)");
+  assert.equal(providerError(null, 503), "server error (503)");
+  assert.equal(providerError(null, 402), "quota reached (402)");
+
+  // Not the provider's: a task that failed, a bad request, an ok result.
+  assert.equal(providerError(failed("The tests still fail.")), null);
+  assert.equal(providerError(failed("The tests still fail."), 200), null);
+  assert.equal(
+    providerError(failed('API Error: 400 {"error":{"type":"invalid_request_error"}}')),
+    null,
+  );
+  assert.equal(providerError({ ok: true, text: "Done: added a rate limit." }, 429), null);
+  assert.equal(providerError(null), null);
+});
+
+test("each agent's env on a provider: OpenRouter's token as a bearer, with its model names", () => {
+  const config = {
+    brokerUrl: "http://listener:8081",
+    claudeCredential: "CLAUDE_CODE_OAUTH_TOKEN",
+    modelAliases: { ANTHROPIC_DEFAULT_OPUS_MODEL: "claude-opus-5-5" },
+    openrouterAliases: { ANTHROPIC_DEFAULT_OPUS_MODEL: "anthropic/claude-opus-5.5" },
+    claudeFallbackModel: "balanced",
+  };
+  assert.deepEqual(claude.env(config, "s3cret"), {
+    CLAUDE_CODE_OAUTH_TOKEN: "s3cret",
+    ANTHROPIC_BASE_URL: "http://listener:8081/anthropic",
+    ANTHROPIC_DEFAULT_OPUS_MODEL: "claude-opus-5-5",
+    SANDBOX_FALLBACK_MODEL: "sonnet",
+  });
+  assert.deepEqual(claude.env({ ...config, claudeFallbackModel: null }, "s3cret", "openrouter"), {
+    ANTHROPIC_AUTH_TOKEN: "s3cret",
+    ANTHROPIC_BASE_URL: "http://listener:8081/anthropic",
+    ANTHROPIC_DEFAULT_OPUS_MODEL: "anthropic/claude-opus-5.5",
+  });
 });

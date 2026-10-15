@@ -303,6 +303,14 @@ ctx.anthropic = createAnthropicProxy({
   name: config.claudeCredential,
   credential: config.claudeCredential && env[config.claudeCredential],
   upstream: config.anthropicUrl,
+  // claude@openrouter, for runs that fall back to it (FALLBACKS).
+  providers: {
+    openrouter: {
+      name: "OPENROUTER_API_KEY",
+      credential: env.OPENROUTER_API_KEY,
+      upstream: config.openrouterUrl,
+    },
+  },
   log,
 });
 // Their Codex's, likewise.
@@ -400,7 +408,7 @@ http.listenBroker();
 
 log(`Deckhand ${ctx.version}`);
 log(
-  `Agents: ${config.agent} for work, ${config.brainstormAgent} for light runs; repos may pick ${config.agents.join(", ")}`,
+  `Agents: ${config.agent} for work, ${config.brainstormAgent} for light runs; repos may pick ${config.agents.join(", ")}${config.fallbacks.length ? `; on provider errors, falls back to ${config.fallbacks.join(", ")}` : ""}`,
 );
 if (!ctx.app) log(`No GitHub App yet. Set it up at ${setup.link()}`);
 

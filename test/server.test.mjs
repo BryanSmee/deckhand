@@ -166,6 +166,18 @@ case "$1" in
       if [ -e "${dir}/hold" ]; then
         until [ -e "${dir}/go" ]; do sleep 0.05; done
       fi
+      # Each run'"'"'s agent, provider and session, and its first message (fallbacks).
+      echo "$SANDBOX_AGENT@$SANDBOX_PROVIDER \${TASK_SESSION:-default}" >> "${dir}/runs-seen"
+      { echo "$TASK_MESSAGE"; echo ----; } >> "${dir}/messages"
+      # A provider the test says fails: Claude Code'"'"'s API error. Or a task that fails.
+      if grep -qx "$SANDBOX_AGENT@$SANDBOX_PROVIDER" "${dir}/failing" 2> /dev/null; then
+        echo "{\\"type\\":\\"result\\",\\"is_error\\":true,\\"result\\":\\"API Error: 529 overloaded_error: Overloaded\\",\\"duration_ms\\":1000}"
+        exit 0
+      fi
+      if [ -e "${dir}/task-fails" ]; then
+        echo "{\\"type\\":\\"result\\",\\"is_error\\":true,\\"result\\":\\"The tests still fail.\\",\\"duration_ms\\":1000}"
+        exit 0
+      fi
       # Codex: its API call through the listener, one turn on the message it was given, and
       # no inbox to read (it takes no messages mid-run).
       if [ "$SANDBOX_AGENT" = codex ]; then
@@ -755,6 +767,101 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
       /org\/repo#12: running \S+ \(work, continue, codex gpt-6-astra\/medium\)/,
     );
     await settled(github, [99, 100]);
+  });
+
+  // A Claude credential, an OpenRouter key and an OpenAI key, with FALLBACKS; `failing`: the
+  // entries whose provider fails.
+  function falling(t, fallbacks, failing) {
+    return listen(
+      t,
+      (dir) => (writeFileSync(join(dir, "failing"), failing.join("\n") + "\n"), {}),
+      (dir, github) => ({
+        CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat01-operator",
+        ANTHROPIC_BASE_URL: github.url,
+        OPENROUTER_API_KEY: "sk-or-v1-operator",
+        OPENROUTER_BASE_URL: `${github.url}/openrouter`,
+        OPENAI_API_KEY: "sk-proj-operator",
+        OPENAI_BASE_URL: `${github.url}/v1`,
+        FALLBACKS: fallbacks,
+      }),
+    );
+  }
+
+  const seen = (dir) => exists(join(dir, "runs-seen"))?.trim().split("\n") ?? [];
+  const messages = (dir) => exists(join(dir, "messages"))?.split("----\n").slice(0, -1) ?? [];
+
+  test("a provider error: the run goes on with the same agent on the next provider, one reply naming it", async (t) => {
+    const { dir, github, send, listener } = await falling(t, "claude@openrouter, codex", [
+      "claude@anthropic",
+    ]);
+    await send(comment("alice", "Deckhand\nFix the login"));
+    await until(() => replies(github).length === 1, "the reply");
+    await settled(github, [99]);
+
+    // Claude on Anthropic, then on OpenRouter, told why; no reply for the first run.
+    assert.deepEqual(seen(dir), ["claude@anthropic default", "claude@openrouter default"]);
+    const second = messages(dir)[1];
+    assert.match(
+      second,
+      /^\(Your provider failed: overloaded \(529\)\. This run goes on in the same session through openrouter/,
+    );
+    assert.match(second, /Fix the login/);
+    const body = JSON.parse(replies(github)[0].body).body;
+    assert.match(body, /^All done\./);
+    assert.match(
+      body,
+      /🤖 Claude \(openrouter\) opus · medium effort · 1 min · fell back from Claude \(anthropic\): overloaded \(529\)/,
+    );
+    // Its call went to OpenRouter with the operator's key, as a bearer.
+    const call = await github.waitFor((r) => r.path === "/openrouter/v1/messages?beta=true");
+    assert.equal(call.auth, "Bearer sk-or-v1-operator");
+    assert.match(
+      listener.output(),
+      /Claude \(anthropic\)'s provider failed: overloaded \(529\)\. Falling back to Claude \(openrouter\)/,
+    );
+  });
+
+  test("a provider error with another agent next: it starts afresh, handed over, and the issue sticks to it", async (t) => {
+    const { dir, github, send } = await falling(t, "codex@openai", ["claude@anthropic"]);
+    await send(comment("alice", "Deckhand\nFix the login"));
+    await until(() => replies(github).length === 1, "the reply");
+
+    // Codex, in a new session (not an older one of its own), with the hand-off.
+    assert.deepEqual(seen(dir), ["claude@anthropic default", "codex@openai new"]);
+    const handoff = messages(dir)[1];
+    assert.match(
+      handoff,
+      /^Claude \(anthropic\) was working on this and stopped, as its provider failed: overloaded \(529\)\. You take over, in a new session/,
+    );
+    assert.match(handoff, /its branch, and yours: `issue-12-…`/);
+    assert.match(handoff, /Its last message:\n\n> API Error: 529 overloaded_error: Overloaded/);
+    assert.match(handoff, /What it was asked:\n\nFix the login/);
+    const first = JSON.parse(replies(github)[0].body).body;
+    assert.match(
+      first,
+      /🤖 Codex \(openai\) gpt-6-astra · medium effort · 1 min · fell back from Claude \(anthropic\): overloaded \(529\)/,
+    );
+
+    // The next comment stays with Codex, in its session: no hand-off, no switch in the footer.
+    await send(followUp(100, "Deckhand\nAlso the logout"));
+    await until(() => replies(github).length === 2, "the second reply");
+    assert.deepEqual(seen(dir).at(-1), "codex@openai default");
+    const second = JSON.parse(replies(github)[1].body).body;
+    assert.match(second, /🤖 Codex \(openai\) gpt-6-astra · medium effort · 1 min<\/sub>/);
+  });
+
+  test("a run that fails for another reason, or with no fallback left, ends with its error", async (t) => {
+    const { dir, github, send } = await falling(t, "codex", ["claude@anthropic", "codex@openai"]);
+    writeFileSync(join(dir, "task-fails"), "");
+    // Codex fails too here, but the task's own failure comes first: no fallback.
+    rmSync(join(dir, "failing"));
+    await send(comment("alice"));
+    await until(() => replies(github).length === 1, "the reply");
+    assert.deepEqual(seen(dir), ["claude@anthropic default"]);
+    assert.match(
+      JSON.parse(replies(github)[0].body).body,
+      /^Claude stopped with an error\.\n\n> The tests still fail\./,
+    );
   });
 
   test("/model opus on a Codex run: the reply says it is Claude's, nothing runs", async (t) => {
@@ -2556,7 +2663,7 @@ mounts:
       "finishedAt",
       "status",
     ],
-    ["reason", "agent", "model", "effort", "phase", "summary", "delivered"],
+    ["reason", "agent", "provider", "fallback", "model", "effort", "phase", "summary", "delivered"],
   ];
 
   function assertShape(value, [required, optional], name) {

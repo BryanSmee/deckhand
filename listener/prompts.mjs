@@ -231,6 +231,29 @@ export function firstMessage({ mode, text, restored, started }) {
   return INBOX.has(mode) ? "" : body;
 }
 
+// A run that falls back to the same agent on another provider (runs.mjs): its session goes on,
+// and the comments come again after this.
+export function retryNote({ reason, provider }) {
+  return `(Your provider failed: ${reason}. This run goes on in the same session through ${provider}: carry on where you stopped.)`;
+}
+
+// A run that falls back to another agent (runs.mjs): sessions don't move between agents, so
+// it starts a new one on what the previous agent left. `from`: that agent and its provider;
+// `result`: its last message, if any; `body`: what the run was asked (firstMessage()).
+export function handoffMessage({ from, reason, result, body, branches = [] }) {
+  const pushes = branches.length
+    ? `; its branch, and yours: ${branches.map((b) => `\`${b.replace(/\*$/, "…")}\``).join(" or ")}`
+    : "";
+  const last = (result ?? "").trim();
+  const quoted =
+    last &&
+    (last.length > 2000 ? `${last.slice(0, 1999)}…` : last)
+      .split("\n")
+      .map((l) => `> ${l}`)
+      .join("\n");
+  return `${from} was working on this and stopped, as its provider failed: ${reason}. You take over, in a new session: sessions don't move between agents, so start from what it left. /workspace is the clone it worked in, with what it hadn't committed (\`git status\`, \`git log\`)${pushes}; GitHub has what it pushed and posted.${quoted ? `\n\nIts last message:\n\n${quoted}` : ""}${body ? `\n\nWhat it was asked:\n\n${body}` : ""}`;
+}
+
 // What the agent reads for comments delivered mid-run (Claude Code adds that the user sent it
 // while it was working).
 export function liveMessage(mode, text) {

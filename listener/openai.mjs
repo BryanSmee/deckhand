@@ -29,7 +29,8 @@ export function createOpenAiProxy({
   async function handle(req, res) {
     const url = new URL(req.url, "http://broker");
     const [scheme, secret] = (req.headers.authorization ?? "").split(" ");
-    if (scheme !== "Bearer" || !broker.runOf(secret)) {
+    const run = scheme === "Bearer" ? broker.runOf(secret) : undefined;
+    if (!run) {
       return fail(res, 401, "invalid_request_error", "unknown or finished run");
     }
     if (!credential) return fail(res, 503, "server_error", "the operator set no OPENAI_API_KEY");
@@ -48,6 +49,7 @@ export function createOpenAiProxy({
       unreachable: () => fail(res, 502, "server_error", "OpenAI can't be reached"),
       log,
       what: "OpenAI",
+      answered: (status) => (run.apiStatus = status),
     });
   }
 

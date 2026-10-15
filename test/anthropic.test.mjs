@@ -214,3 +214,62 @@ test("redaction replaces every occurrence of each secret, and leaves short value
   );
   assert.equal(redact("abc", ["abc"]), "abc");
 });
+
+test("a run on another provider goes to its URL with its key; the provider's status is kept", async (t) => {
+  const anthropic = await fakeAnthropic(t);
+  const openrouter = await fakeAnthropic(t);
+  openrouter.release();
+  const broker = createBroker({ app: () => null });
+  const proxy = createAnthropicProxy({
+    broker,
+    name: "CLAUDE_CODE_OAUTH_TOKEN",
+    credential: "sk-ant-oat01-real",
+    upstream: anthropic.url,
+    providers: {
+      openrouter: {
+        name: "OPENROUTER_API_KEY",
+        credential: "sk-or-v1-real",
+        upstream: `${openrouter.url}/api`,
+      },
+      empty: { name: "OPENROUTER_API_KEY", credential: "", upstream: openrouter.url },
+    },
+  });
+  const server = createServer((req, res) => proxy.handle(req, res));
+  const url = await listen(server);
+  t.after(() => server.close());
+
+  const secret = broker.register("org/repo");
+  broker.provide(secret, "openrouter");
+  const res = await ask(url, { authorization: `Bearer ${secret}` });
+  assert.equal(res.status, 200);
+  await res.text();
+  assert.equal(anthropic.requests.length, 0);
+  assert.equal(openrouter.requests[0].url, "/api/v1/messages?beta=true");
+  assert.equal(openrouter.requests[0].headers.authorization, "Bearer sk-or-v1-real");
+  assert.equal(broker.runOf(secret).apiStatus, 200);
+
+  // A provider without its credential answers so, and Anthropic gets nothing either.
+  const other = broker.register("org/repo");
+  broker.provide(other, "empty");
+  const refused = await ask(url, { authorization: `Bearer ${other}` });
+  assert.equal(refused.status, 503);
+  assert.match((await refused.json()).error.message, /no credential for empty/);
+  assert.equal(anthropic.requests.length, 0);
+});
+
+test("a provider that can't be reached counts as a 502", async (t) => {
+  const broker = createBroker({ app: () => null });
+  const proxy = createAnthropicProxy({
+    broker,
+    name: "ANTHROPIC_API_KEY",
+    credential: "sk-ant-api03-real",
+    upstream: "http://127.0.0.1:1",
+  });
+  const server = createServer((req, res) => proxy.handle(req, res));
+  const url = await listen(server);
+  t.after(() => server.close());
+  const secret = broker.register("org/repo");
+  const res = await ask(url, { "x-api-key": secret });
+  assert.equal(res.status, 502);
+  assert.equal(broker.runOf(secret).apiStatus, 502);
+});

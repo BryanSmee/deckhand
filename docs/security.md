@@ -155,6 +155,13 @@ call to OpenAI (or the operator's `OPENAI_BASE_URL`), under its base path only: 
 credentials are redacted
 from every run's log and reply, whichever agent ran.
 
+`OPENROUTER_API_KEY`, for runs that fall back to Claude Code through OpenRouter
+(`claude@openrouter` in `FALLBACKS`), is kept out the same way: such a run's Claude Code gets
+the run's secret as `ANTHROPIC_AUTH_TOKEN`, and the listener's Anthropic endpoint, which the
+broker tells which provider the run is on, sends the call to `OPENROUTER_BASE_URL` with your
+key. A sandbox can't pick its provider: only the listener sets it, from `FALLBACKS`. The key is
+redacted like the others.
+
 ## Mounts
 
 A sandbox only gets Docker named volumes:

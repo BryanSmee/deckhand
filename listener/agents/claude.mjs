@@ -64,15 +64,31 @@ export const claude = {
     versionVar: "CLAUDE_CODE_VERSION",
     command: "deckhand-install-claude-code",
   }),
-  // Its environment. No credential: Claude Code calls the listener (anthropic.mjs) with the
-  // run's secret in its place.
-  env: (config, secret) => ({
-    ...(config.claudeCredential && { [config.claudeCredential]: secret }),
+  // Its environment on `provider`. No credential: Claude Code calls the listener
+  // (anthropic.mjs) with the run's secret in its place, in the variable that gives the
+  // provider's header (a gateway's token as a bearer).
+  env: (config, secret, provider = "anthropic") => ({
+    ...(provider === "anthropic"
+      ? config.claudeCredential && { [config.claudeCredential]: secret }
+      : { ANTHROPIC_AUTH_TOKEN: secret }),
     ANTHROPIC_BASE_URL: `${config.brokerUrl}/anthropic`,
     ...config.modelAliases,
+    ...(provider === "openrouter" && config.openrouterAliases),
+    // Claude Code's own fallback when the model is overloaded, within the provider.
+    ...(config.claudeFallbackModel && {
+      SANDBOX_FALLBACK_MODEL: MODELS[config.claudeFallbackModel] ?? config.claudeFallbackModel,
+    }),
   }),
-  // Variables whose values never reach a log or a reply (secrets.mjs).
+  // Variables whose values never reach a log or a reply (secrets.mjs): its default provider's.
   secrets: CREDENTIALS,
+  // Where its API calls go (the listener forwards them, anthropic.mjs), each with the
+  // credentials it takes. `anthropic` is the operator's ANTHROPIC_BASE_URL: Anthropic, unless
+  // it points at a gateway.
+  providers: {
+    anthropic: { secrets: CREDENTIALS },
+    openrouter: { secrets: ["OPENROUTER_API_KEY"] },
+  },
+  defaultProvider: "anthropic",
   // Claude Code (with CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC and a credential variable) only
   // calls api.anthropic.com, for WebFetch's domain check: its API calls go to the listener,
   // even with a gateway (ANTHROPIC_BASE_URL), no OAuth refresh, telemetry or update host.

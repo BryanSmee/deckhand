@@ -2,7 +2,14 @@
 // networks come from here so nothing in the listener is tied to one deployment. What the
 // operator grants one repo (hosts, mounts, limits) is in its grants folder instead (grants.mjs).
 import { readFileSync } from "node:fs";
-import { AGENT_SECRETS, AGENTS, DEFAULT_AGENT } from "./agents/index.mjs";
+import {
+  AGENT_SECRETS,
+  AGENTS,
+  DEFAULT_AGENT,
+  ENTRIES,
+  entryName,
+  entryOf,
+} from "./agents/index.mjs";
 import { credentialName } from "./anthropic.mjs";
 import { MODEL_NAME } from "./events.mjs";
 import { ENGINES } from "./runner/engine.mjs";
@@ -68,11 +75,17 @@ export const FILE_SETTINGS = {
   ANTHROPIC_DEFAULT_OPUS_MODEL: "scalar",
   ANTHROPIC_DEFAULT_SONNET_MODEL: "scalar",
   ANTHROPIC_DEFAULT_HAIKU_MODEL: "scalar",
+  CLAUDE_FALLBACK_MODEL: "scalar",
+  OPENROUTER_BASE_URL: "scalar",
+  OPENROUTER_OPUS_MODEL: "scalar",
+  OPENROUTER_SONNET_MODEL: "scalar",
+  OPENROUTER_HAIKU_MODEL: "scalar",
   CODEX_VERSION: "scalar",
   OPENAI_BASE_URL: "scalar",
   CODEX_BEST_MODEL: "scalar",
   CODEX_BALANCED_MODEL: "scalar",
   CODEX_FAST_MODEL: "scalar",
+  FALLBACKS: "list",
   SANDBOX_MODEL: "scalar",
   SANDBOX_EFFORT: "scalar",
   BRAINSTORM_MODEL: "scalar",
@@ -328,6 +341,40 @@ function agentSettings(env, { setting, label }) {
   return { agent, brainstormAgent, agents };
 }
 
+// FALLBACKS: where a run goes when its provider fails, in order ("claude@openrouter, codex"
+// → ["claude@openrouter", "codex@openai"]). Each needs its credential: a fallback that can't
+// run would only show when the first one fails.
+function fallbackSettings(env, { setting, label }) {
+  const fallbacks = [];
+  for (const text of list(setting("FALLBACKS"))) {
+    const entry = entryOf(text);
+    if (!entry) {
+      throw new ConfigError(
+        `${label("FALLBACKS")}: expected agent@provider (${ENTRIES.join(", ")}), got ${text}`,
+      );
+    }
+    const name = entryName(entry.agent, entry.provider);
+    const { secrets } = AGENTS[entry.agent].providers[entry.provider];
+    if (!secrets.some((secret) => env[secret])) {
+      throw new ConfigError(
+        `${label("FALLBACKS")}: ${name} needs ${secrets.join(" or ")} in the environment`,
+      );
+    }
+    if (!fallbacks.includes(name)) fallbacks.push(name);
+  }
+  return fallbacks;
+}
+
+// Models by name, from settings: [what it is to the agent (a variable, a tier), the setting,
+// its value].
+function aliases(label, settings) {
+  return Object.fromEntries(
+    settings
+      .filter(([, , value]) => value)
+      .map(([key, name, value]) => [key, modelName(value, label(name))]),
+  );
+}
+
 function modelName(value, label) {
   if (MODEL_NAME.test(value)) return value;
   throw new ConfigError(`${label}: expected a model name (anthropic/claude-…), got ${value}`);
@@ -386,15 +433,48 @@ export function loadConfig(env, file = NO_FILE) {
     ),
     // What opus, sonnet and haiku mean to the sandboxes' Claude Code, by name: a gateway's
     // models have its own names. Empty: Claude Code's defaults.
-    modelAliases: Object.fromEntries(
+    modelAliases: aliases(label, [
       [
-        ["ANTHROPIC_DEFAULT_OPUS_MODEL", setting("ANTHROPIC_DEFAULT_OPUS_MODEL")],
-        ["ANTHROPIC_DEFAULT_SONNET_MODEL", setting("ANTHROPIC_DEFAULT_SONNET_MODEL")],
-        ["ANTHROPIC_DEFAULT_HAIKU_MODEL", setting("ANTHROPIC_DEFAULT_HAIKU_MODEL")],
-      ]
-        .filter(([, value]) => value)
-        .map(([name, value]) => [name, modelName(value, label(name))]),
+        "ANTHROPIC_DEFAULT_OPUS_MODEL",
+        "ANTHROPIC_DEFAULT_OPUS_MODEL",
+        setting("ANTHROPIC_DEFAULT_OPUS_MODEL"),
+      ],
+      [
+        "ANTHROPIC_DEFAULT_SONNET_MODEL",
+        "ANTHROPIC_DEFAULT_SONNET_MODEL",
+        setting("ANTHROPIC_DEFAULT_SONNET_MODEL"),
+      ],
+      [
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+        setting("ANTHROPIC_DEFAULT_HAIKU_MODEL"),
+      ],
+    ]),
+    // Claude Code's own model fallback (--fallback-model), when its model is overloaded: a
+    // tier or a model's name. Empty: none.
+    claudeFallbackModel: setting("CLAUDE_FALLBACK_MODEL")
+      ? modelName(setting("CLAUDE_FALLBACK_MODEL"), label("CLAUDE_FALLBACK_MODEL"))
+      : null,
+    // Claude Code through OpenRouter (claude@openrouter in FALLBACKS), with OPENROUTER_API_KEY,
+    // and what opus, sonnet and haiku mean there, over the aliases above.
+    openrouterUrl: apiUrl(
+      setting("OPENROUTER_BASE_URL"),
+      label("OPENROUTER_BASE_URL"),
+      "https://openrouter.ai/api",
     ),
+    openrouterAliases: aliases(label, [
+      ["ANTHROPIC_DEFAULT_OPUS_MODEL", "OPENROUTER_OPUS_MODEL", setting("OPENROUTER_OPUS_MODEL")],
+      [
+        "ANTHROPIC_DEFAULT_SONNET_MODEL",
+        "OPENROUTER_SONNET_MODEL",
+        setting("OPENROUTER_SONNET_MODEL"),
+      ],
+      [
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+        "OPENROUTER_HAIKU_MODEL",
+        setting("OPENROUTER_HAIKU_MODEL"),
+      ],
+    ]),
     // Codex's, the same way (openai.mjs): OpenAI, or an OpenAI-compatible endpoint.
     openaiCredential: env.OPENAI_API_KEY ? "OPENAI_API_KEY" : null,
     openaiUrl: apiUrl(
@@ -403,17 +483,15 @@ export function loadConfig(env, file = NO_FILE) {
       "https://api.openai.com/v1",
     ),
     // What best, balanced and fast mean to Codex, when not its built-in models (agents/codex.mjs).
-    codexModels: Object.fromEntries(
-      [
-        ["best", "CODEX_BEST_MODEL", setting("CODEX_BEST_MODEL")],
-        ["balanced", "CODEX_BALANCED_MODEL", setting("CODEX_BALANCED_MODEL")],
-        ["fast", "CODEX_FAST_MODEL", setting("CODEX_FAST_MODEL")],
-      ]
-        .filter(([, , value]) => value)
-        .map(([tier, name, value]) => [tier, modelName(value, label(name))]),
-    ),
+    codexModels: aliases(label, [
+      ["best", "CODEX_BEST_MODEL", setting("CODEX_BEST_MODEL")],
+      ["balanced", "CODEX_BALANCED_MODEL", setting("CODEX_BALANCED_MODEL")],
+      ["fast", "CODEX_FAST_MODEL", setting("CODEX_FAST_MODEL")],
+    ]),
     // Which agent runs work and light runs, and those a repo may pick instead.
     ...agentSettings(env, from),
+    // Where a run goes, in order, when its provider fails (runs.mjs). Empty: nowhere.
+    fallbacks: fallbackSettings(env, from),
     githubApi: (setting("GITHUB_API") || "https://api.github.com").replace(/\/$/, ""),
     githubUrl: (setting("GITHUB_URL") || "https://github.com").replace(/\/$/, ""),
     users,

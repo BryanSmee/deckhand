@@ -27,6 +27,12 @@ export AGENT_NAME=Claude
 # Model and thinking effort, from the listener (a tier already resolved, agents/claude.mjs)
 # or a comment's /model and /effort.
 claude_model=(--model "${SANDBOX_MODEL:-opus}" --effort "${SANDBOX_EFFORT:-medium}")
+# Its own fallback when that model is overloaded (CLAUDE_FALLBACK_MODEL), headless only, and
+# never the model itself, which Claude Code refuses.
+claude_fallback=()
+if [ -n "${SANDBOX_FALLBACK_MODEL:-}" ] && [ "$SANDBOX_FALLBACK_MODEL" != "${SANDBOX_MODEL:-opus}" ]; then
+  claude_fallback=(--fallback-model "$SANDBOX_FALLBACK_MODEL")
+fi
 
 # Installed by the listener before the run. The volume is read-only here, so a sandbox
 # started by hand can't install it: say so rather than fail later on a missing command.
@@ -66,7 +72,8 @@ agent_run() {
     fresh) resume=(--no-session-persistence) ;;
   esac
   local prompt=$2
-  local claude=(claude --dangerously-skip-permissions "${claude_model[@]}" "${resume[@]}" -p)
+  local claude=(claude --dangerously-skip-permissions "${claude_model[@]}" "${claude_fallback[@]}"
+    "${resume[@]}" -p)
   if [ "${TASK_OUTPUT:-}" = "json" ] && [ "${TASK_INPUT:-}" = "stream" ]; then
     # The prompt is the first message, then each comment the listener writes; closing the
     # inbox (or stdin) ends the session once Claude has answered. A process substitution

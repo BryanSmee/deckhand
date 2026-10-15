@@ -30,11 +30,17 @@ export function baseOf(upstream) {
 }
 
 // `req` to `target` with `headers`, its answer back to `res`. `unreachable()` answers when the
-// provider can't be reached before anything was sent back.
-export function forward(req, res, { target, headers, unreachable, log, what }) {
+// provider can't be reached before anything was sent back. `answered(status)`: the provider's
+// status, 502 when it can't be reached (what a fallback reads, agents/ providerError()).
+export function forward(
+  req,
+  res,
+  { target, headers, unreachable, log, what, answered = () => {} },
+) {
   const send = target.protocol === "https:" ? httpsRequest : httpRequest;
   return new Promise((resolve) => {
     const out = send(target, { method: req.method, headers }, (answer) => {
+      answered(answer.statusCode);
       res.writeHead(answer.statusCode, forwarded(answer.headers));
       // Server-sent events: each chunk goes on as it arrives.
       answer.pipe(res);
@@ -43,8 +49,10 @@ export function forward(req, res, { target, headers, unreachable, log, what }) {
     });
     out.on("error", (error) => {
       log(`${what}: ${req.method} ${target.pathname}: ${error.message}`);
-      if (!res.headersSent) unreachable();
-      else res.destroy();
+      if (!res.headersSent) {
+        answered(502);
+        unreachable();
+      } else res.destroy();
       resolve();
     });
     // The agent gave up (an interrupt, the run's end): so does the request upstream.
