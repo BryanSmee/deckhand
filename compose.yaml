@@ -74,7 +74,8 @@ services:
       - screenshots:/data/shots
       # Each run's inbox: comments for a running sandbox, which reads its own folder only.
       - runs:/data/runs
-      # Optional: what you grant each repo (hosts, host mounts, limits): docs/security.md.
+      # Optional: what you grant each repo (hosts, whether its .deckhand.yaml may add hosts,
+      # host mounts, limits): docs/security.md.
       # - ./grants.yaml:/etc/deckhand/grants.yaml:ro
       # Each mount root you grant, at the same path and read-only: the listener resolves the
       # paths repos ask for (.., symlinks) in it before mounting them into a sandbox.

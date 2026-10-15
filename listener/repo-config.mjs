@@ -1,12 +1,12 @@
 // Per-repo settings: a repo's .deckhand.yaml, always read from its default branch so a pull
 // request can't change its own permissions. It can only narrow the operator's settings
-// (users, parallel runs), and brings what is the project's own: trigger word, models,
-// setup command, extra instructions, its own modes, Dockerfile, caches, preview hook. Format
-// and example:
+// (users, parallel runs), requests what the operator must grant (hosts, mounts: grants.mjs),
+// and brings what is the project's own: trigger word, models, setup command, extra
+// instructions, its own modes, Dockerfile, caches, preview hook. Format and example:
 // ../docs/repo-config.md.
 import { createHash } from "node:crypto";
 import { posix } from "node:path";
-import { hostProblem } from "./egress.mjs";
+import { hostProblem, repoHostProblem } from "./egress.mjs";
 import { EFFORTS } from "./events.mjs";
 import { list, normalize } from "./config.mjs";
 import { parseYaml } from "./yaml.mjs";
@@ -161,9 +161,11 @@ export function parseRepoConfig(text, config) {
           fail(key, "expected a list of host names");
           break;
         }
-        // Added to what its sandboxes may reach through the egress proxy (egress.mjs).
+        // Added to what its sandboxes may reach through the egress proxy only when the
+        // operator's grant says allow_repo_hosts (egress.mjs); "*" never.
         for (const host of value) {
-          if (hostProblem(host)) fail(`hosts: ${JSON.stringify(host)}`, hostProblem(host));
+          const problem = hostProblem(host) ?? repoHostProblem(host.toLowerCase());
+          if (problem) fail(`hosts: ${JSON.stringify(host)}`, problem);
           else settings.hosts.push(host.toLowerCase());
         }
         break;

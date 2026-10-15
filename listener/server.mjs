@@ -112,7 +112,7 @@ import { createBroker } from "./broker.mjs";
 import { checkout } from "./checkout.mjs";
 import { ConfigError, loadConfig } from "./config.mjs";
 import { docker } from "./docker.mjs";
-import { mandatoryHosts, matchHost, proxyEnv, runHosts } from "./egress.mjs";
+import { mandatoryHosts, matchHost, proxyEnv, refusedRepoHosts, runHosts } from "./egress.mjs";
 import { MARKER, previewEvent, pullRequest, takeOptions, verified, workItem } from "./events.mjs";
 import {
   createGitHubApp,
@@ -912,6 +912,7 @@ ${onboardingInstructions}
 - Users who may start runs (\`ALLOWED_USERS\`; \`users\` can only narrow it): ${none(config.users)}
 - Hosts every sandbox reaches: ${none(mandatoryHosts(config))}, and the operator's \`ALLOWED_HOSTS\`: ${none(config.hosts)}
 - Hosts the operator grants this repository: ${none(grant.hosts)}
+- \`hosts\` in \`.deckhand.yaml\`: ${grant.allowRepoHosts ? "allowed: the operator lets this repository add hosts (never `*`)" : "only hosts listed above count; any other is refused and stops runs until the operator sets `allow_repo_hosts` for this repository"}
 - Host mount roots granted to this repository: ${roots.length ? none(roots) : "none: a \`mounts\` entry would be refused until the operator grants a root"}
 - Models: work \`${settings.model}\` (${settings.effort} effort), brainstorms \`${settings.brainstormModel}\` (${settings.brainstormEffort})
 
@@ -1181,7 +1182,7 @@ async function start(task, items) {
     );
   }
   const ownInstructions = own && (await modeInstructions(task, own));
-  const access = grantedAccess(task.repo, settings, note);
+  const access = grantedAccess(task, settings, note);
   const prepared = await prepare(task, items, settings, record, note, logFile);
 
   // A fresh, unguessable folder per run: its screenshots are public once linked on GitHub.
@@ -1210,8 +1211,10 @@ async function start(task, items) {
 }
 
 // What the operator grants the repo, with its config's requests: the hosts its sandbox may
-// reach, its host mounts (refused ones stop the run, and the reply lists them) and limits.
-function grantedAccess(repo, settings, note) {
+// reach, its host mounts and limits. Refused hosts or mounts stop the run, and the reply
+// lists them.
+function grantedAccess(task, settings, note) {
+  const { repo } = task;
   let grant;
   try {
     grant = grantFor(loadGrants(config), config, repo);
@@ -1219,6 +1222,12 @@ function grantedAccess(repo, settings, note) {
     log(`${repo}: ${error.message}`);
     throw new RunError(
       "Claude can't run here: the operator's grants file has errors (see the listener's logs).",
+    );
+  }
+  const hosts = refusedRepoHosts(config, grant, settings);
+  if (hosts.length) {
+    throw new RunError(
+      `${configErrors(task.base, hosts)}\n\nA repository's \`hosts\` only count when the operator's grants file sets \`allow_repo_hosts: true\` for it; hosts the operator already allows can stay.`,
     );
   }
   const { mounts, refused, notes } = resolveMounts(settings.mounts, grant, {

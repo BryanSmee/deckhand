@@ -1,7 +1,14 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ConfigError, loadConfig } from "../listener/config.mjs";
-import { hostProblem, mandatoryHosts, matchHost, proxyEnv, runHosts } from "../listener/egress.mjs";
+import {
+  hostProblem,
+  mandatoryHosts,
+  matchHost,
+  proxyEnv,
+  refusedRepoHosts,
+  runHosts,
+} from "../listener/egress.mjs";
 import { parseRepoConfig } from "../listener/repo-config.mjs";
 
 const config = loadConfig({ ALLOWED_USERS: "a", ALLOWED_HOSTS: "Registry.npmjs.org" });
@@ -25,18 +32,51 @@ test("mandatory hosts: Anthropic's API and the configured GitHub", () => {
   ]);
 });
 
-test("a run's hosts: mandatory, the operator's, its grant's and its repo's", () => {
-  const { settings } = parseRepoConfig('hosts: ["*.example.com", "*"]\n', config);
-  assert.deepEqual(runHosts(config, { hosts: ["pypi.org"] }, settings), [
+test("a run's hosts: mandatory, the operator's, its grant's, its repo's with allow_repo_hosts", () => {
+  const { settings } = parseRepoConfig('hosts: ["*.example.com", pypi.org]\n', config);
+  const operator = [
     "api.anthropic.com",
     "github.com",
     "api.github.com",
     "*.githubusercontent.com",
     "registry.npmjs.org",
     "pypi.org",
-    "*.example.com",
-    "*",
-  ]);
+  ];
+  const granted = { hosts: ["pypi.org"], allowRepoHosts: true };
+  assert.deepEqual(runHosts(config, granted, settings), [...operator, "*.example.com"]);
+  assert.deepEqual(refusedRepoHosts(config, granted, settings), []);
+  // Without the operator's permission the repo's own hosts never reach the list.
+  const plain = { hosts: ["pypi.org"], allowRepoHosts: false };
+  assert.deepEqual(runHosts(config, plain, settings), operator);
+});
+
+test("without allow_repo_hosts, a repo's hosts that widen egress are refused", () => {
+  const hosts = (list) => parseRepoConfig(`hosts: [${list}]\n`, config).settings;
+  const grant = { hosts: ["*.example.com", "pypi.org"], allowRepoHosts: false };
+  // Already allowed by the operator, mandatory or granted: nothing widens, nothing refused.
+  const covered = hosts(
+    'registry.npmjs.org, api.github.com, "*.githubusercontent.com", raw.githubusercontent.com, pypi.org, a.example.com, "*.a.example.com", "*.example.com"',
+  );
+  assert.deepEqual(refusedRepoHosts(config, grant, covered), []);
+  // Wider than what the operator allows: each named.
+  const wider = hosts('example.com, files.pypi.org, "*.pypi.org", evil.net');
+  assert.deepEqual(
+    refusedRepoHosts(config, grant, wider).map((r) => r.match(/`(.+)`/)[1]),
+    ["example.com", "files.pypi.org", "*.pypi.org", "evil.net"],
+  );
+  assert.match(refusedRepoHosts(config, grant, wider)[0], /doesn't let this repository add hosts/);
+  // An operator who allows "*" allows everything a repo could list.
+  const open = loadConfig({ ALLOWED_USERS: "a", ALLOWED_HOSTS: "*" });
+  assert.deepEqual(refusedRepoHosts(open, { hosts: [], allowRepoHosts: false }, wider), []);
+});
+
+test("a repo can never open every host, granted or not", () => {
+  for (const host of ['"*"', '"*.com"', '"*.Dev"']) {
+    const { errors, settings } = parseRepoConfig(`hosts: [pypi.org, ${host}]\n`, config);
+    assert.match(errors[0], /a repository can't open that much: only the operator can/, host);
+    assert.deepEqual(settings.hosts, ["pypi.org"]);
+  }
+  assert.deepEqual(parseRepoConfig('hosts: ["*.example.com"]\n', config).errors, []);
 });
 
 test("host matching: names, subdomain wildcards, *", () => {

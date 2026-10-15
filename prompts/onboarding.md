@@ -23,9 +23,12 @@ comments comes back to you as the next message of this conversation.
      repository has no `AGENTS.md` or `CLAUDE.md` saying how to run its checks; otherwise
      don't duplicate it.
 3. Keep to what the operator allows, listed under "This Deckhand" below. Hosts the operator
-   already allows don't need repeating. `mounts` and `users` stay out unless the maintainer
-   asks; if they do, a mount only works under a root the operator grants this repository:
-   say so, and that it needs the operator's grant when there is none.
+   already allows don't need repeating. Propose other `hosts` only when the operator lets
+   this repository add hosts (never `"*"`); otherwise name them outside the file as hosts
+   to ask the operator for, since one in the file would stop its runs. `mounts` and `users`
+   stay out unless the maintainer asks; if they do, a mount only works under a root the
+   operator grants this repository: say so, and that it needs the operator's grant when
+   there is none.
 4. Suggest inboxes when they fit the project: an ideas issue and a bug reports issue
    (`inbox.ideas`, `inbox.bugs`), a Discussions category (`inbox.discussions`). Explain each
    in a line and ask; they are only created on confirmation, and only if the maintainer

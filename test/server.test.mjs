@@ -534,6 +534,7 @@ mounts:
         join(dir, "grants.yaml"),
         `org/repo:
   hosts: [pypi.org]
+  allow_repo_hosts: true
   limits: { memory: 8g }
   mounts:
     - root: ${join(dir, "nfs")}
@@ -569,6 +570,30 @@ mounts:
       `type=bind,src=${join(dir, "nfs", "docs")},dst=${join(dir, "nfs", "docs")},readonly`,
     ),
   );
+});
+
+test("a repo's hosts without allow_repo_hosts: refused on the issue, unless already allowed", async (t) => {
+  const { dir, github, send } = await listen(
+    t,
+    { ".deckhand.yaml": 'hosts: [registry.npmjs.org, pypi.org, "*.evil.net"]\n' },
+    (dir) => {
+      writeFileSync(join(dir, "grants.yaml"), "org/repo:\n  hosts: [pypi.org]\n");
+      return { ALLOWED_HOSTS: "registry.npmjs.org" };
+    },
+  );
+  await send(comment("alice"));
+  const reply = await github.waitFor(
+    (r) => r.method === "POST" && r.path === "/repos/org/repo/issues/12/comments",
+  );
+  const body = JSON.parse(reply.body).body;
+  assert.match(body, /`\.deckhand\.yaml` on `trunk` has errors/);
+  assert.match(
+    body,
+    /- hosts: `\*\.evil\.net`: the operator doesn't let this repository add hosts/,
+  );
+  assert.doesNotMatch(body, /pypi\.org`|registry\.npmjs\.org`/);
+  assert.match(body, /allow_repo_hosts: true/);
+  assert.throws(() => readFileSync(join(dir, "run-args")));
 });
 
 test("a mount outside the granted root, through a symlink, is refused on the issue", async (t) => {
@@ -842,7 +867,10 @@ test("/mode review: the repo's light mode, its instructions and model, the repo'
     t,
     { ".deckhand.yaml": MODES, ".deckhand/review.md": "Read the diff and list the risks." },
     (dir) => {
-      writeFileSync(join(dir, "grants.yaml"), "org/repo:\n  hosts: [pypi.org]\n");
+      writeFileSync(
+        join(dir, "grants.yaml"),
+        "org/repo:\n  hosts: [pypi.org]\n  allow_repo_hosts: true\n",
+      );
       return {};
     },
   );
