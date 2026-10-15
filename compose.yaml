@@ -43,6 +43,9 @@ services:
       CLAUDE_CODE_VERSION: ${CLAUDE_CODE_VERSION:-2.1.300}
       SANDBOX_MODEL: ${SANDBOX_MODEL:-opus}
       SANDBOX_EFFORT: ${SANDBOX_EFFORT:-medium}
+      # Brainstorms, inbox entries and discussions. Empty: SANDBOX_MODEL, SANDBOX_EFFORT.
+      BRAINSTORM_MODEL: ${BRAINSTORM_MODEL:-}
+      BRAINSTORM_EFFORT: ${BRAINSTORM_EFFORT:-}
       MAX_PARALLEL: ${MAX_PARALLEL:-2}
       # Hosts every sandbox may reach besides Anthropic and GitHub (*.domain and * work).
       ALLOWED_HOSTS: ${ALLOWED_HOSTS:-}

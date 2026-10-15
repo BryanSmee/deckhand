@@ -132,9 +132,6 @@ const auth = createAuth({
   key: sessionKey(config.dataDir),
   log,
 });
-if (env.DASHBOARD_PASSWORD) {
-  log("DASHBOARD_PASSWORD is no longer used: allowed users sign in with GitHub (docs/setup.md)");
-}
 
 // The dashboard's titles: from webhooks, else fetched once (titles.mjs).
 const titles = createTitles({

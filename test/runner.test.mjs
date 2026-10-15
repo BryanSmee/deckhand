@@ -98,6 +98,14 @@ test("the image's deckhand-inbox prints the messages until the close line", asyn
   );
 });
 
+// deckhand-inbox is plain Node in the image and can't import the listener's marker: a copy.
+test("deckhand-inbox and the runner agree on the close line", () => {
+  const script = readFileSync(new URL("../sandbox/deckhand-inbox", import.meta.url), "utf8");
+  const copy = script.match(/^const CLOSE = (.+);$/m);
+  assert.ok(copy, "deckhand-inbox declares CLOSE");
+  assert.equal(new Function(`return ${copy[1]}`)(), CLOSE);
+});
+
 test("list: this deployment's sandboxes, by label", async () => {
   const { r, calls } = runner({
     answers: {
