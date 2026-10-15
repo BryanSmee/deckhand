@@ -88,6 +88,15 @@ answered. The dashboard lists the open issues carrying the label as `needs-input
 or not (`inputs.json`, kept by `issues` deliveries, whoever adds or removes the label, and one
 lookup per repo when the listener starts); a closed issue leaves the list.
 
+The graph's backlog read (`work.mjs`, at most once per 30 seconds a repo) catches what those
+missed: an App without the `issues` event, or a label call that failed. An open issue of an
+allowed user or the App's bot, with no task on the dashboard, whose body has open questions
+but which isn't listed gets the label and the list, as an `issues opened` delivery would have
+given it, unless its timeline shows the label was taken off once (answered, by hand or by a
+run starting): that issue is left alone, and remembered until the listener restarts. At each
+start the listener also reads the App's settings (`GET /app`) and logs a warning naming any
+event of `APP_EVENTS` it isn't subscribed to.
+
 The questions themselves have one format, set once in `prompts/sandbox.md` (the other prompts
 point to it): numbered, an optional `**Title**:`, options as an indented task list with one
 `(recommended)`. `parseQuestions()` (`questions.mjs`) reads them, all or nothing: a section in

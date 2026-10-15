@@ -69,8 +69,10 @@ default branch, when a run on the issue ends, or on any comment on it: the liste
 asks GitHub about the issue. An issue closed by hand, with nothing else happening to it, is
 only seen at the listener's next check of every wait (`WAITS_CHECK_MINUTES`, 5 minutes by
 default, and at each start). Issues opened with an **Open questions** section aren't labelled
-`NEEDS_INPUT_LABEL`, answering them doesn't take the label off unless a run starts, and the
-dashboard only sees the label change when the listener restarts.
+`NEEDS_INPUT_LABEL` until the graph page reads the repo's open issues, answering them doesn't
+take the label off unless a run starts, and the dashboard only sees the label change when the
+listener restarts. The listener logs a warning at each start naming the events the App
+misses.
 
 ## 3. Use it
 

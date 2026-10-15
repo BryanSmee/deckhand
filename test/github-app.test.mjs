@@ -5,10 +5,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import {
+  APP_EVENTS,
   DISCUSSION_PERMISSIONS,
   READ_ONLY_PERMISSIONS,
   REFRESH_MS,
   SANDBOX_PERMISSIONS,
+  checkAppEvents,
   createGitHubApp,
   loadCredentials,
   saveCredentials,
@@ -165,4 +167,26 @@ test("credentials are stored owner-only and read back", () => {
   saveCredentials(dir, credentials);
   assert.equal(statSync(join(dir, "app.json")).mode & 0o777, 0o600);
   assert.deepEqual(loadCredentials(dir), credentials);
+});
+
+test("checkAppEvents: a warning naming the events the App isn't subscribed to", async () => {
+  const logs = [];
+  const asApp =
+    (events, status = 200) =>
+    async (method, path) => {
+      assert.equal(`${method} ${path}`, "GET /app");
+      return Response.json({ events }, { status });
+    };
+  const without = APP_EVENTS.filter((e) => e !== "issues");
+  assert.deepEqual(await checkAppEvents(asApp(without), (l) => logs.push(l)), ["issues"]);
+  assert.equal(logs.length, 1);
+  assert.match(logs[0], /isn't subscribed to issues: turn it on .*docs\/setup\.md/);
+  assert.deepEqual(await checkAppEvents(asApp(APP_EVENTS), (l) => logs.push(l)), []);
+  // GitHub refusing is logged by asApp already.
+  assert.deepEqual(await checkAppEvents(asApp([], 401), (l) => logs.push(l)), []);
+  assert.equal(logs.length, 1);
+});
+
+test("APP_EVENTS: no event twice", () => {
+  assert.equal(new Set(APP_EVENTS).size, APP_EVENTS.length);
 });

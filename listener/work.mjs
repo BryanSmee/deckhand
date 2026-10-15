@@ -18,6 +18,7 @@
 //                                         the task's last run, failed or interrupted, again:
 //                                         its mode and comments (board.mjs rerunnable())
 import { MAX_TEXT, Refused, answersComment, parseAnswers, refuse } from "./answers.mjs";
+import { parseQuestions, questionsSection } from "./questions.mjs";
 import { issueList } from "./waits.mjs";
 import { CONFIG_FILE, modeNames } from "./repo-config.mjs";
 import { sameOrigin } from "./repos.mjs";
@@ -76,7 +77,8 @@ export function leadsTo(get, repo, from, to) {
 // `waits` (waits.mjs), `accept(item)` (tasks.mjs). `boardKeys()`: the keys of the tasks on the
 // dashboard; `busy(key)`: a run going or queued, which can't be moved.
 // `taskOf(key)`: the dashboard's task (board.mjs, with its `questions`), or null.
-// `label(repo, number, on)`: the needs-input label; `inputs` (inputs.mjs).
+// `label(repo, number, on)`: the needs-input label; `inputs` (inputs.mjs), which the backlog
+// also fills (seedInputs()).
 // `runOf(id)`: a run's record (runs.mjs, with the comments it ran on), or null.
 export function createWorkApi({
   config,
@@ -89,7 +91,7 @@ export function createWorkApi({
   busy,
   taskOf = () => null,
   label = async () => new Response(null, { status: 204 }),
-  inputs = { set() {} },
+  inputs = { set() {}, has: () => false },
   runOf = () => null,
   publicUrl = () => null,
   now = Date.now,
@@ -97,6 +99,8 @@ export function createWorkApi({
 }) {
   // "owner/repo" → { at, read: Promise<{ issues, modes, errors }> }
   const backlogs = new Map();
+  // Issues with open questions whose label was taken off once: answered, or removed by hand.
+  const unlabelled = new Set();
 
   const allowed = (repo) => !config.repos.length || config.repos.includes(repo.toLowerCase());
 
@@ -120,6 +124,7 @@ export function createWorkApi({
     );
     const list = res.ok ? await res.json() : null;
     if (!Array.isArray(list)) throw new Error(`GitHub GET issues of ${repo}: ${res.status}`);
+    if (!errors.length) await seedInputs(repo, list, settings.users);
     return {
       issues: list
         .filter((i) => !i.pull_request)
@@ -129,6 +134,71 @@ export function createWorkApi({
       // Who may see it, as for the dashboard's tasks: unknown while the config has errors.
       users: errors.length ? null : settings.users,
     };
+  }
+
+  // Open questions in an issue's body that the needs-input label never came for: without the
+  // `issues` event, or when the label call failed, only the label's listing (inputs.mjs) knew
+  // of them, so the graph's form didn't open and a start went through unanswered. Listed and
+  // labelled here, as an `issues opened` delivery would have, unless the label was taken off
+  // once (its timeline says): its questions were answered, or someone said they don't hold.
+  // An issue on the board had a run, whose start takes the label off: left alone too.
+  async function seedInputs(repo, list, users) {
+    const name = config.needsInputLabel;
+    if (!name) return;
+    const keys = boardKeys();
+    const author = (u) =>
+      u?.type === "Bot"
+        ? !!config.bot && u.login?.toLowerCase() === config.bot.toLowerCase()
+        : !!u?.login &&
+          config.users.includes(u.login.toLowerCase()) &&
+          users.includes(u.login.toLowerCase());
+    for (const issue of list) {
+      const key = `${repo}#${issue.number}`;
+      if (issue.pull_request || inputs.has(key) || keys.has(key) || unlabelled.has(key)) continue;
+      // Fail closed, as questions.mjs: only an allowed user's issue, or the App's own.
+      if (!author(issue.user)) continue;
+      const questions = parseQuestions(questionsSection(issue.body));
+      if (!questions) continue;
+      try {
+        const labelled = (issue.labels ?? []).some(
+          (l) => (typeof l === "string" ? l : l?.name)?.toLowerCase() === name.toLowerCase(),
+        );
+        if (!labelled) {
+          if (await wasUnlabelled(repo, issue.number, name)) {
+            unlabelled.add(key);
+            continue;
+          }
+          const res = await label(repo, issue.number, true);
+          if (!res.ok) log(`${key}: label: ${res.status}`);
+        }
+        log(`${key}: open questions found in the backlog`);
+        inputs.set(key, true, questions);
+      } catch (error) {
+        // The next read tries again.
+        log(`${key}: open questions: ${error.message ?? error}`);
+      }
+    }
+  }
+
+  // Whether the label was ever taken off issue `number`.
+  async function wasUnlabelled(repo, number, name) {
+    for (let page = 1; ; page++) {
+      const res = await github(
+        repo,
+        "GET",
+        `/repos/${repo}/issues/${number}/events?per_page=100&page=${page}`,
+      );
+      const events = res.ok ? await res.json() : null;
+      if (!Array.isArray(events)) throw new Error(`GitHub GET events of #${number}: ${res.status}`);
+      if (
+        events.some(
+          (e) => e.event === "unlabeled" && e.label?.name?.toLowerCase() === name.toLowerCase(),
+        )
+      ) {
+        return true;
+      }
+      if (events.length < 100) return false;
+    }
   }
 
   async function backlog(res, repo, user) {
