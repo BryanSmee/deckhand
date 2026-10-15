@@ -325,7 +325,10 @@ request), the listener runs `preview.command`:
 
 The hook decides what to do from the event (`action`, the pull request's head, whether a
 workflow succeeded…): the event's content comes from whoever opened the pull request, so
-treat it as untrusted input. Holding the Docker socket is root on the host.
+treat it as untrusted input. That includes the App's bot's own pull requests: they are
+same-repository, but a sandbox wrote them (see
+[GitHub Actions on Deckhand's branches](security.md#github-actions-on-deckhands-branches)).
+Holding the Docker socket is root on the host.
 
 Hooks of one repository run one at a time, in delivery order. At most 3 wait behind the
 running one: deliveries past that are dropped (and logged), since anyone can open pull
