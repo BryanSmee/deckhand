@@ -285,3 +285,59 @@
   text-decoration: underline;
   cursor: pointer;
 }
+
+/* An issue's open questions, before the drag that opened them starts or queues it. */
+.backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+  background: rgb(0 0 0 / 0.45);
+}
+
+.dialog {
+  display: flex;
+  flex-direction: column;
+  width: min(44rem, 100%);
+  max-height: 100%;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--raised);
+  box-shadow: 0 12px 40px rgb(0 0 0 / 0.3);
+}
+
+.asks {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  margin: 0;
+  padding: 1rem 1.5rem 0.75rem;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+  font-size: 0.85rem;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.asks b {
+  color: var(--ink);
+  font-size: 1rem;
+}
+
+@media (max-width: 760px) {
+  .backdrop {
+    align-items: stretch;
+    padding: 0;
+  }
+  .dialog {
+    border: 0;
+    border-radius: 0;
+  }
+  .asks {
+    padding: 0.75rem 1rem;
+  }
+}

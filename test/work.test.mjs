@@ -538,3 +538,72 @@ test("answer refused: signed out, another origin, users, not waiting, changed or
   assert.deepEqual([w.comments, w.accepted, w.labels], [[], [], []]);
   assert.equal((await answer(w, ok, { user: "carol" })).status, 200);
 });
+
+test("start or queue an issue with open questions: refused until they are answered", async () => {
+  const w = setup({
+    issues: { 5: open("Five"), 7: open("Seven") },
+    tasks: { "org/app#5": asking(5, "issue") },
+  });
+  const start = await post(w, { action: "start", number: 5 });
+  assert.equal(start.status, 409);
+  assert.match(start.body.error, /open questions: answer them first/);
+  assert.equal((await post(w, { action: "queue", number: 5, after: 7 })).status, 409);
+  // Every question needs an answer before it moves.
+  const partial = await answer(w, {
+    number: 5,
+    answers: [{ options: [0] }, {}],
+    then: { action: "start" },
+  });
+  assert.equal(partial.status, 400);
+  assert.equal(
+    (await answer(w, { number: 5, text: "x", then: { action: "dequeue" } })).status,
+    422,
+  );
+  assert.equal((await answer(w, { number: 5, text: "x", then: { action: "fly" } })).status, 400);
+  assert.deepEqual([w.comments, w.accepted, w.labels], [[], [], []]);
+});
+
+test("answer then queue: one App comment with the answers, held after the other issue, label off", async () => {
+  const w = setup({
+    issues: { 5: open("Five"), 7: open("Seven") },
+    tasks: { "org/app#5": asking(5, "issue") },
+  });
+  const res = await answer(w, {
+    number: 5,
+    answers: [{ options: [0] }, { text: "Home" }],
+    then: { action: "queue", after: 7, mode: "brainstorm" },
+  });
+  assert.equal(res.status, 200);
+  assert.equal(res.body.message, "Answers sent: #5 waits for #7.");
+  assert.equal(w.comments.length, 1);
+  const [number, text] = w.comments[0];
+  assert.equal(number, 5);
+  assert.match(text, /^Queued from the dashboard by @alice, after #7 in `brainstorm` mode\./);
+  assert.match(text, /\n\nAnswers from @alice, from the dashboard:\n\n1\. \*\*Phones\*\*/);
+  const wait = w.waits.get("org/app#5");
+  assert.deepEqual(wait.blockers, [7]);
+  // The run that starts once #7 is done reads them.
+  assert.match(wait.item.text, /^Answers from @alice/);
+  assert.equal(wait.item.modeLine, "brainstorm");
+  assert.deepEqual(w.labels, [[5, false]]);
+  assert.deepEqual(w.untracked, [["org/app#5", false]]);
+});
+
+test("answer then start: a run's questions too, the work queued with them", async () => {
+  const w = setup({
+    issues: { 5: open("Five") },
+    tasks: { "org/app#5": asking(5, "run", null) },
+  });
+  const res = await answer(w, { number: 5, text: "Yes to both", then: { action: "start" } });
+  assert.equal(res.status, 200);
+  assert.equal(res.body.message, "Answers sent: #5 started.");
+  assert.equal(
+    w.comments[0][1],
+    "Started from the dashboard by @alice.\n\nAnswers from @alice, from the dashboard:\n\nYes to both",
+  );
+  const [item] = w.accepted;
+  assert.equal(item.trigger, "work");
+  assert.equal(item.text, "Answers from @alice, from the dashboard:\n\nYes to both");
+  assert.equal(w.accepted.length, 1);
+  assert.deepEqual(w.labels, [[5, false]]);
+});

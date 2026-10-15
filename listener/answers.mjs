@@ -25,8 +25,9 @@ export const refuse = (status, message) => {
 
 const text = (s) => typeof s === "string" && s.length <= MAX_TEXT;
 
-// The body asked for, checked: { number, pr, answers, text } with either `answers` (one per
-// question) or `text`. Throws Refused.
+// The body asked for, checked: { number, pr, answers, text, then } with either `answers` (one
+// per question) or `text`. `then`: the work area's action to take once they are in (the graph's
+// drag that asked for them), as sent: work.mjs checks it. Throws Refused.
 export function parseAnswers(raw) {
   let body;
   try {
@@ -34,7 +35,7 @@ export function parseAnswers(raw) {
   } catch {
     refuse(400, "Not JSON.");
   }
-  const { number, pr = false, answers, text: free } = body ?? {};
+  const { number, pr = false, answers, text: free, then = null } = body ?? {};
   if (!Number.isSafeInteger(number) || number <= 0) refuse(400, "`number` is an issue number.");
   if (typeof pr !== "boolean") refuse(400, "`pr` is true or false.");
   if ((answers === undefined) === (free === undefined)) {
@@ -43,7 +44,7 @@ export function parseAnswers(raw) {
   if (free !== undefined) {
     if (!text(free)) refuse(400, `\`text\` is a string of at most ${MAX_TEXT} characters.`);
     if (!free.trim()) refuse(400, "Nothing to send: the answer is empty.");
-    return { number, pr, answers: null, text: free.trim() };
+    return { number, pr, answers: null, text: free.trim(), then };
   }
   if (!Array.isArray(answers) || answers.length > MAX_QUESTIONS) {
     refuse(400, "`answers` is a list, one per question.");
@@ -60,7 +61,7 @@ export function parseAnswers(raw) {
   const total = checked.reduce((n, a) => n + a.text.length, 0);
   if (total > MAX_TEXT) refuse(413, `The answers are longer than ${MAX_TEXT} characters.`);
   if (!checked.some(answered)) refuse(400, "Nothing to send: every answer is empty.");
-  return { number, pr, answers: checked, text: null };
+  return { number, pr, answers: checked, text: null, then };
 }
 
 const answered = (a) => a.options.length > 0 || !!a.text;

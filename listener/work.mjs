@@ -11,7 +11,9 @@
 //                                         { action: "dequeue", number }
 //   POST /api/repos/<owner>/<repo>/answer { number, pr?, answers: [{ options: [i], text }] }
 //                                         { number, pr?, text }
-//                                         answers to a task's open questions (answers.mjs)
+//                                         answers to a task's open questions (answers.mjs);
+//                                         with `then: { action, after?, mode? }`, all of
+//                                         them, and the issue starts or queues with them
 import { MAX_TEXT, Refused, answersComment, parseAnswers, refuse } from "./answers.mjs";
 import { issueList } from "./waits.mjs";
 import { CONFIG_FILE, modeNames } from "./repo-config.mjs";
@@ -35,6 +37,11 @@ export function parseAction(text) {
   } catch {
     refuse(400, "Not JSON.");
   }
+  return checkAction(body);
+}
+
+// An action's fields, checked (a body's, or answers' `then`). Throws Refused.
+export function checkAction(body) {
   const { action, number, after = null, mode = null } = body ?? {};
   const issue = (n) => Number.isSafeInteger(n) && n > 0;
   if (!ACTIONS.includes(action)) refuse(400, `The action is one of ${ACTIONS.join(", ")}.`);
@@ -203,10 +210,18 @@ export function createWorkApi({
 
   const inMode = (mode) => (mode === "work" ? "" : ` in \`${mode}\` mode`);
 
-  async function act(repo, user, { action, number, after, mode }) {
+  // `answers`: the answers to its open questions (answersComment()), sent along from the form
+  // the drag opened; they go in the App's comment and are the run's text. Without them, an
+  // issue with open questions doesn't move: they are answered first.
+  async function act(repo, user, { action, number, after, mode }, answers = null) {
     const key = `${repo}#${number}`;
+    const asking = taskOf(key);
+    if (!answers && action !== "dequeue" && asking?.state === "needs-input" && asking.questions) {
+      refuse(409, `#${number} has open questions: answer them first.`);
+    }
     const { settings, base, issue } = await checked(repo, user, number);
     const wait = waits.get(key);
+    const also = answers ? `\n\n${answers}` : "";
     if (action === "dequeue") {
       if (!wait) refuse(409, `#${number} doesn't wait for anything.`);
       waits.cancel(key, `cancelled from the dashboard by @${user}`);
@@ -221,6 +236,7 @@ export function createWorkApi({
     const wanted = mode ?? wait?.item.modeLine ?? "work";
     if (!modeNames(settings).includes(wanted)) refuse(422, `${repo} has no mode \`${wanted}\`.`);
     const item = itemOf(repo, issue, wanted, user, base, settings);
+    if (answers) item.text = answers;
     if (action === "queue") {
       if (after === number) refuse(422, `#${number} can't wait for itself.`);
       if (leadsTo(waits.get, repo, after, number)) {
@@ -239,7 +255,7 @@ export function createWorkApi({
         item.comment = await comment(
           repo,
           number,
-          `${text} It starts when #${after} is done (closed as completed, or merged).`,
+          `${text} It starts when #${after} is done (closed as completed, or merged).${also}`,
         );
         await waits.hold(item, [after]);
         return `#${number} waits for #${after}.`;
@@ -253,7 +269,7 @@ export function createWorkApi({
     item.comment = await comment(
       repo,
       number,
-      `Started from the dashboard by @${user}${inMode(wanted)}${why}.${was}`,
+      `Started from the dashboard by @${user}${inMode(wanted)}${why}.${was}${also}`,
     );
     await accept(item);
     return `#${number} started.`;
@@ -268,6 +284,7 @@ export function createWorkApi({
     const key = `${repo}#${pr ? `pr-${number}` : number}`;
     const task = taskOf(key);
     if (task?.state !== "needs-input") refuse(409, `#${number} isn't waiting for answers.`);
+    if (asked.then) return answerThen(repo, user, task, asked);
     const { settings, base, issue } = await checked(repo, user, number, pr);
     const questions = task.questions ?? null;
     const { comment: text, open } = answersComment(user, questions?.items ?? null, asked);
@@ -302,6 +319,25 @@ export function createWorkApi({
     if (!res.ok && res.status !== 404) throw new Error(`GitHub label of #${number}: ${res.status}`);
     inputs.set(key, false);
     return `Answers sent: #${number} no longer needs input.`;
+  }
+
+  // Answers sent from the form a drag on the graph opened, and that drag's action (`then`):
+  // every question answered, then the issue starts or queues with them in one App comment.
+  // Answered, it no longer waits for input, whoever asked.
+  async function answerThen(repo, user, task, asked) {
+    const then = checkAction({ ...asked.then, number: asked.number });
+    if (asked.pr || then.action === "dequeue") {
+      refuse(422, "Only an issue starts or queues once its questions are answered.");
+    }
+    const { comment: text, open } = answersComment(user, task.questions?.items ?? null, asked);
+    if (open.length) refuse(400, "Answer every question before it starts.");
+    const message = await act(repo, user, then, text);
+    const res = await label(repo, asked.number, false);
+    if (!res.ok && res.status !== 404) {
+      throw new Error(`GitHub label of #${asked.number}: ${res.status}`);
+    }
+    inputs.set(task.key, false);
+    return `Answers sent: ${message}`;
   }
 
   // The request's body; one over `limit` bytes is refused as it is.

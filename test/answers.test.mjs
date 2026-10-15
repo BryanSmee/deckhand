@@ -13,12 +13,14 @@ test("parseAnswers: one answer per question, or one text", () => {
       { options: [], text: "" },
     ],
     text: null,
+    then: null,
   });
   assert.deepEqual(parse({ number: 3, pr: true, text: " yes " }), {
     number: 3,
     pr: true,
     answers: null,
     text: "yes",
+    then: null,
   });
 });
 

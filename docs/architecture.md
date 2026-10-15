@@ -107,6 +107,11 @@ reply that continues its session, as an allowed user's would be. An issue's: App
 don't take the label off, so the listener does, once every question has an answer; nothing
 starts until a trigger comment or the work area says so.
 
+On the graph, an issue waiting for answers moves like a waiting one, but its questions come
+first: dragging it (or its Start and "After…" buttons) opens them, and the start or queue goes
+only once every one has an answer, in one App comment that carries both (`then` on the answer
+request). The run that starts reads them. Started or queued without answers, it is refused.
+
 Reactions on the triggering comment follow its run: 👀 when it is received, then 🚀 (done),
 😕 (needs input) or 👎 (error) once the run that handled it is over.
 

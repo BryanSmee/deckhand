@@ -281,9 +281,14 @@ export type WorkAction =
 
 // POST api/repos/<owner>/<repo>/answer: one answer per parsed question (the options ticked, by
 // index, and a note), or one text for questions not in the format. `pr`: a pull request's task.
-export type Answers =
-  | { number: number; pr?: boolean; answers: { options: number[]; text: string }[] }
-  | { number: number; pr?: boolean; text: string };
+// `then`: what the graph's drag that opened the form does once they are in (an issue's start
+// or queue): every question needs an answer then.
+export type Answers = { number: number; pr?: boolean; then?: AnswersThen } & (
+  { answers: { options: number[]; text: string }[] } | { text: string }
+);
+
+export type AnswersThen =
+  { action: "start"; mode?: string } | { action: "queue"; after: number; mode?: string };
 
 export interface WorkResult {
   message?: string;

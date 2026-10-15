@@ -2,7 +2,8 @@
 // ("/after"), coloured by where it stands (graph.ts). A node opens its task. On a repo's tab
 // it is a work area too (WorkArea.tsx): an issue dropped on it starts, dropped next to a node
 // it waits for that one; a waiting node dragged away stops waiting, onto another node waits
-// for that one instead.
+// for that one instead. An issue waiting for answers moves too, once they are in: the drag
+// opens its open questions first (Questions.tsx).
 import type { JSX } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
 import { useWorkArea } from "./api";
@@ -17,8 +18,9 @@ import {
   LOOKS,
   shorten,
 } from "./graph";
+import { Questions } from "./Questions";
 import { formatRoute } from "./route";
-import type { State } from "./types";
+import type { State, Task, WorkAction } from "./types";
 import { ISSUE_TYPE, type Target, WorkArea } from "./WorkArea";
 import styles from "./Graph.module.css";
 
@@ -46,6 +48,8 @@ function refOf(n: GraphNode, showRepo: boolean, room: number): string {
 interface NodeDrag {
   key: string;
   number: number;
+  // A waiting node (let go in the open, it stops waiting), not one waiting for answers.
+  waits: boolean;
   pointer: number;
   x: number;
   y: number;
@@ -68,6 +72,8 @@ export function Graph({ state, refresh, repo, narrow, showClosed, onShowClosed }
   // The node last pressed, drawn last (on top) from then on: moving it back among the others
   // when it is let go would cut its slide to its new place short.
   const [onTop, setOnTop] = useState<string | null>(null);
+  // An issue's start or queue that waits for its open questions to be answered.
+  const [asking, setAsking] = useState<{ task: Task; action: WorkAction } | null>(null);
   // The last drawing, on this tab and at this size: its places are kept.
   const last = useRef<{ on: string; shape: Layout } | null>(null);
   // A drag ended on a node: the click that follows doesn't open it.
@@ -76,7 +82,14 @@ export function Graph({ state, refresh, repo, narrow, showClosed, onShowClosed }
   useEffect(() => {
     setMode("work");
     setNotice(null);
+    setAsking(null);
   }, [repo]);
+  useEffect(() => {
+    if (!asking) return;
+    const close = (e: KeyboardEvent) => e.key === "Escape" && setAsking(null);
+    addEventListener("keydown", close);
+    return () => removeEventListener("keydown", close);
+  }, [asking]);
   const tasks = (state?.tasks ?? []).filter((t) => !repo || t.repo === repo);
   const { nodes, edges, hidden } = graphOf(tasks, state?.edges ?? [], state?.blockers ?? [], {
     showClosed,
@@ -106,7 +119,7 @@ export function Graph({ state, refresh, repo, narrow, showClosed, onShowClosed }
     !!repo &&
     !blocked &&
     n.look !== "pending" &&
-    n.task?.state === "waiting" &&
+    (n.task?.state === "waiting" || n.task?.state === "needs-input") &&
     n.kind === "issue" &&
     n.number !== null;
   const targets: Target[] = repo
@@ -118,10 +131,14 @@ export function Graph({ state, refresh, repo, narrow, showClosed, onShowClosed }
           label: `${refOf(n, false, 0)} ${shorten(n.title ?? "", 40)}`.trim(),
         }))
     : [];
+  const sentFor = (number: number) => work.pending.some((p) => p.number === number);
   // Less those a Start or Remove on its way takes out of their wait.
   const leaving = new Set(work.pending.filter((p) => p.action !== "queue").map((p) => p.number));
   const waiting = tasks.filter(
     (t) => t.state === "waiting" && t.kind === "issue" && t.number && !leaving.has(t.number),
+  );
+  const answering = tasks.filter(
+    (t) => t.state === "needs-input" && t.kind === "issue" && t.number && !sentFor(t.number),
   );
 
   // The node under the pointer, in the drawing's units (the viewBox starts at -4).
@@ -138,9 +155,19 @@ export function Graph({ state, refresh, repo, narrow, showClosed, onShowClosed }
     const node = onto ? byKey.get(onto) : null;
     if (node?.number === number && node.repo === repo) return;
     if (node?.number != null) {
-      return work.act({ action: "queue", number, after: node.number, ...(waits ? {} : picked) });
+      return request({ action: "queue", number, after: node.number, ...(waits ? {} : picked) });
     }
-    work.act(waits ? { action: "dequeue", number } : { action: "start", number, ...picked });
+    request(waits ? { action: "dequeue", number } : { action: "start", number, ...picked });
+  };
+
+  // An action, unless its issue has open questions: they are answered first, in a form.
+  const request = (action: WorkAction) => {
+    const task = tasks.find((t) => t.key === `${repo}#${action.number}`);
+    if (action.action !== "dequeue" && task?.state === "needs-input" && task.questions) {
+      setAsking({ task, action });
+      return;
+    }
+    work.act(action);
   };
 
   const onDragOver = (e: DragEvent) => {
@@ -182,6 +209,7 @@ export function Graph({ state, refresh, repo, narrow, showClosed, onShowClosed }
       setNodeDrag({
         key: n.key,
         number: n.number!,
+        waits: n.task?.state === "waiting",
         pointer: e.pointerId,
         x: e.clientX,
         y: e.clientY,
@@ -204,7 +232,7 @@ export function Graph({ state, refresh, repo, narrow, showClosed, onShowClosed }
       setTarget(null);
       if (!nodeDrag.moved) return;
       dragEnded.current = true;
-      dropped(nodeDrag.number, targetAt(e.clientX, e.clientY), true);
+      dropped(nodeDrag.number, targetAt(e.clientX, e.clientY), nodeDrag.waits);
     },
     onPointerCancel: () => {
       setNodeDrag(null);
@@ -370,9 +398,11 @@ export function Graph({ state, refresh, repo, narrow, showClosed, onShowClosed }
             work={work}
             targets={targets}
             waiting={waiting}
+            answering={answering}
             mode={modes.includes(mode) ? mode : "work"}
             onMode={setMode}
             notice={notice}
+            onAct={request}
           />
           <div
             class={`${styles.area} ${over || nodeDrag?.moved ? styles.over : ""}`}
@@ -382,6 +412,36 @@ export function Graph({ state, refresh, repo, narrow, showClosed, onShowClosed }
           >
             {drawing}
           </div>
+          {asking?.task.questions && (
+            <div
+              class={styles.backdrop}
+              onClick={(e) => e.target === e.currentTarget && setAsking(null)}
+            >
+              <div
+                class={styles.dialog}
+                role="dialog"
+                aria-modal="true"
+                aria-label={`Answer #${asking.task.number}'s questions`}
+              >
+                <p class={styles.asks}>
+                  <b>
+                    {asking.action.action === "queue"
+                      ? `Answer them to queue #${asking.task.number} after #${asking.action.after}`
+                      : `Answer them to start #${asking.task.number}`}
+                  </b>
+                  {asking.task.title}
+                </p>
+                <Questions
+                  task={asking.task}
+                  questions={asking.task.questions}
+                  then={asking.action.action === "queue" ? "queue" : "start"}
+                  submit={(body) => work.act(asking.action, body)}
+                  onSent={() => setAsking(null)}
+                  onCancel={() => setAsking(null)}
+                />
+              </div>
+            </div>
+          )}
         </div>
       ) : (
         <>

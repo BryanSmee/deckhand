@@ -1,6 +1,8 @@
 // The open questions of a task waiting for input, as a form: per question its options as
 // checkboxes (the agent's pick marked) and a note; questions not in the set format as written,
-// with one text box. Sending posts them as one App comment (listener/work.mjs `answer`).
+// with one text box. Sending posts them as one App comment (listener/work.mjs `answer`). Opened
+// by a drag on the graph (`then`), every question needs an answer, and the issue starts or
+// queues with them.
 import { useState } from "preact/hooks";
 import { sendAnswers } from "./api";
 import type { Answers, Questions as Asked, Task, WorkResult } from "./types";
@@ -11,6 +13,11 @@ interface Props {
   questions: Asked;
   // Once they are in: what the listener said (api/state is read again).
   onSent: (message: string) => void;
+  // What sends them: api/repos/<repo>/answer, or the graph's action with them.
+  submit?: (body: Answers) => Promise<WorkResult>;
+  // The graph's action they come before, and the way back from it.
+  then?: "start" | "queue";
+  onCancel?: () => void;
 }
 
 interface Answer {
@@ -20,7 +27,14 @@ interface Answer {
 
 const blank = (n: number): Answer[] => Array.from({ length: n }, () => ({ options: [], text: "" }));
 
-export function Questions({ task: t, questions: q, onSent }: Props) {
+export function Questions({
+  task: t,
+  questions: q,
+  onSent,
+  submit = (body) => sendAnswers(t.repo, body),
+  then,
+  onCancel,
+}: Props) {
   const items = q.items;
   const [answers, setAnswers] = useState<Answer[]>(() => blank(items?.length ?? 0));
   const [text, setText] = useState("");
@@ -37,16 +51,18 @@ export function Questions({ task: t, questions: q, onSent }: Props) {
   const said = (a: Answer) => a.options.length > 0 || !!a.text.trim();
   const empty = items ? !answers.some(said) : !text.trim();
   const open = items ? answers.filter((a) => !said(a)).length : 0;
+  // Before a start or a queue, nothing is left open.
+  const unsendable = empty || (!!then && open > 0);
 
   const send = async (e: Event) => {
     e.preventDefault();
-    if (empty || sending || t.number === null) return;
+    if (unsendable || sending || t.number === null) return;
     // A pull request's own task ("#pr-12"): one that closes an issue is the issue's.
     const which = { number: t.number, ...(t.key.endsWith(`#pr-${t.number}`) ? { pr: true } : {}) };
     const body: Answers = items ? { ...which, answers } : { ...which, text };
     setSending(true);
     setError(null);
-    const result: WorkResult = await sendAnswers(t.repo, body);
+    const result: WorkResult = await submit(body);
     setSending(false);
     if (result.error) return setError(result.error);
     setAnswers(blank(items?.length ?? 0));
@@ -119,10 +135,20 @@ export function Questions({ task: t, questions: q, onSent }: Props) {
             {error}
           </p>
         )}
-        <button type="submit" class={styles.send} disabled={empty || sending}>
-          {sending ? "Sending…" : "Send answers"}
+        <button type="submit" class={styles.send} disabled={unsendable || sending}>
+          {sending ? "Sending…" : then ? `Send answers and ${then}` : "Send answers"}
         </button>
-        {!empty && open > 0 && (
+        {onCancel && (
+          <button type="button" class={styles.cancel} disabled={sending} onClick={onCancel}>
+            Cancel
+          </button>
+        )}
+        {then && open > 0 && (
+          <span class={styles.hint}>
+            Answer every question to {then} it ({open} left).
+          </span>
+        )}
+        {!then && !empty && open > 0 && (
           <span class={styles.hint}>
             {open} left blank:{" "}
             {q.source === "run" ? "the run sees which" : "it keeps waiting for them"}
