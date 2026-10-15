@@ -1,8 +1,11 @@
 // The open task: its repo and title, the last reply's first line, its runs, and the log of
-// the run shown (the latest unless one was picked).
+// the run shown (the latest unless one was picked). Waiting for input: its open questions, as
+// a form to answer them.
+import { useState } from "preact/hooks";
 import { ago, duration, githubUrl, kindName, numberOf, ownMode, runName, titleOf } from "./format";
 import { Log } from "./Log";
 import { PrLink } from "./PullRequest";
+import { Questions } from "./Questions";
 import { StateBadge, StateDot } from "./State";
 import type { Run, Task } from "./types";
 import styles from "./Detail.module.css";
@@ -15,9 +18,13 @@ interface Props {
   now: number;
   // api/state's githubUrl.
   github: string;
+  // Reads api/state again (answers sent).
+  refresh?: () => Promise<void>;
 }
 
-export function Detail({ task: t, run: r, onRun, onBack, now, github }: Props) {
+export function Detail({ task: t, run: r, onRun, onBack, now, github, refresh }: Props) {
+  // What the listener said of the answers sent last, on that task's page.
+  const [sent, setSent] = useState<{ key: string; message: string } | null>(null);
   if (!t) {
     return (
       <div class={styles.detail}>
@@ -29,6 +36,7 @@ export function Detail({ task: t, run: r, onRun, onBack, now, github }: Props) {
   const own = ownMode(t.mode);
   // The last reply: from the latest run that has one.
   const reply = t.runs.find((x) => x.summary);
+  const asked = t.state === "needs-input" ? t.questions : undefined;
   return (
     <div class={styles.detail}>
       <header class={styles.head}>
@@ -104,9 +112,25 @@ export function Detail({ task: t, run: r, onRun, onBack, now, github }: Props) {
           ))}
         </nav>
       )}
+      {sent?.key === t.key && (
+        <p class={styles.sent} role="status">
+          {sent.message}
+        </p>
+      )}
+      {asked && (
+        <Questions
+          key={`${t.key} ${asked.raw}`}
+          task={t}
+          questions={asked}
+          onSent={(message) => {
+            setSent({ key: t.key, message });
+            refresh?.();
+          }}
+        />
+      )}
       {r ? (
         <Log runId={r.id} />
-      ) : t.state === "needs-input" ? (
+      ) : asked ? null : t.state === "needs-input" ? (
         // Labelled for its open questions (an inbox run filed it, or someone wrote it so).
         <p class={styles.placeholder}>Waiting for answers to its open questions on GitHub</p>
       ) : (

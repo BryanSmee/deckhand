@@ -1,9 +1,12 @@
 // The listener's API: api/state polled, a run's log streamed (server-sent events), the
-// repositories listed, onboarded and their config read, the graph's backlog and its actions.
+// repositories listed, onboarded and their config read, the graph's backlog and its actions,
+// answers to open questions.
 // Relative URLs, like the assets: the page works under any path.
 import { useEffect, useRef, useState } from "preact/hooks";
 import type { Pending } from "./graph";
 import type {
+  Answers,
+  AnswersThen,
   Backlog,
   Entry,
   Onboarded,
@@ -248,7 +251,8 @@ export interface WorkArea {
   busy: boolean;
   pending: Pending[];
   result: WorkResult | null;
-  act: (action: WorkAction) => Promise<void>;
+  // `answers`: the issue's open questions answered, sent along (api/repos/<repo>/answer).
+  act: (action: WorkAction, answers?: Answers) => Promise<WorkResult>;
 }
 
 // One repo's backlog and the actions on its issues; nothing on the All tab (`repo` null).
@@ -287,31 +291,51 @@ export function useWorkArea(
     return () => clearInterval(timer);
   }, [repo]);
 
-  const act = async (action: WorkAction) => {
-    if (!repo) return;
+  const act = async (action: WorkAction, answers?: Answers): Promise<WorkResult> => {
+    if (!repo) return { error: "No repository." };
     const title = backlog?.issues.find((i) => i.number === action.number)?.title ?? null;
     const mine: Pending = { ...action, repo, title };
     setPending((all) => [...all, mine]);
     setResult(null);
-    let done = false;
-    try {
-      const res = await fetch(`api/repos/${repo}/work`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(action),
-      });
-      const body = await answer<WorkResult>(res);
-      setResult(body);
-      done = !body.error;
-    } catch (e) {
-      setResult({ error: message(e) });
+    let said: WorkResult;
+    if (answers) {
+      const { number: _, ...then } = action;
+      said = await sendAnswers(repo, { ...answers, then: then as AnswersThen });
+    } else {
+      try {
+        const res = await fetch(`api/repos/${repo}/work`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(action),
+        });
+        said = await answer<WorkResult>(res);
+      } catch (e) {
+        said = { error: message(e) };
+      }
     }
+    setResult(said);
+    const done = !said.error;
     // The real node replaces the pending one, and the issue leaves the backlog for good:
     // both read again before it goes. A refusal just takes it away.
     if (done) await Promise.all([refresh(), load()]);
     setPending((all) => all.filter((p) => p !== mine));
+    return said;
   };
 
   const mine = pending.filter((p) => p.repo === repo);
   return { backlog, error, busy: mine.length > 0, pending: mine, result, act };
+}
+
+// Answers to a task's open questions: what the listener says, or why it refused.
+export async function sendAnswers(repo: string, answers: Answers): Promise<WorkResult> {
+  try {
+    const res = await fetch(`api/repos/${repo}/answer`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(answers),
+    });
+    return await answer<WorkResult>(res);
+  } catch (e) {
+    return { error: message(e) };
+  }
 }

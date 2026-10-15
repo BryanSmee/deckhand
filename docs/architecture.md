@@ -96,6 +96,22 @@ them in `api/state` (`questions`): from the reply of its last run when that run 
 (kept on the run, and read again from its log after a restart), else from its issue's body
 (kept in `inputs.json` with the entry, from the `issues` deliveries and the startup lookup).
 
+The dashboard answers them too (`work.mjs` `answer`, `answers.mjs`): a task waiting for input
+shows its questions as a form (one option per question, the recommended one ticked in
+advance, and a note), or as written
+with one text box when they aren't in the set format. Sending checks what the work area does
+(signed in, same origin, the user allowed by the operator and the repo) and posts one App
+comment, "Answers from @user, from the dashboard:", that lists every answer under its
+question and which ones are still open. A run's questions: that comment is queued as the
+reply that continues its session, as an allowed user's would be. An issue's: App comments
+don't take the label off, so the listener does, once every question has an answer; nothing
+starts until a trigger comment or the work area says so.
+
+On the graph, an issue waiting for answers moves like a waiting one, but its questions come
+first: dragging it (or its Start and "After…" buttons) opens them, and the start or queue goes
+only once every one has an answer, in one App comment that carries both (`then` on the answer
+request). The run that starts reads them. Started or queued without answers, it is refused.
+
 Reactions on the triggering comment follow its run: 👀 when it is received, then 🚀 (done),
 😕 (needs input) or 👎 (error) once the run that handled it is over.
 

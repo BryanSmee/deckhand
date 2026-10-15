@@ -108,6 +108,14 @@
   box-shadow: inset 0 0 0 1px var(--accent);
 }
 
+.sent {
+  margin: 0;
+  padding: 0.5rem 1.5rem;
+  border-bottom: 1px solid var(--line);
+  background: var(--ok-soft);
+  font-size: 0.85rem;
+}
+
 .placeholder {
   margin: auto;
   padding: 2rem;
@@ -132,6 +140,9 @@
     padding: 0.35rem 0.6rem;
   }
   .runs {
+    padding: 0.5rem 1rem;
+  }
+  .sent {
     padding: 0.5rem 1rem;
   }
 }

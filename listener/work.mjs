@@ -9,6 +9,12 @@
 //   POST /api/repos/<owner>/<repo>/work   { action: "start", number, mode? }
 //                                         { action: "queue", number, after, mode? }
 //                                         { action: "dequeue", number }
+//   POST /api/repos/<owner>/<repo>/answer { number, pr?, answers: [{ options: [i], text }] }
+//                                         { number, pr?, text }
+//                                         answers to a task's open questions (answers.mjs);
+//                                         with `then: { action, after?, mode? }`, all of
+//                                         them, and the issue starts or queues with them
+import { MAX_TEXT, Refused, answersComment, parseAnswers, refuse } from "./answers.mjs";
 import { issueList } from "./waits.mjs";
 import { CONFIG_FILE, modeNames } from "./repo-config.mjs";
 import { sameOrigin } from "./repos.mjs";
@@ -17,21 +23,11 @@ import { readBody, sendJson } from "./web.mjs";
 // How long a repo's open issues are kept: the dashboard polls them.
 export const ISSUES_MS = 30_000;
 const MAX_BODY = 4096;
+// The answers' text, and the JSON around it (escapes, indexes).
+const MAX_ANSWER_BODY = 4 * MAX_TEXT;
 const ACTIONS = ["start", "queue", "dequeue"];
 
 const send = (res, status, value) => sendJson(res, value, status);
-
-// A refusal the dashboard shows as it is.
-class Refused extends Error {
-  constructor(status, message) {
-    super(message);
-    this.status = status;
-  }
-}
-
-const refuse = (status, message) => {
-  throw new Refused(status, message);
-};
 
 // The action asked for, checked: { action, number, after, mode }. Throws Refused.
 export function parseAction(text) {
@@ -41,6 +37,11 @@ export function parseAction(text) {
   } catch {
     refuse(400, "Not JSON.");
   }
+  return checkAction(body);
+}
+
+// An action's fields, checked (a body's, or answers' `then`). Throws Refused.
+export function checkAction(body) {
   const { action, number, after = null, mode = null } = body ?? {};
   const issue = (n) => Number.isSafeInteger(n) && n > 0;
   if (!ACTIONS.includes(action)) refuse(400, `The action is one of ${ACTIONS.join(", ")}.`);
@@ -71,6 +72,8 @@ export function leadsTo(get, repo, from, to) {
 // the default branch's config. `reply(repo, number, text)`: the App's comment (comments.mjs).
 // `waits` (waits.mjs), `accept(item)` (tasks.mjs). `boardKeys()`: the keys of the tasks on the
 // dashboard; `busy(key)`: a run going or queued, which can't be moved.
+// `taskOf(key)`: the dashboard's task (board.mjs, with its `questions`), or null.
+// `label(repo, number, on)`: the needs-input label; `inputs` (inputs.mjs).
 export function createWorkApi({
   config,
   github,
@@ -80,6 +83,9 @@ export function createWorkApi({
   accept,
   boardKeys,
   busy,
+  taskOf = () => null,
+  label = async () => new Response(null, { status: 204 }),
+  inputs = { set() {} },
   publicUrl = () => null,
   now = Date.now,
   log = () => {},
@@ -145,9 +151,9 @@ export function createWorkApi({
   }
 
   // The checks a comment passes, for the signed-in `user`: the repo's config without errors,
-  // the user in both the operator's and the repo's users, an open issue (not a pull request)
-  // with no run going or queued. Returns { settings, base, issue }; throws Refused.
-  async function checked(repo, user, number) {
+  // the user in both the operator's and the repo's users, an open issue (a pull request when
+  // `pr`) with no run going or queued. Returns { settings, base, issue }; throws Refused.
+  async function checked(repo, user, number, pr = false) {
     const login = user.toLowerCase();
     if (!config.users.includes(login)) refuse(403, `${user} is not in ALLOWED_USERS.`);
     const base = await baseOf(repo);
@@ -164,7 +170,10 @@ export function createWorkApi({
       refuse(404, `#${number} isn't an issue of ${repo}.`);
     if (!res.ok) throw new Error(`GitHub GET #${number}: ${res.status}`);
     const issue = await res.json();
-    if (issue.pull_request) refuse(422, `#${number} is a pull request: start its issue instead.`);
+    if (pr && !issue.pull_request) refuse(404, `#${number} isn't a pull request of ${repo}.`);
+    if (!pr && issue.pull_request) {
+      refuse(422, `#${number} is a pull request: start its issue instead.`);
+    }
     if (issue.state !== "open") refuse(409, `#${number} is closed.`);
     if (busy(`${repo}#${number}`)) {
       refuse(409, `#${number} is running or queued: it can't be moved now.`);
@@ -201,10 +210,18 @@ export function createWorkApi({
 
   const inMode = (mode) => (mode === "work" ? "" : ` in \`${mode}\` mode`);
 
-  async function act(repo, user, { action, number, after, mode }) {
+  // `answers`: the answers to its open questions (answersComment()), sent along from the form
+  // the drag opened; they go in the App's comment and are the run's text. Without them, an
+  // issue with open questions doesn't move: they are answered first.
+  async function act(repo, user, { action, number, after, mode }, answers = null) {
     const key = `${repo}#${number}`;
+    const asking = taskOf(key);
+    if (!answers && action !== "dequeue" && asking?.state === "needs-input" && asking.questions) {
+      refuse(409, `#${number} has open questions: answer them first.`);
+    }
     const { settings, base, issue } = await checked(repo, user, number);
     const wait = waits.get(key);
+    const also = answers ? `\n\n${answers}` : "";
     if (action === "dequeue") {
       if (!wait) refuse(409, `#${number} doesn't wait for anything.`);
       waits.cancel(key, `cancelled from the dashboard by @${user}`);
@@ -219,6 +236,7 @@ export function createWorkApi({
     const wanted = mode ?? wait?.item.modeLine ?? "work";
     if (!modeNames(settings).includes(wanted)) refuse(422, `${repo} has no mode \`${wanted}\`.`);
     const item = itemOf(repo, issue, wanted, user, base, settings);
+    if (answers) item.text = answers;
     if (action === "queue") {
       if (after === number) refuse(422, `#${number} can't wait for itself.`);
       if (leadsTo(waits.get, repo, after, number)) {
@@ -237,7 +255,7 @@ export function createWorkApi({
         item.comment = await comment(
           repo,
           number,
-          `${text} It starts when #${after} is done (closed as completed, or merged).`,
+          `${text} It starts when #${after} is done (closed as completed, or merged).${also}`,
         );
         await waits.hold(item, [after]);
         return `#${number} waits for #${after}.`;
@@ -251,18 +269,95 @@ export function createWorkApi({
     item.comment = await comment(
       repo,
       number,
-      `Started from the dashboard by @${user}${inMode(wanted)}${why}.${was}`,
+      `Started from the dashboard by @${user}${inMode(wanted)}${why}.${was}${also}`,
     );
     await accept(item);
     return `#${number} started.`;
   }
 
-  async function work(req, res, user, repo) {
-    if (!sameOrigin(req, publicUrl())) {
-      log(`Work area: refused for ${user}: Origin ${req.headers.origin ?? "missing"}`);
-      return send(res, 403, { error: "Not from this dashboard." });
+  // Answers to the open questions of the task of issue (or pull request) `number`, as one App
+  // comment. A run's questions: the comment is the reply that continues its session, as an
+  // allowed user's would be. An issue's (its body's section): App comments don't take the
+  // label off (questions.mjs), so this does, once every question has an answer.
+  async function answer(repo, user, asked) {
+    const { number, pr } = asked;
+    const key = `${repo}#${pr ? `pr-${number}` : number}`;
+    const task = taskOf(key);
+    if (task?.state !== "needs-input") refuse(409, `#${number} isn't waiting for answers.`);
+    if (asked.then) return answerThen(repo, user, task, asked);
+    const { settings, base, issue } = await checked(repo, user, number, pr);
+    const questions = task.questions ?? null;
+    const { comment: text, open } = answersComment(user, questions?.items ?? null, asked);
+    // Where the run asked: a pull request's run on an issue's task replies on the pull request.
+    const replyTo = task.replyTo ?? number;
+    const posted = await comment(repo, replyTo, text);
+    const left = open.length ? ` ${open.length} still open.` : "";
+    const fromRun = questions
+      ? questions.source === "run"
+      : task.runs?.[0]?.status === "needs-input";
+    if (fromRun) {
+      await accept({
+        repo,
+        id: pr ? `pr-${number}` : String(number),
+        kind: pr ? "pr" : "issue",
+        number,
+        title: issue.title ?? null,
+        // No trigger line: it goes on in the session that asked, as a reply on GitHub would.
+        trigger: null,
+        modeLine: null,
+        text,
+        replyTo,
+        author: user,
+        base,
+        settings,
+        comment: posted,
+      });
+      return `Answers sent: #${number} continues.${left}`;
     }
-    const asked = parseAction((await readBody(req, MAX_BODY)).toString("utf8"));
+    if (open.length) return `Answers sent: #${number} still needs input.${left}`;
+    const res = await label(repo, number, false);
+    if (!res.ok && res.status !== 404) throw new Error(`GitHub label of #${number}: ${res.status}`);
+    inputs.set(key, false);
+    return `Answers sent: #${number} no longer needs input.`;
+  }
+
+  // Answers sent from the form a drag on the graph opened, and that drag's action (`then`):
+  // every question answered, then the issue starts or queues with them in one App comment.
+  // Answered, it no longer waits for input, whoever asked.
+  async function answerThen(repo, user, task, asked) {
+    const then = checkAction({ ...asked.then, number: asked.number });
+    if (asked.pr || then.action === "dequeue") {
+      refuse(422, "Only an issue starts or queues once its questions are answered.");
+    }
+    const { comment: text, open } = answersComment(user, task.questions?.items ?? null, asked);
+    if (open.length) refuse(400, "Answer every question before it starts.");
+    const message = await act(repo, user, then, text);
+    const res = await label(repo, asked.number, false);
+    if (!res.ok && res.status !== 404) {
+      throw new Error(`GitHub label of #${asked.number}: ${res.status}`);
+    }
+    inputs.set(task.key, false);
+    return `Answers sent: ${message}`;
+  }
+
+  // The request's body; one over `limit` bytes is refused as it is.
+  async function bodyOf(req, limit) {
+    try {
+      return (await readBody(req, limit)).toString("utf8");
+    } catch (error) {
+      if (/^body over/.test(error.message)) refuse(413, `The request is over ${limit} bytes.`);
+      throw error;
+    }
+  }
+
+  async function answers(req, res, user, repo) {
+    const asked = parseAnswers(await bodyOf(req, MAX_ANSWER_BODY));
+    log(`Work area: ${user} answers ${repo}#${asked.pr ? "pr-" : ""}${asked.number}`);
+    send(res, 200, { message: await answer(repo, user, asked) });
+  }
+
+  async function work(req, res, user, repo) {
+    const asked = parseAction(await bodyOf(req, MAX_BODY));
     log(
       `Work area: ${user} asks ${asked.action} ${repo}#${asked.number}${asked.after ? ` after #${asked.after}` : ""}`,
     );
@@ -270,19 +365,24 @@ export function createWorkApi({
     send(res, 200, { message });
   }
 
-  // Handles /api/repos/<owner>/<repo>/issues and /work; false for any other path.
+  // Handles /api/repos/<owner>/<repo>/issues, /work and /answer; false for any other path.
   function handle(req, res, user) {
     const { pathname } = new URL(req.url, "http://localhost");
-    const one = /^\/api\/repos\/([\w.-]+)\/([\w.-]+)\/(issues|work)$/.exec(pathname);
+    const one = /^\/api\/repos\/([\w.-]+)\/([\w.-]+)\/(issues|work|answer)$/.exec(pathname);
     if (!one) return false;
     const repo = `${one[1]}/${one[2]}`;
-    const post = one[3] === "work";
+    const post = one[3] !== "issues";
     const run = async () => {
       if (post && req.method !== "POST") return send(res, 405, { error: "POST only." });
       if (!post && req.method !== "GET") return send(res, 405, { error: "GET only." });
       if (!user) return send(res, 401, { error: "Sign in first." });
       if (!allowed(repo)) return send(res, 404, { error: `${repo} is not in ALLOWED_REPOS.` });
-      return post ? work(req, res, user, repo) : backlog(res, repo, user);
+      if (!post) return backlog(res, repo, user);
+      if (!sameOrigin(req, publicUrl())) {
+        log(`Work area: refused for ${user}: Origin ${req.headers.origin ?? "missing"}`);
+        return send(res, 403, { error: "Not from this dashboard." });
+      }
+      return one[3] === "work" ? work(req, res, user, repo) : answers(req, res, user, repo);
     };
     run().catch((error) => {
       if (error instanceof Refused) {

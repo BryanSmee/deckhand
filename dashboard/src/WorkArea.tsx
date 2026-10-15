@@ -1,6 +1,7 @@
-// The graph's work area panel: the repo's backlog (open issues with no task yet) and its
-// waiting issues, with a button for each drag the graph takes (Start, Queue after…, Remove),
-// for phones and keyboards. The drags themselves are the graph's (Graph.tsx).
+// The graph's work area panel: the repo's backlog (open issues with no task yet), its waiting
+// issues and those waiting for answers, with a button for each drag the graph takes (Start,
+// Queue after…, Remove), for phones and keyboards. The drags themselves are the graph's
+// (Graph.tsx), and so is the form an issue's open questions open first.
 import { useState } from "preact/hooks";
 import type { WorkArea as Work } from "./api";
 import type { Task, WorkAction } from "./types";
@@ -22,10 +23,14 @@ interface Props {
   targets: Target[];
   // The repo's tasks that wait for others ("/after").
   waiting: Task[];
+  // Its issues waiting for answers: starting or queueing one asks them first.
+  answering?: Task[];
   mode: string;
   onMode: (mode: string) => void;
   // What a drop that couldn't be sent says (a link from another repo).
   notice: string | null;
+  // Takes an action: the graph's, which opens an issue's open questions first.
+  onAct?: (action: WorkAction) => void;
 }
 
 // "Queue after…": the graph's issues to pick from, then Queue.
@@ -82,7 +87,17 @@ function Chooser({
   );
 }
 
-export function WorkArea({ repo, work, targets, waiting, mode, onMode, notice }: Props) {
+export function WorkArea({
+  repo,
+  work,
+  targets,
+  waiting,
+  answering = [],
+  mode,
+  onMode,
+  notice,
+  onAct = (action) => void work.act(action),
+}: Props) {
   // The issue whose "Queue after…" is open.
   const [choosing, setChoosing] = useState<number | null>(null);
   const { backlog, busy, result } = work;
@@ -94,7 +109,7 @@ export function WorkArea({ repo, work, targets, waiting, mode, onMode, notice }:
   const picked = mode === "work" ? {} : { mode };
   const act = (action: WorkAction) => {
     setChoosing(null);
-    work.act(action);
+    onAct(action);
   };
   const said = notice ?? result?.error ?? result?.message ?? null;
   const failed = !!(notice || result?.error);
@@ -193,6 +208,37 @@ export function WorkArea({ repo, work, targets, waiting, mode, onMode, notice }:
             ))}
           </ul>
         )
+      )}
+      {answering.length > 0 && (
+        <>
+          <h2 class={styles.title}>Waiting for answers</h2>
+          <ul class={styles.list} aria-label="Issues waiting for answers">
+            {answering.map((t) => (
+              <li key={t.key} class={styles.issue}>
+                <div class={styles.row}>
+                  <span class={styles.ref}>#{t.number}</span>
+                  <span class={styles.name}>{t.title ?? `Issue #${t.number}`}</span>
+                </div>
+                {t.questions && (
+                  <span class={styles.note}>Its open questions are asked before it starts.</span>
+                )}
+                <div class={styles.buttons}>
+                  <button
+                    type="button"
+                    class={styles.primary}
+                    disabled={busy || blocked}
+                    aria-label={`Start #${t.number}`}
+                    onClick={() => act({ action: "start", number: t.number!, ...picked })}
+                  >
+                    Start
+                  </button>
+                  {afterButton(t.number!)}
+                </div>
+                {chooser(t.number!, false)}
+              </li>
+            ))}
+          </ul>
+        </>
       )}
       {waiting.length > 0 && (
         <>

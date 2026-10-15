@@ -250,6 +250,7 @@ export function Dashboard({ state, error, repos, refresh }: Props) {
                 onBack={() => go({ ...route, task: null, run: null }, true)}
                 now={now}
                 github={state?.githubUrl ?? "https://github.com"}
+                refresh={refresh}
               />
             </main>
           </div>

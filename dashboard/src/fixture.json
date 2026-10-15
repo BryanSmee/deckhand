@@ -152,6 +152,34 @@
       "since": 1791979200000,
       "closed": null,
       "pr": null,
+      "questions": {
+        "source": "run",
+        "runId": "acme-api-138-1791979200000",
+        "items": [
+          {
+            "title": "Debounce",
+            "text": "How long should the search wait after the last keystroke?",
+            "options": [
+              { "label": "150 ms: snappier, more requests", "recommended": false },
+              { "label": "300 ms: fewer requests, still feels instant", "recommended": true }
+            ]
+          },
+          {
+            "title": null,
+            "text": "Should a search in flight be cancelled when a new one starts?",
+            "options": [
+              { "label": "Yes, abort it", "recommended": true },
+              { "label": "No, drop its results when they arrive", "recommended": false }
+            ]
+          },
+          {
+            "title": "Empty state",
+            "text": "What should the list say while nothing matches?",
+            "options": []
+          }
+        ],
+        "raw": "1. **Debounce**: How long should the search wait after the last keystroke?"
+      },
       "runs": [
         {
           "id": "acme-api-138-1791979200000",
