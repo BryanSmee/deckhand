@@ -77,7 +77,8 @@ You need:
   listener's port (8080);
 - a GitHub account (or organization) to own the App, and the repositories to use it on;
 - a Claude credential: a token from `claude setup-token` (your Claude plan) or an
-  `ANTHROPIC_API_KEY`.
+  `ANTHROPIC_API_KEY`; or an Anthropic-compatible gateway such as OpenRouter and its token
+  (see [Through a gateway](docs/setup.md#through-a-gateway)).
 
 **1. Configure and start.**
 

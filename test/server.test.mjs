@@ -97,8 +97,9 @@ case "$1" in
           >> "${dir}/egress"
       done
       # Claude Code'"'"'s API call, through the listener, with the run'"'"'s secret.
-      if [ -n "$CLAUDE_CODE_OAUTH_TOKEN" ]; then
-        curl -sS -X POST -H "Authorization: Bearer $CLAUDE_CODE_OAUTH_TOKEN" \\
+      bearer="\${ANTHROPIC_AUTH_TOKEN:-\$CLAUDE_CODE_OAUTH_TOKEN}"
+      if [ -n "$bearer" ]; then
+        curl -sS -X POST -H "Authorization: Bearer $bearer" \\
           -d "{}" "$ANTHROPIC_BASE_URL/v1/messages?beta=true" > "${dir}/anthropic-answer"
       fi
       # Not all of stdout is Claude'"'"'s: gh prints the draft pull request'"'"'s address.
@@ -528,6 +529,36 @@ test("the Claude credential stays out of sandboxes, and a reply leaking secrets 
     const log = readFileSync(join(dir, "logs", file), "utf8");
     assert.ok(!log.includes(secret) && !log.includes(credential));
   }
+});
+
+test("through a gateway: its token stays out too, and opus means the gateway's model", async (t) => {
+  const credential = "sk-or-v1-operator-gateway-token";
+  const { dir, github, send, listener } = await listen(t, {}, (dir, github) => ({
+    ANTHROPIC_AUTH_TOKEN: credential,
+    ANTHROPIC_API_KEY: "sk-ant-api03-ignored-for-the-gateway",
+    ANTHROPIC_BASE_URL: `${github.url}/api/`,
+    ANTHROPIC_DEFAULT_OPUS_MODEL: "anthropic/claude-opus-4.1",
+    SANDBOX_MODEL: "openai/gpt-5",
+  }));
+  await send(comment("alice"));
+  await listener.until("done (ok)");
+
+  const secret = readFileSync(join(dir, "run-secret"), "utf8").trim();
+  const runEnv = readFileSync(join(dir, "run-env"), "utf8");
+  assert.ok(!runEnv.includes(credential));
+  assert.match(runEnv, new RegExp(`^ANTHROPIC_AUTH_TOKEN=${secret}$`, "m"));
+  // Only the variables named with -e reach the container: not the unused API key.
+  const passed = readFileSync(join(dir, "run-args"), "utf8").split("\n");
+  assert.ok(passed.includes("ANTHROPIC_AUTH_TOKEN"));
+  assert.ok(!passed.includes("ANTHROPIC_API_KEY") && !passed.includes("CLAUDE_CODE_OAUTH_TOKEN"));
+  assert.match(runEnv, /^ANTHROPIC_BASE_URL=http:\/\/127\.0\.0\.1:\d+\/anthropic$/m);
+  assert.match(runEnv, /^ANTHROPIC_DEFAULT_OPUS_MODEL=anthropic\/claude-opus-4\.1$/m);
+  assert.doesNotMatch(runEnv, /^ANTHROPIC_DEFAULT_SONNET_MODEL=/m);
+  assert.match(runEnv, /^SANDBOX_MODEL=openai\/gpt-5$/m);
+
+  // The call reached the gateway under its own path, with its token as a bearer.
+  const call = await github.waitFor((r) => r.path === "/api/v1/messages?beta=true");
+  assert.equal(call.auth, `Bearer ${credential}`);
 });
 
 test("a webhook from the App runs a sandbox that gets its repo's token from the broker", async (t) => {

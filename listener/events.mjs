@@ -101,15 +101,20 @@ export function parseAfter(text) {
 
 export const EFFORTS = ["low", "medium", "high", "xhigh", "max"];
 
+// A model name: an alias (opus), an id (claude-opus-5-5[1m]) or a gateway's
+// (anthropic/claude-opus-5.5, openai/gpt-5, meta-llama/llama-4:free).
+export const MODEL_NAME = /^[\w.[\]/:-]+$/;
+
 // Removes "/model <name>" and "/effort <level>" lines from a comment, recording them in options.
 export function takeOptions(text, options) {
   return text
     .split(/\r?\n/)
     .filter((line) => {
-      const match = /^\s*\/(model|effort)\s+([\w.[\]-]+)\s*$/i.exec(line);
+      const match = /^\s*\/(model|effort)\s+(\S+)\s*$/i.exec(line);
       if (!match) return true;
       const [, key, value] = match;
       if (key.toLowerCase() === "effort" && !EFFORTS.includes(value.toLowerCase())) return true;
+      if (key.toLowerCase() === "model" && !MODEL_NAME.test(value)) return true;
       options[key.toLowerCase()] = key.toLowerCase() === "effort" ? value.toLowerCase() : value;
       return false;
     })

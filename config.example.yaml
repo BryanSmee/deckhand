@@ -14,6 +14,12 @@ allowed_hosts: []
 
 trigger: Deckhand
 sandbox_model: opus
+# Through an Anthropic-compatible gateway (docs/setup.md#through-a-gateway), with
+# ANTHROPIC_AUTH_TOKEN in .env:
+# anthropic_base_url: https://openrouter.ai/api
+# anthropic_default_opus_model: anthropic/claude-opus-4.1
+# anthropic_default_sonnet_model: anthropic/claude-sonnet-4.5
+# anthropic_default_haiku_model: anthropic/claude-haiku-4.5
 sandbox_effort: medium
 max_parallel: 2
 

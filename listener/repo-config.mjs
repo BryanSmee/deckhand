@@ -7,7 +7,7 @@
 import { createHash } from "node:crypto";
 import { posix } from "node:path";
 import { hostProblem, repoHostProblem } from "./egress.mjs";
-import { EFFORTS } from "./events.mjs";
+import { EFFORTS, MODEL_NAME } from "./events.mjs";
 import { list, normalize } from "./config.mjs";
 import { isMap, parseYaml } from "./yaml.mjs";
 
@@ -103,8 +103,8 @@ function text(key, value, fail) {
 const modelKey =
   (field) =>
   (value, { key, settings, fail }) => {
-    if (typeof value === "string" && /^[\w.[\]-]+$/.test(value)) settings[field] = value;
-    else fail(key, "expected a model name (opus, sonnet, claude-…)");
+    if (typeof value === "string" && MODEL_NAME.test(value)) settings[field] = value;
+    else fail(key, "expected a model name (opus, sonnet, claude-…, openai/gpt-…)");
   };
 
 // A thinking effort, into settings[field].
@@ -304,8 +304,8 @@ function parseMode(name, mode, settings, fail) {
       if (["issue", "fresh"].includes(value)) own.session = value;
       else bad(key, "expected issue or fresh");
     } else if (key === "model") {
-      if (typeof value === "string" && /^[\w.[\]-]+$/.test(value)) own.model = value;
-      else bad(key, "expected a model name (opus, sonnet, claude-…)");
+      if (typeof value === "string" && MODEL_NAME.test(value)) own.model = value;
+      else bad(key, "expected a model name (opus, sonnet, claude-…, openai/gpt-…)");
     } else if (EFFORTS.includes(String(value).toLowerCase())) {
       own.effort = String(value).toLowerCase();
     } else bad(key, `expected one of ${EFFORTS.join(", ")}`);

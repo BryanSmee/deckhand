@@ -430,6 +430,7 @@ export function createRuns(ctx) {
     return {
       ...(config.claudeCredential && { [config.claudeCredential]: live.secret }),
       ANTHROPIC_BASE_URL: `${config.brokerUrl}/anthropic`,
+      ...config.modelAliases,
       DECKHAND_RUN_SECRET: live.secret,
       DECKHAND_BROKER_URL: config.brokerUrl,
       CLAUDE_CODE_VERSION: config.claudeCodeVersion,

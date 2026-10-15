@@ -4,6 +4,7 @@
 import { readFileSync } from "node:fs";
 import { CREDENTIALS, credentialName } from "./anthropic.mjs";
 import { hostProblem } from "./egress.mjs";
+import { MODEL_NAME } from "./events.mjs";
 import { isMap, parseYaml } from "./yaml.mjs";
 
 export class ConfigError extends Error {}
@@ -60,6 +61,10 @@ export const FILE_SETTINGS = {
   PUBLIC_URL: "scalar",
   TRIGGER: "scalar",
   CLAUDE_CODE_VERSION: "scalar",
+  ANTHROPIC_BASE_URL: "scalar",
+  ANTHROPIC_DEFAULT_OPUS_MODEL: "scalar",
+  ANTHROPIC_DEFAULT_SONNET_MODEL: "scalar",
+  ANTHROPIC_DEFAULT_HAIKU_MODEL: "scalar",
   SANDBOX_MODEL: "scalar",
   SANDBOX_EFFORT: "scalar",
   BRAINSTORM_MODEL: "scalar",
@@ -202,6 +207,25 @@ function sandboxConfig(env, { setting, label, number }, prefix, hosts) {
   };
 }
 
+// "https://openrouter.ai/api/" → "https://openrouter.ai/api", or a ConfigError: a typo would
+// otherwise only show as every run failing.
+function anthropicUrl(value, label) {
+  if (!value) return "https://api.anthropic.com";
+  let url;
+  try {
+    url = new URL(value);
+  } catch {}
+  if (!["http:", "https:"].includes(url?.protocol)) {
+    throw new ConfigError(`${label}: expected an http(s) URL, got ${value}`);
+  }
+  return value.replace(/\/$/, "");
+}
+
+function modelName(value, label) {
+  if (MODEL_NAME.test(value)) return value;
+  throw new ConfigError(`${label}: expected a model name (anthropic/claude-…), got ${value}`);
+}
+
 // The environment, over config.yaml's settings (readConfigFile()), over the defaults.
 export function loadConfig(env, file = NO_FILE) {
   const from = settings(env, file);
@@ -243,8 +267,21 @@ export function loadConfig(env, file = NO_FILE) {
     // Which variable holds the operator's Claude credential (anthropic.mjs): the value stays
     // in the environment, read by the listener's Anthropic endpoint only.
     claudeCredential: credentialName(env),
-    // Where that endpoint sends sandboxes' requests: the listener's own ANTHROPIC_BASE_URL.
-    anthropicUrl: (env.ANTHROPIC_BASE_URL || "https://api.anthropic.com").replace(/\/$/, ""),
+    // Where that endpoint sends sandboxes' requests: Anthropic, or an Anthropic-compatible
+    // gateway (OpenRouter, a company's). The operator's only: a repo that could set it would
+    // send its code and the credential elsewhere.
+    anthropicUrl: anthropicUrl(setting("ANTHROPIC_BASE_URL"), label("ANTHROPIC_BASE_URL")),
+    // What opus, sonnet and haiku mean to the sandboxes' Claude Code, by name: a gateway's
+    // models have its own names. Empty: Claude Code's defaults.
+    modelAliases: Object.fromEntries(
+      [
+        ["ANTHROPIC_DEFAULT_OPUS_MODEL", setting("ANTHROPIC_DEFAULT_OPUS_MODEL")],
+        ["ANTHROPIC_DEFAULT_SONNET_MODEL", setting("ANTHROPIC_DEFAULT_SONNET_MODEL")],
+        ["ANTHROPIC_DEFAULT_HAIKU_MODEL", setting("ANTHROPIC_DEFAULT_HAIKU_MODEL")],
+      ]
+        .filter(([, value]) => value)
+        .map(([name, value]) => [name, modelName(value, label(name))]),
+    ),
     githubApi: (setting("GITHUB_API") || "https://api.github.com").replace(/\/$/, ""),
     githubUrl: (setting("GITHUB_URL") || "https://github.com").replace(/\/$/, ""),
     users,

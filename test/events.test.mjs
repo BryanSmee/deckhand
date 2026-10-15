@@ -258,6 +258,13 @@ test("trigger lines and options", () => {
     "/effort huge\nhello",
   );
   assert.deepEqual(options, { model: "sonnet", effort: "high" });
+  // A gateway's names; not a sentence that starts with /model.
+  const gateway = {};
+  assert.equal(
+    takeOptions("/model openai/gpt-5\n/model the best one\nhi", gateway),
+    "/model the best one\nhi",
+  );
+  assert.deepEqual(gateway, { model: "openai/gpt-5" });
 });
 
 test("a /mode line picks the mode, and is never taken for /model", () => {

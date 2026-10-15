@@ -9,7 +9,8 @@ that GitHub can reach (your reverse proxy, or a tunnel) forwarding to the listen
 ```sh
 cp .env.example .env
 # ALLOWED_USERS: the GitHub logins allowed to start runs (required: no start without it)
-# CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-token`) or ANTHROPIC_API_KEY
+# CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-token`) or ANTHROPIC_API_KEY (or a gateway's
+#   ANTHROPIC_AUTH_TOKEN: see Through a gateway below)
 # Optional: the other settings in a file you can commit (see Settings below); then
 # uncomment its line under the listener's volumes in compose.yaml
 cp config.example.yaml config.yaml
@@ -228,30 +229,64 @@ onboarding: true
 needs_input_label: needs-input
 ```
 
-| Setting                                          | `config.yaml` key                                | Default                            | What                                                                            |
-| ------------------------------------------------ | ------------------------------------------------ | ---------------------------------- | ------------------------------------------------------------------------------- |
-| `ALLOWED_USERS`                                  | `allowed_users`                                  | none: required                     | GitHub logins that can start runs                                               |
-| `ALLOWED_REPOS`                                  | `allowed_repos`                                  | all where the App is installed     | narrows the repos (`owner/repo`, comma-separated in `.env`)                     |
-| `CLAUDE_CODE_OAUTH_TOKEN` / `ANTHROPIC_API_KEY`  | none: a secret, `.env` only                      |                                    | Claude credential, added by the listener to the sandboxes' API calls            |
-| `ANTHROPIC_BASE_URL`                             | none: `.env` only                                | `https://api.anthropic.com`        | where the listener sends the sandboxes' API calls (an API gateway, say)         |
-| `PUBLIC_URL`                                     | `public_url`                                     | stored by `/setup`                 | the listener's public address                                                   |
-| `PORT`                                           | none: compose's                                  | `8080`                             | the host port compose publishes the listener on                                 |
-| `CLAUDE_CODE_VERSION`                            | `claude_code_version`                            | `2.1.300`                          | Claude Code version the sandboxes install on first use                          |
-| `SANDBOX_MODEL`, `SANDBOX_EFFORT`                | `sandbox_model`, `sandbox_effort`                | `opus`, `medium`                   | defaults; a comment's `/model` and `/effort` lines override them                |
-| `BRAINSTORM_MODEL`, `BRAINSTORM_EFFORT`          | `brainstorm_model`, `brainstorm_effort`          | `SANDBOX_MODEL`, `SANDBOX_EFFORT`  | the same for brainstorms, inbox entries and discussions                         |
-| `BRAINSTORM_IDLE_MINUTES`                        | `brainstorm_idle_minutes`                        | `10`                               | minutes without a comment before a brainstorm shows as idle                     |
-| `MAX_PARALLEL`                                   | `max_parallel`                                   | `2`                                | sandboxes running at once (a repo's `max_parallel` within it)                   |
-| `ALLOWED_HOSTS`                                  | `allowed_hosts`                                  | none                               | hosts every sandbox may reach besides Anthropic and GitHub                      |
-| `SANDBOX_CPUS`, `SANDBOX_MEMORY`, `SANDBOX_PIDS` | `sandbox_cpus`, `sandbox_memory`, `sandbox_pids` | `2`, `4g`, `2048`                  | each sandbox's limits (per repo: the grants folder)                             |
-| `TRIGGER`                                        | `trigger`                                        | `Deckhand`                         | first line of a comment that starts a run                                       |
-| `ONBOARDING`                                     | `onboarding`                                     | on                                 | `off`: no onboarding issue when the App is installed on a repo without a config |
-| `NEEDS_INPUT_LABEL`                              | `needs_input_label`                              | `needs-input`                      | label while a run or an issue waits for answers (empty: none)                   |
-| `CONFLICT_CHECK_MINUTES`                         | `conflict_check_minutes`                         | `5`                                | shortest interval of a repo's `conflicts.check_minutes`; `0` turns it off       |
-| `NAME_PREFIX`, `CLAUDE_CODE_VOLUME`              | `name_prefix`, `claude_code_volume`              | `deckhand`, `deckhand-claude-code` | names of what the listener creates on Docker                                    |
-| `DOCKER_SOCKET`                                  | none: compose's                                  | `/var/run/docker.sock`             | the host's Docker socket, as preview hooks mount it                             |
-| `DECKHAND_VERSION`                               | none: compose's                                  | `latest`                           | the release compose runs (`1.2.3`, `1.2`): see [Updating](#updating)            |
-| `DECKHAND_REGISTRY`                              | none: compose's                                  | `ghcr.io/bryansmee`                | where compose pulls the images from                                             |
-| `SANDBOX_NETWORK`, `SHOTS_VOLUME`, `RUNS_VOLUME` | none: compose's                                  | `deckhand-…`                       | names of the network and volumes compose creates and the listener uses          |
+| Setting                                                                                           | `config.yaml` key                                                                                 | Default                            | What                                                                                                       |
+| ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- | ---------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `ALLOWED_USERS`                                                                                   | `allowed_users`                                                                                   | none: required                     | GitHub logins that can start runs                                                                          |
+| `ALLOWED_REPOS`                                                                                   | `allowed_repos`                                                                                   | all where the App is installed     | narrows the repos (`owner/repo`, comma-separated in `.env`)                                                |
+| `CLAUDE_CODE_OAUTH_TOKEN` / `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN`                          | none: a secret, `.env` only                                                                       |                                    | Claude credential, added by the listener to the sandboxes' API calls (`ANTHROPIC_AUTH_TOKEN`: a gateway's) |
+| `ANTHROPIC_BASE_URL`                                                                              | `anthropic_base_url`                                                                              | `https://api.anthropic.com`        | where the listener sends the sandboxes' API calls: a [gateway](#through-a-gateway), say                    |
+| `ANTHROPIC_DEFAULT_OPUS_MODEL`, `ANTHROPIC_DEFAULT_SONNET_MODEL`, `ANTHROPIC_DEFAULT_HAIKU_MODEL` | `anthropic_default_opus_model`, `anthropic_default_sonnet_model`, `anthropic_default_haiku_model` | Claude Code's                      | the models `opus`, `sonnet` and `haiku` stand for in the sandboxes (a gateway's names)                     |
+| `PUBLIC_URL`                                                                                      | `public_url`                                                                                      | stored by `/setup`                 | the listener's public address                                                                              |
+| `PORT`                                                                                            | none: compose's                                                                                   | `8080`                             | the host port compose publishes the listener on                                                            |
+| `CLAUDE_CODE_VERSION`                                                                             | `claude_code_version`                                                                             | `2.1.300`                          | Claude Code version the sandboxes install on first use                                                     |
+| `SANDBOX_MODEL`, `SANDBOX_EFFORT`                                                                 | `sandbox_model`, `sandbox_effort`                                                                 | `opus`, `medium`                   | defaults; a comment's `/model` and `/effort` lines override them                                           |
+| `BRAINSTORM_MODEL`, `BRAINSTORM_EFFORT`                                                           | `brainstorm_model`, `brainstorm_effort`                                                           | `SANDBOX_MODEL`, `SANDBOX_EFFORT`  | the same for brainstorms, inbox entries and discussions                                                    |
+| `BRAINSTORM_IDLE_MINUTES`                                                                         | `brainstorm_idle_minutes`                                                                         | `10`                               | minutes without a comment before a brainstorm shows as idle                                                |
+| `MAX_PARALLEL`                                                                                    | `max_parallel`                                                                                    | `2`                                | sandboxes running at once (a repo's `max_parallel` within it)                                              |
+| `ALLOWED_HOSTS`                                                                                   | `allowed_hosts`                                                                                   | none                               | hosts every sandbox may reach besides Anthropic and GitHub                                                 |
+| `SANDBOX_CPUS`, `SANDBOX_MEMORY`, `SANDBOX_PIDS`                                                  | `sandbox_cpus`, `sandbox_memory`, `sandbox_pids`                                                  | `2`, `4g`, `2048`                  | each sandbox's limits (per repo: the grants folder)                                                        |
+| `TRIGGER`                                                                                         | `trigger`                                                                                         | `Deckhand`                         | first line of a comment that starts a run                                                                  |
+| `ONBOARDING`                                                                                      | `onboarding`                                                                                      | on                                 | `off`: no onboarding issue when the App is installed on a repo without a config                            |
+| `NEEDS_INPUT_LABEL`                                                                               | `needs_input_label`                                                                               | `needs-input`                      | label while a run or an issue waits for answers (empty: none)                                              |
+| `CONFLICT_CHECK_MINUTES`                                                                          | `conflict_check_minutes`                                                                          | `5`                                | shortest interval of a repo's `conflicts.check_minutes`; `0` turns it off                                  |
+| `NAME_PREFIX`, `CLAUDE_CODE_VOLUME`                                                               | `name_prefix`, `claude_code_volume`                                                               | `deckhand`, `deckhand-claude-code` | names of what the listener creates on Docker                                                               |
+| `DOCKER_SOCKET`                                                                                   | none: compose's                                                                                   | `/var/run/docker.sock`             | the host's Docker socket, as preview hooks mount it                                                        |
+| `DECKHAND_VERSION`                                                                                | none: compose's                                                                                   | `latest`                           | the release compose runs (`1.2.3`, `1.2`): see [Updating](#updating)                                       |
+| `DECKHAND_REGISTRY`                                                                               | none: compose's                                                                                   | `ghcr.io/bryansmee`                | where compose pulls the images from                                                                        |
+| `SANDBOX_NETWORK`, `SHOTS_VOLUME`, `RUNS_VOLUME`                                                  | none: compose's                                                                                   | `deckhand-…`                       | names of the network and volumes compose creates and the listener uses                                     |
+
+### Through a gateway
+
+Claude Code can go through an Anthropic-compatible gateway instead of Anthropic:
+[OpenRouter](https://openrouter.ai), your company's LLM gateway. Sandboxes still call the
+listener, which forwards their calls to `ANTHROPIC_BASE_URL` with your credential: they never
+reach the gateway themselves, so it needs no host in `ALLOWED_HOSTS`. Only you set it; a
+repository's config can't. With OpenRouter, in `.env`:
+
+```sh
+ANTHROPIC_AUTH_TOKEN=sk-or-v1-…   # your OpenRouter key, sent as Authorization: Bearer
+```
+
+and in `config.yaml`:
+
+```yaml
+anthropic_base_url: https://openrouter.ai/api
+# What opus, sonnet and haiku mean (haiku runs Claude Code's background tasks).
+anthropic_default_opus_model: anthropic/claude-opus-4.1
+anthropic_default_sonnet_model: anthropic/claude-sonnet-4.5
+anthropic_default_haiku_model: anthropic/claude-haiku-4.5
+sandbox_model: opus
+```
+
+Leave `CLAUDE_CODE_OAUTH_TOKEN` and `ANTHROPIC_API_KEY` empty: `ANTHROPIC_AUTH_TOKEN` wins
+over them anyway, as in Claude Code. `SANDBOX_MODEL`, `BRAINSTORM_MODEL`, a repository's
+`model` and a comment's `/model` line take the gateway's names too (`/model openai/gpt-5`).
+
+Claude Code is built for Claude models: others, through a gateway, are uneven at its tool
+calls (edits, long sessions, thinking), and a run can stop halfway or misuse a tool. Try a
+model on a small issue before giving it real work. Restart the listener after changing these
+settings; switching back to Anthropic is emptying `anthropic_base_url` and setting your
+Anthropic credential.
 
 ### Advanced settings
 
