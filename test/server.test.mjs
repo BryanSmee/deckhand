@@ -85,10 +85,11 @@ case "$1" in
     cp "\${@: -1}/docker/Dockerfile" "${dir}/built-dockerfile" ;;
   run)
     case "$*" in *--entrypoint*) echo "$*" >> "${dir}/docker-calls"; exit 0 ;; esac
-    # run-args last: tests wait for it, then read the others.
-    echo "$DECKHAND_RUN_SECRET" > "${dir}/run-secret"
-    env > "${dir}/run-env"
-    printf '%s\\n' "$@" > "${dir}/run-args"
+    # Each file renamed into place, so a test never reads one half-written; run-args last:
+    # tests wait for it, then read the others. (Not .tmp: tests look for leftover state writes.)
+    echo "$DECKHAND_RUN_SECRET" > "${dir}/run-secret.part" && mv "${dir}/run-secret.part" "${dir}/run-secret"
+    env > "${dir}/run-env.part" && mv "${dir}/run-env.part" "${dir}/run-env"
+    printf '%s\\n' "$@" > "${dir}/run-args.part" && mv "${dir}/run-args.part" "${dir}/run-args"
     name=$(printf '%s\\n' "$@" | grep -A1 -x -- --name | tail -1)
     run=$(printf '%s\\n' "$@" | sed -n 's/^deckhand\\.run=//p')
     mkdir -p "$c/$name"
