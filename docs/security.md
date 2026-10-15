@@ -80,6 +80,29 @@ So what a run copied out (through an allowed host) can be used against its own r
 with those permissions, for up to an hour. Uninstalling the App, or suspending its
 installation, revokes its tokens at once.
 
+### The Claude credential
+
+Your `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY` outlives everything else a sandbox
+could hold, and works for anyone: **no sandbox gets it**. Runs read text anyone may write
+(issue and discussion comments, a fork's code), and their final message is posted as is: a
+credential in the sandbox's environment could be read by Claude's tools or the repo's setup
+and end up in a public comment.
+
+- A sandbox's Claude Code calls the listener instead of Anthropic (`ANTHROPIC_BASE_URL` set
+  to `<broker>/anthropic`, `listener/anthropic.mjs`), with the run's secret in the variable
+  your credential would be in, so it keeps its mode (an OAuth token as
+  `Authorization: Bearer`, an API key as `x-api-key`; the API key wins when you set both,
+  as in Claude Code).
+- The listener refuses a secret that isn't a live run's, replaces it with your credential in
+  the same header and forwards the call to Anthropic (or to the listener's own
+  `ANTHROPIC_BASE_URL`), streaming the answer back.
+- So a run's secret can call the API with your credential while the run lasts, and nothing
+  after: what a run copied out of its sandbox can't.
+- The listener redacts your credential and the run's secret from the sandbox's output
+  before writing the run's log (what the dashboard shows) and from its reply before posting
+  it, as `[redacted]`. Only the exact value: an encoded or split one gets through, which is
+  why the credential isn't there to begin with.
+
 ## Mounts
 
 A sandbox only gets Docker named volumes:
@@ -268,7 +291,7 @@ and `DELETE` (`docker run`, `ps`, `logs`, `inspect`, `wait`, `rm`, `cp`, `build`
 
 ```
 sandbox ──(deckhand-sandboxes, internal: no route out)──▶ egress proxy ──▶ allowed hosts
-   └──────────────────────────────────────────────────▶ listener (token broker)
+   └──────────────────────────────────────────────────▶ listener (broker, Claude's API calls)
 ```
 
 - The sandboxes' network is **internal**: Docker gives it no route out. The listener checks
@@ -327,18 +350,20 @@ mode.
 
 **Mandatory hosts**, always allowed:
 
-| Host                      | For                                                  |
-| ------------------------- | ---------------------------------------------------- |
-| `api.anthropic.com`       | Claude Code: the API, and WebFetch's domain check    |
-| `github.com`              | git over HTTPS (`GITHUB_URL`)                        |
-| `api.github.com`          | `gh` and the API (`GITHUB_API`)                      |
-| `*.githubusercontent.com` | raw files, release downloads, avatars                |
-| the listener              | the token broker, directly on the sandboxes' network |
+| Host                      | For                                         |
+| ------------------------- | ------------------------------------------- |
+| `api.anthropic.com`       | Claude Code: WebFetch's domain check        |
+| `github.com`              | git over HTTPS (`GITHUB_URL`)               |
+| `api.github.com`          | `gh` and the API (`GITHUB_API`)             |
+| `*.githubusercontent.com` | raw files, release downloads, avatars       |
+| the listener              | the broker and Claude's API calls, directly |
 
 That list was checked against Claude Code 2.1.300 (the pinned version) by reading the hosts
 in its binary. With `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` (set in the image) and the
 credential in `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`) or
-`ANTHROPIC_API_KEY`, Claude Code only calls `api.anthropic.com`:
+`ANTHROPIC_API_KEY`, Claude Code sends its API calls to the listener (`ANTHROPIC_BASE_URL`,
+see [The Claude credential](#the-claude-credential)) and nothing else but WebFetch's domain
+check to `api.anthropic.com`:
 
 - not `platform.claude.com`: it refreshes OAuth credentials stored by `/login`, which a
   sandbox doesn't use (`setup-token` tokens aren't refreshed);

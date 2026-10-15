@@ -9,6 +9,7 @@
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { createAuth, sessionKey } from "./auth.mjs";
+import { createAnthropicProxy } from "./anthropic.mjs";
 import { createBroker } from "./broker.mjs";
 import { createGitGateway } from "./git-gateway.mjs";
 import { createPrReady } from "./pr-ready.mjs";
@@ -253,6 +254,14 @@ ctx.gitGateway = createGitGateway({
   broker: ctx.broker,
   app: () => ctx.app,
   githubUrl: config.githubUrl,
+  log,
+});
+// Their Claude Code's API calls, with the operator's credential that they never see.
+ctx.anthropic = createAnthropicProxy({
+  broker: ctx.broker,
+  name: config.claudeCredential,
+  credential: config.claudeCredential && env[config.claudeCredential],
+  upstream: config.anthropicUrl,
   log,
 });
 // Their pull requests ready for review (or back to draft): their own token can't.

@@ -96,12 +96,20 @@ case "$1" in
         echo "$host $(curl -fsS "$DECKHAND_BROKER_URL/egress?ip=10.9.0.5&host=$host")" \\
           >> "${dir}/egress"
       done
+      # Claude Code'"'"'s API call, through the listener, with the run'"'"'s secret.
+      if [ -n "$CLAUDE_CODE_OAUTH_TOKEN" ]; then
+        curl -sS -X POST -H "Authorization: Bearer $CLAUDE_CODE_OAUTH_TOKEN" \\
+          -d "{}" "$ANTHROPIC_BASE_URL/v1/messages?beta=true" > "${dir}/anthropic-answer"
+      fi
       # Not all of stdout is Claude'"'"'s: gh prints the draft pull request'"'"'s address.
       echo "https://github.com/org/repo/pull/13"
       if [ -e "${dir}/hold" ]; then
         until [ -e "${dir}/go" ]; do sleep 0.05; done
       fi
-      echo "{\\"type\\":\\"result\\",\\"result\\":\\"All done.\\",\\"duration_ms\\":60000}"
+      result="All done."
+      # A run talked into posting secrets: its own, and whatever the test leaves in leak.
+      [ -e "${dir}/leak" ] && result="Leaked $DECKHAND_RUN_SECRET and $(cat "${dir}/leak")."
+      echo "{\\"type\\":\\"result\\",\\"result\\":\\"$result\\",\\"duration_ms\\":60000}"
       node "${inbox}" "${dir}/runs/$1/inbox.jsonl" | while IFS= read -r line; do
         echo "$line" >> "${dir}/delivered"
         if [ -e "${dir}/hold-answer" ]; then
@@ -460,6 +468,40 @@ test("unsigned or oversized deliveries are refused before their body is read", a
     body,
   });
   assert.equal(res.status, 202);
+});
+
+test("the Claude credential stays out of sandboxes, and a reply leaking secrets is redacted", async (t) => {
+  const credential = "sk-ant-oat01-operator-credential";
+  const { dir, github, send, listener } = await listen(
+    t,
+    (dir) => (writeFileSync(join(dir, "leak"), credential), {}),
+    (dir, github) => ({ CLAUDE_CODE_OAUTH_TOKEN: credential, ANTHROPIC_BASE_URL: github.url }),
+  );
+  await send(comment("alice"));
+  const reply = await github.waitFor((r) => r.path === "/repos/org/repo/issues/12/comments");
+  await listener.until("done (ok)");
+
+  // The sandbox has the run's secret where the credential would be, and the listener's URL.
+  const secret = readFileSync(join(dir, "run-secret"), "utf8").trim();
+  const runEnv = readFileSync(join(dir, "run-env"), "utf8");
+  assert.ok(!runEnv.includes(credential));
+  assert.match(runEnv, new RegExp(`^CLAUDE_CODE_OAUTH_TOKEN=${secret}$`, "m"));
+  assert.doesNotMatch(runEnv, /^ANTHROPIC_API_KEY=/m);
+  assert.match(runEnv, /^ANTHROPIC_BASE_URL=http:\/\/127\.0\.0\.1:\d+\/anthropic$/m);
+
+  // Its API call reached "Anthropic" with the operator's credential, not the secret.
+  const call = await github.waitFor((r) => r.path === "/v1/messages?beta=true");
+  assert.equal(call.auth, `Bearer ${credential}`);
+  assert.deepEqual(JSON.parse(readFileSync(join(dir, "anthropic-answer"), "utf8")), { id: 1 });
+
+  // Neither secret is posted, nor stored in the run's log.
+  const body = JSON.parse(reply.body).body;
+  assert.match(body, /^Leaked \[redacted\] and \[redacted\]\./);
+  assert.ok(!body.includes(secret) && !body.includes(credential));
+  for (const file of readdirSync(join(dir, "logs"))) {
+    const log = readFileSync(join(dir, "logs", file), "utf8");
+    assert.ok(!log.includes(secret) && !log.includes(credential));
+  }
 });
 
 test("a webhook from the App runs a sandbox that gets its repo's token from the broker", async (t) => {
