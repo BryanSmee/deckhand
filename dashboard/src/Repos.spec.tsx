@@ -218,6 +218,43 @@ test("a repository's panel: errors first, then what runs get, then the file", as
   expect(within(await screen.findByRole("list")).getAllByText("Invalid config")).toHaveLength(2);
 });
 
+test("a config that parses but asks for what isn't granted: Invalid config, not Configured", async () => {
+  const listed = fetch;
+  vi.stubGlobal("fetch", async (url: string, init?: RequestInit) => {
+    if (url !== "api/repos/org/api/config") return listed(url, init);
+    return Response.json({
+      ...CONFIG,
+      // The server's verdict: no run starts.
+      repo: repo("org/api", { status: "invalid", readAt: Date.now() }),
+      errors: [],
+      effective: {
+        ...CONFIG.effective,
+        settings: [
+          {
+            key: "dockerfile",
+            value: ".deckhand/Dockerfile",
+            source: "refused",
+            note: "the operator's grants file doesn't set allow_dockerfile: true for this repository",
+          },
+        ],
+        hosts: [],
+      },
+    });
+  });
+  render(<Page />);
+  expect(within(await screen.findByRole("list")).getAllByText("Configured")).toHaveLength(1);
+  fireEvent.click(screen.getByRole("button", { name: "org/api" }));
+  const alert = await screen.findByRole("alert");
+  expect(alert.textContent).toContain("dockerfile: the operator's grants file");
+  const heading = screen.getByRole("heading", { name: /org\/api/ }).textContent;
+  expect(heading).toContain("Invalid config");
+  expect(heading).not.toContain("Configured");
+  fireEvent.click(screen.getByRole("button", { name: "← Repositories" }));
+  const list = await screen.findByRole("list");
+  expect(within(list).getAllByText("Invalid config")).toHaveLength(2);
+  expect(within(list).queryByText("Configured")).toBeNull();
+});
+
 test("a repository without a config: the operator's defaults, said so", async () => {
   render(<Page />);
   fireEvent.click(await screen.findByRole("button", { name: "org/app" }));

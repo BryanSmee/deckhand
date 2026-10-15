@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import { generateKeyPairSync } from "node:crypto";
-import { mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { loadConfig } from "../listener/config.mjs";
+import { parseGrants } from "../listener/grants.mjs";
 import { createGitHubApp } from "../listener/github-app.mjs";
 import { createOnboardingStore } from "../listener/onboarding.mjs";
 import {
@@ -99,7 +100,13 @@ function fakeGitHub({ first = [], second = [], configured = [], files = {} } = {
   return { fetch, calls };
 }
 
-function setup({ env = {}, ...repos } = {}) {
+// `grants`: the parsed grants file, an Error (it has errors), or a function returning either.
+const grantsOf = (grants) => () => {
+  const value = typeof grants === "function" ? grants() : grants;
+  return value instanceof Error ? throwing(value) : value;
+};
+
+function setup({ env = {}, grants = new Map(), fs, ...repos } = {}) {
   const gh = fakeGitHub(repos);
   const clock = { now: 1_000_000 };
   const app = createGitHubApp({
@@ -108,7 +115,14 @@ function setup({ env = {}, ...repos } = {}) {
   });
   const config = loadConfig({ ALLOWED_USERS: "alice", ...env });
   const store = createOnboardingStore(join(mkdtempSync(join(tmpdir(), "repos-")), "o.json"));
-  const list = createRepoList({ app, config, store, now: () => clock.now });
+  const list = createRepoList({
+    app,
+    config,
+    store,
+    grants: grantsOf(grants),
+    fs,
+    now: () => clock.now,
+  });
   return { gh, clock, app, config, store, list };
 }
 
@@ -250,12 +264,12 @@ async function call(
 }
 
 function apiSetup({ grants = new Map(), fs, ...opts } = {}) {
-  const s = setup(opts);
+  const s = setup({ grants, fs, ...opts });
   const started = [];
   const api = createRepoApi({
     config: s.config,
     list: s.list,
-    grants: () => (grants instanceof Error ? throwing(grants) : grants),
+    grants: grantsOf(grants),
     fs,
     now: () => s.clock.now,
     publicUrl: () => "https://deckhand.example.com",
@@ -350,6 +364,104 @@ test("an invalid config shows as such in the list", async () => {
   assert.equal(rows[0].readAt, 1_000_000);
 });
 
+// What runs refuse, each against the grant that allows it: [.deckhand.yaml, grants file].
+function refusedCases(root) {
+  return {
+    dockerfile: ["dockerfile: .deckhand/Dockerfile\n", "allow_dockerfile: true"],
+    preview: ["preview:\n  command: ./preview.sh\n", "allow_preview: true"],
+    hosts: ["hosts: [pypi.org]\n", "allow_repo_hosts: true"],
+    mounts: [`mounts: [${root}/data]\n`, `mounts: [${root}]`],
+  };
+}
+
+function refusedSetup() {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "repos-mounts-")));
+  mkdirSync(join(root, "data"));
+  const cases = refusedCases(root);
+  const files = Object.fromEntries(Object.entries(cases).map(([k, [file]]) => [`org/${k}`, file]));
+  const grants = { text: "" };
+  const s = apiSetup({
+    first: Object.keys(cases).map((k) => info(`org/${k}`)),
+    files,
+    grants: () => parseGrants(grants.text, s.config),
+  });
+  return { ...s, cases, grants };
+}
+
+const statuses = async (api) =>
+  Object.fromEntries(
+    (await call(api, "GET", "/api/repos")).body.repos.map((r) => [r.repo, r.status]),
+  );
+
+test("a config the operator's grants refuse is invalid: no run starts there", async () => {
+  const { api, cases } = refusedSetup();
+  // Each file parses: only the grants refuse it.
+  assert.deepEqual(await statuses(api), {
+    "org/dockerfile": "invalid",
+    "org/hosts": "invalid",
+    "org/mounts": "invalid",
+    "org/preview": "invalid",
+  });
+  for (const repo of Object.keys(cases)) {
+    const { body } = await call(api, "GET", `/api/repos/org/${repo}/config`);
+    assert.deepEqual(body.errors, [], repo);
+    assert.equal(body.repo.status, "invalid", repo);
+  }
+});
+
+test("a fully granted config is configured; editing the grants file shows without GitHub", async () => {
+  const { api, gh, cases, grants } = refusedSetup();
+  await statuses(api);
+  const reads = configReads(gh.calls);
+  grants.text = Object.entries(cases)
+    .map(([repo, [, grant]]) => `org/${repo}:\n  ${grant}\n`)
+    .join("");
+  assert.deepEqual(await statuses(api), {
+    "org/dockerfile": "configured",
+    "org/hosts": "configured",
+    "org/mounts": "configured",
+    "org/preview": "configured",
+  });
+  for (const repo of Object.keys(cases)) {
+    const { body } = await call(api, "GET", `/api/repos/org/${repo}/config`);
+    assert.equal(body.repo.status, "configured", repo);
+  }
+  // The list read no config again: the grants are checked against the kept settings.
+  assert.equal(configReads(gh.calls), reads + Object.keys(cases).length);
+  grants.text = "";
+  assert.equal((await statuses(api))["org/preview"], "invalid");
+});
+
+test("a grants file with errors makes every configured repo invalid, not the others", async () => {
+  const { api } = apiSetup({
+    first: [info("org/app"), info("org/new")],
+    configured: ["org/app"],
+    grants: new Error("grants: bad"),
+  });
+  assert.deepEqual(await statuses(api), { "org/app": "invalid", "org/new": "not-onboarded" });
+  const { body } = await call(api, "GET", "/api/repos/org/app/config");
+  assert.equal(body.repo.status, "invalid");
+});
+
+test("the list's refused checks are the run preflight's: both go through grantCheck()", () => {
+  const runs = readFileSync(new URL("../listener/runs.mjs", import.meta.url), "utf8");
+  const preflight = runs.slice(runs.indexOf("function grantedAccess("));
+  const body = preflight.slice(0, preflight.indexOf("\n  }\n"));
+  assert.match(body, /grantCheck\(config, repo, settings\)/);
+  // None of the checks is made on the side, where the list wouldn't see it.
+  for (const piece of [
+    "loadGrants(",
+    "grantFor(",
+    "refusedRepoHosts(",
+    "ungranted(",
+    "resolveMounts(",
+  ]) {
+    assert.ok(!body.includes(piece), piece);
+  }
+  const repos = readFileSync(new URL("../listener/repos.mjs", import.meta.url), "utf8");
+  assert.match(repos, /refusedByGrants\(grantCheck\(config, info\.full_name, settings/);
+});
+
 test("GET config: raw text, errors, warnings and what runs get; its row updated", async () => {
   const { api, gh, clock } = apiSetup({
     env: { ALLOWED_USERS: "alice,bob", ALLOWED_HOSTS: "registry.npmjs.org" },
@@ -368,7 +480,8 @@ test("GET config: raw text, errors, warnings and what runs get; its row updated"
   assert.deepEqual(body.errors, []);
   assert.deepEqual(body.warnings, ["users not in ALLOWED_USERS, ignored: carol"]);
   assert.equal(body.grantsError, null);
-  assert.equal(body.repo.status, "configured");
+  // Its refused host stops every run: the row says so too.
+  assert.equal(body.repo.status, "invalid");
   // Read now, not from the list's cache.
   assert.equal(body.readAt, 1_001_000);
   assert.equal(configReads(gh.calls), 2);

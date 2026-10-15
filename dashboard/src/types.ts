@@ -109,8 +109,9 @@ export type Entry =
   | { kind: "output"; text: string; error: boolean }
   | { kind: "result"; status: "ok" | "needs-input" | "error"; text: string; minutes: number };
 
-// configured: its default branch has .deckhand.yaml; invalid: it has, with errors (no run
-// starts); onboarding: its onboarding issue is open; unknown: GitHub didn't say.
+// configured: its default branch has .deckhand.yaml; invalid: it has, but no run starts (the
+// file has errors, or asks for what the operator's grants refuse); onboarding: its onboarding
+// issue is open; unknown: GitHub didn't say.
 export type RepoStatus = "configured" | "invalid" | "onboarding" | "not-onboarded" | "unknown";
 
 export interface Repo {

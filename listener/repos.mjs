@@ -1,7 +1,7 @@
 // The dashboard's repository list: every repo the App is installed on that ALLOWED_REPOS
 // lets through, with whether it is set up (a .deckhand.yaml on its default branch), set up
-// with errors, being onboarded (an issue in onboarding.json) or neither, and the button that
-// starts onboarding.
+// so that no run starts (errors, or what the operator's grants refuse), being onboarded (an
+// issue in onboarding.json) or neither, and the button that starts onboarding.
 //
 //   GET  /api/repos                       the list
 //   POST /api/repos/refresh               the list, read again from GitHub
@@ -11,9 +11,9 @@
 //
 // GitHub is asked as little as possible: the installations' repos are listed again every
 // LIST_MS, and each repo's config is read once per CONFIG_MS, or again after a delivery says
-// it may have changed (refresh()), or the dashboard asks. The onboarding status comes from
-// onboarding.json, so it shows at once.
-import { loadGrants } from "./grants.mjs";
+// it may have changed (refresh()), or the dashboard asks. The operator's grants file and the
+// onboarding status are read at each list, so their changes show at once.
+import { grantCheck, loadGrants, refusedByGrants } from "./grants.mjs";
 import { CONFIG_FILE, defaultSettings, parseRepoConfig, readRepoFile } from "./repo-config.mjs";
 import { effectiveView } from "./repo-view.mjs";
 import { sendJson } from "./web.mjs";
@@ -39,10 +39,10 @@ async function paginate(get, path, items) {
   }
 }
 
-// One row: "configured", "invalid" (its config has errors: no run starts), "onboarding"
-// (with its issue) or "not-onboarded"; "unknown" when its config couldn't be read. `found`:
-// { has, invalid, at } as last read, or null. `issues: false`: it can't be onboarded, its
-// issues are off.
+// One row: "configured", "invalid" (no run starts: its config has errors, or asks for what the
+// operator's grants refuse), "onboarding" (with its issue) or "not-onboarded"; "unknown" when
+// its config couldn't be read. `found`: { has, invalid, at } as last read, or null.
+// `issues: false`: it can't be onboarded, its issues are off.
 export function repoStatus(info, found, onboarded) {
   const row = {
     repo: info.full_name,
@@ -67,11 +67,22 @@ export function repoStatus(info, found, onboarded) {
 }
 
 // `app`: asApp(), asInstallation(), request() and remember() (github-app.mjs). `store`: the
-// onboarding store (onboarding.mjs).
-export function createRepoList({ app, config, store, now = Date.now, log = () => {} }) {
+// onboarding store (onboarding.mjs). `grants()` and `fs` (realpath, stat): what a run reads
+// too, the operator's grants file and the listener's filesystem.
+export function createRepoList({
+  app,
+  config,
+  store,
+  grants = () => loadGrants(config),
+  fs = {},
+  now = Date.now,
+  log = () => {},
+}) {
   let listing = null; // Promise<repo infos>, while fresh
   let listedAt = 0;
-  const configs = new Map(); // "owner/repo" → { at, base, has, invalid }
+  // "owner/repo" → { at, base, has, errors, settings }: the parsed settings are kept (not the
+  // text) so the grant checks run again at each list, without asking GitHub.
+  const configs = new Map();
 
   const allowed = (repo) => !config.repos.length || config.repos.includes(repo.toLowerCase());
 
@@ -108,25 +119,55 @@ export function createRepoList({ app, config, store, now = Date.now, log = () =>
     return listing;
   }
 
+  // The grants file once per list: a function that returns it, or throws its error.
+  function grantsOnce() {
+    try {
+      const parsed = grants();
+      return () => parsed;
+    } catch (error) {
+      return () => {
+        throw error;
+      };
+    }
+  }
+
+  // What the row shows: { has, invalid, at }. Invalid when no run would start: the file's
+  // errors, or what the operator's grants refuse in it (as grantCheck() is the run's
+  // preflight). Checked at each call: an edited grants file shows without reading GitHub.
+  function judged(info, known, load) {
+    if (!known) return null;
+    const { at, has, errors, settings } = known;
+    const invalid =
+      has &&
+      (errors || refusedByGrants(grantCheck(config, info.full_name, settings, { load, fs })));
+    return { at, has, invalid: !!invalid };
+  }
+
   // The config of the default branch, read now: { file, parsed } (file null without one).
-  // Its text isn't kept, only whether it is there and has errors.
+  // Its text isn't kept, only whether it is there, has errors, and its settings.
   async function read(info) {
     const base = info.default_branch || "main";
     const file = await readRepoFile(app.request, info.full_name, CONFIG_FILE, base);
     const parsed = file ? parseRepoConfig(file.text, config) : null;
-    const found = { at: now(), base, has: !!file, invalid: !!parsed?.errors.length };
-    configs.set(info.full_name.toLowerCase(), found);
-    return { file, parsed, found };
+    const known = {
+      at: now(),
+      base,
+      has: !!file,
+      errors: !!parsed?.errors.length,
+      settings: parsed?.settings ?? null,
+    };
+    configs.set(info.full_name.toLowerCase(), known);
+    return { file, parsed, known };
   }
 
-  // Whether the default branch has the config, and whether it has errors: { has, invalid, at },
-  // or null when GitHub failed.
+  // The default branch's config as last read: { at, base, has, errors, settings }, or null
+  // when GitHub failed.
   async function configState(info) {
     const known = configs.get(info.full_name.toLowerCase());
     const base = info.default_branch || "main";
     if (known && known.base === base && now() - known.at < CONFIG_MS) return known;
     try {
-      return (await read(info)).found;
+      return (await read(info)).known;
     } catch (error) {
       log(`Repositories: ${info.full_name}: ${error.message ?? error}`);
       return null;
@@ -135,12 +176,14 @@ export function createRepoList({ app, config, store, now = Date.now, log = () =>
 
   async function list() {
     const infos = await repos();
+    const load = grantsOnce();
     const rows = new Array(infos.length);
     let next = 0;
     const worker = async () => {
       while (next < infos.length) {
         const i = next++;
-        rows[i] = repoStatus(infos[i], await configState(infos[i]), store.get(infos[i].full_name));
+        const found = judged(infos[i], await configState(infos[i]), load);
+        rows[i] = repoStatus(infos[i], found, store.get(infos[i].full_name));
       }
     };
     await Promise.all(Array.from({ length: Math.min(PARALLEL, infos.length) }, worker));
@@ -156,7 +199,8 @@ export function createRepoList({ app, config, store, now = Date.now, log = () =>
   async function readConfig(repo) {
     const info = (await repos()).find((r) => r.full_name.toLowerCase() === repo.toLowerCase());
     if (!info) return null;
-    const { file, parsed, found } = await read(info);
+    const { file, parsed, known } = await read(info);
+    const found = judged(info, known, grantsOnce());
     return { info, file, parsed, row: repoStatus(info, found, store.get(info.full_name)) };
   }
 

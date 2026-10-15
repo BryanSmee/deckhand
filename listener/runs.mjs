@@ -4,16 +4,9 @@
 import { randomBytes } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readdirSync, rmdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { proxyEnv, refusedRepoHosts, runHosts } from "./egress.mjs";
+import { proxyEnv, runHosts } from "./egress.mjs";
 import { commentsText, sameRepo } from "./events.mjs";
-import {
-  grantFor,
-  hardeningArgs,
-  loadGrants,
-  mountArgs,
-  resolveMounts,
-  ungranted,
-} from "./grants.mjs";
+import { grantCheck, hardeningArgs, mountArgs, resolveMounts } from "./grants.mjs";
 import { imageRef } from "./images.mjs";
 import { BUILT_IN, isFresh, isLight, kindOf, permissionsFor, sessionName } from "./modes.mjs";
 import { branchConfigReport, triggerWord } from "./onboarding.mjs";
@@ -264,31 +257,26 @@ export function createRuns(ctx) {
   // Dockerfile without their grant, stop the run, and the reply lists them.
   function grantedAccess(task, settings, note) {
     const { repo } = task;
-    let grant;
-    try {
-      grant = grantFor(loadGrants(config), config, repo);
-    } catch (error) {
-      log(`${repo}: ${error.message}`);
+    const check = grantCheck(config, repo, settings);
+    if (check.error) {
+      log(`${repo}: ${check.error.message}`);
       throw new RunError(
         "Claude can't run here: the operator's grants file has errors (see the listener's logs).",
       );
     }
-    const hosts = refusedRepoHosts(config, grant, settings);
+    const { grant, hosts, missing } = check;
     if (hosts.length) {
       throw new RunError(
         `${configErrors(task.base, hosts)}\n\nA repository's \`hosts\` only count when the operator's grants file sets \`allow_repo_hosts: true\` for it; hosts the operator already allows can stay.`,
       );
     }
-    const missing = ungranted(grant, settings);
     if (missing.length) {
       log(`${repo}: ${CONFIG_FILE} asks for what its grant doesn't allow: ${missing.join("; ")}`);
       throw new RunError(
         `${configErrors(task.base, missing)}\n\nThe operator can add these to the repository's entry in the grants file (see Deckhand's docs/security.md), or the repository can remove them from \`${CONFIG_FILE}\`.`,
       );
     }
-    const { mounts, refused, notes } = resolveMounts(settings.mounts, grant, {
-      caches: settings.caches,
-    });
+    const { mounts, refused, notes } = check.mounts;
     if (refused.length) throw new RunError(refusedMounts(refused));
     for (const text of notes) note(text);
     const { light } = task.live;
