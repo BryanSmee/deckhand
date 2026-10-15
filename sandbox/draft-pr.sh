@@ -24,11 +24,12 @@ cache=/workspace/.git/deckhand-task.json
 [ -n "${TASK_ISSUE:-}" ] || exit 0
 cd /workspace || exit 0
 
-# "Café : bientôt" → "cafe-bientot", short enough for a branch name.
+# "Café : bientôt" → "cafe-bientot", short enough for a branch name. A title with no Latin
+# letter or digit ("修复登录") gives "task": the gateway takes issue-<n>-<something> only.
 slug() {
   node -e 'process.stdout.write(require("fs").readFileSync(0, "utf8").normalize("NFD")
     .replace(/\p{M}/gu, "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+/, "")
-    .slice(0, 50).replace(/-+$/, ""))'
+    .slice(0, 50).replace(/-+$/, "") || "task")'
 }
 
 # Title and branch name of the issue, as JSON, looked up once.

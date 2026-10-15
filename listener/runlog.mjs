@@ -171,8 +171,9 @@ export function format(line, agent = agentFor()) {
   return agent.normalize(line).flatMap((event) => agentEntry(event, agent) ?? []);
 }
 
-// Server-sent events: the log so far, then new lines as they are written, until the run ends.
-export function stream(req, res, run) {
+// Server-sent events: the log so far, then new lines as they are written, until the run ends,
+// or until `allowed()` turns false (a sign-out, a repo's `users` narrowed): checked each second.
+export function stream(req, res, run, allowed = () => true) {
   res.writeHead(200, {
     "content-type": "text/event-stream",
     "cache-control": "no-cache",
@@ -183,6 +184,7 @@ export function stream(req, res, run) {
   let rest = "";
   const send = (event, data) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
   const pump = () => {
+    if (!allowed()) return stop();
     const size = statSync(run.logPath).size;
     if (size > offset) {
       const fd = openSync(run.logPath, "r");

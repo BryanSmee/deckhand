@@ -56,15 +56,20 @@ export function createRestart(ctx) {
 
   // Queued comments don't count: they are saved (saveQueue()), running sandboxes go on without
   // the listener (restoreRuns()), and brainstorms between replies are restored from
-  // brainstorms.json and their volume. Nothing needs to drain before a restart.
-  function status() {
+  // brainstorms.json and their volume. Nothing needs to drain before a restart. `sees(repo)`:
+  // which repos' runs, hooks and queues are listed (a signed-in user's, http.mjs); `idle` is
+  // the whole listener's either way.
+  function status(sees = () => true) {
     const active = ctx.runs.filter((r) => r.status === "running");
-    const reasons = [
-      ...active.map((r) => `${r.kind} run ${r.key} since ${new Date(r.startedAt).toISOString()}`),
+    const previews = ctx.previews.status();
+    const reasons = (shown) => [
+      ...active
+        .filter((r) => shown(r.repo ?? r.key.slice(0, r.key.lastIndexOf("#"))))
+        .map((r) => `${r.kind} run ${r.key} since ${new Date(r.startedAt).toISOString()}`),
       ...(inflight.size ? [`${inflight.size} reaction update(s) in flight`] : []),
       // A preview hook may be deploying: a restart waits for it too.
-      ...ctx.previews
-        .status()
+      ...previews
+        .filter((h) => shown(h.repo))
         .map(
           (h) =>
             `preview hook ${h.repo} (${h.event}) ${h.state} since ${new Date(h.since).toISOString()}`,
@@ -72,11 +77,13 @@ export function createRestart(ctx) {
     ];
     return {
       version: ctx.version,
-      idle: ctx.running === 0 && !reasons.length,
-      previews: ctx.previews.status(),
-      reasons,
+      idle: ctx.running === 0 && !reasons(() => true).length,
+      previews: previews.filter((h) => sees(h.repo)),
+      reasons: reasons(sees),
       setUp: ctx.app !== null,
-      queued: [...tasks.values()].reduce((n, t) => n + t.pending.length, 0),
+      queued: [...tasks.values()]
+        .filter((t) => sees(t.repo))
+        .reduce((n, t) => n + t.pending.length, 0),
       now: Date.now(),
     };
   }
@@ -101,7 +108,7 @@ export function createRestart(ctx) {
     for (const t of saved) {
       const key = `${t.repo}#${t.id}`;
       // ALLOWED_REPOS or ALLOWED_USERS may have changed with the restart. The repo's own
-      // users are checked when the run begins (runs.mjs).
+      // users are checked when the run begins (runs.mjs), or below for a run still going.
       t.pending = t.pending.filter((item) => {
         const refused = noLongerAllowed(config, item);
         if (!refused) return true;
@@ -121,7 +128,8 @@ export function createRestart(ctx) {
       if (!t.pending.length) continue;
       log(`${key}: ${t.pending.length} comment(s) queued before the restart`);
       if (!task.running) ctx.startLater(task);
-      else ctx.deliverLater(task);
+      // Its run began before: these comments weren't checked against the repo's users then.
+      else ctx.track(ctx.dropRefused(task).then(() => ctx.deliverLater(task)));
     }
   }
 

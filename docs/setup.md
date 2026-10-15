@@ -479,9 +479,10 @@ No sandbox gets a long-lived token, an SSH key or the host's git configuration:
 - Each run gets a random secret, valid while the run lasts.
 - Its git credential helper and `gh` wrapper send that secret to the listener's token
   broker (port 8081, on the runs' networks only, not published) on every
-  call, and get back an installation token limited to the run's repository, with issues
-  and pull requests (read and write), contents, actions and metadata (read); discussions
-  too (read and write) for runs answering a discussion, and only those. Installation tokens
+  call, and get back an installation token limited to the run's repository. A work run's
+  has issues and pull requests (read and write), contents, actions and metadata (read).
+  Brainstorms and inbox runs read pull requests only; discussion runs also write
+  discussions, and only those. Onboarding and a repository's own light modes only read. Installation tokens
   last an hour; the broker renews them before that, so a run can go on for hours.
 - Git fetches from GitHub over HTTPS with that token, and pushes through the listener's git
   gateway (same port, with the run's secret), which pushes the run's own branch only (its

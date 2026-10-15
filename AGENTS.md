@@ -72,7 +72,7 @@ docs/         setup, per-repo config reference, security model, architecture
 - **Per-repo config is read from the default branch only**, and can only narrow the
   operator's settings (users, parallel runs), never widen them. What would widen them is a
   request the operator's grants folder must grant: `mounts` only under a granted root, `hosts`
-  only with `allow_repo_hosts: true` for that repo (or `"*"`), and never `*` or `*.<tld>`
+  only with `allow_repo_hosts: true` for that repo (or in `default.yaml`), and never `*` or `*.<tld>`
   from a repo. A repo's `dockerfile` is built only with `allow_dockerfile`, its `preview`
   hook runs only with `allow_preview`, branch Dockerfiles only with
   `allow_branch_docker_images` (all three in the grants folder), never for fork pull requests.

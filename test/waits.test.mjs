@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -90,6 +90,7 @@ test("a comment waits for open issues, says so, and keeps its 👀", async () =>
   assert.equal(saved.item.eyes, 4242);
   assert.equal(saved.item.text, "Do it.");
   assert.equal(saved.item.author, "alice");
+  assert.equal(statSync(w.path).mode & 0o777, 0o600);
   // Read again when it starts; not kept.
   assert.equal(saved.item.settings, undefined);
   assert.equal(saved.item.after, undefined);

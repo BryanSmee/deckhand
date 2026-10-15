@@ -320,8 +320,12 @@ test("a preview hook or a Dockerfile without its grant: one line each, naming th
 // let the tests' user rename it: they may run as uid 1000, the sandbox's user. So `stat`
 // reads `dir` and what it holds, and shows what is above it as root's, not writable.
 const ROOT_DIR = { mode: 0o40755, uid: 0, gid: 0 };
+// Real modes under `dir`, owned by root: the tests may run as uid 1000, the sandbox's user,
+// which would own (so could chmod) every directory they create.
 const statUnder = (dir) => (path) =>
-  path === dir || path.startsWith(`${dir}/`) ? statSync(path) : ROOT_DIR;
+  path === dir || path.startsWith(`${dir}/`)
+    ? { ...ROOT_DIR, mode: statSync(path).mode }
+    : ROOT_DIR;
 
 // A root with a subfolder, a symlink inside it and one pointing out. The root and the temp
 // dir are read-only for everyone (the tests may run as uid 1000, the sandbox's user), so its
@@ -455,16 +459,19 @@ test("mounts: a directory another repo's root lets a sandbox write is refused on
   const refusedFor = (path) => resolveMounts([{ path, readOnly: false }], a, fs).refused;
   assert.match(refusedFor("/nfs/work/api")[0], /can write `\/nfs\/work` on its way/);
   assert.match(refusedFor("/nfs/work/api/src")[0], /can write `\/nfs\/work` on its way/);
-  // Read-only: not checked this way. And /nfs/work read-only for uid 1000: accepted.
+  // Read-only: not checked this way. Owned by uid 1000 but read-only: it can chmod it back.
   assert.deepEqual(resolveMounts([{ path: "/nfs/work/api", readOnly: true }], a, fs).refused, []);
   modes.set("/nfs/work", { mode: 0o40555, uid: 1000, gid: 1000 });
+  assert.match(refusedFor("/nfs/work/api/src")[0], /can write `\/nfs\/work` on its way/);
+  // Owned by another user and read-only for uid 1000: accepted.
+  modes.set("/nfs/work", { mode: 0o40555, uid: 0, gid: 1000 });
   assert.deepEqual(refusedFor("/nfs/work/api/src"), []);
   // Higher up too: anything from / on the way.
   modes.set("/nfs", { mode: 0o40777, uid: 0, gid: 0 });
   assert.match(refusedFor("/nfs/work/api")[0], /can write `\/nfs` on its way/);
 });
 
-test("mounts: writable by uid 1000 as owner, group 1000 or anyone", () => {
+test("mounts: writable by uid 1000 as owner (write bit or not), group 1000 or anyone", () => {
   const modes = new Map();
   const stat = (path) => modes.get(path) ?? ROOT_DIR;
   const grant = { mounts: [{ root: "/nfs", readOnly: false }] };
@@ -478,7 +485,7 @@ test("mounts: writable by uid 1000 as owner, group 1000 or anyone", () => {
     }).refused.length;
   };
   assert.equal(refusedWith({ mode: 0o755, uid: 1000, gid: 0 }), 1);
-  assert.equal(refusedWith({ mode: 0o555, uid: 1000, gid: 0 }), 0);
+  assert.equal(refusedWith({ mode: 0o555, uid: 1000, gid: 0 }), 1); // its owner can chmod it
   assert.equal(refusedWith({ mode: 0o775, uid: 0, gid: 1000 }), 1);
   assert.equal(refusedWith({ mode: 0o755, uid: 0, gid: 1000 }), 0);
   assert.equal(refusedWith({ mode: 0o777, uid: 0, gid: 0 }), 1);
@@ -487,6 +494,7 @@ test("mounts: writable by uid 1000 as owner, group 1000 or anyone", () => {
   assert.equal(refusedWith({ mode: 0o1777, uid: 0, gid: 0 }), 0);
   assert.equal(refusedWith({ mode: 0o1777, uid: 0, gid: 0 }, { ...ROOT_DIR, uid: 1000 }), 1);
   assert.equal(refusedWith({ mode: 0o1777, uid: 1000, gid: 0 }), 1);
+  assert.equal(refusedWith({ mode: 0o1555, uid: 1000, gid: 0 }), 1);
 });
 
 test("docker arguments: bind mounts, no capabilities, limits", () => {

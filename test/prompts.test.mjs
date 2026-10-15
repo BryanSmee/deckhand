@@ -139,6 +139,13 @@ test("prompts: a pull request's run is told the one branch it may push, or none 
   assert.match(fork, /you can't push: its branch is in a fork/);
   const work = promptFor(issue, { mode: "work", settings, branches: ["issue-12-*"] });
   assert.match(work, /Deckhand refuses pushes to branches not named `issue-12-…`\./);
+  // Asked from its pull request, whose head is a maintainer's branch: named too.
+  const fromPr = promptFor(issue, {
+    mode: "work",
+    settings,
+    branches: ["issue-12-*", "feature/maintainer"],
+  });
+  assert.match(fromPr, /not named `issue-12-…` or `feature\/maintainer`\./);
 });
 
 test("first message: brainstorms, follow-ups and new inbox sessions", () => {

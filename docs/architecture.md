@@ -187,7 +187,7 @@ to: the new listener joins itself and the egress proxy to the running sandboxes'
 first (`runner.relink()`), and again every minute, for a proxy recreated on its own; the
 networks, container engines and engine volumes of runs that are gone are removed then. Queued comments whose author or repository is no longer allowed are
 dropped then; each run checks its comments' authors against the repository's `users` again
-when it begins.
+when it begins, and so does the next listener for comments queued for a run still going.
 
 ## Agents
 

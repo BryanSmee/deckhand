@@ -115,10 +115,12 @@ export function createWorkApi({
         .map((i) => ({ number: i.number, title: i.title ?? null, url: i.html_url })),
       modes: errors.length ? [] : modeNames(settings).filter((m) => m !== "onboarding"),
       errors: errors.length > 0,
+      // Who may see it, as for the dashboard's tasks: unknown while the config has errors.
+      users: errors.length ? null : settings.users,
     };
   }
 
-  async function backlog(res, repo) {
+  async function backlog(res, repo, user) {
     let known = backlogs.get(repo.toLowerCase());
     if (!known || now() - known.at >= ISSUES_MS) {
       known = { at: now(), read: readBacklog(repo) };
@@ -128,7 +130,10 @@ export function createWorkApi({
         () => backlogs.get(repo.toLowerCase()) === known && backlogs.delete(repo.toLowerCase()),
       );
     }
-    const { issues, modes, errors } = await known.read;
+    const { issues, modes, errors, users } = await known.read;
+    if (users && !users.includes(user.toLowerCase())) {
+      refuse(404, `${user} is not among ${repo}'s users.`);
+    }
     // The tasks change between two reads: an issue started a moment ago leaves at once.
     const keys = boardKeys();
     send(res, 200, {
@@ -277,7 +282,7 @@ export function createWorkApi({
       if (!post && req.method !== "GET") return send(res, 405, { error: "GET only." });
       if (!user) return send(res, 401, { error: "Sign in first." });
       if (!allowed(repo)) return send(res, 404, { error: `${repo} is not in ALLOWED_REPOS.` });
-      return post ? work(req, res, user, repo) : backlog(res, repo);
+      return post ? work(req, res, user, repo) : backlog(res, repo, user);
     };
     run().catch((error) => {
       if (error instanceof Refused) {

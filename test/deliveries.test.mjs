@@ -26,13 +26,48 @@ test("slots: a source holds its share, the rest stay for the others", () => {
   const b1 = take("b", "b1");
   assert.ok(b1);
   assert.ok(take("c", "c1"));
-  // Full, all young: refused.
-  assert.equal(take("d", "d1"), null);
   // A place given back is taken again.
   b1();
   assert.equal(slots.size(), 3);
   assert.ok(take("d", "d1"));
   assert.deepEqual(dropped, []);
+});
+
+test("slots: full, a source holding fewer takes the biggest holder's oldest place, however young", () => {
+  let clock = 0;
+  const dropped = [];
+  const slots = createSlots({ total: 4, share: 2, graceMs: 1000, now: () => clock });
+  const take = (source, name) => slots.take(source, () => dropped.push(name));
+  take("a", "a1");
+  take("a", "a2");
+  take("b", "b1");
+  take("c", "c1");
+  clock = 10;
+  assert.ok(take("d", "d1"));
+  assert.deepEqual(dropped, ["a1"]);
+  // Now each holds one: a source already holding one doesn't get a young place.
+  assert.equal(take("d", "d2"), null);
+  assert.deepEqual(dropped, ["a1"]);
+});
+
+// The issue's churn: four sources each reopen a stalled body every 250 ms, so every place is
+// always younger than the grace. A delivery from another address still gets in.
+test("slots: sources churning stalled bodies don't keep every delivery out", () => {
+  let clock = 0;
+  const slots = createSlots({ total: 16, share: 4, graceMs: 1000, now: () => clock });
+  let tries = 0;
+  let refused = 0;
+  for (; clock < 20000; clock += 50) {
+    if (clock % 250 === 0) for (const source of "abcd") slots.take(source, () => {});
+    if (clock > 2000) {
+      tries++;
+      const release = slots.take(`github-${clock}`, () => {});
+      if (release) release();
+      else refused++;
+    }
+  }
+  assert.ok(tries > 300);
+  assert.equal(refused, 0);
 });
 
 test("slots: past the grace, a newcomer takes the oldest reader's place, its own source's first", () => {
@@ -53,8 +88,11 @@ test("slots: past the grace, a newcomer takes the oldest reader's place, its own
   assert.ok(take("c", "c1"));
   assert.deepEqual(dropped, ["a1", "b1"]);
   assert.equal(slots.size(), 3);
-  // The ones left are young again: refused.
-  assert.equal(take("d", "d1"), null);
+  // The ones left are young again, and "d" is refused while it holds as many as the most
+  // ("a", with two, gives its oldest up).
+  assert.ok(take("d", "d1"));
+  assert.deepEqual(dropped, ["a1", "b1", "a2"]);
+  assert.equal(take("d", "d2"), null);
 });
 
 // A server reading each request with readDelivery; `results` gets what each one came to.

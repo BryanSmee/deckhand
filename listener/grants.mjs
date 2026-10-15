@@ -375,13 +375,12 @@ function within(path, root) {
   return path === root || path.startsWith(root === "/" ? "/" : `${root}/`);
 }
 
-// Whether the sandbox's user can add, remove or rename entries in a directory. ACLs aren't
+// Whether the sandbox's user can add, remove or rename entries in a directory. Owning it is
+// enough, write bit or not: an owner can chmod it back (no capability needed). ACLs aren't
 // read: docs/security.md says so.
 function writableBySandbox({ mode, uid, gid }) {
   return (
-    Boolean(mode & 0o002) ||
-    (uid === SANDBOX_UID && Boolean(mode & 0o200)) ||
-    (gid === SANDBOX_GID && Boolean(mode & 0o020))
+    Boolean(mode & 0o002) || uid === SANDBOX_UID || (gid === SANDBOX_GID && Boolean(mode & 0o020))
   );
 }
 
@@ -494,7 +493,7 @@ export function resolveMounts(
       const open = rewritableParent(real, stat);
       if (open) {
         refuse(
-          `read-write, but the sandbox's user (uid ${SANDBOX_UID}) can write \`${open}\` on its way, so a sandbox could redirect it; make the directories above it read-only for that user, or ask for it read-only`,
+          `read-write, but the sandbox's user (uid ${SANDBOX_UID}) can write \`${open}\` on its way, so a sandbox could redirect it; make the directories above it read-only for that user and owned by another, or ask for it read-only`,
         );
         continue;
       }

@@ -199,6 +199,18 @@ test("work feedback rebases on the base and force-pushes with a lease before gh 
   assert.match(feedback, /can't be resolved safely[^]*stop\s+and ask/);
 });
 
+// The branch's slug, from draft-pr.sh's own slug(): the gateway only takes issue-<n>-<slug>,
+// so it is never empty.
+test("draft-pr's branch slug: accents dropped, and never empty", () => {
+  const script = readFileSync(`${bin}draft-pr.sh`, "utf8");
+  const slug = /^slug\(\) \{[^]*?^\}$/m.exec(script)[0];
+  const of = (title) =>
+    spawnSync("bash", ["-c", `${slug}\nslug`], { input: title, encoding: "utf8" }).stdout;
+  assert.equal(of("Café : bientôt"), "cafe-bientot");
+  assert.equal(of("修复登录"), "task");
+  assert.equal(of("🔥 !"), "task");
+});
+
 test(
   "installing Claude Code refuses to run as the sandbox's user",
   { skip: process.getuid() === 0 },

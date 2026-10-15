@@ -45,8 +45,9 @@ export function createWaits({
   const queued = new Map();
   const latest = new Map();
 
+  // The comments' text and authors, as in queue.json: the owner's only.
   function save() {
-    writeJsonAtomic(path, Object.fromEntries(waits));
+    writeJsonAtomic(path, Object.fromEntries(waits), { mode: 0o600 });
   }
 
   const keyOf = (item) => `${item.repo}#${item.id}`;

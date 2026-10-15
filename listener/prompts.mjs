@@ -133,6 +133,14 @@ function prPush(branches) {
     : `you can't push: its branch is in a fork, so describe the changes in your reply instead`;
 }
 
+// The branches an issue's run may push: its own, and the pull requests' heads it was asked
+// from (runs.mjs pushBranches()), named so it doesn't pick another one.
+function issueBranches(n, branches) {
+  const others = branches.filter((b) => b !== `issue-${n}-*` && !b.startsWith(`issue-${n}-`));
+  const extra = others.map((b) => ` or \`${b}\``).join("");
+  return `\`issue-${n}-…\`${extra}`;
+}
+
 export function initialPrompt(task, branches = []) {
   const base = task.base || "main";
   const common = `Follow the repository's AGENTS.md and CLAUDE.md if it has them, with tests where the
@@ -157,7 +165,7 @@ ${common}`;
    request (\`Closes #${task.number}\`; \`gh pr view\` shows it): work on that branch. If you
    are still on ${base}, it couldn't: create a branch from ${base} named
    \`issue-${task.number}-<short-slug>\` and push it, and the draft pull request is opened for
-   you. Deckhand refuses pushes to branches not named \`issue-${task.number}-…\`.
+   you. Deckhand refuses pushes to branches not named ${issueBranches(task.number, branches)}.
 3. Implement it, pushing to the same branch as you go.
 4. When the checks pass, update the pull request with \`gh pr edit\`: final title, and a
    description with \`Closes #${task.number}\`, what changed and why, any choice you made, and
@@ -188,7 +196,7 @@ fetched from \`origin\` at the start of this run.`
 Never push to ${base}.`
       : `The sandbox has already checked out the issue's branch, pushed it and opened a draft pull
 request (\`gh pr view\` shows it): if you change code, commit and push to that branch
-(Deckhand refuses pushes to branches not named \`issue-${n}-…\`). Never push to ${base}.`;
+(Deckhand refuses pushes to branches not named ${issueBranches(n, branches)}). Never push to ${base}.`;
   return `You are in the "${own.name}" mode of this repository, on ${where}.
 
 ${rules}

@@ -1241,6 +1241,35 @@ mounts:
     );
   });
 
+  test("a comment queued for a running session is checked against the repo's users after a restart", async (t) => {
+    const files = { ".deckhand.yaml": "users: [alice, bob]\n" };
+    const ctx = await listen(t, files, (dir) => {
+      writeFileSync(join(dir, "hold"), "");
+      return {};
+    });
+    const { dir } = ctx;
+    await ctx.send(comment("alice"));
+    await until(() => exists(join(dir, "egress"))?.trim().split("\n").length === 9, "the sandbox");
+    // Bob's comment waits out a long pause for the running session, then the listener stops.
+    await ctx.restart({ DEBOUNCE_MS: "60000" });
+    await ctx.listener.until("picked up deckhand-org-repo-12-0e9572aae2 again");
+    await ctx.send({
+      ...followUp(100, "Also delete the tests"),
+      comment: { id: 100, body: "Also delete the tests", user: { login: "bob", type: "User" } },
+    });
+    await ctx.github.waitFor((r) => r.path === "/repos/org/repo/issues/comments/100/reactions");
+    // Meanwhile, the repo's users leave bob out.
+    files[".deckhand.yaml"] = "users: [alice]\n";
+    const { output } = await ctx.restart({ DEBOUNCE_MS: "0" });
+    assert.match(output, /Saved 1 task\(s\) with queued comments/);
+    await ctx.listener.until("a queued comment dropped: bob is no longer an allowed user");
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    const [run] = readdirSync(join(dir, "runs"));
+    assert.doesNotMatch(exists(join(dir, "runs", run, "inbox.jsonl")) ?? "", /delete the tests/);
+    writeFileSync(join(dir, "go"), "");
+    await ctx.listener.until("done (ok)");
+  });
+
   test("a listener killed mid-run: Claude answers meanwhile, the next one replies once", async (t) => {
     const ctx = await holding(t);
     const { dir, github } = ctx;
@@ -2019,6 +2048,39 @@ mounts:
     await listener.until("done (ok)");
     assert.deepEqual(await keys(), []);
     assert.equal((await get("/api/runs/org-repo-pr-3-1000/stream", session)).status, 404);
+  });
+
+  test("/status lists a signed-in user only the runs of the repos they may see", async (t) => {
+    const files = { ".deckhand.yaml": "users: [bob]\n" };
+    const { dir, port, send } = await listen(t, files, (dir, github) => {
+      writeFileSync(join(dir, "hold"), "");
+      return { GITHUB_URL: github.url };
+    });
+    await send(comment("bob"));
+    await until(() => exists(join(dir, "egress"))?.trim().split("\n").length === 9, "the sandbox");
+    const base = `http://127.0.0.1:${port}`;
+    // Forwarded, so not a call from inside the container: the session decides.
+    const get = (path, cookie) =>
+      fetch(base + path, {
+        redirect: "manual",
+        headers: { "x-forwarded-for": "203.0.113.9", ...(cookie ? { cookie } : {}) },
+      });
+    const login = await get("/auth/login");
+    const to = new URL(login.headers.get("location"));
+    const state = login.headers.getSetCookie()[0].split(";")[0];
+    const back = await get(`/auth/callback?code=c&state=${to.searchParams.get("state")}`, state);
+    const session = back.headers
+      .getSetCookie()
+      .find((c) => c.startsWith("deckhand_session="))
+      .split(";")[0];
+    // alice isn't in the repo's users: bob's run isn't hers to see, though the listener is busy.
+    const seen = await (await get("/status", session)).json();
+    assert.equal(seen.idle, false);
+    assert.deepEqual(seen.reasons, []);
+    // From inside the container: everything.
+    const all = await (await fetch(`${base}/status`)).json();
+    assert.match(all.reasons.join("\n"), /run org\/repo#12 since/);
+    writeFileSync(join(dir, "go"), "");
   });
 
   test("the dashboard and its logs are for allowed users signed in with GitHub", async (t) => {

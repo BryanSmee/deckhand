@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,6 +11,7 @@ import {
   loadRuns,
   outcome,
   publicRun,
+  stream,
   summaryOf,
 } from "../listener/runlog.mjs";
 import { agentFor } from "../listener/agents/index.mjs";
@@ -190,3 +192,25 @@ test("runs: rebuilt from their log files, newest first, without their path for t
   assert.equal(runs[1].agent, "claude");
   assert.equal("logPath" in publicRun(runs[1]), false);
 });
+
+// A sign-out, or a repo's users narrowed, while the stream is open: it ends within a second.
+test(
+  "stream: a running run's log stops once the viewer may no longer see it",
+  { timeout: 5000 },
+  async () => {
+    const dir = mkdtempSync(join(tmpdir(), "deckhand-stream-"));
+    const logPath = join(dir, "run.log");
+    writeFileSync(logPath, "");
+    const req = new EventEmitter();
+    let ended;
+    const done = new Promise((resolve) => (ended = resolve));
+    const written = [];
+    const res = { writeHead() {}, write: (s) => written.push(s), end: ended };
+    let allowed = true;
+    stream(req, res, { status: "running", logPath, agent: "claude" }, () => allowed);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    allowed = false;
+    await done;
+    assert.ok(!written.some((w) => w.startsWith("event: end")));
+  },
+);
