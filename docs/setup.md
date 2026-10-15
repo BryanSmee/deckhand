@@ -258,7 +258,7 @@ needs_input_label: needs-input
 | `CONFLICT_CHECK_MINUTES`                                                                          | `conflict_check_minutes`                                                                          | `5`                                | shortest interval of a repo's `conflicts.check_minutes`; `0` turns it off                                  |
 | `NAME_PREFIX`, `CLAUDE_CODE_VOLUME`                                                               | `name_prefix`, `claude_code_volume`                                                               | `deckhand`, `deckhand-claude-code` | names of what the listener creates on Docker                                                               |
 | `DOCKER_SOCKET`                                                                                   | none: compose's                                                                                   | `/var/run/docker.sock`             | the host's Docker socket, as preview hooks mount it                                                        |
-| `DECKHAND_VERSION`                                                                                | none: compose's                                                                                   | `latest`                           | the release compose runs (`1.2.3`, `1.2`): see [Updating](#updating)                                       |
+| `DECKHAND_VERSION`                                                                                | none: compose's                                                                                   | `latest`                           | the release compose runs (`1.2.3`, `1.2`), or `edge` to follow `main`: see [Updating](#updating)           |
 | `DECKHAND_REGISTRY`                                                                               | none: compose's                                                                                   | `ghcr.io/bryansmee`                | where compose pulls the images from                                                                        |
 | `SANDBOX_NETWORK`, `SHOTS_VOLUME`, `RUNS_VOLUME`                                                  | none: compose's                                                                                   | `deckhand-…`                       | names of the network and volumes compose creates and the listener uses                                     |
 
@@ -323,7 +323,7 @@ else set it in the service's `environment`, for example in a `compose.override.y
 ## Updating
 
 Each release is a git tag (`v1.2.3`) that publishes the three images, tagged `1.2.3`, `1.2`
-and `latest`. There is no built-in updater: update the way you update other compose
+and `latest`. Each push to `main` publishes them too, tagged `edge`. There is no built-in updater: update the way you update other compose
 services.
 
 ```sh
@@ -335,6 +335,10 @@ docker compose up -d
   can run them for you.
 - **A pinned version**: set `DECKHAND_VERSION=1.2.3` in `.env`, change it to update (by
   hand, or with Renovate's docker-compose or regex manager), then the same two commands.
+- **`edge`**: set `DECKHAND_VERSION=edge` in `.env` to follow `main`, unreleased and for
+  amd64 only. It is published about 3 minutes after a push (merges closer together build
+  once), and the dashboard shows the commit it runs as `edge-<short sha>`. The same two
+  commands (or Watchtower) update it.
 
 You can update at any time, runs in progress included. The listener stops within its grace
 period without waiting for them: it starts no new run, saves the comments still waiting for
