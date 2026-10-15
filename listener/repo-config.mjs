@@ -79,162 +79,166 @@ export function parseRepoConfig(text, config) {
     return { settings, errors: [`${CONFIG_FILE}: expected keys at the top level`], warnings };
   }
   const fail = (key, what) => errors.push(`${key}: ${what}`);
-  const string = (key, value) => {
-    if (typeof value === "string" && value.trim()) return value.trim();
-    fail(key, "expected text");
-    return null;
-  };
-
+  const warn = (what) => warnings.push(what);
   for (const [key, value] of Object.entries(raw)) {
     if (value === null) continue; // "key:" with nothing: the default
-    switch (key) {
-      case "users": {
-        if (!Array.isArray(value) || value.some((u) => typeof u !== "string")) {
-          fail(key, "expected a list of GitHub logins");
-          break;
-        }
-        // Only narrows: someone the operator doesn't allow stays out.
-        const wanted = list(value.join(","));
-        const outside = wanted.filter((u) => !config.users.includes(u));
-        if (outside.length)
-          warnings.push(`users not in ALLOWED_USERS, ignored: ${outside.join(", ")}`);
-        settings.users = wanted.filter((u) => config.users.includes(u));
-        break;
-      }
-      case "trigger": {
-        // The whole first line of a comment, compared loosely ("Deckhand", "@deckhand:").
-        if (typeof value === "string" && normalize(value)) settings.trigger = normalize(value);
-        else fail(key, "expected a line of text");
-        break;
-      }
-      case "model":
-      case "brainstorm_model": {
-        const field = key === "model" ? "model" : "brainstormModel";
-        if (typeof value === "string" && /^[\w.[\]-]+$/.test(value)) settings[field] = value;
-        else fail(key, "expected a model name (opus, sonnet, claude-…)");
-        break;
-      }
-      case "effort":
-      case "brainstorm_effort": {
-        const field = key === "effort" ? "effort" : "brainstormEffort";
-        if (EFFORTS.includes(String(value).toLowerCase()))
-          settings[field] = String(value).toLowerCase();
-        else fail(key, `expected one of ${EFFORTS.join(", ")}`);
-        break;
-      }
-      case "max_parallel":
-        // The operator's MAX_PARALLEL stays the ceiling.
-        if (Number.isInteger(value) && value > 0)
-          settings.maxParallel = Math.min(value, config.maxParallel);
-        else fail(key, "expected a whole number above 0");
-        break;
-      case "setup":
-        settings.setup = string(key, value);
-        break;
-      case "instructions":
-      case "dockerfile": {
-        const path = repoPath(value);
-        if (path) settings[key] = path;
-        else fail(key, "expected a path in the repository (relative, no ..)");
-        break;
-      }
-      case "allow_branch_docker_images":
-        if (typeof value === "boolean") settings.allowBranchDockerImages = value;
-        else fail(key, "expected true or false");
-        break;
-      case "caches": {
-        if (!Array.isArray(value)) {
-          fail(key, "expected a list of absolute paths");
-          break;
-        }
-        for (const path of value) {
-          const problem = cacheProblem(path);
-          if (problem) fail(`caches: ${JSON.stringify(path)}`, problem);
-          else if (!settings.caches.includes(path.replace(/\/$/, ""))) {
-            settings.caches.push(path.replace(/\/$/, ""));
-          }
-        }
-        break;
-      }
-      case "hosts":
-        if (!Array.isArray(value)) {
-          fail(key, "expected a list of host names");
-          break;
-        }
-        // Added to what its sandboxes may reach through the egress proxy only when the
-        // operator's grant says allow_repo_hosts (egress.mjs); "*" never.
-        for (const host of value) {
-          const problem = hostProblem(host) ?? repoHostProblem(host.toLowerCase());
-          if (problem) fail(`hosts: ${JSON.stringify(host)}`, problem);
-          else settings.hosts.push(host.toLowerCase());
-        }
-        break;
-      case "mounts":
-        // Requests only: a mount happens under a root the operator grants the repo
-        // (grants.mjs), checked at each run.
-        if (!Array.isArray(value)) {
-          fail(key, "expected a list of { path, read_only }");
-          break;
-        }
-        for (const mount of value) {
-          const path = isMap(mount) ? mount.path : mount;
-          if (typeof path !== "string" || !path.startsWith("/")) {
-            fail("mounts", `expected absolute host paths, got ${JSON.stringify(path)}`);
-            continue;
-          }
-          settings.mounts.push({ path, readOnly: isMap(mount) ? mount.read_only !== false : true });
-        }
-        break;
-      case "inbox":
-        if (!isMap(value)) {
-          fail(key, "expected ideas and bugs issue numbers, and a discussions category");
-          break;
-        }
-        for (const [name, entry] of Object.entries(value)) {
-          if (entry === null) continue;
-          if (name === "discussions") {
-            // A category of the repo's GitHub Discussions, compared loosely like trigger lines.
-            if (typeof entry === "string" && normalize(entry))
-              settings.inbox[name] = normalize(entry);
-            else fail(`inbox.${name}`, "expected the name of a discussion category");
-          } else if (!["ideas", "bugs"].includes(name)) {
-            warnings.push(`inbox.${name}: unknown, ignored`);
-          } else if (Number.isInteger(entry) && entry > 0) settings.inbox[name] = entry;
-          else fail(`inbox.${name}`, "expected an issue number");
-        }
-        break;
-      case "modes":
-        if (!isMap(value)) {
-          fail(key, "expected modes by name, each with its instructions");
-          break;
-        }
-        for (const [name, mode] of Object.entries(value)) parseMode(name, mode, settings, fail);
-        break;
-      case "preview": {
-        const preview = isMap(value) ? value : { command: value };
-        const command = string("preview.command", preview.command);
-        const image = preview.image ?? null;
-        const minutes = preview.timeout_minutes ?? 30;
-        if (image !== null && (typeof image !== "string" || !/^[\w./:@-]+$/.test(image))) {
-          fail("preview.image", "expected an image name");
-        }
-        if (!Number.isInteger(minutes) || minutes <= 0) {
-          fail("preview.timeout_minutes", "expected a whole number above 0");
-        }
-        for (const other of Object.keys(preview)) {
-          if (!["command", "image", "timeout_minutes"].includes(other)) {
-            warnings.push(`preview.${other}: unknown, ignored`);
-          }
-        }
-        if (command) settings.preview = { command, image, timeoutMinutes: minutes };
-        break;
-      }
-      default:
-        warnings.push(`${key}: unknown, ignored`);
-    }
+    if (Object.hasOwn(KEYS, key)) KEYS[key](value, { key, settings, config, fail, warn });
+    else warn(`${key}: unknown, ignored`);
   }
   return { settings, errors, warnings };
 }
+
+// Non-empty text, else an error.
+function text(key, value, fail) {
+  if (typeof value === "string" && value.trim()) return value.trim();
+  fail(key, "expected text");
+  return null;
+}
+
+// A model name, into settings[field].
+const modelKey =
+  (field) =>
+  (value, { key, settings, fail }) => {
+    if (typeof value === "string" && /^[\w.[\]-]+$/.test(value)) settings[field] = value;
+    else fail(key, "expected a model name (opus, sonnet, claude-…)");
+  };
+
+// A thinking effort, into settings[field].
+const effortKey =
+  (field) =>
+  (value, { key, settings, fail }) => {
+    if (EFFORTS.includes(String(value).toLowerCase()))
+      settings[field] = String(value).toLowerCase();
+    else fail(key, `expected one of ${EFFORTS.join(", ")}`);
+  };
+
+// A file of the repository, into settings[key].
+function pathKey(value, { key, settings, fail }) {
+  const path = repoPath(value);
+  if (path) settings[key] = path;
+  else fail(key, "expected a path in the repository (relative, no ..)");
+}
+
+function parseUsers(value, { key, settings, config, fail, warn }) {
+  if (!Array.isArray(value) || value.some((u) => typeof u !== "string")) {
+    return fail(key, "expected a list of GitHub logins");
+  }
+  // Only narrows: someone the operator doesn't allow stays out.
+  const wanted = list(value.join(","));
+  const outside = wanted.filter((u) => !config.users.includes(u));
+  if (outside.length) warn(`users not in ALLOWED_USERS, ignored: ${outside.join(", ")}`);
+  settings.users = wanted.filter((u) => config.users.includes(u));
+}
+
+function parseCaches(value, { key, settings, fail }) {
+  if (!Array.isArray(value)) return fail(key, "expected a list of absolute paths");
+  for (const path of value) {
+    const problem = cacheProblem(path);
+    if (problem) fail(`caches: ${JSON.stringify(path)}`, problem);
+    else if (!settings.caches.includes(path.replace(/\/$/, ""))) {
+      settings.caches.push(path.replace(/\/$/, ""));
+    }
+  }
+}
+
+// Added to what its sandboxes may reach through the egress proxy only when the operator's
+// grant says allow_repo_hosts (egress.mjs); "*" never.
+function parseHosts(value, { key, settings, fail }) {
+  if (!Array.isArray(value)) return fail(key, "expected a list of host names");
+  for (const host of value) {
+    const problem = hostProblem(host) ?? repoHostProblem(host.toLowerCase());
+    if (problem) fail(`hosts: ${JSON.stringify(host)}`, problem);
+    else settings.hosts.push(host.toLowerCase());
+  }
+}
+
+// Requests only: a mount happens under a root the operator grants the repo (grants.mjs),
+// checked at each run.
+function parseMounts(value, { key, settings, fail }) {
+  if (!Array.isArray(value)) return fail(key, "expected a list of { path, read_only }");
+  for (const mount of value) {
+    const path = isMap(mount) ? mount.path : mount;
+    if (typeof path !== "string" || !path.startsWith("/")) {
+      fail("mounts", `expected absolute host paths, got ${JSON.stringify(path)}`);
+      continue;
+    }
+    settings.mounts.push({ path, readOnly: isMap(mount) ? mount.read_only !== false : true });
+  }
+}
+
+function parseInbox(value, { key, settings, fail, warn }) {
+  if (!isMap(value)) {
+    return fail(key, "expected ideas and bugs issue numbers, and a discussions category");
+  }
+  for (const [name, entry] of Object.entries(value)) {
+    if (entry === null) continue;
+    if (name === "discussions") {
+      // A category of the repo's GitHub Discussions, compared loosely like trigger lines.
+      if (typeof entry === "string" && normalize(entry)) settings.inbox[name] = normalize(entry);
+      else fail(`inbox.${name}`, "expected the name of a discussion category");
+    } else if (!["ideas", "bugs"].includes(name)) {
+      warn(`inbox.${name}: unknown, ignored`);
+    } else if (Number.isInteger(entry) && entry > 0) settings.inbox[name] = entry;
+    else fail(`inbox.${name}`, "expected an issue number");
+  }
+}
+
+function parsePreview(value, { settings, fail, warn }) {
+  const preview = isMap(value) ? value : { command: value };
+  const command = text("preview.command", preview.command, fail);
+  const image = preview.image ?? null;
+  const minutes = preview.timeout_minutes ?? 30;
+  if (image !== null && (typeof image !== "string" || !/^[\w./:@-]+$/.test(image))) {
+    fail("preview.image", "expected an image name");
+  }
+  if (!Number.isInteger(minutes) || minutes <= 0) {
+    fail("preview.timeout_minutes", "expected a whole number above 0");
+  }
+  for (const other of Object.keys(preview)) {
+    if (!["command", "image", "timeout_minutes"].includes(other)) {
+      warn(`preview.${other}: unknown, ignored`);
+    }
+  }
+  if (command) settings.preview = { command, image, timeoutMinutes: minutes };
+}
+
+// Each top-level key's parser, into `settings`; any other key is unknown (a warning).
+const KEYS = {
+  users: parseUsers,
+  // The whole first line of a comment, compared loosely ("Deckhand", "@deckhand:").
+  trigger: (value, { key, settings, fail }) => {
+    if (typeof value === "string" && normalize(value)) settings.trigger = normalize(value);
+    else fail(key, "expected a line of text");
+  },
+  model: modelKey("model"),
+  brainstorm_model: modelKey("brainstormModel"),
+  effort: effortKey("effort"),
+  brainstorm_effort: effortKey("brainstormEffort"),
+  // The operator's MAX_PARALLEL stays the ceiling.
+  max_parallel: (value, { key, settings, config, fail }) => {
+    if (Number.isInteger(value) && value > 0) {
+      settings.maxParallel = Math.min(value, config.maxParallel);
+    } else fail(key, "expected a whole number above 0");
+  },
+  setup: (value, { key, settings, fail }) => {
+    settings.setup = text(key, value, fail);
+  },
+  instructions: pathKey,
+  dockerfile: pathKey,
+  allow_branch_docker_images: (value, { key, settings, fail }) => {
+    if (typeof value === "boolean") settings.allowBranchDockerImages = value;
+    else fail(key, "expected true or false");
+  },
+  caches: parseCaches,
+  hosts: parseHosts,
+  mounts: parseMounts,
+  inbox: parseInbox,
+  modes: (value, { key, settings, fail }) => {
+    if (!isMap(value)) return fail(key, "expected modes by name, each with its instructions");
+    for (const [name, mode] of Object.entries(value)) parseMode(name, mode, settings, fail);
+  },
+  preview: parsePreview,
+};
 
 // One of `modes:`, into settings.modes. Every key is checked: a mistyped one would otherwise
 // change what the mode does without anyone noticing. Nothing here touches the repo's grants.

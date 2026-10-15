@@ -111,62 +111,69 @@ export function workItem(config, event, p, skip = () => null) {
   }
   if (body.includes(MARKER)) return skip("our own reply");
 
-  if (event === "discussion" || event === "discussion_comment") {
-    return discussionItem(config, event, p, skip);
-  }
-  if (event === "issue_comment" && p.action === "created") {
-    const { trigger, mode, text } = splitTrigger(config, body);
-    if (!p.issue.pull_request) {
-      const n = p.issue.number;
-      // Every comment on an inbox issue is an entry: trigger lines don't apply there.
-      const inbox = [
-        ["idea", config.inbox?.ideas],
-        ["bug", config.inbox?.bugs],
-      ].find(([, number]) => number === n)?.[0];
-      if (inbox) {
-        return {
-          repo,
-          id: String(n),
-          kind: "issue",
-          number: n,
-          title: p.issue.title ?? null,
-          trigger: inbox,
-          text: entry(author, p.comment.html_url, body),
-          replyTo: n,
-          comment: p.comment,
-        };
-      }
-      return {
-        repo,
-        id: String(n),
-        kind: "issue",
-        number: n,
-        title: p.issue.title ?? null,
-        trigger,
-        modeLine: mode,
-        text,
-        replyTo: n,
-        comment: p.comment,
-      };
-    }
+  // null: skipped there, the reason logged.
+  const item = Object.hasOwn(ITEMS, event) ? ITEMS[event](config, event, p, skip) : undefined;
+  return item === undefined ? skip(`${event} ${p.action ?? ""} is not handled`) : item;
+}
+
+// A comment on an issue or a pull request (pull requests are issues to that event).
+function issueCommentItem(config, event, p, skip) {
+  if (p.action !== "created") return undefined;
+  const repo = p.repository.full_name;
+  const body = p.comment.body ?? "";
+  const { trigger, mode, text } = splitTrigger(config, body);
+  if (p.issue.pull_request) {
     const pr = { number: p.issue.number, title: p.issue.title, body: p.issue.body };
     return prItem(skip, repo, pr, { trigger, mode }, text, p.comment);
   }
-  if (event === "pull_request_review_comment" && p.action === "created") {
-    const cmd = splitTrigger(config, body);
-    const c = p.comment;
-    const where = `Review comment on \`${c.path}\` line ${c.line ?? c.original_line}:\n\`\`\`diff\n${c.diff_hunk}\n\`\`\`\n`;
-    return prItem(skip, repo, p.pull_request, cmd, where + cmd.text, {
-      ...c,
-      review: true,
-    });
-  }
-  if (event === "pull_request_review" && p.action === "submitted" && body.trim()) {
-    const cmd = splitTrigger(config, body);
-    return prItem(skip, repo, p.pull_request, cmd, `Review: ${cmd.text}`);
-  }
-  return skip(`${event} ${p.action ?? ""} is not handled`);
+  const n = p.issue.number;
+  const issue = {
+    repo,
+    id: String(n),
+    kind: "issue",
+    number: n,
+    title: p.issue.title ?? null,
+    replyTo: n,
+    comment: p.comment,
+  };
+  // Every comment on an inbox issue is an entry: trigger lines don't apply there.
+  const inbox = [
+    ["idea", config.inbox?.ideas],
+    ["bug", config.inbox?.bugs],
+  ].find(([, number]) => number === n)?.[0];
+  if (inbox)
+    return { ...issue, trigger: inbox, text: entry(p.comment.user, p.comment.html_url, body) };
+  return { ...issue, trigger, modeLine: mode, text };
 }
+
+// A comment on a line of a pull request's diff: Claude gets the line and its hunk.
+function reviewCommentItem(config, event, p, skip) {
+  if (p.action !== "created") return undefined;
+  const c = p.comment;
+  const cmd = splitTrigger(config, c.body ?? "");
+  const where = `Review comment on \`${c.path}\` line ${c.line ?? c.original_line}:\n\`\`\`diff\n${c.diff_hunk}\n\`\`\`\n`;
+  return prItem(skip, p.repository.full_name, p.pull_request, cmd, where + cmd.text, {
+    ...c,
+    review: true,
+  });
+}
+
+// A submitted review with a body. It has no reactions API: no comment for those.
+function reviewItem(config, event, p, skip) {
+  const body = p.review.body ?? "";
+  if (p.action !== "submitted" || !body.trim()) return undefined;
+  const cmd = splitTrigger(config, body);
+  return prItem(skip, p.repository.full_name, p.pull_request, cmd, `Review: ${cmd.text}`);
+}
+
+// Each event's work item; undefined: that action isn't handled.
+const ITEMS = {
+  issue_comment: issueCommentItem,
+  pull_request_review_comment: reviewCommentItem,
+  pull_request_review: reviewItem,
+  discussion: discussionItem,
+  discussion_comment: discussionItem,
+};
 
 // A new discussion, or a comment on one, in the repo's discussions category: one session per
 // discussion, like a brainstorm. Discussions only exist in GraphQL for writing, so the item
