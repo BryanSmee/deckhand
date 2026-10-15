@@ -74,6 +74,15 @@ A run that stops to ask (its final message starts with `<!-- needs-input -->`, s
 `prompts/sandbox.md`) shows as `needs-input` on the dashboard and labels the issue or pull
 request `NEEDS_INPUT_LABEL` (default `needs-input`) until the next run starts.
 
+An issue can wait for answers without a run stopping to ask: inbox runs file issues with an
+**Open questions** section, and people write some by hand. When an allowed user or the App's
+bot opens an issue whose `## Open questions` section asks something (its first paragraph isn't
+"None"), the listener labels it; an edit to that section adds or removes the label as it now
+reads. An allowed user's comment on a labelled issue or pull request takes the label off: they
+answered. The dashboard lists the open issues carrying the label as `needs-input`, with a run
+or not (`inputs.json`, kept by `issues` deliveries, whoever adds or removes the label, and one
+lookup per repo when the listener starts); a closed issue leaves the list.
+
 Reactions on the triggering comment follow its run: 👀 when it is received, then 🚀 (done),
 😕 (needs input) or 👎 (error) once the run that handled it is over.
 
@@ -164,6 +173,7 @@ which starts runs.
 | `restart.mjs`                                                     | `queue.json` and `logs/<run>.live.json`: what a listener leaves to the next one; `/status`.        |
 | `brainstorms.mjs`                                                 | Each issue's brainstorm (`brainstorms.json`) and repo mode (`modes.json`).                         |
 | `comments.mjs`                                                    | Replies (comments, discussion threads), reactions, the needs-input label.                          |
+| `questions.mjs`, `inputs.mjs`                                     | Open questions in an issue → the needs-input label (pure); the issues waiting for input.           |
 | `prompts.mjs`                                                     | What Claude reads: each run's prompt and first message, comments delivered mid-run. Pure.          |
 | `modes.mjs`                                                       | Built-in modes: light, fresh, their token's permissions, the dashboard's kind. Pure.               |
 | `runlog.mjs`                                                      | Run logs: the list rebuilt after a restart, the dashboard's entries per line, the live stream.     |

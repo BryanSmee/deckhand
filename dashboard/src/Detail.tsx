@@ -106,6 +106,9 @@ export function Detail({ task: t, run: r, onRun, onBack, now, github }: Props) {
       )}
       {r ? (
         <Log runId={r.id} />
+      ) : t.state === "needs-input" ? (
+        // Labelled for its open questions (an inbox run filed it, or someone wrote it so).
+        <p class={styles.placeholder}>Waiting for answers to its open questions on GitHub</p>
       ) : (
         <p class={styles.placeholder}>Waiting for the first run of {titleOf(t)} to start…</p>
       )}

@@ -22,6 +22,7 @@ import { createGitHubApp, loadCredentials, saveCredentials } from "./github-app.
 import { loadGrants } from "./grants.mjs";
 import { createHttp } from "./http.mjs";
 import { createImages } from "./images.mjs";
+import { createInputs } from "./inputs.mjs";
 import { createOnboarding, createOnboardingStore } from "./onboarding.mjs";
 import { createPreviews } from "./previews.mjs";
 import { createPulls } from "./pulls.mjs";
@@ -173,6 +174,23 @@ const pulls = createPulls({
   },
 });
 
+// Open issues labelled needs-input: from webhooks, and looked up once per start (inputs.mjs).
+const inputs = createInputs({
+  path: join(config.dataDir, "inputs.json"),
+  log,
+  listLabelled: async (repo) => {
+    const label = encodeURIComponent(config.needsInputLabel);
+    const res = await github(
+      repo,
+      "GET",
+      `/repos/${repo}/issues?labels=${label}&state=open&sort=updated&per_page=100`,
+    );
+    const list = res.ok ? await res.json() : null;
+    if (!Array.isArray(list)) throw new Error(`no list (${res.status})`);
+    return list;
+  },
+});
+
 // --- Per-repo settings, images and preview hooks -------------------------------------------
 
 // A repo's settings from its default branch; errors in its config file stop its runs.
@@ -209,6 +227,7 @@ Object.assign(ctx, {
   auth,
   titles,
   pulls,
+  inputs,
   onboarded,
   repoList,
   // Replies, reactions and the needs-input label.
@@ -311,6 +330,14 @@ ctx.loadQueue();
 ctx.reattach(restored).catch((error) => log(`Re-attaching: ${error.stack ?? error}`));
 ctx.conflicts.start();
 ctx.waits.start();
+// Labels added or removed while the listener was down.
+if (ctx.app && config.needsInputLabel) {
+  repoList
+    .names()
+    .then((repos) => inputs.sync(repos))
+    .then((found) => titles.seed(found))
+    .catch((error) => log(`Issues waiting for input: ${error.message ?? error}`));
+}
 
 // `docker compose up`, `restart` or an update stops the listener with SIGTERM, and kills it
 // after the stop grace period. Sandboxes go on: no run starts any more, what is queued is

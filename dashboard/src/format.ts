@@ -150,7 +150,9 @@ export function when(t: Task, now: number): string {
     return `idle in ${Math.max(0, Math.ceil((t.deadline - now) / 60000))} min`;
   }
   if (t.state === "idle-brainstorm" && t.deadline) return `since ${ago(t.deadline, now)}`;
-  return last ? ago(last.startedAt, now) : "";
+  // An issue waiting for input without a run: since it was labelled.
+  if (last) return ago(last.startedAt, now);
+  return t.since ? ago(t.since, now) : "";
 }
 
 // "#77", "#77 and #80", "#77, #80 and #81".
