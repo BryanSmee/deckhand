@@ -24,6 +24,15 @@ instructions. A sandbox that could write to it could grant itself all of that, s
   can't write pull requests (onboarding, a repo's light modes) can't push at all.
 - The sandbox's `pre-push` hook only gives an earlier, clearer message: the gateway doesn't
   rely on it.
+- Marking a pull request ready for review, or back to draft, also takes `contents: write`
+  for an App's token (GitHub's `markPullRequestReadyForReview` and
+  `convertPullRequestToDraft`). The sandbox's `gh` wrapper sends `gh pr ready [--undo]` to
+  the listener instead (`POST /pr/<owner>/<repo>/<number>/ready` or `/draft` on the
+  broker's port, `listener/pr-ready.mjs`), with the run's secret. The listener checks that
+  the run is live and may write pull requests, that the pull request belongs to the run's
+  repository and that its head branch is in that repository too (not a fork), then calls
+  that one mutation with a token of its own, which the sandbox never sees. That token does
+  nothing else.
 
 This doesn't depend on GitHub: branch protection and rulesets aren't enforced on private
 repositories of free plans. Where they are, a ruleset on the default branch (pull request

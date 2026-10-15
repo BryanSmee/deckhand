@@ -11,6 +11,7 @@ import { join } from "node:path";
 import { createAuth, sessionKey } from "./auth.mjs";
 import { createBroker } from "./broker.mjs";
 import { createGitGateway } from "./git-gateway.mjs";
+import { createPrReady } from "./pr-ready.mjs";
 import { createBrainstorms, createIssueModes } from "./brainstorms.mjs";
 import { checkout } from "./checkout.mjs";
 import { createComments } from "./comments.mjs";
@@ -234,6 +235,13 @@ ctx.gitGateway = createGitGateway({
   broker: ctx.broker,
   app: () => ctx.app,
   githubUrl: config.githubUrl,
+  log,
+});
+// Their pull requests ready for review (or back to draft): their own token can't.
+ctx.prReady = createPrReady({
+  broker: ctx.broker,
+  app: () => ctx.app,
+  api: config.githubApi,
   log,
 });
 

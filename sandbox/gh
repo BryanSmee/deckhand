@@ -2,11 +2,50 @@
 # gh with a token fresh from the broker on every call (deckhand-token): a run outlives any
 # token it could get at start. Installed ahead of the real gh on PATH. Outside a Deckhand run
 # (no broker), gh runs as usual.
-if [ -n "${DECKHAND_BROKER_URL:-}" ]; then
-  GH_TOKEN=$(deckhand-token) || {
-    echo "gh: no GitHub token from Deckhand's broker" >&2
-    exit 1
-  }
-  export GH_TOKEN
+#
+# `gh pr ready [--undo]` needs `contents: write`, which the run's token lacks: the listener
+# does it (../listener/pr-ready.mjs), for the pull request the real gh finds.
+real=${DECKHAND_REAL_GH:-/usr/bin/gh}
+[ -n "${DECKHAND_BROKER_URL:-}" ] || exec "$real" "$@"
+
+GH_TOKEN=$(deckhand-token) || {
+  echo "gh: no GitHub token from Deckhand's broker" >&2
+  exit 1
+}
+export GH_TOKEN
+[ "${1:-}" = pr ] && [ "${2:-}" = ready ] || exec "$real" "$@"
+
+action=ready
+selector=()
+repo=()
+args=("${@:3}")
+for ((i = 0; i < ${#args[@]}; i++)); do
+  case ${args[i]} in
+    --undo) action=draft ;;
+    -R | --repo) repo=(--repo "${args[++i]:-}") ;;
+    --repo=*) repo=(--repo "${args[i]#--repo=}") ;;
+    -h | --help) exec "$real" "$@" ;;
+    -*)
+      echo "gh pr ready: unknown flag ${args[i]}" >&2
+      exit 1
+      ;;
+    *) selector=("${args[i]}") ;;
+  esac
+done
+
+url=$("$real" pr view "${selector[@]}" "${repo[@]}" --json url --jq .url) || exit 1
+if [[ ! $url =~ ^https?://[^/]+/([^/]+)/([^/]+)/pull/([0-9]+)$ ]]; then
+  echo "gh pr ready: unexpected pull request URL: $url" >&2
+  exit 1
 fi
-exec /usr/bin/gh "$@"
+path="pr/${BASH_REMATCH[1]}/${BASH_REMATCH[2]}/${BASH_REMATCH[3]}/$action"
+# The secret goes through a header file on stdin, so it never shows in `ps`.
+answer=$(curl -sS --max-time 60 --fail-with-body -X POST -H @- "$DECKHAND_BROKER_URL/$path" \
+  <<< "Authorization: Bearer ${DECKHAND_RUN_SECRET:-}")
+status=$?
+message=$(jq -r '.message // .error // empty' <<< "$answer" 2> /dev/null)
+if [ "$status" -ne 0 ]; then
+  echo "gh pr ready: ${message:-Deckhand's broker didn't answer}" >&2
+  exit 1
+fi
+echo "✓ $message"
