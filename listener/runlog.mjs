@@ -153,7 +153,11 @@ function listenerEntries(e, agent) {
 function agentEntry(e, agent) {
   switch (e.type) {
     case "started":
-      return { kind: "meta", text: `${agent.displayName} started (${e.model})` };
+      // Codex doesn't say its model there: the run's first line does.
+      return {
+        kind: "meta",
+        text: `${agent.displayName} started${e.model ? ` (${e.model})` : ""}`,
+      };
     case "text":
       return { kind: "text", text: e.text };
     case "tool":

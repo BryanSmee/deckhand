@@ -1,7 +1,7 @@
 // Tasks: one queue per issue, pull request or discussion, at most maxParallel containers.
 // A comment that passed the checks is queued under its task's key ("org/repo#12"); after a
 // pause (so a burst is one run) it starts a run, or goes to the running one (deliver()).
-import { agentFor } from "./agents/index.mjs";
+import { AGENTS, agentFor } from "./agents/index.mjs";
 import { commentsText, linkedIssue, linkTo, takeOptions, workItem } from "./events.mjs";
 import { INBOX, isLight, sessionName } from "./modes.mjs";
 import { liveMessage } from "./prompts.mjs";
@@ -292,7 +292,7 @@ export function createTasks(ctx) {
     if (wanted === "brainstorm" || (!wanted && ctx.brainstorms.get(key) && onIssue(item))) {
       return brainstorm(item, key, wanted);
     }
-    // Without a trigger line, a comment only continues work Claude already started (a
+    // Without a trigger line, a comment only continues work the agent already started (a
     // brainstorm's session is not work's: sessionName()).
     if (!item.trigger && !(await hasSession(key, name, false))) {
       return skip(`#${item.replyTo} has no agent session and no trigger line`);
@@ -300,11 +300,16 @@ export function createTasks(ctx) {
     return "work";
   }
 
-  // That of its work runs or of its light ones; either when `light` is undefined.
+  // That of its work runs or of its light ones (either when `light` is undefined), of any
+  // agent: the repo may have picked another since.
   async function hasSession(key, name, light) {
     if (tasks.has(key)) return true;
     const kinds = light === undefined ? [false, true] : [light];
-    for (const l of kinds) if (await ctx.runner.hasSession(sessionName(name, l))) return true;
+    for (const l of kinds) {
+      for (const agent of Object.values(AGENTS)) {
+        if (await ctx.runner.hasSession(sessionName(name, l), agent)) return true;
+      }
+    }
     return false;
   }
 

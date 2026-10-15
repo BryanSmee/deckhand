@@ -6,9 +6,10 @@
 #   agent_mcp <name> <command> …     an MCP server, added again on every start
 #   agent_has_session                whether the issue's volume has a session to continue
 #   agent_run <session> <prompt>     headless: session is "new", "continue" or "fresh" (not
-#                                    kept); TASK_OUTPUT=json prints the raw stream-json the
-#                                    listener normalizes, TASK_INPUT=stream also reads
-#                                    deckhand_messages (the inbox: comments that arrive mid-run)
+#                                    kept); TASK_OUTPUT=json prints the raw output the
+#                                    listener normalizes (Claude Code's stream-json),
+#                                    TASK_INPUT=stream also reads deckhand_messages (the inbox:
+#                                    comments that arrive mid-run) if the agent takes them
 #   agent_interactive <session> …    by hand: "continue" or "new", with claude's arguments
 #
 # and keeps its own state in AGENT_STATE, a folder of the issue's session volume.
@@ -20,6 +21,8 @@
 export CLAUDE_CONFIG_DIR=${CLAUDE_CONFIG_DIR:-/home/node/.claude}
 export DISABLE_AUTOUPDATER=1 CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
 AGENT_STATE=$CLAUDE_CONFIG_DIR
+# Its name in what the sandbox writes for it (the draft pull request).
+export AGENT_NAME=Claude
 
 # Model and thinking effort, from the listener (a tier already resolved, agents/claude.mjs)
 # or a comment's /model and /effort.

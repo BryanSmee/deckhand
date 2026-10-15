@@ -58,6 +58,13 @@ services:
       ANTHROPIC_DEFAULT_OPUS_MODEL: ${ANTHROPIC_DEFAULT_OPUS_MODEL:-}
       ANTHROPIC_DEFAULT_SONNET_MODEL: ${ANTHROPIC_DEFAULT_SONNET_MODEL:-}
       ANTHROPIC_DEFAULT_HAIKU_MODEL: ${ANTHROPIC_DEFAULT_HAIKU_MODEL:-}
+      # Codex's OpenAI API key (docs/setup.md#codex), kept out of sandboxes the same way.
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
+      # The agent of work runs, and of light runs (empty: SANDBOX_AGENT): claude or codex.
+      SANDBOX_AGENT: ${SANDBOX_AGENT:-}
+      BRAINSTORM_AGENT: ${BRAINSTORM_AGENT:-}
+      CODEX_VERSION: ${CODEX_VERSION:-}
       # Optional: /setup detects it from your browser's address and stores it.
       PUBLIC_URL: ${PUBLIC_URL:-}
       CLAUDE_CODE_VERSION: ${CLAUDE_CODE_VERSION:-}
@@ -85,6 +92,7 @@ services:
       WAITS_CHECK_MINUTES: ${WAITS_CHECK_MINUTES:-}
       NAME_PREFIX: ${NAME_PREFIX:-}
       CLAUDE_CODE_VOLUME: ${CLAUDE_CODE_VOLUME:-}
+      CODEX_VOLUME: ${CODEX_VOLUME:-}
       # Wiring, environment only. Names of what the listener creates on the host's Docker,
       # matching the ones below.
       SANDBOX_IMAGE: *sandbox-image

@@ -1,7 +1,7 @@
 #!/bin/bash
-# Loads the run's agent (SANDBOX_AGENT, by default claude: agents/<name>.sh, which finds its
-# CLI in its shared, read-only volume, installed by the listener), clones the repository over
-# HTTPS (tokens from the listener's broker, git-credential-deckhand), opens the task's branch
+# Loads the run's agent (SANDBOX_AGENT, claude by default, or codex: agents/<name>.sh, which
+# finds its CLI in its shared, read-only volume, installed by the listener), clones the
+# repository over HTTPS (tokens from the listener's broker, git-credential-deckhand), opens the task's branch
 # and draft pull request (draft-pr.sh, for TASK_ISSUE), runs the repo's setup command
 # (SANDBOX_SETUP), then runs the agent without permission prompts: the container is the
 # sandbox. With DOCKER_HOST (a run granted a container engine), the docker CLI goes through

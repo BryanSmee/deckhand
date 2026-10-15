@@ -4,7 +4,7 @@
 import { randomBytes } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readdirSync, rmdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { agentFor, effortOf, modelOf } from "./agents/index.mjs";
+import { AGENT_SECRETS, agentFor, effortOf, modelOf } from "./agents/index.mjs";
 import { operatorHosts, proxyEnv } from "./egress.mjs";
 import { commentsText, sameRepo } from "./events.mjs";
 import { grantCheck, hardeningArgs, mountArgs, resolveMounts } from "./grants.mjs";
@@ -30,17 +30,23 @@ function refusedMounts(refused, name) {
   return `${name} can't run here: host mounts requested by \`${CONFIG_FILE}\` are refused.\n\n${refused.map((r) => `- ${r}`).join("\n")}\n\nOnly paths under a root the operator grants this repository can be mounted.`;
 }
 
+// The agent of a run: the repo's mode's, else that of light runs or work (the repo's, among
+// the operator's, else the operator's).
+export function agentNameFor(settings, own, light) {
+  return own?.agent ?? (light ? settings.brainstormAgent : settings.agent);
+}
+
 // The model and effort of a run: the comments' "/model" and "/effort" (`options`), else the
-// repo's mode's, else those of light runs or work. Tiers (`best`…) and efforts as the run's
-// agent names them.
-export function modelFor(settings, own, light, options, agent = agentFor()) {
+// repo's mode's, else those of light runs or work. Tiers (`best`…, with the operator's own in
+// `config`) and efforts as the run's agent names them.
+export function modelFor(settings, own, light, options, agent = agentFor(), config = {}) {
   const defaults = own
     ? [own.model, own.effort]
     : light
       ? [settings.brainstormModel, settings.brainstormEffort]
       : [settings.model, settings.effort];
   return [
-    modelOf(agent, options.model ?? defaults[0]),
+    modelOf(agent, options.model ?? defaults[0], config),
     effortOf(agent, options.effort ?? defaults[1]),
   ];
 }
@@ -127,7 +133,7 @@ export function createRuns(ctx) {
   }
 
   // What the dashboard lists for a run.
-  function newRecord(task, { id, key, mode, replyTo, reason, items }) {
+  function newRecord(task, { id, key, mode, light, replyTo, reason, items }) {
     return {
       id,
       key,
@@ -137,8 +143,8 @@ export function createRuns(ctx) {
       repo: task.repo,
       title: ctx.titles.get(key),
       replyTo,
-      // What runs it: the only agent until a deployment can pick one.
-      agent: agentFor().name,
+      // What runs it: the operator's until the repo's settings are read (begin()).
+      agent: light ? config.brainstormAgent : config.agent,
       // Why the listener started it itself ("conflict": conflicts.mjs); null for comments.
       reason,
       // What it was asked to act on, kept in its log's first line: a run that fails can run
@@ -169,7 +175,7 @@ export function createRuns(ctx) {
     const key = `${task.repo}#${task.id}`;
     const id = `${task.name}-${Date.now()}`;
     const reason = items.at(-1).reason ?? null;
-    const record = newRecord(task, { id, key, mode, replyTo, reason, items });
+    const record = newRecord(task, { id, key, mode, light, replyTo, reason, items });
     return {
       id,
       key,
@@ -247,8 +253,13 @@ export function createRuns(ctx) {
   // config with errors, or a mode no longer in it, stops the run there.
   async function begin(task, items) {
     const { key, mode, light, record, logFile } = task.live;
-    const agent = agentOf(task);
     await makeRoom(task);
+    // Fresh from the default branch: a config merged since the comment applies.
+    const { settings, errors, warnings } = await ctx.repoSettings(task.repo, task.base);
+    task.settings = settings;
+    const own = customMode(settings, mode);
+    record.agent = agentFor(agentNameFor(settings, own, light)).name;
+    const agent = agentOf(task);
     // Inbox entries start afresh: the sandbox doesn't resume their session (entrypoint.sh).
     const started =
       !isFresh(task, mode) && (await ctx.runner.hasSession(sessionName(task.name, light), agent));
@@ -264,15 +275,11 @@ export function createRuns(ctx) {
     const text = commentsText(items, options);
     const restored = items.some((i) => i.restored);
     const message = firstMessage({ mode, text, restored, started });
-    // Fresh from the default branch: a config merged since the comment applies.
-    const { settings, errors, warnings } = await ctx.repoSettings(task.repo, task.base);
-    task.settings = settings;
-    const own = customMode(settings, mode);
-    [record.model, record.effort] = modelFor(settings, own, light, options, agent);
+    [record.model, record.effort] = modelFor(settings, own, light, options, agent, config);
     record.mode =
       mode === "stop" ? "wrap-up" : restored ? "restore" : started ? "continue" : "start";
     log(
-      `${key}: running ${task.name} (${mode}, ${record.mode}, ${record.model}/${record.effort}), log ${record.logPath}`,
+      `${key}: running ${task.name} (${mode}, ${record.mode}, ${agent.name} ${record.model}/${record.effort}), log ${record.logPath}`,
     );
     // First line of every log: what the dashboard needs to list it after a restart.
     const { logPath: _, ...meta } = record;
@@ -286,6 +293,13 @@ export function createRuns(ctx) {
     if (!own && !BUILT_IN.has(mode)) {
       throw new RunError(
         `${cantRun(task)}: the \`${mode}\` mode is no longer in \`${CONFIG_FILE}\` on \`${task.base || "main"}\`.`,
+      );
+    }
+    // A model of another agent's ("/model opus" for Codex): the run would only fail later.
+    const wrongModel = agent.modelProblem(record.model);
+    if (wrongModel) {
+      throw new RunError(
+        `${cantRun(task)}: ${wrongModel}. Use a tier (\`/model best\`, \`balanced\` or \`fast\`) or one of its models.`,
       );
     }
     return { text, message, settings, own, note };
@@ -349,9 +363,9 @@ export function createRuns(ctx) {
     }
     return {
       grant,
-      // All the operator's: each may resolve to a private address.
-      hosts: operatorHosts(config, grant),
-      trusted: operatorHosts(config, grant),
+      // All the operator's, for the run's agent: each may resolve to a private address.
+      hosts: operatorHosts(config, grant, agentOf(task)),
+      trusted: operatorHosts(config, grant, agentOf(task)),
       mounts,
       limits: grant.limits,
     };
@@ -606,8 +620,7 @@ export function createRuns(ctx) {
   // A line of the sandbox's output without the secrets it must not publish (secrets.mjs):
   // what is stored is what the dashboard shows, and the result is what gets posted.
   function hidden(live, line) {
-    const names = agentFor(live.record.agent).secrets;
-    return redact(line, [live.secret, ...names.map((name) => process.env[name])]);
+    return redact(line, [live.secret, ...AGENT_SECRETS.map((name) => process.env[name])]);
   }
 
   function output(task, raw) {

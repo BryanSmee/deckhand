@@ -1,6 +1,6 @@
 # Deckhand's base sandbox image: a container per issue that clones the repository, runs an
-# agent (Claude Code) without permission prompts, and pushes a branch. Built from the
-# repository root (compose.yaml), as it also takes ../prompts/sandbox.md.
+# agent (Claude Code or Codex) without permission prompts, and pushes a branch. Built from
+# the repository root (compose.yaml), as it also takes ../prompts/sandbox.md.
 #
 # The harness only: no project toolchain. A repo brings its own with a Dockerfile FROM this
 # image (`ARG DECKHAND_BASE` / `FROM $DECKHAND_BASE`, see ../docs/repo-config.md), which the
@@ -8,8 +8,9 @@
 #
 # No agent is in the image: each installs per version into a shared volume before the first
 # run that needs it (Claude Code: agents/claude/install puts the pinned CLAUDE_CODE_VERSION
-# into the /opt/claude-code volume). One image for every agent: what is an agent's own is in
-# agents/<name>.sh and agents/<name>/, copied to /usr/local/share/deckhand-agents. GitHub
+# into the /opt/claude-code volume; Codex: agents/codex/install, CODEX_VERSION, /opt/codex).
+# One image for every agent: what is an agent's own is in agents/<name>.sh and
+# agents/<name>/, copied to /usr/local/share/deckhand-agents. GitHub
 # access goes through the listener's token broker (git-credential-deckhand, the gh wrapper):
 # no token or SSH key is ever mounted.
 
@@ -33,7 +34,7 @@ RUN set -eux; \
       docker-ce-cli docker-buildx-plugin docker-compose-plugin; \
     rm -rf /var/lib/apt/lists/*
 
-# A headless Chromium for checking pages: the Playwright MCP server gives Claude browser
+# A headless Chromium for checking pages: the Playwright MCP server gives the agent browser
 # tools (navigate, click, screenshots it can look at, console), and the same Playwright
 # serves scripts. One Playwright, the MCP server's own, so a single browser matches it.
 # CJK and emoji fonts, so screenshots don't show boxes.
@@ -72,6 +73,12 @@ COPY sandbox/agents/claude/managed-settings.json /etc/claude-code/managed-settin
 # /opt/claude-code: a new volume mounted there takes this owner, root: the listener installs
 # Claude Code as root and sandboxes mount it read-only (../docs/security.md).
 RUN install -d -o node -g node /workspace && install -d /opt/claude-code
+
+# Codex's: its installer. Its home (/home/node/.codex, the issue's session volume) gets its
+# config and hooks from agents/codex.sh on every start; a new volume mounted there takes the
+# owner of this folder, node. /opt/codex: root's, like /opt/claude-code.
+COPY sandbox/agents/codex/install /usr/local/bin/deckhand-install-codex
+RUN install -d -o node -g node /home/node/.codex && install -d /opt/codex
 
 # Run as `node` (uid 1000): Claude Code refuses --dangerously-skip-permissions as root anyway.
 USER node

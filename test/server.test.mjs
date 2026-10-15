@@ -166,6 +166,18 @@ case "$1" in
       if [ -e "${dir}/hold" ]; then
         until [ -e "${dir}/go" ]; do sleep 0.05; done
       fi
+      # Codex: its API call through the listener, one turn on the message it was given, and
+      # no inbox to read (it takes no messages mid-run).
+      if [ "$SANDBOX_AGENT" = codex ]; then
+        curl -sS -X POST -H "Authorization: Bearer $OPENAI_API_KEY" \\
+          -d "{}" "$OPENAI_BASE_URL/responses" > "${dir}/openai-answer"
+        text="Codex did: \${TASK_MESSAGE:-the issue}"
+        echo '"'"'{"type":"thread.started","thread_id":"t1"}'"'"'
+        jq -nc --arg text "$text" '"'"'{type: "item.completed", item: {id: "item_0", type: "agent_message", text: $text}}'"'"'
+        echo '"'"'{"type":"turn.completed","usage":{}}'"'"'
+        jq -nc --arg text "$text" '"'"'{type: "deckhand.result", ok: true, text: $text, duration_ms: 60000}'"'"'
+        exit 0
+      fi
       result="All done."
       # A run talked into posting secrets: its own, and whatever the test leaves in leak.
       [ -e "${dir}/leak" ] && result="Leaked $DECKHAND_RUN_SECRET and $(cat "${dir}/leak")."
@@ -671,6 +683,107 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
     // The call reached the gateway under its own path, with its token as a bearer.
     const call = await github.waitFor((r) => r.path === "/api/v1/messages?beta=true");
     assert.equal(call.auth, `Bearer ${credential}`);
+  });
+
+  test("Codex: its key stays out, its calls go through the listener, a mid-run comment gets a follow-up run", async (t) => {
+    const key = "sk-proj-operator-openai-key";
+    const { dir, github, send, listener } = await listen(
+      t,
+      {},
+      (dir, github) => (
+        writeFileSync(join(dir, "hold"), ""),
+        { OPENAI_API_KEY: key, OPENAI_BASE_URL: `${github.url}/v1`, SANDBOX_AGENT: "codex" }
+      ),
+    );
+    await send(comment("alice"));
+    const egress = join(dir, "egress");
+    await until(() => exists(egress)?.trim().split("\n").length === 9, "the sandbox");
+
+    // Codex, installed into its own volume, with its session volume and the run's secret.
+    const secret = readFileSync(join(dir, "run-secret"), "utf8").trim();
+    const runEnv = readFileSync(join(dir, "run-env"), "utf8");
+    assert.ok(!runEnv.includes(key));
+    assert.match(runEnv, /^SANDBOX_AGENT=codex$/m);
+    assert.match(runEnv, /^CODEX_VERSION=0\.162\.1$/m);
+    assert.match(runEnv, new RegExp(`^OPENAI_API_KEY=${secret}$`, "m"));
+    assert.match(runEnv, /^OPENAI_BASE_URL=http:\/\/127\.0\.0\.1:\d+\/openai$/m);
+    assert.match(runEnv, /^SANDBOX_MODEL=gpt-6-astra$/m);
+    assert.doesNotMatch(runEnv, /^(ANTHROPIC_|CLAUDE_CODE_VERSION=)/m);
+    const args = readFileSync(join(dir, "run-args"), "utf8").split("\n");
+    assert.ok(args.includes("deckhand-codex:/opt/codex:ro"));
+    const session = args.find((a) => a.endsWith("-codex:/home/node/.codex"));
+    assert.ok(session, "the issue's Codex session volume");
+    assert.ok(!args.some((a) => a.endsWith(":/home/node/.claude")));
+    const calls = readFileSync(join(dir, "docker-calls"), "utf8");
+    assert.match(
+      calls,
+      /-e CODEX_VERSION=0\.162\.1 -v deckhand-codex:\/opt\/codex --entrypoint deckhand-install-codex/,
+    );
+
+    // Its egress: GitHub's, not Anthropic's.
+    const answers = Object.fromEntries(
+      readFileSync(egress, "utf8")
+        .trim()
+        .split("\n")
+        .map((l) => [l.split(" ")[0], JSON.parse(l.slice(l.indexOf(" ") + 1)).allowed]),
+    );
+    assert.equal(answers["api.anthropic.com"], false);
+    assert.equal(answers["github.com"], true);
+
+    // A comment while it works: Codex takes none, so it waits for the next run, which goes
+    // on in the issue's session.
+    writeFileSync(join(dir, "volumes"), `${session.split(":")[0]}\n`);
+    await send(followUp(100, "Also cover the edge case"));
+    await listener.until("org/repo#12: queued after the running one (work)");
+    writeFileSync(join(dir, "go"), "");
+
+    // Its API call reached "OpenAI" with the operator's key, not the secret.
+    const call = await github.waitFor((r) => r.path === "/v1/responses");
+    assert.equal(call.auth, `Bearer ${key}`);
+    const answer = await until(() => exists(join(dir, "openai-answer"))?.trim(), "its answer");
+    assert.deepEqual(JSON.parse(answer), { id: 1 });
+
+    // Two replies: the first run's, then the follow-up's, which resumed the session.
+    await until(() => replies(github).length === 2, "the follow-up's reply");
+    const [first, second] = replies(github).map((r) => JSON.parse(r.body).body);
+    assert.match(first, /^Codex did: /);
+    assert.match(first, /🤖 Codex gpt-6-astra · medium effort · 1 min/);
+    assert.match(second, /^Codex did: [^]*Also cover the edge case/);
+    assert.equal(exists(join(dir, "delivered")), null);
+    assert.match(
+      listener.output(),
+      /org\/repo#12: running \S+ \(work, continue, codex gpt-6-astra\/medium\)/,
+    );
+    await settled(github, [99, 100]);
+  });
+
+  test("/model opus on a Codex run: the reply says it is Claude's, nothing runs", async (t) => {
+    const { dir, github, send } = await listen(t, {}, () => ({
+      OPENAI_API_KEY: "sk-proj-k",
+      SANDBOX_AGENT: "codex",
+    }));
+    await send(comment("alice", "Deckhand\n/model opus"));
+    const reply = await github.waitFor(
+      (r) => r.method === "POST" && r.path === "/repos/org/repo/issues/12/comments",
+    );
+    assert.match(
+      JSON.parse(reply.body).body,
+      /^Codex can't run here: `opus` is a Claude model, not one of Codex's\. Use a tier/,
+    );
+    assert.equal(exists(join(dir, "run-args")), null);
+  });
+
+  test("a repo that picks an agent the operator hasn't configured: the reply says so, nothing runs", async (t) => {
+    const { dir, github, send } = await listen(t, { ".deckhand.yaml": "agent: codex\n" });
+    await send(comment("alice"));
+    const reply = await github.waitFor(
+      (r) => r.method === "POST" && r.path === "/repos/org/repo/issues/12/comments",
+    );
+    assert.match(
+      JSON.parse(reply.body).body,
+      /`\.deckhand\.yaml` on `trunk` has errors\.\n\n- agent: the operator hasn't configured codex \(configured: claude\)/,
+    );
+    assert.equal(exists(join(dir, "run-args")), null);
   });
 
   test("a webhook from the App runs a sandbox that gets its repo's token from the broker", async (t) => {

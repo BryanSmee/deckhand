@@ -18,11 +18,11 @@ function hostOf(url) {
   return new URL(url).hostname.toLowerCase();
 }
 
-// What the agent (its `hosts`, agents/) and GitHub need. git and gh use the GitHub hosts the
-// listener is configured with; raw files and release downloads come from
-// *.githubusercontent.com. The listener (the broker) is reached directly, on the
+// What the agent (its `hosts`, agents/; by default the operator's) and GitHub need. git and
+// gh use the GitHub hosts the listener is configured with; raw files and release downloads
+// come from *.githubusercontent.com. The listener (the broker) is reached directly, on the
 // run's own network.
-export function mandatoryHosts(config, agent = agentFor()) {
+export function mandatoryHosts(config, agent = agentFor(config.agent)) {
   return [
     ...agent.hosts,
     ...new Set([hostOf(config.githubUrl), hostOf(config.githubApi)]),
@@ -30,10 +30,10 @@ export function mandatoryHosts(config, agent = agentFor()) {
   ];
 }
 
-// What the operator allows a repo: the mandatory hosts and its grant's (default.yaml's and
-// its own file's), once each.
-export function operatorHosts(config, grant) {
-  const all = [...mandatoryHosts(config), ...grant.hosts];
+// What the operator allows a repo's runs of `agent`: the mandatory hosts and its grant's
+// (default.yaml's and its own file's), once each.
+export function operatorHosts(config, grant, agent) {
+  const all = [...mandatoryHosts(config, agent), ...grant.hosts];
   return [...new Set(all.map((h) => h.toLowerCase()))];
 }
 

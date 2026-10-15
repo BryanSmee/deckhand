@@ -2,7 +2,8 @@
 // networks come from here so nothing in the listener is tied to one deployment. What the
 // operator grants one repo (hosts, mounts, limits) is in its grants folder instead (grants.mjs).
 import { readFileSync } from "node:fs";
-import { CREDENTIALS, credentialName } from "./anthropic.mjs";
+import { AGENT_SECRETS, AGENTS, DEFAULT_AGENT } from "./agents/index.mjs";
+import { credentialName } from "./anthropic.mjs";
 import { MODEL_NAME } from "./events.mjs";
 import { ENGINES } from "./runner/engine.mjs";
 import { parseCidr } from "./subnets.mjs";
@@ -60,11 +61,18 @@ export const FILE_SETTINGS = {
   ALLOWED_REPOS: "list",
   PUBLIC_URL: "scalar",
   TRIGGER: "scalar",
+  SANDBOX_AGENT: "scalar",
+  BRAINSTORM_AGENT: "scalar",
   CLAUDE_CODE_VERSION: "scalar",
   ANTHROPIC_BASE_URL: "scalar",
   ANTHROPIC_DEFAULT_OPUS_MODEL: "scalar",
   ANTHROPIC_DEFAULT_SONNET_MODEL: "scalar",
   ANTHROPIC_DEFAULT_HAIKU_MODEL: "scalar",
+  CODEX_VERSION: "scalar",
+  OPENAI_BASE_URL: "scalar",
+  CODEX_BEST_MODEL: "scalar",
+  CODEX_BALANCED_MODEL: "scalar",
+  CODEX_FAST_MODEL: "scalar",
   SANDBOX_MODEL: "scalar",
   SANDBOX_EFFORT: "scalar",
   BRAINSTORM_MODEL: "scalar",
@@ -80,6 +88,7 @@ export const FILE_SETTINGS = {
   WAITS_CHECK_MINUTES: "scalar",
   NAME_PREFIX: "scalar",
   CLAUDE_CODE_VOLUME: "scalar",
+  CODEX_VOLUME: "scalar",
   GRANTS_DIR: "scalar",
   INSTALL_NETWORK: "scalar",
   DEBOUNCE_MS: "scalar",
@@ -135,7 +144,7 @@ export function parseConfigFile(text, path) {
   for (const [key, value] of Object.entries(raw)) {
     const name = key.toUpperCase();
     const type = key === name.toLowerCase() ? FILE_SETTINGS[name] : undefined;
-    if (CREDENTIALS.includes(name)) {
+    if (AGENT_SECRETS.includes(name)) {
       errors.push(`${key}: a secret, keep it in the environment (.env), not in a file`);
     } else if (name === "GRANTS_FILE") {
       errors.push(`${key}: gone, one file per repository in grants_dir instead (docs/security.md)`);
@@ -231,6 +240,9 @@ function sandboxConfig(env, from, prefix) {
     // Claude Code is not in the image: the first run installs this version into the volume.
     claudeCodeVolume: setting("CLAUDE_CODE_VOLUME") || `${prefix}-claude-code`,
     claudeCodeVersion: setting("CLAUDE_CODE_VERSION") || "2.1.300",
+    // Codex's, the same way (agents/codex.mjs).
+    codexVolume: setting("CODEX_VOLUME") || `${prefix}-codex`,
+    codexVersion: setting("CODEX_VERSION") || "0.162.1",
     maxParallel: number("MAX_PARALLEL", 2, "a whole number of sandboxes"),
     // Where the runs' networks take their subnets from (runner/docker.mjs).
     subnets: sandboxSubnets(from),
@@ -270,8 +282,8 @@ function engineSetting(value, label) {
 
 // "https://openrouter.ai/api/" → "https://openrouter.ai/api", or a ConfigError: a typo would
 // otherwise only show as every run failing.
-function anthropicUrl(value, label) {
-  if (!value) return "https://api.anthropic.com";
+function apiUrl(value, label, fallback) {
+  if (!value) return fallback;
   let url;
   try {
     url = new URL(value);
@@ -280,6 +292,40 @@ function anthropicUrl(value, label) {
     throw new ConfigError(`${label}: expected an http(s) URL, got ${value}`);
   }
   return value.replace(/\/$/, "");
+}
+
+// SANDBOX_AGENT and BRAINSTORM_AGENT (by default the same), and the agents the operator
+// configured: those it has a credential for (each agent's `secrets`), and the defaults. A
+// repo's `agent:` can only pick among these (repo-config.mjs). Claude Code may be the
+// default without one, as before agents could be picked: its endpoint then answers that the
+// operator set none. Another agent can't: it is picked on purpose.
+function agentSettings(env, { setting, label }) {
+  const pick = (value, name, fallback) => {
+    const agent = String(value || fallback)
+      .trim()
+      .toLowerCase();
+    if (!Object.hasOwn(AGENTS, agent)) {
+      throw new ConfigError(
+        `${label(name)}: expected ${Object.keys(AGENTS).join(" or ")}, got ${value}`,
+      );
+    }
+    const secrets = AGENTS[agent].secrets;
+    if (agent !== DEFAULT_AGENT && !secrets.some((secret) => env[secret])) {
+      throw new ConfigError(
+        `${label(name)} is ${agent}, which needs ${secrets.join(" or ")} in the environment`,
+      );
+    }
+    return agent;
+  };
+  const agent = pick(setting("SANDBOX_AGENT"), "SANDBOX_AGENT", DEFAULT_AGENT);
+  const brainstormAgent = pick(setting("BRAINSTORM_AGENT"), "BRAINSTORM_AGENT", agent);
+  const agents = Object.keys(AGENTS).filter(
+    (name) =>
+      AGENTS[name].secrets.some((secret) => env[secret]) ||
+      name === agent ||
+      name === brainstormAgent,
+  );
+  return { agent, brainstormAgent, agents };
 }
 
 function modelName(value, label) {
@@ -333,7 +379,11 @@ export function loadConfig(env, file = NO_FILE) {
     // Where that endpoint sends sandboxes' requests: Anthropic, or an Anthropic-compatible
     // gateway (OpenRouter, a company's). The operator's only: a repo that could set it would
     // send its code and the credential elsewhere.
-    anthropicUrl: anthropicUrl(setting("ANTHROPIC_BASE_URL"), label("ANTHROPIC_BASE_URL")),
+    anthropicUrl: apiUrl(
+      setting("ANTHROPIC_BASE_URL"),
+      label("ANTHROPIC_BASE_URL"),
+      "https://api.anthropic.com",
+    ),
     // What opus, sonnet and haiku mean to the sandboxes' Claude Code, by name: a gateway's
     // models have its own names. Empty: Claude Code's defaults.
     modelAliases: Object.fromEntries(
@@ -345,6 +395,25 @@ export function loadConfig(env, file = NO_FILE) {
         .filter(([, value]) => value)
         .map(([name, value]) => [name, modelName(value, label(name))]),
     ),
+    // Codex's, the same way (openai.mjs): OpenAI, or an OpenAI-compatible endpoint.
+    openaiCredential: env.OPENAI_API_KEY ? "OPENAI_API_KEY" : null,
+    openaiUrl: apiUrl(
+      setting("OPENAI_BASE_URL"),
+      label("OPENAI_BASE_URL"),
+      "https://api.openai.com/v1",
+    ),
+    // What best, balanced and fast mean to Codex, when not its built-in models (agents/codex.mjs).
+    codexModels: Object.fromEntries(
+      [
+        ["best", "CODEX_BEST_MODEL", setting("CODEX_BEST_MODEL")],
+        ["balanced", "CODEX_BALANCED_MODEL", setting("CODEX_BALANCED_MODEL")],
+        ["fast", "CODEX_FAST_MODEL", setting("CODEX_FAST_MODEL")],
+      ]
+        .filter(([, , value]) => value)
+        .map(([tier, name, value]) => [tier, modelName(value, label(name))]),
+    ),
+    // Which agent runs work and light runs, and those a repo may pick instead.
+    ...agentSettings(env, from),
     githubApi: (setting("GITHUB_API") || "https://api.github.com").replace(/\/$/, ""),
     githubUrl: (setting("GITHUB_URL") || "https://github.com").replace(/\/$/, ""),
     users,

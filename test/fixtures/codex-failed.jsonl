@@ -1,0 +1,12 @@
+{"type":"thread.started","thread_id":"01a140d4-c5ce-70b3-8e35-5c27c1fe55a7"}
+{"type":"item.completed","item":{"id":"item_0","type":"error","message":"`--dangerously-bypass-hook-trust` is enabled. Enabled hooks may run without review for this invocation."}}
+{"type":"item.completed","item":{"id":"item_1","type":"error","message":"`--dangerously-bypass-hook-trust` is enabled. Enabled hooks may run without review for this invocation."}}
+{"type":"turn.started"}
+{"type":"error","message":"Reconnecting... 1/5 (rate limit exceeded: Rate limit reached for gpt-5.5)"}
+{"type":"error","message":"Reconnecting... 2/5 (rate limit exceeded: Rate limit reached for gpt-5.5)"}
+{"type":"error","message":"Reconnecting... 3/5 (rate limit exceeded: Rate limit reached for gpt-5.5)"}
+{"type":"error","message":"Reconnecting... 4/5 (rate limit exceeded: Rate limit reached for gpt-5.5)"}
+{"type":"error","message":"Reconnecting... 5/5 (rate limit exceeded: Rate limit reached for gpt-5.5)"}
+{"type":"error","message":"rate limit exceeded: Rate limit reached for gpt-5.5"}
+{"type":"turn.failed","error":{"message":"rate limit exceeded: Rate limit reached for gpt-5.5"}}
+{"type":"deckhand.result","ok":false,"text":"rate limit exceeded: Rate limit reached for gpt-5.5","duration_ms":5950}
