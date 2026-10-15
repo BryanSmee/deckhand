@@ -38,7 +38,7 @@ beforeEach(() => {
 });
 afterEach(() => document.body.replaceChildren());
 
-const KEY = "BryanSmee/deckhand#22";
+const KEY = "acme/app#22";
 // The state a later poll brings: #22's pull request turned ready at `readyAt`.
 const withPr = (s: State, pr: Partial<NonNullable<Task["pr"]>>, now = s.now + 3000): State => ({
   ...s,
@@ -54,7 +54,7 @@ test("rows show their pull request's state; the detail links to it", () => {
 
   // #22 is open: its draft pull request, where it replies.
   const link = screen.getByRole("link", { name: "Pull request #25" });
-  expect(link.getAttribute("href")).toBe("https://github.com/BryanSmee/deckhand/pull/25");
+  expect(link.getAttribute("href")).toBe("https://github.example.com/acme/app/pull/25");
   expect(within(link.parentElement!).getByText("Draft")).toBeTruthy();
   expect(screen.queryByRole("link", { name: /Replies on/ })).toBeNull();
 });
@@ -87,7 +87,7 @@ test("one notification when a pull request turns ready, none for those ready bef
   expect(n.title).toBe(
     "Ready for review: Dashboard on a frontend framework, built at image build time",
   );
-  expect(n.options.body).toBe("BryanSmee/deckhand · pull request #25");
+  expect(n.options.body).toBe("acme/app · pull request #25");
 
   // The next polls: no second one.
   rerender(<Dashboard state={{ ...ready, now: ready.now + 3000 }} error={null} />);
@@ -97,7 +97,7 @@ test("one notification when a pull request turns ready, none for those ready bef
   const open = vi.spyOn(window, "open").mockImplementation(() => null);
   n.onclick!();
   expect(open).toHaveBeenCalledWith(
-    "https://github.com/BryanSmee/deckhand/pull/25",
+    "https://github.example.com/acme/app/pull/25",
     "_blank",
     "noreferrer",
   );

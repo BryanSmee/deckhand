@@ -51,8 +51,8 @@ test("the tasks with their titles, tabs per repo, and the first live one open", 
   render(<Dashboard state={state} error={null} />);
   expect(screen.getAllByRole("tab").map((t) => t.firstChild!.textContent)).toEqual([
     "All",
-    "deckhand",
-    "shiny-piece",
+    "app",
+    "api",
     "notes",
   ]);
   expect(rows()).toHaveLength(10);
@@ -61,14 +61,24 @@ test("the tasks with their titles, tabs per repo, and the first live one open", 
   expect(rows()).toContain("Issue #127");
   expect(screen.getByRole("heading", { level: 1, name: /Dashboard on a frontend/ })).toBeTruthy();
   expect(screen.getByText(/npm installs get a 403/)).toBeTruthy();
-  expect(location.hash).toBe("#/all?task=BryanSmee%2Fdeckhand%2322");
+  expect(location.hash).toBe("#/all?task=acme%2Fapp%2322");
   expect(screen.getByText(/2 running \(max 4\) · 1 queued/)).toBeTruthy();
+});
+
+test("links go to the listener's GitHub", () => {
+  render(<Dashboard state={state} error={null} />);
+  expect(screen.getByRole("link", { name: "acme/app" }).getAttribute("href")).toBe(
+    "https://github.example.com/acme/app",
+  );
+  expect(screen.getByRole("link", { name: /Dashboard on a frontend/ }).getAttribute("href")).toBe(
+    "https://github.example.com/acme/app/issues/25",
+  );
 });
 
 test("a repo's tab and the state chips filter the list", () => {
   render(<Dashboard state={state} error={null} />);
-  fireEvent.click(screen.getByRole("tab", { name: /shiny-piece/ }));
-  expect(location.hash).toMatch(/^#\/BryanSmee\/shiny-piece/);
+  fireEvent.click(screen.getByRole("tab", { name: /^api/ }));
+  expect(location.hash).toMatch(/^#\/acme\/api/);
   expect(rows()).toEqual([
     "Offline sync for the reading list",
     "Search results flicker when typing fast",
@@ -79,16 +89,16 @@ test("a repo's tab and the state chips filter the list", () => {
   expect(rows()).toEqual(["Search results flicker when typing fast"]);
   // Kept on this device.
   expect(localStorage.getItem("deckhand.chip")).toBe("input");
-  expect(localStorage.getItem("deckhand.tab")).toBe("BryanSmee/shiny-piece");
+  expect(localStorage.getItem("deckhand.tab")).toBe("acme/api");
   fireEvent.click(screen.getByRole("button", { name: /^Done/ }));
   expect(rows()).toEqual(["Dark mode for the settings page"]);
 });
 
 test("old links open their task and run", () => {
-  history.replaceState(null, "", "#task=BryanSmee%2Fnotes%23discussion-8");
+  history.replaceState(null, "", "#task=acme%2Fnotes%23discussion-8");
   render(<Dashboard state={state} error={null} />);
   expect(screen.getByRole("heading", { level: 1, name: /How do runs restart/ })).toBeTruthy();
-  expect(FakeSource.last!.url).toBe("api/runs/BryanSmee-notes-discussion-8-1791896400000/stream");
+  expect(FakeSource.last!.url).toBe("api/runs/acme-notes-discussion-8-1791896400000/stream");
 });
 
 test("on a phone: the list, then the task with a way back", () => {
@@ -105,7 +115,7 @@ test("on a phone: the list, then the task with a way back", () => {
 test("the log streams in: tool calls with their output, then the result", async () => {
   render(<Dashboard state={state} error={null} />);
   const source = FakeSource.last!;
-  expect(source.url).toBe("api/runs/BryanSmee-deckhand-22-1791989580000/stream");
+  expect(source.url).toBe("api/runs/acme-app-22-1791989580000/stream");
   const entries: Entry[] = [
     { kind: "meta", text: "Continuing the session" },
     { kind: "tool", name: "Bash", text: "npm test" },
@@ -127,8 +137,8 @@ test("the log streams in: tool calls with their output, then the result", async 
   // Another run of the task: a new stream, the old one closed.
   fireEvent.click(screen.getByRole("button", { name: /Start · 2 h ago/ }));
   expect(FakeSource.last).not.toBe(source);
-  expect(FakeSource.last!.url).toMatch(/BryanSmee-deckhand-22-1791984600000/);
-  expect(location.hash).toMatch(/run=BryanSmee-deckhand-22-1791984600000/);
+  expect(FakeSource.last!.url).toMatch(/acme-app-22-1791984600000/);
+  expect(location.hash).toMatch(/run=acme-app-22-1791984600000/);
 });
 
 test("signed out of reach: the error instead of the counts", () => {

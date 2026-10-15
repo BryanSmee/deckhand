@@ -13,9 +13,11 @@ interface Props {
   onRun: (id: string | null) => void;
   onBack: () => void;
   now: number;
+  // api/state's githubUrl.
+  github: string;
 }
 
-export function Detail({ task: t, run: r, onRun, onBack, now }: Props) {
+export function Detail({ task: t, run: r, onRun, onBack, now, github }: Props) {
   if (!t) {
     return (
       <div class={styles.detail}>
@@ -23,7 +25,7 @@ export function Detail({ task: t, run: r, onRun, onBack, now }: Props) {
       </div>
     );
   }
-  const url = githubUrl(t);
+  const url = githubUrl(t, github);
   const own = ownMode(t.mode);
   // The last reply: from the latest run that has one.
   const reply = t.runs.find((x) => x.summary);
@@ -33,12 +35,7 @@ export function Detail({ task: t, run: r, onRun, onBack, now }: Props) {
         <button type="button" class={styles.back} onClick={onBack}>
           ← Back
         </button>
-        <a
-          class={styles.repo}
-          href={`https://github.com/${t.repo}`}
-          target="_blank"
-          rel="noreferrer"
-        >
+        <a class={styles.repo} href={`${github}/${t.repo}`} target="_blank" rel="noreferrer">
           {t.repo}
         </a>
         <h1 class={styles.title}>
