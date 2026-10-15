@@ -94,6 +94,15 @@ export function createPrReady({
     const wanted = action === "draft";
     const state = wanted ? "a draft" : "ready for review";
     if (pr.draft === wanted) return send(res, 200, { message: `${ref} is already ${state}` });
+    // Conflicts with its base: not ready, whatever the run thinks. Only `dirty` is refused:
+    // GitHub computes the state lazily (`unknown`, null) and the rest (checks, reviews) is
+    // for the reviewer to weigh.
+    if (!wanted && pr.mergeable_state === "dirty") {
+      const base = pr.base?.ref ?? "the base branch";
+      return send(res, 409, {
+        error: `${ref} conflicts with ${base}: rebase on origin/${base} first (git fetch origin, git rebase origin/${base}, git push --force-with-lease)`,
+      });
+    }
     try {
       const { token } = await github.repoToken(repo, PUSH_PERMISSIONS);
       await mutate(token, action, pr.node_id);

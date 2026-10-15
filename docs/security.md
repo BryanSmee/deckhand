@@ -34,7 +34,8 @@ instructions. A sandbox that could write to it could grant itself all of that, s
   the run is live and a work run, that the pull request belongs to the run's repository
   and that its head branch is in that repository too (not a fork), then calls
   that one mutation with a token of its own, which the sandbox never sees. That token does
-  nothing else.
+  nothing else. A pull request that conflicts with its base (`mergeable_state: dirty`) is
+  refused ready with a 409 until the run rebases it.
 
 This doesn't depend on GitHub: branch protection and rulesets aren't enforced on private
 repositories of free plans. Where they are, a ruleset on the default branch (pull request
