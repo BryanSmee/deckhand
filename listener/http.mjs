@@ -212,7 +212,8 @@ export function createHttp(ctx, { dashboardDir }) {
     if (url.pathname === "/api/state") return sendJson(res, state(user));
     const match = /^\/api\/runs\/([\w.-]+)\/stream$/.exec(url.pathname);
     const run = match && ctx.runs.find((r) => r.id === match[1]);
-    if (run && sees(user, run.repo ?? repoOf(run.key))) return stream(req, res, run);
+    const visible = () => ctx.auth.user(req) === user && sees(user, run.repo ?? repoOf(run.key));
+    if (run && visible()) return stream(req, res, run, visible);
     res.statusCode = 404;
     res.end();
   }
@@ -427,7 +428,9 @@ export function createHttp(ctx, { dashboardDir }) {
     if (ctx.auth.handle(req, res)) return;
     if (req.url === "/status") {
       if (!trusted(req)) return res.writeHead(401).end();
-      return sendJson(res, ctx.status());
+      // A signed-in user's: only the repos they may see, as in api/state.
+      const user = local(req) ? null : ctx.auth.user(req);
+      return sendJson(res, ctx.status(user ? (repo) => sees(user, repo) : undefined));
     }
     if (req.method === "POST" && req.url === "/webhook") return webhook(req, res);
     if (req.url.startsWith("/api/repos")) {

@@ -180,6 +180,16 @@ test("GET issues: signed in, for allowed repos the App is installed on", async (
   assert.equal(w.api.handle({ method: "GET", url: "/api/repos/org/app/config" }, {}, "x"), false);
 });
 
+test("GET issues: only for the repo's own users, as the dashboard's tasks are", async () => {
+  const w = setup({ settings: { users: ["bob"] }, issues: { 1: open("One") } });
+  const res = await call(w.api, "GET", "/api/repos/org/app/issues");
+  assert.equal(res.status, 404);
+  assert.match(res.body.error, /alice is not among org\/app's users/);
+  const bob = await call(w.api, "GET", "/api/repos/org/app/issues", { user: "bob" });
+  assert.equal(bob.status, 200);
+  assert.deepEqual(bob.body.issues, [{ number: 1, title: "One", url: "u/1" }]);
+});
+
 test("GET issues: a config with errors offers no mode", async () => {
   const w = setup({ errors: ["bad"], issues: { 1: open("One") } });
   const res = await call(w.api, "GET", "/api/repos/org/app/issues");

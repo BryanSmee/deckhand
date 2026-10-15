@@ -746,5 +746,5 @@ export function createRuns(ctx) {
     }
   }
 
-  return { run, follow, ending };
+  return { run, follow, ending, dropRefused };
 }

@@ -94,6 +94,9 @@ changes: your workflows are yours to set up. On each repository the App is insta
 - treat pull requests from the App's bot (`<app>[bot]`) like an outsider's in workflows
   and in the [preview hook](repo-config.md#preview-hook): they are same-repository and look
   trusted, but their code comes from a sandbox.
+- the same goes for `pull_request_target` and `workflow_run` workflows that check out a
+  pull request's head: they run it with the default branch's secrets and a token that may
+  write.
 
 Not checked yet: whether a sandbox could push the head of a fork's pull request
 (`refs/pull/<n>/head`) that changes a workflow, as its own branch, without `workflows`.
@@ -373,8 +376,9 @@ A comment reaches Claude when its author is in `ALLOWED_USERS` and the repositor
   listener drops it (and takes its 👀 off) when its author or repository is no longer
   allowed;
 - every queued comment is checked again against the repository's `users`, read from its
-  default branch, when its run begins: a `.deckhand.yaml` that removes a user while their
-  comment waits out the pause, or behind a busy repository, stops it;
+  default branch, when its run begins (or, for a run still going after a restart, before it
+  reaches that run): a `.deckhand.yaml` that removes a user while their comment waits out
+  the pause, or behind a busy repository, stops it;
 - a comment that waits for other issues (`/after`) is checked again when it starts.
 
 A comment on a pull request goes on in the session of the issue the pull request closes
@@ -396,7 +400,10 @@ Only `ALLOWED_USERS` sign in. Each repository's tasks, runs and live logs (whose
 may hold what a run read) are shown to the users in its own `users` too, as the listener last
 read them (for a run or a comment, or for the repositories tab); a repository whose
 `.deckhand.yaml` hasn't been read since the listener started is shown to every allowed user
-until it is. The repositories tab and its configs are shown to every allowed user.
+until it is. `/status` lists them the runs, preview hooks and queued comments of those
+repositories only. An open live log stops within a second of its viewer signing out or
+leaving the repository's `users`. The repositories tab and its configs are shown to every
+allowed user.
 
 A session is a signed cookie, valid for 7 days, with the login and its **epoch**. Signing out
 bumps the login's epoch (`/data/sessions.json`): every session of that login ends, in any
@@ -413,13 +420,14 @@ of them, keep `/status` from it.
 The data volume (`/data`) holds what the listener keeps; whoever reads it has the App. The
 files holding secrets are the owner's only (`0600`):
 
-| File                   | What                                                          |
-| ---------------------- | ------------------------------------------------------------- |
-| `app.json`             | the App's private key, client and webhook secrets             |
-| `session.key`          | signs dashboard sessions                                      |
-| `sessions.json`        | each login's session epoch                                    |
-| `logs/<run>.live.json` | a running run's state, with its secret (gone once it is over) |
-| `queue.json`           | comments queued when the listener stopped, with their authors |
+| File                   | What                                                             |
+| ---------------------- | ---------------------------------------------------------------- |
+| `app.json`             | the App's private key, client and webhook secrets                |
+| `session.key`          | signs dashboard sessions                                         |
+| `sessions.json`        | each login's session epoch                                       |
+| `logs/<run>.live.json` | a running run's state, with its secret (gone once it is over)    |
+| `queue.json`           | comments queued when the listener stopped, with their authors    |
+| `waits.json`           | comments waiting for other issues (`/after`), with their authors |
 
 Run logs (`logs/<run>.log`) have the Claude credential and the run's secret redacted (see
 [The Claude credential](#the-claude-credential)).
@@ -445,8 +453,8 @@ Each action is written on the issue as the App's comment ("Started from the dash
 @alice"), so the issue's history says who started what, as a trigger comment would. The
 App's comments are ignored as triggers, so the listener queues or holds the work itself
 rather than through a webhook. The backlog (`GET /api/repos/<owner>/<repo>/issues`) lists a
-repository's open issues to signed-in users, from GitHub at most once every 30 seconds per
-repository.
+repository's open issues to signed-in users in its `users` (all of them while its config has
+errors), from GitHub at most once every 30 seconds per repository.
 
 ## Hardening
 
