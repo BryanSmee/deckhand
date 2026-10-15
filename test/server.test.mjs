@@ -438,7 +438,7 @@ function headersOnly(port, headers) {
   });
 }
 
-test("unsigned or oversized deliveries are refused before their body is read", async (t) => {
+test("unsigned or oversized deliveries are refused unread; one client gets only its share of places", async (t) => {
   const { port, listener } = await listen(t);
   const signed = { "x-github-event": "issue_comment", "x-hub-signature-256": "sha256=00" };
   assert.equal(
@@ -446,14 +446,14 @@ test("unsigned or oversized deliveries are refused before their body is read", a
     401,
   );
   assert.equal(
-    await headersOnly(port, { ...signed, "content-length": String(26 * 1024 * 1024) }),
+    await headersOnly(port, { ...signed, "content-length": String(6 * 1024 * 1024) }),
     413,
   );
-  await listener.until("Rejected a delivery: over 26214400 bytes");
+  await listener.until("Rejected a delivery: over 5242880 bytes");
   assert.match(listener.output(), /Rejected a delivery: no signature/);
-  // At most 16 bodies being read: the 17th is refused until one of them is done.
+  // One client holds its share of the places, 4, with stalled bodies: its 5th is refused...
   const held = [];
-  for (let i = 0; i < 16; i++) {
+  for (let i = 0; i < 4; i++) {
     const req = request({ port, method: "POST", path: "/webhook", headers: signed });
     req.on("error", () => {});
     req.write("{");
@@ -461,10 +461,30 @@ test("unsigned or oversized deliveries are refused before their body is read", a
   }
   await new Promise((resolve) => setTimeout(resolve, 200));
   assert.equal(await headersOnly(port, signed), 503);
-  await listener.until("16 deliveries being read already");
-  for (const req of held) req.destroy();
-  await new Promise((resolve) => setTimeout(resolve, 200));
+  await listener.until("no place to read a delivery from 127.0.0.1");
+  // ...while a signed delivery from another address gets through.
   const body = JSON.stringify(comment("mallory"));
+  const delivered = await new Promise((resolve, reject) => {
+    const req = request(
+      {
+        port,
+        method: "POST",
+        path: "/webhook",
+        localAddress: "127.0.0.2",
+        headers: {
+          "x-github-event": "issue_comment",
+          "x-hub-signature-256": `sha256=${createHmac("sha256", SECRET).update(body).digest("hex")}`,
+        },
+      },
+      (res) => (res.resume(), resolve(res.statusCode)),
+    );
+    req.on("error", reject);
+    req.end(body);
+  });
+  assert.equal(delivered, 202);
+  // The stalled bodies are dropped after 2 seconds without data.
+  await listener.until("Rejected a delivery: no data for 2000 ms");
+  for (const req of held) req.destroy();
   const res = await fetch(`http://127.0.0.1:${port}/webhook`, {
     method: "POST",
     headers: {
