@@ -12,7 +12,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { createServer } from "node:http";
+import { createServer, request } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
@@ -365,6 +365,57 @@ function comment(login, body = "Deckhand") {
     sender: { login },
   };
 }
+
+// Sends a delivery's headers and holds its body back: the answer comes from the headers alone.
+function headersOnly(port, headers) {
+  return new Promise((resolve, reject) => {
+    const req = request({ port, method: "POST", path: "/webhook", headers }, (res) => {
+      resolve(res.statusCode);
+      res.resume();
+      req.destroy();
+    });
+    req.on("error", reject);
+    req.flushHeaders();
+  });
+}
+
+test("unsigned or oversized deliveries are refused before their body is read", async (t) => {
+  const { port, listener } = await listen(t);
+  const signed = { "x-github-event": "issue_comment", "x-hub-signature-256": "sha256=00" };
+  assert.equal(
+    await headersOnly(port, { "x-github-event": "issue_comment", "content-length": "100" }),
+    401,
+  );
+  assert.equal(
+    await headersOnly(port, { ...signed, "content-length": String(26 * 1024 * 1024) }),
+    413,
+  );
+  await listener.until("Rejected a delivery: over 26214400 bytes");
+  assert.match(listener.output(), /Rejected a delivery: no signature/);
+  // At most 16 bodies being read: the 17th is refused until one of them is done.
+  const held = [];
+  for (let i = 0; i < 16; i++) {
+    const req = request({ port, method: "POST", path: "/webhook", headers: signed });
+    req.on("error", () => {});
+    req.write("{");
+    held.push(req);
+  }
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  assert.equal(await headersOnly(port, signed), 503);
+  await listener.until("16 deliveries being read already");
+  for (const req of held) req.destroy();
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  const body = JSON.stringify(comment("mallory"));
+  const res = await fetch(`http://127.0.0.1:${port}/webhook`, {
+    method: "POST",
+    headers: {
+      "x-github-event": "issue_comment",
+      "x-hub-signature-256": `sha256=${createHmac("sha256", SECRET).update(body).digest("hex")}`,
+    },
+    body,
+  });
+  assert.equal(res.status, 202);
+});
 
 test("a webhook from the App runs a sandbox that gets its repo's token from the broker", async (t) => {
   const { dir, github, listener, port, brokerPort } = await listen(t);

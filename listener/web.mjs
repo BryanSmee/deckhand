@@ -21,5 +21,7 @@ export function readBody(req, limit) {
     });
     req.on("end", () => resolve(Buffer.concat(chunks)));
     req.on("error", reject);
+    // Cut short without an error (a client gone): nothing more comes. A no-op after "end".
+    req.on("close", () => reject(new Error("connection closed before the body's end")));
   });
 }
