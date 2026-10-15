@@ -5,6 +5,7 @@ import {
   mkdtempSync,
   readFileSync,
   realpathSync,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -313,9 +314,16 @@ test("a preview hook or a Dockerfile without its grant: one line each, naming th
   assert.deepEqual(ungranted(none, { preview: null, dockerfile: null }), []);
 });
 
-// A root with a subfolder, a symlink inside it and one pointing out. The root is read-only
-// for everyone (the tests may run as uid 1000, the sandbox's user), so its subfolders can be
-// mounted read-write.
+// Read-write mounts are checked from /, and the temp dir's own parents (/tmp, sticky) may
+// let the tests' user rename it: they may run as uid 1000, the sandbox's user. So `stat`
+// reads `dir` and what it holds, and shows what is above it as root's, not writable.
+const ROOT_DIR = { mode: 0o40755, uid: 0, gid: 0 };
+const statUnder = (dir) => (path) =>
+  path === dir || path.startsWith(`${dir}/`) ? statSync(path) : ROOT_DIR;
+
+// A root with a subfolder, a symlink inside it and one pointing out. The root and the temp
+// dir are read-only for everyone (the tests may run as uid 1000, the sandbox's user), so its
+// subfolders can be mounted read-write.
 function tree() {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), "deckhand-grants-")));
   mkdirSync(join(dir, "work", "api"), { recursive: true });
@@ -323,6 +331,7 @@ function tree() {
   symlinkSync(join(dir, "work", "api"), join(dir, "work", "inside"));
   symlinkSync(join(dir, "secret"), join(dir, "work", "escape"));
   chmodSync(join(dir, "work"), 0o555);
+  chmodSync(dir, 0o555);
   return dir;
 }
 
@@ -337,6 +346,7 @@ test("mounts: subpaths of a granted root pass, after resolving .. and symlinks",
       { path: `${dir}/work/api/../api`, readOnly: true },
     ],
     grant,
+    { stat: statUnder(dir) },
   );
   assert.deepEqual(refused, []);
   assert.deepEqual(mounts, [
@@ -381,19 +391,22 @@ test("mounts: read-only unless the operator grants read-write; a repo can only n
   assert.equal(ro.mounts[0].readOnly, true);
   assert.match(ro.notes[0], /mounted read-only: the operator grants \S+ read-only/);
   const rw = { mounts: [{ root: join(dir, "work"), readOnly: false }] };
-  assert.equal(resolveMounts([{ path, readOnly: true }], rw).mounts[0].readOnly, true);
-  assert.equal(resolveMounts([{ path, readOnly: false }], rw).mounts[0].readOnly, false);
+  const fs = { stat: statUnder(dir) };
+  assert.equal(resolveMounts([{ path, readOnly: true }], rw, fs).mounts[0].readOnly, true);
+  assert.equal(resolveMounts([{ path, readOnly: false }], rw, fs).mounts[0].readOnly, false);
 });
 
 test("mounts: read-write refused when the sandbox's user can rewrite a directory on the way", () => {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), "deckhand-grants-")));
   const root = join(dir, "work");
   mkdirSync(join(root, "team", "api", "src"), { recursive: true });
+  chmodSync(dir, 0o555);
   chmodSync(root, 0o555);
   chmodSync(join(root, "team"), 0o777); // anyone, so uid 1000 too
   chmodSync(join(root, "team", "api"), 0o777); // the mount itself may be writable
+  const stat = statUnder(dir);
   const grant = { mounts: [{ root, readOnly: false }] };
-  const resolve = (path, readOnly = false) => resolveMounts([{ path, readOnly }], grant);
+  const resolve = (path, readOnly = false) => resolveMounts([{ path, readOnly }], grant, { stat });
   // /work/team can be written: a sandbox could swap /work/team/api for a symlink to /.
   assert.match(
     resolve(join(root, "team", "api")).refused[0],
@@ -404,7 +417,7 @@ test("mounts: read-write refused when the sandbox's user can rewrite a directory
   assert.deepEqual(resolve(join(root, "team")).refused, []);
   assert.deepEqual(resolve(root).refused, []);
   assert.deepEqual(resolve(join(root, "team", "api"), true).refused, []);
-  // A narrower root inside a wider one: checked from the wider one.
+  // A narrower root inside a wider one: checked above the narrower one too.
   chmodSync(join(root, "team"), 0o555);
   chmodSync(root, 0o777);
   const nested = {
@@ -413,19 +426,50 @@ test("mounts: read-write refused when the sandbox's user can rewrite a directory
       { root, readOnly: true },
     ],
   };
+  const refusedFor = (g, path) => resolveMounts([{ path, readOnly: false }], g, { stat }).refused;
   assert.match(
-    resolveMounts([{ path: join(root, "team", "api"), readOnly: false }], nested).refused[0],
+    refusedFor(nested, join(root, "team", "api"))[0],
     /can write `\S+\/work` on its way/,
   );
+  // Above every root this repo has: another repo's root, or none at all, may hold it.
+  const own = { mounts: [{ root: join(root, "team"), readOnly: false }] };
+  assert.match(refusedFor(own, join(root, "team", "api"))[0], /can write `\S+\/work` on its way/);
+  assert.match(refusedFor(own, join(root, "team"))[0], /can write `\S+\/work` on its way/);
+  chmodSync(root, 0o555);
+  assert.deepEqual(refusedFor(own, join(root, "team", "api")), []);
+  // The temp dir's own parents count too, read for real: /tmp is sticky, so only an entry
+  // the sandbox's user owns (the tests' own, when they run as uid 1000) can be swapped.
+  const real = resolveMounts([{ path: join(root, "team"), readOnly: false }], own).refused;
+  assert.equal(real.length, statSync(dir).uid === 1000 ? 1 : 0);
+});
+
+// The issue's layout, with an injected stat: repo A is granted /nfs/work/api read-write, repo
+// B /nfs/work, which uid 1000 can write. B's sandbox could rename /nfs/work/api and put a
+// symlink to / in its place, so A's read-write mounts are refused.
+test("mounts: a directory another repo's root lets a sandbox write is refused on the way", () => {
+  const modes = new Map([["/nfs/work", { mode: 0o40755, uid: 1000, gid: 1000 }]]);
+  const fs = { realpath: (p) => p, stat: (p) => modes.get(p) ?? ROOT_DIR };
+  const a = { mounts: [{ root: "/nfs/work/api", readOnly: false }] };
+  const refusedFor = (path) => resolveMounts([{ path, readOnly: false }], a, fs).refused;
+  assert.match(refusedFor("/nfs/work/api")[0], /can write `\/nfs\/work` on its way/);
+  assert.match(refusedFor("/nfs/work/api/src")[0], /can write `\/nfs\/work` on its way/);
+  // Read-only: not checked this way. And /nfs/work read-only for uid 1000: accepted.
+  assert.deepEqual(resolveMounts([{ path: "/nfs/work/api", readOnly: true }], a, fs).refused, []);
+  modes.set("/nfs/work", { mode: 0o40555, uid: 1000, gid: 1000 });
+  assert.deepEqual(refusedFor("/nfs/work/api/src"), []);
+  // Higher up too: anything from / on the way.
+  modes.set("/nfs", { mode: 0o40777, uid: 0, gid: 0 });
+  assert.match(refusedFor("/nfs/work/api")[0], /can write `\/nfs` on its way/);
 });
 
 test("mounts: writable by uid 1000 as owner, group 1000 or anyone", () => {
   const modes = new Map();
-  const stat = (path) => modes.get(path) ?? { mode: 0o755, uid: 0, gid: 0 };
+  const stat = (path) => modes.get(path) ?? ROOT_DIR;
   const grant = { mounts: [{ root: "/nfs", readOnly: false }] };
-  const refusedWith = (parent) => {
+  const refusedWith = (parent, child = ROOT_DIR) => {
     modes.clear();
     modes.set("/nfs/team", parent);
+    modes.set("/nfs/team/api", child);
     return resolveMounts([{ path: "/nfs/team/api", readOnly: false }], grant, {
       realpath: (p) => p,
       stat,
@@ -435,8 +479,12 @@ test("mounts: writable by uid 1000 as owner, group 1000 or anyone", () => {
   assert.equal(refusedWith({ mode: 0o555, uid: 1000, gid: 0 }), 0);
   assert.equal(refusedWith({ mode: 0o775, uid: 0, gid: 1000 }), 1);
   assert.equal(refusedWith({ mode: 0o755, uid: 0, gid: 1000 }), 0);
-  assert.equal(refusedWith({ mode: 0o1777, uid: 0, gid: 0 }), 1);
+  assert.equal(refusedWith({ mode: 0o777, uid: 0, gid: 0 }), 1);
   assert.equal(refusedWith({ mode: 0o775, uid: 1001, gid: 1001 }), 0);
+  // Sticky (/tmp): only the directory's owner or the entry's can rename the entry.
+  assert.equal(refusedWith({ mode: 0o1777, uid: 0, gid: 0 }), 0);
+  assert.equal(refusedWith({ mode: 0o1777, uid: 0, gid: 0 }, { ...ROOT_DIR, uid: 1000 }), 1);
+  assert.equal(refusedWith({ mode: 0o1777, uid: 1000, gid: 0 }), 1);
 });
 
 test("docker arguments: bind mounts, no capabilities, limits", () => {
