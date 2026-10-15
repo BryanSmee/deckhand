@@ -7,7 +7,8 @@
 #   docker compose pull && docker compose up -d
 #   docker compose logs listener   # prints the one-time /setup link
 #
-# The images are the release DECKHAND_VERSION (default: the latest), published for each tag.
+# The images are the release DECKHAND_VERSION (default: the latest), published for each tag,
+# or `edge` (amd64 only), published for each push to main.
 # Updating is the same two commands, at any time: running sandboxes go on, and the new
 # listener picks them up. `docker compose up -d --build` builds them from this checkout
 # instead. The listener's port is published as is: put your own reverse proxy (TLS, host
