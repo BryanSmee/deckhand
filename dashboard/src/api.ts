@@ -1,7 +1,8 @@
-// The listener's API: api/state polled, a run's log streamed (server-sent events).
+// The listener's API: api/state polled, a run's log streamed (server-sent events), the
+// repositories listed and onboarded.
 // Relative URLs, like the assets: the page works under any path.
 import { useEffect, useState } from "preact/hooks";
-import type { Entry, State } from "./types";
+import type { Entry, Onboarded, Repo, Repos, State } from "./types";
 
 const POLL_MS = 3000;
 
@@ -57,4 +58,64 @@ export function useRunLog(runId: string | null): { entries: Entry[]; ended: bool
     return () => source.close();
   }, [runId]);
   return log.id === runId ? log : { entries: [], ended: false };
+}
+
+// The listener caches the list for minutes: polling it now and then costs GitHub nothing.
+const REPOS_POLL_MS = 60000;
+
+export interface RepoList {
+  repos: Repo[] | null;
+  error: string | null;
+  // The repo whose onboarding is being started, and the last failure to.
+  starting: string | null;
+  failed: { repo: string; error: string } | null;
+  onboard: (repo: string) => Promise<void>;
+}
+
+export function useRepos(): RepoList {
+  const [repos, setRepos] = useState<Repo[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [starting, setStarting] = useState<string | null>(null);
+  const [failed, setFailed] = useState<RepoList["failed"]>(null);
+  useEffect(() => {
+    let stopped = false;
+    const refresh = async () => {
+      try {
+        const res = await fetch("api/repos", { cache: "no-store" });
+        if (res.status === 401) return location.reload();
+        if (!res.ok) throw new Error(String(res.status));
+        const next = (await res.json()) as Repos;
+        if (!stopped) {
+          setRepos(next.repos);
+          setError(null);
+        }
+      } catch (e) {
+        if (!stopped) setError(e instanceof Error ? e.message : String(e));
+      }
+    };
+    refresh();
+    const timer = setInterval(refresh, REPOS_POLL_MS);
+    return () => {
+      stopped = true;
+      clearInterval(timer);
+    };
+  }, []);
+
+  const onboard = async (repo: string) => {
+    setStarting(repo);
+    setFailed(null);
+    try {
+      const res = await fetch(`api/repos/${repo}/onboard`, { method: "POST" });
+      const answer = (await res.json().catch(() => ({}))) as Onboarded;
+      const row = answer.repo;
+      if (row) setRepos((all) => all && all.map((r) => (r.repo === row.repo ? row : r)));
+      if (!res.ok) setFailed({ repo, error: answer.error ?? String(res.status) });
+    } catch (e) {
+      setFailed({ repo, error: e instanceof Error ? e.message : String(e) });
+    } finally {
+      setStarting(null);
+    }
+  };
+
+  return { repos, error, starting, failed, onboard };
 }

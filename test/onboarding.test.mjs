@@ -9,6 +9,7 @@ import {
   createOnboarding,
   createOnboardingStore,
   ONBOARDING_LABEL,
+  onboardingBody,
   onboardingTargets,
 } from "../listener/onboarding.mjs";
 
@@ -196,4 +197,15 @@ test("the config on the onboarding pull request's branch: errors, warnings, miss
   // No pull request (the run stopped before opening one): nothing to say.
   const empty = fakeRequest({ "GET /repos/org/app/pulls?state=open&per_page=100": [200, []] });
   assert.equal(await branchConfigReport(empty.request, config, "org/app", 30), null);
+});
+
+test("the issue says who started it: the installer, or someone on the dashboard", () => {
+  assert.match(
+    onboardingBody("alice", "Deckhand"),
+    /^@alice installed Deckhand on this repository\./,
+  );
+  assert.match(
+    onboardingBody("bob", "Deckhand", true),
+    /^@bob started Deckhand's setup for this repository from the dashboard\./,
+  );
 });

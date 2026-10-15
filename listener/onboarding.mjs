@@ -47,9 +47,13 @@ export function onboardingTargets(config, event, p, skip = () => null) {
   });
 }
 
-// The issue that starts the conversation: who installed the App, and how it goes on.
-export function onboardingBody(sender, trigger) {
-  return `@${sender} installed Deckhand on this repository. It has no \`${CONFIG_FILE}\` yet, so its runs use the operator's settings and the bare sandbox image: no toolchain beyond Node, no setup command, no project hosts.
+// The issue that starts the conversation: who installed the App (or started it from the
+// dashboard, `byHand`), and how it goes on.
+export function onboardingBody(sender, trigger, byHand = false) {
+  const who = byHand
+    ? `@${sender} started Deckhand's setup for this repository from the dashboard.`
+    : `@${sender} installed Deckhand on this repository.`;
+  return `${who} It has no \`${CONFIG_FILE}\` yet, so its runs use the operator's settings and the bare sandbox image: no toolchain beyond Node, no setup command, no project hosts.
 
 Claude is reading the repository and replies here with a proposed \`${CONFIG_FILE}\` (and a Dockerfile or instructions file when they help), each key with its reason.
 
@@ -94,7 +98,8 @@ export function createOnboarding({ request, store, config, log = () => {} }) {
   // Repos whose issue is being opened: two deliveries at once open one.
   const opening = new Set();
 
-  async function open(repo, sender) {
+  // `byHand`: from the dashboard (repos.mjs) rather than an installation delivery.
+  async function open(repo, sender, byHand = false) {
     const key = repo.toLowerCase();
     const skip = (why) => (log(`  onboarding ${repo}: skipped, ${why}`), null);
     const known = store.get(repo);
@@ -124,7 +129,7 @@ export function createOnboarding({ request, store, config, log = () => {} }) {
       );
       const created = await request(repo, "POST", `/repos/${repo}/issues`, {
         title: ONBOARDING_TITLE,
-        body: onboardingBody(sender, triggerWord(config.trigger)),
+        body: onboardingBody(sender, triggerWord(config.trigger), byHand),
         labels: [ONBOARDING_LABEL],
       });
       if (!created.ok) return skip(`creating its issue: ${created.status}`);

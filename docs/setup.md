@@ -48,10 +48,14 @@ What the App asks for:
 | Deployments, Discussions: read and write        | `pull_request_review`                         |
 | Actions, Metadata: read                         | `pull_request_review_comment`, `workflow_run` |
 |                                                 | `discussion`, `discussion_comment`            |
+|                                                 | `push`                                        |
 
-An App created before Deckhand answered discussions lacks the last two events and the
+An App created before Deckhand answered discussions lacks the `discussion` events and the
 Discussions permission: add them in the App's settings (_Permissions & events_), then accept
-the new permissions on its installation. Everything else works without them.
+the new permissions on its installation. Everything else works without them. `push` only
+tells the dashboard's repository list that a default branch changed; an App without it
+(created before the list) sees a config pushed straight to the default branch within half an
+hour, and one merged through a pull request at once.
 
 ## 3. Use it
 
@@ -78,7 +82,8 @@ through, open an issue; the others are skipped, with the reason in the listener'
 repository gets one onboarding issue, ever (`/data/onboarding.json`), so reinstalling the App
 opens no second one. `ONBOARDING=off` turns the automatic issue off; a `/mode onboarding`
 comment on any issue starts the same conversation by hand, for repositories installed
-before, or skipped.
+before, or skipped. The dashboard's **Repositories** page lists them and starts it with a
+button (see [the dashboard](#4-the-dashboard)).
 
 A repository can also declare inboxes in its `.deckhand.yaml`: an ideas issue and a bug
 reports issue, where every comment of an allowed user becomes a labelled GitHub issue (or an
@@ -124,6 +129,17 @@ Each task shows its listener's state:
 Pick one to see the first line of its last reply and its latest run's log live (and the
 next runs as they start), or an earlier run. The address keeps the tab, task and run, so a
 link opens the same view. On a phone, the list and the log take the whole screen in turn.
+
+**Repositories** (top right, with the count of those not onboarded) lists every repository
+the App is installed on that `ALLOWED_REPOS` lets through, archived ones aside: `configured`
+(its default branch has a `.deckhand.yaml`), `onboarding` (with a link to its onboarding
+issue) or `not onboarded`. **Start onboarding** on a `not onboarded` row opens its onboarding
+issue as an installation would, mentioning you, and starts the conversation: the way to
+onboard repositories installed before onboarding existed, by someone not in `ALLOWED_USERS`,
+or with `ONBOARDING=off`. A repository with issues disabled shows why it can't be onboarded.
+The list is cached: the installations' repositories are read again every 5 minutes, each
+configuration every 30 minutes, or at once after a push or a merged pull request on its
+default branch.
 
 ## Settings
 

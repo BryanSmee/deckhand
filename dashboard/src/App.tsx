@@ -1,9 +1,11 @@
-// The dashboard: repo tabs, the tab's tasks filtered by state, the open task and its log.
+// The dashboard: repo tabs, the tab's tasks filtered by state, the open task and its log; or
+// the repositories page, where onboarding starts.
 // What is shown lives in the address (route.ts); the state chip is kept on this device.
 import { useEffect, useState } from "preact/hooks";
-import { useAppState } from "./api";
+import { type RepoList, useAppState, useRepos } from "./api";
 import { Detail } from "./Detail";
 import { type ChipId, CHIPS, inChip, isLive } from "./format";
+import { notOnboarded, Repos } from "./Repos";
 import { formatRoute, parseRoute, type Route } from "./route";
 import { Tabs } from "./Tabs";
 import { TaskList } from "./TaskList";
@@ -12,7 +14,8 @@ import styles from "./App.module.css";
 
 export function App() {
   const { state, error } = useAppState();
-  return <Dashboard state={state} error={error} />;
+  const repos = useRepos();
+  return <Dashboard state={state} error={error} repos={repos} />;
 }
 
 const stored = (name: string) => {
@@ -69,7 +72,13 @@ function useWide() {
   return wide;
 }
 
-export function Dashboard({ state, error }: { state: State | null; error: string | null }) {
+interface Props {
+  state: State | null;
+  error: string | null;
+  repos?: RepoList;
+}
+
+export function Dashboard({ state, error, repos }: Props) {
   const [route, go] = useRoute();
   const [chip, setChip] = useState<ChipId>(() => {
     const saved = stored("chip");
@@ -85,9 +94,11 @@ export function Dashboard({ state, error }: { state: State | null; error: string
   // A wide screen has room for a task: the first live one, else the first one, once.
   const visible = inTab.filter((t) => inChip(chip, t));
   const first = visible.find(isLive) ?? visible[0];
+  const onRepos = route.page === "repositories";
   useEffect(() => {
-    if (wide && !route.task && first) go({ ...route, task: first.key, run: null }, true);
-  }, [wide, route.task, first?.key]);
+    if (wide && !onRepos && !route.task && first)
+      go({ ...route, task: first.key, run: null }, true);
+  }, [wide, onRepos, route.task, first?.key]);
 
   const selectTab = (repo: string | null) => {
     store("tab", repo ?? "");
@@ -105,12 +116,24 @@ export function Dashboard({ state, error }: { state: State | null; error: string
       ? `${state.running} running (max ${state.maxParallel}) · ${state.queued} queued` +
         (hooks ? ` · ${hooks} preview hook${hooks > 1 ? "s" : ""}` : "")
       : "Loading…";
+  const waiting = notOnboarded(repos?.repos ?? null);
 
   return (
     <div class={`${styles.app} ${task ? styles.reading : ""}`}>
       <header class={styles.top}>
         <h1 class={styles.brand}>Deckhand</h1>
         <span class={`${styles.status} ${error ? styles.error : ""}`}>{status}</span>
+        {repos && (
+          <a
+            class={styles.repos}
+            href="#/repositories"
+            aria-current={onRepos ? "page" : undefined}
+            title={waiting ? `${waiting} not onboarded` : "Repositories"}
+          >
+            Repositories
+            {waiting > 0 && <span class={styles.waiting}>{waiting}</span>}
+          </a>
+        )}
         {state && (
           <form class={styles.who} method="post" action="auth/logout">
             <span>@{state.user}</span>
@@ -118,32 +141,43 @@ export function Dashboard({ state, error }: { state: State | null; error: string
           </form>
         )}
       </header>
-      <div class={styles.tabs}>
-        <Tabs tasks={tasks} repo={route.repo} onSelect={selectTab} />
-      </div>
-      <div class={styles.body}>
-        <aside class={styles.side}>
-          <TaskList
-            tasks={inTab}
-            chip={chip}
-            onChip={selectChip}
-            selected={task?.key ?? null}
-            onSelect={(key) => go({ ...route, task: key, run: null }, true)}
-            showRepo={!route.repo}
-            now={now}
-            loading={!state}
-          />
-        </aside>
-        <main class={styles.main}>
-          <Detail
-            task={task}
-            run={run ?? null}
-            onRun={(id) => task && go({ ...route, task: task.key, run: id }, true)}
-            onBack={() => go({ ...route, task: null, run: null }, true)}
-            now={now}
+      {onRepos && repos ? (
+        <main class={styles.page}>
+          <Repos
+            list={repos}
+            onBack={() => go({ repo: stored("tab") || null, task: null, run: null })}
           />
         </main>
-      </div>
+      ) : (
+        <>
+          <div class={styles.tabs}>
+            <Tabs tasks={tasks} repo={route.repo} onSelect={selectTab} />
+          </div>
+          <div class={styles.body}>
+            <aside class={styles.side}>
+              <TaskList
+                tasks={inTab}
+                chip={chip}
+                onChip={selectChip}
+                selected={task?.key ?? null}
+                onSelect={(key) => go({ ...route, task: key, run: null }, true)}
+                showRepo={!route.repo}
+                now={now}
+                loading={!state}
+              />
+            </aside>
+            <main class={styles.main}>
+              <Detail
+                task={task}
+                run={run ?? null}
+                onRun={(id) => task && go({ ...route, task: task.key, run: id }, true)}
+                onBack={() => go({ ...route, task: null, run: null }, true)}
+                now={now}
+              />
+            </main>
+          </div>
+        </>
+      )}
     </div>
   );
 }

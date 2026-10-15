@@ -23,3 +23,9 @@ test("links from before the tabs open their task in All", () => {
 test("anything else in the path is All", () => {
   expect(parseRoute("#/not a repo")).toEqual({ repo: null, task: null, run: null });
 });
+
+test("the repositories page", () => {
+  const route = { repo: null, task: null, run: null, page: "repositories" as const };
+  expect(formatRoute(route)).toBe("#/repositories");
+  expect(parseRoute("#/repositories")).toEqual(route);
+});
