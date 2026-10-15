@@ -351,7 +351,8 @@ ctx.repoApi = createRepoApi({
   log,
 });
 
-// The graph's work area: the backlog, and starting or queueing issues by dragging them.
+// The graph's work area: the backlog, starting or queueing issues by dragging them, and the
+// answers to open questions sent from a task's page.
 ctx.workApi = createWorkApi({
   config,
   github,
@@ -361,6 +362,9 @@ ctx.workApi = createWorkApi({
   accept: (item) => ctx.accept(item),
   boardKeys: () => http.boardKeys(),
   busy: taskBusy,
+  taskOf: (key) => http.taskOf(key),
+  label: (repo, number, on) => ctx.label(repo, number, on),
+  inputs,
   publicUrl,
   log,
 });

@@ -545,6 +545,8 @@ export function createHttp(ctx, { dashboardDir }) {
 
   // The keys of the tasks on the dashboard: the work area's backlog leaves them out.
   const boardKeys = () => new Set(shownTasks().shown.map((t) => t.key));
+  // A task as the dashboard has it (questions and all), or null.
+  const taskOf = (key) => shownTasks().shown.find((t) => t.key === key) ?? null;
 
-  return { listen, listenBroker, admitting, boardKeys };
+  return { listen, listenBroker, admitting, boardKeys, taskOf };
 }

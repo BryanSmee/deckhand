@@ -1,6 +1,7 @@
 // The contract with the listener: what GET api/state returns (listener/http.mjs state(),
 // listener/board.mjs), what api/runs/<id>/stream sends (runlog.mjs format()), and the
-// repositories' api/repos (listener/repos.mjs) and the graph's work area (listener/work.mjs).
+// repositories' api/repos (listener/repos.mjs) and the graph's work area and answers
+// (listener/work.mjs, answers.mjs).
 
 export type TaskState =
   | "building-image"
@@ -277,6 +278,12 @@ export type WorkAction =
   | { action: "start"; number: number; mode?: string }
   | { action: "queue"; number: number; after: number; mode?: string }
   | { action: "dequeue"; number: number };
+
+// POST api/repos/<owner>/<repo>/answer: one answer per parsed question (the options ticked, by
+// index, and a note), or one text for questions not in the format. `pr`: a pull request's task.
+export type Answers =
+  | { number: number; pr?: boolean; answers: { options: number[]; text: string }[] }
+  | { number: number; pr?: boolean; text: string };
 
 export interface WorkResult {
   message?: string;

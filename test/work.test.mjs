@@ -6,19 +6,40 @@ import { test } from "node:test";
 import { loadConfig } from "../listener/config.mjs";
 import { createWaits } from "../listener/waits.mjs";
 import { ISSUES_MS, createWorkApi, leadsTo, parseAction } from "../listener/work.mjs";
+import { MAX_TEXT } from "../listener/answers.mjs";
 
 const ORIGIN = "https://deckhand.example.com";
 
 // The work area with a fake GitHub behind it: `issues` by number (GET /issues/{n}, and the
 // open ones listed), `repoSettings` as the default branch's config says, real waits in a temp
 // dir.
-function setup({ env = {}, settings = {}, errors = [], issues = {}, busy = [], board = [] } = {}) {
+// `tasks`: the board's, by key (api/state's, with their questions).
+function setup({
+  env = {},
+  settings = {},
+  errors = [],
+  issues = {},
+  busy = [],
+  board = [],
+  tasks = {},
+} = {}) {
   const config = loadConfig({
     ALLOWED_USERS: "alice,bob",
     DATA_DIR: mkdtempSync(join(tmpdir(), "deckhand-")),
     ...env,
   });
-  const w = { calls: [], comments: [], accepted: [], eyes: [], settled: [], issues, clock: 1000 };
+  const w = {
+    calls: [],
+    comments: [],
+    accepted: [],
+    eyes: [],
+    settled: [],
+    labels: [],
+    untracked: [],
+    issues,
+    tasks,
+    clock: 1000,
+  };
   let commentId = 500;
   const github = async (repo, method, path) => {
     w.calls.push(`${method} ${path}`);
@@ -65,6 +86,12 @@ function setup({ env = {}, settings = {}, errors = [], issues = {}, busy = [], b
     accept: async (item) => w.accepted.push(item),
     boardKeys: () => new Set(board),
     busy: (key) => busy.includes(key),
+    taskOf: (key) => w.tasks[key] ?? null,
+    label: async (repo, number, on) => {
+      w.labels.push([number, on]);
+      return new Response(null, { status: 200 });
+    },
+    inputs: { set: (key, on) => w.untracked.push([key, on]) },
     publicUrl: () => ORIGIN,
     now: () => w.clock,
   });
@@ -342,4 +369,172 @@ test("refused: a config with errors, a user outside the repo's users", async () 
   assert.match(res.body.error, /not among org\/app's users/);
   assert.equal((await post(narrowed, { action: "start", number: 5 }, { user: "bob" })).status, 200);
   assert.deepEqual(broken.accepted, []);
+});
+
+// --- Answers to open questions -----------------------------------------------------------
+
+const QUESTIONS = [
+  {
+    title: "Phones",
+    text: "Left to right, or top to bottom on phones?",
+    options: [
+      { label: "Left to right", recommended: true },
+      { label: "Top to bottom", recommended: false },
+    ],
+  },
+  { title: null, text: "What should the link say?", options: [] },
+];
+
+// A task waiting for input, as board() has it: `source` "issue" (its body's questions) or "run".
+const asking = (number, source, items = QUESTIONS, extra = {}) => ({
+  key: `org/app#${number}`,
+  state: "needs-input",
+  replyTo: number,
+  runs: source === "run" ? [{ status: "needs-input" }] : [],
+  questions: { source, items, raw: "1. …" },
+  ...extra,
+});
+
+const answer = (w, body, opts = {}) =>
+  call(w.api, "POST", "/api/repos/org/app/answer", { body, ...opts });
+
+test("answer an issue's questions: one App comment, the label off, the task no longer listed", async () => {
+  const w = setup({ issues: { 5: open("Five") }, tasks: { "org/app#5": asking(5, "issue") } });
+  const res = await answer(w, {
+    number: 5,
+    answers: [{ options: [0], text: "Scroll hint too" }, { text: "Home" }],
+  });
+  assert.equal(res.status, 200);
+  assert.equal(res.body.message, "Answers sent: #5 no longer needs input.");
+  assert.deepEqual(w.comments, [
+    [
+      5,
+      [
+        "Answers from @alice, from the dashboard:",
+        "",
+        "1. **Phones**",
+        "   - [x] Left to right",
+        "   - Scroll hint too",
+        "2. What should the link say?",
+        "   - Home",
+      ].join("\n"),
+    ],
+  ]);
+  assert.deepEqual(w.labels, [[5, false]]);
+  assert.deepEqual(w.untracked, [["org/app#5", false]]);
+  // Nothing runs: the issue starts later, from the work area or a trigger.
+  assert.deepEqual(w.accepted, []);
+});
+
+test("answer some of an issue's questions: the comment says which are open, the label stays", async () => {
+  const w = setup({ issues: { 5: open("Five") }, tasks: { "org/app#5": asking(5, "issue") } });
+  const res = await answer(w, { number: 5, answers: [{ options: [1] }, {}] });
+  assert.equal(res.status, 200);
+  assert.equal(res.body.message, "Answers sent: #5 still needs input. 1 still open.");
+  assert.match(w.comments[0][1], /2\. What should the link say\?\n {3}- _Not answered yet\._/);
+  assert.match(w.comments[0][1], /\n\nStill open: question 2\.$/);
+  assert.deepEqual([w.labels, w.untracked], [[], []]);
+});
+
+test("answer questions not in the format: the free text as written", async () => {
+  const w = setup({
+    issues: { 5: open("Five") },
+    tasks: { "org/app#5": asking(5, "issue", null) },
+  });
+  const res = await answer(w, { number: 5, text: "  1. yes\n2. the second one  " });
+  assert.equal(res.status, 200);
+  assert.deepEqual(w.comments, [
+    [5, "Answers from @alice, from the dashboard:\n\n1. yes\n2. the second one"],
+  ]);
+  assert.deepEqual(w.labels, [[5, false]]);
+  // A form's answers to questions that aren't parsed: refused.
+  w.tasks["org/app#5"] = asking(5, "issue", null);
+  assert.equal((await answer(w, { number: 5, answers: [{ text: "x" }] })).status, 409);
+});
+
+test("answer a run's questions: the comment is the reply that continues its session", async () => {
+  const w = setup({
+    issues: { 5: open("Five"), 9: { ...open("Its PR"), pull_request: {} } },
+    tasks: {
+      "org/app#5": asking(5, "run"),
+      "org/app#pr-9": asking(9, "run", QUESTIONS, { key: "org/app#pr-9" }),
+    },
+  });
+  const res = await answer(w, { number: 5, answers: [{ options: [0] }, {}] });
+  assert.equal(res.status, 200);
+  assert.equal(res.body.message, "Answers sent: #5 continues. 1 still open.");
+  const [item] = w.accepted;
+  assert.equal(item.id, "5");
+  assert.equal(item.kind, "issue");
+  // No trigger: it goes on as a reply would, in the session that asked.
+  assert.equal(item.trigger, null);
+  assert.equal(item.modeLine, null);
+  assert.equal(item.text, w.comments[0][1]);
+  assert.equal(item.author, "alice");
+  assert.equal(item.comment.id, 501);
+  assert.equal(item.base, "main");
+  // The run takes the label off as it starts (runs.mjs begin()).
+  assert.deepEqual(w.labels, []);
+  // A pull request's own task.
+  const pr = await answer(w, { number: 9, pr: true, text: "Go ahead" });
+  assert.equal(pr.status, 200);
+  assert.equal(w.accepted[1].id, "pr-9");
+  assert.equal(w.accepted[1].kind, "pr");
+  assert.equal(w.comments[1][0], 9);
+});
+
+test("answer a run's questions before they are parsed: free text, the reply all the same", async () => {
+  const run = {
+    key: "org/app#5",
+    state: "needs-input",
+    replyTo: 7,
+    runs: [{ status: "needs-input" }],
+  };
+  const w = setup({ issues: { 5: open("Five") }, tasks: { "org/app#5": run } });
+  const res = await answer(w, { number: 5, text: "Yes" });
+  assert.equal(res.status, 200);
+  // The run asked on its pull request: the answers go there.
+  assert.equal(w.comments[0][0], 7);
+  assert.equal(w.accepted[0].replyTo, 7);
+});
+
+test("answer refused: signed out, another origin, users, not waiting, changed or empty answers, too big", async () => {
+  const w = setup({
+    env: { ALLOWED_REPOS: "org/app", ALLOWED_USERS: "alice,bob,carol" },
+    settings: { users: ["alice", "carol"] },
+    issues: { 5: open("Five"), 6: open("Six"), 8: { state: "closed" } },
+    tasks: {
+      "org/app#5": asking(5, "issue"),
+      "org/app#6": { key: "org/app#6", state: "done", runs: [] },
+      "org/app#8": asking(8, "issue"),
+    },
+  });
+  const ok = { number: 5, text: "Yes" };
+  assert.equal((await answer(w, ok, { user: null })).status, 401);
+  assert.equal((await answer(w, ok, { origin: "https://evil.example" })).status, 403);
+  assert.equal((await answer(w, ok, { origin: null })).status, 403);
+  // Not in ALLOWED_USERS, then not among the repo's users.
+  assert.equal((await answer(w, ok, { user: "mallory" })).status, 403);
+  assert.equal((await answer(w, ok, { user: "bob" })).status, 403);
+  assert.equal(
+    (await call(w.api, "POST", "/api/repos/org/other/answer", { body: ok })).status,
+    404,
+  );
+  assert.equal((await call(w.api, "GET", "/api/repos/org/app/answer")).status, 405);
+  // Not waiting for input, unknown, closed.
+  assert.equal((await answer(w, { number: 6, text: "Yes" })).status, 409);
+  assert.equal((await answer(w, { number: 7, text: "Yes" })).status, 409);
+  assert.equal((await answer(w, { number: 8, text: "Yes" })).status, 409);
+  // Not a pull request's task.
+  assert.equal((await answer(w, { number: 5, pr: true, text: "Yes" })).status, 409);
+  // Answers that don't fit the questions any more, or say nothing.
+  assert.equal((await answer(w, { number: 5, answers: [{ text: "x" }] })).status, 409);
+  assert.equal((await answer(w, { number: 5, answers: [{ options: [2] }, {}] })).status, 409);
+  assert.equal((await answer(w, { number: 5, answers: [{}, { text: " " }] })).status, 400);
+  assert.equal((await answer(w, { number: 5, text: "  " })).status, 400);
+  // Over the body's limit.
+  const big = await answer(w, { number: 5, text: "x".repeat(5 * MAX_TEXT) });
+  assert.equal(big.status, 413);
+  assert.deepEqual([w.comments, w.accepted, w.labels], [[], [], []]);
+  assert.equal((await answer(w, ok, { user: "carol" })).status, 200);
 });

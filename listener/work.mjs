@@ -9,6 +9,10 @@
 //   POST /api/repos/<owner>/<repo>/work   { action: "start", number, mode? }
 //                                         { action: "queue", number, after, mode? }
 //                                         { action: "dequeue", number }
+//   POST /api/repos/<owner>/<repo>/answer { number, pr?, answers: [{ options: [i], text }] }
+//                                         { number, pr?, text }
+//                                         answers to a task's open questions (answers.mjs)
+import { MAX_TEXT, Refused, answersComment, parseAnswers, refuse } from "./answers.mjs";
 import { issueList } from "./waits.mjs";
 import { CONFIG_FILE, modeNames } from "./repo-config.mjs";
 import { sameOrigin } from "./repos.mjs";
@@ -17,21 +21,11 @@ import { readBody, sendJson } from "./web.mjs";
 // How long a repo's open issues are kept: the dashboard polls them.
 export const ISSUES_MS = 30_000;
 const MAX_BODY = 4096;
+// The answers' text, and the JSON around it (escapes, indexes).
+const MAX_ANSWER_BODY = 4 * MAX_TEXT;
 const ACTIONS = ["start", "queue", "dequeue"];
 
 const send = (res, status, value) => sendJson(res, value, status);
-
-// A refusal the dashboard shows as it is.
-class Refused extends Error {
-  constructor(status, message) {
-    super(message);
-    this.status = status;
-  }
-}
-
-const refuse = (status, message) => {
-  throw new Refused(status, message);
-};
 
 // The action asked for, checked: { action, number, after, mode }. Throws Refused.
 export function parseAction(text) {
@@ -71,6 +65,8 @@ export function leadsTo(get, repo, from, to) {
 // the default branch's config. `reply(repo, number, text)`: the App's comment (comments.mjs).
 // `waits` (waits.mjs), `accept(item)` (tasks.mjs). `boardKeys()`: the keys of the tasks on the
 // dashboard; `busy(key)`: a run going or queued, which can't be moved.
+// `taskOf(key)`: the dashboard's task (board.mjs, with its `questions`), or null.
+// `label(repo, number, on)`: the needs-input label; `inputs` (inputs.mjs).
 export function createWorkApi({
   config,
   github,
@@ -80,6 +76,9 @@ export function createWorkApi({
   accept,
   boardKeys,
   busy,
+  taskOf = () => null,
+  label = async () => new Response(null, { status: 204 }),
+  inputs = { set() {} },
   publicUrl = () => null,
   now = Date.now,
   log = () => {},
@@ -145,9 +144,9 @@ export function createWorkApi({
   }
 
   // The checks a comment passes, for the signed-in `user`: the repo's config without errors,
-  // the user in both the operator's and the repo's users, an open issue (not a pull request)
-  // with no run going or queued. Returns { settings, base, issue }; throws Refused.
-  async function checked(repo, user, number) {
+  // the user in both the operator's and the repo's users, an open issue (a pull request when
+  // `pr`) with no run going or queued. Returns { settings, base, issue }; throws Refused.
+  async function checked(repo, user, number, pr = false) {
     const login = user.toLowerCase();
     if (!config.users.includes(login)) refuse(403, `${user} is not in ALLOWED_USERS.`);
     const base = await baseOf(repo);
@@ -164,7 +163,10 @@ export function createWorkApi({
       refuse(404, `#${number} isn't an issue of ${repo}.`);
     if (!res.ok) throw new Error(`GitHub GET #${number}: ${res.status}`);
     const issue = await res.json();
-    if (issue.pull_request) refuse(422, `#${number} is a pull request: start its issue instead.`);
+    if (pr && !issue.pull_request) refuse(404, `#${number} isn't a pull request of ${repo}.`);
+    if (!pr && issue.pull_request) {
+      refuse(422, `#${number} is a pull request: start its issue instead.`);
+    }
     if (issue.state !== "open") refuse(409, `#${number} is closed.`);
     if (busy(`${repo}#${number}`)) {
       refuse(409, `#${number} is running or queued: it can't be moved now.`);
@@ -257,12 +259,69 @@ export function createWorkApi({
     return `#${number} started.`;
   }
 
-  async function work(req, res, user, repo) {
-    if (!sameOrigin(req, publicUrl())) {
-      log(`Work area: refused for ${user}: Origin ${req.headers.origin ?? "missing"}`);
-      return send(res, 403, { error: "Not from this dashboard." });
+  // Answers to the open questions of the task of issue (or pull request) `number`, as one App
+  // comment. A run's questions: the comment is the reply that continues its session, as an
+  // allowed user's would be. An issue's (its body's section): App comments don't take the
+  // label off (questions.mjs), so this does, once every question has an answer.
+  async function answer(repo, user, asked) {
+    const { number, pr } = asked;
+    const key = `${repo}#${pr ? `pr-${number}` : number}`;
+    const task = taskOf(key);
+    if (task?.state !== "needs-input") refuse(409, `#${number} isn't waiting for answers.`);
+    const { settings, base, issue } = await checked(repo, user, number, pr);
+    const questions = task.questions ?? null;
+    const { comment: text, open } = answersComment(user, questions?.items ?? null, asked);
+    // Where the run asked: a pull request's run on an issue's task replies on the pull request.
+    const replyTo = task.replyTo ?? number;
+    const posted = await comment(repo, replyTo, text);
+    const left = open.length ? ` ${open.length} still open.` : "";
+    const fromRun = questions
+      ? questions.source === "run"
+      : task.runs?.[0]?.status === "needs-input";
+    if (fromRun) {
+      await accept({
+        repo,
+        id: pr ? `pr-${number}` : String(number),
+        kind: pr ? "pr" : "issue",
+        number,
+        title: issue.title ?? null,
+        // No trigger line: it goes on in the session that asked, as a reply on GitHub would.
+        trigger: null,
+        modeLine: null,
+        text,
+        replyTo,
+        author: user,
+        base,
+        settings,
+        comment: posted,
+      });
+      return `Answers sent: #${number} continues.${left}`;
     }
-    const asked = parseAction((await readBody(req, MAX_BODY)).toString("utf8"));
+    if (open.length) return `Answers sent: #${number} still needs input.${left}`;
+    const res = await label(repo, number, false);
+    if (!res.ok && res.status !== 404) throw new Error(`GitHub label of #${number}: ${res.status}`);
+    inputs.set(key, false);
+    return `Answers sent: #${number} no longer needs input.`;
+  }
+
+  // The request's body; one over `limit` bytes is refused as it is.
+  async function bodyOf(req, limit) {
+    try {
+      return (await readBody(req, limit)).toString("utf8");
+    } catch (error) {
+      if (/^body over/.test(error.message)) refuse(413, `The request is over ${limit} bytes.`);
+      throw error;
+    }
+  }
+
+  async function answers(req, res, user, repo) {
+    const asked = parseAnswers(await bodyOf(req, MAX_ANSWER_BODY));
+    log(`Work area: ${user} answers ${repo}#${asked.pr ? "pr-" : ""}${asked.number}`);
+    send(res, 200, { message: await answer(repo, user, asked) });
+  }
+
+  async function work(req, res, user, repo) {
+    const asked = parseAction(await bodyOf(req, MAX_BODY));
     log(
       `Work area: ${user} asks ${asked.action} ${repo}#${asked.number}${asked.after ? ` after #${asked.after}` : ""}`,
     );
@@ -270,19 +329,24 @@ export function createWorkApi({
     send(res, 200, { message });
   }
 
-  // Handles /api/repos/<owner>/<repo>/issues and /work; false for any other path.
+  // Handles /api/repos/<owner>/<repo>/issues, /work and /answer; false for any other path.
   function handle(req, res, user) {
     const { pathname } = new URL(req.url, "http://localhost");
-    const one = /^\/api\/repos\/([\w.-]+)\/([\w.-]+)\/(issues|work)$/.exec(pathname);
+    const one = /^\/api\/repos\/([\w.-]+)\/([\w.-]+)\/(issues|work|answer)$/.exec(pathname);
     if (!one) return false;
     const repo = `${one[1]}/${one[2]}`;
-    const post = one[3] === "work";
+    const post = one[3] !== "issues";
     const run = async () => {
       if (post && req.method !== "POST") return send(res, 405, { error: "POST only." });
       if (!post && req.method !== "GET") return send(res, 405, { error: "GET only." });
       if (!user) return send(res, 401, { error: "Sign in first." });
       if (!allowed(repo)) return send(res, 404, { error: `${repo} is not in ALLOWED_REPOS.` });
-      return post ? work(req, res, user, repo) : backlog(res, repo, user);
+      if (!post) return backlog(res, repo, user);
+      if (!sameOrigin(req, publicUrl())) {
+        log(`Work area: refused for ${user}: Origin ${req.headers.origin ?? "missing"}`);
+        return send(res, 403, { error: "Not from this dashboard." });
+      }
+      return one[3] === "work" ? work(req, res, user, repo) : answers(req, res, user, repo);
     };
     run().catch((error) => {
       if (error instanceof Refused) {

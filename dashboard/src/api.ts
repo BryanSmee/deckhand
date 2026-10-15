@@ -1,9 +1,11 @@
 // The listener's API: api/state polled, a run's log streamed (server-sent events), the
-// repositories listed, onboarded and their config read, the graph's backlog and its actions.
+// repositories listed, onboarded and their config read, the graph's backlog and its actions,
+// answers to open questions.
 // Relative URLs, like the assets: the page works under any path.
 import { useEffect, useRef, useState } from "preact/hooks";
 import type { Pending } from "./graph";
 import type {
+  Answers,
   Backlog,
   Entry,
   Onboarded,
@@ -314,4 +316,18 @@ export function useWorkArea(
 
   const mine = pending.filter((p) => p.repo === repo);
   return { backlog, error, busy: mine.length > 0, pending: mine, result, act };
+}
+
+// Answers to a task's open questions: what the listener says, or why it refused.
+export async function sendAnswers(repo: string, answers: Answers): Promise<WorkResult> {
+  try {
+    const res = await fetch(`api/repos/${repo}/answer`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(answers),
+    });
+    return await answer<WorkResult>(res);
+  } catch (e) {
+    return { error: message(e) };
+  }
 }
