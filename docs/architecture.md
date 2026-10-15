@@ -18,15 +18,17 @@ model in [security.md](security.md).
 - **Anywhere**: `/model fast` or `/effort high` lines pick the model or thinking effort for
   that run (defaults: `SANDBOX_MODEL`, `SANDBOX_EFFORT`). A model is a tier, `best`,
   `balanced` or `fast`, that the run's agent maps to one of its models (see [Agents](#agents)),
-  or a model's own name (`sonnet`, `claude-opus-5-5`).
+  or a model's own name (`sonnet`, `claude-opus-5-5`). `/agent codex` (or
+  `claude@openrouter`) picks the agent, and the issue's later runs stay on it; see
+  [Picking an agent with `/agent`](#picking-an-agent-with-agent).
 - **Later**: `/after #77` (or `/after #77 #80`), with a trigger or `/mode` line, holds the
   comment back; see [Waiting for other issues](#waiting-for-other-issues).
 
 A comment that arrives while its issue's run is working goes to that run: after the usual
 pause (so a burst is one message), the listener writes it to the run's inbox (in the agent's
 input format, `TASK_INPUT=stream` in `sandbox/entrypoint.sh`), and the agent sees it after its
-current tool call; the run's final message is still the one reply and covers it. `/model` and
-`/effort` cannot change a live process: they apply to the next run, and the reply says so.
+current tool call; the run's final message is still the one reply and covers it. `/model`,
+`/effort` and `/agent` cannot change a live process: they apply to the next run, and the reply says so.
 Comments the run cannot take (a trigger that switches between work and brainstorm, a wrap-up,
 or one arriving once the agent's input is closed, or any for an agent that takes no messages
 mid-run) wait for a follow-up run.
@@ -329,6 +331,19 @@ comment. The next run takes its entry from the marker (`entryFor()`):
 The run's record keeps `provider` and `fallback`. The reply's footer names the agent and
 provider and why it switched; the log's first line says it. Later runs of the task stick to
 the entry that took over (`previous.fallback`), as long as it is still in `FALLBACKS`.
+
+### Picking an agent with `/agent`
+
+A comment's `/agent <entry>` line (`codex`, `claude@openrouter`; `takeOptions()`) picks the
+run's agent and provider among those the operator configured: `config.agents` on their default
+provider, and `FALLBACKS` (`pickable()`, `pickProblem()`; anything else stops the run with a
+reply). `entryFor()` gives it a `picked` record, and `nextFallback()` returns nothing for it: a
+run picked on purpose ends with its provider's error rather than going elsewhere. Later runs of
+the task stick to it (`previous.picked`, `{ sticky: true }`) until another `/agent`, or
+`/agent default`, which goes back to the settings' agent. When the pick changes the agent from
+the previous run's, the run starts a new session with `handoffMessage()`, as after a fallback,
+without a failure to report. Like `/model`, an `/agent` that arrives mid-run applies to the
+next run.
 
 ## Modules
 

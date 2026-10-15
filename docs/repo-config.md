@@ -271,7 +271,9 @@ agent: the operator hasn't configured codex (configured: claude)
 Models are the agent's: `best`, `balanced` and `fast` work with either. A model name of the
 other agent's (`model: opus` with `agent: codex`) stops the run, and the reply says why.
 Each agent keeps its own session for an issue: switching agent starts the issue afresh with
-the new one, which reads the issue and its comments like any first run. With Codex, comments
+the new one, which reads the issue and its comments like any first run. A comment's
+`/agent codex` picks the agent for the issue instead, among the operator's, whatever these
+keys say: [Agents and providers](setup.md#agents-and-providers). With Codex, comments
 posted while a run works wait for it to end, and the next run answers them in the same
 session (see [Codex](setup.md#codex)).
 
@@ -428,7 +430,7 @@ An issue whose body has an `## Open questions` section that asks something is la
 off: they answered. With `wait_for_answers: true` (the default), work doesn't start on an
 issue while it carries the label:
 
-- A comment that is only the trigger line (with `/mode`, `/model`, `/effort` or `/after`
+- A comment that is only the trigger line (with `/mode`, `/model`, `/effort`, `/agent` or `/after`
   lines at most) starts nothing: the App replies that the issue has open questions, points
   to the dashboard's form, and the label stays. A trigger comment with text is the answer:
   the label comes off and the run starts.

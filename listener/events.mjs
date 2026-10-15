@@ -112,17 +112,24 @@ export const EFFORTS = ["low", "medium", "high", "xhigh", "max"];
 // meta-llama/llama-4:free).
 export const MODEL_NAME = /^[\w.[\]/:-]+$/;
 
-// Removes "/model <name>" and "/effort <level>" lines from a comment, recording them in options.
+// An agent, on a provider or not (codex, claude@openrouter), or `default`: checked against the
+// operator's when the run starts (runs.mjs pickProblem()).
+const AGENT_NAME = /^[\w.-]+(@[\w.-]+)?$/;
+
+// Removes "/model <name>", "/effort <level>" and "/agent <name>" lines from a comment,
+// recording them in options.
 export function takeOptions(text, options) {
   return text
     .split(/\r?\n/)
     .filter((line) => {
-      const match = /^\s*\/(model|effort)\s+(\S+)\s*$/i.exec(line);
+      const match = /^\s*\/(model|effort|agent)\s+(\S+)\s*$/i.exec(line);
       if (!match) return true;
-      const [, key, value] = match;
-      if (key.toLowerCase() === "effort" && !EFFORTS.includes(value.toLowerCase())) return true;
-      if (key.toLowerCase() === "model" && !MODEL_NAME.test(value)) return true;
-      options[key.toLowerCase()] = key.toLowerCase() === "effort" ? value.toLowerCase() : value;
+      const key = match[1].toLowerCase();
+      const value = key === "model" ? match[2] : match[2].toLowerCase();
+      if (key === "effort" && !EFFORTS.includes(value)) return true;
+      if (key === "model" && !MODEL_NAME.test(value)) return true;
+      if (key === "agent" && !AGENT_NAME.test(value)) return true;
+      options[key] = value;
       return false;
     })
     .join("\n")
@@ -130,13 +137,13 @@ export function takeOptions(text, options) {
 }
 
 // Whether a comment says anything besides its trigger and command lines ("/mode", "/after",
-// "/model", "/effort"): only then does it answer an issue's open questions (tasks.mjs).
+// "/model", "/effort", "/agent"): only then does it answer an issue's open questions (tasks.mjs).
 export function saysMore(config, body) {
   return !!takeOptions(splitTrigger(config, body ?? "").text, {});
 }
 
-// Comments as Claude reads them, one after the other, without their "/model" and "/effort"
-// lines (collected in `options`).
+// Comments as the agent reads them, one after the other, without their "/model", "/effort"
+// and "/agent" lines (collected in `options`).
 export function commentsText(items, options) {
   return items
     .map((i) => takeOptions(i.text, options))

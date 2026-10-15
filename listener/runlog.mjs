@@ -67,6 +67,8 @@ function runOf(logDir, file) {
     // task sticks to it. None in logs from before fallbacks.
     provider: meta.provider ?? null,
     fallback: meta.fallback ?? null,
+    // Whether `/agent` picked it (or a previous run's `/agent`: sticky): it doesn't fall back.
+    picked: meta.picked ?? null,
     light: meta.light ?? null,
     key: meta.key ?? id.replace(/-\d+$/, ""),
     kind: meta.kind ?? null,
@@ -157,7 +159,8 @@ function listenerEntries(e, agent) {
   const from = fell
     ? `Falling back to ${agent.displayName} (${e.provider}) from ${e.fallback.from}, whose provider failed: ${e.fallback.reason}. `
     : "";
-  return [{ kind: "meta", text: from + what + (e.message ? `: ${e.message}` : "") }];
+  const picked = e.picked && !e.picked.sticky ? `${agent.displayName} picked with /agent. ` : "";
+  return [{ kind: "meta", text: from + picked + what + (e.message ? `: ${e.message}` : "") }];
 }
 
 // The agent's events (its normalize()) → the dashboard's entries.

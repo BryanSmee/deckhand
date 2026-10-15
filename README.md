@@ -22,7 +22,9 @@ operator, across as many repositories as the App is installed on.
     the issue in its comments, without code. `/stop` wraps it up; `Deckhand` or `/mode work`
     then implements, in a session of its own that starts from the issue and its comments.
   - `/model <name>` and `/effort <level>` lines pick the model (`best`, `balanced`, `fast` or a
-    model's name) and thinking effort of that run.
+    model's name) and thinking effort of that run. `/agent <name>` (`codex`,
+    `claude@openrouter`, among those the operator configured) picks the agent: the issue stays
+    with it, without fallbacks, until another `/agent` (`/agent default` goes back).
   - `/mode <name>` picks a mode: `work`, `brainstorm` or one the repository declares in its
     `.deckhand.yaml` (a review that only comments, say). Alone on an issue with a session,
     it switches modes and keeps the conversation (light modes keep theirs apart from work's).

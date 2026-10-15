@@ -50,28 +50,55 @@ export function entryLabel(name) {
   return entry ? `${agentFor(entry.agent).displayName} (${entry.provider})` : name;
 }
 
-// The agent and provider of a run (`fallback` on the record: why it isn't the usual one): the
-// fallback its comments carry (finish()), else the one the task's previous run fell back to
-// (`previous`: an agent sticks to an issue once it took over), else the agent the settings
-// pick (`chosen`) on its default provider. Only entries still in FALLBACKS.
-export function entryFor(config, chosen, fallback, previous) {
+// What `/agent` may pick: the agents the operator configured (config.agents), on their default
+// provider, and the entries of FALLBACKS. A repo's config can't add any.
+export function pickable(config) {
+  return [...new Set([...config.agents.map((a) => entryName(a)), ...config.fallbacks])];
+}
+
+// Why a comment's `/agent` can't be followed, or null: an agent or provider Deckhand doesn't
+// have, or one the operator hasn't configured. `default` goes back to the settings' agent.
+export function pickProblem(config, pick) {
+  if (!pick || pick === "default") return null;
+  const entry = entryOf(pick);
+  if (entry && pickable(config).includes(entryName(entry.agent, entry.provider))) return null;
+  const names = pickable(config)
+    .map((e) => `\`${e}\``)
+    .join(", ");
+  return `\`/agent ${pick}\` isn't one the operator configured (${names}, or \`default\`)`;
+}
+
+// The agent and provider of a run (`fallback` on the record: why it isn't the usual one,
+// `picked`: chosen with `/agent`): the fallback its comments carry (finish()), else the
+// comments' `/agent` (`pick`, checked by pickProblem()), else the entry the task's previous run
+// picked or fell back to (`previous`: an agent sticks to an issue), else the agent the
+// settings pick (`chosen`) on its default provider. `/agent default` drops what stuck. A
+// previous entry the operator took out since doesn't stick.
+export function entryFor(config, chosen, fallback, previous, pick) {
   if (fallback && config.fallbacks.includes(fallback.entry)) {
     const { from, reason, tried, result } = fallback;
     return { ...entryOf(fallback.entry), fallback: { from, reason, tried }, result };
   }
-  const stuck = previous?.fallback && entryName(previous.agent, previous.provider);
-  if (stuck && config.fallbacks.includes(stuck)) {
-    const { from, reason } = previous.fallback;
-    return { ...entryOf(stuck), fallback: { from, reason, sticky: true } };
+  const settings = { agent: chosen, provider: agentFor(chosen).defaultProvider, fallback: null };
+  if (pick === "default") return settings;
+  if (pick) return { ...entryOf(pick), fallback: null, picked: {} };
+  const last = previous && entryName(previous.agent, previous.provider);
+  if (previous?.picked && pickable(config).includes(last)) {
+    return { ...entryOf(last), fallback: null, picked: { sticky: true } };
   }
-  return { agent: chosen, provider: agentFor(chosen).defaultProvider, fallback: null };
+  if (previous?.fallback && config.fallbacks.includes(last)) {
+    const { from, reason } = previous.fallback;
+    return { ...entryOf(last), fallback: { from, reason, sticky: true } };
+  }
+  return settings;
 }
 
 // Where a run whose provider failed goes next: the first entry of FALLBACKS it hasn't been
 // on yet (each at most once per run, across the runs of one fallback chain), or null when
-// it failed for another reason or none is left. `apiStatus`: the provider's last answer.
+// it failed for another reason or none is left. `apiStatus`: the provider's last answer. An
+// agent picked with `/agent` doesn't fall back: it was asked for.
 export function nextFallback(config, record, result, apiStatus) {
-  if (!config.fallbacks.length) return null;
+  if (!config.fallbacks.length || record.picked) return null;
   const reason = providerError(result, apiStatus);
   if (!reason) return null;
   const from = entryName(record.agent, record.provider);
@@ -200,10 +227,11 @@ export function createRuns(ctx) {
       title: ctx.titles.get(key),
       replyTo,
       // What runs it: the operator's until the repo's settings are read (begin()), on which
-      // provider, and why when it is a fallback's (entryFor()).
+      // provider, and why when it is a fallback's or `/agent`'s (entryFor()).
       agent: light ? config.brainstormAgent : config.agent,
       provider: null,
       fallback: null,
+      picked: null,
       // Whether it is a light run: an issue's light runs and its work have their own sessions.
       light,
       // Why the listener started it itself ("conflict": conflicts.mjs); null for comments.
@@ -326,15 +354,33 @@ export function createRuns(ctx) {
     const previous = ctx.runs.find(
       (r) => r !== record && r.key === key && !!r.light === light && r.status !== "running",
     );
-    const entry = entryFor(config, chosen, items.findLast((i) => i.fallback)?.fallback, previous);
+    // "/model", "/effort" and "/agent" sent during the previous run, unless these comments say
+    // otherwise.
+    const options = task.next;
+    task.next = {};
+    const text = commentsText(items, options);
+    // An `/agent` the operator doesn't allow: the run stops once its log has a first line.
+    const badPick = pickProblem(config, options.agent);
+    const pick = badPick ? undefined : options.agent;
+    const marker = items.findLast((i) => i.fallback)?.fallback;
+    const entry = entryFor(config, chosen, marker, previous, pick);
     record.agent = entry.agent;
     record.provider = entry.provider;
     record.fallback = entry.fallback;
+    record.picked = entry.picked ?? null;
     ctx.broker.provide(task.live.secret, entry.provider);
     const agent = agentOf(task);
     // Another agent than the one that failed: a new session, handed what it left.
     const switched = entry.fallback && !entry.fallback.sticky ? entry.fallback : null;
-    const takeOver = switched && entryOf(switched.from)?.agent !== agent.name;
+    // Another agent than the previous run's, by `/agent`: the same, without a failure. Inbox
+    // entries have no previous run to hand over.
+    const handedBy =
+      !switched &&
+      pick &&
+      previous &&
+      !isFresh(task, mode) &&
+      agentFor(previous.agent).name !== agent.name;
+    const takeOver = (switched && entryOf(switched.from)?.agent !== agent.name) || handedBy;
     // Inbox entries start afresh: the sandbox doesn't resume their session (entrypoint.sh).
     const started =
       !isFresh(task, mode) &&
@@ -346,10 +392,6 @@ export function createRuns(ctx) {
     if (config.needsInputLabel && task.kind !== "discussion" && !helps) {
       await ctx.label(task.repo, task.number, false);
     }
-    // "/model" and "/effort" sent during the previous run, unless these comments say otherwise.
-    const options = task.next;
-    task.next = {};
-    const text = commentsText(items, options);
     const restored = items.some((i) => i.restored);
     // The same agent on another provider: its session goes on, told why.
     const retry = switched && !takeOver;
@@ -358,18 +400,22 @@ export function createRuns(ctx) {
       : text;
     const message = firstMessage({ mode, text: said, restored, started });
     const handoff = takeOver && {
-      from: entryLabel(switched.from),
-      reason: switched.reason,
-      result: entry.result,
+      from: handedBy
+        ? entryLabel(entryName(previous.agent, previous.provider))
+        : entryLabel(switched.from),
+      reason: handedBy ? null : switched.reason,
+      result: handedBy ? previous.summary : entry.result,
       body: firstMessage({ mode, text, restored, started: false }),
     };
     [record.model, record.effort] = modelFor(settings, own, light, options, agent, config);
-    // A model of the agent that failed (`/model opus` before a fall back to Codex): its best.
-    const foreign = takeOver && agent.modelProblem(record.model);
+    // A model of the agent that failed (`/model opus` before a fall back to Codex), or the
+    // settings' model of another agent than the one picked: its best.
+    const foreign =
+      (takeOver || (entry.picked && !options.model)) && agent.modelProblem(record.model);
     if (foreign) record.model = modelOf(agent, "best", config);
     record.mode =
       mode === "stop" ? "wrap-up" : restored ? "restore" : started ? "continue" : "start";
-    const on = record.fallback ? `@${record.provider}` : "";
+    const on = record.fallback || record.picked ? `@${record.provider}` : "";
     log(
       `${key}: running ${task.name} (${mode}, ${record.mode}, ${agent.name}${on} ${record.model}/${record.effort}), log ${record.logPath}`,
     );
@@ -381,6 +427,7 @@ export function createRuns(ctx) {
         JSON.stringify({ type: "listener", event: "note", at: Date.now(), message }) + "\n",
       );
     if (foreign) note(`${foreign}: ${agent.displayName} runs its best model instead`);
+    if (badPick) throw new RunError(`${cantRun(task)}: ${badPick}.`);
     if (errors.length) throw new RunError(configErrors(task.base, errors, agent.displayName));
     for (const warning of warnings) note(`${CONFIG_FILE}: ${warning}`);
     if (!own && !BUILT_IN.has(mode)) {

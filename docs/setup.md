@@ -30,6 +30,12 @@ networks, see [Security model](security.md)), and the base sandbox image runs st
 
 To build the images from this checkout instead: `docker compose up -d --build`.
 
+**A plan's credential** (`CLAUDE_CODE_OAUTH_TOKEN`, from `claude setup-token`) works, and the
+listener's log warns about it at each start. A subscription (Claude Pro/Max, a ChatGPT plan) is
+usually licensed to one person. Serving a team, or repositories other people write to, may
+break your provider's terms: check them before you do. You are responsible for how your
+Deckhand uses your credential. For teams, use an API key.
+
 ## 2. Create the GitHub App
 
 The logs print a one-time setup link: `…/setup?token=…`. Open it through your public
@@ -356,6 +362,33 @@ elsewhere; Codex: `gpt-6-astra`, `gpt-6.1-sol`, `gpt-6-luna`, or `CODEX_*_MODEL`
 model's own name (`sonnet`, `claude-opus-5-5`, `gpt-6.1-sol`). Efforts (`low` to `max`) are
 the same for both. A run whose model belongs to another agent (`/model opus` on a Codex run)
 doesn't start: the reply says why.
+
+### Agents and providers
+
+Deckhand runs two agents, Claude Code (`claude`) and Codex (`codex`), from one sandbox image:
+each installs on first use into a volume of its own. An agent calls a provider; sandboxes
+always call the listener, which adds your credential and forwards the call, so none of these
+needs a host in the grants folder (only GitHub's, which every run has).
+
+| Entry               | Agent and provider                                           | Credential (`.env`)                                                                 | The listener calls                         |
+| ------------------- | ------------------------------------------------------------ | ----------------------------------------------------------------------------------- | ------------------------------------------ |
+| `claude@anthropic`  | Claude Code on Anthropic, or [a gateway](#through-a-gateway) | `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN` (a plan's) or `ANTHROPIC_AUTH_TOKEN` | `ANTHROPIC_BASE_URL` (`api.anthropic.com`) |
+| `claude@openrouter` | Claude Code through OpenRouter, as a [fallback](#fallbacks)  | `OPENROUTER_API_KEY`                                                                | `OPENROUTER_BASE_URL` (`openrouter.ai`)    |
+| `codex@openai`      | [Codex](#codex) on OpenAI                                    | `OPENAI_API_KEY` (a ChatGPT plan's login isn't supported yet)                       | `OPENAI_BASE_URL` (`api.openai.com`)       |
+
+What runs an issue, first match wins:
+
+1. A comment's `/agent <entry>` line (`/agent codex`, `/agent claude@openrouter`; an agent
+   alone is on its default provider), among the agents you have a credential for and the
+   entries of `FALLBACKS`. Anything else gets a reply naming what is configured, and nothing
+   runs. A picked agent doesn't fall back: when its provider fails, the run ends with the
+   error. The issue's later runs stay with it until another `/agent`; `/agent default` goes
+   back to the next rule. When it changes the agent, the new one starts a session of its own,
+   handed the branch and the previous agent's last message.
+2. The [fallback](#fallbacks) a run whose provider failed went to, and later runs of the issue.
+3. The repository's `agent` (per mode, or `brainstorm_agent`: [Per-repo config](repo-config.md#agent)),
+   among the agents you configured.
+4. Your `SANDBOX_AGENT` (`BRAINSTORM_AGENT` for light runs), `claude` by default.
 
 ### Through a gateway
 

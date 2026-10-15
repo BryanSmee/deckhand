@@ -638,6 +638,11 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
     await send(comment("alice"));
     const reply = await github.waitFor((r) => r.path === "/repos/org/repo/issues/12/comments");
     await listener.until("done (ok)");
+    // A plan's token: the operator is warned at start.
+    assert.match(
+      listener.output(),
+      /Warning: CLAUDE_CODE_OAUTH_TOKEN is a Claude plan's credential/,
+    );
 
     // The sandbox has the run's secret where the credential would be, and the listener's URL.
     const secret = readFileSync(join(dir, "run-secret"), "utf8").trim();
@@ -862,6 +867,51 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
       JSON.parse(replies(github)[0].body).body,
       /^Claude stopped with an error\.\n\n> The tests still fail\./,
     );
+  });
+
+  test("/agent codex: Codex takes over, handed what Claude left, sticks to the issue and doesn't fall back", async (t) => {
+    const { dir, github, send, listener } = await falling(t, "claude@openrouter", []);
+    await send(comment("alice", "Deckhand\nFix the login"));
+    await until(() => replies(github).length === 1, "the first reply");
+
+    // Codex, in a new session, on Claude's work; the settings' Claude model becomes its best.
+    await send(followUp(100, "Deckhand\n/agent codex\nNow the logout"));
+    await until(() => replies(github).length === 2, "the second reply");
+    assert.deepEqual(seen(dir), ["claude@anthropic default", "codex@openai new"]);
+    const handoff = messages(dir)[1];
+    assert.match(
+      handoff,
+      /^Claude \(anthropic\) was working on this before; this comment asked for you instead \(`\/agent`\)\. You take over, in a new session/,
+    );
+    assert.match(handoff, /Its last message:\n\n> All done\./);
+    assert.match(handoff, /Now the logout/);
+    assert.doesNotMatch(handoff, /\/agent codex/);
+    assert.match(JSON.parse(replies(github)[1].body).body, /🤖 Codex gpt-6-astra · medium effort/);
+    assert.match(
+      listener.output(),
+      /running \S+ \(work, start, codex@openai gpt-6-astra\/medium\)/,
+    );
+
+    // The next comment stays with Codex, in its session; its provider failing ends the run.
+    writeFileSync(join(dir, "failing"), "codex@openai\n");
+    await send(followUp(101, "Deckhand\nAnd the signup"));
+    await until(() => replies(github).length === 3, "the third reply");
+    assert.deepEqual(seen(dir).at(-1), "codex@openai default");
+    assert.equal(seen(dir).length, 3);
+    assert.match(JSON.parse(replies(github)[2].body).body, /^Codex stopped with an error\./);
+  });
+
+  test("/agent with an agent the operator hasn't configured: the reply says so, nothing runs", async (t) => {
+    const { dir, github, send } = await listen(t);
+    await send(comment("alice", "Deckhand\n/agent codex"));
+    const reply = await github.waitFor(
+      (r) => r.method === "POST" && r.path === "/repos/org/repo/issues/12/comments",
+    );
+    assert.match(
+      JSON.parse(reply.body).body,
+      /^Claude can't run here: `\/agent codex` isn't one the operator configured \(`claude@anthropic`, or `default`\)\./,
+    );
+    assert.equal(exists(join(dir, "run-args")), null);
   });
 
   test("/model opus on a Codex run: the reply says it is Claude's, nothing runs", async (t) => {
@@ -2663,7 +2713,18 @@ mounts:
       "finishedAt",
       "status",
     ],
-    ["reason", "agent", "provider", "fallback", "model", "effort", "phase", "summary", "delivered"],
+    [
+      "reason",
+      "agent",
+      "provider",
+      "fallback",
+      "picked",
+      "model",
+      "effort",
+      "phase",
+      "summary",
+      "delivered",
+    ],
   ];
 
   function assertShape(value, [required, optional], name) {
