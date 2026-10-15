@@ -365,6 +365,7 @@ ctx.workApi = createWorkApi({
   taskOf: (key) => http.taskOf(key),
   label: (repo, number, on) => ctx.label(repo, number, on),
   inputs,
+  runOf: (id) => ctx.runs.find((r) => r.id === id) ?? null,
   publicUrl,
   log,
 });

@@ -158,6 +158,8 @@ export function createHttp(ctx, { dashboardDir }) {
         title: ctx.titles.get(t.key),
         closed: ctx.titles.closed(t.key),
         pr: ctx.pulls.get(t.key),
+        // Closed: the listener would refuse it.
+        rerunnable: t.rerunnable && !ctx.titles.closed(t.key),
         runs: t.runs.map(publicRun),
       })),
       // The graph's arrows, and the issues they come from that aren't on the board.

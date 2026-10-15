@@ -71,6 +71,8 @@ function runOf(logDir, file) {
     mode: meta.mode ?? null,
     taskMode: meta.taskMode ?? null,
     reason: meta.reason ?? null,
+    // Logs from before runs kept them have none: those runs can't run again.
+    items: meta.items ?? null,
     model: meta.model ?? null,
     effort: meta.effort ?? null,
     startedAt: meta.startedAt ?? Number(id.match(/-(\d+)$/)?.[1] ?? 0),
@@ -83,10 +85,10 @@ function runOf(logDir, file) {
   };
 }
 
-// A run as the dashboard gets it: without where its log is on disk, nor its questions (the
-// task carries those, board.mjs).
+// A run as the dashboard gets it: without where its log is on disk, its questions (the task
+// carries those, board.mjs) nor the comments it ran on (their text is in its log).
 export function publicRun(r) {
-  const { logPath, questions, ...rest } = r;
+  const { logPath, questions, items, ...rest } = r;
   return rest;
 }
 

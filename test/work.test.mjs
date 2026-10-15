@@ -22,6 +22,7 @@ function setup({
   busy = [],
   board = [],
   tasks = {},
+  runs = {},
 } = {}) {
   const config = loadConfig({
     ALLOWED_USERS: "alice,bob",
@@ -38,6 +39,7 @@ function setup({
     untracked: [],
     issues,
     tasks,
+    runs,
     clock: 1000,
   };
   let commentId = 500;
@@ -92,6 +94,7 @@ function setup({
       return new Response(null, { status: 200 });
     },
     inputs: { set: (key, on) => w.untracked.push([key, on]) },
+    runOf: (id) => w.runs[id] ?? null,
     publicUrl: () => ORIGIN,
     now: () => w.clock,
   });
@@ -606,4 +609,108 @@ test("answer then start: a run's questions too, the work queued with them", asyn
   assert.equal(item.text, "Answers from @alice, from the dashboard:\n\nYes to both");
   assert.equal(w.accepted.length, 1);
   assert.deepEqual(w.labels, [[5, false]]);
+});
+
+// A task whose last run failed (board.mjs), and that run's record (runs.mjs).
+function failed(key, extra = {}) {
+  const id = key.slice(key.indexOf("#") + 1);
+  const run = {
+    id: `run-${id}`,
+    key,
+    repo: "org/app",
+    kind: id.startsWith("pr-") ? "pr" : "issue",
+    taskMode: "work",
+    replyTo: Number(id.replace("pr-", "")),
+    status: "error",
+    items: [
+      { id, kind: "issue", number: 5, trigger: "work", modeLine: null, text: "Fix it\n/model x" },
+      { id, kind: "issue", number: 5, trigger: null, modeLine: null, text: "" },
+      { id, kind: "issue", number: 5, trigger: null, modeLine: null, text: "And this" },
+    ],
+    ...extra,
+  };
+  const task = { key, state: run.status, rerunnable: true, runs: [run] };
+  return { runs: { [run.id]: run }, tasks: { [key]: task } };
+}
+
+const rerun = (w, body, opts = {}) =>
+  call(w.api, "POST", "/api/repos/org/app/rerun", { body, ...opts });
+
+test("rerun: the App comments, then the failed run's comments are queued in its mode", async () => {
+  const w = setup({
+    issues: { 5: open("Five") },
+    settings: { modes: { review: {} } },
+    ...failed("org/app#5", { taskMode: "review", status: "interrupted" }),
+  });
+  const res = await rerun(w, { runId: "run-5" });
+  assert.equal(res.status, 200);
+  assert.equal(res.body.message, "Rerun of #5 queued.");
+  assert.deepEqual(w.comments, [
+    [5, "Rerun from the dashboard by @alice in `review` mode: its last run was interrupted."],
+  ]);
+  const [item] = w.accepted;
+  assert.equal(item.id, "5");
+  assert.equal(item.kind, "issue");
+  assert.equal(item.trigger, "work");
+  assert.equal(item.modeLine, "review");
+  assert.equal(item.text, "Fix it\n/model x\n\n---\n\nAnd this");
+  assert.equal(item.author, "alice");
+  assert.equal(item.replyTo, 5);
+  // Its reactions go on the App's comment.
+  assert.equal(item.comment.id, 501);
+});
+
+test("rerun: a pull request's task, replying where the failed run did", async () => {
+  const w = setup({
+    issues: { 8: { ...open("PR"), pull_request: {} } },
+    ...failed("org/app#pr-8"),
+  });
+  const res = await rerun(w, { runId: "run-pr-8" });
+  assert.equal(res.status, 200);
+  assert.deepEqual(w.comments, [[8, "Rerun from the dashboard by @alice: its last run failed."]]);
+  const [item] = w.accepted;
+  assert.equal(item.id, "pr-8");
+  assert.equal(item.kind, "pr");
+  assert.equal(item.modeLine, null);
+});
+
+test("rerun refused: users, a broken config, closed, busy, not the latest, not failed, unknown", async () => {
+  const issues = { 5: open("Five") };
+  const refused = async (opts, body, expected, user = "alice") => {
+    const w = setup({ issues, ...failed("org/app#5"), ...opts });
+    const res = await rerun(w, body, { user });
+    assert.equal(res.status, expected, JSON.stringify(res.body));
+    assert.deepEqual(w.comments, []);
+    assert.deepEqual(w.accepted, []);
+    return res.body.error;
+  };
+  await refused({}, { runId: "run-5" }, 403, "carol");
+  await refused({ settings: { users: ["bob"] } }, { runId: "run-5" }, 403);
+  await refused({ errors: ["bad"] }, { runId: "run-5" }, 409);
+  await refused({ issues: { 5: { state: "closed" } } }, { runId: "run-5" }, 409);
+  await refused({ busy: ["org/app#5"] }, { runId: "run-5" }, 409);
+  await refused({}, { runId: "run-6" }, 404);
+  await refused({}, { runId: "../x" }, 400);
+  await refused({}, "nope", 400);
+  // Not the latest: a newer run came after it.
+  const older = failed("org/app#5");
+  older.tasks["org/app#5"].runs.unshift({ id: "run-5b", status: "error" });
+  await refused(older, { runId: "run-5" }, 409);
+  // Ended ok or needs-input: the board doesn't call it rerunnable.
+  for (const status of ["ok", "needs-input"]) {
+    const done = failed("org/app#5", { status });
+    done.tasks["org/app#5"].rerunnable = false;
+    await refused(done, { runId: "run-5" }, 409);
+  }
+  // A mode gone from the config since.
+  await refused(failed("org/app#5", { taskMode: "review" }), { runId: "run-5" }, 422);
+  // Another repo's run.
+  await refused(failed("org/app#5", { repo: "org/other" }), { runId: "run-5" }, 404);
+  // A pull request's task that is busy (its key isn't the issue's).
+  const pr = failed("org/app#pr-8");
+  await refused(
+    { ...pr, issues: { 8: { ...open("PR"), pull_request: {} } }, busy: ["org/app#pr-8"] },
+    { runId: "run-pr-8" },
+    409,
+  );
 });

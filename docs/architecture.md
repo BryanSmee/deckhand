@@ -112,6 +112,16 @@ first: dragging it (or its Start and "After…" buttons) opens them, and the sta
 only once every one has an answer, in one App comment that carries both (`then` on the answer
 request). The run that starts reads them. Started or queued without answers, it is refused.
 
+A task whose last run ended in `error` or `interrupted` shows a **Rerun** button on its page
+(`rerunnable` in `api/state`, from `board.mjs`): work on an issue or pull request, in work or
+one of the repo's own modes, not brainstorms, discussions or inbox entries. Each run keeps the
+comments it ran on (their text, trigger and mode lines) in its log's first line, so a run lost
+in a restart can run again too. `POST /api/repos/<owner>/<repo>/rerun { runId }` (`work.mjs`
+`rerun`) checks what the work area does, refuses a run that isn't the task's latest or didn't
+fail, posts an App comment ("Rerun from the dashboard by @user") where the run replied, and
+queues those comments again in the run's mode, with that comment for the reactions. The
+issue's session volume carries what the run had done.
+
 Reactions on the triggering comment follow its run: 👀 when it is received, then 🚀 (done),
 😕 (needs input) or 👎 (error) once the run that handled it is over.
 
@@ -283,7 +293,7 @@ which starts runs.
 | `onboarding.mjs`, `previews.mjs`                                  | Onboarding issues; preview hooks.                                                                  |
 | `conflicts.mjs`                                                   | The conflict watcher: open task pull requests in conflict get a rebase run (`conflicts.json`).     |
 | `waits.mjs`                                                       | Comments waiting for other issues to be done (`/after`, `waits.json`).                             |
-| `work.mjs`                                                        | The graph's work area: the backlog, and starting or queueing issues from the dashboard.            |
+| `work.mjs`                                                        | The graph's work area: the backlog, starting or queueing issues, and reruns from the dashboard.    |
 | `board.mjs`, `titles.mjs`, `pulls.mjs`, `repos.mjs`, `static.mjs` | The dashboard's tasks, titles and closed states, pull requests, repository list and files.         |
 | `repo-view.mjs`                                                   | A repository's config as the dashboard shows it: what its runs get, from the runs' own checks.     |
 | `store.mjs`, `html.mjs`, `web.mjs`                                | Shared helpers: JSON state files written atomically; the small HTML pages; `sendJson`, `readBody`. |

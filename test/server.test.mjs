@@ -2314,6 +2314,7 @@ mounts:
       "since",
       "closed",
       "pr",
+      "rerunnable",
       "runs",
     ],
     ["deadline", "waitingFor", "questions"],

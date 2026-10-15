@@ -14,6 +14,9 @@
 //                                         answers to a task's open questions (answers.mjs);
 //                                         with `then: { action, after?, mode? }`, all of
 //                                         them, and the issue starts or queues with them
+//   POST /api/repos/<owner>/<repo>/rerun  { runId }
+//                                         the task's last run, failed or interrupted, again:
+//                                         its mode and comments (board.mjs rerunnable())
 import { MAX_TEXT, Refused, answersComment, parseAnswers, refuse } from "./answers.mjs";
 import { issueList } from "./waits.mjs";
 import { CONFIG_FILE, modeNames } from "./repo-config.mjs";
@@ -74,6 +77,7 @@ export function leadsTo(get, repo, from, to) {
 // dashboard; `busy(key)`: a run going or queued, which can't be moved.
 // `taskOf(key)`: the dashboard's task (board.mjs, with its `questions`), or null.
 // `label(repo, number, on)`: the needs-input label; `inputs` (inputs.mjs).
+// `runOf(id)`: a run's record (runs.mjs, with the comments it ran on), or null.
 export function createWorkApi({
   config,
   github,
@@ -86,6 +90,7 @@ export function createWorkApi({
   taskOf = () => null,
   label = async () => new Response(null, { status: 204 }),
   inputs = { set() {} },
+  runOf = () => null,
   publicUrl = () => null,
   now = Date.now,
   log = () => {},
@@ -340,6 +345,48 @@ export function createWorkApi({
     return `Answers sent: ${message}`;
   }
 
+  // The task's last run again, when it failed or the listener lost it: checked as a comment
+  // is, then queued as its comments were, in its mode, with the App's comment for its
+  // reactions. The issue's session volume carries what the run had done.
+  async function rerun(repo, user, runId) {
+    const run = runOf(runId);
+    if (run?.repo?.toLowerCase() !== repo.toLowerCase()) refuse(404, `No run ${runId} in ${repo}.`);
+    const id = run.key.slice(run.key.lastIndexOf("#") + 1);
+    const pr = id.startsWith("pr-");
+    const number = Number(pr ? id.slice(3) : id);
+    if (!/^(pr-)?\d+$/.test(id)) refuse(409, "Only work on an issue or pull request runs again.");
+    const { settings, base, issue } = await checked(repo, user, number, pr);
+    // A pull request's task isn't checked() by its number.
+    if (busy(run.key)) refuse(409, `#${number} is running or queued already.`);
+    const task = taskOf(run.key);
+    if (task?.runs[0]?.id !== runId) refuse(409, `Only the latest run of #${number} runs again.`);
+    if (!task.rerunnable) {
+      refuse(409, `#${number}'s last run didn't fail, or isn't work: it doesn't run again.`);
+    }
+    const mode = run.taskMode;
+    if (!modeNames(settings).includes(mode)) refuse(422, `${repo} has no mode \`${mode}\` now.`);
+    const replyTo = run.replyTo ?? number;
+    const ended = run.status === "error" ? "failed" : "was interrupted";
+    const posted = await comment(
+      repo,
+      replyTo,
+      `Rerun from the dashboard by @${user}${inMode(mode)}: its last run ${ended}.`,
+    );
+    await accept({
+      ...itemOf(repo, issue, mode, user, base, settings),
+      id,
+      kind: pr ? "pr" : "issue",
+      // The comments it ran on, as begin() joins them; "/model" lines and all.
+      text: run.items
+        .map((i) => i.text)
+        .filter(Boolean)
+        .join("\n\n---\n\n"),
+      replyTo,
+      comment: posted,
+    });
+    return `Rerun of #${number} queued.`;
+  }
+
   // The request's body; one over `limit` bytes is refused as it is.
   async function bodyOf(req, limit) {
     try {
@@ -365,10 +412,28 @@ export function createWorkApi({
     send(res, 200, { message });
   }
 
-  // Handles /api/repos/<owner>/<repo>/issues, /work and /answer; false for any other path.
+  async function reruns(req, res, user, repo) {
+    let body;
+    try {
+      body = JSON.parse(await bodyOf(req, MAX_BODY));
+    } catch (error) {
+      if (error instanceof Refused) throw error;
+      refuse(400, "Not JSON.");
+    }
+    const runId = body?.runId;
+    if (typeof runId !== "string" || !/^[\w.-]+$/.test(runId))
+      refuse(400, "`runId` is a run's id.");
+    log(`Work area: ${user} reruns ${repo} ${runId}`);
+    send(res, 200, { message: await rerun(repo, user, runId) });
+  }
+
+  const POSTS = { work, answer: answers, rerun: reruns };
+
+  // Handles /api/repos/<owner>/<repo>/issues, /work, /answer and /rerun; false for any other
+  // path.
   function handle(req, res, user) {
     const { pathname } = new URL(req.url, "http://localhost");
-    const one = /^\/api\/repos\/([\w.-]+)\/([\w.-]+)\/(issues|work|answer)$/.exec(pathname);
+    const one = /^\/api\/repos\/([\w.-]+)\/([\w.-]+)\/(issues|work|answer|rerun)$/.exec(pathname);
     if (!one) return false;
     const repo = `${one[1]}/${one[2]}`;
     const post = one[3] !== "issues";
@@ -382,7 +447,7 @@ export function createWorkApi({
         log(`Work area: refused for ${user}: Origin ${req.headers.origin ?? "missing"}`);
         return send(res, 403, { error: "Not from this dashboard." });
       }
-      return one[3] === "work" ? work(req, res, user, repo) : answers(req, res, user, repo);
+      return POSTS[one[3]](req, res, user, repo);
     };
     run().catch((error) => {
       if (error instanceof Refused) {

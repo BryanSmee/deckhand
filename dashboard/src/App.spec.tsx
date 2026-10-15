@@ -171,6 +171,7 @@ test("an issue waiting for answers without a run: listed under Needs input, no l
     state: "needs-input" as const,
     since: state.now - 2 * 3600000,
     pr: null,
+    rerunnable: false,
     runs: [],
   };
   history.replaceState(null, "", "#/all?task=acme%2Fnotes%239");

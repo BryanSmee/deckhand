@@ -12,6 +12,9 @@
 //   needs-input     the last run stopped to ask, or the issue carries the needs-input label
 //                   (open questions in its body, inputs.mjs), with or without a run
 //   done, error, interrupted   how the last run ended (interrupted: the listener restarted)
+// A task whose last run is error or interrupted is `rerunnable` when it may run again.
+import { LIGHT } from "./modes.mjs";
+
 export const STATES = [
   "building-image",
   "working",
@@ -36,6 +39,22 @@ function runState(r) {
   }
   if (r.status === "ok") return "done";
   return r.status; // needs-input, error, interrupted
+}
+
+// Whether the task's last run may run again from the dashboard (work.mjs rerun()): it failed
+// or was lost, nothing came after it, and it was work on an issue or pull request (in work or
+// one of the repo's own modes) whose comments its log kept.
+export function rerunnable(t) {
+  const last = t.runs[0];
+  return (
+    !!last &&
+    ["error", "interrupted"].includes(last.status) &&
+    t.state === last.status &&
+    ["issue", "pr"].includes(t.kind) &&
+    !!last.taskMode &&
+    !LIGHT.has(last.taskMode) &&
+    Array.isArray(last.items)
+  );
 }
 
 function questionsFor(t, last, input) {
@@ -118,6 +137,7 @@ export function board({ runs, queued, brainstorms, waits = [], inputs = [] }) {
       t.mode = "brainstorm";
       t.deadline = b.deadline;
     }
+    t.rerunnable = rerunnable(t);
   }
   // Most recent activity first, the live ones on top.
   const live = (t) => ["building-image", "working", "stopping", "queued"].includes(t.state);

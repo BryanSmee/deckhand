@@ -127,7 +127,7 @@ export function createRuns(ctx) {
   }
 
   // What the dashboard lists for a run.
-  function newRecord(task, { id, key, mode, replyTo, reason }) {
+  function newRecord(task, { id, key, mode, replyTo, reason, items }) {
     return {
       id,
       key,
@@ -141,6 +141,16 @@ export function createRuns(ctx) {
       agent: agentFor().name,
       // Why the listener started it itself ("conflict": conflicts.mjs); null for comments.
       reason,
+      // What it was asked to act on, kept in its log's first line: a run that fails can run
+      // again with it, after a restart too (the dashboard's Rerun, work.mjs).
+      items: items.map(({ id, kind, number, trigger, modeLine, text }) => ({
+        id,
+        kind,
+        number,
+        trigger,
+        modeLine,
+        text,
+      })),
       mode: null,
       startedAt: Date.now(),
       finishedAt: null,
@@ -159,7 +169,7 @@ export function createRuns(ctx) {
     const key = `${task.repo}#${task.id}`;
     const id = `${task.name}-${Date.now()}`;
     const reason = items.at(-1).reason ?? null;
-    const record = newRecord(task, { id, key, mode, replyTo, reason });
+    const record = newRecord(task, { id, key, mode, replyTo, reason, items });
     return {
       id,
       key,

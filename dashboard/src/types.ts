@@ -78,6 +78,8 @@ export interface Task {
   // merging), or null while open or not known yet (listener/titles.mjs).
   closed: Closed;
   pr: PullRequest | null;
+  // Its last run failed or was lost, and may run again from its page (listener/board.mjs).
+  rerunnable: boolean;
   runs: Run[]; // newest first
   // What a task waiting for input asks (listener/questions.mjs, board.mjs).
   questions?: Questions;

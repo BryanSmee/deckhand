@@ -1,6 +1,6 @@
 // The listener's API: api/state polled, a run's log streamed (server-sent events), the
 // repositories listed, onboarded and their config read, the graph's backlog and its actions,
-// answers to open questions.
+// answers to open questions, a failed run again.
 // Relative URLs, like the assets: the page works under any path.
 import { useEffect, useRef, useState } from "preact/hooks";
 import type { Pending } from "./graph";
@@ -333,6 +333,21 @@ export async function sendAnswers(repo: string, answers: Answers): Promise<WorkR
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(answers),
+    });
+    return await answer<WorkResult>(res);
+  } catch (e) {
+    return { error: message(e) };
+  }
+}
+
+// A task's last run again, when it failed (api/repos/<repo>/rerun): what the listener says,
+// or why it refused.
+export async function sendRerun(repo: string, runId: string): Promise<WorkResult> {
+  try {
+    const res = await fetch(`api/repos/${repo}/rerun`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ runId }),
     });
     return await answer<WorkResult>(res);
   } catch (e) {

@@ -456,6 +456,11 @@ rather than through a webhook. The backlog (`GET /api/repos/<owner>/<repo>/issue
 repository's open issues to signed-in users in its `users` (all of them while its config has
 errors), from GitHub at most once every 30 seconds per repository.
 
+A failed run's Rerun (`POST /api/repos/<owner>/<repo>/rerun`) passes the same checks, for
+the run's issue or pull request, and only for the task's latest run when it ended in `error`
+or `interrupted`: it queues the comments that run had already been allowed to act on, as the
+signed-in user's, and posts the App's comment saying who asked.
+
 ## Hardening
 
 Every sandbox runs:
