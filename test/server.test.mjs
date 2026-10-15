@@ -1840,6 +1840,40 @@ test("/mode onboarding alone on an issue starts the conversation by hand", async
   });
 });
 
+test("the dashboard shows a repo's tasks and logs to its own users, once they are known", async (t) => {
+  const files = { ".deckhand.yaml": "users: [bob]\n" };
+  const { port, send, listener } = await listen(t, files, (dir, github) => {
+    mkdirSync(join(dir, "logs"));
+    const meta = { type: "listener", key: "org/repo#pr-3", repo: "org/repo", startedAt: 1000 };
+    writeFileSync(join(dir, "logs", "org-repo-pr-3-1000.log"), `${JSON.stringify(meta)}\n`);
+    return { GITHUB_URL: github.url };
+  });
+  const base = `http://127.0.0.1:${port}`;
+  const get = (path, cookie) =>
+    fetch(base + path, { redirect: "manual", headers: cookie ? { cookie } : {} });
+  // alice (the fake GitHub's browser) signs in: she is in ALLOWED_USERS.
+  const login = await get("/auth/login");
+  const to = new URL(login.headers.get("location"));
+  const state = login.headers.getSetCookie()[0].split(";")[0];
+  const back = await get(`/auth/callback?code=c&state=${to.searchParams.get("state")}`, state);
+  const session = back.headers
+    .getSetCookie()
+    .find((c) => c.startsWith("deckhand_session="))
+    .split(";")[0];
+  const keys = async () =>
+    (await (await get("/api/state", session)).json()).tasks.map((task) => task.key);
+  // The repo's users aren't known yet: ALLOWED_USERS decides.
+  assert.deepEqual(await keys(), ["org/repo#pr-3"]);
+  const open = await get("/api/runs/org-repo-pr-3-1000/stream", session);
+  assert.equal(open.status, 200);
+  await open.body.cancel();
+  // bob's comment reads the repo's config, whose users leave alice out.
+  await send(comment("bob"));
+  await listener.until("done (ok)");
+  assert.deepEqual(await keys(), []);
+  assert.equal((await get("/api/runs/org-repo-pr-3-1000/stream", session)).status, 404);
+});
+
 test("the dashboard and its logs are for allowed users signed in with GitHub", async (t) => {
   // GitHub's sign-in pages are the fake GitHub too. A built dashboard, and an older log with
   // no title.

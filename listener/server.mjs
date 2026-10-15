@@ -141,6 +141,7 @@ const auth = createAuth({
   app: () => ctx.app,
   publicUrl,
   key: sessionKey(config.dataDir),
+  epochsPath: join(config.dataDir, "sessions.json"),
   log,
 });
 
@@ -204,9 +205,17 @@ const inputs = createInputs({
 
 // --- Per-repo settings, images and preview hooks -------------------------------------------
 
+// Each repo's `users` as last read for a run or a comment: the dashboard shows a repo's tasks
+// and logs to them only (http.mjs).
+const repoUsers = new Map();
+
 // A repo's settings from its default branch; errors in its config file stop its runs.
-function repoSettings(repo, base) {
-  return loadRepoSettings(github, config, repo, base || "main");
+async function repoSettings(repo, base) {
+  const read = await loadRepoSettings(github, config, repo, base || "main");
+  if (!read.errors.length) {
+    repoUsers.set(repo.toLowerCase(), { users: read.settings.users, at: Date.now() });
+  }
+  return read;
 }
 
 const repoFile = (repo, path, ref) => readRepoFile(github, repo, path, ref);
@@ -233,6 +242,12 @@ Object.assign(ctx, {
   graphql,
   publicUrl,
   repoSettings,
+  // The latest read, here or for the repository list; null when not known yet: ALLOWED_USERS
+  // alone then.
+  usersOf: (repo) => {
+    const known = [repoUsers.get(repo.toLowerCase()), repoList.usersOf(repo)].filter(Boolean);
+    return known.sort((a, b) => b.at - a.at)[0]?.users ?? null;
+  },
   repoFile,
   setup,
   auth,

@@ -85,12 +85,25 @@ export function createHttp(ctx, { dashboardDir }) {
     return local(req) || ctx.auth.user(req) !== null;
   }
 
-  // The dashboard's tasks: each issue and pull request with its state (board.mjs).
-  function shownTasks() {
+  // Whether `user` may see a repo's tasks and logs: the repo's own `users`, where the listener
+  // knows them (ctx.usersOf()), narrow ALLOWED_USERS. Tool output in the logs may hold the
+  // repo's secrets.
+  function sees(user, repo) {
+    const users = ctx.usersOf(repo);
+    return !users || users.includes(user);
+  }
+
+  const repoOf = (key) => key.slice(0, key.lastIndexOf("#"));
+
+  // The dashboard's tasks: each issue and pull request with its state (board.mjs). `user`:
+  // only the repos they may see; all of them without one.
+  function shownTasks(user = null) {
+    const mine = (list) => (user ? list.filter((x) => sees(user, repoOf(x.key))) : list);
     // A running task's comments are queued only when they wait for a follow-up run: the others
     // are on their way to the live session.
     const queued = [...tasks.values()]
       .filter((t) => t.pending.length > (t.running ? ctx.deliverable(t) : 0))
+      .filter((t) => !user || sees(user, t.repo))
       .map((t) => ({
         key: `${t.repo}#${t.id}`,
         kind: kindOf(t.pending.at(-1).mode, t.kind),
@@ -99,19 +112,19 @@ export function createHttp(ctx, { dashboardDir }) {
         replyTo: t.pending.at(-1).replyTo,
       }));
     const shown = board({
-      runs: ctx.runs,
+      runs: mine(ctx.runs),
       queued,
-      brainstorms: ctx.brainstorms.list(),
-      waits: ctx.waits.list(),
+      brainstorms: mine(ctx.brainstorms.list()),
+      waits: mine(ctx.waits.list()),
       // Stored before the label was turned off: not listed.
-      inputs: config.needsInputLabel ? ctx.inputs.list() : [],
+      inputs: config.needsInputLabel ? mine(ctx.inputs.list()) : [],
     }).slice(0, 200);
     return { shown, queued };
   }
 
   // What the dashboard shows `user`.
   function state(user) {
-    const { shown, queued } = shownTasks();
+    const { shown, queued } = shownTasks(user);
     const { edges, blockers } = waitEdges(shown, ctx.waits.list());
     // Titles the listener doesn't have yet show on a later poll.
     if (ctx.app) {
@@ -141,7 +154,7 @@ export function createHttp(ctx, { dashboardDir }) {
       running: ctx.running,
       queued: queued.length,
       maxParallel: config.maxParallel,
-      previews: ctx.previews.status(),
+      previews: ctx.previews.status().filter((h) => sees(user, h.repo)),
       // GitHub Enterprise: the dashboard's links go where the listener's do.
       githubUrl: config.githubUrl,
       now: Date.now(),
@@ -180,7 +193,7 @@ export function createHttp(ctx, { dashboardDir }) {
     if (url.pathname === "/api/state") return sendJson(res, state(user));
     const match = /^\/api\/runs\/([\w.-]+)\/stream$/.exec(url.pathname);
     const run = match && ctx.runs.find((r) => r.id === match[1]);
-    if (run) return stream(req, res, run);
+    if (run && sees(user, run.repo ?? repoOf(run.key))) return stream(req, res, run);
     res.statusCode = 404;
     res.end();
   }
