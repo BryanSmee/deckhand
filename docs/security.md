@@ -11,7 +11,7 @@ paths unless you grant them, a restricted network, and no privileges.
 Deckhand trusts a repository's default branch: its `.deckhand.yaml`, its sandbox
 instructions. What that file can ask for beyond a sandbox (hosts, mounts, the preview hook,
 which runs with the Docker socket, the Dockerfile built on the host) only happens when your
-grants file allows it for that repository (see [The grants file](#the-grants-file)): with
+grants folder allows it for that repository (see [The grants folder](#the-grants-folder)): with
 the App on many repositories, whoever can push one's default branch must not get root on the
 host through it. A sandbox that could write to a default branch could still change what
 that file asks for, so none can:
@@ -155,7 +155,7 @@ source tree.
 
 A host path reaches a sandbox only when **both** sides agree:
 
-1. **You** grant the repository a root in the grants file (below), read-only unless you say
+1. **You** grant the repository a root in its grants file (below), read-only unless you say
    `read_only: false`.
 2. **The repository** asks for a path under it in its `.deckhand.yaml`:
 
@@ -208,44 +208,91 @@ also your own user on the host, the directories you own count as writable by san
 into the listener read-only in `compose.yaml` (`- /nfs/work:/nfs/work:ro`). A root it can't
 see grants nothing.
 
-## The grants file
+## The grants folder
 
-What you give a repository beyond what every sandbox gets lives in `GRANTS_FILE`
-(`/etc/deckhand/grants.yaml` in the listener; mount it from the host, see `compose.yaml`).
-It is optional and read again at each run, so an edit applies without a restart. A file
-with errors grants nothing: the listener won't start, and runs started after a broken edit
-stop (the details are in the listener's logs, not on GitHub).
+What you give a repository beyond what every sandbox gets lives in `GRANTS_DIR`
+(`/etc/deckhand/grants` in the listener; mount it read-only from the host, see
+`compose.yaml`): one file per repository, and `default.yaml` for every repository. It is
+optional and read again at each run, so an edit applies without a restart.
 
-```yaml
-# grants.yaml: one key per repository (owner/repo), and "*" for every repository
-"*":
-  # The yes-or-no grants below (all false by default) are the only keys "*" takes: hosts
-  # and limits for every repo are ALLOWED_HOSTS and SANDBOX_*. A repo's own entry overrides.
-  allow_repo_hosts: false
-  allow_dockerfile: false
-acme/api:
-  # Reachable by its sandboxes, besides the mandatory hosts and ALLOWED_HOSTS.
-  hosts: ["*.acme.dev", pypi.org]
-  # Its .deckhand.yaml may add hosts of its own (never "*"); overrides "*" above.
-  allow_repo_hosts: true
-  # Its .deckhand.yaml's `preview` hook runs, with the Docker socket: root on the host.
-  allow_preview: true
-  # Its .deckhand.yaml's `dockerfile` is built on the host's Docker, with its network.
-  allow_dockerfile: true
-  # Runs on its pull requests build the Dockerfile of the pull request's branch (never a
-  # fork's) rather than the default branch's. Needs allow_dockerfile too.
-  allow_branch_docker_images: true
-  # Its own limits; missing ones keep SANDBOX_CPUS, SANDBOX_MEMORY, SANDBOX_PIDS.
-  limits: { cpus: 4, memory: 8g, pids: 4096 }
-  # Roots it may mount from (read-only unless read_only: false).
-  mounts:
-    - root: /nfs/work
-      read_only: false
-    - /srv/datasets
+```
+grants/
+  default.yaml       # every repository
+  acme/api.yaml      # acme/api
+  acme/web.yaml      # acme/web
+  CODEOWNERS         # anything that isn't .yaml is skipped, and dot folders (.git, .github)
 ```
 
-Quote patterns starting with `*` (`"*.acme.dev"`, `"*"` as a key): YAML reads a bare `*`
-as an alias. See [A repository's own hosts](#a-repositorys-own-hosts) for
+A repository's file is `<owner>/<repo>.yaml`, matched case-insensitively. It holds what you
+grant that repository:
+
+```yaml
+# acme/api.yaml
+# Reachable by its sandboxes, besides the mandatory hosts, ALLOWED_HOSTS and default.yaml's.
+hosts: ["*.acme.dev", pypi.org]
+# Its .deckhand.yaml may add hosts of its own (never "*"); overrides default.yaml.
+allow_repo_hosts: true
+# Its .deckhand.yaml's `preview` hook runs, with the Docker socket: root on the host.
+allow_preview: true
+# Its .deckhand.yaml's `dockerfile` is built on the host's Docker, with its network.
+allow_dockerfile: true
+# Runs on its pull requests build the Dockerfile of the pull request's branch (never a
+# fork's) rather than the default branch's. Needs allow_dockerfile too.
+allow_branch_docker_images: true
+# Its own limits; missing ones keep default.yaml's, else SANDBOX_CPUS, SANDBOX_MEMORY,
+# SANDBOX_PIDS.
+limits: { cpus: 4, memory: 8g, pids: 4096 }
+# Roots it may mount from (read-only unless read_only: false).
+mounts:
+  - root: /nfs/work
+    read_only: false
+  - /srv/datasets
+```
+
+`default.yaml` takes the same keys but `mounts`, for every repository:
+
+```yaml
+# default.yaml
+# The yes-or-no grants (all false by default); a repository's own file overrides each one.
+allow_repo_hosts: false
+allow_dockerfile: false
+# Added to every repository's hosts, alongside ALLOWED_HOSTS.
+hosts: [pypi.org]
+# The base each repository's own limits start from, instead of SANDBOX_*.
+limits: { memory: 8g }
+```
+
+`mounts` in `default.yaml` is an error: a root for every repository is too broad to grant by
+accident, so roots are granted one repository at a time.
+
+**Errors stop runs, file by file.** A repository's file with errors grants that repository
+nothing: its runs stop, with a reply naming the file (the details are in the listener's logs,
+not on GitHub), and the dashboard's repositories tab shows it as invalid, with the file and
+its errors in its panel. Other repositories keep running. A broken `default.yaml`, or a
+`.yaml` file that isn't `default.yaml` or `<owner>/<repo>.yaml` (deeper or at the top, a
+`.yml`, a name GitHub doesn't allow, `acme/API.yaml` next to `acme/api.yaml`), stops every
+run, and the listener won't start with one. At start, a repository's broken file is logged
+and the listener starts anyway.
+
+**Symlinks** are followed while they stay in the folder: one leading outside it is an error,
+for that repository when it is its file, for every repository when it is a folder.
+
+**Who can edit the folder can grant root on the host** (`allow_preview`) and host paths
+(`mounts`): protect it like the deployment itself. A git checkout works well: reviewed pull
+requests, and a `CODEOWNERS` giving each team its own repositories' files, while the
+folder's root (`default.yaml`, `CODEOWNERS` itself) stays with you:
+
+```
+# CODEOWNERS of the grants repository
+*                @acme/platform
+/acme/api.yaml   @acme/api-team
+/globex/         @globex/admins
+```
+
+Mount it read-only into the listener (`- ./grants:/etc/deckhand/grants:ro`) and pull it on
+the host; the next run reads the change.
+
+Quote patterns starting with `*` (`"*.acme.dev"`): YAML reads a bare `*` as an alias. See [A repository's own hosts](#a-repositorys-own-hosts) for
 `allow_repo_hosts`.
 
 **Preview hooks and Dockerfiles** are the most powerful things a `.deckhand.yaml` asks for:
@@ -269,14 +316,14 @@ Every sandbox runs:
   `--security-opt no-new-privileges`;
 - with `--cpus`, `--memory` (and as much `--memory-swap`: no swap on top) and
   `--pids-limit`: `SANDBOX_CPUS` (2), `SANDBOX_MEMORY` (`4g`), `SANDBOX_PIDS` (2048), or
-  the repo's `limits` in the grants file.
+  `limits` in `default.yaml` and the repo's grants file.
 
 The containers the listener starts around runs get the same treatment where they can: the
 Claude Code install runs as root with only `CHOWN` (to take over an older volume); the one
 that hands a new cache volume to uid 1000 keeps only `CHOWN`, without network.
 
 The Docker socket stays in the listener (and in preview hooks, which a repo's maintainers
-configure and only run with `allow_preview` in the grants file, see
+configure and only run with `allow_preview` in its grants file, see
 [Per-repo config](repo-config.md#preview-hook)). No sandbox gets it. Image builds only run
 for repositories granted `allow_dockerfile`.
 
@@ -320,9 +367,9 @@ inspect`) and answers from that run's list. An unknown address, an unknown host,
 **Restricted by default**: the mandatory hosts, plus
 
 - `ALLOWED_HOSTS`: yours, for every repository;
-- the repo's `hosts` in the grants file;
+- `hosts` in `default.yaml` and the repo's grants file;
 - the repo's own `hosts` in its `.deckhand.yaml` (default branch only), **only when you
-  allow it** with `allow_repo_hosts: true` in the grants file (see below).
+  allow it** with `allow_repo_hosts: true` in its grants file (see below).
 
 Each entry is a host name (`registry.npmjs.org`), `*.domain` (any subdomain, at any depth,
 not the domain itself: list both if you need both), or `*` (anything). Any port.
@@ -335,15 +382,15 @@ sandbox could get its way out by changing that file. So the rule is the same as 
 mounts: the repository asks, you decide.
 
 - **Without `allow_repo_hosts`** (the default), a repo's `hosts` can only repeat what you
-  already allow it: the mandatory hosts, `ALLOWED_HOSTS` and its `hosts` in the grants file
+  already allow it: the mandatory hosts, `ALLOWED_HOSTS` and `hosts` in its grants
   (`files.example.com` is fine under a granted `*.example.com`). Any other entry stops its
   runs, and the reply on the issue lists each refused host with the config's other errors.
-- **With `allow_repo_hosts: true`** for the repo (or for every repo, under `"*"`), its
+- **With `allow_repo_hosts: true`** for the repo (or for every repo, in `default.yaml`), its
   `hosts` are added to what its sandboxes may reach. Give it to repositories whose default
-  branch you trust as much as your own grants file: protected, reviewed merges.
+  branch you trust as much as your own grants: protected, reviewed merges.
 - **Never `*` or a whole top-level domain** (`"*.com"`) from a repository, granted or not:
   that is a config error. Only you can open that much, in `ALLOWED_HOSTS` or the grants
-  file.
+  folder.
 
 A mode can't change any of this: the hosts of every run of a repo are the same whatever the
 mode.

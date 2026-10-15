@@ -2,9 +2,9 @@
 // repo's own image built FROM it; Claude Code, installed once per version into a shared
 // volume by a container of its own; and the repo's cache volumes.
 //
-// A repo image is built from the default branch (or, when the operator's grants file sets
-// allow_branch_docker_images for the repo, from a pull request's own branch, never a fork's) and tagged with a hash of the base image's id
-// and the Dockerfile's blob: a new base or a changed Dockerfile builds a new tag, the same
+// A repo image is built from the default branch (or, when the operator's grants set
+// allow_branch_docker_images for the repo, from a pull request's own branch, never a fork's)
+// and tagged with a hash of the base image's id and the Dockerfile's blob: a new base or a changed Dockerfile builds a new tag, the same
 // ones reuse it. A branch's image is tagged apart (`branch-…`, its commit in the hash): the
 // default branch's runs and preview hooks never pick up what a branch built. Old tags are
 // pruned, keeping the default branch's newest and the most recent few.

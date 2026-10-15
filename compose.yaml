@@ -58,7 +58,7 @@ services:
       MAX_PARALLEL: ${MAX_PARALLEL:-}
       # Hosts every sandbox may reach besides Anthropic and GitHub (*.domain and * work).
       ALLOWED_HOSTS: ${ALLOWED_HOSTS:-}
-      # Each sandbox's limits; the grants file can set them per repo.
+      # Each sandbox's limits; the grants folder can set them per repo.
       SANDBOX_CPUS: ${SANDBOX_CPUS:-}
       SANDBOX_MEMORY: ${SANDBOX_MEMORY:-}
       SANDBOX_PIDS: ${SANDBOX_PIDS:-}
@@ -94,8 +94,8 @@ services:
       # Optional: your settings (config.example.yaml), read at start.
       # - ./config.yaml:/etc/deckhand/config.yaml:ro
       # Optional: what you grant each repo (hosts, whether its .deckhand.yaml may add hosts,
-      # host mounts, limits): docs/security.md.
-      # - ./grants.yaml:/etc/deckhand/grants.yaml:ro
+      # host mounts, limits), one file per repo and default.yaml: docs/security.md.
+      # - ./grants:/etc/deckhand/grants:ro
       # Each mount root you grant, at the same path and read-only: the listener resolves the
       # paths repos ask for (.., symlinks) in it before mounting them into a sandbox.
       # - /nfs/work:/nfs/work:ro

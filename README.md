@@ -126,7 +126,7 @@ A repository can add a `.deckhand.yaml` at its root: its own users (narrowing
 `ALLOWED_USERS`), trigger word, models, parallel runs, a setup command, project
 instructions, a Dockerfile for its image, caches, extra hosts, host mounts, inboxes and a
 preview hook. Its Dockerfile, preview hook, extra hosts and host mounts only count once the
-operator grants them to it in the grants file.
+operator grants them to it in its grants file.
 
 ```yaml
 users: [alice]
@@ -149,8 +149,8 @@ Out of the box, without any configuration:
 
 - **Network:** sandboxes sit on an internal Docker network; the egress proxy lets them reach
   `api.anthropic.com`, GitHub and nothing else. You add hosts for every repository
-  (`ALLOWED_HOSTS`) or for one (the grants file); a repository's own `hosts` only count
-  when you allow it (`allow_repo_hosts` in the grants file), and never `*`.
+  (`ALLOWED_HOSTS`) or for one (the grants folder); a repository's own `hosts` only count
+  when you allow it (`allow_repo_hosts` in its grants file), and never `*`.
 - **Host paths:** none. No `~/.ssh`, `~/.gitconfig`, Docker socket or source tree. A host
   path is only mounted when you grant the repository a root that holds it, and read-only
   unless you say otherwise.
@@ -178,10 +178,10 @@ Read this before installing Deckhand on a repository.
   is a way out. Keep the list short.
 - **What isn't covered:** image builds, the Claude Code install and preview hooks run
   outside the sandboxes' network, and preview hooks get the Docker socket (root on the
-  host): a repository only gets its own Dockerfile built or preview hook run when the grants
-  file says so (`allow_dockerfile`, `allow_preview`). DNS lookups may leave the internal network.
+  host): a repository only gets its own Dockerfile built or preview hook run when its grants
+  say so (`allow_dockerfile`, `allow_preview`). DNS lookups may leave the internal network.
 
-All of it, with the grants file and the limits of each measure:
+All of it, with the grants folder and the limits of each measure:
 [docs/security.md](docs/security.md).
 
 ## Updating

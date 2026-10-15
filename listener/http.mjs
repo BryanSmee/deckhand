@@ -301,7 +301,7 @@ export function createHttp(ctx, { dashboardDir }) {
     const { settings, errors } = await ctx.repoSettings(repo, base);
     if (errors.length) return skip(`${event}: ${CONFIG_FILE} of ${repo} has errors`);
     if (!settings.preview) return skip(`${event}: ${repo} has no preview hook`);
-    // Root on the host: only when the operator's grants file says so (grants.mjs).
+    // Root on the host: only when the operator's grants say so (grants.mjs).
     let grant;
     try {
       grant = grantFor(loadGrants(config), config, repo);

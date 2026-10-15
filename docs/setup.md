@@ -104,7 +104,7 @@ Each repository can add a `.deckhand.yaml` on its default branch: its own users 
 `ALLOWED_USERS`), trigger word, models, parallel cap, setup command, instructions,
 Dockerfile, caches and preview hook. See [Per-repo config](repo-config.md). A Dockerfile, a
 preview hook, extra hosts and host mounts only take effect once you grant them to that
-repository in your grants file (see [Security model](security.md#the-grants-file)).
+repository in your grants folder (see [Security model](security.md#the-grants-folder)).
 
 ## 4. The dashboard
 
@@ -159,17 +159,19 @@ issue as an installation would, mentioning you, and starts the conversation: the
 onboard repositories installed before onboarding existed, by someone not in `ALLOWED_USERS`,
 or with `ONBOARDING=off`. A repository with issues disabled shows why it can't be onboarded.
 A repository shows `invalid config` when no run starts there: its `.deckhand.yaml` has
-errors, or asks for what the operator's grants file refuses (a `dockerfile` or `preview`
+errors, or asks for what the operator's grants refuse (a `dockerfile` or `preview`
 without its grant, `hosts` without `allow_repo_hosts`, a mount outside the granted roots), or
-the grants file itself has errors. The list is cached: the installations' repositories are
+its grants have errors (its own file, or the folder's `default.yaml` and layout, for every
+repository). The list is cached: the installations' repositories are
 read again every 5 minutes, each configuration every 30 minutes, or at once after a push or a
-merged pull request on its default branch. The grants file is checked at each load, so editing
-it shows at once. **Refresh** reads everything again, in case a webhook was missed.
+merged pull request on its default branch. The grants folder is checked at each load, so
+editing it shows at once. **Refresh** reads everything again, in case a webhook was missed.
 
 A repository's name opens its configuration, read from its default branch then: what stops
 its runs (errors, and what it asks for that the operator doesn't grant) and its warnings first, then
-what its runs get (each value from the repository, from the operator, or refused), its entry
-in the grants file, and the raw file. Anyone signed in to the dashboard sees it, grants
+what its runs get (each value from the repository, from the operator, or refused), its grant
+and the files of the grants folder it comes from (or the file to fix, when it has errors), and
+the raw file. Anyone signed in to the dashboard sees it, grants
 included. Its **Refresh** reads it again (at most every 5 seconds); changing it is a commit on
 the default branch.
 
@@ -185,7 +187,7 @@ Secrets (the Claude credential) stay in `.env`; the App's are in `/data/app.json
   `config.yaml`, then the default below. `NEEDS_INPUT_LABEL` is the exception: set and
   empty in `.env`, it still wins (no label); `needs_input_label: ""` does the same in the file.
 - **Read at start only:** restart the listener (`docker compose restart listener`) after an
-  edit. Unlike the grants file, it isn't read again.
+  edit. Unlike the grants folder, it isn't read again.
 - **Fail closed:** an unknown key, a value of the wrong type, a bad value or a secret in the
   file stops the listener, naming the key (`/etc/deckhand/config.yaml: max_parallel:
 expected a whole number of sandboxes, got lots`). The file is optional; `ALLOWED_USERS`
@@ -228,7 +230,7 @@ needs_input_label: needs-input
 | `BRAINSTORM_IDLE_MINUTES`                        | `brainstorm_idle_minutes`                        | `10`                               | minutes without a comment before a brainstorm shows as idle                     |
 | `MAX_PARALLEL`                                   | `max_parallel`                                   | `2`                                | sandboxes running at once (a repo's `max_parallel` within it)                   |
 | `ALLOWED_HOSTS`                                  | `allowed_hosts`                                  | none                               | hosts every sandbox may reach besides Anthropic and GitHub                      |
-| `SANDBOX_CPUS`, `SANDBOX_MEMORY`, `SANDBOX_PIDS` | `sandbox_cpus`, `sandbox_memory`, `sandbox_pids` | `2`, `4g`, `2048`                  | each sandbox's limits (per repo: the grants file)                               |
+| `SANDBOX_CPUS`, `SANDBOX_MEMORY`, `SANDBOX_PIDS` | `sandbox_cpus`, `sandbox_memory`, `sandbox_pids` | `2`, `4g`, `2048`                  | each sandbox's limits (per repo: the grants folder)                             |
 | `TRIGGER`                                        | `trigger`                                        | `Deckhand`                         | first line of a comment that starts a run                                       |
 | `ONBOARDING`                                     | `onboarding`                                     | on                                 | `off`: no onboarding issue when the App is installed on a repo without a config |
 | `NEEDS_INPUT_LABEL`                              | `needs_input_label`                              | `needs-input`                      | label while a run or an issue waits for answers (empty: none)                   |
@@ -246,23 +248,23 @@ The listener and the egress proxy also read these. `compose.yaml` doesn't take t
 others to their defaults. To change one, set its key in `config.yaml` when it has one, or
 else set it in the service's `environment`, for example in a `compose.override.yaml`.
 
-| Setting                           | Key                        | Default                                        | What                                                                                                      |
-| --------------------------------- | -------------------------- | ---------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| `GRANTS_FILE`                     | `grants_file`              | `/etc/deckhand/grants.yaml`                    | what you grant each repo: hosts, host mounts, limits, preview hook, Dockerfile (`compose.yaml` mounts it) |
-| `INSTALL_NETWORK`                 | `install_network`          | `bridge`                                       | network of the Claude Code install container (needs npm)                                                  |
-| `DEBOUNCE_MS`                     | `debounce_ms`              | `15000`                                        | pause after a comment before its run starts, so that comments posted together go in one run               |
-| `BRAINSTORM_DEBOUNCE_MS`          | `brainstorm_debounce_ms`   | `3000`                                         | the same before a light run (brainstorms, onboarding, light modes)                                        |
-| `DATA_DIR`                        | none                       | `/data`                                        | the listener's state: the App's credentials, logs, queue, runs (the `data` volume)                        |
-| `DASHBOARD_DIR`                   | none                       | the image's `dashboard/dist`                   | the built dashboard the listener serves                                                                   |
-| `SANDBOX_IMAGE`                   | none                       | `<NAME_PREFIX>-sandbox`                        | the base image runs start from; compose sets the release's                                                |
-| `BROKER_PORT`                     | none                       | `8081`                                         | port of the token broker, git gateway and egress policy, on the sandboxes' network                        |
-| `BROKER_URL`                      | none                       | `http://listener:<BROKER_PORT>`                | the broker, as sandboxes reach it; compose sets it                                                        |
-| `EGRESS_PROXY`                    | none                       | `http://egress:3128`                           | the egress proxy, as sandboxes reach it; compose sets it                                                  |
-| `POLICY_URL` (egress proxy)       | none                       | `http://listener:8081/egress`                  | where the proxy asks whether a sandbox may reach a host; compose sets it                                  |
-| `PORT` (in the containers)        | none                       | `8080`, egress proxy: `3128`                   | port the listener and the proxy listen on; the `PORT` above only changes the published one                |
-| `GITHUB_URL`, `GITHUB_API`        | `github_url`, `github_api` | `https://github.com`, `https://api.github.com` | GitHub's web and API addresses, always allowed through the egress proxy                                   |
-| `CONFIG_FILE`                     | none                       | `/etc/deckhand/config.yaml`                    | the settings file above; set on purpose, it has to exist                                                  |
-| `DECKHAND_VERSION` (in the image) | none                       | set when the image is built                    | the version the dashboard shows                                                                           |
+| Setting                           | Key                        | Default                                        | What                                                                                                                     |
+| --------------------------------- | -------------------------- | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `GRANTS_DIR`                      | `grants_dir`               | `/etc/deckhand/grants`                         | what you grant each repo, one file each: hosts, host mounts, limits, preview hook, Dockerfile (`compose.yaml` mounts it) |
+| `INSTALL_NETWORK`                 | `install_network`          | `bridge`                                       | network of the Claude Code install container (needs npm)                                                                 |
+| `DEBOUNCE_MS`                     | `debounce_ms`              | `15000`                                        | pause after a comment before its run starts, so that comments posted together go in one run                              |
+| `BRAINSTORM_DEBOUNCE_MS`          | `brainstorm_debounce_ms`   | `3000`                                         | the same before a light run (brainstorms, onboarding, light modes)                                                       |
+| `DATA_DIR`                        | none                       | `/data`                                        | the listener's state: the App's credentials, logs, queue, runs (the `data` volume)                                       |
+| `DASHBOARD_DIR`                   | none                       | the image's `dashboard/dist`                   | the built dashboard the listener serves                                                                                  |
+| `SANDBOX_IMAGE`                   | none                       | `<NAME_PREFIX>-sandbox`                        | the base image runs start from; compose sets the release's                                                               |
+| `BROKER_PORT`                     | none                       | `8081`                                         | port of the token broker, git gateway and egress policy, on the sandboxes' network                                       |
+| `BROKER_URL`                      | none                       | `http://listener:<BROKER_PORT>`                | the broker, as sandboxes reach it; compose sets it                                                                       |
+| `EGRESS_PROXY`                    | none                       | `http://egress:3128`                           | the egress proxy, as sandboxes reach it; compose sets it                                                                 |
+| `POLICY_URL` (egress proxy)       | none                       | `http://listener:8081/egress`                  | where the proxy asks whether a sandbox may reach a host; compose sets it                                                 |
+| `PORT` (in the containers)        | none                       | `8080`, egress proxy: `3128`                   | port the listener and the proxy listen on; the `PORT` above only changes the published one                               |
+| `GITHUB_URL`, `GITHUB_API`        | `github_url`, `github_api` | `https://github.com`, `https://api.github.com` | GitHub's web and API addresses, always allowed through the egress proxy                                                  |
+| `CONFIG_FILE`                     | none                       | `/etc/deckhand/config.yaml`                    | the settings file above; set on purpose, it has to exist                                                                 |
+| `DECKHAND_VERSION` (in the image) | none                       | set when the image is built                    | the version the dashboard shows                                                                                          |
 
 ## Updating
 
@@ -321,16 +323,35 @@ container of its own, and later runs reuse it, read-only.
 
 Sandboxes run without capabilities and with CPU, memory and pids limits, get no host path
 unless you grant one, and reach only Anthropic, GitHub and the hosts you or the repository
-allow, through the egress proxy. See [Security model](security.md): the grants file, host
+allow, through the egress proxy. See [Security model](security.md): the grants folder, host
 mounts, the mandatory hosts, and what isn't covered.
 
 Upgrading from a version whose `deckhand-sandboxes` network wasn't internal: stop the stack,
 `docker network rm deckhand-sandboxes`, and start it again so compose creates it internal.
 Until then the listener refuses to start runs.
 
+Upgrading from a version with a single grants file (`GRANTS_FILE`, `grants.yaml`): the
+listener reads a folder now, `GRANTS_DIR`, and refuses to start while `GRANTS_FILE` is set.
+Move each `owner/repo:` entry to its own file, `owner/repo.yaml`, with its keys one level
+up; `"*"` becomes `default.yaml`. Then mount the folder instead of the file
+(`- ./grants:/etc/deckhand/grants:ro`) and remove `GRANTS_FILE`. For example:
+
+```yaml
+# grants.yaml, before
+acme/api:
+  hosts: [pypi.org]
+  allow_preview: true
+```
+
+```yaml
+# grants/acme/api.yaml, after
+hosts: [pypi.org]
+allow_preview: true
+```
+
 Upgrading from a version where a repository's `.deckhand.yaml` alone decided its preview
-hook, Dockerfile and branch images: grant them in your grants file, for each repository
-that uses them (or every one, under `"*"`), with `allow_preview: true`,
+hook, Dockerfile and branch images: grant them in your grants folder, for each repository
+that uses them (or every one, in `default.yaml`), with `allow_preview: true`,
 `allow_dockerfile: true` and `allow_branch_docker_images: true`. Until then that
 repository's runs stop with a reply naming the missing grant, its preview hook doesn't run
 (the listener's logs say why), and `allow_branch_docker_images` in its `.deckhand.yaml` is

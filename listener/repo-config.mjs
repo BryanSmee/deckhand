@@ -254,9 +254,9 @@ const KEYS = {
   },
   instructions: pathKey,
   dockerfile: pathKey,
-  // Moved to the operator's grants file (grants.mjs): a repo can't allow itself this.
+  // Moved to the operator's grants folder (grants.mjs): a repo can't allow itself this.
   allow_branch_docker_images: (value, { key, warn }) => {
-    warn(`${key}: ignored here, the operator's grants file sets it for this repository`);
+    warn(`${key}: ignored here, the operator's grants folder sets it for this repository`);
   },
   caches: parseCaches,
   hosts: parseHosts,

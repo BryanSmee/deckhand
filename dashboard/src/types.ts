@@ -141,7 +141,7 @@ export interface Onboarded {
 }
 
 // Where a value comes from: the repo's .deckhand.yaml, the operator (environment, grants
-// file), or the repo's, refused (a refused host or mount stops every run).
+// folder), or the repo's, refused (a refused host or mount stops every run).
 export type Source = "repo" | "operator" | "refused";
 
 // One setting a run reads (listener/repo-view.mjs settingRows()); `key` is its YAML key.
@@ -167,9 +167,10 @@ export interface MountRow {
   note: string | null;
 }
 
-// The repo's entry of the operator's grants file: its own (entry is the repo), "*"'s, or none.
+// What the operator grants the repo, and the files of its grants folder it comes from
+// (default.yaml, <owner>/<repo>.yaml); none: nothing beyond what every repository gets.
 export interface Grant {
-  entry: string | null;
+  files: string[];
   allowRepoHosts: boolean;
   allowPreview: boolean;
   allowDockerfile: boolean;
@@ -188,7 +189,9 @@ export interface RepoConfig {
   file: { text: string; sha: string; url: string } | null;
   errors: string[];
   warnings: string[];
-  grantsError: string | null;
+  // The operator's grants have errors: no run starts here (or anywhere, everyRepo). `file`:
+  // the one to fix in the grants folder, when there is one.
+  grantsError: { file: string | null; message: string; everyRepo: boolean } | null;
   effective: {
     settings: SettingRow[];
     hosts: HostRow[];

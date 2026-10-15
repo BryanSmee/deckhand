@@ -111,7 +111,7 @@ Reactions on the triggering comment follow its run: 👀 when it is received, th
   pids limits, on an internal network (checked before each run) whose only way out is the
   egress proxy (`proxy/proxy.mjs`): it asks the broker's port, for each connection, whether
   the sandbox at that address may reach that host. Host mounts only happen under roots the
-  operator grants the repo (`GRANTS_FILE`).
+  operator grants the repo (`GRANTS_DIR`, one file per repo).
 - **Who may run**: only comments from `ALLOWED_USERS`, on repos where the App is installed
   (narrowed by `ALLOWED_REPOS` if set), are acted on: the sandbox runs without permission
   prompts and can push.

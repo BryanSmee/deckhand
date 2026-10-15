@@ -131,7 +131,7 @@ hosts: [registry.npmjs.org, "*.pythonhosted.org", pypi.org]
 Like `mounts`, `hosts` is a request: anyone who can push to the default branch could
 otherwise open the sandbox's network.
 
-- When the operator sets `allow_repo_hosts: true` for the repository in their grants file,
+- When the operator sets `allow_repo_hosts: true` for the repository in their grants folder,
   its `hosts` are added to what its sandboxes reach.
 - Otherwise its `hosts` may only list what the operator already allows it (they change
   nothing); any other host stops the runs, and the reply lists it with the file's errors.
@@ -163,7 +163,7 @@ Every run starts from an image:
   before the first run that needs it, the listener installs the pinned
   `CLAUDE_CODE_VERSION` in a short container of its own, into the shared
   `deckhand-claude-code` volume; later runs reuse it.
-- **The repo's image**, when `dockerfile` is set and the operator's grants file sets
+- **The repo's image**, when `dockerfile` is set and the operator's grants set
   `allow_dockerfile: true` for the repository (otherwise its runs stop, and the reply says
   so): built `FROM` the base image, by the listener, from the default branch, with normal
   network access (not through the egress proxy: install the toolchain there rather than in
@@ -194,7 +194,7 @@ reply on GitHub.
 Only the Dockerfile's own content is hashed: a change in a file it copies builds a new
 image once the Dockerfile changes, or the base image does.
 
-**Branch images.** When the operator's grants file sets `allow_branch_docker_images: true`
+**Branch images.** When the operator's grants set `allow_branch_docker_images: true`
 for the repository (it is not a key of `.deckhand.yaml`: one there is ignored, with a
 warning), a run triggered from a pull request (a comment or review on it) uses the
 Dockerfile of the pull request's head commit, with that commit as the build context. Its
@@ -308,7 +308,7 @@ They are light runs, like brainstorms: no branch, no `setup`, the brainstorm mod
 
 ## Preview hook
 
-Only when the operator's grants file sets `allow_preview: true` for the repository: holding
+Only when the operator's grants set `allow_preview: true` for the repository: holding
 the Docker socket is root on the host. Without it, a `preview` key stops the repository's
 runs (the reply says which grant is missing) and its hook never runs.
 

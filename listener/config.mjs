@@ -1,6 +1,6 @@
 // The operator's settings, from the environment and config.yaml. Names of images, volumes and
 // networks come from here so nothing in the listener is tied to one deployment. What the
-// operator grants one repo (hosts, mounts, limits) is in its grants file instead (grants.mjs).
+// operator grants one repo (hosts, mounts, limits) is in its grants folder instead (grants.mjs).
 import { readFileSync } from "node:fs";
 import { CREDENTIALS, credentialName } from "./anthropic.mjs";
 import { hostProblem } from "./egress.mjs";
@@ -74,7 +74,7 @@ export const FILE_SETTINGS = {
   CONFLICT_CHECK_MINUTES: "scalar",
   NAME_PREFIX: "scalar",
   CLAUDE_CODE_VOLUME: "scalar",
-  GRANTS_FILE: "scalar",
+  GRANTS_DIR: "scalar",
   INSTALL_NETWORK: "scalar",
   DEBOUNCE_MS: "scalar",
   BRAINSTORM_DEBOUNCE_MS: "scalar",
@@ -119,6 +119,8 @@ export function parseConfigFile(text, path) {
     const type = key === name.toLowerCase() ? FILE_SETTINGS[name] : undefined;
     if (CREDENTIALS.includes(name)) {
       errors.push(`${key}: a secret, keep it in the environment (.env), not in a file`);
+    } else if (name === "GRANTS_FILE") {
+      errors.push(`${key}: gone, one file per repository in grants_dir instead (docs/security.md)`);
     } else if (!type) {
       errors.push(`${key}: unknown (secrets and compose.yaml's wiring are environment only)`);
     } else if (value !== null) {
@@ -190,8 +192,9 @@ function sandboxConfig(env, { setting, label, number }, prefix, hosts) {
     ),
     // The only way out of the sandboxes' network (../proxy/proxy.mjs).
     egressProxy: (env.EGRESS_PROXY || "http://egress:3128").replace(/\/$/, ""),
-    // What the operator grants each repo: hosts, host mounts, limits (grants.mjs).
-    grantsFile: setting("GRANTS_FILE") || "/etc/deckhand/grants.yaml",
+    // What the operator grants each repo, one file per repo: hosts, host mounts, limits
+    // (grants.mjs).
+    grantsDir: setting("GRANTS_DIR") || "/etc/deckhand/grants",
     // Claude Code's install container downloads from npm, outside the sandboxes' network.
     installNetwork: setting("INSTALL_NETWORK") || "bridge",
     // The host's Docker socket, as preview hooks mount it.
@@ -209,6 +212,12 @@ export function loadConfig(env, file = NO_FILE) {
   if (!users.length) {
     throw new ConfigError(
       "ALLOWED_USERS is empty: name the GitHub users who may start runs (or allowed_users in config.yaml)",
+    );
+  }
+  // Replaced by a folder: ignoring it would quietly take back every grant it held.
+  if (env.GRANTS_FILE) {
+    throw new ConfigError(
+      "GRANTS_FILE is gone: move each repository's entry to its own file in GRANTS_DIR (docs/security.md)",
     );
   }
   const port = wholeNumber(env.PORT, 8080, "PORT", "a port");

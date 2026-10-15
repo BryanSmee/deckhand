@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { loadConfig } from "../listener/config.mjs";
-import { parseGrants } from "../listener/grants.mjs";
+import { GrantsError, grantsFrom } from "../listener/grants.mjs";
 import { createGitHubApp } from "../listener/github-app.mjs";
 import { createOnboardingStore } from "../listener/onboarding.mjs";
 import {
@@ -100,13 +100,15 @@ function fakeGitHub({ first = [], second = [], configured = [], files = {} } = {
   return { fetch, calls };
 }
 
-// `grants`: the parsed grants file, an Error (it has errors), or a function returning either.
-const grantsOf = (grants) => () => {
+// `grants`: the grants folder's files ({ "owner/repo.yaml": text }), an Error (its layout has
+// errors), or a function returning loaded grants or an Error.
+const grantsOf = (grants, config) => () => {
   const value = typeof grants === "function" ? grants() : grants;
-  return value instanceof Error ? throwing(value) : value;
+  if (value instanceof Error) return throwing(value);
+  return typeof grants === "function" ? value : grantsFrom(value, config);
 };
 
-function setup({ env = {}, grants = new Map(), fs, ...repos } = {}) {
+function setup({ env = {}, grants = {}, fs, ...repos } = {}) {
   const gh = fakeGitHub(repos);
   const clock = { now: 1_000_000 };
   const app = createGitHubApp({
@@ -119,7 +121,7 @@ function setup({ env = {}, grants = new Map(), fs, ...repos } = {}) {
     app,
     config,
     store,
-    grants: grantsOf(grants),
+    grants: grantsOf(grants, config),
     fs,
     now: () => clock.now,
   });
@@ -263,13 +265,13 @@ async function call(
   });
 }
 
-function apiSetup({ grants = new Map(), fs, ...opts } = {}) {
+function apiSetup({ grants = {}, fs, ...opts } = {}) {
   const s = setup({ grants, fs, ...opts });
   const started = [];
   const api = createRepoApi({
     config: s.config,
     list: s.list,
-    grants: grantsOf(grants),
+    grants: grantsOf(grants, s.config),
     fs,
     now: () => s.clock.now,
     publicUrl: () => "https://deckhand.example.com",
@@ -364,7 +366,7 @@ test("an invalid config shows as such in the list", async () => {
   assert.equal(rows[0].readAt, 1_000_000);
 });
 
-// What runs refuse, each against the grant that allows it: [.deckhand.yaml, grants file].
+// What runs refuse, each against the grant that allows it: [.deckhand.yaml, its grant file].
 function refusedCases(root) {
   return {
     dockerfile: ["dockerfile: .deckhand/Dockerfile\n", "allow_dockerfile: true"],
@@ -379,11 +381,11 @@ function refusedSetup() {
   mkdirSync(join(root, "data"));
   const cases = refusedCases(root);
   const files = Object.fromEntries(Object.entries(cases).map(([k, [file]]) => [`org/${k}`, file]));
-  const grants = { text: "" };
+  const grants = { files: {} };
   const s = apiSetup({
     first: Object.keys(cases).map((k) => info(`org/${k}`)),
     files,
-    grants: () => parseGrants(grants.text, s.config),
+    grants: () => grantsFrom(grants.files, s.config),
   });
   return { ...s, cases, grants };
 }
@@ -409,13 +411,13 @@ test("a config the operator's grants refuse is invalid: no run starts there", as
   }
 });
 
-test("a fully granted config is configured; editing the grants file shows without GitHub", async () => {
+test("a fully granted config is configured; editing a grant shows without GitHub", async () => {
   const { api, gh, cases, grants } = refusedSetup();
   await statuses(api);
   const reads = configReads(gh.calls);
-  grants.text = Object.entries(cases)
-    .map(([repo, [, grant]]) => `org/${repo}:\n  ${grant}\n`)
-    .join("");
+  grants.files = Object.fromEntries(
+    Object.entries(cases).map(([repo, [, grant]]) => [`org/${repo}.yaml`, `${grant}\n`]),
+  );
   assert.deepEqual(await statuses(api), {
     "org/dockerfile": "configured",
     "org/hosts": "configured",
@@ -428,15 +430,35 @@ test("a fully granted config is configured; editing the grants file shows withou
   }
   // The list read no config again: the grants are checked against the kept settings.
   assert.equal(configReads(gh.calls), reads + Object.keys(cases).length);
-  grants.text = "";
+  grants.files = {};
   assert.equal((await statuses(api))["org/preview"], "invalid");
 });
 
-test("a grants file with errors makes every configured repo invalid, not the others", async () => {
+test("a repo's broken grant makes that repo invalid only", async () => {
+  const { api } = apiSetup({
+    first: [info("org/app"), info("org/other")],
+    configured: ["org/app", "org/other"],
+    grants: { "default.yaml": "allow_dockerfile: true\n", "org/app.yaml": "hosts: [bad host]\n" },
+  });
+  assert.deepEqual(await statuses(api), { "org/app": "invalid", "org/other": "configured" });
+  const { body } = await call(api, "GET", "/api/repos/org/app/config");
+  const { file, message, everyRepo } = body.grantsError;
+  assert.deepEqual([file, everyRepo], ["org/app.yaml", false]);
+  assert.match(message, /^hosts: "bad host": ./);
+  assert.equal(body.effective.grant, null);
+  const other = (await call(api, "GET", "/api/repos/org/other/config")).body;
+  assert.equal(other.grantsError, null);
+  assert.deepEqual(other.effective.grant.files, ["default.yaml"]);
+});
+
+test("a grants folder with errors makes every configured repo invalid, not the others", async () => {
   const { api } = apiSetup({
     first: [info("org/app"), info("org/new")],
     configured: ["org/app"],
-    grants: new Error("grants: bad"),
+    grants: new GrantsError(
+      "grants: default.yaml: mounts: only a repository's own file grants mounts",
+      "default.yaml",
+    ),
   });
   assert.deepEqual(await statuses(api), { "org/app": "invalid", "org/new": "not-onboarded" });
   const { body } = await call(api, "GET", "/api/repos/org/app/config");
@@ -504,7 +526,7 @@ test("GET config: raw text, errors, warnings and what runs get; its row updated"
     "operator",
   );
   assert.deepEqual(body.effective.grant, {
-    entry: null,
+    files: [],
     allowRepoHosts: false,
     allowPreview: false,
     allowDockerfile: false,
@@ -537,15 +559,30 @@ test("GET config: without a file, the operator's defaults", async () => {
   assert.equal(body.effective.settings.find((r) => r.key === "trigger").value, "deckhand");
 });
 
-test("GET config: a broken grants file is said, not detailed", async () => {
+test("GET config: a broken grants folder names the file and stops every repo", async () => {
+  const error = new GrantsError(
+    "grants: default.yaml: mounts: only a repository's own file grants mounts",
+    "default.yaml",
+  );
+  const { api } = apiSetup({ first: [info("org/app")], configured: ["org/app"], grants: error });
+  const { body } = await call(api, "GET", "/api/repos/org/app/config");
+  assert.deepEqual(body.grantsError, {
+    file: "default.yaml",
+    message: "mounts: only a repository's own file grants mounts",
+    everyRepo: true,
+  });
+  assert.equal(body.effective.grant, null);
+});
+
+test("GET config: an unexpected grants error is said, not detailed", async () => {
   const { api } = apiSetup({
     first: [info("org/app")],
     configured: ["org/app"],
-    grants: new Error("grants: /secret/path: bad"),
+    grants: new Error("EIO: /secret/path"),
   });
   const { body } = await call(api, "GET", "/api/repos/org/app/config");
-  assert.match(body.grantsError, /grants file has errors/);
-  assert.doesNotMatch(body.grantsError, /secret/);
+  assert.match(body.grantsError.message, /can't be read \(see the listener's logs\)/);
+  assert.doesNotMatch(JSON.stringify(body.grantsError), /secret/);
   assert.equal(body.effective.grant, null);
 });
 
