@@ -218,7 +218,7 @@ No sandbox gets a long-lived token, an SSH key or the host's git configuration:
 
 Claude Code is not part of any image: before the first run that needs it, the listener
 installs the pinned `CLAUDE_CODE_VERSION` into the `deckhand-claude-code` volume, in a
-container of its own, and later runs reuse it.
+container of its own, and later runs reuse it, read-only.
 
 ## Isolation
 

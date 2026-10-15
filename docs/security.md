@@ -14,7 +14,7 @@ A sandbox only gets Docker named volumes:
 | ------------------------------------------------- | -------------------------------------------- |
 | `<prefix>-<owner>-<repo>-<n>-workspace`           | the issue's clone, kept between its runs     |
 | `<prefix>-<owner>-<repo>-<n>-claude`              | the issue's Claude session                   |
-| `deckhand-claude-code`                            | Claude Code, installed by the listener       |
+| `deckhand-claude-code`, **read-only**             | Claude Code, installed by the listener       |
 | `deckhand-cache-<owner>-<repo>-<path>-…`          | the repo's `caches`, its own                 |
 | `deckhand-screenshots`, **its run's folder only** | screenshots, served under `/shots/<folder>/` |
 | `deckhand-runs`, **its run's folder, read-only**  | its inbox: comments that arrive mid-run      |
@@ -24,6 +24,14 @@ Engine 26 or later), named with 24 random hex digits: it can't list or read anot
 Its inbox folder is mounted the same way, read-only: the listener writes the comments
 delivered to the run there (a file rather than the container's stdin, so a run outlives a
 listener restart).
+
+The Claude Code volume is shared by every repository, so it is read-only in sandboxes: a run
+that could replace `claude` there would run its code in the next sandbox of any repository,
+with that run's broker secret and grants. The listener installs each version before the
+first run that needs it, as root, so its files don't belong to the sandboxes' user (uid
+1000) either. An install that finds the volume owned by uid 1000 (from an older Deckhand)
+takes it over and reinstalls from npm rather than keep what a sandbox could have changed. A
+sandbox whose version isn't installed stops with a message instead of installing it.
 
 No host path is ever mounted by default: no `~/.ssh`, `~/.gitconfig`, Docker socket or
 source tree.
@@ -99,8 +107,8 @@ Every sandbox runs:
   the repo's `limits` in the grants file.
 
 The containers the listener starts around runs get the same treatment where they can: the
-Claude Code install runs without capabilities; the one that hands a new cache volume to uid
-1000 keeps only `CHOWN`, without network.
+Claude Code install runs as root with only `CHOWN` (to take over an older volume); the one
+that hands a new cache volume to uid 1000 keeps only `CHOWN`, without network.
 
 The Docker socket stays in the listener (and in preview hooks, which a repo's maintainers
 configure, see [Per-repo config](repo-config.md#preview-hook)). No sandbox gets it.

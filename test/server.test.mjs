@@ -499,6 +499,8 @@ test("a repo's config: its image, caches, setup and model", async (t) => {
   assert.ok(
     args.some((a) => /^deckhand-cache-org-repo-home-node-npm-\w+:\/home\/node\/\.npm$/.test(a)),
   );
+  // Shared by every repository: no run may change what the next one runs.
+  assert.ok(args.includes("deckhand-claude-code:/opt/claude-code:ro"));
   const runEnv = readFileSync(join(dir, "run-env"), "utf8");
   assert.match(runEnv, /^SANDBOX_SETUP=npm ci$/m);
   assert.match(runEnv, /^SANDBOX_INSTRUCTIONS=docs\/agents\.md$/m);

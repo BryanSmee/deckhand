@@ -1,6 +1,6 @@
 // The sandbox's side of the broker: git's credential helper asks it for a token per call.
 import assert from "node:assert/strict";
-import { execFile } from "node:child_process";
+import { execFile, spawnSync } from "node:child_process";
 import { createServer } from "node:http";
 import { test } from "node:test";
 import { createBroker } from "../listener/broker.mjs";
@@ -68,3 +68,31 @@ test("a finished run's helper answers nothing, so git fails instead of using a s
   assert.equal(res.status, 0);
   assert.equal(res.stdout, "");
 });
+
+// The Claude Code volume is read-only in a sandbox: a missing version is the listener's to
+// install, and the entrypoint says so instead of trying.
+test("a sandbox without its Claude Code version stops with a clear message", () => {
+  const result = spawnSync(`${bin}entrypoint.sh`, [], {
+    env: {
+      PATH: process.env.PATH,
+      REPO_URL: "https://github.com/org/repo.git",
+      CLAUDE_CODE_VERSION: "0.0.0-missing",
+    },
+    encoding: "utf8",
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /Claude Code 0\.0\.0-missing is not installed in \/opt\/claude-code/);
+});
+
+test(
+  "installing Claude Code refuses to run as the sandbox's user",
+  { skip: process.getuid() === 0 },
+  () => {
+    const result = spawnSync(`${bin}install-claude-code`, [], {
+      env: { PATH: process.env.PATH, CLAUDE_CODE_VERSION: "9.9.9" },
+      encoding: "utf8",
+    });
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /run it as root/);
+  },
+);

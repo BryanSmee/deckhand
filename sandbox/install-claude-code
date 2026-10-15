@@ -1,18 +1,34 @@
 #!/bin/bash
 # Installs Claude Code CLAUDE_CODE_VERSION into the shared /opt/claude-code volume, once:
-# the listener runs it in a container of its own before the first run that needs that
-# version, and entrypoint.sh again as a fallback (a sandbox started by hand). No image ships
-# Claude Code.
+# the listener runs it as root in a container of its own before the first run that needs
+# that version. No image ships Claude Code, and sandboxes mount the volume read-only.
+#
+# Root-owned files: the volume is shared by every repository, so the sandbox's user
+# (uid 1000) must not be able to change what the next sandbox runs, even through a mount
+# made read-write by mistake.
 #
 # One folder per version, installed aside then renamed, so two installs at once can't leave
 # a half-installed copy behind.
 set -euo pipefail
 
 : "${CLAUDE_CODE_VERSION:?CLAUDE_CODE_VERSION: the Claude Code version to install}"
+[ "$(id -u)" = 0 ] || { echo "install-claude-code: run it as root" >&2; exit 1; }
 
-home=/opt/claude-code/$CLAUDE_CODE_VERSION
+root=/opt/claude-code
+umask 022
+# A volume from before installs ran as root belongs to uid 1000, and so does what any
+# sandbox could have changed in it: take it over and drop its contents, reinstalled below.
+if [ "$(stat -c %u "$root")" != 0 ]; then
+  chown -R 0:0 "$root"
+  chmod 755 "$root"
+  find "$root" -mindepth 1 -delete
+  echo "Claude Code: took over $root from uid 1000, reinstalling" >&2
+fi
+
+home=$root/$CLAUDE_CODE_VERSION
 [ -x "$home/node_modules/.bin/claude" ] && exit 0
-tmp=$(mktemp -d /opt/claude-code/.install-XXXXXX)
+tmp=$(mktemp -d "$root/.install-XXXXXX")
+chmod 755 "$tmp"
 npm install --prefix "$tmp" --no-fund --no-audit --loglevel=error \
   "@anthropic-ai/claude-code@$CLAUDE_CODE_VERSION" > /tmp/claude-install.log 2>&1 ||
   { cat /tmp/claude-install.log >&2; rm -rf "$tmp"; exit 1; }

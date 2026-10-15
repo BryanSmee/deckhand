@@ -1,10 +1,11 @@
 #!/bin/bash
-# Finds Claude Code (CLAUDE_CODE_VERSION, in the shared /opt/claude-code volume: no image
-# ships it, install-claude-code puts it there), clones the repository over HTTPS (tokens
-# from the listener's broker, git-credential-deckhand), opens the task's branch and draft
-# pull request (draft-pr.sh, for TASK_ISSUE), runs the repo's setup command (SANDBOX_SETUP),
-# then runs Claude without permission prompts: the container is the sandbox. SANDBOX_LIGHT=1
-# (brainstorms, inbox entries, discussions) skips the branch and the setup.
+# Finds Claude Code (CLAUDE_CODE_VERSION, in the shared /opt/claude-code volume, read-only:
+# no image ships it, the listener installs it with install-claude-code), clones the
+# repository over HTTPS (tokens from the listener's broker, git-credential-deckhand), opens
+# the task's branch and draft pull request (draft-pr.sh, for TASK_ISSUE), runs the repo's
+# setup command (SANDBOX_SETUP), then runs Claude without permission prompts: the container
+# is the sandbox. SANDBOX_LIGHT=1 (brainstorms, inbox entries, discussions) skips the branch
+# and the setup.
 #
 #   (no arguments)      interactive claude
 #   -p "<task>" …       arguments for claude, e.g. a headless task
@@ -23,9 +24,17 @@ if [ "${TASK_INPUT:-}" = "stream" ]; then
   exec 3<&0 < /dev/null
 fi
 
-# Installed by the listener before the run; this covers a sandbox started by hand.
-deckhand-install-claude-code
-export PATH=/opt/claude-code/$CLAUDE_CODE_VERSION/node_modules/.bin:$PATH
+# Installed by the listener before the run. The volume is read-only here, so a sandbox
+# started by hand can't install it: say so rather than fail later on a missing command.
+claude_bin=/opt/claude-code/$CLAUDE_CODE_VERSION/node_modules/.bin
+if [ ! -x "$claude_bin/claude" ]; then
+  echo "Claude Code $CLAUDE_CODE_VERSION is not installed in /opt/claude-code. The listener" \
+    "installs it before a run; by hand, run deckhand-install-claude-code as root" \
+    "(docker run --user 0 --entrypoint deckhand-install-claude-code" \
+    "-e CLAUDE_CODE_VERSION=$CLAUDE_CODE_VERSION -v <volume>:/opt/claude-code <image>)." >&2
+  exit 1
+fi
+export PATH=$claude_bin:$PATH
 
 if [ ! -d /workspace/.git ]; then
   # Blobless clone: full history for git log/blame, file contents fetched on demand. The
