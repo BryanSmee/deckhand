@@ -88,11 +88,31 @@ symlink) and checks that the result is the root or inside it. With `/nfs/work` g
 | `/nfs/other`                       | refused                                           |
 
 A refused mount stops the run, and the reply on the issue lists each refused path and why.
-The sandbox mounts the resolved path rather than the one asked for, so changing the
-requested symlink after the check doesn't redirect the mount. A read-write request under a read-only root is mounted read-only (noted in the run's
-log). Paths the sandbox uses itself (`/workspace`, `/home/node/.claude`, `/opt/claude-code`,
+A read-write request under a read-only root is mounted read-only (noted in the run's log). Paths the sandbox uses itself (`/workspace`, `/home/node/.claude`, `/opt/claude-code`,
 `/screenshots`) and the repo's `caches` can't be mount targets. Paths are limited to
 letters, digits and `./@+-_`.
+
+**Between the check and the mount.** The sandbox mounts the resolved path rather than the
+one asked for, but Docker resolves that path again when the container starts, minutes later
+when the run builds an image first. Two things keep a sandbox from redirecting it meanwhile:
+
+- **Resolved again right before `docker run`.** If any mount now resolves elsewhere, or is
+  refused, the run stops and the reply says so.
+- **Read-write requests are refused when the sandbox can rewrite their path.** Another
+  sandbox with a read-write mount could otherwise swap a directory on the way (`/nfs/work/api`
+  for a symlink to `/`) after both checks. So a read-write path is refused when a directory
+  from the outermost granted root holding it down to its parent can be written by the
+  sandbox's user, uid 1000 (owner with write permission, group 1000 with group write, or
+  writable by anyone). The mounted directory itself may be writable: its own entry lives in
+  its parent. With `/nfs/work` granted read-write, make `/nfs/work` (and any directory between
+  it and what you mount) read-only for uid 1000, or ask for the path read-only.
+
+What isn't guaranteed: ACLs and NFS server-side permissions aren't read, only the mode bits,
+owner and group the listener sees. Read-only requests aren't checked this way, so a path
+under a directory some sandbox can write could still be swapped in the moment between the
+last check and the mount; grant read-write roots that don't hold your read-only ones. A
+process outside Deckhand that can write the root can always redirect a mount. If uid 1000 is
+also your own user on the host, the directories you own count as writable by sandboxes.
 
 **The listener must see each root**, at the same path, to resolve what is asked: mount it
 into the listener read-only in `compose.yaml` (`- /nfs/work:/nfs/work:ro`). A root it can't

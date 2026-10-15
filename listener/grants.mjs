@@ -13,12 +13,17 @@
 //     mounts:
 //       - root: /nfs/work
 //         read_only: false     # default: read-only
-import { readFileSync, realpathSync } from "node:fs";
+import { readFileSync, realpathSync, statSync } from "node:fs";
 import { posix } from "node:path";
 import { ConfigError, parseLimits } from "./config.mjs";
 import { hostProblem } from "./egress.mjs";
 import { RESERVED } from "./repo-config.mjs";
 import { parseYaml } from "./yaml.mjs";
+
+// The sandbox's user (sandbox/Dockerfile): who must not be able to rewrite a read-write
+// mount's path.
+export const SANDBOX_UID = 1000;
+export const SANDBOX_GID = 1000;
 
 // Docker's --mount is comma-separated: paths stay within these characters.
 const PLAIN_PATH = /^\/[\w./@+-]*$/;
@@ -127,12 +132,48 @@ function within(path, root) {
   return path === root || path.startsWith(root === "/" ? "/" : `${root}/`);
 }
 
+// Whether the sandbox's user can add, remove or rename entries in a directory. ACLs aren't
+// read: docs/security.md says so.
+function writableBySandbox({ mode, uid, gid }) {
+  return (
+    Boolean(mode & 0o002) ||
+    (uid === SANDBOX_UID && Boolean(mode & 0o200)) ||
+    (gid === SANDBOX_GID && Boolean(mode & 0o020))
+  );
+}
+
+// The first directory between `top` (included) and `real` (excluded) that a sandbox could
+// write, or null. Docker resolves the bind source again when the container starts: a sandbox
+// that can rename an entry on the way (through another read-write mount) could swap it for a
+// symlink in between. `real` itself may be writable: its own entry is in its parent.
+function rewritableParent(real, top, stat) {
+  if (real === top) return null;
+  const dirs = [];
+  for (let dir = posix.dirname(real); within(dir, top); dir = posix.dirname(dir)) {
+    dirs.unshift(dir);
+    if (dir === top || dir === "/") break;
+  }
+  for (const dir of dirs) {
+    try {
+      if (writableBySandbox(stat(dir))) return dir;
+    } catch {
+      return dir; // gone meanwhile: refuse rather than guess
+    }
+  }
+  return null;
+}
+
 // A repo's mount requests ({ path, readOnly }) checked against its grant's roots, after
 // resolving `..` and symlinks with `realpath` in the listener's own filesystem, where the
 // operator mounts each root at the same path. → { mounts: [{ source, target, readOnly }],
-// refused: [why], notes: [what was narrowed] }. Mounted from the resolved path, so a symlink
-// can't point it elsewhere between the check and the run.
-export function resolveMounts(requests, grant, { caches = [], realpath = realpathSync } = {}) {
+// refused: [why], notes: [what was narrowed] }. Mounted from the resolved path; a read-write
+// one only when no directory on its way below the root can be written by the sandbox's user,
+// so another sandbox can't swap a part of it for a symlink before Docker mounts it.
+export function resolveMounts(
+  requests,
+  grant,
+  { caches = [], realpath = realpathSync, stat = statSync } = {},
+) {
   const mounts = [];
   const refused = [];
   const notes = [];
@@ -189,6 +230,19 @@ export function resolveMounts(requests, grant, { caches = [], realpath = realpat
     }
     if (!readOnly && root.readOnly) {
       notes.push(`${path} mounted read-only: the operator grants ${root.root} read-only`);
+    }
+    if (!readOnly && !root.readOnly) {
+      // From the outermost root holding it: a sandbox may write anywhere under that one.
+      const top = roots
+        .filter((r) => r.real && within(real, r.real))
+        .sort((a, b) => a.real.length - b.real.length)[0].real;
+      const open = rewritableParent(real, top, stat);
+      if (open) {
+        refuse(
+          `read-write, but the sandbox's user (uid ${SANDBOX_UID}) can write \`${open}\` on its way, so a sandbox could redirect it; make the directories above it read-only for that user, or ask for it read-only`,
+        );
+        continue;
+      }
     }
     mounts.push({ source: real, target, readOnly: readOnly || root.readOnly });
   }

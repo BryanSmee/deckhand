@@ -21,6 +21,10 @@ export function configErrors(base, errors) {
   return `Claude can't run here: \`${CONFIG_FILE}\` on \`${base || "main"}\` has errors.\n\n${errors.map((e) => `- ${e}`).join("\n")}`;
 }
 
+function refusedMounts(refused) {
+  return `Claude can't run here: host mounts requested by \`${CONFIG_FILE}\` are refused.\n\n${refused.map((r) => `- ${r}`).join("\n")}\n\nOnly paths under a root the operator grants this repository can be mounted.`;
+}
+
 // The model and effort of a run: the comments' "/model" and "/effort" (`options`), else the
 // repo's mode's, else those of light runs or work.
 export function modelFor(settings, own, light, options) {
@@ -158,6 +162,7 @@ export function createRuns(ctx) {
       config,
       grant: access.grant,
     });
+    recheckMounts(settings, access);
     await ctx.runner.start(sandboxSpec(task, prompt, message, { ...prepared, ...access }));
     // Written before Claude starts (setup takes a while), a message waits in the inbox.
     live.open = true;
@@ -261,14 +266,25 @@ export function createRuns(ctx) {
     const { mounts, refused, notes } = resolveMounts(settings.mounts, grant, {
       caches: settings.caches,
     });
-    if (refused.length) {
-      throw new RunError(
-        `Claude can't run here: host mounts requested by \`${CONFIG_FILE}\` are refused.\n\n${refused.map((r) => `- ${r}`).join("\n")}\n\nOnly paths under a root the operator grants this repository can be mounted.`,
-      );
-    }
+    if (refused.length) throw new RunError(refusedMounts(refused));
     for (const text of notes) note(text);
     for (const m of mounts) note(`Host mount ${m.target}${m.readOnly ? " (read-only)" : ""}`);
     return { grant, hosts: runHosts(config, grant, settings), mounts, limits: grant.limits };
+  }
+
+  // Resolved again as late as possible: preparing the run can take minutes, during which a
+  // path's parts may have changed. Anything different from what was checked stops the run.
+  function recheckMounts(settings, { grant, mounts }) {
+    const now = resolveMounts(settings.mounts, grant, { caches: settings.caches });
+    if (now.refused.length) throw new RunError(refusedMounts(now.refused));
+    const changed = mounts.filter(
+      (m, i) => now.mounts[i]?.source !== m.source || now.mounts[i]?.readOnly !== m.readOnly,
+    );
+    if (changed.length || now.mounts.length !== mounts.length) {
+      throw new RunError(
+        `Claude can't run here: host mounts changed while the run was being prepared.\n\n${changed.map((m) => `- \`${m.target}\` no longer resolves to \`${m.source}\``).join("\n")}\n\nComment again to retry once they are stable.`,
+      );
+    }
   }
 
   // The run's image (built first if the repo's Dockerfile changed), Claude Code and the repo's
