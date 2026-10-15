@@ -177,21 +177,38 @@ test("a failed build fails the run and is tried again next time", async () => {
   );
 });
 
-test("branch images: a pull request's own branch, never a fork's", () => {
-  const allowed = { allowBranchDockerImages: true, dockerfile: "Dockerfile" };
+test("branch images: with the operator's grant, a pull request's own branch, never a fork's", () => {
+  const grant = { allowBranchDockerImages: true };
+  const settings = { dockerfile: "Dockerfile" };
   const pr = (fullName) => ({
     head: { sha: "abc", repo: fullName ? { full_name: fullName } : null },
   });
-  assert.deepEqual(imageRef(allowed, "org/a", "main", pr("Org/A")), { ref: "abc", branch: true });
-  assert.deepEqual(imageRef(allowed, "org/a", "main", pr("mallory/a")), {
+  assert.deepEqual(imageRef(grant, settings, "org/a", "main", pr("Org/A")), {
+    ref: "abc",
+    branch: true,
+  });
+  assert.deepEqual(imageRef(grant, settings, "org/a", "main", pr("mallory/a")), {
     ref: "main",
     branch: false,
   });
   // The fork was deleted: GitHub gives no head repo.
-  assert.deepEqual(imageRef(allowed, "org/a", "main", pr(null)), { ref: "main", branch: false });
-  const off = { ...allowed, allowBranchDockerImages: false };
-  assert.deepEqual(imageRef(off, "org/a", "main", pr("org/a")), { ref: "main", branch: false });
-  assert.deepEqual(imageRef(allowed, "org/a", "main", null), { ref: "main", branch: false });
+  assert.deepEqual(imageRef(grant, settings, "org/a", "main", pr(null)), {
+    ref: "main",
+    branch: false,
+  });
+  const off = { allowBranchDockerImages: false };
+  assert.deepEqual(imageRef(off, settings, "org/a", "main", pr("org/a")), {
+    ref: "main",
+    branch: false,
+  });
+  assert.deepEqual(imageRef(grant, { dockerfile: null }, "org/a", "main", pr("org/a")), {
+    ref: "main",
+    branch: false,
+  });
+  assert.deepEqual(imageRef(grant, settings, "org/a", "main", null), {
+    ref: "main",
+    branch: false,
+  });
 });
 
 test("Claude Code installs once per version, in a container of its own", async () => {

@@ -2,8 +2,8 @@
 // repo's own image built FROM it; Claude Code, installed once per version into a shared
 // volume by a container of its own; and the repo's cache volumes.
 //
-// A repo image is built from the default branch (or, with allow_branch_docker_images, from
-// a pull request's own branch, never a fork's) and tagged with a hash of the base image's id
+// A repo image is built from the default branch (or, when the operator's grants file sets
+// allow_branch_docker_images for the repo, from a pull request's own branch, never a fork's) and tagged with a hash of the base image's id
 // and the Dockerfile's blob: a new base or a changed Dockerfile builds a new tag, the same
 // ones reuse it. A branch's image is tagged apart (`branch-…`, its commit in the hash): the
 // default branch's runs and preview hooks never pick up what a branch built. Old tags are
@@ -20,10 +20,11 @@ export const KEEP_TAGS = 3;
 const BRANCH = "branch-";
 
 // Which ref a run's image is built from: the default branch, or a pull request's head when
-// the repo allows branch images and the pull request's branch lives in the repo itself.
-export function imageRef(settings, repo, base, pr) {
+// the operator grants the repo branch images (`grant`, grants.mjs) and the pull request's
+// branch lives in the repo itself.
+export function imageRef(grant, settings, repo, base, pr) {
   const own = pr?.head?.repo?.full_name?.toLowerCase() === repo.toLowerCase();
-  if (settings.allowBranchDockerImages && settings.dockerfile && pr?.head?.sha && own) {
+  if (grant.allowBranchDockerImages && settings.dockerfile && pr?.head?.sha && own) {
     return { ref: pr.head.sha, branch: true };
   }
   return { ref: base, branch: false };

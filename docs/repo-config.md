@@ -59,9 +59,9 @@ setup: |
 # Project instructions, added to the generic ones (path in the repo, default branch).
 instructions: docs/agents.md
 
-# The image runs start from: a Dockerfile FROM the base image (see below).
+# The image runs start from: a Dockerfile FROM the base image (see below). Only with the
+# operator's allow_dockerfile grant.
 dockerfile: .deckhand/Dockerfile
-allow_branch_docker_images: false
 
 # Kept between runs: one Docker volume per path, for this repo only.
 caches:
@@ -105,15 +105,14 @@ conflicts:
 | `max_parallel`                          | `MAX_PARALLEL`                          | runs of this repo at once; capped by `MAX_PARALLEL`                                      |
 | `setup`                                 | none                                    | shell command run in `/workspace` before Claude, on work runs                            |
 | `instructions`                          | none                                    | Markdown file of the repo, appended to Claude's instructions                             |
-| `dockerfile`                            | none: the base image                    | Dockerfile of the repo for its runs' image                                               |
-| `allow_branch_docker_images`            | `false`                                 | runs on a pull request use the Dockerfile of its branch; never for forks                 |
+| `dockerfile`                            | none: the base image                    | Dockerfile of the repo for its runs' image; needs the operator's `allow_dockerfile`      |
 | `caches`                                | none                                    | absolute paths in the sandbox kept in a volume per repo and path                         |
 | `hosts`                                 | none                                    | extra hosts the sandbox may reach (`name`, `"*.domain"`); only if the operator allows it |
 | `mounts`                                | none                                    | host paths requested (`- path: /nfs/work/api`, `read_only`); only under granted roots    |
 | `modes.<name>`                          | none                                    | the repo's own modes, picked with `/mode <name>` (see Modes)                             |
 | `inbox.ideas`, `inbox.bugs`             | none                                    | issue numbers whose comments are ideas or bug reports to file (see Inboxes)              |
 | `inbox.discussions`                     | none                                    | GitHub Discussions category whose discussions Claude answers (see Inboxes)               |
-| `preview.command`                       | none                                    | preview hook command (a plain string `preview: ./x.sh` works too)                        |
+| `preview.command`                       | none                                    | preview hook command (`preview: ./x.sh` works too); needs the operator's `allow_preview` |
 | `preview.image`                         | the repo's image                        | image the hook runs in; it needs a Docker client                                         |
 | `preview.timeout_minutes`               | `30`                                    | the hook is stopped after that                                                           |
 | `conflicts.check_minutes`               | none: off                               | minutes between conflict checks; at least `CONFLICT_CHECK_MINUTES` (see Conflicts)       |
@@ -164,10 +163,12 @@ Every run starts from an image:
   before the first run that needs it, the listener installs the pinned
   `CLAUDE_CODE_VERSION` in a short container of its own, into the shared
   `deckhand-claude-code` volume; later runs reuse it.
-- **The repo's image**, when `dockerfile` is set: built `FROM` the base image, by the
-  listener, from the default branch, with normal network access (not through the egress
-  proxy: install the toolchain there rather than in `setup`). Name the base with a build argument, so the
-  operator's image name isn't written in the repo:
+- **The repo's image**, when `dockerfile` is set and the operator's grants file sets
+  `allow_dockerfile: true` for the repository (otherwise its runs stop, and the reply says
+  so): built `FROM` the base image, by the listener, from the default branch, with normal
+  network access (not through the egress proxy: install the toolchain there rather than in
+  `setup`). Name the base with a build argument, so the operator's image name isn't written
+  in the repo:
 
   ```dockerfile
   # .deckhand/Dockerfile: a Python project
@@ -193,14 +194,15 @@ reply on GitHub.
 Only the Dockerfile's own content is hashed: a change in a file it copies builds a new
 image once the Dockerfile changes, or the base image does.
 
-**Branch images.** With `allow_branch_docker_images: true`, a run triggered from a pull
-request (a comment or review on it) uses the Dockerfile of the pull request's head commit,
-with that commit as the build context. Its image is tagged
-`deckhand-repo-<owner>-<repo>:branch-<hash>`, the hash covering the commit too: each new
-commit builds again (Docker's layer cache helps), and the default branch never runs on an
-image a branch built. Never for a pull request from a fork: those use the
-default branch's image. Builds run on the host's Docker, so only turn this on for
-repositories whose branches you trust like the default branch.
+**Branch images.** When the operator's grants file sets `allow_branch_docker_images: true`
+for the repository (it is not a key of `.deckhand.yaml`: one there is ignored, with a
+warning), a run triggered from a pull request (a comment or review on it) uses the
+Dockerfile of the pull request's head commit, with that commit as the build context. Its
+image is tagged `deckhand-repo-<owner>-<repo>:branch-<hash>`, the hash covering the commit
+too: each new commit builds again (Docker's layer cache helps), and the default branch never
+runs on an image a branch built. Never for a pull request from a fork: those use the default
+branch's image. Builds run on the host's Docker, so operators only grant this to
+repositories whose branches they trust like the default branch.
 
 ## Caches
 
@@ -305,6 +307,10 @@ They are light runs, like brainstorms: no branch, no `setup`, the brainstorm mod
   [Setting up](setup.md) for an App created before it). Prompt: `prompts/discussion.md`.
 
 ## Preview hook
+
+Only when the operator's grants file sets `allow_preview: true` for the repository: holding
+the Docker socket is root on the host. Without it, a `preview` key stops the repository's
+runs (the reply says which grant is missing) and its hook never runs.
 
 On `pull_request` and `workflow_run` deliveries for the repository (whoever opened the pull
 request), the listener runs `preview.command`:

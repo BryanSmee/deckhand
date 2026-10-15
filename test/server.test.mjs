@@ -71,6 +71,9 @@ case "$1" in
   image)
     # The base image exists; repo images don't, until built.
     [ "$2" = inspect ] && case "$*" in *-repo-*) exit 1 ;; *) echo sha256:base ;; esac ;;
+  create|cp|start)
+    # A preview hook's container.
+    echo "$*" >> "${dir}/docker-calls" ;;
   build)
     echo "$*" >> "${dir}/docker-calls"
     # The build context is the repo's checkout.
@@ -564,10 +567,17 @@ caches:
 `;
 
 test("a repo's config: its image, caches, setup and model", async (t) => {
-  const { dir, github, listener, send } = await listen(t, {
-    ".deckhand.yaml": CONFIG,
-    "docker/Dockerfile": "ARG DECKHAND_BASE\nFROM $DECKHAND_BASE\nRUN true\n",
-  });
+  const { dir, github, listener, send } = await listen(
+    t,
+    {
+      ".deckhand.yaml": CONFIG,
+      "docker/Dockerfile": "ARG DECKHAND_BASE\nFROM $DECKHAND_BASE\nRUN true\n",
+    },
+    (dir) => {
+      writeFileSync(join(dir, "grants.yaml"), "org/repo:\n  allow_dockerfile: true\n");
+      return {};
+    },
+  );
   // Bob is allowed by the operator, not by the repo: nothing runs for him.
   await send(comment("bob"));
   await listener.until("bob not in ALLOWED_USERS");
@@ -605,6 +615,55 @@ test("a repo's config: its image, caches, setup and model", async (t) => {
   assert.match(runEnv, /^SANDBOX_SETUP=npm ci$/m);
   assert.match(runEnv, /^SANDBOX_INSTRUCTIONS=docs\/agents\.md$/m);
   assert.match(runEnv, /^SANDBOX_MODEL=sonnet$/m);
+});
+
+test("a Dockerfile or preview hook without its grant stops the run, and nothing is built", async (t) => {
+  const { dir, github, listener, send } = await listen(t, {
+    ".deckhand.yaml": `${CONFIG}preview: ./preview.sh\n`,
+    "docker/Dockerfile": "ARG DECKHAND_BASE\nFROM $DECKHAND_BASE\nRUN true\n",
+  });
+  await send(comment("alice"));
+  const reply = await github.waitFor(
+    (r) => r.method === "POST" && r.path === "/repos/org/repo/issues/12/comments",
+  );
+  const body = JSON.parse(reply.body).body;
+  assert.match(body, /`\.deckhand\.yaml` on `trunk` has errors/);
+  assert.match(body, /- preview: .* doesn't set `allow_preview: true` for this repository/);
+  assert.match(body, /- dockerfile: .* doesn't set `allow_dockerfile: true` for this repository/);
+  await listener.until("asks for what its grant doesn't allow");
+  // No build, no sandbox: no docker call was even logged.
+  assert.throws(() => readFileSync(join(dir, "docker-calls")));
+  assert.throws(() => readFileSync(join(dir, "run-args")));
+});
+
+test("a preview hook runs only with allow_preview", async (t) => {
+  const delivery = {
+    action: "opened",
+    installation: { id: 7 },
+    repository: { full_name: "org/repo", default_branch: "trunk" },
+    pull_request: { number: 13 },
+    sender: { login: "mallory" },
+  };
+  const { dir, listener, send } = await listen(t, {
+    ".deckhand.yaml": "preview:\n  command: ./preview.sh\n  image: docker:cli\n",
+    Dockerfile: "FROM scratch\n",
+  });
+  const calls = () => {
+    try {
+      return readFileSync(join(dir, "docker-calls"), "utf8");
+    } catch {
+      return "";
+    }
+  };
+  assert.equal((await send(delivery, "pull_request")).status, 202);
+  await listener.until(
+    "preview hook of org/repo not run: preview: the operator's grants file doesn't set `allow_preview: true`",
+  );
+  assert.doesNotMatch(calls(), /^create /m);
+  writeFileSync(join(dir, "grants.yaml"), "org/repo:\n  allow_preview: true\n");
+  await send({ ...delivery, action: "synchronize" }, "pull_request");
+  await listener.until("preview hook deckhand-preview-org-repo-");
+  assert.match(calls(), /^create .*docker\.sock.* docker:cli .*\.\/preview\.sh$/m);
 });
 
 test("a config with errors stops the run and the reply says why", async (t) => {

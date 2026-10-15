@@ -24,7 +24,6 @@ test("no config file: the operator's settings as they are", async () => {
   const { settings, errors } = await loadRepoSettings(request, config, "org/repo", "main");
   assert.deepEqual(errors, []);
   assert.deepEqual(settings, defaultSettings(config));
-  assert.equal(settings.allowBranchDockerImages, false);
 });
 
 test("read from the default branch through the contents API", async () => {
@@ -109,13 +108,15 @@ colour: blue
     config,
   );
   assert.deepEqual(errors, []);
-  assert.deepEqual(warnings, ["colour: unknown, ignored"]);
+  assert.deepEqual(warnings, [
+    "allow_branch_docker_images: ignored here, the operator's grants file sets it for this repository",
+    "colour: unknown, ignored",
+  ]);
   assert.equal(settings.model, "sonnet");
   assert.equal(settings.effort, "high");
   assert.equal(settings.brainstormModel, "haiku");
   assert.equal(settings.setup, "npm ci");
   assert.equal(settings.dockerfile, "docker/Dockerfile");
-  assert.equal(settings.allowBranchDockerImages, true);
   assert.deepEqual(settings.caches, ["/home/node/.npm", "/home/node/.cache/pip"]);
   assert.deepEqual(settings.hosts, ["registry.npmjs.org", "*.example.com"]);
   assert.deepEqual(settings.mounts, [{ path: "/nfs/work/api", readOnly: false }]);
@@ -132,14 +133,13 @@ test("wrong values are errors, each named", () => {
     `effort: extreme
 max_parallel: 0
 dockerfile: ../outside/Dockerfile
-allow_branch_docker_images: "yes"
 caches: [relative/path, /workspace/node_modules, /home/node/../root]
 hosts: ["bad host", "*"]
 inbox: { ideas: three, discussions: 5 }
 `,
     config,
   );
-  assert.equal(errors.length, 11);
+  assert.equal(errors.length, 10);
   assert.match(errors.join("\n"), /hosts: "\*": a repository can't open that much/);
   assert.match(errors.join("\n"), /inbox\.ideas: expected an issue number/);
   assert.match(errors.join("\n"), /inbox\.discussions: expected the name of a discussion category/);
@@ -293,7 +293,6 @@ modes:
   assert.equal(customMode(settings, "wide"), null);
   assert.deepEqual(settings.hosts, ["registry.npmjs.org"]);
   assert.deepEqual(settings.mounts, []);
-  assert.equal(settings.allowBranchDockerImages, false);
   // What a valid mode's run gets: nothing about access.
   const { settings: valid } = parseRepoConfig(MODES, config);
   assert.deepEqual(Object.keys(customMode(valid, "review")).sort(), [

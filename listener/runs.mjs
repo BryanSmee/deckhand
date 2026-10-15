@@ -6,7 +6,14 @@ import { chmodSync, existsSync, mkdirSync, readdirSync, rmdirSync, rmSync } from
 import { join } from "node:path";
 import { proxyEnv, refusedRepoHosts, runHosts } from "./egress.mjs";
 import { commentsText, sameRepo } from "./events.mjs";
-import { grantFor, hardeningArgs, loadGrants, mountArgs, resolveMounts } from "./grants.mjs";
+import {
+  grantFor,
+  hardeningArgs,
+  loadGrants,
+  mountArgs,
+  resolveMounts,
+  ungranted,
+} from "./grants.mjs";
 import { imageRef } from "./images.mjs";
 import { BUILT_IN, isFresh, isLight, kindOf, permissionsFor, sessionName } from "./modes.mjs";
 import { branchConfigReport, triggerWord } from "./onboarding.mjs";
@@ -155,7 +162,7 @@ export function createRuns(ctx) {
     ctx.broker.allow(live.secret, live.branches);
     const instructions = own && (await modeInstructions(task, own));
     const access = grantedAccess(task, settings, note);
-    const prepared = await prepare(task, items, settings, note);
+    const prepared = await prepare(task, items, settings, access.grant, note);
     live.shots = shotsFolder();
     live.hosts = access.hosts;
     if (ctx.stopping) return false;
@@ -253,8 +260,8 @@ export function createRuns(ctx) {
   }
 
   // What the operator grants the repo, with its config's requests: the hosts its sandbox may
-  // reach, its host mounts and limits. Refused hosts or mounts stop the run, and the reply
-  // lists them.
+  // reach, its host mounts and limits. Refused hosts or mounts, and a preview hook or
+  // Dockerfile without their grant, stop the run, and the reply lists them.
   function grantedAccess(task, settings, note) {
     const { repo } = task;
     let grant;
@@ -270,6 +277,13 @@ export function createRuns(ctx) {
     if (hosts.length) {
       throw new RunError(
         `${configErrors(task.base, hosts)}\n\nA repository's \`hosts\` only count when the operator's grants file sets \`allow_repo_hosts: true\` for it; hosts the operator already allows can stay.`,
+      );
+    }
+    const missing = ungranted(grant, settings);
+    if (missing.length) {
+      log(`${repo}: ${CONFIG_FILE} asks for what its grant doesn't allow: ${missing.join("; ")}`);
+      throw new RunError(
+        `${configErrors(task.base, missing)}\n\nThe operator can add these to the repository's entry in the grants file (see Deckhand's docs/security.md), or the repository can remove them from \`${CONFIG_FILE}\`.`,
       );
     }
     const { mounts, refused, notes } = resolveMounts(settings.mounts, grant, {
@@ -301,13 +315,13 @@ export function createRuns(ctx) {
 
   // The run's image (built first if the repo's Dockerfile changed), Claude Code and the repo's
   // cache volumes. While an image builds, the dashboard shows the run as "building image".
-  async function prepare(task, items, settings, note) {
+  async function prepare(task, items, settings, grant, note) {
     const { record, logFile } = task.live;
     const base = task.base || "main";
     const output = (chunk) => logFile.write(chunk);
     try {
       await ctx.runner.checkNetwork();
-      const source = await imageSource(task, items, settings);
+      const source = await imageSource(task, items, settings, grant);
       const image = await ctx.images.imageFor({
         repo: task.repo,
         ref: source.ref,
@@ -364,16 +378,16 @@ export function createRuns(ctx) {
   }
 
   // A comment on a pull request may run on the image of its own branch (imageRef()).
-  async function imageSource(task, items, settings) {
+  async function imageSource(task, items, settings, grant) {
     const base = task.base || "main";
     const pr = items.at(-1).replyTo;
     if (
-      settings.allowBranchDockerImages &&
+      grant.allowBranchDockerImages &&
       settings.dockerfile &&
       (task.kind === "pr" || pr !== task.number)
     ) {
       const res = await ctx.github(task.repo, "GET", `/repos/${task.repo}/pulls/${pr}`);
-      if (res.ok) return imageRef(settings, task.repo, base, await res.json());
+      if (res.ok) return imageRef(grant, settings, task.repo, base, await res.json());
     }
     return { ref: base, branch: false };
   }

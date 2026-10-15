@@ -11,6 +11,7 @@ import {
   mountArgs,
   parseGrants,
   resolveMounts,
+  ungranted,
 } from "../listener/grants.mjs";
 
 const config = loadConfig({ ALLOWED_USERS: "a", SANDBOX_MEMORY: "2g" });
@@ -30,6 +31,9 @@ test("the operator's grants, per repo", () => {
   assert.deepEqual(grantFor(grants, config, "org/repo"), {
     hosts: ["*.example.com", "pypi.org"],
     allowRepoHosts: false,
+    allowPreview: false,
+    allowDockerfile: false,
+    allowBranchDockerImages: false,
     limits: { cpus: "4", memory: "2g", pids: 4096 },
     mounts: [
       { root: "/nfs/work", readOnly: false },
@@ -40,6 +44,9 @@ test("the operator's grants, per repo", () => {
   assert.deepEqual(grantFor(grants, config, "org/other"), {
     hosts: [],
     allowRepoHosts: false,
+    allowPreview: false,
+    allowDockerfile: false,
+    allowBranchDockerImages: false,
     mounts: [],
     limits: config.limits,
   });
@@ -56,6 +63,41 @@ test('allow_repo_hosts: per repo, for every repo with "*", a repo\'s own entry f
   assert.equal(allows(`${every}org/mounts:\n  hosts: [pypi.org]\n`, "org/mounts"), true);
 });
 
+test('preview, Dockerfile and branch images: per repo or "*", false by default', () => {
+  const grant = (text, repo) => grantFor(parseGrants(text, config), config, repo);
+  const every = '"*":\n  allow_dockerfile: true\norg/closed:\n  allow_dockerfile: false\n';
+  const open = `${every}org/repo:
+  allow_preview: true
+  allow_branch_docker_images: true
+`;
+  assert.deepEqual(
+    [grant(open, "Org/Repo"), grant(open, "org/other"), grant(open, "org/closed")].map((g) => [
+      g.allowPreview,
+      g.allowDockerfile,
+      g.allowBranchDockerImages,
+    ]),
+    [
+      [true, true, true],
+      [false, true, false],
+      [false, false, false],
+    ],
+  );
+  assert.equal(grant("", "org/repo").allowPreview, false);
+});
+
+test("a preview hook or a Dockerfile without its grant: one line each, naming the grant", () => {
+  const settings = { preview: { command: "./preview.sh" }, dockerfile: "Dockerfile" };
+  const none = grantFor(new Map(), config, "org/repo");
+  assert.deepEqual(ungranted(none, settings), [
+    "preview: the operator's grants file doesn't set `allow_preview: true` for this repository",
+    "dockerfile: the operator's grants file doesn't set `allow_dockerfile: true` for this repository",
+  ]);
+  const both = { ...none, allowPreview: true, allowDockerfile: true };
+  assert.deepEqual(ungranted(both, settings), []);
+  // Nothing asked, nothing missing.
+  assert.deepEqual(ungranted(none, { preview: null, dockerfile: null }), []);
+});
+
 test("a broken grants file grants nothing and says what is wrong", () => {
   const bad = (text, pattern) => assert.throws(() => parseGrants(text, config), pattern);
   bad("org/repo:\n  hosts: [bad host]\n", /org\/repo: hosts: "bad host"/);
@@ -67,7 +109,9 @@ test("a broken grants file grants nothing and says what is wrong", () => {
   bad("just-a-name:\n  hosts: []\n", /expected an owner\/repo key/);
   bad("org/repo:\n  allow_repo_hosts: yes\n", /allow_repo_hosts: expected true or false/);
   // "*" only says whether repos may add hosts: nothing else is granted to every repo at once.
-  bad('"*":\n  hosts: [pypi.org]\n', /\*: hosts: only allow_repo_hosts applies to every repo/);
+  bad("org/repo:\n  allow_preview: 1\n", /allow_preview: expected true or false/);
+  // "*" only says what repos may ask for: nothing else is granted to every repo at once.
+  bad('"*":\n  hosts: [pypi.org]\n', /\*: hosts: only allow_repo_hosts, .* apply to every repo/);
   bad('"*":\n  mounts: [/srv]\n', /\*: mounts: only allow_repo_hosts/);
   assert.throws(() => parseGrants("[a]", config), ConfigError);
 });
