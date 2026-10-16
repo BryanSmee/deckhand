@@ -13,7 +13,7 @@ import {
   modelOf,
   providerError,
 } from "./agents/index.mjs";
-import { operatorHosts, proxyEnv } from "./egress.mjs";
+import { mandatoryHosts, operatorHosts, proxyEnv } from "./egress.mjs";
 import { commentsText, sameRepo } from "./events.mjs";
 import { grantCheck, hardeningArgs, mountArgs, resolveMounts } from "./grants.mjs";
 import { imageRef } from "./images.mjs";
@@ -280,12 +280,15 @@ export function createRuns(ctx) {
       open: false, // whether its inbox takes comments
       replied: false,
       // What the egress proxy lets it reach (egressAnswer()), those of them that may resolve to
-      // private addresses (the operator's), those whose plain HTTP it may cache, and its
-      // address once known. Until it exits.
+      // private addresses (the operator's), those whose answers it may cache (and decrypt),
+      // those it never may whatever `cached` says, and its address and its engine's once
+      // known. Until it exits.
       hosts: null,
       trusted: null,
       cached: null,
+      uncached: null,
       ip: null,
+      engineIp: null,
       // What it may push (pushBranches()), once it starts.
       branches: [],
       shots: null,
@@ -316,7 +319,9 @@ export function createRuns(ctx) {
     live.shots = shotsFolder();
     live.hosts = access.hosts;
     live.trusted = access.trusted;
-    live.cached = access.grant.cachedHosts;
+    live.uncached = mandatoryHosts(config, agentOf(task));
+    const { ca, cached } = await egressCache(access.grant, note);
+    live.cached = cached;
     if (ctx.stopping) return false;
     const prompt = promptFor(task, {
       mode: live.mode,
@@ -331,7 +336,7 @@ export function createRuns(ctx) {
     });
     recheckMounts(task, settings, access);
     try {
-      const spec = sandboxSpec(task, prompt, message, { ...prepared, ...access, engine });
+      const spec = sandboxSpec(task, prompt, message, { ...prepared, ...access, engine, ca });
       const started = await ctx.runner.start(spec);
       if (started?.engine) note(engineNote(started.engine, engine));
     } catch (error) {
@@ -514,6 +519,18 @@ export function createRuns(ctx) {
     };
   }
 
+  // The egress proxy's CA certificate, which the sandbox trusts so that the proxy may decrypt
+  // the HTTPS of its cached hosts, and those hosts. Without the CA (the proxy's cache is off,
+  // or it doesn't answer), none: their HTTPS would fail on a certificate the sandbox doesn't
+  // know.
+  async function egressCache(grant, note) {
+    if (!grant.cachedHosts.length) return { ca: null, cached: [] };
+    const ca = await ctx.egressCa();
+    if (ca) return { ca, cached: grant.cachedHosts };
+    note("Egress cache: off for this run, the egress proxy has no CA (its cache is off?)");
+    return { ca: null, cached: [] };
+  }
+
   // The container engine (runner/engine.mjs) a run gets, or null: only with the operator's
   // SANDBOX_ENGINE, the repo's `docker` and its grant (grantedAccess() stopped the run when
   // that is missing), for work runs whose comments came from no fork's pull request: a
@@ -646,7 +663,7 @@ export function createRuns(ctx) {
     task,
     prompt,
     message,
-    { image, cacheArgs, settings, mounts, limits, engine },
+    { image, cacheArgs, settings, mounts, limits, engine, ca },
   ) {
     const { live } = task;
     const n = task.name;
@@ -680,7 +697,16 @@ export function createRuns(ctx) {
     const env = sandboxEnv(task, prompt, message, settings, engine);
     const labels = { "deckhand.task": live.key };
     // Its engine, if any, is the runner's to start: DOCKER_HOST comes from it.
-    return { run: live.id, name: n, image, labels, env, args, engine: engine ?? undefined };
+    return {
+      run: live.id,
+      name: n,
+      image,
+      labels,
+      env,
+      args,
+      engine: engine ?? undefined,
+      ca: ca ?? undefined,
+    };
   }
 
   // Values reach the container by name only: they never show in `ps`. The App's credentials
@@ -820,7 +846,9 @@ export function createRuns(ctx) {
     live.hosts = null;
     live.trusted = null;
     live.cached = null;
+    live.uncached = null;
     live.ip = null;
+    live.engineIp = null;
     try {
       if (error) throw error;
       // The agent exited before answering a delivered comment (a crash): the next run gets it.

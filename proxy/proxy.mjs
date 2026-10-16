@@ -351,7 +351,8 @@ export function createProxy({
       headers,
       setHost: false,
     };
-    if (url.protocol !== "https:") return httpRequest({ ...options, port: url.port || 80 }, onAnswer);
+    if (url.protocol !== "https:")
+      return httpRequest({ ...options, port: url.port || 80 }, onAnswer);
     return httpsRequest(
       {
         ...options,
@@ -468,8 +469,9 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   const url = process.env.POLICY_URL || "http://listener:8081/egress";
   const port = Number(process.env.PORT ?? 3128);
   const log = (...args) => console.log(new Date().toISOString(), ...args);
+  const dir = process.env.EGRESS_CACHE_DIR || "/cache";
   const cache = createCache({
-    dir: process.env.EGRESS_CACHE_DIR || "/cache",
+    dir,
     max: parseSize(process.env.EGRESS_CACHE_MAX, DEFAULT_MAX),
     entryMax: parseSize(process.env.EGRESS_CACHE_ENTRY_MAX, DEFAULT_ENTRY_MAX),
     log,
@@ -477,10 +479,7 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   // The CA lives next to the cache, in the proxy's volume, and only with the cache on.
   let authority = null;
   if (cache.enabled) {
-    authority = createAuthority({
-      dir: process.env.EGRESS_CA_DIR || join(process.env.EGRESS_CACHE_DIR || "/cache", "ca"),
-      log,
-    });
+    authority = createAuthority({ dir: join(dir, "ca"), log });
     try {
       await authority.ready();
     } catch (error) {

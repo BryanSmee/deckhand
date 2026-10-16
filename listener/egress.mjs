@@ -49,14 +49,16 @@ export function matchHost(host, patterns) {
 // The proxy's answer for `host` in a run. Private addresses only for a host or domain the
 // operator named (`trusted`: operatorHosts()), never through "*" alone. A run restored from
 // before repos lost their own `hosts` may still list some: those stay public only. `cache`:
-// the proxy may keep its plain HTTP answers (the grant's `cached_hosts`, matched like hosts).
-export function egressPolicy(host, hosts, trusted, cached) {
+// the proxy may keep its answers, and decrypt its HTTPS to do so (the grant's
+// `cached_hosts`, matched like hosts), never for the `uncached` ones (mandatoryHosts(): their
+// traffic carries the run's tokens) whatever `cached` says.
+export function egressPolicy(host, hosts, trusted, cached, uncached = []) {
   const allowed = matchHost(host, hosts) !== null;
   const named = matchHost(host, trusted ?? []);
   return {
     allowed,
     private: allowed && (named === "exact" || named === "wildcard"),
-    cache: allowed && matchHost(host, cached ?? []) !== null,
+    cache: allowed && matchHost(host, cached ?? []) !== null && matchHost(host, uncached) === null,
   };
 }
 

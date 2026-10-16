@@ -14,7 +14,8 @@
 //   remove(name, run)    the sandbox, its engine, its network and its inbox
 //   hasSession(name, agent)  whether its issue has a session of that agent already (a
 //                        previous run)
-//   address(name)        its addresses on its network
+//   address(name)        its addresses on its network, its engine's too
+//   engineAddress(name)  its engine's alone
 //   relink()             joins the listener and the proxy to running sandboxes' networks
 //                        again, and removes the networks of runs that are gone
 //   proxyAddresses()     the egress proxy's addresses, on all of its networks
@@ -50,6 +51,7 @@ export const CLOSE = JSON.stringify({ type: "deckhand", event: "close" });
 
 // Where the inbox is, inside the sandbox.
 const INBOX_DIR = "/deckhand";
+const CA_FILE = "egress-ca.crt";
 const INBOX = "inbox.jsonl";
 
 // How long the proxy's addresses are trusted, and how often a caller that isn't among them
@@ -77,17 +79,19 @@ export function createDockerRunner({
   // Runs whose network exists before their sandbox does: relink() leaves them alone.
   const starting = new Set();
 
-  // `spec`: { run, name, image, labels, env, args, engine }. `env` values reach the container
-  // by name only (`-e NAME`), so they never show in `ps`; `args`: Docker's own options
-  // (hardening, limits, volumes); `engine`: { limits, cache } for a run granted a container
-  // engine, `cache` the base name of the repo's cache volume when it keeps one. → { engine:
-  // { backend, volume, cached } } when it has one.
-  async function start({ run, name, image, labels = {}, env: values = {}, args = [], engine }) {
+  // `spec`: { run, name, image, labels, env, args, engine, ca }. `env` values reach the
+  // container by name only (`-e NAME`), so they never show in `ps`; `args`: Docker's own
+  // options (hardening, limits, volumes); `engine`: { limits, cache } for a run granted a
+  // container engine, `cache` the base name of the repo's cache volume when it keeps one;
+  // `ca`: the egress proxy's CA certificate (PEM), which the sandbox trusts, in its inbox
+  // folder (DECKHAND_CA). → { engine: { backend, volume, cached } } when it has one.
+  async function start({ run, name, image, labels = {}, env: values = {}, args = [], engine, ca }) {
     // Unset values stay unset in the sandbox, as with `-e NAME` and no NAME.
     const env = Object.fromEntries(Object.entries(values).filter(([, v]) => v !== undefined));
     mkdirSync(join(inboxDir, run), { recursive: true });
     chmodSync(join(inboxDir, run), 0o755); // the sandbox runs as uid 1000 and only reads
     writeFileSync(inbox(run), "");
+    if (ca) writeFileSync(join(inboxDir, run, CA_FILE), ca, { mode: 0o644 });
     const all = {
       "deckhand.owner": config.prefix,
       "deckhand.run": run,
@@ -112,6 +116,7 @@ export function createDockerRunner({
           ...Object.entries(engineVars).flatMap(([k, v]) => ["-e", `${k}=${v}`]),
           "-e",
           `TASK_INBOX=${INBOX_DIR}/${INBOX}`,
+          ...(ca ? ["-e", `DECKHAND_CA=${INBOX_DIR}/${CA_FILE}`] : []),
           "--mount",
           `type=volume,src=${config.runsVolume},dst=${INBOX_DIR},volume-subpath=${run},readonly`,
           "--network",
@@ -461,14 +466,21 @@ export function createDockerRunner({
   // started. Its engine's count as its own: the engine's pulls and containers go out under
   // the run's hosts.
   async function address(name) {
-    const found = [];
-    for (const container of [name, engineName(name)]) {
-      const nets = await networksOf(container);
-      if (!nets) continue;
-      const all = Object.values(nets).flatMap((n) => [n?.IPAddress, n?.GlobalIPv6Address]);
-      found.push(...all.filter(Boolean));
-    }
+    const found = [...((await addressesOf(name)) ?? []), ...((await engineAddress(name)) ?? [])];
     return found.length ? found : null;
+  }
+
+  // Its engine's alone: the egress proxy never decrypts their HTTPS, as the engine's builds
+  // and containers don't trust Deckhand's CA.
+  async function engineAddress(name) {
+    return addressesOf(engineName(name));
+  }
+
+  async function addressesOf(container) {
+    const nets = await networksOf(container);
+    if (!nets) return null;
+    const all = Object.values(nets).flatMap((n) => [n?.IPAddress, n?.GlobalIPv6Address]);
+    return all.filter(Boolean);
   }
 
   async function networksOf(container) {
@@ -581,6 +593,7 @@ export function createDockerRunner({
     remove,
     hasSession,
     address,
+    engineAddress,
     relink,
     proxyAddresses,
   };
