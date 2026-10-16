@@ -5,7 +5,7 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { Dashboard } from "./App";
 import fixture from "./fixture.json";
 import type { Backlog, State, Task } from "./types";
-import { ISSUE_TYPE } from "./WorkArea";
+import { ISSUE_TYPE } from "./dnd";
 
 const state = fixture as State;
 

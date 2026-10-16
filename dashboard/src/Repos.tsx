@@ -1,10 +1,11 @@
 // The repositories the App is installed on: which have a .deckhand.yaml (and whether it has
 // errors), which are being onboarded (with their issue), and a button that starts onboarding
 // on the others. A repository's name opens its config (ConfigPanel).
-import { useEffect, useState } from "preact/hooks";
 import type { RepoList } from "./api";
 import { ConfigPanel } from "./ConfigPanel";
-import { ago, REPO_LABELS as LABELS } from "./format";
+import { ago } from "./format";
+import { useNow } from "./hooks";
+import { RepoBadge } from "./RepoBadge";
 import type { Repo, RepoStatus } from "./types";
 import styles from "./Repos.module.css";
 
@@ -13,16 +14,6 @@ const ORDER: RepoStatus[] = ["invalid", "not-onboarded", "onboarding", "unknown"
 
 export function notOnboarded(repos: Repo[] | null): number {
   return repos?.filter((r) => r.status === "not-onboarded").length ?? 0;
-}
-
-// The clock "read … ago" is compared with, ticking.
-export function useNow(everyMs = 15000): number {
-  const [now, setNow] = useState(Date.now);
-  useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now()), everyMs);
-    return () => clearInterval(timer);
-  }, [everyMs]);
-  return now;
 }
 
 interface Props {
@@ -106,7 +97,7 @@ export function Repos({ list, onBack, open = null, onOpen = () => {} }: Props) {
                 </button>
                 {r.private && <span class={styles.private}>private</span>}
               </div>
-              <span class={`${styles.status} ${styles[r.status]}`}>{LABELS[r.status]}</span>
+              <RepoBadge status={r.status} class={styles.status} />
               <div class={styles.action}>
                 {r.status === "onboarding" && r.issue && (
                   <a href={r.issue.url} target="_blank" rel="noreferrer">

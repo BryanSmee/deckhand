@@ -160,35 +160,15 @@
 }
 
 .send {
+  composes: primary from "./controls.module.css";
   padding: 0.35rem 0.9rem;
-  border: 1px solid var(--accent);
-  border-radius: 6px;
-  background: var(--accent);
-  color: var(--panel);
-  font: inherit;
   font-size: 0.85rem;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.send:disabled {
-  opacity: 0.6;
-  cursor: default;
 }
 
 .cancel {
+  composes: button from "./controls.module.css";
   padding: 0.35rem 0.9rem;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  background: var(--panel);
-  color: var(--ink);
-  font: inherit;
   font-size: 0.85rem;
-  cursor: pointer;
-}
-
-.cancel:hover {
-  background: var(--hover);
 }
 
 .hint {

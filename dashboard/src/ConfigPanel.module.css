@@ -14,11 +14,7 @@
 }
 
 .back {
-  padding: 0;
-  border: 0;
-  background: none;
-  color: var(--accent);
-  cursor: pointer;
+  composes: back from "./controls.module.css";
 }
 
 .toolbar {
@@ -44,22 +40,8 @@
 }
 
 .refresh {
+  composes: button from "./controls.module.css";
   padding: 0.2rem 0.7rem;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  background: var(--panel);
-  color: var(--ink);
-  font: inherit;
-  cursor: pointer;
-}
-
-.refresh:hover:not(:disabled) {
-  background: var(--hover);
-}
-
-.refresh:disabled {
-  opacity: 0.6;
-  cursor: default;
 }
 
 .failed {
@@ -70,39 +52,6 @@
 
 .muted {
   color: var(--muted);
-}
-
-.status {
-  padding: 0.1rem 0.55rem;
-  border-radius: 999px;
-  font-size: 0.78rem;
-  font-weight: 600;
-  white-space: nowrap;
-}
-
-.configured {
-  background: var(--ok-soft);
-  color: var(--ok);
-}
-
-.invalid {
-  background: var(--err-soft);
-  color: var(--err);
-}
-
-.onboarding {
-  background: var(--run-soft);
-  color: var(--run);
-}
-
-.not-onboarded {
-  background: var(--accent-soft);
-  color: var(--accent);
-}
-
-.unknown {
-  background: var(--idle-soft);
-  color: var(--idle);
 }
 
 .box {
@@ -176,33 +125,12 @@
   text-align: right;
 }
 
+/* Where a value comes from: its tone is controls.module.css's (ConfigPanel.tsx TAGS). */
 .tag {
+  composes: pill from "./controls.module.css";
   display: inline-block;
   padding: 0.05rem 0.5rem;
-  border-radius: 999px;
   font-size: 0.72rem;
-  font-weight: 600;
-  white-space: nowrap;
-}
-
-.repo {
-  background: var(--run-soft);
-  color: var(--run);
-}
-
-.operator {
-  background: var(--idle-soft);
-  color: var(--muted);
-}
-
-.refused {
-  background: var(--err-soft);
-  color: var(--err);
-}
-
-.unknown {
-  background: var(--warn-soft);
-  color: var(--warn);
 }
 
 .raw {

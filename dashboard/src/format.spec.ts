@@ -1,6 +1,17 @@
 import { describe, expect, test } from "vitest";
 import fixture from "./fixture.json";
-import { inChip, ownMode, repoTabs, runName, titleOf, when } from "./format";
+import {
+  inChip,
+  isPrTask,
+  ownMode,
+  plural,
+  repoTabs,
+  runKindName,
+  runName,
+  shortRepo,
+  titleOf,
+  when,
+} from "./format";
 import type { Run, State, Task } from "./types";
 
 const state = fixture as State;
@@ -57,4 +68,25 @@ test("run names: why the listener started a run itself", () => {
   const run = { mode: "continue", taskMode: "work", reason: null } as Run;
   expect(runName(run)).toBe("Continue");
   expect(runName({ ...run, reason: "conflict" })).toBe("Conflict · Continue");
+});
+
+test("plurals, short repo names and pull requests' own tasks", () => {
+  expect(plural(1, "run")).toBe("1 run");
+  expect(plural(3, "run")).toBe("3 runs");
+  expect(plural(2, "earlier reply", "earlier replies")).toBe("2 earlier replies");
+  expect(shortRepo("acme/app")).toBe("app");
+  expect(isPrTask(task("acme/api#pr-141"))).toBe(true);
+  // The issue a pull request closes is the issue's task.
+  expect(isPrTask(task("acme/api#138"))).toBe(false);
+});
+
+test("run kinds as an analysis names them", () => {
+  expect(["work", "brainstorm", "bug", "discussion", "analyze"].map(runKindName)).toEqual([
+    "Work",
+    "Brainstorm",
+    "Bug",
+    "Discussion",
+    "Analysis",
+  ]);
+  expect(runKindName("review")).toBe("review");
 });

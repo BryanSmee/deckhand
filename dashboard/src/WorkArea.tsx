@@ -4,33 +4,18 @@
 // The drags themselves are the graph's (Graph.tsx) and the column's (Brainstorms.tsx), and so
 // is the form an issue's open questions open first. A brainstorm dropped here stops.
 import { useState } from "preact/hooks";
-import type { WorkArea as Work } from "./api";
+import type { WorkAreaState } from "./api";
+import { Chooser, type Target } from "./Chooser";
+import { BRAINSTORM_TYPE, dragOf, ISSUE_TYPE } from "./dnd";
+import { issueList } from "./format";
+import { typesOf, useDropZone } from "./hooks";
+import { IssueRow } from "./IssueRow";
 import type { Task, WorkAction } from "./types";
 import styles from "./WorkArea.module.css";
 
-// An issue a drop or "Queue after…" can put another one after: a node of the graph.
-export interface Target {
-  key: string;
-  number: number;
-  label: string;
-}
-
-// The drag's payload from the backlog: the issue's number (its link goes along, as text).
-export const ISSUE_TYPE = "application/x-deckhand-issue";
-// A brainstorm card's (Brainstorms.tsx): its issue number. Not ISSUE_TYPE: the column doesn't
-// take its own cards back, and a drop elsewhere knows it is a brainstorm.
-export const BRAINSTORM_TYPE = "application/x-deckhand-brainstorm";
-
-// An issue card's drag, onto the graph (or its link elsewhere).
-const dragOf = (number: number, url: string) => (e: DragEvent) => {
-  e.dataTransfer?.setData(ISSUE_TYPE, String(number));
-  e.dataTransfer?.setData("text/uri-list", url);
-  if (e.dataTransfer) e.dataTransfer.effectAllowed = "copyMove";
-};
-
 interface Props {
   repo: string;
-  work: Work;
+  work: WorkAreaState;
   targets: Target[];
   // The repo's tasks that wait for others ("/after").
   waiting: Task[];
@@ -44,60 +29,6 @@ interface Props {
   notice: string | null;
   // Takes an action: the graph's, which opens an issue's open questions first.
   onAct?: (action: WorkAction) => void;
-}
-
-// "Queue after…": the graph's issues to pick from, then Queue.
-export function Chooser({
-  number,
-  targets,
-  disabled,
-  onQueue,
-  onCancel,
-}: {
-  number: number;
-  targets: Target[];
-  disabled: boolean;
-  onQueue: (after: number) => void;
-  onCancel: () => void;
-}) {
-  const options = targets.filter((t) => t.number !== number);
-  const [after, setAfter] = useState(options[0]?.number ?? null);
-  if (!options.length) {
-    return (
-      <div class={styles.chooser}>
-        <span class={styles.note}>No issue on the graph to queue it after.</span>
-        <button type="button" class={styles.button} onClick={onCancel}>
-          Cancel
-        </button>
-      </div>
-    );
-  }
-  return (
-    <div class={styles.chooser}>
-      <select
-        aria-label={`Queue #${number} after`}
-        value={after ?? undefined}
-        onChange={(e) => setAfter(Number(e.currentTarget.value))}
-      >
-        {options.map((t) => (
-          <option key={t.key} value={t.number}>
-            {t.label}
-          </option>
-        ))}
-      </select>
-      <button
-        type="button"
-        class={styles.primary}
-        disabled={disabled || after === null}
-        onClick={() => after !== null && onQueue(after)}
-      >
-        Queue
-      </button>
-      <button type="button" class={styles.button} onClick={onCancel}>
-        Cancel
-      </button>
-    </div>
-  );
 }
 
 export function WorkArea({
@@ -114,8 +45,6 @@ export function WorkArea({
 }: Props) {
   // The issue whose "Queue after…" is open.
   const [choosing, setChoosing] = useState<number | null>(null);
-  // A brainstorm's card is dragged over the panel: let go, it stops.
-  const [over, setOver] = useState(false);
   const { backlog, busy, result } = work;
   // Those an action on its way takes: they come back if it fails.
   const sent = new Set(work.pending.map((p) => p.number));
@@ -128,25 +57,15 @@ export function WorkArea({
     setChoosing(null);
     onAct(action);
   };
-  const stops = (e: DragEvent) =>
-    !blocked && [...(e.dataTransfer?.types ?? [])].includes(BRAINSTORM_TYPE);
-  const onDragOver = (e: DragEvent) => {
-    if (!stops(e)) return;
-    e.preventDefault();
-    if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
-    setOver(true);
-  };
-  const onDragLeave = (e: DragEvent) => {
-    if ((e.currentTarget as Node).contains(e.relatedTarget as Node | null)) return;
-    setOver(false);
-  };
-  const onDrop = (e: DragEvent) => {
-    if (!stops(e)) return;
-    e.preventDefault();
-    setOver(false);
-    const number = Number(e.dataTransfer?.getData(BRAINSTORM_TYPE));
-    if (number) act({ action: "stop", number });
-  };
+  // A brainstorm's card is dragged over the panel: let go, it stops.
+  const zone = useDropZone(
+    (e) => !blocked && typesOf(e).includes(BRAINSTORM_TYPE),
+    (e) => {
+      const number = Number(e.dataTransfer?.getData(BRAINSTORM_TYPE));
+      if (number) act({ action: "stop", number });
+    },
+    { effect: "move" },
+  );
   const said = notice ?? result?.error ?? result?.message ?? null;
   const failed = !!(notice || result?.error);
 
@@ -174,11 +93,9 @@ export function WorkArea({
 
   return (
     <section
-      class={`${styles.panel} ${over ? styles.over : ""}`}
+      class={`${styles.panel} ${zone.over ? styles.over : ""}`}
       aria-label="Work area"
-      onDragOver={onDragOver}
-      onDragLeave={onDragLeave}
-      onDrop={onDrop}
+      {...zone.handlers}
     >
       <div class={styles.head}>
         <h2 class={styles.title}>Backlog</h2>
@@ -222,16 +139,9 @@ export function WorkArea({
                 key={i.number}
                 class={styles.issue}
                 draggable={!blocked}
-                onDragStart={dragOf(i.number, i.url)}
+                onDragStart={dragOf(ISSUE_TYPE, i.number, i.url)}
               >
-                <div class={styles.row}>
-                  <a class={styles.ref} href={i.url} target="_blank" rel="noreferrer">
-                    #{i.number}
-                  </a>
-                  <span class={styles.name} title={i.title ?? `Issue #${i.number}`}>
-                    {i.title ?? `Issue #${i.number}`}
-                  </span>
-                </div>
+                <IssueRow number={i.number} title={i.title} href={i.url} />
                 <div class={styles.buttons}>
                   <button
                     type="button"
@@ -270,14 +180,13 @@ export function WorkArea({
                 key={t.key}
                 class={styles.issue}
                 draggable={!blocked}
-                onDragStart={dragOf(t.number!, `${github}/${t.repo}/issues/${t.number}`)}
+                onDragStart={dragOf(
+                  ISSUE_TYPE,
+                  t.number!,
+                  `${github}/${t.repo}/issues/${t.number}`,
+                )}
               >
-                <div class={styles.row}>
-                  <span class={styles.ref}>#{t.number}</span>
-                  <span class={styles.name} title={t.title ?? `Issue #${t.number}`}>
-                    {t.title ?? `Issue #${t.number}`}
-                  </span>
-                </div>
+                <IssueRow number={t.number!} title={t.title} />
                 {t.questions && (
                   <span class={styles.note}>Its open questions are asked before it starts.</span>
                 )}
@@ -305,15 +214,8 @@ export function WorkArea({
           <ul class={styles.list} aria-label="Waiting issues">
             {waiting.map((t) => (
               <li key={t.key} class={styles.issue}>
-                <div class={styles.row}>
-                  <span class={styles.ref}>#{t.number}</span>
-                  <span class={styles.name} title={t.title ?? `Issue #${t.number}`}>
-                    {t.title ?? `Issue #${t.number}`}
-                  </span>
-                </div>
-                <span class={styles.note}>
-                  after {(t.waitingFor ?? []).map((n) => `#${n}`).join(", ")}
-                </span>
+                <IssueRow number={t.number!} title={t.title} />
+                <span class={styles.note}>after {issueList(t.waitingFor ?? [])}</span>
                 <div class={styles.buttons}>
                   <button
                     type="button"

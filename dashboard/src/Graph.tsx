@@ -1,31 +1,24 @@
 // The graph page: one node per issue, an arrow from each issue to what waits for it
-// ("/after"), coloured by where it stands (graph.ts). A node opens its task. On a repo's tab
-// it is a work area too (WorkArea.tsx): an issue dropped on it starts, dropped next to a node
-// it waits for that one; a waiting node dragged away stops waiting, onto another node waits
+// ("/after"), coloured by where it stands (graphModel.ts). A node opens its task. On a repo's
+// tab it is a work area too (WorkArea.tsx): an issue dropped on it starts, dropped next to a
+// node it waits for that one; a waiting node dragged away stops waiting, onto another node waits
 // for that one instead. An issue waiting for answers moves too, once they are in: the drag
-// opens its open questions first (Questions.tsx). A click on a node waiting for answers opens
-// them too, on any tab: they go, and its run continues. Brainstorms have a column of their own
-// between the backlog and the graph (Brainstorms.tsx): one dropped on the graph starts work.
-import type { JSX } from "preact";
+// opens its open questions first (QuestionsDialog.tsx). A click on a node waiting for answers
+// opens them too, on any tab: they go, and its run continues. Brainstorms have a column of their
+// own between the backlog and the graph (Brainstorms.tsx): one dropped on the graph starts work.
 import { useEffect, useRef, useState } from "preact/hooks";
-import { sendAnswers, useWorkArea } from "./api";
+import { useWorkArea } from "./api";
 import { Brainstorms } from "./Brainstorms";
-import { inChip, kindName } from "./format";
-import {
-  brainstormsOf,
-  dropTarget,
-  graphOf,
-  type GraphNode,
-  issueOfLink,
-  type Layout,
-  layout,
-  LOOKS,
-  shorten,
-} from "./graph";
-import { Questions } from "./Questions";
-import { formatRoute } from "./route";
-import type { Answers, State, Task, WorkAction } from "./types";
-import { BRAINSTORM_TYPE, ISSUE_TYPE, type Target, WorkArea } from "./WorkArea";
+import { BRAINSTORM_TYPE, droppedIssue, ISSUE_TYPE, LINK_TYPES } from "./dnd";
+import { GraphDrawing, targetsOf } from "./GraphDrawing";
+import { useAnswering, useKeptLayout, useNodeDrag } from "./graphHooks";
+import { dropTarget } from "./graphLayout";
+import { GraphLegend } from "./GraphLegend";
+import { brainstormsOf, graphOf, type GraphNode, movable, workLists } from "./graphModel";
+import { typesOf, useDropZone } from "./hooks";
+import { QuestionsDialog } from "./QuestionsDialog";
+import type { State, WorkAction } from "./types";
+import { WorkArea } from "./WorkArea";
 import styles from "./Graph.module.css";
 
 interface Props {
@@ -40,141 +33,40 @@ interface Props {
   onShowClosed: (show: boolean) => void;
 }
 
-// "#12", "PR #3", with the repo on the All tab when there is room: the number always shows.
-function refOf(
-  n: Pick<GraphNode, "number" | "kind" | "repo">,
-  showRepo: boolean,
-  room: number,
-): string {
-  const number = n.number === null ? "" : n.kind === "pr" ? `PR #${n.number}` : `#${n.number}`;
-  const repo = n.repo.slice(n.repo.indexOf("/") + 1);
-  if (!showRepo || room < number.length + 3) return number;
-  return `${shorten(repo, room - number.length - 1)} ${number}`;
-}
-
-// A waiting node being dragged: where the pointer went down, how far it moved.
-interface NodeDrag {
-  key: string;
-  number: number;
-  // A waiting node (let go in the open, it stops waiting), not one waiting for answers.
-  waits: boolean;
-  pointer: number;
-  x: number;
-  y: number;
-  dx: number;
-  dy: number;
-  moved: boolean;
-}
-
-// An issue waiting for the maintainer ("Needs input": its questions, or a brainstorm's next
-// comment, on the graph when an arrow touches it): starting it answers them first, or ends the
-// brainstorm with a work run.
-const answers = (t: Task) => inChip("input", t) && (t.kind === "issue" || t.kind === "brainstorm");
-
 // What is dragged onto the graph: a card from the backlog (or a node waiting for answers), a
 // brainstorm (Start in doesn't apply: it starts work), a waiting node (let go in the open, it
 // stops waiting).
 type Dragged = "new" | "brainstorm" | "waits";
 
-// Past this many pixels a press on a waiting node is a drag, not a click.
-const DRAG_PX = 6;
-
-// A node whose click answers its questions in place: a task waiting for answers, with them
-// parsed (a label alone opens the detail page).
-const asks = (n: GraphNode) => n.look === "input" && !!n.task?.questions;
-
-// The "?" badge's width: with the open question count, or alone (questions not in the format).
-const badgeWidth = (n: GraphNode) => (n.task?.questions?.items ? 28 : 16);
-
 export function Graph({ state, refresh, repo, narrow, showClosed, onShowClosed }: Props) {
   const work = useWorkArea(repo, refresh);
+  const questions = useAnswering(repo, refresh);
   const [mode, setMode] = useState("work");
   const [notice, setNotice] = useState<string | null>(null);
-  // Something is dragged over the area, and the node a drop there would queue after.
-  const [over, setOver] = useState(false);
-  const [target, setTarget] = useState<string | null>(null);
-  const [nodeDrag, setNodeDrag] = useState<NodeDrag | null>(null);
-  // The node last pressed, drawn last (on top) from then on: moving it back among the others
-  // when it is let go would cut its slide to its new place short.
-  const [onTop, setOnTop] = useState<string | null>(null);
-  // An issue's start or queue that waits for its open questions to be answered; no action:
-  // a click on its node, which just answers them.
-  const [asking, setAsking] = useState<{ task: Task; action: WorkAction | null } | null>(null);
-  // The tasks whose answers are on their way, until api/state is read again; what the last
-  // answers sent said.
-  const [sending, setSending] = useState<string[]>([]);
-  const [said, setSaid] = useState<string | null>(null);
-  // The last drawing, on this tab and at this size: its places are kept.
-  const last = useRef<{ on: string; shape: Layout } | null>(null);
-  // A drag ended on a node: the click that follows doesn't open it.
-  const dragEnded = useRef(false);
-  const svg = useRef<SVGSVGElement>(null);
   useEffect(() => {
     setMode("work");
     setNotice(null);
-    setAsking(null);
-    setSaid(null);
   }, [repo]);
-  useEffect(() => {
-    if (!asking) return;
-    const close = (e: KeyboardEvent) => e.key === "Escape" && setAsking(null);
-    addEventListener("keydown", close);
-    return () => removeEventListener("keydown", close);
-  }, [asking]);
+  // The node a drop there would queue after.
+  const [target, setTarget] = useState<string | null>(null);
+  const svg = useRef<SVGSVGElement>(null);
   const tasks = (state?.tasks ?? []).filter((t) => !repo || t.repo === repo);
   const brainstorms = brainstormsOf(tasks, work.pending);
   const { nodes, edges, hidden } = graphOf(tasks, state?.edges ?? [], state?.blockers ?? [], {
     showClosed,
     pending: work.pending,
-    sending,
+    sending: questions.sending,
   });
-  // An issue just queued goes next to what it now waits for, wherever it was.
-  const queued = new Set(
-    work.pending.filter((p) => p.action === "queue").map((p) => `${p.repo}#${p.number}`),
-  );
-  const on = `${repo} ${narrow}`;
-  const prev = last.current?.on === on ? last.current.shape : null;
-  const shape = layout(
-    nodes.map((n) => n.key),
-    edges,
-    { narrow },
-    prev && { ...prev, boxes: prev.boxes.filter((b) => !queued.has(b.key)) },
-  );
-  last.current = { on, shape };
+  const shape = useKeptLayout(nodes, edges, work.pending, { repo, narrow });
   const byKey = new Map(nodes.map((n) => [n.key, n]));
   const github = state?.githubUrl ?? "https://github.com";
-  const chars = Math.floor((shape.w - 24) / 7);
+  const now = state?.now ?? Date.now();
   const modes = work.backlog?.modes ?? [];
   const picked = mode === "work" || !modes.includes(mode) ? {} : { mode };
   const blocked = !!work.backlog?.errors;
-  // Only a repo's issues move: what runs or ran stays where it is. Those waiting for answers
-  // move whatever their last run was (a brainstorm's kind is "brainstorm"): not a pull request.
-  const movable = (n: GraphNode) =>
-    !!repo &&
-    !blocked &&
-    n.look !== "pending" &&
-    n.number !== null &&
-    !!n.task &&
-    (n.task.state === "waiting" ? n.kind === "issue" : answers(n.task));
-  const targets: Target[] = repo
-    ? nodes
-        .filter((n) => n.number !== null)
-        .map((n) => ({
-          key: n.key,
-          number: n.number!,
-          label: `${refOf(n, false, 0)} ${shorten(n.title ?? "", 40)}`.trim(),
-        }))
-    : [];
-  const sentFor = (number: number) => work.pending.some((p) => p.number === number);
-  // Less those a Start or Remove on its way takes out of their wait.
-  const leaving = new Set(work.pending.filter((p) => p.action !== "queue").map((p) => p.number));
-  const waiting = tasks.filter(
-    (t) => t.state === "waiting" && t.kind === "issue" && t.number && !leaving.has(t.number),
-  );
-  // Brainstorms are the column's.
-  const answering = tasks.filter(
-    (t) => answers(t) && t.state === "needs-input" && t.number && !sentFor(t.number),
-  );
+  const moves = (n: GraphNode) => movable(n, repo, blocked);
+  const targets = repo ? targetsOf(nodes) : [];
+  const { waiting, answering } = workLists(tasks, work.pending);
 
   // The node under the pointer, in the drawing's units (the viewBox starts at -4).
   const targetAt = (clientX: number, clientY: number) => {
@@ -203,325 +95,71 @@ export function Graph({ state, refresh, repo, narrow, showClosed, onShowClosed }
   // its repo doesn't wait for answers).
   const request = (action: WorkAction) => {
     const task = tasks.find((t) => t.key === `${repo}#${action.number}`);
-    const asks = task?.state === "needs-input" && task.questions && task.waitForAnswers !== false;
-    if (action.action !== "dequeue" && asks) {
-      setAsking({ task, action });
-      return;
-    }
+    const asked = task?.state === "needs-input" && task.questions && task.waitForAnswers !== false;
+    if (action.action !== "dequeue" && asked) return questions.ask(task, action);
     work.act(action);
   };
 
-  // Answers sent from a click on the node: it shows Sending… until api/state is read again,
-  // where its run continues (or the issue no longer waits). A refusal stays in the form.
-  const answer = async (task: Task, body: Answers) => {
-    setSaid(null);
-    setSending((all) => [...all, task.key]);
-    const result = await sendAnswers(task.repo, body);
-    const done = () => setSending((all) => all.filter((k) => k !== task.key));
-    if (result.error) done();
-    else (refresh?.() ?? Promise.resolve()).finally(done);
-    return result;
-  };
+  const zone = useDropZone(
+    (e) =>
+      !blocked && typesOf(e).some((t) => [ISSUE_TYPE, BRAINSTORM_TYPE, ...LINK_TYPES].includes(t)),
+    (e) => {
+      const brainstorm = !!Number(e.dataTransfer?.getData(BRAINSTORM_TYPE));
+      const number = droppedIssue(e.dataTransfer, [BRAINSTORM_TYPE, ISSUE_TYPE], github, repo);
+      if (!number) {
+        setNotice(
+          `That isn't a link to one of ${repo}'s issues: drag an issue's card from the work area, or its link.`,
+        );
+        return;
+      }
+      dropped(number, targetAt(e.clientX, e.clientY), brainstorm ? "brainstorm" : "new");
+    },
+    { onOver: (e) => setTarget(e && targetAt(e.clientX, e.clientY)) },
+  );
 
-  const onDragOver = (e: DragEvent) => {
-    const types = [...(e.dataTransfer?.types ?? [])];
-    const ours = [ISSUE_TYPE, BRAINSTORM_TYPE, "text/uri-list", "text/plain"];
-    if (blocked || !types.some((t) => ours.includes(t))) {
-      return;
-    }
-    e.preventDefault();
-    if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
-    setOver(true);
-    setTarget(targetAt(e.clientX, e.clientY));
-  };
-  const onDragLeave = (e: DragEvent) => {
-    if ((e.currentTarget as Node).contains(e.relatedTarget as Node | null)) return;
-    setOver(false);
-    setTarget(null);
-  };
-  const onDrop = (e: DragEvent) => {
-    e.preventDefault();
-    setOver(false);
-    setTarget(null);
-    const data = e.dataTransfer;
-    const brainstorm = Number(data?.getData(BRAINSTORM_TYPE));
-    const own = brainstorm || Number(data?.getData(ISSUE_TYPE));
-    const link = data?.getData("text/uri-list") || data?.getData("text/plain") || "";
-    const number = own || (repo && issueOfLink(link, github, repo));
-    if (!number) {
-      setNotice(
-        `That isn't a link to one of ${repo}'s issues: drag an issue's card from the work area, or its link.`,
-      );
-      return;
-    }
-    dropped(number, targetAt(e.clientX, e.clientY), brainstorm ? "brainstorm" : "new");
-  };
-
-  // A waiting node follows the pointer once it moved past DRAG_PX.
-  const nodeHandlers = (n: GraphNode): JSX.HTMLAttributes<HTMLAnchorElement> => ({
-    onPointerDown: (e) => {
-      if (e.button !== 0) return;
-      (e.currentTarget as Element).setPointerCapture?.(e.pointerId);
-      setOnTop(n.key);
-      setNodeDrag({
-        key: n.key,
-        number: n.number!,
-        waits: n.task?.state === "waiting",
-        pointer: e.pointerId,
-        x: e.clientX,
-        y: e.clientY,
-        dx: 0,
-        dy: 0,
-        moved: false,
-      });
-    },
-    onPointerMove: (e) => {
-      if (!nodeDrag || nodeDrag.pointer !== e.pointerId) return;
-      const dx = e.clientX - nodeDrag.x;
-      const dy = e.clientY - nodeDrag.y;
-      const moved = nodeDrag.moved || Math.hypot(dx, dy) > DRAG_PX;
-      setNodeDrag({ ...nodeDrag, dx, dy, moved });
-      if (moved) setTarget(targetAt(e.clientX, e.clientY));
-    },
-    onPointerUp: (e) => {
-      if (!nodeDrag || nodeDrag.pointer !== e.pointerId) return;
-      setNodeDrag(null);
-      setTarget(null);
-      if (!nodeDrag.moved) return;
-      dragEnded.current = true;
-      dropped(nodeDrag.number, targetAt(e.clientX, e.clientY), nodeDrag.waits ? "waits" : "new");
-    },
-    onPointerCancel: () => {
-      setNodeDrag(null);
-      setTarget(null);
-    },
-    // The browser's own drag of a link would take over from the pointer's.
-    onDragStart: (e) => e.preventDefault(),
+  const drag = useNodeDrag({
+    onMove: (at) => setTarget(at && targetAt(at.x, at.y)),
+    onDrop: (d, at) => dropped(d.number, targetAt(at.x, at.y), d.waits ? "waits" : "new"),
   });
 
-  // In an order that doesn't change as nodes come and go, so none is moved in the page (which
-  // would cut its slide short); the one pressed last goes last: SVG paints in order.
-  const boxes = [...shape.boxes].sort(
-    (a, b) =>
-      Number(a.key === onTop) - Number(b.key === onTop) ||
-      (a.key < b.key ? -1 : a.key > b.key ? 1 : 0),
-  );
-  const drawing = !state ? (
-    <p class={styles.empty}>Loading…</p>
-  ) : !nodes.length && hidden ? (
-    <p class={styles.empty}>
-      Nothing open here.{" "}
-      <button type="button" class={styles.show} onClick={() => onShowClosed(true)}>
-        Show closed issues
-      </button>
-    </p>
-  ) : !nodes.length ? (
-    <p class={styles.empty}>No issues here yet.{repo ? " Drop one here to start it." : ""}</p>
-  ) : (
-    <svg
-      ref={svg}
-      class={styles.svg}
-      width={shape.width + 8}
-      height={shape.height + 8}
-      viewBox={`-4 -4 ${shape.width + 8} ${shape.height + 8}`}
-      role="list"
-      aria-label={repo ? `Issues of ${repo}` : "Issues"}
-    >
-      <defs>
-        <marker
-          id="arrow"
-          viewBox="0 0 8 8"
-          refX="8"
-          refY="4"
-          markerWidth="8"
-          markerHeight="8"
-          orient="auto"
-        >
-          <path d="M0 0L8 4L0 8z" class={styles.head} />
-        </marker>
-        <marker
-          id="arrow-held"
-          viewBox="0 0 8 8"
-          refX="8"
-          refY="4"
-          markerWidth="8"
-          markerHeight="8"
-          orient="auto"
-        >
-          <path d="M0 0L8 4L0 8z" class={`${styles.head} ${styles.heldHead}`} />
-        </marker>
-      </defs>
-      {shape.arrows.map((a) => {
-        // Behind a failed issue, the chain holds: its arrows say so.
-        const held = byKey.get(a.from)?.look === "err";
-        return (
-          <path
-            key={`${a.from} ${a.to}`}
-            d={a.d}
-            // As a style too, where browsers can slide it along with its nodes.
-            style={{ d: `path("${a.d}")` }}
-            class={`${styles.arrow} ${held ? styles.held : ""}`}
-            marker-end={held ? "url(#arrow-held)" : "url(#arrow)"}
-          />
-        );
-      })}
-      {boxes.map((b) => {
-        const n = byKey.get(b.key)!;
-        const badge = asks(n) ? badgeWidth(n) : 0;
-        // "Needs input, PR ready" where it fits, its first part where it doesn't.
-        const room = chars - Math.ceil(badge / 7);
-        const status = n.status.length + 5 > room ? n.status.split(",")[0] : n.status;
-        const ref = refOf(n, !repo, room - status.length - 1);
-        const count = n.task?.questions?.items?.length;
-        const right = n.look === "pending" ? 30 : badge ? badge + 16 : 12;
-        // The bold ref takes about 7.5px a character, the status 6: on a phone's narrow node the
-        // status is left to its tooltip and label (the look says it) rather than drawn over it.
-        const fits = 12 + ref.length * 7.5 + 8 + status.length * 6 <= shape.w - right;
-        const title = n.title ?? `${kindName(n)} ${refOf(n, false, 0)}`;
-        const waits = edges.filter((e) => e.to === n.key).length;
-        const href = n.task
-          ? formatRoute({ repo, task: n.key, run: null })
-          : `${github}/${n.repo}/issues/${n.number}`;
-        const label =
-          `${ref} ${n.title ?? ""}`.trim() +
-          `: ${n.status}` +
-          (count ? `, ${count} question${count > 1 ? "s" : ""}` : "") +
-          (waits ? `, waits for ${waits} issue${waits > 1 ? "s" : ""}` : "");
-        const moving = nodeDrag?.key === n.key && nodeDrag.moved ? nodeDrag : null;
-        // Placed with a transform, which slides (Graph.module.css) when the place changes.
-        const x = b.x + (moving?.dx ?? 0);
-        const y = b.y + (moving?.dy ?? 0);
-        return (
-          <a
-            key={n.key}
-            href={href}
-            role="listitem"
-            aria-label={label}
-            class={`${styles.node} ${styles[n.look]} ${movable(n) ? styles.movable : ""} ${
-              target === n.key && !moving ? styles.target : ""
-            } ${moving ? styles.moving : ""}`}
-            style={{ transform: `translate(${x}px, ${y}px)` }}
-            aria-haspopup={asks(n) ? "dialog" : undefined}
-            onClick={(e) => {
-              if (dragEnded.current) {
-                dragEnded.current = false;
-                e.preventDefault();
-                return;
-              }
-              // Ctrl/Cmd, Shift or a middle click follow the link to its detail page.
-              if (!asks(n) || e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey) return;
-              e.preventDefault();
-              setSaid(null);
-              setAsking({ task: n.task!, action: null });
-            }}
-            {...(movable(n) ? nodeHandlers(n) : {})}
-            {...(n.task ? {} : { target: "_blank", rel: "noreferrer" })}
-          >
-            <title>{`${title} (${n.status})`}</title>
-            <rect width={shape.w} height={shape.h} rx="8" />
-            <text x={12} y={21} class={styles.ref}>
-              {ref}
-            </text>
-            {n.look === "pending" && (
-              <circle class={styles.spinner} cx={shape.w - 18} cy={17} r={5} aria-hidden="true" />
-            )}
-            {badge > 0 && (
-              <g class={styles.badge} aria-hidden="true">
-                <rect x={shape.w - 10 - badge} y={9} width={badge} height={16} rx={8} />
-                <text x={shape.w - 10 - badge / 2} y={21} text-anchor="middle">
-                  {count ? `?${count}` : "?"}
-                </text>
-              </g>
-            )}
-            {fits && (
-              <text x={shape.w - right} y={21} class={styles.status} text-anchor="end">
-                {status}
-              </text>
-            )}
-            <text x={12} y={41} class={styles.title}>
-              {shorten(title, chars)}
-            </text>
-          </a>
-        );
-      })}
-    </svg>
+  const drawing = (
+    <GraphDrawing
+      loading={!state}
+      nodes={nodes}
+      edges={edges}
+      hidden={hidden}
+      onShowClosed={onShowClosed}
+      shape={shape}
+      svg={svg}
+      repo={repo}
+      github={github}
+      target={target}
+      movable={moves}
+      drag={drag}
+      onAsk={(task) => questions.ask(task, null)}
+    />
   );
 
-  // An issue's open questions: before the drag that opened them starts or queues it, or on
-  // their own from a click on its node.
-  const asked = asking?.task.questions ? { ...asking, questions: asking.task.questions } : null;
-  const dialog = asked && (
-    <div class={styles.backdrop} onClick={(e) => e.target === e.currentTarget && setAsking(null)}>
-      <div
-        class={styles.dialog}
-        role="dialog"
-        aria-modal="true"
-        aria-label={`Answer ${refOf(asked.task, false, 0)}'s questions`}
-      >
-        <p class={styles.asks}>
-          <b>
-            {asked.action?.action === "queue"
-              ? `Answer them to queue #${asked.task.number} after #${asked.action.after}`
-              : asked.action
-                ? `Answer them to start #${asked.task.number}`
-                : `${refOf(asked.task, !repo, 60)} waits for your answers`}
-          </b>
-          {asked.task.title}
-          <a
-            class={styles.details}
-            href={formatRoute({ repo, task: asked.task.key, run: null })}
-            onClick={() => setAsking(null)}
-          >
-            Open details
-          </a>
-        </p>
-        <Questions
-          task={asked.task}
-          questions={asked.questions}
-          then={asked.action ? (asked.action.action === "queue" ? "queue" : "start") : undefined}
-          submit={(body) =>
-            asked.action ? work.act(asked.action, body) : answer(asked.task, body)
-          }
-          onSent={(message) => {
-            setAsking(null);
-            if (!asked.action) setSaid(message);
-          }}
-          onCancel={() => setAsking(null)}
-        />
-      </div>
-    </div>
-  );
-
+  const asking = questions.asking;
   return (
     <div class={styles.page}>
-      <ul class={styles.legend} aria-label="Legend">
-        {LOOKS.map(({ look, name, means }) => (
-          <li key={look} title={means}>
-            <span class={`${styles.swatch} ${styles[look]}`} aria-hidden="true" />
-            {name}
-          </li>
-        ))}
-        <li title="It starts once the issue the arrow comes from is done">
-          <span class={styles.arrowKey} aria-hidden="true" />
-          waits for
-        </li>
-        <li class={styles.toggle}>
-          <label title="Issues closed as completed or not planned, and merged pull requests">
-            <input
-              type="checkbox"
-              checked={showClosed}
-              onChange={(e) => onShowClosed(e.currentTarget.checked)}
-            />
-            Show closed
-          </label>
-        </li>
-      </ul>
-      {said && (
+      <GraphLegend showClosed={showClosed} onShowClosed={onShowClosed} />
+      {questions.said && (
         <p class={styles.said} role="status">
-          {said}
+          {questions.said}
         </p>
       )}
-      {dialog}
+      {asking?.task.questions && (
+        <QuestionsDialog
+          asking={{ ...asking, task: { ...asking.task, questions: asking.task.questions } }}
+          repo={repo}
+          submit={(body) =>
+            asking.action ? work.act(asking.action, body) : questions.answer(asking.task, body)
+          }
+          onSent={questions.sent}
+          onClose={questions.close}
+        />
+      )}
       {repo ? (
         <div class={styles.work}>
           <WorkArea
@@ -545,12 +183,11 @@ export function Graph({ state, refresh, repo, narrow, showClosed, onShowClosed }
             github={github}
             onAct={request}
             onNotice={setNotice}
+            now={now}
           />
           <div
-            class={`${styles.area} ${over || nodeDrag?.moved ? styles.over : ""}`}
-            onDragOver={onDragOver}
-            onDragLeave={onDragLeave}
-            onDrop={onDrop}
+            class={`${styles.area} ${zone.over || drag.moving ? styles.over : ""}`}
+            {...zone.handlers}
           >
             {drawing}
           </div>
@@ -559,16 +196,7 @@ export function Graph({ state, refresh, repo, narrow, showClosed, onShowClosed }
         <>
           <p class={styles.hint}>Open a repository's tab to start or queue its issues here.</p>
           <div class={`${styles.work} ${styles.overview}`}>
-            <Brainstorms
-              repo={null}
-              cards={brainstorms}
-              targets={[]}
-              busy={false}
-              blocked={false}
-              github={github}
-              onAct={() => {}}
-              onNotice={() => {}}
-            />
+            <Brainstorms repo={null} cards={brainstorms} github={github} now={now} />
             <div>{drawing}</div>
           </div>
         </>

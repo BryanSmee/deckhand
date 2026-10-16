@@ -312,14 +312,10 @@
 
 /* An issue's open questions, before the drag that opened them starts or queues it. */
 .backdrop {
-  position: fixed;
-  inset: 0;
+  composes: backdrop from "./Dialog.module.css";
   z-index: 20;
-  display: flex;
   align-items: center;
-  justify-content: center;
   padding: 1.5rem;
-  background: rgb(0 0 0 / 0.45);
 }
 
 .dialog {

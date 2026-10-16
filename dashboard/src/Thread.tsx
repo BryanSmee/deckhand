@@ -5,7 +5,8 @@
 // up too.
 import { useState } from "preact/hooks";
 import { sendDiscussionComment, useThread } from "./api";
-import { ago } from "./format";
+import { ago, plural } from "./format";
+import { useSubmit } from "./hooks";
 import type { DiscussionComment, Post, Task, WorkResult } from "./types";
 import styles from "./Thread.module.css";
 
@@ -47,7 +48,7 @@ export function Thread({ task, now, refresh }: Props) {
       <Message post={thread.post} now={now} opening />
       {thread.more > 0 && (
         <p class={styles.more}>
-          {thread.more} earlier comment{thread.more > 1 ? "s" : ""}{" "}
+          {plural(thread.more, "earlier comment")}{" "}
           {thread.url && (
             <a href={thread.url} target="_blank" rel="noreferrer">
               on GitHub
@@ -62,7 +63,7 @@ export function Thread({ task, now, refresh }: Props) {
             <div class={styles.replies}>
               {c.more > 0 && (
                 <p class={styles.more}>
-                  {c.more} earlier repl{c.more > 1 ? "ies" : "y"}{" "}
+                  {plural(c.more, "earlier reply", "earlier replies")}{" "}
                   {c.url && (
                     <a href={c.url} target="_blank" rel="noreferrer">
                       on GitHub
@@ -129,17 +130,12 @@ function Compose({
   onCancel?: () => void;
 }) {
   const [text, setText] = useState("");
-  const [sending, setSending] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const { sending, error, run } = useSubmit(onSend);
   const submit = async (e: Event) => {
     e.preventDefault();
     if (!text.trim() || sending) return;
-    setSending(true);
-    setError(null);
-    const said = await onSend(text);
-    setSending(false);
-    if (said.error) return setError(said.error);
-    setText("");
+    const said = await run(text);
+    if (!said.error) setText("");
   };
   return (
     <form class={styles.compose} aria-label={label} onSubmit={submit}>

@@ -5,6 +5,8 @@
 // queues with them.
 import { useState } from "preact/hooks";
 import { sendAnswers } from "./api";
+import { isPrTask } from "./format";
+import { useSubmit } from "./hooks";
 import type { Answers, Question, Questions as Asked, Task, WorkResult } from "./types";
 import styles from "./Questions.module.css";
 
@@ -43,8 +45,7 @@ export function Questions({
   const items = q.items;
   const [answers, setAnswers] = useState<Answer[]>(() => initial(items));
   const [text, setText] = useState("");
-  const [sending, setSending] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const { sending, error, run } = useSubmit(submit);
 
   const set = (i: number, change: Partial<Answer>) =>
     setAnswers((all) => all.map((a, j) => (j === i ? { ...a, ...change } : a)));
@@ -62,13 +63,10 @@ export function Questions({
     e.preventDefault();
     if (unsendable || sending || t.number === null) return;
     // A pull request's own task ("#pr-12"): one that closes an issue is the issue's.
-    const which = { number: t.number, ...(t.key.endsWith(`#pr-${t.number}`) ? { pr: true } : {}) };
+    const which = { number: t.number, ...(isPrTask(t) ? { pr: true } : {}) };
     const body: Answers = items ? { ...which, answers } : { ...which, text };
-    setSending(true);
-    setError(null);
-    const result: WorkResult = await submit(body);
-    setSending(false);
-    if (result.error) return setError(result.error);
+    const result = await run(body);
+    if (result.error) return;
     setAnswers(initial(items));
     setText("");
     onSent(result.message ?? "Answers sent.");

@@ -4,8 +4,10 @@
 // (listener/discussions.mjs). Only the repos with an inbox, and the inboxes they have, are
 // offered; once sent, the comment's or discussion's link, then the run on its task when
 // api/state lists it.
-import { useEffect, useState } from "preact/hooks";
+import { useState } from "preact/hooks";
 import { sendToInbox, startDiscussion } from "./api";
+import { useSubmit } from "./hooks";
+import { RepoDialog } from "./RepoDialog";
 import { formatRoute } from "./route";
 import type {
   DiscussionResult,
@@ -15,6 +17,7 @@ import type {
   Inboxes,
   Task,
 } from "./types";
+import dialog from "./Dialog.module.css";
 import styles from "./Inbox.module.css";
 
 export const INBOX_DOCS =
@@ -59,32 +62,19 @@ export function InboxDialog({
   onSent = () => {},
 }: DialogProps) {
   const repos = inboxRepos(inboxes);
-  const [picked, setPicked] = useState(() => (tab && repos.includes(tab) ? tab : null));
-  const repo = picked && repos.includes(picked) ? picked : (repos[0] ?? null);
-  useEffect(() => {
-    const close = (e: KeyboardEvent) => e.key === "Escape" && onClose();
-    // A link to the entry's run opens it: the dialog goes.
-    addEventListener("keydown", close);
-    addEventListener("hashchange", onClose);
-    return () => {
-      removeEventListener("keydown", close);
-      removeEventListener("hashchange", onClose);
-    };
-  }, []);
   // The tab's repo, read and without an inbox: said, with the way to set one up.
   const without = tab && inboxes?.[tab] && !hasInbox(inboxes[tab]) ? tab : null;
 
   return (
-    <div class={styles.backdrop} onClick={(e) => e.target === e.currentTarget && onClose()}>
-      <div class={styles.dialog} role="dialog" aria-modal="true" aria-label="Send feedback">
-        <div class={styles.head}>
-          <h2 class={styles.title}>Send an idea, a bug report or a discussion</h2>
-          <button type="button" class={styles.close} aria-label="Close" onClick={onClose}>
-            ×
-          </button>
-        </div>
-        {(without || !repos.length) && (
-          <p class={styles.note}>
+    <RepoDialog
+      label="Send feedback"
+      title="Send an idea, a bug report or a discussion"
+      repos={repos}
+      tab={tab}
+      onClose={onClose}
+      notes={
+        (without || !repos.length) && (
+          <p class={dialog.note}>
             {without
               ? `${without} has no inbox for ideas, bug reports or discussions.`
               : inboxes
@@ -96,32 +86,21 @@ export function InboxDialog({
               </a>
             )}
           </p>
-        )}
-        {repo && (
-          <>
-            <label class={styles.repo}>
-              Repository
-              <select value={repo} onChange={(e) => setPicked(e.currentTarget.value)}>
-                {repos.map((r) => (
-                  <option key={r} value={r}>
-                    {r}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <Inbox
-              key={repo}
-              repo={repo}
-              inboxes={inboxes![repo]}
-              tasks={tasks}
-              submit={(entry) => submit(repo, entry)}
-              start={(discussion) => start(repo, discussion)}
-              onSent={onSent}
-            />
-          </>
-        )}
-      </div>
-    </div>
+        )
+      }
+    >
+      {(repo) => (
+        <Inbox
+          key={repo}
+          repo={repo}
+          inboxes={inboxes![repo]}
+          tasks={tasks}
+          submit={(entry) => submit(repo, entry)}
+          start={(discussion) => start(repo, discussion)}
+          onSent={onSent}
+        />
+      )}
+    </RepoDialog>
   );
 }
 
@@ -149,9 +128,21 @@ function Inbox({ repo, inboxes, tasks, submit, start, onSent }: Props) {
   const [picked, setPicked] = useState<Kind | null>(null);
   const [title, setTitle] = useState("");
   const [text, setText] = useState("");
-  const [sending, setSending] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [sent, setSent] = useState<Sent | null>(null);
+  const {
+    sending,
+    error,
+    run: post,
+  } = useSubmit(
+    (entry: {
+      kind: Kind;
+      title: string;
+      text: string;
+    }): Promise<InboxResult | DiscussionResult> =>
+      entry.kind === "discussion"
+        ? start({ title: entry.title, body: entry.text })
+        : submit({ kind: entry.kind, text: entry.text }),
+  );
   const kind = offered.some((k) => k.kind === picked) ? picked! : offered[0].kind;
   const taskOf = (key: string | null) => (key && tasks.find((t) => t.key === key)) || null;
 
@@ -165,12 +156,9 @@ function Inbox({ repo, inboxes, tasks, submit, start, onSent }: Props) {
     const before = discussion
       ? null
       : (taskOf(`${repo}#${inboxes[kind === "idea" ? "ideas" : "bugs"]}`)?.runs[0]?.id ?? null);
-    setSending(true);
-    setError(null);
     setSent(null);
-    const result = discussion ? await start({ title, body: text }) : await submit({ kind, text });
-    setSending(false);
-    if (result.error) return setError(result.error);
+    const result = await post({ kind, title, text });
+    if (result.error) return;
     setTitle("");
     setText("");
     setSent({ kind, url: result.url ?? null, task: result.task ?? null, before });
@@ -182,8 +170,8 @@ function Inbox({ repo, inboxes, tasks, submit, start, onSent }: Props) {
   const what = sent?.kind === "discussion" ? "the discussion" : "the comment";
 
   return (
-    <form class={styles.form} aria-label="Feedback" onSubmit={send}>
-      <fieldset class={styles.fields} disabled={sending}>
+    <form class={dialog.form} aria-label="Feedback" onSubmit={send}>
+      <fieldset class={dialog.fields} disabled={sending}>
         <div class={styles.kinds} role="radiogroup" aria-label="Kind">
           {offered.map((k) => (
             <label key={k.kind} class={`${styles.kind} ${kind === k.kind ? styles.on : ""}`}>
@@ -227,12 +215,12 @@ function Inbox({ repo, inboxes, tasks, submit, start, onSent }: Props) {
         />
       </fieldset>
       {error && (
-        <p class={`${styles.said} ${styles.failed}`} role="alert">
+        <p class={`${dialog.said} ${dialog.failed}`} role="alert">
           {error}
         </p>
       )}
       {sent && (
-        <p class={styles.said} role="status">
+        <p class={dialog.said} role="status">
           Sent:{" "}
           {sent.url ? (
             <a href={sent.url} target="_blank" rel="noreferrer">
@@ -261,8 +249,8 @@ function Inbox({ repo, inboxes, tasks, submit, start, onSent }: Props) {
           )}
         </p>
       )}
-      <div class={styles.actions}>
-        <button type="submit" class={styles.send} disabled={!ready || sending}>
+      <div class={dialog.actions}>
+        <button type="submit" class={dialog.send} disabled={!ready || sending}>
           {sending ? "Sending…" : discussion ? "Start" : "Send"}
         </button>
       </div>

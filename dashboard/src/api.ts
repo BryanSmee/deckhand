@@ -4,7 +4,6 @@
 // run analyses.
 // Relative URLs, like the assets: the page works under any path.
 import { useEffect, useRef, useState } from "preact/hooks";
-import type { Pending } from "./graph";
 import type {
   AnalysisPreview,
   AnalysisResult,
@@ -20,6 +19,7 @@ import type {
   InboxEntry,
   InboxResult,
   Onboarded,
+  Pending,
   Repo,
   RepoConfig,
   Repos,
@@ -28,6 +28,120 @@ import type {
   WorkAction,
   WorkResult,
 } from "./types";
+
+// What the listener answers, or why it refused: its `error`, else the status.
+export type Answer<T> = T & { error?: string };
+
+// A JSON answer, or { error } from its status. Signed out (or no longer an allowed user): the
+// sign-in page, and the answer never comes.
+async function answer<T>(res: Response): Promise<Answer<T>> {
+  if (res.status === 401) {
+    location.reload();
+    return new Promise(() => {});
+  }
+  const body = (await res.json().catch(() => ({}))) as Answer<T>;
+  if (!res.ok && !body.error) body.error = String(res.status);
+  return body;
+}
+
+const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
+
+// Reads a JSON answer, never from the browser's cache: what the listener says, or why not.
+export async function getJson<T>(url: string): Promise<Answer<T>> {
+  try {
+    return await answer<T>(await fetch(url, { cache: "no-store" }));
+  } catch (e) {
+    return { error: message(e) } as Answer<T>;
+  }
+}
+
+// POSTs a JSON body (none: an empty POST): what the listener says, or why it refused.
+export async function postJson<T>(url: string, body?: unknown): Promise<Answer<T>> {
+  try {
+    const init: RequestInit =
+      body === undefined
+        ? { method: "POST" }
+        : {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(body),
+          };
+    return await answer<T>(await fetch(url, init));
+  } catch (e) {
+    return { error: message(e) } as Answer<T>;
+  }
+}
+
+export interface Polled<T> {
+  // The last answer read; null until the first.
+  data: T | null;
+  // Why the last read failed (the last answer stays shown).
+  error: string | null;
+  // Read it now: after an action, not at the next tick.
+  reload: () => Promise<void>;
+  // An answer read another way (a POST that returns it), shown as the latest; or a change to
+  // the one shown.
+  show: (data: T | ((last: T | null) => T | null)) => void;
+}
+
+// `url` read now and every `ms` (null: once) while it stays the same; null: nothing to read.
+// An answer for another url, or older than one shown already (a slow read before a quick
+// one), is dropped. `onData`: each answer shown; `cached`: what to show for a url until its
+// first answer.
+export function usePolled<T>(
+  url: string | null,
+  ms: number | null,
+  {
+    onData,
+    cached = () => null,
+  }: { onData?: (data: T) => void; cached?: (url: string) => T | null } = {},
+): Polled<T> {
+  const [read, setRead] = useState(() => ({
+    url,
+    data: url ? cached(url) : null,
+    error: null as string | null,
+  }));
+  // Each read's number, and the last one shown.
+  const asked = useRef(0);
+  const shown = useRef(0);
+  const current = useRef(url);
+  current.current = url;
+  const mounted = useRef(true);
+  useEffect(
+    () => () => {
+      mounted.current = false;
+    },
+    [],
+  );
+  const show = (data: T | ((last: T | null) => T | null)) => {
+    if (typeof data === "function") {
+      const change = data as (last: T | null) => T | null;
+      return setRead((r) => ({ ...r, data: change(r.data) }));
+    }
+    // Newer than any read on its way.
+    shown.current = ++asked.current;
+    setRead({ url, data, error: null });
+  };
+  const reload = async () => {
+    if (!url) return;
+    const mine = ++asked.current;
+    const body = await getJson<T>(url);
+    if (!mounted.current || current.current !== url || mine < shown.current) return;
+    if (body.error) return setRead((r) => ({ ...r, url, error: body.error! }));
+    shown.current = mine;
+    setRead({ url, data: body, error: null });
+    onData?.(body);
+  };
+  useEffect(() => {
+    setRead((r) => (r.url === url ? r : { url, data: url ? cached(url) : null, error: null }));
+    if (!url) return;
+    reload();
+    if (ms === null) return;
+    const timer = setInterval(reload, ms);
+    return () => clearInterval(timer);
+  }, [url]);
+  return { data: read.data, error: read.error, reload, show };
+}
 
 const POLL_MS = 3000;
 
@@ -39,41 +153,8 @@ export interface AppState {
 }
 
 export function useAppState(): AppState {
-  const [state, setState] = useState<State | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  // Each read's number, and the last one shown: a slow answer read before another one that
-  // came back already is older, and dropped.
-  const asked = useRef(0);
-  const shown = useRef(0);
-  const stopped = useRef(false);
-  const refresh = async () => {
-    const mine = ++asked.current;
-    try {
-      const res = await fetch("api/state", { cache: "no-store" });
-      // Signed out (or no longer an allowed user): the sign-in page.
-      if (res.status === 401) return location.reload();
-      if (!res.ok) throw new Error(String(res.status));
-      const next = (await res.json()) as State;
-      if (stopped.current || mine < shown.current) return;
-      shown.current = mine;
-      setState(next);
-      setError(null);
-    } catch (e) {
-      if (!stopped.current && mine >= shown.current) {
-        setError(e instanceof Error ? e.message : String(e));
-      }
-    }
-  };
-  useEffect(() => {
-    stopped.current = false;
-    refresh();
-    const timer = setInterval(refresh, POLL_MS);
-    return () => {
-      stopped.current = true;
-      clearInterval(timer);
-    };
-  }, []);
-  return { state, error, refresh };
+  const { data, error, reload } = usePolled<State>("api/state", POLL_MS);
+  return { state: data, error, refresh: reload };
 }
 
 // A run's log so far, then live until it ends.
@@ -120,85 +201,40 @@ export interface RepoList {
   update: (row: Repo) => void;
 }
 
-// A JSON answer, or { error } from its status.
-async function answer<T>(res: Response): Promise<T & { error?: string }> {
-  const body = (await res.json().catch(() => ({}))) as T & { error?: string };
-  if (!res.ok && !body.error) body.error = String(res.status);
-  return body;
-}
-
-const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
-
 export function useRepos(): RepoList {
-  const [repos, setRepos] = useState<Repo[] | null>(null);
-  const [listedAt, setListedAt] = useState<number | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const list = usePolled<Repos>("api/repos", REPOS_POLL_MS);
   const [starting, setStarting] = useState<string | null>(null);
   const [failed, setFailed] = useState<RepoList["failed"]>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [refreshError, setRefreshError] = useState<string | null>(null);
-  const show = (next: Repos) => {
-    setRepos(next.repos);
-    setListedAt(next.listedAt ?? null);
-    setError(null);
-  };
-  useEffect(() => {
-    let stopped = false;
-    const poll = async () => {
-      try {
-        const res = await fetch("api/repos", { cache: "no-store" });
-        if (res.status === 401) return location.reload();
-        if (!res.ok) throw new Error(String(res.status));
-        const next = (await res.json()) as Repos;
-        if (!stopped) show(next);
-      } catch (e) {
-        if (!stopped) setError(message(e));
-      }
-    };
-    poll();
-    const timer = setInterval(poll, REPOS_POLL_MS);
-    return () => {
-      stopped = true;
-      clearInterval(timer);
-    };
-  }, []);
 
   const update = (row: Repo) =>
-    setRepos((all) => all && all.map((r) => (r.repo === row.repo ? row : r)));
+    list.show(
+      (last) => last && { ...last, repos: last.repos.map((r) => (r.repo === row.repo ? row : r)) },
+    );
 
   const onboard = async (repo: string) => {
     setStarting(repo);
     setFailed(null);
-    try {
-      const res = await fetch(`api/repos/${repo}/onboard`, { method: "POST" });
-      const body = await answer<Onboarded>(res);
-      if (body.repo) update(body.repo);
-      if (body.error) setFailed({ repo, error: body.error });
-    } catch (e) {
-      setFailed({ repo, error: message(e) });
-    } finally {
-      setStarting(null);
-    }
+    const body = await postJson<Onboarded>(`api/repos/${repo}/onboard`);
+    if (body.repo) update(body.repo);
+    if (body.error) setFailed({ repo, error: body.error });
+    setStarting(null);
   };
 
   const refresh = async () => {
     setRefreshing(true);
     setRefreshError(null);
-    try {
-      const body = await answer<Repos>(await fetch("api/repos/refresh", { method: "POST" }));
-      if (body.error) setRefreshError(body.error);
-      else show(body);
-    } catch (e) {
-      setRefreshError(message(e));
-    } finally {
-      setRefreshing(false);
-    }
+    const body = await postJson<Repos>("api/repos/refresh");
+    if (body.error) setRefreshError(body.error);
+    else list.show(body);
+    setRefreshing(false);
   };
 
   return {
-    repos,
-    listedAt,
-    error,
+    repos: list.data?.repos ?? null,
+    listedAt: list.data?.listedAt ?? null,
+    error: list.error,
     starting,
     failed,
     onboard,
@@ -220,36 +256,32 @@ export interface RepoConfigView {
 // One repo's config, read from GitHub when the panel opens and on its Refresh. `onRow`: its
 // row, read along with it.
 export function useRepoConfig(repo: string, onRow: (row: Repo) => void): RepoConfigView {
-  const [config, setConfig] = useState<RepoConfig | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+  const read = usePolled<RepoConfig>(`api/repos/${repo}/config`, null, {
+    onData: (config) => onRow(config.repo),
+  });
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
   // The repo open now: an answer for another one (opened before) is dropped.
   const current = useRef(repo);
   current.current = repo;
-  const load = async (init?: RequestInit) => {
-    setLoading(true);
-    setError(null);
-    const mine = () => current.current === repo;
-    try {
-      const url = `api/repos/${repo}/${init ? "refresh" : "config"}`;
-      const res = await fetch(url, { cache: "no-store", ...init });
-      if (res.status === 401) return location.reload();
-      const body = await answer<RepoConfig>(res);
-      if (!mine()) return;
-      if (body.error) return setError(body.error);
-      setConfig(body);
-      onRow(body.repo);
-    } catch (e) {
-      if (mine()) setError(message(e));
-    } finally {
-      if (mine()) setLoading(false);
-    }
+  useEffect(() => setRefreshError(null), [repo]);
+  const refresh = async () => {
+    setRefreshing(true);
+    setRefreshError(null);
+    const body = await postJson<RepoConfig>(`api/repos/${repo}/refresh`);
+    setRefreshing(false);
+    if (current.current !== repo) return;
+    if (body.error) return setRefreshError(body.error);
+    read.show(body);
+    onRow(body.repo);
   };
-  useEffect(() => {
-    setConfig(null);
-    load();
-  }, [repo]);
-  return { config, error, loading, refresh: () => load({ method: "POST" }) };
+  const error = refreshError ?? read.error;
+  return {
+    config: read.data,
+    error,
+    loading: refreshing || (!read.data && !error),
+    refresh,
+  };
 }
 
 // The listener reads GitHub at most every 30 seconds for it: polling costs nothing more.
@@ -265,7 +297,7 @@ export function forgetBacklogs() {
   backlogs.clear();
 }
 
-export interface WorkArea {
+export interface WorkAreaState {
   backlog: Backlog | null;
   error: string | null;
   // An action on its way (the graph draws them at once), and what the last one said.
@@ -281,39 +313,15 @@ export interface WorkArea {
 export function useWorkArea(
   repo: string | null,
   refresh: () => Promise<void> = async () => {},
-): WorkArea {
-  const [backlog, setBacklog] = useState<Backlog | null>(() =>
-    repo ? (backlogs.get(repo) ?? null) : null,
-  );
-  const [error, setError] = useState<string | null>(null);
+): WorkAreaState {
+  const read = usePolled<Backlog>(repo && `api/repos/${repo}/issues`, BACKLOG_POLL_MS, {
+    onData: (backlog) => repo && backlogs.set(repo, backlog),
+    cached: () => (repo ? (backlogs.get(repo) ?? null) : null),
+  });
+  const backlog = read.data;
   const [pending, setPending] = useState<Pending[]>([]);
   const [result, setResult] = useState<WorkResult | null>(null);
-  const current = useRef(repo);
-  current.current = repo;
-  const load = async () => {
-    if (!repo) return;
-    try {
-      const res = await fetch(`api/repos/${repo}/issues`, { cache: "no-store" });
-      if (res.status === 401) return location.reload();
-      const body = await answer<Backlog>(res);
-      if (current.current !== repo) return;
-      if (body.error) return setError(body.error);
-      backlogs.set(repo, body);
-      setBacklog(body);
-      setError(null);
-    } catch (e) {
-      if (current.current === repo) setError(message(e));
-    }
-  };
-  useEffect(() => {
-    setBacklog(repo ? (backlogs.get(repo) ?? null) : null);
-    setError(null);
-    setResult(null);
-    if (!repo) return;
-    load();
-    const timer = setInterval(load, BACKLOG_POLL_MS);
-    return () => clearInterval(timer);
-  }, [repo]);
+  useEffect(() => setResult(null), [repo]);
 
   const act = async (action: WorkAction, answers?: Answers): Promise<WorkResult> => {
     if (!repo) return { error: "No repository." };
@@ -326,58 +334,36 @@ export function useWorkArea(
       const { number: _, ...then } = action;
       said = await sendAnswers(repo, { ...answers, then: then as AnswersThen });
     } else {
-      try {
-        const res = await fetch(`api/repos/${repo}/work`, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify(action),
-        });
-        said = await answer<WorkResult>(res);
-      } catch (e) {
-        said = { error: message(e) };
-      }
+      said = await postJson<WorkResult>(`api/repos/${repo}/work`, action);
     }
     setResult(said);
     const done = !said.error;
     // The real node replaces the pending one, and the issue leaves the backlog for good:
     // both read again before it goes. A refusal just takes it away.
-    if (done) await Promise.all([refresh(), load()]);
+    if (done) await Promise.all([refresh(), read.reload()]);
     setPending((all) => all.filter((p) => p !== mine));
     return said;
   };
 
   const mine = pending.filter((p) => p.repo === repo);
-  return { backlog, error, busy: mine.length > 0, pending: mine, result, act };
+  return {
+    backlog,
+    error: read.error,
+    busy: mine.length > 0,
+    pending: mine,
+    result,
+    act,
+  };
 }
 
 // Answers to a task's open questions: what the listener says, or why it refused.
-export async function sendAnswers(repo: string, answers: Answers): Promise<WorkResult> {
-  try {
-    const res = await fetch(`api/repos/${repo}/answer`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(answers),
-    });
-    return await answer<WorkResult>(res);
-  } catch (e) {
-    return { error: message(e) };
-  }
-}
+export const sendAnswers = (repo: string, answers: Answers) =>
+  postJson<WorkResult>(`api/repos/${repo}/answer`, answers);
 
 // A task's last run again, when it failed (api/repos/<repo>/rerun): what the listener says,
 // or why it refused.
-export async function sendRerun(repo: string, runId: string): Promise<WorkResult> {
-  try {
-    const res = await fetch(`api/repos/${repo}/rerun`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ runId }),
-    });
-    return await answer<WorkResult>(res);
-  } catch (e) {
-    return { error: message(e) };
-  }
-}
+export const sendRerun = (repo: string, runId: string) =>
+  postJson<WorkResult>(`api/repos/${repo}/rerun`, { runId });
 
 // Stops the task's run (api/repos/<repo>/work, `cancel`): what the listener says, or why it
 // refused. `pr`: a pull request's task.
@@ -388,21 +374,11 @@ export function sendCancel(repo: string, number: number, pr: boolean): Promise<W
 
 // An idea or a bug report for the repo's inbox (api/repos/<repo>/inbox): the comment it
 // became and the inbox's task, or why it was refused.
-export async function sendToInbox(repo: string, entry: InboxEntry): Promise<InboxResult> {
-  try {
-    const res = await fetch(`api/repos/${repo}/inbox`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(entry),
-    });
-    return await answer<InboxResult>(res);
-  } catch (e) {
-    return { error: message(e) };
-  }
-}
+export const sendToInbox = (repo: string, entry: InboxEntry) =>
+  postJson<InboxResult>(`api/repos/${repo}/inbox`, entry);
 
 // What an analysis of these runs would read (api/repos/<repo>/analyze), or why it can't.
-export async function previewAnalysis(
+export function previewAnalysis(
   repo: string,
   { count, kinds, outcomes }: AnalysisSelection,
 ): Promise<AnalysisPreview> {
@@ -411,44 +387,12 @@ export async function previewAnalysis(
     kinds: kinds.join(","),
     outcomes: outcomes.join(","),
   });
-  try {
-    const res = await fetch(`api/repos/${repo}/analyze?${query}`, { cache: "no-store" });
-    return await answer<AnalysisPreview>(res);
-  } catch (e) {
-    return { error: message(e) };
-  }
+  return getJson<AnalysisPreview>(`api/repos/${repo}/analyze?${query}`);
 }
 
 // A run analysis: its new issue and task, or why it was refused.
-export async function startAnalysis(
-  repo: string,
-  selection: AnalysisSelection,
-): Promise<AnalysisResult> {
-  try {
-    const res = await fetch(`api/repos/${repo}/analyze`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(selection),
-    });
-    return await answer<AnalysisResult>(res);
-  } catch (e) {
-    return { error: message(e) };
-  }
-}
-
-// POSTs a JSON body: what the listener says, or why it refused.
-async function postJson<T>(url: string, body: unknown): Promise<T & { error?: string }> {
-  try {
-    const res = await fetch(url, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    return await answer<T>(res);
-  } catch (e) {
-    return { error: message(e) } as T & { error?: string };
-  }
-}
+export const startAnalysis = (repo: string, selection: AnalysisSelection) =>
+  postJson<AnalysisResult>(`api/repos/${repo}/analyze`, selection);
 
 // A discussion in the repo's discussions category (api/repos/<repo>/discussions): the
 // discussion it became and its task, or why it was refused.
@@ -472,30 +416,9 @@ export interface ThreadView {
 // A discussion's thread while it is shown, read again now and then: comments written on
 // GitHub show up too.
 export function useThread(repo: string, number: number): ThreadView {
-  const [thread, setThread] = useState<Thread | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const current = useRef("");
-  const key = `${repo}#${number}`;
-  current.current = key;
-  const load = async () => {
-    try {
-      const res = await fetch(`api/repos/${repo}/discussions/${number}`, { cache: "no-store" });
-      if (res.status === 401) return location.reload();
-      const body = await answer<Thread>(res);
-      if (current.current !== key) return;
-      if (body.error) return setError(body.error);
-      setThread(body);
-      setError(null);
-    } catch (e) {
-      if (current.current === key) setError(message(e));
-    }
-  };
-  useEffect(() => {
-    setThread(null);
-    setError(null);
-    load();
-    const timer = setInterval(load, THREAD_POLL_MS);
-    return () => clearInterval(timer);
-  }, [key]);
-  return { thread, error, reload: load };
+  const { data, error, reload } = usePolled<Thread>(
+    `api/repos/${repo}/discussions/${number}`,
+    THREAD_POLL_MS,
+  );
+  return { thread: data, error, reload };
 }

@@ -1,7 +1,7 @@
 // One tab per repo, plus All. Each counts its tasks that are running and those waiting for
 // the maintainer.
 import { useEffect, useRef } from "preact/hooks";
-import { inChip, repoTabs } from "./format";
+import { inChip, repoTabs, shortRepo } from "./format";
 import type { Task } from "./types";
 import styles from "./Tabs.module.css";
 
@@ -15,7 +15,7 @@ export function Tabs({ tasks, repo, onSelect }: Props) {
   const tabs = repoTabs(tasks);
   // A repo from the address that has no task (yet) still gets its tab.
   if (repo && !tabs.some((t) => t.repo === repo)) {
-    tabs.push({ repo, label: repo.slice(repo.indexOf("/") + 1) });
+    tabs.push({ repo, label: shortRepo(repo) });
   }
   const all = [{ repo: null, label: "All" }, ...tabs];
   // The open tab stays in view on a narrow screen, where they scroll sideways.

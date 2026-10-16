@@ -162,20 +162,14 @@
 }
 
 .send {
+  composes: primary from "./controls.module.css";
   padding: 0.25rem 0.9rem;
-  border: 1px solid var(--accent);
-  border-radius: 6px;
-  background: var(--accent);
-  color: var(--panel);
-  font: inherit;
   font-size: 0.8rem;
-  font-weight: 600;
-  cursor: pointer;
 }
 
-.send:disabled {
+/* Fainter than other disabled buttons: the box waits for its text. */
+.actions .send:disabled {
   opacity: 0.5;
-  cursor: default;
 }
 
 @media (max-width: 760px) {
