@@ -40,6 +40,7 @@ import { loadRepoSettings, readRepoFile } from "./repo-config.mjs";
 import { createRepoApi, createRepoList } from "./repos.mjs";
 import { createRestart } from "./restart.mjs";
 import { loadRuns } from "./runlog.mjs";
+import { createDiscussionApi } from "./discussions.mjs";
 import { createDockerRunner } from "./runner/docker.mjs";
 import { createRuns } from "./runs.mjs";
 import { createSetup } from "./setup.mjs";
@@ -266,7 +267,8 @@ Object.assign(ctx, {
   usersOf: (repo) => latestRead(repo)?.users ?? null,
   // Unknown: the default, on.
   waitsForAnswers: (repo) => latestRead(repo)?.waitForAnswers ?? true,
-  // Each repo read so far and its inbox issues ({ ideas, bugs }): the dashboard's inbox form.
+  // Each repo read so far, its inbox issues and discussions category ({ ideas, bugs,
+  // discussions }): the dashboard's Feedback form.
   inboxes: () => {
     const names = new Map(
       [...[...repoUsers.values()].map((r) => r.repo), ...repoList.known()].map((n) => [
@@ -275,8 +277,8 @@ Object.assign(ctx, {
       ]),
     );
     return [...names.values()].map((repo) => {
-      const { ideas = null, bugs = null } = latestRead(repo)?.inbox ?? {};
-      return [repo, { ideas, bugs }];
+      const { ideas = null, bugs = null, discussions = null } = latestRead(repo)?.inbox ?? {};
+      return [repo, { ideas, bugs, discussions }];
     });
   },
   repoFile,
@@ -414,6 +416,16 @@ ctx.workApi = createWorkApi({
   label: (repo, number, on) => ctx.label(repo, number, on),
   inputs,
   runOf: (id) => ctx.runs.find((r) => r.id === id) ?? null,
+  publicUrl,
+  log,
+});
+
+// Discussions started, read and answered from the dashboard, with the work area's checks.
+ctx.discussionApi = createDiscussionApi({
+  config,
+  graphql,
+  checkedRepo: ctx.workApi.checkedRepo,
+  accept: (item) => ctx.accept(item),
   publicUrl,
   log,
 });

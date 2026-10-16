@@ -179,7 +179,7 @@ export function createHttp(ctx, { dashboardDir }) {
       queued: queued.length,
       maxParallel: config.maxParallel,
       previews: ctx.previews.status().filter((h) => sees(user, h.repo)),
-      // The inbox issues of each repo read so far (the dashboard's inbox form).
+      // Each repo read so far: its inbox issues and discussions category (the Feedback form).
       inboxes: Object.fromEntries((ctx.inboxes?.() ?? []).filter(([repo]) => sees(user, repo))),
       // GitHub Enterprise: the dashboard's links go where the listener's do.
       githubUrl: config.githubUrl,
@@ -457,6 +457,7 @@ export function createHttp(ctx, { dashboardDir }) {
       if (!ctx.app) return res.writeHead(503).end();
       const user = ctx.auth.user(req);
       if (ctx.workApi.handle(req, res, user)) return;
+      if (ctx.discussionApi?.handle(req, res, user)) return;
       if (ctx.repoApi.handle(req, res, user)) return;
     }
     // GitHub only ever POSTs to /webhook; everything a browser asks for is the dashboard.

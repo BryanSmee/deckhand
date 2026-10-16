@@ -1,6 +1,7 @@
 // The open task: its repo and title, the last reply's first line, its runs, and the log of
 // the run shown (the latest unless one was picked). Waiting for input: its open questions, as
-// a form to answer them. Its last run failed: a button to run it again.
+// a form to answer them. Its last run failed: a button to run it again. A discussion: its
+// thread, to read and reply to, or the run's log.
 import { useState } from "preact/hooks";
 import { sendRerun } from "./api";
 import { ago, duration, githubUrl, kindName, numberOf, ownMode, runName, titleOf } from "./format";
@@ -8,6 +9,7 @@ import { Log } from "./Log";
 import { PrLink } from "./PullRequest";
 import { Questions } from "./Questions";
 import { StateBadge, StateDot } from "./State";
+import { Thread } from "./Thread";
 import type { Run, Task } from "./types";
 import styles from "./Detail.module.css";
 
@@ -28,6 +30,8 @@ export function Detail({ task: t, run: r, onRun, onBack, now, github, refresh }:
   const [sent, setSent] = useState<{ key: string; message: string; error?: boolean } | null>(null);
   // The run whose rerun is on its way.
   const [rerunning, setRerunning] = useState<string | null>(null);
+  // A discussion's page shows its thread, or the run's log.
+  const [showLog, setShowLog] = useState(false);
   if (!t) {
     return (
       <div class={styles.detail}>
@@ -42,6 +46,8 @@ export function Detail({ task: t, run: r, onRun, onBack, now, github, refresh }:
   const asked = t.state === "needs-input" ? t.questions : undefined;
   // The latest run only, and only when it is the one shown.
   const failed = t.rerunnable && r && r.id === t.runs[0]?.id ? r : null;
+  const discussion = t.kind === "discussion" && t.number !== null;
+  const thread = discussion && !showLog;
   const again = async (run: Run) => {
     setRerunning(run.id);
     const said = await sendRerun(t.repo, run.id);
@@ -127,12 +133,25 @@ export function Detail({ task: t, run: r, onRun, onBack, now, github, refresh }:
               class={styles.run}
               aria-current={x.id === r?.id}
               title={i === 0 ? "Latest: follows the next runs" : x.id}
-              onClick={() => onRun(i === 0 ? null : x.id)}
+              onClick={() => {
+                setShowLog(true);
+                onRun(i === 0 ? null : x.id);
+              }}
             >
               <StateDot state={x.status} />
               {runName(x)} · {x.status === "running" ? duration(x, now) : ago(x.startedAt, now)}
             </button>
           ))}
+        </nav>
+      )}
+      {discussion && (
+        <nav class={styles.views} aria-label="Show">
+          <button type="button" aria-pressed={thread} onClick={() => setShowLog(false)}>
+            Thread
+          </button>
+          <button type="button" aria-pressed={!thread} onClick={() => setShowLog(true)}>
+            Log
+          </button>
         </nav>
       )}
       {sent?.key === t.key && (
@@ -151,7 +170,9 @@ export function Detail({ task: t, run: r, onRun, onBack, now, github, refresh }:
           }}
         />
       )}
-      {r ? (
+      {thread ? (
+        <Thread key={t.key} task={t} now={now} refresh={refresh} />
+      ) : r ? (
         <Log runId={r.id} />
       ) : asked ? null : t.state === "needs-input" ? (
         // Labelled for its open questions (an inbox run filed it, or someone wrote it so).

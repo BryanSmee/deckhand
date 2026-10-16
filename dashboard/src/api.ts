@@ -1,6 +1,6 @@
 // The listener's API: api/state polled, a run's log streamed (server-sent events), the
 // repositories listed, onboarded and their config read, the graph's backlog and its actions,
-// answers to open questions, a failed run again.
+// answers to open questions, a failed run again, feedback and discussions.
 // Relative URLs, like the assets: the page works under any path.
 import { useEffect, useRef, useState } from "preact/hooks";
 import type { Pending } from "./graph";
@@ -8,6 +8,9 @@ import type {
   Answers,
   AnswersThen,
   Backlog,
+  DiscussionComment,
+  DiscussionResult,
+  DiscussionStart,
   Entry,
   InboxEntry,
   InboxResult,
@@ -16,6 +19,7 @@ import type {
   RepoConfig,
   Repos,
   State,
+  Thread,
   WorkAction,
   WorkResult,
 } from "./types";
@@ -370,4 +374,68 @@ export async function sendToInbox(repo: string, entry: InboxEntry): Promise<Inbo
   } catch (e) {
     return { error: message(e) };
   }
+}
+
+// POSTs a JSON body: what the listener says, or why it refused.
+async function postJson<T>(url: string, body: unknown): Promise<T & { error?: string }> {
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    return await answer<T>(res);
+  } catch (e) {
+    return { error: message(e) } as T & { error?: string };
+  }
+}
+
+// A discussion in the repo's discussions category (api/repos/<repo>/discussions): the
+// discussion it became and its task, or why it was refused.
+export const startDiscussion = (repo: string, start: DiscussionStart) =>
+  postJson<DiscussionResult>(`api/repos/${repo}/discussions`, start);
+
+// A comment in discussion `number`, in a thread when `replyTo` says which.
+export const sendDiscussionComment = (repo: string, number: number, comment: DiscussionComment) =>
+  postJson<WorkResult>(`api/repos/${repo}/discussions/${number}/comments`, comment);
+
+// The listener reads GitHub at most every 15 seconds for it.
+const THREAD_POLL_MS = 15000;
+
+export interface ThreadView {
+  thread: Thread | null;
+  error: string | null;
+  // Read it now (a comment sent).
+  reload: () => Promise<void>;
+}
+
+// A discussion's thread while it is shown, read again now and then: comments written on
+// GitHub show up too.
+export function useThread(repo: string, number: number): ThreadView {
+  const [thread, setThread] = useState<Thread | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const current = useRef("");
+  const key = `${repo}#${number}`;
+  current.current = key;
+  const load = async () => {
+    try {
+      const res = await fetch(`api/repos/${repo}/discussions/${number}`, { cache: "no-store" });
+      if (res.status === 401) return location.reload();
+      const body = await answer<Thread>(res);
+      if (current.current !== key) return;
+      if (body.error) return setError(body.error);
+      setThread(body);
+      setError(null);
+    } catch (e) {
+      if (current.current === key) setError(message(e));
+    }
+  };
+  useEffect(() => {
+    setThread(null);
+    setError(null);
+    load();
+    const timer = setInterval(load, THREAD_POLL_MS);
+    return () => clearInterval(timer);
+  }, [key]);
+  return { thread, error, reload: load };
 }

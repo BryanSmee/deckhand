@@ -283,11 +283,19 @@ function discussionItem(config, event, p, skip) {
     return skip(`discussion category "${category}" doesn't call Deckhand`);
   }
   const c = event === "discussion" ? null : p.comment;
+  return discussionEntryItem(p.repository.full_name, d, c, (c ?? d).user, (c ?? d).body ?? "");
+}
+
+// A discussion's item ("discussion"): a new one when `c` is null, else a comment in it. From a
+// webhook, or the App's post for one sent from the dashboard (discussions.mjs), where `author`
+// is who sent it and `body` its text without the App's line. `d`: { number, title, html_url,
+// node_id, id }; `c`: { id, node_id, html_url, parent_id }, as the webhook has them.
+export function discussionEntryItem(repo, d, c, author, body) {
   const text = c
-    ? entry(c.user, c.html_url, c.body ?? "")
-    : `${entry(d.user, d.html_url, d.body ?? "")}\n\n(Title: ${d.title})`;
+    ? entry(author, c.html_url, body)
+    : `${entry(author, d.html_url, body)}\n\n(Title: ${d.title})`;
   return {
-    repo: p.repository.full_name,
+    repo,
     id: `discussion-${d.number}`,
     kind: "discussion",
     number: d.number,

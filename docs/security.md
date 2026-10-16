@@ -503,6 +503,14 @@ repository's half of these checks (same origin, the user in `ALLOWED_USERS` and 
 posted on the inbox issue as the App's comment, ending "From the dashboard by @alice", and its
 run reads it as that user's entry, as it would read their own comment there.
 
+Discussions from the dashboard (`POST /api/repos/<owner>/<repo>/discussions`, and
+`…/discussions/<n>/comments`) pass the same checks, only in the repo's `inbox.discussions`
+category: a discussion elsewhere, or a reply to a comment of another discussion, is refused. Their
+text is posted as the App's, ending "From the dashboard by @alice". Reading a thread
+(`GET …/discussions/<n>`) takes a signed-in user in `ALLOWED_USERS` and the repo's `users`,
+for a discussion in that category only. The thread shows a post as a dashboard user's only when
+the App wrote it: anyone else writing the same line is shown as themself.
+
 ## Hardening
 
 Every sandbox runs:

@@ -111,6 +111,8 @@ test("old links open their task and run", () => {
   history.replaceState(null, "", "#task=acme%2Fnotes%23discussion-8");
   render(<Dashboard state={state} error={null} />);
   expect(screen.getByRole("heading", { level: 1, name: /How do runs restart/ })).toBeTruthy();
+  // A discussion shows its thread first; its run's log is a click away.
+  fireEvent.click(screen.getByRole("button", { name: "Log" }));
   expect(FakeSource.last!.url).toBe("api/runs/acme-notes-discussion-8-1791896400000/stream");
 });
 
