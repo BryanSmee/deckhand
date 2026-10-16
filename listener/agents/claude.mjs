@@ -1,12 +1,11 @@
 // Claude Code, the agent behind the seam (index.mjs): what Deckhand needs to install it, run
 // it and read it. Its sandbox half is ../../sandbox/agents/claude.sh.
 import { CREDENTIALS } from "../anthropic.mjs";
+import { EFFORTS, installSpec, normalizer } from "./common.mjs";
 
 // Deckhand's model tiers (`/model best`) → Claude Code's aliases, which the operator can point
 // elsewhere (ANTHROPIC_DEFAULT_OPUS_MODEL…, config.modelAliases).
 const MODELS = { best: "opus", balanced: "sonnet", fast: "haiku" };
-// Deckhand's efforts are Claude Code's own.
-const EFFORTS = { low: "low", medium: "medium", high: "high", xhigh: "xhigh", max: "max" };
 
 // What a tool call is about, for the dashboard: the input that says it, else all of it.
 function detailOf(input = {}) {
@@ -55,15 +54,12 @@ const EVENTS = {
 export const claude = {
   name: "claude",
   displayName: "Claude",
-  // Installed per version into a shared, root-owned volume (images.installAgent()), mounted
-  // read-only in sandboxes.
-  install: (config) => ({
-    volume: config.claudeCodeVolume,
-    mount: "/opt/claude-code",
-    version: config.claudeCodeVersion,
-    versionVar: "CLAUDE_CODE_VERSION",
-    command: "deckhand-install-claude-code",
-  }),
+  install: (config) =>
+    installSpec("claude-code", {
+      volume: config.claudeCodeVolume,
+      version: config.claudeCodeVersion,
+      versionVar: "CLAUDE_CODE_VERSION",
+    }),
   // Its environment on `provider`. No credential: Claude Code calls the listener
   // (anthropic.mjs) with the run's secret in its place, in the variable that gives the
   // provider's header (a gateway's token as a bearer).
@@ -102,17 +98,9 @@ export const claude = {
   models: () => MODELS,
   // Any name passes: a gateway's models have names of their own (openai/gpt-…).
   modelProblem: () => null,
+  // Deckhand's efforts are Claude Code's own.
   efforts: EFFORTS,
   // One line of its output (stream-json) → Deckhand's events: started{model}, text,
-  // tool{name, detail}, toolOutput{text, error}, result{ok, text, durationMs}. Lines that
-  // aren't its JSON give none.
-  normalize(line) {
-    let e;
-    try {
-      e = JSON.parse(line);
-    } catch {
-      return [];
-    }
-    return e && Object.hasOwn(EVENTS, e.type) ? EVENTS[e.type](e) : [];
-  },
+  // tool{name, detail}, toolOutput{text, error}, result{ok, text, durationMs}.
+  normalize: normalizer(EVENTS),
 };
