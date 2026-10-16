@@ -220,12 +220,18 @@ test("the listener's policy: its answer, or refused when it can't answer", async
   const listener = createServer((req, res) => {
     asked.push(req.url);
     if (req.url.includes("broken")) return res.writeHead(500).end();
-    res.end(JSON.stringify({ allowed: req.url.includes("good"), private: true }));
+    const cache = req.url.includes("cached");
+    res.end(JSON.stringify({ allowed: req.url.includes("good"), private: true, cache }));
   });
   const port = await listening(listener);
   t.after(() => listener.close());
   const policy = listenerPolicy(`http://127.0.0.1:${port}/egress`);
-  assert.deepEqual(await policy("10.0.0.5", "good.com"), { allowed: true, private: true });
+  assert.deepEqual(await policy("10.0.0.5", "good.com"), {
+    allowed: true,
+    private: true,
+    cache: false,
+  });
+  assert.equal((await policy("10.0.0.5", "good.cached.com")).cache, true);
   assert.equal((await policy("10.0.0.5", "bad.com")).allowed, false);
   assert.equal((await policy("10.0.0.5", "broken.com")).allowed, false);
   assert.equal(asked[0], "/egress?ip=10.0.0.5&host=good.com");

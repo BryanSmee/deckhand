@@ -11,6 +11,7 @@
 //   grants/
 //     default.yaml       # every repo: the flags, hosts added to each repo's, base limits
 //       hosts: [pypi.org]
+//       cached_hosts: [deb.debian.org]  # plain HTTP from them is kept by the egress proxy
 //       allow_dockerfile: true
 //       limits: { memory: 8g }   # over the built-in 2 CPUs, 4g, 2048 pids
 //     acme/api.yaml      # acme/api, matched case-insensitively
@@ -63,7 +64,11 @@ const REPO_ONLY = new Set(["allow_docker"]);
 
 const NO_FLAGS = Object.fromEntries(Object.values(FLAGS).map((f) => [f, null]));
 
-// One file's text → { hosts, mounts, limits, and FLAGS }; a flag is null when the file doesn't
+// The keys listing hosts: what a run may reach, and of those, what the egress proxy may keep
+// in its cache (plain HTTP only, proxy/cache.mjs).
+const HOST_LISTS = { hosts: "hosts", cached_hosts: "cachedHosts" };
+
+// One file's text → { hosts, cachedHosts, mounts, limits, and FLAGS }; a flag is null when the file doesn't
 // say, so default.yaml decides (grantFor), and limits null unless it sets them. `file` names it
 // in errors; `base`: the limits its own start from. Throws a GrantsError listing every error.
 export function parseGrant(text, file, base, { isDefault = false } = {}) {
@@ -76,7 +81,7 @@ export function parseGrant(text, file, base, { isDefault = false } = {}) {
     throw new GrantsError(`${file}: ${error.message}`, file);
   }
   if (!isMap(value)) throw new GrantsError(`${file}: expected a mapping of grants`, file);
-  const grant = { hosts: [], ...NO_FLAGS, mounts: [], limits: null };
+  const grant = { hosts: [], cachedHosts: [], ...NO_FLAGS, mounts: [], limits: null };
   for (const [key, v] of Object.entries(value)) {
     if (key === "allow_repo_hosts") {
       // Ignoring it would quietly take away the hosts the repo's .deckhand.yaml added.
@@ -86,12 +91,12 @@ export function parseGrant(text, file, base, { isDefault = false } = {}) {
     } else if (Object.hasOwn(FLAGS, key)) {
       if (typeof v === "boolean") grant[FLAGS[key]] = v;
       else fail(`${key}: expected true or false`);
-    } else if (key === "hosts") {
-      if (!Array.isArray(v)) fail("hosts: expected a list of host names");
+    } else if (Object.hasOwn(HOST_LISTS, key)) {
+      if (!Array.isArray(v)) fail(`${key}: expected a list of host names`);
       else
         for (const host of v) {
-          if (hostProblem(host)) fail(`hosts: ${JSON.stringify(host)}: ${hostProblem(host)}`);
-          else grant.hosts.push(host.toLowerCase());
+          if (hostProblem(host)) fail(`${key}: ${JSON.stringify(host)}: ${hostProblem(host)}`);
+          else grant[HOST_LISTS[key]].push(host.toLowerCase());
         }
     } else if (key === "limits") {
       try {
@@ -123,7 +128,7 @@ export function parseGrant(text, file, base, { isDefault = false } = {}) {
         }
       }
     } else {
-      const keys = ["hosts", "limits", ...(isDefault ? [] : ["mounts"])];
+      const keys = ["hosts", "cached_hosts", "limits", ...(isDefault ? [] : ["mounts"])];
       fail(`${key}: unknown (${keys.join(", ")} or ${Object.keys(FLAGS).join(", ")})`);
     }
   }
@@ -291,7 +296,7 @@ export function grantErrors(grants) {
 
 // What one repo gets: default.yaml's grants and its own file's, else nothing extra and the
 // operator's limits. Each flag is what its own file says, or else default.yaml, or else
-// false; hosts add up; limits are its own over default.yaml's over the built-in ones. `files`: where
+// false; hosts add up, and cached hosts too; limits are its own over default.yaml's over the built-in ones. `files`: where
 // it comes from; `hostFiles` and `limitsFile` too, for the dashboard. Throws its file's
 // GrantsError when that file has errors.
 export function grantFor(grants, config, repo) {
@@ -305,11 +310,13 @@ export function grantFor(grants, config, repo) {
   ]) {
     for (const host of grant?.hosts ?? []) hostFiles[host] ??= file;
   }
+  const cachedHosts = [...new Set([...(defaults?.cachedHosts ?? []), ...(own?.cachedHosts ?? [])])];
   const flags = Object.fromEntries(
     Object.values(FLAGS).map((f) => [f, own?.[f] ?? defaults?.[f] ?? false]),
   );
   return {
     hosts: Object.keys(hostFiles),
+    cachedHosts,
     ...flags,
     mounts: own?.mounts ?? [],
     limits: own?.limits ?? defaults?.limits ?? config.limits,

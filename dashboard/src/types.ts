@@ -246,6 +246,8 @@ export interface Grant {
   allowBranchDockerImages: boolean;
   allowDocker: boolean;
   hosts: string[];
+  // Those whose plain HTTP answers the egress proxy keeps in its cache.
+  cachedHosts: string[];
   mounts: { root: string; readOnly: boolean }[];
   limits: { cpus: string; memory: string; pids: number };
 }

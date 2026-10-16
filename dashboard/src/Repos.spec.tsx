@@ -63,6 +63,7 @@ const CONFIG: RepoConfig = {
       allowBranchDockerImages: false,
       allowDocker: false,
       hosts: ["pypi.org"],
+      cachedHosts: [],
       mounts: [],
       limits: { cpus: "2", memory: "4g", pids: 2048 },
     },

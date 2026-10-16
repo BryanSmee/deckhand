@@ -139,7 +139,9 @@ hosts the operator grants the repository in their grants folder (`hosts` in
 `grants/default.yaml` for every repository, `grants/<owner>/<repo>.yaml` for this one).
 Anything else is refused with a `403` saying so. This file has no `hosts`: anyone who can
 push to the default branch could otherwise open the sandbox's network, so only the operator
-lists them (one here is ignored, with a warning). Ask the operator for the registries and
+lists them (one here is ignored, with a warning). The same goes for `cached_hosts`, those of
+them whose plain HTTP answers the egress proxy keeps for every run
+([The egress cache](security.md#the-egress-cache)). Ask the operator for the registries and
 APIs the repository needs; the onboarding issue lists them. See
 [Where a sandbox's hosts come from](security.md#where-a-sandboxs-hosts-come-from).
 

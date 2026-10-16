@@ -322,6 +322,9 @@ grant that repository:
 # acme/api.yaml
 # Reachable by its sandboxes, besides the mandatory hosts and default.yaml's.
 hosts: ["*.acme.dev", pypi.org]
+# Of the hosts it may reach, those whose plain HTTP answers the egress proxy keeps (see The
+# egress cache below), besides default.yaml's.
+cached_hosts: [apt.acme.dev]
 # Its .deckhand.yaml's `preview` hook runs, with the Docker socket: root on the host.
 allow_preview: true
 # Its .deckhand.yaml's `dockerfile` is built on the host's Docker, with its network.
@@ -349,6 +352,8 @@ mounts:
 allow_dockerfile: false
 # Hosts every repository's sandboxes may reach, added to its own file's.
 hosts: [pypi.org]
+# Plain HTTP mirrors every repository's runs download from again and again, cached.
+cached_hosts: [deb.debian.org]
 # Every sandbox's limits, over the built-in 2 CPUs, 4g and 2048 processes; a repository's
 # own file overrides each one.
 limits: { memory: 8g }
@@ -609,6 +614,9 @@ inspect`) and answers from that run's list. Only the proxy may ask: the listener
   IPv4 one (`::ffff:0:0/96`, `::ffff:0:0:0/96`, `::/96`, NAT64's `64:ff9b::/96`, 6to4's
   `2002::/16`) are checked as that IPv4 address, so `[::ffff:a9fe:a9fe]` is the metadata
   service too.
+- The proxy keeps plain HTTP answers from the hosts you list in `cached_hosts` (see
+  [The egress cache](#the-egress-cache)). `CONNECT` is never cached: it stays a tunnel the
+  proxy can't read.
 - The listener forgets a sandbox's address as soon as it sees the sandbox exit, before
   posting its reply: Docker may give the address to another sandbox, which must not get the
   finished run's hosts.
@@ -616,6 +624,36 @@ inspect`) and answers from that run's list. Only the proxy may ask: the listener
   listener) and `NODE_USE_ENV_PROXY=1`: without it, Node's `fetch` ignores the proxy (and
   fails, as nothing else goes out). The Playwright browser gets the proxy as flags. A tool
   that ignores proxy settings fails closed: it has no route out.
+
+### The egress cache
+
+Runs download the same packages again and again: `apt-get` from a Debian mirror, a
+toolchain from its release server. For plain HTTP (`http://`) from the hosts you list in
+`cached_hosts` (in `grants/default.yaml` and `grants/<owner>/<repo>.yaml`, added up like
+`hosts`, with the same patterns), the egress proxy keeps the answers on disk, in the
+`egress-cache` volume, and serves them to every run. A repository's `.deckhand.yaml`
+can't list them (one there is ignored, with a warning): the cache is shared by every run, so
+only you say what goes in it. A host in `cached_hosts` must be reachable too (in `hosts`, or
+mandatory): `cached_hosts` alone opens nothing.
+
+- **What is kept**: only what is the same for anyone. A `GET` without `Authorization`,
+  `Cookie` or `Range`, answered `200` without `Cache-Control: private` or `no-store`, without
+  `Set-Cookie`, varying on nothing but `Accept-Encoding` (part of the key, with the URL), and
+  within `EGRESS_CACHE_ENTRY_MAX`. Anything else is forwarded as before.
+- **Freshness**: the host's `Cache-Control` (`s-maxage`, `max-age`, `no-cache`), else its
+  `Expires`, else a tenth of the time since its `Last-Modified` (a day at most), else none.
+  A fresh answer is served from disk without asking the host; a stale one is checked with
+  `If-None-Match` / `If-Modified-Since`, and a `304` serves it. A client's own
+  `Cache-Control: no-cache` has it checked too. Each answer says how in an
+  `x-deckhand-cache: hit | miss | revalidated` header.
+- **Downloads**: the first one is streamed to the client while it is written to a temporary
+  file, renamed into place once complete. A client that disconnects, a host that stops
+  midway or a body over the per-entry limit leaves nothing behind.
+- **Size**: over `EGRESS_CACHE_MAX` (10 GB by default), the least recently used answers are
+  removed. `EGRESS_CACHE_MAX=0` turns the cache off ([Setup](setup.md#advanced-settings)).
+- **Trust**: plain HTTP can be tampered with on the way, cached or not, and a cached answer
+  then reaches every run. Cache only what the client checks itself (apt's signed indexes and
+  their package checksums do) or hosts you would trust over plain HTTP anyway.
 
 ### Where a sandbox's hosts come from
 

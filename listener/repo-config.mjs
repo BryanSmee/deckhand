@@ -319,6 +319,10 @@ const KEYS = {
   hosts: (value, { key, warn }) => {
     warn(`${key}: ignored, the operator lists the hosts in grants/<owner>/<repo>.yaml`);
   },
+  // The egress proxy's cache is shared by every run: only the operator says what goes in it.
+  cached_hosts: (value, { key, warn }) => {
+    warn(`${key}: ignored, the operator lists them in grants/<owner>/<repo>.yaml`);
+  },
   mounts: parseMounts,
   inbox: parseInbox,
   modes: (value, { key, settings, config, fail }) => {

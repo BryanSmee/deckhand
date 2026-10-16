@@ -280,9 +280,11 @@ export function createRuns(ctx) {
       open: false, // whether its inbox takes comments
       replied: false,
       // What the egress proxy lets it reach (egressAnswer()), those of them that may resolve to
-      // private addresses (the operator's), and its address once known. Until it exits.
+      // private addresses (the operator's), those whose plain HTTP it may cache, and its
+      // address once known. Until it exits.
       hosts: null,
       trusted: null,
+      cached: null,
       ip: null,
       // What it may push (pushBranches()), once it starts.
       branches: [],
@@ -314,6 +316,7 @@ export function createRuns(ctx) {
     live.shots = shotsFolder();
     live.hosts = access.hosts;
     live.trusted = access.trusted;
+    live.cached = access.grant.cachedHosts;
     if (ctx.stopping) return false;
     const prompt = promptFor(task, {
       mode: live.mode,
@@ -816,6 +819,7 @@ export function createRuns(ctx) {
     // reply is posted: the egress proxy's answers for it stop now.
     live.hosts = null;
     live.trusted = null;
+    live.cached = null;
     live.ip = null;
     try {
       if (error) throw error;

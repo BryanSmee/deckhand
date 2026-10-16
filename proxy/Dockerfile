@@ -3,7 +3,9 @@
 # the repository root (compose.yaml).
 FROM node:22-alpine
 WORKDIR /app
-COPY proxy/proxy.mjs proxy/
+COPY proxy/proxy.mjs proxy/cache.mjs proxy/
+# The egress cache's folder, the node user's: a new volume mounted there takes its owner.
+RUN mkdir /cache && chown node:node /cache
 USER node
 EXPOSE 3128
 CMD ["node", "proxy/proxy.mjs"]

@@ -1251,7 +1251,11 @@ mounts:
     assert.equal((await send(comment("alice"))).status, 202);
     await github.waitFor(reply);
     const asked = await fetch(`http://127.0.0.1:${brokerPort}/egress?ip=10.9.0.5&host=github.com`);
-    assert.deepEqual(await asked.json(), { allowed: false, private: false });
+    assert.deepEqual(await asked.json(), {
+      allowed: false,
+      private: false,
+      cache: false,
+    });
     release();
   });
 

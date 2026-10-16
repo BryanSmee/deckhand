@@ -507,8 +507,8 @@ export function createHttp(ctx, { dashboardDir }) {
     }
     const task = await taskAt(ip);
     const answer = task
-      ? egressPolicy(host, task.live.hosts, task.live.trusted)
-      : { allowed: false, private: false };
+      ? egressPolicy(host, task.live.hosts, task.live.trusted, task.live.cached)
+      : { allowed: false, private: false, cache: false };
     if (!answer.allowed)
       log(`Egress: refused ${host} for ${task ? `${task.repo}#${task.id}` : ip}`);
     sendJson(res, answer);

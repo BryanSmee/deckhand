@@ -229,6 +229,7 @@ function GrantTable({ grant }: { grant: Grant }) {
     ["allow_preview", String(grant.allowPreview)],
     ["allow_docker", String(grant.allowDocker)],
     ["hosts", grant.hosts.join(", ") || "none"],
+    ["cached_hosts", grant.cachedHosts.join(", ") || "none"],
     [
       "mounts",
       grant.mounts.map((m) => `${m.root}${m.readOnly ? " (read-only)" : ""}`).join(", ") || "none",

@@ -48,11 +48,16 @@ export function matchHost(host, patterns) {
 
 // The proxy's answer for `host` in a run. Private addresses only for a host or domain the
 // operator named (`trusted`: operatorHosts()), never through "*" alone. A run restored from
-// before repos lost their own `hosts` may still list some: those stay public only.
-export function egressPolicy(host, hosts, trusted) {
+// before repos lost their own `hosts` may still list some: those stay public only. `cache`:
+// the proxy may keep its plain HTTP answers (the grant's `cached_hosts`, matched like hosts).
+export function egressPolicy(host, hosts, trusted, cached) {
   const allowed = matchHost(host, hosts) !== null;
   const named = matchHost(host, trusted ?? []);
-  return { allowed, private: allowed && (named === "exact" || named === "wildcard") };
+  return {
+    allowed,
+    private: allowed && (named === "exact" || named === "wildcard"),
+    cache: allowed && matchHost(host, cached ?? []) !== null,
+  };
 }
 
 // The proxy settings a sandbox gets. Both cases, as tools disagree (curl only reads the
