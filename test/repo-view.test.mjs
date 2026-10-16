@@ -1,14 +1,13 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, realpathSync, symlinkSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, realpathSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
-import { loadConfig } from "../listener/config.mjs";
 import { grantFor, grantsFrom } from "../listener/grants.mjs";
 import { KEYS, parseRepoConfig } from "../listener/repo-config.mjs";
 import { effectiveView } from "../listener/repo-view.mjs";
+import { tempDir, testConfig } from "./helpers.mjs";
 
-const config = loadConfig({
+const config = testConfig({
   ALLOWED_USERS: "alice,bob",
   MAX_PARALLEL: "3",
 });
@@ -91,8 +90,8 @@ test("hosts: the operator's only, each naming the grants file it comes from", ()
   assert.equal("allowRepoHosts" in grant, false);
 });
 
-test("mounts: as a run resolves them, refused ones with their reason", () => {
-  const dir = realpathSync(mkdtempSync(join(tmpdir(), "deckhand-view-")));
+test("mounts: as a run resolves them, refused ones with their reason", (t) => {
+  const dir = realpathSync(tempDir(t, "deckhand-view-"));
   mkdirSync(join(dir, "work", "api"), { recursive: true });
   mkdirSync(join(dir, "secret"));
   symlinkSync(join(dir, "secret"), join(dir, "work", "escape"));
@@ -194,7 +193,7 @@ test("docker: refused without allow_docker; granted, its engine noted when there
 });
 
 test("settings: agent, brainstorm_agent and wait_for_answers have their rows", () => {
-  const withCodex = loadConfig({ ALLOWED_USERS: "alice", OPENAI_API_KEY: "sk-test" });
+  const withCodex = testConfig({ OPENAI_API_KEY: "sk-test" });
   const yaml = "brainstorm_agent: codex\nwait_for_answers: false\n";
   const { settings: parsed, errors } = parseRepoConfig(yaml, withCodex);
   assert.deepEqual(errors, []);

@@ -1,15 +1,14 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
-import { loadConfig } from "../listener/config.mjs";
 import { createWaits } from "../listener/waits.mjs";
 import { ISSUES_MS, checkAction, createWorkApi, leadsTo, staleFor } from "../listener/work.mjs";
 import { createAnalysis } from "../listener/analysis.mjs";
 import { MAX_TEXT } from "../listener/answers.mjs";
 import { board as boardOf } from "../listener/board.mjs";
 import { workItem } from "../listener/events.mjs";
+import { tempDir, testConfig } from "./helpers.mjs";
 
 const ORIGIN = "https://deckhand.example.com";
 
@@ -33,9 +32,9 @@ function setup({
   cancels = {},
   history = [],
 } = {}) {
-  const config = loadConfig({
+  const config = testConfig({
     ALLOWED_USERS: "alice,bob",
-    DATA_DIR: mkdtempSync(join(tmpdir(), "deckhand-")),
+    DATA_DIR: tempDir(null),
     ...env,
   });
   config.bot = "deckhand[bot]";
@@ -1105,7 +1104,7 @@ test("inbox: the App's comment on the inbox issue, and the run a comment there s
   assert.deepEqual(w.comments, []);
   const [item] = w.accepted;
   // What the webhook makes of a comment on the inbox: the same trigger, text and target.
-  const hook = workItem({ ...loadConfig({ ALLOWED_USERS: "alice" }), ...INBOX }, "issue_comment", {
+  const hook = workItem({ ...testConfig(), ...INBOX }, "issue_comment", {
     action: "created",
     installation: { id: 1 },
     repository: { full_name: "org/app" },

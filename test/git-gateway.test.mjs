@@ -3,8 +3,8 @@
 import assert from "node:assert/strict";
 import { execFile, execFileSync, spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { createServer, request } from "node:http";
+import { writeFileSync } from "node:fs";
+import { request } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -16,6 +16,7 @@ import {
   refusal,
   rejection,
 } from "../listener/git-gateway.mjs";
+import { serve, tempDir } from "./helpers.mjs";
 
 const ZERO = "0".repeat(40);
 const A = "a".repeat(40);
@@ -196,8 +197,7 @@ function issueRun(b, branches = ["issue-1-*"]) {
 }
 
 async function setup(t, { register = issueRun, app = true, headMs, drainMs } = {}) {
-  const dir = mkdtempSync(join(tmpdir(), "gateway-"));
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const dir = tempDir(t, "gateway-");
   const root = join(dir, "github");
   execFileSync("git", ["init", "-q", "--bare", "-b", "main", join(root, "org/repo.git")]);
   const seen = [];
@@ -225,10 +225,7 @@ async function setup(t, { register = issueRun, app = true, headMs, drainMs } = {
     headMs,
     drainMs,
   });
-  const server = createServer((req, res) => gateway.handle(req, res));
-  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-  t.after(() => server.close());
-  const port = server.address().port;
+  const { port } = await serve(t, (req, res) => gateway.handle(req, res));
   const remote = (s = secret, repo = "org/repo") =>
     `http://deckhand:${s}@127.0.0.1:${port}/git/${repo}.git`;
   const work = join(dir, "work");

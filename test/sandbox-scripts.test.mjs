@@ -1,26 +1,16 @@
 // The sandbox's side of the broker: git's credential helper asks it for a token per call.
 import assert from "node:assert/strict";
 import { execFile, spawnSync } from "node:child_process";
-import {
-  chmodSync,
-  existsSync,
-  mkdtempSync,
-  readdirSync,
-  readFileSync,
-  rmSync,
-  statSync,
-  writeFileSync,
-} from "node:fs";
-import { createServer } from "node:http";
-import { tmpdir } from "node:os";
+import { chmodSync, existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { createBroker } from "../listener/broker.mjs";
 import { createPrReady } from "../listener/pr-ready.mjs";
+import { serve, tempDir } from "./helpers.mjs";
 
 const bin = new URL("../sandbox/", import.meta.url).pathname;
 
-async function broker() {
+async function broker(t) {
   let n = 0;
   const b = createBroker({
     app: () => ({
@@ -30,13 +20,8 @@ async function broker() {
       }),
     }),
   });
-  const server = createServer((req, res) => b.handle(req, res));
-  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-  return {
-    b,
-    url: `http://127.0.0.1:${server.address().port}`,
-    close: () => server.close(),
-  };
+  const { url } = await serve(t, (req, res) => b.handle(req, res));
+  return { b, url };
 }
 
 // Async: the broker answers from this same process.
@@ -53,8 +38,7 @@ function helper(env, input) {
 }
 
 test("git gets a fresh token for the repo's host on each call", async (t) => {
-  const { b, url, close } = await broker();
-  t.after(close);
+  const { b, url } = await broker(t);
   const env = {
     DECKHAND_BROKER_URL: url,
     DECKHAND_RUN_SECRET: b.register("org/repo", undefined, { push: true }),
@@ -68,8 +52,7 @@ test("git gets a fresh token for the repo's host on each call", async (t) => {
 });
 
 test("a finished run's helper answers nothing, so git fails instead of using a stale token", async (t) => {
-  const { b, url, close } = await broker();
-  t.after(close);
+  const { b, url } = await broker(t);
   const secret = b.register("org/repo", undefined, { push: true });
   b.revoke(secret);
   const env = {
@@ -141,8 +124,7 @@ test("the entrypoint runs no claude command itself", () => {
 
 // agents/claude.sh, sourced as entrypoint.sh does, with a `claude` that prints what it got.
 function claudeScript(t, script, env = {}) {
-  const dir = mkdtempSync(join(tmpdir(), "deckhand-claude-"));
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const dir = tempDir(t, "deckhand-claude-");
   writeFileSync(
     join(dir, "claude"),
     '#!/bin/bash\nprintf "%s\\n" "$@"\n[ -t 0 ] || { echo "stdin:"; cat; }\n',
@@ -248,8 +230,7 @@ test(
 // agents/codex.sh, sourced as entrypoint.sh does, with a `codex` that prints what it got,
 // then the JSONL of a turn (`turn`: completed or failed) and exits as Codex would.
 function codexScript(t, script, env = {}) {
-  const dir = mkdtempSync(join(tmpdir(), "deckhand-codex-"));
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const dir = tempDir(t, "deckhand-codex-");
   writeFileSync(
     join(dir, "codex"),
     `#!/bin/bash
@@ -421,8 +402,7 @@ test("work feedback rebases on the base and force-pushes with a lease before gh 
 test("the prompt says whether the run has a container engine, and whether it answers", (t) => {
   const script = readFileSync(`${bin}entrypoint.sh`, "utf8");
   const fn = /^engine_note\(\) \{[^]*?^\}$/m.exec(script)[0];
-  const dir = mkdtempSync(join(tmpdir(), "engine-"));
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const dir = tempDir(t, "engine-");
   const note = (env, answers) => {
     writeFileSync(join(dir, "docker"), `#!/bin/sh\nexit ${answers ? 0 : 1}\n`);
     chmodSync(join(dir, "docker"), 0o755);
@@ -486,8 +466,7 @@ test(
 );
 
 test("for the broker's host, git gets the run's secret: what the git gateway takes", async (t) => {
-  const { b, url, close } = await broker();
-  t.after(close);
+  const { b, url } = await broker(t);
   const secret = b.register("org/repo", undefined, { push: true });
   const env = {
     DECKHAND_BROKER_URL: url,
@@ -503,7 +482,7 @@ test("for the broker's host, git gets the run's secret: what the git gateway tak
 
 // A broker that also marks pull requests ready (pr-ready.mjs): `mutations` are its calls to
 // GitHub. Pull request 7 of org/repo is a draft, 8 is ready.
-async function prBroker() {
+async function prBroker(t) {
   const mutations = [];
   const github = {
     repoToken: async () => ({ token: "token", expiresAt: Date.now() + 3600000 }),
@@ -527,23 +506,16 @@ async function prBroker() {
       return Response.json({ data: {} });
     },
   });
-  const server = createServer((req, res) =>
+  const { url } = await serve(t, (req, res) =>
     (req.url.startsWith("/pr/") ? prReady : b).handle(req, res),
   );
-  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-  return {
-    b,
-    mutations,
-    url: `http://127.0.0.1:${server.address().port}`,
-    close: () => server.close(),
-  };
+  return { b, mutations, url };
 }
 
 // The real gh, played by a script: logs its arguments and token, and finds pull request 7 for
 // the current branch, or the number it was given.
 function fakeGh(t) {
-  const dir = mkdtempSync(join(tmpdir(), "deckhand-gh-"));
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const dir = tempDir(t, "deckhand-gh-");
   const log = join(dir, "calls");
   const path = join(dir, "gh");
   writeFileSync(
@@ -573,8 +545,7 @@ function gh(env, ...args) {
 }
 
 test("gh pr ready goes to the listener, with or without a number, and --undo too", async (t) => {
-  const { b, mutations, url, close } = await prBroker();
-  t.after(close);
+  const { b, mutations, url } = await prBroker(t);
   const real = fakeGh(t);
   const env = {
     DECKHAND_BROKER_URL: url,
@@ -601,8 +572,7 @@ test("gh pr ready goes to the listener, with or without a number, and --undo too
 });
 
 test("a refused gh pr ready fails with the listener's reason", async (t) => {
-  const { b, mutations, url, close } = await prBroker();
-  t.after(close);
+  const { b, mutations, url } = await prBroker(t);
   const real = fakeGh(t);
   const env = {
     DECKHAND_BROKER_URL: url,
@@ -616,8 +586,7 @@ test("a refused gh pr ready fails with the listener's reason", async (t) => {
 });
 
 test("other gh commands go to the real gh, with a fresh token", async (t) => {
-  const { b, mutations, url, close } = await prBroker();
-  t.after(close);
+  const { b, mutations, url } = await prBroker(t);
   const real = fakeGh(t);
   const env = {
     DECKHAND_BROKER_URL: url,

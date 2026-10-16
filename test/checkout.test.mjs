@@ -1,13 +1,13 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { checkout } from "../listener/checkout.mjs";
+import { tempDir } from "./helpers.mjs";
 
-test("a checkout is GitHub's tarball without its top folder", async () => {
-  const src = mkdtempSync(join(tmpdir(), "deckhand-src-"));
+test("a checkout is GitHub's tarball without its top folder", async (t) => {
+  const src = tempDir(t, "deckhand-src-");
   mkdirSync(join(src, "org-repo-abc1234", "docker"), { recursive: true });
   writeFileSync(join(src, "org-repo-abc1234", "docker", "Dockerfile"), "FROM x\n");
   const tarball = execFileSync("tar", ["-czf", "-", "-C", src, "org-repo-abc1234"]);
@@ -16,7 +16,7 @@ test("a checkout is GitHub's tarball without its top folder", async () => {
     asked.push(`${method} ${path}`);
     return new Response(tarball);
   };
-  const tmp = mkdtempSync(join(tmpdir(), "deckhand-tmp-"));
+  const tmp = tempDir(t, "deckhand-tmp-");
   const dir = await checkout(request, "org/repo", "feature/x", { tmp });
   assert.deepEqual(asked, ["GET /repos/org/repo/tarball/feature%2Fx"]);
   assert.equal(readFileSync(join(dir, "docker", "Dockerfile"), "utf8"), "FROM x\n");

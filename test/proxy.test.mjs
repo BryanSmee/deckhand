@@ -1,22 +1,16 @@
 // The egress proxy against local servers: a fake policy decides, a fake DNS points names at
 // 127.0.0.1 (which the real address check refuses, so tests decide that too).
 import assert from "node:assert/strict";
-import { createServer } from "node:http";
 import { connect } from "node:net";
 import { test } from "node:test";
 import { blockedAddress, createProxy, listenerPolicy, target, v6Bytes } from "../proxy/proxy.mjs";
-
-async function listening(server) {
-  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-  return server.address().port;
-}
+import { listening, serve } from "./helpers.mjs";
 
 // An upstream web server, and a proxy allowing `allowed` hosts (all resolving to it).
 async function setup(t, allowed, { blocked = () => false } = {}) {
-  const upstream = createServer((req, res) =>
+  const { port: upstreamPort } = await serve(t, (req, res) =>
     res.end(`upstream ${req.method} ${req.url} host=${req.headers.host}`),
   );
-  const upstreamPort = await listening(upstream);
   const asked = [];
   const proxy = createProxy({
     policy: async (ip, host) => {
@@ -30,10 +24,7 @@ async function setup(t, allowed, { blocked = () => false } = {}) {
     blocked,
   });
   const proxyPort = await listening(proxy);
-  t.after(() => {
-    proxy.close();
-    upstream.close();
-  });
+  t.after(() => proxy.close());
   return { upstreamPort, proxyPort, asked };
 }
 
@@ -217,16 +208,14 @@ test("CONNECT targets", () => {
 
 test("the listener's policy: its answer, or refused when it can't answer", async (t) => {
   const asked = [];
-  const listener = createServer((req, res) => {
+  const { url } = await serve(t, (req, res) => {
     asked.push(req.url);
     if (req.url.includes("broken")) return res.writeHead(500).end();
     const cache = req.url.includes("cached");
     const decrypt = req.url.includes("decrypt");
     res.end(JSON.stringify({ allowed: req.url.includes("good"), private: true, cache, decrypt }));
   });
-  const port = await listening(listener);
-  t.after(() => listener.close());
-  const policy = listenerPolicy(`http://127.0.0.1:${port}/egress`);
+  const policy = listenerPolicy(`${url}/egress`);
   assert.deepEqual(await policy("10.0.0.5", "good.com"), {
     allowed: true,
     private: true,

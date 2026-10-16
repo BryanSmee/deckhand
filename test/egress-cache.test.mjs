@@ -1,18 +1,13 @@
 // The egress proxy's cache (proxy/cache.mjs) through the proxy, against a local upstream that
 // counts what reaches it, with a temp dir and a fake clock.
 import assert from "node:assert/strict";
-import { mkdtempSync, readdirSync, writeFileSync } from "node:fs";
-import { createServer, request } from "node:http";
-import { tmpdir } from "node:os";
+import { readdirSync, writeFileSync } from "node:fs";
+import { request } from "node:http";
 import { join } from "node:path";
 import { test } from "node:test";
 import { createCache, lifetime, parseSize } from "../proxy/cache.mjs";
 import { createProxy } from "../proxy/proxy.mjs";
-
-async function listening(server) {
-  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-  return server.address().port;
-}
+import { listening, serve, tempDir } from "./helpers.mjs";
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -20,16 +15,15 @@ const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 // proxy caching `cached.test` only, and a clock tests move.
 async function setup(t, routes = {}, { max = 1024 * 1024, entryMax = 1024 * 1024 } = {}) {
   const seen = [];
-  const upstream = createServer((req, res) => {
+  const { port: upstreamPort } = await serve(t, (req, res) => {
     seen.push({ url: req.url, headers: req.headers });
     const route = routes[req.url];
     if (route) return route(req, res);
     res.writeHead(200, { "content-type": "text/plain", "cache-control": "max-age=60" });
     res.end(`body of ${req.url}`);
   });
-  const upstreamPort = await listening(upstream);
   const clock = { now: 1_000_000 };
-  const dir = mkdtempSync(join(tmpdir(), "deckhand-egress-cache-"));
+  const dir = tempDir(t, "deckhand-egress-cache-");
   const cache = createCache({ dir, max, entryMax, now: () => clock.now });
   const proxy = createProxy({
     policy: async (ip, host) => ({ allowed: true, private: true, cache: host === "cached.test" }),
@@ -39,10 +33,7 @@ async function setup(t, routes = {}, { max = 1024 * 1024, entryMax = 1024 * 1024
     now: () => clock.now,
   });
   const proxyPort = await listening(proxy);
-  t.after(() => {
-    proxy.close();
-    upstream.close();
-  });
+  t.after(() => proxy.close());
   // GET through the proxy: { status, headers, body }.
   const get = (path, headers = {}, host = "cached.test") =>
     new Promise((resolve, reject) => {

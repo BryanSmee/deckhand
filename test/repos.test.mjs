@@ -1,10 +1,8 @@
 import assert from "node:assert/strict";
 import { generateKeyPairSync } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, readFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
-import { loadConfig } from "../listener/config.mjs";
 import { GrantsError, grantsFrom } from "../listener/grants.mjs";
 import { createGitHubApp } from "../listener/github-app.mjs";
 import { createOnboardingStore } from "../listener/onboarding.mjs";
@@ -17,6 +15,7 @@ import {
   refreshFor,
   repoStatus,
 } from "../listener/repos.mjs";
+import { recordingFetch, tempDir, testConfig } from "./helpers.mjs";
 
 const throwing = (error) => {
   throw error;
@@ -71,32 +70,36 @@ test("repoStatus: configured (or invalid) wins, then onboarding, then unknown, e
 });
 
 function fakeGitHub({ first = [], second = [], configured = [], files = {} } = {}) {
-  const calls = [];
-  const fetch = async (url, init) => {
-    const { pathname, searchParams } = new URL(url);
-    calls.push(`${init.method} ${pathname}${searchParams.size ? `?${searchParams}` : ""}`);
+  const github = recordingFetch(({ path, auth }) => {
+    const { pathname, searchParams } = new URL(path, "https://api.github.com");
     const page = Number(searchParams.get("page") ?? 1);
     const per = Number(searchParams.get("per_page") ?? 30);
     const slice = (all) => all.slice((page - 1) * per, page * per);
-    if (pathname === "/app/installations") return Response.json(slice([{ id: 1 }, { id: 2 }]));
+    if (pathname === "/app/installations") return slice([{ id: 1 }, { id: 2 }]);
     const minted = /^\/app\/installations\/(\d+)\/access_tokens$/.exec(pathname);
     if (minted) {
       const expires_at = new Date(Date.now() + 3600000).toISOString();
       return Response.json({ token: `tok-${minted[1]}`, expires_at }, { status: 201 });
     }
     if (pathname === "/installation/repositories") {
-      const mine = init.headers.authorization === "Bearer tok-1" ? first : second;
-      return Response.json({ total_count: mine.length, repositories: slice(mine) });
+      const mine = auth === "Bearer tok-1" ? first : second;
+      return { total_count: mine.length, repositories: slice(mine) };
     }
     const content = /^\/repos\/([^/]+\/[^/]+)\/contents\/\.deckhand\.yaml$/.exec(pathname);
     if (content) {
       const text = files[content[1]] ?? (configured.includes(content[1]) && "trigger: deckhand\n");
-      if (text) return Response.json({ type: "file", sha: "s", content: btoa(text) });
-      return new Response("Not Found", { status: 404 });
+      // Nothing: a 404.
+      return text ? { type: "file", sha: "s", content: btoa(text) } : undefined;
     }
     return new Response("unexpected", { status: 500 });
+  });
+  // The calls as "METHOD /path?query", which the tests count and look for.
+  return {
+    fetch: github.fetch,
+    get calls() {
+      return github.calls.map(({ method, path }) => `${method} ${path}`);
+    },
   };
-  return { fetch, calls };
 }
 
 // `grants`: the grants folder's files ({ "owner/repo.yaml": text }), an Error (its layout has
@@ -114,8 +117,8 @@ function setup({ env = {}, grants = {}, fs, ...repos } = {}) {
     credentials: { id: 1, client_id: "Iv1.abc", pem },
     fetch: gh.fetch,
   });
-  const config = loadConfig({ ALLOWED_USERS: "alice", ...env });
-  const store = createOnboardingStore(join(mkdtempSync(join(tmpdir(), "repos-")), "o.json"));
+  const config = testConfig(env);
+  const store = createOnboardingStore(join(tempDir(null, "deckhand-repos-"), "o.json"));
   const list = createRepoList({
     app,
     config,
@@ -362,8 +365,8 @@ function refusedCases(root) {
   };
 }
 
-function refusedSetup() {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), "repos-mounts-")));
+function refusedSetup(t) {
+  const root = realpathSync(tempDir(t, "deckhand-repos-mounts-"));
   mkdirSync(join(root, "data"));
   const cases = refusedCases(root);
   const files = Object.fromEntries(Object.entries(cases).map(([k, [file]]) => [`org/${k}`, file]));
@@ -381,8 +384,8 @@ const statuses = async (api) =>
     (await call(api, "GET", "/api/repos")).body.repos.map((r) => [r.repo, r.status]),
   );
 
-test("a config the operator's grants refuse is invalid: no run starts there", async () => {
-  const { api, cases } = refusedSetup();
+test("a config the operator's grants refuse is invalid: no run starts there", async (t) => {
+  const { api, cases } = refusedSetup(t);
   // Each file parses: only the grants refuse it.
   assert.deepEqual(await statuses(api), {
     "org/dockerfile": "invalid",
@@ -396,8 +399,8 @@ test("a config the operator's grants refuse is invalid: no run starts there", as
   }
 });
 
-test("a fully granted config is configured; editing a grant shows without GitHub", async () => {
-  const { api, gh, cases, grants } = refusedSetup();
+test("a fully granted config is configured; editing a grant shows without GitHub", async (t) => {
+  const { api, gh, cases, grants } = refusedSetup(t);
   await statuses(api);
   const reads = configReads(gh.calls);
   grants.files = Object.fromEntries(

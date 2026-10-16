@@ -1,18 +1,15 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, statSync } from "node:fs";
-import { createServer } from "node:http";
-import { tmpdir } from "node:os";
+import { statSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { createAuth, SESSION_COOKIE, SESSION_MS, sessionKey } from "../listener/auth.mjs";
-import { loadConfig } from "../listener/config.mjs";
+import { serve, tempDir, testConfig } from "./helpers.mjs";
 
 const credentials = { client_id: "Iv1.x", client_secret: "cs" };
 
 // An auth handler behind a server, with GitHub answering that the browser is `login`.
-async function serve({ login = "Alice", app = { credentials }, epochsPath } = {}) {
-  const config = loadConfig({
-    ALLOWED_USERS: "alice",
+async function serveAuth(t, { login = "Alice", app = { credentials }, epochsPath } = {}) {
+  const config = testConfig({
     GITHUB_URL: "https://gh.test",
     GITHUB_API: "https://api.gh.test",
   });
@@ -39,13 +36,11 @@ async function serve({ login = "Alice", app = { credentials }, epochsPath } = {}
     now: () => clock,
     random: () => "state1",
   });
-  const server = createServer((req, res) => {
+  const { url: base } = await serve(t, (req, res) => {
     if (auth.handle(req, res)) return;
     const user = auth.user(req);
     res.writeHead(user ? 200 : 401).end(user ?? "");
   });
-  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const base = `http://127.0.0.1:${server.address().port}`;
   const get = (path, cookie) =>
     globalThis.fetch(base + path, { redirect: "manual", headers: cookie ? { cookie } : {} });
   return {
@@ -53,7 +48,6 @@ async function serve({ login = "Alice", app = { credentials }, epochsPath } = {}
     calls,
     get,
     later: (ms) => (clock += ms),
-    close: () => server.close(),
   };
 }
 
@@ -64,8 +58,7 @@ const value = (res, name) =>
     ?.split(";")[0];
 
 test("sign-in goes to GitHub with the App's client id and a state bound to the browser", async (t) => {
-  const s = await serve();
-  t.after(s.close);
+  const s = await serveAuth(t);
   const res = await s.get("/auth/login");
   assert.equal(res.status, 302);
   const to = new URL(res.headers.get("location"));
@@ -79,8 +72,7 @@ test("sign-in goes to GitHub with the App's client id and a state bound to the b
 });
 
 test("an allowed user gets a session; the user token is revoked", async (t) => {
-  const s = await serve();
-  t.after(s.close);
+  const s = await serveAuth(t);
   const res = await s.get("/auth/callback?code=good&state=state1", "deckhand_oauth_state=state1");
   assert.equal(res.status, 302);
   assert.equal(res.headers.get("location"), "/");
@@ -95,8 +87,7 @@ test("an allowed user gets a session; the user token is revoked", async (t) => {
 });
 
 test("a user outside ALLOWED_USERS is refused, by name", async (t) => {
-  const s = await serve({ login: "mallory" });
-  t.after(s.close);
+  const s = await serveAuth(t, { login: "mallory" });
   const res = await s.get("/auth/callback?code=good&state=state1", "deckhand_oauth_state=state1");
   assert.equal(res.status, 403);
   assert.match(await res.text(), /signed in on GitHub as <strong>mallory<\/strong>/);
@@ -104,8 +95,7 @@ test("a user outside ALLOWED_USERS is refused, by name", async (t) => {
 });
 
 test("a callback without the browser's state, or with a bad code, gets no session", async (t) => {
-  const s = await serve();
-  t.after(s.close);
+  const s = await serveAuth(t);
   // Login CSRF: someone else's code and state, without our cookie.
   const forged = await s.get("/auth/callback?code=good&state=state1");
   assert.equal(forged.status, 400);
@@ -120,8 +110,7 @@ test("a callback without the browser's state, or with a bad code, gets no sessio
 });
 
 test("sessions: forged, expired or for a removed user are refused", async (t) => {
-  const s = await serve();
-  t.after(s.close);
+  const s = await serveAuth(t);
   const good = `${SESSION_COOKIE}=${s.auth.issue("alice")}`;
   assert.equal((await s.get("/", good)).status, 200);
   // Same payload, another login: the signature no longer matches.
@@ -137,8 +126,7 @@ test("sessions: forged, expired or for a removed user are refused", async (t) =>
 });
 
 test("sign-out clears the session cookie", async (t) => {
-  const s = await serve();
-  t.after(s.close);
+  const s = await serveAuth(t);
   const res = await fetch(new URL("/auth/logout", (await s.get("/auth/login")).url), {
     method: "POST",
     redirect: "manual",
@@ -148,10 +136,9 @@ test("sign-out clears the session cookie", async (t) => {
 });
 
 test("sign-out ends the login's sessions everywhere, through a restart", async (t) => {
-  const dir = mkdtempSync(join(tmpdir(), "deckhand-sessions-"));
+  const dir = tempDir(t, "deckhand-sessions-");
   const epochsPath = join(dir, "sessions.json");
-  const s = await serve({ epochsPath });
-  t.after(s.close);
+  const s = await serveAuth(t, { epochsPath });
   const here = `${SESSION_COOKIE}=${s.auth.issue("alice")}`;
   const there = `${SESSION_COOKIE}=${s.auth.issue("alice")}`;
   assert.equal((await s.get("/", there)).status, 200);
@@ -168,22 +155,20 @@ test("sign-out ends the login's sessions everywhere, through a restart", async (
   // A new sign-in works, and the epoch survives a restart.
   const again = `${SESSION_COOKIE}=${s.auth.issue("alice")}`;
   assert.equal((await s.get("/", again)).status, 200);
-  const next = await serve({ epochsPath });
-  t.after(next.close);
+  const next = await serveAuth(t, { epochsPath });
   assert.equal((await next.get("/", again)).status, 200);
   assert.equal((await next.get("/", there)).status, 401);
 });
 
 test("without an App, sign-in says to set it up first", async (t) => {
-  const s = await serve({ app: null });
-  t.after(s.close);
+  const s = await serveAuth(t, { app: null });
   const res = await s.get("/auth/login");
   assert.equal(res.status, 503);
   assert.match(await res.text(), /setup link/);
 });
 
-test("the session key is created once, owner-only, and kept", () => {
-  const dir = mkdtempSync(join(tmpdir(), "deckhand-key-"));
+test("the session key is created once, owner-only, and kept", (t) => {
+  const dir = tempDir(t, "deckhand-key-");
   const key = sessionKey(dir);
   assert.equal(key.length, 32);
   assert.equal(statSync(join(dir, "session.key")).mode & 0o777, 0o600);

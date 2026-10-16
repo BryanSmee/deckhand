@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, statSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { createWaits, issueList, waitsFor } from "../listener/waits.mjs";
+import { tempDir } from "./helpers.mjs";
 
-const tempPath = () => join(mkdtempSync(join(tmpdir(), "deckhand-")), "waits.json");
+// `t` null: removed when the file's tests end.
+const tempPath = (t = null) => join(tempDir(t), "waits.json");
 
 // GET /repos/org/repo/issues/{n} as GitHub has them.
 const open = { state: "open" };
@@ -268,8 +269,8 @@ test("the waiting issue closed itself: its wait is dropped", async () => {
   assert.equal(w.waits.list().length, 0);
 });
 
-test("waits survive a restart; the check catches what closed meanwhile", async () => {
-  const path = tempPath();
+test("waits survive a restart; the check catches what closed meanwhile", async (t) => {
+  const path = tempPath(t);
   const before = setup({ path });
   await before.waits.request(item({ numbers: [77, 80] }));
   await before.waits.request(item({ numbers: [77] }, { id: "79", number: 79, replyTo: 79 }));

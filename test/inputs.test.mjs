@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { createInputs } from "../listener/inputs.mjs";
+import { tempDir } from "./helpers.mjs";
 
 const issue = (number, extra = {}) => ({
   number,
@@ -12,8 +12,8 @@ const issue = (number, extra = {}) => ({
   ...extra,
 });
 
-test("issues waiting for input: from webhooks, kept across a restart", () => {
-  const path = join(mkdtempSync(join(tmpdir(), "deckhand-")), "inputs.json");
+test("issues waiting for input: from webhooks, kept across a restart", (t) => {
+  const path = join(tempDir(t), "inputs.json");
   let clock = 1000;
   const inputs = createInputs({ path, listLabelled: async () => [], now: () => clock });
   inputs.set("org/repo#1", true);
@@ -45,8 +45,8 @@ test("issues waiting for input: from webhooks, kept across a restart", () => {
   assert.deepEqual(again.list()[0].questions, asked);
 });
 
-test("the startup lookup adds labels added meanwhile and drops those removed", async () => {
-  const path = join(mkdtempSync(join(tmpdir(), "deckhand-")), "inputs.json");
+test("the startup lookup adds labels added meanwhile and drops those removed", async (t) => {
+  const path = join(tempDir(t), "inputs.json");
   const lists = {
     "org/repo": [
       issue(2, { body: "## Open questions\n\n1. Which one?" }),

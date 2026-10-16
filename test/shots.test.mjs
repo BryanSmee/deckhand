@@ -2,17 +2,17 @@
 // never what a link there points to.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { linkSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { linkSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { after, before, test } from "node:test";
 import { createHttp } from "../listener/http.mjs";
+import { tempDir } from "./helpers.mjs";
 
 const folder = "0123456789abcdef01234567";
 let base, server;
 
 before(async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "deckhand-shots-"));
+  const dataDir = tempDir(null, "deckhand-shots-");
   const shotsDir = join(dataDir, "shots");
   const dir = join(shotsDir, folder);
   mkdirSync(dir, { recursive: true });

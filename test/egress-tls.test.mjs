@@ -5,26 +5,22 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { X509Certificate } from "node:crypto";
-import { mkdtempSync, readFileSync } from "node:fs";
-import { createServer, request } from "node:http";
+import { readFileSync } from "node:fs";
+import { request } from "node:http";
 import { createServer as createHttpsServer } from "node:https";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { connect as tlsConnect, createSecureContext } from "node:tls";
 import { createAuthority } from "../proxy/authority.mjs";
 import { createCache } from "../proxy/cache.mjs";
 import { createProxy } from "../proxy/proxy.mjs";
+import { listening, serve, tempDir } from "./helpers.mjs";
 
-const temp = (name) => mkdtempSync(join(tmpdir(), `deckhand-${name}-`));
-
-async function listening(server) {
-  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-  return server.address().port;
-}
+// `t` null: the file's, removed when it ends.
+const temp = (t, name) => tempDir(t, `deckhand-${name}-`);
 
 // The upstream's CA, made once for every test: openssl takes a moment.
-const publicCa = createAuthority({ dir: temp("public-ca") });
+const publicCa = createAuthority({ dir: temp(null, "public-ca") });
 await publicCa.ready();
 const nameOf = (pem) => new X509Certificate(pem).subject.replace(/^CN=/, "");
 
@@ -48,10 +44,9 @@ async function setup(
   );
   const upstreamPort = await listening(upstream);
   // Plain HTTP on a cached host's tunnel: no TLS, so no interception.
-  const plain = createServer((req, res) => res.end(`plain ${req.url}`));
-  const plainPort = await listening(plain);
+  const { port: plainPort } = await serve(t, (req, res) => res.end(`plain ${req.url}`));
   const asked = [];
-  const authority = createAuthority({ dir: join(temp("egress"), "ca") });
+  const authority = createAuthority({ dir: join(temp(t, "egress"), "ca") });
   await authority.ready();
   const proxy = createProxy({
     policy: async (ip, host) => {
@@ -61,7 +56,7 @@ async function setup(
     },
     lookup: async () => [{ address: "127.0.0.1", family: 4 }],
     blocked: () => false,
-    cache: createCache({ dir: temp("egress-cache"), max: cacheOn ? 1024 * 1024 : 0 }),
+    cache: createCache({ dir: temp(t, "egress-cache"), max: cacheOn ? 1024 * 1024 : 0 }),
     authority,
     upstreamCa,
   });
@@ -69,7 +64,6 @@ async function setup(
   t.after(() => {
     proxy.close();
     upstream.close();
-    plain.close();
   });
 
   // CONNECT host:port through the proxy → the tunnel's socket.
@@ -157,7 +151,7 @@ test("other hosts, or the cache off: a raw tunnel, with the real server's certif
 
 test("an upstream certificate that doesn't verify is refused, not passed on", async (t) => {
   // The proxy trusts some other CA: the upstream's certificate doesn't verify.
-  const someCa = createAuthority({ dir: temp("some-ca") });
+  const someCa = createAuthority({ dir: temp(t, "some-ca") });
   await someCa.ready();
   const { get, seen, authority } = await setup(t, { upstreamCa: someCa.certificate() });
   const answer = await get("cached.test", "/pkg.tgz", authority.certificate());
@@ -188,8 +182,8 @@ test("the CA's certificate is served at /deckhand-ca.crt; none with the cache of
   assert.equal((await fetch(`http://127.0.0.1:${port}/deckhand-ca.crt`)).status, 404);
 });
 
-test("the CA: made once, kept across restarts; host certificates reused, then renewed", async () => {
-  const dir = temp("ca");
+test("the CA: made once, kept across restarts; host certificates reused, then renewed", async (t) => {
+  const dir = temp(t, "ca");
   const calls = [];
   const clock = { now: Date.now() };
   const openssl = async (args) => {

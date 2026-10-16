@@ -1,9 +1,8 @@
 import assert from "node:assert/strict";
-import { createServer } from "node:http";
 import { test } from "node:test";
-import { loadConfig } from "../listener/config.mjs";
 import { APP_EVENTS, APP_PERMISSIONS } from "../listener/github-app.mjs";
 import { createSetup, manifest } from "../listener/setup.mjs";
+import { serve, testConfig } from "./helpers.mjs";
 
 const conversion = {
   id: 5,
@@ -16,8 +15,8 @@ const conversion = {
   html_url: "https://github.com/apps/deckhand-x",
 };
 
-async function serve(env = {}) {
-  const config = loadConfig({ ALLOWED_USERS: "alice", ...env });
+async function serveSetup(t, env = {}) {
+  const config = testConfig(env);
   const stored = [];
   const calls = [];
   const fetch = async (url, init) => {
@@ -36,11 +35,9 @@ async function serve(env = {}) {
     onConfigured: (c) => stored.push(c),
     random: () => `rand${++n}`.padEnd(12, "0"),
   });
-  const server = createServer((req, res) => {
+  const { url: base } = await serve(t, (req, res) => {
     if (!setup.handle(req, res)) res.writeHead(404).end();
   });
-  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const base = `http://127.0.0.1:${server.address().port}`;
   const token = new URL(setup.link()).searchParams.get("token");
   const post = (form) =>
     globalThis.fetch(`${base}/setup`, {
@@ -48,7 +45,7 @@ async function serve(env = {}) {
       headers: { "content-type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams(form),
     });
-  return { base, token, stored, calls, post, close: () => server.close() };
+  return { base, token, stored, calls, post };
 }
 
 function unescape(html) {
@@ -71,8 +68,7 @@ test("the manifest asks for the App's permissions and events, webhook on /webhoo
 });
 
 test("the setup form needs the one-time token from the logs", async (t) => {
-  const s = await serve();
-  t.after(s.close);
+  const s = await serveSetup(t);
   assert.equal((await fetch(`${s.base}/setup`)).status, 403);
   assert.equal((await fetch(`${s.base}/setup?token=wrong`)).status, 403);
   const form = await fetch(`${s.base}/setup?token=${s.token}`, {
@@ -87,8 +83,7 @@ test("the setup form needs the one-time token from the logs", async (t) => {
 });
 
 test("from the form to stored credentials and the install page", async (t) => {
-  const s = await serve();
-  t.after(s.close);
+  const s = await serveSetup(t);
   const res = await s.post({
     token: s.token,
     name: "deckhand-x",
@@ -131,8 +126,7 @@ test("from the form to stored credentials and the install page", async (t) => {
 });
 
 test("an organization's App is created under the organization", async (t) => {
-  const s = await serve({ PUBLIC_URL: "https://hooks.example.com" });
-  t.after(s.close);
+  const s = await serveSetup(t, { PUBLIC_URL: "https://hooks.example.com" });
   const res = await s.post({
     token: s.token,
     name: "d",
@@ -153,8 +147,7 @@ test("an organization's App is created under the organization", async (t) => {
 });
 
 test("a code GitHub refuses stores nothing", async (t) => {
-  const s = await serve();
-  t.after(s.close);
+  const s = await serveSetup(t);
   const html = unescape(
     await (await s.post({ token: s.token, name: "d", url: "https://h.example" })).text(),
   );

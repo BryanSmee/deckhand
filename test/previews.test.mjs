@@ -1,13 +1,12 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
-import { loadConfig } from "../listener/config.mjs";
 import { previewEvent } from "../listener/events.mjs";
 import { createPreviews, MAX_WAITING } from "../listener/previews.mjs";
+import { tempDir, testConfig } from "./helpers.mjs";
 
-const config = loadConfig({ ALLOWED_USERS: "a", DOCKER_SOCKET: "/run/docker.sock" });
+const config = testConfig({ ALLOWED_USERS: "a", DOCKER_SOCKET: "/run/docker.sock" });
 const hook = { command: "./preview.sh", image: "docker:cli", timeoutMinutes: 1 };
 
 function setup() {
@@ -24,11 +23,12 @@ function setup() {
     }
     return { code: 0, out: "", err: "" };
   };
-  const logDir = mkdtempSync(join(tmpdir(), "deckhand-previews-"));
+  // Removed when the file's tests end: hooks still running after a test write their logs here.
+  const logDir = tempDir(null, "deckhand-previews-");
   const previews = createPreviews({
     config,
     docker,
-    checkout: async () => mkdtempSync(join(tmpdir(), "deckhand-ctx-")),
+    checkout: async () => tempDir(null, "deckhand-ctx-"),
     logDir,
   });
   return { previews, calls, inputs, release, logDir };
@@ -47,7 +47,7 @@ test("pull_request and workflow_run deliveries go to the preview hook", () => {
   assert.equal(previewEvent(config, "workflow_run", p).event, "workflow_run");
   assert.equal(previewEvent(config, "issue_comment", p), null);
   assert.equal(previewEvent(config, "pull_request", { ...p, installation: null }), null);
-  const narrowed = loadConfig({ ALLOWED_USERS: "a", ALLOWED_REPOS: "org/b" });
+  const narrowed = testConfig({ ALLOWED_USERS: "a", ALLOWED_REPOS: "org/b" });
   assert.equal(previewEvent(narrowed, "pull_request", p), null);
 });
 

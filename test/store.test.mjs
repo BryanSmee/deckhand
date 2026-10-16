@@ -1,13 +1,5 @@
 import assert from "node:assert/strict";
-import {
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  readdirSync,
-  statSync,
-  writeFileSync,
-} from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { createBrainstorms, createIssueModes } from "../listener/brainstorms.mjs";
@@ -16,12 +8,13 @@ import { createOnboardingStore } from "../listener/onboarding.mjs";
 import { createPulls } from "../listener/pulls.mjs";
 import { persistentMap, readJson, writeJsonAtomic } from "../listener/store.mjs";
 import { createTitles } from "../listener/titles.mjs";
+import { tempDir } from "./helpers.mjs";
 
-const temp = () => mkdtempSync(join(tmpdir(), "deckhand-store-"));
+const temp = (t) => tempDir(t, "deckhand-store-");
 const leftovers = (dir) => readdirSync(dir).filter((f) => f.endsWith(".tmp"));
 
-test("readJson: the value, or the fallback when missing or unreadable", () => {
-  const dir = temp();
+test("readJson: the value, or the fallback when missing or unreadable", (t) => {
+  const dir = temp(t);
   assert.equal(readJson(join(dir, "none.json")), null);
   assert.deepEqual(readJson(join(dir, "none.json"), {}), {});
   writeFileSync(join(dir, "half.json"), '{"a": ');
@@ -30,8 +23,8 @@ test("readJson: the value, or the fallback when missing or unreadable", () => {
   assert.deepEqual(readJson(join(dir, "ok.json"), {}), { a: 1 });
 });
 
-test("writeJsonAtomic: replaces the file whole, leaves no temporary file", () => {
-  const dir = temp();
+test("writeJsonAtomic: replaces the file whole, leaves no temporary file", (t) => {
+  const dir = temp(t);
   const path = join(dir, "state.json");
   writeJsonAtomic(path, { a: 1 });
   writeJsonAtomic(path, { a: 2 });
@@ -39,15 +32,15 @@ test("writeJsonAtomic: replaces the file whole, leaves no temporary file", () =>
   assert.deepEqual(leftovers(dir), []);
 });
 
-test("writeJsonAtomic: a mode for secrets, even over a wider umask", () => {
-  const dir = temp();
+test("writeJsonAtomic: a mode for secrets, even over a wider umask", (t) => {
+  const dir = temp(t);
   const path = join(dir, "secret.json");
   writeJsonAtomic(path, { pem: "…" }, { mode: 0o600 });
   assert.equal(statSync(path).mode & 0o777, 0o600);
 });
 
-test("writeJsonAtomic: a failed write keeps the previous file and cleans up", () => {
-  const dir = temp();
+test("writeJsonAtomic: a failed write keeps the previous file and cleans up", (t) => {
+  const dir = temp(t);
   // A directory where the file should be: the rename fails.
   const path = join(dir, "taken");
   mkdirSync(path);
@@ -57,8 +50,8 @@ test("writeJsonAtomic: a failed write keeps the previous file and cleans up", ()
   assert.deepEqual(leftovers(dir), []);
 });
 
-test("persistentMap: the file's object as a Map, saved whole in the same format", () => {
-  const dir = temp();
+test("persistentMap: the file's object as a Map, saved whole in the same format", (t) => {
+  const dir = temp(t);
   const path = join(dir, "pulls.json");
   // A file from before persistentMap(), as writeJsonAtomic() wrote it.
   const before = { "o/r#1": { number: 2, state: "draft" }, "o/r#pr-3": { number: 3 } };
@@ -89,8 +82,8 @@ test("persistentMap: the file's object as a Map, saved whole in the same format"
   assert.equal(statSync(join(dir, "waits.json")).mode & 0o777, 0o600);
 });
 
-test("every state file is written through store.mjs: no temporary file left behind", async () => {
-  const dir = temp();
+test("every state file is written through store.mjs: no temporary file left behind", async (t) => {
+  const dir = temp(t);
   const brainstorms = createBrainstorms({
     path: join(dir, "brainstorms.json"),
     idleMs: 60000,

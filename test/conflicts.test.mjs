@@ -1,18 +1,18 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
-import { loadConfig } from "../listener/config.mjs";
 import { createConflicts, rebaseMessage } from "../listener/conflicts.mjs";
 import { parseRepoConfig } from "../listener/repo-config.mjs";
+import { tempDir, testConfig } from "./helpers.mjs";
 
 const MIN = 60_000;
-const config = loadConfig({ ALLOWED_USERS: "alice", CONFLICT_CHECK_MINUTES: "5" });
+const config = testConfig({ CONFLICT_CHECK_MINUTES: "5" });
 const optedIn = (minutes = 10, c = config) =>
   parseRepoConfig(`conflicts:\n  check_minutes: ${minutes}`, c);
 
-const tempPath = () => join(mkdtempSync(join(tmpdir(), "deckhand-")), "conflicts.json");
+// `t` null: removed when the file's tests end.
+const tempPath = (t = null) => join(tempDir(t), "conflicts.json");
 
 // A pull request as GET /repos/{repo}/pulls/{n} has it.
 function pull(number, fields = {}) {
@@ -170,7 +170,7 @@ test("only the open pull requests pulls.mjs knows as tasks', in allowed repos", 
   const w = setup({ open: [] });
   await w.conflicts.tick();
   assert.deepEqual(w.calls, []);
-  const narrowed = loadConfig({ ALLOWED_USERS: "alice", ALLOWED_REPOS: "org/other" });
+  const narrowed = testConfig({ ALLOWED_REPOS: "org/other" });
   const outside = setup({ c: narrowed, settings: optedIn(10, narrowed) });
   await outside.conflicts.tick();
   assert.deepEqual(outside.calls, []);
@@ -193,7 +193,7 @@ test("without conflicts in the repo's config, or with errors, nothing is checked
 });
 
 test("CONFLICT_CHECK_MINUTES=0 turns the watcher off for everyone", async () => {
-  const off = loadConfig({ ALLOWED_USERS: "alice", CONFLICT_CHECK_MINUTES: "0" });
+  const off = testConfig({ CONFLICT_CHECK_MINUTES: "0" });
   // Even with settings that slipped through: the watcher itself doesn't run.
   const w = setup({ c: off, settings: optedIn() });
   await w.conflicts.tick();
@@ -224,8 +224,8 @@ test("each repo at its own interval, never shorter than the floor", async () => 
   assert.equal(checks(), 4);
 });
 
-test("the same (head, base) never starts a second run, across a restart", async () => {
-  const path = tempPath();
+test("the same (head, base) never starts a second run, across a restart", async (t) => {
+  const path = tempPath(t);
   const first = setup({ path });
   await first.conflicts.tick();
   assert.equal(first.accepted.length, 1);

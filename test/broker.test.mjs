@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
-import { createServer } from "node:http";
 import { test } from "node:test";
 import { createBroker } from "../listener/broker.mjs";
+import { serve } from "./helpers.mjs";
 
-async function serve(app) {
+async function serveBroker(t, app) {
   const asked = [];
   const github = app && {
     repoToken: async (repo, extra) => {
@@ -15,19 +15,16 @@ async function serve(app) {
     },
   };
   const broker = createBroker({ app: () => github });
-  const server = createServer((req, res) => broker.handle(req, res));
-  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const url = `http://127.0.0.1:${server.address().port}`;
+  const { url } = await serve(t, (req, res) => broker.handle(req, res));
   const get = (path, secret) =>
     fetch(url + path, {
       headers: secret ? { authorization: `Bearer ${secret}` } : {},
     });
-  return { broker, asked, get, close: () => server.close() };
+  return { broker, asked, get };
 }
 
 test("a run's secret gets a token for its repo, until the run ends", async (t) => {
-  const { broker, asked, get, close } = await serve(true);
-  t.after(close);
+  const { broker, asked, get } = await serveBroker(t, true);
   const a = broker.register("Org/A");
   const b = broker.register("org/b");
   const res = await get("/token", a);
@@ -46,15 +43,13 @@ test("a run's secret gets a token for its repo, until the run ends", async (t) =
 });
 
 test("a run's extra permissions go with its tokens", async (t) => {
-  const { broker, asked, get, close } = await serve(true);
-  t.after(close);
+  const { broker, asked, get } = await serveBroker(t, true);
   await get("/token", broker.register("org/a", { discussions: "write" }));
   assert.deepEqual(asked, ["org/a +discussions"]);
 });
 
 test("no secret, a wrong one or another path: nothing", async (t) => {
-  const { broker, asked, get, close } = await serve(true);
-  t.after(close);
+  const { broker, asked, get } = await serveBroker(t, true);
   broker.register("org/a");
   assert.equal((await get("/token")).status, 401);
   assert.equal((await get("/token", "guess")).status, 401);
@@ -63,8 +58,7 @@ test("no secret, a wrong one or another path: nothing", async (t) => {
 });
 
 test("before the App is set up, no token", async (t) => {
-  const { broker, get, close } = await serve(false);
-  t.after(close);
+  const { broker, get } = await serveBroker(t, false);
   assert.equal((await get("/token", broker.register("org/a"))).status, 503);
 });
 

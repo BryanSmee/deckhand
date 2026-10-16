@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
 import { test } from "node:test";
-import { loadConfig, normalize } from "../listener/config.mjs";
+import { normalize } from "../listener/config.mjs";
 import {
   closedItem,
   issueItem,
@@ -19,9 +19,10 @@ import {
   verified,
   workItem,
 } from "../listener/events.mjs";
+import { testConfig } from "./helpers.mjs";
 
 // The App's bot, as server.mjs sets it once the App is known.
-const config = { ...loadConfig({ ALLOWED_USERS: "alice" }), bot: "Deckhand-X[bot]" };
+const config = { ...testConfig(), bot: "Deckhand-X[bot]" };
 const sign = (secret, body) => "sha256=" + createHmac("sha256", secret).update(body).digest("hex");
 
 test("task keys: built and parsed, for issues, pull requests and discussions", () => {
@@ -144,8 +145,7 @@ test("deliveries outside the allowlist or the App are ignored", () => {
   assert.equal(workItem(config, "issue_comment", comment(`hi\n${MARKER}`), skip), null);
   assert.equal(workItem(config, "ping", {}, skip), null);
   assert.equal(reasons.length, 5);
-  const narrowed = loadConfig({
-    ALLOWED_USERS: "alice",
+  const narrowed = testConfig({
     ALLOWED_REPOS: "org/other",
   });
   assert.equal(workItem(narrowed, "issue_comment", comment(go)), null);
@@ -511,7 +511,7 @@ test("closed issues and pull requests: done when completed or merged", () => {
   assert.equal(closedItem(config, "issues", opened), null);
   const foreign = delivery("issues", issue, { installation: null });
   assert.equal(closedItem(config, "issues", foreign), null);
-  const narrowed = loadConfig({ ALLOWED_USERS: "alice", ALLOWED_REPOS: "org/other" });
+  const narrowed = testConfig({ ALLOWED_REPOS: "org/other" });
   assert.equal(closedItem(narrowed, "issues", delivery("issues", issue)), null);
   assert.equal(closedItem(config, "issue_comment", delivery("issues", issue)), null);
 });
@@ -543,7 +543,7 @@ test("touchedItems: what a delivery is about, and the issue a merged pull reques
   const onPr = { number: 90, body: "Fixes #77", pull_request: {}, author_association: "NONE" };
   assert.deepEqual(touched("issue_comment", { action: "created", issue: onPr }).numbers, [90, 77]);
   assert.equal(touched("push", { action: "x" }), null);
-  const narrowed = loadConfig({ ALLOWED_USERS: "alice", ALLOWED_REPOS: "org/other" });
+  const narrowed = testConfig({ ALLOWED_REPOS: "org/other" });
   assert.equal(touchedItems(narrowed, "issues", { ...base, issue: { number: 77 } }), null);
   assert.equal(
     touchedItems(config, "issues", { repository: base.repository, issue: { number: 77 } }),
@@ -552,7 +552,7 @@ test("touchedItems: what a delivery is about, and the issue a merged pull reques
 });
 
 test("saysMore: only text besides the trigger and command lines answers open questions", () => {
-  const config = loadConfig({ ALLOWED_USERS: "alice", TRIGGER: "Deckhand" });
+  const config = testConfig({ TRIGGER: "Deckhand" });
   for (const bare of [
     "Deckhand",
     "@deckhand:",

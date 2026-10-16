@@ -1,14 +1,10 @@
 // Codex's endpoint: the run's secret in, the operator's OPENAI_API_KEY out, the answer streamed.
 import assert from "node:assert/strict";
-import { createServer, request } from "node:http";
+import { request } from "node:http";
 import { test } from "node:test";
 import { createBroker } from "../listener/broker.mjs";
 import { createOpenAiProxy } from "../listener/openai.mjs";
-
-const listen = (server) =>
-  new Promise((resolve) =>
-    server.listen(0, "127.0.0.1", () => resolve(`http://127.0.0.1:${server.address().port}`)),
-  );
+import { serve } from "./helpers.mjs";
 
 // A fake OpenAI that records each request and streams two events, the second one only once
 // the test lets it (`release`).
@@ -16,7 +12,7 @@ async function fakeOpenAi(t) {
   const requests = [];
   let release;
   const released = new Promise((resolve) => (release = resolve));
-  const server = createServer((req, res) => {
+  const { url } = await serve(t, (req, res) => {
     let body = "";
     req.on("data", (d) => (body += d));
     req.on("end", async () => {
@@ -27,18 +23,14 @@ async function fakeOpenAi(t) {
       res.end('event: response.completed\ndata: {"type":"response.completed"}\n\n');
     });
   });
-  const url = await listen(server);
-  t.after(() => server.close());
   return { url, requests, release };
 }
 
-async function serve(t, { credential = "sk-proj-real", path = "/v1" } = {}) {
+async function serveProxy(t, { credential = "sk-proj-real", path = "/v1" } = {}) {
   const upstream = await fakeOpenAi(t);
   const broker = createBroker({ app: () => null });
   const proxy = createOpenAiProxy({ broker, credential, upstream: `${upstream.url}${path}` });
-  const server = createServer((req, res) => proxy.handle(req, res));
-  const url = await listen(server);
-  t.after(() => server.close());
+  const { url } = await serve(t, (req, res) => proxy.handle(req, res));
   return { url, broker, upstream };
 }
 
@@ -51,7 +43,7 @@ const ask = (url, headers) =>
   });
 
 test("a run's secret is swapped for the key, and the answer streams back", async (t) => {
-  const { url, broker, upstream } = await serve(t);
+  const { url, broker, upstream } = await serveProxy(t);
   const secret = broker.register("org/repo");
   const res = await ask(url, { authorization: `Bearer ${secret}` });
   assert.equal(res.status, 200);
@@ -76,7 +68,7 @@ test("a run's secret is swapped for the key, and the answer streams back", async
 });
 
 test("the operator's OPENAI_BASE_URL keeps its own path", async (t) => {
-  const { url, broker, upstream } = await serve(t, { path: "/openai/v1/" });
+  const { url, broker, upstream } = await serveProxy(t, { path: "/openai/v1/" });
   upstream.release();
   const res = await ask(url, { authorization: `Bearer ${broker.register("org/repo")}` });
   assert.equal(res.status, 200);
@@ -98,7 +90,7 @@ test("only paths under the base URL go on: the key never reaches another host", 
   const elsewhere = await fakeOpenAi(t);
   elsewhere.release();
   const host = new URL(elsewhere.url).host;
-  const { url, broker, upstream } = await serve(t);
+  const { url, broker, upstream } = await serveProxy(t);
   upstream.release();
   const secret = broker.register("org/repo");
   for (const path of [
@@ -122,7 +114,7 @@ test("only paths under the base URL go on: the key never reaches another host", 
 });
 
 test("no secret, a wrong one or a finished run's: refused, and OpenAI never asked", async (t) => {
-  const { url, broker, upstream } = await serve(t);
+  const { url, broker, upstream } = await serveProxy(t);
   const secret = broker.register("org/repo");
   broker.revoke(secret);
   for (const headers of [{}, { authorization: "Bearer guess" }, { authorization: secret }]) {
@@ -136,7 +128,7 @@ test("no secret, a wrong one or a finished run's: refused, and OpenAI never aske
 });
 
 test("without OPENAI_API_KEY, a live run gets an error rather than an empty header", async (t) => {
-  const { url, broker, upstream } = await serve(t, { credential: null });
+  const { url, broker, upstream } = await serveProxy(t, { credential: null });
   const res = await ask(url, { authorization: `Bearer ${broker.register("org/repo")}` });
   assert.equal(res.status, 503);
   assert.equal(upstream.requests.length, 0);
@@ -145,9 +137,7 @@ test("without OPENAI_API_KEY, a live run gets an error rather than an empty head
 test("OpenAI out of reach: a 502 in OpenAI's error shape", async (t) => {
   const broker = createBroker({ app: () => null });
   const proxy = createOpenAiProxy({ broker, credential: "k", upstream: "http://127.0.0.1:1" });
-  const server = createServer((req, res) => proxy.handle(req, res));
-  const url = await listen(server);
-  t.after(() => server.close());
+  const { url } = await serve(t, (req, res) => proxy.handle(req, res));
   const res = await ask(url, { authorization: `Bearer ${broker.register("org/repo")}` });
   assert.equal(res.status, 502);
   assert.match((await res.json()).error.message, /OpenAI can't be reached/);
@@ -164,9 +154,7 @@ async function servePlan(t, login) {
     upstream: "http://127.0.0.1:1/v1",
     chatgptUrl: `${upstream.url}/backend-api/codex`,
   });
-  const server = createServer((req, res) => proxy.handle(req, res));
-  const url = await listen(server);
-  t.after(() => server.close());
+  const { url } = await serve(t, (req, res) => proxy.handle(req, res));
   return { url, broker, upstream };
 }
 
@@ -202,17 +190,13 @@ test("a plan's login the backend refuses is marked, for a refresh before the nex
     headers: async () => ({ authorization: "Bearer plan-access" }),
     refused: (authorization) => refused.push(authorization),
   };
-  const upstream = createServer((req, res) => {
+  const { url: upstreamUrl } = await serve(t, (req, res) => {
     res.writeHead(401, { "content-type": "application/json" });
     res.end('{"error":{"message":"token expired"}}');
   });
-  const upstreamUrl = await listen(upstream);
-  t.after(() => upstream.close());
   const broker = createBroker({ app: () => null });
   const proxy = createOpenAiProxy({ broker, login, chatgptUrl: `${upstreamUrl}/codex` });
-  const server = createServer((req, res) => proxy.handle(req, res));
-  const url = await listen(server);
-  t.after(() => server.close());
+  const { url } = await serve(t, (req, res) => proxy.handle(req, res));
   const secret = broker.register("org/repo");
   const res = await ask(url, { authorization: `Bearer ${secret}` });
   assert.equal(res.status, 401);
