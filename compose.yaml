@@ -142,6 +142,10 @@ services:
     restart: unless-stopped
     environment:
       POLICY_URL: http://listener:8081/egress
+    volumes:
+      # Plain HTTP answers from the hosts the grants list in cached_hosts, kept for every
+      # run (docs/security.md#the-egress-cache). EGRESS_CACHE_MAX in environment sizes it.
+      - egress-cache:/cache
     # How the listener finds it, to join it to each run's network.
     labels:
       deckhand.role: egress
@@ -188,3 +192,4 @@ volumes:
     name: ${SHOTS_VOLUME:-deckhand-screenshots}
   runs:
     name: ${RUNS_VOLUME:-deckhand-runs}
+  egress-cache:

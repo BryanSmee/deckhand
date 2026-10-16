@@ -102,23 +102,48 @@ test("private addresses only for hosts the operator named, default.yaml's too, n
   const hosts = [...operatorHosts(config, grantFor(grants, config, "org/api")), "*"];
   const answer = (host) => egressPolicy(host, hosts, hosts);
   // default.yaml's, as ALLOWED_HOSTS was.
-  assert.deepEqual(answer("registry.npmjs.org"), { allowed: true, private: true });
-  assert.deepEqual(answer("nas.lan.example"), { allowed: true, private: true });
-  assert.deepEqual(answer("anything.net"), { allowed: true, private: false });
+  assert.deepEqual(answer("registry.npmjs.org"), {
+    allowed: true,
+    private: true,
+    cache: false,
+  });
+  assert.deepEqual(answer("nas.lan.example"), { allowed: true, private: true, cache: false });
+  assert.deepEqual(answer("anything.net"), { allowed: true, private: false, cache: false });
   // A run restored from before repos lost their own hosts: those stay public.
   assert.deepEqual(egressPolicy("repo.dev", ["github.com", "repo.dev"], ["github.com"]), {
     allowed: true,
     private: false,
+    cache: false,
   });
   assert.deepEqual(egressPolicy("x.net", ["github.com"], ["github.com"]), {
     allowed: false,
     private: false,
+    cache: false,
   });
   // A run saved before `trusted` was: nothing private.
   assert.deepEqual(egressPolicy("github.com", ["github.com"], undefined), {
     allowed: true,
     private: false,
+    cache: false,
   });
+});
+
+test("cache: only for allowed hosts the run's cached_hosts match", () => {
+  const files = {
+    "default.yaml": "hosts: [deb.debian.org]\ncached_hosts: [deb.debian.org]\n",
+    "org/api.yaml": 'hosts: ["*.example.com"]\ncached_hosts: ["*.example.com", nowhere.net]\n',
+  };
+  const grant = grantFor(grantsFrom(files, config), config, "org/api");
+  assert.deepEqual(grant.cachedHosts, ["deb.debian.org", "*.example.com", "nowhere.net"]);
+  const hosts = operatorHosts(config, grant);
+  const cache = (host) => egressPolicy(host, hosts, hosts, grant.cachedHosts).cache;
+  assert.equal(cache("deb.debian.org"), true);
+  assert.equal(cache("dl.example.com"), true);
+  assert.equal(cache("github.com"), false);
+  // Listed, but not reachable: refused all the same.
+  assert.equal(cache("nowhere.net"), false);
+  // A run saved before `cached` was: nothing cached.
+  assert.equal(egressPolicy("deb.debian.org", hosts, hosts, undefined).cache, false);
 });
 
 test("host matching: names, subdomain wildcards, *", () => {

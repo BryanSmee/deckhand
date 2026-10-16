@@ -528,6 +528,7 @@ test("GET config: raw text, errors, warnings and what runs get; its row updated"
     allowBranchDockerImages: false,
     allowDocker: false,
     hosts: ["registry.npmjs.org"],
+    cachedHosts: [],
     mounts: [],
     limits: { cpus: "2", memory: "4g", pids: 2048 },
   });

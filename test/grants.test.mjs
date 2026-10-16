@@ -42,6 +42,7 @@ function folder(files) {
 
 const NOTHING = {
   hosts: [],
+  cachedHosts: [],
   allowPreview: false,
   allowDockerfile: false,
   allowBranchDockerImages: false,
@@ -65,6 +66,7 @@ mounts:
   };
   assert.deepEqual(grantOf(files, "org/repo"), {
     hosts: ["*.example.com", "pypi.org"],
+    cachedHosts: [],
     allowPreview: false,
     allowDockerfile: false,
     allowBranchDockerImages: false,
@@ -171,11 +173,13 @@ test("each repo file's errors, one list per file", () => {
   const bad = (text, pattern) =>
     assert.throws(() => grantOf({ "org/repo.yaml": text }, "org/repo"), pattern);
   bad("hosts: [bad host]\n", /org\/repo\.yaml: hosts: "bad host"/);
+  bad("cached_hosts: [bad host]\n", /org\/repo\.yaml: cached_hosts: "bad host": expected a host/);
+  bad("cached_hosts: deb.debian.org\n", /cached_hosts: expected a list of host names/);
   bad("mounts: [/nfs/../etc]\n", /plain absolute root/);
   bad("mounts: [relative]\n", /plain absolute root/);
   bad("limits: { memory: lots }\n", /org\/repo\.yaml: limits\.memory: expected an amount/);
   bad("limits: { disk: 1 }\n", /limits\.disk: unknown/);
-  bad("network: host\n", /network: unknown/);
+  bad("network: host\n", /network: unknown \(hosts, cached_hosts, limits, mounts/);
   // Gone with a repo's own hosts: ignoring it would quietly take them away.
   bad("allow_repo_hosts: true\n", /allow_repo_hosts: gone, list the hosts .* under hosts here/);
   bad("allow_preview: 1\n", /allow_preview: expected true or false/);

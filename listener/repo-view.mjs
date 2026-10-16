@@ -185,6 +185,7 @@ export function grantRows(grant) {
     allowBranchDockerImages: grant.allowBranchDockerImages,
     allowDocker: grant.allowDocker,
     hosts: grant.hosts,
+    cachedHosts: grant.cachedHosts,
     mounts: grant.mounts.map(({ root, readOnly }) => ({ root, readOnly })),
     limits: grant.limits,
   };

@@ -97,6 +97,7 @@ dockerfile: ./docker/Dockerfile
 allow_branch_docker_images: true
 caches: [/home/node/.npm, /home/node/.cache/pip/]
 hosts: [registry.npmjs.org, "*.example.com"]
+cached_hosts: [registry.npmjs.org]
 mounts:
   - path: /nfs/work/api
     read_only: false
@@ -113,6 +114,8 @@ colour: blue
     "allow_branch_docker_images: ignored here, the operator's grants folder sets it for this repository",
     // Only the operator lists hosts: a repo's are no longer read.
     "hosts: ignored, the operator lists the hosts in grants/<owner>/<repo>.yaml",
+    // So does what the egress proxy keeps for every run.
+    "cached_hosts: ignored, the operator lists them in grants/<owner>/<repo>.yaml",
     "colour: unknown, ignored",
   ]);
   assert.equal(settings.model, "sonnet");

@@ -8,10 +8,24 @@
 // can't be pointed at the host or the cloud's metadata service once allowed: loopback,
 // link-local and unspecified addresses are always refused, private ones unless the operator
 // allowed the host by name or domain (not only through "*").
+//
+// Plain HTTP from the hosts the listener says may be cached goes through a cache on disk
+// (cache.mjs); everything else, and every CONNECT, is forwarded as is.
 import { lookup as dnsLookup } from "node:dns/promises";
 import { createServer, request as httpRequest } from "node:http";
 import { connect, isIP } from "node:net";
 import { pathToFileURL } from "node:url";
+import {
+  conditional,
+  createCache,
+  DEFAULT_ENTRY_MAX,
+  DEFAULT_MAX,
+  isFresh,
+  notModified,
+  parseSize,
+  requestUse,
+  storable,
+} from "./cache.mjs";
 
 function v4(address) {
   const parts = address.split(".").map(Number);
@@ -95,7 +109,7 @@ export function target(authority) {
   return { host: (match[1] ?? match[2]).toLowerCase().replace(/\.$/, ""), port };
 }
 
-// Asks the listener: { allowed, private }. Fails closed.
+// Asks the listener: { allowed, private, cache }. Fails closed.
 export function listenerPolicy(url, timeoutMs = 5000) {
   return async (ip, host) => {
     try {
@@ -103,7 +117,11 @@ export function listenerPolicy(url, timeoutMs = 5000) {
       const res = await fetch(`${url}?${query}`, { signal: AbortSignal.timeout(timeoutMs) });
       if (!res.ok) return { allowed: false };
       const answer = await res.json();
-      return { allowed: answer.allowed === true, private: answer.private === true };
+      return {
+        allowed: answer.allowed === true,
+        private: answer.private === true,
+        cache: answer.cache === true,
+      };
     } catch {
       return { allowed: false };
     }
@@ -113,15 +131,18 @@ export function listenerPolicy(url, timeoutMs = 5000) {
 class Refused extends Error {}
 
 export function createProxy({
-  policy, // (client ip, host) → { allowed, private }
+  policy, // (client ip, host) → { allowed, private, cache }
   lookup = (host) => dnsLookup(host, { all: true }),
   blocked = blockedAddress,
+  cache = null, // createCache()'s, or none
+  now = Date.now,
   log = () => {},
 }) {
-  // The address to connect to, or a Refused saying why not.
+  // { address to connect to, whether its plain HTTP may be cached }, or a Refused saying why
+  // not.
   async function decide(client, host) {
     const ip = client.replace(/^::ffff:/, "");
-    const { allowed, private: privateOk } = await policy(ip, host);
+    const { allowed, private: privateOk, cache: cacheOk } = await policy(ip, host);
     if (!allowed) {
       log(`refused ${host} for ${ip}`);
       throw new Refused(
@@ -142,7 +163,7 @@ export function createProxy({
         `Deckhand's egress proxy refused ${host}: it resolves to a private address`,
       );
     }
-    return usable.address;
+    return { address: usable.address, cache: cacheOk === true };
   }
 
   function refuse(socket, error) {
@@ -160,7 +181,7 @@ export function createProxy({
     if (!to) return refuse(client, new Refused("expected CONNECT host:port"));
     let address;
     try {
-      address = await decide(req.socket.remoteAddress, to.host);
+      ({ address } = await decide(req.socket.remoteAddress, to.host));
     } catch (error) {
       return refuse(client, error);
     }
@@ -193,9 +214,9 @@ export function createProxy({
       return res.end("Deckhand's egress proxy: expected an http:// URL or CONNECT\n");
     }
     const host = url.hostname.replace(/^\[|\]$/g, "").toLowerCase();
-    let address;
+    let decision;
     try {
-      address = await decide(req.socket.remoteAddress, host);
+      decision = await decide(req.socket.remoteAddress, host);
     } catch (error) {
       res.writeHead(error.cause === 502 ? 502 : 403, { "content-type": "text/plain" });
       return res.end(`${error instanceof Refused ? error.message : "refused"}\n`);
@@ -204,25 +225,116 @@ export function createProxy({
     for (const name of Object.keys(headers)) {
       if (name.startsWith("proxy-")) delete headers[name];
     }
-    const upstream = httpRequest(
+    const to = { address: decision.address, url, host, headers };
+    const use = cache?.enabled && decision.cache ? requestUse(req) : "skip";
+    if (use !== "skip") return cached(req, res, to, use);
+    const upstream = send(to, req.method, headers, (answer) => {
+      res.writeHead(answer.statusCode, answer.headers);
+      answer.pipe(res);
+    });
+    upstream.on("error", () => unreachable(res, host));
+    req.pipe(upstream);
+  }
+
+  function send({ address, url }, method, headers, onAnswer) {
+    return httpRequest(
       {
         host: address,
         port: url.port || 80,
-        method: req.method,
+        method,
         path: url.pathname + url.search,
         headers,
         setHost: false,
       },
-      (answer) => {
-        res.writeHead(answer.statusCode, answer.headers);
-        answer.pipe(res);
-      },
+      onAnswer,
     );
-    upstream.on("error", () => {
-      if (!res.headersSent) res.writeHead(502, { "content-type": "text/plain" });
-      res.end(`Deckhand's egress proxy could not reach ${host}\n`);
+  }
+
+  function unreachable(res, host) {
+    if (!res.headersSent) res.writeHead(502, { "content-type": "text/plain" });
+    res.end(`Deckhand's egress proxy could not reach ${host}\n`);
+  }
+
+  // A GET on a cached host: from disk when fresh, revalidated when stale (a 304 serves it),
+  // else downloaded, streamed to the client and stored as it comes when it may be.
+  async function cached(req, res, to, use) {
+    const key = cache.key(to.url.href, req.headers["accept-encoding"]);
+    let entry = await cache.get(key);
+    if (entry && use === "use" && isFresh(entry.meta, now()))
+      return serve(req, res, key, entry, "hit");
+    // A client checking its own copy, with nothing here to check it against: as before.
+    if (!entry && conditional(req)) return passThrough(req, res, to);
+    const headers = { ...to.headers };
+    for (const name of ["if-none-match", "if-modified-since", "if-match", "if-unmodified-since"]) {
+      delete headers[name];
+    }
+    if (entry?.meta.headers.etag) headers["if-none-match"] = entry.meta.headers.etag;
+    if (entry?.meta.headers["last-modified"]) {
+      headers["if-modified-since"] = entry.meta.headers["last-modified"];
+    }
+    const upstream = send(to, "GET", headers, async (answer) => {
+      if (entry && answer.statusCode === 304) {
+        answer.resume();
+        const meta = await cache.refresh(key, entry.meta, answer.headers);
+        return serve(req, res, key, { ...entry, meta }, "revalidated");
+      }
+      await entry?.file.close();
+      entry = null;
+      const keep = storable(answer.statusCode, answer.headers, cache.limit);
+      // What was kept is no longer what the host answers.
+      if (!keep && cache.has(key)) cache.remove(key);
+      const writer = keep
+        ? cache.writer(key, {
+            url: to.url.href,
+            status: answer.statusCode,
+            headers: answer.headers,
+          })
+        : null;
+      res.writeHead(answer.statusCode, { ...answer.headers, "x-deckhand-cache": "miss" });
+      let ended = false;
+      answer.on("data", (chunk) => writer?.write(chunk));
+      answer.on("end", () => {
+        ended = true;
+        writer?.commit(answer.headers["content-length"]);
+      });
+      answer.on("error", () => writer?.abort());
+      // A client gone mid-download: the rest isn't fetched, nothing is kept.
+      res.on("close", () => {
+        if (ended) return;
+        writer?.abort();
+        answer.destroy();
+      });
+      answer.pipe(res);
     });
-    req.pipe(upstream);
+    upstream.on("error", async () => {
+      await entry?.file.close();
+      unreachable(res, to.host);
+    });
+    upstream.end();
+  }
+
+  function passThrough(req, res, to) {
+    const upstream = send(to, req.method, to.headers, (answer) => {
+      res.writeHead(answer.statusCode, answer.headers);
+      answer.pipe(res);
+    });
+    upstream.on("error", () => unreachable(res, to.host));
+    upstream.end();
+  }
+
+  // A kept answer, or a 304 when it matches the client's own validators.
+  function serve(req, res, key, { meta, file }, how) {
+    cache.touch(key, meta);
+    const headers = { ...meta.headers, "x-deckhand-cache": how };
+    if (notModified(req, meta.headers)) {
+      file.close();
+      res.writeHead(304, headers);
+      return res.end();
+    }
+    res.writeHead(meta.status, { ...headers, "content-length": meta.size });
+    const body = file.createReadStream();
+    body.on("error", () => res.destroy());
+    body.pipe(res);
   }
 
   const server = createServer(forward);
@@ -236,7 +348,13 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   const url = process.env.POLICY_URL || "http://listener:8081/egress";
   const port = Number(process.env.PORT ?? 3128);
   const log = (...args) => console.log(new Date().toISOString(), ...args);
-  createProxy({ policy: listenerPolicy(url), log }).listen(port, () =>
-    log(`Egress proxy on :${port}, asking ${url}`),
+  const cache = createCache({
+    dir: process.env.EGRESS_CACHE_DIR || "/cache",
+    max: parseSize(process.env.EGRESS_CACHE_MAX, DEFAULT_MAX),
+    entryMax: parseSize(process.env.EGRESS_CACHE_ENTRY_MAX, DEFAULT_ENTRY_MAX),
+    log,
+  });
+  createProxy({ policy: listenerPolicy(url), cache, log }).listen(port, () =>
+    log(`Egress proxy on :${port}, asking ${url}; cache ${cache.enabled ? "on" : "off"}`),
   );
 }
