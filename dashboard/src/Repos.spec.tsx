@@ -235,6 +235,40 @@ test("a repository's broken grant: the file to fix, and only this repository sto
   expect(screen.getByText("Unknown: the operator's grants have errors.")).toBeTruthy();
 });
 
+test("a broken grant: what needs a grant is unknown, and only the grants error is listed", async () => {
+  const listed = fetch;
+  vi.stubGlobal("fetch", async (url: string, init?: RequestInit) => {
+    if (url !== "api/repos/org/api/config") return listed(url, init);
+    const note = "depends on the operator's grants, which have errors";
+    return Response.json({
+      ...CONFIG,
+      errors: [],
+      grantsError: {
+        file: "org/api.yaml",
+        message: "allow_repo_hosts: gone",
+        everyRepo: false,
+      },
+      effective: {
+        ...CONFIG.effective,
+        settings: [{ key: "docker", value: "a container engine", source: "unknown", note }],
+        hosts: [],
+        mounts: [{ path: "/srv/data", source: "unknown", readOnly: true, note }],
+        grant: null,
+      },
+    });
+  });
+  render(<Page />);
+  fireEvent.click(await screen.findByRole("button", { name: "org/api" }));
+  const alert = await screen.findByRole("alert");
+  expect(within(alert).getAllByRole("listitem")).toHaveLength(1);
+  expect(alert.textContent).toContain("allow_repo_hosts: gone");
+  expect(alert.textContent).not.toContain("docker");
+  const docker = screen.getByText("docker", { selector: "th code" }).closest("tr")!;
+  expect(within(docker).getByText("unknown")).toBeTruthy();
+  const mount = screen.getByText("/srv/data", { selector: "th code" }).closest("tr")!;
+  expect(within(mount).getByText("unknown")).toBeTruthy();
+});
+
 test("a config that parses but asks for what isn't granted: Invalid config, not Configured", async () => {
   const listed = fetch;
   vi.stubGlobal("fetch", async (url: string, init?: RequestInit) => {

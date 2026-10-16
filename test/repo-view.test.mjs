@@ -127,6 +127,35 @@ test("broken grants: the defaults, and no grant shown", () => {
   assert.ok(v.hosts.every((h) => h.note === "always"));
 });
 
+test("broken grants: what needs a grant is unknown, not refused", () => {
+  const yaml = [
+    "dockerfile: Dockerfile",
+    "docker: true",
+    "preview: ./preview.sh",
+    "mounts:",
+    "  - path: /srv/data",
+  ].join("\n");
+  const { settings, errors } = parseRepoConfig(yaml, config);
+  assert.deepEqual(errors, []);
+  const v = effectiveView(config, "org/app", settings, null);
+  assert.ok(![...v.settings, ...v.mounts].some((r) => r.source === "refused"));
+  for (const key of ["dockerfile", "allow_branch_docker_images", "docker", "preview"]) {
+    assert.equal(byKey(v.settings, key).source, "unknown", key);
+    assert.match(byKey(v.settings, key).note, /grants, which have errors/);
+  }
+  assert.equal(byKey(v.settings, "dockerfile").value, "Dockerfile");
+  assert.deepEqual(v.mounts, [
+    {
+      path: "/srv/data",
+      source: "unknown",
+      readOnly: true,
+      note: "depends on the operator's grants, which have errors",
+    },
+  ]);
+  // What doesn't need a grant is shown as usual.
+  assert.equal(byKey(v.settings, "effort").source, "operator");
+});
+
 test("dockerfile and preview: from the repo once granted", () => {
   const yaml = "dockerfile: Dockerfile\npreview: ./preview.sh\n";
   const { settings, grant } = view(yaml, {
