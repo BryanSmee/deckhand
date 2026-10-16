@@ -143,8 +143,9 @@ services:
     environment:
       POLICY_URL: http://listener:8081/egress
     volumes:
-      # Plain HTTP answers from the hosts the grants list in cached_hosts, kept for every
-      # run (docs/security.md#the-egress-cache). EGRESS_CACHE_MAX in environment sizes it.
+      # Answers from the hosts the grants list in cached_hosts, kept for every run, and the
+      # CA with which the proxy decrypts their HTTPS: its key never leaves this volume
+      # (docs/security.md#the-egress-cache). EGRESS_CACHE_MAX in environment sizes it.
       - egress-cache:/cache
     # How the listener finds it, to join it to each run's network.
     labels:
