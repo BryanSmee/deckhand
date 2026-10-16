@@ -3,6 +3,7 @@
 // Brainstorm column take (Start, Brainstorm, Queue after…, Remove), for phones and keyboards.
 // The drags themselves are the graph's (Graph.tsx) and the column's (Brainstorms.tsx), and so
 // is the form an issue's open questions open first. A brainstorm dropped here stops.
+import type { ComponentChildren } from "preact";
 import { useState } from "preact/hooks";
 import type { WorkArea as Work } from "./api";
 import type { Task, WorkAction } from "./types";
@@ -44,6 +45,8 @@ interface Props {
   notice: string | null;
   // Takes an action: the graph's, which opens an issue's open questions first.
   onAct?: (action: WorkAction) => void;
+  // Below the lists: the repo's inbox form (Inbox.tsx).
+  children?: ComponentChildren;
 }
 
 // "Queue after…": the graph's issues to pick from, then Queue.
@@ -111,6 +114,7 @@ export function WorkArea({
   onMode,
   notice,
   onAct = (action) => void work.act(action),
+  children,
 }: Props) {
   // The issue whose "Queue after…" is open.
   const [choosing, setChoosing] = useState<number | null>(null);
@@ -336,6 +340,7 @@ export function WorkArea({
           </ul>
         </>
       )}
+      {children}
     </section>
   );
 }

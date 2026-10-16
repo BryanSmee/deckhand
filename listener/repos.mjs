@@ -150,6 +150,7 @@ export function createRepoList({
     const file = await readRepoFile(app.request, info.full_name, CONFIG_FILE, base);
     const parsed = file ? parseRepoConfig(file.text, config) : null;
     const known = {
+      repo: info.full_name,
       at: now(),
       base,
       has: !!file,
@@ -218,14 +219,17 @@ export function createRepoList({
     configs.clear();
   }
 
-  // The repo's `users` and `wait_for_answers` as last read for the list,
-  // { users, waitForAnswers, at }, or null when it wasn't (http.mjs sees()).
+  // The repo's `users`, `wait_for_answers` and `inbox` as last read for the list,
+  // { users, waitForAnswers, inbox, at }, or null when it wasn't (http.mjs sees()).
   function usersOf(repo) {
     const known = configs.get(repo.toLowerCase());
     if (!known?.settings) return null;
-    const { users, waitForAnswers } = known.settings;
-    return { users, waitForAnswers, at: known.at };
+    const { users, waitForAnswers, inbox } = known.settings;
+    return { users, waitForAnswers, inbox, at: known.at };
   }
+
+  // The names of the repos whose settings were read.
+  const known = () => [...configs.values()].filter((k) => k.settings).map((k) => k.repo);
 
   // The repos' names, without reading their configs.
   const names = async () => (await repos()).map((r) => r.full_name);
@@ -238,6 +242,7 @@ export function createRepoList({
     refreshAll,
     names,
     usersOf,
+    known,
     listedAt: () => listedAt,
   };
 }

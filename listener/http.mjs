@@ -179,6 +179,8 @@ export function createHttp(ctx, { dashboardDir }) {
       queued: queued.length,
       maxParallel: config.maxParallel,
       previews: ctx.previews.status().filter((h) => sees(user, h.repo)),
+      // The inbox issues of each repo read so far (the dashboard's inbox form).
+      inboxes: Object.fromEntries((ctx.inboxes?.() ?? []).filter(([repo]) => sees(user, repo))),
       // GitHub Enterprise: the dashboard's links go where the listener's do.
       githubUrl: config.githubUrl,
       now: Date.now(),

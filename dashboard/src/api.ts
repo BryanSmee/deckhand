@@ -9,6 +9,8 @@ import type {
   AnswersThen,
   Backlog,
   Entry,
+  InboxEntry,
+  InboxResult,
   Onboarded,
   Repo,
   RepoConfig,
@@ -350,6 +352,21 @@ export async function sendRerun(repo: string, runId: string): Promise<WorkResult
       body: JSON.stringify({ runId }),
     });
     return await answer<WorkResult>(res);
+  } catch (e) {
+    return { error: message(e) };
+  }
+}
+
+// An idea or a bug report for the repo's inbox (api/repos/<repo>/inbox): the comment it
+// became and the inbox's task, or why it was refused.
+export async function sendToInbox(repo: string, entry: InboxEntry): Promise<InboxResult> {
+  try {
+    const res = await fetch(`api/repos/${repo}/inbox`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(entry),
+    });
+    return await answer<InboxResult>(res);
   } catch (e) {
     return { error: message(e) };
   }

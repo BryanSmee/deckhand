@@ -225,8 +225,8 @@ const repoUsers = new Map();
 async function repoSettings(repo, base) {
   const read = await loadRepoSettings(github, config, repo, base || "main");
   if (!read.errors.length) {
-    const { users, waitForAnswers } = read.settings;
-    repoUsers.set(repo.toLowerCase(), { users, waitForAnswers, at: Date.now() });
+    const { users, waitForAnswers, inbox } = read.settings;
+    repoUsers.set(repo.toLowerCase(), { repo, users, waitForAnswers, inbox, at: Date.now() });
   }
   return read;
 }
@@ -266,6 +266,19 @@ Object.assign(ctx, {
   usersOf: (repo) => latestRead(repo)?.users ?? null,
   // Unknown: the default, on.
   waitsForAnswers: (repo) => latestRead(repo)?.waitForAnswers ?? true,
+  // Each repo read so far and its inbox issues ({ ideas, bugs }): the dashboard's inbox form.
+  inboxes: () => {
+    const names = new Map(
+      [...[...repoUsers.values()].map((r) => r.repo), ...repoList.known()].map((n) => [
+        n.toLowerCase(),
+        n,
+      ]),
+    );
+    return [...names.values()].map((repo) => {
+      const { ideas = null, bugs = null } = latestRead(repo)?.inbox ?? {};
+      return [repo, { ideas, bugs }];
+    });
+  },
   repoFile,
   setup,
   auth,

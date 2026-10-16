@@ -19,7 +19,11 @@
 //   POST /api/repos/<owner>/<repo>/rerun  { runId }
 //                                         the task's last run, failed or interrupted, again:
 //                                         its mode and comments (board.mjs rerunnable())
+//   POST /api/repos/<owner>/<repo>/inbox  { kind: "idea" | "bug", text }
+//                                         an entry for the repo's inbox: the App's comment on
+//                                         its inbox issue, and the run a comment there starts
 import { MAX_TEXT, Refused, answersComment, parseAnswers, refuse } from "./answers.mjs";
+import { inboxItem } from "./events.mjs";
 import { parseQuestions, questionsSection } from "./questions.mjs";
 import { waitsFor } from "./waits.mjs";
 import { CONFIG_FILE, modeNames } from "./repo-config.mjs";
@@ -32,6 +36,8 @@ const MAX_BODY = 4096;
 // The answers' text, and the JSON around it (escapes, indexes).
 const MAX_ANSWER_BODY = 4 * MAX_TEXT;
 const ACTIONS = ["start", "queue", "dequeue", "stop"];
+// An inbox entry's kind, and the repo config's key for its issue.
+const INBOXES = { idea: "ideas", bug: "bugs" };
 
 const send = (res, status, value) => sendJson(res, value, status);
 
@@ -234,17 +240,7 @@ export function createWorkApi({
   // the user in both the operator's and the repo's users, an open issue (a pull request when
   // `pr`) with no run going or queued. Returns { settings, base, issue }; throws Refused.
   async function checked(repo, user, number, pr = false) {
-    const login = user.toLowerCase();
-    if (!config.users.includes(login)) refuse(403, `${user} is not in ALLOWED_USERS.`);
-    const base = await baseOf(repo);
-    const { settings, errors } = await repoSettings(repo, base);
-    if (errors.length) {
-      refuse(
-        409,
-        `${CONFIG_FILE} of ${repo} has errors: no run starts there until they are fixed.`,
-      );
-    }
-    if (!settings.users.includes(login)) refuse(403, `${user} is not among ${repo}'s users.`);
+    const { settings, base } = await checkedRepo(repo, user);
     const res = await github(repo, "GET", `/repos/${repo}/issues/${number}`, undefined, [404, 410]);
     if (res.status === 404 || res.status === 410)
       refuse(404, `#${number} isn't an issue of ${repo}.`);
@@ -259,6 +255,22 @@ export function createWorkApi({
       refuse(409, `#${number} is running or queued: it can't be moved now.`);
     }
     return { settings, base, issue };
+  }
+
+  // The repo's half of checked(): { settings, base }; throws Refused.
+  async function checkedRepo(repo, user) {
+    const login = user.toLowerCase();
+    if (!config.users.includes(login)) refuse(403, `${user} is not in ALLOWED_USERS.`);
+    const base = await baseOf(repo);
+    const { settings, errors } = await repoSettings(repo, base);
+    if (errors.length) {
+      refuse(
+        409,
+        `${CONFIG_FILE} of ${repo} has errors: no run starts there until they are fixed.`,
+      );
+    }
+    if (!settings.users.includes(login)) refuse(403, `${user} is not among ${repo}'s users.`);
+    return { settings, base };
   }
 
   // The App's comment on the issue: the record of who did what, and where the run's reactions
@@ -489,6 +501,38 @@ export function createWorkApi({
     return `Rerun of #${number} queued.`;
   }
 
+  // An idea or a bug report for the repo's inbox, as a comment there would be: the App's
+  // comment on the inbox issue (an entry, not a reply: no marker), then the run it starts,
+  // queued here since bot comments never reach admit(). The run reads the entry as the user's.
+  async function sendToInbox(repo, user, { kind, text }) {
+    const { settings, base } = await checkedRepo(repo, user);
+    const number = settings.inbox?.[INBOXES[kind]];
+    if (!number) {
+      refuse(
+        409,
+        `${repo} has no ${kind} inbox: see \`inbox.${INBOXES[kind]}\` in its ${CONFIG_FILE}.`,
+      );
+    }
+    const res = await github(repo, "GET", `/repos/${repo}/issues/${number}`, undefined, [404, 410]);
+    if (res.status === 404 || res.status === 410) {
+      refuse(409, `${repo}'s ${kind} inbox, #${number}, isn't an issue.`);
+    }
+    if (!res.ok) throw new Error(`GitHub GET #${number}: ${res.status}`);
+    const issue = await res.json();
+    const body = `${text.trim()}\n\nFrom the dashboard by @${user}`;
+    const sent = await github(repo, "POST", `/repos/${repo}/issues/${number}/comments`, { body });
+    if (!sent.ok) throw new Error(`GitHub POST a comment on #${number}: ${sent.status}`);
+    const c = await sent.json();
+    const posted = { id: c.id, html_url: c.html_url, node_id: c.node_id };
+    await accept({
+      ...inboxItem(repo, issue, kind, posted, { login: user }, text),
+      author: user,
+      base,
+      settings,
+    });
+    return { message: `Sent to #${number}.`, url: posted.html_url, task: `${repo}#${number}` };
+  }
+
   // The request's body; one over `limit` bytes is refused as it is.
   async function bodyOf(req, limit) {
     try {
@@ -529,13 +573,31 @@ export function createWorkApi({
     send(res, 200, { message: await rerun(repo, user, runId) });
   }
 
-  const POSTS = { work, answer: answers, rerun: reruns };
+  async function inbox(req, res, user, repo) {
+    let body;
+    try {
+      body = JSON.parse(await bodyOf(req, MAX_ANSWER_BODY));
+    } catch (error) {
+      if (error instanceof Refused) throw error;
+      refuse(400, "Not JSON.");
+    }
+    const { kind, text } = body ?? {};
+    if (!Object.hasOwn(INBOXES, kind)) refuse(400, "`kind` is idea or bug.");
+    if (typeof text !== "string" || !text.trim()) refuse(400, "Write something to send.");
+    if (text.length > MAX_TEXT) refuse(413, `The text is over ${MAX_TEXT} characters.`);
+    log(`Work area: ${user} sends a ${kind} to ${repo}'s inbox`);
+    send(res, 200, await sendToInbox(repo, user, { kind, text }));
+  }
 
-  // Handles /api/repos/<owner>/<repo>/issues, /work, /answer and /rerun; false for any other
+  const POSTS = { work, answer: answers, rerun: reruns, inbox };
+
+  // Handles /api/repos/<owner>/<repo>/issues, /work, /answer, /rerun and /inbox; false for any other
   // path.
   function handle(req, res, user) {
     const { pathname } = new URL(req.url, "http://localhost");
-    const one = /^\/api\/repos\/([\w.-]+)\/([\w.-]+)\/(issues|work|answer|rerun)$/.exec(pathname);
+    const one = /^\/api\/repos\/([\w.-]+)\/([\w.-]+)\/(issues|work|answer|rerun|inbox)$/.exec(
+      pathname,
+    );
     if (!one) return false;
     const repo = `${one[1]}/${one[2]}`;
     const post = one[3] !== "issues";
