@@ -2,7 +2,7 @@
 // older than one shown is dropped, a change to the one shown doesn't drop the first read, and
 // an error keeps the last answer.
 import { act, render, waitFor } from "@testing-library/preact";
-import { afterEach, expect, test, vi } from "vitest";
+import { expect, test, vi } from "vitest";
 import { type Polled, usePolled } from "./api";
 
 // Each fetch waits until the test answers it, in any order.
@@ -24,10 +24,6 @@ function poll(url: string) {
   render(<Probe />);
   return seen;
 }
-
-afterEach(() => {
-  vi.unstubAllGlobals();
-});
 
 test("a slow read older than one shown is dropped", async () => {
   const waiting = slowListener();

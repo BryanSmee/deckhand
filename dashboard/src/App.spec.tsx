@@ -1,12 +1,12 @@
 // The dashboard from a fixture api/state, with a fake EventSource for the log stream.
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/preact";
-import { afterEach, beforeEach, expect, test } from "vitest";
+import { beforeEach, expect, test, vi } from "vitest";
 import type { RepoList } from "./api";
 import { Dashboard } from "./App";
-import fixture from "./fixture.json";
-import type { Entry, State } from "./types";
+import { makeState } from "./testUtils";
+import type { Entry } from "./types";
 
-const state = fixture as State;
+const state = makeState();
 
 class FakeSource {
   static last: FakeSource | null = null;
@@ -29,19 +29,14 @@ class FakeSource {
 let wide = true;
 beforeEach(() => {
   wide = true;
-  history.replaceState(null, "", "/");
-  localStorage.clear();
   FakeSource.last = null;
-  Object.assign(globalThis, {
-    EventSource: FakeSource,
-    matchMedia: (query: string) => ({
-      matches: query.includes("min-width") ? wide : false,
-      addEventListener() {},
-      removeEventListener() {},
-    }),
-  });
+  vi.stubGlobal("EventSource", FakeSource);
+  vi.stubGlobal("matchMedia", (query: string) => ({
+    matches: query.includes("min-width") ? wide : false,
+    addEventListener() {},
+    removeEventListener() {},
+  }));
 });
-afterEach(() => document.body.replaceChildren());
 
 const rows = () =>
   within(screen.getByRole("list"))

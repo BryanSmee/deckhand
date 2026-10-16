@@ -1,12 +1,12 @@
 // Each task's pull request: its badge in the list, its link in the detail, the "Ready for
 // review" chip, and a notification when one turns ready (Notification mocked).
 import { fireEvent, render, screen, within } from "@testing-library/preact";
-import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { beforeEach, expect, test, vi } from "vitest";
 import { Dashboard } from "./App";
-import fixture from "./fixture.json";
+import { makeState } from "./testUtils";
 import type { State, Task } from "./types";
 
-const state = fixture as State;
+const state = makeState();
 
 class FakeNotification {
   static permission: NotificationPermission = "granted";
@@ -23,20 +23,10 @@ class FakeNotification {
 }
 
 beforeEach(() => {
-  history.replaceState(null, "", "/");
-  localStorage.clear();
   FakeNotification.permission = "granted";
   FakeNotification.shown = [];
-  Object.assign(globalThis, {
-    Notification: FakeNotification,
-    EventSource: class {
-      addEventListener() {}
-      close() {}
-    },
-    matchMedia: () => ({ matches: true, addEventListener() {}, removeEventListener() {} }),
-  });
+  vi.stubGlobal("Notification", FakeNotification);
 });
-afterEach(() => document.body.replaceChildren());
 
 const KEY = "acme/app#22";
 // The state a later poll brings: #22's pull request turned ready at `readyAt`.
