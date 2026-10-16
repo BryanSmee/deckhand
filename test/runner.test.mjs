@@ -449,6 +449,22 @@ test("address: the sandbox's own, on its run's network", async () => {
   const { r } = runner();
   await r.start({ run: "dh-a-1", name: "dh-a", image: "i" });
   assert.deepEqual(await r.address("dh-a"), ["10.1.0.2"]);
+  assert.equal(await r.engineAddress("dh-a"), null);
+});
+
+test("start with the egress proxy's CA: in the inbox folder, read-only, as DECKHAND_CA", async () => {
+  const { r, calls, inboxDir } = runner();
+  const pem = "-----BEGIN CERTIFICATE-----\nx\n-----END CERTIFICATE-----\n";
+  await r.start({ run: "dh-a-1", name: "dh-a", image: "i", ca: pem });
+  assert.equal(readFileSync(join(inboxDir, "dh-a-1", "egress-ca.crt"), "utf8"), pem);
+  const { args } = calls.find((c) => c.args[0] === "run");
+  assert.match(args.join(" "), /-e DECKHAND_CA=\/deckhand\/egress-ca\.crt /);
+  // None without it.
+  const other = runner();
+  await other.r.start({ run: "dh-b-1", name: "dh-b", image: "i" });
+  const run = other.calls.find((c) => c.args[0] === "run").args.join(" ");
+  assert.doesNotMatch(run, /DECKHAND_CA/);
+  assert.equal(existsSync(join(other.inboxDir, "dh-b-1", "egress-ca.crt")), false);
 });
 
 test("remove: the sandbox, then its network, once the listener and the proxy leave it", async () => {
@@ -610,8 +626,9 @@ test("start: the engine first, on the run's network as `engine`, then the sandbo
     "deckhand.engine": "dh-a-1",
   });
   assert.equal(containers.get("dh-a-engine").volume, "dh-a-1-engine");
-  // The engine's address is the run's too, for the egress proxy.
+  // The engine's address is the run's too, for the egress proxy, which tells it apart.
   assert.deepEqual(await r.address("dh-a"), ["10.1.0.2", "10.1.0.3"]);
+  assert.deepEqual(await r.engineAddress("dh-a"), ["10.1.0.3"]);
 });
 
 test("start: auto without Sysbox is Podman, with what it relaxes and no BuildKit", async () => {

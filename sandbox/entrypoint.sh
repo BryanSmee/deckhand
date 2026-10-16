@@ -26,6 +26,34 @@ deckhand_messages() {
   if [ -n "${TASK_INBOX:-}" ]; then deckhand-inbox "$TASK_INBOX"; else cat <&3; fi
 }
 
+# The egress proxy's CA (DECKHAND_CA, a file from the listener when the repository's grant has
+# cached_hosts): the proxy decrypts those hosts' HTTPS to cache it. Trusted next to the
+# image's own roots, in a bundle of ours (`node` can't run update-ca-certificates), through
+# the variables each tool reads, and by Chromium, which reads its own store (~/.pki/nssdb).
+if [ -n "${DECKHAND_CA:-}" ] && [ -f "$DECKHAND_CA" ]; then
+  bundle=$HOME/.deckhand/ca-bundle.crt
+  mkdir -p "${bundle%/*}"
+  for roots in /etc/ssl/certs/ca-certificates.crt /etc/pki/tls/certs/ca-bundle.crt /etc/ssl/cert.pem; do
+    if [ -f "$roots" ]; then
+      cat "$roots" > "$bundle"
+      break
+    fi
+  done
+  { echo; cat "$DECKHAND_CA"; } >> "$bundle"
+  export NODE_EXTRA_CA_CERTS=$DECKHAND_CA SSL_CERT_FILE=$bundle CURL_CA_BUNDLE=$bundle \
+    GIT_SSL_CAINFO=$bundle REQUESTS_CA_BUNDLE=$bundle PIP_CERT=$bundle
+  # Replaced, not added again: a new proxy volume is a new CA.
+  if command -v certutil > /dev/null; then
+    nss=$HOME/.pki/nssdb
+    mkdir -p "$nss"
+    {
+      { [ -f "$nss/cert9.db" ] || certutil -d "sql:$nss" -N --empty-password; } \
+        && { certutil -d "sql:$nss" -D -n "Deckhand egress CA" 2> /dev/null || true; } \
+        && certutil -d "sql:$nss" -A -t "C,," -n "Deckhand egress CA" -i "$DECKHAND_CA"
+    } || echo "Chromium doesn't trust the egress proxy's CA: cached hosts fail in it" >&2
+  fi
+fi
+
 # Everything that is the agent's own, in the image or, run from a checkout, next to this file.
 : "${SANDBOX_AGENT:=claude}"
 agents=/usr/local/share/deckhand-agents

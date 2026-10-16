@@ -146,7 +146,7 @@ export function createRestart(ctx) {
         task: pick(task),
         ...Object.fromEntries(
           ["id", "mode", "talk", "light", "secret", "asked", "replyTo", "replied", "hosts", "shots"]
-            .concat(["trusted", "cached", "branches", "lines", "result", "later"])
+            .concat(["trusted", "cached", "uncached", "branches", "lines", "result", "later"])
             .map((k) => [k, live[k]]),
         ),
         record,
@@ -194,7 +194,10 @@ export function createRestart(ctx) {
       result: savedResult(saved.result),
       logFile: openLog(logPath),
       open: !ctx.runner.closed(saved.id),
+      // A run started before the proxy decrypted HTTPS doesn't trust its CA: nothing cached.
+      cached: saved.uncached ? saved.cached : [],
       ip: null,
+      engineIp: null,
       handled,
       unanswered: saved.unanswered.map((i) => handled[i]).filter(Boolean),
       saving: null,

@@ -322,7 +322,7 @@ grant that repository:
 # acme/api.yaml
 # Reachable by its sandboxes, besides the mandatory hosts and default.yaml's.
 hosts: ["*.acme.dev", pypi.org]
-# Of the hosts it may reach, those whose plain HTTP answers the egress proxy keeps (see The
+# Of the hosts it may reach, those whose answers the egress proxy keeps, HTTPS too (see The
 # egress cache below), besides default.yaml's.
 cached_hosts: [apt.acme.dev]
 # Its .deckhand.yaml's `preview` hook runs, with the Docker socket: root on the host.
@@ -352,7 +352,7 @@ mounts:
 allow_dockerfile: false
 # Hosts every repository's sandboxes may reach, added to its own file's.
 hosts: [pypi.org]
-# Plain HTTP mirrors every repository's runs download from again and again, cached.
+# Mirrors every repository's runs download from again and again, cached.
 cached_hosts: [deb.debian.org]
 # Every sandbox's limits, over the built-in 2 CPUs, 4g and 2048 processes; a repository's
 # own file overrides each one.
@@ -614,9 +614,9 @@ inspect`) and answers from that run's list. Only the proxy may ask: the listener
   IPv4 one (`::ffff:0:0/96`, `::ffff:0:0:0/96`, `::/96`, NAT64's `64:ff9b::/96`, 6to4's
   `2002::/16`) are checked as that IPv4 address, so `[::ffff:a9fe:a9fe]` is the metadata
   service too.
-- The proxy keeps plain HTTP answers from the hosts you list in `cached_hosts` (see
-  [The egress cache](#the-egress-cache)). `CONNECT` is never cached: it stays a tunnel the
-  proxy can't read.
+- The proxy keeps answers from the hosts you list in `cached_hosts`, and decrypts their
+  HTTPS to do so (see [The egress cache](#the-egress-cache)). Every other `CONNECT` stays a
+  tunnel the proxy can't read.
 - The listener forgets a sandbox's address as soon as it sees the sandbox exit, before
   posting its reply: Docker may give the address to another sandbox, which must not get the
   finished run's hosts.
@@ -627,11 +627,12 @@ inspect`) and answers from that run's list. Only the proxy may ask: the listener
 
 ### The egress cache
 
-Runs download the same packages again and again: `apt-get` from a Debian mirror, a
-toolchain from its release server. For plain HTTP (`http://`) from the hosts you list in
-`cached_hosts` (in `grants/default.yaml` and `grants/<owner>/<repo>.yaml`, added up like
+Runs download the same packages again and again: `npm ci` from the npm registry,
+`apt-get` from a Debian mirror, a toolchain from its release server. For the hosts you list
+in `cached_hosts` (in `grants/default.yaml` and `grants/<owner>/<repo>.yaml`, added up like
 `hosts`, with the same patterns), the egress proxy keeps the answers on disk, in the
-`egress-cache` volume, and serves them to every run. A repository's `.deckhand.yaml`
+`egress-cache` volume, and serves them to every run: plain HTTP, and HTTPS, which it
+decrypts ([below](#https-and-deckhands-ca)). A repository's `.deckhand.yaml`
 can't list them (one there is ignored, with a warning): the cache is shared by every run, so
 only you say what goes in it. A host in `cached_hosts` must be reachable too (in `hosts`, or
 mandatory): `cached_hosts` alone opens nothing.
@@ -654,6 +655,53 @@ mandatory): `cached_hosts` alone opens nothing.
 - **Trust**: plain HTTP can be tampered with on the way, cached or not, and a cached answer
   then reaches every run. Cache only what the client checks itself (apt's signed indexes and
   their package checksums do) or hosts you would trust over plain HTTP anyway.
+
+#### HTTPS and Deckhand's CA
+
+HTTPS reaches the proxy as a `CONNECT` tunnel, which it can't read. For a host in
+`cached_hosts`, and only then, the proxy ends the client's TLS itself, with a certificate
+for that host signed by a CA of its own, and serves the requests inside through the cache
+above; what isn't served from it goes on to the host over TLS, which the proxy checks
+against Node's trust store. Everything else keeps the raw tunnel, and the client sees the
+real server's certificate.
+
+- **The CA** is made by the proxy on its first start (the `openssl` CLI, in its image),
+  in its volume (`ca/` in the `egress-cache` volume), and kept across restarts: a new
+  volume is a new CA, which the next runs get. Its key (`ca.key`) never leaves that volume;
+  no sandbox, engine or listener mounts it. Each host's certificate lasts 7 days, and is
+  made again 2 days before its end. The CA only exists with the cache on
+  (`EGRESS_CACHE_MAX` not `0`).
+- **Trust in the sandbox**: when its repository's grant has `cached_hosts`, the listener
+  asks the proxy for the CA's certificate (public, at `http://egress:3128/deckhand-ca.crt`)
+  and puts it in the run's read-only inbox folder. The sandbox's entrypoint adds it to a
+  bundle with the image's own roots, which `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`,
+  `CURL_CA_BUNDLE`, `GIT_SSL_CAINFO`, `REQUESTS_CA_BUNDLE` and `PIP_CERT` point at, and to
+  Chromium's store (`~/.pki/nssdb`, with `certutil`). A tool that reads none of them refuses
+  cached hosts' certificates, and fails rather than going round the proxy. When the
+  listener can't get the CA (the proxy's cache is off, or it doesn't answer), the run has no
+  cached hosts at all, and says so in its log.
+- **Never decrypted**, whatever `cached_hosts` says: the agent's hosts and GitHub's (the
+  mandatory hosts below). Their traffic carries the run's tokens, which the cache would
+  refuse anyway. Nor a run's [container engine](#container-engine): its builds and
+  containers don't trust the CA, so its connections keep the tunnel, and only plain HTTP is
+  cached for them; caching in the engine itself is `docker: { cache: true }`'s.
+- **An upstream certificate that doesn't verify** (expired, self-signed, for another name)
+  is refused with a `502` saying so: the proxy never passes it on under its own CA. A
+  private mirror whose CA isn't a public one can't be cached over HTTPS: leave it out of
+  `cached_hosts`.
+- A tunnel to a cached host that doesn't start with TLS (SSH on port 443, say) is passed on
+  as is.
+
+What this changes: the proxy now reads the requests and answers of the hosts you list in
+`cached_hosts`, and holds a key that sandboxes trust for any host. It stays acceptable
+because the proxy only uses it for the hosts you listed, which are what you would cache
+anyway (public mirrors, without credentials: a request with `Authorization` or `Cookie` is
+sent on, never kept); the key never leaves the proxy's volume, which neither sandboxes nor
+engines can reach, and the proxy runs read-only, without capabilities; and a sandbox
+trusting the CA gains nothing it could use: it reaches the same hosts as before, through
+the same proxy. Someone who gets the key (from the host, or the proxy's volume) can
+impersonate any host to the sandboxes running then: treat the volume like the listener's
+data. Removing the volume (or `ca/` in it) and restarting the proxy makes a new CA.
 
 ### Where a sandbox's hosts come from
 

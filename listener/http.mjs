@@ -483,7 +483,10 @@ export function createHttp(ctx, { dashboardDir }) {
     for (const task of tasks.values()) {
       const live = task.live;
       if (!live?.hosts) continue;
-      if (!live.ip) live.ip = await ctx.runner.address(task.name);
+      if (!live.ip) {
+        live.ip = await ctx.runner.address(task.name);
+        live.engineIp = await ctx.runner.engineAddress(task.name);
+      }
       if (task.live === live && live.hosts && live.ip?.includes(ip)) return task;
     }
     return null;
@@ -506,8 +509,11 @@ export function createHttp(ctx, { dashboardDir }) {
       return sendJson(res, { allowed: false }, 403);
     }
     const task = await taskAt(ip);
+    const live = task?.live;
+    // Never for its container engine: its builds and containers don't trust Deckhand's CA.
+    const cached = live?.engineIp?.includes(ip) ? [] : live?.cached;
     const answer = task
-      ? egressPolicy(host, task.live.hosts, task.live.trusted, task.live.cached)
+      ? egressPolicy(host, live.hosts, live.trusted, cached, live.uncached ?? [])
       : { allowed: false, private: false, cache: false };
     if (!answer.allowed)
       log(`Egress: refused ${host} for ${task ? `${task.repo}#${task.id}` : ip}`);

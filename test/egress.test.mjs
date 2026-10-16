@@ -142,6 +142,14 @@ test("cache: only for allowed hosts the run's cached_hosts match", () => {
   assert.equal(cache("github.com"), false);
   // Listed, but not reachable: refused all the same.
   assert.equal(cache("nowhere.net"), false);
+  // Never the agent's or GitHub's, whatever cached_hosts says: their traffic carries tokens.
+  const everything = ["*"];
+  const uncached = mandatoryHosts(config);
+  const policy = (host) => egressPolicy(host, hosts, hosts, everything, uncached).cache;
+  assert.equal(policy("deb.debian.org"), true);
+  assert.equal(policy("github.com"), false);
+  assert.equal(policy("api.github.com"), false);
+  assert.equal(policy("objects.githubusercontent.com"), false);
   // A run saved before `cached` was: nothing cached.
   assert.equal(egressPolicy("deb.debian.org", hosts, hosts, undefined).cache, false);
 });

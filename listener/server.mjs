@@ -301,6 +301,20 @@ Object.assign(ctx, {
   // The sandboxes' only way to GitHub: short-lived tokens for their run's repo, which only
   // read the code.
   broker: createBroker({ app: () => ctx.app, log }),
+  // The egress proxy's CA certificate (../proxy/authority.mjs), which sandboxes trust when
+  // their grant has cached_hosts; null when it has none (its cache is off). Asked at each such
+  // run: a new proxy volume is a new CA.
+  egressCa: async () => {
+    try {
+      const res = await fetch(`${config.egressProxy}/deckhand-ca.crt`, {
+        signal: AbortSignal.timeout(5000),
+      });
+      const pem = res.ok ? await res.text() : "";
+      return pem.includes("BEGIN CERTIFICATE") ? pem : null;
+    } catch {
+      return null;
+    }
+  },
   // Sandboxes are started, followed and removed through it; they run detached.
   runner: createDockerRunner({ config, docker, inboxDir: runsDir, log }),
 });

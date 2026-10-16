@@ -11,7 +11,7 @@
 //   grants/
 //     default.yaml       # every repo: the flags, hosts added to each repo's, base limits
 //       hosts: [pypi.org]
-//       cached_hosts: [deb.debian.org]  # plain HTTP from them is kept by the egress proxy
+//       cached_hosts: [deb.debian.org]  # kept by the egress proxy, HTTPS too
 //       allow_dockerfile: true
 //       limits: { memory: 8g }   # over the built-in 2 CPUs, 4g, 2048 pids
 //     acme/api.yaml      # acme/api, matched case-insensitively
@@ -65,7 +65,7 @@ const REPO_ONLY = new Set(["allow_docker"]);
 const NO_FLAGS = Object.fromEntries(Object.values(FLAGS).map((f) => [f, null]));
 
 // The keys listing hosts: what a run may reach, and of those, what the egress proxy may keep
-// in its cache (plain HTTP only, proxy/cache.mjs).
+// in its cache, HTTPS too (proxy/cache.mjs, proxy/authority.mjs).
 const HOST_LISTS = { hosts: "hosts", cached_hosts: "cachedHosts" };
 
 // One file's text → { hosts, cachedHosts, mounts, limits, and FLAGS }; a flag is null when the file doesn't

@@ -1186,6 +1186,44 @@ caches:
     assert.match(JSON.parse(reply.body).body, /max_parallel: expected a whole number/);
   });
 
+  test("cached_hosts: with the proxy's CA, cached but never GitHub's or the agent's; none without it", async (t) => {
+    const pem = "-----BEGIN CERTIFICATE-----\nx\n-----END CERTIFICATE-----\n";
+    let serving = true;
+    const proxy = createServer((req, res) => {
+      if (req.url !== "/deckhand-ca.crt" || !serving) return res.writeHead(404).end();
+      res.end(pem);
+    });
+    await new Promise((resolve) => proxy.listen(0, "127.0.0.1", resolve));
+    t.after(() => proxy.close());
+    const grants = (dir) => {
+      mkdirSync(join(dir, "grants"), { recursive: true });
+      writeFileSync(
+        join(dir, "grants", "default.yaml"),
+        `hosts: [registry.npmjs.org]\ncached_hosts: [registry.npmjs.org, github.com, "*.githubusercontent.com", api.anthropic.com]\n`,
+      );
+      return { EGRESS_PROXY: `http://127.0.0.1:${proxy.address().port}` };
+    };
+    const run = async () => {
+      const { dir, github, send } = await listen(t, {}, grants);
+      assert.equal((await send(comment("alice"))).status, 202);
+      await github.waitFor(
+        (r) => r.method === "POST" && r.path === "/repos/org/repo/issues/12/comments",
+      );
+      const cached = Object.entries(egressAnswers(dir)).filter(([, a]) => a.cache);
+      const args = readFileSync(join(dir, "run-args"), "utf8");
+      return { cached: cached.map(([host]) => host), args };
+    };
+    const withCa = await run();
+    assert.deepEqual(withCa.cached, ["registry.npmjs.org"]);
+    assert.match(withCa.args, /^DECKHAND_CA=\/deckhand\/egress-ca\.crt$/m);
+
+    // The proxy has no CA (its cache is off): nothing is cached, the sandbox trusts nothing more.
+    serving = false;
+    const without = await run();
+    assert.deepEqual(without.cached, []);
+    assert.doesNotMatch(without.args, /DECKHAND_CA/);
+  });
+
   test("hosts from default.yaml and the repo's grant, not the repo; granted mounts and limits", async (t) => {
     const { dir, github, send } = await listen(
       t,
