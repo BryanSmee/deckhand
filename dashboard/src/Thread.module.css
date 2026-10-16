@@ -94,9 +94,8 @@
 .replies {
   display: flex;
   flex-direction: column;
+  align-self: stretch;
   gap: 0.35rem;
-  box-sizing: border-box;
-  width: 100%;
   padding-left: 1rem;
   border-left: 2px solid var(--line);
   margin-left: 0.5rem;
