@@ -5,7 +5,7 @@
 
 # The dashboard: built on the build machine's platform (static files, the same for every
 # architecture), so a multi-arch release doesn't run Vite under emulation.
-FROM --platform=$BUILDPLATFORM node:22-alpine AS dashboard
+FROM --platform=$BUILDPLATFORM node:26-alpine AS dashboard
 WORKDIR /dashboard
 COPY dashboard/package.json dashboard/package-lock.json ./
 RUN npm ci
@@ -13,7 +13,7 @@ COPY dashboard/ ./
 RUN npm run build
 
 # The listener has no dependencies: only the dashboard's build, no node_modules.
-FROM node:22-alpine
+FROM node:26-alpine
 # buildx: repo images build with BuildKit. GNU tar: checkouts strip GitHub's top folder.
 RUN apk add --no-cache docker-cli docker-cli-buildx tar
 WORKDIR /app

@@ -14,7 +14,7 @@
 # access goes through the listener's token broker (git-credential-deckhand, the gh wrapper):
 # no token or SSH key is ever mounted.
 
-FROM node:22-bookworm
+FROM node:26-bookworm
 
 # gh from GitHub's apt repository. The docker CLI with buildx and compose from Docker's, no
 # daemon: a run granted a container engine talks to it (DOCKER_HOST, set by the listener).

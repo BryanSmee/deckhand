@@ -161,7 +161,7 @@ with the line number.
 Every run starts from an image:
 
 - **The base image** (`SANDBOX_IMAGE`, `deckhand-sandbox`): the harness only: `git`, `gh`
-  (through the token broker), `jq`, `ripgrep`, Node 22, Playwright with Chromium, the
+  (through the token broker), `jq`, `ripgrep`, Node 26, Playwright with Chromium, the
   entrypoint and the draft pull request hooks. No project toolchain, and **no Claude Code**:
   before the first run that needs it, the listener installs the pinned
   `CLAUDE_CODE_VERSION` in a short container of its own, into the shared

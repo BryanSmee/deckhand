@@ -226,7 +226,7 @@ another one, and the next run installs it. Codex's is `CODEX_VERSION`, the same 
 
 ## Development
 
-Node 22; the listener has no dependencies. Tests: `node --test`; syntax: `node --check
+Node 26; the listener has no dependencies. Tests: `node --test`; syntax: `node --check
 listener/server.mjs`, `bash -n` on `sandbox/`'s shell scripts and `node --check
 sandbox/deckhand-inbox` (the list: [AGENTS.md](AGENTS.md#commands)); format: `npx --yes prettier@3 --check .`.
 The dashboard (`dashboard/`, Preact + Vite + TypeScript) is built into the listener's image;
