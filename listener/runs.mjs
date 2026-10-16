@@ -4,17 +4,10 @@
 import { randomBytes } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readdirSync, rmdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import {
-  AGENT_SECRETS,
-  agentFor,
-  effortOf,
-  entryName,
-  entryOf,
-  modelOf,
-  providerError,
-} from "./agents/index.mjs";
+import { agentFor, effortOf, entryName, entryOf, modelOf, providerError } from "./agents/index.mjs";
 import { mandatoryHosts, operatorHosts, proxyEnv } from "./egress.mjs";
-import { commentsText, sameRepo } from "./events.mjs";
+import { commentsText, sameRepo, taskKey } from "./events.mjs";
+import { getJson } from "./github.mjs";
 import { grantCheck, hardeningArgs, mountArgs, resolveMounts } from "./grants.mjs";
 import { imageRef } from "./images.mjs";
 import {
@@ -33,14 +26,16 @@ import { ENGINE_HOST } from "./runner/engine.mjs";
 import {
   addRun,
   lastResult,
+  minutes,
   openLog,
   outcome,
   questionsOf,
   saveSummary,
   summaryOf,
+  writeEvent,
 } from "./runlog.mjs";
 import { noLongerAllowed } from "./tasks.mjs";
-import { redact } from "./secrets.mjs";
+import { operatorSecrets, redact } from "./secrets.mjs";
 
 // A run that can't start for a reason the maintainer can fix: the reply says it.
 export class RunError extends Error {}
@@ -160,7 +155,7 @@ export function nextStep(mode, { talk, fresh, trigger }) {
 // came too late for the run.
 // The provider shows when it isn't the agent's default, or after a fallback, with why.
 export function replyFooter(record, result, hint, later) {
-  const minutes = result ? Math.round(result.durationMs / 6000) / 10 : null;
+  const took = result ? minutes(result.durationMs) : null;
   const late = Object.entries(later)
     .map(([k, v]) => `\`/${k} ${v}\``)
     .join(" ");
@@ -175,7 +170,7 @@ export function replyFooter(record, result, hint, later) {
     fallback && !fallback.sticky
       ? ` · fell back from ${entryLabel(fallback.from)}: ${fallback.reason}`
       : "";
-  return `<sub>🤖 ${agent.displayName}${provider} ${record.model} · ${record.effort} effort${minutes !== null ? ` · ${minutes} min` : ""}${switched}${hint}${next}</sub>`;
+  return `<sub>🤖 ${agent.displayName}${provider} ${record.model} · ${record.effort} effort${took !== null ? ` · ${took} min` : ""}${switched}${hint}${next}</sub>`;
 }
 
 // `ctx` (server.mjs): the listener's state and services, read at call time.
@@ -229,7 +224,7 @@ export function createRuns(ctx) {
     task.pending = task.pending.filter((item) => {
       const refused = noLongerAllowed(config, item, settings);
       if (!refused) return true;
-      log(`${task.repo}#${task.id}: a queued comment dropped: ${refused}`);
+      log(`${taskKey(task.repo, task.id)}: a queued comment dropped: ${refused}`);
       ctx.track(ctx.settle(item, "refused"));
       return false;
     });
@@ -283,7 +278,7 @@ export function createRuns(ctx) {
     // The last comment decides: a work trigger after a brainstorm comment means work.
     const mode = items.at(-1).mode;
     const light = isLight(task, mode);
-    const key = `${task.repo}#${task.id}`;
+    const key = taskKey(task.repo, task.id);
     const id = `${task.name}-${Date.now()}`;
     const reason = items.at(-1).reason ?? null;
     const record = newRecord(task, { id, key, mode, light, replyTo, reason, items });
@@ -329,7 +324,7 @@ export function createRuns(ctx) {
   async function start(task, items) {
     const { live } = task;
     const { text, settings, own, note, handoff, ...first } = await begin(task, items);
-    const { branches, fork } = await pushBranches(task, items);
+    const { branches, fork, pulls } = await pushBranches(task, items);
     // Another agent takes over: the branches are part of what it is handed.
     const message = handoff ? handoffMessage({ ...handoff, branches }) : first.message;
     live.handoff = !!handoff;
@@ -338,7 +333,7 @@ export function createRuns(ctx) {
     const instructions = own && (await modeInstructions(task, own));
     const access = grantedAccess(task, settings, note);
     const engine = engineFor(task, settings, access, fork, note);
-    const prepared = await prepare(task, items, settings, access.grant, note);
+    const prepared = await prepare(task, items, settings, access.grant, note, pulls);
     live.shots = shotsFolder();
     live.record.shots = live.shots;
     live.hosts = access.hosts;
@@ -465,17 +460,14 @@ export function createRuns(ctx) {
     // First line of every log: what the dashboard needs to list it after a restart.
     const { logPath: _, ...meta } = record;
     logFile.write(JSON.stringify({ type: "listener", ...meta, message: text }) + "\n");
-    const note = (message) =>
-      logFile.write(
-        JSON.stringify({ type: "listener", event: "note", at: Date.now(), message }) + "\n",
-      );
+    const note = (message) => writeEvent(logFile, "note", { message });
     if (foreign) note(`${foreign}: ${agent.displayName} runs its best model instead`);
     if (badPick) throw new RunError(`${cantRun(task)}: ${badPick}.`);
     if (errors.length) throw new RunError(configErrors(task.base, errors, agent.displayName));
     for (const warning of warnings) note(`${CONFIG_FILE}: ${warning}`);
     if (!own && !BUILT_IN.has(mode)) {
       throw new RunError(
-        `${cantRun(task)}: the \`${mode}\` mode is no longer in \`${CONFIG_FILE}\` on \`${task.base || "main"}\`.`,
+        `${cantRun(task)}: the \`${mode}\` mode is no longer in \`${CONFIG_FILE}\` on \`${task.base}\`.`,
       );
     }
     // A model of another agent's ("/model opus" for Codex): the run would only fail later.
@@ -526,7 +518,7 @@ export function createRuns(ctx) {
 
   // The instructions file of the repo's mode, from its default branch like the config.
   async function modeInstructions(task, own) {
-    const base = task.base || "main";
+    const { base } = task;
     const missing = `${cantRun(task)}: the \`${own.name}\` mode's instructions, \`${own.instructions}\`, are not on \`${base}\`.`;
     let file;
     try {
@@ -633,12 +625,12 @@ export function createRuns(ctx) {
 
   // The run's image (built first if the repo's Dockerfile changed), its agent and the repo's
   // cache volumes. While an image builds, the dashboard shows the run as "building image".
-  async function prepare(task, items, settings, grant, note) {
+  async function prepare(task, items, settings, grant, note, pulls) {
     const { record, logFile } = task.live;
-    const base = task.base || "main";
+    const { base } = task;
     const output = (chunk) => logFile.write(chunk);
     try {
-      const source = await imageSource(task, items, settings, grant);
+      const source = await imageSource(task, items, settings, grant, pulls);
       const image = await ctx.images.imageFor({
         repo: task.repo,
         ref: source.ref,
@@ -672,42 +664,45 @@ export function createRuns(ctx) {
   // (pr-ready.mjs): an issue's own, issue-<n>-* (draft-pr.sh names it from the title, which
   // may change), and the head of each pull request its comments came from, a maintainer's
   // included, but not a fork's. None for a run that can't push. `fork`: whether one of them
-  // is a fork's.
+  // is a fork's; `pulls`: number → the pull request, as GitHub has it, for imageSource().
   async function pushBranches(task, items) {
-    if (!ctx.broker.runOf(task.live.secret)?.push) return { branches: [], fork: false };
+    const pulls = new Map();
+    if (!ctx.broker.runOf(task.live.secret)?.push) return { branches: [], fork: false, pulls };
     let fork = false;
     const branches = task.kind === "issue" ? [`issue-${task.number}-*`] : [];
-    const pulls = new Set(items.map((i) => i.replyTo));
-    if (task.kind !== "pr") pulls.delete(task.number);
-    for (const number of pulls) {
+    const numbers = new Set(items.map((i) => i.replyTo));
+    if (task.kind !== "pr") numbers.delete(task.number);
+    for (const number of numbers) {
       let pr;
       try {
-        const res = await ctx.github(task.repo, "GET", `/repos/${task.repo}/pulls/${number}`);
-        if (!res.ok) throw new Error(`GitHub answered ${res.status}`);
-        pr = await res.json();
+        pr = await getJson(ctx.github, task.repo, `/repos/${task.repo}/pulls/${number}`);
       } catch (error) {
         throw new RunError(
           `${agentOf(task).displayName} couldn't start: pull request #${number} couldn't be looked up (${error.message ?? error}). Comment again to retry.`,
         );
       }
+      pulls.set(number, pr);
       const ref = pr.head?.ref;
       if (!sameRepo(pr, task.repo)) fork = true;
       else if (ref && !branches.includes(ref)) branches.push(ref);
     }
-    return { branches, fork };
+    return { branches, fork, pulls };
   }
 
-  // A comment on a pull request may run on the image of its own branch (imageRef()).
-  async function imageSource(task, items, settings, grant) {
-    const base = task.base || "main";
+  // A comment on a pull request may run on the image of its own branch (imageRef()). `pulls`:
+  // those pushBranches() looked up already.
+  async function imageSource(task, items, settings, grant, pulls = new Map()) {
+    const { base } = task;
     const pr = items.at(-1).replyTo;
     if (
       grant.allowBranchDockerImages &&
       settings.dockerfile &&
       (task.kind === "pr" || pr !== task.number)
     ) {
-      const res = await ctx.github(task.repo, "GET", `/repos/${task.repo}/pulls/${pr}`);
-      if (res.ok) return imageRef(grant, settings, task.repo, base, await res.json());
+      const found =
+        pulls.get(pr) ??
+        (await getJson(ctx.github, task.repo, `/repos/${task.repo}/pulls/${pr}`).catch(() => null));
+      if (found) return imageRef(grant, settings, task.repo, base, found);
     }
     return { ref: base, branch: false };
   }
@@ -789,7 +784,7 @@ export function createRuns(ctx) {
       GIT_COMMITTER_NAME: bot.name,
       GIT_COMMITTER_EMAIL: bot.email,
       REPO_URL: `${config.githubUrl}/${task.repo}.git`,
-      BASE_BRANCH: task.base || "main",
+      BASE_BRANCH: task.base,
       TASK_PROMPT: prompt,
       TASK_MESSAGE: message,
       // work, brainstorm, idea, bug, discussion or one of the repo's own modes.
@@ -852,11 +847,7 @@ export function createRuns(ctx) {
   }
 
   function secretValues(live) {
-    return [
-      live.secret,
-      ...AGENT_SECRETS.map((name) => process.env[name]),
-      ...(ctx.openai?.secrets() ?? []),
-    ];
+    return [live.secret, ...operatorSecrets(ctx)];
   }
 
   function output(task, raw) {
@@ -905,8 +896,7 @@ export function createRuns(ctx) {
       live.cancelled = { by, at: Date.now() };
       // Nothing more goes to its inbox: what waits is for the next run.
       live.open = false;
-      const event = { type: "listener", event: "cancelled", ...live.cancelled };
-      live.logFile.write(JSON.stringify(event) + "\n");
+      writeEvent(live.logFile, "cancelled", live.cancelled);
       log(`${key}: cancelled by ${by}`);
       ctx
         .saveLive(task)
@@ -1010,8 +1000,7 @@ export function createRuns(ctx) {
     const result = (live.result?.text ?? "").slice(0, 4000);
     fallback.summary = `${entryLabel(fallback.from)}'s provider failed: ${fallback.reason}. Falling back to ${entryLabel(fallback.entry)}`;
     log(`${live.key}: ${fallback.summary}`);
-    const event = { type: "listener", event: "note", at: Date.now(), message: fallback.summary };
-    live.logFile.write(JSON.stringify(event) + "\n");
+    writeEvent(live.logFile, "note", { message: fallback.summary });
     const { summary: _, ...marker } = fallback;
     for (const item of live.handled) item.fallback = { ...marker, result };
     task.pending.unshift(...live.handled.filter((item) => !task.pending.includes(item)));
@@ -1090,7 +1079,7 @@ export function createRuns(ctx) {
     try {
       return await branchConfigReport(ctx.github, config, task.repo, task.number);
     } catch (error) {
-      log(`${task.repo}#${task.id}: checking the branch's config: ${error.stack ?? error}`);
+      log(`${taskKey(task.repo, task.id)}: checking the branch's config: ${error.stack ?? error}`);
       return `⚠️ The listener couldn't check the branch's \`${CONFIG_FILE}\`: ${error.message}`;
     }
   }

@@ -4,7 +4,9 @@
 // hand-written issue can have one too. The questions themselves are parsed for the dashboard
 // (parseQuestions()), from an issue's section or a run's reply that stopped to ask; their
 // format is in ../prompts/sandbox.md. Pure, so tested on its own (../test/questions.test.mjs).
-import { MARKER } from "./events.mjs";
+import { hasLabel } from "./comments.mjs";
+import { repoAllowed } from "./config.mjs";
+import { MARKER, taskKey } from "./events.mjs";
 
 // Starts the final message of a run that stopped to ask the maintainer (../prompts/sandbox.md).
 export const NEEDS_INPUT = "<!-- needs-input -->";
@@ -138,9 +140,6 @@ export function replyQuestions(text) {
   return parseQuestions(section.join("\n"));
 }
 
-const has = (labels, name) =>
-  (labels ?? []).some((l) => (l.name ?? l).toLowerCase() === name.toLowerCase());
-
 // An `issues` or `issue_comment` delivery → what it changes for the label, or null:
 //   { repo, key, number, title, base, label, by, track, questions, comment, answered }
 // `label`: true to add it, false to take it off, undefined to leave it. `by`: the allowed
@@ -157,11 +156,11 @@ export function inputEvent(config, event, p, bot) {
   const issue = p.issue;
   // Fail closed: only the App's installations, on allowed repos.
   if (!p.installation?.id || !repo || !issue) return null;
-  if (config.repos.length && !config.repos.includes(repo.toLowerCase())) return null;
-  const labelled = has(issue.labels, name);
+  if (!repoAllowed(config, repo)) return null;
+  const labelled = hasLabel(issue.labels, name);
   const change = {
     repo,
-    key: `${repo}#${issue.number}`,
+    key: taskKey(repo, issue.number),
     number: issue.number,
     title: issue.title ?? null,
     base: p.repository.default_branch,
@@ -207,7 +206,7 @@ export function inputEvent(config, event, p, bot) {
     // Whoever adds or removes it, by hand or not: the dashboard follows the issue's labels.
     case "labeled":
     case "unlabeled":
-      if (!has([p.label], name)) return null;
+      if (!hasLabel([p.label], name)) return null;
       if (issue.state === "closed") return { ...change, track: false };
       if (p.action === "unlabeled") return { ...change, track: false, answered: true };
       return { ...change, track: true, questions: questions() };

@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { loadConfig } from "../listener/config.mjs";
 import { createWaits } from "../listener/waits.mjs";
-import { ISSUES_MS, createWorkApi, leadsTo, parseAction, staleFor } from "../listener/work.mjs";
+import { ISSUES_MS, checkAction, createWorkApi, leadsTo, staleFor } from "../listener/work.mjs";
 import { createAnalysis } from "../listener/analysis.mjs";
 import { MAX_TEXT } from "../listener/answers.mjs";
 import { board as boardOf } from "../listener/board.mjs";
@@ -204,15 +204,15 @@ const post = (w, body, opts = {}) =>
 
 const open = (title) => ({ state: "open", title });
 
-test("parseAction: an action, issue numbers, a mode's name", () => {
-  assert.deepEqual(parseAction('{"action":"start","number":3}'), {
+test("checkAction: an action, issue numbers, a mode's name", () => {
+  assert.deepEqual(checkAction({ action: "start", number: 3 }), {
     action: "start",
     number: 3,
     after: null,
     mode: null,
     pr: false,
   });
-  assert.deepEqual(parseAction('{"action":"queue","number":3,"after":2,"mode":"brainstorm"}'), {
+  assert.deepEqual(checkAction({ action: "queue", number: 3, after: 2, mode: "brainstorm" }), {
     action: "queue",
     number: 3,
     after: 2,
@@ -220,10 +220,9 @@ test("parseAction: an action, issue numbers, a mode's name", () => {
     pr: false,
   });
   // `pr` only means something to a cancel.
-  assert.equal(parseAction('{"action":"cancel","number":3,"pr":true}').pr, true);
-  assert.equal(parseAction('{"action":"start","number":3,"pr":true}').pr, false);
+  assert.equal(checkAction({ action: "cancel", number: 3, pr: true }).pr, true);
+  assert.equal(checkAction({ action: "start", number: 3, pr: true }).pr, false);
   for (const bad of [
-    "nope",
     "null",
     '{"action":"merge","number":3}',
     '{"action":"start","number":"3"}',
@@ -232,7 +231,7 @@ test("parseAction: an action, issue numbers, a mode's name", () => {
     '{"action":"start","number":3,"mode":"a b"}',
     '{"action":"cancel","number":3,"pr":"yes"}',
   ]) {
-    assert.throws(() => parseAction(bad), { status: 400 }, bad);
+    assert.throws(() => checkAction(JSON.parse(bad)), { status: 400 }, bad);
   }
 });
 

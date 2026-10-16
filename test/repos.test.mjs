@@ -16,7 +16,6 @@ import {
   createRepoList,
   refreshFor,
   repoStatus,
-  sameOrigin,
 } from "../listener/repos.mjs";
 
 const throwing = (error) => {
@@ -228,18 +227,6 @@ test("which deliveries refresh the list", () => {
   );
   refreshFor("issue_comment", { action: "created", repository }, refresh);
   assert.deepEqual(calls, ["*", "org/app", "org/app"]);
-});
-
-test("same origin: the public URL, or the host the browser asked for", () => {
-  const req = (origin, host = "deckhand.example.com") => ({ headers: { origin, host } });
-  assert.equal(
-    sameOrigin(req("https://deckhand.example.com"), "https://deckhand.example.com"),
-    true,
-  );
-  assert.equal(sameOrigin(req("http://localhost:5173", "localhost:5173"), null), true);
-  assert.equal(sameOrigin(req("https://evil.example"), "https://deckhand.example.com"), false);
-  assert.equal(sameOrigin(req(undefined), "https://deckhand.example.com"), false);
-  assert.equal(sameOrigin(req("null"), "https://deckhand.example.com"), false);
 });
 
 // The API with a fake request and response.

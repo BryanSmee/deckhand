@@ -7,7 +7,7 @@
 // (git-gateway.mjs), which finds the run here by the same secret, with the branches it may
 // push (allow()).
 import { createHash, randomBytes } from "node:crypto";
-import { sendJson } from "./web.mjs";
+import { send } from "./web.mjs";
 
 // Kept by hash: the map never holds a usable secret, and lookups don't compare secrets.
 function hash(secret) {
@@ -73,8 +73,6 @@ export function createBroker({
   function revoke(secret) {
     if (secret) runs.delete(hash(secret));
   }
-
-  const send = (res, status, value) => sendJson(res, value, status);
 
   async function handle(req, res) {
     if (req.method !== "GET" || new URL(req.url, "http://broker").pathname !== "/token") {

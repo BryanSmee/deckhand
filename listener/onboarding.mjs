@@ -2,6 +2,8 @@
 // opens an issue there and Claude proposes the file in an "onboarding" conversation, which
 // the trigger line turns into a pull request (tasks.mjs, runs.mjs). The decisions and the issue are
 // here, with GitHub injected, so they are tested on their own (../test/onboarding.test.mjs).
+import { ensureLabel } from "./comments.mjs";
+import { repoAllowed } from "./config.mjs";
 import { linkedIssue, sameRepo } from "./events.mjs";
 import { CONFIG_FILE, parseRepoConfig, readRepoFile } from "./repo-config.mjs";
 import { readJson, writeJsonAtomic } from "./store.mjs";
@@ -40,7 +42,7 @@ export function onboardingTargets(config, event, p, skip = () => null) {
     return [];
   }
   return repos.filter((repo) => {
-    if (config.repos.length && !config.repos.includes(repo.toLowerCase())) {
+    if (!repoAllowed(config, repo)) {
       return skip(`${event}: ${repo} not in ALLOWED_REPOS`) ?? false;
     }
     return true;
@@ -107,17 +109,15 @@ export function createOnboarding({ request, store, config, log = () => {} }) {
       if (await readRepoFile(request, repo, CONFIG_FILE, base)) {
         return skip(`${CONFIG_FILE} is already on ${base}`);
       }
-      // Already there is fine (422): only its colour and description are ours.
-      await request(
+      await ensureLabel(
+        request,
         repo,
-        "POST",
-        `/repos/${repo}/labels`,
         {
           name: ONBOARDING_LABEL,
           color: "0e8a16",
           description: "Deckhand proposes this repository's .deckhand.yaml",
         },
-        [422],
+        log,
       );
       const created = await request(repo, "POST", `/repos/${repo}/issues`, {
         title: ONBOARDING_TITLE,

@@ -10,12 +10,12 @@
 //                                                             THREAD_MS)
 //   POST /api/repos/<owner>/<repo>/discussions/<n>/comments   { text, replyTo? }: replyTo, a
 //                                                             comment's node id, for its thread
-import { MAX_TEXT, Refused, refuse } from "./answers.mjs";
-import { normalize } from "./config.mjs";
-import { MARKER, discussionEntryItem } from "./events.mjs";
+import { MAX_TEXT } from "./answers.mjs";
+import { addDiscussionComment, commentThread } from "./comments.mjs";
+import { normalize, repoAllowed } from "./config.mjs";
+import { MARKER, discussionEntryItem, taskKey } from "./events.mjs";
 import { CONFIG_FILE } from "./repo-config.mjs";
-import { sameOrigin } from "./repos.mjs";
-import { readBody, sendJson } from "./web.mjs";
+import { apiRoute, readJsonBody, refuse, send } from "./web.mjs";
 
 // How long a thread is kept: the dashboard polls it while it is open.
 export const THREAD_MS = 15_000;
@@ -26,8 +26,6 @@ const MAX_BODY = 4 * MAX_TEXT + 4 * MAX_TITLE;
 // How many comments, and replies to each, a thread shows: the latest.
 const COMMENTS = 100;
 const REPLIES = 50;
-
-const send = (res, status, value) => sendJson(res, value, status);
 
 // The line that says who wrote an App post from the dashboard, as the dashboard shows it.
 export const fromLine = (user) => `From the dashboard by @${user}`;
@@ -94,7 +92,6 @@ export function createDiscussionApi({
   // "owner/repo#n" → { at, read: Promise<thread> }
   const threads = new Map();
 
-  const allowed = (repo) => !config.repos.length || config.repos.includes(repo.toLowerCase());
   const split = (repo) => repo.split("/");
 
   // The repo's checks, and its discussions category: { settings, base, category }.
@@ -203,7 +200,7 @@ export function createDiscussionApi({
       message: `Discussion #${d.number} started.`,
       url: d.url,
       number: d.number,
-      task: `${repo}#discussion-${d.number}`,
+      task: taskKey(repo, `discussion-${d.number}`),
     };
   }
 
@@ -215,23 +212,16 @@ export function createDiscussionApi({
     const { node: d } = await discussion(repo, number, category);
     let thread = null;
     if (replyTo) {
-      const data = await lookup(
-        repo,
-        "query($id: ID!) { node(id: $id) { ... on DiscussionComment { id discussion { id } replyTo { id } } } }",
-        { id: replyTo },
-      );
-      const c = data?.node;
-      if (!c?.discussion || c.discussion.id !== d.id) {
-        refuse(404, `That comment isn't in discussion #${number}.`);
-      }
-      thread = c.replyTo?.id ?? c.id;
+      const found = await commentThread(lookup, repo, replyTo);
+      if (found?.discussion !== d.id) refuse(404, `That comment isn't in discussion #${number}.`);
+      thread = found.thread;
     }
-    const made = await graphql(
+    const c = await addDiscussionComment(
+      graphql,
       repo,
-      "mutation($id: ID!, $thread: ID, $body: String!) { addDiscussionComment(input: {discussionId: $id, replyToId: $thread, body: $body}) { comment { id databaseId url replyTo { databaseId } } } }",
       { id: d.id, thread, body: `${text.trim()}\n\n${fromLine(user)}` },
+      "id databaseId url replyTo { databaseId }",
     );
-    const c = made.addDiscussionComment.comment;
     // Shown on the next read, not in THREAD_MS.
     threads.delete(`${repo.toLowerCase()}#${number}`);
     await accept({
@@ -249,22 +239,6 @@ export function createDiscussionApi({
     return { message: `Sent to discussion #${number}.`, url: c.url };
   }
 
-  // The request's body as JSON; one over `limit` bytes is refused as it is.
-  async function jsonOf(req) {
-    let text;
-    try {
-      text = (await readBody(req, MAX_BODY)).toString("utf8");
-    } catch (error) {
-      if (/^body over/.test(error.message)) refuse(413, `The request is over ${MAX_BODY} bytes.`);
-      throw error;
-    }
-    try {
-      return JSON.parse(text) ?? {};
-    } catch {
-      refuse(400, "Not JSON.");
-    }
-  }
-
   // A text field: a string, not blank, not over `max`.
   function field(value, what, max) {
     if (typeof value !== "string" || !value.trim()) refuse(400, `Write ${what}.`);
@@ -274,7 +248,7 @@ export function createDiscussionApi({
   }
 
   async function started(req, res, user, repo) {
-    const body = await jsonOf(req);
+    const body = (await readJsonBody(req, MAX_BODY)) ?? {};
     const title = field(body.title, "a title", MAX_TITLE);
     const text = field(body.body, "the discussion's text", MAX_TEXT);
     log(`Discussions: ${user} starts one in ${repo}`);
@@ -282,7 +256,7 @@ export function createDiscussionApi({
   }
 
   async function commented(req, res, user, repo, number) {
-    const body = await jsonOf(req);
+    const body = (await readJsonBody(req, MAX_BODY)) ?? {};
     const text = field(body.text, "a comment", MAX_TEXT);
     const replyTo = body.replyTo ?? null;
     if (replyTo !== null && (typeof replyTo !== "string" || !/^[\w=-]+$/.test(replyTo))) {
@@ -292,44 +266,31 @@ export function createDiscussionApi({
     send(res, 200, await comment(repo, user, number, { text, replyTo }));
   }
 
+  // A route of discussion <n>: one past what JavaScript counts exactly is none.
+  const numbered =
+    (handler) =>
+    (req, res, user, repo, { number }) =>
+      Number.isSafeInteger(number)
+        ? handler(req, res, user, repo, number)
+        : send(res, 404, { error: "No such discussion." });
+
   // Handles /api/repos/<owner>/<repo>/discussions[/<n>[/comments]]; false for any other path.
-  function handle(req, res, user) {
-    const { pathname } = new URL(req.url, "http://localhost");
-    const one = /^\/api\/repos\/([\w.-]+)\/([\w.-]+)\/discussions(?:\/(\d+)(\/comments)?)?$/.exec(
-      pathname,
-    );
-    if (!one) return false;
-    const repo = `${one[1]}/${one[2]}`;
-    const number = one[3] ? Number(one[3]) : null;
-    const post = !number || !!one[4];
-    const run = async () => {
-      if (post && req.method !== "POST") return send(res, 405, { error: "POST only." });
-      if (!post && req.method !== "GET") return send(res, 405, { error: "GET only." });
-      if (!user) return send(res, 401, { error: "Sign in first." });
-      if (!allowed(repo)) return send(res, 404, { error: `${repo} is not in ALLOWED_REPOS.` });
-      if (number !== null && !Number.isSafeInteger(number)) {
-        return send(res, 404, { error: "No such discussion." });
-      }
-      if (!post) return read(res, repo, user, number);
-      if (!sameOrigin(req, publicUrl())) {
-        log(`Discussions: refused for ${user}: Origin ${req.headers.origin ?? "missing"}`);
-        return send(res, 403, { error: "Not from this dashboard." });
-      }
-      return number ? commented(req, res, user, repo, number) : started(req, res, user, repo);
-    };
-    run().catch((error) => {
-      if (error instanceof Refused) {
-        log(`Discussions: ${repo}: refused for ${user}: ${error.message}`);
-        if (!res.headersSent) send(res, error.status, { error: error.message });
-        return;
-      }
-      log(`Discussions: ${error.stack ?? error}`);
-      if (!res.headersSent) {
-        send(res, 502, { error: "GitHub didn't answer: see the listener's logs." });
-      }
-    });
-    return true;
-  }
+  const handle = apiRoute({
+    name: "Discussions",
+    route: (pathname) => {
+      const one = /^\/api\/repos\/([\w.-]+)\/([\w.-]+)\/discussions(?:\/(\d+)(\/comments)?)?$/.exec(
+        pathname,
+      );
+      if (!one) return null;
+      const what = !one[3] ? "start" : one[4] ? "comment" : "thread";
+      return { repo: `${one[1]}/${one[2]}`, what, number: one[3] ? Number(one[3]) : null };
+    },
+    posts: { start: started, comment: numbered(commented) },
+    gets: { thread: numbered((req, res, user, repo, number) => read(res, repo, user, number)) },
+    allowed: (repo) => repoAllowed(config, repo),
+    publicUrl,
+    log,
+  });
 
   return { handle };
 }

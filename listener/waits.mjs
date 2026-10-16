@@ -6,9 +6,10 @@
 // missed while the listener was down, or never subscribed to, still starts the work. Once
 // they are done, an issue whose open questions aren't answered yet (the repo's
 // `wait_for_answers`) waits for its answers too: `blockers` empty, `answers` true.
-import { outcome } from "./events.mjs";
+import { outcome, parseKey, taskKey } from "./events.mjs";
+import { getJson } from "./github.mjs";
 import { plain, revive } from "./restart.mjs";
-import { readJson, writeJsonAtomic } from "./store.mjs";
+import { persistentMap } from "./store.mjs";
 
 // How often GitHub is asked about what the waits wait for (the operator's WAITS_CHECK_MINUTES).
 export const CHECK_MS = 5 * 60_000;
@@ -46,28 +47,24 @@ export function createWaits({
 }) {
   // Task key ("org/repo#78") → { repo, blockers: [77, …], item, since }; `item`: the comment
   // as restart.mjs saves it.
-  const waits = new Map(Object.entries(readJson(path, {})));
+  const waits = persistentMap(path, { mode: 0o600 });
   let timer = null;
   let checking = null;
   // "org/repo#77" → recheck() not started yet, and the last one started or queued.
   const queued = new Map();
   const latest = new Map();
 
-  // The comments' text and authors, as in queue.json: the owner's only.
-  function save() {
-    writeJsonAtomic(path, Object.fromEntries(waits), { mode: 0o600 });
-  }
+  // The comments' text and authors, as in queue.json: the owner's only (its file's mode).
+  const save = waits.save;
 
-  const keyOf = (item) => `${item.repo}#${item.id}`;
+  const keyOf = (item) => taskKey(item.repo, item.id);
   const answer = (item, text) =>
     reply(item.repo, item.replyTo, text).catch((error) => log(`${keyOf(item)}: ${error}`));
 
   // "open", "done", "not-done" or "missing" (deleted, transferred, or never there).
   async function stateOf(repo, number) {
-    const res = await github(repo, "GET", `/repos/${repo}/issues/${number}`, undefined, [404, 410]);
-    if (res.status === 404 || res.status === 410) return "missing";
-    if (!res.ok) throw new Error(`#${number}: ${res.status}`);
-    return outcome(await res.json());
+    const issue = await getJson(github, repo, `/repos/${repo}/issues/${number}`, [404, 410]);
+    return issue ? outcome(issue) : "missing";
   }
 
   // Drops the task's wait, its comment losing its 👀. Returns the wait, or null.
@@ -159,7 +156,7 @@ export function createWaits({
   async function closed(repo, number, state) {
     if (state === "open") return;
     // A waiting issue closed itself: nothing to start any more.
-    const own = `${repo}#${number}`;
+    const own = taskKey(repo, number);
     if (waits.has(own)) {
       drop(own);
       log(`${own}: closed, its wait is dropped`);
@@ -212,7 +209,7 @@ export function createWaits({
   // wait for them, if any, starts the comment, as resume() checks again.
   async function answered(repo, number) {
     const key = [...waits.keys()].find(
-      (k) => k.toLowerCase() === `${repo}#${number}`.toLowerCase(),
+      (k) => k.toLowerCase() === taskKey(repo, number).toLowerCase(),
     );
     const wait = key && waits.get(key);
     if (!wait?.answers) return;
@@ -243,8 +240,7 @@ export function createWaits({
       // A label taken off while the listener was down.
       for (const [key, w] of [...waits]) {
         if (!w.answers) continue;
-        const number = Number(key.slice(key.lastIndexOf("#") + 1));
-        await answered(w.repo, number).catch((error) => {
+        await answered(w.repo, parseKey(key)?.number).catch((error) => {
           log(`Waits: ${key}: ${error.message ?? error}`);
         });
       }

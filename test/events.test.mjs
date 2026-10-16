@@ -4,13 +4,17 @@ import { test } from "node:test";
 import { loadConfig, normalize } from "../listener/config.mjs";
 import {
   closedItem,
+  issueItem,
   linkTo,
   MARKER,
   outcome,
   parseAfter,
+  parseKey,
+  prId,
   splitTrigger,
   saysMore,
   takeOptions,
+  taskKey,
   touchedItems,
   verified,
   workItem,
@@ -19,6 +23,44 @@ import {
 // The App's bot, as server.mjs sets it once the App is known.
 const config = { ...loadConfig({ ALLOWED_USERS: "alice" }), bot: "Deckhand-X[bot]" };
 const sign = (secret, body) => "sha256=" + createHmac("sha256", secret).update(body).digest("hex");
+
+test("task keys: built and parsed, for issues, pull requests and discussions", () => {
+  assert.equal(taskKey("org/repo", 12), "org/repo#12");
+  assert.equal(taskKey("org/repo", prId(3)), "org/repo#pr-3");
+  assert.deepEqual(parseKey("org/repo#12"), {
+    repo: "org/repo",
+    id: "12",
+    kind: "issue",
+    number: 12,
+  });
+  assert.deepEqual(parseKey(taskKey("org/repo", prId(3))), {
+    repo: "org/repo",
+    id: "pr-3",
+    kind: "pr",
+    number: 3,
+  });
+  assert.deepEqual(parseKey("org/repo#discussion-8"), {
+    repo: "org/repo",
+    id: "discussion-8",
+    kind: "discussion",
+    number: 8,
+  });
+  assert.equal(parseKey("org-repo-12"), null);
+  assert.equal(parseKey("org/repo#onboarding"), null);
+});
+
+test("issueItem: an issue's item, with what the caller adds", () => {
+  assert.deepEqual(issueItem("o/r", { number: 7, title: "T" }, { trigger: "work" }), {
+    repo: "o/r",
+    id: "7",
+    kind: "issue",
+    number: 7,
+    title: "T",
+    replyTo: 7,
+    trigger: "work",
+  });
+  assert.equal(issueItem("o/r", { number: 7 }).title, null);
+});
 
 test("webhook signatures: only the App's secret passes", () => {
   const body = Buffer.from('{"a":1}');

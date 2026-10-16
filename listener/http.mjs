@@ -9,12 +9,16 @@ import { pipeline } from "node:stream";
 import { page } from "./auth.mjs";
 import { board, isLive, STATES } from "./board.mjs";
 import { egressPolicy } from "./egress.mjs";
+import { labelFailed } from "./comments.mjs";
 import { createSlots, readDelivery, sourceOf } from "./deliveries.mjs";
 import {
   closedItem,
+  parseKey,
   previewEvent,
+  prId,
   pullRequest,
   saysMore,
+  taskKey,
   touchedItems,
   verified,
   workItem,
@@ -74,8 +78,8 @@ export function waitEdges(shown, waits) {
   for (const w of waits) {
     if (!keys.has(w.key)) continue;
     for (const n of w.blockers) {
-      const pr = `${w.repo}#pr-${n}`;
-      const from = keys.has(pr) ? pr : `${w.repo}#${n}`;
+      const pr = taskKey(w.repo, prId(n));
+      const from = keys.has(pr) ? pr : taskKey(w.repo, n);
       edges.push({ from, to: w.key, kind: "after" });
       if (!keys.has(from)) blockers.add(from);
     }
@@ -110,11 +114,12 @@ export function createHttp(ctx, { dashboardDir }) {
   // knows them (ctx.usersOf()), narrow ALLOWED_USERS. Tool output in the logs may hold the
   // repo's secrets.
   function sees(user, repo) {
+    if (!repo) return false;
     const users = ctx.usersOf(repo);
     return !users || users.includes(user);
   }
 
-  const repoOf = (key) => key.slice(0, key.lastIndexOf("#"));
+  const repoOf = (key) => parseKey(key)?.repo ?? null;
 
   // The dashboard's tasks: each issue and pull request with its state (board.mjs). `user`:
   // only the repos they may see; all of them without one.
@@ -126,7 +131,7 @@ export function createHttp(ctx, { dashboardDir }) {
       .filter((t) => t.pending.length > (t.running ? ctx.deliverable(t) : 0))
       .filter((t) => !user || sees(user, t.repo))
       .map((t) => ({
-        key: `${t.repo}#${t.id}`,
+        key: taskKey(t.repo, t.id),
         kind: kindOf(t.pending.at(-1).mode, t.kind),
         mode: t.pending.at(-1).mode,
         repo: t.repo,
@@ -170,8 +175,8 @@ export function createHttp(ctx, { dashboardDir }) {
       edges,
       blockers: blockers.map((key) => ({
         key,
-        repo: key.slice(0, key.lastIndexOf("#")),
-        number: Number(key.slice(key.lastIndexOf("#") + 1)),
+        repo: parseKey(key)?.repo ?? null,
+        number: parseKey(key)?.number ?? null,
         title: ctx.titles.get(key),
         closed: ctx.titles.closed(key),
       })),
@@ -416,7 +421,7 @@ export function createHttp(ctx, { dashboardDir }) {
     }
     if (label !== undefined) {
       const res = await ctx.label(repo, number, label);
-      if (!res.ok && res.status !== 404) return log(`${key}: label: ${res.status}`);
+      if (labelFailed(res)) return log(`${key}: label: ${res.status}`);
       log(`${key}: ${label ? "open questions, labelled" : "answered, label removed"}`);
     }
     if (track !== undefined) ctx.inputs.set(key, track, asked);
@@ -525,7 +530,7 @@ export function createHttp(ctx, { dashboardDir }) {
         })
       : { allowed: false, private: false, cache: false, decrypt: false };
     if (!answer.allowed)
-      log(`Egress: refused ${host} for ${task ? `${task.repo}#${task.id}` : ip}`);
+      log(`Egress: refused ${host} for ${task ? taskKey(task.repo, task.id) : ip}`);
     sendJson(res, answer);
   }
 

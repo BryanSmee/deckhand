@@ -5,36 +5,19 @@
 // The questions are api/state's (questions.mjs parseQuestions(), on the board's task): parsed
 // (`items`) the form sends one answer per question, `{ options: [i], text }`; not parsed, one
 // free text for them all.
+import { refuse } from "./web.mjs";
 
 // GitHub keeps 65536 characters of a comment (comments.mjs cuts longer ones): answers stay
 // well under, with room for the questions' titles.
 export const MAX_TEXT = 20_000;
 export const MAX_QUESTIONS = 50;
 
-// A refusal the dashboard shows as it is (work.mjs).
-export class Refused extends Error {
-  constructor(status, message) {
-    super(message);
-    this.status = status;
-  }
-}
-
-export const refuse = (status, message) => {
-  throw new Refused(status, message);
-};
-
 const text = (s) => typeof s === "string" && s.length <= MAX_TEXT;
 
-// The body asked for, checked: { number, pr, answers, text, then } with either `answers` (one
-// per question) or `text`. `then`: the work area's action to take once they are in (the graph's
-// drag that asked for them), as sent: work.mjs checks it. Throws Refused.
-export function parseAnswers(raw) {
-  let body;
-  try {
-    body = JSON.parse(raw);
-  } catch {
-    refuse(400, "Not JSON.");
-  }
+// The body asked for (parsed JSON), checked: { number, pr, answers, text, then } with either
+// `answers` (one per question) or `text`. `then`: the work area's action to take once they are
+// in (the graph's drag that asked for them), as sent: work.mjs checks it. Throws Refused.
+export function parseAnswers(body) {
   const { number, pr = false, answers, text: free, then = null } = body ?? {};
   if (!Number.isSafeInteger(number) || number <= 0) refuse(400, "`number` is an issue number.");
   if (typeof pr !== "boolean") refuse(400, "`pr` is true or false.");

@@ -443,34 +443,35 @@ services); each reads `ctx` when it is called rather than when it is created, so
 call one created after it: a finished run (`runs.mjs`) schedules the next one (`tasks.mjs`),
 which starts runs.
 
-| Module                                                            | What it does                                                                                       |
-| ----------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| `server.mjs`                                                      | Settings, the GitHub App, `ctx`, the modules; starts the servers, restores runs, handles SIGTERM.  |
-| `http.mjs`                                                        | Webhook deliveries, dashboard and its API, `/status`, screenshots; the broker's egress answers.    |
-| `tasks.mjs`                                                       | One queue per issue: which mode a comment asks for, the pause, delivery to a running session.      |
-| `runs.mjs`                                                        | A run from start to reply: settings, image, grants, the sandbox, its output, reactions, label.     |
-| `restart.mjs`                                                     | `queue.json` and `logs/<run>.live.json`: what a listener leaves to the next one; `/status`.        |
-| `brainstorms.mjs`                                                 | Each issue's brainstorm (`brainstorms.json`) and repo mode (`modes.json`).                         |
-| `comments.mjs`                                                    | Replies (comments, discussion threads), reactions, the needs-input label.                          |
-| `questions.mjs`, `inputs.mjs`                                     | Open questions → the needs-input label, parsed questions (pure); the issues waiting for input.     |
-| `prompts.mjs`                                                     | What the agent reads: each run's prompt and first message, comments delivered mid-run. Pure.       |
-| `agents/`                                                         | Each agent's specifics: install, env, hosts, session, tiers, `normalize()` ([Agents](#agents)).    |
-| `modes.mjs`                                                       | Built-in modes: light, fresh, their token's permissions, the dashboard's kind. Pure.               |
-| `runlog.mjs`                                                      | Run logs: the list rebuilt after a restart, the dashboard's entries per line, the live stream.     |
-| `history.mjs`                                                     | Retention: the logs, summaries and screenshots of runs older than `LOG_RETENTION_DAYS`.            |
-| `events.mjs`                                                      | Deliveries → work items, trigger, `/mode` and `/after` lines, pull request states. Pure.           |
-| `repo-config.mjs`, `yaml.mjs`                                     | `.deckhand.yaml`, read from the default branch and parsed.                                         |
-| `grants.mjs`, `egress.mjs`                                        | The operator's grants (hosts, mounts, limits) and the egress policy.                               |
-| `github-app.mjs`, `broker.mjs`, `git-gateway.mjs`                 | The App's tokens; the sandboxes' token broker; their pushes, to the run's own branches only.       |
-| `pr-ready.mjs`                                                    | The sandboxes' pull requests marked ready for review or back to draft (`gh pr ready`).             |
-| `anthropic.mjs`, `secrets.mjs`                                    | The sandboxes' Claude API calls, with the operator's credential; secrets redacted from replies.    |
-| `setup.mjs`, `auth.mjs`                                           | `/setup` (creating the App) and signing in with GitHub.                                            |
-| `images.mjs`, `checkout.mjs`, `runner/`                           | Repo images, the agent's install, caches; checkouts; the Docker runner and container engines.      |
-| `onboarding.mjs`, `previews.mjs`                                  | Onboarding issues; preview hooks.                                                                  |
-| `conflicts.mjs`                                                   | The conflict watcher: open task pull requests in conflict get a rebase run (`conflicts.json`).     |
-| `waits.mjs`                                                       | Comments waiting for other issues to be done (`/after`, `waits.json`).                             |
-| `work.mjs`                                                        | The graph's work area: the backlog, starting or queueing issues, reruns and inbox entries.         |
-| `discussions.mjs`                                                 | Discussions from the dashboard: started, their thread read, replies.                               |
-| `board.mjs`, `titles.mjs`, `pulls.mjs`, `repos.mjs`, `static.mjs` | The dashboard's tasks, titles and closed states, pull requests, repository list and files.         |
-| `repo-view.mjs`                                                   | A repository's config as the dashboard shows it: what its runs get, from the runs' own checks.     |
-| `store.mjs`, `html.mjs`, `web.mjs`                                | Shared helpers: JSON state files written atomically; the small HTML pages; `sendJson`, `readBody`. |
+| Module                                                            | What it does                                                                                      |
+| ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `server.mjs`                                                      | Settings, the GitHub App, `ctx`, the modules; starts the servers, restores runs, handles SIGTERM. |
+| `http.mjs`                                                        | Webhook deliveries, dashboard and its API, `/status`, screenshots; the broker's egress answers.   |
+| `tasks.mjs`                                                       | One queue per issue: which mode a comment asks for, the pause, delivery to a running session.     |
+| `runs.mjs`                                                        | A run from start to reply: settings, image, grants, the sandbox, its output, reactions, label.    |
+| `restart.mjs`                                                     | `queue.json` and `logs/<run>.live.json`: what a listener leaves to the next one; `/status`.       |
+| `brainstorms.mjs`                                                 | Each issue's brainstorm (`brainstorms.json`) and repo mode (`modes.json`).                        |
+| `comments.mjs`                                                    | Replies (comments, discussion threads), reactions, labels (`hasLabel`, `ensureLabel`).            |
+| `questions.mjs`, `inputs.mjs`                                     | Open questions → the needs-input label, parsed questions (pure); the issues waiting for input.    |
+| `prompts.mjs`                                                     | What the agent reads: each run's prompt and first message, comments delivered mid-run. Pure.      |
+| `agents/`                                                         | Each agent's specifics: install, env, hosts, session, tiers, `normalize()` ([Agents](#agents)).   |
+| `modes.mjs`                                                       | Built-in modes: light, fresh, their token's permissions, the dashboard's kind. Pure.              |
+| `runlog.mjs`                                                      | Run logs: the list rebuilt after a restart, the dashboard's entries per line, the live stream.    |
+| `history.mjs`                                                     | Retention: the logs, summaries and screenshots of runs older than `LOG_RETENTION_DAYS`.           |
+| `events.mjs`                                                      | Deliveries → work items, trigger, `/mode` and `/after` lines, task keys (`taskKey`, `parseKey`).  |
+| `repo-config.mjs`, `yaml.mjs`                                     | `.deckhand.yaml`, read from the default branch and parsed.                                        |
+| `grants.mjs`, `egress.mjs`                                        | The operator's grants (hosts, mounts, limits) and the egress policy.                              |
+| `github-app.mjs`, `github.mjs`                                    | The App's tokens and calls; `getJson`, `paginate` and `graphql` on top of them.                   |
+| `broker.mjs`, `git-gateway.mjs`                                   | The sandboxes' token broker; their pushes, to the run's own branches only.                        |
+| `pr-ready.mjs`                                                    | The sandboxes' pull requests marked ready for review or back to draft (`gh pr ready`).            |
+| `anthropic.mjs`, `secrets.mjs`                                    | The sandboxes' Claude API calls, with the operator's credential; secrets redacted from replies.   |
+| `setup.mjs`, `auth.mjs`                                           | `/setup` (creating the App) and signing in with GitHub.                                           |
+| `images.mjs`, `checkout.mjs`, `runner/`                           | Repo images, the agent's install, caches; checkouts; the Docker runner and container engines.     |
+| `onboarding.mjs`, `previews.mjs`                                  | Onboarding issues; preview hooks.                                                                 |
+| `conflicts.mjs`                                                   | The conflict watcher: open task pull requests in conflict get a rebase run (`conflicts.json`).    |
+| `waits.mjs`                                                       | Comments waiting for other issues to be done (`/after`, `waits.json`).                            |
+| `work.mjs`                                                        | The graph's work area: the backlog, starting or queueing issues, reruns and inbox entries.        |
+| `discussions.mjs`                                                 | Discussions from the dashboard: started, their thread read, replies.                              |
+| `board.mjs`, `titles.mjs`, `pulls.mjs`, `repos.mjs`, `static.mjs` | The dashboard's tasks, titles and closed states, pull requests, repository list and files.        |
+| `repo-view.mjs`                                                   | A repository's config as the dashboard shows it: what its runs get, from the runs' own checks.    |
+| `store.mjs`, `html.mjs`, `web.mjs`                                | Shared helpers: JSON state files and Maps (`persistentMap`); HTML pages; the API's `apiRoute`.    |

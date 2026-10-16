@@ -22,6 +22,52 @@ const REACTION_ENUM = {
   "+1": "THUMBS_UP",
 };
 
+// Whether `labels` (an issue's, as GitHub has them: names or { name }) hold `name`. GitHub's
+// label names are case-insensitive: a "Needs-Input" set by hand is the same label.
+export function hasLabel(labels, name) {
+  if (!name) return false;
+  const wanted = name.toLowerCase();
+  return (labels ?? []).some(
+    (l) => (typeof l === "string" ? l : l?.name)?.toLowerCase() === wanted,
+  );
+}
+
+// The label `label.name` ({ name, color, description }) on the repo, made when it isn't there
+// yet. Already there (422) is fine: only its colour and description are ours. `github`: the
+// App's calls (server.mjs). A failure is logged: the issue it was for goes on without it.
+export async function ensureLabel(github, repo, label, log = () => {}) {
+  const res = await github(repo, "POST", `/repos/${repo}/labels`, label, [422]);
+  if (!res.ok && res.status !== 422) log(`${repo}: the ${label.name} label: ${res.status}`);
+}
+
+// Whether a call of label() below failed: taking off a label that isn't there (404) didn't.
+export const labelFailed = (res) => !res.ok && res.status !== 404;
+
+// A discussion comment's thread: GitHub threads are one level deep, so a reply's thread is
+// its comment's. { discussion, thread } (node ids), or null when `id` is no discussion comment.
+// `discussion`: null when GitHub doesn't say.
+export async function commentThread(graphql, repo, id) {
+  const data = await graphql(
+    repo,
+    "query($id: ID!) { node(id: $id) { ... on DiscussionComment { id discussion { id } replyTo { id } } } }",
+    { id },
+  );
+  const c = data?.node;
+  if (!c?.id) return null;
+  return { discussion: c.discussion?.id ?? null, thread: c.replyTo?.id ?? c.id };
+}
+
+// A comment in discussion `id` (a node id), in `thread`'s thread or at the top (null): the
+// comment's `fields`, as GraphQL names them.
+export async function addDiscussionComment(graphql, repo, { id, thread, body }, fields = "url") {
+  const data = await graphql(
+    repo,
+    `mutation($id: ID!, $thread: ID, $body: String!) { addDiscussionComment(input: {discussionId: $id, replyToId: $thread, body: $body}) { comment { ${fields} } } }`,
+    { id, thread, body },
+  );
+  return data.addDiscussionComment.comment;
+}
+
 // Replies longer than GitHub takes are cut.
 function cut(text) {
   return text.length > 60000 ? text.slice(0, 60000) + "\n\n…" : text;
@@ -100,21 +146,15 @@ export function createComments({ config, github, graphql, log }) {
     const c = target.comment;
     let thread = null;
     if (c?.discussion && c.node_id !== target.discussionId) {
-      thread = c.node_id;
-      if (c.parent_id) {
-        const data = await graphql(
-          target.repo,
-          "query($id: ID!) { node(id: $id) { ... on DiscussionComment { replyTo { id } } } }",
-          { id: c.node_id },
-        );
-        thread = data.node?.replyTo?.id ?? null;
-      }
+      thread = c.parent_id
+        ? ((await commentThread(graphql, target.repo, c.node_id))?.thread ?? null)
+        : c.node_id;
     }
-    return graphql(
-      target.repo,
-      "mutation($id: ID!, $thread: ID, $body: String!) { addDiscussionComment(input: {discussionId: $id, replyToId: $thread, body: $body}) { comment { url } } }",
-      { id: target.discussionId, thread, body: `${cut(text)}\n\n${MARKER}` },
-    );
+    return addDiscussionComment(graphql, target.repo, {
+      id: target.discussionId,
+      thread,
+      body: `${cut(text)}\n\n${MARKER}`,
+    });
   }
 
   // Adding a label that doesn't exist yet creates it.

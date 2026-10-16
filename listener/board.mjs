@@ -16,6 +16,7 @@
 //                   restarted; cancelled: someone stopped it, `/cancel` or the dashboard)
 // A task whose last run is error, interrupted or cancelled is `rerunnable` when it may run
 // again.
+import { parseKey } from "./events.mjs";
 import { LIGHT } from "./modes.mjs";
 
 export const STATES = [
@@ -85,13 +86,14 @@ export function board({ runs, queued, brainstorms, waits = [], inputs = [] }) {
   const tasks = new Map();
   const entry = (key, repo) => {
     if (!tasks.has(key)) {
-      const name = repo ?? key.slice(0, key.lastIndexOf("#"));
+      const parsed = parseKey(key);
+      const name = repo ?? parsed?.repo ?? "";
       tasks.set(key, {
         key,
         repo: name,
         project: name.split("/")[0],
         // "#12", "#pr-12", "#discussion-8"
-        number: Number(/(\d+)$/.exec(key)?.[1]) || null,
+        number: parsed?.number || null,
         kind: null,
         // work, brainstorm, idea, bug, discussion or one of the repo's own modes.
         mode: null,

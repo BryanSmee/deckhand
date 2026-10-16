@@ -2,7 +2,18 @@
 // A comment that passed the checks is queued under its task's key ("org/repo#12"); after a
 // pause (so a burst is one run) it starts a run, or goes to the running one (deliver()).
 import { AGENTS, agentFor } from "./agents/index.mjs";
-import { commentsText, linkedIssue, linkTo, takeOptions, workItem } from "./events.mjs";
+import { repoAllowed } from "./config.mjs";
+import { hasLabel } from "./comments.mjs";
+import {
+  commentsText,
+  issueItem,
+  linkedIssue,
+  linkTo,
+  takeOptions,
+  taskKey,
+  workItem,
+} from "./events.mjs";
+import { getJson } from "./github.mjs";
 import { entryRun, INBOX, isLight, sessionName } from "./modes.mjs";
 import { liveMessage } from "./prompts.mjs";
 import { hasOpenQuestions } from "./questions.mjs";
@@ -15,6 +26,7 @@ import {
   sandboxName,
   startable,
 } from "./repo-config.mjs";
+import { writeEvent } from "./runlog.mjs";
 import { configErrors } from "./runs.mjs";
 
 // Why a queued comment may no longer run, or null: its repo left ALLOWED_REPOS, or its author
@@ -22,7 +34,7 @@ import { configErrors } from "./runs.mjs";
 // queued before a restart, and when its run begins. Items the listener makes itself
 // (onboarding, conflicts) have no comment and no author; a comment without one is refused.
 export function noLongerAllowed(config, item, settings = null) {
-  if (config.repos.length && !config.repos.includes(item.repo.toLowerCase())) {
+  if (!repoAllowed(config, item.repo)) {
     return `${item.repo} is no longer in ALLOWED_REPOS`;
   }
   if (!item.author) return item.comment ? "its author isn't known" : null;
@@ -46,7 +58,7 @@ export function createTasks(ctx) {
   // its own runs had the name (run ids are "<name>-<start>"), else a new task would take over
   // another repo's session and workspace.
   async function containerName(repo, id) {
-    const key = `${repo}#${id}`;
+    const key = taskKey(repo, id);
     if (tasks.has(key)) return tasks.get(key).name;
     const legacy = legacySandboxName(config, repo, id);
     const ran = ctx.runs.some(
@@ -89,7 +101,7 @@ export function createTasks(ctx) {
     const issue = event === "issue_comment" && !payload.issue?.pull_request ? payload.issue : null;
     if (!hasAnswer(item) && unanswered(item, issue)) return holdBack(item);
     if (!item.after && (item.trigger === "work" || item.modeLine)) {
-      ctx.waits.cancel(`${item.repo}#${item.id}`);
+      ctx.waits.cancel(taskKey(item.repo, item.id));
     }
     await accept(item);
   }
@@ -98,7 +110,7 @@ export function createTasks(ctx) {
   // dropped, and the comment gets a 👍; the run's reply says who stopped it. With nothing to
   // stop, a reply says so.
   async function cancelRun(item) {
-    const key = `${item.repo}#${item.id}`;
+    const key = taskKey(item.repo, item.id);
     if (!ctx.cancel(key, item.author)) {
       log(`${key}: /cancel with nothing running`);
       const text = `Nothing is running on #${item.replyTo}.`;
@@ -124,17 +136,16 @@ export function createTasks(ctx) {
     const mode = item.modeLine ?? (item.trigger === "work" ? "work" : null);
     const own = customMode(item.settings, mode);
     if (mode !== "work" && (!own || own.light)) return false;
-    const name = config.needsInputLabel.toLowerCase();
-    if (!(issue.labels ?? []).some((l) => (l.name ?? l).toLowerCase() === name)) return false;
+    if (!hasLabel(issue.labels, config.needsInputLabel)) return false;
     if (!hasOpenQuestions(issue.body)) return false;
-    const key = `${item.repo}#${item.id}`;
+    const key = taskKey(item.repo, item.id);
     return ctx.runs.find((r) => r.key === key)?.status !== "needs-input";
   }
 
   // A trigger comment on an issue whose questions aren't answered: nothing starts, and the
   // reply says how to answer. The label stays (http.mjs questions()).
   async function holdBack(item) {
-    const key = `${item.repo}#${item.id}`;
+    const key = taskKey(item.repo, item.id);
     log(`${key}: not started, its open questions aren't answered`);
     const url = ctx.publicUrl?.();
     const task = `${url}/#/${item.repo}?task=${encodeURIComponent(key)}`;
@@ -150,18 +161,18 @@ export function createTasks(ctx) {
   async function linked(item) {
     if (!item.claims) return item;
     const { claims: _, ...own } = item;
-    const res = await ctx.github(
-      item.repo,
-      "GET",
-      `/repos/${item.repo}/pulls/${item.number}`,
-      undefined,
-      [404],
-    );
-    const pr = res.ok ? await res.json() : null;
+    const path = `/repos/${item.repo}/pulls/${item.number}`;
+    let pr = null;
+    let why = "lookup: 404";
+    try {
+      pr = await getJson(ctx.github, item.repo, path, [404]);
+    } catch (error) {
+      why = `lookup: ${error.message ?? error}`;
+    }
     const issue = pr && linkedIssue(pr, item.repo, config.bot);
     if (!issue) {
-      const why = pr ? "its head isn't a branch of the repo" : `lookup: ${res.status}`;
-      log(`${item.repo}#${own.id}: says it closes #${item.claims}, not linked (${why})`);
+      if (pr) why = "its head isn't a branch of the repo";
+      log(`${taskKey(item.repo, own.id)}: says it closes #${item.claims}, not linked (${why})`);
     }
     return issue ? linkTo(item, issue) : own;
   }
@@ -170,7 +181,7 @@ export function createTasks(ctx) {
   // the operator's repos and the repo's users or config may have changed since. False when
   // it may no longer run (the reason logged).
   async function resume(item) {
-    const key = `${item.repo}#${item.id}`;
+    const key = taskKey(item.repo, item.id);
     const repoGone = noLongerAllowed(config, { repo: item.repo });
     if (repoGone) {
       log(`${key}: not started, ${repoGone}`);
@@ -204,8 +215,8 @@ export function createTasks(ctx) {
       return false;
     }
     const path = `/repos/${item.repo}/issues/${item.number}`;
-    const res = await ctx.github(item.repo, "GET", path, undefined, [404, 410]).catch(() => null);
-    return !!res?.ok && unanswered(item, await res.json());
+    const issue = await getJson(ctx.github, item.repo, path, [404, 410]).catch(() => null);
+    return !!issue && unanswered(item, issue);
   }
 
   // An onboarding issue for the repo, if it needs one, starting an onboarding run on it as a
@@ -218,20 +229,16 @@ export function createTasks(ctx) {
     });
     if (!issue) return null;
     const { settings } = await ctx.repoSettings(repo, issue.base);
-    await accept({
-      repo,
-      id: String(issue.number),
-      kind: "issue",
-      number: issue.number,
-      title: issue.title,
-      trigger: null,
-      modeLine: "onboarding",
-      text: "",
-      replyTo: issue.number,
-      comment: null,
-      base: issue.base,
-      settings,
-    });
+    await accept(
+      issueItem(repo, issue, {
+        trigger: null,
+        modeLine: "onboarding",
+        text: "",
+        comment: null,
+        base: issue.base,
+        settings,
+      }),
+    );
     return issue;
   }
 
@@ -241,8 +248,10 @@ export function createTasks(ctx) {
   }
 
   async function accept(item) {
+    // Its default branch, as GitHub said: "main" when it didn't.
+    item.base ||= "main";
     const name = await containerName(item.repo, item.id);
-    const key = `${item.repo}#${item.id}`;
+    const key = taskKey(item.repo, item.id);
     item.mode = await modeOf(item, key, name);
     if (!item.mode) return;
     ctx.titles.set(key, item.title);
@@ -395,7 +404,7 @@ export function createTasks(ctx) {
     const list = modeNames(item.settings)
       .map((m) => `\`${m}\`${own[m]?.light ? " (comments only)" : ""}`)
       .join(", ");
-    const where = `${item.repo}#${item.id}`;
+    const where = taskKey(item.repo, item.id);
     log(`${where}: ${what}`);
     const text = `${what} The modes here: ${list}. Pick one with a \`/mode <name>\` line.`;
     await ctx.reply(item.repo, item.replyTo, text).catch((error) => log(`${where}: ${error}`));
@@ -443,8 +452,7 @@ export function createTasks(ctx) {
       return false;
     }
     ctx.runner.send(live.id, liveMessage(live.mode, text), agentFor(live.record.agent));
-    const event = { type: "listener", event: "delivered", at: Date.now(), message: text };
-    live.logFile.write(JSON.stringify(event) + "\n");
+    writeEvent(live.logFile, "delivered", { message: text });
     live.unanswered.push(...items);
     ctx.saveLive(task);
     return true;

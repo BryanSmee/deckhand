@@ -9,7 +9,8 @@
 // Served on the broker's port, which only the runs' networks reach.
 import { branchAllowed } from "./broker.mjs";
 import { GITHUB_HEADERS, PUSH_PERMISSIONS } from "./github-app.mjs";
-import { sendJson } from "./web.mjs";
+import { graphqlData } from "./github.mjs";
+import { send } from "./web.mjs";
 
 const PATH = /^\/pr\/([\w.-]+)\/([\w.-]+)\/(\d+)\/(ready|draft)$/;
 
@@ -25,8 +26,6 @@ export function createPrReady({
   fetch = globalThis.fetch,
   log = () => {},
 }) {
-  const send = (res, status, value) => sendJson(res, value, status);
-
   async function mutate(token, action, id) {
     const name = MUTATIONS[action];
     const res = await fetch(`${api}/graphql`, {
@@ -41,11 +40,8 @@ export function createPrReady({
         variables: { id },
       }),
     });
-    // GraphQL errors come with a 200.
-    const answer = await res.json().catch(() => ({}));
-    if (!res.ok || answer.errors) {
-      throw new Error(`${name}: ${res.status} ${JSON.stringify(answer.errors ?? answer)}`);
-    }
+    // GraphQL errors come with a 200: graphqlData() throws them.
+    await graphqlData(res, name);
   }
 
   async function handle(req, res) {

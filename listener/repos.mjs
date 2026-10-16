@@ -13,31 +13,19 @@
 // LIST_MS, and each repo's config is read once per CONFIG_MS, or again after a delivery says
 // it may have changed (refresh()), or the dashboard asks. The operator's grants and the
 // onboarding status are read at each list, so their changes show at once.
+import { repoAllowed } from "./config.mjs";
 import { GrantsError, grantCheck, grantFor, loadGrants, refusedByGrants } from "./grants.mjs";
 import { CONFIG_FILE, defaultSettings, parseRepoConfig, readRepoFile } from "./repo-config.mjs";
 import { effectiveView } from "./repo-view.mjs";
-import { sendJson } from "./web.mjs";
+import { paginate } from "./github.mjs";
+import { apiRoute, send } from "./web.mjs";
 
 export const LIST_MS = 5 * 60000;
 export const CONFIG_MS = 30 * 60000;
 // The dashboard's Refresh buttons: at most one read of a repo (or of the list) this often.
 export const REFRESH_MS = 5000;
-const PER_PAGE = 100;
 // Config reads at once: a large installation is listed without a burst of hundreds.
 const PARALLEL = 8;
-
-// Every page of a list GitHub paginates; `items` picks the page's entries.
-async function paginate(get, path, items) {
-  const all = [];
-  for (let page = 1; ; page++) {
-    const sep = path.includes("?") ? "&" : "?";
-    const res = await get(`${path}${sep}per_page=${PER_PAGE}&page=${page}`);
-    if (!res.ok) throw new Error(`GitHub GET ${path}: ${res.status}`);
-    const found = items(await res.json()) ?? [];
-    all.push(...found);
-    if (found.length < PER_PAGE) return all;
-  }
-}
 
 // One row: "configured", "invalid" (no run starts: its config has errors, or asks for what the
 // operator's grants refuse), "onboarding" (with its issue) or "not-onboarded"; "unknown" when
@@ -84,25 +72,19 @@ export function createRepoList({
   // text) so the grant checks run again at each list, without asking GitHub.
   const configs = new Map();
 
-  const allowed = (repo) => !config.repos.length || config.repos.includes(repo.toLowerCase());
-
   async function fetchRepos() {
-    const installations = await paginate(
-      (path) => app.asApp("GET", path),
-      "/app/installations",
-      (page) => page,
-    );
+    const installations = await paginate((path) => app.asApp("GET", path), "/app/installations");
     const infos = [];
     for (const installation of installations) {
       const repos = await paginate(
         (path) => app.asInstallation(installation.id, "GET", path),
         "/installation/repositories",
-        (page) => page.repositories,
+        (page) => page.repositories ?? [],
       );
       for (const r of repos) {
         app.remember(r.full_name, installation.id);
         // Archived repos take no issue or run: not worth a row.
-        if (!r.archived && allowed(r.full_name)) infos.push(r);
+        if (!r.archived && repoAllowed(config, r.full_name)) infos.push(r);
       }
     }
     return infos.sort((a, b) => a.full_name.localeCompare(b.full_name));
@@ -267,24 +249,6 @@ export function refreshFor(event, p, refresh) {
   return !!moved;
 }
 
-// A POST from the dashboard's own page: the Origin header names this listener (its public
-// URL, or the host the browser asked for). The session cookie's SameSite=Lax already keeps
-// other sites' POSTs without it; this refuses the rest.
-export function sameOrigin(req, publicUrl) {
-  const origin = req.headers.origin;
-  if (!origin) return false;
-  let url;
-  try {
-    url = new URL(origin);
-  } catch {
-    return false;
-  }
-  if (publicUrl && url.origin === new URL(publicUrl).origin) return true;
-  return !!req.headers.host && url.host === req.headers.host;
-}
-
-const send = (res, status, value) => sendJson(res, value, status);
-
 // A grants error as the config panel shows it: { file, message, everyRepo }, the file to edit
 // (relative to GRANTS_DIR) when there is one. Only a GrantsError's details are shown: they
 // name files in the folder and their values; anything else may name the host's paths, and
@@ -320,23 +284,11 @@ export function createRepoApi({
 }) {
   const refreshed = new Map(); // "owner/repo" or "*" → when last refreshed
 
-  // Not in ALLOWED_REPOS, or the App isn't installed on it: a 404 (sent), else its row.
+  // The App isn't installed on it: a 404 (sent), else its row. ALLOWED_REPOS: apiRoute().
   async function known(res, repo) {
-    if (config.repos.length && !config.repos.includes(repo.toLowerCase())) {
-      send(res, 404, { error: `${repo} is not in ALLOWED_REPOS.` });
-      return null;
-    }
     const row = await list.get(repo);
     if (!row) send(res, 404, { error: `The App is not installed on ${repo}.` });
     return row;
-  }
-
-  // A POST from elsewhere: refused (sent).
-  function foreign(req, res, user, what) {
-    if (sameOrigin(req, publicUrl())) return false;
-    log(`Repositories: refused ${what} for ${user}: Origin ${req.headers.origin ?? "missing"}`);
-    send(res, 403, { error: "Not from this dashboard." });
-    return true;
   }
 
   // At most one refresh of `key` per REFRESH_MS: each reads GitHub.
@@ -348,7 +300,6 @@ export function createRepoApi({
   }
 
   async function onboard(req, res, user, repo) {
-    if (foreign(req, res, user, `onboarding ${repo}`)) return;
     const row = await known(res, repo);
     if (!row) return;
     // Already set up or being onboarded: nothing to do, the row says why.
@@ -369,7 +320,6 @@ export function createRepoApi({
   }
 
   async function refresh(req, res, user, repo) {
-    if (foreign(req, res, user, `refreshing ${repo ?? "the list"}`)) return;
     if (!repo) {
       if (tooSoon("*")) return send(res, 429, { error: "Refreshed a moment ago." });
       list.refreshAll();
@@ -377,11 +327,11 @@ export function createRepoApi({
     }
     if (!(await known(res, repo))) return;
     if (tooSoon(repo.toLowerCase())) return send(res, 429, { error: "Refreshed a moment ago." });
-    return repoConfig(res, repo, true);
+    return repoConfig(req, res, user, repo, true);
   }
 
   // Read from GitHub at each request (the text isn't kept), which refreshes its row too.
-  async function repoConfig(res, repo, checked = false) {
+  async function repoConfig(req, res, user, repo, checked = false) {
     if (!checked && !(await known(res, repo))) return;
     const read = await list.readConfig(repo);
     if (!read) return send(res, 404, { error: `The App is not installed on ${repo}.` });
@@ -416,32 +366,24 @@ export function createRepoApi({
   }
 
   // Handles /api/repos*; false for any other path.
-  function handle(req, res, user) {
-    const { pathname } = new URL(req.url, "http://localhost");
-    const one = /^\/api\/repos\/([\w.-]+)\/([\w.-]+)\/(onboard|refresh|config)$/.exec(pathname);
-    const all = pathname === "/api/repos" || pathname === "/api/repos/refresh";
-    if (!all && !one) return false;
-    const run = async () => {
-      const post = pathname.endsWith("/onboard") || pathname.endsWith("/refresh");
-      if (post && req.method !== "POST") return send(res, 405, { error: "POST only." });
-      if (!post && req.method !== "GET") return send(res, 405, { error: "GET only." });
-      if (!user) return send(res, 401, { error: "Sign in first." });
-      if (!one) {
-        if (post) return refresh(req, res, user, null);
-        return send(res, 200, { repos: await list.list(), listedAt: list.listedAt() });
-      }
-      const repo = `${one[1]}/${one[2]}`;
-      if (one[3] === "onboard") return onboard(req, res, user, repo);
-      if (one[3] === "refresh") return refresh(req, res, user, repo);
-      return repoConfig(res, repo);
-    };
-    run().catch((error) => {
-      log(`Repositories: ${error.stack ?? error}`);
-      if (!res.headersSent)
-        send(res, 502, { error: "GitHub didn't answer: see the listener's logs." });
-    });
-    return true;
-  }
+  const handle = apiRoute({
+    name: "Repositories",
+    route: (pathname) => {
+      if (pathname === "/api/repos") return { what: "list" };
+      if (pathname === "/api/repos/refresh") return { what: "refresh" };
+      const one = /^\/api\/repos\/([\w.-]+)\/([\w.-]+)\/(onboard|refresh|config)$/.exec(pathname);
+      return one && { repo: `${one[1]}/${one[2]}`, what: one[3] };
+    },
+    gets: {
+      list: async (req, res) =>
+        send(res, 200, { repos: await list.list(), listedAt: list.listedAt() }),
+      config: repoConfig,
+    },
+    posts: { onboard, refresh },
+    allowed: (repo) => repoAllowed(config, repo),
+    publicUrl,
+    log,
+  });
 
   return { handle };
 }

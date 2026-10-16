@@ -3,18 +3,15 @@
 // webhooks keep it current (questions.mjs); labels added or removed, or bodies edited, while
 // the listener was down are caught by one lookup per repo when it starts (sync()). Kept in
 // inputs.json, so a restart doesn't forget them meanwhile.
+import { parseKey, taskKey } from "./events.mjs";
 import { parseQuestions, questionsSection } from "./questions.mjs";
-import { readJson, writeJsonAtomic } from "./store.mjs";
-import { parseKey } from "./titles.mjs";
+import { persistentMap } from "./store.mjs";
 
 // `listLabelled(repo)`: the repo's open issues with the label, as GET /repos/{repo}/issues
 // has them.
 export function createInputs({ path, listLabelled, now = Date.now, log = () => {} }) {
-  const inputs = new Map(Object.entries(readJson(path, {})));
-
-  function save() {
-    writeJsonAtomic(path, Object.fromEntries(inputs));
-  }
+  const inputs = persistentMap(path);
+  const save = inputs.save;
 
   // Whether issue `key` waits for input now, and its questions when known (undefined: as
   // they were).
@@ -55,7 +52,7 @@ export function createInputs({ path, listLabelled, now = Date.now, log = () => {
       for (const issue of list) {
         // Pull requests are issues to that listing: their runs show them already.
         if (issue.pull_request) continue;
-        const key = `${repo}#${issue.number}`;
+        const key = taskKey(repo, issue.number);
         found.set(key, {
           since: Date.parse(issue.updated_at) || now(),
           questions: parseQuestions(questionsSection(issue.body)),

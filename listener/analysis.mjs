@@ -6,7 +6,7 @@
 // the logs.
 import { readFileSync } from "node:fs";
 import { agentFor } from "./agents/index.mjs";
-import { clip, format } from "./runlog.mjs";
+import { clip, format, minutes } from "./runlog.mjs";
 import { redact } from "./secrets.mjs";
 
 // How many runs one analysis reads: 10 unless asked, 50 at most.
@@ -83,14 +83,11 @@ const NOTABLE = /error|fail|denied|refused|forbidden|\b403\b|timed? ?out|not fou
 export function runDigest(run, lines) {
   const agent = agentFor(run.agent);
   const entries = lines.flatMap((l) => format(l, agent));
-  const minutes =
-    run.finishedAt && run.startedAt
-      ? Math.round((run.finishedAt - run.startedAt) / 6000) / 10
-      : null;
+  const took = run.finishedAt && run.startedAt ? minutes(run.finishedAt - run.startedAt) : null;
   const what = [
     `kind ${kindOf(run)}${run.mode ? ` (${run.mode})` : ""}`,
     `${agent.name}${run.provider ? `@${run.provider}` : ""} ${run.model ?? "?"}, ${run.effort ?? "?"} effort`,
-    `${run.status}${minutes !== null ? ` after ${minutes} min` : ""}`,
+    `${run.status}${took !== null ? ` after ${took} min` : ""}`,
     `started ${time(run.startedAt)} UTC`,
   ];
   const out = [

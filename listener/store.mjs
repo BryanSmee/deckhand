@@ -25,3 +25,14 @@ export function writeJsonAtomic(path, value, { mode } = {}) {
     throw error;
   }
 }
+
+// A Map kept in a JSON file as one object, { key: value }: the listener's state Maps
+// (pulls.json, inputs.json, conflicts.json, titles.json, closed.json, waits.json, modes.json).
+// `save()` writes it whole; `mode` as writeJsonAtomic()'s. Without a path, nothing is kept.
+export function persistentMap(path, { mode } = {}) {
+  const map = new Map(path ? Object.entries(readJson(path, {}) ?? {}) : []);
+  map.save = () => {
+    if (path) writeJsonAtomic(path, Object.fromEntries(map), { mode });
+  };
+  return map;
+}
