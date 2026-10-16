@@ -11,6 +11,8 @@
 // waits for it. A hook that starts something long-lived should run until it is done.
 import { createWriteStream, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
+import { grantFor, loadGrants, ungranted } from "./grants.mjs";
+import { CONFIG_FILE } from "./repo-config.mjs";
 
 export const MAX_WAITING = 3;
 
@@ -140,4 +142,29 @@ export function createPreviews({
   }
 
   return { run, status };
+}
+
+// A delivery's preview hook (events.mjs previewEvent()), run when the repo's config has one
+// and the operator's grants allow it: it runs as root on the host. `ctx` (server.mjs): the
+// listener's state and services, `ctx.previews` the queue above.
+export async function previewHook(ctx, { repo, base, event }, payload) {
+  const { config, skip } = ctx;
+  const { settings, errors } = await ctx.repoSettings(repo, base);
+  if (errors.length) return skip(`${event}: ${CONFIG_FILE} of ${repo} has errors`);
+  if (!settings.preview) return skip(`${event}: ${repo} has no preview hook`);
+  // Root on the host: only when the operator's grants say so (grants.mjs).
+  let grant;
+  try {
+    grant = grantFor(loadGrants(config), config, repo);
+  } catch (error) {
+    return skip(`${event}: preview hook of ${repo} not run: ${error.message}`);
+  }
+  const missing = ungranted(grant, settings);
+  if (missing.length) {
+    return skip(`${event}: preview hook of ${repo} not run: ${missing.join("; ")}`);
+  }
+  const image =
+    settings.preview.image ??
+    (await ctx.images.imageFor({ repo, ref: base, dockerfile: settings.dockerfile }));
+  await ctx.previews.run({ repo, event, payload, ref: base, hook: settings.preview, image });
 }

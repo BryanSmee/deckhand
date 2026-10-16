@@ -1,15 +1,12 @@
-// The listener's two HTTP servers. The public one: GitHub's webhooks, /setup, sign-in, the
-// dashboard and its API, /status and the runs' screenshots. The broker's, on the runs'
-// networks only: installation tokens (broker.mjs), the egress proxy's questions and the
-// agents' API calls (anthropic.mjs, openai.mjs).
+// The listener's public HTTP server: GitHub's webhooks, /setup, sign-in, the dashboard and its
+// API, /status and the runs' screenshots. The broker's, on the runs' networks only, is
+// broker-http.mjs.
 import { closeSync, constants, createReadStream, fstatSync, openSync, realpathSync } from "node:fs";
 import { createServer } from "node:http";
 import { join } from "node:path";
 import { pipeline } from "node:stream";
 import { page } from "./auth.mjs";
 import { board, isLive, STATES } from "./board.mjs";
-import { egressPolicy } from "./egress.mjs";
-import { labelFailed } from "./comments.mjs";
 import { createSlots, readDelivery, sourceOf } from "./deliveries.mjs";
 import {
   closedItem,
@@ -17,17 +14,15 @@ import {
   previewEvent,
   prId,
   pullRequest,
-  saysMore,
   taskKey,
   touchedItems,
   verified,
   workItem,
 } from "./events.mjs";
-import { grantFor, loadGrants, ungranted } from "./grants.mjs";
 import { kindOf } from "./modes.mjs";
 import { onboardingTargets } from "./onboarding.mjs";
-import { inputEvent } from "./questions.mjs";
-import { CONFIG_FILE, effectiveConfig } from "./repo-config.mjs";
+import { previewHook } from "./previews.mjs";
+import { applyInput, inputEvent } from "./questions.mjs";
 import { refreshFor } from "./repos.mjs";
 import { staleFor } from "./work.mjs";
 import { publicRun, stream } from "./runlog.mjs";
@@ -371,7 +366,7 @@ export function createHttp(ctx, { dashboardDir }) {
     }
     // Open questions and answers to them: the needs-input label (questions.mjs).
     const input = inputEvent(config, event, payload, app.identity().name);
-    if (input) admitted(questions(input));
+    if (input) admitted(applyInput(ctx, input));
     // Nothing runs for an issue being opened, edited, labelled or closed: the graph's backlog
     // is read again on its next poll.
     if (event === "issues") {
@@ -380,7 +375,7 @@ export function createHttp(ctx, { dashboardDir }) {
     }
     const preview = previewEvent(config, event, payload, skip);
     if (preview) {
-      previewHook(preview, payload).catch((error) => log(error.stack ?? error));
+      previewHook(ctx, preview, payload).catch((error) => log(error.stack ?? error));
       return;
     }
     // The operator's checks first, so only comments that may run cost a config read.
@@ -395,60 +390,6 @@ export function createHttp(ctx, { dashboardDir }) {
     const done = promise.catch((error) => log(error.stack ?? error));
     admitting.add(done);
     done.finally(() => admitting.delete(done));
-  }
-
-  // Open questions in an issue, or an answer to them: the needs-input label and the
-  // dashboard's list of issues waiting for input (questions.mjs, inputs.mjs).
-  async function questions(change) {
-    const { repo, key, number, title, base, label, by, track, questions: asked } = change;
-    if (title) ctx.titles.set(key, title);
-    if (label !== undefined && by) {
-      // The repo's own users narrow the operator's.
-      const { settings, errors } = await ctx.repoSettings(repo, base);
-      if (errors.length) return skip(`${key}: ${CONFIG_FILE} of ${repo} has errors`);
-      const seen = effectiveConfig(config, settings);
-      if (!seen.users.includes(by.toLowerCase())) {
-        return skip(`${key}: ${by} not among ${repo}'s users`);
-      }
-      // A trigger line alone answers nothing: the issue still waits (tasks.mjs holdBack()).
-      if (
-        settings.waitForAnswers &&
-        change.comment !== undefined &&
-        !saysMore(seen, change.comment)
-      ) {
-        return skip(`${key}: ${by}'s comment answers nothing, the label stays`);
-      }
-    }
-    if (label !== undefined) {
-      const res = await ctx.label(repo, number, label);
-      if (labelFailed(res)) return log(`${key}: label: ${res.status}`);
-      log(`${key}: ${label ? "open questions, labelled" : "answered, label removed"}`);
-    }
-    if (track !== undefined) ctx.inputs.set(key, track, asked);
-    else if (asked !== undefined) ctx.inputs.update(key, asked);
-    // Answered: a comment that waited for the answers starts (waits.mjs).
-    if (change.answered) admitted(ctx.waits.answered(repo, number));
-  }
-
-  async function previewHook({ repo, base, event }, payload) {
-    const { settings, errors } = await ctx.repoSettings(repo, base);
-    if (errors.length) return skip(`${event}: ${CONFIG_FILE} of ${repo} has errors`);
-    if (!settings.preview) return skip(`${event}: ${repo} has no preview hook`);
-    // Root on the host: only when the operator's grants say so (grants.mjs).
-    let grant;
-    try {
-      grant = grantFor(loadGrants(config), config, repo);
-    } catch (error) {
-      return skip(`${event}: preview hook of ${repo} not run: ${error.message}`);
-    }
-    const missing = ungranted(grant, settings);
-    if (missing.length) {
-      return skip(`${event}: preview hook of ${repo} not run: ${missing.join("; ")}`);
-    }
-    const image =
-      settings.preview.image ??
-      (await ctx.images.imageFor({ repo, ref: base, dockerfile: settings.dockerfile }));
-    await ctx.previews.run({ repo, event, payload, ref: base, hook: settings.preview, image });
   }
 
   function handle(req, res) {
@@ -485,110 +426,6 @@ export function createHttp(ctx, { dashboardDir }) {
     return web;
   }
 
-  // --- Egress: the proxy asks, for each connection, whether a sandbox may reach a host ----
-
-  // The running task whose sandbox has this address on its network. Addresses are
-  // looked up once per run, the first time its sandbox connects, and forgotten once it exits
-  // (runs.mjs finish()): Docker may give the address to another sandbox.
-  async function taskAt(ip) {
-    for (const task of tasks.values()) {
-      const live = task.live;
-      if (!live?.hosts) continue;
-      if (!live.ip) {
-        live.ip = await ctx.runner.address(task.name);
-        live.engineIp = await ctx.runner.engineAddress(task.name);
-      }
-      if (task.live === live && live.hosts && live.ip?.includes(ip)) return task;
-    }
-    return null;
-  }
-
-  // Only the proxy may ask: it is the one that knows the connection's source address. It is on
-  // every run's network, so its name may resolve to its address on any of them: the caller is
-  // compared with all of them (`docker inspect`).
-  async function fromProxy(req) {
-    const caller = req.socket.remoteAddress.replace(/^::ffff:/, "");
-    if ((await ctx.runner.proxyAddresses()).includes(caller)) return true;
-    return (await ctx.runner.proxyAddresses({ fresh: true })).includes(caller);
-  }
-
-  async function egressAnswer(req, res) {
-    const url = new URL(req.url, "http://broker");
-    const ip = url.searchParams.get("ip") ?? "";
-    const host = url.searchParams.get("host") ?? "";
-    if (!(await fromProxy(req))) {
-      return sendJson(res, { allowed: false }, 403);
-    }
-    const task = await taskAt(ip);
-    const live = task?.live;
-    // Its container engine's plain HTTP is cached too, but its HTTPS never decrypted: its
-    // builds and containers don't trust Deckhand's CA.
-    const engine = !!live?.engineIp?.includes(ip);
-    const answer = task
-      ? egressPolicy(host, live.hosts, live.trusted, live.cached, live.uncached ?? [], {
-          decrypt: !engine,
-        })
-      : { allowed: false, private: false, cache: false, decrypt: false };
-    if (!answer.allowed)
-      log(`Egress: refused ${host} for ${task ? taskKey(task.repo, task.id) : ip}`);
-    sendJson(res, answer);
-  }
-
-  // Sandboxes and the egress proxy only: compose.yaml doesn't publish this port. Egress
-  // answers, the token broker, the git gateway (git-gateway.mjs), ready for review
-  // (pr-ready.mjs) and the agents' API endpoints (anthropic.mjs, openai.mjs).
-  function listenBroker() {
-    const server = createServer((req, res) => {
-      if (req.method === "GET" && req.url.startsWith("/egress?")) {
-        return egressAnswer(req, res).catch((error) => {
-          log(`Egress: ${error.stack ?? error}`);
-          if (!res.headersSent) res.writeHead(500).end();
-        });
-      }
-      if (req.url.startsWith("/git/")) {
-        return ctx.gitGateway.handle(req, res).catch((error) => {
-          log(`Git gateway: ${error.stack ?? error}`);
-          if (!res.headersSent) res.writeHead(500).end();
-          else res.destroy();
-        });
-      }
-      if (req.url.startsWith("/anthropic/")) {
-        return ctx.anthropic.handle(req, res).catch((error) => {
-          log(`Anthropic: ${error.stack ?? error}`);
-          if (!res.headersSent) res.writeHead(500).end();
-          else res.destroy();
-        });
-      }
-      if (req.url.startsWith("/openai/")) {
-        return ctx.openai.handle(req, res).catch((error) => {
-          log(`OpenAI: ${error.stack ?? error}`);
-          if (!res.headersSent) res.writeHead(500).end();
-          else res.destroy();
-        });
-      }
-      if (req.url.startsWith("/pr/")) {
-        return ctx.prReady.handle(req, res).catch((error) => {
-          log(`Pull requests: ${error.stack ?? error}`);
-          if (!res.headersSent) res.writeHead(500).end();
-        });
-      }
-      ctx.broker.handle(req, res).catch((error) => {
-        log(`Broker: ${error.stack ?? error}`);
-        if (!res.headersSent) res.writeHead(500).end();
-      });
-    }).listen(config.brokerPort, () => {
-      // BROKER_PORT=0 (the tests): the OS picks a free port, and sandboxes are sent to that one.
-      if (!config.brokerPort) {
-        const url = new URL(config.brokerUrl);
-        url.port = server.address().port;
-        config.brokerUrl = url.href.replace(/\/$/, "");
-      }
-      config.brokerPort = server.address().port;
-      log(`Token broker on :${config.brokerPort}`);
-    });
-    return server;
-  }
-
   // The keys of the tasks on the dashboard, and of those with something live: the work area's
   // backlog leaves these out.
   const boardKeys = () => new Set(shownTasks().shown.map((t) => t.key));
@@ -601,5 +438,5 @@ export function createHttp(ctx, { dashboardDir }) {
   // A task as the dashboard has it (questions and all), or null.
   const taskOf = (key) => shownTasks().shown.find((t) => t.key === key) ?? null;
 
-  return { listen, listenBroker, admitting, boardKeys, liveKeys, taskOf };
+  return { listen, admitting, boardKeys, liveKeys, taskOf };
 }

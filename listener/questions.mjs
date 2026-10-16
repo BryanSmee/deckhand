@@ -3,10 +3,12 @@
 // answered). Inbox runs file their issues with that section (prompts/idea.md, bug.md), and a
 // hand-written issue can have one too. The questions themselves are parsed for the dashboard
 // (parseQuestions()), from an issue's section or a run's reply that stopped to ask; their
-// format is in ../prompts/sandbox.md. Pure, so tested on its own (../test/questions.test.mjs).
-import { hasLabel } from "./comments.mjs";
+// format is in ../prompts/sandbox.md. Pure, so tested on its own (../test/questions.test.mjs),
+// apart from applyInput(), which acts on what a delivery changes.
+import { hasLabel, labelFailed } from "./comments.mjs";
 import { repoAllowed } from "./config.mjs";
-import { MARKER, taskKey } from "./events.mjs";
+import { MARKER, saysMore, taskKey } from "./events.mjs";
+import { CONFIG_FILE, effectiveConfig } from "./repo-config.mjs";
 
 // Starts the final message of a run that stopped to ask the maintainer (../prompts/sandbox.md).
 export const NEEDS_INPUT = "<!-- needs-input -->";
@@ -219,4 +221,39 @@ export function inputEvent(config, event, p, bot) {
     default:
       return null;
   }
+}
+
+// Open questions in an issue, or an answer to them (inputEvent()): the needs-input label and
+// the dashboard's list of issues waiting for input (inputs.mjs). `ctx` (server.mjs): the
+// listener's state and services.
+export async function applyInput(ctx, change) {
+  const { config, log, skip } = ctx;
+  const { repo, key, number, title, base, label, by, track, questions: asked } = change;
+  if (title) ctx.titles.set(key, title);
+  if (label !== undefined && by) {
+    // The repo's own users narrow the operator's.
+    const { settings, errors } = await ctx.repoSettings(repo, base);
+    if (errors.length) return skip(`${key}: ${CONFIG_FILE} of ${repo} has errors`);
+    const seen = effectiveConfig(config, settings);
+    if (!seen.users.includes(by.toLowerCase())) {
+      return skip(`${key}: ${by} not among ${repo}'s users`);
+    }
+    // A trigger line alone answers nothing: the issue still waits (tasks.mjs holdBack()).
+    if (
+      settings.waitForAnswers &&
+      change.comment !== undefined &&
+      !saysMore(seen, change.comment)
+    ) {
+      return skip(`${key}: ${by}'s comment answers nothing, the label stays`);
+    }
+  }
+  if (label !== undefined) {
+    const res = await ctx.label(repo, number, label);
+    if (labelFailed(res)) return log(`${key}: label: ${res.status}`);
+    log(`${key}: ${label ? "open questions, labelled" : "answered, label removed"}`);
+  }
+  if (track !== undefined) ctx.inputs.set(key, track, asked);
+  else if (asked !== undefined) ctx.inputs.update(key, asked);
+  // Answered: a comment that waited for the answers starts (waits.mjs).
+  if (change.answered) await ctx.waits.answered(repo, number);
 }

@@ -15,6 +15,7 @@ import { createChatgptLogin } from "./chatgpt.mjs";
 import { createOpenAiProxy } from "./openai.mjs";
 import { planWarning } from "./upstream.mjs";
 import { createBroker } from "./broker.mjs";
+import { createBrokerHttp } from "./broker-http.mjs";
 import { createGitGateway } from "./git-gateway.mjs";
 import { createPrReady } from "./pr-ready.mjs";
 import { createBrainstorms, createIssueModes } from "./brainstorms.mjs";
@@ -49,6 +50,7 @@ import { createDockerRunner } from "./runner/docker.mjs";
 import { operatorSecrets } from "./secrets.mjs";
 import { createRuns } from "./runs.mjs";
 import { createSetup } from "./setup.mjs";
+import { createStatus } from "./status.mjs";
 import { createTasks } from "./tasks.mjs";
 import { createTitles } from "./titles.mjs";
 import { createWaits } from "./waits.mjs";
@@ -305,7 +307,7 @@ Object.assign(ctx, {
   // The issues whose session is in one of their repo's own modes.
   issueModes: createIssueModes(join(config.dataDir, "modes.json")),
 });
-Object.assign(ctx, createTasks(ctx), createRuns(ctx), createRestart(ctx));
+Object.assign(ctx, createStatus(ctx), createTasks(ctx), createRuns(ctx), createRestart(ctx));
 // Open pull requests of opted-in repos that conflict with their base get a rebase run.
 ctx.conflicts = createConflicts({
   path: join(config.dataDir, "conflicts.json"),
@@ -381,7 +383,7 @@ const http = createHttp(ctx, {
   dashboardDir: env.DASHBOARD_DIR || new URL("../dashboard/dist", import.meta.url).pathname,
 });
 http.listen();
-http.listenBroker();
+createBrokerHttp(ctx).listen();
 
 log(`Deckhand ${ctx.version}`);
 log(

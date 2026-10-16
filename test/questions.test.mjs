@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { loadConfig } from "../listener/config.mjs";
 import {
+  applyInput,
   hasOpenQuestions,
   inputEvent,
   parseQuestions,
@@ -318,4 +319,56 @@ test("an allowed user's comment on a labelled issue takes the label off; Deckhan
   assert.equal(pr.track, undefined);
   assert.equal(pr.title, null);
   assert.equal(pr.comment, undefined);
+});
+
+// The listener's state and services applyInput() touches, each call kept.
+function inputCtx(
+  settings = { users: ["alice", "bob"], trigger: "deckhand", waitForAnswers: true },
+) {
+  const calls = [];
+  const ctx = {
+    config,
+    log: (line) => calls.push(["log", line]),
+    skip: (why) => (calls.push(["skip", why]), null),
+    titles: { set: (key, title) => calls.push(["title", key, title]) },
+    repoSettings: async () => ({ settings, errors: [] }),
+    label: async (repo, number, on) => (calls.push(["label", number, on]), new Response(null)),
+    inputs: {
+      set: (key, track) => calls.push(["track", key, track]),
+      update: (key) => calls.push(["update", key]),
+    },
+    waits: { answered: async (repo, number) => calls.push(["answered", number]) },
+  };
+  return { ctx, calls };
+}
+
+test("applyInput: the label and the list follow the change, by the repo's own users", async () => {
+  const change = { repo: "org/repo", key: "org/repo#3", number: 3, base: "main", label: false };
+  const { ctx, calls } = inputCtx();
+  await applyInput(ctx, { ...change, by: "bob", track: false, comment: "Yes, Postgres." });
+  assert.deepEqual(
+    calls.filter(([what]) => what !== "log"),
+    [
+      ["label", 3, false],
+      ["track", "org/repo#3", false],
+    ],
+  );
+  // Not among the repo's users: nothing changes.
+  const narrow = inputCtx({ users: ["alice"], trigger: "deckhand", waitForAnswers: true });
+  await applyInput(narrow.ctx, { ...change, by: "bob", track: false, comment: "Yes." });
+  assert.deepEqual(
+    narrow.calls.map(([what]) => what),
+    ["skip"],
+  );
+  // A trigger line alone answers nothing while the repo waits for answers.
+  const trigger = inputCtx();
+  await applyInput(trigger.ctx, { ...change, by: "bob", track: false, comment: "Deckhand" });
+  assert.deepEqual(
+    trigger.calls.map(([what]) => what),
+    ["skip"],
+  );
+  // The label taken off by hand: whatever waited for the answers starts.
+  const off = inputCtx();
+  await applyInput(off.ctx, { ...change, label: undefined, track: false, answered: true });
+  assert.deepEqual(off.calls.at(-1), ["answered", 3]);
 });
