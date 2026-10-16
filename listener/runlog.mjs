@@ -1,10 +1,12 @@
 // Runs and their logs, for the dashboard: each run's log file (logs/<run>.log, its first line
-// the listener's, then the agent's raw output), the list rebuilt from them after a restart,
-// and the entries the dashboard shows for each line. The agent's lines are read through its
-// normalize() (agents/), so a log keeps what the agent wrote. Pure, apart from the log files.
+// the listener's, then the agent's raw output), its summary once it ended (logs/<run>.json),
+// the list rebuilt from them after a restart, and the entries the dashboard shows for each
+// line. The agent's lines are read through its normalize() (agents/), so a log keeps what the
+// agent wrote. Pure, apart from the log files.
 import {
   appendFileSync,
   closeSync,
+  existsSync,
   openSync,
   readdirSync,
   readFileSync,
@@ -14,6 +16,7 @@ import {
 import { join } from "node:path";
 import { agentFor } from "./agents/index.mjs";
 import { NEEDS_INPUT, replyQuestions } from "./questions.mjs";
+import { readJson, writeJsonAtomic } from "./store.mjs";
 
 // "ok", "needs-input" or "error" for an agent's `result` event (null: no result).
 export function outcome(result) {
@@ -43,13 +46,45 @@ export function openLog(path) {
   return { write: (text) => appendFileSync(path, text) };
 }
 
-// Rebuilds the list from the log files, so the dashboard survives a listener restart.
-// Newest first.
+// Rebuilds the list after a restart, so the dashboard survives it. From the runs' summaries:
+// a log is read in full (a few MB each) only when its run has none, from before summaries or
+// a listener that died mid-run, and then gets one, so the next start skips it. A run still
+// live (its .live.json, restart.mjs) gets its summary when it ends. Newest first.
 export function loadRuns(logDir) {
   return readdirSync(logDir)
     .filter((f) => f.endsWith(".log"))
-    .map((file) => runOf(logDir, file))
+    .map((file) => {
+      const id = file.slice(0, -4);
+      const logPath = join(logDir, file);
+      const saved = readJson(summaryPath(logPath));
+      if (saved?.id === id) return { ...saved, logPath };
+      const run = runOf(logDir, file);
+      if (!existsSync(join(logDir, `${id}.live.json`))) saveSummary(run);
+      return run;
+    })
     .sort((a, b) => b.startedAt - a.startedAt);
+}
+
+export const summaryPath = (logPath) => logPath.replace(/\.log$/, ".json");
+
+// What loadRuns() lists a finished run with. Written whole (store.mjs), so a crash damages no
+// summary; one that can't be written leaves its log to be read again at the next start.
+export function saveSummary(record, log = console.error) {
+  const { logPath, ...summary } = record;
+  try {
+    writeJsonAtomic(summaryPath(logPath), summary);
+  } catch (error) {
+    log(`${record.key}: saving the summary of ${record.id}: ${error.message}`);
+  }
+}
+
+// A new run, or one a restart picks up again (restart.mjs), in the list and its index by id.
+export function addRun(ctx, record) {
+  const known = ctx.runsById.get(record.id);
+  const at = known ? ctx.runs.indexOf(known) : -1;
+  if (at >= 0) ctx.runs[at] = record;
+  else ctx.runs.unshift(record);
+  ctx.runsById.set(record.id, record);
 }
 
 function runOf(logDir, file) {
@@ -93,10 +128,10 @@ function runOf(logDir, file) {
 }
 
 // A run as the dashboard gets it: without where its log is on disk, its questions (the task
-// carries those, board.mjs), the comments it ran on (their text is in its log) nor whether it
-// was light (its kind says it).
+// carries those, board.mjs), the comments it ran on (their text is in its log), whether it
+// was light (its kind says it), nor its screenshots' folder (history.mjs).
 export function publicRun(r) {
-  const { logPath, questions, items, light, ...rest } = r;
+  const { logPath, questions, items, light, shots, ...rest } = r;
   return rest;
 }
 

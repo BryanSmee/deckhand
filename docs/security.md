@@ -201,7 +201,8 @@ A sandbox only gets Docker named volumes:
 `<hash>` (10 hex digits of the repository and task) keeps apart names that would otherwise
 be the same, such as `acme/x` pull request 5 and `acme/x-pr` issue 5. Tasks whose session
 dates from before it (`<prefix>-<owner>-<repo>-<n>-claude` exists) keep that name and their
-volumes, but only when one of the task's own runs had that name (its log is in `logs/`):
+volumes, but only when one of the task's own runs had that name (its log is in `logs/`, so
+not once retention removed them all):
 otherwise a new task could take over the session and workspace of another repository's task
 whose old name is the same.
 
@@ -470,7 +471,9 @@ files holding secrets are the owner's only (`0600`):
 | `codex-auth.json`      | a ChatGPT plan's login, when `CODEX_AUTH_FILE` points there      |
 
 Run logs (`logs/<run>.log`) have the Claude credential and the run's secret redacted (see
-[The Claude credential](#the-claude-credential)).
+[The Claude credential](#the-claude-credential)). Their summaries (`logs/<run>.json`) hold
+what the log's first line does, the run's comments included, and its screenshots' folder.
+Both, and the screenshots, go after `LOG_RETENTION_DAYS` (90 by default).
 
 ## The dashboard's actions
 

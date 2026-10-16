@@ -60,6 +60,17 @@ test("waits check: every 5 minutes by default, never off, junk refused", () => {
   }
 });
 
+test("log retention: 90 days by default, 0 keeps everything, junk refused", () => {
+  const base = { ALLOWED_USERS: "alice" };
+  assert.equal(loadConfig(base).logRetentionDays, 90);
+  assert.equal(loadConfig({ ...base, LOG_RETENTION_DAYS: "0" }).logRetentionDays, 0);
+  assert.equal(loadConfig({ ...base, LOG_RETENTION_DAYS: "30" }).logRetentionDays, 30);
+  assert.equal(loadConfig({ ...base, LOG_RETENTION_DAYS: "" }).logRetentionDays, 90);
+  for (const bad of ["-1", "2.5", "forever"]) {
+    assert.throws(() => loadConfig({ ...base, LOG_RETENTION_DAYS: bad }), ConfigError);
+  }
+});
+
 test("conflict watcher floor: 5 minutes by default, 0 turns it off, junk refused", () => {
   const base = { ALLOWED_USERS: "alice" };
   assert.equal(loadConfig(base).conflictCheckMinutes, 5);

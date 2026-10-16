@@ -100,6 +100,7 @@ export const FILE_SETTINGS = {
   NEEDS_INPUT_LABEL: "scalar",
   CONFLICT_CHECK_MINUTES: "scalar",
   WAITS_CHECK_MINUTES: "scalar",
+  LOG_RETENTION_DAYS: "scalar",
   NAME_PREFIX: "scalar",
   CLAUDE_CODE_VOLUME: "scalar",
   CODEX_VOLUME: "scalar",
@@ -522,6 +523,8 @@ export function loadConfig(env, file = NO_FILE) {
     conflictCheckMinutes: number("CONFLICT_CHECK_MINUTES", 5, "a whole number of minutes (0: off)"),
     // How often every "/after" wait asks GitHub again (waits.mjs), for what no delivery said.
     waitsCheckMinutes: waitsCheck(from),
+    // How long a run's log, summary and screenshots are kept (history.mjs). 0: forever.
+    logRetentionDays: number("LOG_RETENTION_DAYS", 90, "a whole number of days (0: forever)"),
     // An issue proposing a .deckhand.yaml when the App is installed on a repo without one
     // (onboarding.mjs). "/mode onboarding" works either way.
     onboarding: !["off", "false", "0", "no"].includes(onboarding),

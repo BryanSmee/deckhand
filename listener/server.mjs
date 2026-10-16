@@ -31,6 +31,7 @@ import {
 } from "./github-app.mjs";
 import { grantErrors, loadGrants } from "./grants.mjs";
 import { createHttp } from "./http.mjs";
+import { createHistory } from "./history.mjs";
 import { createImages } from "./images.mjs";
 import { createInputs } from "./inputs.mjs";
 import { createOnboarding, createOnboardingStore } from "./onboarding.mjs";
@@ -97,13 +98,16 @@ const ctx = {
   app: null,
   // key ("org/repo#12") → task (tasks.mjs).
   tasks: new Map(),
-  // The dashboard's runs, newest first (runlog.mjs).
+  // The dashboard's runs, newest first (runlog.mjs), and by id; pruned daily (history.mjs).
   runs: loadRuns(logDir),
+  runsById: new Map(),
   // Runs with a sandbox, for the parallel cap.
   running: 0,
   // Set on SIGTERM: no run starts any more, what waits is saved for the next listener.
   stopping: false,
 };
+
+for (const run of ctx.runs) ctx.runsById.set(run.id, run);
 
 // --- GitHub ----------------------------------------------------------------------------
 
@@ -429,7 +433,7 @@ ctx.workApi = createWorkApi({
   taskOf: (key) => http.taskOf(key),
   label: (repo, number, on) => ctx.label(repo, number, on),
   inputs,
-  runOf: (id) => ctx.runs.find((r) => r.id === id) ?? null,
+  runOf: (id) => ctx.runsById.get(id) ?? null,
   publicUrl,
   log,
 });
@@ -475,6 +479,9 @@ ctx.reattach(restored).catch((error) => log(`Re-attaching: ${error.stack ?? erro
 const relinking = setInterval(ctx.relink, RELINK_MS);
 ctx.conflicts.start();
 ctx.waits.start();
+// After restoreRuns() and loadQueue(): what they bring back is kept.
+const history = createHistory(ctx);
+history.start();
 // Events the App's settings miss: without `issues`, open questions get no label.
 if (ctx.app) {
   checkAppEvents(ctx.app.asApp, log).catch((error) =>
@@ -497,6 +504,7 @@ process.on("SIGTERM", () => {
   ctx.stopping = true;
   ctx.conflicts.stop();
   ctx.waits.stop();
+  history.stop();
   clearInterval(relinking);
   log("Stopping: running sandboxes go on, the next listener picks them up");
   // Replies being posted and comments being admitted first, then what they leave.

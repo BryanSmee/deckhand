@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -11,6 +11,7 @@ import {
   loadRuns,
   outcome,
   publicRun,
+  saveSummary,
   stream,
   summaryOf,
 } from "../listener/runlog.mjs";
@@ -259,4 +260,59 @@ test("runs: the comments a run ran on come back from its log, for a rerun, not f
   assert.deepEqual(run.items, items);
   assert.equal(old.items, null);
   assert.equal("items" in publicRun(run), false);
+});
+
+test("runs: an older log without a summary is read once, then its summary is", () => {
+  const dir = mkdtempSync(join(tmpdir(), "deckhand-"));
+  const logPath = join(dir, "deckhand-org-repo-6-1000.log");
+  const meta = { type: "listener", key: "org/repo#6", repo: "org/repo", startedAt: 1000 };
+  writeFileSync(logPath, [line(meta), line({ type: "result", result: "Done." })].join("\n"));
+  const [first] = loadRuns(dir);
+  assert.equal(first.summary, "Done.");
+  const saved = JSON.parse(readFileSync(join(dir, "deckhand-org-repo-6-1000.json"), "utf8"));
+  assert.equal(saved.status, "ok");
+  assert.equal("logPath" in saved, false);
+  // The next start lists it from its summary: the log isn't read again.
+  writeFileSync(logPath, [line(meta), line({ type: "result", result: "Changed." })].join("\n"));
+  const [again] = loadRuns(dir);
+  assert.deepEqual(again, first);
+});
+
+test("runs: a live run gets no summary from its log, the one written when it ends wins", () => {
+  const dir = mkdtempSync(join(tmpdir(), "deckhand-"));
+  const id = "deckhand-org-repo-7-1000";
+  const logPath = join(dir, `${id}.log`);
+  writeFileSync(logPath, line({ type: "listener", key: "org/repo#7", startedAt: 1000 }));
+  writeFileSync(join(dir, `${id}.live.json`), "{}");
+  assert.equal(loadRuns(dir)[0].status, "interrupted");
+  assert.equal(existsSync(join(dir, `${id}.json`)), false);
+  const record = { id, key: "org/repo#7", startedAt: 1000, finishedAt: 5000, logPath };
+  saveSummary({ ...record, status: "ok", summary: "Done.", shots: "a".repeat(24) });
+  const [run] = loadRuns(dir);
+  assert.deepEqual(
+    [run.status, run.summary, run.finishedAt, run.logPath],
+    ["ok", "Done.", 5000, logPath],
+  );
+  assert.equal("shots" in publicRun(run), false);
+});
+
+// Thousands of runs whose logs are never opened: their summaries alone.
+test("runs: a few thousand runs with summaries load fast", () => {
+  const dir = mkdtempSync(join(tmpdir(), "deckhand-"));
+  const count = 3000;
+  const big = line({ type: "result", result: "x".repeat(20_000) });
+  for (let i = 0; i < count; i++) {
+    const id = `deckhand-org-repo-${i % 50}-${i}`;
+    const logPath = join(dir, `${id}.log`);
+    writeFileSync(logPath, big);
+    saveSummary({ id, key: `org/repo#${i % 50}`, startedAt: i, status: "ok", logPath });
+  }
+  const started = performance.now();
+  const runs = loadRuns(dir);
+  const ms = performance.now() - started;
+  assert.equal(runs.length, count);
+  assert.equal(runs[0].startedAt, count - 1);
+  // Read from their logs, they would have a summary.
+  assert.ok(runs.every((r) => r.summary === undefined));
+  assert.ok(ms < 3000, `${count} runs took ${Math.round(ms)} ms`);
 });

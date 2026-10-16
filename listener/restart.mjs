@@ -6,7 +6,7 @@ import { readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { agentFor } from "./agents/index.mjs";
 import { permissionsFor } from "./modes.mjs";
-import { openLog } from "./runlog.mjs";
+import { addRun, openLog, saveSummary } from "./runlog.mjs";
 import { readJson, writeJsonAtomic } from "./store.mjs";
 import { noLongerAllowed } from "./tasks.mjs";
 
@@ -177,10 +177,10 @@ export function createRestart(ctx) {
   function restoreRun(saved) {
     const key = `${saved.task.repo}#${saved.task.id}`;
     const logPath = join(ctx.logDir, `${saved.id}.log`);
-    const record = { ...saved.record, logPath, status: "running", finishedAt: null };
-    const known = ctx.runs.findIndex((r) => r.id === saved.id);
-    if (known >= 0) ctx.runs[known] = record;
-    else ctx.runs.unshift(record);
+    // State saved before records kept their screenshots' folder has it beside them.
+    const shots = saved.record.shots ?? saved.shots ?? null;
+    const record = { ...saved.record, shots, logPath, status: "running", finishedAt: null };
+    addRun(ctx, record);
     let task = tasks.get(key);
     if (!task) {
       task = { ...saved.task, pending: [], ready: false, timer: null, next: {} };
@@ -268,6 +268,7 @@ export function createRestart(ctx) {
     const live = task.live;
     live.record.status = "interrupted";
     live.record.finishedAt = Date.now();
+    saveSummary(live.record, log);
     ctx.broker.revoke(live.secret);
     await ctx.runner.remove(task.name, live.id);
     rmSync(livePath(live.id), { force: true });
