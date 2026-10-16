@@ -11,6 +11,7 @@
 // waits for it. A hook that starts something long-lived should run until it is done.
 import { createWriteStream, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
+import { labelArgs } from "./docker.mjs";
 import { grantFor, loadGrants, ungranted } from "./grants.mjs";
 import { CONFIG_FILE } from "./repo-config.mjs";
 
@@ -96,8 +97,7 @@ export function createPreviews({
         "-i",
         "--name",
         name,
-        "--label",
-        `deckhand.preview=${repo.toLowerCase()}`,
+        ...labelArgs({ "deckhand.preview": repo.toLowerCase() }),
         // Root: the socket belongs to root, and whoever holds it is root on the host anyway.
         "--user",
         "0",

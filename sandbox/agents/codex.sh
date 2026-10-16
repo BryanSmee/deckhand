@@ -28,13 +28,7 @@ codex_toml() {
 # Installed by the listener before the run, like Claude Code (claude.sh).
 agent_check() {
   local bin=/opt/codex/$CODEX_VERSION/node_modules/.bin
-  if [ ! -x "$bin/codex" ]; then
-    echo "Codex $CODEX_VERSION is not installed in /opt/codex. The listener installs it" \
-      "before a run; by hand, run deckhand-install-codex as root (docker run --user 0" \
-      "--entrypoint deckhand-install-codex -e CODEX_VERSION=$CODEX_VERSION" \
-      "-v <volume>:/opt/codex <image>)." >&2
-    exit 1
-  fi
+  [ -x "$bin/codex" ] || agent_missing Codex CODEX_VERSION /opt/codex deckhand-install-codex
   export PATH=$bin:$PATH
   codex_home
 }

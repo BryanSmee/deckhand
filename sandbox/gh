@@ -39,9 +39,7 @@ if [[ ! $url =~ ^https?://[^/]+/([^/]+)/([^/]+)/pull/([0-9]+)$ ]]; then
   exit 1
 fi
 path="pr/${BASH_REMATCH[1]}/${BASH_REMATCH[2]}/${BASH_REMATCH[3]}/$action"
-# The secret goes through a header file on stdin, so it never shows in `ps`.
-answer=$(curl -sS --max-time 60 --fail-with-body -X POST -H @- "$DECKHAND_BROKER_URL/$path" \
-  <<< "Authorization: Bearer ${DECKHAND_RUN_SECRET:-}")
+answer=$(deckhand-broker "$path" -sS --max-time 60 --fail-with-body -X POST)
 status=$?
 message=$(jq -r '.message // .error // empty' <<< "$answer" 2> /dev/null)
 if [ "$status" -ne 0 ]; then

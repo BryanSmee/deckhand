@@ -1,0 +1,20 @@
+#!/bin/bash
+# Installs an npm package at one version into an agent's shared volume, for its installer
+# (agents/<name>/install, run as root): npm-install <volume> <package> <version> <bin> <name>.
+# Nothing if that version's <bin> is already there.
+#
+# One folder per version, installed aside then renamed, so two installs at once can't leave
+# a half-installed copy behind.
+set -euo pipefail
+
+root=$1 package=$2 version=$3 bin=$4 name=$5
+umask 022
+home=$root/$version
+[ -x "$home/node_modules/.bin/$bin" ] && exit 0
+tmp=$(mktemp -d "$root/.install-XXXXXX")
+chmod 755 "$tmp"
+npm install --prefix "$tmp" --no-fund --no-audit --loglevel=error \
+  "$package@$version" > "/tmp/$bin-install.log" 2>&1 ||
+  { cat "/tmp/$bin-install.log" >&2; rm -rf "$tmp"; exit 1; }
+mv -T "$tmp" "$home" 2> /dev/null || rm -rf "$tmp" # another install got there first
+echo "$name $version installed" >&2

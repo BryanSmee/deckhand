@@ -5,7 +5,4 @@
 set -euo pipefail
 : "${DECKHAND_BROKER_URL:?not a Deckhand run: no broker}"
 : "${DECKHAND_RUN_SECRET:?not a Deckhand run: no run secret}"
-# The secret goes through a header file on stdin, so it never shows in `ps`.
-curl -fsS --max-time 30 --retry 2 \
-  -H @- "$DECKHAND_BROKER_URL/token" <<< "Authorization: Bearer $DECKHAND_RUN_SECRET" |
-  jq -er .token
+deckhand-broker token -fsS --max-time 30 --retry 2 | jq -er .token

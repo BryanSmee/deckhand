@@ -7,8 +7,7 @@
 // is checked against the broker and swapped for the credential, in the same header, and the
 // request goes on to Anthropic; the answer streams back as it comes. The secret dies with the
 // run. Served on the broker's port, which only the runs' networks reach.
-import { baseOf, forward, forwarded } from "./upstream.mjs";
-import { sendJson } from "./web.mjs";
+import { baseOf, createApiProxy } from "./upstream.mjs";
 
 // Claude Code's own order: a bearer token (a gateway's), then an API key, then an OAuth token.
 export const CREDENTIALS = ["ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"];
@@ -24,14 +23,16 @@ function secretOf(req) {
   return scheme === "Bearer" ? value : req.headers["x-api-key"];
 }
 
-// Anthropic's API under /v1, nothing else: no "//host", "https://host", "\\host" or ".." that
-// would send the credential to another host, or out of a gateway's base path.
+// Anthropic's API under /v1, nothing else (createApiProxy()).
 const API_PATH = /^\/anthropic\/(v1(?:\/[A-Za-z0-9_-]+)+)$/;
 
 // Errors in Anthropic's shape, so Claude Code shows them as such.
-function fail(res, status, type, message) {
-  sendJson(res, { type: "error", error: { type, message: `Deckhand: ${message}` } }, status);
-}
+const ERRORS = {
+  body: (type, message) => ({ type: "error", error: { type, message } }),
+  auth: "authentication_error",
+  unavailable: "api_error",
+  notFound: "not_found_error",
+};
 
 export function createAnthropicProxy({
   broker, // broker.mjs: the run a secret belongs to
@@ -44,44 +45,39 @@ export function createAnthropicProxy({
   log = () => {},
 }) {
   const own = { name, credential, upstream };
+  // Anthropic (or the operator's gateway) unless the broker gives the run another provider.
+  const providerOf = (run) => (run.provider && run.provider !== "anthropic" ? run.provider : null);
+  const settingsOf = (run) => {
+    const provider = providerOf(run);
+    return provider ? (providers[provider] ?? {}) : own;
+  };
 
-  async function handle(req, res) {
-    const path = API_PATH.exec(req.url.split("?")[0])?.[1];
-    const run = broker.runOf(secretOf(req));
-    if (!run) return fail(res, 401, "authentication_error", "unknown or finished run");
-    const provider = run.provider && run.provider !== "anthropic" ? run.provider : null;
-    const { name, credential, upstream } = provider ? (providers[provider] ?? {}) : own;
-    if (!name || !credential) {
-      return fail(
-        res,
-        503,
-        "api_error",
-        provider
-          ? `the operator set no credential for ${provider}`
-          : "the operator set no Claude credential",
-      );
-    }
-    const base = baseOf(upstream);
-    if (!path) return fail(res, 404, "not_found_error", "not an Anthropic API path");
-    // /anthropic/v1/messages?beta=true → <upstream>/v1/messages?beta=true
-    const target = new URL(base.href + path + new URL(req.url, "http://broker").search);
-    if (target.origin !== base.origin || !target.pathname.startsWith(base.pathname)) {
-      return fail(res, 404, "not_found_error", "not an Anthropic API path");
-    }
-    const headers = forwarded(req.headers, ["authorization", "x-api-key"]);
-    if (name === "ANTHROPIC_API_KEY") headers["x-api-key"] = credential;
-    else headers.authorization = `Bearer ${credential}`;
-
-    const what = provider ?? "Anthropic";
-    await forward(req, res, {
-      target,
-      headers,
-      unreachable: () => fail(res, 502, "api_error", `${what} can't be reached`),
-      log,
-      what,
-      answered: (status) => (run.apiStatus = status),
-    });
-  }
-
-  return { handle };
+  return createApiProxy({
+    broker,
+    pathRe: API_PATH,
+    errorShape: ERRORS,
+    notApi: "not an Anthropic API path",
+    secretOf,
+    routeOf: (run) => {
+      const provider = providerOf(run);
+      const { name, credential, upstream } = settingsOf(run);
+      if (!name || !credential) {
+        return {
+          missing: provider
+            ? `the operator set no credential for ${provider}`
+            : "the operator set no Claude credential",
+        };
+      }
+      return { base: baseOf(upstream), what: provider ?? "Anthropic" };
+    },
+    drop: ["authorization", "x-api-key"],
+    // In the header Claude Code sent the secret in.
+    authHeaders: async (run) => {
+      const { name, credential } = settingsOf(run);
+      return name === "ANTHROPIC_API_KEY"
+        ? { "x-api-key": credential }
+        : { authorization: `Bearer ${credential}` };
+    },
+    log,
+  });
 }

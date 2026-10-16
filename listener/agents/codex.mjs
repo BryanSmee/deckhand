@@ -3,13 +3,12 @@
 // one line of its own with the turn's outcome (`deckhand.result`): Codex's JSONL has no
 // event that holds both the last message and whether the turn worked.
 import { OPENAI_CREDENTIALS } from "../openai.mjs";
+import { EFFORTS, installSpec, normalizer } from "./common.mjs";
 
 // Deckhand's model tiers → the pinned Codex's own catalog (`codex` lists it as best: frontier,
 // balanced: the default workhorse, fast: for easier tasks). The operator can point them
 // elsewhere (CODEX_BEST_MODEL…, config.codexModels), for another CODEX_VERSION say.
 const MODELS = { best: "gpt-6-astra", balanced: "gpt-6.1-sol", fast: "gpt-6-luna" };
-// Codex's reasoning efforts are Deckhand's.
-const EFFORTS = { low: "low", medium: "medium", high: "high", xhigh: "xhigh", max: "max" };
 
 // "/bin/bash -lc 'npm test'" → "npm test": how Codex runs every command.
 function commandOf(command = "") {
@@ -78,15 +77,12 @@ const CLAUDE_MODEL = /^(opus|sonnet|haiku)(\[.*\])?$|^claude[-.]/i;
 export const codex = {
   name: "codex",
   displayName: "Codex",
-  // Installed per version into a shared, root-owned volume (images.installAgent()), mounted
-  // read-only in sandboxes.
-  install: (config) => ({
-    volume: config.codexVolume,
-    mount: "/opt/codex",
-    version: config.codexVersion,
-    versionVar: "CODEX_VERSION",
-    command: "deckhand-install-codex",
-  }),
+  install: (config) =>
+    installSpec("codex", {
+      volume: config.codexVolume,
+      version: config.codexVersion,
+      versionVar: "CODEX_VERSION",
+    }),
   // The run's secret as its key, and the listener (openai.mjs) as its provider.
   env: (config, secret) => ({
     OPENAI_API_KEY: secret,
@@ -104,18 +100,11 @@ export const codex = {
   // next run, which resumes the session (tasks.mjs, deliverable()).
   takesMessages: false,
   models: (config = {}) => ({ ...MODELS, ...config.codexModels }),
+  // Codex's reasoning efforts are Deckhand's.
   efforts: EFFORTS,
   modelProblem: (model) =>
     CLAUDE_MODEL.test(model) ? `\`${model}\` is a Claude model, not one of Codex's` : null,
   // One line of its output → Deckhand's events: started, text, tool{name, detail},
-  // toolOutput{text, error}, result{ok, text, durationMs}. Lines that aren't its JSON give none.
-  normalize(line) {
-    let e;
-    try {
-      e = JSON.parse(line);
-    } catch {
-      return [];
-    }
-    return e && Object.hasOwn(EVENTS, e.type) ? EVENTS[e.type](e) : [];
-  },
+  // toolOutput{text, error}, result{ok, text, durationMs}.
+  normalize: normalizer(EVENTS),
 };

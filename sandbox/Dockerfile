@@ -8,7 +8,8 @@
 #
 # No agent is in the image: each installs per version into a shared volume before the first
 # run that needs it (Claude Code: agents/claude/install puts the pinned CLAUDE_CODE_VERSION
-# into the /opt/claude-code volume; Codex: agents/codex/install, CODEX_VERSION, /opt/codex).
+# into the /opt/claude-code volume; Codex: agents/codex/install, CODEX_VERSION, /opt/codex;
+# both through agents/npm-install).
 # One image for every agent: what is an agent's own is in agents/<name>.sh and
 # agents/<name>/, copied to /usr/local/share/deckhand-agents. GitHub
 # access goes through the listener's token broker (git-credential-deckhand, the gh wrapper):
@@ -52,7 +53,8 @@ RUN npm install -g @playwright/mcp@0.0.82 \
     && chmod -R a+rX /ms-playwright
 
 # Git over HTTPS with the broker's tokens; gh through its wrapper, ahead of /usr/bin/gh.
-COPY sandbox/deckhand-token sandbox/git-credential-deckhand sandbox/gh /usr/local/bin/
+COPY sandbox/deckhand-broker sandbox/deckhand-token sandbox/git-credential-deckhand sandbox/gh \
+    /usr/local/bin/
 RUN git config --system credential.helper deckhand \
     && git config --system credential.useHttpPath false
 
@@ -67,9 +69,10 @@ COPY sandbox/agents/ /usr/local/share/deckhand-agents/
 
 # Claude Code's: pre-accepted onboarding, workspace trust and bypass mode (nobody is there to
 # click), its installer, and its hooks: managed settings, because ~/.claude is a per-issue
-# volume that would keep an old copy of a settings.json forever.
+# volume that would keep an old copy of a settings.json forever. The installers are links to
+# their copy in deckhand-agents, where they find the npm-install they share.
 COPY --chown=node:node sandbox/agents/claude/home/ /home/node/.claude/
-COPY sandbox/agents/claude/install /usr/local/bin/deckhand-install-claude-code
+RUN ln -s /usr/local/share/deckhand-agents/claude/install /usr/local/bin/deckhand-install-claude-code
 COPY sandbox/agents/claude/managed-settings.json /etc/claude-code/managed-settings.json
 # /opt/claude-code: a new volume mounted there takes this owner, root: the listener installs
 # Claude Code as root and sandboxes mount it read-only (../docs/security.md).
@@ -78,7 +81,7 @@ RUN install -d -o node -g node /workspace && install -d /opt/claude-code
 # Codex's: its installer. Its home (/home/node/.codex, the issue's session volume) gets its
 # config and hooks from agents/codex.sh on every start; a new volume mounted there takes the
 # owner of this folder, node. /opt/codex: root's, like /opt/claude-code.
-COPY sandbox/agents/codex/install /usr/local/bin/deckhand-install-codex
+RUN ln -s /usr/local/share/deckhand-agents/codex/install /usr/local/bin/deckhand-install-codex
 RUN install -d -o node -g node /home/node/.codex && install -d /opt/codex
 
 # Run as `node` (uid 1000): Claude Code refuses --dangerously-skip-permissions as root anyway.

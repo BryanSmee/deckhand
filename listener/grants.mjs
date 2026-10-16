@@ -27,6 +27,7 @@
 import { readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { join, posix } from "node:path";
 import { ConfigError, parseLimits } from "./config.mjs";
+import { hardening, limitArgs } from "./docker.mjs";
 import { hostProblem } from "./egress.mjs";
 import { PLAIN_PATH, RESERVED } from "./repo-config.mjs";
 import { isMap, parseYaml } from "./yaml.mjs";
@@ -536,12 +537,7 @@ export function mountArgs(mounts) {
   ]);
 }
 
-// No capabilities, no privilege gain through setuid binaries, and the repo's limits (no swap
-// beyond its memory).
+// No capabilities, no privilege gain through setuid binaries, and the repo's limits.
 export function hardeningArgs(limits) {
-  return [
-    ...["--cap-drop", "ALL", "--security-opt", "no-new-privileges"],
-    ...["--cpus", limits.cpus, "--memory", limits.memory, "--memory-swap", limits.memory],
-    ...["--pids-limit", String(limits.pids)],
-  ];
+  return [...hardening(), ...limitArgs(limits)];
 }

@@ -7,7 +7,7 @@
 // `<sha256>.json` (status, headers, stored at, last used, size). Each file is written to a
 // temporary one and renamed into place, so an interrupted download leaves nothing behind.
 // Over `max` bytes in all, the least recently used entries go. No dependencies.
-import { createHash, randomBytes } from "node:crypto";
+import { createHash } from "node:crypto";
 import {
   createWriteStream,
   mkdirSync,
@@ -16,8 +16,9 @@ import {
   statSync,
   unlinkSync,
 } from "node:fs";
-import { open, readFile, rename, unlink, writeFile } from "node:fs/promises";
+import { open, readFile, rename, unlink } from "node:fs/promises";
 import { join } from "node:path";
+import { atomicWrite, tempPath } from "./atomic.mjs";
 
 export const DEFAULT_MAX = 10 * 1024 ** 3;
 export const DEFAULT_ENTRY_MAX = 1024 ** 3;
@@ -151,7 +152,6 @@ export function createCache({
   const limit = Math.min(entryMax, max);
   const bodyPath = (key) => join(dir, `${key}.body`);
   const metaPath = (key) => join(dir, `${key}.json`);
-  const temp = () => join(dir, `tmp-${randomBytes(8).toString("hex")}`);
 
   const drop = (key) => {
     const entry = index.get(key);
@@ -180,11 +180,7 @@ export function createCache({
     }
   }
 
-  async function writeMeta(key, meta) {
-    const path = temp();
-    await writeFile(path, JSON.stringify(meta));
-    await rename(path, metaPath(key));
-  }
+  const writeMeta = (key, meta) => atomicWrite(metaPath(key), JSON.stringify(meta));
 
   // What a previous proxy left: complete entries only.
   function load() {
@@ -294,7 +290,7 @@ export function createCache({
     // dropped), then commit() once complete (`expected`: its Content-Length, checked), or
     // abort().
     writer(key, { url, status, headers }) {
-      const path = temp();
+      const path = tempPath(dir);
       const stream = createWriteStream(path, { flags: "wx" });
       let size = 0;
       let done = false;

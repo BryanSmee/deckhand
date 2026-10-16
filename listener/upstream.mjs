@@ -3,6 +3,7 @@
 // answer streams back as it comes.
 import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
+import { sendJson } from "./web.mjs";
 
 // Plans' credentials (`claude setup-token`, `codex login`): logged at start, as the operator
 // is responsible for how they are used, and a plan's terms may not cover a team's bot.
@@ -74,4 +75,72 @@ export function forward(
     });
     req.pipe(out);
   });
+}
+
+// A provider's endpoint: each call's run from its secret, then where it goes and with which
+// credential, then on to the provider. What differs between providers:
+//
+//   pathRe       the API paths a sandbox may call, the path under the base URL its first group:
+//                no "//host", "https://host", "\\host" or ".." that would send the credential to
+//                another host, or out of a base URL's path
+//   errorShape   { body(type, message), auth, unavailable, notFound }: errors in the
+//                provider's shape and its types for each, so the agent shows them as such
+//   notApi       what a refused path says
+//   secretOf     req → the run's secret, from whichever header the agent sent it in
+//   routeOf      run → { base, what, missing }: the provider's base URL (baseOf()), its name in
+//                messages, and why the operator's credential is missing, if it is
+//   drop         request headers the listener sets rather than the sandbox
+//   authHeaders  async (run) → the credential's headers; an error with a `status` (what a
+//                fallback reads) refuses the call
+//   answered     (run, status, headers): the provider's status, once it answers
+export function createApiProxy({
+  broker, // broker.mjs: the run a secret belongs to
+  pathRe,
+  errorShape,
+  notApi,
+  secretOf,
+  routeOf,
+  drop,
+  authHeaders,
+  answered = () => {},
+  log = () => {},
+}) {
+  const fail = (res, status, type, message) =>
+    sendJson(res, errorShape.body(type, `Deckhand: ${message}`), status);
+
+  async function handle(req, res) {
+    const url = new URL(req.url, "http://broker");
+    const run = broker.runOf(secretOf(req));
+    if (!run) return fail(res, 401, errorShape.auth, "unknown or finished run");
+    const { base, what, missing } = routeOf(run);
+    if (missing) return fail(res, 503, errorShape.unavailable, missing);
+    const path = pathRe.exec(req.url.split("?")[0])?.[1];
+    if (!path) return fail(res, 404, errorShape.notFound, notApi);
+    // /openai/responses?x=1 → <base>/responses?x=1
+    const target = new URL(base.href + path + url.search);
+    if (target.origin !== base.origin || !target.pathname.startsWith(base.pathname)) {
+      return fail(res, 404, errorShape.notFound, notApi);
+    }
+    const headers = forwarded(req.headers, drop);
+    try {
+      Object.assign(headers, await authHeaders(run));
+    } catch (error) {
+      log(`${what}: ${error.message}`);
+      run.apiStatus = error.status ?? 502;
+      return fail(res, 503, errorShape.unavailable, error.message);
+    }
+    await forward(req, res, {
+      target,
+      headers,
+      unreachable: () => fail(res, 502, errorShape.unavailable, `${what} can't be reached`),
+      log,
+      what,
+      answered: (status) => {
+        run.apiStatus = status;
+        answered(run, status, headers);
+      },
+    });
+  }
+
+  return { handle };
 }

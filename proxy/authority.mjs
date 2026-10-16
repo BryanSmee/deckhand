@@ -12,6 +12,7 @@ import { mkdirSync } from "node:fs";
 import { chmod, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { isIP } from "node:net";
 import { join } from "node:path";
+import { atomicWrite, tempPath } from "./atomic.mjs";
 
 const DAY = 24 * 3600 * 1000;
 export const CA_DAYS = 3650;
@@ -61,7 +62,7 @@ export function createAuthority({ dir, openssl = runOpenssl, now = Date.now, log
   const caKey = join(dir, "ca.key");
   const caCrt = join(dir, "ca.crt");
   const hostsDir = join(dir, "hosts");
-  const temp = (name) => join(dir, `tmp-${randomBytes(8).toString("hex")}-${name}`);
+  const temp = (name) => tempPath(dir, name);
   let ca = null; // { pem, x509 }
   const hosts = new Map(); // host → { key, cert, until }
   const making = new Map(); // host → its promise, so concurrent CONNECTs make one
@@ -147,9 +148,7 @@ export function createAuthority({ dir, openssl = runOpenssl, now = Date.now, log
       const entry = { key: await readFile(key, "utf8"), cert: await readFile(crt, "utf8") };
       entry.until = issued(entry.cert);
       if (!entry.until) throw new Error(`the certificate made for ${host} doesn't verify`);
-      const file = temp("host.pem");
-      await writeFile(file, entry.key + entry.cert, { mode: 0o600 });
-      await rename(file, path);
+      await atomicWrite(path, entry.key + entry.cert, { dir, name: "host.pem", mode: 0o600 });
       return entry;
     } finally {
       await Promise.all([config, key, crt].map((p) => rm(p, { force: true })));

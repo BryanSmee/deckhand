@@ -34,17 +34,11 @@ if [ -n "${SANDBOX_FALLBACK_MODEL:-}" ] && [ "$SANDBOX_FALLBACK_MODEL" != "${SAN
   claude_fallback=(--fallback-model "$SANDBOX_FALLBACK_MODEL")
 fi
 
-# Installed by the listener before the run. The volume is read-only here, so a sandbox
-# started by hand can't install it: say so rather than fail later on a missing command.
+# Installed by the listener before the run (entrypoint.sh's agent_missing says how otherwise).
 agent_check() {
   local bin=/opt/claude-code/$CLAUDE_CODE_VERSION/node_modules/.bin
-  if [ ! -x "$bin/claude" ]; then
-    echo "Claude Code $CLAUDE_CODE_VERSION is not installed in /opt/claude-code. The listener" \
-      "installs it before a run; by hand, run deckhand-install-claude-code as root" \
-      "(docker run --user 0 --entrypoint deckhand-install-claude-code" \
-      "-e CLAUDE_CODE_VERSION=$CLAUDE_CODE_VERSION -v <volume>:/opt/claude-code <image>)." >&2
-    exit 1
-  fi
+  [ -x "$bin/claude" ] ||
+    agent_missing "Claude Code" CLAUDE_CODE_VERSION /opt/claude-code deckhand-install-claude-code
   export PATH=$bin:$PATH
 }
 

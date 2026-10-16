@@ -10,6 +10,8 @@
 //            host setup, but seccomp and AppArmor unconfined, /dev/fuse and /dev/net/tun
 //   auto     sysbox where the host's Docker has its runtime, else podman
 
+import { limitArgs } from "../docker.mjs";
+
 // SANDBOX_ENGINE's values; empty: no engine for anyone.
 export const ENGINES = ["sysbox", "podman", "auto"];
 
@@ -48,8 +50,7 @@ export function engineArgs(backend, { volume, limits }) {
         ];
   return [
     ...own,
-    ...["--cpus", limits.cpus, "--memory", limits.memory, "--memory-swap", limits.memory],
-    ...["--pids-limit", String(limits.pids)],
+    ...limitArgs(limits),
     "--mount",
     `type=volume,src=${volume},dst=${STORAGE[backend]}`,
   ];
