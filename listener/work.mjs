@@ -27,6 +27,13 @@
 //   POST /api/repos/<owner>/<repo>/inbox  { kind: "idea" | "bug", text }
 //                                         an entry for the repo's inbox: the App's comment on
 //                                         its inbox issue, and the run a comment there starts
+//   GET  /api/repos/<owner>/<repo>/analyze?count=&kinds=a,b&outcomes=c,d
+//                                         what an analysis of these runs would read: how many
+//                                         match, the digest's size and tokens, the kinds there
+//   POST /api/repos/<owner>/<repo>/analyze { count, kinds, outcomes }
+//                                         a run analysis (analysis.mjs): a new issue labelled
+//                                         `analysis`, and a run in the `analyze` mode on it
+import { DEFAULT_RUNS, MAX_RUNS, OUTCOMES, checkSelection, createAnalysis } from "./analysis.mjs";
 import { MAX_TEXT, Refused, answersComment, parseAnswers, refuse } from "./answers.mjs";
 import { inboxItem } from "./events.mjs";
 import { parseQuestions, questionsSection } from "./questions.mjs";
@@ -44,6 +51,16 @@ const MAX_ANSWER_BODY = 4 * MAX_TEXT;
 const ACTIONS = ["start", "queue", "dequeue", "stop", "cancel"];
 // An inbox entry's kind, and the repo config's key for its issue.
 const INBOXES = { idea: "ideas", bug: "bugs" };
+// The label of run analyses' issues.
+export const ANALYSIS_LABEL = "analysis";
+// How an analysis's issue names each outcome.
+const OUTCOME_NAMES = {
+  ok: "successes",
+  error: "errors",
+  "needs-input": "needs-input",
+  interrupted: "interrupted",
+  cancelled: "cancelled",
+};
 
 const send = (res, status, value) => sendJson(res, value, status);
 
@@ -103,7 +120,7 @@ export function leadsTo(get, repo, from, to) {
 // also fills (seedInputs()).
 // `runOf(id)`: a run's record (runs.mjs, with the comments it ran on), or null.
 // `cancel(key, user)`: stops the task's run or drops its queued comments (runs.mjs cancel()):
-// "running", "queued" or null.
+// "running", "queued" or null. `analysis`: run digests (analysis.mjs createAnalysis()).
 export function createWorkApi({
   config,
   github,
@@ -119,6 +136,7 @@ export function createWorkApi({
   inputs = { set() {}, has: () => false },
   runOf = () => null,
   cancel = () => null,
+  analysis = createAnalysis({ runs: () => [] }),
   publicUrl = () => null,
   now = Date.now,
   log = () => {},
@@ -592,6 +610,77 @@ export function createWorkApi({
     return { message: `Sent to #${number}.`, url: posted.html_url, task: `${repo}#${number}` };
   }
 
+  // A run analysis: the runs it reads, picked now among the repo's (never another's), in an
+  // issue of its own that stays as its record, then the run on it. The run reads a digest of
+  // them (runs.mjs analysisDigest()); it changes nothing, and its reply is the report.
+  async function startAnalysis(repo, user, selection) {
+    const { settings, base } = await checkedRepo(repo, user);
+    const runs = analysis.select(repo, selection);
+    if (!runs.length) refuse(409, `No run of ${repo} matches: pick other kinds or outcomes.`);
+    const ids = runs.map((r) => r.id);
+    const { count, kinds, outcomes } = selection;
+    const every = outcomes.length === OUTCOMES.length;
+    const title = `Run analysis: last ${runs.length} run${runs.length === 1 ? "" : "s"}${every ? "" : ` (${outcomes.map((o) => OUTCOME_NAMES[o]).join(", ")})`}`;
+    const text = [
+      `- Kinds: ${kinds.join(", ")}`,
+      `- Outcomes: ${outcomes.join(", ")}`,
+      `- Runs (${runs.length}${runs.length < count ? `, of ${count} asked for` : ""}, newest first): ${ids.join(", ")}`,
+    ].join("\n");
+    const body = `Asked for from the dashboard by @${user}: what would make the runs of ${repo} faster and more reliable.\n\n${text}\n\nDeckhand reads a digest of these runs (not their raw logs) and replies here with its findings. It changes no code: file what you want of them.`;
+    // Already there is fine (422): only its colour and description are ours.
+    const label = await github(
+      repo,
+      "POST",
+      `/repos/${repo}/labels`,
+      { name: ANALYSIS_LABEL, color: "c5def5", description: "A Deckhand analysis of past runs" },
+      [422],
+    );
+    if (!label.ok && label.status !== 422)
+      log(`${repo}: the ${ANALYSIS_LABEL} label: ${label.status}`);
+    const res = await github(
+      repo,
+      "POST",
+      `/repos/${repo}/issues`,
+      { title, body, labels: [ANALYSIS_LABEL] },
+      [410],
+    );
+    if (res.status === 410) refuse(409, `${repo} has issues turned off: an analysis needs one.`);
+    if (!res.ok) throw new Error(`GitHub POST an issue: ${res.status}`);
+    const issue = await res.json();
+    await accept({
+      ...itemOf(repo, issue, "work", user, base, settings),
+      trigger: "analyze",
+      modeLine: null,
+      text,
+      comment: null,
+      analysis: { runs: ids, count, kinds, outcomes },
+    });
+    return {
+      message: `Analysis of ${runs.length} run${runs.length === 1 ? "" : "s"} started on #${issue.number}.`,
+      url: issue.html_url,
+      number: issue.number,
+      task: `${repo}#${issue.number}`,
+    };
+  }
+
+  // The form's preview: the same checks, then what the selection would read. Empty kinds or
+  // outcomes are no error here: the form starts with none, and learns the kinds there are.
+  async function previewAnalysis(req, res, user, repo) {
+    const query = new URL(req.url, "http://localhost").searchParams;
+    const list = (name) => (query.get(name) ?? "").split(",").filter(Boolean);
+    const selection = checkSelection(
+      {
+        count: query.has("count") ? Number(query.get("count")) : DEFAULT_RUNS,
+        kinds: list("kinds"),
+        outcomes: list("outcomes"),
+      },
+      (message) => refuse(400, message),
+      { empty: true },
+    );
+    await checkedRepo(repo, user);
+    send(res, 200, { ...analysis.preview(repo, selection), max: MAX_RUNS });
+  }
+
   // The request's body; one over `limit` bytes is refused as it is.
   async function bodyOf(req, limit) {
     try {
@@ -648,29 +737,49 @@ export function createWorkApi({
     send(res, 200, await sendToInbox(repo, user, { kind, text }));
   }
 
-  const POSTS = { work, answer: answers, rerun: reruns, inbox };
+  async function analyze(req, res, user, repo) {
+    let body;
+    try {
+      body = JSON.parse(await bodyOf(req, MAX_BODY));
+    } catch (error) {
+      if (error instanceof Refused) throw error;
+      refuse(400, "Not JSON.");
+    }
+    const selection = checkSelection(body, (message) => refuse(400, message));
+    log(`Work area: ${user} analyzes ${selection.count} run(s) of ${repo}`);
+    send(res, 200, await startAnalysis(repo, user, selection));
+  }
 
-  // Handles /api/repos/<owner>/<repo>/issues, /work, /answer, /rerun and /inbox; false for any other
-  // path.
+  const POSTS = { work, answer: answers, rerun: reruns, inbox, analyze };
+  const GETS = {
+    issues: (req, res, user, repo) => backlog(res, repo, user),
+    analyze: previewAnalysis,
+  };
+
+  // Handles /api/repos/<owner>/<repo>/issues, /work, /answer, /rerun, /inbox and /analyze;
+  // false for any other path.
   function handle(req, res, user) {
     const { pathname } = new URL(req.url, "http://localhost");
-    const one = /^\/api\/repos\/([\w.-]+)\/([\w.-]+)\/(issues|work|answer|rerun|inbox)$/.exec(
-      pathname,
-    );
+    const one =
+      /^\/api\/repos\/([\w.-]+)\/([\w.-]+)\/(issues|work|answer|rerun|inbox|analyze)$/.exec(
+        pathname,
+      );
     if (!one) return false;
     const repo = `${one[1]}/${one[2]}`;
-    const post = one[3] !== "issues";
+    const what = one[3];
     const run = async () => {
-      if (post && req.method !== "POST") return send(res, 405, { error: "POST only." });
-      if (!post && req.method !== "GET") return send(res, 405, { error: "GET only." });
+      const methods = [POSTS[what] && "POST", GETS[what] && "GET"].filter(Boolean);
+      if (!methods.includes(req.method)) {
+        return send(res, 405, { error: `${methods.join(" or ")} only.` });
+      }
       if (!user) return send(res, 401, { error: "Sign in first." });
       if (!allowed(repo)) return send(res, 404, { error: `${repo} is not in ALLOWED_REPOS.` });
-      if (!post) return backlog(res, repo, user);
+      if (req.method === "GET") return GETS[what](req, res, user, repo);
       if (!sameOrigin(req, publicUrl())) {
         log(`Work area: refused for ${user}: Origin ${req.headers.origin ?? "missing"}`);
         return send(res, 403, { error: "Not from this dashboard." });
       }
-      return POSTS[one[3]](req, res, user, repo);
+      return POSTS[what](req, res, user, repo);
     };
     run().catch((error) => {
       if (error instanceof Refused) {

@@ -471,6 +471,18 @@ test("start with the egress proxy's CA: in the inbox folder, read-only, as DECKH
   assert.equal(existsSync(join(other.inboxDir, "dh-b-1", "egress-ca.crt")), false);
 });
 
+test("start with a run digest: in the inbox folder, read-only, as TASK_DIGEST", async () => {
+  const { r, calls, inboxDir } = runner();
+  await r.start({ run: "dh-a-1", name: "dh-a", image: "i", digest: "# Run digest\n" });
+  assert.equal(readFileSync(join(inboxDir, "dh-a-1", "digest.md"), "utf8"), "# Run digest\n");
+  const { args } = calls.find((c) => c.args[0] === "run");
+  assert.match(args.join(" "), /-e TASK_DIGEST=\/deckhand\/digest\.md /);
+  const other = runner();
+  await other.r.start({ run: "dh-b-1", name: "dh-b", image: "i" });
+  assert.doesNotMatch(other.calls.find((c) => c.args[0] === "run").args.join(" "), /TASK_DIGEST/);
+  assert.equal(existsSync(join(other.inboxDir, "dh-b-1", "digest.md")), false);
+});
+
 test("remove: the sandbox, then its network, once the listener and the proxy leave it", async () => {
   const { r, nets, containers } = runner();
   await r.start({ run: "dh-a-1", name: "dh-a", image: "i" });

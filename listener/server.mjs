@@ -8,6 +8,8 @@
 // ../docs/architecture.md. No dependencies: node:http, node:crypto, docker CLI.
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
+import { AGENT_SECRETS } from "./agents/index.mjs";
+import { createAnalysis } from "./analysis.mjs";
 import { createAuth, sessionKey } from "./auth.mjs";
 import { createAnthropicProxy } from "./anthropic.mjs";
 import { createChatgptLogin } from "./chatgpt.mjs";
@@ -418,6 +420,16 @@ ctx.repoApi = createRepoApi({
   log,
 });
 
+// Run analyses (the dashboard's Analyze): digests of a repo's past runs, without the secrets
+// their logs must never carry.
+ctx.analysis = createAnalysis({
+  runs: () => ctx.runs,
+  secrets: () => [
+    ...AGENT_SECRETS.map((name) => process.env[name]),
+    ...(ctx.openai?.secrets() ?? []),
+  ],
+});
+
 // The graph's work area: the backlog, starting or queueing issues by dragging them, and the
 // answers to open questions sent from a task's page.
 ctx.workApi = createWorkApi({
@@ -435,6 +447,7 @@ ctx.workApi = createWorkApi({
   inputs,
   runOf: (id) => ctx.runsById.get(id) ?? null,
   cancel: (key, user) => ctx.cancel(key, user),
+  analysis: ctx.analysis,
   publicUrl,
   log,
 });

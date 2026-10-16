@@ -1,10 +1,14 @@
 // The listener's API: api/state polled, a run's log streamed (server-sent events), the
 // repositories listed, onboarded and their config read, the graph's backlog and its actions,
-// answers to open questions, a failed run again or a run stopped, feedback and discussions.
+// answers to open questions, a failed run again or a run stopped, feedback and discussions,
+// run analyses.
 // Relative URLs, like the assets: the page works under any path.
 import { useEffect, useRef, useState } from "preact/hooks";
 import type { Pending } from "./graph";
 import type {
+  AnalysisPreview,
+  AnalysisResult,
+  AnalysisSelection,
   Answers,
   AnswersThen,
   Backlog,
@@ -392,6 +396,41 @@ export async function sendToInbox(repo: string, entry: InboxEntry): Promise<Inbo
       body: JSON.stringify(entry),
     });
     return await answer<InboxResult>(res);
+  } catch (e) {
+    return { error: message(e) };
+  }
+}
+
+// What an analysis of these runs would read (api/repos/<repo>/analyze), or why it can't.
+export async function previewAnalysis(
+  repo: string,
+  { count, kinds, outcomes }: AnalysisSelection,
+): Promise<AnalysisPreview> {
+  const query = new URLSearchParams({
+    count: String(count),
+    kinds: kinds.join(","),
+    outcomes: outcomes.join(","),
+  });
+  try {
+    const res = await fetch(`api/repos/${repo}/analyze?${query}`, { cache: "no-store" });
+    return await answer<AnalysisPreview>(res);
+  } catch (e) {
+    return { error: message(e) };
+  }
+}
+
+// A run analysis: its new issue and task, or why it was refused.
+export async function startAnalysis(
+  repo: string,
+  selection: AnalysisSelection,
+): Promise<AnalysisResult> {
+  try {
+    const res = await fetch(`api/repos/${repo}/analyze`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(selection),
+    });
+    return await answer<AnalysisResult>(res);
   } catch (e) {
     return { error: message(e) };
   }

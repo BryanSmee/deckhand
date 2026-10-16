@@ -282,8 +282,9 @@ export function createTasks(ctx) {
   // line picks the mode, with or without a trigger line; without either, a comment goes on in
   // the issue's current mode. Keeps the issue's brainstorm and mode state up to date.
   async function modeOf(item, key, name) {
-    // The inbox issue or the discussion category is the trigger (workItem()).
-    if (INBOX.has(item.trigger)) return item.trigger;
+    // The inbox issue or the discussion category is the trigger (workItem()), or the
+    // dashboard's Analyze (work.mjs analyze()), which no comment can ask for.
+    if (INBOX.has(item.trigger) || item.trigger === "analyze") return item.trigger;
     if (item.trigger === "stop") return stopBrainstorm(item, key);
     let wanted = item.trigger;
     if (item.modeLine) {

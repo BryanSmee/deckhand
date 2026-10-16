@@ -387,3 +387,35 @@ export interface Thread {
   more: number;
   readAt: number;
 }
+
+// A run's outcome, as an analysis picks them (listener/analysis.mjs OUTCOMES).
+export type Outcome = "ok" | "error" | "needs-input" | "interrupted" | "cancelled";
+
+// POST api/repos/<owner>/<repo>/analyze, and the preview's query (GET, the same path): the
+// `count` newest finished runs of these kinds (`taskMode`) and outcomes.
+export interface AnalysisSelection {
+  count: number;
+  kinds: string[];
+  outcomes: Outcome[];
+}
+
+// GET api/repos/<owner>/<repo>/analyze: what the selection would read. `runs`: the ids that
+// match, newest first; `included` of them fit in the digest, `left` don't; `tokens`: about
+// what the digest costs to read; `kinds`: those of the repo's finished runs; `max`: the
+// largest `count`.
+export interface AnalysisPreview extends WorkResult {
+  runs?: string[];
+  included?: number;
+  left?: number;
+  bytes?: number;
+  tokens?: number;
+  kinds?: string[];
+  max?: number;
+}
+
+// What the POST answers: the analysis's issue and its task.
+export interface AnalysisResult extends WorkResult {
+  url?: string;
+  number?: number;
+  task?: string;
+}

@@ -61,7 +61,8 @@ sandbox/      base image: Dockerfile, entrypoint.sh, draft-pr.sh, pre-push, git 
               helper and gh wrapper; agents/<name>.sh and agents/<name>/ (Claude Code's
               flags, installer, settings, hooks, progress.jq)
 prompts/      sandbox.md (generic rules), idea.md, bug.md, discussion.md, brainstorm.md,
-              onboarding.md (followed by docs/repo-config.md, copied into the image)
+              analyze.md, onboarding.md (followed by docs/repo-config.md, copied into the
+              image)
 proxy/        egress proxy for sandboxes
 engine/       container engine sidecar images (dockerd for Sysbox, podman/ for Podman)
 compose.yaml  what an operator runs (publishes a port; no reverse-proxy labels)

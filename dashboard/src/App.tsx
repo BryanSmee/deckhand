@@ -4,6 +4,7 @@
 // What is shown lives in the address (route.ts); the state chip and the graph's "Show closed"
 // are kept on this device.
 import { useEffect, useState } from "preact/hooks";
+import { AnalyzeDialog, analysisRepos } from "./Analyze";
 import { type RepoList, useAppState, useRepos } from "./api";
 import { Detail } from "./Detail";
 import { Graph } from "./Graph";
@@ -94,6 +95,8 @@ export function Dashboard({ state, error, repos, refresh }: Props) {
   const [showClosed, setShowClosed] = useState(() => stored("graphClosed") === "1");
   // The Feedback dialog: an idea or a bug report for a repo's inbox.
   const [inbox, setInbox] = useState(false);
+  // The Analyze dialog: a run that reviews a repo's recent runs.
+  const [analyze, setAnalyze] = useState(false);
   const wide = useWide();
   const tasks = state?.tasks ?? [];
   const now = state?.now ?? Date.now();
@@ -190,6 +193,18 @@ export function Dashboard({ state, error, repos, refresh }: Props) {
               Feedback
             </button>
           )}
+          {state && (
+            <button
+              type="button"
+              class={styles.link}
+              aria-haspopup="dialog"
+              aria-expanded={analyze}
+              title="A run that reviews a repository's recent runs and suggests how to make them faster and more reliable"
+              onClick={() => setAnalyze(true)}
+            >
+              Analyze
+            </button>
+          )}
         </nav>
         {notify.permission === "default" && (
           <button
@@ -214,6 +229,15 @@ export function Dashboard({ state, error, repos, refresh }: Props) {
           tasks={tasks}
           repo={route.repo}
           onClose={() => setInbox(false)}
+          onSent={() => void refresh?.()}
+        />
+      )}
+      {analyze && state && (
+        <AnalyzeDialog
+          repos={analysisRepos(state.inboxes, tasks)}
+          tasks={tasks}
+          repo={route.repo}
+          onClose={() => setAnalyze(false)}
           onSent={() => void refresh?.()}
         />
       )}

@@ -28,10 +28,11 @@ export const PLAIN_PATH = /^\/[\w./@+-]*$/;
 
 // The listener's own modes: a repo's `modes:` can't take these names, and any other mode is
 // one of the repo's own (modes.mjs). Work, brainstorm and onboarding (proposing this file,
-// onboarding.mjs) are the ones "/mode" picks; the others come from the inbox, discussions
-// and "/stop". The dashboard has a copy (format.ts), checked by a test.
+// onboarding.mjs) are the ones "/mode" picks; the others come from the inbox, discussions,
+// "/stop" and the dashboard's Analyze (analysis.mjs). The dashboard has a copy (format.ts),
+// checked by a test.
 const PICKED_MODES = ["work", "brainstorm", "onboarding"];
-export const RESERVED_MODES = [...PICKED_MODES, "stop", "idea", "bug", "discussion"];
+export const RESERVED_MODES = [...PICKED_MODES, "stop", "idea", "bug", "discussion", "analyze"];
 const MODE_KEYS = ["instructions", "light", "session", "agent", "model", "effort"];
 
 // What a repo gets without a config file: the operator's settings as they are.
