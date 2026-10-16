@@ -152,3 +152,84 @@ test("OpenAI out of reach: a 502 in OpenAI's error shape", async (t) => {
   assert.equal(res.status, 502);
   assert.match((await res.json()).error.message, /OpenAI can't be reached/);
 });
+
+// With a ChatGPT plan's login (chatgpt.mjs) instead of a key.
+async function servePlan(t, login) {
+  const upstream = await fakeOpenAi(t);
+  const broker = createBroker({ app: () => null });
+  const proxy = createOpenAiProxy({
+    broker,
+    credential: null,
+    login,
+    upstream: "http://127.0.0.1:1/v1",
+    chatgptUrl: `${upstream.url}/backend-api/codex`,
+  });
+  const server = createServer((req, res) => proxy.handle(req, res));
+  const url = await listen(server);
+  t.after(() => server.close());
+  return { url, broker, upstream };
+}
+
+test("a plan's login: the call goes to ChatGPT's Codex backend with its headers", async (t) => {
+  const refused = [];
+  const login = {
+    headers: async () => ({ authorization: "Bearer plan-access", "chatgpt-account-id": "acct-1" }),
+    refused: (authorization) => refused.push(authorization),
+  };
+  const { url, broker, upstream } = await servePlan(t, login);
+  upstream.release();
+  const secret = broker.register("org/repo");
+  const res = await ask(url, {
+    authorization: `Bearer ${secret}`,
+    // The sandbox can't pick another workspace of the account.
+    "chatgpt-account-id": "acct-other",
+    "x-openai-fedramp": "true",
+  });
+  assert.equal(res.status, 200);
+  await res.text();
+  const [call] = upstream.requests;
+  assert.equal(call.url, "/backend-api/codex/responses");
+  assert.equal(call.headers.authorization, "Bearer plan-access");
+  assert.equal(call.headers["chatgpt-account-id"], "acct-1");
+  assert.equal(call.headers["x-openai-fedramp"], undefined);
+  assert.equal(call.headers.originator, "codex_exec");
+  assert.deepEqual(refused, []);
+});
+
+test("a plan's login the backend refuses is marked, for a refresh before the next call", async (t) => {
+  const refused = [];
+  const login = {
+    headers: async () => ({ authorization: "Bearer plan-access" }),
+    refused: (authorization) => refused.push(authorization),
+  };
+  const upstream = createServer((req, res) => {
+    res.writeHead(401, { "content-type": "application/json" });
+    res.end('{"error":{"message":"token expired"}}');
+  });
+  const upstreamUrl = await listen(upstream);
+  t.after(() => upstream.close());
+  const broker = createBroker({ app: () => null });
+  const proxy = createOpenAiProxy({ broker, login, chatgptUrl: `${upstreamUrl}/codex` });
+  const server = createServer((req, res) => proxy.handle(req, res));
+  const url = await listen(server);
+  t.after(() => server.close());
+  const secret = broker.register("org/repo");
+  const res = await ask(url, { authorization: `Bearer ${secret}` });
+  assert.equal(res.status, 401);
+  assert.deepEqual(refused, ["Bearer plan-access"]);
+  assert.equal(broker.runOf(secret).apiStatus, 401);
+});
+
+test("a plan's login that can't be used: a 503, and its status for fallbacks", async (t) => {
+  const spent = Object.assign(new Error("the ChatGPT login can't be refreshed (401)"), {
+    status: 401,
+  });
+  const login = { headers: async () => Promise.reject(spent), refused: () => {} };
+  const { url, broker, upstream } = await servePlan(t, login);
+  const secret = broker.register("org/repo");
+  const res = await ask(url, { authorization: `Bearer ${secret}` });
+  assert.equal(res.status, 503);
+  assert.match((await res.json()).error.message, /^Deckhand: the ChatGPT login can't be refreshed/);
+  assert.equal(broker.runOf(secret).apiStatus, 401);
+  assert.equal(upstream.requests.length, 0);
+});

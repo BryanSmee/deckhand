@@ -762,7 +762,11 @@ export function createRuns(ctx) {
   // A line of the sandbox's output without the secrets it must not publish (secrets.mjs):
   // what is stored is what the dashboard shows, and the result is what gets posted.
   function hidden(live, line) {
-    return redact(line, [live.secret, ...AGENT_SECRETS.map((name) => process.env[name])]);
+    return redact(line, [
+      live.secret,
+      ...AGENT_SECRETS.map((name) => process.env[name]),
+      ...(ctx.openai?.secrets() ?? []),
+    ]);
   }
 
   function output(task, raw) {

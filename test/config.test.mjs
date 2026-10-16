@@ -380,7 +380,7 @@ test("agents: an unknown one, or Codex without its key, stops the listener", () 
   );
   assert.throws(
     () => loadConfig({ ALLOWED_USERS: "a", SANDBOX_AGENT: "codex" }),
-    /SANDBOX_AGENT is codex, which needs OPENAI_API_KEY in the environment/,
+    /SANDBOX_AGENT is codex, which needs OPENAI_API_KEY or CODEX_AUTH_FILE in the environment/,
   );
   assert.throws(
     () => loadConfig({}, file("allowed_users: [a]\nbrainstorm_agent: codex")),
@@ -395,6 +395,20 @@ test("agents: an unknown one, or Codex without its key, stops the listener", () 
     () => loadConfig({ ALLOWED_USERS: "a", OPENAI_BASE_URL: "api.openai.com" }),
     /OPENAI_BASE_URL: expected an http\(s\) URL/,
   );
+});
+
+test("Codex: an API key, else a ChatGPT plan's login (CODEX_AUTH_FILE), environment only", () => {
+  const plan = loadConfig({
+    ALLOWED_USERS: "a",
+    SANDBOX_AGENT: "codex",
+    CODEX_AUTH_FILE: "/data/a.json",
+  });
+  assert.equal(plan.openaiCredential, "CODEX_AUTH_FILE");
+  assert.deepEqual(plan.agents, ["codex"]);
+  const both = loadConfig({ ALLOWED_USERS: "a", OPENAI_API_KEY: "k", CODEX_AUTH_FILE: "/a.json" });
+  assert.equal(both.openaiCredential, "OPENAI_API_KEY");
+  assert.equal(loadConfig({ ALLOWED_USERS: "a" }).openaiCredential, null);
+  assert.throws(() => file("codex_auth_file: /data/a.json"), /codex_auth_file: a secret/);
 });
 
 test("FALLBACKS: none by default; agent@provider entries in order, each with its credential", () => {

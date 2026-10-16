@@ -155,6 +155,27 @@ call to OpenAI (or the operator's `OPENAI_BASE_URL`), under its base path only: 
 credentials are redacted
 from every run's log and reply, whichever agent ran.
 
+A ChatGPT plan's login (`CODEX_AUTH_FILE`, `listener/chatgpt.mjs`) takes the key's place the
+same way, with more reason: its refresh token is account-wide, single-use and rotated on every
+refresh, so copies in several sandboxes would also spend each other's. The listener holds the
+only copy: it refreshes the access token at `auth.openai.com` (one refresh at a time, for all
+runs), writes the rotated tokens back to the file (`0600`) before using them, and sends the
+sandboxes' calls to ChatGPT's Codex backend (`chatgpt.com/backend-api/codex`) with the access
+token and the account's `ChatGPT-Account-ID`, headers a sandbox can't set itself. A sandbox
+gets the run's secret as its key, as with an API key, and nothing of the login. The tokens are
+redacted from runs' output too.
+
+Why this way, checked against Codex 0.162.1 (`codex-rs/login`, `model-provider`): with a
+ChatGPT login, Codex calls `chatgpt.com/backend-api/codex/responses` with
+`Authorization: Bearer <access token>` and `ChatGPT-Account-ID`, the same Responses requests
+as with a key (`store: false`, streamed), and refreshes at
+`auth.openai.com/oauth/token` 5 minutes before the access token expires. A custom provider
+(the sandbox's `deckhand` one) sends those requests with the run's secret instead, so the
+listener only has to swap the headers and the base URL; Codex in the sandbox never knows it
+runs on a plan. Codex's own "external tokens" mode (`chatgptAuthTokens`) only exists in its
+app server, not `codex exec`, and would still put the access token in the sandbox. Check it
+again when you change `CODEX_VERSION`.
+
 `OPENROUTER_API_KEY`, for runs that fall back to Claude Code through OpenRouter
 (`claude@openrouter` in `FALLBACKS`), is kept out the same way: such a run's Claude Code gets
 the run's secret as `ANTHROPIC_AUTH_TOKEN`, and the listener's Anthropic endpoint, which the
@@ -441,6 +462,7 @@ files holding secrets are the owner's only (`0600`):
 | `logs/<run>.live.json` | a running run's state, with its secret (gone once it is over)    |
 | `queue.json`           | comments queued when the listener stopped, with their authors    |
 | `waits.json`           | comments waiting for other issues (`/after`), with their authors |
+| `codex-auth.json`      | a ChatGPT plan's login, when `CODEX_AUTH_FILE` points there      |
 
 Run logs (`logs/<run>.log`) have the Claude credential and the run's secret redacted (see
 [The Claude credential](#the-claude-credential)).

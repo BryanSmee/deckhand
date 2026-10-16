@@ -9,8 +9,10 @@
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { createAuth, sessionKey } from "./auth.mjs";
-import { createAnthropicProxy, planWarning } from "./anthropic.mjs";
+import { createAnthropicProxy } from "./anthropic.mjs";
+import { createChatgptLogin } from "./chatgpt.mjs";
 import { createOpenAiProxy } from "./openai.mjs";
+import { planWarning } from "./upstream.mjs";
 import { createBroker } from "./broker.mjs";
 import { createGitGateway } from "./git-gateway.mjs";
 import { createPrReady } from "./pr-ready.mjs";
@@ -313,10 +315,15 @@ ctx.anthropic = createAnthropicProxy({
   },
   log,
 });
-// Their Codex's, likewise.
+// Their Codex's, likewise: with a ChatGPT plan's login, the listener holds and refreshes it.
+const chatgptLogin =
+  config.openaiCredential === "CODEX_AUTH_FILE"
+    ? createChatgptLogin({ file: env.CODEX_AUTH_FILE, log })
+    : null;
 ctx.openai = createOpenAiProxy({
   broker: ctx.broker,
-  credential: config.openaiCredential && env[config.openaiCredential],
+  credential: config.openaiCredential === "OPENAI_API_KEY" ? env.OPENAI_API_KEY : null,
+  login: chatgptLogin,
   upstream: config.openaiUrl,
   log,
 });
@@ -410,8 +417,15 @@ log(`Deckhand ${ctx.version}`);
 log(
   `Agents: ${config.agent} for work, ${config.brainstormAgent} for light runs; repos may pick ${config.agents.join(", ")}${config.fallbacks.length ? `; on provider errors, falls back to ${config.fallbacks.join(", ")}` : ""}`,
 );
-const plan = planWarning(config.claudeCredential);
-if (plan) log(plan);
+for (const name of [config.claudeCredential, config.openaiCredential]) {
+  const plan = planWarning(name);
+  if (plan) log(plan);
+}
+// Read (and refreshed if due) now, so a missing or spent login shows before a run needs it.
+chatgptLogin
+  ?.headers()
+  .then(() => log(`Codex: a ChatGPT plan's login, from ${env.CODEX_AUTH_FILE}`))
+  .catch((error) => log(`Codex: ${error.message}`));
 if (!ctx.app) log(`No GitHub App yet. Set it up at ${setup.link()}`);
 
 // Before any request is served: runs still going since the previous listener, then what it

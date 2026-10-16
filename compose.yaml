@@ -60,6 +60,9 @@ services:
       ANTHROPIC_DEFAULT_HAIKU_MODEL: ${ANTHROPIC_DEFAULT_HAIKU_MODEL:-}
       # Codex's OpenAI API key (docs/setup.md#codex), kept out of sandboxes the same way.
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      # Or a ChatGPT plan's login (docs/setup.md#with-a-chatgpt-plan): its auth.json in the
+      # data volume, /data/codex-auth.json say, which the listener alone holds and refreshes.
+      CODEX_AUTH_FILE: ${CODEX_AUTH_FILE:-}
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
       # OpenRouter's key, for claude@openrouter in FALLBACKS (docs/setup.md#fallbacks), and
       # where a run goes when its provider fails (or fallbacks in config.yaml).
