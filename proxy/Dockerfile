@@ -5,7 +5,8 @@ FROM node:26-alpine
 # Deckhand's CA and its host certificates (authority.mjs): Node can't make certificates.
 RUN apk add --no-cache openssl
 WORKDIR /app
-COPY proxy/proxy.mjs proxy/cache.mjs proxy/authority.mjs proxy/
+COPY proxy/proxy.mjs proxy/addresses.mjs proxy/cached.mjs proxy/cache.mjs proxy/authority.mjs \
+  proxy/atomic.mjs proxy/
 # The egress cache's folder, the node user's: a new volume mounted there takes its owner. The
 # CA lives in it too (ca/).
 RUN mkdir /cache && chown node:node /cache
