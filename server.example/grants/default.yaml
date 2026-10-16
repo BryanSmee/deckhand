@@ -6,6 +6,10 @@
 # patterns starting with "*".
 # hosts: [pypi.org]
 
+# Of the hosts they may reach, those whose answers the egress proxy keeps for every run,
+# HTTPS too: public mirrors downloaded from again and again (docs/setup.md#download-cache).
+# cached_hosts: [deb.debian.org, dl-cdn.alpinelinux.org]
+
 # The yes-or-no grants, all false by default; a repository's own file overrides each one.
 # allow_dockerfile: false
 

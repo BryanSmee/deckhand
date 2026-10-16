@@ -4,6 +4,8 @@
 
 # Reachable by its sandboxes, besides default.yaml's: the registries and APIs it needs.
 # hosts: ["*.example.com", registry.npmjs.org]
+# Of those, the ones whose answers the egress proxy keeps, besides default.yaml's.
+# cached_hosts: [registry.npmjs.org]
 # Its .deckhand.yaml's `dockerfile` is built on the host's Docker.
 # allow_dockerfile: true
 # Its .deckhand.yaml's `preview` hook runs, with the Docker socket: root on the host.
