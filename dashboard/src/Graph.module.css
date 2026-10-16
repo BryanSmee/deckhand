@@ -57,14 +57,19 @@
   font-size: 12px;
 }
 
-/* Each look: a fill, its border and its text. Needs input and ready for review are both
-   orange: an outline for the one, filled for the other. */
+/* Each look: a fill, its border and its text. Needs input, a brainstorm's turn and ready for
+   review are all orange: softly filled with a "?" badge, an outline, filled. */
 .idle {
   --fill: var(--idle-soft);
   --stroke: var(--idle);
   --text: var(--ink);
 }
 .input {
+  --fill: var(--accent-soft);
+  --stroke: var(--accent);
+  --text: var(--ink);
+}
+.talk {
   --fill: transparent;
   --stroke: var(--accent);
   --text: var(--ink);
@@ -98,7 +103,7 @@
   --text: var(--ink);
 }
 
-.node.pending rect {
+.node.pending > rect {
   stroke-dasharray: 5 3;
 }
 
@@ -129,15 +134,28 @@
   stroke-width: 1.5px;
 }
 
-.node.input rect {
+.node.input rect,
+.node.talk rect {
   stroke-width: 2px;
+}
+
+/* "?" and the open question count, where a pending node's spinner goes. */
+.node .badge rect {
+  fill: var(--accent);
+  stroke: none;
+}
+
+.node .badge text {
+  fill: var(--panel);
+  font-size: 11px;
+  font-weight: 700;
 }
 
 .node text {
   fill: var(--text);
 }
 
-.node:hover rect {
+.node:hover > rect {
   stroke-width: 2.5px;
 }
 
@@ -145,7 +163,7 @@
   outline: none;
 }
 
-.node:focus-visible rect {
+.node:focus-visible > rect {
   stroke: var(--ink);
   stroke-width: 2.5px;
 }
@@ -260,7 +278,7 @@
 }
 
 /* The issue a drop would queue after. */
-.node.target rect {
+.node.target > rect {
   stroke: var(--accent);
   stroke-width: 3px;
   stroke-dasharray: 5 3;
@@ -332,6 +350,23 @@
 .asks b {
   color: var(--ink);
   font-size: 1rem;
+}
+
+.details {
+  align-self: flex-start;
+  margin-top: 0.25rem;
+  color: var(--accent);
+  font-size: 0.8rem;
+}
+
+/* What the answers sent from a node's click said. */
+.said {
+  margin: 0 0 1rem;
+  padding: 0.4rem 0.6rem;
+  border-radius: 6px;
+  background: var(--ok-soft);
+  color: var(--ink);
+  font-size: 0.8rem;
 }
 
 @media (max-width: 760px) {
