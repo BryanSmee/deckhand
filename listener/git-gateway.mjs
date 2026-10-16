@@ -101,11 +101,6 @@ export function commandReader(limit = MAX_COMMANDS) {
   return { push };
 }
 
-// The ref updates of a whole buffer (commandReader()): null while it is too short.
-export function readCommands(buffer) {
-  return commandReader(Infinity).push(buffer);
-}
-
 function pkt(data) {
   const body = Buffer.from(data);
   return Buffer.concat([Buffer.from((body.length + 4).toString(16).padStart(4, "0")), body]);

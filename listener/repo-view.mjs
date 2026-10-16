@@ -30,7 +30,7 @@ const UNKNOWN = "depends on the operator's grants, which have errors";
 // The settings a run reads, as rows of the panel's table. What the repo asks for that only a
 // grant allows (ungranted()) is refused: it stops every run. `known`: false when `grant` is a
 // stand-in for grants that have errors, so what it lacks is unknown rather than refused.
-export function settingRows(config, settings, grant, known = true) {
+function settingRows(config, settings, grant, known = true) {
   const base = defaultSettings(config);
   const changed = (field) => !same(settings[field], base[field]);
   const missing = ungranted(grant, settings);
@@ -160,7 +160,7 @@ function previewText(preview) {
 
 // Every host its sandboxes may reach, each with the file that grants it: the operator's grants
 // folder is the only place hosts are listed (operatorHosts()).
-export function hostRows(config, grant) {
+function hostRows(config, grant) {
   const rows = [];
   const seen = new Set();
   const add = (host, note) => {
@@ -175,7 +175,7 @@ export function hostRows(config, grant) {
 
 // The repo's mount requests, each resolved as a run resolves it (a refused one stops runs).
 // `grant`: null when the grants have errors, so no mount root is known.
-export function mountRows(settings, grant, fs = {}) {
+function mountRows(settings, grant, fs = {}) {
   return settings.mounts.map((request) => {
     if (!grant) {
       return { path: request.path, source: "unknown", readOnly: request.readOnly, note: UNKNOWN };
@@ -201,7 +201,7 @@ export function mountRows(settings, grant, fs = {}) {
 }
 
 // What the operator grants the repo, as the panel shows it, with the files it comes from.
-export function grantRows(grant) {
+function grantRows(grant) {
   return {
     files: grant.files,
     allowPreview: grant.allowPreview,

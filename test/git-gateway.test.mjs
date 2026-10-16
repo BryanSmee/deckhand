@@ -13,7 +13,6 @@ import {
   commandReader,
   createGitGateway,
   MAX_COMMANDS,
-  readCommands,
   refusal,
   rejection,
 } from "../listener/git-gateway.mjs";
@@ -25,6 +24,9 @@ const B = "b".repeat(40);
 function pkt(line) {
   return (line.length + 4).toString(16).padStart(4, "0") + line;
 }
+
+// The ref updates of a whole buffer: null while it is too short.
+const readCommands = (buffer) => commandReader(Infinity).push(buffer);
 
 test("the ref updates of a push are read up to the flush", () => {
   const head = Buffer.from(

@@ -10,7 +10,7 @@ import { refuse } from "./web.mjs";
 // GitHub keeps 65536 characters of a comment (comments.mjs cuts longer ones): answers stay
 // well under, with room for the questions' titles.
 export const MAX_TEXT = 20_000;
-export const MAX_QUESTIONS = 50;
+const MAX_QUESTIONS = 50;
 
 const text = (s) => typeof s === "string" && s.length <= MAX_TEXT;
 

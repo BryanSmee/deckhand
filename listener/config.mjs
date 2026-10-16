@@ -119,7 +119,7 @@ export const FILE_SETTINGS = {
 
 // Settings that moved to the grants folder (grants.mjs), and where: ignoring one would quietly
 // take hosts away or change every sandbox's limits.
-export const MOVED_TO_GRANTS = {
+const MOVED_TO_GRANTS = {
   ALLOWED_HOSTS: "hosts in grants/default.yaml",
   SANDBOX_CPUS: "limits.cpus in grants/default.yaml",
   SANDBOX_MEMORY: "limits.memory in grants/default.yaml",
@@ -127,7 +127,7 @@ export const MOVED_TO_GRANTS = {
 };
 
 // A sandbox's limits when the grants folder sets none.
-export const DEFAULT_LIMITS = { cpus: "2", memory: "4g", pids: 2048 };
+const DEFAULT_LIMITS = { cpus: "2", memory: "4g", pids: 2048 };
 
 // Where an empty value means something (no label): set in the environment, even empty, wins.
 const EMPTY_MEANS = new Set(["NEEDS_INPUT_LABEL"]);

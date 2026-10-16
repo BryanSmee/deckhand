@@ -2,7 +2,7 @@
 // `github(repo, method, path, body, expected)` (createGitHub(), github-app.mjs request()),
 // which tests fake. Statuses in `expected` are normal for the call: not logged, and answered
 // here as null. Also the lookups the dashboard's stores fall back on (titles, pulls, inputs).
-import { outcome } from "./events.mjs";
+import { issueOutcome } from "./events.mjs";
 import { closedAs } from "./titles.mjs";
 
 // The listener's `github` and `graphql`, as the repo's installation. `app()`: the GitHub App
@@ -61,7 +61,7 @@ export async function graphql(github, repo, query, variables) {
 }
 
 // The first page of a list: the recent ones are enough there.
-export async function listOf(github, repo, path) {
+async function listOf(github, repo, path) {
   const list = await getJson(github, repo, path);
   if (!Array.isArray(list)) throw new Error(`GitHub GET ${path}: no list`);
   return list;
@@ -81,7 +81,7 @@ export async function fetchTitle(github, repo, kind, number) {
   }
   // Pull requests are issues too, for their title and whether they are merged.
   const issue = await getJson(github, repo, `/repos/${repo}/issues/${number}`, [404]);
-  return issue && { title: issue.title ?? null, closed: closedAs(outcome(issue)) };
+  return issue && { title: issue.title ?? null, closed: closedAs(issueOutcome(issue)) };
 }
 
 // The repo's pull requests, recently updated first (pulls.mjs).

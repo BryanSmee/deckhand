@@ -5,7 +5,7 @@ import { closeSync, constants, createReadStream, fstatSync, openSync, realpathSy
 import { createServer } from "node:http";
 import { join } from "node:path";
 import { pipeline } from "node:stream";
-import { page } from "./auth.mjs";
+import { authPage } from "./auth.mjs";
 import { board, isLive, STATES } from "./board.mjs";
 import { createSlots, readDelivery, sourceOf } from "./deliveries.mjs";
 import {
@@ -199,7 +199,7 @@ export function createHttp(ctx, { dashboardDir }) {
     const user = ctx.auth.user(req);
     if (!user) {
       if (url.pathname !== "/") return res.writeHead(401).end();
-      return page(
+      return authPage(
         res,
         200,
         "Deckhand",

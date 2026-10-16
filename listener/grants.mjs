@@ -33,10 +33,10 @@ import { isMap, parseYaml } from "./yaml.mjs";
 
 // The sandbox's user (sandbox/Dockerfile): who must not be able to rewrite a read-write
 // mount's path.
-export const SANDBOX_UID = 1000;
-export const SANDBOX_GID = 1000;
+const SANDBOX_UID = 1000;
+const SANDBOX_GID = 1000;
 
-export const DEFAULT_FILE = "default.yaml";
+const DEFAULT_FILE = "default.yaml";
 
 // "acme/api.yaml": a repo's file, with GitHub's characters for owners and repos.
 const REPO_FILE = /^([\w.-]+)\/([\w.-]+)\.yaml$/;
@@ -71,7 +71,7 @@ const HOST_LISTS = { hosts: "hosts", cached_hosts: "cachedHosts" };
 // One file's text → { hosts, cachedHosts, mounts, limits, and FLAGS }; a flag is null when the file doesn't
 // say, so default.yaml decides (grantFor), and limits null unless it sets them. `file` names it
 // in errors; `base`: the limits its own start from. Throws a GrantsError listing every error.
-export function parseGrant(text, file, base, { isDefault = false } = {}) {
+function parseGrant(text, file, base, { isDefault = false } = {}) {
   const errors = [];
   const fail = (what) => errors.push(what);
   let value;

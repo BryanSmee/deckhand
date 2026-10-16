@@ -5,7 +5,7 @@
 import { parseKey } from "./events.mjs";
 import { persistentMap } from "./store.mjs";
 
-// waits.mjs's outcome() ("open", "done", "not-done") → the dashboard's closed state: null
+// events.mjs issueOutcome() ("open", "done", "not-done") → the dashboard's closed state: null
 // (open), "completed" (a pull request: merged) or "not_planned".
 export function closedAs(outcome) {
   if (outcome === "done") return "completed";

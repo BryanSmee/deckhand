@@ -13,7 +13,7 @@ import { newTask, noLongerAllowed } from "./tasks.mjs";
 
 // A result saved by a listener from before the agent seam is Claude Code's raw stream-json
 // `result` event: Deckhand's own from it, with the duration of all its turns.
-export function savedResult(result) {
+function savedResult(result) {
   if (!result || "ok" in result) return result ?? null;
   return agentFor("claude").normalize(JSON.stringify(result))[0];
 }

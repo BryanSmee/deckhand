@@ -16,17 +16,17 @@ import { refuse } from "./web.mjs";
 export const DEFAULT_RUNS = 10;
 export const MAX_RUNS = 50;
 // The digest's cap, in bytes: older runs beyond it are left out (and the digest says so).
-export const MAX_DIGEST = 400_000;
+const MAX_DIGEST = 400_000;
 // One run's share at most, so a single long run doesn't push all the others out.
 const MAX_RUN = 24_000;
 // Run statuses an analysis can pick (runlog.mjs outcome(), and runs that ended otherwise).
-export const OUTCOMES = ["ok", "error", "needs-input", "interrupted", "cancelled"];
+const OUTCOMES = ["ok", "error", "needs-input", "interrupted", "cancelled"];
 // About four bytes a token: the preview's estimate of what the run reads.
 export const tokens = (bytes) => Math.ceil(bytes / 4);
 
 // What a run was: its mode (work, brainstorm, idea, bug, discussion, onboarding, analyze or
 // one of the repo's own), or its kind for logs from before runs kept their mode.
-export function kindOf(run) {
+function runKind(run) {
   return run.taskMode ?? run.kind ?? "work";
 }
 
@@ -35,7 +35,7 @@ const finished = (run) => run.status !== "running";
 
 // The kinds of a repo's finished runs, for the form to offer.
 export function runKinds(runs, repo) {
-  const kinds = new Set(runs.filter((r) => ofRepo(r, repo) && finished(r)).map(kindOf));
+  const kinds = new Set(runs.filter((r) => ofRepo(r, repo) && finished(r)).map(runKind));
   return [...kinds].sort();
 }
 
@@ -45,7 +45,7 @@ export function selectRuns(runs, repo, { count, kinds, outcomes }) {
   return runs
     .filter(
       (r) =>
-        ofRepo(r, repo) && finished(r) && kinds.includes(kindOf(r)) && outcomes.includes(r.status),
+        ofRepo(r, repo) && finished(r) && kinds.includes(runKind(r)) && outcomes.includes(r.status),
     )
     .slice(0, count);
 }
@@ -102,7 +102,7 @@ export function runDigest(run, lines) {
 function runHeader(run, agent) {
   const took = run.finishedAt && run.startedAt ? minutes(run.finishedAt - run.startedAt) : null;
   const what = [
-    `kind ${kindOf(run)}${run.mode ? ` (${run.mode})` : ""}`,
+    `kind ${runKind(run)}${run.mode ? ` (${run.mode})` : ""}`,
     `${agent.name}${run.provider ? `@${run.provider}` : ""} ${run.model ?? "?"}, ${run.effort ?? "?"} effort`,
     `${run.status}${took !== null ? ` after ${took} min` : ""}`,
     `started ${time(run.startedAt)} UTC`,

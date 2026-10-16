@@ -49,7 +49,7 @@ function cookies(req) {
 const CSS = `.button { display: inline-block; margin-top: 1rem; padding: 0.6rem 1.2rem; font: inherit; border: 0; border-radius: 6px; background: var(--accent); color: #fff; cursor: pointer; text-decoration: none; }`;
 
 // The sign-in pages, and the dashboard's before it (http.mjs).
-export function page(res, status, title, body, headers = {}) {
+export function authPage(res, status, title, body, headers = {}) {
   return html(res, status, title, body, { headers, css: CSS });
 }
 
@@ -112,7 +112,7 @@ export function createAuth({
   function login(res) {
     const credentials = app()?.credentials;
     if (!credentials?.client_id) {
-      return page(
+      return authPage(
         res,
         503,
         "No GitHub App yet",
@@ -147,7 +147,7 @@ from the listener's logs.</p>`,
     const expected = cookies(req)[STATE_COOKIE] ?? "";
     const clear = cookie(STATE_COOKIE, "", 0);
     if (!credentials?.client_secret || !expected || !same(state, expected) || !code) {
-      return page(
+      return authPage(
         res,
         400,
         "Sign-in expired",
@@ -157,7 +157,7 @@ from the listener's logs.</p>`,
     }
     const token = await exchange(credentials, code);
     if (!token) {
-      return page(
+      return authPage(
         res,
         502,
         "GitHub refused the sign-in",
@@ -167,14 +167,20 @@ from the listener's logs.</p>`,
     }
     const me = await whoIs(credentials, token);
     if (!me) {
-      return page(res, 502, "GitHub didn't say who you are", `<p>See the listener's logs.</p>`, {
-        "set-cookie": clear,
-      });
+      return authPage(
+        res,
+        502,
+        "GitHub didn't say who you are",
+        `<p>See the listener's logs.</p>`,
+        {
+          "set-cookie": clear,
+        },
+      );
     }
     const login = me.toLowerCase();
     if (!config.users.includes(login)) {
       log(`Login: refused ${me}: not in ALLOWED_USERS`);
-      return page(
+      return authPage(
         res,
         403,
         "Not allowed",
@@ -275,7 +281,7 @@ GitHub and sign in here with another account.</p>`,
     };
     run().catch((error) => {
       log(`Login: ${error.stack ?? error}`);
-      if (!res.headersSent) page(res, 500, "Sign-in failed", `<p>See the listener's logs.</p>`);
+      if (!res.headersSent) authPage(res, 500, "Sign-in failed", `<p>See the listener's logs.</p>`);
     });
     return true;
   }

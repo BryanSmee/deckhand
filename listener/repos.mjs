@@ -23,7 +23,7 @@ import { apiRoute, send } from "./web.mjs";
 export const LIST_MS = 5 * 60000;
 export const CONFIG_MS = 30 * 60000;
 // The dashboard's Refresh buttons: at most one read of a repo (or of the list) this often.
-export const REFRESH_MS = 5000;
+export const REPO_REFRESH_MS = 5000;
 // Config reads at once: a large installation is listed without a burst of hundreds.
 const PARALLEL = 8;
 
@@ -253,7 +253,7 @@ export function refreshFor(event, p, refresh) {
 // (relative to GRANTS_DIR) when there is one. Only a GrantsError's details are shown: they
 // name files in the folder and their values; anything else may name the host's paths, and
 // the listener's logs have it.
-export function grantsErrorView(error, everyRepo) {
+function grantsErrorView(error, everyRepo) {
   if (!(error instanceof GrantsError)) {
     return {
       file: null,
@@ -291,10 +291,10 @@ export function createRepoApi({
     return row;
   }
 
-  // At most one refresh of `key` per REFRESH_MS: each reads GitHub.
+  // At most one refresh of `key` per REPO_REFRESH_MS: each reads GitHub.
   function tooSoon(key) {
     const last = refreshed.get(key);
-    if (last !== undefined && now() - last < REFRESH_MS) return true;
+    if (last !== undefined && now() - last < REPO_REFRESH_MS) return true;
     refreshed.set(key, now());
     return false;
   }

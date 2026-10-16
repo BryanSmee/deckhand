@@ -11,7 +11,7 @@ import { createOnboardingStore } from "../listener/onboarding.mjs";
 import {
   CONFIG_MS,
   LIST_MS,
-  REFRESH_MS,
+  REPO_REFRESH_MS,
   createRepoApi,
   createRepoList,
   refreshFor,
@@ -597,7 +597,7 @@ test("POST refresh: same origin only, reads the repo's config again, rate limite
   // Again at once: refused, GitHub isn't asked.
   assert.equal((await call(api, "POST", path)).status, 429);
   assert.equal(configReads(gh.calls), 2);
-  clock.now += REFRESH_MS;
+  clock.now += REPO_REFRESH_MS;
   assert.equal((await call(api, "POST", path)).status, 200);
   assert.equal(configReads(gh.calls), 3);
   assert.equal((await call(api, "POST", "/api/repos/org/other/refresh")).status, 404);
