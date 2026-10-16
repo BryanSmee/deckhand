@@ -83,78 +83,87 @@ function questionsFor(t, last, input) {
 // A task waiting for input carries `questions`: { source, runId?, items, raw }, from the reply
 // of its last run when it stopped to ask, else from its issue's body (questions.mjs).
 export function board({ runs, queued, brainstorms, waits = [], inputs = [] }) {
+  const tasks = gather(runs, [queued, brainstorms, waits, inputs]);
+  const byKey = (list) => new Map(list.map((x) => [x.key, x]));
+  const waiting = byKey(queued);
+  const talks = byKey(brainstorms);
+  const held = byKey(waits);
+  const labelled = byKey(inputs);
+  for (const t of tasks.values()) {
+    settle(t, waiting.get(t.key), talks.get(t.key), held.get(t.key), labelled.get(t.key));
+  }
+  // Most recent activity first, the live ones on top.
+  const live = (t) => ["building-image", "working", "stopping", "queued"].includes(t.state);
+  return [...tasks.values()].sort((a, b) => Number(live(b)) - Number(live(a)) || b.since - a.since);
+}
+
+// One task per key, in the order they first appear: the runs' (each keeps its latest
+// RUNS_PER_TASK), then each of `lists`' (queued, brainstorms, waits, inputs).
+function gather(runs, lists) {
   const tasks = new Map();
   const entry = (key, repo) => {
-    if (!tasks.has(key)) {
-      const parsed = parseKey(key);
-      const name = repo ?? parsed?.repo ?? "";
-      tasks.set(key, {
-        key,
-        repo: name,
-        project: name.split("/")[0],
-        // "#12", "#pr-12", "#discussion-8"
-        number: parsed?.number || null,
-        kind: null,
-        // work, brainstorm, idea, bug, discussion or one of the repo's own modes.
-        mode: null,
-        replyTo: null,
-        state: null,
-        since: 0,
-        runs: [],
-      });
-    }
+    if (!tasks.has(key)) tasks.set(key, newTask(key, repo));
     return tasks.get(key);
   };
   for (const r of runs) {
     const t = entry(r.key, r.repo);
     if (t.runs.length < RUNS_PER_TASK) t.runs.push(r);
   }
-  const waiting = new Map(queued.map((q) => [q.key, q]));
-  for (const q of queued) entry(q.key, q.repo);
-  const talks = new Map(brainstorms.map((b) => [b.key, b]));
-  for (const b of brainstorms) entry(b.key, b.repo);
-  const held = new Map(waits.map((w) => [w.key, w]));
-  for (const w of waits) entry(w.key, w.repo);
-  const labelled = new Map(inputs.map((i) => [i.key, i]));
-  for (const i of inputs) entry(i.key, i.repo);
+  for (const list of lists) for (const x of list) entry(x.key, x.repo);
+  return tasks;
+}
 
-  for (const t of tasks.values()) {
-    const last = t.runs[0];
-    const q = waiting.get(t.key);
-    const b = talks.get(t.key);
-    const w = held.get(t.key);
-    t.kind = q?.kind ?? last?.kind ?? w?.kind ?? (b ? "brainstorm" : null);
-    t.mode = (q?.mode === "stop" ? "brainstorm" : q?.mode) ?? w?.mode ?? last?.taskMode ?? null;
-    t.replyTo = q?.replyTo ?? w?.replyTo ?? last?.replyTo ?? t.number;
-    t.since = Math.max(last?.startedAt ?? 0, b?.deadline ?? 0, w?.since ?? 0);
-    // What its next run waits for, whatever it is doing now.
-    if (w) t.waitingFor = w.blockers;
-    // A running run first: comments for a follow-up wait behind it anyway.
-    if (last?.status === "running") t.state = runState(last);
-    else if (q) t.state = "queued";
-    else if (w) t.state = "waiting";
-    else if (b?.status === "active") t.state = "brainstorm";
-    else if (b?.status === "idle") t.state = "idle-brainstorm";
-    else t.state = last ? runState(last) : "done";
-    // The label outlasts how the last run ended (a run starting takes it off), not a live one,
-    // and is what a wait whose issues are done still waits for (waits.mjs).
-    const input = labelled.get(t.key);
-    const answers = t.state === "waiting" && w.answers;
-    if (input && (answers || ENDED.includes(t.state))) {
-      t.state = "needs-input";
-      t.kind ??= "issue";
-      t.since = Math.max(t.since, input.since ?? 0);
-    }
-    const asked = questionsFor(t, last, input);
-    if (asked) t.questions = asked;
-    if (b && b.status !== "stopped") {
-      t.kind = "brainstorm";
-      t.mode = "brainstorm";
-      t.deadline = b.deadline;
-    }
-    t.rerunnable = rerunnable(t);
+// A task with nothing known yet but its key: settle() fills in the rest.
+function newTask(key, repo) {
+  const parsed = parseKey(key);
+  const name = repo ?? parsed?.repo ?? "";
+  return {
+    key,
+    repo: name,
+    project: name.split("/")[0],
+    // "#12", "#pr-12", "#discussion-8"
+    number: parsed?.number || null,
+    kind: null,
+    // work, brainstorm, idea, bug, discussion or one of the repo's own modes.
+    mode: null,
+    replyTo: null,
+    state: null,
+    since: 0,
+    runs: [],
+  };
+}
+
+// A task's kind, mode, state and the rest, from its last run `t.runs[0]` and its queued entry
+// `q`, brainstorm `b`, wait `w` and needs-input label `input`, each if it has one.
+function settle(t, q, b, w, input) {
+  const last = t.runs[0];
+  t.kind = q?.kind ?? last?.kind ?? w?.kind ?? (b ? "brainstorm" : null);
+  t.mode = (q?.mode === "stop" ? "brainstorm" : q?.mode) ?? w?.mode ?? last?.taskMode ?? null;
+  t.replyTo = q?.replyTo ?? w?.replyTo ?? last?.replyTo ?? t.number;
+  t.since = Math.max(last?.startedAt ?? 0, b?.deadline ?? 0, w?.since ?? 0);
+  // What its next run waits for, whatever it is doing now.
+  if (w) t.waitingFor = w.blockers;
+  // A running run first: comments for a follow-up wait behind it anyway.
+  if (last?.status === "running") t.state = runState(last);
+  else if (q) t.state = "queued";
+  else if (w) t.state = "waiting";
+  else if (b?.status === "active") t.state = "brainstorm";
+  else if (b?.status === "idle") t.state = "idle-brainstorm";
+  else t.state = last ? runState(last) : "done";
+  // The label outlasts how the last run ended (a run starting takes it off), not a live one,
+  // and is what a wait whose issues are done still waits for (waits.mjs).
+  const answers = t.state === "waiting" && w.answers;
+  if (input && (answers || ENDED.includes(t.state))) {
+    t.state = "needs-input";
+    t.kind ??= "issue";
+    t.since = Math.max(t.since, input.since ?? 0);
   }
-  // Most recent activity first, the live ones on top.
-  const live = (t) => ["building-image", "working", "stopping", "queued"].includes(t.state);
-  return [...tasks.values()].sort((a, b) => Number(live(b)) - Number(live(a)) || b.since - a.since);
+  const asked = questionsFor(t, last, input);
+  if (asked) t.questions = asked;
+  if (b && b.status !== "stopped") {
+    t.kind = "brainstorm";
+    t.mode = "brainstorm";
+    t.deadline = b.deadline;
+  }
+  t.rerunnable = rerunnable(t);
 }

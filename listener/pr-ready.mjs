@@ -44,7 +44,9 @@ export function createPrReady({
     await graphqlData(res, name);
   }
 
-  async function handle(req, res) {
+  // The run and pull request a request is about, once the run may ask: { run, repo, number,
+  // action, ref, github }, or nothing once refused.
+  function admit(req, res) {
     const path = PATH.exec(new URL(req.url, "http://broker").pathname);
     if (!path) return send(res, 404, { error: "not found" });
     if (req.method !== "POST") return send(res, 405, { error: "method not allowed" });
@@ -64,7 +66,12 @@ export function createPrReady({
 
     const github = app();
     if (!github) return send(res, 503, { error: "the GitHub App is not set up" });
+    return { run, repo, number, action, ref, github };
+  }
 
+  // The pull request, once it is the run's own: of its repo, not from a fork, from a branch
+  // the run may push. Nothing once refused.
+  async function ownPullRequest(res, { run, repo, number, ref, github }) {
     let pr;
     try {
       const found = await github.request(
@@ -92,6 +99,15 @@ export function createPrReady({
     if (!branchAllowed(run.branches, pr.head.ref)) {
       return send(res, 403, { error: `${ref}'s branch, ${pr.head.ref}, is not this run's` });
     }
+    return pr;
+  }
+
+  async function handle(req, res) {
+    const asked = admit(req, res);
+    if (!asked) return;
+    const pr = await ownPullRequest(res, asked);
+    if (!pr) return;
+    const { repo, action, ref, github } = asked;
 
     const wanted = action === "draft";
     const state = wanted ? "a draft" : "ready for review";

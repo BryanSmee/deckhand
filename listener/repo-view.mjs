@@ -40,7 +40,24 @@ export function settingRows(config, settings, grant, known = true) {
     if (!known) return { key, value, source: "unknown", note: UNKNOWN };
     return { key, value, source: "refused", note: plain(why.slice(key.length + 2)) };
   };
-  const rows = [
+  const ctx = { config, settings, grant, known, changed, refusedRow };
+  return [
+    ...runRows(ctx),
+    ...imageRows(ctx),
+    ...extraRows(ctx),
+    ...modeRows(settings),
+    row(
+      "limits",
+      limitsText(grant.limits),
+      false,
+      grant.limitsFile ? `grants/${grant.limitsFile}` : "built in",
+    ),
+  ];
+}
+
+// Who starts runs, with which model, how many at once, and what they set up and read first.
+function runRows({ config, settings, changed }) {
+  return [
     row(
       "users",
       none(settings.users),
@@ -60,6 +77,12 @@ export function settingRows(config, settings, grant, known = true) {
     ),
     row("setup", settings.setup ?? "none", changed("setup")),
     row("instructions", settings.instructions ?? "none", changed("instructions")),
+  ];
+}
+
+// The sandbox's image and container engine: grant-gated, so each may be refused or unknown.
+function imageRows({ config, settings, grant, known, changed, refusedRow }) {
+  return [
     refusedRow("dockerfile", settings.dockerfile) ??
       row(
         "dockerfile",
@@ -83,6 +106,12 @@ export function settingRows(config, settings, grant, known = true) {
         changed("docker"),
         settings.docker && !config.engine ? "the operator hasn't set SANDBOX_ENGINE" : null,
       ),
+  ];
+}
+
+// Caches, the inbox issues, previews and the conflict watcher.
+function extraRows({ config, settings, changed, refusedRow }) {
+  return [
     row("caches", none(settings.caches), changed("caches")),
     row("inbox", inboxText(settings.inbox), changed("inbox")),
     refusedRow("preview", previewText(settings.preview)) ??
@@ -94,7 +123,11 @@ export function settingRows(config, settings, grant, known = true) {
       config.conflictCheckMinutes ? null : "the operator turned the conflict watcher off",
     ),
   ];
-  for (const name of Object.keys(settings.modes)) {
+}
+
+// The repo's own modes, one row each: only its file defines them.
+function modeRows(settings) {
+  return Object.keys(settings.modes).map((name) => {
     const mode = customMode(settings, name);
     const traits = [
       mode.instructions,
@@ -102,17 +135,8 @@ export function settingRows(config, settings, grant, known = true) {
       mode.light ? "light" : null,
       mode.fresh ? "fresh session" : null,
     ];
-    rows.push(row(`modes.${name}`, traits.filter(Boolean).join(" · "), true));
-  }
-  rows.push(
-    row(
-      "limits",
-      limitsText(grant.limits),
-      false,
-      grant.limitsFile ? `grants/${grant.limitsFile}` : "built in",
-    ),
-  );
-  return rows;
+    return row(`modes.${name}`, traits.filter(Boolean).join(" · "), true);
+  });
 }
 
 function inboxText(inbox) {

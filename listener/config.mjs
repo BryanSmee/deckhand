@@ -390,7 +390,42 @@ function modelName(value, label) {
 // The environment, over config.yaml's settings (readConfigFile()), over the defaults.
 export function loadConfig(env, file = NO_FILE) {
   const from = settings(env, file);
-  const { setting, label, number } = from;
+  const { setting } = from;
+  const users = requiredSettings(env, from);
+  const port = wholeNumber(env.PORT, 8080, "PORT", "a port");
+  const brokerPort = wholeNumber(env.BROKER_PORT, 8081, "BROKER_PORT", "a port");
+  const prefix = setting("NAME_PREFIX") || "deckhand";
+  const onboarding = onboardingSetting(from);
+  return {
+    port,
+    // Internal only: sandboxes ask it for tokens. Not published by compose.yaml.
+    brokerPort,
+    // How sandboxes reach the broker on their network (compose service name by default).
+    brokerUrl: (env.BROKER_URL || `http://listener:${brokerPort}`).replace(/\/$/, ""),
+    ...claudeSettings(env, from),
+    ...codexSettings(env, from),
+    // Which agent runs work and light runs, and those a repo may pick instead.
+    ...agentSettings(env, from),
+    // Where a run goes, in order, when its provider fails (runs.mjs). Empty: nowhere.
+    fallbacks: fallbackSettings(env, from),
+    githubApi: (setting("GITHUB_API") || "https://api.github.com").replace(/\/$/, ""),
+    githubUrl: (setting("GITHUB_URL") || "https://github.com").replace(/\/$/, ""),
+    users,
+    // Optional: narrows the repos where the App is installed. Empty: all of them.
+    repos: list(setting("ALLOWED_REPOS")),
+    // The first line of a comment that calls Deckhand; "/mode <name>" picks another mode.
+    trigger: normalize(setting("TRIGGER") || "Deckhand"),
+    ...sandboxConfig(env, from, prefix),
+    ...runSettings(env, from),
+    // An issue proposing a .deckhand.yaml when the App is installed on a repo without one
+    // (onboarding.mjs). "/mode onboarding" works either way.
+    onboarding,
+  };
+}
+
+// What must be settled before anything starts: who may trigger runs, and no setting that
+// moved elsewhere. Returns the allowed users.
+function requiredSettings(env, { setting }) {
   // Fail closed: the sandbox runs without permission prompts and can push, so nobody may
   // trigger it until the operator names who can.
   const users = list(setting("ALLOWED_USERS"));
@@ -413,20 +448,20 @@ export function loadConfig(env, file = NO_FILE) {
       `${moved.join(", ")} ${moved.length > 1 ? "are" : "is"} gone (${where} instead, docs/security.md)`,
     );
   }
-  const port = wholeNumber(env.PORT, 8080, "PORT", "a port");
-  const brokerPort = wholeNumber(env.BROKER_PORT, 8081, "BROKER_PORT", "a port");
-  const prefix = setting("NAME_PREFIX") || "deckhand";
-  const ms = "a whole number of milliseconds";
+  return users;
+}
+
+function onboardingSetting({ setting, label }) {
   const onboarding = (setting("ONBOARDING") ?? "on").trim().toLowerCase();
   if (!["on", "true", "1", "yes", "", "off", "false", "0", "no"].includes(onboarding)) {
     throw new ConfigError(`${label("ONBOARDING")}: expected on or off, got ${onboarding}`);
   }
+  return !["off", "false", "0", "no"].includes(onboarding);
+}
+
+// Claude Code's credential, endpoint and models, directly and through OpenRouter.
+function claudeSettings(env, { setting, label }) {
   return {
-    port,
-    // Internal only: sandboxes ask it for tokens. Not published by compose.yaml.
-    brokerPort,
-    // How sandboxes reach the broker on their network (compose service name by default).
-    brokerUrl: (env.BROKER_URL || `http://listener:${brokerPort}`).replace(/\/$/, ""),
     // Which variable holds the operator's Claude credential (anthropic.mjs): the value stays
     // in the environment, read by the listener's Anthropic endpoint only.
     claudeCredential: credentialName(env),
@@ -462,8 +497,14 @@ export function loadConfig(env, file = NO_FILE) {
     claudeFallbackModel: setting("CLAUDE_FALLBACK_MODEL")
       ? modelName(setting("CLAUDE_FALLBACK_MODEL"), label("CLAUDE_FALLBACK_MODEL"))
       : null,
-    // Claude Code through OpenRouter (claude@openrouter in FALLBACKS), with OPENROUTER_API_KEY,
-    // and what opus, sonnet and haiku mean there, over the aliases above.
+    ...openrouterSettings({ setting, label }),
+  };
+}
+
+// Claude Code through OpenRouter (claude@openrouter in FALLBACKS), with OPENROUTER_API_KEY,
+// and what opus, sonnet and haiku mean there, over the aliases above.
+function openrouterSettings({ setting, label }) {
+  return {
     openrouterUrl: apiUrl(
       setting("OPENROUTER_BASE_URL"),
       label("OPENROUTER_BASE_URL"),
@@ -482,8 +523,13 @@ export function loadConfig(env, file = NO_FILE) {
         setting("OPENROUTER_HAIKU_MODEL"),
       ],
     ]),
-    // Codex's, the same way (openai.mjs): OpenAI, or an OpenAI-compatible endpoint; without
-    // a key, a ChatGPT plan's login, which the listener holds and refreshes (chatgpt.mjs).
+  };
+}
+
+// Codex's, the same way (openai.mjs): OpenAI, or an OpenAI-compatible endpoint; without
+// a key, a ChatGPT plan's login, which the listener holds and refreshes (chatgpt.mjs).
+function codexSettings(env, { setting, label }) {
+  return {
     openaiCredential: OPENAI_CREDENTIALS.find((name) => env[name]) ?? null,
     openaiUrl: apiUrl(
       setting("OPENAI_BASE_URL"),
@@ -496,18 +542,14 @@ export function loadConfig(env, file = NO_FILE) {
       ["balanced", "CODEX_BALANCED_MODEL", setting("CODEX_BALANCED_MODEL")],
       ["fast", "CODEX_FAST_MODEL", setting("CODEX_FAST_MODEL")],
     ]),
-    // Which agent runs work and light runs, and those a repo may pick instead.
-    ...agentSettings(env, from),
-    // Where a run goes, in order, when its provider fails (runs.mjs). Empty: nowhere.
-    fallbacks: fallbackSettings(env, from),
-    githubApi: (setting("GITHUB_API") || "https://api.github.com").replace(/\/$/, ""),
-    githubUrl: (setting("GITHUB_URL") || "https://github.com").replace(/\/$/, ""),
-    users,
-    // Optional: narrows the repos where the App is installed. Empty: all of them.
-    repos: list(setting("ALLOWED_REPOS")),
-    // The first line of a comment that calls Deckhand; "/mode <name>" picks another mode.
-    trigger: normalize(setting("TRIGGER") || "Deckhand"),
-    ...sandboxConfig(env, from, prefix),
+  };
+}
+
+// How runs are batched, which model and effort they get, and what the listener keeps.
+function runSettings(env, from) {
+  const { setting, number } = from;
+  const ms = "a whole number of milliseconds";
+  return {
     // Batches the comments of one review (each arrives as its own webhook) into one run.
     debounceMs: number("DEBOUNCE_MS", 15000, ms),
     // A brainstorm comment comes alone, and someone is waiting for the answer.
@@ -530,8 +572,5 @@ export function loadConfig(env, file = NO_FILE) {
     waitsCheckMinutes: waitsCheck(from),
     // How long a run's log, summary and screenshots are kept (history.mjs). 0: forever.
     logRetentionDays: number("LOG_RETENTION_DAYS", 90, "a whole number of days (0: forever)"),
-    // An issue proposing a .deckhand.yaml when the App is installed on a repo without one
-    // (onboarding.mjs). "/mode onboarding" works either way.
-    onboarding: !["off", "false", "0", "no"].includes(onboarding),
   };
 }

@@ -104,11 +104,7 @@ export function createDockerRunner({
   }) {
     // Unset values stay unset in the sandbox, as with `-e NAME` and no NAME.
     const env = Object.fromEntries(Object.entries(values).filter(([, v]) => v !== undefined));
-    mkdirSync(join(inboxDir, run), { recursive: true });
-    chmodSync(join(inboxDir, run), 0o755); // the sandbox runs as uid 1000 and only reads
-    writeFileSync(inbox(run), "");
-    if (ca) writeFileSync(join(inboxDir, run, CA_FILE), ca, { mode: 0o644 });
-    if (digest) writeFileSync(join(inboxDir, run, DIGEST_FILE), digest, { mode: 0o644 });
+    writeInbox(run, ca, digest);
     const all = {
       "deckhand.owner": config.prefix,
       "deckhand.run": run,
@@ -122,26 +118,7 @@ export function createDockerRunner({
       // Not secrets: where the engine is, as values.
       const engineVars = started ? engineEnv(started.backend) : {};
       const { code, err } = await docker(
-        [
-          "run",
-          "--detach",
-          "--init",
-          "--name",
-          name,
-          ...Object.entries(all).flatMap(([k, v]) => ["--label", `${k}=${v}`]),
-          ...Object.keys(env).flatMap((k) => ["-e", k]),
-          ...Object.entries(engineVars).flatMap(([k, v]) => ["-e", `${k}=${v}`]),
-          "-e",
-          `TASK_INBOX=${INBOX_DIR}/${INBOX}`,
-          ...(ca ? ["-e", `DECKHAND_CA=${INBOX_DIR}/${CA_FILE}`] : []),
-          ...(digest ? ["-e", `TASK_DIGEST=${INBOX_DIR}/${DIGEST_FILE}`] : []),
-          "--mount",
-          `type=volume,src=${config.runsVolume},dst=${INBOX_DIR},volume-subpath=${run},readonly`,
-          "--network",
-          run,
-          ...args,
-          image,
-        ],
+        runArgs({ run, name, image, labels: all, env, engineVars, args, ca, digest }),
         { env: { ...process.env, ...env } },
       );
       if (code !== 0) throw new Error(`the sandbox didn't start: ${err || `docker exit ${code}`}`);
@@ -153,6 +130,41 @@ export function createDockerRunner({
       starting.delete(run);
     }
     return { engine: started };
+  }
+
+  // The run's inbox folder, which the sandbox mounts read-only: its inbox file, empty, and the
+  // proxy's CA and the digest when start() has them.
+  function writeInbox(run, ca, digest) {
+    mkdirSync(join(inboxDir, run), { recursive: true });
+    chmodSync(join(inboxDir, run), 0o755); // the sandbox runs as uid 1000 and only reads
+    writeFileSync(inbox(run), "");
+    if (ca) writeFileSync(join(inboxDir, run, CA_FILE), ca, { mode: 0o644 });
+    if (digest) writeFileSync(join(inboxDir, run, DIGEST_FILE), digest, { mode: 0o644 });
+  }
+
+  // start()'s `docker run` arguments: secrets in `env` by name only, the engine's variables
+  // (not secrets) as values, the inbox volume read-only, on the run's own network.
+  function runArgs({ run, name, image, labels, env, engineVars, args, ca, digest }) {
+    return [
+      "run",
+      "--detach",
+      "--init",
+      "--name",
+      name,
+      ...Object.entries(labels).flatMap(([k, v]) => ["--label", `${k}=${v}`]),
+      ...Object.keys(env).flatMap((k) => ["-e", k]),
+      ...Object.entries(engineVars).flatMap(([k, v]) => ["-e", `${k}=${v}`]),
+      "-e",
+      `TASK_INBOX=${INBOX_DIR}/${INBOX}`,
+      ...(ca ? ["-e", `DECKHAND_CA=${INBOX_DIR}/${CA_FILE}`] : []),
+      ...(digest ? ["-e", `TASK_DIGEST=${INBOX_DIR}/${DIGEST_FILE}`] : []),
+      "--mount",
+      `type=volume,src=${config.runsVolume},dst=${INBOX_DIR},volume-subpath=${run},readonly`,
+      "--network",
+      run,
+      ...args,
+      image,
+    ];
   }
 
   // Which engine this host runs (engine.mjs engineBackend()), asked once; again after a

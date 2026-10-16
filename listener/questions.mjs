@@ -159,7 +159,6 @@ export function inputEvent(config, event, p, bot) {
   // Fail closed: only the App's installations, on allowed repos.
   if (!p.installation?.id || !repo || !issue) return null;
   if (!repoAllowed(config, repo)) return null;
-  const labelled = hasLabel(issue.labels, name);
   const change = {
     repo,
     key: taskKey(repo, issue.number),
@@ -170,58 +169,86 @@ export function inputEvent(config, event, p, bot) {
   const person = (u) =>
     !!u?.login && u.type !== "Bot" && config.users.includes(u.login.toLowerCase());
   const ours = (u) => !!bot && u?.type === "Bot" && u.login?.toLowerCase() === bot.toLowerCase();
-  // Who may set it off: an allowed user (`by`) or the App's bot (null).
-  const who = (u) => (person(u) ? u.login : ours(u) ? null : undefined);
-  // What the dashboard shows of an issue it lists: its questions as the body has them now.
-  const questions = () => parseQuestions(questionsSection(issue.body));
-
-  if (event === "issue_comment") {
-    const c = p.comment;
-    if (p.action !== "created" || !labelled || !person(c?.user)) return null;
-    if ((c.body ?? "").includes(MARKER)) return null;
-    // Pull requests carry the label too (a run on one stopped to ask); only issues are listed,
-    // and a pull request's task key isn't its number.
-    if (issue.pull_request) return { ...change, title: null, label: false, by: c.user.login };
-    return { ...change, label: false, by: c.user.login, track: false, comment: c.body ?? "" };
-  }
-
-  switch (p.action) {
-    case "opened": {
-      const by = who(issue.user);
-      if (by === undefined) return null;
-      if (labelled) return { ...change, track: true, questions: questions() };
-      if (!hasOpenQuestions(issue.body)) return null;
-      return { ...change, label: true, by, track: true, questions: questions() };
-    }
-    case "edited": {
-      // The author's issue, edited by them, another allowed user or the bot. Only a change to
-      // the section moves the label: a typo fixed elsewhere doesn't undo removing it by hand,
-      // nor take off a run's.
-      const by = who(p.sender);
-      if (who(issue.user) === undefined || by === undefined || !p.changes?.body) return null;
-      if (questionsSection(p.changes.body.from) === questionsSection(issue.body)) return null;
-      const now = hasOpenQuestions(issue.body);
-      // Still waiting: only what the dashboard shows changes.
-      if (now === labelled) return now ? { ...change, questions: questions() } : null;
-      return { ...change, label: now, by, track: now, ...(now && { questions: questions() }) };
-    }
-    // Whoever adds or removes it, by hand or not: the dashboard follows the issue's labels.
-    case "labeled":
-    case "unlabeled":
-      if (!hasLabel([p.label], name)) return null;
-      if (issue.state === "closed") return { ...change, track: false };
-      if (p.action === "unlabeled") return { ...change, track: false, answered: true };
-      return { ...change, track: true, questions: questions() };
-    case "reopened":
-      return labelled ? { ...change, track: true, questions: questions() } : null;
-    case "closed":
-    case "deleted":
-    case "transferred":
-      return { ...change, track: false };
-    default:
-      return null;
-  }
+  const ctx = {
+    p,
+    issue,
+    name,
+    change,
+    person,
+    labelled: hasLabel(issue.labels, name),
+    // Who may set it off: an allowed user (`by`) or the App's bot (null).
+    who: (u) => (person(u) ? u.login : ours(u) ? null : undefined),
+    // What the dashboard shows of an issue it lists: its questions as the body has them now.
+    questions: () => parseQuestions(questionsSection(issue.body)),
+  };
+  if (event === "issue_comment") return commentInput(ctx);
+  return ISSUE_ACTIONS[p.action]?.(ctx) ?? null;
 }
+
+// An allowed user's comment on a labelled issue or pull request: it may answer the questions.
+function commentInput({ p, issue, change, person, labelled }) {
+  const c = p.comment;
+  if (p.action !== "created" || !labelled || !person(c?.user)) return null;
+  if ((c.body ?? "").includes(MARKER)) return null;
+  // Pull requests carry the label too (a run on one stopped to ask); only issues are listed,
+  // and a pull request's task key isn't its number.
+  if (issue.pull_request) return { ...change, title: null, label: false, by: c.user.login };
+  return { ...change, label: false, by: c.user.login, track: false, comment: c.body ?? "" };
+}
+
+// A new issue: listed when labelled already, labelled when it opens with questions.
+function openedInput({ issue, change, labelled, who, questions }) {
+  const by = who(issue.user);
+  if (by === undefined) return null;
+  if (labelled) return { ...change, track: true, questions: questions() };
+  if (!hasOpenQuestions(issue.body)) return null;
+  return { ...change, label: true, by, track: true, questions: questions() };
+}
+
+// The author's issue, edited by them, another allowed user or the bot. Only a change to the
+// section moves the label: a typo fixed elsewhere doesn't undo removing it by hand, nor take
+// off a run's.
+function editedInput({ p, issue, change, labelled, who, questions }) {
+  const by = who(p.sender);
+  if (who(issue.user) === undefined || by === undefined || !p.changes?.body) return null;
+  if (questionsSection(p.changes.body.from) === questionsSection(issue.body)) return null;
+  const now = hasOpenQuestions(issue.body);
+  // Still waiting: only what the dashboard shows changes.
+  if (now === labelled) return now ? { ...change, questions: questions() } : null;
+  return { ...change, label: now, by, track: now, ...(now && { questions: questions() }) };
+}
+
+// Whoever adds or removes it, by hand or not: the dashboard follows the issue's labels.
+function labelInput({ p, issue, name, change, questions }) {
+  if (!hasLabel([p.label], name)) return null;
+  if (issue.state === "closed") return { ...change, track: false };
+  if (p.action === "unlabeled") return { ...change, track: false, answered: true };
+  return { ...change, track: true, questions: questions() };
+}
+
+// A reopened issue still labelled is listed again.
+function reopenedInput({ change, labelled, questions }) {
+  return labelled ? { ...change, track: true, questions: questions() } : null;
+}
+
+// An issue gone from the repo's open ones leaves the list.
+function goneInput({ change }) {
+  return { ...change, track: false };
+}
+
+// An `issues` delivery's action → what it changes (inputEvent()); others change nothing. No
+// prototype, so an action named like an Object method finds nothing.
+const ISSUE_ACTIONS = {
+  __proto__: null,
+  opened: openedInput,
+  edited: editedInput,
+  labeled: labelInput,
+  unlabeled: labelInput,
+  reopened: reopenedInput,
+  closed: goneInput,
+  deleted: goneInput,
+  transferred: goneInput,
+};
 
 // Open questions in an issue, or an answer to them (inputEvent()): the needs-input label and
 // the dashboard's list of issues waiting for input (inputs.mjs). `ctx` (server.mjs): the

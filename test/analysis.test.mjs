@@ -13,6 +13,7 @@ import {
   runKinds,
   selectRuns,
   tokens,
+  toolStats,
 } from "../listener/analysis.mjs";
 import { REDACTED } from "../listener/secrets.mjs";
 
@@ -228,4 +229,36 @@ test("createAnalysis: previews and digests from the logs, one repo's runs only",
   const none = analysis.preview("org/app", { count: 10, kinds: [], outcomes: [] });
   assert.deepEqual([none.runs, none.included], [[], 0]);
   assert.deepEqual(none.kinds, ["work"]);
+});
+
+test("toolStats counts each tool and call, and pairs a failed output with the call before it", () => {
+  const read = { kind: "tool", name: "Read", text: "a.mjs" };
+  const bash = { kind: "tool", name: "Bash", text: "npm test" };
+  const stats = toolStats([
+    { kind: "output", error: true, text: "orphan" },
+    read,
+    read,
+    bash,
+    { kind: "output", error: false, text: "ok" },
+    { kind: "output", error: true, text: "1 failing" },
+    { kind: "meta", text: "ignored" },
+  ]);
+  assert.deepEqual(
+    [...stats.tools],
+    [
+      ["Read", 2],
+      ["Bash", 1],
+    ],
+  );
+  assert.deepEqual(
+    [...stats.calls],
+    [
+      ["Read: a.mjs", 2],
+      ["Bash: npm test", 1],
+    ],
+  );
+  assert.deepEqual(stats.failed, [
+    { tool: null, output: "orphan" },
+    { tool: bash, output: "1 failing" },
+  ]);
 });

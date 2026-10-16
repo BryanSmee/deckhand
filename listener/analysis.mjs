@@ -86,6 +86,20 @@ const NOTABLE = /error|fail|denied|refused|forbidden|\b403\b|timed? ?out|not fou
 export function runDigest(run, lines) {
   const agent = agentFor(run.agent);
   const entries = lines.flatMap((l) => format(l, agent));
+  const out = [...runHeader(run, agent), ...setupLines(entries), ...toolLines(entries)];
+  const result = entries.findLast((e) => e.kind === "result");
+  out.push(
+    "",
+    result
+      ? `Final reply (${result.status}, ${result.minutes} min of agent time):\n\n${quote(clip(result.text, 60, 4000))}`
+      : "No final reply: the run ended before the agent answered.",
+  );
+  const text = out.join("\n");
+  return text.length > MAX_RUN ? `${text.slice(0, MAX_RUN)}\n…(cut)` : text;
+}
+
+// The run's heading and what it was: its task, kind, agent, model, how and when it ended.
+function runHeader(run, agent) {
   const took = run.finishedAt && run.startedAt ? minutes(run.finishedAt - run.startedAt) : null;
   const what = [
     `kind ${kindOf(run)}${run.mode ? ` (${run.mode})` : ""}`,
@@ -101,7 +115,13 @@ export function runDigest(run, lines) {
   ];
   if (run.reason) out.push(`- started by the listener: ${run.reason}`);
   if (run.fallback) out.push(`- fell back from ${run.fallback.from}: ${run.fallback.reason}`);
+  return out;
+}
 
+// What happened before the agent's own work: the listener's notes and setup output that
+// looks wrong.
+function setupLines(entries) {
+  const out = [];
   // The listener's notes (image builds, mounts, egress cache…), the first one aside: the
   // lines above say it.
   const notes = entries.filter((e) => e.kind === "meta").slice(1);
@@ -118,9 +138,12 @@ export function runDigest(run, lines) {
       "```",
     );
   }
+  return out;
+}
 
-  // Tool calls: how many of each, the same call made again and again, and those that failed
-  // with what they gave back. An output answers the call before it.
+// Tool calls: how many of each (`tools`), each distinct call's count (`calls`), and those that
+// failed with what they gave back (`failed`). An output answers the call before it.
+export function toolStats(entries) {
   const tools = new Map();
   const calls = new Map();
   const failed = [];
@@ -135,6 +158,14 @@ export function runDigest(run, lines) {
       failed.push({ tool: last, output: e.text });
     }
   }
+  return { tools, calls, failed };
+}
+
+// The digest's lines on tool calls: the counts, the same call made again and again, the
+// failures.
+function toolLines(entries) {
+  const { tools, calls, failed } = toolStats(entries);
+  const out = [];
   const total = [...tools.values()].reduce((a, b) => a + b, 0);
   if (total) {
     const each = [...tools].sort((a, b) => b[1] - a[1]).map(([name, n]) => `${name} ${n}`);
@@ -158,15 +189,7 @@ export function runDigest(run, lines) {
       out.push("", "```", call, "→", clip(output, 12, 1200), "```");
     }
   }
-  const result = entries.findLast((e) => e.kind === "result");
-  out.push(
-    "",
-    result
-      ? `Final reply (${result.status}, ${result.minutes} min of agent time):\n\n${quote(clip(result.text, 60, 4000))}`
-      : "No final reply: the run ended before the agent answered.",
-  );
-  const text = out.join("\n");
-  return text.length > MAX_RUN ? `${text.slice(0, MAX_RUN)}\n…(cut)` : text;
+  return out;
 }
 
 // The digest of `runs` (newest first): a header, then each run's part, redacted of
