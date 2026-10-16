@@ -3,7 +3,7 @@
 // pause (so a burst is one run) it starts a run, or goes to the running one (deliver()).
 import { AGENTS, agentFor } from "./agents/index.mjs";
 import { commentsText, linkedIssue, linkTo, takeOptions, workItem } from "./events.mjs";
-import { INBOX, isLight, sessionName } from "./modes.mjs";
+import { entryRun, INBOX, isLight, sessionName } from "./modes.mjs";
 import { liveMessage } from "./prompts.mjs";
 import { hasOpenQuestions } from "./questions.mjs";
 import {
@@ -411,10 +411,10 @@ export function createTasks(ctx) {
 
   // How many of the pending comments, from the first, the running session can take: those in
   // its own mode. A wrap-up or a switch between work and brainstorm needs its own prompt, so it
-  // and everything after it (order is kept) wait for the next run.
+  // and everything after it (order is kept) wait for the next run. So does every inbox entry.
   function deliverable(task) {
     const live = task.live;
-    if (!live?.open || live.mode === "stop") return 0;
+    if (!live?.open || live.mode === "stop" || entryRun(live.mode)) return 0;
     // An agent that takes no messages mid-run gets them in its next run.
     if (!agentFor(live.record.agent).takesMessages) return 0;
     const n = task.pending.findIndex((i) => i.mode !== live.mode);

@@ -72,7 +72,7 @@ test("prompts: each kind of run gets its own", () => {
   assert.match(prompt(issue, "brainstorm"), /^Brainstorm GitHub issue #12/);
   assert.match(prompt(issue, "stop"), /^Brainstorm GitHub issue #12/);
   assert.match(prompt(issue, "idea"), /^New on the ideas inbox of org\/repo \(issue #12\)/);
-  assert.match(prompt(issue, "idea"), /The entries, each its own:\n\nthe comments$/);
+  assert.match(prompt(issue, "idea"), /The entry:\n\nthe comments$/);
   assert.match(
     prompt(issue, "discussion"),
     /gh api graphql -F owner=org -F name=repo -F number=12/,

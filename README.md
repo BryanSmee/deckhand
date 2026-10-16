@@ -41,8 +41,9 @@ operator, across as many repositories as the App is installed on.
   the dashboard lists the repositories not onboarded yet, with a button that starts it.
 - **Live feedback.** The comment gets 👀 when it is received, then 🚀 (done), 😕 (needs
   input) or 👎 (error). A burst of comments is one message, and one that arrives while
-  Claude works reaches the running session. The final message comes back as a comment from
-  the App's bot.
+  Claude works reaches the running session; an entry on the ideas or bugs inbox is always a
+  run of its own, with its own reply. The final message comes back as a comment from the
+  App's bot.
 - **Needs input.** A run that hits a decision only you can make pushes its work in progress,
   asks numbered questions and labels the issue `needs-input`; your answer continues the same
   session.

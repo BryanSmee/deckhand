@@ -40,7 +40,7 @@ gh api graphql -F owner=${repo.split("/")[0]} -F name=${repo.split("/")[1]} -F n
 
 ${inboxInstructions[mode]}
 
-${mode === "discussion" ? "The message" : "The entries, each its own"}:
+${mode === "discussion" ? "The message" : "The entry"}:
 
 ${text}`;
 }
