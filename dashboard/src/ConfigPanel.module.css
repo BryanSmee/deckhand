@@ -200,6 +200,11 @@
   color: var(--err);
 }
 
+.unknown {
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+
 .raw {
   margin: 0;
   padding: 0.75rem 1rem;

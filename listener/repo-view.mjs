@@ -1,7 +1,8 @@
 // What a repo's runs get, for the dashboard's config panel: its .deckhand.yaml's settings
-// against the operator's, each value tagged "repo", "operator" or "refused". Built from the
-// same checks a run makes (grantFor, operatorHosts, resolveMounts, customMode) so the
-// panel can't say something a run wouldn't do.
+// against the operator's, each value tagged "repo", "operator", "refused", or "unknown" when
+// it needs a grant and the operator's grants have errors. Built from the same checks a run
+// makes (grantFor, operatorHosts, resolveMounts, customMode) so the panel can't say
+// something a run wouldn't do.
 import { realpathSync, statSync } from "node:fs";
 import { mandatoryHosts } from "./egress.mjs";
 import { grantFor, grantsFrom, resolveMounts, ungranted } from "./grants.mjs";
@@ -23,15 +24,21 @@ function limitsText({ cpus, memory, pids }) {
   return `${cpus} CPUs, ${memory} memory, ${pids} processes`;
 }
 
+// Why a grant-gated value is neither granted nor refused.
+const UNKNOWN = "depends on the operator's grants, which have errors";
+
 // The settings a run reads, as rows of the panel's table. What the repo asks for that only a
-// grant allows (ungranted()) is refused: it stops every run.
-export function settingRows(config, settings, grant) {
+// grant allows (ungranted()) is refused: it stops every run. `known`: false when `grant` is a
+// stand-in for grants that have errors, so what it lacks is unknown rather than refused.
+export function settingRows(config, settings, grant, known = true) {
   const base = defaultSettings(config);
   const changed = (field) => !same(settings[field], base[field]);
   const missing = ungranted(grant, settings);
   const refusedRow = (key, value) => {
     const why = missing.find((m) => m.startsWith(`${key}: `));
-    return why && { key, value, source: "refused", note: plain(why.slice(key.length + 2)) };
+    if (!why) return null;
+    if (!known) return { key, value, source: "unknown", note: UNKNOWN };
+    return { key, value, source: "refused", note: plain(why.slice(key.length + 2)) };
   };
   const rows = [
     row(
@@ -59,14 +66,16 @@ export function settingRows(config, settings, grant) {
         settings.dockerfile ?? `none: the base image ${config.image}`,
         changed("dockerfile"),
       ),
-    row(
-      "allow_branch_docker_images",
-      String(grant.allowBranchDockerImages && !!settings.dockerfile),
-      false,
-      grant.allowBranchDockerImages && !settings.dockerfile
-        ? "granted, but the repository has no dockerfile"
-        : "the operator's grants",
-    ),
+    !known && settings.dockerfile
+      ? { key: "allow_branch_docker_images", value: "unknown", source: "unknown", note: UNKNOWN }
+      : row(
+          "allow_branch_docker_images",
+          String(grant.allowBranchDockerImages && !!settings.dockerfile),
+          false,
+          grant.allowBranchDockerImages && !settings.dockerfile
+            ? "granted, but the repository has no dockerfile"
+            : "the operator's grants",
+        ),
     refusedRow("docker", dockerText(settings.docker)) ??
       row(
         "docker",
@@ -141,8 +150,12 @@ export function hostRows(config, grant) {
 }
 
 // The repo's mount requests, each resolved as a run resolves it (a refused one stops runs).
+// `grant`: null when the grants have errors, so no mount root is known.
 export function mountRows(settings, grant, fs = {}) {
   return settings.mounts.map((request) => {
+    if (!grant) {
+      return { path: request.path, source: "unknown", readOnly: request.readOnly, note: UNKNOWN };
+    }
     const { mounts, refused, notes } = resolveMounts([request], grant, {
       caches: settings.caches,
       ...fs,
@@ -178,7 +191,8 @@ export function grantRows(grant) {
 }
 
 // Everything the panel shows under the file's errors and warnings. `grant`: grantFor()'s, or
-// null when the repo's grants have errors (no run starts then; the defaults are shown).
+// null when the repo's grants have errors (no run starts then; the defaults are shown, and what
+// needs a grant is "unknown", not refused: the grants file's error is the one to fix).
 export function effectiveView(
   config,
   repo,
@@ -188,9 +202,9 @@ export function effectiveView(
 ) {
   const shown = grant ?? grantFor(grantsFrom({}, config), config, repo);
   return {
-    settings: settingRows(config, settings, shown),
+    settings: settingRows(config, settings, shown, !!grant),
     hosts: hostRows(config, shown),
-    mounts: mountRows(settings, shown, fs),
+    mounts: mountRows(settings, grant, fs),
     grant: grant ? grantRows(grant) : null,
   };
 }

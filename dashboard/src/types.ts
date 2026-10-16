@@ -205,11 +205,12 @@ export interface Onboarded {
 }
 
 // Where a value comes from: the repo's .deckhand.yaml, the operator (environment, grants
-// folder), or the repo's, refused (a refused host or mount stops every run).
-export type Source = "repo" | "operator" | "refused";
+// folder), or the repo's, refused (a refused host or mount stops every run), or unknown (it
+// needs a grant, and the operator's grants have errors: not judged until they're fixed).
+export type Source = "repo" | "operator" | "refused" | "unknown";
 
 // One setting a run reads (listener/repo-view.mjs settingRows()); `key` is its YAML key.
-// Refused: it needs a grant the operator doesn't give (dockerfile, preview).
+// Refused: it needs a grant the operator doesn't give (dockerfile, preview, docker).
 export interface SettingRow {
   key: string;
   value: string;

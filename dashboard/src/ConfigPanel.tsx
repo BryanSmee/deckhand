@@ -11,6 +11,7 @@ const TAGS: Record<Source, string> = {
   repo: "from repo",
   operator: "from operator",
   refused: "refused",
+  unknown: "unknown",
 };
 
 function Tag({ source }: { source: Source }) {
