@@ -250,6 +250,16 @@ export function useRepoConfig(repo: string, onRow: (row: Repo) => void): RepoCon
 // The listener reads GitHub at most every 30 seconds for it: polling costs nothing more.
 const BACKLOG_POLL_MS = 30000;
 
+// Each repo's last backlog, for as long as the page is open: leaving the Graph or a repo's
+// tab and coming back shows it at once, while it is read again. Memory only: a reload waits
+// for one read, and no issue title stays in the browser's storage.
+const backlogs = new Map<string, Backlog>();
+
+// For the tests: each starts with nothing seen.
+export function forgetBacklogs() {
+  backlogs.clear();
+}
+
 export interface WorkArea {
   backlog: Backlog | null;
   error: string | null;
@@ -267,7 +277,9 @@ export function useWorkArea(
   repo: string | null,
   refresh: () => Promise<void> = async () => {},
 ): WorkArea {
-  const [backlog, setBacklog] = useState<Backlog | null>(null);
+  const [backlog, setBacklog] = useState<Backlog | null>(() =>
+    repo ? (backlogs.get(repo) ?? null) : null,
+  );
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState<Pending[]>([]);
   const [result, setResult] = useState<WorkResult | null>(null);
@@ -281,6 +293,7 @@ export function useWorkArea(
       const body = await answer<Backlog>(res);
       if (current.current !== repo) return;
       if (body.error) return setError(body.error);
+      backlogs.set(repo, body);
       setBacklog(body);
       setError(null);
     } catch (e) {
@@ -288,7 +301,7 @@ export function useWorkArea(
     }
   };
   useEffect(() => {
-    setBacklog(null);
+    setBacklog(repo ? (backlogs.get(repo) ?? null) : null);
     setError(null);
     setResult(null);
     if (!repo) return;
