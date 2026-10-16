@@ -1,5 +1,5 @@
 // Names, groups and times the views share.
-import type { PrState, RepoStatus, Run, RunStatus, Task, TaskState } from "./types";
+import type { Kind, PrState, RepoStatus, Run, RunStatus, Task, TaskState } from "./types";
 
 export const STATE_NAMES: Record<TaskState, string> = {
   "building-image": "Building image",
@@ -109,6 +109,32 @@ export function kindName(t: Pick<Task, "kind">): string {
   return KIND_NAMES[t.kind ?? ""] ?? "Issue";
 }
 
+// A run's kind as an analysis picks them (its `taskMode`): the task kinds' names, shorter for
+// a bug, and the listener's own modes. A repo's own mode as it is.
+const RUN_KIND_NAMES: Record<string, string> = {
+  work: "Work",
+  bug: "Bug",
+  onboarding: "Onboarding",
+  analyze: "Analysis",
+};
+
+export function runKindName(kind: string): string {
+  if (RUN_KIND_NAMES[kind]) return RUN_KIND_NAMES[kind];
+  return ["brainstorm", "idea", "discussion"].includes(kind)
+    ? kindName({ kind: kind as Kind })
+    : kind;
+}
+
+// A pull request's own task ("org/app#pr-12"), not the issue a pull request closes.
+export const isPrTask = (t: Pick<Task, "key" | "number">) =>
+  t.number !== null && t.key.endsWith(`#pr-${t.number}`);
+
+// "app" for "org/app".
+export const shortRepo = (repo: string) => repo.slice(repo.indexOf("/") + 1);
+
+// "1 run", "3 runs"; `many` when adding an s won't do ("replies").
+export const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+
 // The repo's own mode, if any: "review".
 export function ownMode(mode: string | null | undefined): string | null {
   return mode && !BUILT_IN_MODES.includes(mode) ? mode : null;
@@ -120,7 +146,7 @@ export function titleOf(t: Task): string {
 }
 
 // "#12", "PR #3": the number as GitHub shows it.
-export function numberOf(t: Task): string {
+export function numberOf(t: Pick<Task, "number" | "kind">): string {
   if (t.number === null) return "";
   return t.kind === "pr" ? `PR #${t.number}` : `#${t.number}`;
 }
@@ -188,7 +214,7 @@ export function repoTabs(tasks: Task[]): { repo: string; label: string }[] {
   const owners = new Set(repos.map((r) => r.split("/")[0]));
   return repos.map((repo) => ({
     repo,
-    label: owners.size > 1 ? repo : repo.slice(repo.indexOf("/") + 1),
+    label: owners.size > 1 ? repo : shortRepo(repo),
   }));
 }
 
@@ -200,3 +226,8 @@ export const REPO_LABELS: Record<RepoStatus, string> = {
   "not-onboarded": "Not onboarded",
   unknown: "Unknown",
 };
+
+// "#12 · Fix the queue" shortened to `max` characters, to fit a graph node.
+export function shorten(text: string, max: number): string {
+  return text.length > max ? `${text.slice(0, max - 1).trimEnd()}…` : text;
+}

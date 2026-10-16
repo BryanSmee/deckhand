@@ -5,7 +5,17 @@
 // to, or the run's log.
 import { useState } from "preact/hooks";
 import { sendCancel, sendRerun } from "./api";
-import { ago, duration, githubUrl, kindName, numberOf, ownMode, runName, titleOf } from "./format";
+import {
+  ago,
+  duration,
+  githubUrl,
+  isPrTask,
+  kindName,
+  numberOf,
+  ownMode,
+  runName,
+  titleOf,
+} from "./format";
 import { Log } from "./Log";
 import { PrLink } from "./PullRequest";
 import { Questions } from "./Questions";
@@ -61,7 +71,7 @@ export function Detail({ task: t, run: r, onRun, onBack, now, github, refresh }:
     if (confirming !== t.key) return setConfirming(t.key);
     setConfirming(null);
     setStopping(t.key);
-    const said = await sendCancel(t.repo, t.number!, t.key.includes("#pr-"));
+    const said = await sendCancel(t.repo, t.number!, isPrTask(t));
     setSent({
       key: t.key,
       message: said.error ?? said.message ?? "Stopping.",

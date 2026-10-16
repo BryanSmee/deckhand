@@ -1,15 +1,8 @@
 import { expect, test } from "vitest";
-import {
-  brainstormsOf,
-  dropTarget,
-  graphOf,
-  issueOfLink,
-  layout,
-  lookOf,
-  type Pending,
-  SIZES,
-} from "./graph";
-import type { Task, WorkAction } from "./types";
+import { issueOfLink } from "./dnd";
+import { dropTarget, layout, SIZES } from "./graphLayout";
+import { brainstormsOf, graphOf, lookOf } from "./graphModel";
+import type { Pending, Task, WorkAction } from "./types";
 
 const task = (n: number, extra: Partial<Task> = {}): Task => ({
   key: `org/app#${n}`,

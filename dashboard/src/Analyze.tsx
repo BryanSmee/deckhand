@@ -5,13 +5,15 @@
 // analysis's issue, then its task.
 import { useEffect, useRef, useState } from "preact/hooks";
 import { previewAnalysis, startAnalysis } from "./api";
+import { plural, runKindName } from "./format";
+import { useSubmit } from "./hooks";
+import { RepoDialog } from "./RepoDialog";
 import { formatRoute } from "./route";
 import type { AnalysisPreview, AnalysisResult, AnalysisSelection, Outcome, Task } from "./types";
-import inbox from "./Inbox.module.css";
+import dialog from "./Dialog.module.css";
 import styles from "./Analyze.module.css";
 
 export const DEFAULT_RUNS = 10;
-const MAX_RUNS = 50;
 // The preview waits for the selection to settle: typing a count asks once.
 const PREVIEW_MS = 250;
 
@@ -22,18 +24,6 @@ const OUTCOMES: { id: Outcome; label: string }[] = [
   { id: "interrupted", label: "Interrupted" },
   { id: "cancelled", label: "Cancelled" },
 ];
-
-const KIND_LABELS: Record<string, string> = {
-  work: "Work",
-  brainstorm: "Brainstorm",
-  idea: "Idea",
-  bug: "Bug",
-  discussion: "Discussion",
-  onboarding: "Onboarding",
-  analyze: "Analysis",
-};
-
-const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
 // The repos the form offers: those api/state shows the user, by name.
 export const analysisRepos = (inboxes: Record<string, unknown> | undefined, tasks: Task[]) =>
@@ -60,57 +50,34 @@ export function AnalyzeDialog({
   start = startAnalysis,
   onSent = () => {},
 }: Props) {
-  const [picked, setPicked] = useState(() => (tab && repos.includes(tab) ? tab : null));
-  const repo = picked && repos.includes(picked) ? picked : (repos[0] ?? null);
-  useEffect(() => {
-    const close = (e: KeyboardEvent) => e.key === "Escape" && onClose();
-    // A link to the analysis's task opens it: the dialog goes.
-    addEventListener("keydown", close);
-    addEventListener("hashchange", onClose);
-    return () => {
-      removeEventListener("keydown", close);
-      removeEventListener("hashchange", onClose);
-    };
-  }, []);
-
   return (
-    <div class={inbox.backdrop} onClick={(e) => e.target === e.currentTarget && onClose()}>
-      <div class={inbox.dialog} role="dialog" aria-modal="true" aria-label="Analyze runs">
-        <div class={inbox.head}>
-          <h2 class={inbox.title}>Analyze recent runs</h2>
-          <button type="button" class={inbox.close} aria-label="Close" onClick={onClose}>
-            ×
-          </button>
-        </div>
-        <p class={inbox.note}>
-          A run reads a digest of the runs you pick and replies on a new issue with what would make
-          them faster or more reliable. It changes no code.
-        </p>
-        {!repo && <p class={inbox.note}>No repository has runs to analyze yet.</p>}
-        {repo && (
-          <>
-            <label class={inbox.repo}>
-              Repository
-              <select value={repo} onChange={(e) => setPicked(e.currentTarget.value)}>
-                {repos.map((r) => (
-                  <option key={r} value={r}>
-                    {r}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <Analyze
-              key={repo}
-              repo={repo}
-              tasks={tasks}
-              preview={(selection) => preview(repo, selection)}
-              start={(selection) => start(repo, selection)}
-              onSent={onSent}
-            />
-          </>
-        )}
-      </div>
-    </div>
+    <RepoDialog
+      label="Analyze runs"
+      title="Analyze recent runs"
+      repos={repos}
+      tab={tab}
+      onClose={onClose}
+      notes={
+        <>
+          <p class={dialog.note}>
+            A run reads a digest of the runs you pick and replies on a new issue with what would
+            make them faster or more reliable. It changes no code.
+          </p>
+          {!repos.length && <p class={dialog.note}>No repository has runs to analyze yet.</p>}
+        </>
+      }
+    >
+      {(repo) => (
+        <Analyze
+          key={repo}
+          repo={repo}
+          tasks={tasks}
+          preview={(selection) => preview(repo, selection)}
+          start={(selection) => start(repo, selection)}
+          onSent={onSent}
+        />
+      )}
+    </RepoDialog>
   );
 }
 
@@ -129,13 +96,14 @@ function Analyze({ repo, tasks, preview, start, onSent }: FormProps) {
   const [kinds, setKinds] = useState<string[] | null>(null);
   const [outcomes, setOutcomes] = useState<Outcome[]>(OUTCOMES.map((o) => o.id));
   const [seen, setSeen] = useState<AnalysisPreview | null>(null);
-  const [sending, setSending] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [sent, setSent] = useState<AnalysisResult | null>(null);
+  const { sending, error, run } = useSubmit(start);
   const asked = useRef(0);
 
+  // The listener's limit, once a preview said it.
+  const [max, setMax] = useState<number | null>(null);
   const n = Number(count);
-  const validCount = Number.isInteger(n) && n >= 1 && n <= MAX_RUNS;
+  const validCount = Number.isInteger(n) && n >= 1 && (max === null || n <= max);
   const selection: AnalysisSelection = { count: n, kinds: kinds ?? [], outcomes };
 
   useEffect(() => {
@@ -145,6 +113,7 @@ function Analyze({ repo, tasks, preview, start, onSent }: FormProps) {
       const next = await preview(selection);
       if (mine !== asked.current) return;
       setSeen(next);
+      if (next.max) setMax(next.max);
       if (kinds === null && next.kinds) setKinds(next.kinds);
     }, PREVIEW_MS);
     return () => clearTimeout(timer);
@@ -160,12 +129,9 @@ function Analyze({ repo, tasks, preview, start, onSent }: FormProps) {
   const send = async (e: Event) => {
     e.preventDefault();
     if (!ready) return;
-    setSending(true);
-    setError(null);
     setSent(null);
-    const result = await start(selection);
-    setSending(false);
-    if (result.error) return setError(result.error);
+    const result = await run(selection);
+    if (result.error) return;
     setSent(result);
     onSent();
   };
@@ -173,19 +139,19 @@ function Analyze({ repo, tasks, preview, start, onSent }: FormProps) {
   const task = (sent?.task && tasks.find((t) => t.key === sent.task)) || null;
 
   return (
-    <form class={inbox.form} aria-label="Analysis" onSubmit={send}>
-      <fieldset class={inbox.fields} disabled={sending}>
+    <form class={dialog.form} aria-label="Analysis" onSubmit={send}>
+      <fieldset class={dialog.fields} disabled={sending}>
         <label class={styles.count}>
           Runs to read
           <input
             type="number"
             min={1}
-            max={MAX_RUNS}
+            max={max ?? undefined}
             value={count}
             aria-invalid={!validCount}
             onInput={(e) => setCount(e.currentTarget.value)}
           />
-          <span class={styles.hint}>the most recent, {MAX_RUNS} at most</span>
+          <span class={styles.hint}>the most recent{max !== null && `, ${max} at most`}</span>
         </label>
         <div class={styles.group} role="group" aria-label="Kinds">
           <span class={styles.legend}>Kinds</span>
@@ -197,7 +163,7 @@ function Analyze({ repo, tasks, preview, start, onSent }: FormProps) {
                 checked={!!kinds?.includes(k)}
                 onChange={() => setKinds(toggle(kinds ?? [], k))}
               />
-              {KIND_LABELS[k] ?? k}
+              {runKindName(k)}
             </label>
           ))}
         </div>
@@ -217,7 +183,9 @@ function Analyze({ repo, tasks, preview, start, onSent }: FormProps) {
       </fieldset>
       <p class={styles.preview} role="status" aria-live="polite">
         {!validCount
-          ? `Pick from 1 to ${MAX_RUNS} runs.`
+          ? max === null
+            ? "Pick 1 run or more."
+            : `Pick from 1 to ${max} runs.`
           : seen?.error
             ? seen.error
             : !seen || kinds === null
@@ -233,12 +201,12 @@ function Analyze({ repo, tasks, preview, start, onSent }: FormProps) {
         This is a large run: it uses the operator's Claude budget, on the model of light runs.
       </p>
       {error && (
-        <p class={`${inbox.said} ${inbox.failed}`} role="alert">
+        <p class={`${dialog.said} ${dialog.failed}`} role="alert">
           {error}
         </p>
       )}
       {sent && (
-        <p class={inbox.said}>
+        <p class={dialog.said}>
           Started:{" "}
           {sent.url ? (
             <a href={sent.url} target="_blank" rel="noreferrer">
@@ -257,8 +225,8 @@ function Analyze({ repo, tasks, preview, start, onSent }: FormProps) {
           )}
         </p>
       )}
-      <div class={inbox.actions}>
-        <button type="submit" class={inbox.send} disabled={!ready}>
+      <div class={dialog.actions}>
+        <button type="submit" class={dialog.send} disabled={!ready}>
           {sending ? "Starting…" : matching ? `Analyze ${plural(matching, "run")}` : "Analyze"}
         </button>
       </div>

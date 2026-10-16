@@ -4,11 +4,13 @@
 // stops the brainstorm ("/stop"). Each card has a button for each drag, for phones and
 // keyboards. On the All tab (no `repo`) it only lists them.
 import { useState } from "preact/hooks";
-import { STATE_NAMES, when } from "./format";
-import type { BrainstormCard } from "./graph";
-import { issueOfLink } from "./graph";
+import { Chooser, type Target } from "./Chooser";
+import { BRAINSTORM_TYPE, dragOf, droppedIssue, ISSUE_TYPE, LINK_TYPES } from "./dnd";
+import { shortRepo, STATE_NAMES, when } from "./format";
+import type { BrainstormCard } from "./graphModel";
+import { typesOf, useDropZone } from "./hooks";
+import { IssueRow } from "./IssueRow";
 import type { WorkAction } from "./types";
-import { BRAINSTORM_TYPE, Chooser, ISSUE_TYPE, type Target } from "./WorkArea";
 import styles from "./WorkArea.module.css";
 
 // What can be done to a brainstorm now: start work on it, or stop it. Not while a reply or its
@@ -17,83 +19,67 @@ const movable = (c: BrainstormCard) =>
   !c.sending && (c.task?.state === "brainstorm" || c.task?.state === "idle-brainstorm");
 
 interface Props {
-  // Null on the All tab: read-only.
+  // Null on the All tab: read-only, none of the rest is needed.
   repo: string | null;
   cards: BrainstormCard[];
-  targets: Target[];
+  targets?: Target[];
   // An action on its way, or the repo's config with errors: no button works.
-  busy: boolean;
-  blocked: boolean;
+  busy?: boolean;
+  blocked?: boolean;
   github: string;
   // The graph's, which opens an issue's open questions first.
-  onAct: (action: WorkAction) => void;
+  onAct?: (action: WorkAction) => void;
   // What a drop that couldn't be sent says.
-  onNotice: (notice: string | null) => void;
-  now?: number;
+  onNotice?: (notice: string | null) => void;
+  // api/state's clock.
+  now: number;
 }
 
 export function Brainstorms({
   repo,
   cards,
-  targets,
-  busy,
-  blocked,
+  targets = [],
+  busy = false,
+  blocked = false,
   github,
-  onAct,
-  onNotice,
-  now = Date.now(),
+  onAct = () => {},
+  onNotice = () => {},
+  now,
 }: Props) {
   const [choosing, setChoosing] = useState<number | null>(null);
-  const [over, setOver] = useState(false);
   const act = (action: WorkAction) => {
     setChoosing(null);
     onNotice(null);
     onAct(action);
   };
-  const takes = (e: DragEvent) => {
-    const types = [...(e.dataTransfer?.types ?? [])];
-    return (
-      !!repo &&
-      !blocked &&
-      !types.includes(BRAINSTORM_TYPE) &&
-      types.some((t) => [ISSUE_TYPE, "text/uri-list", "text/plain"].includes(t))
-    );
-  };
-  const onDragOver = (e: DragEvent) => {
-    if (!takes(e)) return;
-    e.preventDefault();
-    if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
-    setOver(true);
-  };
-  const onDragLeave = (e: DragEvent) => {
-    if ((e.currentTarget as Node).contains(e.relatedTarget as Node | null)) return;
-    setOver(false);
-  };
-  const onDrop = (e: DragEvent) => {
-    if (!takes(e) || !repo) return;
-    e.preventDefault();
-    setOver(false);
-    const data = e.dataTransfer;
-    const own = Number(data?.getData(ISSUE_TYPE));
-    const link = data?.getData("text/uri-list") || data?.getData("text/plain") || "";
-    const number = own || issueOfLink(link, github, repo);
-    if (!number) {
-      onNotice(
-        `That isn't a link to one of ${repo}'s issues: drag an issue's card from the backlog, or its link.`,
+  const zone = useDropZone(
+    (e) => {
+      const types = typesOf(e);
+      return (
+        !!repo &&
+        !blocked &&
+        !types.includes(BRAINSTORM_TYPE) &&
+        types.some((t) => [ISSUE_TYPE, ...LINK_TYPES].includes(t))
       );
-      return;
-    }
-    if (cards.some((c) => c.number === number && c.repo === repo)) return;
-    act({ action: "start", number, mode: "brainstorm" });
-  };
+    },
+    (e) => {
+      const number = droppedIssue(e.dataTransfer, [ISSUE_TYPE], github, repo);
+      if (!number) {
+        onNotice(
+          `That isn't a link to one of ${repo}'s issues: drag an issue's card from the backlog, or its link.`,
+        );
+        return;
+      }
+      if (cards.some((c) => c.number === number && c.repo === repo)) return;
+      act({ action: "start", number, mode: "brainstorm" });
+    },
+  );
 
   return (
     <section
-      class={`${styles.panel} ${styles.column} ${over ? styles.over : ""}`}
+      class={`${styles.panel} ${styles.column} ${zone.over ? styles.over : ""}`}
       aria-label="Brainstorms"
-      onDragOver={onDragOver}
-      onDragLeave={onDragLeave}
-      onDrop={onDrop}
+      {...zone.handlers}
     >
       <h2 class={styles.title}>Brainstorm</h2>
       {repo && (
@@ -108,30 +94,20 @@ export function Brainstorms({
           const can = !!repo && !blocked && !busy && movable(c);
           const status = c.sending ? "Sending…" : c.task ? STATE_NAMES[c.task.state] : "";
           const time = !c.sending && c.task ? when(c.task, now) : "";
+          const url = `${github}/${c.repo}/issues/${c.number}`;
           return (
             <li
               key={c.key}
               class={`${styles.issue} ${c.sending ? styles.sending : ""}`}
               draggable={!!repo && !blocked && movable(c)}
-              onDragStart={(e) => {
-                e.dataTransfer?.setData(BRAINSTORM_TYPE, String(c.number));
-                e.dataTransfer?.setData("text/uri-list", `${github}/${c.repo}/issues/${c.number}`);
-                if (e.dataTransfer) e.dataTransfer.effectAllowed = "copyMove";
-              }}
+              onDragStart={dragOf(BRAINSTORM_TYPE, c.number, url)}
             >
-              <div class={styles.row}>
-                <a
-                  class={styles.ref}
-                  href={`${github}/${c.repo}/issues/${c.number}`}
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  {repo ? "" : `${c.repo.slice(c.repo.indexOf("/") + 1)} `}#{c.number}
-                </a>
-                <span class={styles.name} title={c.title ?? `Issue #${c.number}`}>
-                  {c.title ?? `Issue #${c.number}`}
-                </span>
-              </div>
+              <IssueRow
+                number={c.number}
+                title={c.title}
+                href={url}
+                repo={repo ? undefined : shortRepo(c.repo)}
+              />
               <span class={styles.note}>
                 <span class={styles.state}>{status}</span>
                 {time && ` · ${time}`}

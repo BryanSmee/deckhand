@@ -103,7 +103,7 @@ test("Queue after…: the graph's issues to pick from", async () => {
 test("a waiting issue: Remove cancels its wait, Start now keeps its mode", async () => {
   open("#/graph/acme/app");
   const waiting = screen.getByRole("list", { name: "Waiting issues" });
-  expect(within(waiting).getByText("after #23, #22")).toBeTruthy();
+  expect(within(waiting).getByText("after #23 and #22")).toBeTruthy();
   fireEvent.click(within(waiting).getByRole("button", { name: "Remove #24's wait" }));
   await waitFor(() => expect(posted).toEqual([{ action: "dequeue", number: 24 }]));
   fireEvent.click(within(waiting).getByRole("button", { name: "Start #24 now" }));

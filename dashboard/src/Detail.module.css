@@ -13,13 +13,9 @@
 }
 
 .back {
+  composes: back from "./controls.module.css";
   display: none;
   margin: 0 0 0.5rem;
-  padding: 0;
-  border: 0;
-  background: none;
-  color: var(--accent);
-  cursor: pointer;
 }
 
 .repo {
@@ -158,20 +154,9 @@
 }
 
 .rerun {
+  composes: primary from "./controls.module.css";
   margin-left: auto;
   padding: 0.25rem 0.8rem;
-  border: 1px solid var(--accent);
-  border-radius: 6px;
-  background: var(--accent);
-  color: var(--panel);
-  font: inherit;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.rerun:disabled {
-  opacity: 0.6;
-  cursor: default;
 }
 
 /* Stop: quiet until pressed once, then the confirmation stands out. */

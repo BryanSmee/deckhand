@@ -9,7 +9,7 @@ import { type RepoList, useAppState, useRepos } from "./api";
 import { Detail } from "./Detail";
 import { Graph } from "./Graph";
 import { InboxDialog } from "./Inbox";
-import { type ChipId, CHIPS, inChip, isLive } from "./format";
+import { type ChipId, CHIPS, inChip, isLive, plural } from "./format";
 import { useReadyNotifications } from "./notify";
 import { notOnboarded, Repos } from "./Repos";
 import { formatRoute, parseRoute, type Route } from "./route";
@@ -132,7 +132,7 @@ export function Dashboard({ state, error, repos, refresh }: Props) {
     ? `Can't reach the listener (${error})`
     : state
       ? `${state.running} running (max ${state.maxParallel}) · ${state.queued} queued` +
-        (hooks ? ` · ${hooks} preview hook${hooks > 1 ? "s" : ""}` : "")
+        (hooks ? ` · ${plural(hooks, "preview hook")}` : "")
       : "Loading…";
   const waiting = notOnboarded(repos?.repos ?? null);
   const notify = useReadyNotifications(state);

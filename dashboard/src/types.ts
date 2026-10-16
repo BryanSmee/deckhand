@@ -35,6 +35,7 @@ export interface Run {
   // Why the listener started it itself ("conflict": a pull request to rebase); null for comments.
   reason?: string | null;
   // What ran it (listener/agents/): "claude", also for runs from before agents had names.
+  // Sent, not shown (nor are provider, fallback, picked and phase).
   agent?: string;
   // Where its agent's API calls went (listener/agents/), and why when a fallback picked it:
   // the entry that failed (`from`, "claude@anthropic"), and how ("overloaded (529)").
@@ -50,7 +51,7 @@ export interface Run {
   status: RunStatus;
   // The first line of its reply.
   summary?: string | null;
-  // How many comments reached it while it ran.
+  // How many comments reached it while it ran. Sent, not shown.
   delivered?: number;
 }
 
@@ -69,6 +70,7 @@ export interface PullRequest {
 export interface Task {
   key: string;
   repo: string;
+  // Sent, not shown.
   project: string;
   number: number | null;
   title: string | null;
@@ -138,7 +140,8 @@ export interface Blocker {
   closed: Closed;
 }
 
-// A preview hook waiting or running (listener/previews.mjs status()).
+// A preview hook waiting or running (listener/previews.mjs status()). Sent, not shown: the
+// top bar counts them.
 export interface Preview {
   // Its container's name.
   name: string;
@@ -155,6 +158,7 @@ export interface State {
   tasks: Task[];
   edges: Edge[];
   blockers: Blocker[];
+  // Sent, not shown: the chips group the states themselves (format.ts CHIPS).
   states: TaskState[];
   running: number;
   queued: number;
@@ -191,7 +195,8 @@ export interface Repo {
   issues: boolean;
   status: RepoStatus;
   issue: { number: number; url: string } | null;
-  // When its config was last read from GitHub; null when it couldn't be.
+  // When its config was last read from GitHub; null when it couldn't be. Sent, not shown: the
+  // config panel says when it read its own.
   readAt: number | null;
 }
 
@@ -289,6 +294,7 @@ export interface Backlog {
   modes: string[];
   // Its .deckhand.yaml has errors: nothing starts there.
   errors: boolean;
+  // Sent, not shown.
   readAt: number;
 }
 
@@ -299,6 +305,9 @@ export type WorkAction =
   | { action: "queue"; number: number; after: number; mode?: string }
   | { action: "dequeue"; number: number }
   | { action: "stop"; number: number };
+// A work area action sent and not confirmed yet (api.ts useWorkArea()): the graph shows what
+// it will do at once.
+export type Pending = WorkAction & { repo: string; title: string | null };
 // The task page's Stop (not the graph's): its run stops, or what is queued is dropped. `pr`:
 // a pull request's task.
 export type CancelAction = { action: "cancel"; number: number; pr: boolean };
@@ -379,12 +388,14 @@ export interface ThreadComment extends Post {
 // GET api/repos/<owner>/<repo>/discussions/<n>: the opening post and the latest comments.
 export interface Thread {
   number: number;
+  // Sent, not shown: the task's own title heads the page.
   title: string | null;
   url: string | null;
   post: Post;
   comments: ThreadComment[];
   // Older comments, on GitHub only.
   more: number;
+  // Sent, not shown.
   readAt: number;
 }
 
@@ -402,7 +413,7 @@ export interface AnalysisSelection {
 // GET api/repos/<owner>/<repo>/analyze: what the selection would read. `runs`: the ids that
 // match, newest first; `included` of them fit in the digest, `left` don't; `tokens`: about
 // what the digest costs to read; `kinds`: those of the repo's finished runs; `max`: the
-// largest `count`.
+// largest `count`. `runs` and `bytes`: sent, not shown.
 export interface AnalysisPreview extends WorkResult {
   runs?: string[];
   included?: number;

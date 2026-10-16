@@ -8,10 +8,13 @@ import type { State, Task } from "./types";
 
 let previews: string[];
 let posted: [string, unknown][];
+// The largest count the listener takes (listener/analysis.mjs MAX_RUNS).
+let max: number;
 beforeEach(() => {
   previews = [];
   posted = [];
   history.replaceState(null, "", "/");
+  max = 50;
   Object.assign(globalThis, {
     EventSource: class {
       addEventListener() {}
@@ -48,7 +51,7 @@ beforeEach(() => {
         bytes: n * 4000,
         tokens: n * 1000,
         kinds: ["bug", "review", "work"],
-        max: 50,
+        max,
       });
     }
     return new Response("{}", { status: 404 });
@@ -194,4 +197,14 @@ test("a refusal shows the listener's message", async () => {
   );
   fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
   expect(screen.queryByRole("dialog")).toBeNull();
+});
+
+test("the count's limit is the listener's", async () => {
+  max = 30;
+  const { dialog } = openDialog(stateWith(), "#/acme/app");
+  await waitFor(() => expect(within(dialog).getByText("the most recent, 30 at most")).toBeTruthy());
+  fireEvent.input(within(dialog).getByRole("spinbutton", { name: /Runs to read/ }), {
+    target: { value: "40" },
+  });
+  await waitFor(() => expect(status(dialog)).toBe("Pick from 1 to 30 runs."));
 });

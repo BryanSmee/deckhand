@@ -3,19 +3,23 @@
 // from, the operator's grant, and the raw .deckhand.yaml. Read from GitHub when it opens and
 // on Refresh; changing it is a commit on the default branch.
 import { useRepoConfig } from "./api";
-import { ago, REPO_LABELS as LABELS } from "./format";
+import { ago } from "./format";
+import { RepoBadge } from "./RepoBadge";
 import type { Grant, Repo, RepoConfig, Source } from "./types";
+import controls from "./controls.module.css";
 import styles from "./ConfigPanel.module.css";
 
-const TAGS: Record<Source, string> = {
-  repo: "from repo",
-  operator: "from operator",
-  refused: "refused",
-  unknown: "unknown",
+// A source's tag and its tone: unknown is yellow (a grant to fix), unlike an unknown status.
+const TAGS: Record<Source, [string, string]> = {
+  repo: ["from repo", controls.run],
+  operator: ["from operator", controls.quiet],
+  refused: ["refused", controls.err],
+  unknown: ["unknown", controls.warn],
 };
 
 function Tag({ source }: { source: Source }) {
-  return <span class={`${styles.tag} ${styles[source]}`}>{TAGS[source]}</span>;
+  const [label, tone] = TAGS[source];
+  return <span class={`${styles.tag} ${tone}`}>{label}</span>;
 }
 
 interface Props {
@@ -41,7 +45,7 @@ export function ConfigPanel({ repo, row, onRow, onBack, now }: Props) {
         </button>
         <h2>
           {repo}
-          {status && <span class={`${styles.status} ${styles[status]}`}>{LABELS[status]}</span>}
+          {status && <RepoBadge status={status} />}
         </h2>
         <div class={styles.toolbar}>
           {config && (

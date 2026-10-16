@@ -245,3 +245,13 @@ test("a card's whole title is in its title attribute", async () => {
   const { cards } = await show([brainstorm(150, "brainstorm")]);
   expect(within(cards()).getByText("Brainstorm 150").getAttribute("title")).toBe("Brainstorm 150");
 });
+
+test("a card's time follows the listener's clock, not the browser's", () => {
+  history.replaceState(null, "", "#/graph");
+  render(<Dashboard state={{ ...state, now: state.now - 3600000 }} error={null} />);
+  const cards = screen.getByRole("list", { name: "Issues being brainstormed" });
+  // acme/app#20 goes idle 6 minutes after the fixture's `now`: an hour more, an hour earlier.
+  expect(
+    within(cardOf(cards, "Egress proxy: allow wildcard ports")).getByText(/idle in 66 min/),
+  ).toBeTruthy();
+});
