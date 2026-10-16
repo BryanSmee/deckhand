@@ -95,7 +95,7 @@ ${configReference}`;
 // The run the trigger line starts on an onboarding issue: the agreed files, nothing else.
 export function onboardingWorkPrompt(task) {
   const n = task.number;
-  const base = task.base || "main";
+  const { base } = task;
   return `The maintainer confirmed the onboarding proposal on GitHub issue #${n} of ${task.repo}
 (\`gh issue view ${n} --comments\` has the conversation). Open the pull request:
 1. The sandbox has already checked out the issue's branch, pushed it and opened a draft pull
@@ -153,7 +153,7 @@ function issueBranches(n, branches) {
 }
 
 export function initialPrompt(task, branches = []) {
-  const base = task.base || "main";
+  const { base } = task;
   const common = `Follow the repository's AGENTS.md and CLAUDE.md if it has them, with tests where the
 code has them, and run the checks they list before pushing. Never push to ${base}. When
 something is ambiguous, pick the reasonable option and say so rather than stopping, unless it
@@ -191,7 +191,7 @@ ${common}`;
 // instructions have the generic rules, as for work.
 export function modePrompt(task, own, instructions, branches = []) {
   const { number: n, repo } = task;
-  const base = task.base || "main";
+  const { base } = task;
   const where =
     task.kind === "pr"
       ? `pull request #${n} of ${repo}. Read it with \`gh pr view ${n} --comments\` and \`gh pr diff ${n}\``

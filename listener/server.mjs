@@ -8,7 +8,6 @@
 // ../docs/architecture.md. No dependencies: node:http, node:crypto, docker CLI.
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
-import { AGENT_SECRETS } from "./agents/index.mjs";
 import { createAnalysis } from "./analysis.mjs";
 import { createAuth, sessionKey } from "./auth.mjs";
 import { createAnthropicProxy } from "./anthropic.mjs";
@@ -31,6 +30,7 @@ import {
   loadCredentials,
   saveCredentials,
 } from "./github-app.mjs";
+import { getJson, graphql as graphqlOf } from "./github.mjs";
 import { grantErrors, loadGrants } from "./grants.mjs";
 import { createHttp } from "./http.mjs";
 import { createHistory } from "./history.mjs";
@@ -45,6 +45,7 @@ import { createRestart } from "./restart.mjs";
 import { loadRuns } from "./runlog.mjs";
 import { createDiscussionApi } from "./discussions.mjs";
 import { createDockerRunner } from "./runner/docker.mjs";
+import { operatorSecrets } from "./secrets.mjs";
 import { createRuns } from "./runs.mjs";
 import { createSetup } from "./setup.mjs";
 import { createTasks } from "./tasks.mjs";
@@ -135,15 +136,8 @@ async function github(repo, method, path, body, expected = []) {
   return ctx.app.request(repo, method, path, body, expected);
 }
 
-// Discussions are written to through GraphQL only. Its errors come with a 200: thrown here.
-async function graphql(repo, query, variables) {
-  const res = await github(repo, "POST", "/graphql", { query, variables });
-  const answer = await res.json().catch(() => ({}));
-  if (!res.ok || answer.errors) {
-    throw new Error(`GraphQL: ${res.status} ${JSON.stringify(answer.errors ?? answer)}`);
-  }
-  return answer.data;
-}
+// Discussions are written to through GraphQL only. Its errors come with a 200: thrown there.
+const graphql = (repo, query, variables) => graphqlOf(github, repo, query, variables);
 
 const setup = createSetup({
   config,
@@ -164,6 +158,13 @@ const auth = createAuth({
   log,
 });
 
+// The first page of a list: the recent ones are enough there.
+async function listOf(repo, path) {
+  const list = await getJson(github, repo, path);
+  if (!Array.isArray(list)) throw new Error(`GitHub GET ${path}: no list`);
+  return list;
+}
+
 // The dashboard's titles and closed states: from webhooks, else fetched (titles.mjs).
 const titles = createTitles({
   path: join(config.dataDir, "titles.json"),
@@ -180,10 +181,8 @@ const titles = createTitles({
       return { title: data.repository?.discussion?.title ?? null };
     }
     // Pull requests are issues too, for their title and whether they are merged.
-    const res = await github(repo, "GET", `/repos/${repo}/issues/${number}`, undefined, [404]);
-    if (!res.ok) return null;
-    const issue = await res.json();
-    return { title: issue.title ?? null, closed: closedAs(outcome(issue)) };
+    const issue = await getJson(github, repo, `/repos/${repo}/issues/${number}`, [404]);
+    return issue && { title: issue.title ?? null, closed: closedAs(outcome(issue)) };
   },
 });
 // Logs that have their title (newest first: the latest wins).
@@ -193,32 +192,20 @@ titles.seed(ctx.runs.map((r) => [r.key, r.title]));
 const pulls = createPulls({
   path: join(config.dataDir, "pulls.json"),
   log,
-  listPulls: async (repo) => {
-    const res = await github(
-      repo,
-      "GET",
-      `/repos/${repo}/pulls?state=all&sort=updated&direction=desc&per_page=100`,
-    );
-    const list = res.ok ? await res.json() : null;
-    if (!Array.isArray(list)) throw new Error(`no list (${res.status})`);
-    return list;
-  },
+  listPulls: (repo) =>
+    listOf(repo, `/repos/${repo}/pulls?state=all&sort=updated&direction=desc&per_page=100`),
 });
 
 // Open issues labelled needs-input: from webhooks, and looked up once per start (inputs.mjs).
 const inputs = createInputs({
   path: join(config.dataDir, "inputs.json"),
   log,
-  listLabelled: async (repo) => {
+  listLabelled: (repo) => {
     const label = encodeURIComponent(config.needsInputLabel);
-    const res = await github(
+    return listOf(
       repo,
-      "GET",
       `/repos/${repo}/issues?labels=${label}&state=open&sort=updated&per_page=100`,
     );
-    const list = res.ok ? await res.json() : null;
-    if (!Array.isArray(list)) throw new Error(`no list (${res.status})`);
-    return list;
   },
 });
 
@@ -424,10 +411,7 @@ ctx.repoApi = createRepoApi({
 // their logs must never carry.
 ctx.analysis = createAnalysis({
   runs: () => ctx.runs,
-  secrets: () => [
-    ...AGENT_SECRETS.map((name) => process.env[name]),
-    ...(ctx.openai?.secrets() ?? []),
-  ],
+  secrets: () => operatorSecrets(ctx),
 });
 
 // The graph's work area: the backlog, starting or queueing issues by dragging them, and the

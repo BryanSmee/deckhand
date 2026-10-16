@@ -4,7 +4,8 @@ import { test } from "node:test";
 import { createAnthropicProxy, credentialName } from "../listener/anthropic.mjs";
 import { planWarning } from "../listener/upstream.mjs";
 import { createBroker } from "../listener/broker.mjs";
-import { redact } from "../listener/secrets.mjs";
+import { AGENT_SECRETS } from "../listener/agents/index.mjs";
+import { operatorSecrets, redact } from "../listener/secrets.mjs";
 
 const listen = (server) =>
   new Promise((resolve) =>
@@ -231,6 +232,18 @@ test("redaction replaces every occurrence of each secret, and leaves short value
     "token [redacted], again [redacted]; run [redacted]",
   );
   assert.equal(redact("abc", ["abc"]), "abc");
+});
+
+test("operatorSecrets: the agents' credentials from the environment, and the ChatGPT sign-in's", () => {
+  const env = { ANTHROPIC_API_KEY: "sk-ant-api03-abcdefghijklmnop", OTHER: "not a secret" };
+  const secrets = operatorSecrets({ openai: { secrets: () => ["chatgpt-token"] } }, env);
+  assert.ok(AGENT_SECRETS.includes("ANTHROPIC_API_KEY"));
+  assert.ok(secrets.includes(env.ANTHROPIC_API_KEY));
+  assert.ok(!secrets.includes(env.OTHER));
+  assert.equal(secrets.at(-1), "chatgpt-token");
+  assert.equal(secrets.length, AGENT_SECRETS.length + 1);
+  // Before the ChatGPT proxy exists.
+  assert.equal(operatorSecrets({}, env).length, AGENT_SECRETS.length);
 });
 
 test("a run on another provider goes to its URL with its key; the provider's status is kept", async (t) => {

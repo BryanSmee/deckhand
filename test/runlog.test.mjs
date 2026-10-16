@@ -9,11 +9,13 @@ import {
   format,
   lastResult,
   loadRuns,
+  minutes,
   outcome,
   publicRun,
   saveSummary,
   stream,
   summaryOf,
+  writeEvent,
 } from "../listener/runlog.mjs";
 import { agentFor } from "../listener/agents/index.mjs";
 
@@ -41,6 +43,26 @@ test("summary: the first sentence of the reply, not its headings", () => {
   const long = summaryOf({ text: "x".repeat(300) });
   assert.equal(long.length, 200);
   assert.ok(long.endsWith("…"));
+});
+
+test("writeEvent: the listener's line, at now unless it says when; minutes to a tenth", () => {
+  const lines = [];
+  const file = { write: (text) => lines.push(text) };
+  const before = Date.now();
+  writeEvent(file, "note", { message: "hi" });
+  writeEvent(file, "cancelled", { by: "alice", at: 5 });
+  assert.ok(lines.every((l) => l.endsWith("\n")));
+  const [note, cancelled] = lines.map((l) => JSON.parse(l));
+  assert.equal(note.type, "listener");
+  assert.equal(note.event, "note");
+  assert.equal(note.message, "hi");
+  assert.ok(note.at >= before && note.at <= Date.now());
+  // Its fields in their order: logs from before read the same.
+  assert.equal(lines[1], '{"type":"listener","event":"cancelled","by":"alice","at":5}\n');
+  assert.deepEqual(cancelled, { type: "listener", event: "cancelled", by: "alice", at: 5 });
+  assert.equal(minutes(90_000), 1.5);
+  assert.equal(minutes(0), 0);
+  assert.equal(minutes(6_100_000), 101.7);
 });
 
 test("clip: lines first, then characters", () => {

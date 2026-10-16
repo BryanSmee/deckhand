@@ -7,9 +7,11 @@
 // No loops: each attempt's (head, base) pair is kept in conflicts.json, and the same pair
 // never starts a second run, across restarts: a rebase that failed or stopped to ask waits
 // for a new push or a new base commit.
-import { sameRepo } from "./events.mjs";
-import { readJson, writeJsonAtomic } from "./store.mjs";
-import { parseKey } from "./titles.mjs";
+import { repoAllowed } from "./config.mjs";
+import { hasLabel } from "./comments.mjs";
+import { parseKey, sameRepo } from "./events.mjs";
+import { getJson } from "./github.mjs";
+import { persistentMap } from "./store.mjs";
 
 // How often the watcher wakes up; each repo is checked at its own interval.
 export const TICK_MS = 60_000;
@@ -34,17 +36,13 @@ export function createConflicts({
   now = Date.now,
 }) {
   // "org/repo#12" → { pr, head, base } of its last attempt.
-  const attempts = new Map(Object.entries(readJson(path, {})));
+  const attempts = persistentMap(path);
   // repo (lowercase) → when it is next due. A restart checks every repo at once.
   const due = new Map();
   let ticking = null;
   let timer = null;
 
-  async function json(repo, url, expected = []) {
-    const res = await github(repo, "GET", url, undefined, expected);
-    if (!res.ok) return null;
-    return res.json();
-  }
+  const json = (repo, url, expected) => getJson(github, repo, url, expected);
 
   // One pass over the repos that are due. Overlapping ticks share the pass under way.
   function tick() {
@@ -59,7 +57,7 @@ export function createConflicts({
       const target = parseKey(key);
       if (!target || target.kind === "discussion") continue;
       // Fail closed, as for webhooks: the operator may have narrowed ALLOWED_REPOS since.
-      if (config.repos.length && !config.repos.includes(target.repo.toLowerCase())) continue;
+      if (!repoAllowed(config, target.repo)) continue;
       const repo = target.repo.toLowerCase();
       if ((due.get(repo) ?? 0) > now()) continue;
       if (!byRepo.has(repo)) byRepo.set(repo, { repo: target.repo, tasks: [] });
@@ -116,11 +114,11 @@ export function createConflicts({
     // Checked again: a comment may have come during the calls above.
     if (busy(key)) return null;
     attempts.set(key, pair);
-    writeJsonAtomic(path, Object.fromEntries(attempts));
+    attempts.save();
     log(`${key}: pull request #${number} conflicts with ${pr.base.ref}, starting a rebase run`);
     await accept({
       repo,
-      id: key.slice(key.lastIndexOf("#") + 1),
+      id: target.id,
       kind: target.kind,
       number: target.number,
       title: target.kind === "pr" ? (pr.title ?? null) : null,
@@ -142,11 +140,10 @@ export function createConflicts({
   async function waitsForInput(repo, pr, target) {
     const name = config.needsInputLabel;
     if (!name) return false;
-    const has = (labels) => (labels ?? []).some((l) => l.name === name);
-    if (has(pr.labels)) return true;
+    if (hasLabel(pr.labels, name)) return true;
     if (target.kind !== "issue") return false;
-    const issue = await json(repo, `/repos/${repo}/issues/${target.number}`, [404]);
-    return has(issue?.labels);
+    const issue = await json(repo, `/repos/${repo}/issues/${target.number}`, [404, 410]);
+    return hasLabel(issue?.labels, name);
   }
 
   // The base branch's latest commit: a pull request's own base.sha can lag behind it.

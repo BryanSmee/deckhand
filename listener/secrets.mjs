@@ -2,6 +2,7 @@
 // a mistake elsewhere could bring it back) and the run's own secret, which the sandbox holds.
 // Whatever Claude writes is read by people who may be anyone on a public repo: its reply and
 // its log are redacted before they are posted or stored.
+import { AGENT_SECRETS } from "./agents/index.mjs";
 
 export const REDACTED = "[redacted]";
 
@@ -17,4 +18,10 @@ export function redact(text, secrets) {
     }
   }
   return out;
+}
+
+// The operator's credentials as the listener holds them: the agents' (AGENT_SECRETS, from its
+// environment) and the ChatGPT sign-in's (`ctx.openai`, openai.mjs), once there is one.
+export function operatorSecrets(ctx, env = process.env) {
+  return [...AGENT_SECRETS.map((name) => env[name]), ...(ctx.openai?.secrets() ?? [])];
 }

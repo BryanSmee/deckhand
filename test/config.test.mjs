@@ -7,6 +7,7 @@ import {
   normalize,
   parseConfigFile,
   readConfigFile,
+  repoAllowed,
 } from "../listener/config.mjs";
 
 test("refuses to start without allowed users", () => {
@@ -22,6 +23,14 @@ test("allowed users and repos are lowercase lists", () => {
   });
   assert.deepEqual(config.users, ["alice", "bob"]);
   assert.deepEqual(config.repos, ["org/repo"]);
+});
+
+test("repoAllowed: ALLOWED_REPOS whatever the case, every repo without it", () => {
+  const some = loadConfig({ ALLOWED_USERS: "alice", ALLOWED_REPOS: "Org/Repo" });
+  assert.equal(repoAllowed(some, "org/repo"), true);
+  assert.equal(repoAllowed(some, "ORG/REPO"), true);
+  assert.equal(repoAllowed(some, "org/other"), false);
+  assert.equal(repoAllowed(loadConfig({ ALLOWED_USERS: "alice" }), "any/repo"), true);
 });
 
 test("names come from settings, with a neutral default", () => {

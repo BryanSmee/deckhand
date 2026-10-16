@@ -3,18 +3,7 @@ import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { closedAs, createTitles, parseKey } from "../listener/titles.mjs";
-
-test("task keys: issues, pull requests and discussions", () => {
-  assert.deepEqual(parseKey("org/repo#12"), { repo: "org/repo", kind: "issue", number: 12 });
-  assert.deepEqual(parseKey("org/repo#pr-3"), { repo: "org/repo", kind: "pr", number: 3 });
-  assert.deepEqual(parseKey("org/repo#discussion-8"), {
-    repo: "org/repo",
-    kind: "discussion",
-    number: 8,
-  });
-  assert.equal(parseKey("org-repo-12"), null);
-});
+import { closedAs, createTitles } from "../listener/titles.mjs";
 
 test("titles: webhooks first, the rest fetched once and kept across a restart", async () => {
   const path = join(mkdtempSync(join(tmpdir(), "deckhand-")), "titles.json");

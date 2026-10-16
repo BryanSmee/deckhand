@@ -46,6 +46,16 @@ export function openLog(path) {
   return { write: (text) => appendFileSync(path, text) };
 }
 
+// One of the listener's own lines in a run's log (`file`: openLog()'s): `event` ("note",
+// "delivered", "cancelled"…) with what `fields` add, at `fields.at` or now.
+export function writeEvent(file, event, fields = {}) {
+  const at = "at" in fields ? {} : { at: Date.now() };
+  file.write(JSON.stringify({ type: "listener", event, ...at, ...fields }) + "\n");
+}
+
+// A duration in minutes, to a tenth: what the dashboard, replies and digests show.
+export const minutes = (ms) => Math.round(ms / 6000) / 10;
+
 // Rebuilds the list after a restart, so the dashboard survives it. From the runs' summaries:
 // a log is read in full (a few MB each) only when its run has none, from before summaries or
 // a listener that died mid-run, and then gets one, so the next start skips it. A run still
@@ -229,8 +239,7 @@ function agentEntry(e, agent) {
     case "toolOutput":
       return { kind: "output", error: e.error, text: clip(e.text, 40, 4000) };
     case "result": {
-      const minutes = Math.round(e.durationMs / 6000) / 10;
-      return { kind: "result", status: outcome(e), text: e.text, minutes };
+      return { kind: "result", status: outcome(e), text: e.text, minutes: minutes(e.durationMs) };
     }
   }
   return null;

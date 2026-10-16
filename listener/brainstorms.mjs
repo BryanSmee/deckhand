@@ -1,6 +1,6 @@
 // Each issue's conversation state, kept across listener restarts: its brainstorm
 // (brainstorms.json) and the repo's own mode its session is in (modes.json).
-import { readJson, writeJsonAtomic } from "./store.mjs";
+import { persistentMap, readJson, writeJsonAtomic } from "./store.mjs";
 
 // Claude's reply keeps a brainstorm active at least this long, so an answer can follow it.
 export const REPLY_GRACE_MS = 2 * 60000;
@@ -87,12 +87,12 @@ export function createBrainstorms({ path, idleMs, busy, log, now = Date.now }) {
 // key → mode name: a comment without a trigger or "/mode" line goes on in that mode
 // (modeOf()). Fresh modes don't change it; work, a brainstorm or another "/mode" do.
 export function createIssueModes(path) {
-  const modes = new Map(Object.entries(readJson(path, {})));
+  const modes = persistentMap(path);
   function set(key, mode) {
     if ((modes.get(key) ?? null) === mode) return;
     if (mode) modes.set(key, mode);
     else modes.delete(key);
-    writeJsonAtomic(path, Object.fromEntries(modes));
+    modes.save();
   }
   return { get: (key) => modes.get(key), has: (key) => modes.has(key), set };
 }

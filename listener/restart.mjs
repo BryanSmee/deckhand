@@ -5,6 +5,7 @@
 import { readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { agentFor } from "./agents/index.mjs";
+import { parseKey, taskKey } from "./events.mjs";
 import { permissionsFor } from "./modes.mjs";
 import { addRun, openLog, saveSummary } from "./runlog.mjs";
 import { readJson, writeJsonAtomic } from "./store.mjs";
@@ -64,7 +65,7 @@ export function createRestart(ctx) {
     const previews = ctx.previews.status();
     const reasons = (shown) => [
       ...active
-        .filter((r) => shown(r.repo ?? r.key.slice(0, r.key.lastIndexOf("#"))))
+        .filter((r) => shown(r.repo ?? parseKey(r.key)?.repo))
         .map((r) => `${r.kind} run ${r.key} since ${new Date(r.startedAt).toISOString()}`),
       ...(inflight.size ? [`${inflight.size} reaction update(s) in flight`] : []),
       // A preview hook may be deploying: a restart waits for it too.
@@ -106,7 +107,7 @@ export function createRestart(ctx) {
     if (!Array.isArray(saved)) return; // Nothing was waiting.
     rmSync(queuePath, { force: true });
     for (const t of saved) {
-      const key = `${t.repo}#${t.id}`;
+      const key = taskKey(t.repo, t.id);
       // ALLOWED_REPOS or ALLOWED_USERS may have changed with the restart. The repo's own
       // users are checked when the run begins (runs.mjs), or below for a run still going.
       t.pending = t.pending.filter((item) => {
@@ -176,7 +177,7 @@ export function createRestart(ctx) {
   }
 
   function restoreRun(saved) {
-    const key = `${saved.task.repo}#${saved.task.id}`;
+    const key = taskKey(saved.task.repo, saved.task.id);
     const logPath = join(ctx.logDir, `${saved.id}.log`);
     // State saved before records kept their screenshots' folder has it beside them.
     const shots = saved.record.shots ?? saved.shots ?? null;

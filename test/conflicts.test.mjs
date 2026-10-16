@@ -154,6 +154,9 @@ test("running or queued tasks, forks, closed pull requests and needs-input are l
     closed: setup({ prs: { 31: pull(31, { state: "closed" }) } }),
     labelled: setup({ prs: { 31: pull(31, { labels: [{ name: "needs-input" }] }) } }),
     "issue labelled": setup({ issue: { labels: [{ name: "needs-input" }] } }),
+    // GitHub's label names are case-insensitive: one set by hand counts too.
+    "labelled by hand": setup({ prs: { 31: pull(31, { labels: [{ name: "Needs-Input" }] }) } }),
+    "issue labelled by hand": setup({ issue: { labels: [{ name: "NEEDS-INPUT" }] } }),
   };
   for (const [what, w] of Object.entries(cases)) {
     await w.conflicts.tick();

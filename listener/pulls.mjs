@@ -2,28 +2,23 @@
 // { number, url, state, readyAt }. `pull_request` webhooks keep it current (events.mjs
 // pullRequest()); tasks older than that are looked up once per listener start, from the
 // repo's recent pull requests. Kept in pulls.json, so a restart neither forgets nor asks again.
-import { linkedIssue, prState, sameRepo } from "./events.mjs";
-import { readJson, writeJsonAtomic } from "./store.mjs";
-import { parseKey } from "./titles.mjs";
+import { linkedIssue, parseKey, prState, sameRepo } from "./events.mjs";
+import { persistentMap } from "./store.mjs";
 
 const open = (pr) => pr?.state === "draft" || pr?.state === "ready";
 
 // `listPulls(repo)`: the repo's recent pull requests, as GET /repos/{repo}/pulls has them.
 export function createPulls({ path, listPulls, log = () => {} }) {
-  const pulls = new Map(Object.entries(readJson(path, {})));
+  const pulls = persistentMap(path);
   // Listed once per listener: tasks after that get theirs from webhooks.
   const listed = new Set();
   let fetching = null;
-
-  function save() {
-    writeJsonAtomic(path, Object.fromEntries(pulls));
-  }
 
   // Records `pr` on task `key`, the latest event winning: the same pull request leaves the
   // task it was on (its "Closes #n" was edited). A closed pull request doesn't replace another
   // one still open on the task: a new attempt was opened before the old one was closed.
   function record(key, pr) {
-    const repo = key.slice(0, key.lastIndexOf("#"));
+    const repo = parseKey(key)?.repo;
     const current = pulls.get(key);
     if (current && current.number !== pr.number && open(current) && !open(pr)) return false;
     let before = null;
@@ -35,7 +30,7 @@ export function createPulls({ path, listPulls, log = () => {} }) {
     // An edit or a close says nothing about when it turned ready: the earlier event did.
     const readyAt = pr.readyAt ?? before?.readyAt ?? null;
     pulls.set(key, { ...pr, readyAt });
-    save();
+    pulls.save();
     return true;
   }
 
@@ -70,7 +65,7 @@ export function createPulls({ path, listPulls, log = () => {} }) {
           changed = true;
         }
       }
-      if (changed) save();
+      if (changed) pulls.save();
     })()
       // Nobody awaits it (http.mjs state()): a failure is logged, never thrown.
       .catch((error) => log(`Pull requests: ${error.message ?? error}`))

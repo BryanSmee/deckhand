@@ -27,6 +27,11 @@ export function list(value) {
     .filter(Boolean);
 }
 
+// Whether ALLOWED_REPOS lets `repo` ("Owner/Name") through: empty, it lets all of them.
+export function repoAllowed(config, repo) {
+  return !config.repos.length || config.repos.includes(repo.toLowerCase());
+}
+
 // "@Deckhand:" matches "deckhand", "Let's go!" matches "lets go".
 export function normalize(line) {
   return line

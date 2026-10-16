@@ -1,10 +1,40 @@
 // Webhook deliveries → work items: signature check, allowlist, trigger lines. No state, so
 // it is tested on its own (../test/events.test.mjs).
 import { createHmac, timingSafeEqual } from "node:crypto";
-import { normalize } from "./config.mjs";
+import { normalize, repoAllowed } from "./config.mjs";
 
 // Marks our own comments, in case one ever reaches us from another account than the bot's.
 export const MARKER = "<!-- deckhand -->";
+
+// A task's key: "org/repo#12" (an issue), "org/repo#pr-5" (a pull request of its own),
+// "org/repo#discussion-8". `id`: its items' (prId(), String(n), discussion-<n>).
+export const taskKey = (repo, id) => `${repo}#${id}`;
+
+// The id of a pull request's own task (one that closes no issue it may speak for).
+export const prId = (number) => `pr-${number}`;
+
+// "org/repo#pr-3" → { repo: "org/repo", id: "pr-3", kind: "pr", number: 3 }; null for what
+// isn't a task's key.
+export function parseKey(key) {
+  const m = /^([^/#]+\/[^/#]+)#((?:(pr|discussion)-)?(\d+))$/.exec(key);
+  return m && { repo: m[1], id: m[2], kind: m[3] ?? "issue", number: Number(m[4]) };
+}
+
+// An issue's item, as a comment on it makes: { repo, id, kind, number, title, replyTo },
+// and what `fields` add (the trigger, the text, the comment…). `issue`: { number, title }, as
+// GitHub has it.
+export function issueItem(repo, issue, fields = {}) {
+  const n = issue.number;
+  return {
+    repo,
+    id: String(n),
+    kind: "issue",
+    number: n,
+    title: issue.title ?? null,
+    replyTo: n,
+    ...fields,
+  };
+}
 
 // GitHub's X-Hub-Signature-256 for the raw body, compared in constant time.
 export function verified(secret, signature, body) {
@@ -182,7 +212,7 @@ export function workItem(config, event, p, skip = () => null) {
   // The preview hook's (previewEvent()); nothing runs Claude for them.
   if (event === "pull_request" || event === "workflow_run") return skip(`${event}: no hook`);
   if (!repo || !author) return skip("not a comment");
-  if (config.repos.length && !config.repos.includes(repo.toLowerCase())) {
+  if (!repoAllowed(config, repo)) {
     return skip(`${repo} not in ALLOWED_REPOS`);
   }
   if (author.type === "Bot") return skip("comment by a bot");
@@ -203,18 +233,7 @@ export function workItem(config, event, p, skip = () => null) {
 // for an entry sent from the dashboard (work.mjs), where `author` is who sent it and `body` its
 // text without the App's line.
 export function inboxItem(repo, issue, trigger, comment, author, body) {
-  const n = issue.number;
-  return {
-    repo,
-    id: String(n),
-    kind: "issue",
-    number: n,
-    title: issue.title ?? null,
-    replyTo: n,
-    comment,
-    trigger,
-    text: entry(author, comment.html_url, body),
-  };
+  return issueItem(repo, issue, { comment, trigger, text: entry(author, comment.html_url, body) });
 }
 
 // A comment on an issue or a pull request (pull requests are issues to that event).
@@ -235,17 +254,7 @@ function issueCommentItem(config, event, p, skip) {
       ["bug", config.inbox?.bugs],
     ].find(([, number]) => number === p.issue.number)?.[0];
   if (inbox) return inboxItem(repo, p.issue, inbox, p.comment, p.comment.user, body);
-  const n = p.issue.number;
-  const issue = {
-    repo,
-    id: String(n),
-    kind: "issue",
-    number: n,
-    title: p.issue.title ?? null,
-    replyTo: n,
-    comment: p.comment,
-  };
-  return { ...issue, trigger, modeLine: mode, after, text };
+  return issueItem(repo, p.issue, { comment: p.comment, trigger, modeLine: mode, after, text });
 }
 
 // A comment on a line of a pull request's diff: Claude gets the line and its hunk.
@@ -323,7 +332,7 @@ export function previewEvent(config, event, p, skip = () => null) {
   if (event !== "pull_request" && event !== "workflow_run") return null;
   const repo = p.repository?.full_name;
   if (!p.installation?.id || !repo) return skip("not from an installation of the App");
-  if (config.repos.length && !config.repos.includes(repo.toLowerCase())) {
+  if (!repoAllowed(config, repo)) {
     return skip(`${repo} not in ALLOWED_REPOS`);
   }
   return { repo, base: p.repository.default_branch || "main", event };
@@ -340,10 +349,10 @@ export function closedItem(config, event, p, skip = () => null) {
   const repo = p.repository?.full_name;
   const target = event === "issues" ? p.issue : p.pull_request;
   if (!p.installation?.id || !repo || !target) return skip("not from an installation of the App");
-  if (config.repos.length && !config.repos.includes(repo.toLowerCase())) {
+  if (!repoAllowed(config, repo)) {
     return skip(`${repo} not in ALLOWED_REPOS`);
   }
-  const key = `${repo}#${event === "issues" ? "" : "pr-"}${target.number}`;
+  const key = taskKey(repo, event === "issues" ? target.number : prId(target.number));
   if (p.action === "reopened") return { repo, number: target.number, key, state: "open" };
   // The pull_request event's own shape → the issues API's, which outcome() reads.
   const issue =
@@ -363,7 +372,7 @@ export function touchedItems(config, event, p) {
   const repo = p.repository?.full_name;
   const target = event === "pull_request" ? p.pull_request : p.issue;
   if (!p.installation?.id || !repo || !target?.number) return null;
-  if (config.repos.length && !config.repos.includes(repo.toLowerCase())) return null;
+  if (!repoAllowed(config, repo)) return null;
   const pull = event === "pull_request" || target.pull_request;
   const issue = !pull ? null : target.head ? linkedIssue(target, repo) : closesIssue(target);
   const numbers = [target.number, ...(issue && issue !== target.number ? [issue] : [])];
@@ -406,7 +415,7 @@ export function pullRequest(config, event, p, now, skip = () => null) {
   const repo = p.repository?.full_name;
   const pr = p.pull_request;
   if (!p.installation?.id || !repo || !pr) return skip("not from an installation of the App");
-  if (config.repos.length && !config.repos.includes(repo.toLowerCase())) {
+  if (!repoAllowed(config, repo)) {
     return skip(`${repo} not in ALLOWED_REPOS`);
   }
   const issue = linkedIssue(pr, repo);
@@ -415,7 +424,7 @@ export function pullRequest(config, event, p, now, skip = () => null) {
     p.action === "ready_for_review" ||
     (["opened", "reopened"].includes(p.action) && state === "ready");
   return {
-    key: `${repo}#${issue ?? `pr-${pr.number}`}`,
+    key: taskKey(repo, issue ?? prId(pr.number)),
     pr: { number: pr.number, url: pr.html_url, state, readyAt: turnedReady ? now : null },
   };
 }
@@ -432,7 +441,7 @@ function prItem(config, skip, repo, pull, { trigger, mode, after = null }, text,
   const { number: pr, title } = pull;
   const item = {
     repo,
-    id: `pr-${pr}`,
+    id: prId(pr),
     kind: "pr",
     number: pr,
     title: title ?? null,

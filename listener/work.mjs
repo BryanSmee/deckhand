@@ -34,13 +34,16 @@
 //                                         a run analysis (analysis.mjs): a new issue labelled
 //                                         `analysis`, and a run in the `analyze` mode on it
 import { DEFAULT_RUNS, MAX_RUNS, OUTCOMES, checkSelection, createAnalysis } from "./analysis.mjs";
-import { MAX_TEXT, Refused, answersComment, parseAnswers, refuse } from "./answers.mjs";
-import { inboxItem } from "./events.mjs";
+import { MAX_TEXT, answersComment, parseAnswers } from "./answers.mjs";
+import { ensureLabel, hasLabel, labelFailed } from "./comments.mjs";
+import { repoAllowed } from "./config.mjs";
+import { fromLine } from "./discussions.mjs";
+import { inboxItem, issueItem, parseKey, prId, taskKey } from "./events.mjs";
+import { getJson, paginate } from "./github.mjs";
 import { parseQuestions, questionsSection } from "./questions.mjs";
 import { waitsFor } from "./waits.mjs";
 import { CONFIG_FILE, modeNames } from "./repo-config.mjs";
-import { sameOrigin } from "./repos.mjs";
-import { readBody, sendJson } from "./web.mjs";
+import { apiRoute, readJsonBody, refuse, send } from "./web.mjs";
 
 // How long a repo's open issues are served before they are read again (in the background):
 // the dashboard polls them.
@@ -62,20 +65,8 @@ const OUTCOME_NAMES = {
   cancelled: "cancelled",
 };
 
-const send = (res, status, value) => sendJson(res, value, status);
-
-// The action asked for, checked: { action, number, after, mode }. Throws Refused.
-export function parseAction(text) {
-  let body;
-  try {
-    body = JSON.parse(text);
-  } catch {
-    refuse(400, "Not JSON.");
-  }
-  return checkAction(body);
-}
-
-// An action's fields, checked (a body's, or answers' `then`). Throws Refused.
+// An action's fields, checked (a body's, or answers' `then`): { action, number, after, mode,
+// pr }. Throws Refused.
 export function checkAction(body) {
   const { action, number, after = null, mode = null, pr = false } = body ?? {};
   const issue = (n) => Number.isSafeInteger(n) && n > 0;
@@ -105,7 +96,7 @@ export function leadsTo(get, repo, from, to) {
     if (n === to) return true;
     if (seen.has(n)) continue;
     seen.add(n);
-    stack.push(...(get(`${repo}#${n}`)?.blockers ?? []));
+    stack.push(...(get(taskKey(repo, n))?.blockers ?? []));
   }
   return false;
 }
@@ -147,14 +138,11 @@ export function createWorkApi({
   // Issues with open questions whose label was taken off once: answered, or removed by hand.
   const unlabelled = new Set();
 
-  const allowed = (repo) => !config.repos.length || config.repos.includes(repo.toLowerCase());
-
   // The repo's default branch, or a 404 when the App can't read it.
   async function baseOf(repo) {
-    const res = await github(repo, "GET", `/repos/${repo}`, undefined, [404]);
-    if (res.status === 404) refuse(404, `The App is not installed on ${repo}.`);
-    if (!res.ok) throw new Error(`GitHub GET /repos/${repo}: ${res.status}`);
-    return (await res.json()).default_branch || "main";
+    const info = await getJson(github, repo, `/repos/${repo}`, [404]);
+    if (!info) refuse(404, `The App is not installed on ${repo}.`);
+    return info.default_branch || "main";
   }
 
   // The repo's open issues, newest first (pull requests are issues to this API: left out), and
@@ -162,13 +150,9 @@ export function createWorkApi({
   async function readBacklog(repo) {
     const base = await baseOf(repo);
     const { settings, errors } = await repoSettings(repo, base);
-    const res = await github(
-      repo,
-      "GET",
-      `/repos/${repo}/issues?state=open&sort=created&direction=desc&per_page=100`,
-    );
-    const list = res.ok ? await res.json() : null;
-    if (!Array.isArray(list)) throw new Error(`GitHub GET issues of ${repo}: ${res.status}`);
+    const path = `/repos/${repo}/issues?state=open&sort=created&direction=desc&per_page=100`;
+    const list = await getJson(github, repo, path);
+    if (!Array.isArray(list)) throw new Error(`GitHub GET ${path}: no list`);
     if (!errors.length) await seedInputs(repo, list, settings.users);
     return {
       issues: list
@@ -198,17 +182,14 @@ export function createWorkApi({
           config.users.includes(u.login.toLowerCase()) &&
           users.includes(u.login.toLowerCase());
     for (const issue of list) {
-      const key = `${repo}#${issue.number}`;
+      const key = taskKey(repo, issue.number);
       if (issue.pull_request || inputs.has(key) || keys.has(key) || unlabelled.has(key)) continue;
       // Fail closed, as questions.mjs: only an allowed user's issue, or the App's own.
       if (!author(issue.user)) continue;
       const questions = parseQuestions(questionsSection(issue.body));
       if (!questions) continue;
       try {
-        const labelled = (issue.labels ?? []).some(
-          (l) => (typeof l === "string" ? l : l?.name)?.toLowerCase() === name.toLowerCase(),
-        );
-        if (!labelled) {
+        if (!hasLabel(issue.labels, name)) {
           if (await wasUnlabelled(repo, issue.number, name)) {
             unlabelled.add(key);
             continue;
@@ -227,23 +208,11 @@ export function createWorkApi({
 
   // Whether the label was ever taken off issue `number`.
   async function wasUnlabelled(repo, number, name) {
-    for (let page = 1; ; page++) {
-      const res = await github(
-        repo,
-        "GET",
-        `/repos/${repo}/issues/${number}/events?per_page=100&page=${page}`,
-      );
-      const events = res.ok ? await res.json() : null;
-      if (!Array.isArray(events)) throw new Error(`GitHub GET events of #${number}: ${res.status}`);
-      if (
-        events.some(
-          (e) => e.event === "unlabeled" && e.label?.name?.toLowerCase() === name.toLowerCase(),
-        )
-      ) {
-        return true;
-      }
-      if (events.length < 100) return false;
-    }
+    const events = await paginate(
+      (path) => github(repo, "GET", path),
+      `/repos/${repo}/issues/${number}/events`,
+    );
+    return events.some((e) => e.event === "unlabeled" && hasLabel([e.label], name));
   }
 
   // A repo's read, started once at a time; `at` is when it started, `version` the stale()
@@ -289,7 +258,7 @@ export function createWorkApi({
     // whose task is over (a run done, a brainstorm stopped) is back.
     const keys = liveKeys();
     send(res, 200, {
-      issues: issues.filter((i) => !keys.has(`${repo}#${i.number}`)),
+      issues: issues.filter((i) => !keys.has(taskKey(repo, i.number))),
       modes,
       errors,
       readAt: at,
@@ -301,17 +270,14 @@ export function createWorkApi({
   // `pr`) with no run going or queued. Returns { settings, base, issue }; throws Refused.
   async function checked(repo, user, number, pr = false) {
     const { settings, base } = await checkedRepo(repo, user);
-    const res = await github(repo, "GET", `/repos/${repo}/issues/${number}`, undefined, [404, 410]);
-    if (res.status === 404 || res.status === 410)
-      refuse(404, `#${number} isn't an issue of ${repo}.`);
-    if (!res.ok) throw new Error(`GitHub GET #${number}: ${res.status}`);
-    const issue = await res.json();
+    const issue = await getJson(github, repo, `/repos/${repo}/issues/${number}`, [404, 410]);
+    if (!issue) refuse(404, `#${number} isn't an issue of ${repo}.`);
     if (pr && !issue.pull_request) refuse(404, `#${number} isn't a pull request of ${repo}.`);
     if (!pr && issue.pull_request) {
       refuse(422, `#${number} is a pull request: start its issue instead.`);
     }
     if (issue.state !== "open") refuse(409, `#${number} is closed.`);
-    if (busy(`${repo}#${number}`)) {
+    if (busy(taskKey(repo, number))) {
       refuse(409, `#${number} is running or queued: it can't be moved now.`);
     }
     return { settings, base, issue };
@@ -344,20 +310,14 @@ export function createWorkApi({
 
   // What a trigger comment ("Deckhand", with "/mode <name>" unless it is work) would queue.
   function itemOf(repo, issue, mode, user, base, settings) {
-    return {
-      repo,
-      id: String(issue.number),
-      kind: "issue",
-      number: issue.number,
-      title: issue.title ?? null,
+    return issueItem(repo, issue, {
       trigger: "work",
       modeLine: mode === "work" ? null : mode,
       text: "",
-      replyTo: issue.number,
       author: user,
       base,
       settings,
-    };
+    });
   }
 
   const inMode = (mode) => (mode === "work" ? "" : ` in \`${mode}\` mode`);
@@ -369,7 +329,7 @@ export function createWorkApi({
   async function act(repo, user, { action, number, after, mode, pr }, answers = null) {
     // Whatever the issue's state: a run may go on once it is closed.
     if (action === "cancel") return cancelTask(repo, user, number, pr);
-    const key = `${repo}#${number}`;
+    const key = taskKey(repo, number);
     const { settings, base, issue } = await checked(repo, user, number);
     const asking = taskOf(key);
     const asks = action === "start" || action === "queue";
@@ -442,7 +402,7 @@ export function createWorkApi({
   // refused a reply on its way.
   async function stop(repo, user, issue, base, settings) {
     const { number } = issue;
-    const state = taskOf(`${repo}#${number}`)?.state;
+    const state = taskOf(taskKey(repo, number))?.state;
     if (state !== "brainstorm" && state !== "idle-brainstorm") {
       refuse(409, `#${number} has no brainstorm to stop.`);
     }
@@ -460,7 +420,7 @@ export function createWorkApi({
   // record. The run's own reply follows once its sandbox is gone.
   async function cancelTask(repo, user, number, pr) {
     await checkedRepo(repo, user);
-    const key = `${repo}#${pr ? `pr-${number}` : number}`;
+    const key = taskKey(repo, pr ? prId(number) : number);
     const replyTo = taskOf(key)?.replyTo ?? number;
     const what = cancel(key, user);
     if (!what) refuse(409, `Nothing is running or queued on #${number}.`);
@@ -477,7 +437,7 @@ export function createWorkApi({
   // label off (questions.mjs), so this does, once every question has an answer.
   async function answer(repo, user, asked) {
     const { number, pr } = asked;
-    const key = `${repo}#${pr ? `pr-${number}` : number}`;
+    const key = taskKey(repo, pr ? prId(number) : number);
     const task = taskOf(key);
     if (task?.state !== "needs-input") refuse(409, `#${number} isn't waiting for answers.`);
     if (asked.then) return answerThen(repo, user, task, asked);
@@ -494,7 +454,7 @@ export function createWorkApi({
     if (fromRun) {
       await accept({
         repo,
-        id: pr ? `pr-${number}` : String(number),
+        id: pr ? prId(number) : String(number),
         kind: pr ? "pr" : "issue",
         number,
         title: issue.title ?? null,
@@ -512,7 +472,7 @@ export function createWorkApi({
     }
     if (open.length) return `Answers sent: #${number} still needs input.${left}`;
     const res = await label(repo, number, false);
-    if (!res.ok && res.status !== 404) throw new Error(`GitHub label of #${number}: ${res.status}`);
+    if (labelFailed(res)) throw new Error(`GitHub label of #${number}: ${res.status}`);
     inputs.set(key, false);
     return `Answers sent: #${number} no longer needs input.`;
   }
@@ -529,9 +489,7 @@ export function createWorkApi({
     if (open.length) refuse(400, "Answer every question before it starts.");
     const message = await act(repo, user, then, text);
     const res = await label(repo, asked.number, false);
-    if (!res.ok && res.status !== 404) {
-      throw new Error(`GitHub label of #${asked.number}: ${res.status}`);
-    }
+    if (labelFailed(res)) throw new Error(`GitHub label of #${asked.number}: ${res.status}`);
     inputs.set(task.key, false);
     return `Answers sent: ${message}`;
   }
@@ -542,10 +500,12 @@ export function createWorkApi({
   async function rerun(repo, user, runId) {
     const run = runOf(runId);
     if (run?.repo?.toLowerCase() !== repo.toLowerCase()) refuse(404, `No run ${runId} in ${repo}.`);
-    const id = run.key.slice(run.key.lastIndexOf("#") + 1);
-    const pr = id.startsWith("pr-");
-    const number = Number(pr ? id.slice(3) : id);
-    if (!/^(pr-)?\d+$/.test(id)) refuse(409, "Only work on an issue or pull request runs again.");
+    const target = parseKey(run.key);
+    if (!target || target.kind === "discussion") {
+      refuse(409, "Only work on an issue or pull request runs again.");
+    }
+    const { id, number } = target;
+    const pr = target.kind === "pr";
     const { settings, base, issue } = await checked(repo, user, number, pr);
     // A pull request's task isn't checked() by its number.
     if (busy(run.key)) refuse(409, `#${number} is running or queued already.`);
@@ -590,13 +550,9 @@ export function createWorkApi({
         `${repo} has no ${kind} inbox: see \`inbox.${INBOXES[kind]}\` in its ${CONFIG_FILE}.`,
       );
     }
-    const res = await github(repo, "GET", `/repos/${repo}/issues/${number}`, undefined, [404, 410]);
-    if (res.status === 404 || res.status === 410) {
-      refuse(409, `${repo}'s ${kind} inbox, #${number}, isn't an issue.`);
-    }
-    if (!res.ok) throw new Error(`GitHub GET #${number}: ${res.status}`);
-    const issue = await res.json();
-    const body = `${text.trim()}\n\nFrom the dashboard by @${user}`;
+    const issue = await getJson(github, repo, `/repos/${repo}/issues/${number}`, [404, 410]);
+    if (!issue) refuse(409, `${repo}'s ${kind} inbox, #${number}, isn't an issue.`);
+    const body = `${text.trim()}\n\n${fromLine(user)}`;
     const sent = await github(repo, "POST", `/repos/${repo}/issues/${number}/comments`, { body });
     if (!sent.ok) throw new Error(`GitHub POST a comment on #${number}: ${sent.status}`);
     const c = await sent.json();
@@ -607,7 +563,7 @@ export function createWorkApi({
       base,
       settings,
     });
-    return { message: `Sent to #${number}.`, url: posted.html_url, task: `${repo}#${number}` };
+    return { message: `Sent to #${number}.`, url: posted.html_url, task: taskKey(repo, number) };
   }
 
   // A run analysis: the runs it reads, picked now among the repo's (never another's), in an
@@ -627,16 +583,12 @@ export function createWorkApi({
       `- Runs (${runs.length}${runs.length < count ? `, of ${count} asked for` : ""}, newest first): ${ids.join(", ")}`,
     ].join("\n");
     const body = `Asked for from the dashboard by @${user}: what would make the runs of ${repo} faster and more reliable.\n\n${text}\n\nDeckhand reads a digest of these runs (not their raw logs) and replies here with its findings. It changes no code: file what you want of them.`;
-    // Already there is fine (422): only its colour and description are ours.
-    const label = await github(
+    await ensureLabel(
+      github,
       repo,
-      "POST",
-      `/repos/${repo}/labels`,
       { name: ANALYSIS_LABEL, color: "c5def5", description: "A Deckhand analysis of past runs" },
-      [422],
+      log,
     );
-    if (!label.ok && label.status !== 422)
-      log(`${repo}: the ${ANALYSIS_LABEL} label: ${label.status}`);
     const res = await github(
       repo,
       "POST",
@@ -659,7 +611,7 @@ export function createWorkApi({
       message: `Analysis of ${runs.length} run${runs.length === 1 ? "" : "s"} started on #${issue.number}.`,
       url: issue.html_url,
       number: issue.number,
-      task: `${repo}#${issue.number}`,
+      task: taskKey(repo, issue.number),
     };
   }
 
@@ -681,40 +633,25 @@ export function createWorkApi({
     send(res, 200, { ...analysis.preview(repo, selection), max: MAX_RUNS });
   }
 
-  // The request's body; one over `limit` bytes is refused as it is.
-  async function bodyOf(req, limit) {
-    try {
-      return (await readBody(req, limit)).toString("utf8");
-    } catch (error) {
-      if (/^body over/.test(error.message)) refuse(413, `The request is over ${limit} bytes.`);
-      throw error;
-    }
-  }
-
   async function answers(req, res, user, repo) {
-    const asked = parseAnswers(await bodyOf(req, MAX_ANSWER_BODY));
-    log(`Work area: ${user} answers ${repo}#${asked.pr ? "pr-" : ""}${asked.number}`);
+    const asked = parseAnswers(await readJsonBody(req, MAX_ANSWER_BODY));
+    log(
+      `Work area: ${user} answers ${taskKey(repo, asked.pr ? prId(asked.number) : asked.number)}`,
+    );
     send(res, 200, { message: await answer(repo, user, asked) });
   }
 
   async function work(req, res, user, repo) {
-    const asked = parseAction(await bodyOf(req, MAX_BODY));
+    const asked = checkAction(await readJsonBody(req, MAX_BODY));
     log(
-      `Work area: ${user} asks ${asked.action} ${repo}#${asked.number}${asked.after ? ` after #${asked.after}` : ""}`,
+      `Work area: ${user} asks ${asked.action} ${taskKey(repo, asked.number)}${asked.after ? ` after #${asked.after}` : ""}`,
     );
     const message = await act(repo, user, asked);
     send(res, 200, { message });
   }
 
   async function reruns(req, res, user, repo) {
-    let body;
-    try {
-      body = JSON.parse(await bodyOf(req, MAX_BODY));
-    } catch (error) {
-      if (error instanceof Refused) throw error;
-      refuse(400, "Not JSON.");
-    }
-    const runId = body?.runId;
+    const runId = (await readJsonBody(req, MAX_BODY))?.runId;
     if (typeof runId !== "string" || !/^[\w.-]+$/.test(runId))
       refuse(400, "`runId` is a run's id.");
     log(`Work area: ${user} reruns ${repo} ${runId}`);
@@ -722,14 +659,7 @@ export function createWorkApi({
   }
 
   async function inbox(req, res, user, repo) {
-    let body;
-    try {
-      body = JSON.parse(await bodyOf(req, MAX_ANSWER_BODY));
-    } catch (error) {
-      if (error instanceof Refused) throw error;
-      refuse(400, "Not JSON.");
-    }
-    const { kind, text } = body ?? {};
+    const { kind, text } = (await readJsonBody(req, MAX_ANSWER_BODY)) ?? {};
     if (!Object.hasOwn(INBOXES, kind)) refuse(400, "`kind` is idea or bug.");
     if (typeof text !== "string" || !text.trim()) refuse(400, "Write something to send.");
     if (text.length > MAX_TEXT) refuse(413, `The text is over ${MAX_TEXT} characters.`);
@@ -738,62 +668,32 @@ export function createWorkApi({
   }
 
   async function analyze(req, res, user, repo) {
-    let body;
-    try {
-      body = JSON.parse(await bodyOf(req, MAX_BODY));
-    } catch (error) {
-      if (error instanceof Refused) throw error;
-      refuse(400, "Not JSON.");
-    }
+    const body = await readJsonBody(req, MAX_BODY);
     const selection = checkSelection(body, (message) => refuse(400, message));
     log(`Work area: ${user} analyzes ${selection.count} run(s) of ${repo}`);
     send(res, 200, await startAnalysis(repo, user, selection));
   }
 
-  const POSTS = { work, answer: answers, rerun: reruns, inbox, analyze };
-  const GETS = {
-    issues: (req, res, user, repo) => backlog(res, repo, user),
-    analyze: previewAnalysis,
-  };
-
   // Handles /api/repos/<owner>/<repo>/issues, /work, /answer, /rerun, /inbox and /analyze;
   // false for any other path.
-  function handle(req, res, user) {
-    const { pathname } = new URL(req.url, "http://localhost");
-    const one =
-      /^\/api\/repos\/([\w.-]+)\/([\w.-]+)\/(issues|work|answer|rerun|inbox|analyze)$/.exec(
-        pathname,
-      );
-    if (!one) return false;
-    const repo = `${one[1]}/${one[2]}`;
-    const what = one[3];
-    const run = async () => {
-      const methods = [POSTS[what] && "POST", GETS[what] && "GET"].filter(Boolean);
-      if (!methods.includes(req.method)) {
-        return send(res, 405, { error: `${methods.join(" or ")} only.` });
-      }
-      if (!user) return send(res, 401, { error: "Sign in first." });
-      if (!allowed(repo)) return send(res, 404, { error: `${repo} is not in ALLOWED_REPOS.` });
-      if (req.method === "GET") return GETS[what](req, res, user, repo);
-      if (!sameOrigin(req, publicUrl())) {
-        log(`Work area: refused for ${user}: Origin ${req.headers.origin ?? "missing"}`);
-        return send(res, 403, { error: "Not from this dashboard." });
-      }
-      return POSTS[what](req, res, user, repo);
-    };
-    run().catch((error) => {
-      if (error instanceof Refused) {
-        log(`Work area: ${repo}: refused for ${user}: ${error.message}`);
-        if (!res.headersSent) send(res, error.status, { error: error.message });
-        return;
-      }
-      log(`Work area: ${error.stack ?? error}`);
-      if (!res.headersSent) {
-        send(res, 502, { error: "GitHub didn't answer: see the listener's logs." });
-      }
-    });
-    return true;
-  }
+  const handle = apiRoute({
+    name: "Work area",
+    route: (pathname) => {
+      const one =
+        /^\/api\/repos\/([\w.-]+)\/([\w.-]+)\/(issues|work|answer|rerun|inbox|analyze)$/.exec(
+          pathname,
+        );
+      return one && { repo: `${one[1]}/${one[2]}`, what: one[3] };
+    },
+    posts: { work, answer: answers, rerun: reruns, inbox, analyze },
+    gets: {
+      issues: (req, res, user, repo) => backlog(res, repo, user),
+      analyze: previewAnalysis,
+    },
+    allowed: (repo) => repoAllowed(config, repo),
+    publicUrl,
+    log,
+  });
 
   // An `issues` delivery for `repo`: its backlog is read again on the next request, which
   // still gets the last one. A read already going started before it: it doesn't count.
