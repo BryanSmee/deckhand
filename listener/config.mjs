@@ -66,56 +66,107 @@ const LIMIT_FORMAT = {
   pids: "a whole number",
 };
 
-// What config.yaml may set: each setting's environment variable, in lowercase as the key,
-// with the YAML it takes. Secrets and the wiring compose.yaml sets to match its own services
-// stay in the environment only.
-export const FILE_SETTINGS = {
-  ALLOWED_USERS: "list",
-  ALLOWED_REPOS: "list",
-  PUBLIC_URL: "scalar",
-  TRIGGER: "scalar",
-  SANDBOX_AGENT: "scalar",
-  BRAINSTORM_AGENT: "scalar",
-  CLAUDE_CODE_VERSION: "scalar",
-  ANTHROPIC_BASE_URL: "scalar",
-  ANTHROPIC_DEFAULT_OPUS_MODEL: "scalar",
-  ANTHROPIC_DEFAULT_SONNET_MODEL: "scalar",
-  ANTHROPIC_DEFAULT_HAIKU_MODEL: "scalar",
-  CLAUDE_FALLBACK_MODEL: "scalar",
-  OPENROUTER_BASE_URL: "scalar",
-  OPENROUTER_OPUS_MODEL: "scalar",
-  OPENROUTER_SONNET_MODEL: "scalar",
-  OPENROUTER_HAIKU_MODEL: "scalar",
-  CODEX_VERSION: "scalar",
-  OPENAI_BASE_URL: "scalar",
-  CODEX_BEST_MODEL: "scalar",
-  CODEX_BALANCED_MODEL: "scalar",
-  CODEX_FAST_MODEL: "scalar",
-  FALLBACKS: "list",
-  SANDBOX_MODEL: "scalar",
-  SANDBOX_EFFORT: "scalar",
-  BRAINSTORM_MODEL: "scalar",
-  BRAINSTORM_EFFORT: "scalar",
-  BRAINSTORM_IDLE_MINUTES: "scalar",
-  MAX_PARALLEL: "scalar",
-  SANDBOX_ENGINE: "scalar",
-  SANDBOX_SUBNETS: "scalar",
-  SANDBOX_SUBNET_SIZE: "scalar",
-  ONBOARDING: "boolean",
-  NEEDS_INPUT_LABEL: "scalar",
-  CONFLICT_CHECK_MINUTES: "scalar",
-  WAITS_CHECK_MINUTES: "scalar",
-  LOG_RETENTION_DAYS: "scalar",
-  NAME_PREFIX: "scalar",
-  CLAUDE_CODE_VOLUME: "scalar",
-  CODEX_VOLUME: "scalar",
-  GRANTS_DIR: "scalar",
-  INSTALL_NETWORK: "scalar",
-  DEBOUNCE_MS: "scalar",
-  BRAINSTORM_DEBOUNCE_MS: "scalar",
-  GITHUB_URL: "scalar",
-  GITHUB_API: "scalar",
+// What opus, sonnet and haiku mean to Claude Code (its variables), and best, balanced and fast
+// to Codex: each the setting <prefix>_<tier>_MODEL (aliasesFrom()).
+const CLAUDE_TIERS = {
+  ANTHROPIC_DEFAULT_OPUS_MODEL: "OPUS",
+  ANTHROPIC_DEFAULT_SONNET_MODEL: "SONNET",
+  ANTHROPIC_DEFAULT_HAIKU_MODEL: "HAIKU",
 };
+const CODEX_TIERS = { best: "BEST", balanced: "BALANCED", fast: "FAST" };
+
+// The operator's settings, by environment variable (in lowercase, its config.yaml key), in the
+// order they are read: a default can use the ones before it. Each one has
+// - type: the YAML config.yaml takes (FILE_SETTINGS): scalar unless it says list or boolean;
+// - default: its value when unset, or a function of the values before it;
+// - parse: its text into its value, or a ConfigError naming it (`label`); none: the text;
+// - empty: an empty value means something (no label), so set in the environment, even empty,
+//   it wins.
+// Each one is in docs/setup.md and compose.yaml (test/settings.test.mjs). Secrets and the
+// wiring compose.yaml sets to match its own services stay in the environment only.
+export const SETTINGS = {
+  // Fail closed: required (requiredSettings()).
+  ALLOWED_USERS: { type: "list", default: [], parse: list },
+  // Optional: narrows the repos where the App is installed. Empty: all of them.
+  ALLOWED_REPOS: { type: "list", default: [], parse: list },
+  // Where GitHub sends webhooks and screenshots are served. Optional: /setup detects it and
+  // stores it with the App.
+  PUBLIC_URL: { default: null, parse: noSlash },
+  // The first line of a comment that calls Deckhand; "/mode <name>" picks another mode.
+  TRIGGER: { default: "deckhand", parse: normalize },
+  // Which agent runs work and light runs (by default the same).
+  SANDBOX_AGENT: { default: DEFAULT_AGENT, parse: agentSetting },
+  BRAINSTORM_AGENT: { default: (s) => s.SANDBOX_AGENT, parse: agentSetting },
+  // Claude Code is not in the image: the first run installs this version into its volume.
+  CLAUDE_CODE_VERSION: { default: "2.1.300" },
+  // Where the listener's Anthropic endpoint sends sandboxes' requests: Anthropic, or an
+  // Anthropic-compatible gateway (OpenRouter, a company's). The operator's only: a repo that
+  // could set it would send its code and the credential elsewhere.
+  ANTHROPIC_BASE_URL: { default: "https://api.anthropic.com", parse: apiUrl },
+  // What opus, sonnet and haiku mean to the sandboxes' Claude Code, by name: a gateway's
+  // models have its own names. Empty: Claude Code's defaults.
+  ...tierSettings("ANTHROPIC_DEFAULT", CLAUDE_TIERS),
+  // Claude Code's own model fallback (--fallback-model), when its model is overloaded: a tier
+  // or a model's name. Empty: none.
+  CLAUDE_FALLBACK_MODEL: { default: null, parse: modelName },
+  // Claude Code through OpenRouter (claude@openrouter in FALLBACKS), and what opus, sonnet and
+  // haiku mean there, over the aliases above.
+  OPENROUTER_BASE_URL: { default: "https://openrouter.ai/api", parse: apiUrl },
+  ...tierSettings("OPENROUTER", CLAUDE_TIERS),
+  // Codex's, the same way (agents/codex.mjs, openai.mjs).
+  CODEX_VERSION: { default: "0.162.1" },
+  OPENAI_BASE_URL: { default: "https://api.openai.com/v1", parse: apiUrl },
+  // What best, balanced and fast mean to Codex, when not its built-in models.
+  ...tierSettings("CODEX", CODEX_TIERS),
+  // Where a run goes, in order, when its provider fails (runs.mjs). Empty: nowhere.
+  FALLBACKS: { type: "list", default: [], parse: fallbacks },
+  // A tier (best, balanced, fast) each agent maps to one of its models, or a model's name.
+  SANDBOX_MODEL: { default: "best" },
+  SANDBOX_EFFORT: { default: "medium" },
+  BRAINSTORM_MODEL: { default: (s) => s.SANDBOX_MODEL },
+  BRAINSTORM_EFFORT: { default: (s) => s.SANDBOX_EFFORT },
+  BRAINSTORM_IDLE_MINUTES: { default: 10, parse: whole("a whole number of minutes") },
+  MAX_PARALLEL: { default: 2, parse: whole("a whole number of sandboxes") },
+  // The container engine sidecar of runs whose repo is granted allow_docker
+  // (runner/engine.mjs); none until the operator picks one.
+  SANDBOX_ENGINE: { default: null, parse: engineSetting },
+  // Where the runs' networks take their subnets from (runner/docker.mjs, subnets.mjs).
+  SANDBOX_SUBNET_SIZE: { default: 28, parse: subnetSize },
+  SANDBOX_SUBNETS: { default: null, parse: sandboxSubnets },
+  // An issue proposing a .deckhand.yaml when the App is installed on a repo without one
+  // (onboarding.mjs). "/mode onboarding" works either way.
+  ONBOARDING: { type: "boolean", default: true, parse: onOff },
+  NEEDS_INPUT_LABEL: { default: "needs-input", empty: true },
+  // The shortest interval at which a repo's `conflicts.check_minutes` may look at its open
+  // pull requests (conflicts.mjs); each conflict found is a run. 0: the watcher is off.
+  CONFLICT_CHECK_MINUTES: { default: 5, parse: whole("a whole number of minutes (0: off)") },
+  // How often every "/after" wait asks GitHub again (waits.mjs), for what no delivery said.
+  // It catches missed deliveries, so it can't be turned off.
+  WAITS_CHECK_MINUTES: { default: 5, parse: aboveZero("a whole number of minutes above 0") },
+  // How long a run's log, summary and screenshots are kept (history.mjs). 0: forever.
+  LOG_RETENTION_DAYS: { default: 90, parse: whole("a whole number of days (0: forever)") },
+  // The names of what the listener creates on Docker.
+  NAME_PREFIX: { default: "deckhand" },
+  CLAUDE_CODE_VOLUME: { default: (s) => `${s.NAME_PREFIX}-claude-code` },
+  CODEX_VOLUME: { default: (s) => `${s.NAME_PREFIX}-codex` },
+  // What the operator grants each repo, one file per repo: hosts, host mounts, limits
+  // (grants.mjs).
+  GRANTS_DIR: { default: "/etc/deckhand/grants" },
+  // The agents' install containers download from npm, outside the runs' networks.
+  INSTALL_NETWORK: { default: "bridge" },
+  // Batches the comments of one review (each arrives as its own webhook) into one run.
+  DEBOUNCE_MS: { default: 15000, parse: whole("a whole number of milliseconds") },
+  // A brainstorm comment comes alone, and someone is waiting for the answer.
+  BRAINSTORM_DEBOUNCE_MS: { default: 3000, parse: whole("a whole number of milliseconds") },
+  GITHUB_URL: { default: "https://github.com", parse: noSlash },
+  GITHUB_API: { default: "https://api.github.com", parse: noSlash },
+};
+
+// What config.yaml may set, and the YAML it takes: each setting's environment variable, in
+// lowercase as the key.
+export const FILE_SETTINGS = Object.fromEntries(
+  Object.entries(SETTINGS).map(([name, { type }]) => [name, type ?? "scalar"]),
+);
 
 // Settings that moved to the grants folder (grants.mjs), and where: ignoring one would quietly
 // take hosts away or change every sandbox's limits.
@@ -128,9 +179,6 @@ const MOVED_TO_GRANTS = {
 
 // A sandbox's limits when the grants folder sets none.
 const DEFAULT_LIMITS = { cpus: "2", memory: "4g", pids: 2048 };
-
-// Where an empty value means something (no label): set in the environment, even empty, wins.
-const EMPTY_MEANS = new Set(["NEEDS_INPUT_LABEL"]);
 
 const TYPE_FORMAT = {
   list: "a list",
@@ -200,77 +248,99 @@ const NO_FILE = { path: null, settings: {} };
 
 // A set, non-empty environment variable, else config.yaml's key; and how an error names it.
 function settings(env, file) {
-  const fromEnv = (name) => env[name] != null && (env[name] !== "" || EMPTY_MEANS.has(name));
+  const fromEnv = (name) => env[name] != null && (env[name] !== "" || SETTINGS[name]?.empty);
   const setting = (name) => (fromEnv(name) ? env[name] : file.settings[name]);
   const label = (name) =>
     fromEnv(name) || !(name in file.settings) ? name : `${file.path}: ${name.toLowerCase()}`;
-  const number = (name, fallback, what) => wholeNumber(setting(name), fallback, label(name), what);
-  return { setting, label, number };
+  return { setting, label };
 }
 
-// WAITS_CHECK_MINUTES: the check catches missed deliveries, so it can't be turned off.
-function waitsCheck({ number, label }) {
-  const minutes = number("WAITS_CHECK_MINUTES", 5, "a whole number of minutes above 0");
-  if (!minutes) throw new ConfigError(`${label("WAITS_CHECK_MINUTES")}: expected above 0, got 0`);
-  return minutes;
-}
-
-// "15" → 15, or a ConfigError naming the setting: NaN would be a silent 0 or forever.
-function wholeNumber(value, fallback, label, what) {
-  const text = String(value ?? fallback).trim();
-  if (!/^\d+$/.test(text)) throw new ConfigError(`${label}: expected ${what}, got ${value}`);
-  return Number(text);
-}
-
-// SANDBOX_SUBNETS cut into blocks of SANDBOX_SUBNET_SIZE (subnets.mjs): { range, base, prefix,
-// size }, or null (empty: Docker's own address pools). A /29 is the smallest block that holds
-// a sandbox, the listener, the proxy and a container engine besides the gateway.
-function sandboxSubnets({ setting, label, number }) {
-  const size = number("SANDBOX_SUBNET_SIZE", 28, "a prefix length (28 for blocks of 16 addresses)");
-  if (size < 1 || size > 29) {
-    throw new ConfigError(
-      `${label("SANDBOX_SUBNET_SIZE")}: expected a prefix length from 1 to 29, got ${size}`,
-    );
+// Every setting's value, in SETTINGS' order. Empty is unset, unless it means something.
+function readSettings(env, { setting, label }) {
+  const values = {};
+  for (const [name, { default: fallback, parse, empty }] of Object.entries(SETTINGS)) {
+    const text = setting(name);
+    if (text === undefined || (text === "" && !empty)) {
+      values[name] = typeof fallback === "function" ? fallback(values) : fallback;
+    } else {
+      values[name] = parse
+        ? parse(text, { label: label(name), env, values, labelOf: label })
+        : text;
+    }
   }
-  const range = (setting("SANDBOX_SUBNETS") ?? "").trim();
-  if (!range) return null;
-  const cidr = parseCidr(range);
-  if (!cidr) {
-    throw new ConfigError(
-      `${label("SANDBOX_SUBNETS")}: expected an IPv4 range with its host bits at zero (10.200.0.0/16), got ${range}`,
-    );
-  }
-  if (cidr.prefix > size) {
-    throw new ConfigError(
-      `${label("SANDBOX_SUBNETS")}: ${range} is smaller than one block of /${size} (${label("SANDBOX_SUBNET_SIZE")})`,
-    );
-  }
-  return { range, ...cidr, size };
+  return values;
 }
 
-// Where sandboxes run, what they get and what they may reach.
-function sandboxConfig(env, from, prefix) {
-  const { setting, label, number } = from;
+// The environment, over config.yaml's settings (readConfigFile()), over the defaults.
+export function loadConfig(env, file = NO_FILE) {
+  const from = settings(env, file);
+  requiredSettings(env, from);
+  const s = readSettings(env, from);
+  const brokerPort = wholeNumber(env.BROKER_PORT, 8081, "BROKER_PORT", "a port");
+  return {
+    port: wholeNumber(env.PORT, 8080, "PORT", "a port"),
+    // Internal only: sandboxes ask it for tokens. Not published by compose.yaml.
+    brokerPort,
+    // How sandboxes reach the broker on their network (compose service name by default).
+    brokerUrl: (env.BROKER_URL || `http://listener:${brokerPort}`).replace(/\/$/, ""),
+    // Which variable holds the operator's Claude credential (anthropic.mjs): the value stays
+    // in the environment, read by the listener's Anthropic endpoint only.
+    claudeCredential: credentialName(env),
+    anthropicUrl: s.ANTHROPIC_BASE_URL,
+    modelAliases: aliasesFrom(s, "ANTHROPIC_DEFAULT", CLAUDE_TIERS),
+    claudeFallbackModel: s.CLAUDE_FALLBACK_MODEL,
+    openrouterUrl: s.OPENROUTER_BASE_URL,
+    openrouterAliases: aliasesFrom(s, "OPENROUTER", CLAUDE_TIERS),
+    // Without a key, a ChatGPT plan's login, which the listener holds and refreshes (chatgpt.mjs).
+    openaiCredential: OPENAI_CREDENTIALS.find((name) => env[name]) ?? null,
+    openaiUrl: s.OPENAI_BASE_URL,
+    codexModels: aliasesFrom(s, "CODEX", CODEX_TIERS),
+    agent: s.SANDBOX_AGENT,
+    brainstormAgent: s.BRAINSTORM_AGENT,
+    agents: configuredAgents(env, s),
+    fallbacks: s.FALLBACKS,
+    githubApi: s.GITHUB_API,
+    githubUrl: s.GITHUB_URL,
+    users: s.ALLOWED_USERS,
+    repos: s.ALLOWED_REPOS,
+    trigger: s.TRIGGER,
+    ...sandboxConfig(env, s),
+    debounceMs: s.DEBOUNCE_MS,
+    brainstormDebounceMs: s.BRAINSTORM_DEBOUNCE_MS,
+    brainstormIdleMs: s.BRAINSTORM_IDLE_MINUTES * 60000,
+    dataDir: env.DATA_DIR || "/data",
+    publicUrl: s.PUBLIC_URL,
+    model: s.SANDBOX_MODEL,
+    effort: s.SANDBOX_EFFORT,
+    brainstormModel: s.BRAINSTORM_MODEL,
+    brainstormEffort: s.BRAINSTORM_EFFORT,
+    needsInputLabel: s.NEEDS_INPUT_LABEL,
+    conflictCheckMinutes: s.CONFLICT_CHECK_MINUTES,
+    waitsCheckMinutes: s.WAITS_CHECK_MINUTES,
+    logRetentionDays: s.LOG_RETENTION_DAYS,
+    onboarding: s.ONBOARDING,
+  };
+}
+
+// Where sandboxes run, what they get and what they may reach: `s`, readSettings()'s, and the
+// wiring compose.yaml sets.
+function sandboxConfig(env, s) {
+  const prefix = s.NAME_PREFIX;
   return {
     prefix,
     image: env.SANDBOX_IMAGE || `${prefix}-sandbox`,
     shotsVolume: env.SHOTS_VOLUME || `${prefix}-screenshots`,
     // Each run's inbox (runner/docker.mjs), mounted by the listener at <dataDir>/runs.
     runsVolume: env.RUNS_VOLUME || `${prefix}-runs`,
-    // Claude Code is not in the image: the first run installs this version into the volume.
-    claudeCodeVolume: setting("CLAUDE_CODE_VOLUME") || `${prefix}-claude-code`,
-    claudeCodeVersion: setting("CLAUDE_CODE_VERSION") || "2.1.300",
-    // Codex's, the same way (agents/codex.mjs).
-    codexVolume: setting("CODEX_VOLUME") || `${prefix}-codex`,
-    codexVersion: setting("CODEX_VERSION") || "0.162.1",
-    maxParallel: number("MAX_PARALLEL", 2, "a whole number of sandboxes"),
-    // Where the runs' networks take their subnets from (runner/docker.mjs).
-    subnets: sandboxSubnets(from),
+    claudeCodeVolume: s.CLAUDE_CODE_VOLUME,
+    claudeCodeVersion: s.CLAUDE_CODE_VERSION,
+    codexVolume: s.CODEX_VOLUME,
+    codexVersion: s.CODEX_VERSION,
+    maxParallel: s.MAX_PARALLEL,
+    subnets: s.SANDBOX_SUBNETS,
     // Per sandbox, under the grants folder's: default.yaml's limits, then a repo's own.
     limits: DEFAULT_LIMITS,
-    // The container engine sidecar of runs whose repo is granted allow_docker
-    // (runner/engine.mjs), and its images; none until the operator picks one.
-    engine: engineSetting(setting("SANDBOX_ENGINE"), label("SANDBOX_ENGINE")),
+    engine: s.SANDBOX_ENGINE,
     engineImage: env.ENGINE_IMAGE || `${prefix}-engine`,
     enginePodmanImage: env.ENGINE_PODMAN_IMAGE || `${prefix}-engine-podman`,
     // The only way out of the runs' networks (../proxy/proxy.mjs).
@@ -279,157 +349,19 @@ function sandboxConfig(env, from, prefix) {
     // the listener runs in and the one compose.yaml labels deckhand.role=egress.
     listenerContainer: env.LISTENER_CONTAINER || "",
     egressContainer: env.EGRESS_CONTAINER || "",
-    // What the operator grants each repo, one file per repo: hosts, host mounts, limits
-    // (grants.mjs).
-    grantsDir: setting("GRANTS_DIR") || "/etc/deckhand/grants",
-    // Claude Code's install container downloads from npm, outside the runs' networks.
-    installNetwork: setting("INSTALL_NETWORK") || "bridge",
+    grantsDir: s.GRANTS_DIR,
+    installNetwork: s.INSTALL_NETWORK,
     // The host's Docker socket, as preview hooks mount it.
     dockerSocket: env.DOCKER_SOCKET || "/var/run/docker.sock",
   };
 }
 
-// SANDBOX_ENGINE: sysbox, podman, auto, or nothing (null). A typo is an error rather than
-// no engine.
-function engineSetting(value, label) {
-  const engine = String(value ?? "")
-    .trim()
-    .toLowerCase();
-  if (!engine) return null;
-  if (ENGINES.includes(engine)) return engine;
-  throw new ConfigError(`${label}: expected ${ENGINES.join(", ")} or nothing, got ${value}`);
-}
-
-// "https://openrouter.ai/api/" → "https://openrouter.ai/api", or a ConfigError: a typo would
-// otherwise only show as every run failing.
-function apiUrl(value, label, fallback) {
-  if (!value) return fallback;
-  let url;
-  try {
-    url = new URL(value);
-  } catch {}
-  if (!["http:", "https:"].includes(url?.protocol)) {
-    throw new ConfigError(`${label}: expected an http(s) URL, got ${value}`);
-  }
-  return value.replace(/\/$/, "");
-}
-
-// SANDBOX_AGENT and BRAINSTORM_AGENT (by default the same), and the agents the operator
-// configured: those it has a credential for (each agent's `secrets`), and the defaults. A
-// repo's `agent:` can only pick among these (repo-config.mjs). Claude Code may be the
-// default without one, as before agents could be picked: its endpoint then answers that the
-// operator set none. Another agent can't: it is picked on purpose.
-function agentSettings(env, { setting, label }) {
-  const pick = (value, name, fallback) => {
-    const agent = String(value || fallback)
-      .trim()
-      .toLowerCase();
-    if (!Object.hasOwn(AGENTS, agent)) {
-      throw new ConfigError(
-        `${label(name)}: expected ${Object.keys(AGENTS).join(" or ")}, got ${value}`,
-      );
-    }
-    const secrets = AGENTS[agent].secrets;
-    if (agent !== DEFAULT_AGENT && !secrets.some((secret) => env[secret])) {
-      throw new ConfigError(
-        `${label(name)} is ${agent}, which needs ${secrets.join(" or ")} in the environment`,
-      );
-    }
-    return agent;
-  };
-  const agent = pick(setting("SANDBOX_AGENT"), "SANDBOX_AGENT", DEFAULT_AGENT);
-  const brainstormAgent = pick(setting("BRAINSTORM_AGENT"), "BRAINSTORM_AGENT", agent);
-  const agents = Object.keys(AGENTS).filter(
-    (name) =>
-      AGENTS[name].secrets.some((secret) => env[secret]) ||
-      name === agent ||
-      name === brainstormAgent,
-  );
-  return { agent, brainstormAgent, agents };
-}
-
-// FALLBACKS: where a run goes when its provider fails, in order ("claude@openrouter, codex"
-// → ["claude@openrouter", "codex@openai"]). Each needs its credential: a fallback that can't
-// run would only show when the first one fails.
-function fallbackSettings(env, { setting, label }) {
-  const fallbacks = [];
-  for (const text of list(setting("FALLBACKS"))) {
-    const entry = entryOf(text);
-    if (!entry) {
-      throw new ConfigError(
-        `${label("FALLBACKS")}: expected agent@provider (${ENTRIES.join(", ")}), got ${text}`,
-      );
-    }
-    const name = entryName(entry.agent, entry.provider);
-    const { secrets } = AGENTS[entry.agent].providers[entry.provider];
-    if (!secrets.some((secret) => env[secret])) {
-      throw new ConfigError(
-        `${label("FALLBACKS")}: ${name} needs ${secrets.join(" or ")} in the environment`,
-      );
-    }
-    if (!fallbacks.includes(name)) fallbacks.push(name);
-  }
-  return fallbacks;
-}
-
-// Models by name, from settings: [what it is to the agent (a variable, a tier), the setting,
-// its value].
-function aliases(label, settings) {
-  return Object.fromEntries(
-    settings
-      .filter(([, , value]) => value)
-      .map(([key, name, value]) => [key, modelName(value, label(name))]),
-  );
-}
-
-function modelName(value, label) {
-  if (MODEL_NAME.test(value)) return value;
-  throw new ConfigError(`${label}: expected a model name (anthropic/claude-…), got ${value}`);
-}
-
-// The environment, over config.yaml's settings (readConfigFile()), over the defaults.
-export function loadConfig(env, file = NO_FILE) {
-  const from = settings(env, file);
-  const { setting } = from;
-  const users = requiredSettings(env, from);
-  const port = wholeNumber(env.PORT, 8080, "PORT", "a port");
-  const brokerPort = wholeNumber(env.BROKER_PORT, 8081, "BROKER_PORT", "a port");
-  const prefix = setting("NAME_PREFIX") || "deckhand";
-  const onboarding = onboardingSetting(from);
-  return {
-    port,
-    // Internal only: sandboxes ask it for tokens. Not published by compose.yaml.
-    brokerPort,
-    // How sandboxes reach the broker on their network (compose service name by default).
-    brokerUrl: (env.BROKER_URL || `http://listener:${brokerPort}`).replace(/\/$/, ""),
-    ...claudeSettings(env, from),
-    ...codexSettings(env, from),
-    // Which agent runs work and light runs, and those a repo may pick instead.
-    ...agentSettings(env, from),
-    // Where a run goes, in order, when its provider fails (runs.mjs). Empty: nowhere.
-    fallbacks: fallbackSettings(env, from),
-    githubApi: (setting("GITHUB_API") || "https://api.github.com").replace(/\/$/, ""),
-    githubUrl: (setting("GITHUB_URL") || "https://github.com").replace(/\/$/, ""),
-    users,
-    // Optional: narrows the repos where the App is installed. Empty: all of them.
-    repos: list(setting("ALLOWED_REPOS")),
-    // The first line of a comment that calls Deckhand; "/mode <name>" picks another mode.
-    trigger: normalize(setting("TRIGGER") || "Deckhand"),
-    ...sandboxConfig(env, from, prefix),
-    ...runSettings(env, from),
-    // An issue proposing a .deckhand.yaml when the App is installed on a repo without one
-    // (onboarding.mjs). "/mode onboarding" works either way.
-    onboarding,
-  };
-}
-
 // What must be settled before anything starts: who may trigger runs, and no setting that
-// moved elsewhere. Returns the allowed users.
+// moved elsewhere.
 function requiredSettings(env, { setting }) {
   // Fail closed: the sandbox runs without permission prompts and can push, so nobody may
   // trigger it until the operator names who can.
-  const users = list(setting("ALLOWED_USERS"));
-  if (!users.length) {
+  if (!list(setting("ALLOWED_USERS")).length) {
     throw new ConfigError(
       "ALLOWED_USERS is empty: name the GitHub users who may start runs (or allowed_users in config.yaml)",
     );
@@ -448,129 +380,168 @@ function requiredSettings(env, { setting }) {
       `${moved.join(", ")} ${moved.length > 1 ? "are" : "is"} gone (${where} instead, docs/security.md)`,
     );
   }
-  return users;
 }
 
-function onboardingSetting({ setting, label }) {
-  const onboarding = (setting("ONBOARDING") ?? "on").trim().toLowerCase();
-  if (!["on", "true", "1", "yes", "", "off", "false", "0", "no"].includes(onboarding)) {
-    throw new ConfigError(`${label("ONBOARDING")}: expected on or off, got ${onboarding}`);
+// The parsers of SETTINGS: (text, { label, env, values, labelOf }) → the value.
+
+function noSlash(text) {
+  return text.replace(/\/$/, "");
+}
+
+// "15" → 15, or a ConfigError naming the setting: NaN would be a silent 0 or forever.
+function wholeNumber(value, fallback, label, what) {
+  const text = String(value ?? fallback).trim();
+  if (!/^\d+$/.test(text)) throw new ConfigError(`${label}: expected ${what}, got ${value}`);
+  return Number(text);
+}
+
+function whole(what) {
+  return (text, { label }) => wholeNumber(text, undefined, label, what);
+}
+
+function aboveZero(what) {
+  return (text, { label }) => {
+    const number = wholeNumber(text, undefined, label, what);
+    if (!number) throw new ConfigError(`${label}: expected above 0, got 0`);
+    return number;
+  };
+}
+
+function onOff(text, { label }) {
+  const value = text.trim().toLowerCase();
+  if (["on", "true", "1", "yes", ""].includes(value)) return true;
+  if (["off", "false", "0", "no"].includes(value)) return false;
+  throw new ConfigError(`${label}: expected on or off, got ${value}`);
+}
+
+// A /29 is the smallest block that holds a sandbox, the listener, the proxy and a container
+// engine besides the gateway.
+function subnetSize(text, { label }) {
+  const size = wholeNumber(
+    text,
+    undefined,
+    label,
+    "a prefix length (28 for blocks of 16 addresses)",
+  );
+  if (size < 1 || size > 29) {
+    throw new ConfigError(`${label}: expected a prefix length from 1 to 29, got ${size}`);
   }
-  return !["off", "false", "0", "no"].includes(onboarding);
+  return size;
 }
 
-// Claude Code's credential, endpoint and models, directly and through OpenRouter.
-function claudeSettings(env, { setting, label }) {
-  return {
-    // Which variable holds the operator's Claude credential (anthropic.mjs): the value stays
-    // in the environment, read by the listener's Anthropic endpoint only.
-    claudeCredential: credentialName(env),
-    // Where that endpoint sends sandboxes' requests: Anthropic, or an Anthropic-compatible
-    // gateway (OpenRouter, a company's). The operator's only: a repo that could set it would
-    // send its code and the credential elsewhere.
-    anthropicUrl: apiUrl(
-      setting("ANTHROPIC_BASE_URL"),
-      label("ANTHROPIC_BASE_URL"),
-      "https://api.anthropic.com",
-    ),
-    // What opus, sonnet and haiku mean to the sandboxes' Claude Code, by name: a gateway's
-    // models have its own names. Empty: Claude Code's defaults.
-    modelAliases: aliases(label, [
-      [
-        "ANTHROPIC_DEFAULT_OPUS_MODEL",
-        "ANTHROPIC_DEFAULT_OPUS_MODEL",
-        setting("ANTHROPIC_DEFAULT_OPUS_MODEL"),
-      ],
-      [
-        "ANTHROPIC_DEFAULT_SONNET_MODEL",
-        "ANTHROPIC_DEFAULT_SONNET_MODEL",
-        setting("ANTHROPIC_DEFAULT_SONNET_MODEL"),
-      ],
-      [
-        "ANTHROPIC_DEFAULT_HAIKU_MODEL",
-        "ANTHROPIC_DEFAULT_HAIKU_MODEL",
-        setting("ANTHROPIC_DEFAULT_HAIKU_MODEL"),
-      ],
+// SANDBOX_SUBNETS cut into blocks of SANDBOX_SUBNET_SIZE (subnets.mjs): { range, base, prefix,
+// size }, or null (empty: Docker's own address pools).
+function sandboxSubnets(text, { label, values, labelOf }) {
+  const size = values.SANDBOX_SUBNET_SIZE;
+  const range = text.trim();
+  if (!range) return null;
+  const cidr = parseCidr(range);
+  if (!cidr) {
+    throw new ConfigError(
+      `${label}: expected an IPv4 range with its host bits at zero (10.200.0.0/16), got ${range}`,
+    );
+  }
+  if (cidr.prefix > size) {
+    throw new ConfigError(
+      `${label}: ${range} is smaller than one block of /${size} (${labelOf("SANDBOX_SUBNET_SIZE")})`,
+    );
+  }
+  return { range, ...cidr, size };
+}
+
+// SANDBOX_ENGINE: sysbox, podman, auto, or nothing (null). A typo is an error rather than
+// no engine.
+function engineSetting(text, { label }) {
+  const engine = text.trim().toLowerCase();
+  if (!engine) return null;
+  if (ENGINES.includes(engine)) return engine;
+  throw new ConfigError(`${label}: expected ${ENGINES.join(", ")} or nothing, got ${text}`);
+}
+
+// "https://openrouter.ai/api/" → "https://openrouter.ai/api", or a ConfigError: a typo would
+// otherwise only show as every run failing.
+function apiUrl(text, { label }) {
+  let url;
+  try {
+    url = new URL(text);
+  } catch {}
+  if (!["http:", "https:"].includes(url?.protocol)) {
+    throw new ConfigError(`${label}: expected an http(s) URL, got ${text}`);
+  }
+  return noSlash(text);
+}
+
+// SANDBOX_AGENT and BRAINSTORM_AGENT. Claude Code may be the default without a credential, as
+// before agents could be picked: its endpoint then answers that the operator set none. Another
+// agent can't: it is picked on purpose.
+function agentSetting(text, { label, env }) {
+  const agent = text.trim().toLowerCase();
+  if (!Object.hasOwn(AGENTS, agent)) {
+    throw new ConfigError(`${label}: expected ${Object.keys(AGENTS).join(" or ")}, got ${text}`);
+  }
+  const secrets = AGENTS[agent].secrets;
+  if (agent !== DEFAULT_AGENT && !secrets.some((secret) => env[secret])) {
+    throw new ConfigError(
+      `${label} is ${agent}, which needs ${secrets.join(" or ")} in the environment`,
+    );
+  }
+  return agent;
+}
+
+// The agents the operator configured: those it has a credential for (each agent's `secrets`),
+// and the defaults. A repo's `agent:` can only pick among these (repo-config.mjs).
+function configuredAgents(env, s) {
+  return Object.keys(AGENTS).filter(
+    (name) =>
+      AGENTS[name].secrets.some((secret) => env[secret]) ||
+      name === s.SANDBOX_AGENT ||
+      name === s.BRAINSTORM_AGENT,
+  );
+}
+
+// FALLBACKS: where a run goes when its provider fails, in order ("claude@openrouter, codex"
+// → ["claude@openrouter", "codex@openai"]). Each needs its credential: a fallback that can't
+// run would only show when the first one fails.
+function fallbacks(text, { label, env }) {
+  const names = [];
+  for (const item of list(text)) {
+    const entry = entryOf(item);
+    if (!entry) {
+      throw new ConfigError(
+        `${label}: expected agent@provider (${ENTRIES.join(", ")}), got ${item}`,
+      );
+    }
+    const name = entryName(entry.agent, entry.provider);
+    const { secrets } = AGENTS[entry.agent].providers[entry.provider];
+    if (!secrets.some((secret) => env[secret])) {
+      throw new ConfigError(`${label}: ${name} needs ${secrets.join(" or ")} in the environment`);
+    }
+    if (!names.includes(name)) names.push(name);
+  }
+  return names;
+}
+
+function modelName(text, { label }) {
+  if (MODEL_NAME.test(text)) return text;
+  throw new ConfigError(`${label}: expected a model name (anthropic/claude-…), got ${text}`);
+}
+
+// One <prefix>_<tier>_MODEL setting per tier, each a model's name.
+function tierSettings(prefix, tiers) {
+  return Object.fromEntries(
+    Object.values(tiers).map((tier) => [
+      `${prefix}_${tier}_MODEL`,
+      { default: null, parse: modelName },
     ]),
-    // Claude Code's own model fallback (--fallback-model), when its model is overloaded: a
-    // tier or a model's name. Empty: none.
-    claudeFallbackModel: setting("CLAUDE_FALLBACK_MODEL")
-      ? modelName(setting("CLAUDE_FALLBACK_MODEL"), label("CLAUDE_FALLBACK_MODEL"))
-      : null,
-    ...openrouterSettings({ setting, label }),
-  };
+  );
 }
 
-// Claude Code through OpenRouter (claude@openrouter in FALLBACKS), with OPENROUTER_API_KEY,
-// and what opus, sonnet and haiku mean there, over the aliases above.
-function openrouterSettings({ setting, label }) {
-  return {
-    openrouterUrl: apiUrl(
-      setting("OPENROUTER_BASE_URL"),
-      label("OPENROUTER_BASE_URL"),
-      "https://openrouter.ai/api",
-    ),
-    openrouterAliases: aliases(label, [
-      ["ANTHROPIC_DEFAULT_OPUS_MODEL", "OPENROUTER_OPUS_MODEL", setting("OPENROUTER_OPUS_MODEL")],
-      [
-        "ANTHROPIC_DEFAULT_SONNET_MODEL",
-        "OPENROUTER_SONNET_MODEL",
-        setting("OPENROUTER_SONNET_MODEL"),
-      ],
-      [
-        "ANTHROPIC_DEFAULT_HAIKU_MODEL",
-        "OPENROUTER_HAIKU_MODEL",
-        setting("OPENROUTER_HAIKU_MODEL"),
-      ],
-    ]),
-  };
-}
-
-// Codex's, the same way (openai.mjs): OpenAI, or an OpenAI-compatible endpoint; without
-// a key, a ChatGPT plan's login, which the listener holds and refreshes (chatgpt.mjs).
-function codexSettings(env, { setting, label }) {
-  return {
-    openaiCredential: OPENAI_CREDENTIALS.find((name) => env[name]) ?? null,
-    openaiUrl: apiUrl(
-      setting("OPENAI_BASE_URL"),
-      label("OPENAI_BASE_URL"),
-      "https://api.openai.com/v1",
-    ),
-    // What best, balanced and fast mean to Codex, when not its built-in models (agents/codex.mjs).
-    codexModels: aliases(label, [
-      ["best", "CODEX_BEST_MODEL", setting("CODEX_BEST_MODEL")],
-      ["balanced", "CODEX_BALANCED_MODEL", setting("CODEX_BALANCED_MODEL")],
-      ["fast", "CODEX_FAST_MODEL", setting("CODEX_FAST_MODEL")],
-    ]),
-  };
-}
-
-// How runs are batched, which model and effort they get, and what the listener keeps.
-function runSettings(env, from) {
-  const { setting, number } = from;
-  const ms = "a whole number of milliseconds";
-  return {
-    // Batches the comments of one review (each arrives as its own webhook) into one run.
-    debounceMs: number("DEBOUNCE_MS", 15000, ms),
-    // A brainstorm comment comes alone, and someone is waiting for the answer.
-    brainstormDebounceMs: number("BRAINSTORM_DEBOUNCE_MS", 3000, ms),
-    brainstormIdleMs: number("BRAINSTORM_IDLE_MINUTES", 10, "a whole number of minutes") * 60000,
-    dataDir: env.DATA_DIR || "/data",
-    // Where GitHub sends webhooks and screenshots are served. Optional: /setup detects it
-    // and stores it with the App.
-    publicUrl: setting("PUBLIC_URL") ? setting("PUBLIC_URL").replace(/\/$/, "") : null,
-    // A tier (best, balanced, fast) each agent maps to one of its models, or a model's name.
-    model: setting("SANDBOX_MODEL") || "best",
-    effort: setting("SANDBOX_EFFORT") || "medium",
-    brainstormModel: setting("BRAINSTORM_MODEL") || setting("SANDBOX_MODEL") || "best",
-    brainstormEffort: setting("BRAINSTORM_EFFORT") || setting("SANDBOX_EFFORT") || "medium",
-    needsInputLabel: setting("NEEDS_INPUT_LABEL") ?? "needs-input",
-    // The shortest interval at which a repo's `conflicts.check_minutes` may look at its open
-    // pull requests (conflicts.mjs); each conflict found is a run. 0: the watcher is off.
-    conflictCheckMinutes: number("CONFLICT_CHECK_MINUTES", 5, "a whole number of minutes (0: off)"),
-    // How often every "/after" wait asks GitHub again (waits.mjs), for what no delivery said.
-    waitsCheckMinutes: waitsCheck(from),
-    // How long a run's log, summary and screenshots are kept (history.mjs). 0: forever.
-    logRetentionDays: number("LOG_RETENTION_DAYS", 90, "a whole number of days (0: forever)"),
-  };
+// Models by name, from tierSettings()'s values: { what it is to the agent (a variable, a
+// tier): its model }, for those set.
+function aliasesFrom(values, prefix, tiers) {
+  return Object.fromEntries(
+    Object.entries(tiers)
+      .map(([key, tier]) => [key, values[`${prefix}_${tier}_MODEL`]])
+      .filter(([, model]) => model),
+  );
 }

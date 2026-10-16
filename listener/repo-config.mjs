@@ -9,6 +9,7 @@ import { posix } from "node:path";
 import { AGENTS } from "./agents/index.mjs";
 import { EFFORTS, MODEL_NAME } from "./events.mjs";
 import { list, normalize } from "./config.mjs";
+import { customMode, PICKED_MODES, RESERVED_MODES } from "./modes.mjs";
 import { isMap, parseYaml } from "./yaml.mjs";
 
 export const CONFIG_FILE = ".deckhand.yaml";
@@ -26,60 +27,24 @@ export const RESERVED = [
 // Docker's --mount is comma-separated: host and cache paths stay within these characters.
 export const PLAIN_PATH = /^\/[\w./@+-]*$/;
 
-// The listener's own modes: a repo's `modes:` can't take these names, and any other mode is
-// one of the repo's own (modes.mjs). Work, brainstorm and onboarding (proposing this file,
-// onboarding.mjs) are the ones "/mode" picks; the others come from the inbox, discussions,
-// "/stop" and the dashboard's Analyze (analysis.mjs). The dashboard has a copy (format.ts),
-// checked by a test.
-const PICKED_MODES = ["work", "brainstorm", "onboarding"];
-export const RESERVED_MODES = [...PICKED_MODES, "stop", "idea", "bug", "discussion", "analyze"];
 const MODE_KEYS = ["instructions", "light", "session", "agent", "model", "effort"];
+
+// The listener's own modes (modes.mjs): a repo's `modes:` can't take these names.
+export { customMode, RESERVED_MODES };
 
 // What a repo gets without a config file: the operator's settings as they are.
 export function defaultSettings(config) {
-  return {
-    users: config.users,
-    trigger: config.trigger,
-    agent: config.agent,
-    brainstormAgent: config.brainstormAgent,
-    model: config.model,
-    effort: config.effort,
-    brainstormModel: config.brainstormModel,
-    brainstormEffort: config.brainstormEffort,
-    maxParallel: config.maxParallel,
-    setup: null,
-    instructions: null,
-    dockerfile: null,
-    // { cache } when its runs get a container engine (runner/engine.mjs), with its grant.
-    docker: null,
-    caches: [],
-    mounts: [],
-    inbox: {},
-    modes: {},
-    preview: null,
-    conflicts: null,
-    // An issue's open questions (the needs-input label) hold its work runs back (tasks.mjs).
-    waitForAnswers: true,
-  };
+  const settings = {};
+  for (const { field, default: value } of Object.values(KEYS)) {
+    if (field) settings[field] = typeof value === "function" ? value(config, field) : value;
+  }
+  return settings;
 }
 
 // The operator's config as seen from one repo: what events.mjs and the runs read.
 export function effectiveConfig(config, settings) {
-  const { users, trigger, maxParallel } = settings;
-  const { model, effort, brainstormModel, brainstormEffort, inbox } = settings;
-  return {
-    ...config,
-    inbox,
-    users,
-    trigger,
-    agent: settings.agent,
-    brainstormAgent: settings.brainstormAgent,
-    model,
-    effort,
-    brainstormModel,
-    brainstormEffort,
-    maxParallel,
-  };
+  const own = Object.values(KEYS).filter((k) => k.effective);
+  return { ...config, ...Object.fromEntries(own.map(({ field }) => [field, settings[field]])) };
 }
 
 // The file's text → { settings, errors, warnings }. Errors stop runs (the reply says why);
@@ -101,8 +66,8 @@ export function parseRepoConfig(text, config) {
   const warn = (what) => warnings.push(what);
   for (const [key, value] of Object.entries(raw)) {
     if (value === null) continue; // "key:" with nothing: the default
-    if (Object.hasOwn(KEYS, key)) KEYS[key](value, { key, settings, config, fail, warn });
-    else warn(`${key}: unknown, ignored`);
+    if (!Object.hasOwn(KEYS, key)) warn(`${key}: unknown, ignored`);
+    else KEYS[key].parse(value, { key, field: KEYS[key].field, settings, config, fail, warn });
   }
   return { settings, errors, warnings };
 }
@@ -115,16 +80,14 @@ function text(key, value, fail) {
 }
 
 // A model name, into settings[field].
-const modelKey =
-  (field) =>
-  (value, { key, settings, fail }) => {
-    if (typeof value === "string" && MODEL_NAME.test(value)) settings[field] = value;
-    else
-      fail(
-        key,
-        "expected a model tier (best, balanced, fast) or name (opus, claude-…, openai/gpt-…)",
-      );
-  };
+function modelKey(value, { key, field, settings, fail }) {
+  if (typeof value === "string" && MODEL_NAME.test(value)) settings[field] = value;
+  else
+    fail(
+      key,
+      "expected a model tier (best, balanced, fast) or name (opus, claude-…, openai/gpt-…)",
+    );
+}
 
 // One of the agents the operator configured (config.agents), or null with `fail` called:
 // a repo picks among them, it can't add one.
@@ -141,26 +104,21 @@ function agentName(value, key, config, fail) {
   return null;
 }
 
-const agentKey =
-  (field) =>
-  (value, { key, settings, config, fail }) => {
-    const name = agentName(value, key, config, fail);
-    if (name) settings[field] = name;
-  };
+function agentKey(value, { key, field, settings, config, fail }) {
+  const name = agentName(value, key, config, fail);
+  if (name) settings[field] = name;
+}
 
 // A thinking effort, into settings[field].
-const effortKey =
-  (field) =>
-  (value, { key, settings, fail }) => {
-    if (EFFORTS.includes(String(value).toLowerCase()))
-      settings[field] = String(value).toLowerCase();
-    else fail(key, `expected one of ${EFFORTS.join(", ")}`);
-  };
+function effortKey(value, { key, field, settings, fail }) {
+  if (EFFORTS.includes(String(value).toLowerCase())) settings[field] = String(value).toLowerCase();
+  else fail(key, `expected one of ${EFFORTS.join(", ")}`);
+}
 
-// A file of the repository, into settings[key].
-function pathKey(value, { key, settings, fail }) {
+// A file of the repository, into settings[field].
+function pathKey(value, { key, field, settings, fail }) {
   const path = repoPath(value);
-  if (path) settings[key] = path;
+  if (path) settings[field] = path;
   else fail(key, "expected a path in the repository (relative, no ..)");
 }
 
@@ -285,62 +243,229 @@ function parseConflicts(value, { key, settings, config, fail, warn }) {
   if (ok) settings.conflicts = { checkMinutes: Math.max(minutes, floor) };
 }
 
-// Each top-level key's parser, into `settings`; any other key is unknown (a warning).
-const KEYS = {
-  users: parseUsers,
+// The operator's value of `field`, as the repo's default: a file can only narrow or replace it.
+const operator = (config, field) => config[field];
+
+const none = (values) => (values.length ? values.join(", ") : "none");
+
+// A row of the dashboard's config panel showing the value as it is, or "none".
+const asIs = ({ value, row }) => row(String(value));
+const orNone = ({ value, row }) => row(value ?? "none");
+
+// Each top-level key of the file:
+// - field: what it sets in `settings`; none for the keys that are only ignored (a warning);
+// - default: its value without the key, or a function of the operator's config;
+// - effective: part of the operator's config as one repo sees it (effectiveConfig());
+// - parse: the key's value into settings[field], or `fail` (an error) or `warn`;
+// - display: its rows on the dashboard's config panel (repo-view.mjs settingRows(), which
+//   gives `row`, `refused` and `unknown`), or false for those it shows in a table of their own.
+// Any other key is unknown (a warning).
+export const KEYS = {
+  users: {
+    field: "users",
+    default: operator,
+    effective: true,
+    parse: parseUsers,
+    display: ({ value, row, changed, config }) =>
+      row(none(value), changed ? `narrowed from ALLOWED_USERS (${none(config.users)})` : null),
+  },
   // The whole first line of a comment, compared loosely ("Deckhand", "@deckhand:").
-  trigger: (value, { key, settings, fail }) => {
-    if (typeof value === "string" && normalize(value)) settings.trigger = normalize(value);
-    else fail(key, "expected a line of text");
+  trigger: {
+    field: "trigger",
+    default: operator,
+    effective: true,
+    parse: (value, { key, settings, fail }) => {
+      if (typeof value === "string" && normalize(value)) settings.trigger = normalize(value);
+      else fail(key, "expected a line of text");
+    },
+    display: asIs,
   },
-  agent: agentKey("agent"),
-  brainstorm_agent: agentKey("brainstormAgent"),
-  model: modelKey("model"),
-  brainstorm_model: modelKey("brainstormModel"),
-  effort: effortKey("effort"),
-  brainstorm_effort: effortKey("brainstormEffort"),
+  agent: { field: "agent", default: operator, effective: true, parse: agentKey, display: asIs },
+  brainstorm_agent: {
+    field: "brainstormAgent",
+    default: operator,
+    effective: true,
+    parse: agentKey,
+    display: asIs,
+  },
+  model: { field: "model", default: operator, effective: true, parse: modelKey, display: asIs },
+  effort: { field: "effort", default: operator, effective: true, parse: effortKey, display: asIs },
+  brainstorm_model: {
+    field: "brainstormModel",
+    default: operator,
+    effective: true,
+    parse: modelKey,
+    display: asIs,
+  },
+  brainstorm_effort: {
+    field: "brainstormEffort",
+    default: operator,
+    effective: true,
+    parse: effortKey,
+    display: asIs,
+  },
   // The operator's MAX_PARALLEL stays the ceiling.
-  max_parallel: (value, { key, settings, config, fail }) => {
-    if (Number.isInteger(value) && value > 0) {
-      settings.maxParallel = Math.min(value, config.maxParallel);
-    } else fail(key, "expected a whole number above 0");
+  max_parallel: {
+    field: "maxParallel",
+    default: operator,
+    effective: true,
+    parse: (value, { key, settings, config, fail }) => {
+      if (Number.isInteger(value) && value > 0) {
+        settings.maxParallel = Math.min(value, config.maxParallel);
+      } else fail(key, "expected a whole number above 0");
+    },
+    display: ({ value, row, changed, config }) =>
+      row(String(value), changed ? `MAX_PARALLEL is ${config.maxParallel}` : null),
   },
-  setup: (value, { key, settings, fail }) => {
-    settings.setup = text(key, value, fail);
+  setup: {
+    field: "setup",
+    default: null,
+    parse: (value, { key, settings, fail }) => {
+      settings.setup = text(key, value, fail);
+    },
+    display: orNone,
   },
-  instructions: pathKey,
-  dockerfile: pathKey,
+  instructions: { field: "instructions", default: null, parse: pathKey, display: orNone },
+  dockerfile: {
+    field: "dockerfile",
+    default: null,
+    parse: pathKey,
+    display: ({ value, row, refused, config }) =>
+      refused(value) ?? row(value ?? `none: the base image ${config.image}`),
+  },
   // Moved to the operator's grants folder (grants.mjs): a repo can't allow itself this.
-  allow_branch_docker_images: (value, { key, warn }) => {
-    warn(`${key}: ignored here, the operator's grants folder sets it for this repository`);
+  allow_branch_docker_images: {
+    parse: (value, { key, warn }) => {
+      warn(`${key}: ignored here, the operator's grants folder sets it for this repository`);
+    },
+    display: ({ settings, grant, known, row, unknown }) =>
+      !known && settings.dockerfile
+        ? unknown("unknown")
+        : row(
+            String(grant.allowBranchDockerImages && !!settings.dockerfile),
+            grant.allowBranchDockerImages && !settings.dockerfile
+              ? "granted, but the repository has no dockerfile"
+              : "the operator's grants",
+          ),
   },
-  caches: parseCaches,
+  // { cache } when its runs get a container engine (runner/engine.mjs), with its grant.
+  docker: {
+    field: "docker",
+    default: null,
+    parse: parseDocker,
+    display: ({ value, row, refused, config }) =>
+      refused(dockerText(value)) ??
+      row(
+        dockerText(value),
+        value && !config.engine ? "the operator hasn't set SANDBOX_ENGINE" : null,
+      ),
+  },
+  caches: {
+    field: "caches",
+    default: () => [],
+    parse: parseCaches,
+    display: ({ value, row }) => row(none(value)),
+  },
   // Moved to the operator's grants folder (grants.mjs): only the operator lists hosts. Its
-  // runs never counted them unless the grant said allow_repo_hosts, which now stops them.
-  hosts: (value, { key, warn }) => {
-    warn(`${key}: ignored, the operator lists the hosts in grants/<owner>/<repo>.yaml`);
+  // runs never counted them unless the grant said allow_repo_hosts, which now stops them. The
+  // panel's hosts are the grants'.
+  hosts: {
+    parse: (value, { key, warn }) => {
+      warn(`${key}: ignored, the operator lists the hosts in grants/<owner>/<repo>.yaml`);
+    },
+    display: false,
   },
   // The egress proxy's cache is shared by every run: only the operator says what goes in it.
-  cached_hosts: (value, { key, warn }) => {
-    warn(`${key}: ignored, the operator lists them in grants/<owner>/<repo>.yaml`);
+  cached_hosts: {
+    parse: (value, { key, warn }) => {
+      warn(`${key}: ignored, the operator lists them in grants/<owner>/<repo>.yaml`);
+    },
+    display: false,
   },
-  mounts: parseMounts,
-  inbox: parseInbox,
-  modes: (value, { key, settings, config, fail }) => {
-    if (!isMap(value)) return fail(key, "expected modes by name, each with its instructions");
-    for (const [name, mode] of Object.entries(value)) {
-      parseMode(name, mode, settings, config, fail);
-    }
+  // The panel resolves them in a table of their own (repo-view.mjs mountRows()).
+  mounts: { field: "mounts", default: () => [], parse: parseMounts, display: false },
+  inbox: {
+    field: "inbox",
+    default: () => ({}),
+    effective: true,
+    parse: parseInbox,
+    display: ({ value, row }) => row(inboxText(value)),
   },
-  preview: parsePreview,
-  conflicts: parseConflicts,
-  docker: parseDocker,
-  // A behaviour switch, not a permission: nothing to narrow.
-  wait_for_answers: (value, { key, settings, fail }) => {
-    if (typeof value === "boolean") settings.waitForAnswers = value;
-    else fail(key, "expected true or false");
+  preview: {
+    field: "preview",
+    default: null,
+    parse: parsePreview,
+    display: ({ value, row, refused }) => refused(previewText(value)) ?? row(previewText(value)),
+  },
+  conflicts: {
+    field: "conflicts",
+    default: null,
+    parse: parseConflicts,
+    display: ({ value, row, config }) =>
+      row(
+        value ? `every ${value.checkMinutes} minutes` : "off",
+        config.conflictCheckMinutes ? null : "the operator turned the conflict watcher off",
+      ),
+  },
+  // An issue's open questions (the needs-input label) hold its work runs back (tasks.mjs). A
+  // behaviour switch, not a permission: nothing to narrow.
+  wait_for_answers: {
+    field: "waitForAnswers",
+    default: true,
+    parse: (value, { key, settings, fail }) => {
+      if (typeof value === "boolean") settings.waitForAnswers = value;
+      else fail(key, "expected true or false");
+    },
+    display: asIs,
+  },
+  // One row per mode: only the repo's file defines them.
+  modes: {
+    field: "modes",
+    default: () => ({}),
+    parse: (value, { key, settings, config, fail }) => {
+      if (!isMap(value)) return fail(key, "expected modes by name, each with its instructions");
+      for (const [name, mode] of Object.entries(value)) {
+        parseMode(name, mode, settings, config, fail);
+      }
+    },
+    display: ({ value, settings }) => Object.keys(value).map((name) => modeRow(settings, name)),
   },
 };
+
+function modeRow(settings, name) {
+  const mode = customMode(settings, name);
+  const traits = [
+    mode.instructions,
+    `${mode.model}/${mode.effort}`,
+    mode.light ? "light" : null,
+    mode.fresh ? "fresh session" : null,
+  ];
+  return {
+    key: `modes.${name}`,
+    value: traits.filter(Boolean).join(" · "),
+    source: "repo",
+    note: null,
+  };
+}
+
+function inboxText(inbox) {
+  const parts = [];
+  if (inbox.ideas) parts.push(`ideas #${inbox.ideas}`);
+  if (inbox.bugs) parts.push(`bugs #${inbox.bugs}`);
+  if (inbox.discussions) parts.push(`discussions "${inbox.discussions}"`);
+  return none(parts);
+}
+
+function dockerText(docker) {
+  if (!docker) return "none";
+  return docker.cache ? "a container engine, its cache kept" : "a container engine";
+}
+
+function previewText(preview) {
+  if (!preview) return "none";
+  const image = preview.image ? `, image ${preview.image}` : "";
+  return `${preview.command} (${preview.timeoutMinutes} min${image})`;
+}
 
 // One of `modes:`, into settings.modes. Every key is checked: a mistyped one would otherwise
 // change what the mode does without anyone noticing. Nothing here touches the repo's grants.
@@ -403,29 +528,6 @@ function parseMode(name, mode, settings, config, fail) {
   if (!("instructions" in mode)) bad("instructions", "missing: a mode is its instructions");
   if (before) return fail(where, "defined twice (names are not case-sensitive)");
   if (ok) settings.modes[id] = own;
-}
-
-// What a run in the repo's own mode `name` gets, or null when the repo has no such mode
-// (work, brainstorm and the inbox are the listener's): light (no branch, no setup, a read-only
-// token: it can only comment), fresh (a new session each time, the issue's kept as it is),
-// its instructions file, and its agent, model and effort, by default those of work or
-// brainstorms.
-// No hosts, mounts or limits: those are the repo's grants, the same in every mode.
-export function customMode(settings, name) {
-  const own = settings?.modes?.[name];
-  if (!own) return null;
-  const [agent, model, effort] = own.light
-    ? [settings.brainstormAgent, settings.brainstormModel, settings.brainstormEffort]
-    : [settings.agent, settings.model, settings.effort];
-  return {
-    name,
-    light: own.light,
-    fresh: own.session === "fresh",
-    instructions: own.instructions,
-    agent: own.agent ?? agent,
-    model: own.model ?? model,
-    effort: own.effort ?? effort,
-  };
 }
 
 // The modes "/mode" can pick in a repo, for the reply to an unknown one.

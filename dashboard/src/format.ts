@@ -89,7 +89,7 @@ export function toneOf(state: TaskState | RunStatus): Tone {
 export const isLive = (t: Task) => ["building-image", "working", "stopping"].includes(t.state);
 
 const KIND_NAMES: Record<string, string> = { pr: "Pull request", discussion: "Discussion" };
-// The listener's own modes (RESERVED_MODES in listener/repo-config.mjs, which a test keeps
+// The listener's own modes (MODES in listener/modes.mjs, which a test keeps
 // in step): the kind already names them, only the repo's own modes are shown.
 export const BUILT_IN_MODES = [
   "work",

@@ -1,22 +1,105 @@
 // What each kind of run is: the built-in modes, and the repo's own (its config's `modes:`,
 // customMode()) that add their `light` and `fresh` to them. Pure: no state, no I/O.
 import { DISCUSSION_PERMISSIONS, LIGHT_PERMISSIONS, READ_ONLY_PERMISSIONS } from "./github-app.mjs";
-import { customMode, RESERVED_MODES } from "./repo-config.mjs";
 
-// Inbox issues and discussion categories are their own trigger (workItem()).
-export const INBOX = new Set(["idea", "bug", "discussion"]);
+// The listener's own modes, each with its traits:
+// - picked: "/mode" picks it; the others come from the inbox, discussions, "/stop" and the
+//   dashboard's Analyze (analysis.mjs).
+// - light: it reads the code and answers, without a branch or the repo's setup.
+// - fresh: a new session each time. An inbox issue collects unrelated entries, so each entry
+//   is a run of its own (entryRun()); an analysis reads its digest, nothing before.
+// - inbox: inbox issues and discussion categories are their own trigger (workItem()).
+// - kind: what the dashboard shows its runs as (kindOf()).
+// - permissions: its token's (permissionsFor()). No light run writes pull requests. A
+//   discussion run answers through GraphQL: its token needs Discussions too. Brainstorms and
+//   inbox entries comment and create issues. Onboarding proposes: nothing is pushed or created
+//   before the trigger line. An analysis reports: the maintainer files what they want of it.
+// - prompt: its instructions, in ../prompts/ (prompts.mjs).
+// Their names are reserved: a repo's `modes:` can't take them (repo-config.mjs). The
+// dashboard has a copy of the list (format.ts), checked by a test.
+export const MODES = {
+  work: { picked: true },
+  brainstorm: {
+    picked: true,
+    light: true,
+    kind: "brainstorm",
+    permissions: LIGHT_PERMISSIONS,
+    prompt: "brainstorm.md",
+  },
+  onboarding: {
+    picked: true,
+    light: true,
+    permissions: READ_ONLY_PERMISSIONS,
+    prompt: "onboarding.md",
+  },
+  // A brainstorm's wrap-up.
+  stop: {
+    light: true,
+    kind: "brainstorm",
+    permissions: LIGHT_PERMISSIONS,
+    prompt: "brainstorm.md",
+  },
+  idea: {
+    light: true,
+    fresh: true,
+    inbox: true,
+    kind: "idea",
+    permissions: LIGHT_PERMISSIONS,
+    prompt: "idea.md",
+  },
+  bug: {
+    light: true,
+    fresh: true,
+    inbox: true,
+    kind: "bug",
+    permissions: LIGHT_PERMISSIONS,
+    prompt: "bug.md",
+  },
+  // A discussion keeps its session, like a brainstorm.
+  discussion: {
+    light: true,
+    inbox: true,
+    kind: "discussion",
+    permissions: DISCUSSION_PERMISSIONS,
+    prompt: "discussion.md",
+  },
+  analyze: { light: true, fresh: true, permissions: READ_ONLY_PERMISSIONS, prompt: "analyze.md" },
+};
 
-// Runs that read the code and answer, without a branch or the repo's setup: brainstorms (and
-// their wrap-up), onboarding, inbox entries, discussions and run analyses (analysis.mjs).
-export const LIGHT = new Set(["brainstorm", "stop", "onboarding", "analyze", ...INBOX]);
+const builtIn = (mode) => (Object.hasOwn(MODES, mode) ? MODES[mode] : null);
+const having = (trait) => new Set(Object.keys(MODES).filter((mode) => MODES[mode][trait]));
 
-// Each inbox entry starts a fresh session (the inbox issue collects unrelated entries); a
-// discussion keeps its own, like a brainstorm. An analysis reads its digest, nothing before.
-// They are also a run each (entryRun()).
-export const FRESH = new Set(["idea", "bug", "analyze"]);
+export const RESERVED_MODES = Object.keys(MODES);
+export const PICKED_MODES = RESERVED_MODES.filter((mode) => MODES[mode].picked);
+export const INBOX = having("inbox");
+export const LIGHT = having("light");
+export const FRESH = having("fresh");
 
 // Any other mode is one of the repo's own.
 export const BUILT_IN = new Set(RESERVED_MODES);
+
+// What a run in the repo's own mode `name` gets, or null when the repo has no such mode
+// (work, brainstorm and the inbox are the listener's): light (no branch, no setup, a read-only
+// token: it can only comment), fresh (a new session each time, the issue's kept as it is),
+// its instructions file, and its agent, model and effort, by default those of work or
+// brainstorms.
+// No hosts, mounts or limits: those are the repo's grants, the same in every mode.
+export function customMode(settings, name) {
+  const own = settings?.modes?.[name];
+  if (!own) return null;
+  const [agent, model, effort] = own.light
+    ? [settings.brainstormAgent, settings.brainstormModel, settings.brainstormEffort]
+    : [settings.agent, settings.model, settings.effort];
+  return {
+    name,
+    light: own.light,
+    fresh: own.session === "fresh",
+    instructions: own.instructions,
+    agent: own.agent ?? agent,
+    model: own.model ?? model,
+    effort: own.effort ?? effort,
+  };
+}
 
 export function isLight(task, mode) {
   return LIGHT.has(mode) || !!customMode(task.settings, mode)?.light;
@@ -41,18 +124,11 @@ export function sessionName(name, light) {
 
 // What the dashboard shows a run or queued task as.
 export function kindOf(mode, kind) {
-  return mode === "brainstorm" || mode === "stop" ? "brainstorm" : INBOX.has(mode) ? mode : kind;
+  return builtIn(mode)?.kind ?? kind;
 }
 
-// No light run writes pull requests. A discussion run answers through GraphQL: its token
-// needs Discussions too. Brainstorms and inbox entries comment and create issues. Onboarding,
-// an analysis and a light run in one of the repo's own modes only comment: their token only
-// reads.
+// A built-in mode's token, else a light run in one of the repo's own modes only comments: its
+// token only reads.
 export function permissionsFor(mode, light) {
-  if (mode === "discussion") return DISCUSSION_PERMISSIONS;
-  // Onboarding proposes: nothing is pushed or created before the trigger line. An analysis
-  // reports: the maintainer files what they want of it.
-  if (mode === "onboarding" || mode === "analyze") return READ_ONLY_PERMISSIONS;
-  if (LIGHT.has(mode)) return LIGHT_PERMISSIONS;
-  return light ? READ_ONLY_PERMISSIONS : undefined;
+  return builtIn(mode)?.permissions ?? (light ? READ_ONLY_PERMISSIONS : undefined);
 }

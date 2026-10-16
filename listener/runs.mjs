@@ -8,11 +8,19 @@ import { agentFor } from "./agents/index.mjs";
 import { entryLabel, nextFallback, resolveEntry } from "./agents/select.mjs";
 import { commentsText, taskKey } from "./events.mjs";
 import { nextStep, replyFooter } from "./footer.mjs";
-import { BUILT_IN, entryRun, isFresh, isLight, permissionsFor, sessionName } from "./modes.mjs";
+import {
+  BUILT_IN,
+  customMode,
+  entryRun,
+  isFresh,
+  isLight,
+  permissionsFor,
+  sessionName,
+} from "./modes.mjs";
 import { branchConfigReport } from "./onboarding.mjs";
 import { createPreparation } from "./preparation.mjs";
 import { openingMessages, promptFor } from "./prompts.mjs";
-import { CONFIG_FILE, customMode } from "./repo-config.mjs";
+import { CONFIG_FILE } from "./repo-config.mjs";
 import {
   addRun,
   lastResult,
