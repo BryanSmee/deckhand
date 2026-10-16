@@ -683,9 +683,12 @@ cached_hosts: [deb.debian.org, dl-cdn.alpinelinux.org, registry.npmjs.org, files
   `cached_hosts` alone opens nothing. List public mirrors whose files are the same for
   everyone, not APIs.
 - **What is never kept**: a request with `Authorization`, `Cookie` or `Range`, anything but a
-  `GET` answered `200`, and an answer marked `Cache-Control: private` or `no-store`, setting
-  a cookie, or larger than `EGRESS_CACHE_ENTRY_MAX` (1 GB). Those go through as before.
-  Answers are kept as long as the host says they are fresh, then checked again with it.
+  `GET` answered `200`, and an answer marked `Cache-Control: private` or `no-store`, or
+  larger than `EGRESS_CACHE_ENTRY_MAX` (1 GB). Those go through as before. Cookies an answer
+  sets reach that client only. Answers are kept as long as the host says they are fresh,
+  then checked again with it.
+- **When**: a run's cached hosts are fixed when it starts, from the grants then: a change
+  applies to the next runs, not to those already running.
 - **Size**: one cache for every repository, in the `egress` service's `egress-cache` volume
   (`deckhand_egress-cache` with compose's default project name), at most `EGRESS_CACHE_MAX`
   (10 GB by default): beyond it, the least recently used answers go. Set it in the `egress`

@@ -119,9 +119,10 @@ test("answers that aren't the same for everyone are never stored", async (t) => 
   const routes = {
     "/private": answer(200, { "cache-control": "private, max-age=60" }),
     "/no-store": answer(200, { "cache-control": "no-store" }),
-    "/cookie": answer(200, { "set-cookie": "id=1", "cache-control": "max-age=60" }),
     "/missing": answer(404, { "cache-control": "max-age=60" }),
+    // Varies on a header the request sends, or on anything.
     "/vary": answer(200, { vary: "User-Agent", "cache-control": "max-age=60" }),
+    "/vary-all": answer(200, { vary: "*", "cache-control": "max-age=60" }),
     "/big": answer(200, { "cache-control": "max-age=60", "content-length": "100" }),
     // No Content-Length: counted as it comes.
     "/big-chunked": (req, res) => {
@@ -133,7 +134,7 @@ test("answers that aren't the same for everyone are never stored", async (t) => 
   const { get, seen, files } = await setup(t, routes, { entryMax: 99 });
   for (const path of Object.keys(routes)) {
     for (let i = 0; i < 2; i++) {
-      const got = await get(path);
+      const got = await get(path, { "user-agent": "apt" });
       assert.equal(got.body, "x".repeat(100), path);
       assert.equal(got.headers["x-deckhand-cache"], "miss", path);
     }
@@ -141,6 +142,64 @@ test("answers that aren't the same for everyone are never stored", async (t) => 
   await wait(30);
   assert.equal(seen.length, Object.keys(routes).length * 2);
   assert.deepEqual(files(), []);
+});
+
+test("a cookie a CDN sets on everything doesn't keep an answer out, and isn't kept", async (t) => {
+  const routes = {
+    // Cloudflare's, on every answer of npm's registry.
+    "/left-pad.tgz": (req, res) => {
+      res.writeHead(200, { "set-cookie": "__cf_bm=1; Path=/", "cache-control": "max-age=60" });
+      res.end("tarball");
+    },
+  };
+  const { get, seen, stored } = await setup(t, routes);
+  const first = await get("/left-pad.tgz");
+  assert.equal(first.headers["x-deckhand-cache"], "miss");
+  assert.deepEqual(first.headers["set-cookie"], ["__cf_bm=1; Path=/"]);
+  assert.ok(await stored("/left-pad.tgz"));
+  const second = await get("/left-pad.tgz");
+  assert.equal(second.headers["x-deckhand-cache"], "hit");
+  assert.equal(second.body, "tarball");
+  assert.equal(second.headers["set-cookie"], undefined);
+  assert.equal(seen.length, 1);
+});
+
+test("an answer varying on a header is kept for requests without it, Accept in the key", async (t) => {
+  const routes = {
+    // dl-cdn.alpinelinux.org's.
+    "/APKINDEX.tar.gz": (req, res) => {
+      res.writeHead(200, { vary: "Origin", "cache-control": "max-age=60" });
+      res.end(`index for ${req.headers.origin ?? "anyone"}`);
+    },
+    // npm's registry: a packument by Accept.
+    "/left-pad": (req, res) => {
+      res.writeHead(200, { vary: "accept-encoding, accept", "cache-control": "max-age=60" });
+      res.end(`packument as ${req.headers.accept}`);
+    },
+  };
+  const { get, seen, cache, url, stored } = await setup(t, routes);
+  await get("/APKINDEX.tar.gz");
+  assert.ok(await stored("/APKINDEX.tar.gz"));
+  const hit = await get("/APKINDEX.tar.gz");
+  assert.equal(hit.headers["x-deckhand-cache"], "hit");
+  // One with Origin goes on to the host, and leaves the entry alone.
+  const cors = await get("/APKINDEX.tar.gz", { origin: "https://a.test" });
+  assert.equal(cors.body, "index for https://a.test");
+  assert.equal(cors.headers["x-deckhand-cache"], undefined);
+  assert.equal((await get("/APKINDEX.tar.gz")).headers["x-deckhand-cache"], "hit");
+  assert.equal(seen.length, 2);
+
+  const corgi = "application/vnd.npm.install-v1+json";
+  await get("/left-pad", { accept: corgi });
+  const json = await get("/left-pad", { accept: "application/json" });
+  assert.equal(json.headers["x-deckhand-cache"], "miss");
+  assert.equal(json.body, "packument as application/json");
+  for (let i = 0; i < 50 && !cache.has(cache.key(url("/left-pad"), undefined, corgi)); i++) {
+    await wait(5);
+  }
+  const again = await get("/left-pad", { accept: corgi });
+  assert.equal(again.headers["x-deckhand-cache"], "hit");
+  assert.equal(again.body, `packument as ${corgi}`);
 });
 
 test("a stale entry is revalidated, and a 304 serves it", async (t) => {

@@ -26,6 +26,7 @@ import {
   createCache,
   DEFAULT_ENTRY_MAX,
   DEFAULT_MAX,
+  fits,
   isFresh,
   notModified,
   parseSize,
@@ -379,8 +380,13 @@ export function createProxy({
   // A GET on a cached host: from disk when fresh, revalidated when stale (a 304 serves it),
   // else downloaded, streamed to the client and stored as it comes when it may be.
   async function cached(req, res, to, use) {
-    const key = cache.key(to.url.href, req.headers["accept-encoding"]);
+    const key = cache.key(to.url.href, req.headers["accept-encoding"], req.headers.accept);
     let entry = await cache.get(key);
+    // Kept for requests without the headers it varies on: one sending them goes on as is.
+    if (entry && !fits(req, entry.meta.headers)) {
+      await entry.file.close();
+      return passThrough(req, res, to);
+    }
     if (entry && use === "use" && isFresh(entry.meta, now()))
       return serve(req, res, key, entry, "hit");
     // A client checking its own copy, with nothing here to check it against: as before.
@@ -401,7 +407,7 @@ export function createProxy({
       }
       await entry?.file.close();
       entry = null;
-      const keep = storable(answer.statusCode, answer.headers, cache.limit);
+      const keep = storable(answer.statusCode, answer.headers, cache.limit, req);
       // What was kept is no longer what the host answers.
       if (!keep && cache.has(key)) cache.remove(key);
       const writer = keep
