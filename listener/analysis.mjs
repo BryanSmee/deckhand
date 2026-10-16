@@ -3,27 +3,30 @@
 // reliable. A digest, not the logs: those are MB of stream-json each, cover every repo and
 // are only redacted line by line as they are written. Built from format()'s entries, which
 // clip tool details and outputs, redacted again, capped in size. Pure, apart from reading
-// the logs.
+// the logs and startAnalysis(), which opens the analysis's issue and queues its run.
 import { readFileSync } from "node:fs";
 import { agentFor } from "./agents/index.mjs";
+import { ensureLabel } from "./comments.mjs";
+import { issueItem, taskKey } from "./events.mjs";
 import { clip, format, minutes } from "./runlog.mjs";
 import { redact } from "./secrets.mjs";
+import { refuse } from "./web.mjs";
 
 // How many runs one analysis reads: 10 unless asked, 50 at most.
 export const DEFAULT_RUNS = 10;
 export const MAX_RUNS = 50;
 // The digest's cap, in bytes: older runs beyond it are left out (and the digest says so).
-export const MAX_DIGEST = 400_000;
+const MAX_DIGEST = 400_000;
 // One run's share at most, so a single long run doesn't push all the others out.
 const MAX_RUN = 24_000;
 // Run statuses an analysis can pick (runlog.mjs outcome(), and runs that ended otherwise).
-export const OUTCOMES = ["ok", "error", "needs-input", "interrupted", "cancelled"];
+const OUTCOMES = ["ok", "error", "needs-input", "interrupted", "cancelled"];
 // About four bytes a token: the preview's estimate of what the run reads.
 export const tokens = (bytes) => Math.ceil(bytes / 4);
 
 // What a run was: its mode (work, brainstorm, idea, bug, discussion, onboarding, analyze or
 // one of the repo's own), or its kind for logs from before runs kept their mode.
-export function kindOf(run) {
+function runKind(run) {
   return run.taskMode ?? run.kind ?? "work";
 }
 
@@ -32,7 +35,7 @@ const finished = (run) => run.status !== "running";
 
 // The kinds of a repo's finished runs, for the form to offer.
 export function runKinds(runs, repo) {
-  const kinds = new Set(runs.filter((r) => ofRepo(r, repo) && finished(r)).map(kindOf));
+  const kinds = new Set(runs.filter((r) => ofRepo(r, repo) && finished(r)).map(runKind));
   return [...kinds].sort();
 }
 
@@ -42,7 +45,7 @@ export function selectRuns(runs, repo, { count, kinds, outcomes }) {
   return runs
     .filter(
       (r) =>
-        ofRepo(r, repo) && finished(r) && kinds.includes(kindOf(r)) && outcomes.includes(r.status),
+        ofRepo(r, repo) && finished(r) && kinds.includes(runKind(r)) && outcomes.includes(r.status),
     )
     .slice(0, count);
 }
@@ -83,9 +86,23 @@ const NOTABLE = /error|fail|denied|refused|forbidden|\b403\b|timed? ?out|not fou
 export function runDigest(run, lines) {
   const agent = agentFor(run.agent);
   const entries = lines.flatMap((l) => format(l, agent));
+  const out = [...runHeader(run, agent), ...setupLines(entries), ...toolLines(entries)];
+  const result = entries.findLast((e) => e.kind === "result");
+  out.push(
+    "",
+    result
+      ? `Final reply (${result.status}, ${result.minutes} min of agent time):\n\n${quote(clip(result.text, 60, 4000))}`
+      : "No final reply: the run ended before the agent answered.",
+  );
+  const text = out.join("\n");
+  return text.length > MAX_RUN ? `${text.slice(0, MAX_RUN)}\n…(cut)` : text;
+}
+
+// The run's heading and what it was: its task, kind, agent, model, how and when it ended.
+function runHeader(run, agent) {
   const took = run.finishedAt && run.startedAt ? minutes(run.finishedAt - run.startedAt) : null;
   const what = [
-    `kind ${kindOf(run)}${run.mode ? ` (${run.mode})` : ""}`,
+    `kind ${runKind(run)}${run.mode ? ` (${run.mode})` : ""}`,
     `${agent.name}${run.provider ? `@${run.provider}` : ""} ${run.model ?? "?"}, ${run.effort ?? "?"} effort`,
     `${run.status}${took !== null ? ` after ${took} min` : ""}`,
     `started ${time(run.startedAt)} UTC`,
@@ -98,7 +115,13 @@ export function runDigest(run, lines) {
   ];
   if (run.reason) out.push(`- started by the listener: ${run.reason}`);
   if (run.fallback) out.push(`- fell back from ${run.fallback.from}: ${run.fallback.reason}`);
+  return out;
+}
 
+// What happened before the agent's own work: the listener's notes and setup output that
+// looks wrong.
+function setupLines(entries) {
+  const out = [];
   // The listener's notes (image builds, mounts, egress cache…), the first one aside: the
   // lines above say it.
   const notes = entries.filter((e) => e.kind === "meta").slice(1);
@@ -115,9 +138,12 @@ export function runDigest(run, lines) {
       "```",
     );
   }
+  return out;
+}
 
-  // Tool calls: how many of each, the same call made again and again, and those that failed
-  // with what they gave back. An output answers the call before it.
+// Tool calls: how many of each (`tools`), each distinct call's count (`calls`), and those that
+// failed with what they gave back (`failed`). An output answers the call before it.
+export function toolStats(entries) {
   const tools = new Map();
   const calls = new Map();
   const failed = [];
@@ -132,6 +158,14 @@ export function runDigest(run, lines) {
       failed.push({ tool: last, output: e.text });
     }
   }
+  return { tools, calls, failed };
+}
+
+// The digest's lines on tool calls: the counts, the same call made again and again, the
+// failures.
+function toolLines(entries) {
+  const { tools, calls, failed } = toolStats(entries);
+  const out = [];
   const total = [...tools.values()].reduce((a, b) => a + b, 0);
   if (total) {
     const each = [...tools].sort((a, b) => b[1] - a[1]).map(([name, n]) => `${name} ${n}`);
@@ -155,15 +189,7 @@ export function runDigest(run, lines) {
       out.push("", "```", call, "→", clip(output, 12, 1200), "```");
     }
   }
-  const result = entries.findLast((e) => e.kind === "result");
-  out.push(
-    "",
-    result
-      ? `Final reply (${result.status}, ${result.minutes} min of agent time):\n\n${quote(clip(result.text, 60, 4000))}`
-      : "No final reply: the run ended before the agent answered.",
-  );
-  const text = out.join("\n");
-  return text.length > MAX_RUN ? `${text.slice(0, MAX_RUN)}\n…(cut)` : text;
+  return out;
 }
 
 // The digest of `runs` (newest first): a header, then each run's part, redacted of
@@ -260,5 +286,82 @@ export function createAnalysis({ runs, secrets = () => [], partOf = logPart, max
       const selected = ids.map((id) => byId.get(id)).filter((r) => r && ofRepo(r, repo));
       return digestOf(selected, selection);
     },
+  };
+}
+
+// The label of run analyses' issues.
+const ANALYSIS_LABEL = "analysis";
+// How an analysis's issue names each outcome.
+const OUTCOME_NAMES = {
+  ok: "successes",
+  error: "errors",
+  "needs-input": "needs-input",
+  interrupted: "interrupted",
+  cancelled: "cancelled",
+};
+
+// The analysis's issue: its title, its body, and the selection as the run reads it (`text`).
+function analysisIssue(repo, user, runs, { count, kinds, outcomes }) {
+  const every = outcomes.length === OUTCOMES.length;
+  const title = `Run analysis: last ${runs.length} run${runs.length === 1 ? "" : "s"}${every ? "" : ` (${outcomes.map((o) => OUTCOME_NAMES[o]).join(", ")})`}`;
+  const text = [
+    `- Kinds: ${kinds.join(", ")}`,
+    `- Outcomes: ${outcomes.join(", ")}`,
+    `- Runs (${runs.length}${runs.length < count ? `, of ${count} asked for` : ""}, newest first): ${runs.map((r) => r.id).join(", ")}`,
+  ].join("\n");
+  const body = `Asked for from the dashboard by @${user}: what would make the runs of ${repo} faster and more reliable.\n\n${text}\n\nDeckhand reads a digest of these runs (not their raw logs) and replies here with its findings. It changes no code: file what you want of them.`;
+  return { title, body, text };
+}
+
+// A run analysis (the dashboard's Analyze, work.mjs): the runs it reads, picked now among the
+// repo's (never another's), in an issue of its own that stays as its record, then the run on
+// it. The run reads a digest of them (preparation.mjs analysisDigest()); it changes nothing,
+// and its reply is the report. `github`: the App's calls; `checkedRepo(repo, user)`:
+// repo-check.mjs; `analysis`: createAnalysis(); `accept(item)`: queues the run (tasks.mjs).
+// Throws Refused (web.mjs).
+export async function startAnalysis(
+  { github, checkedRepo, analysis, accept, log },
+  repo,
+  user,
+  selection,
+) {
+  const { settings, base } = await checkedRepo(repo, user);
+  const runs = analysis.select(repo, selection);
+  if (!runs.length) refuse(409, `No run of ${repo} matches: pick other kinds or outcomes.`);
+  const { title, body, text } = analysisIssue(repo, user, runs, selection);
+  await ensureLabel(
+    github,
+    repo,
+    { name: ANALYSIS_LABEL, color: "c5def5", description: "A Deckhand analysis of past runs" },
+    log,
+  );
+  const res = await github(
+    repo,
+    "POST",
+    `/repos/${repo}/issues`,
+    { title, body, labels: [ANALYSIS_LABEL] },
+    [410],
+  );
+  if (res.status === 410) refuse(409, `${repo} has issues turned off: an analysis needs one.`);
+  if (!res.ok) throw new Error(`GitHub POST an issue: ${res.status}`);
+  const issue = await res.json();
+  const { count, kinds, outcomes } = selection;
+  await accept(
+    issueItem(repo, issue, {
+      trigger: "analyze",
+      modeLine: null,
+      text,
+      author: user,
+      base,
+      settings,
+      comment: null,
+      analysis: { runs: runs.map((r) => r.id), count, kinds, outcomes },
+    }),
+  );
+  return {
+    message: `Analysis of ${runs.length} run${runs.length === 1 ? "" : "s"} started on #${issue.number}.`,
+    url: issue.html_url,
+    number: issue.number,
+    task: taskKey(repo, issue.number),
   };
 }

@@ -1,6 +1,15 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { PER_PAGE, getJson, graphql, graphqlData, paginate } from "../listener/github.mjs";
+import {
+  PER_PAGE,
+  createGitHub,
+  fetchTitle,
+  getJson,
+  graphql,
+  graphqlData,
+  listLabelled,
+  paginate,
+} from "../listener/github.mjs";
 
 // A fake `github(repo, method, path, body, expected)`: `answers` path → Response, the calls kept.
 function fake(answers) {
@@ -87,4 +96,41 @@ test("graphql: the data; GraphQL's errors, on a 200, thrown as a failed status i
   await assert.rejects(graphqlData(new Response("nope", { status: 502 }), "ready"), {
     message: "ready: 502 {}",
   });
+});
+
+test("createGitHub: refuses calls until there is an App, then makes them as it", async () => {
+  let app = null;
+  const { github } = createGitHub(() => app);
+  await assert.rejects(github("o/r", "GET", "/repos/o/r"), /not set up/);
+  const seen = [];
+  app = { request: async (...args) => (seen.push(args), Response.json({})) };
+  await github("o/r", "GET", "/repos/o/r", undefined, [404]);
+  assert.deepEqual(seen, [["o/r", "GET", "/repos/o/r", undefined, [404]]]);
+});
+
+test("fetchTitle: an issue's title and closed state, a discussion's through GraphQL", async () => {
+  const { github } = fake({
+    "/repos/o/r/issues/3": Response.json({
+      title: "Done",
+      state: "closed",
+      state_reason: "completed",
+    }),
+    "/repos/o/r/issues/4": new Response("{}", { status: 404 }),
+    "/graphql": () => Response.json({ data: { repository: { discussion: { title: "Talk" } } } }),
+  });
+  assert.deepEqual(await fetchTitle(github, "o/r", "issue", 3), {
+    title: "Done",
+    closed: "completed",
+  });
+  assert.equal(await fetchTitle(github, "o/r", "issue", 4), null);
+  assert.deepEqual(await fetchTitle(github, "o/r", "discussion", 5), { title: "Talk" });
+});
+
+test("listLabelled: the first page of open issues with the label, which must be a list", async () => {
+  const path = "/repos/o/r/issues?labels=needs%20input&state=open&sort=updated&per_page=100";
+  const { github, calls } = fake({ [path]: Response.json([{ number: 1 }]) });
+  assert.deepEqual(await listLabelled(github, "o/r", "needs input"), [{ number: 1 }]);
+  assert.equal(calls[0].path, path);
+  const other = fake({ [path]: Response.json({}) });
+  await assert.rejects(listLabelled(other.github, "o/r", "needs input"), /no list/);
 });

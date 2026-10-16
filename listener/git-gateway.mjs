@@ -24,6 +24,27 @@ const DRAIN_MS = 60_000;
 
 const PATH = /^\/git\/([\w.-]+)\/([\w.-]+?)(?:\.git)?\/(info\/refs|git-receive-pack)$/;
 
+// The first `n` bytes of `chunks`, removed from them: copied only when they span several
+// chunks, so a pkt-line sent whole costs no copy.
+function takeBytes(chunks, n) {
+  if (chunks[0].length >= n) {
+    const out = chunks[0].subarray(0, n);
+    chunks[0] = chunks[0].subarray(n);
+    if (!chunks[0].length) chunks.shift();
+    return out;
+  }
+  const parts = [];
+  for (let got = 0; got < n;) {
+    const c = chunks[0];
+    const k = Math.min(c.length, n - got);
+    parts.push(c.subarray(0, k));
+    got += k;
+    if (k === c.length) chunks.shift();
+    else chunks[0] = c.subarray(k);
+  }
+  return Buffer.concat(parts, n);
+}
+
 // Reads the ref updates at the start of a receive-pack request (pkt-lines up to a flush) as
 // its chunks come: push(chunk) returns null while they are incomplete, then { refs, caps, end }
 // with `caps` the client's capabilities (after the first one) and `end` the offset of what
@@ -42,22 +63,7 @@ export function commandReader(limit = MAX_COMMANDS) {
   // The next `n` buffered bytes, removed from the buffer.
   function take(n) {
     buffered -= n;
-    if (chunks[0].length >= n) {
-      const out = chunks[0].subarray(0, n);
-      chunks[0] = chunks[0].subarray(n);
-      if (!chunks[0].length) chunks.shift();
-      return out;
-    }
-    const parts = [];
-    for (let got = 0; got < n;) {
-      const c = chunks[0];
-      const k = Math.min(c.length, n - got);
-      parts.push(c.subarray(0, k));
-      got += k;
-      if (k === c.length) chunks.shift();
-      else chunks[0] = c.subarray(k);
-    }
-    return Buffer.concat(parts, n);
+    return takeBytes(chunks, n);
   }
 
   function line(data) {
@@ -93,11 +99,6 @@ export function commandReader(limit = MAX_COMMANDS) {
   }
 
   return { push };
-}
-
-// The ref updates of a whole buffer (commandReader()): null while it is too short.
-export function readCommands(buffer) {
-  return commandReader(Infinity).push(buffer);
 }
 
 function pkt(data) {
@@ -215,8 +216,10 @@ export function createGitGateway({
     }
   }
 
-  async function handle(req, res) {
-    const url = new URL(req.url, "http://broker");
+  // The run a request comes from, once it may go through: { repo, service, run, github }, or
+  // nothing once refused. Checked in this order: path, run, repo, push right, method, encoding,
+  // the App.
+  function admit(req, res, url) {
     const path = PATH.exec(url.pathname);
     if (!path) return fail(res, 404, "not found");
     const repo = `${path[1]}/${path[2]}`.toLowerCase();
@@ -232,8 +235,7 @@ export function createGitGateway({
     if (run.repo !== repo) return fail(res, 403, `Deckhand: this run can only push to ${run.repo}`);
     if (!run.push) return fail(res, 403, "Deckhand: this run can't push");
 
-    const advertising = service === "info/refs";
-    if (advertising) {
+    if (service === "info/refs") {
       if (req.method !== "GET" || url.searchParams.get("service") !== "git-receive-pack") {
         return fail(res, 403, "Deckhand: only pushes go through the gateway");
       }
@@ -248,46 +250,49 @@ export function createGitGateway({
 
     const github = app();
     if (!github) return fail(res, 503, "Deckhand: the GitHub App is not set up");
+    return { repo, service, run, github };
+  }
 
-    let body;
-    if (!advertising) {
-      let parsed;
-      try {
-        parsed = await commands(req);
-      } catch (error) {
-        return fail(res, 400, `Deckhand: ${error.message}`);
-      }
-      // Looked up on each push: a renamed default branch is protected at once. No answer, no
-      // push.
-      let base;
-      try {
-        base = await defaultBranch(github, repo);
-      } catch (error) {
-        log(`Git gateway: ${repo}: ${error.message}`);
-        return fail(res, 502, "Deckhand: couldn't check the default branch; try again");
-      }
-      const reasons = new Map();
-      for (const ref of parsed.refs) {
-        const why = refusal(ref, base, run.branches);
-        if (why) reasons.set(ref, why);
-      }
-      if (reasons.size) {
-        log(`Git gateway: refused a push to ${repo}: ${[...reasons.values()].join("; ")}`);
-        // The pack is not forwarded: let the client finish sending it.
-        await drain(req, parsed.body);
-        const report = rejection(parsed.refs, parsed.caps, reasons);
-        if (!report) {
-          return fail(res, 403, [...reasons.values()].map((r) => `Deckhand: ${r}`).join("\n"));
-        }
-        res.writeHead(200, {
-          "content-type": "application/x-git-receive-pack-result",
-          "cache-control": "no-cache",
-        });
-        return res.end(report);
-      }
-      body = parsed.body;
+  // The body of a push whose every ref update the run may make, or nothing once the push is
+  // refused (answered with git's own rejection report when the client reads one).
+  async function checkPush(req, res, { repo, run, github }) {
+    let parsed;
+    try {
+      parsed = await commands(req);
+    } catch (error) {
+      return fail(res, 400, `Deckhand: ${error.message}`);
     }
+    // Looked up on each push: a renamed default branch is protected at once. No answer, no
+    // push.
+    let base;
+    try {
+      base = await defaultBranch(github, repo);
+    } catch (error) {
+      log(`Git gateway: ${repo}: ${error.message}`);
+      return fail(res, 502, "Deckhand: couldn't check the default branch; try again");
+    }
+    const reasons = new Map();
+    for (const ref of parsed.refs) {
+      const why = refusal(ref, base, run.branches);
+      if (why) reasons.set(ref, why);
+    }
+    if (!reasons.size) return parsed.body;
+    log(`Git gateway: refused a push to ${repo}: ${[...reasons.values()].join("; ")}`);
+    // The pack is not forwarded: let the client finish sending it.
+    await drain(req, parsed.body);
+    const report = rejection(parsed.refs, parsed.caps, reasons);
+    if (!report) {
+      return fail(res, 403, [...reasons.values()].map((r) => `Deckhand: ${r}`).join("\n"));
+    }
+    res.writeHead(200, {
+      "content-type": "application/x-git-receive-pack-result",
+      "cache-control": "no-cache",
+    });
+    res.end(report);
+  }
 
+  // Sends the request on to GitHub with the gateway's own push token, and its answer back.
+  async function forward(req, res, url, { repo, service, github }, body) {
     let upstream;
     try {
       const { token } = await github.repoToken(repo, PUSH_PERMISSIONS);
@@ -314,6 +319,18 @@ export function createGitGateway({
     res.writeHead(upstream.status, headers);
     if (!upstream.body) return res.end();
     await pipeline(Readable.fromWeb(upstream.body), res);
+  }
+
+  async function handle(req, res) {
+    const url = new URL(req.url, "http://broker");
+    const admitted = admit(req, res, url);
+    if (!admitted) return;
+    let body;
+    if (admitted.service !== "info/refs") {
+      body = await checkPush(req, res, admitted);
+      if (!body) return;
+    }
+    await forward(req, res, url, admitted, body);
   }
 
   return { handle };

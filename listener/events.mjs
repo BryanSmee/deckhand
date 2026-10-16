@@ -54,7 +54,7 @@ export function linkedIssue(pr, repo, bot = null) {
 }
 
 // The issue a pull request's description says it closes, trusted or not.
-export function closesIssue(pr) {
+function closesIssue(pr) {
   const match = /\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)/i.exec(pr?.body ?? "");
   return match ? Number(match[1]) : null;
 }
@@ -145,7 +145,7 @@ export const EFFORTS = ["low", "medium", "high", "xhigh", "max"];
 export const MODEL_NAME = /^[\w.[\]/:-]+$/;
 
 // An agent, on a provider or not (codex, claude@openrouter), or `default`: checked against the
-// operator's when the run starts (runs.mjs pickProblem()).
+// operator's when the run starts (agents/select.mjs pickProblem()).
 const AGENT_NAME = /^[\w.-]+(@[\w.-]+)?$/;
 
 // Removes "/model <name>", "/effort <level>" and "/agent <name>" lines from a comment,
@@ -354,12 +354,12 @@ export function closedItem(config, event, p, skip = () => null) {
   }
   const key = taskKey(repo, event === "issues" ? target.number : prId(target.number));
   if (p.action === "reopened") return { repo, number: target.number, key, state: "open" };
-  // The pull_request event's own shape → the issues API's, which outcome() reads.
+  // The pull_request event's own shape → the issues API's, which issueOutcome() reads.
   const issue =
     event === "issues"
       ? target
       : { state: "closed", pull_request: { merged_at: target.merged_at ?? target.merged ?? null } };
-  return { repo, number: target.number, key, state: outcome(issue) };
+  return { repo, number: target.number, key, state: issueOutcome(issue) };
 }
 
 // What an `issues`, `issue_comment` or `pull_request` delivery is about, in an allowed repo →
@@ -384,7 +384,7 @@ export function touchedItems(config, event, p) {
 // waiting for it: "open", "done" (closed as completed; a pull request: merged) or "not-done"
 // (not planned, a duplicate; a pull request closed without merging). Issues closed before
 // GitHub recorded a reason have none: completed was the only way to close one then.
-export function outcome(issue) {
+export function issueOutcome(issue) {
   if (issue.state !== "closed") return "open";
   if (issue.pull_request) return issue.pull_request.merged_at ? "done" : "not-done";
   return [null, undefined, "completed"].includes(issue.state_reason) ? "done" : "not-done";

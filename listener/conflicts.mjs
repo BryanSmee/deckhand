@@ -14,7 +14,7 @@ import { getJson } from "./github.mjs";
 import { persistentMap } from "./store.mjs";
 
 // How often the watcher wakes up; each repo is checked at its own interval.
-export const TICK_MS = 60_000;
+const TICK_MS = 60_000;
 
 // What the run is asked to do, as if a maintainer had commented it.
 export function rebaseMessage(base) {

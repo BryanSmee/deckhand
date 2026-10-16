@@ -622,7 +622,7 @@ test("stop: an active or idle brainstorm wraps up, with the App's comment", asyn
       ],
     ]);
     const [item] = w.accepted;
-    // What a "/stop" comment is: tasks.mjs modeOf() turns it into the wrap-up.
+    // What a "/stop" comment is: task-modes.mjs modeOf() turns it into the wrap-up.
     assert.equal(item.trigger, "stop");
     assert.equal(item.modeLine, null);
     assert.equal(item.author, "alice");
@@ -833,7 +833,7 @@ test("answer a run's questions: the comment is the reply that continues its sess
   assert.equal(item.author, "alice");
   assert.equal(item.comment.id, 501);
   assert.equal(item.base, "main");
-  // The run takes the label off as it starts (runs.mjs begin()).
+  // The run takes the label off as it starts (runs.mjs start()).
   assert.deepEqual(w.labels, []);
   // A pull request's own task.
   const pr = await answer(w, { number: 9, pr: true, text: "Go ahead" });

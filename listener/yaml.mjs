@@ -19,135 +19,142 @@ export function parseYaml(text) {
     .replace(/^﻿/, "")
     .split(/\r?\n/)
     .map((raw, i) => ({ raw, n: i + 1 }));
-  let i = 0;
-  let started = false;
+  // The reader's position, shared by the steps below: they consume lines as they go.
+  const doc = { lines, i: 0, started: false };
+  const result = block(doc, 0);
+  const left = peek(doc);
+  if (left) throw new YamlError("unexpected indentation", left.n);
+  return result;
+}
 
-  // The next line that holds something, as { indent, text, n }; null at the end.
-  function peek() {
-    while (i < lines.length) {
-      const { raw, n } = lines[i];
-      if (lines[i].indent !== undefined) return lines[i]; // reshaped by a sequence item
-      const body = raw.trimStart();
-      const indentation = raw.slice(0, raw.length - body.length);
-      if (!body || body.startsWith("#")) {
-        i++;
+// The next line that holds something, as { indent, text, n }; null at the end.
+function peek(doc) {
+  const { lines } = doc;
+  while (doc.i < lines.length) {
+    const { raw, n } = lines[doc.i];
+    if (lines[doc.i].indent !== undefined) return lines[doc.i]; // reshaped by a sequence item
+    const body = raw.trimStart();
+    const indentation = raw.slice(0, raw.length - body.length);
+    if (!body || body.startsWith("#")) {
+      doc.i++;
+      continue;
+    }
+    if (indentation.includes("\t")) throw new YamlError("tabs can't indent YAML", n);
+    if (/^(---|\.\.\.)(\s|$)/.test(raw)) {
+      if (raw.startsWith("---") && !doc.started && !stripComment(raw.slice(3), n).trim()) {
+        doc.started = true;
+        doc.i++;
         continue;
       }
-      if (indentation.includes("\t")) throw new YamlError("tabs can't indent YAML", n);
-      if (/^(---|\.\.\.)(\s|$)/.test(raw)) {
-        if (raw.startsWith("---") && !started && !stripComment(raw.slice(3), n).trim()) {
-          started = true;
-          i++;
-          continue;
-        }
-        if (raw.startsWith("...")) {
-          i = lines.length;
-          return null;
-        }
-        throw new YamlError("only one document per file", n);
+      if (raw.startsWith("...")) {
+        doc.i = lines.length;
+        return null;
       }
-      started = true;
-      lines[i] = { raw, n, indent: indentation.length, text: body };
-      return lines[i];
+      throw new YamlError("only one document per file", n);
+    }
+    doc.started = true;
+    lines[doc.i] = { raw, n, indent: indentation.length, text: body };
+    return lines[doc.i];
+  }
+  return null;
+}
+
+const isItem = (line) => line.text === "-" || line.text.startsWith("- ");
+
+function block(doc, indent) {
+  const line = peek(doc);
+  if (!line || line.indent < indent) return null;
+  return isItem(line) ? sequence(doc, line.indent) : mapping(doc, line.indent);
+}
+
+function mapping(doc, indent) {
+  const result = {};
+  for (let line = peek(doc); line && line.indent >= indent; line = peek(doc)) {
+    if (line.indent > indent) throw new YamlError("unexpected indentation", line.n);
+    if (isItem(line)) throw new YamlError("a list item where a key was expected", line.n);
+    const { key, rest } = splitKey(line.text, line.n);
+    if (Object.hasOwn(result, key)) throw new YamlError(`duplicate key "${key}"`, line.n);
+    doc.i++;
+    result[key] = value(doc, rest, indent, line.n, true);
+  }
+  return result;
+}
+
+function sequence(doc, indent) {
+  const result = [];
+  for (let line = peek(doc); line && line.indent === indent && isItem(line); line = peek(doc)) {
+    const rest = line.text.slice(1).trimStart();
+    if (rest && !rest.startsWith("#") && keyAt(rest) >= 0) {
+      // "- name: x" starts a mapping whose keys line up with "name".
+      line.indent += line.text.length - rest.length;
+      line.text = rest;
+      result.push(mapping(doc, line.indent));
+      continue;
+    }
+    doc.i++;
+    result.push(value(doc, rest, indent, line.n, false));
+  }
+  const line = peek(doc);
+  if (line && line.indent > indent) throw new YamlError("unexpected indentation", line.n);
+  return result;
+}
+
+// What follows "key:" or "- ": a scalar, a flow collection, a block scalar, or a nested block.
+function value(doc, rest, indent, n, inMapping) {
+  const text = stripComment(rest, n).trim();
+  if (!text) {
+    const child = peek(doc);
+    // A mapping's list may sit at the key's own indentation.
+    if (
+      child &&
+      (child.indent > indent || (inMapping && child.indent === indent && isItem(child)))
+    ) {
+      return block(doc, child.indent);
     }
     return null;
   }
+  if (/^[|>]/.test(text)) return blockScalar(doc, text, indent, n);
+  if (text.startsWith("[") || text.startsWith("{")) return flow(text, n);
+  return scalar(text, n);
+}
 
-  const isItem = (line) => line.text === "-" || line.text.startsWith("- ");
+function blockScalar(doc, header, indent, n) {
+  const match = /^([|>])([+-]?)$/.exec(header);
+  if (!match) throw new YamlError(`unsupported block header "${header}"`, n);
+  const [, style, chomp] = match;
+  const body = blockLines(doc, indent);
+  let end = body.length;
+  while (end > 0 && body[end - 1] === "") end--;
+  const content = body.slice(0, end);
+  const trailing = body.length - end;
+  let out = style === "|" ? content.join("\n") : fold(content);
+  if (!content.length) return "";
+  if (chomp === "") out += "\n";
+  if (chomp === "+") out += "\n".repeat(trailing + 1);
+  return out;
+}
 
-  function block(indent) {
-    const line = peek();
-    if (!line || line.indent < indent) return null;
-    return isItem(line) ? sequence(line.indent) : mapping(line.indent);
-  }
-
-  function mapping(indent) {
-    const result = {};
-    for (let line = peek(); line && line.indent >= indent; line = peek()) {
-      if (line.indent > indent) throw new YamlError("unexpected indentation", line.n);
-      if (isItem(line)) throw new YamlError("a list item where a key was expected", line.n);
-      const { key, rest } = splitKey(line.text, line.n);
-      if (Object.hasOwn(result, key)) throw new YamlError(`duplicate key "${key}"`, line.n);
-      i++;
-      result[key] = value(rest, indent, line.n, true);
-    }
-    return result;
-  }
-
-  function sequence(indent) {
-    const result = [];
-    for (let line = peek(); line && line.indent === indent && isItem(line); line = peek()) {
-      const rest = line.text.slice(1).trimStart();
-      if (rest && !rest.startsWith("#") && keyAt(rest) >= 0) {
-        // "- name: x" starts a mapping whose keys line up with "name".
-        line.indent += line.text.length - rest.length;
-        line.text = rest;
-        result.push(mapping(line.indent));
-        continue;
+// A block scalar's lines, without their indentation: up to the first line indented less.
+function blockLines(doc, indent) {
+  const { lines } = doc;
+  const body = [];
+  let own = null; // the block's indentation, from its first non-blank line
+  while (doc.i < lines.length) {
+    const raw = lines[doc.i].raw;
+    if (raw.trim()) {
+      const width = raw.length - raw.trimStart().length;
+      if (own === null) {
+        if (width <= indent) break;
+        own = width;
       }
-      i++;
-      result.push(value(rest, indent, line.n, false));
+      if (width < own) break;
+      body.push(raw.slice(own));
+    } else {
+      body.push("");
     }
-    const line = peek();
-    if (line && line.indent > indent) throw new YamlError("unexpected indentation", line.n);
-    return result;
+    doc.i++;
   }
-
-  // What follows "key:" or "- ": a scalar, a flow collection, a block scalar, or a nested block.
-  function value(rest, indent, n, inMapping) {
-    const text = stripComment(rest, n).trim();
-    if (!text) {
-      const child = peek();
-      // A mapping's list may sit at the key's own indentation.
-      if (
-        child &&
-        (child.indent > indent || (inMapping && child.indent === indent && isItem(child)))
-      ) {
-        return block(child.indent);
-      }
-      return null;
-    }
-    if (/^[|>]/.test(text)) return blockScalar(text, indent, n);
-    if (text.startsWith("[") || text.startsWith("{")) return flow(text, n);
-    return scalar(text, n);
-  }
-
-  function blockScalar(header, indent, n) {
-    const match = /^([|>])([+-]?)$/.exec(header);
-    if (!match) throw new YamlError(`unsupported block header "${header}"`, n);
-    const [, style, chomp] = match;
-    const body = [];
-    let own = null; // the block's indentation, from its first non-blank line
-    while (i < lines.length) {
-      const raw = lines[i].raw;
-      if (raw.trim()) {
-        const width = raw.length - raw.trimStart().length;
-        if (own === null) {
-          if (width <= indent) break;
-          own = width;
-        }
-        if (width < own) break;
-        body.push(raw.slice(own));
-      } else {
-        body.push("");
-      }
-      i++;
-    }
-    let end = body.length;
-    while (end > 0 && body[end - 1] === "") end--;
-    const content = body.slice(0, end);
-    const trailing = body.length - end;
-    let out = style === "|" ? content.join("\n") : fold(content);
-    if (!content.length) return "";
-    if (chomp === "") out += "\n";
-    if (chomp === "+") out += "\n".repeat(trailing + 1);
-    return out;
-  }
-
-  const result = block(0);
-  const left = peek();
-  if (left) throw new YamlError("unexpected indentation", left.n);
-  return result;
+  return body;
 }
 
 // Folded (>) block: lines join with spaces, a blank line is a line break.

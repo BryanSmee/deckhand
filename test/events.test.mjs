@@ -5,9 +5,9 @@ import { loadConfig, normalize } from "../listener/config.mjs";
 import {
   closedItem,
   issueItem,
+  issueOutcome,
   linkTo,
   MARKER,
-  outcome,
   parseAfter,
   parseKey,
   prId,
@@ -470,13 +470,13 @@ test("/after takes this repo's numbers or none; anything else is an error", () =
 });
 
 test("closed issues and pull requests: done when completed or merged", () => {
-  assert.equal(outcome({ state: "open" }), "open");
-  assert.equal(outcome({ state: "closed", state_reason: "completed" }), "done");
-  assert.equal(outcome({ state: "closed", state_reason: null }), "done");
-  assert.equal(outcome({ state: "closed", state_reason: "not_planned" }), "not-done");
-  assert.equal(outcome({ state: "closed", state_reason: "duplicate" }), "not-done");
-  assert.equal(outcome({ state: "closed", pull_request: { merged_at: "2026" } }), "done");
-  assert.equal(outcome({ state: "closed", pull_request: { merged_at: null } }), "not-done");
+  assert.equal(issueOutcome({ state: "open" }), "open");
+  assert.equal(issueOutcome({ state: "closed", state_reason: "completed" }), "done");
+  assert.equal(issueOutcome({ state: "closed", state_reason: null }), "done");
+  assert.equal(issueOutcome({ state: "closed", state_reason: "not_planned" }), "not-done");
+  assert.equal(issueOutcome({ state: "closed", state_reason: "duplicate" }), "not-done");
+  assert.equal(issueOutcome({ state: "closed", pull_request: { merged_at: "2026" } }), "done");
+  assert.equal(issueOutcome({ state: "closed", pull_request: { merged_at: null } }), "not-done");
 
   const delivery = (event, target, fields = {}) => ({
     action: "closed",

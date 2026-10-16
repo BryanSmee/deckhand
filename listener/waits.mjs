@@ -6,17 +6,17 @@
 // missed while the listener was down, or never subscribed to, still starts the work. Once
 // they are done, an issue whose open questions aren't answered yet (the repo's
 // `wait_for_answers`) waits for its answers too: `blockers` empty, `answers` true.
-import { outcome, parseKey, taskKey } from "./events.mjs";
+import { issueOutcome, parseKey, taskKey } from "./events.mjs";
 import { getJson } from "./github.mjs";
 import { plain, revive } from "./restart.mjs";
 import { persistentMap } from "./store.mjs";
 
 // How often GitHub is asked about what the waits wait for (the operator's WAITS_CHECK_MINUTES).
-export const CHECK_MS = 5 * 60_000;
+const CHECK_MS = 5 * 60_000;
 
 // GitHub closes the issue a merged pull request closes on its own, maybe after telling us of
 // the merge: still open then, it is asked about once more after this long.
-export const MERGE_SETTLE_MS = 30_000;
+const MERGE_SETTLE_MS = 30_000;
 
 // What a wait is for: "#77", "#77 and #80", "#77, #80 and #81", or the issue's answers.
 export function waitsFor(wait) {
@@ -64,7 +64,7 @@ export function createWaits({
   // "open", "done", "not-done" or "missing" (deleted, transferred, or never there).
   async function stateOf(repo, number) {
     const issue = await getJson(github, repo, `/repos/${repo}/issues/${number}`, [404, 410]);
-    return issue ? outcome(issue) : "missing";
+    return issue ? issueOutcome(issue) : "missing";
   }
 
   // Drops the task's wait, its comment losing its 👀. Returns the wait, or null.

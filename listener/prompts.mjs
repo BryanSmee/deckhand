@@ -1,6 +1,8 @@
 // What the agent reads: each run's prompt (TASK_PROMPT), its first message (TASK_MESSAGE) and
 // the comments delivered to it mid-run. Pure, apart from reading ../prompts/ once at start.
 import { readFileSync } from "node:fs";
+import { entryName } from "./agents/index.mjs";
+import { entryLabel } from "./agents/select.mjs";
 import { mandatoryHosts } from "./egress.mjs";
 import { FRESH, INBOX } from "./modes.mjs";
 import { triggerWord } from "./onboarding.mjs";
@@ -18,7 +20,7 @@ const inboxInstructions = {
 };
 
 // Inbox entries and discussions: the entries come with the prompt, as the session is new.
-export function inboxPrompt(task, mode, text) {
+function inboxPrompt(task, mode, text) {
   const { repo, number } = task;
   const where = {
     idea: `the ideas inbox of ${repo} (issue #${number})`,
@@ -48,7 +50,7 @@ ${text}`;
 
 // A run analysis (analysis.mjs): its digest is a file in the run's inbox (TASK_DIGEST), the
 // selection the maintainer made is `text`.
-export function analyzePrompt(task, text) {
+function analyzePrompt(task, text) {
   return `Analyze recent Deckhand runs of ${task.repo}, on GitHub issue #${task.number}. The digest of
 the runs is at \`$TASK_DIGEST\` (\`cat "$TASK_DIGEST"\`; it is large: read it in parts if you
 need to).
@@ -57,7 +59,7 @@ ${analyzeInstructions}
 ${text ? `\nThe selection:\n\n${text}\n` : ""}`;
 }
 
-export function brainstormPrompt(task) {
+function brainstormPrompt(task) {
   return `Brainstorm GitHub issue #${task.number} of ${task.repo} with the maintainer. Read it with
 \`gh issue view ${task.number} --comments\`.
 
@@ -66,7 +68,7 @@ ${brainstormInstructions}`;
 
 // Onboarding: its instructions, what this Deckhand allows the repo (a config can only narrow
 // it, the operator's grants widen it: `grant`, grantFor()), and the config's reference.
-export function onboardingPrompt(task, settings, config, grant) {
+function onboardingPrompt(task, settings, config, grant) {
   const { repo, number } = task;
   const none = (items) => (items.length ? items.map((i) => `\`${i}\``).join(", ") : "none");
   const roots = grant.mounts.map((m) => `${m.root}${m.readOnly === false ? " (read-write)" : ""}`);
@@ -93,7 +95,7 @@ ${configReference}`;
 }
 
 // The run the trigger line starts on an onboarding issue: the agreed files, nothing else.
-export function onboardingWorkPrompt(task) {
+function onboardingWorkPrompt(task) {
   const n = task.number;
   const { base } = task;
   return `The maintainer confirmed the onboarding proposal on GitHub issue #${n} of ${task.repo}
@@ -116,7 +118,7 @@ end with a short summary (the pull request link, the files, the inbox issues cre
 }
 
 // What the agent reads for a brainstorm run, besides the comments themselves.
-export function brainstormMessage(mode, text, restored) {
+function brainstormMessage(mode, text, restored) {
   if (mode === "stop") {
     return `The maintainer ends the brainstorm here${text ? `, adding:\n\n${text}\n\n` : ". "}Wrap up as in step 4 of your instructions: post the summary and update the issue's description with what was decided.`;
   }
@@ -128,7 +130,7 @@ export function brainstormMessage(mode, text, restored) {
 // Before `gh pr ready`: the base may have moved during the run, and a pull request marked
 // ready with conflicts isn't ready (pr-ready.mjs refuses it too). `base`: a branch name, or
 // how to find it.
-export function rebaseStep(base) {
+function rebaseStep(base) {
   return `bring the branch up to date: \`git fetch origin\`, \`git rebase origin/${base}\`,
 resolve any conflicts, run the checks again, then \`git push --force-with-lease\` (rewriting
 history is fine on this branch only). If a conflict can't be resolved safely (both sides
@@ -136,7 +138,7 @@ changed the same behaviour, say), stop and ask instead of guessing (see "Stoppin
 your instructions).`;
 }
 
-// Where a pull request's run may push: its branch (`branches`, runs.mjs pushBranches()), or
+// Where a pull request's run may push: its branch (`branches`, preparation.mjs pushBranches()), or
 // nowhere when that branch is in a fork.
 function prPush(branches) {
   return branches.length
@@ -145,14 +147,14 @@ function prPush(branches) {
 }
 
 // The branches an issue's run may push: its own, and the pull requests' heads it was asked
-// from (runs.mjs pushBranches()), named so it doesn't pick another one.
+// from (preparation.mjs pushBranches()), named so it doesn't pick another one.
 function issueBranches(n, branches) {
   const others = branches.filter((b) => b !== `issue-${n}-*` && !b.startsWith(`issue-${n}-`));
   const extra = others.map((b) => ` or \`${b}\``).join("");
   return `\`issue-${n}-…\`${extra}`;
 }
 
-export function initialPrompt(task, branches = []) {
+function initialPrompt(task, branches = []) {
   const { base } = task;
   const common = `Follow the repository's AGENTS.md and CLAUDE.md if it has them, with tests where the
 code has them, and run the checks they list before pushing. Never push to ${base}. When
@@ -189,7 +191,7 @@ ${common}`;
 // A run in one of the repo's own modes: its instructions (`instructions`, the file's text
 // from the default branch) after what every run of that kind is told. The agent's
 // instructions have the generic rules, as for work.
-export function modePrompt(task, own, instructions, branches = []) {
+function modePrompt(task, own, instructions, branches = []) {
   const { number: n, repo } = task;
   const { base } = task;
   const where =
@@ -219,7 +221,7 @@ ${instructions.trim()}`;
 }
 // The run's prompt, by what it is. `own`: the repo's mode, with its `instructions` text;
 // `onboardingWork`: a work run on an onboarding issue; `grant`: what the operator grants the
-// repo (grantFor()); `branches`: what the run may push (runs.mjs pushBranches()).
+// repo (grantFor()); `branches`: what the run may push (preparation.mjs pushBranches()).
 export function promptFor(
   task,
   { mode, text, settings, own, instructions, onboardingWork, config, grant, branches },
@@ -270,6 +272,25 @@ export function handoffMessage({ from, reason, result, body, branches = [] }) {
     ? `${from} was working on this and stopped, as its provider failed: ${reason}.`
     : `${from} was working on this before; this comment asked for you instead (\`/agent\`).`;
   return `${why} You take over, in a new session: sessions don't move between agents, so start from what it left. /workspace is the clone it worked in, with what it hadn't committed (\`git status\`, \`git log\`)${pushes}; GitHub has what it pushed and posted.${quoted ? `\n\nIts last message:\n\n${quoted}` : ""}${body ? `\n\nWhat it was asked:\n\n${body}` : ""}`;
+}
+
+// The agent's first message, and when another agent takes over the issue's session
+// (agents/select.mjs resolveEntry()), what it is handed (handoffMessage(), once the run's branches
+// are known). The same agent on another provider: its session goes on, told why.
+export function openingMessages(mode, text, chosen, { restored, started, previous }) {
+  const { entry, switched, handedBy, takeOver } = chosen;
+  const retry = switched && !takeOver;
+  const said = retry ? `${retryNote({ ...switched, provider: entry.provider })}\n\n${text}` : text;
+  const message = firstMessage({ mode, text: said, restored, started });
+  const handoff = takeOver && {
+    from: handedBy
+      ? entryLabel(entryName(previous.agent, previous.provider))
+      : entryLabel(switched.from),
+    reason: handedBy ? null : switched.reason,
+    result: handedBy ? previous.summary : entry.result,
+    body: firstMessage({ mode, text, restored, started: false }),
+  };
+  return { message, handoff };
 }
 
 // What the agent reads for comments delivered mid-run (Claude Code adds that the user sent it

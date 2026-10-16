@@ -30,7 +30,7 @@ const UNKNOWN = "depends on the operator's grants, which have errors";
 // The settings a run reads, as rows of the panel's table. What the repo asks for that only a
 // grant allows (ungranted()) is refused: it stops every run. `known`: false when `grant` is a
 // stand-in for grants that have errors, so what it lacks is unknown rather than refused.
-export function settingRows(config, settings, grant, known = true) {
+function settingRows(config, settings, grant, known = true) {
   const base = defaultSettings(config);
   const changed = (field) => !same(settings[field], base[field]);
   const missing = ungranted(grant, settings);
@@ -40,7 +40,24 @@ export function settingRows(config, settings, grant, known = true) {
     if (!known) return { key, value, source: "unknown", note: UNKNOWN };
     return { key, value, source: "refused", note: plain(why.slice(key.length + 2)) };
   };
-  const rows = [
+  const ctx = { config, settings, grant, known, changed, refusedRow };
+  return [
+    ...runRows(ctx),
+    ...imageRows(ctx),
+    ...extraRows(ctx),
+    ...modeRows(settings),
+    row(
+      "limits",
+      limitsText(grant.limits),
+      false,
+      grant.limitsFile ? `grants/${grant.limitsFile}` : "built in",
+    ),
+  ];
+}
+
+// Who starts runs, with which model, how many at once, and what they set up and read first.
+function runRows({ config, settings, changed }) {
+  return [
     row(
       "users",
       none(settings.users),
@@ -60,6 +77,12 @@ export function settingRows(config, settings, grant, known = true) {
     ),
     row("setup", settings.setup ?? "none", changed("setup")),
     row("instructions", settings.instructions ?? "none", changed("instructions")),
+  ];
+}
+
+// The sandbox's image and container engine: grant-gated, so each may be refused or unknown.
+function imageRows({ config, settings, grant, known, changed, refusedRow }) {
+  return [
     refusedRow("dockerfile", settings.dockerfile) ??
       row(
         "dockerfile",
@@ -83,6 +106,12 @@ export function settingRows(config, settings, grant, known = true) {
         changed("docker"),
         settings.docker && !config.engine ? "the operator hasn't set SANDBOX_ENGINE" : null,
       ),
+  ];
+}
+
+// Caches, the inbox issues, previews and the conflict watcher.
+function extraRows({ config, settings, changed, refusedRow }) {
+  return [
     row("caches", none(settings.caches), changed("caches")),
     row("inbox", inboxText(settings.inbox), changed("inbox")),
     refusedRow("preview", previewText(settings.preview)) ??
@@ -94,7 +123,11 @@ export function settingRows(config, settings, grant, known = true) {
       config.conflictCheckMinutes ? null : "the operator turned the conflict watcher off",
     ),
   ];
-  for (const name of Object.keys(settings.modes)) {
+}
+
+// The repo's own modes, one row each: only its file defines them.
+function modeRows(settings) {
+  return Object.keys(settings.modes).map((name) => {
     const mode = customMode(settings, name);
     const traits = [
       mode.instructions,
@@ -102,17 +135,8 @@ export function settingRows(config, settings, grant, known = true) {
       mode.light ? "light" : null,
       mode.fresh ? "fresh session" : null,
     ];
-    rows.push(row(`modes.${name}`, traits.filter(Boolean).join(" · "), true));
-  }
-  rows.push(
-    row(
-      "limits",
-      limitsText(grant.limits),
-      false,
-      grant.limitsFile ? `grants/${grant.limitsFile}` : "built in",
-    ),
-  );
-  return rows;
+    return row(`modes.${name}`, traits.filter(Boolean).join(" · "), true);
+  });
 }
 
 function inboxText(inbox) {
@@ -136,7 +160,7 @@ function previewText(preview) {
 
 // Every host its sandboxes may reach, each with the file that grants it: the operator's grants
 // folder is the only place hosts are listed (operatorHosts()).
-export function hostRows(config, grant) {
+function hostRows(config, grant) {
   const rows = [];
   const seen = new Set();
   const add = (host, note) => {
@@ -151,7 +175,7 @@ export function hostRows(config, grant) {
 
 // The repo's mount requests, each resolved as a run resolves it (a refused one stops runs).
 // `grant`: null when the grants have errors, so no mount root is known.
-export function mountRows(settings, grant, fs = {}) {
+function mountRows(settings, grant, fs = {}) {
   return settings.mounts.map((request) => {
     if (!grant) {
       return { path: request.path, source: "unknown", readOnly: request.readOnly, note: UNKNOWN };
@@ -177,7 +201,7 @@ export function mountRows(settings, grant, fs = {}) {
 }
 
 // What the operator grants the repo, as the panel shows it, with the files it comes from.
-export function grantRows(grant) {
+function grantRows(grant) {
   return {
     files: grant.files,
     allowPreview: grant.allowPreview,

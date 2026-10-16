@@ -11,7 +11,7 @@ import { createOnboardingStore } from "../listener/onboarding.mjs";
 import {
   CONFIG_MS,
   LIST_MS,
-  REFRESH_MS,
+  REPO_REFRESH_MS,
   createRepoApi,
   createRepoList,
   refreshFor,
@@ -450,9 +450,9 @@ test("a grants folder with errors makes every configured repo invalid, not the o
 });
 
 test("the list's refused checks are the run preflight's: both go through grantCheck()", () => {
-  const runs = readFileSync(new URL("../listener/runs.mjs", import.meta.url), "utf8");
-  const preflight = runs.slice(runs.indexOf("function grantedAccess("));
-  const body = preflight.slice(0, preflight.indexOf("\n  }\n"));
+  const access = readFileSync(new URL("../listener/access.mjs", import.meta.url), "utf8");
+  const preflight = access.slice(access.indexOf("function grantedAccess("));
+  const body = preflight.slice(0, preflight.indexOf("\n}\n"));
   assert.match(body, /grantCheck\(config, repo, settings\)/);
   // None of the checks is made on the side, where the list wouldn't see it.
   for (const piece of ["loadGrants(", "grantFor(", "ungranted(", "resolveMounts("]) {
@@ -597,7 +597,7 @@ test("POST refresh: same origin only, reads the repo's config again, rate limite
   // Again at once: refused, GitHub isn't asked.
   assert.equal((await call(api, "POST", path)).status, 429);
   assert.equal(configReads(gh.calls), 2);
-  clock.now += REFRESH_MS;
+  clock.now += REPO_REFRESH_MS;
   assert.equal((await call(api, "POST", path)).status, 200);
   assert.equal(configReads(gh.calls), 3);
   assert.equal((await call(api, "POST", "/api/repos/org/other/refresh")).status, 404);

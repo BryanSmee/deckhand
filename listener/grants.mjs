@@ -33,10 +33,10 @@ import { isMap, parseYaml } from "./yaml.mjs";
 
 // The sandbox's user (sandbox/Dockerfile): who must not be able to rewrite a read-write
 // mount's path.
-export const SANDBOX_UID = 1000;
-export const SANDBOX_GID = 1000;
+const SANDBOX_UID = 1000;
+const SANDBOX_GID = 1000;
 
-export const DEFAULT_FILE = "default.yaml";
+const DEFAULT_FILE = "default.yaml";
 
 // "acme/api.yaml": a repo's file, with GitHub's characters for owners and repos.
 const REPO_FILE = /^([\w.-]+)\/([\w.-]+)\.yaml$/;
@@ -71,7 +71,7 @@ const HOST_LISTS = { hosts: "hosts", cached_hosts: "cachedHosts" };
 // One file's text → { hosts, cachedHosts, mounts, limits, and FLAGS }; a flag is null when the file doesn't
 // say, so default.yaml decides (grantFor), and limits null unless it sets them. `file` names it
 // in errors; `base`: the limits its own start from. Throws a GrantsError listing every error.
-export function parseGrant(text, file, base, { isDefault = false } = {}) {
+function parseGrant(text, file, base, { isDefault = false } = {}) {
   const errors = [];
   const fail = (what) => errors.push(what);
   let value;
@@ -92,12 +92,7 @@ export function parseGrant(text, file, base, { isDefault = false } = {}) {
       if (typeof v === "boolean") grant[FLAGS[key]] = v;
       else fail(`${key}: expected true or false`);
     } else if (Object.hasOwn(HOST_LISTS, key)) {
-      if (!Array.isArray(v)) fail(`${key}: expected a list of host names`);
-      else
-        for (const host of v) {
-          if (hostProblem(host)) fail(`${key}: ${JSON.stringify(host)}: ${hostProblem(host)}`);
-          else grant[HOST_LISTS[key]].push(host.toLowerCase());
-        }
+      parseHosts(key, v, grant[HOST_LISTS[key]], fail);
     } else if (key === "limits") {
       try {
         if (!isMap(v)) throw new ConfigError("limits: expected cpus, memory, pids");
@@ -109,24 +104,7 @@ export function parseGrant(text, file, base, { isDefault = false } = {}) {
       // A root for every repo would be too broad to grant by accident.
       fail("mounts: only a repository's own file grants mounts");
     } else if (key === "mounts") {
-      if (!Array.isArray(v)) {
-        fail("mounts: expected a list of { root, read_only }");
-        continue;
-      }
-      for (const mount of v) {
-        const root = isMap(mount) ? mount.root : mount;
-        const clean = typeof root === "string" ? root.replace(/(.)\/$/, "$1") : null;
-        if (!clean || !PLAIN_PATH.test(clean) || posix.normalize(clean) !== clean) {
-          fail(`mounts: expected a plain absolute root, got ${JSON.stringify(root)}`);
-        } else if (isMap(mount) && ![undefined, true, false].includes(mount.read_only)) {
-          fail(`mounts: ${clean}: read_only: expected true or false`);
-        } else {
-          grant.mounts.push({
-            root: clean,
-            readOnly: !isMap(mount) || mount.read_only !== false,
-          });
-        }
-      }
+      parseMounts(v, grant.mounts, fail);
     } else {
       const keys = ["hosts", "cached_hosts", "limits", ...(isDefault ? [] : ["mounts"])];
       fail(`${key}: unknown (${keys.join(", ")} or ${Object.keys(FLAGS).join(", ")})`);
@@ -134,6 +112,36 @@ export function parseGrant(text, file, base, { isDefault = false } = {}) {
   }
   if (errors.length) throw new GrantsError(`${file}: ${errors.join("; ")}`, file);
   return grant;
+}
+
+// A grant's list of hosts (`key`: hosts or cached_hosts), lowercased into `list`; `fail`
+// collects what's wrong, so one file's errors all show at once.
+function parseHosts(key, v, list, fail) {
+  if (!Array.isArray(v)) return fail(`${key}: expected a list of host names`);
+  for (const host of v) {
+    if (hostProblem(host)) fail(`${key}: ${JSON.stringify(host)}: ${hostProblem(host)}`);
+    else list.push(host.toLowerCase());
+  }
+}
+
+// A repo grant's mount roots, a path or { root, read_only }, into `mounts` as
+// { root, readOnly }: read-only unless the grant says read_only: false.
+function parseMounts(v, mounts, fail) {
+  if (!Array.isArray(v)) return fail("mounts: expected a list of { root, read_only }");
+  for (const mount of v) {
+    const root = isMap(mount) ? mount.root : mount;
+    const clean = typeof root === "string" ? root.replace(/(.)\/$/, "$1") : null;
+    if (!clean || !PLAIN_PATH.test(clean) || posix.normalize(clean) !== clean) {
+      fail(`mounts: expected a plain absolute root, got ${JSON.stringify(root)}`);
+    } else if (isMap(mount) && ![undefined, true, false].includes(mount.read_only)) {
+      fail(`mounts: ${clean}: read_only: expected true or false`);
+    } else {
+      mounts.push({
+        root: clean,
+        readOnly: !isMap(mount) || mount.read_only !== false,
+      });
+    }
+  }
 }
 
 // The folder's files, by path relative to it ("acme/api.yaml") → text, or a function reading
@@ -215,61 +223,70 @@ function scanGrants(dir, read) {
   if (!statSync(top).isDirectory()) {
     throw new GrantsError(`grants: GRANTS_DIR ${dir}: expected a folder`);
   }
-  const files = {};
-  const problems = [];
-  const seen = new Set([top]);
-  const refuse = (file, what) => () => {
+  const scan = { top, read, files: {}, problems: [], seen: new Set([top]) };
+  walkGrants(scan, top, "");
+  return { files: scan.files, problems: scan.problems };
+}
+
+// A grant file's reader that throws `what` instead: the error is that repo's alone, met when
+// a run needs its grant.
+function refuseGrant(file, what) {
+  return () => {
     throw new GrantsError(`grants: ${file}: ${what}`, file);
   };
-  const walk = (real, rel) => {
-    let entries;
+}
+
+// One folder of scanGrants()'s: `real` its resolved path, `rel` its path in the grants folder.
+function walkGrants(scan, real, rel) {
+  let entries;
+  try {
+    entries = readdirSync(real, { withFileTypes: true });
+  } catch (error) {
+    scan.problems.push({ file: rel, what: `can't be read (${error.code ?? error.message})` });
+    return;
+  }
+  for (const entry of entries) {
+    if (entry.name.startsWith(".")) continue;
+    scanEntry(scan, real, rel ? `${rel}/${entry.name}` : entry.name, entry);
+  }
+}
+
+// One entry of a grants folder: a subfolder is walked, a YAML file read when asked for, and a
+// symlink followed only when it stays in the folder.
+function scanEntry(scan, real, file, entry) {
+  const { top, read, files, problems, seen } = scan;
+  const yaml = /\.ya?ml$/i.test(entry.name);
+  let path = join(real, entry.name);
+  let folder = entry.isDirectory();
+  if (entry.isSymbolicLink()) {
+    let resolved = null;
     try {
-      entries = readdirSync(real, { withFileTypes: true });
-    } catch (error) {
-      problems.push({ file: rel, what: `can't be read (${error.code ?? error.message})` });
+      resolved = realpathSync(path);
+      folder = statSync(resolved).isDirectory();
+    } catch {
+      // Leads nowhere: an error for a grant, nothing for anything else.
+    }
+    if (!resolved || !within(resolved, top)) {
+      const what = resolved ? "a symlink leading outside the grants folder" : "a broken symlink";
+      if (yaml && !folder) files[file] = refuseGrant(file, what);
+      else if (folder) problems.push({ file, what });
       return;
     }
-    for (const entry of entries) {
-      if (entry.name.startsWith(".")) continue;
-      const file = rel ? `${rel}/${entry.name}` : entry.name;
-      const yaml = /\.ya?ml$/i.test(entry.name);
-      let path = join(real, entry.name);
-      let folder = entry.isDirectory();
-      if (entry.isSymbolicLink()) {
-        let resolved = null;
-        try {
-          resolved = realpathSync(path);
-          folder = statSync(resolved).isDirectory();
-        } catch {
-          // Leads nowhere: an error for a grant, nothing for anything else.
-        }
-        if (!resolved || !within(resolved, top)) {
-          const what = resolved
-            ? "a symlink leading outside the grants folder"
-            : "a broken symlink";
-          if (yaml && !folder) files[file] = refuse(file, what);
-          else if (folder) problems.push({ file, what });
-          continue;
-        }
-        path = resolved;
+    path = resolved;
+  }
+  if (folder) {
+    if (seen.has(path)) return;
+    seen.add(path);
+    walkGrants(scan, path, file);
+  } else if (yaml && (entry.isFile() || entry.isSymbolicLink())) {
+    files[file] = () => {
+      try {
+        return read(path);
+      } catch (error) {
+        return refuseGrant(file, `can't be read (${error.code ?? error.message})`)();
       }
-      if (folder) {
-        if (seen.has(path)) continue;
-        seen.add(path);
-        walk(path, file);
-      } else if (yaml && (entry.isFile() || entry.isSymbolicLink())) {
-        files[file] = () => {
-          try {
-            return read(path);
-          } catch (error) {
-            return refuse(file, `can't be read (${error.code ?? error.message})`)();
-          }
-        };
-      }
-    }
-  };
-  walk(top, "");
-  return { files, problems };
+    };
+  }
 }
 
 // The grants folder, read now: throws a GrantsError when its layout or default.yaml has

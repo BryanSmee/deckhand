@@ -218,7 +218,7 @@ function parseInbox(value, { key, settings, fail, warn }) {
 }
 
 // A hook runs as root on the host's Docker, and a restart waits for it: two hours at most.
-export const MAX_PREVIEW_MINUTES = 120;
+const MAX_PREVIEW_MINUTES = 120;
 
 function parsePreview(value, { settings, fail, warn }) {
   const preview = isMap(value) ? value : { command: value };

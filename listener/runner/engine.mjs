@@ -16,10 +16,10 @@ export const ENGINES = ["sysbox", "podman", "auto"];
 // What the sandbox calls it by on the run's network, and where its API listens: unencrypted,
 // but only the run's own network (the sandbox, the listener, the proxy) can reach it.
 export const ENGINE_HOST = "engine";
-export const ENGINE_PORT = 2375;
+const ENGINE_PORT = 2375;
 
 // The runtime Sysbox installs on the host's Docker.
-export const SYSBOX_RUNTIME = "sysbox-runc";
+const SYSBOX_RUNTIME = "sysbox-runc";
 
 // The sidecar of the sandbox `name`, and the storage volume of the run `run`.
 export const engineName = (name) => `${name}-engine`;

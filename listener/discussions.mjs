@@ -77,8 +77,8 @@ export function threadOf(d, bot) {
   };
 }
 
-// `graphql(repo, query, variables)`: the App's calls, throwing on errors (server.mjs).
-// `checkedRepo(repo, user)`: the work area's checks for the repo (work.mjs): { settings, base }.
+// `graphql(repo, query, variables)`: the App's calls, throwing on errors (github.mjs).
+// `checkedRepo(repo, user)`: the dashboard's checks for the repo (repo-check.mjs): { settings, base }.
 // `accept(item)` (tasks.mjs).
 export function createDiscussionApi({
   config,
@@ -108,7 +108,7 @@ export function createDiscussionApi({
   }
 
   // A read that GitHub answers with NOT_FOUND (a discussion or node that isn't there): null.
-  // server.mjs graphql() throws on GraphQL's errors, which come with a 200.
+  // github.mjs graphql() throws on GraphQL's errors, which come with a 200.
   async function lookup(repo, query, variables) {
     try {
       return await graphql(repo, query, variables);

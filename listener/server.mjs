@@ -15,6 +15,7 @@ import { createChatgptLogin } from "./chatgpt.mjs";
 import { createOpenAiProxy } from "./openai.mjs";
 import { planWarning } from "./upstream.mjs";
 import { createBroker } from "./broker.mjs";
+import { createBrokerHttp } from "./broker-http.mjs";
 import { createGitGateway } from "./git-gateway.mjs";
 import { createPrReady } from "./pr-ready.mjs";
 import { createBrainstorms, createIssueModes } from "./brainstorms.mjs";
@@ -23,14 +24,13 @@ import { createComments } from "./comments.mjs";
 import { createConflicts } from "./conflicts.mjs";
 import { ConfigError, loadConfig, readConfigFile } from "./config.mjs";
 import { docker } from "./docker.mjs";
-import { outcome } from "./events.mjs";
 import {
   checkAppEvents,
   createGitHubApp,
   loadCredentials,
   saveCredentials,
 } from "./github-app.mjs";
-import { getJson, graphql as graphqlOf } from "./github.mjs";
+import { createGitHub, fetchTitle, listLabelled, listPulls } from "./github.mjs";
 import { grantErrors, loadGrants } from "./grants.mjs";
 import { createHttp } from "./http.mjs";
 import { createHistory } from "./history.mjs";
@@ -39,7 +39,10 @@ import { createInputs } from "./inputs.mjs";
 import { createOnboarding, createOnboardingStore } from "./onboarding.mjs";
 import { createPreviews } from "./previews.mjs";
 import { createPulls } from "./pulls.mjs";
-import { loadRepoSettings, readRepoFile } from "./repo-config.mjs";
+import { fetchEgressCa } from "./egress.mjs";
+import { createRepoCheck } from "./repo-check.mjs";
+import { readRepoFile } from "./repo-config.mjs";
+import { createRepoSettings } from "./repo-settings.mjs";
 import { createRepoApi, createRepoList } from "./repos.mjs";
 import { createRestart } from "./restart.mjs";
 import { loadRuns } from "./runlog.mjs";
@@ -48,8 +51,9 @@ import { createDockerRunner } from "./runner/docker.mjs";
 import { operatorSecrets } from "./secrets.mjs";
 import { createRuns } from "./runs.mjs";
 import { createSetup } from "./setup.mjs";
+import { createStatus } from "./status.mjs";
 import { createTasks } from "./tasks.mjs";
-import { closedAs, createTitles } from "./titles.mjs";
+import { createTitles } from "./titles.mjs";
 import { createWaits } from "./waits.mjs";
 import { createWorkApi } from "./work.mjs";
 
@@ -130,14 +134,8 @@ function publicUrl() {
   return config.publicUrl ?? ctx.app?.credentials.public_url ?? `http://localhost:${config.port}`;
 }
 
-// `expected`: error statuses that are normal for this call, so not logged.
-async function github(repo, method, path, body, expected = []) {
-  if (!ctx.app) throw new Error("the GitHub App is not set up");
-  return ctx.app.request(repo, method, path, body, expected);
-}
-
-// Discussions are written to through GraphQL only. Its errors come with a 200: thrown there.
-const graphql = (repo, query, variables) => graphqlOf(github, repo, query, variables);
+// The App's calls as the repo's installation, REST and GraphQL (github.mjs).
+const { github, graphql } = createGitHub(() => ctx.app);
 
 const setup = createSetup({
   config,
@@ -158,32 +156,12 @@ const auth = createAuth({
   log,
 });
 
-// The first page of a list: the recent ones are enough there.
-async function listOf(repo, path) {
-  const list = await getJson(github, repo, path);
-  if (!Array.isArray(list)) throw new Error(`GitHub GET ${path}: no list`);
-  return list;
-}
-
 // The dashboard's titles and closed states: from webhooks, else fetched (titles.mjs).
 const titles = createTitles({
   path: join(config.dataDir, "titles.json"),
   closedPath: join(config.dataDir, "closed.json"),
   log,
-  fetchTitle: async (repo, kind, number) => {
-    if (kind === "discussion") {
-      const [owner, name] = repo.split("/");
-      const data = await graphql(
-        repo,
-        "query($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) { discussion(number: $number) { title } } }",
-        { owner, name, number },
-      );
-      return { title: data.repository?.discussion?.title ?? null };
-    }
-    // Pull requests are issues too, for their title and whether they are merged.
-    const issue = await getJson(github, repo, `/repos/${repo}/issues/${number}`, [404]);
-    return issue && { title: issue.title ?? null, closed: closedAs(outcome(issue)) };
-  },
+  fetchTitle: (repo, kind, number) => fetchTitle(github, repo, kind, number),
 });
 // Logs that have their title (newest first: the latest wins).
 titles.seed(ctx.runs.map((r) => [r.key, r.title]));
@@ -192,44 +170,17 @@ titles.seed(ctx.runs.map((r) => [r.key, r.title]));
 const pulls = createPulls({
   path: join(config.dataDir, "pulls.json"),
   log,
-  listPulls: (repo) =>
-    listOf(repo, `/repos/${repo}/pulls?state=all&sort=updated&direction=desc&per_page=100`),
+  listPulls: (repo) => listPulls(github, repo),
 });
 
 // Open issues labelled needs-input: from webhooks, and looked up once per start (inputs.mjs).
 const inputs = createInputs({
   path: join(config.dataDir, "inputs.json"),
   log,
-  listLabelled: (repo) => {
-    const label = encodeURIComponent(config.needsInputLabel);
-    return listOf(
-      repo,
-      `/repos/${repo}/issues?labels=${label}&state=open&sort=updated&per_page=100`,
-    );
-  },
+  listLabelled: (repo) => listLabelled(github, repo, config.needsInputLabel),
 });
 
 // --- Per-repo settings, images and preview hooks -------------------------------------------
-
-// Each repo's `users` as last read for a run or a comment: the dashboard shows a repo's tasks
-// and logs to them only (http.mjs). And its `wait_for_answers`, for the dashboard's form.
-const repoUsers = new Map();
-
-// A repo's settings from its default branch; errors in its config file stop its runs.
-async function repoSettings(repo, base) {
-  const read = await loadRepoSettings(github, config, repo, base || "main");
-  if (!read.errors.length) {
-    const { users, waitForAnswers, inbox } = read.settings;
-    repoUsers.set(repo.toLowerCase(), { repo, users, waitForAnswers, inbox, at: Date.now() });
-  }
-  return read;
-}
-
-// The latest read of a repo's settings, here or for the repository list, or null.
-function latestRead(repo) {
-  const known = [repoUsers.get(repo.toLowerCase()), repoList.usersOf(repo)].filter(Boolean);
-  return known.sort((a, b) => b.at - a.at)[0] ?? null;
-}
 
 const repoFile = (repo, path, ref) => readRepoFile(github, repo, path, ref);
 const fetchCheckout = (repo, ref) => checkout(github, repo, ref);
@@ -250,30 +201,15 @@ const repoList = createRepoList({
   log,
 });
 
+// Each repo's settings as last read: its runs' and comments', its `users` for the dashboard.
+const { repoSettings, ...repoReads } = createRepoSettings({ github, config, repoList });
+
 Object.assign(ctx, {
   github,
   graphql,
   publicUrl,
   repoSettings,
-  // The latest read, here or for the repository list; null when not known yet: ALLOWED_USERS
-  // alone then.
-  usersOf: (repo) => latestRead(repo)?.users ?? null,
-  // Unknown: the default, on.
-  waitsForAnswers: (repo) => latestRead(repo)?.waitForAnswers ?? true,
-  // Each repo read so far, its inbox issues and discussions category ({ ideas, bugs,
-  // discussions }): the dashboard's Feedback form.
-  inboxes: () => {
-    const names = new Map(
-      [...[...repoUsers.values()].map((r) => r.repo), ...repoList.known()].map((n) => [
-        n.toLowerCase(),
-        n,
-      ]),
-    );
-    return [...names.values()].map((repo) => {
-      const { ideas = null, bugs = null, discussions = null } = latestRead(repo)?.inbox ?? {};
-      return [repo, { ideas, bugs, discussions }];
-    });
-  },
+  ...repoReads,
   repoFile,
   setup,
   auth,
@@ -284,7 +220,15 @@ Object.assign(ctx, {
   repoList,
   // Replies, reactions and the needs-input label.
   ...createComments({ config, github, graphql, log }),
-  onboarding: createOnboarding({ request: github, store: onboarded, config, log }),
+  // Onboarding issues, and the run each starts.
+  onboarding: createOnboarding({
+    request: github,
+    store: onboarded,
+    config,
+    repoSettings,
+    accept: (item) => ctx.accept(item),
+    log,
+  }),
   images: createImages({ config, docker, readFile: repoFile, checkout: fetchCheckout, log }),
   previews: createPreviews({
     config,
@@ -296,20 +240,8 @@ Object.assign(ctx, {
   // The sandboxes' only way to GitHub: short-lived tokens for their run's repo, which only
   // read the code.
   broker: createBroker({ app: () => ctx.app, log }),
-  // The egress proxy's CA certificate (../proxy/authority.mjs), which sandboxes trust when
-  // their grant has cached_hosts; null when it has none (its cache is off). Asked at each such
-  // run: a new proxy volume is a new CA.
-  egressCa: async () => {
-    try {
-      const res = await fetch(`${config.egressProxy}/deckhand-ca.crt`, {
-        signal: AbortSignal.timeout(5000),
-      });
-      const pem = res.ok ? await res.text() : "";
-      return pem.includes("BEGIN CERTIFICATE") ? pem : null;
-    } catch {
-      return null;
-    }
-  },
+  // The egress proxy's CA certificate, for runs whose grant has cached_hosts (egress.mjs).
+  egressCa: () => fetchEgressCa(config.egressProxy),
   // Sandboxes are started, followed and removed through it; they run detached.
   runner: createDockerRunner({ config, docker, inboxDir: runsDir, log }),
 });
@@ -376,7 +308,7 @@ Object.assign(ctx, {
   // The issues whose session is in one of their repo's own modes.
   issueModes: createIssueModes(join(config.dataDir, "modes.json")),
 });
-Object.assign(ctx, createTasks(ctx), createRuns(ctx), createRestart(ctx));
+Object.assign(ctx, createStatus(ctx), createTasks(ctx), createRuns(ctx), createRestart(ctx));
 // Open pull requests of opted-in repos that conflict with their base get a rebase run.
 ctx.conflicts = createConflicts({
   path: join(config.dataDir, "conflicts.json"),
@@ -403,7 +335,7 @@ ctx.repoApi = createRepoApi({
   config,
   list: repoList,
   publicUrl,
-  start: (repo, login) => ctx.onboardRepo(repo, login, true),
+  start: (repo, login) => ctx.onboarding.start(repo, login, true),
   log,
 });
 
@@ -440,7 +372,7 @@ ctx.workApi = createWorkApi({
 ctx.discussionApi = createDiscussionApi({
   config,
   graphql,
-  checkedRepo: ctx.workApi.checkedRepo,
+  checkedRepo: createRepoCheck({ config, github, repoSettings }).checkedRepo,
   accept: (item) => ctx.accept(item),
   publicUrl,
   log,
@@ -452,7 +384,7 @@ const http = createHttp(ctx, {
   dashboardDir: env.DASHBOARD_DIR || new URL("../dashboard/dist", import.meta.url).pathname,
 });
 http.listen();
-http.listenBroker();
+createBrokerHttp(ctx).listen();
 
 log(`Deckhand ${ctx.version}`);
 log(

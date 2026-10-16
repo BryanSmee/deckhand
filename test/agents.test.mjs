@@ -16,7 +16,7 @@ import {
 import { claude } from "../listener/agents/claude.mjs";
 import { codex } from "../listener/agents/codex.mjs";
 import { lastResult, outcome } from "../listener/runlog.mjs";
-import { agentNameFor, modelFor } from "../listener/runs.mjs";
+import { agentNameFor, modelFor } from "../listener/agents/select.mjs";
 
 const line = (event) => JSON.stringify(event);
 

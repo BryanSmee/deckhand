@@ -5,15 +5,15 @@
 import { readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { agentFor } from "./agents/index.mjs";
-import { parseKey, taskKey } from "./events.mjs";
+import { taskKey } from "./events.mjs";
 import { permissionsFor } from "./modes.mjs";
-import { addRun, openLog, saveSummary } from "./runlog.mjs";
+import { addRun, openLog } from "./runlog.mjs";
 import { readJson, writeJsonAtomic } from "./store.mjs";
-import { noLongerAllowed } from "./tasks.mjs";
+import { newTask, noLongerAllowed } from "./tasks.mjs";
 
 // A result saved by a listener from before the agent seam is Claude Code's raw stream-json
 // `result` event: Deckhand's own from it, with the duration of all its turns.
-export function savedResult(result) {
+function savedResult(result) {
   if (!result || "ok" in result) return result ?? null;
   return agentFor("claude").normalize(JSON.stringify(result))[0];
 }
@@ -47,48 +47,6 @@ export function createRestart(ctx) {
   const { config, log, tasks } = ctx;
   const queuePath = join(config.dataDir, "queue.json");
 
-  // Reaction updates still on their way to GitHub once a run is over (see cleanUp()).
-  const inflight = new Set();
-
-  function track(promise) {
-    inflight.add(promise);
-    promise.finally(() => inflight.delete(promise));
-  }
-
-  // Queued comments don't count: they are saved (saveQueue()), running sandboxes go on without
-  // the listener (restoreRuns()), and brainstorms between replies are restored from
-  // brainstorms.json and their volume. Nothing needs to drain before a restart. `sees(repo)`:
-  // which repos' runs, hooks and queues are listed (a signed-in user's, http.mjs); `idle` is
-  // the whole listener's either way.
-  function status(sees = () => true) {
-    const active = ctx.runs.filter((r) => r.status === "running");
-    const previews = ctx.previews.status();
-    const reasons = (shown) => [
-      ...active
-        .filter((r) => shown(r.repo ?? parseKey(r.key)?.repo))
-        .map((r) => `${r.kind} run ${r.key} since ${new Date(r.startedAt).toISOString()}`),
-      ...(inflight.size ? [`${inflight.size} reaction update(s) in flight`] : []),
-      // A preview hook may be deploying: a restart waits for it too.
-      ...previews
-        .filter((h) => shown(h.repo))
-        .map(
-          (h) =>
-            `preview hook ${h.repo} (${h.event}) ${h.state} since ${new Date(h.since).toISOString()}`,
-        ),
-    ];
-    return {
-      version: ctx.version,
-      idle: ctx.running === 0 && !reasons(() => true).length,
-      previews: previews.filter((h) => sees(h.repo)),
-      reasons: reasons(sees),
-      setUp: ctx.app !== null,
-      queued: [...tasks.values()]
-        .filter((t) => sees(t.repo))
-        .reduce((n, t) => n + t.pending.length, 0),
-      now: Date.now(),
-    };
-  }
-
   // Comments that wait for a run, with the 👀 they got, so the next listener runs them.
   async function saveQueue() {
     const saved = [];
@@ -121,7 +79,7 @@ export function createRestart(ctx) {
       // Its run may have gone on through the restart (restoreRuns()).
       let task = tasks.get(key);
       if (!task) {
-        task = { ...t, pending: [], running: false, ready: false, timer: null, live: null };
+        task = newTask(t);
         tasks.set(key, task);
       }
       task.next = { ...t.next, ...task.next };
@@ -185,7 +143,7 @@ export function createRestart(ctx) {
     addRun(ctx, record);
     let task = tasks.get(key);
     if (!task) {
-      task = { ...saved.task, pending: [], ready: false, timer: null, next: {} };
+      task = newTask(saved.task);
       tasks.set(key, task);
     }
     const handled = saved.handled.map(revive);
@@ -275,23 +233,14 @@ export function createRestart(ctx) {
   }
 
   async function requeue(task) {
-    const live = task.live;
-    live.record.status = "interrupted";
-    live.record.finishedAt = Date.now();
-    saveSummary(live.record, log);
-    ctx.broker.revoke(live.secret);
-    await ctx.runner.remove(task.name, live.id);
-    rmSync(livePath(live.id), { force: true });
-    task.pending.unshift(...live.handled);
-    task.live = null;
-    task.running = false;
-    ctx.running--;
+    const { handled } = task.live;
+    task.live.record.status = "interrupted";
+    await ctx.teardown(task);
+    task.pending.unshift(...handled);
     ctx.startLater(task);
   }
 
   return {
-    track,
-    status,
     saveQueue,
     loadQueue,
     livePath,

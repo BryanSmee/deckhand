@@ -3,7 +3,9 @@
 // webhooks keep it current (questions.mjs); labels added or removed, or bodies edited, while
 // the listener was down are caught by one lookup per repo when it starts (sync()). Kept in
 // inputs.json, so a restart doesn't forget them meanwhile.
+import { hasLabel } from "./comments.mjs";
 import { parseKey, taskKey } from "./events.mjs";
+import { paginate } from "./github.mjs";
 import { parseQuestions, questionsSection } from "./questions.mjs";
 import { persistentMap } from "./store.mjs";
 
@@ -87,4 +89,65 @@ export function createInputs({ path, listLabelled, now = Date.now, log = () => {
     }));
 
   return { set, update, sync, list, has: (key) => inputs.has(key) };
+}
+
+// Open questions in the bodies of a repo's open issues (the work area's backlog, work.mjs)
+// that the needs-input label never came for. `github`: the App's calls; `label(repo, number,
+// on)`: the label (comments.mjs); `inputs`: createInputs(); `boardKeys()`: the keys of the
+// tasks on the dashboard.
+export function createInputSeeder({ config, github, label, inputs, boardKeys, log = () => {} }) {
+  // Issues with open questions whose label was taken off once: answered, or removed by hand.
+  const unlabelled = new Set();
+
+  // Open questions in an issue's body that the needs-input label never came for: without the
+  // `issues` event, or when the label call failed, only the label's listing (sync()) knew
+  // of them, so the graph's form didn't open and a start went through unanswered. Listed and
+  // labelled here, as an `issues opened` delivery would have, unless the label was taken off
+  // once (its timeline says): its questions were answered, or someone said they don't hold.
+  // An issue on the board had a run, whose start takes the label off: left alone too.
+  async function seed(repo, list, users) {
+    const name = config.needsInputLabel;
+    if (!name) return;
+    const keys = boardKeys();
+    const author = (u) =>
+      u?.type === "Bot"
+        ? !!config.bot && u.login?.toLowerCase() === config.bot.toLowerCase()
+        : !!u?.login &&
+          config.users.includes(u.login.toLowerCase()) &&
+          users.includes(u.login.toLowerCase());
+    for (const issue of list) {
+      const key = taskKey(repo, issue.number);
+      if (issue.pull_request || inputs.has(key) || keys.has(key) || unlabelled.has(key)) continue;
+      // Fail closed, as questions.mjs: only an allowed user's issue, or the App's own.
+      if (!author(issue.user)) continue;
+      const questions = parseQuestions(questionsSection(issue.body));
+      if (!questions) continue;
+      try {
+        if (!hasLabel(issue.labels, name)) {
+          if (await wasUnlabelled(repo, issue.number, name)) {
+            unlabelled.add(key);
+            continue;
+          }
+          const res = await label(repo, issue.number, true);
+          if (!res.ok) log(`${key}: label: ${res.status}`);
+        }
+        log(`${key}: open questions found in the backlog`);
+        inputs.set(key, true, questions);
+      } catch (error) {
+        // The next read tries again.
+        log(`${key}: open questions: ${error.message ?? error}`);
+      }
+    }
+  }
+
+  // Whether the label was ever taken off issue `number`.
+  async function wasUnlabelled(repo, number, name) {
+    const events = await paginate(
+      (path) => github(repo, "GET", path),
+      `/repos/${repo}/issues/${number}/events`,
+    );
+    return events.some((e) => e.event === "unlabeled" && hasLabel([e.label], name));
+  }
+
+  return { seed };
 }

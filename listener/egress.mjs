@@ -82,3 +82,18 @@ export function proxyEnv(config, others = []) {
     NODE_USE_ENV_PROXY: "1",
   };
 }
+
+// The egress proxy's CA certificate (../proxy/authority.mjs), which sandboxes trust when their
+// grant has cached_hosts; null when it has none (its cache is off) or doesn't answer. Asked at
+// each such run: a new proxy volume is a new CA.
+export async function fetchEgressCa(egressProxy) {
+  try {
+    const res = await fetch(`${egressProxy}/deckhand-ca.crt`, {
+      signal: AbortSignal.timeout(5000),
+    });
+    const pem = res.ok ? await res.text() : "";
+    return pem.includes("BEGIN CERTIFICATE") ? pem : null;
+  } catch {
+    return null;
+  }
+}
