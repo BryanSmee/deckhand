@@ -13,6 +13,7 @@ export const STATE_NAMES: Record<TaskState, string> = {
   done: "Done",
   error: "Error",
   interrupted: "Interrupted",
+  cancelled: "Stopped",
 };
 
 export const RUN_NAMES: Record<RunStatus, string> = {
@@ -21,6 +22,7 @@ export const RUN_NAMES: Record<RunStatus, string> = {
   "needs-input": "Needs input",
   error: "Error",
   interrupted: "Interrupted",
+  cancelled: "Stopped",
 };
 
 export const PR_NAMES: Record<PrState, string> = {
@@ -33,7 +35,8 @@ export const PR_NAMES: Record<PrState, string> = {
 // The state chips: each groups states. A task waiting for other issues ("/after") is on its
 // way to a run, like a queued one. A brainstorm waiting for its next comment waits for
 // the maintainer, like a run that stopped to ask. "Ready for review" is the pull request's
-// state, whatever the task's: what waits for the maintainer's review.
+// state, whatever the task's: what waits for the maintainer's review. A run someone stopped
+// is over, not failed.
 export const CHIPS = [
   { id: "all", name: "All", states: null },
   {
@@ -43,7 +46,7 @@ export const CHIPS = [
   },
   { id: "input", name: "Needs input", states: ["needs-input", "brainstorm", "idle-brainstorm"] },
   { id: "review", name: "Ready for review", states: null },
-  { id: "done", name: "Done", states: ["done"] },
+  { id: "done", name: "Done", states: ["done", "cancelled"] },
   { id: "error", name: "Error", states: ["error", "interrupted"] },
 ] as const satisfies readonly { id: string; name: string; states: readonly TaskState[] | null }[];
 
@@ -58,7 +61,7 @@ export function inChip(chip: ChipId, t: Task): boolean {
 export const isReady = (t: Task) => t.pr?.state === "ready";
 
 // What a state looks like: its colour family.
-export type Tone = "run" | "input" | "ok" | "err" | "idle";
+export type Tone = "run" | "input" | "ok" | "err" | "stop" | "idle";
 
 export function toneOf(state: TaskState | RunStatus): Tone {
   switch (state) {
@@ -76,6 +79,8 @@ export function toneOf(state: TaskState | RunStatus): Tone {
     case "error":
     case "interrupted":
       return "err";
+    case "cancelled":
+      return "stop";
     default:
       return "idle";
   }

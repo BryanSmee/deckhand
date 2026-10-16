@@ -76,6 +76,8 @@ export function createTasks(ctx) {
     const item = await linked(found);
     item.base = first.base;
     item.settings = settings;
+    // Never queued nor sent to the agent: a stuck run would never read it.
+    if (item.trigger === "cancel") return cancelRun(item);
     if (item.after) {
       // A mode it can't run is said now, not once what it waits for is done.
       if (item.modeLine && !modeNames(settings).includes(item.modeLine)) {
@@ -90,6 +92,20 @@ export function createTasks(ctx) {
       ctx.waits.cancel(`${item.repo}#${item.id}`);
     }
     await accept(item);
+  }
+
+  // A `/cancel` comment: the task's run stops (runs.mjs cancel()), or its queued comments are
+  // dropped, and the comment gets a 👍; the run's reply says who stopped it. With nothing to
+  // stop, a reply says so.
+  async function cancelRun(item) {
+    const key = `${item.repo}#${item.id}`;
+    if (!ctx.cancel(key, item.author)) {
+      log(`${key}: /cancel with nothing running`);
+      const text = `Nothing is running on #${item.replyTo}.`;
+      await ctx.reply(item.repo, item.replyTo, text).catch((error) => log(`${key}: ${error}`));
+      return;
+    }
+    await ctx.settle(item, "acknowledged");
   }
 
   // Whether the comment says anything besides its trigger and command lines: then it answers

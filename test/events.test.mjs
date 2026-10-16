@@ -58,6 +58,19 @@ function comment(
   };
 }
 
+test("/cancel: from an allowed user, on an issue, a pull request or an inbox issue", () => {
+  assert.equal(workItem(config, "issue_comment", comment("/cancel")).trigger, "cancel");
+  // A pull request's comment stops the run of the issue it closes.
+  const pr = workItem(config, "issue_comment", comment("/cancel", { pr: "Closes #3" }));
+  assert.deepEqual([pr.trigger, pr.id, pr.replyTo], ["cancel", "3", 12]);
+  // On an inbox issue every other comment is an entry: this one stops the entry's run.
+  const inbox = { ...config, inbox: { ideas: 12 } };
+  const stop = workItem(inbox, "issue_comment", comment("/cancel"));
+  assert.deepEqual([stop.trigger, stop.id], ["cancel", "12"]);
+  assert.equal(workItem(inbox, "issue_comment", comment("Cancel the plan")).trigger, "idea");
+  assert.equal(workItem(config, "issue_comment", comment("/cancel", { login: "mallory" })), null);
+});
+
 test("issue comments: trigger, text and reply target", () => {
   const item = workItem(config, "issue_comment", comment("Deckhand\nUse X."));
   assert.deepEqual(
@@ -259,6 +272,14 @@ test("trigger lines and options", () => {
     after: null,
     text: "",
   });
+  // `/cancel` stops a run: its own command, not the brainstorm's wrap-up.
+  assert.deepEqual(splitTrigger(config, " /Cancel \nit loops"), {
+    trigger: "cancel",
+    mode: null,
+    after: null,
+    text: "it loops",
+  });
+  assert.equal(splitTrigger(config, "/cancel please").trigger, null);
   assert.deepEqual(splitTrigger(config, "just text"), {
     trigger: null,
     mode: null,

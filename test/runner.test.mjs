@@ -107,6 +107,10 @@ function fakeDocker({ answers = {}, routeOut = false, runtimes = ["runc"], taken
         nets.get(net)?.add(name);
         return ok();
       }
+      case "stop":
+        if (!containers.has(last)) return missing;
+        containers.get(last).running = false;
+        return ok();
       case "rm":
         for (const on of nets.values()) on.delete(last);
         containers.delete(last);
@@ -479,6 +483,17 @@ test("remove: the sandbox, then its network, once the listener and the proxy lea
   assert.equal(nets.has("dh-b-1"), false);
   // Gone already: nothing to do.
   await r.remove("dh-b");
+});
+
+test("kill: stops the sandbox now, SIGKILL after 10 s; one that isn't there is an error", async () => {
+  const { r, calls, containers } = runner();
+  await r.start({ run: "dh-a-1", name: "dh-a", image: "i" });
+  await r.kill("dh-a");
+  assert.deepEqual(callOf(calls, "stop"), ["stop", "-t", "10", "dh-a"]);
+  assert.equal(containers.get("dh-a").running, false);
+  // Stopped, not removed: finish() reads its end, then removes it.
+  assert.equal(await r.state("dh-a"), "exited");
+  await assert.rejects(r.kill("dh-gone"), /docker stop dh-gone/);
 });
 
 test("relink: a recreated listener and proxy join the running sandboxes' networks again", async () => {

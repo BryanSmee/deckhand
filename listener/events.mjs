@@ -44,7 +44,8 @@ export function sameRepo(pr, repo) {
   return !!head && head.toLowerCase() === repo.toLowerCase();
 }
 
-// The command on the first line ("work" for the trigger, "stop" for "/stop"), the mode a
+// The command on the first line ("work" for the trigger, "stop" for "/stop", "cancel" for
+// "/cancel": stop the running run, tasks.mjs), the mode a
 // "/mode <name>" line asks for (lowercase, or null), what an "/after #12" line waits for
 // (parseAfter(), or null) and the rest of the comment; trigger null and the whole comment when
 // there is none. The trigger is the whole first line, so "Deckhand is down" starts nothing;
@@ -52,6 +53,7 @@ export function sameRepo(pr, repo) {
 export function splitTrigger(config, body) {
   const [first, ...rest] = body.split(/\r?\n/);
   if (first.trim().toLowerCase() === "/stop") return takeCommands(rest.join("\n"), "stop");
+  if (first.trim().toLowerCase() === "/cancel") return takeCommands(rest.join("\n"), "cancel");
   const inline = /^(.*?)\s+(\/(?:mode|after)\s.*)$/i.exec(first);
   if (inline && normalize(inline[1]) === config.trigger) {
     // Each command its own line, as if written below; anything else on the line and it isn't
@@ -224,11 +226,14 @@ function issueCommentItem(config, event, p, skip) {
   if (p.issue.pull_request) {
     return prItem(config, skip, repo, p.issue, { trigger, mode, after }, text, p.comment);
   }
-  // Every comment on an inbox issue is an entry: trigger lines don't apply there.
-  const inbox = [
-    ["idea", config.inbox?.ideas],
-    ["bug", config.inbox?.bugs],
-  ].find(([, number]) => number === p.issue.number)?.[0];
+  // Every comment on an inbox issue is an entry: trigger lines don't apply there, but for
+  // `/cancel`, which stops the entry's run.
+  const inbox =
+    trigger !== "cancel" &&
+    [
+      ["idea", config.inbox?.ideas],
+      ["bug", config.inbox?.bugs],
+    ].find(([, number]) => number === p.issue.number)?.[0];
   if (inbox) return inboxItem(repo, p.issue, inbox, p.comment, p.comment.user, body);
   const n = p.issue.number;
   const issue = {

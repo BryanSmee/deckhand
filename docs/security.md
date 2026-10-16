@@ -481,7 +481,9 @@ The dashboard is read-only but for two kinds of POST: starting a repository's on
 (`/api/repos/<owner>/<repo>/onboard`) and the graph's work area
 (`/api/repos/<owner>/<repo>/work`, `listener/work.mjs`), which starts an issue, queues it
 after another (`/after #n`), moves its wait or cancels it (`/after none`), or stops a
-brainstorm (`/stop`, refused unless it is active or idle). The work area
+brainstorm (`/stop`, refused unless it is active or idle), or stops a task's run (`cancel`,
+what a `/cancel` comment does: only the repository's half of the checks below applies, as a
+run may go on on a closed issue; refused when nothing runs or is queued). The work area
 starts runs, so it is checked as a comment that waited is (`tasks.resume()`), at each request:
 
 - a signed-in dashboard session, and an `Origin` header naming this listener (its
@@ -503,8 +505,8 @@ delivery for it, one read at a time; the dashboard keeps the last one in memory 
 the browser's storage.
 
 A failed run's Rerun (`POST /api/repos/<owner>/<repo>/rerun`) passes the same checks, for
-the run's issue or pull request, and only for the task's latest run when it ended in `error`
-or `interrupted`: it queues the comments that run had already been allowed to act on, as the
+the run's issue or pull request, and only for the task's latest run when it ended in `error`,
+`interrupted` or `cancelled`: it queues the comments that run had already been allowed to act on, as the
 signed-in user's, and posts the App's comment saying who asked.
 
 An inbox entry sent from the dashboard (`POST /api/repos/<owner>/<repo>/inbox`) passes the

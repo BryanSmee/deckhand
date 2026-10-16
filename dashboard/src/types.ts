@@ -14,9 +14,10 @@ export type TaskState =
   | "needs-input"
   | "done"
   | "error"
-  | "interrupted";
+  | "interrupted"
+  | "cancelled";
 
-export type RunStatus = "running" | "ok" | "needs-input" | "error" | "interrupted";
+export type RunStatus = "running" | "ok" | "needs-input" | "error" | "interrupted" | "cancelled";
 
 export type Kind = "issue" | "pr" | "discussion" | "brainstorm" | "idea" | "bug";
 
@@ -298,6 +299,9 @@ export type WorkAction =
   | { action: "queue"; number: number; after: number; mode?: string }
   | { action: "dequeue"; number: number }
   | { action: "stop"; number: number };
+// The task page's Stop (not the graph's): its run stops, or what is queued is dropped. `pr`:
+// a pull request's task.
+export type CancelAction = { action: "cancel"; number: number; pr: boolean };
 
 // POST api/repos/<owner>/<repo>/answer: one answer per parsed question (the options ticked, by
 // index, and a note), or one text for questions not in the format. `pr`: a pull request's task.

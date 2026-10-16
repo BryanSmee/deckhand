@@ -12,8 +12,10 @@
 //   idle-brainstorm a brainstorm without a comment for a while; the next one restores it
 //   needs-input     the last run stopped to ask, or the issue carries the needs-input label
 //                   (open questions in its body, inputs.mjs), with or without a run
-//   done, error, interrupted   how the last run ended (interrupted: the listener restarted)
-// A task whose last run is error or interrupted is `rerunnable` when it may run again.
+//   done, error, interrupted, cancelled   how the last run ended (interrupted: the listener
+//                   restarted; cancelled: someone stopped it, `/cancel` or the dashboard)
+// A task whose last run is error, interrupted or cancelled is `rerunnable` when it may run
+// again.
 import { LIGHT } from "./modes.mjs";
 
 export const STATES = [
@@ -28,11 +30,15 @@ export const STATES = [
   "done",
   "error",
   "interrupted",
+  "cancelled",
 ];
 
-// Whether something is going on or waits on the task: what ended (done, error, interrupted)
-// isn't. The work area's backlog lists an open issue again once its task isn't live.
-export const isLive = (t) => !["done", "error", "interrupted"].includes(t.state);
+// How a run can end, as a task's state.
+const ENDED = ["done", "error", "interrupted", "cancelled"];
+
+// Whether something is going on or waits on the task: what ended (done, error, interrupted,
+// cancelled) isn't. The work area's backlog lists an open issue again once its task isn't live.
+export const isLive = (t) => !ENDED.includes(t.state);
 
 // Runs kept per entry: older ones stay in the logs.
 const RUNS_PER_TASK = 20;
@@ -43,17 +49,17 @@ function runState(r) {
     return r.mode === "wrap-up" ? "stopping" : "working";
   }
   if (r.status === "ok") return "done";
-  return r.status; // needs-input, error, interrupted
+  return r.status; // needs-input, error, interrupted, cancelled
 }
 
-// Whether the task's last run may run again from the dashboard (work.mjs rerun()): it failed
-// or was lost, nothing came after it, and it was work on an issue or pull request (in work or
+// Whether the task's last run may run again from the dashboard (work.mjs rerun()): it failed,
+// was lost or cancelled, nothing came after it, and it was work on an issue or pull request (in work or
 // one of the repo's own modes) whose comments its log kept.
 export function rerunnable(t) {
   const last = t.runs[0];
   return (
     !!last &&
-    ["error", "interrupted"].includes(last.status) &&
+    ["error", "interrupted", "cancelled"].includes(last.status) &&
     t.state === last.status &&
     ["issue", "pr"].includes(t.kind) &&
     !!last.taskMode &&
@@ -132,7 +138,7 @@ export function board({ runs, queued, brainstorms, waits = [], inputs = [] }) {
     // and is what a wait whose issues are done still waits for (waits.mjs).
     const input = labelled.get(t.key);
     const answers = t.state === "waiting" && w.answers;
-    if (input && (answers || ["done", "error", "interrupted"].includes(t.state))) {
+    if (input && (answers || ENDED.includes(t.state))) {
       t.state = "needs-input";
       t.kind ??= "issue";
       t.since = Math.max(t.since, input.since ?? 0);

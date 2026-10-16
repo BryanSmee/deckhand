@@ -29,6 +29,7 @@ function setup({
   tasks = {},
   runs = {},
   events = {},
+  cancels = {},
 } = {}) {
   const config = loadConfig({
     ALLOWED_USERS: "alice,bob",
@@ -50,6 +51,7 @@ function setup({
     runs,
     events,
     listed: new Map(),
+    cancelled: [],
     logs: [],
     clock: 1000,
   };
@@ -132,6 +134,10 @@ function setup({
       has: (key) => w.listed.has(key),
     },
     runOf: (id) => w.runs[id] ?? null,
+    cancel: (key, user) => {
+      w.cancelled.push([key, user]);
+      return cancels[key] ?? null;
+    },
     publicUrl: () => ORIGIN,
     now: () => w.clock,
     log: (line) => w.logs.push(line),
@@ -190,13 +196,18 @@ test("parseAction: an action, issue numbers, a mode's name", () => {
     number: 3,
     after: null,
     mode: null,
+    pr: false,
   });
   assert.deepEqual(parseAction('{"action":"queue","number":3,"after":2,"mode":"brainstorm"}'), {
     action: "queue",
     number: 3,
     after: 2,
     mode: "brainstorm",
+    pr: false,
   });
+  // `pr` only means something to a cancel.
+  assert.equal(parseAction('{"action":"cancel","number":3,"pr":true}').pr, true);
+  assert.equal(parseAction('{"action":"start","number":3,"pr":true}').pr, false);
   for (const bad of [
     "nope",
     "null",
@@ -205,6 +216,7 @@ test("parseAction: an action, issue numbers, a mode's name", () => {
     '{"action":"start","number":-1}',
     '{"action":"queue","number":3}',
     '{"action":"start","number":3,"mode":"a b"}',
+    '{"action":"cancel","number":3,"pr":"yes"}',
   ]) {
     assert.throws(() => parseAction(bad), { status: 400 }, bad);
   }
@@ -623,6 +635,45 @@ test("stop refused: no brainstorm, one stopped or busy, users, a broken config",
   const w = setup({ issues: { 5: open("Five") }, tasks: { "org/app#5": { state: "brainstorm" } } });
   assert.equal((await post(w, { action: "stop", number: 5 }, { user: "mallory" })).status, 403);
   assert.equal((await post(w, { action: "stop", number: 5 }, { origin: "https://x" })).status, 403);
+});
+
+test("cancel: the run stops or the queue is dropped, with the App's comment where the task replies", async () => {
+  const w = setup({
+    issues: { 5: open("Five") },
+    tasks: { "org/app#5": { state: "working", replyTo: 9 } },
+    cancels: { "org/app#5": "running", "org/app#pr-8": "queued" },
+  });
+  const res = await post(w, { action: "cancel", number: 5 });
+  assert.equal(res.status, 200);
+  assert.equal(res.body.message, "#5 stops.");
+  // Busy, and its issue isn't even looked up: a run may go on on a closed issue.
+  assert.deepEqual(w.cancelled, [["org/app#5", "alice"]]);
+  assert.deepEqual(w.comments, [[9, "Stopped from the dashboard by @alice."]]);
+  const pr = await post(w, { action: "cancel", number: 8, pr: true });
+  assert.equal(pr.status, 200);
+  assert.equal(pr.body.message, "#8's queued comments dropped.");
+  assert.deepEqual(w.cancelled.at(-1), ["org/app#pr-8", "alice"]);
+  assert.deepEqual(w.comments.at(-1), [8, "Stopped from the dashboard by @alice."]);
+  assert.deepEqual(w.accepted, []);
+});
+
+test("cancel refused: nothing running or queued, users, a broken config, another origin", async () => {
+  const cases = [
+    [{}, {}, 409],
+    [{ settings: { users: ["bob"] } }, {}, 403],
+    [{ errors: ["bad"] }, {}, 409],
+    [{}, { user: "mallory" }, 403],
+    [{}, { origin: "https://x" }, 403],
+  ];
+  for (const [opts, as, status] of cases) {
+    const running = Object.keys(opts).length || Object.keys(as).length;
+    const w = setup({ cancels: running ? { "org/app#5": "running" } : {}, ...opts });
+    const res = await post(w, { action: "cancel", number: 5 }, as);
+    assert.equal(res.status, status, JSON.stringify([opts, as]));
+    assert.deepEqual(w.comments, []);
+    // Checked before anything stops.
+    if (status === 403 || opts.errors) assert.deepEqual(w.cancelled, []);
+  }
 });
 
 test("refused: other origins, repos, users, a broken config, pull requests, closed or busy issues", async () => {

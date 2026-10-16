@@ -1,6 +1,7 @@
 // The graph's work area (the dashboard's Graph page): a repo's backlog, its open issues with
 // nothing live (board.mjs isLive()), and what dragging one does: start it, queue it after
-// another issue ("/after #n"), move its wait or cancel it, or stop its brainstorm ("/stop").
+// another issue ("/after #n"), move its wait or cancel it, or stop its brainstorm ("/stop"),
+// and the task page's Stop ("/cancel").
 // Each action is what a comment would do, checked as a comment that waited is (tasks.mjs
 // resume()), and written on the issue as the App's comment: bot comments never reach admit(),
 // so the listener queues or holds the work itself.
@@ -12,13 +13,16 @@
 //                                         { action: "queue", number, after, mode? }
 //                                         { action: "dequeue", number }
 //                                         { action: "stop", number }: a brainstorm's wrap-up
+//                                         { action: "cancel", number, pr? }: stops the run
+//                                         (runs.mjs cancel()), or drops the queued comments
 //   POST /api/repos/<owner>/<repo>/answer { number, pr?, answers: [{ options: [i], text }] }
 //                                         { number, pr?, text }
 //                                         answers to a task's open questions (answers.mjs);
 //                                         with `then: { action, after?, mode? }`, all of
 //                                         them, and the issue starts or queues with them
 //   POST /api/repos/<owner>/<repo>/rerun  { runId }
-//                                         the task's last run, failed or interrupted, again:
+//                                         the task's last run, failed, interrupted or
+//                                         cancelled, again:
 //                                         its mode and comments (board.mjs rerunnable())
 //   POST /api/repos/<owner>/<repo>/inbox  { kind: "idea" | "bug", text }
 //                                         an entry for the repo's inbox: the App's comment on
@@ -37,7 +41,7 @@ export const ISSUES_MS = 30_000;
 const MAX_BODY = 4096;
 // The answers' text, and the JSON around it (escapes, indexes).
 const MAX_ANSWER_BODY = 4 * MAX_TEXT;
-const ACTIONS = ["start", "queue", "dequeue", "stop"];
+const ACTIONS = ["start", "queue", "dequeue", "stop", "cancel"];
 // An inbox entry's kind, and the repo config's key for its issue.
 const INBOXES = { idea: "ideas", bug: "bugs" };
 
@@ -56,7 +60,7 @@ export function parseAction(text) {
 
 // An action's fields, checked (a body's, or answers' `then`). Throws Refused.
 export function checkAction(body) {
-  const { action, number, after = null, mode = null } = body ?? {};
+  const { action, number, after = null, mode = null, pr = false } = body ?? {};
   const issue = (n) => Number.isSafeInteger(n) && n > 0;
   if (!ACTIONS.includes(action)) refuse(400, `The action is one of ${ACTIONS.join(", ")}.`);
   if (!issue(number)) refuse(400, "`number` is an issue number.");
@@ -64,7 +68,14 @@ export function checkAction(body) {
   if (mode !== null && (typeof mode !== "string" || !/^[\w-]+$/.test(mode))) {
     refuse(400, "`mode` is a mode's name.");
   }
-  return { action, number, after: action === "queue" ? after : null, mode };
+  if (typeof pr !== "boolean") refuse(400, "`pr` is true or false.");
+  return {
+    action,
+    number,
+    after: action === "queue" ? after : null,
+    mode,
+    pr: action === "cancel" && pr,
+  };
 }
 
 // Whether the wait of `from` leads, from one blocker to the next, to issue `to`: queueing `to`
@@ -91,6 +102,8 @@ export function leadsTo(get, repo, from, to) {
 // `label(repo, number, on)`: the needs-input label; `inputs` (inputs.mjs), which the backlog
 // also fills (seedInputs()).
 // `runOf(id)`: a run's record (runs.mjs, with the comments it ran on), or null.
+// `cancel(key, user)`: stops the task's run or drops its queued comments (runs.mjs cancel()):
+// "running", "queued" or null.
 export function createWorkApi({
   config,
   github,
@@ -105,6 +118,7 @@ export function createWorkApi({
   label = async () => new Response(null, { status: 204 }),
   inputs = { set() {}, has: () => false },
   runOf = () => null,
+  cancel = () => null,
   publicUrl = () => null,
   now = Date.now,
   log = () => {},
@@ -334,7 +348,9 @@ export function createWorkApi({
   // the drag opened; they go in the App's comment and are the run's text. Without them, an
   // issue with open questions doesn't move: they are answered first, unless the repo's
   // `wait_for_answers` is off.
-  async function act(repo, user, { action, number, after, mode }, answers = null) {
+  async function act(repo, user, { action, number, after, mode, pr }, answers = null) {
+    // Whatever the issue's state: a run may go on once it is closed.
+    if (action === "cancel") return cancelTask(repo, user, number, pr);
     const key = `${repo}#${number}`;
     const { settings, base, issue } = await checked(repo, user, number);
     const asking = taskOf(key);
@@ -422,6 +438,21 @@ export function createWorkApi({
     return `#${number}'s brainstorm wraps up.`;
   }
 
+  // What a `/cancel` comment does (tasks.mjs cancelRun()), with the App's comment for the
+  // record. The run's own reply follows once its sandbox is gone.
+  async function cancelTask(repo, user, number, pr) {
+    await checkedRepo(repo, user);
+    const key = `${repo}#${pr ? `pr-${number}` : number}`;
+    const replyTo = taskOf(key)?.replyTo ?? number;
+    const what = cancel(key, user);
+    if (!what) refuse(409, `Nothing is running or queued on #${number}.`);
+    // Stopped already: a failed comment doesn't make it fail.
+    await comment(repo, replyTo, `Stopped from the dashboard by @${user}.`).catch((error) =>
+      log(`${key}: ${error.message ?? error}`),
+    );
+    return what === "running" ? `#${number} stops.` : `#${number}'s queued comments dropped.`;
+  }
+
   // Answers to the open questions of the task of issue (or pull request) `number`, as one App
   // comment. A run's questions: the comment is the reply that continues its session, as an
   // allowed user's would be. An issue's (its body's section): App comments don't take the
@@ -473,7 +504,7 @@ export function createWorkApi({
   // Answered, it no longer waits for input, whoever asked.
   async function answerThen(repo, user, task, asked) {
     const then = checkAction({ ...asked.then, number: asked.number });
-    if (asked.pr || then.action === "dequeue" || then.action === "stop") {
+    if (asked.pr || !["start", "queue"].includes(then.action)) {
       refuse(422, "Only an issue starts or queues once its questions are answered.");
     }
     const { comment: text, open } = answersComment(user, task.questions?.items ?? null, asked);
@@ -508,7 +539,7 @@ export function createWorkApi({
     const mode = run.taskMode;
     if (!modeNames(settings).includes(mode)) refuse(422, `${repo} has no mode \`${mode}\` now.`);
     const replyTo = run.replyTo ?? number;
-    const ended = run.status === "error" ? "failed" : "was interrupted";
+    const ended = { error: "failed", cancelled: "was stopped" }[run.status] ?? "was interrupted";
     const posted = await comment(
       repo,
       replyTo,

@@ -32,6 +32,9 @@ operator, across as many repositories as the App is installed on.
     comment back until those issues are closed as completed, or those pull requests merged,
     then runs it as if just posted. A new trigger comment starts now instead; `/after none`
     cancels.
+  - `/cancel` alone on its first line stops the issue's run now (a stuck one, say): the reply
+    says who stopped it, and the next comment resumes its session. The task's page on the
+    dashboard has the same **Stop** button.
 - **Onboarding.** Installing the App on a repository without a `.deckhand.yaml` opens an
   issue there where Claude proposes one, grounded in the repository; your comments refine it
   and `Deckhand` turns it into a pull request. `/mode onboarding` starts it on any issue, and
