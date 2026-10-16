@@ -5,7 +5,8 @@
 # and draft pull request (draft-pr.sh, for TASK_ISSUE), runs the repo's setup command
 # (SANDBOX_SETUP), then runs the agent without permission prompts: the container is the
 # sandbox. With DOCKER_HOST (a run granted a container engine), the docker CLI goes through
-# the egress proxy and waits for the engine before the setup. SANDBOX_LIGHT=1 (brainstorms, inbox entries, discussions) skips the branch and the
+# the egress proxy and waits for the engine before the setup; every prompt ends with whether
+# the run has one. SANDBOX_LIGHT=1 (brainstorms, inbox entries, discussions) skips the branch and the
 # setup.
 #
 #   (no arguments)      the agent, interactive
@@ -104,9 +105,25 @@ if [ -n "${DOCKER_HOST:-}" ]; then
     docker version > /dev/null 2>&1 && break
     sleep 1
   done
-  docker version > /dev/null 2>&1 \
-    || echo "The container engine at $DOCKER_HOST doesn't answer yet" >&2
 fi
+
+# What the agent is told about the engine, at the end of every prompt (a continued session
+# too): the docker CLI is in every image, so finding it tells the agent nothing.
+engine_note() {
+  if [ -z "${DOCKER_HOST:-}" ]; then
+    echo "This run has no container engine: \`docker\` can't build or start anything here."
+  elif docker version > /dev/null 2>&1; then
+    echo "This run has a container engine: \`docker\`, \`docker buildx\` and \`docker compose\`
+work (DOCKER_HOST=$DOCKER_HOST), and published ports answer on \`engine\`, not
+\`localhost\`. Build and start the images your change touches."
+  else
+    echo "The container engine at $DOCKER_HOST doesn't answer yet" >&2
+    echo "This run was given a container engine (DOCKER_HOST=$DOCKER_HOST), but it didn't
+answer \`docker version\` before you started. Retry \`docker version\` before giving up on
+it, and if it never answers, say so in your final message."
+  fi
+}
+engine=$(engine_note)
 
 if [ -n "${SANDBOX_LIGHT:-}" ]; then
   # A light run reads the code and doesn't run it, so it answers quickly. Fresh
@@ -219,6 +236,9 @@ Also take this into account: $TASK_MESSAGE"
 
 $setup_failed"
   fi
+  prompt+="
+
+$engine"
   [ "$session" = fresh ] || echo "$mode" > "$AGENT_STATE/sandbox-mode"
   agent_run "$session" "$prompt"
 fi

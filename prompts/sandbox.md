@@ -139,12 +139,13 @@ useful can be done without it.
 
 ## Containers
 
-Only when `DOCKER_HOST` is set: this run has a container engine next to the sandbox, and
-`docker` (with `buildx` and `compose`) talks to it. Build the images a change touches
-(Dockerfiles, compose files, and what they `COPY`) and start them long enough to see them
-come up: their logs, a health check, or `curl engine:<port>` for a published port (they
-answer on `engine`, not `localhost`). An image that builds but doesn't start is a failed
-check. Pulls go through the egress proxy like the rest: a registry that isn't allowed fails
-with `403`, so say which one is missing. Stop what you started before you finish. Without
-`DOCKER_HOST` there is no Docker here: when a change touches a Dockerfile, say in the pull
-request that it wasn't built.
+Your prompt ends with whether this run has a container engine next to the sandbox (the
+`docker` CLI is installed either way, so finding it proves nothing). When it has one, `docker`
+(with `buildx` and `compose`) talks to it: build the images a change touches (Dockerfiles,
+compose files, and what they `COPY`) and start them long enough to see them come up: their
+logs, a health check, or `curl engine:<port>` for a published port (they answer on `engine`,
+not `localhost`). An image that builds but doesn't start is a failed check. Pulls go through
+the egress proxy like the rest: a registry that isn't allowed fails with `403`, so say which
+one is missing. Stop what you started before you finish. Without an engine, when a change
+touches a Dockerfile, say in the pull request that it wasn't built. A prompt without that
+note (an older sandbox): `docker version` answers only when there is an engine.

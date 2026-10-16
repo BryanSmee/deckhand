@@ -397,6 +397,50 @@ test("work feedback rebases on the base and force-pushes with a lease before gh 
   assert.match(feedback, /can't be resolved safely[^]*stop\s+and ask/);
 });
 
+// The engine note, from the entrypoint's own engine_note(), with a `docker` that answers or
+// not: three distinct notes, and every prompt (new or continued) ends with it.
+test("the prompt says whether the run has a container engine, and whether it answers", (t) => {
+  const script = readFileSync(`${bin}entrypoint.sh`, "utf8");
+  const fn = /^engine_note\(\) \{[^]*?^\}$/m.exec(script)[0];
+  const dir = mkdtempSync(join(tmpdir(), "engine-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const note = (env, answers) => {
+    writeFileSync(join(dir, "docker"), `#!/bin/sh\nexit ${answers ? 0 : 1}\n`);
+    chmodSync(join(dir, "docker"), 0o755);
+    return spawnSync("bash", ["-c", `${fn}\nengine_note`], {
+      env: { PATH: `${dir}:${process.env.PATH}`, ...env },
+      encoding: "utf8",
+    });
+  };
+  const engine = { DOCKER_HOST: "tcp://engine:2375" };
+
+  const up = note(engine, true);
+  assert.match(
+    up.stdout,
+    /^This run has a container engine: `docker`, `docker buildx` and `docker compose`/,
+  );
+  assert.match(up.stdout, /DOCKER_HOST=tcp:\/\/engine:2375/);
+  assert.match(up.stdout, /published ports answer on `engine`/);
+
+  const down = note(engine, false);
+  assert.match(
+    down.stdout,
+    /^This run was given a container engine \(DOCKER_HOST=tcp:\/\/engine:2375\), but it didn't\nanswer/,
+  );
+  assert.match(down.stdout, /Retry `docker version`/);
+  assert.match(down.stderr, /The container engine at tcp:\/\/engine:2375 doesn't answer yet/);
+
+  // A `docker` that answers proves nothing without DOCKER_HOST: the CLI is in every image.
+  const none = note({}, true);
+  assert.equal(
+    none.stdout,
+    "This run has no container engine: `docker` can't build or start anything here.\n",
+  );
+
+  // After every branch that sets the prompt, before agent_run.
+  assert.match(script, /prompt\+="\n\n\$engine"\n[^]*?agent_run "\$session" "\$prompt"/);
+});
+
 // The branch's slug, from draft-pr.sh's own slug(): the gateway only takes issue-<n>-<slug>,
 // so it is never empty.
 test("draft-pr's branch slug: accents dropped, and never empty", () => {
