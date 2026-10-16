@@ -159,8 +159,9 @@ export interface State {
   queued: number;
   maxParallel: number;
   previews?: Preview[];
-  // Each repo's inbox issues, for the repos whose config the listener has read: the
-  // dashboard's inbox form offers those it has (listener/work.mjs sendToInbox()).
+  // Each repo's inbox issues and discussions category, for the repos whose config the
+  // listener has read: the Feedback form offers those it has (listener/work.mjs
+  // sendToInbox(), listener/discussions.mjs).
   inboxes?: Record<string, Inboxes>;
   // GITHUB_URL, without a trailing slash: where links go.
   githubUrl: string;
@@ -314,10 +315,12 @@ export interface WorkResult {
   error?: string;
 }
 
-// A repo's inbox issues (.deckhand.yaml's `inbox`): null when it has none of that kind.
+// A repo's inbox issues and discussions category (.deckhand.yaml's `inbox`, the category's
+// name as compared: lowercase): null when it has none of that kind.
 export interface Inboxes {
   ideas: number | null;
   bugs: number | null;
+  discussions: string | null;
 }
 
 // POST api/repos/<owner>/<repo>/inbox: an idea or a bug report for the repo's inbox.
@@ -330,4 +333,53 @@ export interface InboxEntry {
 export interface InboxResult extends WorkResult {
   url?: string;
   task?: string;
+}
+
+// POST api/repos/<owner>/<repo>/discussions: a discussion in the repo's discussions category.
+export interface DiscussionStart {
+  title: string;
+  body: string;
+}
+
+// What it answers: the discussion on GitHub, and its task.
+export interface DiscussionResult extends WorkResult {
+  url?: string;
+  number?: number;
+  task?: string;
+}
+
+// POST api/repos/<owner>/<repo>/discussions/<n>/comments: `replyTo`, a comment's node id, for
+// its thread; without it, a new comment.
+export interface DiscussionComment {
+  text: string;
+  replyTo?: string;
+}
+
+// A post of a discussion (listener/discussions.mjs postOf()): the App's are Deckhand's answers
+// (`deckhand`), or a dashboard user's, shown as theirs. `author`: null for a deleted account.
+export interface Post {
+  id: string;
+  url: string | null;
+  author: string | null;
+  deckhand: boolean;
+  at: string | null;
+  body: string;
+}
+
+export interface ThreadComment extends Post {
+  replies: Post[];
+  // Older replies, on GitHub only.
+  more: number;
+}
+
+// GET api/repos/<owner>/<repo>/discussions/<n>: the opening post and the latest comments.
+export interface Thread {
+  number: number;
+  title: string | null;
+  url: string | null;
+  post: Post;
+  comments: ThreadComment[];
+  // Older comments, on GitHub only.
+  more: number;
+  readAt: number;
 }

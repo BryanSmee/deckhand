@@ -627,5 +627,5 @@ export function createWorkApi({
     return true;
   }
 
-  return { handle };
+  return { handle, checkedRepo };
 }

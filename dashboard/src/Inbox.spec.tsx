@@ -19,6 +19,23 @@ beforeEach(() => {
     matchMedia: () => ({ matches: true, addEventListener() {}, removeEventListener() {} }),
   });
   vi.stubGlobal("fetch", async (url: string, init?: RequestInit) => {
+    const started = /^api\/repos\/(.+)\/discussions$/.exec(url);
+    if (started && init?.method === "POST") {
+      const body = JSON.parse(String(init.body));
+      posted.push([started[1], body]);
+      if (body.title.includes("refuse")) {
+        return Response.json(
+          { error: 'acme/app has no discussion category "ask claude": create it.' },
+          { status: 409 },
+        );
+      }
+      return Response.json({
+        message: "Discussion #9 started.",
+        url: `https://github.com/${started[1]}/discussions/9`,
+        number: 9,
+        task: `${started[1]}#discussion-9`,
+      });
+    }
     const inbox = /^api\/repos\/(.+)\/inbox$/.exec(url);
     if (inbox && init?.method === "POST") {
       const body = JSON.parse(String(init.body));
@@ -67,9 +84,9 @@ const stateWith = (inboxes: Record<string, Inboxes> | undefined, tasks: Task[] =
 });
 
 const INBOXES = {
-  "acme/app": { ideas: 4, bugs: 5 },
-  "acme/api": { ideas: 7, bugs: null },
-  "acme/notes": { ideas: null, bugs: null },
+  "acme/app": { ideas: 4, bugs: 5, discussions: "ask claude" },
+  "acme/api": { ideas: 7, bugs: null, discussions: null },
+  "acme/notes": { ideas: null, bugs: null, discussions: null },
 };
 
 const openDialog = (state: State, hash = "#/all") => {
@@ -87,8 +104,10 @@ test("the top bar's Feedback offers the repos with an inbox, the open tab's firs
   // Only the inboxes it has.
   expect(within(dialog).getByRole("radio", { name: "Idea" })).toBeTruthy();
   expect(within(dialog).queryByRole("radio", { name: "Bug" })).toBeNull();
+  expect(within(dialog).queryByRole("radio", { name: "Discussion" })).toBeNull();
   fireEvent.change(repo, { target: { value: "acme/app" } });
   expect(within(dialog).getByRole("radio", { name: "Bug" })).toBeTruthy();
+  expect(within(dialog).getByRole("radio", { name: "Discussion" })).toBeTruthy();
   fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
   expect(screen.queryByRole("dialog")).toBeNull();
 });
@@ -100,7 +119,9 @@ test("a repo without an inbox, or none at all: the docs' link", () => {
     INBOX_DOCS,
   );
   view.unmount();
-  const none = openDialog(stateWith({ "acme/notes": { ideas: null, bugs: null } })).dialog;
+  const none = openDialog(
+    stateWith({ "acme/notes": { ideas: null, bugs: null, discussions: null } }),
+  ).dialog;
   expect(within(none).getByText(/No repository has an inbox/)).toBeTruthy();
   expect(within(none).queryByRole("button", { name: "Send" })).toBeNull();
 });
@@ -140,4 +161,53 @@ test("a refusal shows the listener's message and keeps the text", async () => {
   );
   expect((within(dialog).getByRole("textbox") as HTMLTextAreaElement).value).toBe("please refuse");
   expect(within(dialog).queryByRole("status")).toBeNull();
+});
+
+test("a discussion: a title and a text, started in the repo's category, then its thread", async () => {
+  const { dialog, view } = openDialog(stateWith(INBOXES), "#/acme/app");
+  fireEvent.click(within(dialog).getByRole("radio", { name: "Discussion" }));
+  const start = within(dialog).getByRole("button", { name: "Start" }) as HTMLButtonElement;
+  fireEvent.input(within(dialog).getByRole("textbox", { name: "The discussion" }), {
+    target: { value: "Is the queue kept?" },
+  });
+  // Not without a title.
+  expect(start.disabled).toBe(true);
+  fireEvent.input(within(dialog).getByRole("textbox", { name: "Title" }), {
+    target: { value: "Restarts" },
+  });
+  fireEvent.click(start);
+  await waitFor(() => expect(within(dialog).getByRole("status").textContent).toContain("Sent"));
+  expect(posted).toEqual([["acme/app", { title: "Restarts", body: "Is the queue kept?" }]]);
+  expect(within(dialog).getByRole("link", { name: "the discussion" }).getAttribute("href")).toBe(
+    "https://github.com/acme/app/discussions/9",
+  );
+  // Its task, once api/state lists it.
+  const task = {
+    ...inboxTask(["d1"]),
+    key: "acme/app#discussion-9",
+    number: 9,
+    kind: "discussion",
+  } as Task;
+  view.rerender(<Dashboard state={stateWith(INBOXES, [task])} error={null} />);
+  expect(
+    within(screen.getByRole("dialog"))
+      .getByRole("link", { name: "its thread" })
+      .getAttribute("href"),
+  ).toBe("#/acme/app?task=acme%2Fapp%23discussion-9");
+});
+
+test("a discussion refused: the listener's message, the title and text kept", async () => {
+  const { dialog } = openDialog(stateWith(INBOXES), "#/acme/app");
+  fireEvent.click(within(dialog).getByRole("radio", { name: "Discussion" }));
+  fireEvent.input(within(dialog).getByRole("textbox", { name: "Title" }), {
+    target: { value: "please refuse" },
+  });
+  fireEvent.input(within(dialog).getByRole("textbox", { name: "The discussion" }), {
+    target: { value: "Hello" },
+  });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Start" }));
+  await waitFor(() => expect(within(dialog).getByRole("alert").textContent).toMatch(/create it/));
+  expect((within(dialog).getByRole("textbox", { name: "Title" }) as HTMLInputElement).value).toBe(
+    "please refuse",
+  );
 });

@@ -148,7 +148,8 @@
   font-size: 0.76rem;
 }
 
-.text {
+.text,
+.line {
   box-sizing: border-box;
   width: 100%;
   min-height: 7rem;
@@ -160,6 +161,11 @@
   font: inherit;
   font-size: 0.85rem;
   resize: vertical;
+}
+
+.line {
+  min-height: 0;
+  resize: none;
 }
 
 .actions {

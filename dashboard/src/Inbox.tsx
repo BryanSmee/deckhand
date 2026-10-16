@@ -1,11 +1,20 @@
 // Feedback, from the dashboard's top bar: an idea or a bug report, sent as the App's
 // comment on the inbox issue, which starts the run a comment there would (listener/work.mjs
-// sendToInbox()). Only the repos with an inbox, and the inboxes they have, are offered; once
-// sent, the comment's link, then the run on the inbox's task when api/state lists it.
+// sendToInbox()), or a discussion, started as the App's in the repo's discussions category
+// (listener/discussions.mjs). Only the repos with an inbox, and the inboxes they have, are
+// offered; once sent, the comment's or discussion's link, then the run on its task when
+// api/state lists it.
 import { useEffect, useState } from "preact/hooks";
-import { sendToInbox } from "./api";
+import { sendToInbox, startDiscussion } from "./api";
 import { formatRoute } from "./route";
-import type { InboxEntry, InboxResult, Inboxes, Task } from "./types";
+import type {
+  DiscussionResult,
+  DiscussionStart,
+  InboxEntry,
+  InboxResult,
+  Inboxes,
+  Task,
+} from "./types";
 import styles from "./Inbox.module.css";
 
 export const INBOX_DOCS =
@@ -14,9 +23,12 @@ export const INBOX_DOCS =
 const KINDS = [
   { kind: "idea", key: "ideas", label: "Idea", hint: "Something to add or change" },
   { kind: "bug", key: "bugs", label: "Bug", hint: "Something that goes wrong" },
+  { kind: "discussion", key: "discussions", label: "Discussion", hint: "A question to talk over" },
 ] as const;
 
-const hasInbox = (i: Inboxes | undefined) => !!(i?.ideas || i?.bugs);
+type Kind = (typeof KINDS)[number]["kind"];
+
+const hasInbox = (i: Inboxes | undefined) => !!(i?.ideas || i?.bugs || i?.discussions);
 
 // The repos the form offers: those with an inbox, by name.
 export const inboxRepos = (inboxes: Record<string, Inboxes> | undefined) =>
@@ -32,6 +44,7 @@ interface DialogProps {
   repo: string | null;
   onClose: () => void;
   submit?: (repo: string, entry: InboxEntry) => Promise<InboxResult>;
+  start?: (repo: string, discussion: DiscussionStart) => Promise<DiscussionResult>;
   // Once sent: api/state read again, for the run.
   onSent?: () => void;
 }
@@ -42,6 +55,7 @@ export function InboxDialog({
   repo: tab,
   onClose,
   submit = sendToInbox,
+  start = startDiscussion,
   onSent = () => {},
 }: DialogProps) {
   const repos = inboxRepos(inboxes);
@@ -64,7 +78,7 @@ export function InboxDialog({
     <div class={styles.backdrop} onClick={(e) => e.target === e.currentTarget && onClose()}>
       <div class={styles.dialog} role="dialog" aria-modal="true" aria-label="Send feedback">
         <div class={styles.head}>
-          <h2 class={styles.title}>Send an idea or a bug report</h2>
+          <h2 class={styles.title}>Send an idea, a bug report or a discussion</h2>
           <button type="button" class={styles.close} aria-label="Close" onClick={onClose}>
             ×
           </button>
@@ -72,9 +86,9 @@ export function InboxDialog({
         {(without || !repos.length) && (
           <p class={styles.note}>
             {without
-              ? `${without} has no inbox for ideas or bug reports.`
+              ? `${without} has no inbox for ideas, bug reports or discussions.`
               : inboxes
-                ? "No repository has an inbox for ideas or bug reports."
+                ? "No repository has an inbox for ideas, bug reports or discussions."
                 : "Loading…"}{" "}
             {inboxes && (
               <a href={INBOX_DOCS} target="_blank" rel="noreferrer">
@@ -101,6 +115,7 @@ export function InboxDialog({
               inboxes={inboxes![repo]}
               tasks={tasks}
               submit={(entry) => submit(repo, entry)}
+              start={(discussion) => start(repo, discussion)}
               onSent={onSent}
             />
           </>
@@ -115,20 +130,24 @@ interface Props {
   inboxes: Inboxes;
   tasks: Task[];
   submit: (entry: InboxEntry) => Promise<InboxResult>;
+  start: (discussion: DiscussionStart) => Promise<DiscussionResult>;
   onSent: () => void;
 }
 
 interface Sent {
+  kind: Kind;
   url: string | null;
   task: string | null;
   // The inbox task's newest run when it was sent: a newer one is the entry's.
   before: string | null;
 }
 
-// One repo's form: Idea or Bug (those it has), the text, Send.
-function Inbox({ repo, inboxes, tasks, submit, onSent }: Props) {
+// One repo's form: Idea, Bug or Discussion (those it has), the text (and a discussion's
+// title), Send.
+function Inbox({ repo, inboxes, tasks, submit, start, onSent }: Props) {
   const offered = KINDS.filter((k) => inboxes[k.key]);
-  const [picked, setPicked] = useState<InboxEntry["kind"] | null>(null);
+  const [picked, setPicked] = useState<Kind | null>(null);
+  const [title, setTitle] = useState("");
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -136,24 +155,31 @@ function Inbox({ repo, inboxes, tasks, submit, onSent }: Props) {
   const kind = offered.some((k) => k.kind === picked) ? picked! : offered[0].kind;
   const taskOf = (key: string | null) => (key && tasks.find((t) => t.key === key)) || null;
 
+  const discussion = kind === "discussion";
+  const ready = !!text.trim() && (!discussion || !!title.trim());
+
   const send = async (e: Event) => {
     e.preventDefault();
-    if (!text.trim() || sending) return;
-    const number = inboxes[kind === "idea" ? "ideas" : "bugs"];
-    const before = taskOf(`${repo}#${number}`)?.runs[0]?.id ?? null;
+    if (!ready || sending) return;
+    // A new discussion is a task of its own: any run of it is the discussion's.
+    const before = discussion
+      ? null
+      : (taskOf(`${repo}#${inboxes[kind === "idea" ? "ideas" : "bugs"]}`)?.runs[0]?.id ?? null);
     setSending(true);
     setError(null);
     setSent(null);
-    const result = await submit({ kind, text });
+    const result = discussion ? await start({ title, body: text }) : await submit({ kind, text });
     setSending(false);
     if (result.error) return setError(result.error);
+    setTitle("");
     setText("");
-    setSent({ url: result.url ?? null, task: result.task ?? null, before });
+    setSent({ kind, url: result.url ?? null, task: result.task ?? null, before });
     onSent();
   };
 
   const task = taskOf(sent?.task ?? null);
   const run = task?.runs[0] && task.runs[0].id !== sent?.before ? task.runs[0] : null;
+  const what = sent?.kind === "discussion" ? "the discussion" : "the comment";
 
   return (
     <form class={styles.form} aria-label="Feedback" onSubmit={send}>
@@ -174,14 +200,27 @@ function Inbox({ repo, inboxes, tasks, submit, onSent }: Props) {
             </label>
           ))}
         </div>
+        {discussion && (
+          <input
+            class={styles.line}
+            type="text"
+            aria-label="Title"
+            placeholder="Title"
+            maxLength={256}
+            value={title}
+            onInput={(e) => setTitle(e.currentTarget.value)}
+          />
+        )}
         <textarea
           class={styles.text}
           rows={6}
-          aria-label={kind === "idea" ? "The idea" : "The bug"}
+          aria-label={kind === "idea" ? "The idea" : kind === "bug" ? "The bug" : "The discussion"}
           placeholder={
             kind === "idea"
               ? "What you'd like, as you would write it in an issue"
-              : "What goes wrong, and how to see it"
+              : kind === "bug"
+                ? "What goes wrong, and how to see it"
+                : "What you'd like to talk over: Deckhand answers in the discussion"
           }
           value={text}
           onInput={(e) => setText(e.currentTarget.value)}
@@ -197,24 +236,34 @@ function Inbox({ repo, inboxes, tasks, submit, onSent }: Props) {
           Sent:{" "}
           {sent.url ? (
             <a href={sent.url} target="_blank" rel="noreferrer">
-              the comment
+              {what}
             </a>
           ) : (
-            "the comment"
+            what
           )}
           {task && (
             <>
               {" · "}
-              <a href={formatRoute({ repo, task: task.key, run: run?.id ?? null })}>
-                {run ? `its run (${run.status})` : "the inbox's task"}
+              <a
+                href={formatRoute({
+                  repo,
+                  task: task.key,
+                  run: sent.kind === "discussion" ? null : (run?.id ?? null),
+                })}
+              >
+                {sent.kind === "discussion"
+                  ? "its thread"
+                  : run
+                    ? `its run (${run.status})`
+                    : "the inbox's task"}
               </a>
             </>
           )}
         </p>
       )}
       <div class={styles.actions}>
-        <button type="submit" class={styles.send} disabled={!text.trim() || sending}>
-          {sending ? "Sending…" : "Send"}
+        <button type="submit" class={styles.send} disabled={!ready || sending}>
+          {sending ? "Sending…" : discussion ? "Start" : "Send"}
         </button>
       </div>
     </form>

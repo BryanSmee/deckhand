@@ -358,8 +358,8 @@ They are light runs, like brainstorms: no branch, no `setup`, the brainstorm mod
   there is nothing to file. Each entry starts a new session: a follow-up is read from the
   inbox's earlier comments. Prompts: `prompts/idea.md`, `prompts/bug.md`.
   The dashboard sends entries too: Feedback, in its top bar, opens a form (a repository with
-  an inbox, Idea or Bug, only those it has), which posts the text on the inbox issue as the App's
-  comment, ending "From the dashboard by @you", and starts the same run.
+  an inbox, Idea, Bug or Discussion, only those it has), which posts the text on the inbox issue
+  as the App's comment, ending "From the dashboard by @you", and starts the same run.
 - **Discussions**: a category of the repository's GitHub Discussions (create it first, for
   example "Ask Claude"; compared loosely, emoji aside). A new discussion in it, and every
   later comment of an allowed user, gets an answer in the discussion, in the thread of the
@@ -367,6 +367,13 @@ They are light runs, like brainstorms: no branch, no `setup`, the brainstorm mod
   on something to build, Claude files an issue and links it. Other categories are never
   read. These runs alone get a token with the Discussions permission (see
   [Setting up](setup.md) for an App created before it). Prompt: `prompts/discussion.md`.
+  The dashboard starts discussions too (Feedback, Discussion: a title and a text) and follows
+  them: a discussion's page shows its thread, Deckhand's answers included, with a reply box
+  under each thread and one for a new comment. Everything is written on GitHub first, as the
+  App's, ending "From the dashboard by @you" (the dashboard shows those as yours), then starts
+  the run a discussion or comment of yours would; a comment sent while a run is going reaches
+  it, like one written on GitHub. Comments written on GitHub show up in the dashboard within
+  15 seconds or so. The category must exist on GitHub: the dashboard never creates it.
 
 ## Preview hook
 

@@ -154,7 +154,20 @@ The dashboard's top bar (Feedback) sends ideas and bug reports to a repo's inbox
 `sendToInbox`) posts the text on the inbox issue as the App's comment ("From the dashboard by
 @user", without the marker: it is an entry, not a reply), then queues the item a comment there
 would (`events.mjs` `inboxItem()`), with the signed-in user as its author. `api/state`'s
-`inboxes` says which inbox issues each repo read so far has, so the form offers only those repos and inboxes.
+`inboxes` says which inbox issues and discussions category each repo read so far has, so the
+form offers only those repos and inboxes.
+
+The same form starts discussions, and a discussion task's page shows its thread
+(`discussions.mjs`): `POST /api/repos/<owner>/<repo>/discussions { title, body }` creates the
+discussion in the repo's category as the App (GraphQL `createDiscussion`, the category found
+among `discussionCategories` with `normalize()`), `POST …/discussions/<n>/comments { text,
+replyTo? }` adds the App's comment, in `replyTo`'s thread when given, and
+`GET …/discussions/<n>` reads the thread (at most once every 15 seconds per discussion). Each
+post ends "From the dashboard by @user"; the run is the item a webhook would have made of a
+discussion or comment of that user (`events.mjs` `discussionEntryItem()`), queued with
+`accept()`, so a comment sent mid-run reaches the running session. Only discussions in the
+repo's category are read or written; the thread shows the App's posts with that line as the
+user's, and those with the marker as Deckhand's answers.
 
 Reactions on the triggering comment follow its run: 👀 when it is received, then 🚀 (done),
 😕 (needs input) or 👎 (error) once the run that handled it is over.
@@ -386,6 +399,7 @@ which starts runs.
 | `conflicts.mjs`                                                   | The conflict watcher: open task pull requests in conflict get a rebase run (`conflicts.json`).     |
 | `waits.mjs`                                                       | Comments waiting for other issues to be done (`/after`, `waits.json`).                             |
 | `work.mjs`                                                        | The graph's work area: the backlog, starting or queueing issues, reruns and inbox entries.         |
+| `discussions.mjs`                                                 | Discussions from the dashboard: started, their thread read, replies.                               |
 | `board.mjs`, `titles.mjs`, `pulls.mjs`, `repos.mjs`, `static.mjs` | The dashboard's tasks, titles and closed states, pull requests, repository list and files.         |
 | `repo-view.mjs`                                                   | A repository's config as the dashboard shows it: what its runs get, from the runs' own checks.     |
 | `store.mjs`, `html.mjs`, `web.mjs`                                | Shared helpers: JSON state files written atomically; the small HTML pages; `sendJson`, `readBody`. |
