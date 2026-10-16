@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { BUILT_IN, sessionName } from "../listener/modes.mjs";
+import { BUILT_IN, entryRun, sessionName } from "../listener/modes.mjs";
 import { modeNames, RESERVED_MODES } from "../listener/repo-config.mjs";
 
 test("built-in modes: one list, which the dashboard's copy follows", () => {
@@ -22,4 +22,12 @@ test("built-in modes: one list, which the dashboard's copy follows", () => {
 test("light runs have volumes of their own, apart from work's", () => {
   assert.equal(sessionName("deckhand-org-repo-12", false), "deckhand-org-repo-12");
   assert.equal(sessionName("deckhand-org-repo-12", true), "deckhand-org-repo-12-light");
+});
+
+test("entryRun: only the ideas and bugs inboxes' entries are a run each", () => {
+  assert.equal(entryRun("idea"), true);
+  assert.equal(entryRun("bug"), true);
+  for (const mode of ["discussion", "brainstorm", "work", "stop", "review"]) {
+    assert.equal(entryRun(mode), false, mode);
+  }
 });

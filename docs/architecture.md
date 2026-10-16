@@ -32,6 +32,11 @@ current tool call; the run's final message is still the one reply and covers it.
 Comments the run cannot take (a trigger that switches between work and brainstorm, a wrap-up,
 or one arriving once the agent's input is closed, or any for an agent that takes no messages
 mid-run) wait for a follow-up run.
+Inbox entries (the ideas and bugs inboxes, from GitHub or the dashboard's Feedback form) are
+the exception: each is a run of its own (`entryRun()` in `modes.mjs`), never batched with the
+next entry nor delivered to a running one, so each gets its own prompt and reply. A burst runs
+one entry after another under the inbox's task. A repo's `fresh` modes and discussions keep
+the usual batching.
 
 ### Brainstorms
 

@@ -177,6 +177,7 @@ case "$1" in
       # Each run'"'"'s agent, provider and session, and its first message (fallbacks).
       echo "$SANDBOX_AGENT@$SANDBOX_PROVIDER \${TASK_SESSION:-default}" >> "${dir}/runs-seen"
       { echo "$TASK_MESSAGE"; echo ----; } >> "${dir}/messages"
+      { echo "$TASK_PROMPT"; echo ----; } >> "${dir}/prompts"
       # A provider the test says fails: Claude Code'"'"'s API error. Or a task that fails.
       if grep -qx "$SANDBOX_AGENT@$SANDBOX_PROVIDER" "${dir}/failing" 2> /dev/null; then
         echo "{\\"type\\":\\"result\\",\\"is_error\\":true,\\"result\\":\\"API Error: 529 overloaded_error: Overloaded\\",\\"duration_ms\\":1000}"
@@ -1986,6 +1987,94 @@ mounts:
       runEnv,
       /From @alice \(https:\/\/github\.com\/org\/repo\/issues\/12#issuecomment-99\):\n\nA dark mode/,
     );
+  });
+
+  // The prompts of the runs so far, in order (the fake sandbox's log).
+  const prompts = (dir) => (exists(join(dir, "prompts")) ?? "").split("----\n").slice(0, -1);
+
+  // An entry on the ideas inbox (issue 12): comment `id`, saying `body`.
+  function entry(id, body) {
+    const payload = followUp(id, body);
+    payload.comment.html_url = `https://github.com/org/repo/issues/12#issuecomment-${id}`;
+    return payload;
+  }
+
+  test("a burst of inbox entries: a run each, its own entry in the prompt, its own reply", async (t) => {
+    // A pause long enough for both to be queued before the first run.
+    const { dir, github, listener, send } = await listen(
+      t,
+      { ".deckhand.yaml": "inbox: { ideas: 12 }\n" },
+      { BRAINSTORM_DEBOUNCE_MS: "300" },
+    );
+    await send(entry(99, "A dark mode"));
+    await send(entry(100, "Keyboard shortcuts"));
+    await settled(github, [99, 100]);
+    await until(() => (listener.output().match(/done \(ok\)/g) ?? []).length === 2, "two runs");
+    const [first, second] = prompts(dir);
+    assert.equal(prompts(dir).length, 2);
+    assert.match(first, /The entry:\n\nFrom @alice[^\n]*issuecomment-99\):\n\nA dark mode\n$/);
+    assert.doesNotMatch(first, /Keyboard shortcuts/);
+    assert.match(second, /issuecomment-100\):\n\nKeyboard shortcuts\n$/);
+    assert.doesNotMatch(second, /A dark mode/);
+    assert.equal(replies(github).length, 2);
+  });
+
+  test("an inbox entry while another one runs: not delivered to it, a run of its own after", async (t) => {
+    const { dir, github, listener, send } = await listen(
+      t,
+      { ".deckhand.yaml": "inbox: { bugs: 12 }\n" },
+      (dir) => {
+        writeFileSync(join(dir, "hold"), "");
+        return {};
+      },
+    );
+    await send(entry(99, "The login page is blank"));
+    await until(() => exists(join(dir, "egress"))?.trim().split("\n").length === 9, "the sandbox");
+    await send(entry(100, "Dates are off by one"));
+    await listener.until("queued after the running one (bug)");
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    const [run] = readdirSync(join(dir, "runs"));
+    assert.doesNotMatch(exists(join(dir, "runs", run, "inbox.jsonl")) ?? "", /off by one/);
+    writeFileSync(join(dir, "go"), "");
+    await settled(github, [99, 100]);
+    await until(() => prompts(dir).length === 2, "the second run");
+    assert.equal(exists(join(dir, "delivered")), null);
+    const [first, second] = prompts(dir);
+    assert.match(first, /New on the bug reports inbox[\s\S]*The login page is blank\n$/);
+    assert.doesNotMatch(first, /off by one/);
+    assert.match(second, /Dates are off by one\n$/);
+    assert.doesNotMatch(second, /login page/);
+    await until(() => replies(github).length === 2, "two replies");
+    assert.ok(replies(github).every((r) => /^All done\./.test(JSON.parse(r.body).body)));
+  });
+
+  test("inbox entries queued when the listener stops: a run each after it starts", async (t) => {
+    const ctx = await listen(
+      t,
+      { ".deckhand.yaml": "inbox: { ideas: 12 }\n" },
+      { BRAINSTORM_DEBOUNCE_MS: "60000" },
+    );
+    await ctx.send(entry(99, "A dark mode"));
+    await ctx.send(entry(100, "Keyboard shortcuts"));
+    await ctx.github.waitFor((r) => r.path === "/repos/org/repo/issues/comments/100/reactions");
+    const { output } = await ctx.restart({ BRAINSTORM_DEBOUNCE_MS: "0" });
+    assert.match(output, /Saved 1 task\(s\) with queued comments/);
+    await settled(ctx.github, [99, 100]);
+    await until(() => prompts(ctx.dir).length === 2, "two runs");
+    const [first, second] = prompts(ctx.dir);
+    assert.match(first, /A dark mode\n$/);
+    assert.doesNotMatch(first, /Keyboard shortcuts/);
+    assert.match(second, /Keyboard shortcuts\n$/);
+  });
+
+  test("a burst of comments on an ordinary issue is still one run", async (t) => {
+    const { dir, github, listener, send } = await listen(t, {}, { DEBOUNCE_MS: "300" });
+    await send(comment("alice", "Deckhand\nFix the login page."));
+    await send(followUp(100, "And the dates."));
+    await settled(github, [99, 100]);
+    await listener.until("done (ok)");
+    assert.equal(prompts(dir).length, 1);
+    assert.equal(replies(github).length, 1);
   });
 
   function discussion(category, login = "alice") {

@@ -11,7 +11,7 @@ export const INBOX = new Set(["idea", "bug", "discussion"]);
 export const LIGHT = new Set(["brainstorm", "stop", "onboarding", ...INBOX]);
 
 // Each inbox entry starts a fresh session (the inbox issue collects unrelated entries); a
-// discussion keeps its own, like a brainstorm.
+// discussion keeps its own, like a brainstorm. They are also a run each (entryRun()).
 export const FRESH = new Set(["idea", "bug"]);
 
 // Any other mode is one of the repo's own.
@@ -23,6 +23,12 @@ export function isLight(task, mode) {
 
 export function isFresh(task, mode) {
   return FRESH.has(mode) || !!customMode(task.settings, mode)?.fresh;
+}
+
+// An inbox entry is a run of its own: never batched with the next one, never delivered to a
+// running entry. A repo's `fresh` modes run on its issues, where a burst belongs together.
+export function entryRun(mode) {
+  return FRESH.has(mode);
 }
 
 // The name of an issue's volumes for a run: light runs get their own clone and Claude session.

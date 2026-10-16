@@ -17,7 +17,15 @@ import { mandatoryHosts, operatorHosts, proxyEnv } from "./egress.mjs";
 import { commentsText, sameRepo } from "./events.mjs";
 import { grantCheck, hardeningArgs, mountArgs, resolveMounts } from "./grants.mjs";
 import { imageRef } from "./images.mjs";
-import { BUILT_IN, isFresh, isLight, kindOf, permissionsFor, sessionName } from "./modes.mjs";
+import {
+  BUILT_IN,
+  entryRun,
+  isFresh,
+  isLight,
+  kindOf,
+  permissionsFor,
+  sessionName,
+} from "./modes.mjs";
 import { branchConfigReport, triggerWord } from "./onboarding.mjs";
 import { firstMessage, handoffMessage, promptFor, retryNote } from "./prompts.mjs";
 import { CONFIG_FILE, customMode, engineCacheVolume } from "./repo-config.mjs";
@@ -194,7 +202,8 @@ export function createRuns(ctx) {
       if (!ctx.stopping) ctx.schedule();
       return;
     }
-    const items = task.pending.splice(0);
+    // An inbox entry goes alone: the next one starts its own run when this one ends.
+    const items = task.pending.splice(0, entryRun(task.pending[0].mode) ? 1 : Infinity);
     task.live = newLive(task, items);
     addRun(ctx, task.live.record);
     ctx.saveLive(task);
