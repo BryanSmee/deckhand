@@ -97,6 +97,8 @@ services:
       CONFLICT_CHECK_MINUTES: ${CONFLICT_CHECK_MINUTES:-}
       # How often comments waiting for other issues ("/after #77") ask GitHub again.
       WAITS_CHECK_MINUTES: ${WAITS_CHECK_MINUTES:-}
+      # Days a run's log, summary and screenshots are kept (0: forever).
+      LOG_RETENTION_DAYS: ${LOG_RETENTION_DAYS:-}
       NAME_PREFIX: ${NAME_PREFIX:-}
       CLAUDE_CODE_VOLUME: ${CLAUDE_CODE_VOLUME:-}
       CODEX_VOLUME: ${CODEX_VOLUME:-}

@@ -333,6 +333,7 @@ What every sandbox may reach and its limits aren't settings: they go in
 | `NEEDS_INPUT_LABEL`                                                                               | `needs_input_label`                                                                               | `needs-input`                                        | label while a run or an issue waits for answers (empty: none)                                                                                  |
 | `CONFLICT_CHECK_MINUTES`                                                                          | `conflict_check_minutes`                                                                          | `5`                                                  | shortest interval of a repo's `conflicts.check_minutes`; `0` turns it off                                                                      |
 | `WAITS_CHECK_MINUTES`                                                                             | `waits_check_minutes`                                                                             | `5`                                                  | how often comments waiting for other issues (`/after`) ask GitHub again                                                                        |
+| `LOG_RETENTION_DAYS`                                                                              | `log_retention_days`                                                                              | `90`                                                 | days a run's log, its summary and its screenshots are kept; `0` keeps them forever (see below)                                                 |
 | `NAME_PREFIX`, `CLAUDE_CODE_VOLUME`, `CODEX_VOLUME`                                               | `name_prefix`, `claude_code_volume`, `codex_volume`                                               | `deckhand`, `deckhand-claude-code`, `deckhand-codex` | names of what the listener creates on Docker                                                                                                   |
 | `DOCKER_SOCKET`                                                                                   | none: compose's                                                                                   | `/var/run/docker.sock`                               | the host's Docker socket, as preview hooks mount it                                                                                            |
 | `DECKHAND_VERSION`                                                                                | none: compose's                                                                                   | `latest`                                             | the release compose runs (`1.2.3`, `1.2`), or `edge` to follow `main`: see [Updating](#updating)                                               |
@@ -356,6 +357,15 @@ more, smaller networks in `/etc/docker/daemon.json`, then restart Docker. The se
 Docker's own pools, so list those first and add yours after them, for example
 `"default-address-pools": [{"base": "172.16.0.0/12", "size": 16}, {"base": "192.168.0.0/16", "size": 20}, {"base": "10.200.0.0/16", "size": 28}]`
 (the last one: 4096 networks of 16 addresses).
+
+Each run leaves its log in `logs/<run>.log` on the data volume (the agent's whole output, often
+a few MB), a summary beside it (`logs/<run>.json`, what the dashboard lists after a restart,
+so the listener doesn't read the logs to start) and its screenshots in `shots/`. At start and
+then daily, the listener removes those of runs older than `LOG_RETENTION_DAYS` (90 days by
+default), and they leave the dashboard. It keeps a run still going, and the latest run of a
+task that is queued, in a brainstorm, waiting (`/after`) or waiting for input, whatever its
+age. Screenshots linked from older pull requests and comments stop showing once their run is
+removed: set a longer retention, or `0`, to keep them.
 
 A model, in `SANDBOX_MODEL`, `BRAINSTORM_MODEL`, a repository's `model` or a comment's
 `/model`, is a tier the run's agent maps to one of its models, `best`, `balanced` or `fast`

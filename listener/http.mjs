@@ -219,7 +219,7 @@ export function createHttp(ctx, { dashboardDir }) {
     }
     if (url.pathname === "/api/state") return sendJson(res, state(user));
     const match = /^\/api\/runs\/([\w.-]+)\/stream$/.exec(url.pathname);
-    const run = match && ctx.runs.find((r) => r.id === match[1]);
+    const run = match && ctx.runsById.get(match[1]);
     const visible = () => ctx.auth.user(req) === user && sees(user, run.repo ?? repoOf(run.key));
     if (run && visible()) return stream(req, res, run, visible);
     res.statusCode = 404;

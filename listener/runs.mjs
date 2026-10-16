@@ -22,7 +22,15 @@ import { branchConfigReport, triggerWord } from "./onboarding.mjs";
 import { firstMessage, handoffMessage, promptFor, retryNote } from "./prompts.mjs";
 import { CONFIG_FILE, customMode, engineCacheVolume } from "./repo-config.mjs";
 import { ENGINE_HOST } from "./runner/engine.mjs";
-import { lastResult, openLog, outcome, questionsOf, summaryOf } from "./runlog.mjs";
+import {
+  addRun,
+  lastResult,
+  openLog,
+  outcome,
+  questionsOf,
+  saveSummary,
+  summaryOf,
+} from "./runlog.mjs";
 import { noLongerAllowed } from "./tasks.mjs";
 import { redact } from "./secrets.mjs";
 
@@ -185,7 +193,7 @@ export function createRuns(ctx) {
     }
     const items = task.pending.splice(0);
     task.live = newLive(task, items);
-    ctx.runs.unshift(task.live.record);
+    addRun(ctx, task.live.record);
     ctx.saveLive(task);
     try {
       if (!(await start(task, items))) return;
@@ -250,6 +258,8 @@ export function createRuns(ctx) {
       startedAt: Date.now(),
       finishedAt: null,
       status: "running",
+      // Its screenshots' folder, once it starts: they go with its log (history.mjs).
+      shots: null,
       logPath: join(ctx.logDir, `${id}.log`),
     };
   }
@@ -317,6 +327,7 @@ export function createRuns(ctx) {
     const engine = engineFor(task, settings, access, fork, note);
     const prepared = await prepare(task, items, settings, access.grant, note);
     live.shots = shotsFolder();
+    live.record.shots = live.shots;
     live.hosts = access.hosts;
     live.trusted = access.trusted;
     live.uncached = mandatoryHosts(config, agentOf(task));
@@ -926,6 +937,7 @@ export function createRuns(ctx) {
     record.phase = null;
     ctx.broker.revoke(live.secret);
     record.finishedAt = Date.now();
+    saveSummary(record, log);
     await ctx.runner.remove(task.name, live.id).catch((e) => log(`${key}: ${e}`));
     await live.saving;
     rmSync(ctx.livePath(live.id), { force: true });

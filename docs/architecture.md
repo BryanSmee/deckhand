@@ -279,6 +279,13 @@ networks, container engines and engine volumes of runs that are gone are removed
 dropped then; each run checks its comments' authors against the repository's `users` again
 when it begins, and so does the next listener for comments queued for a run still going.
 
+The dashboard's run list comes back from the runs' summaries (`logs/<run>.json`, written
+when a run ends): a log is read in full only for a run without one (from before summaries, or
+a listener that died mid-run), which then gets one. The list is held newest first with an
+index by id, and both lose the runs `history.mjs` removes, at start and daily: those older
+than `LOG_RETENTION_DAYS`, but for a running run and the latest run of a task still queued,
+in a brainstorm, waiting or waiting for input.
+
 ## Agents
 
 Two agents, Claude Code (`claude`) and Codex (`codex`), behind a seam that keeps what is each
@@ -391,6 +398,7 @@ which starts runs.
 | `agents/`                                                         | Each agent's specifics: install, env, hosts, session, tiers, `normalize()` ([Agents](#agents)).    |
 | `modes.mjs`                                                       | Built-in modes: light, fresh, their token's permissions, the dashboard's kind. Pure.               |
 | `runlog.mjs`                                                      | Run logs: the list rebuilt after a restart, the dashboard's entries per line, the live stream.     |
+| `history.mjs`                                                     | Retention: the logs, summaries and screenshots of runs older than `LOG_RETENTION_DAYS`.            |
 | `events.mjs`                                                      | Deliveries → work items, trigger, `/mode` and `/after` lines, pull request states. Pure.           |
 | `repo-config.mjs`, `yaml.mjs`                                     | `.deckhand.yaml`, read from the default branch and parsed.                                         |
 | `grants.mjs`, `egress.mjs`                                        | The operator's grants (hosts, mounts, limits) and the egress policy.                               |
