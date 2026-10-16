@@ -1,6 +1,6 @@
 // The listener's API: api/state polled, a run's log streamed (server-sent events), the
 // repositories listed, onboarded and their config read, the graph's backlog and its actions,
-// answers to open questions, a failed run again, feedback and discussions.
+// answers to open questions, a failed run again or a run stopped, feedback and discussions.
 // Relative URLs, like the assets: the page works under any path.
 import { useEffect, useRef, useState } from "preact/hooks";
 import type { Pending } from "./graph";
@@ -8,6 +8,7 @@ import type {
   Answers,
   AnswersThen,
   Backlog,
+  CancelAction,
   DiscussionComment,
   DiscussionResult,
   DiscussionStart,
@@ -372,6 +373,13 @@ export async function sendRerun(repo: string, runId: string): Promise<WorkResult
   } catch (e) {
     return { error: message(e) };
   }
+}
+
+// Stops the task's run (api/repos/<repo>/work, `cancel`): what the listener says, or why it
+// refused. `pr`: a pull request's task.
+export function sendCancel(repo: string, number: number, pr: boolean): Promise<WorkResult> {
+  const body: CancelAction = { action: "cancel", number, pr };
+  return postJson<WorkResult>(`api/repos/${repo}/work`, body);
 }
 
 // An idea or a bug report for the repo's inbox (api/repos/<repo>/inbox): the comment it

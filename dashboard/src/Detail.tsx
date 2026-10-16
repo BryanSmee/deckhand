@@ -1,9 +1,10 @@
 // The open task: its repo and title, the last reply's first line, its runs, and the log of
 // the run shown (the latest unless one was picked). Waiting for input: its open questions, as
-// a form to answer them. Its last run failed: a button to run it again. A discussion: its
-// thread, to read and reply to, or the run's log.
+// a form to answer them. Its last run failed: a button to run it again. A run going on: a
+// button to stop it, which asks once more first. A discussion: its thread, to read and reply
+// to, or the run's log.
 import { useState } from "preact/hooks";
-import { sendRerun } from "./api";
+import { sendCancel, sendRerun } from "./api";
 import { ago, duration, githubUrl, kindName, numberOf, ownMode, runName, titleOf } from "./format";
 import { Log } from "./Log";
 import { PrLink } from "./PullRequest";
@@ -21,9 +22,12 @@ interface Props {
   now: number;
   // api/state's githubUrl.
   github: string;
-  // Reads api/state again (answers sent, a rerun queued).
+  // Reads api/state again (answers sent, a rerun queued, a run stopped).
   refresh?: () => Promise<void>;
 }
+
+// The states a run is going on in, which Stop ends.
+const STOPPABLE: Task["state"][] = ["building-image", "working", "stopping"];
 
 export function Detail({ task: t, run: r, onRun, onBack, now, github, refresh }: Props) {
   // What the listener said of the answers sent or the rerun asked last, on that task's page.
@@ -32,6 +36,9 @@ export function Detail({ task: t, run: r, onRun, onBack, now, github, refresh }:
   const [rerunning, setRerunning] = useState<string | null>(null);
   // A discussion's page shows its thread, or the run's log.
   const [showLog, setShowLog] = useState(false);
+  // The task whose Stop was pressed once (it asks again), and the one whose stop is on its way.
+  const [confirming, setConfirming] = useState<string | null>(null);
+  const [stopping, setStopping] = useState<string | null>(null);
   if (!t) {
     return (
       <div class={styles.detail}>
@@ -48,6 +55,21 @@ export function Detail({ task: t, run: r, onRun, onBack, now, github, refresh }:
   const failed = t.rerunnable && r && r.id === t.runs[0]?.id ? r : null;
   const discussion = t.kind === "discussion" && t.number !== null;
   const thread = discussion && !showLog;
+  // Discussions have no comment command to stop them by, nor the API's.
+  const stoppable = STOPPABLE.includes(t.state) && t.number !== null && !discussion;
+  const stop = async () => {
+    if (confirming !== t.key) return setConfirming(t.key);
+    setConfirming(null);
+    setStopping(t.key);
+    const said = await sendCancel(t.repo, t.number!, t.key.includes("#pr-"));
+    setSent({
+      key: t.key,
+      message: said.error ?? said.message ?? "Stopping.",
+      error: !!said.error,
+    });
+    if (!said.error) await refresh?.();
+    setStopping(null);
+  };
   const again = async (run: Run) => {
     setRerunning(run.id);
     const said = await sendRerun(t.repo, run.id);
@@ -115,6 +137,24 @@ export function Detail({ task: t, run: r, onRun, onBack, now, github, refresh }:
             >
               {rerunning === failed.id ? "Rerunning…" : "Rerun"}
             </button>
+          )}
+          {stoppable && (
+            <span class={styles.stopping}>
+              {confirming === t.key && (
+                <button type="button" class={styles.keep} onClick={() => setConfirming(null)}>
+                  Keep running
+                </button>
+              )}
+              <button
+                type="button"
+                class={confirming === t.key ? `${styles.stop} ${styles.confirm}` : styles.stop}
+                disabled={stopping === t.key}
+                title="Stops the run now: what it did since its last push is lost"
+                onClick={stop}
+              >
+                {stopping === t.key ? "Stopping…" : confirming === t.key ? "Stop it now" : "Stop"}
+              </button>
+            </span>
           )}
         </div>
         {reply && (

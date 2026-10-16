@@ -79,7 +79,7 @@ const brainstorming = (t: Task) =>
 
 // A brainstorm that is over, wrapped up: its issue is back in the backlog, not on the graph.
 const brainstormed = (t: Task) =>
-  t.mode === "brainstorm" && ["done", "error", "interrupted"].includes(t.state);
+  t.mode === "brainstorm" && ["done", "error", "interrupted", "cancelled"].includes(t.state);
 
 // A card of the Brainstorm column. `task`: null for one just started from the backlog.
 export interface BrainstormCard {

@@ -140,8 +140,8 @@ first: dragging it (or its Start and "After…" buttons) opens them, and the sta
 only once every one has an answer, in one App comment that carries both (`then` on the answer
 request). The run that starts reads them. Started or queued without answers, it is refused.
 
-A task whose last run ended in `error` or `interrupted` shows a **Rerun** button on its page
-(`rerunnable` in `api/state`, from `board.mjs`): work on an issue or pull request, in work or
+A task whose last run ended in `error`, `interrupted` or `cancelled` shows a **Rerun** button
+on its page (`rerunnable` in `api/state`, from `board.mjs`): work on an issue or pull request, in work or
 one of the repo's own modes, not brainstorms, discussions or inbox entries. Each run keeps the
 comments it ran on (their text, trigger and mode lines) in its log's first line, so a run lost
 in a restart can run again too. `POST /api/repos/<owner>/<repo>/rerun { runId }` (`work.mjs`
@@ -264,6 +264,25 @@ each action on the issue as the App's comment, which reactions follow like a tri
 comment's, and queues the work (`accept()`) or holds it (`waits.hold()`) itself: the App's
 own comments never reach `admit()`. The checks are `resume()`'s, see
 [security.md](security.md#the-dashboards-actions).
+
+## Stopping a run
+
+`/cancel` (the whole first line of a comment, from an allowed user) or the task page's
+**Stop** (`POST /api/repos/<owner>/<repo>/work { action: "cancel", number, pr? }`, with the
+work area's checks of the repository and user, and the App's comment "Stopped from the
+dashboard by @user") end a run now. `admit()` takes the comment before the queue, so it never
+reaches the agent's inbox, and gives it 👍. `runs.mjs` `cancel()` writes a `cancelled` line
+(who, when) to the run's log and its saved state, stops its inbox, then
+`runner.kill()` (`docker stop -t 10`). The follow loop sees the sandbox exit and `finish()`
+ends the run as `cancelled` whatever the exit looked like: a "Stopped by @user" reply with the
+usual footer, no fallback, 👀 off its comments, and `cleanUp()` as usual. The session volume
+and pushed commits stay, so the next comment resumes it; comments queued for a follow-up run
+stay queued. A run still being prepared (its image building) doesn't start its sandbox; a task
+with only queued comments loses them instead (409 from the API when there is neither). A
+listener restarting between the cancel and the exit reads it from the saved state, stops the
+sandbox again if it still runs, and ends it as cancelled rather than queueing its comments
+again; the dashboard's list reads it from the log's `cancelled` line. A cancelled run is
+`rerunnable`.
 
 ## Restarts
 

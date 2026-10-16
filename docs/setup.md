@@ -89,7 +89,10 @@ whole first line, any case or punctuation; the rest are instructions). The sandb
 branch `issue-<n>-<slug>` and a draft pull request, and Claude's final message comes back as a
 comment from the App's bot.
 `Deckhand` then a `/mode brainstorm` line (or `Deckhand /mode brainstorm`) discusses the issue
-without code; `/stop` wraps it up.
+without code; `/stop` wraps it up. `/cancel` (the whole first line) stops the issue's running
+run now, and the task's page on the dashboard has a **Stop** button that does the same: the
+run's reply says who stopped it, its session and pushed commits stay, and the next comment
+resumes it. With nothing running, `/cancel` gets a reply saying so.
 
 **Onboarding.** When the App is installed on a repository (at creation, or added to the
 installation later) that has no `.deckhand.yaml` on its default branch, the listener opens an
@@ -196,6 +199,7 @@ Each task shows its listener's state:
 | `brainstorm`      | a brainstorm waits for your next comment                                |
 | `idle brainstorm` | no comment for a while; the next one restores the session               |
 | `done`, `error`   | how the last run ended (`interrupted`: a restart came before its start) |
+| `cancelled`       | someone stopped its last run (`/cancel` or the dashboard's Stop)        |
 
 Pick one to see the first line of its last reply and its latest run's log live (and the
 next runs as they start), or an earlier run. The address keeps the tab, task and run, so a

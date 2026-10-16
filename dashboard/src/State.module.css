@@ -66,6 +66,10 @@
   --tone: var(--err);
   --soft: var(--err-soft);
 }
+.stop {
+  --tone: var(--warn);
+  --soft: var(--warn-soft);
+}
 .idle {
   --tone: var(--idle);
   --soft: var(--idle-soft);
