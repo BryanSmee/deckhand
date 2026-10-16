@@ -92,16 +92,60 @@
 }
 
 .kinds {
-  display: flex;
-  gap: 0.9rem;
-  font-size: 0.85rem;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+  gap: 0.5rem;
 }
 
+/* A tile per kind: the radio stays, out of sight, for the keyboard and screen readers. */
 .kind {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.3rem;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding: 0.55rem 0.75rem;
+  border: 1.5px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
   cursor: pointer;
+  transition:
+    border-color 0.15s,
+    background 0.15s;
+}
+
+.kind:hover {
+  border-color: var(--muted);
+}
+
+.kind input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.kind.on {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.kind:has(input:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.label {
+  color: var(--ink);
+  font-size: 0.88rem;
+  font-weight: 600;
+}
+
+.kind.on .label {
+  color: var(--accent);
+}
+
+.hint {
+  color: var(--muted);
+  font-size: 0.76rem;
 }
 
 .text {

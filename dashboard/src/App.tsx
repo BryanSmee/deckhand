@@ -92,7 +92,7 @@ export function Dashboard({ state, error, repos, refresh }: Props) {
     return CHIPS.some((c) => c.id === saved) ? (saved as ChipId) : "all";
   });
   const [showClosed, setShowClosed] = useState(() => stored("graphClosed") === "1");
-  // The inbox dialog: an idea or a bug report for a repo.
+  // The Feedback dialog: an idea or a bug report for a repo's inbox.
   const [inbox, setInbox] = useState(false);
   const wide = useWide();
   const tasks = state?.tasks ?? [];
@@ -184,10 +184,10 @@ export function Dashboard({ state, error, repos, refresh }: Props) {
               class={styles.link}
               aria-haspopup="dialog"
               aria-expanded={inbox}
-              title="Send an idea or a bug report to a repository's inbox"
+              title="Send an idea or a bug report to a repository"
               onClick={() => setInbox(true)}
             >
-              Inbox
+              Feedback
             </button>
           )}
         </nav>

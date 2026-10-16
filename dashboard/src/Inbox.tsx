@@ -1,4 +1,4 @@
-// A repo's inbox from the dashboard's top bar: an idea or a bug report, sent as the App's
+// Feedback, from the dashboard's top bar: an idea or a bug report, sent as the App's
 // comment on the inbox issue, which starts the run a comment there would (listener/work.mjs
 // sendToInbox()). Only the repos with an inbox, and the inboxes they have, are offered; once
 // sent, the comment's link, then the run on the inbox's task when api/state lists it.
@@ -12,8 +12,8 @@ export const INBOX_DOCS =
   "https://github.com/BryanSmee/deckhand/blob/main/docs/repo-config.md#inboxes";
 
 const KINDS = [
-  { kind: "idea", key: "ideas", label: "Idea" },
-  { kind: "bug", key: "bugs", label: "Bug" },
+  { kind: "idea", key: "ideas", label: "Idea", hint: "Something to add or change" },
+  { kind: "bug", key: "bugs", label: "Bug", hint: "Something that goes wrong" },
 ] as const;
 
 const hasInbox = (i: Inboxes | undefined) => !!(i?.ideas || i?.bugs);
@@ -62,7 +62,7 @@ export function InboxDialog({
 
   return (
     <div class={styles.backdrop} onClick={(e) => e.target === e.currentTarget && onClose()}>
-      <div class={styles.dialog} role="dialog" aria-modal="true" aria-label="Send to an inbox">
+      <div class={styles.dialog} role="dialog" aria-modal="true" aria-label="Send feedback">
         <div class={styles.head}>
           <h2 class={styles.title}>Send an idea or a bug report</h2>
           <button type="button" class={styles.close} aria-label="Close" onClick={onClose}>
@@ -156,19 +156,21 @@ function Inbox({ repo, inboxes, tasks, submit, onSent }: Props) {
   const run = task?.runs[0] && task.runs[0].id !== sent?.before ? task.runs[0] : null;
 
   return (
-    <form class={styles.form} aria-label="Inbox" onSubmit={send}>
+    <form class={styles.form} aria-label="Feedback" onSubmit={send}>
       <fieldset class={styles.fields} disabled={sending}>
         <div class={styles.kinds} role="radiogroup" aria-label="Kind">
           {offered.map((k) => (
-            <label key={k.kind} class={styles.kind}>
+            <label key={k.kind} class={`${styles.kind} ${kind === k.kind ? styles.on : ""}`}>
               <input
                 type="radio"
                 name="inbox-kind"
                 value={k.kind}
+                aria-label={k.label}
                 checked={kind === k.kind}
                 onChange={() => setPicked(k.kind)}
               />
-              {k.label}
+              <span class={styles.label}>{k.label}</span>
+              <span class={styles.hint}>{k.hint}</span>
             </label>
           ))}
         </div>
@@ -178,7 +180,7 @@ function Inbox({ repo, inboxes, tasks, submit, onSent }: Props) {
           aria-label={kind === "idea" ? "The idea" : "The bug"}
           placeholder={
             kind === "idea"
-              ? "What you'd like, as you would comment on the inbox"
+              ? "What you'd like, as you would write it in an issue"
               : "What goes wrong, and how to see it"
           }
           value={text}

@@ -75,11 +75,11 @@ const INBOXES = {
 const openDialog = (state: State, hash = "#/all") => {
   history.replaceState(null, "", hash);
   const view = render(<Dashboard state={state} error={null} />);
-  fireEvent.click(screen.getByRole("button", { name: "Inbox" }));
-  return { view, dialog: screen.getByRole("dialog", { name: "Send to an inbox" }) };
+  fireEvent.click(screen.getByRole("button", { name: "Feedback" }));
+  return { view, dialog: screen.getByRole("dialog", { name: "Send feedback" }) };
 };
 
-test("the top bar's Inbox offers the repos with an inbox, the open tab's first", () => {
+test("the top bar's Feedback offers the repos with an inbox, the open tab's first", () => {
   const { dialog } = openDialog(stateWith(INBOXES), "#/acme/api");
   const repo = within(dialog).getByRole("combobox", { name: "Repository" }) as HTMLSelectElement;
   expect([...repo.options].map((o) => o.value)).toEqual(["acme/api", "acme/app"]);

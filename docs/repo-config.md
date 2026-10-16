@@ -355,7 +355,7 @@ They are light runs, like brainstorms: no branch, no `setup`, the brainstorm mod
   idea sub-issues). Its reply on the inbox links what it created or found, or answers when
   there is nothing to file. Each entry starts a new session: a follow-up is read from the
   inbox's earlier comments. Prompts: `prompts/idea.md`, `prompts/bug.md`.
-  The dashboard sends entries too: Inbox, in its top bar, opens a form (a repository with
+  The dashboard sends entries too: Feedback, in its top bar, opens a form (a repository with
   an inbox, Idea or Bug, only those it has), which posts the text on the inbox issue as the App's
   comment, ending "From the dashboard by @you", and starts the same run.
 - **Discussions**: a category of the repository's GitHub Discussions (create it first, for
