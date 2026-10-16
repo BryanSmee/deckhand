@@ -228,7 +228,9 @@ export function WorkArea({
                   <a class={styles.ref} href={i.url} target="_blank" rel="noreferrer">
                     #{i.number}
                   </a>
-                  <span class={styles.name}>{i.title ?? `Issue #${i.number}`}</span>
+                  <span class={styles.name} title={i.title ?? `Issue #${i.number}`}>
+                    {i.title ?? `Issue #${i.number}`}
+                  </span>
                 </div>
                 <div class={styles.buttons}>
                   <button
@@ -272,7 +274,9 @@ export function WorkArea({
               >
                 <div class={styles.row}>
                   <span class={styles.ref}>#{t.number}</span>
-                  <span class={styles.name}>{t.title ?? `Issue #${t.number}`}</span>
+                  <span class={styles.name} title={t.title ?? `Issue #${t.number}`}>
+                    {t.title ?? `Issue #${t.number}`}
+                  </span>
                 </div>
                 {t.questions && (
                   <span class={styles.note}>Its open questions are asked before it starts.</span>
@@ -303,7 +307,9 @@ export function WorkArea({
               <li key={t.key} class={styles.issue}>
                 <div class={styles.row}>
                   <span class={styles.ref}>#{t.number}</span>
-                  <span class={styles.name}>{t.title ?? `Issue #${t.number}`}</span>
+                  <span class={styles.name} title={t.title ?? `Issue #${t.number}`}>
+                    {t.title ?? `Issue #${t.number}`}
+                  </span>
                 </div>
                 <span class={styles.note}>
                   after {(t.waitingFor ?? []).map((n) => `#${n}`).join(", ")}
