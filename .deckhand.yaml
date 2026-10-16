@@ -4,17 +4,6 @@ inbox:
   bugs: 16
   discussions: Ask Claude
 
-hosts:
-  - registry.npmjs.org
-  # Docker Hub, for the container engine's pulls (node:22-alpine, docker:dind).
-  - registry-1.docker.io
-  - auth.docker.io
-  - production.cloudflare.docker.com
-  - production.cloudfront.docker.com
-  # quay.io/podman/stable (engine/podman/Dockerfile).
-  - quay.io
-  - "*.quay.io"
-
 # A container engine for building and starting listener/Dockerfile and the other images.
 docker:
   cache: true
