@@ -30,8 +30,9 @@ networks, see [Security model](security.md)), and the base sandbox image runs st
 
 To build the images from this checkout instead: `docker compose up -d --build`.
 
-**A plan's credential** (`CLAUDE_CODE_OAUTH_TOKEN`, from `claude setup-token`) works, and the
-listener's log warns about it at each start. A subscription (Claude Pro/Max, a ChatGPT plan) is
+**A plan's credential** (`CLAUDE_CODE_OAUTH_TOKEN`, from `claude setup-token`, or for Codex
+a ChatGPT plan's login in `CODEX_AUTH_FILE`, from `codex login`) works, and the listener's log
+warns about it at each start. A subscription (Claude Pro/Max, a ChatGPT plan) is
 usually licensed to one person. Serving a team, or repositories other people write to, may
 break your provider's terms: check them before you do. You are responsible for how your
 Deckhand uses your credential. For teams, use an API key.
@@ -309,6 +310,7 @@ What every sandbox may reach and its limits aren't settings: they go in
 | `ANTHROPIC_DEFAULT_OPUS_MODEL`, `ANTHROPIC_DEFAULT_SONNET_MODEL`, `ANTHROPIC_DEFAULT_HAIKU_MODEL` | `anthropic_default_opus_model`, `anthropic_default_sonnet_model`, `anthropic_default_haiku_model` | Claude Code's                                        | the models `opus`, `sonnet` and `haiku` stand for in the sandboxes (a gateway's names)                                                         |
 | `SANDBOX_AGENT`, `BRAINSTORM_AGENT`                                                               | `sandbox_agent`, `brainstorm_agent`                                                               | `claude`, `SANDBOX_AGENT`                            | the agent of work runs, and of brainstorms, inbox entries and discussions: `claude` or `codex` (see [Codex](#codex))                           |
 | `OPENAI_API_KEY`                                                                                  | none: a secret, `.env` only                                                                       |                                                      | Codex's OpenAI API key, added by the listener to the sandboxes' API calls                                                                      |
+| `CODEX_AUTH_FILE`                                                                                 | none: `.env` only                                                                                 |                                                      | or a ChatGPT plan's login: its `auth.json`, held and refreshed by the listener (see [With a ChatGPT plan](#with-a-chatgpt-plan))               |
 | `OPENAI_BASE_URL`                                                                                 | `openai_base_url`                                                                                 | `https://api.openai.com/v1`                          | where the listener sends Codex's API calls                                                                                                     |
 | `CODEX_BEST_MODEL`, `CODEX_BALANCED_MODEL`, `CODEX_FAST_MODEL`                                    | `codex_best_model`, `codex_balanced_model`, `codex_fast_model`                                    | `gpt-6-astra`, `gpt-6.1-sol`, `gpt-6-luna`           | the models the tiers `best`, `balanced` and `fast` stand for with Codex                                                                        |
 | `FALLBACKS`                                                                                       | `fallbacks`                                                                                       | none                                                 | where a run goes when its provider fails, in order: `claude@anthropic`, `claude@openrouter`, `codex@openai` (see [Fallbacks](#fallbacks))      |
@@ -370,11 +372,11 @@ each installs on first use into a volume of its own. An agent calls a provider; 
 always call the listener, which adds your credential and forwards the call, so none of these
 needs a host in the grants folder (only GitHub's, which every run has).
 
-| Entry               | Agent and provider                                           | Credential (`.env`)                                                                 | The listener calls                         |
-| ------------------- | ------------------------------------------------------------ | ----------------------------------------------------------------------------------- | ------------------------------------------ |
-| `claude@anthropic`  | Claude Code on Anthropic, or [a gateway](#through-a-gateway) | `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN` (a plan's) or `ANTHROPIC_AUTH_TOKEN` | `ANTHROPIC_BASE_URL` (`api.anthropic.com`) |
-| `claude@openrouter` | Claude Code through OpenRouter, as a [fallback](#fallbacks)  | `OPENROUTER_API_KEY`                                                                | `OPENROUTER_BASE_URL` (`openrouter.ai`)    |
-| `codex@openai`      | [Codex](#codex) on OpenAI                                    | `OPENAI_API_KEY` (a ChatGPT plan's login isn't supported yet)                       | `OPENAI_BASE_URL` (`api.openai.com`)       |
+| Entry               | Agent and provider                                           | Credential (`.env`)                                                                 | The listener calls                                                           |
+| ------------------- | ------------------------------------------------------------ | ----------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| `claude@anthropic`  | Claude Code on Anthropic, or [a gateway](#through-a-gateway) | `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN` (a plan's) or `ANTHROPIC_AUTH_TOKEN` | `ANTHROPIC_BASE_URL` (`api.anthropic.com`)                                   |
+| `claude@openrouter` | Claude Code through OpenRouter, as a [fallback](#fallbacks)  | `OPENROUTER_API_KEY`                                                                | `OPENROUTER_BASE_URL` (`openrouter.ai`)                                      |
+| `codex@openai`      | [Codex](#codex) on OpenAI                                    | `OPENAI_API_KEY`, or `CODEX_AUTH_FILE` (a ChatGPT plan's login)                     | `OPENAI_BASE_URL` (`api.openai.com`), or ChatGPT's Codex backend with a plan |
 
 What runs an issue, first match wins:
 
@@ -426,7 +428,7 @@ Anthropic credential.
 ### Codex
 
 Deckhand can run [Codex](https://github.com/openai/codex) (OpenAI's CLI) instead of Claude
-Code, with an OpenAI API key. In `.env`:
+Code, with an OpenAI API key (or [a ChatGPT plan](#with-a-chatgpt-plan)). In `.env`:
 
 ```sh
 OPENAI_API_KEY=sk-proj-…
@@ -443,7 +445,7 @@ Or keep Claude Code as the default and let repositories pick Codex: with both a 
 credential and `OPENAI_API_KEY` set, a repository's `.deckhand.yaml` may say `agent: codex`
 (per repository, or per mode: [Per-repo config](repo-config.md#agent)). A repository can only
 pick an agent you have a credential for, or the one you chose as default. `SANDBOX_AGENT=codex`
-without `OPENAI_API_KEY` stops the listener at start.
+without `OPENAI_API_KEY` (or `CODEX_AUTH_FILE`) stops the listener at start.
 
 As with Claude Code, the key never enters a sandbox: Codex calls the listener
 (`OPENAI_BASE_URL=<broker>/openai`) with the run's secret as its key, and the listener
@@ -465,7 +467,39 @@ What differs from Claude Code:
 - **Its own sandbox is off** (`--dangerously-bypass-approvals-and-sandbox`): the container is
   the sandbox, as with Claude Code.
 
-A ChatGPT plan's login isn't supported yet: only an API key.
+#### With a ChatGPT plan
+
+Instead of an API key, Codex can run on a ChatGPT plan's login. Its refresh token is
+single-use and rotated on every refresh, so only one copy may be in use: the listener holds
+it, refreshes it and adds the plan's access token to the sandboxes' calls, which go to
+ChatGPT's Codex backend (`chatgpt.com/backend-api/codex`). No sandbox gets it.
+
+1. Sign in for Deckhand alone, in a fresh Codex home (any machine with Codex):
+
+   ```sh
+   export CODEX_HOME=$(mktemp -d)
+   codex login --device-auth
+   ```
+
+2. Copy its `auth.json` into the listener's data volume, then delete that home without
+   `codex logout`, which would revoke the login:
+
+   ```sh
+   docker compose cp "$CODEX_HOME/auth.json" listener:/data/codex-auth.json
+   rm -r "$CODEX_HOME"
+   ```
+
+3. In `.env`, `CODEX_AUTH_FILE=/data/codex-auth.json`, and restart the listener.
+
+The listener logs `Codex: a ChatGPT plan's login, from /data/codex-auth.json` at start, or why
+it can't use it. It refreshes the access token 5 minutes before it expires, once for all
+runs, and writes the new tokens back to the file. Don't use that `auth.json` anywhere else: a
+refresh elsewhere spends the token the listener holds. When the login is spent (revoked,
+or refreshed elsewhere), runs fail with "run `codex login` again": repeat the steps above;
+the listener reads the new file without a restart. `OPENAI_API_KEY`, when set too, wins.
+
+A plan is licensed to one person: the listener's log warns about it at each start (see
+[1. Start the listener](#1-start-the-listener)).
 
 ### Fallbacks
 
@@ -473,11 +507,11 @@ When the model's API fails, a run can go on elsewhere instead of ending with "Cl
 with an error". List where, in order, as `agent@provider` (`agent` alone is its default
 provider):
 
-| Entry               | What                                                                   | Needs                |
-| ------------------- | ---------------------------------------------------------------------- | -------------------- |
-| `claude@anthropic`  | Claude Code on your `ANTHROPIC_BASE_URL` (Anthropic, unless a gateway) | a Claude credential  |
-| `claude@openrouter` | Claude Code through OpenRouter, at `OPENROUTER_BASE_URL`               | `OPENROUTER_API_KEY` |
-| `codex@openai`      | Codex on your `OPENAI_BASE_URL` (OpenAI)                               | `OPENAI_API_KEY`     |
+| Entry               | What                                                                   | Needs                                 |
+| ------------------- | ---------------------------------------------------------------------- | ------------------------------------- |
+| `claude@anthropic`  | Claude Code on your `ANTHROPIC_BASE_URL` (Anthropic, unless a gateway) | a Claude credential                   |
+| `claude@openrouter` | Claude Code through OpenRouter, at `OPENROUTER_BASE_URL`               | `OPENROUTER_API_KEY`                  |
+| `codex@openai`      | Codex on your `OPENAI_BASE_URL` (OpenAI), or on a ChatGPT plan         | `OPENAI_API_KEY` or `CODEX_AUTH_FILE` |
 
 In `.env`, the credentials, and in `config.yaml`:
 

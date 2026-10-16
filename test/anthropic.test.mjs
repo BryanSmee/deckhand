@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { createServer, request } from "node:http";
 import { test } from "node:test";
-import { createAnthropicProxy, credentialName, planWarning } from "../listener/anthropic.mjs";
+import { createAnthropicProxy, credentialName } from "../listener/anthropic.mjs";
+import { planWarning } from "../listener/upstream.mjs";
 import { createBroker } from "../listener/broker.mjs";
 import { redact } from "../listener/secrets.mjs";
 
@@ -70,10 +71,19 @@ test("the credential is the one Claude Code would use: an API key before an OAut
 });
 
 test("a plan's token is warned about at start, an API key or a gateway's token isn't", () => {
+  assert.match(
+    planWarning("CLAUDE_CODE_OAUTH_TOKEN"),
+    /^Warning: CLAUDE_CODE_OAUTH_TOKEN is a Claude plan's/,
+  );
+  assert.match(
+    planWarning("CODEX_AUTH_FILE"),
+    /^Warning: CODEX_AUTH_FILE is a ChatGPT plan's login/,
+  );
   assert.match(planWarning("CLAUDE_CODE_OAUTH_TOKEN"), /usually licensed to one person/);
   assert.match(planWarning("CLAUDE_CODE_OAUTH_TOKEN"), /For teams, use an API key\.$/);
   assert.equal(planWarning("ANTHROPIC_API_KEY"), null);
   assert.equal(planWarning("ANTHROPIC_AUTH_TOKEN"), null);
+  assert.equal(planWarning("OPENAI_API_KEY"), null);
   assert.equal(planWarning(null), null);
 });
 

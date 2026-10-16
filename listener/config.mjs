@@ -11,6 +11,7 @@ import {
   entryOf,
 } from "./agents/index.mjs";
 import { credentialName } from "./anthropic.mjs";
+import { OPENAI_CREDENTIALS } from "./openai.mjs";
 import { MODEL_NAME } from "./events.mjs";
 import { ENGINES } from "./runner/engine.mjs";
 import { parseCidr } from "./subnets.mjs";
@@ -475,8 +476,9 @@ export function loadConfig(env, file = NO_FILE) {
         setting("OPENROUTER_HAIKU_MODEL"),
       ],
     ]),
-    // Codex's, the same way (openai.mjs): OpenAI, or an OpenAI-compatible endpoint.
-    openaiCredential: env.OPENAI_API_KEY ? "OPENAI_API_KEY" : null,
+    // Codex's, the same way (openai.mjs): OpenAI, or an OpenAI-compatible endpoint; without
+    // a key, a ChatGPT plan's login, which the listener holds and refreshes (chatgpt.mjs).
+    openaiCredential: OPENAI_CREDENTIALS.find((name) => env[name]) ?? null,
     openaiUrl: apiUrl(
       setting("OPENAI_BASE_URL"),
       label("OPENAI_BASE_URL"),

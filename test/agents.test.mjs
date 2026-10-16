@@ -317,7 +317,7 @@ test("Codex: installed like Claude Code, the run's secret as its key, no mid-run
     OPENAI_API_KEY: "run-secret",
     OPENAI_BASE_URL: "http://listener:8081/openai",
   });
-  assert.deepEqual(codex.secrets, ["OPENAI_API_KEY"]);
+  assert.deepEqual(codex.secrets, ["OPENAI_API_KEY", "CODEX_AUTH_FILE"]);
   assert.deepEqual(codex.hosts, []);
   assert.deepEqual(codex.session, { volume: "codex", path: "/home/node/.codex" });
   assert.equal(codex.takesMessages, false);
