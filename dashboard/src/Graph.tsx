@@ -3,11 +3,12 @@
 // it is a work area too (WorkArea.tsx): an issue dropped on it starts, dropped next to a node
 // it waits for that one; a waiting node dragged away stops waiting, onto another node waits
 // for that one instead. An issue waiting for answers moves too, once they are in: the drag
-// opens its open questions first (Questions.tsx). Brainstorms have a column of their own
+// opens its open questions first (Questions.tsx). A click on a node waiting for answers opens
+// them too, on any tab: they go, and its run continues. Brainstorms have a column of their own
 // between the backlog and the graph (Brainstorms.tsx): one dropped on the graph starts work.
 import type { JSX } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
-import { useWorkArea } from "./api";
+import { sendAnswers, useWorkArea } from "./api";
 import { Brainstorms } from "./Brainstorms";
 import { inChip, kindName } from "./format";
 import {
@@ -23,7 +24,7 @@ import {
 } from "./graph";
 import { Questions } from "./Questions";
 import { formatRoute } from "./route";
-import type { State, Task, WorkAction } from "./types";
+import type { Answers, State, Task, WorkAction } from "./types";
 import { BRAINSTORM_TYPE, ISSUE_TYPE, type Target, WorkArea } from "./WorkArea";
 import styles from "./Graph.module.css";
 
@@ -40,7 +41,11 @@ interface Props {
 }
 
 // "#12", "PR #3", with the repo on the All tab when there is room: the number always shows.
-function refOf(n: GraphNode, showRepo: boolean, room: number): string {
+function refOf(
+  n: Pick<GraphNode, "number" | "kind" | "repo">,
+  showRepo: boolean,
+  room: number,
+): string {
   const number = n.number === null ? "" : n.kind === "pr" ? `PR #${n.number}` : `#${n.number}`;
   const repo = n.repo.slice(n.repo.indexOf("/") + 1);
   if (!showRepo || room < number.length + 3) return number;
@@ -74,6 +79,13 @@ type Dragged = "new" | "brainstorm" | "waits";
 // Past this many pixels a press on a waiting node is a drag, not a click.
 const DRAG_PX = 6;
 
+// A node whose click answers its questions in place: a task waiting for answers, with them
+// parsed (a label alone opens the detail page).
+const asks = (n: GraphNode) => n.look === "input" && !!n.task?.questions;
+
+// The "?" badge's width: with the open question count, or alone (questions not in the format).
+const badgeWidth = (n: GraphNode) => (n.task?.questions?.items ? 28 : 16);
+
 export function Graph({ state, refresh, repo, narrow, showClosed, onShowClosed }: Props) {
   const work = useWorkArea(repo, refresh);
   const [mode, setMode] = useState("work");
@@ -85,8 +97,13 @@ export function Graph({ state, refresh, repo, narrow, showClosed, onShowClosed }
   // The node last pressed, drawn last (on top) from then on: moving it back among the others
   // when it is let go would cut its slide to its new place short.
   const [onTop, setOnTop] = useState<string | null>(null);
-  // An issue's start or queue that waits for its open questions to be answered.
-  const [asking, setAsking] = useState<{ task: Task; action: WorkAction } | null>(null);
+  // An issue's start or queue that waits for its open questions to be answered; no action:
+  // a click on its node, which just answers them.
+  const [asking, setAsking] = useState<{ task: Task; action: WorkAction | null } | null>(null);
+  // The tasks whose answers are on their way, until api/state is read again; what the last
+  // answers sent said.
+  const [sending, setSending] = useState<string[]>([]);
+  const [said, setSaid] = useState<string | null>(null);
   // The last drawing, on this tab and at this size: its places are kept.
   const last = useRef<{ on: string; shape: Layout } | null>(null);
   // A drag ended on a node: the click that follows doesn't open it.
@@ -96,6 +113,7 @@ export function Graph({ state, refresh, repo, narrow, showClosed, onShowClosed }
     setMode("work");
     setNotice(null);
     setAsking(null);
+    setSaid(null);
   }, [repo]);
   useEffect(() => {
     if (!asking) return;
@@ -108,6 +126,7 @@ export function Graph({ state, refresh, repo, narrow, showClosed, onShowClosed }
   const { nodes, edges, hidden } = graphOf(tasks, state?.edges ?? [], state?.blockers ?? [], {
     showClosed,
     pending: work.pending,
+    sending,
   });
   // An issue just queued goes next to what it now waits for, wherever it was.
   const queued = new Set(
@@ -190,6 +209,18 @@ export function Graph({ state, refresh, repo, narrow, showClosed, onShowClosed }
       return;
     }
     work.act(action);
+  };
+
+  // Answers sent from a click on the node: it shows Sending… until api/state is read again,
+  // where its run continues (or the issue no longer waits). A refusal stays in the form.
+  const answer = async (task: Task, body: Answers) => {
+    setSaid(null);
+    setSending((all) => [...all, task.key]);
+    const result = await sendAnswers(task.repo, body);
+    const done = () => setSending((all) => all.filter((k) => k !== task.key));
+    if (result.error) done();
+    else (refresh?.() ?? Promise.resolve()).finally(done);
+    return result;
   };
 
   const onDragOver = (e: DragEvent) => {
@@ -336,7 +367,16 @@ export function Graph({ state, refresh, repo, narrow, showClosed, onShowClosed }
       })}
       {boxes.map((b) => {
         const n = byKey.get(b.key)!;
-        const ref = refOf(n, !repo, chars - n.status.length - 1);
+        const badge = asks(n) ? badgeWidth(n) : 0;
+        // "Needs input, PR ready" where it fits, its first part where it doesn't.
+        const room = chars - Math.ceil(badge / 7);
+        const status = n.status.length + 5 > room ? n.status.split(",")[0] : n.status;
+        const ref = refOf(n, !repo, room - status.length - 1);
+        const count = n.task?.questions?.items?.length;
+        const right = n.look === "pending" ? 30 : badge ? badge + 16 : 12;
+        // The bold ref takes about 7.5px a character, the status 6: on a phone's narrow node the
+        // status is left to its tooltip and label (the look says it) rather than drawn over it.
+        const fits = 12 + ref.length * 7.5 + 8 + status.length * 6 <= shape.w - right;
         const title = n.title ?? `${kindName(n)} ${refOf(n, false, 0)}`;
         const waits = edges.filter((e) => e.to === n.key).length;
         const href = n.task
@@ -345,6 +385,7 @@ export function Graph({ state, refresh, repo, narrow, showClosed, onShowClosed }
         const label =
           `${ref} ${n.title ?? ""}`.trim() +
           `: ${n.status}` +
+          (count ? `, ${count} question${count > 1 ? "s" : ""}` : "") +
           (waits ? `, waits for ${waits} issue${waits > 1 ? "s" : ""}` : "");
         const moving = nodeDrag?.key === n.key && nodeDrag.moved ? nodeDrag : null;
         // Placed with a transform, which slides (Graph.module.css) when the place changes.
@@ -360,10 +401,18 @@ export function Graph({ state, refresh, repo, narrow, showClosed, onShowClosed }
               target === n.key && !moving ? styles.target : ""
             } ${moving ? styles.moving : ""}`}
             style={{ transform: `translate(${x}px, ${y}px)` }}
+            aria-haspopup={asks(n) ? "dialog" : undefined}
             onClick={(e) => {
-              if (!dragEnded.current) return;
-              dragEnded.current = false;
+              if (dragEnded.current) {
+                dragEnded.current = false;
+                e.preventDefault();
+                return;
+              }
+              // Ctrl/Cmd, Shift or a middle click follow the link to its detail page.
+              if (!asks(n) || e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey) return;
               e.preventDefault();
+              setSaid(null);
+              setAsking({ task: n.task!, action: null });
             }}
             {...(movable(n) ? nodeHandlers(n) : {})}
             {...(n.task ? {} : { target: "_blank", rel: "noreferrer" })}
@@ -376,14 +425,19 @@ export function Graph({ state, refresh, repo, narrow, showClosed, onShowClosed }
             {n.look === "pending" && (
               <circle class={styles.spinner} cx={shape.w - 18} cy={17} r={5} aria-hidden="true" />
             )}
-            <text
-              x={shape.w - (n.look === "pending" ? 30 : 12)}
-              y={21}
-              class={styles.status}
-              text-anchor="end"
-            >
-              {n.status}
-            </text>
+            {badge > 0 && (
+              <g class={styles.badge} aria-hidden="true">
+                <rect x={shape.w - 10 - badge} y={9} width={badge} height={16} rx={8} />
+                <text x={shape.w - 10 - badge / 2} y={21} text-anchor="middle">
+                  {count ? `?${count}` : "?"}
+                </text>
+              </g>
+            )}
+            {fits && (
+              <text x={shape.w - right} y={21} class={styles.status} text-anchor="end">
+                {status}
+              </text>
+            )}
             <text x={12} y={41} class={styles.title}>
               {shorten(title, chars)}
             </text>
@@ -391,6 +445,51 @@ export function Graph({ state, refresh, repo, narrow, showClosed, onShowClosed }
         );
       })}
     </svg>
+  );
+
+  // An issue's open questions: before the drag that opened them starts or queues it, or on
+  // their own from a click on its node.
+  const asked = asking?.task.questions ? { ...asking, questions: asking.task.questions } : null;
+  const dialog = asked && (
+    <div class={styles.backdrop} onClick={(e) => e.target === e.currentTarget && setAsking(null)}>
+      <div
+        class={styles.dialog}
+        role="dialog"
+        aria-modal="true"
+        aria-label={`Answer ${refOf(asked.task, false, 0)}'s questions`}
+      >
+        <p class={styles.asks}>
+          <b>
+            {asked.action?.action === "queue"
+              ? `Answer them to queue #${asked.task.number} after #${asked.action.after}`
+              : asked.action
+                ? `Answer them to start #${asked.task.number}`
+                : `${refOf(asked.task, !repo, 60)} waits for your answers`}
+          </b>
+          {asked.task.title}
+          <a
+            class={styles.details}
+            href={formatRoute({ repo, task: asked.task.key, run: null })}
+            onClick={() => setAsking(null)}
+          >
+            Open details
+          </a>
+        </p>
+        <Questions
+          task={asked.task}
+          questions={asked.questions}
+          then={asked.action ? (asked.action.action === "queue" ? "queue" : "start") : undefined}
+          submit={(body) =>
+            asked.action ? work.act(asked.action, body) : answer(asked.task, body)
+          }
+          onSent={(message) => {
+            setAsking(null);
+            if (!asked.action) setSaid(message);
+          }}
+          onCancel={() => setAsking(null)}
+        />
+      </div>
+    </div>
   );
 
   return (
@@ -417,6 +516,12 @@ export function Graph({ state, refresh, repo, narrow, showClosed, onShowClosed }
           </label>
         </li>
       </ul>
+      {said && (
+        <p class={styles.said} role="status">
+          {said}
+        </p>
+      )}
+      {dialog}
       {repo ? (
         <div class={styles.work}>
           <WorkArea
@@ -449,36 +554,6 @@ export function Graph({ state, refresh, repo, narrow, showClosed, onShowClosed }
           >
             {drawing}
           </div>
-          {asking?.task.questions && (
-            <div
-              class={styles.backdrop}
-              onClick={(e) => e.target === e.currentTarget && setAsking(null)}
-            >
-              <div
-                class={styles.dialog}
-                role="dialog"
-                aria-modal="true"
-                aria-label={`Answer #${asking.task.number}'s questions`}
-              >
-                <p class={styles.asks}>
-                  <b>
-                    {asking.action.action === "queue"
-                      ? `Answer them to queue #${asking.task.number} after #${asking.action.after}`
-                      : `Answer them to start #${asking.task.number}`}
-                  </b>
-                  {asking.task.title}
-                </p>
-                <Questions
-                  task={asking.task}
-                  questions={asking.task.questions}
-                  then={asking.action.action === "queue" ? "queue" : "start"}
-                  submit={(body) => work.act(asking.action, body)}
-                  onSent={() => setAsking(null)}
-                  onCancel={() => setAsking(null)}
-                />
-              </div>
-            </div>
-          )}
         </div>
       ) : (
         <>

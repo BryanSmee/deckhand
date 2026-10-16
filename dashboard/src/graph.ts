@@ -9,11 +9,13 @@ import type { Blocker, Edge, PrState, Task, WorkAction } from "./types";
 // What a node looks like: the graph's own families, not the list's (format.ts toneOf()).
 // Purple, GitHub's colour for merged, stays out: merged is implemented, green. "pending": an
 // action on it is on its way to the listener; not in the legend, it lasts a few seconds.
-export type Look = "idle" | "input" | "run" | "err" | "ready" | "done" | "pending";
+// "input": questions wait for answers; "talk": a brainstorm waits for its next comment.
+export type Look = "idle" | "input" | "talk" | "run" | "err" | "ready" | "done" | "pending";
 
 export const LOOKS: { look: Look; name: string; means: string }[] = [
   { look: "idle", name: "Waiting", means: "for a blocker, queued, or nothing started" },
-  { look: "input", name: "Needs input", means: "a question or a brainstorm waits for you" },
+  { look: "input", name: "Needs input", means: "questions wait for your answers: click to answer" },
+  { look: "talk", name: "Brainstorm", means: "waits for your next comment" },
   { look: "run", name: "Running", means: "being worked on" },
   { look: "err", name: "Error", means: "failed: what waits for it keeps waiting" },
   { look: "ready", name: "Ready for review", means: "its pull request" },
@@ -35,7 +37,8 @@ export interface GraphNode {
   task: Task | null;
 }
 
-// What it does now wins over how it ended: a run on a closed issue is still a run.
+// What it does now wins over how it ended: a run on a closed issue is still a run. Questions
+// win over a ready pull request (a follow-up run on it asked them), not over finished work.
 export function lookOf(t: {
   state?: Task["state"] | null;
   closed: Task["closed"];
@@ -43,17 +46,20 @@ export function lookOf(t: {
 }): Look {
   if (t.state && ["building-image", "working", "stopping"].includes(t.state)) return "run";
   if (t.closed === "completed" || t.pr?.state === "merged") return "done";
+  if (t.state === "needs-input") return "input";
   if (t.pr?.state === "ready") return "ready";
-  if (t.state && ["needs-input", "brainstorm", "idle-brainstorm"].includes(t.state)) {
-    return "input";
-  }
+  if (t.state === "brainstorm" || t.state === "idle-brainstorm") return "talk";
   if (t.state === "error" || t.state === "interrupted") return "err";
   return "idle";
 }
 
-function statusOf(look: Look, t: { state?: Task["state"] | null; closed: Task["closed"] }) {
+function statusOf(
+  look: Look,
+  t: { state?: Task["state"] | null; closed: Task["closed"]; pr?: { state: PrState } | null },
+) {
   if (look === "done") return t.closed === "completed" ? "Implemented" : "Merged";
   if (look === "ready") return "Ready for review";
+  if (look === "input" && t.pr?.state === "ready") return "Needs input, PR ready";
   if (t.closed === "not_planned") return "Closed, not planned";
   // "Done" in the list: its last run replied, which isn't implemented.
   if (t.state === "done") return "Run done";
@@ -188,12 +194,17 @@ function isClosed(n: GraphNode): boolean {
 // between them. Brainstorms are the column's (brainstormsOf()), and those over the backlog's,
 // unless an arrow touches them: what waits for one, or what it waits for, stays in sight. Closed ones are left out unless `showClosed`, or an issue waiting for one
 // still runs; `hidden` counts them. A hidden node takes its arrows with it. `pending`: the
-// actions on their way, drawn as done already, their nodes "Sending…".
+// actions on their way, drawn as done already, their nodes "Sending…"; `sending`: the keys of
+// tasks whose answers are on their way, "Sending…" too.
 export function graphOf(
   tasks: Task[],
   edges: Edge[],
   blockers: Blocker[],
-  { showClosed = false, pending = [] }: { showClosed?: boolean; pending?: Pending[] } = {},
+  {
+    showClosed = false,
+    pending = [],
+    sending: answered = [],
+  }: { showClosed?: boolean; pending?: Pending[]; sending?: string[] } = {},
 ): { nodes: GraphNode[]; edges: Edge[]; hidden: number } {
   const real = new Set(tasks);
   const column = new Set(brainstormsOf(tasks, pending).map((c) => c.key));
@@ -207,7 +218,7 @@ export function graphOf(
   for (const t of tasks) {
     if (NOT_WORK.includes(t.kind)) continue;
     if (elsewhere(t) && !linked(t.key)) continue;
-    const sending = expected.touched.has(t.key);
+    const sending = expected.touched.has(t.key) || answered.includes(t.key);
     const look = sending ? "pending" : lookOf(t);
     nodes.set(t.key, {
       key: t.key,

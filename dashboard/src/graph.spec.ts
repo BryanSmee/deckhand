@@ -139,10 +139,32 @@ test("the looks: implemented is green, not a run that ended done", () => {
   expect(lookOf(task(1, { pr: pr("ready") }))).toBe("ready");
   expect(lookOf(task(1, { pr: pr("draft") }))).toBe("idle");
   expect(lookOf(task(1, { state: "needs-input" }))).toBe("input");
-  expect(lookOf(task(1, { state: "idle-brainstorm" }))).toBe("input");
+  // A brainstorm's turn: an outline, not the questions' filled look.
+  expect(lookOf(task(1, { state: "idle-brainstorm" }))).toBe("talk");
+  expect(lookOf(task(1, { state: "brainstorm" }))).toBe("talk");
+  // A follow-up run on a ready pull request that asked: it waits for you, not for a review.
+  // Finished work still wins.
+  expect(lookOf(task(1, { state: "needs-input", pr: pr("ready") }))).toBe("input");
+  expect(lookOf(task(1, { state: "needs-input", pr: pr("merged") }))).toBe("done");
+  expect(lookOf(task(1, { state: "needs-input", closed: "completed" }))).toBe("done");
   expect(lookOf(task(1, { state: "working", closed: "completed" }))).toBe("run");
   expect(lookOf(task(1, { state: "interrupted" }))).toBe("err");
   expect(lookOf(task(1, { state: "queued" }))).toBe("idle");
+});
+
+test("a run that asked on a ready pull request says both", () => {
+  const pr = { number: 2, url: "", state: "ready" as const, readyAt: null };
+  const { nodes } = graphOf([task(1, { state: "needs-input", pr })], [], []);
+  expect(nodes.map((n) => [n.look, n.status])).toEqual([["input", "Needs input, PR ready"]]);
+});
+
+test("answers on their way: their node Sending…", () => {
+  const tasks = [task(1, { state: "needs-input" }), task(2, { state: "needs-input" })];
+  const { nodes } = graphOf(tasks, [], [], { sending: ["org/app#2"] });
+  expect(nodes.map((n) => [n.number, n.look, n.status])).toEqual([
+    [1, "input", "Needs input"],
+    [2, "pending", "Sending…"],
+  ]);
 });
 
 test("the issues tasks wait for are nodes too, even off the board", () => {

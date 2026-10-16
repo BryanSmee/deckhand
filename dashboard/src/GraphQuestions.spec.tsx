@@ -185,3 +185,109 @@ test("an issue waiting for answers has its whole title in its title attribute", 
   const title = within(list).getByText("Search results flicker when typing fast");
   expect(title.getAttribute("title")).toBe("Search results flicker when typing fast");
 });
+
+// A click on a node waiting for answers: its questions on the graph, sent on their own.
+const node = (name: RegExp) => screen.getByRole("listitem", { name });
+
+test("a click on a node waiting for answers opens them; they go, Sending… until it runs", async () => {
+  answer = () => Response.json({ message: "Answers sent: #138 continues." });
+  let rerun!: () => void;
+  const refresh = () => new Promise<void>((done) => (rerun = done));
+  render(<Dashboard state={state} error={null} refresh={refresh} />);
+  const item = node(/^#138 .*: Needs input, 3 questions$/);
+  expect(item.textContent).toContain("?3");
+  fireEvent.click(item);
+  const dialog = screen.getByRole("dialog", { name: "Answer #138's questions" });
+  expect(within(dialog).getByText("#138 waits for your answers")).toBeTruthy();
+  // The detail page the node's link opens.
+  const details = within(dialog).getByRole("link", { name: "Open details" });
+  expect(details.getAttribute("href")).toBe(item.getAttribute("href"));
+  // No start or queue: a partial answer goes too.
+  fireEvent.click(within(dialog).getByRole("button", { name: "Send answers" }));
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  expect(posted).toEqual([
+    {
+      url: "api/repos/acme/api/answer",
+      body: {
+        number: 138,
+        answers: [
+          { options: [1], text: "" },
+          { options: [0], text: "" },
+          { options: [], text: "" },
+        ],
+      },
+    },
+  ]);
+  expect(screen.getByText("Answers sent: #138 continues.")).toBeTruthy();
+  expect(node(/^#138 .*: Sending…/)).toBeTruthy();
+  rerun();
+  await waitFor(() => expect(node(/^#138 .*: Needs input/)).toBeTruthy());
+});
+
+test("on the All tab too; Escape and the backdrop close it without sending", async () => {
+  history.replaceState(null, "", "#/graph");
+  render(<Dashboard state={state} error={null} />);
+  fireEvent.click(node(/#138 .*: Needs input/));
+  expect(screen.getByRole("dialog", { name: "Answer #138's questions" })).toBeTruthy();
+  fireEvent.keyDown(window, { key: "Escape" });
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  fireEvent.click(node(/#138 .*: Needs input/));
+  const backdrop = screen.getByRole("dialog").parentElement!;
+  fireEvent.click(backdrop);
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(posted).toEqual([]);
+});
+
+test("a modifier click, or a node without parsed questions, follows its link", () => {
+  const labelled = {
+    ...state,
+    tasks: state.tasks.map((t) => (t.key === "acme/api#138" ? { ...t, questions: undefined } : t)),
+  };
+  const { unmount } = render(<Dashboard state={state} error={null} />);
+  const ctrl = fireEvent.click(node(/^#138 /), { ctrlKey: true });
+  expect(ctrl).toBe(true);
+  expect(screen.queryByRole("dialog")).toBeNull();
+  unmount();
+  render(<Dashboard state={labelled} error={null} />);
+  const item = node(/^#138 .*: Needs input$/);
+  expect(item.textContent).not.toContain("?");
+  expect(fireEvent.click(item)).toBe(true);
+  expect(screen.queryByRole("dialog")).toBeNull();
+});
+
+test("a run that asked on a ready pull request: Needs input, answered where it asked", async () => {
+  // A pull request's own task ("#pr-141"), its run waiting for answers on it.
+  const asked = {
+    ...state,
+    tasks: state.tasks.map((t) =>
+      t.key === "acme/api#pr-141"
+        ? {
+            ...t,
+            state: "needs-input" as const,
+            questions: {
+              source: "run" as const,
+              items: [{ title: null, text: "Rename it?", options: [] }],
+              raw: "1. Rename it?",
+            },
+          }
+        : t,
+    ),
+  };
+  answer = () => Response.json({ message: "Answers sent: #141 continues." });
+  render(<Dashboard state={asked} error={null} />);
+  const item = node(/^PR #141 .*: Needs input, PR ready, 1 question$/);
+  expect(item.textContent).toContain("?1");
+  fireEvent.click(item);
+  const dialog = screen.getByRole("dialog", { name: "Answer PR #141's questions" });
+  fireEvent.input(within(dialog).getByRole("textbox", { name: "Answer to question 1" }), {
+    target: { value: "Yes" },
+  });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Send answers" }));
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  expect(posted).toEqual([
+    {
+      url: "api/repos/acme/api/answer",
+      body: { number: 141, pr: true, answers: [{ options: [], text: "Yes" }] },
+    },
+  ]);
+});
