@@ -149,12 +149,12 @@ fail, posts an App comment ("Rerun from the dashboard by @user") where the run r
 queues those comments again in the run's mode, with that comment for the reactions. The
 issue's session volume carries what the run had done.
 
-The work area also sends ideas and bug reports to the repo's inbox:
+The dashboard's top bar (Inbox) sends ideas and bug reports to a repo's inbox:
 `POST /api/repos/<owner>/<repo>/inbox { kind: "idea" | "bug", text }` (`work.mjs`
 `sendToInbox`) posts the text on the inbox issue as the App's comment ("From the dashboard by
 @user", without the marker: it is an entry, not a reply), then queues the item a comment there
 would (`events.mjs` `inboxItem()`), with the signed-in user as its author. `api/state`'s
-`inboxes` says which inbox issues each repo read so far has, so the form offers only those.
+`inboxes` says which inbox issues each repo read so far has, so the form offers only those repos and inboxes.
 
 Reactions on the triggering comment follow its run: 👀 when it is received, then 🚀 (done),
 😕 (needs input) or 👎 (error) once the run that handled it is over.

@@ -1,8 +1,8 @@
-// The repo's inbox from the dashboard: an idea or a bug report, sent as the App's comment on
-// the inbox issue, which starts the run a comment there would (listener/work.mjs
-// sendToInbox()). Only the inboxes the repo has are offered; once sent, the comment's link,
-// then the run on the inbox's task when api/state lists it.
-import { useState } from "preact/hooks";
+// A repo's inbox from the dashboard's top bar: an idea or a bug report, sent as the App's
+// comment on the inbox issue, which starts the run a comment there would (listener/work.mjs
+// sendToInbox()). Only the repos with an inbox, and the inboxes they have, are offered; once
+// sent, the comment's link, then the run on the inbox's task when api/state lists it.
+import { useEffect, useState } from "preact/hooks";
 import { sendToInbox } from "./api";
 import { formatRoute } from "./route";
 import type { InboxEntry, InboxResult, Inboxes, Task } from "./types";
@@ -16,14 +16,106 @@ const KINDS = [
   { kind: "bug", key: "bugs", label: "Bug" },
 ] as const;
 
-interface Props {
-  repo: string;
-  // api/state's for this repo; undefined while the listener hasn't read its config.
-  inboxes: Inboxes | undefined;
+const hasInbox = (i: Inboxes | undefined) => !!(i?.ideas || i?.bugs);
+
+// The repos the form offers: those with an inbox, by name.
+export const inboxRepos = (inboxes: Record<string, Inboxes> | undefined) =>
+  Object.keys(inboxes ?? {})
+    .filter((r) => hasInbox(inboxes![r]))
+    .sort();
+
+interface DialogProps {
+  // api/state's: the repos whose config the listener has read.
+  inboxes: Record<string, Inboxes> | undefined;
   tasks: Task[];
-  submit?: (entry: InboxEntry) => Promise<InboxResult>;
+  // The tab open: picked first when it has an inbox.
+  repo: string | null;
+  onClose: () => void;
+  submit?: (repo: string, entry: InboxEntry) => Promise<InboxResult>;
   // Once sent: api/state read again, for the run.
   onSent?: () => void;
+}
+
+export function InboxDialog({
+  inboxes,
+  tasks,
+  repo: tab,
+  onClose,
+  submit = sendToInbox,
+  onSent = () => {},
+}: DialogProps) {
+  const repos = inboxRepos(inboxes);
+  const [picked, setPicked] = useState(() => (tab && repos.includes(tab) ? tab : null));
+  const repo = picked && repos.includes(picked) ? picked : (repos[0] ?? null);
+  useEffect(() => {
+    const close = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    // A link to the entry's run opens it: the dialog goes.
+    addEventListener("keydown", close);
+    addEventListener("hashchange", onClose);
+    return () => {
+      removeEventListener("keydown", close);
+      removeEventListener("hashchange", onClose);
+    };
+  }, []);
+  // The tab's repo, read and without an inbox: said, with the way to set one up.
+  const without = tab && inboxes?.[tab] && !hasInbox(inboxes[tab]) ? tab : null;
+
+  return (
+    <div class={styles.backdrop} onClick={(e) => e.target === e.currentTarget && onClose()}>
+      <div class={styles.dialog} role="dialog" aria-modal="true" aria-label="Send to an inbox">
+        <div class={styles.head}>
+          <h2 class={styles.title}>Send an idea or a bug report</h2>
+          <button type="button" class={styles.close} aria-label="Close" onClick={onClose}>
+            ×
+          </button>
+        </div>
+        {(without || !repos.length) && (
+          <p class={styles.note}>
+            {without
+              ? `${without} has no inbox for ideas or bug reports.`
+              : inboxes
+                ? "No repository has an inbox for ideas or bug reports."
+                : "Loading…"}{" "}
+            {inboxes && (
+              <a href={INBOX_DOCS} target="_blank" rel="noreferrer">
+                Set one up
+              </a>
+            )}
+          </p>
+        )}
+        {repo && (
+          <>
+            <label class={styles.repo}>
+              Repository
+              <select value={repo} onChange={(e) => setPicked(e.currentTarget.value)}>
+                {repos.map((r) => (
+                  <option key={r} value={r}>
+                    {r}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <Inbox
+              key={repo}
+              repo={repo}
+              inboxes={inboxes![repo]}
+              tasks={tasks}
+              submit={(entry) => submit(repo, entry)}
+              onSent={onSent}
+            />
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+interface Props {
+  repo: string;
+  inboxes: Inboxes;
+  tasks: Task[];
+  submit: (entry: InboxEntry) => Promise<InboxResult>;
+  onSent: () => void;
 }
 
 interface Sent {
@@ -33,33 +125,14 @@ interface Sent {
   before: string | null;
 }
 
-export function Inbox({
-  repo,
-  inboxes,
-  tasks,
-  submit = (entry) => sendToInbox(repo, entry),
-  onSent = () => {},
-}: Props) {
-  const offered = KINDS.filter((k) => inboxes?.[k.key]);
+// One repo's form: Idea or Bug (those it has), the text, Send.
+function Inbox({ repo, inboxes, tasks, submit, onSent }: Props) {
+  const offered = KINDS.filter((k) => inboxes[k.key]);
   const [picked, setPicked] = useState<InboxEntry["kind"] | null>(null);
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [sent, setSent] = useState<Sent | null>(null);
-  if (!inboxes) return null;
-  if (!offered.length) {
-    return (
-      <section class={styles.inbox} aria-label="Inbox">
-        <h2 class={styles.title}>Inbox</h2>
-        <p class={styles.note}>
-          {repo} has no inbox for ideas or bug reports.{" "}
-          <a href={INBOX_DOCS} target="_blank" rel="noreferrer">
-            Set one up
-          </a>
-        </p>
-      </section>
-    );
-  }
   const kind = offered.some((k) => k.kind === picked) ? picked! : offered[0].kind;
   const taskOf = (key: string | null) => (key && tasks.find((t) => t.key === key)) || null;
 
@@ -83,8 +156,7 @@ export function Inbox({
   const run = task?.runs[0] && task.runs[0].id !== sent?.before ? task.runs[0] : null;
 
   return (
-    <form class={styles.inbox} aria-label="Inbox" onSubmit={send}>
-      <h2 class={styles.title}>Inbox</h2>
+    <form class={styles.form} aria-label="Inbox" onSubmit={send}>
       <fieldset class={styles.fields} disabled={sending}>
         <div class={styles.kinds} role="radiogroup" aria-label="Kind">
           {offered.map((k) => (
@@ -102,7 +174,7 @@ export function Inbox({
         </div>
         <textarea
           class={styles.text}
-          rows={4}
+          rows={6}
           aria-label={kind === "idea" ? "The idea" : "The bug"}
           placeholder={
             kind === "idea"
@@ -113,11 +185,6 @@ export function Inbox({
           onInput={(e) => setText(e.currentTarget.value)}
         />
       </fieldset>
-      <div class={styles.actions}>
-        <button type="submit" class={styles.send} disabled={!text.trim() || sending}>
-          {sending ? "Sending…" : "Send"}
-        </button>
-      </div>
       {error && (
         <p class={`${styles.said} ${styles.failed}`} role="alert">
           {error}
@@ -143,6 +210,11 @@ export function Inbox({
           )}
         </p>
       )}
+      <div class={styles.actions}>
+        <button type="submit" class={styles.send} disabled={!text.trim() || sending}>
+          {sending ? "Sending…" : "Send"}
+        </button>
+      </div>
     </form>
   );
 }

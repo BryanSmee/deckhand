@@ -8,7 +8,6 @@
 import type { JSX } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
 import { useWorkArea } from "./api";
-import { Inbox } from "./Inbox";
 import { Brainstorms } from "./Brainstorms";
 import { inChip, kindName } from "./format";
 import {
@@ -431,15 +430,7 @@ export function Graph({ state, refresh, repo, narrow, showClosed, onShowClosed }
             onMode={setMode}
             notice={notice}
             onAct={request}
-          >
-            <Inbox
-              key={repo}
-              repo={repo}
-              inboxes={state?.inboxes?.[repo]}
-              tasks={state?.tasks ?? []}
-              onSent={() => void refresh?.()}
-            />
-          </WorkArea>
+          />
           <Brainstorms
             repo={repo}
             cards={brainstorms}

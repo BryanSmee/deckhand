@@ -7,6 +7,7 @@ import { useEffect, useState } from "preact/hooks";
 import { type RepoList, useAppState, useRepos } from "./api";
 import { Detail } from "./Detail";
 import { Graph } from "./Graph";
+import { InboxDialog } from "./Inbox";
 import { type ChipId, CHIPS, inChip, isLive } from "./format";
 import { useReadyNotifications } from "./notify";
 import { notOnboarded, Repos } from "./Repos";
@@ -91,6 +92,8 @@ export function Dashboard({ state, error, repos, refresh }: Props) {
     return CHIPS.some((c) => c.id === saved) ? (saved as ChipId) : "all";
   });
   const [showClosed, setShowClosed] = useState(() => stored("graphClosed") === "1");
+  // The inbox dialog: an idea or a bug report for a repo.
+  const [inbox, setInbox] = useState(false);
   const wide = useWide();
   const tasks = state?.tasks ?? [];
   const now = state?.now ?? Date.now();
@@ -175,6 +178,18 @@ export function Dashboard({ state, error, repos, refresh }: Props) {
               {waiting > 0 && <span class={styles.waiting}>{waiting}</span>}
             </a>
           )}
+          {state && (
+            <button
+              type="button"
+              class={styles.link}
+              aria-haspopup="dialog"
+              aria-expanded={inbox}
+              title="Send an idea or a bug report to a repository's inbox"
+              onClick={() => setInbox(true)}
+            >
+              Inbox
+            </button>
+          )}
         </nav>
         {notify.permission === "default" && (
           <button
@@ -193,6 +208,15 @@ export function Dashboard({ state, error, repos, refresh }: Props) {
           </form>
         )}
       </header>
+      {inbox && state && (
+        <InboxDialog
+          inboxes={state.inboxes}
+          tasks={tasks}
+          repo={route.repo}
+          onClose={() => setInbox(false)}
+          onSent={() => void refresh?.()}
+        />
+      )}
       {onGraph ? (
         <>
           <div class={styles.tabs}>
