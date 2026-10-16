@@ -28,9 +28,10 @@ Run the first four before pushing (the dashboard's when it changed). Work runs o
 repository start with the dashboard's packages installed (`setup` in `.deckhand.yaml`) and
 the npm cache kept between runs.
 
-Work runs also have a container engine (`docker`, `DOCKER_HOST=tcp://engine:2375`), but no
-webhooks: test the listener through the injectable seams below, and say in the pull request
-what you could not run. The engine is another machine: `-v "$PWD:…"` mounts its empty
+Work runs also have a container engine (`docker`, `DOCKER_HOST=tcp://engine:2375`) when the
+operator grants one (your prompt says whether this run has it), but never webhooks: test the
+listener through the injectable seams below, and say in the pull request what you could not
+run. The engine is another machine: `-v "$PWD:…"` mounts its empty
 directory, not your clone, so send files with `tar` on stdin. With the engine:
 
 ```sh

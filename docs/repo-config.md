@@ -212,7 +212,8 @@ repositories whose branches they trust like the default branch.
 A sandbox has no Docker of its own, so a change to a Dockerfile or a compose file would ship
 untested. With `docker: true`, each work run gets a container engine next to its sandbox
 (set up by the operator: [Setup](setup.md#container-engine)), and the sandbox the `docker`
-CLI with buildx and compose, pointed at it (`DOCKER_HOST=tcp://engine:2375`):
+CLI with buildx and compose, pointed at it (`DOCKER_HOST=tcp://engine:2375`). The agent's
+prompt says whether its run has an engine, and whether it answered:
 
 ```sh
 docker build -t app .
