@@ -28,7 +28,11 @@ const publicCa = createAuthority({ dir: temp("public-ca") });
 await publicCa.ready();
 const nameOf = (pem) => new X509Certificate(pem).subject.replace(/^CN=/, "");
 
-async function setup(t, { upstreamCa = publicCa.certificate(), cacheOn = true } = {}) {
+// `decrypt`: the listener's answer for cached.test, false for a container engine's address.
+async function setup(
+  t,
+  { upstreamCa = publicCa.certificate(), cacheOn = true, decrypt = true } = {},
+) {
   const seen = [];
   const contexts = {};
   for (const host of ["cached.test", "other.test"]) {
@@ -52,7 +56,8 @@ async function setup(t, { upstreamCa = publicCa.certificate(), cacheOn = true } 
   const proxy = createProxy({
     policy: async (ip, host) => {
       asked.push(host);
-      return { allowed: true, private: true, cache: host === "cached.test" };
+      const cache = host === "cached.test";
+      return { allowed: true, private: true, cache, decrypt: cache && decrypt };
     },
     lookup: async () => [{ address: "127.0.0.1", family: 4 }],
     blocked: () => false,
@@ -142,6 +147,12 @@ test("other hosts, or the cache off: a raw tunnel, with the real server's certif
   const direct = await off.get("cached.test", "/y", publicCa.certificate());
   assert.equal(direct.headers["x-deckhand-cache"], undefined);
   assert.equal(direct.issuer, nameOf(publicCa.certificate()));
+
+  // A cached host, from a container engine: its HTTPS isn't decrypted.
+  const engine = await setup(t, { decrypt: false });
+  const tunnelled = await engine.get("cached.test", "/z", publicCa.certificate());
+  assert.equal(tunnelled.headers["x-deckhand-cache"], undefined);
+  assert.equal(tunnelled.issuer, nameOf(publicCa.certificate()));
 });
 
 test("an upstream certificate that doesn't verify is refused, not passed on", async (t) => {

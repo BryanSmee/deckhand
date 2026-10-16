@@ -1293,6 +1293,7 @@ mounts:
       allowed: false,
       private: false,
       cache: false,
+      decrypt: false,
     });
     release();
   });

@@ -510,11 +510,14 @@ export function createHttp(ctx, { dashboardDir }) {
     }
     const task = await taskAt(ip);
     const live = task?.live;
-    // Never for its container engine: its builds and containers don't trust Deckhand's CA.
-    const cached = live?.engineIp?.includes(ip) ? [] : live?.cached;
+    // Its container engine's plain HTTP is cached too, but its HTTPS never decrypted: its
+    // builds and containers don't trust Deckhand's CA.
+    const engine = !!live?.engineIp?.includes(ip);
     const answer = task
-      ? egressPolicy(host, live.hosts, live.trusted, cached, live.uncached ?? [])
-      : { allowed: false, private: false, cache: false };
+      ? egressPolicy(host, live.hosts, live.trusted, live.cached, live.uncached ?? [], {
+          decrypt: !engine,
+        })
+      : { allowed: false, private: false, cache: false, decrypt: false };
     if (!answer.allowed)
       log(`Egress: refused ${host} for ${task ? `${task.repo}#${task.id}` : ip}`);
     sendJson(res, answer);

@@ -221,7 +221,8 @@ test("the listener's policy: its answer, or refused when it can't answer", async
     asked.push(req.url);
     if (req.url.includes("broken")) return res.writeHead(500).end();
     const cache = req.url.includes("cached");
-    res.end(JSON.stringify({ allowed: req.url.includes("good"), private: true, cache }));
+    const decrypt = req.url.includes("decrypt");
+    res.end(JSON.stringify({ allowed: req.url.includes("good"), private: true, cache, decrypt }));
   });
   const port = await listening(listener);
   t.after(() => listener.close());
@@ -230,8 +231,11 @@ test("the listener's policy: its answer, or refused when it can't answer", async
     allowed: true,
     private: true,
     cache: false,
+    decrypt: false,
   });
   assert.equal((await policy("10.0.0.5", "good.cached.com")).cache, true);
+  assert.equal((await policy("10.0.0.5", "good.cached.com")).decrypt, false);
+  assert.equal((await policy("10.0.0.5", "good.cached.decrypt.com")).decrypt, true);
   assert.equal((await policy("10.0.0.5", "bad.com")).allowed, false);
   assert.equal((await policy("10.0.0.5", "broken.com")).allowed, false);
   assert.equal(asked[0], "/egress?ip=10.0.0.5&host=good.com");
