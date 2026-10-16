@@ -24,9 +24,30 @@ Conventions).
 | Format          | `npx --yes prettier@3 --check .` (`--write` to fix)                                                                                                                                                                                                                                      |
 | Dashboard (dev) | `cd dashboard && npm run dev` (proxies the API to a listener on `:8080`)                                                                                                                                                                                                                 |
 
-Run the first four before pushing (the dashboard's when it changed). The sandbox you run in has **no Docker** and receives no
-webhooks: test through the injectable seams below, and say in the pull request what you
-could not run.
+Run the first four before pushing (the dashboard's when it changed). Work runs on this
+repository start with the dashboard's packages installed (`setup` in `.deckhand.yaml`) and
+the npm cache kept between runs.
+
+Work runs also have a container engine (`docker`, `DOCKER_HOST=tcp://engine:2375`), but no
+webhooks: test the listener through the injectable seams below, and say in the pull request
+what you could not run. The engine is another machine: `-v "$PWD:…"` mounts its empty
+directory, not your clone, so send files with `tar` on stdin. With the engine:
+
+```sh
+# Build an image, from the root: listener, sandbox and proxy COPY from other directories.
+docker build -t deckhand-listener -f listener/Dockerfile .
+# Start it: ALLOWED_USERS is all it needs to come up. Ports answer on engine, not localhost.
+docker run -d --name listener -p 8080:8080 -e ALLOWED_USERS=someone deckhand-listener
+curl engine:8080/health
+# The tests on another Node: a Debian image (bash and git for the fakes), jq, not root.
+git ls-files -z | tar --null -T - -c | docker run --rm -i node:<v> sh -c \
+  'apt-get update -qq && apt-get install -y -qq jq && mkdir /w && cd /w && tar x &&
+   chown -R node . && su node -c "node --test"'
+```
+
+The engine is slower than the sandbox: a timing test failing there alone (`deliveries`,
+`previews`) passes on its own, so rerun its file before you suspect the change. Build the images a change touches (Dockerfiles, and the files they `COPY`), and stop what you
+started before you finish.
 
 ## Layout (target; build it as the issues land)
 

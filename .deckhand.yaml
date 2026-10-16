@@ -4,6 +4,13 @@ inbox:
   bugs: 16
   discussions: Ask Claude
 
+# Prettier (npx) and the dashboard's packages, downloaded once.
+caches:
+  - /home/node/.npm
+
+# The dashboard's build-time packages, for its tests and build (AGENTS.md).
+setup: cd dashboard && npm ci --no-audit --no-fund
+
 # A container engine for building and starting listener/Dockerfile and the other images.
 docker:
   cache: true
