@@ -434,6 +434,7 @@ ctx.workApi = createWorkApi({
   label: (repo, number, on) => ctx.label(repo, number, on),
   inputs,
   runOf: (id) => ctx.runsById.get(id) ?? null,
+  cancel: (key, user) => ctx.cancel(key, user),
   publicUrl,
   log,
 });

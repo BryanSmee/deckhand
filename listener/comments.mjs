@@ -3,16 +3,24 @@
 import { MARKER } from "./events.mjs";
 
 // GitHub's reactions have no ✅: 🚀 reads as "shipped" and isn't mistaken for a manual 👍.
-// A wrap-up ("/stop") only loses its 👀.
+// A wrap-up ("/stop") and a cancelled run's comments only lose their 👀; a `/cancel` gets 👍.
 const REACTIONS = {
   ok: "rocket",
   "needs-input": "confused",
   error: "-1",
   stopped: null,
+  cancelled: null,
+  acknowledged: "+1",
 };
 
 // GraphQL's names for the reactions above.
-const REACTION_ENUM = { eyes: "EYES", rocket: "ROCKET", confused: "CONFUSED", "-1": "THUMBS_DOWN" };
+const REACTION_ENUM = {
+  eyes: "EYES",
+  rocket: "ROCKET",
+  confused: "CONFUSED",
+  "-1": "THUMBS_DOWN",
+  "+1": "THUMBS_UP",
+};
 
 // Replies longer than GitHub takes are cut.
 function cut(text) {

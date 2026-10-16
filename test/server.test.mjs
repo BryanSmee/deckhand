@@ -53,6 +53,14 @@ case "$1" in
     done ;;
   wait)
     while alive "\${@: -1}"; do sleep 0.05; done ;;
+  stop)
+    # A cancelled run's sandbox; one the test says is stuck ignores it.
+    echo "$*" >> "${dir}/docker-calls"
+    n=\${@: -1}
+    [ -d "$c/$n" ] || exit 1
+    [ -e "${dir}/stuck" ] && exit 0
+    kill -TERM -- -"$(cat "$c/$n/pid")" 2> /dev/null
+    while alive "$n"; do sleep 0.05; done ;;
   rm)
     n=\${@: -1}
     [ -f "$c/$n/run" ] && sed -i "/^$n\$/d" "${dir}/nets/$(cat "$c/$n/run")" 2> /dev/null
@@ -1451,6 +1459,106 @@ mounts:
     });
     return [`${push.status} ${await push.text()}`, `${ready.status} ${await ready.text()}`];
   }
+
+  // The reactions a comment got, by content.
+  const reactions = (github, id) =>
+    github.requests
+      .filter(
+        (r) => r.method === "POST" && r.path === `/repos/org/repo/issues/comments/${id}/reactions`,
+      )
+      .map((r) => JSON.parse(r.body).content);
+
+  test("/cancel stops a working run: a short reply, no fallback, and what was queued runs next", async (t) => {
+    const ctx = await holding(t);
+    const { dir, github, send } = ctx;
+    // A brainstorm comment waits for the next run: it isn't the running session's mode.
+    await send(followUp(100, "Deckhand\n/mode brainstorm\nWhat else?"));
+    await ctx.listener.until("queued after the running one");
+    // The next run doesn't wait.
+    rmSync(join(dir, "hold"));
+    await send(followUp(101, "/cancel"));
+    await ctx.listener.until("done (cancelled)");
+    const calls = readFileSync(join(dir, "docker-calls"), "utf8");
+    assert.match(calls, /^stop -t 10 deckhand-org-repo-12-0e9572aae2$/m);
+    // The agent never got it; its sandbox and saved state went as usual, its volumes stay.
+    assert.doesNotMatch(ctx.listener.output(), /for the running session/);
+    assert.doesNotMatch(calls, /^volume rm/m);
+    const [stopped] = replies(github);
+    assert.match(
+      JSON.parse(stopped.body).body,
+      /^Stopped by @alice\.\n\n<sub>🤖 Claude opus · medium effort · 0 min<\/sub>/,
+    );
+    assert.doesNotMatch(JSON.parse(stopped.body).body, /stopped with an error/);
+    // Then the brainstorm runs: what was queued wasn't dropped.
+    await ctx.listener.until("done (ok)");
+    await settled(github, [100]);
+    assert.equal(replies(github).length, 2);
+    assert.deepEqual(reactions(github, 101), ["+1"]);
+    // 👀 only: no error, no 🚀 for the comment of the stopped run.
+    assert.deepEqual(reactions(github, 99), ["eyes"]);
+    assert.ok(
+      github.requests.some((r) => r.method === "DELETE" && /comments\/99\/reactions/.test(r.path)),
+    );
+    assert.doesNotMatch(ctx.listener.output(), /Falling back|done \(error\)/);
+    // The dashboard's list, rebuilt from the logs after a restart, keeps it cancelled.
+    await ctx.restart();
+    const logs = readdirSync(join(dir, "logs")).filter((f) => f.endsWith(".log"));
+    const cancelled = logs
+      .map((f) => readFileSync(join(dir, "logs", f), "utf8"))
+      .filter((text) => /"event":"cancelled","by":"alice"/.test(text));
+    assert.equal(cancelled.length, 1);
+  });
+
+  test("/cancel while the run is prepared: no sandbox starts, the run ends cancelled", async (t) => {
+    const ctx = await listen(t, {}, (dir) => {
+      const script = join(dir, "while-preparing");
+      writeFileSync(
+        script,
+        `#!/bin/bash\ntouch "${dir}/preparing"\nuntil [ -e "${dir}/prepared" ]; do sleep 0.05; done\n`,
+      );
+      chmodSync(script, 0o755);
+      return {};
+    });
+    const { dir, github } = ctx;
+    await ctx.send(comment("alice"));
+    await until(() => exists(join(dir, "preparing")) !== null, "the run's preparation");
+    await ctx.send(followUp(101, "/cancel"));
+    await ctx.listener.until("cancelled by alice");
+    writeFileSync(join(dir, "prepared"), "");
+    await ctx.listener.until("done (cancelled)");
+    assert.equal(exists(join(dir, "run-args")), null);
+    assert.equal(replies(github).length, 1);
+    assert.match(JSON.parse(replies(github)[0].body).body, /^Stopped by @alice\./);
+  });
+
+  test("/cancel with nothing running: a reply says so, nothing stops", async (t) => {
+    const ctx = await listen(t, {});
+    await ctx.send(comment("alice", "/cancel"));
+    await ctx.github.waitFor(
+      (r) => r.method === "POST" && r.path === "/repos/org/repo/issues/12/comments",
+    );
+    assert.match(JSON.parse(replies(ctx.github)[0].body).body, /^Nothing is running on #12\./);
+    assert.equal(exists(join(ctx.dir, "run-args")), null);
+  });
+
+  test("a listener restarted between the cancel and the exit: still cancelled, nothing requeued", async (t) => {
+    const ctx = await holding(t);
+    const { dir, github } = ctx;
+    writeFileSync(join(dir, "stuck"), "");
+    await ctx.send(followUp(101, "/cancel"));
+    await until(() => /^stop /m.test(exists(join(dir, "docker-calls")) ?? ""), "the stop");
+    rmSync(join(dir, "stuck"));
+    await ctx.restart();
+    await ctx.listener.until("done (cancelled)");
+    // Stopped again by the new listener, once.
+    const stops = readFileSync(join(dir, "docker-calls"), "utf8").match(/^stop /gm);
+    assert.equal(stops.length, 2);
+    assert.equal(replies(github).length, 1);
+    assert.match(JSON.parse(replies(github)[0].body).body, /^Stopped by @alice\./);
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    assert.doesNotMatch(ctx.listener.output(), /queued again|interrupted|queued \(work/);
+    assert.deepEqual(readdirSync(join(dir, "containers")), []);
+  });
 
   test("a brainstorm can't push or mark a pull request ready, before or after a restart", async (t) => {
     const ctx = await holding(t, "Deckhand\n/mode brainstorm\nWhat about dark mode?");

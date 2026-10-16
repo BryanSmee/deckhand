@@ -94,6 +94,7 @@ function runOf(logDir, file) {
   // Logs from before agents had names are Claude Code's.
   const agent = agentFor(meta.agent);
   const result = lastResult(lines, agent);
+  const stopper = cancelledBy(lines);
   const id = file.slice(0, -4);
   return {
     id,
@@ -120,11 +121,21 @@ function runOf(logDir, file) {
     startedAt: meta.startedAt ?? Number(id.match(/-(\d+)$/)?.[1] ?? 0),
     finishedAt: statSync(logPath).mtimeMs,
     // Unfinished and not ours: the listener restarted during the run.
-    status: result ? outcome(result) : "interrupted",
-    summary: summaryOf(result),
+    status: stopper ? "cancelled" : result ? outcome(result) : "interrupted",
+    summary: stopper ? `Stopped by @${stopper}` : summaryOf(result),
     questions: questionsOf(result),
     logPath,
   };
+}
+
+// Who cancelled the run (runs.mjs cancel()), from its log, or null.
+function cancelledBy(lines) {
+  for (let i = lines.length - 1; i > 0; i--) {
+    if (!lines[i].includes('"cancelled"')) continue;
+    const e = parse(lines[i]);
+    if (e?.type === "listener" && e.event === "cancelled") return e.by ?? "?";
+  }
+  return null;
 }
 
 // A run as the dashboard gets it: without where its log is on disk, its questions (the task
@@ -180,6 +191,10 @@ const REASONS = {
 // The listener's own lines: a run's first line (what it is), notes and delivered comments.
 function listenerEntries(e, agent) {
   if (e.event === "note") return [{ kind: "meta", text: e.message }];
+  if (e.event === "cancelled") {
+    const time = new Date(e.at).toISOString().slice(11, 19);
+    return [{ kind: "meta", text: `Stopped by @${e.by} at ${time} UTC` }];
+  }
   if (e.event === "delivered") {
     const time = new Date(e.at).toISOString().slice(11, 19);
     const text = `New comment delivered to ${agent.displayName} at ${time} UTC: ${e.message}`;

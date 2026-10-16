@@ -242,6 +242,31 @@ test(
   },
 );
 
+test("runs: a cancelled run is cancelled after a restart, whatever its last result; its log says who", () => {
+  const dir = mkdtempSync(join(tmpdir(), "deckhand-"));
+  const result = { type: "result", result: "Half done.", duration_ms: 1000 };
+  const cancelled = {
+    type: "listener",
+    event: "cancelled",
+    by: "alice",
+    at: Date.UTC(2026, 0, 1, 9),
+  };
+  writeFileSync(
+    join(dir, "deckhand-org-repo-4-1000.log"),
+    [
+      line({ type: "listener", key: "org/repo#4", startedAt: 1000 }),
+      line(result),
+      line(cancelled),
+    ].join("\n"),
+  );
+  const [run] = loadRuns(dir);
+  assert.equal(run.status, "cancelled");
+  assert.equal(run.summary, "Stopped by @alice");
+  assert.deepEqual(format(line(cancelled)), [
+    { kind: "meta", text: "Stopped by @alice at 09:00:00 UTC" },
+  ]);
+});
+
 test("runs: the comments a run ran on come back from its log, for a rerun, not for the dashboard", () => {
   const dir = mkdtempSync(join(tmpdir(), "deckhand-"));
   const items = [

@@ -11,6 +11,7 @@
 //   close(run)           no more messages: the agent exits once it has answered
 //   closed(run)          whether close() was called, for a listener that restarts
 //   wait(name)           until it exits
+//   kill(name)           ends it now (a cancelled run): SIGTERM, then SIGKILL after 10 s
 //   remove(name, run)    the sandbox, its engine, its network and its inbox
 //   hasSession(name, agent)  whether its issue has a session of that agent already (a
 //                        previous run)
@@ -62,6 +63,9 @@ const PROXY_RETRY_MS = 2000;
 // How many free-looking blocks of SANDBOX_SUBNETS a run's network tries when Docker says
 // each overlaps (another project took it since the listener looked).
 const SUBNET_TRIES = 5;
+
+// How long a cancelled run's sandbox has between SIGTERM and SIGKILL.
+const KILL_GRACE_S = 10;
 
 // What compose.yaml labels the egress proxy with, so the listener finds it.
 const ROLE = "deckhand.role";
@@ -438,6 +442,11 @@ export function createDockerRunner({
     await docker(["wait", name]);
   }
 
+  async function kill(name) {
+    const { code, err } = await docker(["stop", "-t", String(KILL_GRACE_S), name]);
+    if (code !== 0) throw new Error(`docker stop ${name}: ${err || `exit ${code}`}`);
+  }
+
   // Without `run` (a leftover sandbox), its network is the one its label names.
   async function remove(name, run) {
     const net = run ?? (await runOf(name));
@@ -590,6 +599,7 @@ export function createDockerRunner({
     close,
     closed,
     wait,
+    kill,
     remove,
     hasSession,
     address,

@@ -37,6 +37,9 @@ import { redact } from "./secrets.mjs";
 // A run that can't start for a reason the maintainer can fix: the reply says it.
 export class RunError extends Error {}
 
+// A run cancelled before its sandbox started (cancel()): finish() ends it as cancelled.
+class Cancelled extends Error {}
+
 // `name`: the run's agent's (agents/).
 export function configErrors(base, errors, name = agentFor().displayName) {
   return `${name} can't run here: \`${CONFIG_FILE}\` on \`${base || "main"}\` has errors.\n\n${errors.map((e) => `- ${e}`).join("\n")}`;
@@ -307,6 +310,7 @@ export function createRuns(ctx) {
       later: {}, // "/model" and "/effort" that came too late for this run
       unanswered: [], // delivered since the agent's last result
       handled: [...items], // its comments and those delivered to it, for their reactions
+      cancelled: null, // { by, at } once someone stopped it (cancel())
       saving: null,
     };
   }
@@ -334,6 +338,8 @@ export function createRuns(ctx) {
     const { ca, cached } = await egressCache(access.grant, note);
     live.cached = cached;
     if (ctx.stopping) return false;
+    // Cancelled while it was prepared (its image building, say): no sandbox starts.
+    if (live.cancelled) throw new Cancelled();
     const prompt = promptFor(task, {
       mode: live.mode,
       text,
@@ -350,6 +356,8 @@ export function createRuns(ctx) {
       const spec = sandboxSpec(task, prompt, message, { ...prepared, ...access, engine, ca });
       const started = await ctx.runner.start(spec);
       if (started?.engine) note(engineNote(started.engine, engine));
+      // Cancelled while Docker started it: cancel()'s kill came too early to find it.
+      if (live.cancelled) await ctx.runner.kill(task.name);
     } catch (error) {
       // Its network (not internal, no proxy to join), or Docker refusing the container.
       throw new RunError(`${agentOf(task).displayName} couldn't start: ${error.message}`);
@@ -841,6 +849,66 @@ export function createRuns(ctx) {
     return done;
   }
 
+  // Stops the task's run now (a `/cancel` comment, the dashboard's Stop): marked cancelled in
+  // its log and saved state first, so a listener restarting before the sandbox exits still
+  // knows, then its sandbox is stopped. The follow loop sees it exit and finish() ends the
+  // run as cancelled. Comments waiting for a follow-up run stay queued. A task with no run
+  // going loses its queued comments instead. `by`: who stopped it. Returns "running",
+  // "queued" or null when there was nothing to stop.
+  function cancel(key, by) {
+    const task = ctx.tasks.get(key);
+    if (!task) return null;
+    const live = task.live;
+    if (live && !live.finishing && !live.cancelled) {
+      live.cancelled = { by, at: Date.now() };
+      // Nothing more goes to its inbox: what waits is for the next run.
+      live.open = false;
+      const event = { type: "listener", event: "cancelled", ...live.cancelled };
+      live.logFile.write(JSON.stringify(event) + "\n");
+      log(`${key}: cancelled by ${by}`);
+      ctx
+        .saveLive(task)
+        // Not started yet (start() checks), or gone already: nothing to stop.
+        .then(() => ctx.runner.kill(task.name))
+        .catch((error) => log(`${key}: stopping its sandbox: ${error.message ?? error}`));
+      return "running";
+    }
+    if (live?.cancelled) return "running";
+    if (!task.pending.length) return null;
+    // Waiting for a slot or their pause, or for a run that is ending: dropped, their 👀 off.
+    clearTimeout(task.timer);
+    task.ready = false;
+    for (const item of task.pending.splice(0)) ctx.track(ctx.settle(item, "cancelled"));
+    log(`${key}: queued comments dropped by ${by}`);
+    return "queued";
+  }
+
+  // A cancelled run's end: a short reply, no fallback, and nothing put back in the queue
+  // (what was delivered went with the run). Its session and pushed commits stay.
+  async function endCancelled(task) {
+    const live = task.live;
+    const { key, record } = live;
+    const { by } = live.cancelled;
+    removeEmptyShots(live);
+    if (!live.replied) {
+      // How long it ran, setup included: it may have no result to say.
+      const ran = { durationMs: live.cancelled.at - record.startedAt };
+      const footer = replyFooter(record, ran, "", live.later);
+      await ctx.answer(target(task, live.replyTo), `Stopped by @${by}.\n\n${footer}`);
+      live.replied = true;
+      ctx.saveLive(task);
+    }
+    log(`${key}: done (cancelled)`);
+    record.status = "cancelled";
+    record.summary = `Stopped by @${by}`;
+    record.questions = null;
+  }
+
+  function removeEmptyShots(live) {
+    const shots = live.shots && join(ctx.shotsDir, live.shots);
+    if (shots && existsSync(shots) && !readdirSync(shots).length) rmdirSync(shots);
+  }
+
   // The comment answered last decides where the reply goes (a discussion's thread).
   function target(task, replyTo) {
     return { ...task, replyTo, comment: task.live.handled.at(-1)?.comment };
@@ -852,6 +920,7 @@ export function createRuns(ctx) {
     const live = task.live;
     const { key, record } = live;
     live.open = false;
+    live.finishing = true;
     // Its address goes back to Docker, which may give it to another sandbox before the
     // reply is posted: the egress proxy's answers for it stop now.
     live.hosts = null;
@@ -861,11 +930,12 @@ export function createRuns(ctx) {
     live.ip = null;
     live.engineIp = null;
     try {
+      // Stopped on purpose: whatever the exit looked like, not an error.
+      if (live.cancelled) return await endCancelled(task);
       if (error) throw error;
       // The agent exited before answering a delivered comment (a crash): the next run gets it.
       if (live.unanswered.length) task.pending.unshift(...live.unanswered);
-      const shots = live.shots && join(ctx.shotsDir, live.shots);
-      if (shots && existsSync(shots) && !readdirSync(shots).length) rmdirSync(shots);
+      removeEmptyShots(live);
       const status = outcome(live.result);
       const apiStatus = ctx.broker.runOf(live.secret)?.apiStatus;
       const fallback =
@@ -947,7 +1017,11 @@ export function createRuns(ctx) {
     // Comments put back for the next run keep their 👀 until that one is over. Light runs
     // ask questions all along, like for the label: their replies are "done".
     const status =
-      !light || record.status === "error" ? record.status : mode === "stop" ? "stopped" : "ok";
+      !light || ["error", "cancelled"].includes(record.status)
+        ? record.status
+        : mode === "stop"
+          ? "stopped"
+          : "ok";
     for (const item of live.handled) {
       if (!task.pending.includes(item)) ctx.track(ctx.settle(item, status));
     }
@@ -979,5 +1053,5 @@ export function createRuns(ctx) {
     }
   }
 
-  return { run, follow, ending, dropRefused };
+  return { run, follow, ending, dropRefused, cancel };
 }

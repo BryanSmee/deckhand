@@ -286,6 +286,7 @@ test("rerunnable: the latest run failed or was lost, work on an issue or pull re
       failed("a/b#11", 100, { status: "ok" }),
       failed("a/b#11", 50),
       failed("a/b#12", 100),
+      failed("a/b#13", 100, { status: "cancelled" }),
     ],
     queued: [{ key: "a/b#7", kind: "issue", repo: "a/b", replyTo: 7 }],
     brainstorms: [],
@@ -293,7 +294,11 @@ test("rerunnable: the latest run failed or was lost, work on an issue or pull re
     inputs: [{ key: "a/b#12", repo: "a/b", since: 1 }],
   });
   const yes = tasks.filter((t) => t.rerunnable).map((t) => t.key);
-  assert.deepEqual(yes.sort(), ["a/b#1", "a/b#2", "a/b#pr-3"]);
+  assert.deepEqual(yes.sort(), ["a/b#1", "a/b#13", "a/b#2", "a/b#pr-3"]);
+  // Cancelled: its own state, over.
+  const cancelled = tasks.find((t) => t.key === "a/b#13");
+  assert.equal(cancelled.state, "cancelled");
+  assert.equal(isLive(cancelled), false);
 });
 
 test("isLive: a stopped brainstorm whose wrap-up is done is over, an idle one isn't", () => {
