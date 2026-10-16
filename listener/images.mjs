@@ -11,6 +11,7 @@
 import { createHash } from "node:crypto";
 import { rmSync } from "node:fs";
 import { join } from "node:path";
+import { checked, hardening, labelArgs, removeVolume, volumeExists } from "./docker.mjs";
 import { cacheVolume, repoImage } from "./repo-config.mjs";
 
 // Tags kept per repo image: the default branch's and those of a few branches in flight.
@@ -83,7 +84,7 @@ export function createImages({
     log(`${repo}: building ${tag} from ${dockerfile} at ${ref}`);
     const dir = await checkout(repo, ref);
     try {
-      const { code, err } = await docker(
+      const built = await docker(
         [
           "build",
           "--progress",
@@ -92,8 +93,7 @@ export function createImages({
           // the operator's image name isn't written in every repo.
           "--build-arg",
           `DECKHAND_BASE=${config.image}`,
-          "--label",
-          `deckhand.repo=${repo.toLowerCase()}`,
+          ...labelArgs({ "deckhand.repo": repo.toLowerCase() }),
           "-t",
           tag,
           "-f",
@@ -102,11 +102,7 @@ export function createImages({
         ],
         { onData: output },
       );
-      if (code !== 0) {
-        throw new Error(
-          `building ${dockerfile} of ${repo} failed (exit ${code})${err ? `: ${err}` : ""}`,
-        );
-      }
+      checked(built, `building ${dockerfile} of ${repo} failed`);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -145,8 +141,7 @@ export function createImages({
           // npm's registry, outside the runs' networks: no repo or agent input runs here.
           "--network",
           config.installNetwork,
-          ...["--user", "0"],
-          ...["--cap-drop", "ALL", "--cap-add", "CHOWN", "--security-opt", "no-new-privileges"],
+          ...["--user", "0", ...hardening("CHOWN")],
           "-e",
           `${versionVar}=${version}`,
           "-v",
@@ -156,11 +151,8 @@ export function createImages({
           config.image,
         ],
         { onData: output },
-      ).then(({ code, err }) => {
-        if (code !== 0) {
-          const what = `${agent.displayName} ${version}`;
-          throw new Error(`installing ${what} failed: ${err || `exit ${code}`}`);
-        }
+      ).then((result) => {
+        checked(result, `installing ${agent.displayName} ${version} failed`);
       });
       // A failure is not kept: the next run tries again.
       install.catch(() => installs.get(key) === install && installs.delete(key));
@@ -187,24 +179,19 @@ export function createImages({
   }
 
   async function cacheReady(repo, path, name, image) {
-    if ((await docker(["volume", "inspect", name])).code === 0) return;
-    const labels = [
-      "--label",
-      `deckhand.repo=${repo.toLowerCase()}`,
-      "--label",
-      `deckhand.cache=${path}`,
-    ];
-    const created = await docker(["volume", "create", ...labels, name]);
-    if (created.code !== 0) throw new Error(`creating the cache volume ${name}: ${created.err}`);
+    if (await volumeExists(docker, name)) return;
+    const labels = labelArgs({ "deckhand.repo": repo.toLowerCase(), "deckhand.cache": path });
+    checked(
+      await docker(["volume", "create", ...labels, name]),
+      `creating the cache volume ${name}`,
+    );
     const owned = await docker([
       "run",
       "--rm",
       "--network",
       "none",
-      "--user",
-      "0",
       // Root for chown, and nothing else.
-      ...["--cap-drop", "ALL", "--cap-add", "CHOWN", "--security-opt", "no-new-privileges"],
+      ...["--user", "0", ...hardening("CHOWN")],
       "--entrypoint",
       "chown",
       "-v",
@@ -213,10 +200,8 @@ export function createImages({
       "1000:1000",
       path,
     ]);
-    if (owned.code !== 0) {
-      await docker(["volume", "rm", name]); // so the next run prepares it again
-      throw new Error(`preparing the cache volume ${name}: ${owned.err}`);
-    }
+    if (owned.code !== 0) await removeVolume(docker, name); // so the next run prepares it again
+    checked(owned, `preparing the cache volume ${name}`);
   }
 
   return { baseId, imageFor, installAgent, caches, building: () => [...builds.keys()] };
