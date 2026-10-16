@@ -225,3 +225,13 @@ test("an error with nothing seen yet says it can't read the issues", async () =>
   gate.release();
   expect(await screen.findByText("Can't read the issues (GitHub is down.).")).toBeTruthy();
 });
+
+test("a card's title, clamped to two lines, is whole in its title attribute", async () => {
+  open("#/graph/acme/app");
+  const area = screen.getByRole("region", { name: "Work area" });
+  const title = await within(area).findByText("Export the run log");
+  expect(title.getAttribute("title")).toBe("Export the run log");
+  const waiting = within(area).getByRole("list", { name: "Waiting issues" });
+  const queued = within(waiting).getByText("Per-repo budgets in the dashboard");
+  expect(queued.getAttribute("title")).toBe("Per-repo budgets in the dashboard");
+});

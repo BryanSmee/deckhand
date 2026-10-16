@@ -240,3 +240,8 @@ test("an issue with open questions dropped on the column asks them first", async
   expect(screen.getByRole("dialog", { name: "Answer #138's questions" })).toBeTruthy();
   expect(posted).toEqual([]);
 });
+
+test("a card's whole title is in its title attribute", async () => {
+  const { cards } = await show([brainstorm(150, "brainstorm")]);
+  expect(within(cards()).getByText("Brainstorm 150").getAttribute("title")).toBe("Brainstorm 150");
+});

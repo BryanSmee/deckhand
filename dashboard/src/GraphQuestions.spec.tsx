@@ -179,3 +179,9 @@ test("a repo that doesn't wait for answers: Start goes without the questions", a
     ]),
   );
 });
+
+test("an issue waiting for answers has its whole title in its title attribute", async () => {
+  const list = await area();
+  const title = within(list).getByText("Search results flicker when typing fast");
+  expect(title.getAttribute("title")).toBe("Search results flicker when typing fast");
+});

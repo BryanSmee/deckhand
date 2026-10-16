@@ -128,7 +128,9 @@ export function Brainstorms({
                 >
                   {repo ? "" : `${c.repo.slice(c.repo.indexOf("/") + 1)} `}#{c.number}
                 </a>
-                <span class={styles.name}>{c.title ?? `Issue #${c.number}`}</span>
+                <span class={styles.name} title={c.title ?? `Issue #${c.number}`}>
+                  {c.title ?? `Issue #${c.number}`}
+                </span>
               </div>
               <span class={styles.note}>
                 <span class={styles.state}>{status}</span>
