@@ -497,6 +497,12 @@ the run's issue or pull request, and only for the task's latest run when it ende
 or `interrupted`: it queues the comments that run had already been allowed to act on, as the
 signed-in user's, and posts the App's comment saying who asked.
 
+An inbox entry sent from the dashboard (`POST /api/repos/<owner>/<repo>/inbox`) passes the
+repository's half of these checks (same origin, the user in `ALLOWED_USERS` and the repo's
+`users`, a config without errors), and only for an inbox the repo's config names. Its text is
+posted on the inbox issue as the App's comment, ending "From the dashboard by @alice", and its
+run reads it as that user's entry, as it would read their own comment there.
+
 ## Hardening
 
 Every sandbox runs:

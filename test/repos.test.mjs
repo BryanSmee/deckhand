@@ -630,3 +630,15 @@ test("POST /api/repos/refresh: lists the installations' repos again", async () =
   assert.equal((await call(api, "POST", "/api/repos/refresh")).status, 429);
   assert.equal(listings(), 2);
 });
+
+test("known() and usersOf(): the repos read, with their inbox issues (the dashboard's form)", async () => {
+  const { list } = setup({
+    first: [info("Org/App"), info("org/lib")],
+    files: { "Org/App": "inbox:\n  ideas: 4\n" },
+  });
+  assert.deepEqual(list.known(), []);
+  await list.list();
+  // A repo without a config has no settings read: only the configured one.
+  assert.deepEqual(list.known(), ["Org/App"]);
+  assert.deepEqual(list.usersOf("org/app").inbox, { ideas: 4 });
+});

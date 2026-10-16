@@ -149,6 +149,13 @@ fail, posts an App comment ("Rerun from the dashboard by @user") where the run r
 queues those comments again in the run's mode, with that comment for the reactions. The
 issue's session volume carries what the run had done.
 
+The dashboard's top bar (Feedback) sends ideas and bug reports to a repo's inbox:
+`POST /api/repos/<owner>/<repo>/inbox { kind: "idea" | "bug", text }` (`work.mjs`
+`sendToInbox`) posts the text on the inbox issue as the App's comment ("From the dashboard by
+@user", without the marker: it is an entry, not a reply), then queues the item a comment there
+would (`events.mjs` `inboxItem()`), with the signed-in user as its author. `api/state`'s
+`inboxes` says which inbox issues each repo read so far has, so the form offers only those repos and inboxes.
+
 Reactions on the triggering comment follow its run: 👀 when it is received, then 🚀 (done),
 😕 (needs input) or 👎 (error) once the run that handled it is over.
 
@@ -378,7 +385,7 @@ which starts runs.
 | `onboarding.mjs`, `previews.mjs`                                  | Onboarding issues; preview hooks.                                                                  |
 | `conflicts.mjs`                                                   | The conflict watcher: open task pull requests in conflict get a rebase run (`conflicts.json`).     |
 | `waits.mjs`                                                       | Comments waiting for other issues to be done (`/after`, `waits.json`).                             |
-| `work.mjs`                                                        | The graph's work area: the backlog, starting or queueing issues, and reruns from the dashboard.    |
+| `work.mjs`                                                        | The graph's work area: the backlog, starting or queueing issues, reruns and inbox entries.         |
 | `board.mjs`, `titles.mjs`, `pulls.mjs`, `repos.mjs`, `static.mjs` | The dashboard's tasks, titles and closed states, pull requests, repository list and files.         |
 | `repo-view.mjs`                                                   | A repository's config as the dashboard shows it: what its runs get, from the runs' own checks.     |
 | `store.mjs`, `html.mjs`, `web.mjs`                                | Shared helpers: JSON state files written atomically; the small HTML pages; `sendJson`, `readBody`. |

@@ -2677,7 +2677,7 @@ mounts:
       "githubUrl",
       "now",
     ],
-    ["previews"],
+    ["previews", "inboxes"],
   ];
   const TASK_KEYS = [
     [

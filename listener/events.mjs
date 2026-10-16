@@ -197,6 +197,24 @@ export function workItem(config, event, p, skip = () => null) {
   return item;
 }
 
+// An inbox entry's item ("idea" or "bug"): a comment on the inbox issue, or the App's comment
+// for an entry sent from the dashboard (work.mjs), where `author` is who sent it and `body` its
+// text without the App's line.
+export function inboxItem(repo, issue, trigger, comment, author, body) {
+  const n = issue.number;
+  return {
+    repo,
+    id: String(n),
+    kind: "issue",
+    number: n,
+    title: issue.title ?? null,
+    replyTo: n,
+    comment,
+    trigger,
+    text: entry(author, comment.html_url, body),
+  };
+}
+
 // A comment on an issue or a pull request (pull requests are issues to that event).
 function issueCommentItem(config, event, p, skip) {
   if (p.action !== "created") return undefined;
@@ -206,6 +224,12 @@ function issueCommentItem(config, event, p, skip) {
   if (p.issue.pull_request) {
     return prItem(config, skip, repo, p.issue, { trigger, mode, after }, text, p.comment);
   }
+  // Every comment on an inbox issue is an entry: trigger lines don't apply there.
+  const inbox = [
+    ["idea", config.inbox?.ideas],
+    ["bug", config.inbox?.bugs],
+  ].find(([, number]) => number === p.issue.number)?.[0];
+  if (inbox) return inboxItem(repo, p.issue, inbox, p.comment, p.comment.user, body);
   const n = p.issue.number;
   const issue = {
     repo,
@@ -216,13 +240,6 @@ function issueCommentItem(config, event, p, skip) {
     replyTo: n,
     comment: p.comment,
   };
-  // Every comment on an inbox issue is an entry: trigger lines don't apply there.
-  const inbox = [
-    ["idea", config.inbox?.ideas],
-    ["bug", config.inbox?.bugs],
-  ].find(([, number]) => number === n)?.[0];
-  if (inbox)
-    return { ...issue, trigger: inbox, text: entry(p.comment.user, p.comment.html_url, body) };
   return { ...issue, trigger, modeLine: mode, after, text };
 }
 

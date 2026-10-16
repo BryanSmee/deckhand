@@ -159,6 +159,9 @@ export interface State {
   queued: number;
   maxParallel: number;
   previews?: Preview[];
+  // Each repo's inbox issues, for the repos whose config the listener has read: the
+  // dashboard's inbox form offers those it has (listener/work.mjs sendToInbox()).
+  inboxes?: Record<string, Inboxes>;
   // GITHUB_URL, without a trailing slash: where links go.
   githubUrl: string;
   // The server's clock: run times are compared with it.
@@ -307,4 +310,22 @@ export type AnswersThen =
 export interface WorkResult {
   message?: string;
   error?: string;
+}
+
+// A repo's inbox issues (.deckhand.yaml's `inbox`): null when it has none of that kind.
+export interface Inboxes {
+  ideas: number | null;
+  bugs: number | null;
+}
+
+// POST api/repos/<owner>/<repo>/inbox: an idea or a bug report for the repo's inbox.
+export interface InboxEntry {
+  kind: "idea" | "bug";
+  text: string;
+}
+
+// What it answers: the App's comment on the inbox issue, and the task its run is on.
+export interface InboxResult extends WorkResult {
+  url?: string;
+  task?: string;
 }

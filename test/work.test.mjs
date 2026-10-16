@@ -8,6 +8,7 @@ import { createWaits } from "../listener/waits.mjs";
 import { ISSUES_MS, createWorkApi, leadsTo, parseAction } from "../listener/work.mjs";
 import { MAX_TEXT } from "../listener/answers.mjs";
 import { board as boardOf } from "../listener/board.mjs";
+import { workItem } from "../listener/events.mjs";
 
 const ORIGIN = "https://deckhand.example.com";
 
@@ -38,6 +39,7 @@ function setup({
   const w = {
     calls: [],
     comments: [],
+    posted: [],
     accepted: [],
     eyes: [],
     settled: [],
@@ -52,8 +54,13 @@ function setup({
     clock: 1000,
   };
   let commentId = 500;
-  const github = async (repo, method, path) => {
+  const github = async (repo, method, path, body) => {
     w.calls.push(`${method} ${path}`);
+    const on = /\/issues\/(\d+)\/comments$/.exec(path)?.[1];
+    if (method === "POST" && on) {
+      w.posted.push([Number(on), body.body]);
+      return Response.json({ id: ++commentId, html_url: `c/${commentId}`, node_id: "N" });
+    }
     if (path === `/repos/${repo}`) {
       return repo === "org/app"
         ? Response.json({ default_branch: "main" })
@@ -895,4 +902,77 @@ test("rerun refused: users, a broken config, closed, busy, not the latest, not f
     { runId: "run-pr-8" },
     409,
   );
+});
+
+const sendInbox = (w, body, opts = {}) =>
+  call(w.api, "POST", "/api/repos/org/app/inbox", { body, ...opts });
+
+const INBOX = { inbox: { ideas: 12, bugs: 13 } };
+
+test("inbox: the App's comment on the inbox issue, and the run a comment there starts", async () => {
+  const w = setup({ settings: INBOX, issues: { 12: open("Ideas"), 13: open("Bugs") } });
+  const sent = await sendInbox(w, { kind: "idea", text: "  Dark mode\n" });
+  assert.equal(sent.status, 200);
+  assert.deepEqual(sent.body, { message: "Sent to #12.", url: "c/501", task: "org/app#12" });
+  // An entry, not a reply: no marker, so the run reads it as the user's.
+  assert.deepEqual(w.posted, [[12, "Dark mode\n\nFrom the dashboard by @alice"]]);
+  assert.deepEqual(w.comments, []);
+  const [item] = w.accepted;
+  // What the webhook makes of a comment on the inbox: the same trigger, text and target.
+  const hook = workItem({ ...loadConfig({ ALLOWED_USERS: "alice" }), ...INBOX }, "issue_comment", {
+    action: "created",
+    installation: { id: 1 },
+    repository: { full_name: "org/app" },
+    issue: { number: 12, title: "Ideas" },
+    comment: { id: 501, html_url: "c/501", body: "  Dark mode\n", user: { login: "alice" } },
+  });
+  for (const key of ["repo", "id", "kind", "number", "title", "trigger", "text", "replyTo"]) {
+    assert.deepEqual(item[key], hook[key], key);
+  }
+  assert.equal(item.text, "From @alice (c/501):\n\nDark mode");
+  assert.equal(item.author, "alice");
+  assert.equal(item.base, "main");
+  assert.deepEqual(item.comment, { id: 501, html_url: "c/501", node_id: "N" });
+  // A bug goes to the bugs inbox.
+  assert.equal((await sendInbox(w, { kind: "bug", text: "It crashes" })).status, 200);
+  assert.deepEqual(w.posted[1], [13, "It crashes\n\nFrom the dashboard by @alice"]);
+  assert.equal(w.accepted[1].trigger, "bug");
+});
+
+test("inbox refused, nothing posted: users, config errors, no such inbox, text, origin", async () => {
+  const issues = { 12: open("Ideas") };
+  const w = setup({
+    env: { ALLOWED_USERS: "alice,bob,carol" },
+    settings: { users: ["alice", "carol"], inbox: { ideas: 12 } },
+    issues,
+  });
+  const ok = { kind: "idea", text: "Dark mode" };
+  assert.equal((await sendInbox(w, ok, { user: null })).status, 401);
+  assert.equal((await sendInbox(w, ok, { origin: "https://evil.example" })).status, 403);
+  assert.equal((await sendInbox(w, ok, { origin: null })).status, 403);
+  // Not in ALLOWED_USERS, then not among the repo's users.
+  assert.equal((await sendInbox(w, ok, { user: "mallory" })).status, 403);
+  assert.equal((await sendInbox(w, ok, { user: "bob" })).status, 403);
+  // No bugs inbox.
+  const none = await sendInbox(w, { kind: "bug", text: "It crashes" });
+  assert.equal(none.status, 409);
+  assert.match(none.body.error, /no bug inbox/);
+  // Not a kind, no text, too long.
+  assert.equal((await sendInbox(w, { kind: "discussion", text: "x" })).status, 400);
+  assert.equal((await sendInbox(w, { kind: "idea", text: " \n " })).status, 400);
+  assert.equal((await sendInbox(w, { kind: "idea" })).status, 400);
+  const long = await sendInbox(w, { kind: "idea", text: "x".repeat(MAX_TEXT + 1) });
+  assert.equal(long.status, 413);
+  assert.equal((await call(w.api, "GET", "/api/repos/org/app/inbox")).status, 405);
+  // The inbox issue is gone.
+  delete issues[12];
+  assert.equal((await sendInbox(w, ok)).status, 409);
+  assert.deepEqual([w.posted, w.accepted], [[], []]);
+
+  // A config with errors.
+  const broken = setup({ settings: INBOX, errors: ["bad"], issues: { 12: open("Ideas") } });
+  const refused = await sendInbox(broken, ok);
+  assert.equal(refused.status, 409);
+  assert.match(refused.body.error, /has errors/);
+  assert.deepEqual([broken.posted, broken.accepted], [[], []]);
 });
