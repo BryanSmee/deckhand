@@ -705,7 +705,8 @@ To check it: `docker compose logs egress` says `cache on, HTTPS too` at start. A
 of a repository with a cached host to fetch the same file from it with a `GET` (`curl -s -o
 /dev/null -D - https://<host>/<file>`; `curl -I` isn't cached): the second answer says
 `x-deckhand-cache: hit`. A run whose grant has cached hosts while the proxy's cache is off
-says so in its log on the dashboard (`Egress cache: off for this run`), and reaches those hosts as before, through a tunnel.
+says so in its log on the dashboard (`Egress cache: off for this run`), and
+reaches those hosts as before, through a tunnel.
 
 ## How sandboxes reach GitHub
 
