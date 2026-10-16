@@ -4,7 +4,7 @@
 // here, with GitHub injected, so they are tested on their own (../test/onboarding.test.mjs).
 import { ensureLabel } from "./comments.mjs";
 import { repoAllowed } from "./config.mjs";
-import { linkedIssue, sameRepo } from "./events.mjs";
+import { issueItem, linkedIssue, sameRepo } from "./events.mjs";
 import { CONFIG_FILE, parseRepoConfig, readRepoFile } from "./repo-config.mjs";
 import { readJson, writeJsonAtomic } from "./store.mjs";
 
@@ -86,13 +86,22 @@ export function createOnboardingStore(path) {
 }
 
 // Opens the repo's onboarding issue, unless it was onboarded already, has issues disabled
-// or already has a config on its default branch. Returns { number, title, base } or null,
-// with the reason logged. `request`: the App's GitHub calls (github-app.mjs).
-export function createOnboarding({ request, store, config, log = () => {} }) {
+// or already has a config on its default branch, and starts its run (start()). `request`: the
+// App's GitHub calls (github-app.mjs); `repoSettings(repo, base)`: the default branch's
+// config; `accept(item)`: queues a run (tasks.mjs).
+export function createOnboarding({
+  request,
+  store,
+  config,
+  repoSettings = null,
+  accept = null,
+  log = () => {},
+}) {
   // Repos whose issue is being opened: two deliveries at once open one.
   const opening = new Set();
 
-  // `byHand`: from the dashboard (repos.mjs) rather than an installation delivery.
+  // Resolves to { number, title, base } or null, with the reason logged. `byHand`: from the
+  // dashboard (repos.mjs) rather than an installation delivery.
   async function open(repo, sender, byHand = false) {
     const key = repo.toLowerCase();
     const skip = (why) => (log(`  onboarding ${repo}: skipped, ${why}`), null);
@@ -134,7 +143,35 @@ export function createOnboarding({ request, store, config, log = () => {} }) {
     }
   }
 
-  return { open };
+  // An onboarding issue for the repo, if it needs one, starting an onboarding run on it as a
+  // "/mode onboarding" comment would. Resolves to the issue, or null (the reason logged).
+  // `byHand`: started from the dashboard's repository list.
+  async function start(repo, sender, byHand = false) {
+    const issue = await open(repo, sender, byHand).catch((error) => {
+      log(`  onboarding ${repo}: ${error.stack ?? error}`);
+      return null;
+    });
+    if (!issue) return null;
+    const { settings } = await repoSettings(repo, issue.base);
+    await accept(
+      issueItem(repo, issue, {
+        trigger: null,
+        modeLine: "onboarding",
+        text: "",
+        comment: null,
+        base: issue.base,
+        settings,
+      }),
+    );
+    return issue;
+  }
+
+  // An installation delivery: an onboarding issue per repo that needs one.
+  async function onboard(repos, sender) {
+    for (const repo of repos) await start(repo, sender);
+  }
+
+  return { open, start, onboard };
 }
 
 // The open pull request of issue `number`: its branch (issue-<n>-…) or its "Closes #n", not

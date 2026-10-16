@@ -217,7 +217,15 @@ Object.assign(ctx, {
   repoList,
   // Replies, reactions and the needs-input label.
   ...createComments({ config, github, graphql, log }),
-  onboarding: createOnboarding({ request: github, store: onboarded, config, log }),
+  // Onboarding issues, and the run each starts.
+  onboarding: createOnboarding({
+    request: github,
+    store: onboarded,
+    config,
+    repoSettings,
+    accept: (item) => ctx.accept(item),
+    log,
+  }),
   images: createImages({ config, docker, readFile: repoFile, checkout: fetchCheckout, log }),
   previews: createPreviews({
     config,
@@ -324,7 +332,7 @@ ctx.repoApi = createRepoApi({
   config,
   list: repoList,
   publicUrl,
-  start: (repo, login) => ctx.onboardRepo(repo, login, true),
+  start: (repo, login) => ctx.onboarding.start(repo, login, true),
   log,
 });
 

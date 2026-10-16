@@ -113,9 +113,32 @@ function onboardingWith(
     ...routes,
   });
   const logs = [];
-  const onboarding = createOnboarding({ request, store, config, log: (l) => logs.push(l) });
-  return { onboarding, calls, logs, store };
+  const accepted = [];
+  const onboarding = createOnboarding({
+    request,
+    store,
+    config,
+    repoSettings: async () => ({ settings: { users: ["alice"] }, errors: [] }),
+    accept: async (item) => accepted.push(item),
+    log: (l) => logs.push(l),
+  });
+  return { onboarding, calls, logs, store, accepted };
 }
+
+test("start: the onboarding issue, then a run on it in the onboarding mode; none without one", async () => {
+  const { onboarding, accepted } = onboardingWith({});
+  await onboarding.onboard(["org/app"], "alice");
+  assert.equal(accepted.length, 1);
+  const [item] = accepted;
+  assert.equal(item.repo, "org/app");
+  assert.equal(item.number, 30);
+  assert.equal(item.modeLine, "onboarding");
+  assert.equal(item.base, "trunk");
+  assert.deepEqual(item.settings, { users: ["alice"] });
+  // Onboarded already: no issue, no run.
+  assert.equal(await onboarding.start("org/app", "alice", true), null);
+  assert.equal(accepted.length, 1);
+});
 
 test("the onboarding issue: labelled, mentioning the installer, recorded once", async () => {
   const { onboarding, calls, store } = onboardingWith({});

@@ -348,7 +348,7 @@ export function createHttp(ctx, { dashboardDir }) {
       const added = [...(payload.repositories ?? []), ...(payload.repositories_added ?? [])];
       for (const r of added) app.remember(r.full_name, payload.installation?.id);
       const repos = onboardingTargets(config, event, payload, skip);
-      if (repos.length) admitted(ctx.onboard(repos, payload.sender.login));
+      if (repos.length) admitted(ctx.onboarding.onboard(repos, payload.sender.login));
       return;
     }
     const pr = pullRequest(config, event, payload, Date.now(), skip);

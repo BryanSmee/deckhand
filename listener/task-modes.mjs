@@ -1,0 +1,138 @@
+// Which mode a queued comment runs in (tasks.mjs accept()): a trigger line, a "/mode" line, or
+// the issue's current mode, its brainstorm or its work session. Keeps the issue's brainstorm
+// (brainstorms.json) and repo mode (modes.json) up to date, and replies when a mode can't run.
+import { AGENTS } from "./agents/index.mjs";
+import { taskKey } from "./events.mjs";
+import { INBOX, sessionName } from "./modes.mjs";
+import { CONFIG_FILE, customMode, modeNames } from "./repo-config.mjs";
+
+// `ctx` (server.mjs): the listener's state and services, read at call time.
+export function createTaskModes(ctx) {
+  const { log, skip, tasks } = ctx;
+
+  // What a comment asks for: "work", "brainstorm", "stop" (wrap a brainstorm up) or one of the
+  // repo's own modes (its config's `modes:`); null when it doesn't reach Claude. A "/mode"
+  // line picks the mode, with or without a trigger line; without either, a comment goes on in
+  // the issue's current mode. Keeps the issue's brainstorm and mode state up to date.
+  async function modeOf(item, key, name) {
+    // The inbox issue or the discussion category is the trigger (workItem()), or the
+    // dashboard's Analyze (work.mjs analyze()), which no comment can ask for.
+    if (INBOX.has(item.trigger) || item.trigger === "analyze") return item.trigger;
+    if (item.trigger === "stop") return stopBrainstorm(item, key);
+    let wanted = item.trigger;
+    if (item.modeLine) {
+      if (!(await switchable(item, key, name))) return null;
+      wanted = item.modeLine;
+    }
+    // A comment without either goes on in the repo's own mode the issue is in, if any.
+    const current = ctx.issueModes.get(key);
+    if (!wanted && current && !talks(item, key)) return goOn(item, current);
+    if (wanted === "onboarding") return startOnboarding(item, key);
+    const own = customMode(item.settings, wanted);
+    if (wanted === "work" || (own && !own.fresh)) {
+      // The work (or the repo's mode) takes over from the brainstorm. Light and work runs keep
+      // separate sessions (sessionName()): work reads what was settled from the issue.
+      ctx.brainstorms.end(key);
+      ctx.issueModes.set(key, own ? wanted : null);
+      return wanted;
+    }
+    // A fresh mode runs once on its own session: the issue stays in the mode it was in.
+    if (own) return wanted;
+    // A comment on the issue itself continues its brainstorm; one on its pull request is work.
+    if (wanted === "brainstorm" || (!wanted && ctx.brainstorms.get(key) && onIssue(item))) {
+      return brainstorm(item, key, wanted);
+    }
+    // Without a trigger line, a comment only continues work the agent already started (a
+    // brainstorm's session is not work's: sessionName()).
+    if (!item.trigger && !(await hasSession(key, name, false))) {
+      return skip(`#${item.replyTo} has no agent session and no trigger line`);
+    }
+    return "work";
+  }
+
+  // That of its work runs or of its light ones (either when `light` is undefined), of any
+  // agent: the repo may have picked another since.
+  async function hasSession(key, name, light) {
+    if (tasks.has(key)) return true;
+    const kinds = light === undefined ? [false, true] : [light];
+    for (const l of kinds) {
+      for (const agent of Object.values(AGENTS)) {
+        if (await ctx.runner.hasSession(sessionName(name, l), agent)) return true;
+      }
+    }
+    return false;
+  }
+
+  function onIssue(item) {
+    return item.replyTo === item.number;
+  }
+
+  // A comment on the issue of a brainstorm that goes on.
+  function talks(item, key) {
+    const b = ctx.brainstorms.get(key);
+    return b && onIssue(item) && b.status !== "stopped";
+  }
+
+  // A "/mode" line: a mode the repo has. Without a trigger line, a switch: the conversation so
+  // far carries over, so there must be one. Onboarding starts its own.
+  async function switchable(item, key, name) {
+    if (!modeNames(item.settings).includes(item.modeLine)) {
+      await unknownMode(item, `Unknown mode \`${item.modeLine}\`.`);
+      return false;
+    }
+    if (item.trigger || item.modeLine === "onboarding") return true;
+    if (ctx.brainstorms.get(key) || ctx.issueModes.has(key)) return true;
+    if (await hasSession(key, name)) return true;
+    skip(`#${item.replyTo} has no agent session and no trigger line`);
+    return false;
+  }
+
+  // The issue's current mode, if it is still there.
+  async function goOn(item, current) {
+    if (current === "onboarding" || customMode(item.settings, current)) return current;
+    // Gone from the config: don't guess what to run instead (work could push).
+    await unknownMode(item, `The mode \`${current}\` is no longer in \`${CONFIG_FILE}\`.`);
+    return null;
+  }
+
+  // Like a brainstorm, kept in modes.json: comments go on in it until the trigger line.
+  function startOnboarding(item, key) {
+    ctx.brainstorms.end(key);
+    ctx.issueModes.set(key, "onboarding");
+    // Its work run gets the onboarding prompt and the config check (finish()); no
+    // automatic issue for the repo any more.
+    const { onboarded } = ctx;
+    if (!onboarded.isIssue(item.repo, item.number)) onboarded.record(item.repo, item.number);
+    return "onboarding";
+  }
+
+  function brainstorm(item, key, wanted) {
+    if (!wanted && ctx.brainstorms.get(key).status === "stopped") {
+      return skip(`#${item.number}: brainstorm stopped and no trigger line`);
+    }
+    ctx.issueModes.set(key, null);
+    item.restored = ctx.brainstorms.activate(key, item);
+    return "brainstorm";
+  }
+
+  function stopBrainstorm(item, key) {
+    const b = ctx.brainstorms.get(key);
+    if (!b || b.status === "stopped") return skip(`#${item.number} has no brainstorm to stop`);
+    ctx.brainstorms.stop(key);
+    return "stop";
+  }
+
+  // The reply to a "/mode" Claude can't run: the modes there are. No run starts.
+  async function unknownMode(item, what) {
+    const own = item.settings?.modes ?? {};
+    const list = modeNames(item.settings)
+      .map((m) => `\`${m}\`${own[m]?.light ? " (comments only)" : ""}`)
+      .join(", ");
+    const where = taskKey(item.repo, item.id);
+    log(`${where}: ${what}`);
+    const text = `${what} The modes here: ${list}. Pick one with a \`/mode <name>\` line.`;
+    await ctx.reply(item.repo, item.replyTo, text).catch((error) => log(`${where}: ${error}`));
+  }
+
+  return { modeOf, unknownMode };
+}
