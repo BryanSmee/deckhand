@@ -26,6 +26,7 @@ import {
   createCache,
   DEFAULT_ENTRY_MAX,
   DEFAULT_MAX,
+  fits,
   isFresh,
   notModified,
   parseSize,
@@ -115,7 +116,8 @@ export function target(authority) {
   return { host: (match[1] ?? match[2]).toLowerCase().replace(/\.$/, ""), port };
 }
 
-// Asks the listener: { allowed, private, cache }. Fails closed.
+// Asks the listener: { allowed, private, cache, decrypt }. Fails closed: no `decrypt`, a
+// tunnel.
 export function listenerPolicy(url, timeoutMs = 5000) {
   return async (ip, host) => {
     try {
@@ -127,6 +129,7 @@ export function listenerPolicy(url, timeoutMs = 5000) {
         allowed: answer.allowed === true,
         private: answer.private === true,
         cache: answer.cache === true,
+        decrypt: answer.decrypt === true,
       };
     } catch {
       return { allowed: false };
@@ -155,7 +158,7 @@ function firstChunk(socket) {
 }
 
 export function createProxy({
-  policy, // (client ip, host) → { allowed, private, cache }
+  policy, // (client ip, host) → { allowed, private, cache, decrypt }
   lookup = (host) => dnsLookup(host, { all: true }),
   blocked = blockedAddress,
   cache = null, // createCache()'s, or none
@@ -164,11 +167,11 @@ export function createProxy({
   now = Date.now,
   log = () => {},
 }) {
-  // { address to connect to, whether its plain HTTP may be cached }, or a Refused saying why
-  // not.
+  // { address to connect to, whether its answers may be cached, and its HTTPS decrypted to do
+  // so }, or a Refused saying why not.
   async function decide(client, host) {
     const ip = client.replace(/^::ffff:/, "");
-    const { allowed, private: privateOk, cache: cacheOk } = await policy(ip, host);
+    const { allowed, private: privateOk, cache: cacheOk, decrypt } = await policy(ip, host);
     if (!allowed) {
       log(`refused ${host} for ${ip}`);
       throw new Refused(
@@ -189,7 +192,7 @@ export function createProxy({
         `Deckhand's egress proxy refused ${host}: it resolves to a private address`,
       );
     }
-    return { address: usable.address, cache: cacheOk === true };
+    return { address: usable.address, cache: cacheOk === true, decrypt: decrypt === true };
   }
 
   function refuse(socket, error) {
@@ -212,7 +215,7 @@ export function createProxy({
     } catch (error) {
       return refuse(client, error);
     }
-    if (decision.cache && cache?.enabled && authority && certifiable(to.host)) {
+    if (decision.cache && decision.decrypt && cache?.enabled && authority && certifiable(to.host)) {
       return intercept(client, head, to, decision.address);
     }
     pipe(client, head, to, decision.address, false);
@@ -379,8 +382,13 @@ export function createProxy({
   // A GET on a cached host: from disk when fresh, revalidated when stale (a 304 serves it),
   // else downloaded, streamed to the client and stored as it comes when it may be.
   async function cached(req, res, to, use) {
-    const key = cache.key(to.url.href, req.headers["accept-encoding"]);
+    const key = cache.key(to.url.href, req.headers["accept-encoding"], req.headers.accept);
     let entry = await cache.get(key);
+    // Kept for requests without the headers it varies on: one sending them goes on as is.
+    if (entry && !fits(req, entry.meta.headers)) {
+      await entry.file.close();
+      return passThrough(req, res, to);
+    }
     if (entry && use === "use" && isFresh(entry.meta, now()))
       return serve(req, res, key, entry, "hit");
     // A client checking its own copy, with nothing here to check it against: as before.
@@ -401,7 +409,7 @@ export function createProxy({
       }
       await entry?.file.close();
       entry = null;
-      const keep = storable(answer.statusCode, answer.headers, cache.limit);
+      const keep = storable(answer.statusCode, answer.headers, cache.limit, req);
       // What was kept is no longer what the host answers.
       if (!keep && cache.has(key)) cache.remove(key);
       const writer = keep

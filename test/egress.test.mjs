@@ -106,25 +106,39 @@ test("private addresses only for hosts the operator named, default.yaml's too, n
     allowed: true,
     private: true,
     cache: false,
+    decrypt: false,
   });
-  assert.deepEqual(answer("nas.lan.example"), { allowed: true, private: true, cache: false });
-  assert.deepEqual(answer("anything.net"), { allowed: true, private: false, cache: false });
+  assert.deepEqual(answer("nas.lan.example"), {
+    allowed: true,
+    private: true,
+    cache: false,
+    decrypt: false,
+  });
+  assert.deepEqual(answer("anything.net"), {
+    allowed: true,
+    private: false,
+    cache: false,
+    decrypt: false,
+  });
   // A run restored from before repos lost their own hosts: those stay public.
   assert.deepEqual(egressPolicy("repo.dev", ["github.com", "repo.dev"], ["github.com"]), {
     allowed: true,
     private: false,
     cache: false,
+    decrypt: false,
   });
   assert.deepEqual(egressPolicy("x.net", ["github.com"], ["github.com"]), {
     allowed: false,
     private: false,
     cache: false,
+    decrypt: false,
   });
   // A run saved before `trusted` was: nothing private.
   assert.deepEqual(egressPolicy("github.com", ["github.com"], undefined), {
     allowed: true,
     private: false,
     cache: false,
+    decrypt: false,
   });
 });
 
@@ -152,6 +166,25 @@ test("cache: only for allowed hosts the run's cached_hosts match", () => {
   assert.equal(policy("objects.githubusercontent.com"), false);
   // A run saved before `cached` was: nothing cached.
   assert.equal(egressPolicy("deb.debian.org", hosts, hosts, undefined).cache, false);
+});
+
+test("decrypt: cached hosts' HTTPS, but never a container engine's, whose plain HTTP is cached", () => {
+  const hosts = ["deb.debian.org", "pypi.org"];
+  const cached = ["deb.debian.org"];
+  assert.deepEqual(egressPolicy("deb.debian.org", hosts, hosts, cached), {
+    allowed: true,
+    private: true,
+    cache: true,
+    decrypt: true,
+  });
+  const engine = { decrypt: false };
+  assert.deepEqual(egressPolicy("deb.debian.org", hosts, hosts, cached, [], engine), {
+    allowed: true,
+    private: true,
+    cache: true,
+    decrypt: false,
+  });
+  assert.equal(egressPolicy("pypi.org", hosts, hosts, cached).decrypt, false);
 });
 
 test("host matching: names, subdomain wildcards, *", () => {

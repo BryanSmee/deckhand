@@ -3,7 +3,7 @@
 // downloads that every run fetches again otherwise. Shared by every sandbox, so only what
 // is the same for anyone is kept: a GET without credentials, answered 200 for everyone.
 //
-// On disk, one entry per URL (and Accept-Encoding): `<sha256>.body` and its metadata,
+// On disk, one entry per URL (and Accept-Encoding, Accept): `<sha256>.body` and its metadata,
 // `<sha256>.json` (status, headers, stored at, last used, size). Each file is written to a
 // temporary one and renamed into place, so an interrupted download leaves nothing behind.
 // Over `max` bytes in all, the least recently used entries go. No dependencies.
@@ -76,14 +76,22 @@ export function requestUse(req) {
 export const conditional = (req) =>
   "if-none-match" in req.headers || "if-modified-since" in req.headers;
 
-// Whether an answer may be kept for everyone: a 200 that isn't private, sets no cookie and
-// varies on nothing but Accept-Encoding (which is part of the key), within `entryMax`.
-export function storable(status, headers, entryMax) {
-  if (status !== 200 || headers["set-cookie"]) return false;
+// The request headers an answer varies on besides Accept and Accept-Encoding, which are part
+// of the key: it is kept only for requests that send none of them (`Vary: Origin` on a
+// mirror, for one without Origin), and only served to those.
+const KEYED = new Set(["accept-encoding", "accept"]);
+const varied = (headers) => [...directives(headers.vary).keys()].filter((v) => !KEYED.has(v));
+export const fits = (req, headers) => varied(headers).every((v) => req.headers[v] === undefined);
+
+// Whether an answer to `req` may be kept for everyone: a 200 that isn't private, varies on
+// nothing the request sent but the key's headers, within `entryMax`. A cookie it sets is
+// dropped, never kept (keptHeaders()): the request had none, so the answer is the one anyone
+// gets, and CDNs set theirs on everything (Cloudflare's __cf_bm on npm's registry).
+export function storable(status, headers, entryMax, req = { headers: {} }) {
+  if (status !== 200) return false;
   const cc = directives(headers["cache-control"]);
   if (cc.has("private") || cc.has("no-store")) return false;
-  const vary = [...directives(headers.vary).keys()];
-  if (vary.some((v) => v !== "accept-encoding")) return false;
+  if (directives(headers.vary).has("*") || !fits(req, headers)) return false;
   const length = headers["content-length"];
   return length === undefined || Number(length) <= entryMax;
 }
@@ -232,11 +240,16 @@ export function createCache({
     },
     has: (key) => index.has(key),
 
-    key(url, acceptEncoding) {
-      const encoding = String(acceptEncoding ?? "")
-        .toLowerCase()
-        .replace(/\s+/g, "");
-      return createHash("sha256").update(`${encoding}\n${url}`).digest("hex");
+    // Accept too, when the client sends one: npm's registry answers its packuments by it.
+    key(url, acceptEncoding, accept) {
+      const norm = (v) =>
+        String(v ?? "")
+          .toLowerCase()
+          .replace(/\s+/g, "");
+      const tail = accept === undefined ? "" : `\n${norm(accept)}`;
+      return createHash("sha256")
+        .update(`${norm(acceptEncoding)}\n${url}${tail}`)
+        .digest("hex");
     },
 
     // The entry's metadata and its body, opened (so removing it meanwhile doesn't cut it

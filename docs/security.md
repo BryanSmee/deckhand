@@ -638,9 +638,14 @@ only you say what goes in it. A host in `cached_hosts` must be reachable too (in
 mandatory): `cached_hosts` alone opens nothing.
 
 - **What is kept**: only what is the same for anyone. A `GET` without `Authorization`,
-  `Cookie` or `Range`, answered `200` without `Cache-Control: private` or `no-store`, without
-  `Set-Cookie`, varying on nothing but `Accept-Encoding` (part of the key, with the URL), and
+  `Cookie` or `Range`, answered `200` without `Cache-Control: private` or `no-store`, and
   within `EGRESS_CACHE_ENTRY_MAX`. Anything else is forwarded as before.
+- **Cookies and `Vary`**: a cookie the answer sets goes to that client only, never into the
+  cache: the request had none, so the answer is the one anyone gets, and CDNs set theirs on
+  everything (Cloudflare's `__cf_bm` on npm's registry). `Accept-Encoding` and `Accept` are
+  part of the key, with the URL. An answer varying on another header (`Vary: Origin` on
+  Alpine's mirror) is kept only when the request didn't send it, and served only to
+  requests that don't either; one varying on `*` isn't kept.
 - **Freshness**: the host's `Cache-Control` (`s-maxage`, `max-age`, `no-cache`), else its
   `Expires`, else a tenth of the time since its `Last-Modified` (a day at most), else none.
   A fresh answer is served from disk without asking the host; a stale one is checked with
