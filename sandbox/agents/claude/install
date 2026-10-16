@@ -7,8 +7,7 @@
 # (uid 1000) must not be able to change what the next sandbox runs, even through a mount
 # made read-write by mistake.
 #
-# One folder per version, installed aside then renamed, so two installs at once can't leave
-# a half-installed copy behind.
+# One folder per version, installed aside then renamed: ../npm-install, shared with Codex's.
 set -euo pipefail
 
 : "${CLAUDE_CODE_VERSION:?CLAUDE_CODE_VERSION: the Claude Code version to install}"
@@ -25,12 +24,5 @@ if [ "$(stat -c %u "$root")" != 0 ]; then
   echo "Claude Code: took over $root from uid 1000, reinstalling" >&2
 fi
 
-home=$root/$CLAUDE_CODE_VERSION
-[ -x "$home/node_modules/.bin/claude" ] && exit 0
-tmp=$(mktemp -d "$root/.install-XXXXXX")
-chmod 755 "$tmp"
-npm install --prefix "$tmp" --no-fund --no-audit --loglevel=error \
-  "@anthropic-ai/claude-code@$CLAUDE_CODE_VERSION" > /tmp/claude-install.log 2>&1 ||
-  { cat /tmp/claude-install.log >&2; rm -rf "$tmp"; exit 1; }
-mv -T "$tmp" "$home" 2> /dev/null || rm -rf "$tmp" # another install got there first
-echo "Claude Code $CLAUDE_CODE_VERSION installed" >&2
+exec "$(dirname "$(readlink -f "$0")")/../npm-install" "$root" @anthropic-ai/claude-code \
+  "$CLAUDE_CODE_VERSION" claude "Claude Code"

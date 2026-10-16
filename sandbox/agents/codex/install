@@ -9,13 +9,5 @@ set -euo pipefail
 [ "$(id -u)" = 0 ] || { echo "install-codex: run it as root" >&2; exit 1; }
 
 root=/opt/codex
-umask 022
-home=$root/$CODEX_VERSION
-[ -x "$home/node_modules/.bin/codex" ] && exit 0
-tmp=$(mktemp -d "$root/.install-XXXXXX")
-chmod 755 "$tmp"
-npm install --prefix "$tmp" --no-fund --no-audit --loglevel=error \
-  "@openai/codex@$CODEX_VERSION" > /tmp/codex-install.log 2>&1 ||
-  { cat /tmp/codex-install.log >&2; rm -rf "$tmp"; exit 1; }
-mv -T "$tmp" "$home" 2> /dev/null || rm -rf "$tmp" # another install got there first
-echo "Codex $CODEX_VERSION installed" >&2
+exec "$(dirname "$(readlink -f "$0")")/../npm-install" "$root" @openai/codex "$CODEX_VERSION" \
+  codex Codex

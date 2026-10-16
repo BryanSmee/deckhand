@@ -97,6 +97,25 @@ test("a sandbox without its Claude Code version stops with a clear message", () 
   assert.match(result.stderr, /Claude Code 0\.0\.0-missing is not installed in \/opt\/claude-code/);
 });
 
+test("a sandbox without its Codex version says how to install it", () => {
+  const result = spawnSync(`${bin}entrypoint.sh`, [], {
+    env: {
+      PATH: process.env.PATH,
+      REPO_URL: "https://github.com/org/repo.git",
+      SANDBOX_AGENT: "codex",
+      CODEX_VERSION: "0.0.0-missing",
+    },
+    encoding: "utf8",
+  });
+  assert.equal(result.status, 1);
+  assert.equal(
+    result.stderr,
+    "Codex 0.0.0-missing is not installed in /opt/codex. The listener installs it before a" +
+      " run; by hand, run deckhand-install-codex as root (docker run --user 0 --entrypoint" +
+      " deckhand-install-codex -e CODEX_VERSION=0.0.0-missing -v <volume>:/opt/codex <image>).\n",
+  );
+});
+
 test("an unknown agent stops the sandbox before anything runs", () => {
   for (const agent of ["gemini", "../claude", "Claude"]) {
     const result = spawnSync(`${bin}entrypoint.sh`, [], {

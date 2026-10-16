@@ -64,6 +64,17 @@ if [[ ! "$SANDBOX_AGENT" =~ ^[a-z0-9-]+$ ]] || [ ! -f "$agents/$SANDBOX_AGENT.sh
   exit 1
 fi
 AGENT_FILES=$agents/$SANDBOX_AGENT
+# For agent_check: the listener installs the agent before a run, into a volume a sandbox
+# mounts read-only, so a sandbox started by hand can't. Say how instead of failing later on
+# a missing command. Arguments: its name, the variable with its version, the volume's mount
+# and the installer.
+agent_missing() {
+  local name=$1 var=$2 root=$3 installer=$4
+  echo "$name ${!var} is not installed in $root. The listener installs it before a run; by" \
+    "hand, run $installer as root (docker run --user 0 --entrypoint $installer" \
+    "-e $var=${!var} -v <volume>:$root <image>)." >&2
+  exit 1
+}
 # shellcheck source=agents/claude.sh
 source "$agents/$SANDBOX_AGENT.sh"
 agent_check
