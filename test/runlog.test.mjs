@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import {
@@ -18,6 +17,7 @@ import {
   writeEvent,
 } from "../listener/runlog.mjs";
 import { agentFor } from "../listener/agents/index.mjs";
+import { tempDir } from "./helpers.mjs";
 
 const line = (event) => JSON.stringify(event);
 
@@ -195,8 +195,8 @@ test("lastResult: the agent's last result in a log's lines", () => {
   );
 });
 
-test("runs: rebuilt from their log files, newest first, without their path for the dashboard", () => {
-  const dir = mkdtempSync(join(tmpdir(), "deckhand-"));
+test("runs: rebuilt from their log files, newest first, without their path for the dashboard", (t) => {
+  const dir = tempDir(t);
   const meta = {
     type: "listener",
     key: "org/repo#1",
@@ -246,8 +246,8 @@ test("runs: rebuilt from their log files, newest first, without their path for t
 test(
   "stream: a running run's log stops once the viewer may no longer see it",
   { timeout: 5000 },
-  async () => {
-    const dir = mkdtempSync(join(tmpdir(), "deckhand-stream-"));
+  async (t) => {
+    const dir = tempDir(t, "deckhand-stream-");
     const logPath = join(dir, "run.log");
     writeFileSync(logPath, "");
     const req = new EventEmitter();
@@ -256,7 +256,7 @@ test(
     const written = [];
     const res = { writeHead() {}, write: (s) => written.push(s), end: ended };
     let allowed = true;
-    stream(req, res, { status: "running", logPath, agent: "claude" }, () => allowed);
+    stream(req, res, { status: "running", logPath, agent: "claude" }, () => allowed, 20);
     await new Promise((resolve) => setTimeout(resolve, 50));
     allowed = false;
     await done;
@@ -264,8 +264,8 @@ test(
   },
 );
 
-test("runs: a cancelled run is cancelled after a restart, whatever its last result; its log says who", () => {
-  const dir = mkdtempSync(join(tmpdir(), "deckhand-"));
+test("runs: a cancelled run is cancelled after a restart, whatever its last result; its log says who", (t) => {
+  const dir = tempDir(t);
   const result = { type: "result", result: "Half done.", duration_ms: 1000 };
   const cancelled = {
     type: "listener",
@@ -289,8 +289,8 @@ test("runs: a cancelled run is cancelled after a restart, whatever its last resu
   ]);
 });
 
-test("runs: the comments a run ran on come back from its log, for a rerun, not for the dashboard", () => {
-  const dir = mkdtempSync(join(tmpdir(), "deckhand-"));
+test("runs: the comments a run ran on come back from its log, for a rerun, not for the dashboard", (t) => {
+  const dir = tempDir(t);
   const items = [
     { id: "4", kind: "issue", number: 4, trigger: "work", modeLine: null, text: "Fix it" },
   ];
@@ -309,8 +309,8 @@ test("runs: the comments a run ran on come back from its log, for a rerun, not f
   assert.equal("items" in publicRun(run), false);
 });
 
-test("runs: an older log without a summary is read once, then its summary is", () => {
-  const dir = mkdtempSync(join(tmpdir(), "deckhand-"));
+test("runs: an older log without a summary is read once, then its summary is", (t) => {
+  const dir = tempDir(t);
   const logPath = join(dir, "deckhand-org-repo-6-1000.log");
   const meta = { type: "listener", key: "org/repo#6", repo: "org/repo", startedAt: 1000 };
   writeFileSync(logPath, [line(meta), line({ type: "result", result: "Done." })].join("\n"));
@@ -325,8 +325,8 @@ test("runs: an older log without a summary is read once, then its summary is", (
   assert.deepEqual(again, first);
 });
 
-test("runs: a live run gets no summary from its log, the one written when it ends wins", () => {
-  const dir = mkdtempSync(join(tmpdir(), "deckhand-"));
+test("runs: a live run gets no summary from its log, the one written when it ends wins", (t) => {
+  const dir = tempDir(t);
   const id = "deckhand-org-repo-7-1000";
   const logPath = join(dir, `${id}.log`);
   writeFileSync(logPath, line({ type: "listener", key: "org/repo#7", startedAt: 1000 }));
@@ -344,8 +344,8 @@ test("runs: a live run gets no summary from its log, the one written when it end
 });
 
 // Thousands of runs whose logs are never opened: their summaries alone.
-test("runs: a few thousand runs with summaries load fast", () => {
-  const dir = mkdtempSync(join(tmpdir(), "deckhand-"));
+test("runs: a few thousand runs with summaries load fast", (t) => {
+  const dir = tempDir(t);
   const count = 3000;
   const big = line({ type: "result", result: "x".repeat(20_000) });
   for (let i = 0; i < count; i++) {

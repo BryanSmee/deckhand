@@ -595,6 +595,23 @@ export function legacySandboxName(config, repo, id) {
   return `${config.prefix}-${repo}-${id}`.toLowerCase().replace(/[^a-z0-9_.-]+/g, "-");
 }
 
+// A new task's sandbox name. Tasks with a session from before names had a hash keep their old
+// name, so they still find their volumes; the others get the new one. Old names collide
+// ("acme/x" #pr-5 and "acme/x-pr" #5): a volume of that name is only this task's when one of
+// its own `runs` had the name (run ids are "<name>-<start>"), else a new task would take over
+// another repo's session and workspace. `hasSession(name)`: the runner's.
+export async function taskSandboxName(config, repo, id, runs, hasSession) {
+  const key = `${repo}#${id}`.toLowerCase();
+  const legacy = legacySandboxName(config, repo, id);
+  const ran = runs.some(
+    (r) =>
+      r.key.toLowerCase() === key &&
+      r.id.startsWith(`${legacy}-`) &&
+      /^\d+$/.test(r.id.slice(legacy.length + 1)),
+  );
+  return ran && (await hasSession(legacy)) ? legacy : sandboxName(config, repo, id);
+}
+
 // The image a repo's Dockerfile builds (its tags are hashes, see images.mjs).
 export function repoImage(config, repo) {
   return `${slug(config.prefix)}-repo-${slug(repo)}`;

@@ -4,6 +4,7 @@
 import { agentFor } from "./agents/index.mjs";
 import { operatorHosts } from "./egress.mjs";
 import { grantCheck, resolveMounts } from "./grants.mjs";
+import { BUILT_IN } from "./modes.mjs";
 import { CONFIG_FILE, engineCacheVolume } from "./repo-config.mjs";
 
 // A run that can't start for a reason the maintainer can fix: the reply says it.
@@ -15,6 +16,28 @@ export const cantRun = (agent) => `${agent.displayName} can't run here`;
 // `name`: the run's agent's (agents/).
 export function configErrors(base, errors, name = agentFor().displayName) {
   return `${name} can't run here: \`${CONFIG_FILE}\` on \`${base || "main"}\` has errors.\n\n${errors.map((e) => `- ${e}`).join("\n")}`;
+}
+
+// A config with errors, an `/agent` the operator doesn't allow, a mode no longer in the
+// config or a model of another agent's stop the run (runs.mjs) once its log has its first
+// line. `run`: what resolveEntry() and the repo's settings made of its comments.
+export function validateRun(agent, task, { badPick, errors, warnings, own }, note) {
+  const { mode, record } = task.live;
+  if (badPick) throw new RunError(`${cantRun(agent)}: ${badPick}.`);
+  if (errors.length) throw new RunError(configErrors(task.base, errors, agent.displayName));
+  for (const warning of warnings) note(`${CONFIG_FILE}: ${warning}`);
+  if (!own && !BUILT_IN.has(mode)) {
+    throw new RunError(
+      `${cantRun(agent)}: the \`${mode}\` mode is no longer in \`${CONFIG_FILE}\` on \`${task.base}\`.`,
+    );
+  }
+  // A model of another agent's ("/model opus" for Codex): the run would only fail later.
+  const wrongModel = agent.modelProblem(record.model);
+  if (wrongModel) {
+    throw new RunError(
+      `${cantRun(agent)}: ${wrongModel}. Use a tier (\`/model best\`, \`balanced\` or \`fast\`) or one of its models.`,
+    );
+  }
 }
 
 function refusedMounts(refused, name) {

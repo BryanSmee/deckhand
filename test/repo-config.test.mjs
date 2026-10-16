@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { loadConfig } from "../listener/config.mjs";
 import { workItem } from "../listener/events.mjs";
 import {
   cacheProblem,
@@ -16,9 +15,11 @@ import {
   repoPath,
   sandboxName,
   startable,
+  taskSandboxName,
 } from "../listener/repo-config.mjs";
+import { testConfig } from "./helpers.mjs";
 
-const config = loadConfig({ ALLOWED_USERS: "alice,bob", MAX_PARALLEL: "3" });
+const config = testConfig({ ALLOWED_USERS: "alice,bob", MAX_PARALLEL: "3" });
 
 test("no config file: the operator's settings as they are", async () => {
   const request = async () => new Response("{}", { status: 404 });
@@ -194,6 +195,30 @@ test("sandbox names: repos that collide without the hash are distinct", () => {
   assert.equal(sandboxName(config, "Acme/X", "5"), sandboxName(config, "acme/x", "5"));
 });
 
+test("sandbox names: a task with a session from before the hash keeps its old name", async () => {
+  // org/repo #12 had a run by its old name, and that session's volumes are there; so are
+  // org/repo-pr #5's, whose old name is also org/repo #pr-5's.
+  const runs = [
+    { key: "org/repo#12", id: "deckhand-org-repo-12-1000" },
+    { key: "org/repo-pr#5", id: "deckhand-org-repo-pr-5-1000" },
+  ];
+  const sessions = new Set(["deckhand-org-repo-12", "deckhand-org-repo-pr-5"]);
+  const name = (repo, id, ran = runs) =>
+    taskSandboxName(config, repo, id, ran, async (n) => sessions.has(n));
+  assert.equal(await name("org/repo", "12"), "deckhand-org-repo-12");
+  assert.equal(await name("Org/Repo", "12"), "deckhand-org-repo-12");
+  // None from before: the new name.
+  assert.equal(await name("org/repo", "14"), sandboxName(config, "org/repo", "14"));
+  // The other repo's session isn't this task's.
+  assert.equal(await name("org/repo", "pr-5"), sandboxName(config, "org/repo", "pr-5"));
+  assert.equal(await name("org/repo-pr", "5"), "deckhand-org-repo-pr-5");
+  // A run of that name, but its session gone; or a session without a run of that name.
+  sessions.delete("deckhand-org-repo-pr-5");
+  assert.equal(await name("org/repo-pr", "5"), sandboxName(config, "org/repo-pr", "5"));
+  const other = [{ key: "org/repo#12", id: "deckhand-org-repo-12-x-1000" }];
+  assert.equal(await name("org/repo", "12", other), sandboxName(config, "org/repo", "12"));
+});
+
 test("parallel caps: the operator's overall, each repo's within it", () => {
   const task = (repo, cap) => ({ repo, settings: { maxParallel: cap } });
   const ready = [task("org/a", 1), task("org/a", 1), task("org/b", 3), task("org/b", 3)];
@@ -334,7 +359,7 @@ test("conflicts: opt-in, never more often than the operator's floor", () => {
   assert.deepEqual(slow.settings.conflicts, { checkMinutes: 5 });
   assert.match(slow.warnings.join(), /below CONFLICT_CHECK_MINUTES/);
   // 0: off for every repo.
-  const off = loadConfig({ ALLOWED_USERS: "alice", CONFLICT_CHECK_MINUTES: "0" });
+  const off = testConfig({ CONFLICT_CHECK_MINUTES: "0" });
   const ignored = parse("conflicts:\n  check_minutes: 10", off);
   assert.equal(ignored.settings.conflicts, null);
   assert.deepEqual(ignored.errors, []);
@@ -416,8 +441,7 @@ test("one engine cache volume per repo, apart from the sandbox's caches", () => 
 });
 
 test("agent: a repo picks among the operator's agents, per repo, light runs and mode", () => {
-  const both = loadConfig({
-    ALLOWED_USERS: "alice",
+  const both = testConfig({
     CLAUDE_CODE_OAUTH_TOKEN: "t",
     OPENAI_API_KEY: "k",
   });

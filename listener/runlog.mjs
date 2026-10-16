@@ -303,8 +303,9 @@ export function format(line, agent = agentFor()) {
 }
 
 // Server-sent events: the log so far, then new lines as they are written, until the run ends,
-// or until `allowed()` turns false (a sign-out, a repo's `users` narrowed): checked each second.
-export function stream(req, res, run, allowed = () => true) {
+// or until `allowed()` turns false (a sign-out, a repo's `users` narrowed): checked each second
+// (`every`, in ms: shorter in the tests).
+export function stream(req, res, run, allowed = () => true, every = 1000) {
   res.writeHead(200, {
     "content-type": "text/event-stream",
     "cache-control": "no-cache",
@@ -334,7 +335,7 @@ export function stream(req, res, run, allowed = () => true) {
       return stop();
     }
   };
-  const timer = setInterval(pump, 1000);
+  const timer = setInterval(pump, every);
   const keepAlive = setInterval(() => res.write(": keep-alive\n\n"), 15000);
   const stop = () => {
     clearInterval(timer);

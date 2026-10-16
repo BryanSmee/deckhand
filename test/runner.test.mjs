@@ -3,13 +3,13 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { mkdtempSync, readFileSync, existsSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { test } from "node:test";
 import { aliasOf, CLOSE, createDockerRunner } from "../listener/runner/docker.mjs";
 import { overlaps, parseCidr } from "../listener/subnets.mjs";
+import { tempDir } from "./helpers.mjs";
 
 const config = {
   prefix: "dh",
@@ -204,7 +204,7 @@ function runner({
     await before(args);
     return fake.docker(args);
   };
-  const inboxDir = mkdtempSync(join(tmpdir(), "deckhand-runs-"));
+  const inboxDir = tempDir(null, "deckhand-runs-");
   const r = createDockerRunner({
     config: { ...config, engine, subnets: subnets ?? null },
     docker,
@@ -391,13 +391,20 @@ test("the image's deckhand-inbox prints the messages until the close line", asyn
   const { r, inboxDir } = runner();
   await r.start({ run: "x-1", name: "x", image: "i" });
   const script = new URL("../sandbox/deckhand-inbox", import.meta.url).pathname;
-  const done = new Promise((resolve, reject) =>
-    execFile(script, [join(inboxDir, "x-1", "inbox.jsonl")], { timeout: 10000 }, (e, out) =>
-      e ? reject(e) : resolve(out),
-    ),
-  );
+  let printed;
+  const first = new Promise((resolve) => (printed = resolve));
+  const done = new Promise((resolve, reject) => {
+    const child = execFile(
+      script,
+      [join(inboxDir, "x-1", "inbox.jsonl")],
+      { timeout: 10000 },
+      (e, out) => (e ? reject(e) : resolve(out)),
+    );
+    child.stdout.once("data", printed);
+  });
   r.send("x-1", "one");
-  await new Promise((resolve) => setTimeout(resolve, 700)); // a later write is followed too
+  // A write after the script read the file to its end is followed too.
+  await first;
   r.send("x-1", "two");
   r.close("x-1");
   const out = (await done).trim().split("\n").map(JSON.parse);
