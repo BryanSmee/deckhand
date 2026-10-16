@@ -495,7 +495,9 @@ Each action is written on the issue as the App's comment ("Started from the dash
 App's comments are ignored as triggers, so the listener queues or holds the work itself
 rather than through a webhook. The backlog (`GET /api/repos/<owner>/<repo>/issues`) lists a
 repository's open issues to signed-in users in its `users` (all of them while its config has
-errors), from GitHub at most once every 30 seconds per repository.
+errors), from GitHub at most once every 30 seconds per repository, or after an `issues`
+delivery for it, one read at a time; the dashboard keeps the last one in memory only, not in
+the browser's storage.
 
 A failed run's Rerun (`POST /api/repos/<owner>/<repo>/rerun`) passes the same checks, for
 the run's issue or pull request, and only for the task's latest run when it ended in `error`

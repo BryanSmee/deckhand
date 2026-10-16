@@ -93,7 +93,8 @@ answered. The dashboard lists the open issues carrying the label as `needs-input
 or not (`inputs.json`, kept by `issues` deliveries, whoever adds or removes the label, and one
 lookup per repo when the listener starts); a closed issue leaves the list.
 
-The graph's backlog read (`work.mjs`, at most once per 30 seconds a repo) catches what those
+The graph's backlog read (`work.mjs`, at most once per 30 seconds a repo, or after an
+`issues` delivery) catches what those
 missed: an App without the `issues` event, or a label call that failed. An open issue of an
 allowed user or the App's bot, with no task on the dashboard, whose body has open questions
 but which isn't listed gets the label and the list, as an `issues opened` delivery would have
@@ -255,7 +256,10 @@ instead. Between the backlog and the graph, a Brainstorm column lists the repo's
 (active, idle, wrapping up), which leave the graph unless an arrow touches them: a backlog
 issue dropped there starts a brainstorm, a brainstorm dropped on the graph starts work (and
 ends the brainstorm), dropped back on the backlog it stops (`stop`, what a `/stop` comment
-does: the wrap-up run). Each has a button too. The listener writes
+does: the wrap-up run). Each has a button too. The backlog is served from the last read and
+read again in the background once it is 30 seconds old or an `issues` delivery made it stale
+(only a repo with no read yet waits for GitHub), and the dashboard keeps each repo's last one
+in memory, so coming back to the graph or a repo's tab shows it at once. The listener writes
 each action on the issue as the App's comment, which reactions follow like a trigger
 comment's, and queues the work (`accept()`) or holds it (`waits.hold()`) itself: the App's
 own comments never reach `admit()`. The checks are `resume()`'s, see

@@ -25,6 +25,7 @@ import { onboardingTargets } from "./onboarding.mjs";
 import { inputEvent } from "./questions.mjs";
 import { CONFIG_FILE, effectiveConfig } from "./repo-config.mjs";
 import { refreshFor } from "./repos.mjs";
+import { staleFor } from "./work.mjs";
 import { publicRun, stream } from "./runlog.mjs";
 import { serveAsset } from "./static.mjs";
 import { closedAs } from "./titles.mjs";
@@ -366,8 +367,12 @@ export function createHttp(ctx, { dashboardDir }) {
     // Open questions and answers to them: the needs-input label (questions.mjs).
     const input = inputEvent(config, event, payload, app.identity().name);
     if (input) admitted(questions(input));
-    // Nothing runs for an issue being opened, edited, labelled or closed.
-    if (event === "issues") return;
+    // Nothing runs for an issue being opened, edited, labelled or closed: the graph's backlog
+    // is read again on its next poll.
+    if (event === "issues") {
+      staleFor(event, payload, (repo) => ctx.workApi?.stale(repo));
+      return;
+    }
     const preview = previewEvent(config, event, payload, skip);
     if (preview) {
       previewHook(preview, payload).catch((error) => log(error.stack ?? error));

@@ -5,8 +5,9 @@
 // resume()), and written on the issue as the App's comment: bot comments never reach admit(),
 // so the listener queues or holds the work itself.
 //
-//   GET  /api/repos/<owner>/<repo>/issues the backlog and the repo's modes (GitHub asked at
-//                                         most once per ISSUES_MS)
+//   GET  /api/repos/<owner>/<repo>/issues the backlog and the repo's modes: the last read at
+//                                         once, read again in the background after
+//                                         ISSUES_MS or an `issues` delivery
 //   POST /api/repos/<owner>/<repo>/work   { action: "start", number, mode? }
 //                                         { action: "queue", number, after, mode? }
 //                                         { action: "dequeue", number }
@@ -30,7 +31,8 @@ import { CONFIG_FILE, modeNames } from "./repo-config.mjs";
 import { sameOrigin } from "./repos.mjs";
 import { readBody, sendJson } from "./web.mjs";
 
-// How long a repo's open issues are kept: the dashboard polls them.
+// How long a repo's open issues are served before they are read again (in the background):
+// the dashboard polls them.
 export const ISSUES_MS = 30_000;
 const MAX_BODY = 4096;
 // The answers' text, and the JSON around it (escapes, indexes).
@@ -107,7 +109,8 @@ export function createWorkApi({
   now = Date.now,
   log = () => {},
 }) {
-  // "owner/repo" → { at, read: Promise<{ issues, modes, errors }> }
+  // "owner/repo" → { last: { issues, modes, errors, users, at, version } | null,
+  //                 read: Promise | null, version }
   const backlogs = new Map();
   // Issues with open questions whose label was taken off once: answered, or removed by hand.
   const unlabelled = new Set();
@@ -211,17 +214,42 @@ export function createWorkApi({
     }
   }
 
+  // A repo's read, started once at a time; `at` is when it started, `version` the stale()
+  // calls it saw. A failed read is not kept: the next request tries again.
+  function refresh(known, repo) {
+    const at = now();
+    const version = known.version;
+    known.read = readBacklog(repo).then(
+      (data) => {
+        known.last = { ...data, at, version };
+        known.read = null;
+      },
+      (error) => {
+        known.read = null;
+        throw error;
+      },
+    );
+    return known.read;
+  }
+
+  // The last read straight away, refreshed in the background once it is older than ISSUES_MS
+  // or an `issues` delivery made it stale: only a repo without one waits for GitHub.
   async function backlog(res, repo, user) {
-    let known = backlogs.get(repo.toLowerCase());
-    if (!known || now() - known.at >= ISSUES_MS) {
-      known = { at: now(), read: readBacklog(repo) };
-      backlogs.set(repo.toLowerCase(), known);
-      // A failure is not kept: the next poll asks again.
-      known.read.catch(
-        () => backlogs.get(repo.toLowerCase()) === known && backlogs.delete(repo.toLowerCase()),
-      );
+    const name = repo.toLowerCase();
+    let known = backlogs.get(name);
+    if (!known) {
+      known = { last: null, read: null, version: 0 };
+      backlogs.set(name, known);
     }
-    const { issues, modes, errors, users } = await known.read;
+    const { last } = known;
+    const fresh = last && last.version === known.version && now() - last.at < ISSUES_MS;
+    if (!fresh && !known.read) {
+      const read = refresh(known, repo);
+      if (last)
+        read.catch((error) => log(`Work area: ${repo}: backlog: ${error.message ?? error}`));
+    }
+    if (!last) await known.read;
+    const { issues, modes, errors, users, at } = known.last;
     if (users && !users.includes(user.toLowerCase())) {
       refuse(404, `${user} is not among ${repo}'s users.`);
     }
@@ -232,7 +260,7 @@ export function createWorkApi({
       issues: issues.filter((i) => !keys.has(`${repo}#${i.number}`)),
       modes,
       errors,
-      readAt: known.at,
+      readAt: at,
     });
   }
 
@@ -627,5 +655,24 @@ export function createWorkApi({
     return true;
   }
 
-  return { handle, checkedRepo };
+  // An `issues` delivery for `repo`: its backlog is read again on the next request, which
+  // still gets the last one. A read already going started before it: it doesn't count.
+  function stale(repo) {
+    const known = backlogs.get(repo.toLowerCase());
+    if (known) known.version++;
+  }
+
+  return { handle, checkedRepo, stale };
+}
+
+// Which deliveries make a repo's backlog stale: an issue opened, closed, edited, moved or
+// deleted. Calls stale(repo) for those and returns whether it did.
+export function staleFor(event, p, stale) {
+  const repo = p.repository?.full_name;
+  if (event !== "issues" || !repo) return false;
+  if (!["opened", "closed", "reopened", "edited", "transferred", "deleted"].includes(p.action)) {
+    return false;
+  }
+  stale(repo);
+  return true;
 }

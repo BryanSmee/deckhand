@@ -1,5 +1,5 @@
 // The graph's work area against a fake API: the backlog, and each drag's button.
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/preact";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/preact";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { Dashboard } from "./App";
 import fixture from "./fixture.json";
@@ -51,6 +51,8 @@ beforeEach(() => {
 });
 afterEach(() => {
   vi.unstubAllGlobals();
+  // Unmounted, not only taken off the page: the next test's hash changes would reach it.
+  cleanup();
   document.body.replaceChildren();
 });
 
@@ -161,4 +163,65 @@ test("a refused action: its pending node goes, the issue comes back, the error s
   expect(within(area).getByText("Keyboard shortcuts")).toBeTruthy();
   expect(within(graph).queryByRole("listitem", { name: /Sending…/ })).toBeNull();
   expect(refresh).not.toHaveBeenCalled();
+});
+
+// A fake API whose backlog answers wait for `release()`: acme/app's, acme/api's (empty), or
+// an error.
+function slowBacklogs() {
+  const gate = { release: () => {}, fail: false };
+  const reads: string[] = [];
+  vi.stubGlobal("fetch", async (url: string) => {
+    const repo = /^api\/repos\/(.+)\/issues$/.exec(url)?.[1];
+    if (!repo) return new Response("{}", { status: 404 });
+    reads.push(repo);
+    await new Promise<void>((resolve) => (gate.release = resolve));
+    if (gate.fail) return Response.json({ error: "GitHub is down." }, { status: 502 });
+    return Response.json(repo === "acme/app" ? backlog : { ...BACKLOG, issues: [] });
+  });
+  return { gate, reads };
+}
+
+const go = (hash: string) => {
+  history.replaceState(null, "", hash);
+  dispatchEvent(new HashChangeEvent("hashchange"));
+};
+
+test("back on the Graph, or on a repo's tab, the last backlog shows at once and is read again", async () => {
+  const { gate, reads } = slowBacklogs();
+  open("#/graph/acme/app");
+  // The first time: nothing to show yet.
+  expect(await screen.findByText("Loading…")).toBeTruthy();
+  gate.release();
+  await screen.findByText("Export the run log");
+  // Another page, then back: shown before the listener answers.
+  go("#/repositories");
+  await waitFor(() => expect(screen.queryByRole("region", { name: "Work area" })).toBeNull());
+  go("#/graph/acme/app");
+  await waitFor(() => expect(reads).toEqual(["acme/app", "acme/app"]));
+  const area = screen.getByRole("region", { name: "Work area" });
+  expect(within(area).getByText("Export the run log")).toBeTruthy();
+  expect(within(area).queryByText("Loading…")).toBeNull();
+  // Then the new read replaces it.
+  backlog = { ...BACKLOG, issues: BACKLOG.issues.slice(1) };
+  gate.release();
+  await waitFor(() => expect(within(area).queryByText("Export the run log")).toBeNull());
+  expect(within(area).getByText("Keyboard shortcuts")).toBeTruthy();
+  // Another repo's tab is new: Loading…; back on acme/app, its backlog at once.
+  go("#/graph/acme/api");
+  expect(await within(area).findByText("Loading…")).toBeTruthy();
+  gate.release();
+  await within(area).findByText("No open issue left to start.");
+  go("#/graph/acme/app");
+  await waitFor(() => expect(reads.at(-1)).toBe("acme/app"));
+  expect(within(area).getByText("Keyboard shortcuts")).toBeTruthy();
+  expect(within(area).queryByText("Loading…")).toBeNull();
+});
+
+test("an error with nothing seen yet says it can't read the issues", async () => {
+  const { gate } = slowBacklogs();
+  gate.fail = true;
+  open("#/graph/acme/app");
+  await screen.findByText("Loading…");
+  gate.release();
+  expect(await screen.findByText("Can't read the issues (GitHub is down.).")).toBeTruthy();
 });

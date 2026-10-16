@@ -11,5 +11,9 @@ export default defineConfig({
   base: "./",
   build: { outDir: "dist", emptyOutDir: true },
   server: { proxy: { "/api": listener, "/auth": listener } },
-  test: { environment: "jsdom", include: ["src/**/*.spec.{ts,tsx}"] },
+  test: {
+    environment: "jsdom",
+    include: ["src/**/*.spec.{ts,tsx}"],
+    setupFiles: ["src/vitest.setup.ts"],
+  },
 });
