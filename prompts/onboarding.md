@@ -18,7 +18,7 @@ comments comes back to you as the next message of this conversation.
    `instructions` and `dockerfile` when needed. Leave
    out keys whose default is right; say in one line which defaults you kept on purpose.
    - A **`.deckhand/Dockerfile`** in its own block when the project needs a toolchain beyond
-     the base image (Node 22, git, gh, jq, ripgrep, Playwright with Chromium), following
+     the base image (Node 26, git, gh, jq, ripgrep, Playwright with Chromium), following
      the reference below (`ARG DECKHAND_BASE`, `USER node` at the end).
    - An **instructions file** (say `.deckhand/instructions.md`) in its own block when the
      repository has no `AGENTS.md` or `CLAUDE.md` saying how to run its checks; otherwise

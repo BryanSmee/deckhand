@@ -13,7 +13,7 @@ brainstorm sessions). The plan and its decisions: PocketBerry's PB-135 and issue
 
 ## Commands
 
-Node 22. The listener has no dependencies; the dashboard has build-time ones (see
+Node 26. The listener has no dependencies; the dashboard has build-time ones (see
 Conventions).
 
 | Task            | Command                                                                                                                                                                                                                                                                                  |
@@ -55,7 +55,7 @@ docs/         setup, per-repo config reference, security model, architecture
   image's build stage turns them into static files in `dashboard/dist/`, which the listener
   serves; the released image has no `node_modules`. `src/types.ts` is the contract with
   `http.mjs` (`api/state`) and `runlog.mjs` (the log stream): change them together. Tests: Vitest and
-  Testing Library, named `*.spec.ts(x)`: Node 22 runs `*.test.ts` files itself, and
+  Testing Library, named `*.spec.ts(x)`: Node runs `*.test.ts` files itself, and
   `node --test` must leave them alone.
 - **ESM** (`.mjs`), small functions, comments that explain _why_, briefly.
 - **Nothing project-specific.** No PocketBerry, Linear, pnpm or Postgres in the listener, base

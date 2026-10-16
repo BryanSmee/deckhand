@@ -85,7 +85,8 @@ beforeEach(() => {
       return Response.json({ repos: [...REPOS, repo("org/new")], listedAt: Date.now() });
     }
     if (url === "api/repos/org/api/config" || url === "api/repos/org/api/refresh") {
-      return Response.json(CONFIG);
+      // Read now, not when the file loaded: "read 0s ago" holds however slow the tests before.
+      return Response.json({ ...CONFIG, readAt: Date.now() });
     }
     if (url === "api/repos/org/app/config") {
       return Response.json({
