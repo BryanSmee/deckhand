@@ -327,7 +327,7 @@ error, listed in the reply:
 - **Names**: letters, digits, `-` and `_`. `work` and `brainstorm` can't be redefined (set
   their agent and model with `agent`/`model`/`effort` and `brainstorm_agent`/
   `brainstorm_model`/`brainstorm_effort`);
-  `onboarding`, `stop`, `idea`, `bug` and `discussion` are reserved.
+  `onboarding`, `stop`, `idea`, `bug`, `discussion` and `analyze` are reserved.
 - **Prompt**: the generic sandbox instructions (`prompts/sandbox.md`, and the repo's
   `instructions`) as for every run, then a short frame (the issue or pull request to read,
   what the mode may do) and the mode's file.

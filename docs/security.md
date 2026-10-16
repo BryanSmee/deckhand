@@ -31,7 +31,8 @@ that file asks for, so none can:
   - a work run on a pull request, or a comment on an issue's pull request: that pull
     request's head branch, read from GitHub when the run starts, a maintainer's included
     (they asked for the run); none when it is a fork's;
-  - light runs (brainstorms, onboarding, inbox entries, discussions, a repo's light modes):
+  - light runs (brainstorms, onboarding, inbox entries, discussions, run analyses, a repo's
+    light modes):
     none. The broker registers every one as a run that can't push, so the gateway refuses
     it whatever its token, and the same holds for a run a restarted listener picks up again.
 
@@ -116,7 +117,7 @@ the broker then refuses it. The installation tokens a sandbox already got are an
 - A token only reaches the run's repository, with the sandbox's permissions: it reads the
   code, can't push (pushes go through the gateway, with the run's secret), and can write
   issues and, for work runs only, pull requests (and discussions, for discussion runs)
-  there. Onboarding and a repo's light modes only read issues and pull requests.
+  there. Onboarding, run analyses and a repo's light modes only read issues and pull requests.
 
 So what a run copied out (through an allowed host) can be used against its own repository,
 with those permissions, for up to an hour. Uninstalling the App, or suspending its
@@ -514,6 +515,16 @@ repository's half of these checks (same origin, the user in `ALLOWED_USERS` and 
 `users`, a config without errors), and only for an inbox the repo's config names. Its text is
 posted on the inbox issue as the App's comment, ending "From the dashboard by @alice", and its
 run reads it as that user's entry, as it would read their own comment there.
+
+A run analysis (Analyze in the top bar, `POST /api/repos/<owner>/<repo>/analyze`) passes the
+repository's half of these checks too; its preview (`GET`, the same path) all but the origin,
+as it changes nothing. It only ever reads runs of that repository: they are picked by the
+repo of each run's record, and its digest is built from those alone. Its run never gets the
+logs themselves (they cover every repository, and are a few MB each), nor a mount of the logs
+folder: the listener writes a digest into the run's own read-only inbox folder
+(`TASK_DIGEST`), built from the dashboard's entries (`runlog.mjs` `format()`, tool details and
+outputs clipped), redacted of the operator's credentials (`secrets.mjs`) and capped at about
+400 KB. Its token only reads, as onboarding's: it replies, and files nothing itself.
 
 Discussions from the dashboard (`POST /api/repos/<owner>/<repo>/discussions`, and
 `…/discussions/<n>/comments`) pass the same checks, only in the repo's `inbox.discussions`

@@ -99,6 +99,7 @@ export const BUILT_IN_MODES = [
   "idea",
   "bug",
   "discussion",
+  "analyze",
 ];
 
 export function kindName(t: Pick<Task, "kind">): string {

@@ -53,6 +53,7 @@ export const CLOSE = JSON.stringify({ type: "deckhand", event: "close" });
 // Where the inbox is, inside the sandbox.
 const INBOX_DIR = "/deckhand";
 const CA_FILE = "egress-ca.crt";
+const DIGEST_FILE = "digest.md";
 const INBOX = "inbox.jsonl";
 
 // How long the proxy's addresses are trusted, and how often a caller that isn't among them
@@ -88,14 +89,26 @@ export function createDockerRunner({
   // options (hardening, limits, volumes); `engine`: { limits, cache } for a run granted a
   // container engine, `cache` the base name of the repo's cache volume when it keeps one;
   // `ca`: the egress proxy's CA certificate (PEM), which the sandbox trusts, in its inbox
-  // folder (DECKHAND_CA). → { engine: { backend, volume, cached } } when it has one.
-  async function start({ run, name, image, labels = {}, env: values = {}, args = [], engine, ca }) {
+  // folder (DECKHAND_CA); `digest`: a run analysis's digest of past runs (analysis.mjs), there
+  // too (TASK_DIGEST). → { engine: { backend, volume, cached } } when it has one.
+  async function start({
+    run,
+    name,
+    image,
+    labels = {},
+    env: values = {},
+    args = [],
+    engine,
+    ca,
+    digest,
+  }) {
     // Unset values stay unset in the sandbox, as with `-e NAME` and no NAME.
     const env = Object.fromEntries(Object.entries(values).filter(([, v]) => v !== undefined));
     mkdirSync(join(inboxDir, run), { recursive: true });
     chmodSync(join(inboxDir, run), 0o755); // the sandbox runs as uid 1000 and only reads
     writeFileSync(inbox(run), "");
     if (ca) writeFileSync(join(inboxDir, run, CA_FILE), ca, { mode: 0o644 });
+    if (digest) writeFileSync(join(inboxDir, run, DIGEST_FILE), digest, { mode: 0o644 });
     const all = {
       "deckhand.owner": config.prefix,
       "deckhand.run": run,
@@ -121,6 +134,7 @@ export function createDockerRunner({
           "-e",
           `TASK_INBOX=${INBOX_DIR}/${INBOX}`,
           ...(ca ? ["-e", `DECKHAND_CA=${INBOX_DIR}/${CA_FILE}`] : []),
+          ...(digest ? ["-e", `TASK_DIGEST=${INBOX_DIR}/${DIGEST_FILE}`] : []),
           "--mount",
           `type=volume,src=${config.runsVolume},dst=${INBOX_DIR},volume-subpath=${run},readonly`,
           "--network",

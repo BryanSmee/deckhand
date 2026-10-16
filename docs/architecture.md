@@ -175,6 +175,41 @@ discussion or comment of that user (`events.mjs` `discussionEntryItem()`), queue
 repo's category are read or written; the thread shows the App's posts with that line as the
 user's, and those with the marker as Deckhand's answers.
 
+**Analyze**, also in the top bar, starts a run that reads a selection of a repository's past
+runs and replies with what would make sessions faster or more reliable (`analysis.mjs`). The
+form picks the repository (those `api/state` shows the user), how many recent runs (10 by
+default, 50 at most), their kinds (`taskMode`: work, brainstorm, idea, bug, discussion, the
+repo's own modes…) and outcomes (ok, error, needs-input, interrupted, cancelled). As the
+selection changes, `GET /api/repos/<owner>/<repo>/analyze?count=&kinds=&outcomes=` says how
+many finished runs of that repository match, and about how many tokens their digest is
+(its size ÷ 4); the form warns that the run uses the operator's Claude budget. `POST` (the
+same path, `{ count, kinds, outcomes }`, `work.mjs` `startAnalysis`) refuses an empty
+selection, a count over 50, or a selection no run matches, with the checks of the inbox's
+form. It creates an issue "Run analysis: last N runs (…)", labelled `analysis` (created if
+missing), listing the selection and the run ids, then queues an item with the `analyze`
+trigger on it, as the user's, carrying those ids. No comment can ask for that mode.
+
+`analyze` is a built-in light mode (`modes.mjs`): no branch, no setup, a fresh session, the
+model of light runs (`brainstorm_model`), and a token that only reads, so the reply is the
+report and the issue stays as its record. When the run starts (`runs.mjs`
+`analysisDigest()`), the listener builds the digest of the runs picked that are still listed
+and of that repository: for each, its meta line (kind, agent, model, effort, status,
+duration), the listener's notes, setup output that looks wrong (errors, refused hosts), its
+tool calls (counts per tool, calls made three times or more, failed ones with their clipped
+output) and its final reply, from `format()`'s entries. Each run's part is cut at 24 KB and
+the whole at 400 KB, the newest runs first: the older ones beyond the cap are left out and
+the digest's header names them. It is redacted, written into the run's inbox folder as
+`digest.md` (`TASK_DIGEST`, read-only, like the egress CA), and gone with the run. Agent logs
+carry no per-line timestamps, so the digest can't show gaps between steps: the run's
+duration and agent time say how long it took. The prompt (`prompts/analyze.md`) asks for
+findings ranked by impact, each citing run ids, with a concrete change: a `.deckhand.yaml`
+line, a Dockerfile step, a host for the operator to grant, a rule for `AGENTS.md`.
+
+Its cost is the run's: it reads up to ~100,000 tokens of digest (the 400 KB cap) on top of
+the repository it looks at, on the light runs' model. Previews cost nothing: they read logs
+on the listener, and keep each run's part in memory once built (a finished run's log no
+longer changes).
+
 Reactions on the triggering comment follow its run: 👀 when it is received, then 🚀 (done),
 😕 (needs input) or 👎 (error) once the run that handled it is over.
 

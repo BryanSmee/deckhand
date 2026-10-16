@@ -7,6 +7,7 @@ import { triggerWord } from "./onboarding.mjs";
 
 const instructions = (name) => readFileSync(new URL(`../prompts/${name}`, import.meta.url), "utf8");
 const brainstormInstructions = instructions("brainstorm.md");
+const analyzeInstructions = instructions("analyze.md");
 const onboardingInstructions = instructions("onboarding.md");
 // The config's reference, in the image next to the prompts so the two can't drift apart.
 const configReference = readFileSync(new URL("../docs/repo-config.md", import.meta.url), "utf8");
@@ -43,6 +44,17 @@ ${inboxInstructions[mode]}
 ${mode === "discussion" ? "The message" : "The entry"}:
 
 ${text}`;
+}
+
+// A run analysis (analysis.mjs): its digest is a file in the run's inbox (TASK_DIGEST), the
+// selection the maintainer made is `text`.
+export function analyzePrompt(task, text) {
+  return `Analyze recent Deckhand runs of ${task.repo}, on GitHub issue #${task.number}. The digest of
+the runs is at \`$TASK_DIGEST\` (\`cat "$TASK_DIGEST"\`; it is large: read it in parts if you
+need to).
+
+${analyzeInstructions}
+${text ? `\nThe selection:\n\n${text}\n` : ""}`;
 }
 
 export function brainstormPrompt(task) {
@@ -214,6 +226,7 @@ export function promptFor(
 ) {
   if (mode === "brainstorm" || mode === "stop") return brainstormPrompt(task);
   if (INBOX.has(mode)) return inboxPrompt(task, mode, text);
+  if (mode === "analyze") return analyzePrompt(task, text);
   if (mode === "onboarding") return onboardingPrompt(task, settings, config, grant);
   if (own) return modePrompt(task, own, instructions, branches);
   return onboardingWork ? onboardingWorkPrompt(task) : initialPrompt(task, branches);
@@ -227,8 +240,9 @@ export function firstMessage({ mode, text, restored, started }) {
   if (started) {
     return `${body || "Continue."}\n\n(Don't post comments on GitHub yourself: your final message is posted as a reply.)`;
   }
-  // A new inbox session reads its entries in the prompt (inboxPrompt()).
-  return INBOX.has(mode) ? "" : body;
+  // A new inbox session reads its entries in the prompt (inboxPrompt()), an analysis its
+  // selection (analyzePrompt()).
+  return INBOX.has(mode) || mode === "analyze" ? "" : body;
 }
 
 // A run that falls back to the same agent on another provider (runs.mjs): its session goes on,
@@ -266,7 +280,7 @@ export function liveMessage(mode, text) {
   if (mode === "brainstorm") {
     return `New comment on the issue: ${text}\n\n(Still a brainstorm: no code, branch, commit, pull request or new issue. ${reply})`;
   }
-  if (FRESH.has(mode)) {
+  if (FRESH.has(mode) && mode !== "analyze") {
     return `Another entry arrived on the inbox while you were working:\n\n${text}\n\nHandle it like the others, as its own entry. ${reply}`;
   }
   if (mode === "discussion") return `New comment in the discussion:\n\n${text}\n\n${reply}`;

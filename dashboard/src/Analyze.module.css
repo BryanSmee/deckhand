@@ -1,0 +1,92 @@
+.count {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.count input {
+  width: 4.5rem;
+  padding: 0.25rem 0.35rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--ink);
+  font: inherit;
+}
+
+.count input[aria-invalid="true"] {
+  border-color: var(--err);
+}
+
+.hint {
+  color: var(--muted);
+  font-size: 0.76rem;
+}
+
+.group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.legend {
+  min-width: 4.5rem;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+/* A toggle per kind or outcome: the checkbox stays, out of sight, for the keyboard. */
+.chip {
+  position: relative;
+  padding: 0.2rem 0.65rem;
+  border: 1.5px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--ink);
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition:
+    border-color 0.15s,
+    background 0.15s;
+}
+
+.chip:hover {
+  border-color: var(--muted);
+}
+
+.chip input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.chip.on {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.chip:has(input:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.preview {
+  margin: 0;
+  color: var(--ink);
+  font-size: 0.85rem;
+}
+
+.warning {
+  margin: 0;
+  padding: 0.4rem 0.6rem;
+  border-radius: 6px;
+  background: var(--warn-soft);
+  color: var(--ink);
+  font-size: 0.8rem;
+}

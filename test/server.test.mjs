@@ -2702,6 +2702,85 @@ mounts:
     writeFileSync(join(dir, "go"), "");
   });
 
+  test("Analyze: a new issue, and a light run that reads a digest of the repo's runs only", async (t) => {
+    const secret = "sk-ant-api03-0123456789abcdef";
+    const { dir, github, port, listener } = await listen(t, {}, (dir, github) => {
+      writeFileSync(join(dir, "hold"), "");
+      mkdirSync(join(dir, "logs"));
+      const log = (id, repo, text) =>
+        writeFileSync(
+          join(dir, "logs", `${id}.log`),
+          [
+            { type: "listener", key: `${repo}#5`, repo, taskMode: "work", startedAt: 1000 },
+            { type: "result", is_error: true, result: text, duration_ms: 6000 },
+          ]
+            .map((l) => JSON.stringify(l))
+            .join("\n") + "\n",
+        );
+      log("org-repo-5-1000", "org/repo", `The tests fail with ${secret}.`);
+      log("org-other-5-1000", "org/other", "Another repo's failure.");
+      return { ANTHROPIC_API_KEY: secret, GITHUB_URL: github.url };
+    });
+    const base = `http://127.0.0.1:${port}`;
+    const get = (path, cookie) =>
+      fetch(base + path, { redirect: "manual", headers: cookie ? { cookie } : {} });
+    const login = await get("/auth/login");
+    const to = new URL(login.headers.get("location"));
+    const state = login.headers.getSetCookie()[0].split(";")[0];
+    const back = await get(`/auth/callback?code=c&state=${to.searchParams.get("state")}`, state);
+    const session = back.headers
+      .getSetCookie()
+      .find((c) => c.startsWith("deckhand_session="))
+      .split(";")[0];
+    const preview = await (
+      await get("/api/repos/org/repo/analyze?count=10&kinds=work&outcomes=error", session)
+    ).json();
+    assert.deepEqual(preview.runs, ["org-repo-5-1000"]);
+    const res = await fetch(`${base}/api/repos/org/repo/analyze`, {
+      method: "POST",
+      headers: {
+        cookie: session,
+        origin: "https://hooks.example.com",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ count: 10, kinds: ["work"], outcomes: ["error"] }),
+    });
+    assert.equal(res.status, 200);
+    assert.equal((await res.json()).task, "org/repo#30");
+    const created = await github.waitFor(
+      (r) => r.method === "POST" && r.path === "/repos/org/repo/issues",
+    );
+    assert.deepEqual(JSON.parse(created.body).labels, ["analysis"]);
+    await until(() => exists(join(dir, "run-args")), "the run");
+    const runEnv = readFileSync(join(dir, "run-env"), "utf8");
+    assert.match(runEnv, /^TASK_MODE=analyze$/m);
+    assert.match(runEnv, /^SANDBOX_LIGHT=1$/m);
+    assert.match(runEnv, /^TASK_SESSION=fresh$/m);
+    assert.match(
+      runEnv,
+      /^TASK_PROMPT=Analyze recent Deckhand runs of org\/repo, on GitHub issue #30/m,
+    );
+    assert.match(
+      readFileSync(join(dir, "run-args"), "utf8"),
+      /^TASK_DIGEST=\/deckhand\/digest\.md$/m,
+    );
+    // In the run's inbox folder: this repo's run, redacted; not the other repo's.
+    const [folder] = readdirSync(join(dir, "runs")).filter((f) =>
+      exists(join(dir, "runs", f, "digest.md")),
+    );
+    const digest = readFileSync(join(dir, "runs", folder, "digest.md"), "utf8");
+    assert.match(digest, /## Run org-repo-5-1000/);
+    assert.match(digest, /The tests fail with \[redacted\]\./);
+    assert.ok(!digest.includes(secret));
+    assert.doesNotMatch(digest, /org-other|Another repo/);
+    writeFileSync(join(dir, "go"), "");
+    const reply = await github.waitFor(
+      (r) => r.method === "POST" && r.path === "/repos/org/repo/issues/30/comments",
+    );
+    assert.match(JSON.parse(reply.body).body, /^All done\./);
+    await listener.until("done (ok)");
+  });
+
   test("the dashboard and its logs are for allowed users signed in with GitHub", async (t) => {
     // GitHub's sign-in pages are the fake GitHub too. A built dashboard, and an older log with
     // no title.

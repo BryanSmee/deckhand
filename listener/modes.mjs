@@ -7,12 +7,13 @@ import { customMode, RESERVED_MODES } from "./repo-config.mjs";
 export const INBOX = new Set(["idea", "bug", "discussion"]);
 
 // Runs that read the code and answer, without a branch or the repo's setup: brainstorms (and
-// their wrap-up), onboarding, inbox entries and discussions.
-export const LIGHT = new Set(["brainstorm", "stop", "onboarding", ...INBOX]);
+// their wrap-up), onboarding, inbox entries, discussions and run analyses (analysis.mjs).
+export const LIGHT = new Set(["brainstorm", "stop", "onboarding", "analyze", ...INBOX]);
 
 // Each inbox entry starts a fresh session (the inbox issue collects unrelated entries); a
-// discussion keeps its own, like a brainstorm. They are also a run each (entryRun()).
-export const FRESH = new Set(["idea", "bug"]);
+// discussion keeps its own, like a brainstorm. An analysis reads its digest, nothing before.
+// They are also a run each (entryRun()).
+export const FRESH = new Set(["idea", "bug", "analyze"]);
 
 // Any other mode is one of the repo's own.
 export const BUILT_IN = new Set(RESERVED_MODES);
@@ -44,12 +45,14 @@ export function kindOf(mode, kind) {
 }
 
 // No light run writes pull requests. A discussion run answers through GraphQL: its token
-// needs Discussions too. Brainstorms and inbox entries comment and create issues. Onboarding
-// and a light run in one of the repo's own modes only comment: their token only reads.
+// needs Discussions too. Brainstorms and inbox entries comment and create issues. Onboarding,
+// an analysis and a light run in one of the repo's own modes only comment: their token only
+// reads.
 export function permissionsFor(mode, light) {
   if (mode === "discussion") return DISCUSSION_PERMISSIONS;
-  // Onboarding proposes: nothing is pushed or created before the trigger line.
-  if (mode === "onboarding") return READ_ONLY_PERMISSIONS;
+  // Onboarding proposes: nothing is pushed or created before the trigger line. An analysis
+  // reports: the maintainer files what they want of it.
+  if (mode === "onboarding" || mode === "analyze") return READ_ONLY_PERMISSIONS;
   if (LIGHT.has(mode)) return LIGHT_PERMISSIONS;
   return light ? READ_ONLY_PERMISSIONS : undefined;
 }

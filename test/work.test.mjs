@@ -6,6 +6,7 @@ import { test } from "node:test";
 import { loadConfig } from "../listener/config.mjs";
 import { createWaits } from "../listener/waits.mjs";
 import { ISSUES_MS, createWorkApi, leadsTo, parseAction, staleFor } from "../listener/work.mjs";
+import { createAnalysis } from "../listener/analysis.mjs";
 import { MAX_TEXT } from "../listener/answers.mjs";
 import { board as boardOf } from "../listener/board.mjs";
 import { workItem } from "../listener/events.mjs";
@@ -30,6 +31,7 @@ function setup({
   runs = {},
   events = {},
   cancels = {},
+  history = [],
 } = {}) {
   const config = loadConfig({
     ALLOWED_USERS: "alice,bob",
@@ -53,6 +55,7 @@ function setup({
     listed: new Map(),
     cancelled: [],
     logs: [],
+    created: [],
     clock: 1000,
   };
   let commentId = 500;
@@ -65,6 +68,15 @@ function setup({
     if (method === "POST" && on) {
       w.posted.push([Number(on), body.body]);
       return Response.json({ id: ++commentId, html_url: `c/${commentId}`, node_id: "N" });
+    }
+    if (method === "POST" && path === `/repos/${repo}/labels`) {
+      return new Response("{}", { status: w.labelled ? 422 : 201 });
+    }
+    if (method === "POST" && path === `/repos/${repo}/issues`) {
+      if (w.noIssues) return new Response("{}", { status: 410 });
+      w.created.push(body);
+      const number = 900 + w.created.length;
+      return Response.json({ number, title: body.title, html_url: `u/${number}` });
     }
     if (path === `/repos/${repo}`) {
       return repo === "org/app"
@@ -138,6 +150,8 @@ function setup({
       w.cancelled.push([key, user]);
       return cancels[key] ?? null;
     },
+    // Each run's digest is its id: the endpoint's checks are what is tested here.
+    analysis: createAnalysis({ runs: () => history, partOf: (r) => `part of ${r.id}` }),
     publicUrl: () => ORIGIN,
     now: () => w.clock,
     log: (line) => w.logs.push(line),
@@ -1148,4 +1162,145 @@ test("inbox refused, nothing posted: users, config errors, no such inbox, text, 
   assert.equal(refused.status, 409);
   assert.match(refused.body.error, /has errors/);
   assert.deepEqual([broken.posted, broken.accepted], [[], []]);
+});
+
+const analyze = (w, body, opts = {}) =>
+  call(w.api, "POST", "/api/repos/org/app/analyze", { body, ...opts });
+
+const HISTORY = [
+  { id: "r5", repo: "org/app", key: "org/app#5", taskMode: "work", status: "error", finishedAt: 5 },
+  {
+    id: "o4",
+    repo: "org/other",
+    key: "org/other#4",
+    taskMode: "work",
+    status: "error",
+    finishedAt: 4,
+  },
+  {
+    id: "r3",
+    repo: "org/app",
+    key: "org/app#3",
+    taskMode: "bug",
+    status: "needs-input",
+    finishedAt: 3,
+  },
+  { id: "r2", repo: "org/app", key: "org/app#2", taskMode: "work", status: "ok", finishedAt: 2 },
+  { id: "r1", repo: "org/app", key: "org/app#1", taskMode: "work", status: "error", finishedAt: 1 },
+];
+
+test("analyze: a new issue labelled analysis, and a run in the analyze mode on it", async () => {
+  const w = setup({ history: HISTORY });
+  const sent = await analyze(w, {
+    count: 12,
+    kinds: ["work", "bug"],
+    outcomes: ["error", "needs-input"],
+  });
+  assert.equal(sent.status, 200);
+  assert.deepEqual(sent.body, {
+    message: "Analysis of 3 runs started on #901.",
+    url: "u/901",
+    number: 901,
+    task: "org/app#901",
+  });
+  assert.ok(w.calls.includes("POST /repos/org/app/labels"));
+  const [issue] = w.created;
+  assert.equal(issue.title, "Run analysis: last 3 runs (errors, needs-input)");
+  assert.deepEqual(issue.labels, ["analysis"]);
+  assert.match(issue.body, /^Asked for from the dashboard by @alice/);
+  assert.match(issue.body, /Runs \(3, of 12 asked for, newest first\): r5, r3, r1/);
+  const [item] = w.accepted;
+  assert.equal(item.trigger, "analyze");
+  assert.equal(item.modeLine, null);
+  assert.deepEqual([item.number, item.replyTo, item.id, item.kind], [901, 901, "901", "issue"]);
+  assert.equal(item.author, "alice");
+  assert.equal(item.comment, null);
+  // Only this repo's runs: org/other's run is never picked.
+  assert.deepEqual(item.analysis, {
+    runs: ["r5", "r3", "r1"],
+    count: 12,
+    kinds: ["work", "bug"],
+    outcomes: ["error", "needs-input"],
+  });
+  assert.match(item.text, /- Kinds: work, bug\n- Outcomes: error, needs-input\n/);
+  // Every outcome: the title doesn't list them; the label is there already (422).
+  w.labelled = true;
+  const all = await analyze(w, {
+    count: 1,
+    kinds: ["work"],
+    outcomes: ["ok", "error", "needs-input", "interrupted", "cancelled"],
+  });
+  assert.equal(all.status, 200);
+  assert.equal(w.created[1].title, "Run analysis: last 1 run");
+  assert.deepEqual(w.accepted[1].analysis.runs, ["r5"]);
+});
+
+test("analyze refused, nothing created: users, origin, config errors, selection, no runs", async () => {
+  const w = setup({
+    env: { ALLOWED_USERS: "alice,bob,carol" },
+    settings: { users: ["alice", "carol"] },
+    history: HISTORY,
+  });
+  const ok = { count: 10, kinds: ["work"], outcomes: ["error"] };
+  assert.equal((await analyze(w, ok, { user: null })).status, 401);
+  assert.equal((await analyze(w, ok, { origin: "https://evil.example" })).status, 403);
+  assert.equal((await analyze(w, ok, { origin: null })).status, 403);
+  // Not in ALLOWED_USERS, then not among the repo's users.
+  assert.equal((await analyze(w, ok, { user: "mallory" })).status, 403);
+  assert.equal((await analyze(w, ok, { user: "bob" })).status, 403);
+  // A repo outside ALLOWED_REPOS.
+  const outside = setup({ env: { ALLOWED_REPOS: "org/other" }, history: HISTORY });
+  const other = await call(outside.api, "POST", "/api/repos/org/app/analyze", { body: ok });
+  assert.equal(other.status, 404);
+  // An empty selection, or over the maximum.
+  for (const body of [
+    { ...ok, kinds: [] },
+    { ...ok, outcomes: [] },
+    { ...ok, count: 51 },
+    { ...ok, count: 0 },
+    { ...ok, outcomes: ["success"] },
+  ]) {
+    assert.equal((await analyze(w, body)).status, 400, JSON.stringify(body));
+  }
+  // No run matches: only another repo's would.
+  const none = await analyze(w, { ...ok, kinds: ["discussion"] });
+  assert.equal(none.status, 409);
+  assert.match(none.body.error, /No run of org\/app matches/);
+  // Issues turned off.
+  w.noIssues = true;
+  assert.equal((await analyze(w, ok)).status, 409);
+  assert.deepEqual([w.created, w.accepted], [[], []]);
+  // A config with errors.
+  const broken = setup({ errors: ["bad"], history: HISTORY });
+  const refused = await analyze(broken, ok);
+  assert.equal(refused.status, 409);
+  assert.match(refused.body.error, /has errors/);
+  assert.deepEqual([broken.created, broken.accepted], [[], []]);
+});
+
+test("analyze preview: how many runs match, the tokens, the kinds there are", async () => {
+  const w = setup({
+    env: { ALLOWED_USERS: "alice,bob" },
+    settings: { users: ["alice"] },
+    history: HISTORY,
+  });
+  const get = (query, opts) => call(w.api, "GET", `/api/repos/org/app/analyze?${query}`, opts);
+  const seen = await get("count=10&kinds=work,bug&outcomes=error,needs-input");
+  assert.equal(seen.status, 200);
+  assert.deepEqual(seen.body.runs, ["r5", "r3", "r1"]);
+  assert.deepEqual([seen.body.included, seen.body.left, seen.body.max], [3, 0, 50]);
+  assert.equal(seen.body.tokens, Math.ceil(seen.body.bytes / 4));
+  assert.deepEqual(seen.body.kinds, ["bug", "work"]);
+  // Nothing picked yet: no run, the kinds all the same.
+  const empty = await get("");
+  assert.deepEqual([empty.status, empty.body.runs, empty.body.kinds], [200, [], ["bug", "work"]]);
+  // The same checks as the POST, but the origin: a GET changes nothing.
+  assert.equal((await get("kinds=work&outcomes=ok", { user: "bob" })).status, 403);
+  assert.equal((await get("kinds=work&outcomes=ok", { user: null })).status, 401);
+  assert.equal((await get("count=99&kinds=work&outcomes=ok")).status, 400);
+  assert.equal((await get("kinds=work&outcomes=nope")).status, 400);
+  assert.deepEqual(w.created, []);
+  // Other methods.
+  assert.equal((await call(w.api, "PUT", "/api/repos/org/app/analyze")).status, 405);
+  assert.equal((await call(w.api, "POST", "/api/repos/org/app/issues", { body: {} })).status, 405);
 });

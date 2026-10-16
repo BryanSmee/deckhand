@@ -361,8 +361,15 @@ export function createRuns(ctx) {
       branches: live.branches,
     });
     recheckMounts(task, settings, access);
+    const digest = live.mode === "analyze" ? analysisDigest(task, items, note) : undefined;
     try {
-      const spec = sandboxSpec(task, prompt, message, { ...prepared, ...access, engine, ca });
+      const spec = sandboxSpec(task, prompt, message, {
+        ...prepared,
+        ...access,
+        engine,
+        ca,
+        digest,
+      });
       const started = await ctx.runner.start(spec);
       if (started?.engine) note(engineNote(started.engine, engine));
       // Cancelled while Docker started it: cancel()'s kill came too early to find it.
@@ -479,6 +486,27 @@ export function createRuns(ctx) {
       );
     }
     return { text, message, settings, own, note, handoff };
+  }
+
+  // An analysis's digest (analysis.mjs), built now from the runs picked when it was asked
+  // for: those of its repo still listed, redacted like any output. None left: no run.
+  function analysisDigest(task, items, note) {
+    const asked = items.findLast((i) => i.analysis)?.analysis;
+    if (!asked?.runs?.length) {
+      throw new RunError(
+        `${cantRun(task)}: this analysis has no runs to read. Start one from the dashboard's Analyze.`,
+      );
+    }
+    const { text, included, left } = ctx.analysis.digest(task.repo, asked.runs, asked);
+    if (!included.length) {
+      throw new RunError(
+        `${cantRun(task)}: the runs this analysis was to read are gone (their logs were removed).`,
+      );
+    }
+    note(
+      `Run digest: ${included.length} run(s), ${Math.round(Buffer.byteLength(text) / 1000)} KB${left.length ? `, ${left.length} left out` : ""}`,
+    );
+    return redact(text, secretValues(task.live));
   }
 
   // Left over from a listener that lost track of it: wait for it, then make room.
@@ -691,7 +719,7 @@ export function createRuns(ctx) {
     task,
     prompt,
     message,
-    { image, cacheArgs, settings, mounts, limits, engine, ca },
+    { image, cacheArgs, settings, mounts, limits, engine, ca, digest },
   ) {
     const { live } = task;
     const n = task.name;
@@ -734,6 +762,7 @@ export function createRuns(ctx) {
       args,
       engine: engine ?? undefined,
       ca: ca ?? undefined,
+      digest,
     };
   }
 
@@ -819,11 +848,15 @@ export function createRuns(ctx) {
   // A line of the sandbox's output without the secrets it must not publish (secrets.mjs):
   // what is stored is what the dashboard shows, and the result is what gets posted.
   function hidden(live, line) {
-    return redact(line, [
+    return redact(line, secretValues(live));
+  }
+
+  function secretValues(live) {
+    return [
       live.secret,
       ...AGENT_SECRETS.map((name) => process.env[name]),
       ...(ctx.openai?.secrets() ?? []),
-    ]);
+    ];
   }
 
   function output(task, raw) {

@@ -48,12 +48,18 @@ test("modes: light, fresh and the dashboard's kind, built-in or the repo's own",
   assert.equal(kindOf("stop", "issue"), "brainstorm");
   assert.equal(kindOf("bug", "issue"), "bug");
   assert.equal(kindOf("review", "pr"), "pr");
+  // An analysis reads the code and its digest, in a session of its own.
+  assert.equal(isLight(issue, "analyze"), true);
+  assert.equal(isFresh(issue, "analyze"), true);
+  assert.equal(kindOf("analyze", "issue"), "issue");
 });
 
 test("modes: discussions may write them, onboarding and light repo modes only read", () => {
   assert.equal(permissionsFor("discussion", true), DISCUSSION_PERMISSIONS);
   assert.equal(permissionsFor("onboarding", true), READ_ONLY_PERMISSIONS);
   assert.equal(permissionsFor("review", true), READ_ONLY_PERMISSIONS);
+  // An analysis reports: it files nothing itself.
+  assert.equal(permissionsFor("analyze", true), READ_ONLY_PERMISSIONS);
   // Brainstorms and inbox entries comment and create issues, never touch a pull request.
   for (const mode of ["brainstorm", "stop", "idea", "bug"]) {
     assert.equal(permissionsFor(mode, true), LIGHT_PERMISSIONS, mode);
@@ -81,6 +87,14 @@ test("prompts: each kind of run gets its own", () => {
     prompt(issue, "work", { onboardingWork: true }),
     /^The maintainer confirmed the onboarding proposal/,
   );
+  const analyze = prompt(issue, "analyze");
+  assert.match(analyze, /^Analyze recent Deckhand runs of org\/repo, on GitHub issue #12/);
+  assert.match(analyze, /`cat "\$TASK_DIGEST"`/);
+  assert.match(analyze, /Never write or edit code[^]*create\s+issues/);
+  assert.match(analyze, /The selection:\n\nthe comments\n$/);
+  // Its selection is in the prompt: no first message, and comments mid-run aren't entries.
+  assert.equal(firstMessage({ mode: "analyze", text: "the comments" }), "");
+  assert.doesNotMatch(liveMessage("analyze", "hi"), /inbox/);
 });
 
 test("prompts: work rebases on the base and force-pushes with a lease before gh pr ready", () => {
