@@ -7,9 +7,9 @@ import { join } from "node:path";
 import { agentFor } from "./agents/index.mjs";
 import { parseKey, taskKey } from "./events.mjs";
 import { permissionsFor } from "./modes.mjs";
-import { addRun, openLog, saveSummary } from "./runlog.mjs";
+import { addRun, openLog } from "./runlog.mjs";
 import { readJson, writeJsonAtomic } from "./store.mjs";
-import { noLongerAllowed } from "./tasks.mjs";
+import { newTask, noLongerAllowed } from "./tasks.mjs";
 
 // A result saved by a listener from before the agent seam is Claude Code's raw stream-json
 // `result` event: Deckhand's own from it, with the duration of all its turns.
@@ -121,7 +121,7 @@ export function createRestart(ctx) {
       // Its run may have gone on through the restart (restoreRuns()).
       let task = tasks.get(key);
       if (!task) {
-        task = { ...t, pending: [], running: false, ready: false, timer: null, live: null };
+        task = newTask(t);
         tasks.set(key, task);
       }
       task.next = { ...t.next, ...task.next };
@@ -185,7 +185,7 @@ export function createRestart(ctx) {
     addRun(ctx, record);
     let task = tasks.get(key);
     if (!task) {
-      task = { ...saved.task, pending: [], ready: false, timer: null, next: {} };
+      task = newTask(saved.task);
       tasks.set(key, task);
     }
     const handled = saved.handled.map(revive);
@@ -275,17 +275,10 @@ export function createRestart(ctx) {
   }
 
   async function requeue(task) {
-    const live = task.live;
-    live.record.status = "interrupted";
-    live.record.finishedAt = Date.now();
-    saveSummary(live.record, log);
-    ctx.broker.revoke(live.secret);
-    await ctx.runner.remove(task.name, live.id);
-    rmSync(livePath(live.id), { force: true });
-    task.pending.unshift(...live.handled);
-    task.live = null;
-    task.running = false;
-    ctx.running--;
+    const { handled } = task.live;
+    task.live.record.status = "interrupted";
+    await ctx.teardown(task);
+    task.pending.unshift(...handled);
     ctx.startLater(task);
   }
 

@@ -15,6 +15,7 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { agentFor } from "./agents/index.mjs";
+import { kindOf } from "./modes.mjs";
 import { NEEDS_INPUT, replyQuestions } from "./questions.mjs";
 import { readJson, writeJsonAtomic } from "./store.mjs";
 
@@ -86,6 +87,52 @@ export function saveSummary(record, log = console.error) {
   } catch (error) {
     log(`${record.key}: saving the summary of ${record.id}: ${error.message}`);
   }
+}
+
+// What the dashboard lists for a run (runs.mjs): `title` its task's as known, `agent` the
+// operator's for its kind, `logDir` where its log goes.
+export function newRecord(
+  task,
+  { id, key, mode, light, replyTo, reason, items },
+  { title, agent, logDir },
+) {
+  return {
+    id,
+    key,
+    kind: kindOf(mode, task.kind),
+    // work, brainstorm, idea, bug, discussion or one of the repo's own modes.
+    taskMode: mode === "stop" ? "brainstorm" : mode,
+    repo: task.repo,
+    title,
+    replyTo,
+    // What runs it: the operator's until the repo's settings are read (begin()), on which
+    // provider, and why when it is a fallback's or `/agent`'s (entryFor()).
+    agent,
+    provider: null,
+    fallback: null,
+    picked: null,
+    // Whether it is a light run: an issue's light runs and its work have their own sessions.
+    light,
+    // Why the listener started it itself ("conflict": conflicts.mjs); null for comments.
+    reason,
+    // What it was asked to act on, kept in its log's first line: a run that fails can run
+    // again with it, after a restart too (the dashboard's Rerun, work.mjs).
+    items: items.map(({ id, kind, number, trigger, modeLine, text }) => ({
+      id,
+      kind,
+      number,
+      trigger,
+      modeLine,
+      text,
+    })),
+    mode: null,
+    startedAt: Date.now(),
+    finishedAt: null,
+    status: "running",
+    // Its screenshots' folder, once it starts: they go with its log (history.mjs).
+    shots: null,
+    logPath: join(logDir, `${id}.log`),
+  };
 }
 
 // A new run, or one a restart picks up again (restart.mjs), in the list and its index by id.

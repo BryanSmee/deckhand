@@ -27,7 +27,7 @@ import {
   startable,
 } from "./repo-config.mjs";
 import { writeEvent } from "./runlog.mjs";
-import { configErrors } from "./runs.mjs";
+import { configErrors } from "./access.mjs";
 
 // Why a queued comment may no longer run, or null: its repo left ALLOWED_REPOS, or its author
 // left ALLOWED_USERS or (`settings`, when known) the repo's `users`. Checked again when it was
@@ -43,6 +43,20 @@ export function noLongerAllowed(config, item, settings = null) {
     return `${item.author} is no longer an allowed user`;
   }
   return null;
+}
+
+// A task with nothing queued nor running yet: `fields` are the comment's (repo, id, kind,
+// number, base, name, settings), or those a listener left (restart.mjs).
+export function newTask(fields) {
+  return {
+    ...fields,
+    pending: [],
+    running: false,
+    ready: false,
+    timer: null,
+    live: null,
+    next: {},
+  };
 }
 
 // `ctx` (server.mjs): the listener's state and services, read at call time. Tasks are
@@ -257,16 +271,7 @@ export function createTasks(ctx) {
     ctx.titles.set(key, item.title);
     let task = tasks.get(key);
     if (!task) {
-      task = {
-        ...item,
-        name,
-        pending: [],
-        running: false,
-        ready: false,
-        timer: null,
-        live: null,
-        next: {},
-      };
+      task = newTask({ ...item, name });
       tasks.set(key, task);
     }
     // The latest settings decide the repo's parallel cap.

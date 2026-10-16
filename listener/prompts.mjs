@@ -1,6 +1,8 @@
 // What the agent reads: each run's prompt (TASK_PROMPT), its first message (TASK_MESSAGE) and
 // the comments delivered to it mid-run. Pure, apart from reading ../prompts/ once at start.
 import { readFileSync } from "node:fs";
+import { entryName } from "./agents/index.mjs";
+import { entryLabel } from "./agents/select.mjs";
 import { mandatoryHosts } from "./egress.mjs";
 import { FRESH, INBOX } from "./modes.mjs";
 import { triggerWord } from "./onboarding.mjs";
@@ -270,6 +272,25 @@ export function handoffMessage({ from, reason, result, body, branches = [] }) {
     ? `${from} was working on this and stopped, as its provider failed: ${reason}.`
     : `${from} was working on this before; this comment asked for you instead (\`/agent\`).`;
   return `${why} You take over, in a new session: sessions don't move between agents, so start from what it left. /workspace is the clone it worked in, with what it hadn't committed (\`git status\`, \`git log\`)${pushes}; GitHub has what it pushed and posted.${quoted ? `\n\nIts last message:\n\n${quoted}` : ""}${body ? `\n\nWhat it was asked:\n\n${body}` : ""}`;
+}
+
+// The agent's first message, and when another agent takes over the issue's session
+// (agents/select.mjs resolveEntry()), what it is handed (handoffMessage(), once the run's branches
+// are known). The same agent on another provider: its session goes on, told why.
+export function openingMessages(mode, text, chosen, { restored, started, previous }) {
+  const { entry, switched, handedBy, takeOver } = chosen;
+  const retry = switched && !takeOver;
+  const said = retry ? `${retryNote({ ...switched, provider: entry.provider })}\n\n${text}` : text;
+  const message = firstMessage({ mode, text: said, restored, started });
+  const handoff = takeOver && {
+    from: handedBy
+      ? entryLabel(entryName(previous.agent, previous.provider))
+      : entryLabel(switched.from),
+    reason: handedBy ? null : switched.reason,
+    result: handedBy ? previous.summary : entry.result,
+    body: firstMessage({ mode, text, restored, started: false }),
+  };
+  return { message, handoff };
 }
 
 // What the agent reads for comments delivered mid-run (Claude Code adds that the user sent it
