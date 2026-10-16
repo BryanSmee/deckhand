@@ -138,7 +138,7 @@ changed the same behaviour, say), stop and ask instead of guessing (see "Stoppin
 your instructions).`;
 }
 
-// Where a pull request's run may push: its branch (`branches`, runs.mjs pushBranches()), or
+// Where a pull request's run may push: its branch (`branches`, preparation.mjs pushBranches()), or
 // nowhere when that branch is in a fork.
 function prPush(branches) {
   return branches.length
@@ -147,7 +147,7 @@ function prPush(branches) {
 }
 
 // The branches an issue's run may push: its own, and the pull requests' heads it was asked
-// from (runs.mjs pushBranches()), named so it doesn't pick another one.
+// from (preparation.mjs pushBranches()), named so it doesn't pick another one.
 function issueBranches(n, branches) {
   const others = branches.filter((b) => b !== `issue-${n}-*` && !b.startsWith(`issue-${n}-`));
   const extra = others.map((b) => ` or \`${b}\``).join("");
@@ -221,7 +221,7 @@ ${instructions.trim()}`;
 }
 // The run's prompt, by what it is. `own`: the repo's mode, with its `instructions` text;
 // `onboardingWork`: a work run on an onboarding issue; `grant`: what the operator grants the
-// repo (grantFor()); `branches`: what the run may push (runs.mjs pushBranches()).
+// repo (grantFor()); `branches`: what the run may push (preparation.mjs pushBranches()).
 export function promptFor(
   task,
   { mode, text, settings, own, instructions, onboardingWork, config, grant, branches },

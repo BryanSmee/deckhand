@@ -33,16 +33,23 @@
 //   POST /api/repos/<owner>/<repo>/analyze { count, kinds, outcomes }
 //                                         a run analysis (analysis.mjs): a new issue labelled
 //                                         `analysis`, and a run in the `analyze` mode on it
-import { DEFAULT_RUNS, MAX_RUNS, OUTCOMES, checkSelection, createAnalysis } from "./analysis.mjs";
+import {
+  DEFAULT_RUNS,
+  MAX_RUNS,
+  checkSelection,
+  createAnalysis,
+  startAnalysis,
+} from "./analysis.mjs";
 import { MAX_TEXT, answersComment, parseAnswers } from "./answers.mjs";
-import { ensureLabel, hasLabel, labelFailed } from "./comments.mjs";
+import { labelFailed } from "./comments.mjs";
 import { repoAllowed } from "./config.mjs";
 import { fromLine } from "./discussions.mjs";
 import { inboxItem, issueItem, parseKey, prId, taskKey } from "./events.mjs";
-import { getJson, paginate } from "./github.mjs";
-import { parseQuestions, questionsSection } from "./questions.mjs";
-import { waitsFor } from "./waits.mjs";
+import { getJson } from "./github.mjs";
+import { createInputSeeder } from "./inputs.mjs";
+import { createRepoCheck } from "./repo-check.mjs";
 import { CONFIG_FILE, modeNames } from "./repo-config.mjs";
+import { waitsFor } from "./waits.mjs";
 import { apiRoute, readJsonBody, refuse, send } from "./web.mjs";
 
 // How long a repo's open issues are served before they are read again (in the background):
@@ -54,17 +61,6 @@ const MAX_ANSWER_BODY = 4 * MAX_TEXT;
 const ACTIONS = ["start", "queue", "dequeue", "stop", "cancel"];
 // An inbox entry's kind, and the repo config's key for its issue.
 const INBOXES = { idea: "ideas", bug: "bugs" };
-// The label of run analyses' issues.
-export const ANALYSIS_LABEL = "analysis";
-// How an analysis's issue names each outcome.
-const OUTCOME_NAMES = {
-  ok: "successes",
-  error: "errors",
-  "needs-input": "needs-input",
-  interrupted: "interrupted",
-  cancelled: "cancelled",
-};
-
 // An action's fields, checked (a body's, or answers' `then`): { action, number, after, mode,
 // pr }. Throws Refused.
 export function checkAction(body) {
@@ -135,15 +131,9 @@ export function createWorkApi({
   // "owner/repo" → { last: { issues, modes, errors, users, at, version } | null,
   //                 read: Promise | null, version }
   const backlogs = new Map();
-  // Issues with open questions whose label was taken off once: answered, or removed by hand.
-  const unlabelled = new Set();
-
-  // The repo's default branch, or a 404 when the App can't read it.
-  async function baseOf(repo) {
-    const info = await getJson(github, repo, `/repos/${repo}`, [404]);
-    if (!info) refuse(404, `The App is not installed on ${repo}.`);
-    return info.default_branch || "main";
-  }
+  const { baseOf, checkedRepo } = createRepoCheck({ config, github, repoSettings });
+  // Open questions in the backlog's issues that never got the label (inputs.mjs).
+  const { seed: seedInputs } = createInputSeeder({ config, github, label, inputs, boardKeys, log });
 
   // The repo's open issues, newest first (pull requests are issues to this API: left out), and
   // the modes the dashboard offers: onboarding is the listener's own.
@@ -163,56 +153,6 @@ export function createWorkApi({
       // Who may see it, as for the dashboard's tasks: unknown while the config has errors.
       users: errors.length ? null : settings.users,
     };
-  }
-
-  // Open questions in an issue's body that the needs-input label never came for: without the
-  // `issues` event, or when the label call failed, only the label's listing (inputs.mjs) knew
-  // of them, so the graph's form didn't open and a start went through unanswered. Listed and
-  // labelled here, as an `issues opened` delivery would have, unless the label was taken off
-  // once (its timeline says): its questions were answered, or someone said they don't hold.
-  // An issue on the board had a run, whose start takes the label off: left alone too.
-  async function seedInputs(repo, list, users) {
-    const name = config.needsInputLabel;
-    if (!name) return;
-    const keys = boardKeys();
-    const author = (u) =>
-      u?.type === "Bot"
-        ? !!config.bot && u.login?.toLowerCase() === config.bot.toLowerCase()
-        : !!u?.login &&
-          config.users.includes(u.login.toLowerCase()) &&
-          users.includes(u.login.toLowerCase());
-    for (const issue of list) {
-      const key = taskKey(repo, issue.number);
-      if (issue.pull_request || inputs.has(key) || keys.has(key) || unlabelled.has(key)) continue;
-      // Fail closed, as questions.mjs: only an allowed user's issue, or the App's own.
-      if (!author(issue.user)) continue;
-      const questions = parseQuestions(questionsSection(issue.body));
-      if (!questions) continue;
-      try {
-        if (!hasLabel(issue.labels, name)) {
-          if (await wasUnlabelled(repo, issue.number, name)) {
-            unlabelled.add(key);
-            continue;
-          }
-          const res = await label(repo, issue.number, true);
-          if (!res.ok) log(`${key}: label: ${res.status}`);
-        }
-        log(`${key}: open questions found in the backlog`);
-        inputs.set(key, true, questions);
-      } catch (error) {
-        // The next read tries again.
-        log(`${key}: open questions: ${error.message ?? error}`);
-      }
-    }
-  }
-
-  // Whether the label was ever taken off issue `number`.
-  async function wasUnlabelled(repo, number, name) {
-    const events = await paginate(
-      (path) => github(repo, "GET", path),
-      `/repos/${repo}/issues/${number}/events`,
-    );
-    return events.some((e) => e.event === "unlabeled" && hasLabel([e.label], name));
   }
 
   // A repo's read, started once at a time; `at` is when it started, `version` the stale()
@@ -283,22 +223,6 @@ export function createWorkApi({
     return { settings, base, issue };
   }
 
-  // The repo's half of checked(): { settings, base }; throws Refused.
-  async function checkedRepo(repo, user) {
-    const login = user.toLowerCase();
-    if (!config.users.includes(login)) refuse(403, `${user} is not in ALLOWED_USERS.`);
-    const base = await baseOf(repo);
-    const { settings, errors } = await repoSettings(repo, base);
-    if (errors.length) {
-      refuse(
-        409,
-        `${CONFIG_FILE} of ${repo} has errors: no run starts there until they are fixed.`,
-      );
-    }
-    if (!settings.users.includes(login)) refuse(403, `${user} is not among ${repo}'s users.`);
-    return { settings, base };
-  }
-
   // The App's comment on the issue: the record of who did what, and where the run's reactions
   // go, as on the comment it stands for.
   async function comment(repo, number, text) {
@@ -343,46 +267,17 @@ export function createWorkApi({
       refuse(409, `#${number} has open questions: answer them first.`);
     }
     const wait = waits.get(key);
-    const also = answers ? `\n\n${answers}` : "";
-    if (action === "dequeue") {
-      if (!wait) refuse(409, `#${number} doesn't wait for anything.`);
-      waits.cancel(key, `cancelled from the dashboard by @${user}`);
-      await comment(
-        repo,
-        number,
-        `No longer waiting for ${waitsFor(wait)}: cancelled from the dashboard by @${user}. Nothing starts until a trigger comment or the dashboard says so.`,
-      );
-      return `#${number} no longer waits.`;
-    }
+    if (action === "dequeue") return dequeue(repo, user, number, wait);
     if (action === "stop") return stop(repo, user, issue, base, settings);
     // Moving a wait keeps its mode, unless another one is picked.
     const wanted = mode ?? wait?.item.modeLine ?? "work";
     if (!modeNames(settings).includes(wanted)) refuse(422, `${repo} has no mode \`${wanted}\`.`);
     const item = itemOf(repo, issue, wanted, user, base, settings);
     if (answers) item.text = answers;
+    const also = answers ? `\n\n${answers}` : "";
     if (action === "queue") {
-      if (after === number) refuse(422, `#${number} can't wait for itself.`);
-      if (leadsTo(waits.get, repo, after, number)) {
-        refuse(422, `#${after} waits for #${number}: each would wait for the other.`);
-      }
-      const state = await waits.stateOf(repo, after);
-      if (state === "missing") refuse(422, `#${after} isn't an issue or pull request of ${repo}.`);
-      if (state === "not-done") refuse(422, `#${after} was closed without being done.`);
-      if (state === "open") {
-        if (wait?.blockers.length === 1 && wait.blockers[0] === after && !mode) {
-          return `#${number} already waits for #${after}.`;
-        }
-        const text = wait
-          ? `Moved from the dashboard by @${user}: now after #${after}${inMode(wanted)} (it waited for ${waitsFor(wait)}).`
-          : `Queued from the dashboard by @${user}, after #${after}${inMode(wanted)}.`;
-        item.comment = await comment(
-          repo,
-          number,
-          `${text} It starts when #${after} is done (closed as completed, or merged).${also}`,
-        );
-        await waits.hold(item, [after]);
-        return `#${number} waits for #${after}.`;
-      }
+      const queued = await queueAfter(repo, user, { item, after, mode, wanted, wait, also });
+      if (queued) return queued;
       // Done already: it starts now, as "/after" would.
     }
     waits.cancel(key, `started from the dashboard by @${user}`);
@@ -397,7 +292,46 @@ export function createWorkApi({
     return `#${number} started.`;
   }
 
-  // What a "/stop" comment does: the brainstorm wraps up (tasks.mjs stopBrainstorm()), in a
+  // What "/after #n" does: `item` waits for issue `after`, its wait (`wait`, if any) moved
+  // there. Null when `after` is done already: the caller starts it.
+  async function queueAfter(repo, user, { item, after, mode, wanted, wait, also }) {
+    const { number } = item;
+    if (after === number) refuse(422, `#${number} can't wait for itself.`);
+    if (leadsTo(waits.get, repo, after, number)) {
+      refuse(422, `#${after} waits for #${number}: each would wait for the other.`);
+    }
+    const state = await waits.stateOf(repo, after);
+    if (state === "missing") refuse(422, `#${after} isn't an issue or pull request of ${repo}.`);
+    if (state === "not-done") refuse(422, `#${after} was closed without being done.`);
+    if (state !== "open") return null;
+    if (wait?.blockers.length === 1 && wait.blockers[0] === after && !mode) {
+      return `#${number} already waits for #${after}.`;
+    }
+    const text = wait
+      ? `Moved from the dashboard by @${user}: now after #${after}${inMode(wanted)} (it waited for ${waitsFor(wait)}).`
+      : `Queued from the dashboard by @${user}, after #${after}${inMode(wanted)}.`;
+    item.comment = await comment(
+      repo,
+      number,
+      `${text} It starts when #${after} is done (closed as completed, or merged).${also}`,
+    );
+    await waits.hold(item, [after]);
+    return `#${number} waits for #${after}.`;
+  }
+
+  // Issue `number` no longer waits (`wait`): nothing starts until asked again.
+  async function dequeue(repo, user, number, wait) {
+    if (!wait) refuse(409, `#${number} doesn't wait for anything.`);
+    waits.cancel(taskKey(repo, number), `cancelled from the dashboard by @${user}`);
+    await comment(
+      repo,
+      number,
+      `No longer waiting for ${waitsFor(wait)}: cancelled from the dashboard by @${user}. Nothing starts until a trigger comment or the dashboard says so.`,
+    );
+    return `#${number} no longer waits.`;
+  }
+
+  // What a "/stop" comment does: the brainstorm wraps up (task-modes.mjs stopBrainstorm()), in a
   // run that posts its summary and updates the issue. Only an active or idle one: checked()
   // refused a reply on its way.
   async function stop(repo, user, issue, base, settings) {
@@ -566,55 +500,6 @@ export function createWorkApi({
     return { message: `Sent to #${number}.`, url: posted.html_url, task: taskKey(repo, number) };
   }
 
-  // A run analysis: the runs it reads, picked now among the repo's (never another's), in an
-  // issue of its own that stays as its record, then the run on it. The run reads a digest of
-  // them (runs.mjs analysisDigest()); it changes nothing, and its reply is the report.
-  async function startAnalysis(repo, user, selection) {
-    const { settings, base } = await checkedRepo(repo, user);
-    const runs = analysis.select(repo, selection);
-    if (!runs.length) refuse(409, `No run of ${repo} matches: pick other kinds or outcomes.`);
-    const ids = runs.map((r) => r.id);
-    const { count, kinds, outcomes } = selection;
-    const every = outcomes.length === OUTCOMES.length;
-    const title = `Run analysis: last ${runs.length} run${runs.length === 1 ? "" : "s"}${every ? "" : ` (${outcomes.map((o) => OUTCOME_NAMES[o]).join(", ")})`}`;
-    const text = [
-      `- Kinds: ${kinds.join(", ")}`,
-      `- Outcomes: ${outcomes.join(", ")}`,
-      `- Runs (${runs.length}${runs.length < count ? `, of ${count} asked for` : ""}, newest first): ${ids.join(", ")}`,
-    ].join("\n");
-    const body = `Asked for from the dashboard by @${user}: what would make the runs of ${repo} faster and more reliable.\n\n${text}\n\nDeckhand reads a digest of these runs (not their raw logs) and replies here with its findings. It changes no code: file what you want of them.`;
-    await ensureLabel(
-      github,
-      repo,
-      { name: ANALYSIS_LABEL, color: "c5def5", description: "A Deckhand analysis of past runs" },
-      log,
-    );
-    const res = await github(
-      repo,
-      "POST",
-      `/repos/${repo}/issues`,
-      { title, body, labels: [ANALYSIS_LABEL] },
-      [410],
-    );
-    if (res.status === 410) refuse(409, `${repo} has issues turned off: an analysis needs one.`);
-    if (!res.ok) throw new Error(`GitHub POST an issue: ${res.status}`);
-    const issue = await res.json();
-    await accept({
-      ...itemOf(repo, issue, "work", user, base, settings),
-      trigger: "analyze",
-      modeLine: null,
-      text,
-      comment: null,
-      analysis: { runs: ids, count, kinds, outcomes },
-    });
-    return {
-      message: `Analysis of ${runs.length} run${runs.length === 1 ? "" : "s"} started on #${issue.number}.`,
-      url: issue.html_url,
-      number: issue.number,
-      task: taskKey(repo, issue.number),
-    };
-  }
-
   // The form's preview: the same checks, then what the selection would read. Empty kinds or
   // outcomes are no error here: the form starts with none, and learns the kinds there are.
   async function previewAnalysis(req, res, user, repo) {
@@ -671,7 +556,11 @@ export function createWorkApi({
     const body = await readJsonBody(req, MAX_BODY);
     const selection = checkSelection(body, (message) => refuse(400, message));
     log(`Work area: ${user} analyzes ${selection.count} run(s) of ${repo}`);
-    send(res, 200, await startAnalysis(repo, user, selection));
+    send(
+      res,
+      200,
+      await startAnalysis({ github, checkedRepo, analysis, accept, log }, repo, user, selection),
+    );
   }
 
   // Handles /api/repos/<owner>/<repo>/issues, /work, /answer, /rerun, /inbox and /analyze;
@@ -702,7 +591,7 @@ export function createWorkApi({
     if (known) known.version++;
   }
 
-  return { handle, checkedRepo, stale };
+  return { handle, stale };
 }
 
 // Which deliveries make a repo's backlog stale: an issue opened, closed, edited, moved or

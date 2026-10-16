@@ -145,7 +145,7 @@ export const EFFORTS = ["low", "medium", "high", "xhigh", "max"];
 export const MODEL_NAME = /^[\w.[\]/:-]+$/;
 
 // An agent, on a provider or not (codex, claude@openrouter), or `default`: checked against the
-// operator's when the run starts (runs.mjs pickProblem()).
+// operator's when the run starts (agents/select.mjs pickProblem()).
 const AGENT_NAME = /^[\w.-]+(@[\w.-]+)?$/;
 
 // Removes "/model <name>", "/effort <level>" and "/agent <name>" lines from a comment,

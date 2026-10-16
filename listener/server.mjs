@@ -40,6 +40,7 @@ import { createOnboarding, createOnboardingStore } from "./onboarding.mjs";
 import { createPreviews } from "./previews.mjs";
 import { createPulls } from "./pulls.mjs";
 import { fetchEgressCa } from "./egress.mjs";
+import { createRepoCheck } from "./repo-check.mjs";
 import { readRepoFile } from "./repo-config.mjs";
 import { createRepoSettings } from "./repo-settings.mjs";
 import { createRepoApi, createRepoList } from "./repos.mjs";
@@ -371,7 +372,7 @@ ctx.workApi = createWorkApi({
 ctx.discussionApi = createDiscussionApi({
   config,
   graphql,
-  checkedRepo: ctx.workApi.checkedRepo,
+  checkedRepo: createRepoCheck({ config, github, repoSettings }).checkedRepo,
   accept: (item) => ctx.accept(item),
   publicUrl,
   log,

@@ -151,7 +151,7 @@ export function createTasks(ctx) {
   }
 
   // A trigger comment on an issue whose questions aren't answered: nothing starts, and the
-  // reply says how to answer. The label stays (http.mjs questions()).
+  // reply says how to answer. The label stays (questions.mjs applyInput()).
   async function holdBack(item) {
     const key = taskKey(item.repo, item.id);
     log(`${key}: not started, its open questions aren't answered`);

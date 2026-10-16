@@ -13,7 +13,7 @@ import {
   threadOf,
 } from "../listener/discussions.mjs";
 import { MARKER, workItem } from "../listener/events.mjs";
-import { createWorkApi } from "../listener/work.mjs";
+import { createRepoCheck } from "../listener/repo-check.mjs";
 
 const ORIGIN = "https://deckhand.example.com";
 const BOT = "deckhand[bot]";
@@ -138,7 +138,7 @@ function setup({ env = {}, settings = {}, errors = [], categories, discussions }
       }
       return { node: nodes[vars.id] };
     }
-    // GitHub's answer for what isn't there: an error (server.mjs graphql() throws it).
+    // GitHub's answer for what isn't there: an error (github.mjs graphql() throws it).
     const notFound = () => {
       throw new Error(`GraphQL: 200 [{"type":"NOT_FOUND","message":"Could not resolve"}]`);
     };
@@ -153,22 +153,11 @@ function setup({ env = {}, settings = {}, errors = [], categories, discussions }
     },
     errors,
   });
-  const work = createWorkApi({
-    config,
-    github,
-    repoSettings,
-    reply: async () => {
-      throw new Error("no reply expected");
-    },
-    waits: {},
-    accept: async () => {},
-    boardKeys: () => new Set(),
-    busy: () => false,
-  });
+  const { checkedRepo } = createRepoCheck({ config, github, repoSettings });
   w.api = createDiscussionApi({
     config,
     graphql,
-    checkedRepo: work.checkedRepo,
+    checkedRepo,
     accept: async (item) => w.accepted.push(item),
     publicUrl: () => ORIGIN,
     now: () => w.clock,

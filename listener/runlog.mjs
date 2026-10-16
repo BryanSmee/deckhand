@@ -156,7 +156,7 @@ function runOf(logDir, file) {
   return {
     id,
     agent: agent.name,
-    // Its provider, and why when it is a fallback's (runs.mjs entryFor()): a later run of the
+    // Its provider, and why when it is a fallback's (agents/select.mjs entryFor()): a later run of the
     // task sticks to it. None in logs from before fallbacks.
     provider: meta.provider ?? null,
     fallback: meta.fallback ?? null,

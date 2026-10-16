@@ -3,11 +3,14 @@
 // reliable. A digest, not the logs: those are MB of stream-json each, cover every repo and
 // are only redacted line by line as they are written. Built from format()'s entries, which
 // clip tool details and outputs, redacted again, capped in size. Pure, apart from reading
-// the logs.
+// the logs and startAnalysis(), which opens the analysis's issue and queues its run.
 import { readFileSync } from "node:fs";
 import { agentFor } from "./agents/index.mjs";
+import { ensureLabel } from "./comments.mjs";
+import { issueItem, taskKey } from "./events.mjs";
 import { clip, format, minutes } from "./runlog.mjs";
 import { redact } from "./secrets.mjs";
+import { refuse } from "./web.mjs";
 
 // How many runs one analysis reads: 10 unless asked, 50 at most.
 export const DEFAULT_RUNS = 10;
@@ -260,5 +263,82 @@ export function createAnalysis({ runs, secrets = () => [], partOf = logPart, max
       const selected = ids.map((id) => byId.get(id)).filter((r) => r && ofRepo(r, repo));
       return digestOf(selected, selection);
     },
+  };
+}
+
+// The label of run analyses' issues.
+const ANALYSIS_LABEL = "analysis";
+// How an analysis's issue names each outcome.
+const OUTCOME_NAMES = {
+  ok: "successes",
+  error: "errors",
+  "needs-input": "needs-input",
+  interrupted: "interrupted",
+  cancelled: "cancelled",
+};
+
+// The analysis's issue: its title, its body, and the selection as the run reads it (`text`).
+function analysisIssue(repo, user, runs, { count, kinds, outcomes }) {
+  const every = outcomes.length === OUTCOMES.length;
+  const title = `Run analysis: last ${runs.length} run${runs.length === 1 ? "" : "s"}${every ? "" : ` (${outcomes.map((o) => OUTCOME_NAMES[o]).join(", ")})`}`;
+  const text = [
+    `- Kinds: ${kinds.join(", ")}`,
+    `- Outcomes: ${outcomes.join(", ")}`,
+    `- Runs (${runs.length}${runs.length < count ? `, of ${count} asked for` : ""}, newest first): ${runs.map((r) => r.id).join(", ")}`,
+  ].join("\n");
+  const body = `Asked for from the dashboard by @${user}: what would make the runs of ${repo} faster and more reliable.\n\n${text}\n\nDeckhand reads a digest of these runs (not their raw logs) and replies here with its findings. It changes no code: file what you want of them.`;
+  return { title, body, text };
+}
+
+// A run analysis (the dashboard's Analyze, work.mjs): the runs it reads, picked now among the
+// repo's (never another's), in an issue of its own that stays as its record, then the run on
+// it. The run reads a digest of them (preparation.mjs analysisDigest()); it changes nothing,
+// and its reply is the report. `github`: the App's calls; `checkedRepo(repo, user)`:
+// repo-check.mjs; `analysis`: createAnalysis(); `accept(item)`: queues the run (tasks.mjs).
+// Throws Refused (web.mjs).
+export async function startAnalysis(
+  { github, checkedRepo, analysis, accept, log },
+  repo,
+  user,
+  selection,
+) {
+  const { settings, base } = await checkedRepo(repo, user);
+  const runs = analysis.select(repo, selection);
+  if (!runs.length) refuse(409, `No run of ${repo} matches: pick other kinds or outcomes.`);
+  const { title, body, text } = analysisIssue(repo, user, runs, selection);
+  await ensureLabel(
+    github,
+    repo,
+    { name: ANALYSIS_LABEL, color: "c5def5", description: "A Deckhand analysis of past runs" },
+    log,
+  );
+  const res = await github(
+    repo,
+    "POST",
+    `/repos/${repo}/issues`,
+    { title, body, labels: [ANALYSIS_LABEL] },
+    [410],
+  );
+  if (res.status === 410) refuse(409, `${repo} has issues turned off: an analysis needs one.`);
+  if (!res.ok) throw new Error(`GitHub POST an issue: ${res.status}`);
+  const issue = await res.json();
+  const { count, kinds, outcomes } = selection;
+  await accept(
+    issueItem(repo, issue, {
+      trigger: "analyze",
+      modeLine: null,
+      text,
+      author: user,
+      base,
+      settings,
+      comment: null,
+      analysis: { runs: runs.map((r) => r.id), count, kinds, outcomes },
+    }),
+  );
+  return {
+    message: `Analysis of ${runs.length} run${runs.length === 1 ? "" : "s"} started on #${issue.number}.`,
+    url: issue.html_url,
+    number: issue.number,
+    task: taskKey(repo, issue.number),
   };
 }
