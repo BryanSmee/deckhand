@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { test } from "node:test";
-import { BUILT_IN, entryRun, sessionName } from "../listener/modes.mjs";
+import { BUILT_IN, entryRun, MODES, sessionName } from "../listener/modes.mjs";
 import { modeNames, RESERVED_MODES } from "../listener/repo-config.mjs";
 
 test("built-in modes: one list, which the dashboard's copy follows", () => {
@@ -29,5 +29,11 @@ test("entryRun: only the ideas and bugs inboxes' entries are a run each", () => 
   assert.equal(entryRun("bug"), true);
   for (const mode of ["discussion", "brainstorm", "work", "stop", "review"]) {
     assert.equal(entryRun(mode), false, mode);
+  }
+});
+
+test("every built-in mode's prompt is in prompts/", () => {
+  for (const [name, { prompt }] of Object.entries(MODES)) {
+    if (prompt) assert.ok(existsSync(new URL(`../prompts/${prompt}`, import.meta.url)), name);
   }
 });

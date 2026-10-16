@@ -7,12 +7,11 @@ import { repoAllowed } from "./config.mjs";
 import { hasLabel } from "./comments.mjs";
 import { commentsText, linkedIssue, linkTo, takeOptions, taskKey, workItem } from "./events.mjs";
 import { getJson } from "./github.mjs";
-import { entryRun, isLight } from "./modes.mjs";
+import { customMode, entryRun, isLight } from "./modes.mjs";
 import { liveMessage } from "./prompts.mjs";
 import { hasOpenQuestions } from "./questions.mjs";
 import {
   CONFIG_FILE,
-  customMode,
   effectiveConfig,
   legacySandboxName,
   modeNames,

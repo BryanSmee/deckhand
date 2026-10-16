@@ -4,20 +4,18 @@ import { readFileSync } from "node:fs";
 import { entryName } from "./agents/index.mjs";
 import { entryLabel } from "./agents/select.mjs";
 import { mandatoryHosts } from "./egress.mjs";
-import { FRESH, INBOX } from "./modes.mjs";
+import { FRESH, INBOX, MODES } from "./modes.mjs";
 import { triggerWord } from "./onboarding.mjs";
 
 const instructions = (name) => readFileSync(new URL(`../prompts/${name}`, import.meta.url), "utf8");
-const brainstormInstructions = instructions("brainstorm.md");
-const analyzeInstructions = instructions("analyze.md");
-const onboardingInstructions = instructions("onboarding.md");
+// Each built-in mode's instructions, by mode (MODES' `prompt`).
+const modeInstructions = Object.fromEntries(
+  Object.entries(MODES)
+    .filter(([, mode]) => mode.prompt)
+    .map(([name, mode]) => [name, instructions(mode.prompt)]),
+);
 // The config's reference, in the image next to the prompts so the two can't drift apart.
 const configReference = readFileSync(new URL("../docs/repo-config.md", import.meta.url), "utf8");
-const inboxInstructions = {
-  idea: instructions("idea.md"),
-  bug: instructions("bug.md"),
-  discussion: instructions("discussion.md"),
-};
 
 // Inbox entries and discussions: the entries come with the prompt, as the session is new.
 function inboxPrompt(task, mode, text) {
@@ -41,7 +39,7 @@ gh api graphql -F owner=${repo.split("/")[0]} -F name=${repo.split("/")[1]} -F n
 \`gh issue view ${number} --comments\`.`;
   return `New on ${where}. ${read}
 
-${inboxInstructions[mode]}
+${modeInstructions[mode]}
 
 ${mode === "discussion" ? "The message" : "The entry"}:
 
@@ -55,7 +53,7 @@ function analyzePrompt(task, text) {
 the runs is at \`$TASK_DIGEST\` (\`cat "$TASK_DIGEST"\`; it is large: read it in parts if you
 need to).
 
-${analyzeInstructions}
+${modeInstructions.analyze}
 ${text ? `\nThe selection:\n\n${text}\n` : ""}`;
 }
 
@@ -63,7 +61,7 @@ function brainstormPrompt(task) {
   return `Brainstorm GitHub issue #${task.number} of ${task.repo} with the maintainer. Read it with
 \`gh issue view ${task.number} --comments\`.
 
-${brainstormInstructions}`;
+${modeInstructions.brainstorm}`;
 }
 
 // Onboarding: its instructions, what this Deckhand allows the repo (a config can only narrow
@@ -75,7 +73,7 @@ function onboardingPrompt(task, settings, config, grant) {
   return `Onboard ${repo} with the maintainer, on GitHub issue #${number}. Read it with
 \`gh issue view ${number} --comments\`.
 
-${onboardingInstructions}
+${modeInstructions.onboarding}
 
 ## This Deckhand
 

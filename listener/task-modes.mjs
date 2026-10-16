@@ -3,8 +3,8 @@
 // (brainstorms.json) and repo mode (modes.json) up to date, and replies when a mode can't run.
 import { AGENTS } from "./agents/index.mjs";
 import { taskKey } from "./events.mjs";
-import { INBOX, sessionName } from "./modes.mjs";
-import { CONFIG_FILE, customMode, modeNames } from "./repo-config.mjs";
+import { customMode, INBOX, sessionName } from "./modes.mjs";
+import { CONFIG_FILE, modeNames } from "./repo-config.mjs";
 
 // `ctx` (server.mjs): the listener's state and services, read at call time.
 export function createTaskModes(ctx) {

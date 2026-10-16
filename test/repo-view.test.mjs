@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { loadConfig } from "../listener/config.mjs";
 import { grantFor, grantsFrom } from "../listener/grants.mjs";
-import { parseRepoConfig } from "../listener/repo-config.mjs";
+import { KEYS, parseRepoConfig } from "../listener/repo-config.mjs";
 import { effectiveView } from "../listener/repo-view.mjs";
 
 const config = loadConfig({
@@ -191,4 +191,40 @@ test("docker: refused without allow_docker; granted, its engine noted when there
   const row = byKey(effectiveView(withEngine, "org/app", settings, grant).settings, "docker");
   assert.equal(row.note, null);
   assert.equal(byKey(view("").settings, "docker").value, "none");
+});
+
+test("settings: agent, brainstorm_agent and wait_for_answers have their rows", () => {
+  const withCodex = loadConfig({ ALLOWED_USERS: "alice", OPENAI_API_KEY: "sk-test" });
+  const yaml = "brainstorm_agent: codex\nwait_for_answers: false\n";
+  const { settings: parsed, errors } = parseRepoConfig(yaml, withCodex);
+  assert.deepEqual(errors, []);
+  const grant = grantFor(grantsFrom({}, withCodex), withCodex, "org/app");
+  const { settings } = effectiveView(withCodex, "org/app", parsed, grant);
+  assert.deepEqual(byKey(settings, "agent"), {
+    key: "agent",
+    value: "claude",
+    source: "operator",
+    note: null,
+  });
+  assert.deepEqual(
+    [byKey(settings, "brainstorm_agent").value, byKey(settings, "brainstorm_agent").source],
+    ["codex", "repo"],
+  );
+  assert.deepEqual(
+    [byKey(settings, "wait_for_answers").value, byKey(settings, "wait_for_answers").source],
+    ["false", "repo"],
+  );
+  assert.equal(byKey(view("").settings, "wait_for_answers").value, "true");
+});
+
+test("settings: every key the file takes has its row, or a table of its own", () => {
+  const elsewhere = Object.keys(KEYS).filter((key) => !KEYS[key].display);
+  assert.deepEqual(elsewhere, ["hosts", "cached_hosts", "mounts"]);
+  const { settings } = view("modes:\n  review:\n    instructions: review.md\n");
+  for (const key of Object.keys(KEYS).filter((k) => KEYS[k].display)) {
+    assert.ok(
+      settings.some((r) => r.key === key || r.key.startsWith(`${key}.`)),
+      `${key} has no row`,
+    );
+  }
 });

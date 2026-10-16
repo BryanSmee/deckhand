@@ -58,16 +58,27 @@ services:
       ANTHROPIC_DEFAULT_OPUS_MODEL: ${ANTHROPIC_DEFAULT_OPUS_MODEL:-}
       ANTHROPIC_DEFAULT_SONNET_MODEL: ${ANTHROPIC_DEFAULT_SONNET_MODEL:-}
       ANTHROPIC_DEFAULT_HAIKU_MODEL: ${ANTHROPIC_DEFAULT_HAIKU_MODEL:-}
+      # Optional: Claude Code's own --fallback-model, when the run's model is overloaded.
+      CLAUDE_FALLBACK_MODEL: ${CLAUDE_FALLBACK_MODEL:-}
       # Codex's OpenAI API key (docs/setup.md#codex), kept out of sandboxes the same way.
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       # Or a ChatGPT plan's login (docs/setup.md#with-a-chatgpt-plan): its auth.json in the
       # data volume, /data/codex-auth.json say, which the listener alone holds and refreshes.
       CODEX_AUTH_FILE: ${CODEX_AUTH_FILE:-}
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
+      # Optional: the models best, balanced and fast stand for with Codex.
+      CODEX_BEST_MODEL: ${CODEX_BEST_MODEL:-}
+      CODEX_BALANCED_MODEL: ${CODEX_BALANCED_MODEL:-}
+      CODEX_FAST_MODEL: ${CODEX_FAST_MODEL:-}
       # OpenRouter's key, for claude@openrouter in FALLBACKS (docs/setup.md#fallbacks), and
       # where a run goes when its provider fails (or fallbacks in config.yaml).
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       FALLBACKS: ${FALLBACKS:-}
+      # Optional: OpenRouter's address, and its names for opus, sonnet and haiku.
+      OPENROUTER_BASE_URL: ${OPENROUTER_BASE_URL:-}
+      OPENROUTER_OPUS_MODEL: ${OPENROUTER_OPUS_MODEL:-}
+      OPENROUTER_SONNET_MODEL: ${OPENROUTER_SONNET_MODEL:-}
+      OPENROUTER_HAIKU_MODEL: ${OPENROUTER_HAIKU_MODEL:-}
       # The agent of work runs, and of light runs (empty: SANDBOX_AGENT): claude or codex.
       SANDBOX_AGENT: ${SANDBOX_AGENT:-}
       BRAINSTORM_AGENT: ${BRAINSTORM_AGENT:-}
@@ -102,6 +113,13 @@ services:
       NAME_PREFIX: ${NAME_PREFIX:-}
       CLAUDE_CODE_VOLUME: ${CLAUDE_CODE_VOLUME:-}
       CODEX_VOLUME: ${CODEX_VOLUME:-}
+      # Advanced (docs/setup.md#advanced-settings).
+      GRANTS_DIR: ${GRANTS_DIR:-}
+      INSTALL_NETWORK: ${INSTALL_NETWORK:-}
+      DEBOUNCE_MS: ${DEBOUNCE_MS:-}
+      BRAINSTORM_DEBOUNCE_MS: ${BRAINSTORM_DEBOUNCE_MS:-}
+      GITHUB_URL: ${GITHUB_URL:-}
+      GITHUB_API: ${GITHUB_API:-}
       # Wiring, environment only. Names of what the listener creates on the host's Docker,
       # matching the ones below.
       SANDBOX_IMAGE: *sandbox-image
