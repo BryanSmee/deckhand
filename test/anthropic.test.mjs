@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createServer, request } from "node:http";
 import { test } from "node:test";
-import { createAnthropicProxy, credentialName } from "../listener/anthropic.mjs";
+import { createAnthropicProxy, credentialName, planWarning } from "../listener/anthropic.mjs";
 import { createBroker } from "../listener/broker.mjs";
 import { redact } from "../listener/secrets.mjs";
 
@@ -67,6 +67,14 @@ test("the credential is the one Claude Code would use: an API key before an OAut
     "ANTHROPIC_AUTH_TOKEN",
   );
   assert.equal(credentialName({ ANTHROPIC_API_KEY: "" }), null);
+});
+
+test("a plan's token is warned about at start, an API key or a gateway's token isn't", () => {
+  assert.match(planWarning("CLAUDE_CODE_OAUTH_TOKEN"), /usually licensed to one person/);
+  assert.match(planWarning("CLAUDE_CODE_OAUTH_TOKEN"), /For teams, use an API key\.$/);
+  assert.equal(planWarning("ANTHROPIC_API_KEY"), null);
+  assert.equal(planWarning("ANTHROPIC_AUTH_TOKEN"), null);
+  assert.equal(planWarning(null), null);
 });
 
 test("an OAuth run's secret is swapped for the token, and the answer streams back", async (t) => {

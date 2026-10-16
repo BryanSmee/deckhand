@@ -39,6 +39,8 @@ export interface Run {
   // the entry that failed (`from`, "claude@anthropic"), and how ("overloaded (529)").
   provider?: string | null;
   fallback?: { from: string; reason: string; tried?: string[]; sticky?: boolean } | null;
+  // Chosen with `/agent` (`sticky`: by a previous run's): such a run doesn't fall back.
+  picked?: { sticky?: boolean } | null;
   model?: string | null;
   effort?: string | null;
   phase?: string | null;

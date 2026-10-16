@@ -13,7 +13,7 @@ import {
   promptFor,
   retryNote,
 } from "../listener/prompts.mjs";
-import { entryFor, nextFallback, replyFooter } from "../listener/runs.mjs";
+import { entryFor, nextFallback, pickProblem, replyFooter } from "../listener/runs.mjs";
 
 const settings = {
   model: "opus",
@@ -206,6 +206,11 @@ test("a fallback to another agent: the hand-off says who stopped, why, what it l
   assert.match(text, /What it was asked:\n\nFix the login$/);
   // No result, no branch, no message (an inbox entry's are in its prompt): none of those.
   const bare = handoffMessage({ from: "Codex (openai)", reason: "rate limited (429)", body: "" });
+  // Given with /agent: nothing failed.
+  assert.match(
+    handoffMessage({ from: "Claude (anthropic)", body: "Go on" }),
+    /^Claude \(anthropic\) was working on this before; this comment asked for you instead \(`\/agent`\)\. You take over, in a new session/,
+  );
   assert.doesNotMatch(bare, /last message|What it was asked|its branch/);
   assert.match(
     retryNote({ reason: "rate limited (429)", provider: "openrouter" }),
@@ -247,6 +252,56 @@ test("a run's entry: a fallback's, then the one the task stuck to, then the sett
   // Unless the operator took the entry out of FALLBACKS since.
   const none = { fallbacks: [] };
   assert.equal(entryFor(none, "claude", marker, previous).agent, "claude");
+});
+
+test("/agent: picks an entry the operator configured, which sticks to the issue until /agent default", () => {
+  const config = { agents: ["claude", "codex"], fallbacks: ["claude@openrouter"] };
+  assert.equal(pickProblem(config, undefined), null);
+  assert.equal(pickProblem(config, "default"), null);
+  assert.equal(pickProblem(config, "codex"), null);
+  assert.equal(pickProblem(config, "codex@openai"), null);
+  assert.equal(pickProblem(config, "claude@openrouter"), null);
+  // Not configured, or not an agent at all: refused, naming what is.
+  const only = { agents: ["claude"], fallbacks: [] };
+  assert.equal(
+    pickProblem(only, "codex"),
+    "`/agent codex` isn't one the operator configured (`claude@anthropic`, or `default`)",
+  );
+  assert.match(pickProblem(only, "claude@openrouter"), /isn't one the operator configured/);
+  assert.match(pickProblem(config, "gemini"), /isn't one the operator configured/);
+
+  // Picked: no fallback marker, so it never falls back.
+  const codex = entryFor(config, "claude", undefined, undefined, "codex");
+  assert.deepEqual(codex, { agent: "codex", provider: "openai", fallback: null, picked: {} });
+  const failed = { ok: false, text: "API Error: 529 overloaded_error" };
+  assert.equal(nextFallback(config, codex, failed), null);
+  // The next run, without /agent, stays on it; /agent default goes back to the settings'.
+  const previous = { agent: "codex", provider: "openai", fallback: null, picked: {} };
+  assert.deepEqual(entryFor(config, "claude", undefined, previous), {
+    agent: "codex",
+    provider: "openai",
+    fallback: null,
+    picked: { sticky: true },
+  });
+  assert.equal(nextFallback(config, { ...previous, picked: { sticky: true } }, failed), null);
+  assert.deepEqual(entryFor(config, "claude", undefined, previous, "default"), {
+    agent: "claude",
+    provider: "anthropic",
+    fallback: null,
+  });
+  // Unless the operator no longer has it.
+  assert.equal(
+    entryFor({ agents: ["claude"], fallbacks: [] }, "claude", undefined, previous).agent,
+    "claude",
+  );
+  // A previous fallback sticks too, and a new /agent wins over it.
+  const fell = {
+    agent: "claude",
+    provider: "openrouter",
+    fallback: { from: "claude@anthropic", reason: "x" },
+  };
+  assert.equal(entryFor(config, "claude", undefined, fell).provider, "openrouter");
+  assert.equal(entryFor(config, "claude", undefined, fell, "codex").agent, "codex");
 });
 
 test("the next fallback: each entry once per chain, only for a provider's error", () => {

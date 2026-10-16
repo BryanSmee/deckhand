@@ -18,6 +18,13 @@ export function credentialName(env) {
   return CREDENTIALS.find((name) => env[name]) ?? null;
 }
 
+// Logged at start when the credential is a Claude plan's (`claude setup-token`): the operator
+// is responsible for how it is used, and a plan's terms may not cover a team's bot.
+export function planWarning(name) {
+  if (name !== "CLAUDE_CODE_OAUTH_TOKEN") return null;
+  return "Warning: CLAUDE_CODE_OAUTH_TOKEN is a Claude plan's credential. A subscription (Claude Pro/Max, a ChatGPT plan) is usually licensed to one person. Serving a team, or repositories other people write to, may break your provider's terms: check them before you do. You are responsible for how your Deckhand uses your credential. For teams, use an API key.";
+}
+
 // The run's secret, from whichever header Claude Code sent it in.
 function secretOf(req) {
   const [scheme, value] = (req.headers.authorization ?? "").split(" ");

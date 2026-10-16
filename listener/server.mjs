@@ -9,7 +9,7 @@
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { createAuth, sessionKey } from "./auth.mjs";
-import { createAnthropicProxy } from "./anthropic.mjs";
+import { createAnthropicProxy, planWarning } from "./anthropic.mjs";
 import { createOpenAiProxy } from "./openai.mjs";
 import { createBroker } from "./broker.mjs";
 import { createGitGateway } from "./git-gateway.mjs";
@@ -410,6 +410,8 @@ log(`Deckhand ${ctx.version}`);
 log(
   `Agents: ${config.agent} for work, ${config.brainstormAgent} for light runs; repos may pick ${config.agents.join(", ")}${config.fallbacks.length ? `; on provider errors, falls back to ${config.fallbacks.join(", ")}` : ""}`,
 );
+const plan = planWarning(config.claudeCredential);
+if (plan) log(plan);
 if (!ctx.app) log(`No GitHub App yet. Set it up at ${setup.link()}`);
 
 // Before any request is served: runs still going since the previous listener, then what it

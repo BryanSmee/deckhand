@@ -296,6 +296,13 @@ test("trigger lines and options", () => {
     "/model the best one\nhi",
   );
   assert.deepEqual(gateway, { model: "openai/gpt-5" });
+  // An agent, on a provider or not; not a sentence.
+  const agent = {};
+  assert.equal(
+    takeOptions("/agent Claude@OpenRouter\n/agent the other one\nhi", agent),
+    "/agent the other one\nhi",
+  );
+  assert.deepEqual(agent, { agent: "claude@openrouter" });
 });
 
 test("a /mode line picks the mode, and is never taken for /model", () => {

@@ -237,8 +237,9 @@ export function retryNote({ reason, provider }) {
   return `(Your provider failed: ${reason}. This run goes on in the same session through ${provider}: carry on where you stopped.)`;
 }
 
-// A run that falls back to another agent (runs.mjs): sessions don't move between agents, so
-// it starts a new one on what the previous agent left. `from`: that agent and its provider;
+// A run that falls back to another agent, or that `/agent` gives to another one (runs.mjs):
+// sessions don't move between agents, so it starts a new one on what the previous agent left.
+// `from`: that agent and its provider; `reason`: why its provider failed (none: `/agent`);
 // `result`: its last message, if any; `body`: what the run was asked (firstMessage()).
 export function handoffMessage({ from, reason, result, body, branches = [] }) {
   const pushes = branches.length
@@ -251,7 +252,10 @@ export function handoffMessage({ from, reason, result, body, branches = [] }) {
       .split("\n")
       .map((l) => `> ${l}`)
       .join("\n");
-  return `${from} was working on this and stopped, as its provider failed: ${reason}. You take over, in a new session: sessions don't move between agents, so start from what it left. /workspace is the clone it worked in, with what it hadn't committed (\`git status\`, \`git log\`)${pushes}; GitHub has what it pushed and posted.${quoted ? `\n\nIts last message:\n\n${quoted}` : ""}${body ? `\n\nWhat it was asked:\n\n${body}` : ""}`;
+  const why = reason
+    ? `${from} was working on this and stopped, as its provider failed: ${reason}.`
+    : `${from} was working on this before; this comment asked for you instead (\`/agent\`).`;
+  return `${why} You take over, in a new session: sessions don't move between agents, so start from what it left. /workspace is the clone it worked in, with what it hadn't committed (\`git status\`, \`git log\`)${pushes}; GitHub has what it pushed and posted.${quoted ? `\n\nIts last message:\n\n${quoted}` : ""}${body ? `\n\nWhat it was asked:\n\n${body}` : ""}`;
 }
 
 // What the agent reads for comments delivered mid-run (Claude Code adds that the user sent it
