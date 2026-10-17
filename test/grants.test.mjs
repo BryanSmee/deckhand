@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import {
   chmodSync,
   mkdirSync,
-  mkdtempSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   statSync,
@@ -24,15 +24,16 @@ import {
   resolveMounts,
   ungranted,
 } from "../listener/grants.mjs";
+import { tempDir, testConfig } from "./helpers.mjs";
 
-const config = loadConfig({ ALLOWED_USERS: "a" });
+const config = testConfig({ ALLOWED_USERS: "a" });
 
 // What one repo gets from a grants folder given as { "path/in/it.yaml": text }.
 const grantOf = (files, repo) => grantFor(grantsFrom(files, config), config, repo);
 
 // A grants folder on disk: { "path/in/it": text }, and the config reading it.
-function folder(files) {
-  const dir = realpathSync(mkdtempSync(join(tmpdir(), "deckhand-grants-dir-")));
+function folder(t, files) {
+  const dir = realpathSync(tempDir(t, "deckhand-grants-dir-"));
   for (const [path, text] of Object.entries(files)) {
     mkdirSync(dirname(join(dir, path)), { recursive: true });
     writeFileSync(join(dir, path), text);
@@ -123,8 +124,8 @@ limits: { memory: 8g, cpus: 3 }
   assert.deepEqual(other.files, ["default.yaml"]);
 });
 
-test("a folder of several owners and repos, matched case-insensitively", () => {
-  const { config: c } = folder({
+test("a folder of several owners and repos, matched case-insensitively", (t) => {
+  const { config: c } = folder(t, {
     "default.yaml": "allow_dockerfile: true\n",
     "acme/api.yaml": "hosts: [api.example.com]\n",
     "acme/Web.yaml": "hosts: [web.example.com]\n",
@@ -144,8 +145,8 @@ test("a folder of several owners and repos, matched case-insensitively", () => {
   assert.deepEqual(grantErrors(grants), []);
 });
 
-test("a broken repo file stops that repo only, naming the file", () => {
-  const { config: c } = folder({
+test("a broken repo file stops that repo only, naming the file", (t) => {
+  const { config: c } = folder(t, {
     "default.yaml": "hosts: [pypi.org]\n",
     "acme/api.yaml": "hosts: [bad host]\nlimits: { memory: lots }\n",
     "acme/web.yaml": "allow_preview: true\n",
@@ -188,7 +189,7 @@ test("each repo file's errors, one list per file", () => {
   bad("org/repo:\n  hosts: [pypi.org]\n", /org\/repo: unknown/);
 });
 
-test("a broken default.yaml or a misplaced file stops every run", () => {
+test("a broken default.yaml or a misplaced file stops every run", (t) => {
   const broken = (files, pattern, file = null) =>
     assert.throws(
       () => grantsFrom(files, config),
@@ -229,16 +230,19 @@ test("a broken default.yaml or a misplaced file stops every run", () => {
   broken({ "a.yaml": "", "default.yaml": "mounts: [/srv]\n" }, /a\.yaml: .*; default\.yaml: /);
 
   // The listener refuses to start: loadGrants() throws.
-  const { config: c } = folder({ "default.yaml": "limits: { cpus: none }\n", "acme/api.yaml": "" });
+  const { config: c } = folder(t, {
+    "default.yaml": "limits: { cpus: none }\n",
+    "acme/api.yaml": "",
+  });
   assert.throws(() => loadGrants(c), /default\.yaml: limits\.cpus/);
 });
 
-test("symlinks: followed inside the folder, an error leading outside it", () => {
-  const outside = realpathSync(mkdtempSync(join(tmpdir(), "deckhand-outside-")));
+test("symlinks: followed inside the folder, an error leading outside it", (t) => {
+  const outside = realpathSync(tempDir(t, "deckhand-outside-"));
   writeFileSync(join(outside, "api.yaml"), "allow_preview: true\n");
   mkdirSync(join(outside, "globex"));
   writeFileSync(join(outside, "globex", "tools.yaml"), "allow_preview: true\n");
-  const { dir, config: c } = folder({ "acme/api.yaml": "hosts: [pypi.org]\n" });
+  const { dir, config: c } = folder(t, { "acme/api.yaml": "hosts: [pypi.org]\n" });
   symlinkSync(join(dir, "acme", "api.yaml"), join(dir, "acme", "web.yaml"));
   symlinkSync(join(outside, "api.yaml"), join(dir, "acme", "leak.yaml"));
   symlinkSync(join(dir, "nowhere.yaml"), join(dir, "acme", "dangling.yaml"));
@@ -259,8 +263,8 @@ test("symlinks: followed inside the folder, an error leading outside it", () => 
   assert.throws(() => loadGrants(c), /globex: a symlink leading outside the grants folder/);
 });
 
-test("an edit applies to the next load, without a restart; a repo's file is read when asked for", () => {
-  const { dir, config: c } = folder({
+test("an edit applies to the next load, without a restart; a repo's file is read when asked for", (t) => {
+  const { dir, config: c } = folder(t, {
     "default.yaml": "",
     "acme/api.yaml": "",
     "acme/web.yaml": "",
@@ -286,10 +290,10 @@ test("an edit applies to the next load, without a restart; a repo's file is read
   assert.deepEqual(grantFor(grants, c, "acme/web").files, ["default.yaml", "acme/web.yaml"]);
 });
 
-test("no grants folder: no grants; a file in its place is an error", () => {
+test("no grants folder: no grants; a file in its place is an error", (t) => {
   const none = { ...config, grantsDir: join(tmpdir(), "deckhand-no-such-folder") };
   assert.deepEqual(grantFor(loadGrants(none), none, "org/repo"), NOTHING);
-  const { dir } = folder({ "grants.yaml": "" });
+  const { dir } = folder(t, { "grants.yaml": "" });
   const file = { ...config, grantsDir: join(dir, "grants.yaml") };
   assert.throws(() => loadGrants(file), /expected a folder/);
 });
@@ -334,11 +338,26 @@ const statUnder = (dir) => (path) =>
     ? { ...ROOT_DIR, mode: statSync(path).mode }
     : ROOT_DIR;
 
+// A temp dir the test makes read-only in places: writable again before tempDir removes it (a
+// test's after hooks run in the order they were added).
+function lockedDir(t) {
+  let dir;
+  const writable = (path) => {
+    chmodSync(path, 0o755);
+    for (const entry of readdirSync(path, { withFileTypes: true })) {
+      if (entry.isDirectory()) writable(join(path, entry.name));
+    }
+  };
+  t.after(() => writable(dir));
+  dir = realpathSync(tempDir(t, "deckhand-grants-"));
+  return dir;
+}
+
 // A root with a subfolder, a symlink inside it and one pointing out. The root and the temp
 // dir are read-only for everyone (the tests may run as uid 1000, the sandbox's user), so its
 // subfolders can be mounted read-write.
-function tree() {
-  const dir = realpathSync(mkdtempSync(join(tmpdir(), "deckhand-grants-")));
+function tree(t) {
+  const dir = lockedDir(t);
   mkdirSync(join(dir, "work", "api"), { recursive: true });
   mkdirSync(join(dir, "secret"));
   symlinkSync(join(dir, "work", "api"), join(dir, "work", "inside"));
@@ -348,8 +367,8 @@ function tree() {
   return dir;
 }
 
-test("mounts: subpaths of a granted root pass, after resolving .. and symlinks", () => {
-  const dir = tree();
+test("mounts: subpaths of a granted root pass, after resolving .. and symlinks", (t) => {
+  const dir = tree(t);
   const grant = { mounts: [{ root: join(dir, "work"), readOnly: false }] };
   const { mounts, refused } = resolveMounts(
     [
@@ -371,8 +390,8 @@ test("mounts: subpaths of a granted root pass, after resolving .. and symlinks",
   ]);
 });
 
-test("mounts: .., symlinks out, other paths and no grant are refused", () => {
-  const dir = tree();
+test("mounts: .., symlinks out, other paths and no grant are refused", (t) => {
+  const dir = tree(t);
   const grant = { mounts: [{ root: join(dir, "work"), readOnly: true }] };
   const refusedFor = (path, g = grant) =>
     resolveMounts([{ path, readOnly: true }], g).refused.join("");
@@ -395,8 +414,8 @@ test("mounts: .., symlinks out, other paths and no grant are refused", () => {
   assert.match(clash.refused[0], /uses \/home\/node\/\.npm itself/);
 });
 
-test("mounts: read-only unless the operator grants read-write; a repo can only narrow", () => {
-  const dir = tree();
+test("mounts: read-only unless the operator grants read-write; a repo can only narrow", (t) => {
+  const dir = tree(t);
   const path = join(dir, "work", "api");
   const ro = resolveMounts([{ path, readOnly: false }], {
     mounts: [{ root: join(dir, "work"), readOnly: true }],
@@ -409,8 +428,8 @@ test("mounts: read-only unless the operator grants read-write; a repo can only n
   assert.equal(resolveMounts([{ path, readOnly: false }], rw, fs).mounts[0].readOnly, false);
 });
 
-test("mounts: read-write refused when the sandbox's user can rewrite a directory on the way", () => {
-  const dir = realpathSync(mkdtempSync(join(tmpdir(), "deckhand-grants-")));
+test("mounts: read-write refused when the sandbox's user can rewrite a directory on the way", (t) => {
+  const dir = lockedDir(t);
   const root = join(dir, "work");
   mkdirSync(join(root, "team", "api", "src"), { recursive: true });
   chmodSync(dir, 0o555);
@@ -560,7 +579,7 @@ test("allow_docker: a repository's own file only, and `docker` without it is ref
 
 test("server.example/grants is a valid grants folder that grants nothing", () => {
   const dir = new URL("../server.example/grants", import.meta.url).pathname;
-  const config = loadConfig({ ALLOWED_USERS: "a", GRANTS_DIR: dir });
+  const config = testConfig({ ALLOWED_USERS: "a", GRANTS_DIR: dir });
   const grants = loadGrants(config);
   assert.deepEqual(grantErrors(grants), []);
   const grant = grantFor(grants, config, "your-org/your-repo");

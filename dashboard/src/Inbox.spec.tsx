@@ -1,87 +1,54 @@
 // The top bar's inbox dialog against a fake API: what it offers, a sent entry and its run, a
 // refusal, repos without an inbox.
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/preact";
-import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { beforeEach, expect, test } from "vitest";
 import { Dashboard } from "./App";
-import fixture from "./fixture.json";
 import { INBOX_DOCS } from "./Inbox";
+import { makeState, makeTask, mockApi, running } from "./testUtils";
 import type { Inboxes, State, Task } from "./types";
 
-let posted: [string, unknown][];
+let api: ReturnType<typeof mockApi>;
 beforeEach(() => {
-  posted = [];
-  history.replaceState(null, "", "/");
-  Object.assign(globalThis, {
-    EventSource: class {
-      addEventListener() {}
-      close() {}
-    },
-    matchMedia: () => ({ matches: true, addEventListener() {}, removeEventListener() {} }),
-  });
-  vi.stubGlobal("fetch", async (url: string, init?: RequestInit) => {
+  api = mockApi();
+  // Any repo's inbox or discussions.
+  api.answer = ({ url, body }) => {
     const started = /^api\/repos\/(.+)\/discussions$/.exec(url);
-    if (started && init?.method === "POST") {
-      const body = JSON.parse(String(init.body));
-      posted.push([started[1], body]);
+    if (started) {
       if (body.title.includes("refuse")) {
         return Response.json(
           { error: 'acme/app has no discussion category "ask claude": create it.' },
           { status: 409 },
         );
       }
-      return Response.json({
+      return {
         message: "Discussion #9 started.",
         url: `https://github.com/${started[1]}/discussions/9`,
         number: 9,
         task: `${started[1]}#discussion-9`,
-      });
+      };
     }
     const inbox = /^api\/repos\/(.+)\/inbox$/.exec(url);
-    if (inbox && init?.method === "POST") {
-      const body = JSON.parse(String(init.body));
-      posted.push([inbox[1], body]);
+    if (inbox) {
       if (body.text.includes("refuse")) {
         return Response.json({ error: "The text is over 20000 characters." }, { status: 413 });
       }
       const n = body.kind === "bug" ? 5 : 4;
-      return Response.json({
+      return {
         message: `Sent to #${n}.`,
         url: `https://github.com/${inbox[1]}/issues/${n}#issuecomment-9`,
         task: `${inbox[1]}#${n}`,
-      });
+      };
     }
     return new Response("{}", { status: 404 });
-  });
-});
-afterEach(() => {
-  vi.unstubAllGlobals();
-  document.body.replaceChildren();
+  };
 });
 
 // acme/app's bugs inbox task, #5.
 const inboxTask = (runs: string[]): Task =>
-  ({
-    key: "acme/app#5",
-    repo: "acme/app",
-    project: "acme",
-    number: 5,
-    title: "Bugs",
-    kind: "bug",
-    mode: "bug",
-    replyTo: 5,
-    state: "working",
-    since: 0,
-    closed: null,
-    pr: null,
-    rerunnable: false,
-    runs: runs.map((id) => ({ id, status: "running", startedAt: 0 })),
-  }) as unknown as Task;
+  makeTask({ number: 5, title: "Bugs", kind: "bug", mode: "bug", runs: running(runs) });
 
-const stateWith = (inboxes: Record<string, Inboxes> | undefined, tasks: Task[] = []): State => ({
-  ...(fixture as State),
-  tasks: [...(fixture as State).tasks, ...tasks],
-  inboxes,
-});
+const stateWith = (inboxes: Record<string, Inboxes> | undefined, tasks: Task[] = []): State =>
+  makeState({ inboxes }, tasks);
 
 const INBOXES = {
   "acme/app": { ideas: 4, bugs: 5, discussions: "ask claude" },
@@ -136,7 +103,9 @@ test("Send posts the kind and text to the repo, then links the comment and the e
   });
   fireEvent.click(send);
   await waitFor(() => expect(within(dialog).getByRole("status").textContent).toContain("Sent"));
-  expect(posted).toEqual([["acme/app", { kind: "bug", text: "The log stops" }]]);
+  expect(api.posted).toEqual([
+    { url: "api/repos/acme/app/inbox", body: { kind: "bug", text: "The log stops" } },
+  ]);
   expect(within(dialog).getByRole("link", { name: "the comment" }).getAttribute("href")).toBe(
     "https://github.com/acme/app/issues/5#issuecomment-9",
   );
@@ -177,7 +146,12 @@ test("a discussion: a title and a text, started in the repo's category, then its
   });
   fireEvent.click(start);
   await waitFor(() => expect(within(dialog).getByRole("status").textContent).toContain("Sent"));
-  expect(posted).toEqual([["acme/app", { title: "Restarts", body: "Is the queue kept?" }]]);
+  expect(api.posted).toEqual([
+    {
+      url: "api/repos/acme/app/discussions",
+      body: { title: "Restarts", body: "Is the queue kept?" },
+    },
+  ]);
   expect(within(dialog).getByRole("link", { name: "the discussion" }).getAttribute("href")).toBe(
     "https://github.com/acme/app/discussions/9",
   );

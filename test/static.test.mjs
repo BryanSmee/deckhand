@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { resolveAsset } from "../listener/static.mjs";
+import { tempDir } from "./helpers.mjs";
 
-test("dashboard files: only those inside the build folder", () => {
-  const dir = mkdtempSync(join(tmpdir(), "deckhand-"));
+test("dashboard files: only those inside the build folder", (t) => {
+  const dir = tempDir(t);
   const root = join(dir, "dist");
   mkdirSync(join(root, "assets"), { recursive: true });
   writeFileSync(join(root, "index.html"), "<!doctype html>");

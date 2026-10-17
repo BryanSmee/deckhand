@@ -6,7 +6,6 @@ import { createHmac, generateKeyPairSync } from "node:crypto";
 import {
   chmodSync,
   mkdirSync,
-  mkdtempSync,
   readdirSync,
   readFileSync,
   rmSync,
@@ -15,208 +14,26 @@ import {
   writeFileSync,
 } from "node:fs";
 import { createServer, request } from "node:http";
-import { availableParallelism, tmpdir } from "node:os";
+import { availableParallelism } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, test } from "node:test";
+import { tempDir } from "./helpers.mjs";
 
 const SECRET = "webhook-secret";
+// The App's key, one for every listener: making one takes a while.
+const PEM = generateKeyPairSync("rsa", { modulusLength: 2048 }).privateKey.export({
+  type: "pkcs1",
+  format: "pem",
+});
 // A read-write mount needs every directory from / to its parent out of the sandbox's user's
 // reach (uid 1000, maybe the tests' own), which a temp dir isn't: /usr is root's everywhere.
 // The fake docker mounts nothing.
 const RW_MOUNT = "/usr";
 
-// Sandboxes run detached: `run` starts the fake sandbox in the background (its output in
-// containers/<name>/out), `logs --follow` tails it, `ps`, `inspect`, `wait` and `rm` see it.
-// Each run's network is a file in nets/, listing the containers joined to it: the sandbox,
-// the listener (whatever its host name) and the egress proxy, `egress-1`, whose address is
-// 127.0.0.1 (the fake sandbox asks the egress policy from there).
-// The fake sandbox asks the broker and the egress policy, prints a result (once
-// ${dir}/go exists, if ${dir}/hold does), then answers each comment of its inbox, through
-// the image's own deckhand-inbox, until the listener closes it.
+// A fake `docker` on the listener's PATH, playing Docker on files in `dir`
+// (fixtures/fake-docker.sh says how).
 function fakeDocker(dir) {
-  const path = join(dir, "docker");
-  const inbox = new URL("../sandbox/deckhand-inbox", import.meta.url).pathname;
-  writeFileSync(
-    path,
-    `#!/bin/bash
-# Everything but the sandbox run is logged, one call per line.
-c="${dir}/containers"
-alive() { [ -f "$c/$1/pid" ] && kill -0 "$(cat "$c/$1/pid")" 2> /dev/null; }
-case "$1" in
-  ps)
-    case "$*" in *deckhand.role=egress*) echo egress-1; exit ;; esac
-    for d in "$c"/*/; do
-      [ -d "$d" ] || continue
-      n=$(basename "$d")
-      alive "$n" && state=running || state=exited
-      printf '%s\\t%s\\t%s\\n' "$n" "$(cat "$d/run")" "$state"
-    done ;;
-  wait)
-    while alive "\${@: -1}"; do sleep 0.05; done ;;
-  stop)
-    # A cancelled run's sandbox; one the test says is stuck ignores it.
-    echo "$*" >> "${dir}/docker-calls"
-    n=\${@: -1}
-    [ -d "$c/$n" ] || exit 1
-    [ -e "${dir}/stuck" ] && exit 0
-    kill -TERM -- -"$(cat "$c/$n/pid")" 2> /dev/null
-    while alive "$n"; do sleep 0.05; done ;;
-  rm)
-    n=\${@: -1}
-    [ -f "$c/$n/run" ] && sed -i "/^$n\$/d" "${dir}/nets/$(cat "$c/$n/run")" 2> /dev/null
-    rm -rf "$c/$n" ;;
-  logs)
-    n=\${@: -1}
-    [ -d "$c/$n" ] || exit 1
-    exec tail -n +1 -f --pid="$(cat "$c/$n/pid")" -s 0.05 "$c/$n/out" ;;
-  network)
-    n=\${@: -1}
-    net=\${@: -2:1}
-    case "$2" in
-      create)
-        echo "$*" >> "${dir}/docker-calls"
-        mkdir -p "${dir}/nets" && : > "${dir}/nets/$n" ;;
-      inspect)
-        [ -f "${dir}/nets/$n" ] || exit 1
-        case "$*" in
-          *Containers*) tr '\n' ' ' < "${dir}/nets/$n" ;;
-          # Internal unless the test says otherwise.
-          *) cat "${dir}/network-internal" 2> /dev/null || echo true ;;
-        esac ;;
-      connect)
-        echo "$*" >> "${dir}/docker-calls"
-        [ -f "${dir}/nets/$net" ] || exit 1
-        echo "$n" >> "${dir}/nets/$net" ;;
-      disconnect)
-        sed -i "/^$n\$/d" "${dir}/nets/$net" ;;
-      rm)
-        echo "$*" >> "${dir}/docker-calls"
-        rm -f "${dir}/nets/$n" ;;
-      ls)
-        ls "${dir}/nets" 2> /dev/null ;;
-    esac ;;
-  inspect)
-    n=\${@: -1}
-    case "$3" in
-      *State*)
-        [ -d "$c/$n" ] || exit 1
-        alive "$n" && echo running || echo exited ;;
-      *compose.project*) echo deckhand ;;
-      *deckhand.run*)
-        [ -d "$c/$n" ] || exit 1
-        cat "$c/$n/run" ;;
-      # A sandbox's address on its network, for the egress proxy's questions; the listener's
-      # and the proxy's on each network they are joined to.
-      *)
-        if [ -d "$c/$n" ]; then
-          printf '{"%s":{"IPAddress":"10.9.0.5"}}\\n' "$(cat "$c/$n/run")"
-          exit
-        fi
-        ip=10.9.0.1
-        [ "$n" = egress-1 ] && ip=127.0.0.1
-        printf '{"deckhand_default":{"IPAddress":"%s"}' "$ip"
-        for f in "${dir}"/nets/*; do
-          [ -f "$f" ] && grep -qx -- "$n" "$f" && printf ',"%s":{"IPAddress":"%s"}' "$(basename "$f")" "$ip"
-        done
-        echo "}" ;;
-    esac ;;
-  volume)
-    # The volumes a test says exist (one name per line in ${dir}/volumes).
-    if [ "$2" = inspect ]; then grep -qx -- "\${@: -1}" "${dir}/volumes" 2> /dev/null; exit; fi
-    [ "$2" = ls ] && exit
-    echo "$*" >> "${dir}/docker-calls" ;;
-  image)
-    # Asked while the run is prepared, so a test can change things then.
-    [ "$2" = inspect ] && [ -x "${dir}/while-preparing" ] && "${dir}/while-preparing"
-    # The base image exists; repo images don't, until built.
-    [ "$2" = inspect ] && case "$*" in *-repo-*) exit 1 ;; *) echo sha256:base ;; esac ;;
-  create|cp|start)
-    # A preview hook's container.
-    echo "$*" >> "${dir}/docker-calls" ;;
-  build)
-    echo "$*" >> "${dir}/docker-calls"
-    # The build context is the repo's checkout.
-    cp "\${@: -1}/docker/Dockerfile" "${dir}/built-dockerfile" ;;
-  info)
-    echo '{"runc":{}}' ;;
-  run)
-    case "$*" in *--entrypoint*) echo "$*" >> "${dir}/docker-calls"; exit 0 ;; esac
-    # A run's container engine: its arguments, one per line, and nothing runs.
-    case "$*" in *"--network-alias engine"*) printf '%s\n' "$@" > "${dir}/engine-args"; exit 0 ;; esac
-    name=$(printf '%s\\n' "$@" | grep -A1 -x -- --name | tail -1)
-    run=$(printf '%s\\n' "$@" | sed -n 's/^deckhand\\.run=//p')
-    mkdir -p "$c/$name"
-    echo "$run" > "$c/$name/run"
-    # On its run's network before run-args tells a test it started.
-    echo "$name" >> "${dir}/nets/$run"
-    # Each file renamed into place, so a test never reads one half-written; run-args last:
-    # tests wait for it, then read the others. (Not .tmp: tests look for leftover state writes.)
-    echo "$DECKHAND_RUN_SECRET" > "${dir}/run-secret.part" && mv "${dir}/run-secret.part" "${dir}/run-secret"
-    env > "${dir}/run-env.part" && mv "${dir}/run-env.part" "${dir}/run-env"
-    printf '%s\\n' "$@" > "${dir}/run-args.part" && mv "${dir}/run-args.part" "${dir}/run-args"
-    setsid bash -c '
-      curl -fsS -H "Authorization: Bearer $DECKHAND_RUN_SECRET" "$DECKHAND_BROKER_URL/token" \\
-        > "${dir}/broker-answer"
-      # What the egress proxy would ask about this sandbox'"'"'s connections.
-      for host in api.anthropic.com github.com objects.githubusercontent.com evil.example \\
-        registry.npmjs.org pypi.org a.b.example.com example.com lan.internal; do
-        echo "$host $(curl -fsS "$DECKHAND_BROKER_URL/egress?ip=10.9.0.5&host=$host")" \\
-          >> "${dir}/egress"
-      done
-      # Claude Code'"'"'s API call, through the listener, with the run'"'"'s secret.
-      bearer="\${ANTHROPIC_AUTH_TOKEN:-\$CLAUDE_CODE_OAUTH_TOKEN}"
-      if [ -n "$bearer" ]; then
-        curl -sS -X POST -H "Authorization: Bearer $bearer" \\
-          -d "{}" "$ANTHROPIC_BASE_URL/v1/messages?beta=true" > "${dir}/anthropic-answer"
-      fi
-      # Not all of stdout is Claude'"'"'s: gh prints the draft pull request'"'"'s address.
-      echo "https://github.com/org/repo/pull/13"
-      if [ -e "${dir}/hold" ]; then
-        until [ -e "${dir}/go" ]; do sleep 0.05; done
-      fi
-      # Each run'"'"'s agent, provider and session, and its first message (fallbacks).
-      echo "$SANDBOX_AGENT@$SANDBOX_PROVIDER \${TASK_SESSION:-default}" >> "${dir}/runs-seen"
-      { echo "$TASK_MESSAGE"; echo ----; } >> "${dir}/messages"
-      { echo "$TASK_PROMPT"; echo ----; } >> "${dir}/prompts"
-      # A provider the test says fails: Claude Code'"'"'s API error. Or a task that fails.
-      if grep -qx "$SANDBOX_AGENT@$SANDBOX_PROVIDER" "${dir}/failing" 2> /dev/null; then
-        echo "{\\"type\\":\\"result\\",\\"is_error\\":true,\\"result\\":\\"API Error: 529 overloaded_error: Overloaded\\",\\"duration_ms\\":1000}"
-        exit 0
-      fi
-      if [ -e "${dir}/task-fails" ]; then
-        echo "{\\"type\\":\\"result\\",\\"is_error\\":true,\\"result\\":\\"The tests still fail.\\",\\"duration_ms\\":1000}"
-        exit 0
-      fi
-      # Codex: its API call through the listener, one turn on the message it was given, and
-      # no inbox to read (it takes no messages mid-run).
-      if [ "$SANDBOX_AGENT" = codex ]; then
-        curl -sS -X POST -H "Authorization: Bearer $OPENAI_API_KEY" \\
-          -d "{}" "$OPENAI_BASE_URL/responses" > "${dir}/openai-answer"
-        text="Codex did: \${TASK_MESSAGE:-the issue}"
-        echo '"'"'{"type":"thread.started","thread_id":"t1"}'"'"'
-        jq -nc --arg text "$text" '"'"'{type: "item.completed", item: {id: "item_0", type: "agent_message", text: $text}}'"'"'
-        echo '"'"'{"type":"turn.completed","usage":{}}'"'"'
-        jq -nc --arg text "$text" '"'"'{type: "deckhand.result", ok: true, text: $text, duration_ms: 60000}'"'"'
-        exit 0
-      fi
-      result="All done."
-      # A run talked into posting secrets: its own, and whatever the test leaves in leak.
-      [ -e "${dir}/leak" ] && result="Leaked $DECKHAND_RUN_SECRET and $(cat "${dir}/leak")."
-      echo "{\\"type\\":\\"result\\",\\"result\\":\\"$result\\",\\"duration_ms\\":60000}"
-      node "${inbox}" "${dir}/runs/$1/inbox.jsonl" | while IFS= read -r line; do
-        echo "$line" >> "${dir}/delivered"
-        if [ -e "${dir}/hold-answer" ]; then
-          until [ -e "${dir}/answer" ]; do sleep 0.05; done
-        fi
-        echo "{\\"type\\":\\"result\\",\\"result\\":\\"Answered.\\",\\"duration_ms\\":6000}"
-      done
-    ' sandbox "$run" > "$c/$name/out" 2> "$c/$name/err" < /dev/null &
-    echo $! > "$c/$name/pid"
-    ;;
-esac
-`,
-  );
-  chmodSync(path, 0o755);
+  symlinkSync(new URL("fixtures/fake-docker.sh", import.meta.url).pathname, join(dir, "docker"));
 }
 
 // Stops the fake sandboxes a test leaves running.
@@ -371,7 +188,7 @@ async function fakeGitHub(files = {}) {
 
 // GitHub's tarball: one top folder holding the repo's files.
 function tarOf(files) {
-  const dir = mkdtempSync(join(tmpdir(), "deckhand-repo-"));
+  const dir = tempDir(null, "deckhand-repo-");
   for (const [path, text] of Object.entries(files)) {
     mkdirSync(join(dir, "org-repo-abc", dirname(path)), { recursive: true });
     writeFileSync(join(dir, "org-repo-abc", path), text);
@@ -404,18 +221,6 @@ function start(env) {
 // Each test runs its own listener, fake GitHub and fake Docker in its own temp dir, on ports
 // the OS picks, and mostly waits on them: they run side by side, two per core (eight at most).
 describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, () => {
-  test("refuses to start with an empty allowlist", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "deckhand-"));
-    const { child, output } = start({
-      PATH: process.env.PATH,
-      DATA_DIR: dir,
-      ALLOWED_USERS: " ",
-    });
-    const code = await new Promise((resolve) => child.on("exit", resolve));
-    assert.equal(code, 1);
-    assert.match(output(), /ALLOWED_USERS/);
-  });
-
   // The ports a listener bound, from its log: its own, then its broker's.
   async function ports(listener) {
     const bound = async (name) => {
@@ -435,10 +240,10 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
   }
 
   async function listen(t, files, extra = {}) {
-    const dir = mkdtempSync(join(tmpdir(), "deckhand-"));
+    // Removed once the file is done: its listener and sandboxes are stopped by then.
+    const dir = tempDir(null);
     fakeDocker(dir);
     const github = await fakeGitHub(typeof files === "function" ? files(dir) : files);
-    const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
     writeFileSync(
       join(dir, "app.json"),
       JSON.stringify({
@@ -448,7 +253,7 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
         slug: "deckhand-x",
         bot_id: 77,
         webhook_secret: SECRET,
-        pem: privateKey.export({ type: "pkcs1", format: "pem" }),
+        pem: PEM,
       }),
     );
     // Port 0: the OS picks free ports, which the listener logs. The broker's URL gets its port.
@@ -527,45 +332,6 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
     };
   }
 
-  test("sandbox names: a hash keeps colliding repos apart, sessions from before keep theirs", async (t) => {
-    // Issue 12 has a session from before names had a hash, and a run that had that name;
-    // issue 14 has none. org/repo-pr #5 had one too, whose old name is org/repo #pr-5's.
-    const { dir, github, send, listener } = await listen(t, {}, (dir) => {
-      mkdirSync(join(dir, "logs"));
-      for (const [key, id] of [
-        ["org/repo#12", "deckhand-org-repo-12-1000"],
-        ["org/repo-pr#5", "deckhand-org-repo-pr-5-1000"],
-      ]) {
-        const meta = { type: "listener", key, repo: key.split("#")[0], startedAt: 1000 };
-        writeFileSync(join(dir, "logs", `${id}.log`), `${JSON.stringify(meta)}\n`);
-      }
-      return {};
-    });
-    writeFileSync(
-      join(dir, "volumes"),
-      ["deckhand-org-repo-12-claude", "deckhand-org-repo-pr-5-claude", ""].join("\n"),
-    );
-    const name = () => {
-      const args = readFileSync(join(dir, "run-args"), "utf8").split("\n");
-      return [args[args.indexOf("--name") + 1], args.filter((a) => a.endsWith(":/workspace"))[0]];
-    };
-    // No trigger line: it goes on in the session issue 12 has.
-    await send(comment("alice", "And the tests?"));
-    await github.waitFor((r) => r.path === "/repos/org/repo/issues/12/comments");
-    assert.deepEqual(name(), ["deckhand-org-repo-12", "deckhand-org-repo-12-workspace:/workspace"]);
-    await listener.until("done (ok)");
-    await send({ ...comment("alice"), issue: { number: 14 } });
-    await github.waitFor((r) => r.path === "/repos/org/repo/issues/14/comments");
-    const [fresh, workspace] = name();
-    assert.match(fresh, /^deckhand-org-repo-14-[0-9a-f]{10}$/);
-    assert.equal(workspace, `${fresh}-workspace:/workspace`);
-    await listener.until(/org\/repo#14: done/);
-    // Pull request 5 of org/repo: the other repo's session isn't its own.
-    await send({ ...comment("alice"), issue: { number: 5, pull_request: {} } });
-    await github.waitFor((r) => r.path === "/repos/org/repo/issues/5/comments");
-    assert.match(name()[0], /^deckhand-org-repo-pr-5-[0-9a-f]{10}$/);
-  });
-
   // Sends a delivery's headers and holds its body back: the answer comes from the headers alone.
   function headersOnly(port, headers) {
     return new Promise((resolve, reject) => {
@@ -623,18 +389,8 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
       req.end(body);
     });
     assert.equal(delivered, 202);
-    // The stalled bodies are dropped after 2 seconds without data.
-    await listener.until("Rejected a delivery: no data for 2000 ms");
+    // Stalled bodies are dropped after a while: readDelivery() in deliveries.test.mjs.
     for (const req of held) req.destroy();
-    const res = await fetch(`http://127.0.0.1:${port}/webhook`, {
-      method: "POST",
-      headers: {
-        "x-github-event": "issue_comment",
-        "x-hub-signature-256": `sha256=${createHmac("sha256", SECRET).update(body).digest("hex")}`,
-      },
-      body,
-    });
-    assert.equal(res.status, 202);
   });
 
   test("the Claude credential stays out of sandboxes, and a reply leaking secrets is redacted", async (t) => {
@@ -910,48 +666,6 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
     assert.match(JSON.parse(replies(github)[2].body).body, /^Codex stopped with an error\./);
   });
 
-  test("/agent with an agent the operator hasn't configured: the reply says so, nothing runs", async (t) => {
-    const { dir, github, send } = await listen(t);
-    await send(comment("alice", "Deckhand\n/agent codex"));
-    const reply = await github.waitFor(
-      (r) => r.method === "POST" && r.path === "/repos/org/repo/issues/12/comments",
-    );
-    assert.match(
-      JSON.parse(reply.body).body,
-      /^Claude can't run here: `\/agent codex` isn't one the operator configured \(`claude@anthropic`, or `default`\)\./,
-    );
-    assert.equal(exists(join(dir, "run-args")), null);
-  });
-
-  test("/model opus on a Codex run: the reply says it is Claude's, nothing runs", async (t) => {
-    const { dir, github, send } = await listen(t, {}, () => ({
-      OPENAI_API_KEY: "sk-proj-k",
-      SANDBOX_AGENT: "codex",
-    }));
-    await send(comment("alice", "Deckhand\n/model opus"));
-    const reply = await github.waitFor(
-      (r) => r.method === "POST" && r.path === "/repos/org/repo/issues/12/comments",
-    );
-    assert.match(
-      JSON.parse(reply.body).body,
-      /^Codex can't run here: `opus` is a Claude model, not one of Codex's\. Use a tier/,
-    );
-    assert.equal(exists(join(dir, "run-args")), null);
-  });
-
-  test("a repo that picks an agent the operator hasn't configured: the reply says so, nothing runs", async (t) => {
-    const { dir, github, send } = await listen(t, { ".deckhand.yaml": "agent: codex\n" });
-    await send(comment("alice"));
-    const reply = await github.waitFor(
-      (r) => r.method === "POST" && r.path === "/repos/org/repo/issues/12/comments",
-    );
-    assert.match(
-      JSON.parse(reply.body).body,
-      /`\.deckhand\.yaml` on `trunk` has errors\.\n\n- agent: the operator hasn't configured codex \(configured: claude\)/,
-    );
-    assert.equal(exists(join(dir, "run-args")), null);
-  });
-
   test("a webhook from the App runs a sandbox that gets its repo's token from the broker", async (t) => {
     const { dir, github, listener, port, brokerPort } = await listen(t);
     const payload = JSON.stringify(comment("alice"));
@@ -1119,26 +833,6 @@ caches:
     assert.match(runEnv, /^SANDBOX_MODEL=sonnet$/m);
   });
 
-  test("a Dockerfile or preview hook without its grant stops the run, and nothing is built", async (t) => {
-    const { dir, github, listener, send } = await listen(t, {
-      ".deckhand.yaml": `${CONFIG}preview: ./preview.sh\ndocker: true\n`,
-      "docker/Dockerfile": "ARG DECKHAND_BASE\nFROM $DECKHAND_BASE\nRUN true\n",
-    });
-    await send(comment("alice"));
-    const reply = await github.waitFor(
-      (r) => r.method === "POST" && r.path === "/repos/org/repo/issues/12/comments",
-    );
-    const body = JSON.parse(reply.body).body;
-    assert.match(body, /`\.deckhand\.yaml` on `trunk` has errors/);
-    assert.match(body, /- preview: .* don't set `allow_preview: true` for this repository/);
-    assert.match(body, /- dockerfile: .* don't set `allow_dockerfile: true` for this repository/);
-    assert.match(body, /- docker: .* don't set `allow_docker: true` for this repository/);
-    await listener.until("asks for what its grant doesn't allow");
-    // No build, no sandbox: no docker call was even logged.
-    assert.throws(() => readFileSync(join(dir, "docker-calls")));
-    assert.throws(() => readFileSync(join(dir, "run-args")));
-  });
-
   test("a preview hook runs only with allow_preview", async (t) => {
     const delivery = {
       action: "opened",
@@ -1169,25 +863,19 @@ caches:
     assert.match(calls(), /^create .*docker\.sock.* docker:cli .*\.\/preview\.sh$/m);
   });
 
-  test("a broken grant file stops that repo's runs, not the listener", async (t) => {
-    const { github, listener, send } = await listen(t, {}, (dir) => {
-      writeGrant(dir, "hosts: [bad host]\n");
-      return {};
-    });
-    // Said at start; the listener starts anyway.
-    await listener.until("grants: org/repo.yaml: hosts:");
-    await send(comment("alice"));
-    const reply = await github.waitFor(
-      (r) => r.method === "POST" && r.path === "/repos/org/repo/issues/12/comments",
+  test("a config with errors stops the run and the reply says why; a broken grant, at start", async (t) => {
+    // Another repo's broken grant (access.test.mjs: its runs stop): said at start, and the
+    // listener starts anyway.
+    const { github, send, listener } = await listen(
+      t,
+      { ".deckhand.yaml": "max_parallel: lots\n" },
+      (dir) => {
+        mkdirSync(join(dir, "grants", "org"), { recursive: true });
+        writeFileSync(join(dir, "grants", "org", "other.yaml"), "hosts: [bad host]\n");
+        return {};
+      },
     );
-    const { body } = JSON.parse(reply.body);
-    assert.match(body, /`org\/repo\.yaml` in the operator's grants folder has errors/);
-    // The details stay in the listener's logs.
-    assert.doesNotMatch(body, /bad host/);
-  });
-
-  test("a config with errors stops the run and the reply says why", async (t) => {
-    const { github, send } = await listen(t, { ".deckhand.yaml": "max_parallel: lots\n" });
+    await listener.until("grants: org/other.yaml: hosts:");
     await send(comment("alice"));
     const reply = await github.waitFor(
       (r) => r.method === "POST" && r.path === "/repos/org/repo/issues/12/comments",
@@ -1307,24 +995,6 @@ mounts:
     release();
   });
 
-  test("a grant still saying allow_repo_hosts stops the repo's runs, naming its file", async (t) => {
-    const { dir, github, send } = await listen(
-      t,
-      { ".deckhand.yaml": "hosts: [pypi.org]\n" },
-      (dir) => {
-        writeGrant(dir, "allow_repo_hosts: true\n");
-        return {};
-      },
-    );
-    await send(comment("alice"));
-    const reply = await github.waitFor(
-      (r) => r.method === "POST" && r.path === "/repos/org/repo/issues/12/comments",
-    );
-    const body = JSON.parse(reply.body).body;
-    assert.match(body, /`org\/repo\.yaml` in the operator's grants folder has errors/);
-    assert.throws(() => readFileSync(join(dir, "run-args")));
-  });
-
   test("a mount outside the granted root, through a symlink, is refused on the issue", async (t) => {
     const { dir, github, send } = await listen(
       t,
@@ -1344,30 +1014,6 @@ mounts:
     assert.match(body, /host mounts requested by `\.deckhand\.yaml` are refused/);
     assert.match(body, /escape`: resolves to \/etc, outside the roots/);
     assert.match(body, /\.\.\/etc`: (resolves to \S+, outside|doesn't exist)/);
-    assert.throws(() => readFileSync(join(dir, "run-args")));
-  });
-
-  test("a mount that resolves elsewhere once the run is prepared stops it", async (t) => {
-    const { dir, github, send } = await listen(
-      t,
-      (dir) => ({ ".deckhand.yaml": `mounts:\n  - ${dir}/nfs/api\n` }),
-      (dir) => {
-        mkdirSync(join(dir, "nfs", "a"), { recursive: true });
-        mkdirSync(join(dir, "nfs", "b"));
-        symlinkSync("a", join(dir, "nfs", "api"));
-        writeFileSync(join(dir, "while-preparing"), `#!/bin/sh\nln -sfn b "${dir}/nfs/api"\n`);
-        chmodSync(join(dir, "while-preparing"), 0o755);
-        writeGrant(dir, `mounts: [${join(dir, "nfs")}]\n`);
-        return {};
-      },
-    );
-    await send(comment("alice"));
-    const reply = await github.waitFor(
-      (r) => r.method === "POST" && r.path === "/repos/org/repo/issues/12/comments",
-    );
-    const body = JSON.parse(reply.body).body;
-    assert.match(body, /host mounts changed while the run was being prepared/);
-    assert.match(body, /`\S+\/nfs\/api` no longer resolves to `\S+\/nfs\/a`/);
     assert.throws(() => readFileSync(join(dir, "run-args")));
   });
 
@@ -1425,10 +1071,10 @@ mounts:
 
   // A listener whose sandbox waits (`hold`) before Claude's first answer, with a run started by
   // a comment saying `body`.
-  async function holding(t, body) {
-    const ctx = await listen(t, {}, (dir) => {
+  async function holding(t, body, extra = () => ({})) {
+    const ctx = await listen(t, {}, (dir, github) => {
       writeFileSync(join(dir, "hold"), "");
-      return {};
+      return extra(dir, github);
     });
     await ctx.send(comment("alice", body));
     const egress = join(ctx.dir, "egress");
@@ -1576,8 +1222,9 @@ mounts:
   });
 
   test("a work run still pushes and marks ready, before and after a restart", async (t) => {
-    const ctx = await holding(t);
-    // Past the run checks: on to GitHub (here, a fake one that knows neither).
+    const ctx = await holding(t, undefined, (dir, github) => ({ GITHUB_URL: github.url }));
+    // Past the run checks: on to GitHub (here, a fake one that knows neither, rather than
+    // github.com, which a sandbox without network waits for).
     const check = async () => {
       for (const answer of await pushAndReady(ctx)) {
         assert.doesNotMatch(answer, /^401|can't push|can't change pull requests/);
@@ -2206,23 +1853,6 @@ modes:
     assert.deepEqual(JSON.parse(readFileSync(join(dir, "modes.json"), "utf8")), {});
   });
 
-  test("/mode with a name the repo doesn't have: a reply listing the modes, no run", async (t) => {
-    const { dir, github, send } = await listen(t, {
-      ".deckhand.yaml": MODES,
-      ".deckhand/review.md": "Review.",
-    });
-    await send(comment("alice", "Deckhand\n/mode reveiw"));
-    const reply = await github.waitFor(
-      (r) => r.method === "POST" && r.path === "/repos/org/repo/issues/12/comments",
-    );
-    assert.match(
-      JSON.parse(reply.body).body,
-      /^Unknown mode `reveiw`\. The modes here: `work`, `brainstorm`, `onboarding`, `review` \(comments only\)\./,
-    );
-    await new Promise((resolve) => setTimeout(resolve, 200));
-    assert.equal(exists(join(dir, "run-args")), null);
-  });
-
   // The run's mode and whether it is light, from the fake sandbox's last environment.
   function lastRun(dir) {
     const env = readFileSync(join(dir, "run-env"), "utf8");
@@ -2351,24 +1981,6 @@ modes:
     await listener.until("done (ok)");
   });
 
-  test("/after: a merge into another branch leaves #77 open, and the wait in place", async (t) => {
-    const files = { "issue:77": JSON.stringify({ state: "open" }) };
-    const { dir, github, send } = await listen(t, files);
-    await send(comment("alice", "Deckhand /after #77\nOn top of it."));
-    await until(() => replies(github).length === 1, "the waiting reply");
-    const asked = () =>
-      github.requests.filter((r) => r.path === "/repos/org/repo/issues/77").length;
-    const before = asked();
-    await send(mergedPull("release"), "pull_request");
-    await until(() => asked() > before, "GitHub asked about #77");
-    await new Promise((resolve) => setTimeout(resolve, 200));
-    assert.equal(exists(join(dir, "run-args")), null);
-    assert.deepEqual(
-      JSON.parse(readFileSync(join(dir, "waits.json"), "utf8"))["org/repo#12"].blockers,
-      [77],
-    );
-  });
-
   test("/after: a run on #77 ending asks GitHub about #77 only", async (t) => {
     const files = {
       "issue:77": JSON.stringify({ state: "open" }),
@@ -2474,20 +2086,6 @@ mounts:
     await until(() => replies(github).length === 2, "the work reply");
     assert.equal(lastRun(dir), "work full");
     assert.equal(brainstormOf(dir), undefined);
-  });
-
-  test("/mode foo: a reply listing the modes, no run", async (t) => {
-    const { dir, github, send } = await listen(t);
-    await send(comment("alice", "Deckhand /mode foo"));
-    const reply = await github.waitFor(
-      (r) => r.method === "POST" && r.path === "/repos/org/repo/issues/12/comments",
-    );
-    assert.match(
-      JSON.parse(reply.body).body,
-      /^Unknown mode `foo`\. The modes here: `work`, `brainstorm`, `onboarding`\./,
-    );
-    await new Promise((resolve) => setTimeout(resolve, 200));
-    assert.equal(exists(join(dir, "run-args")), null);
   });
 
   test("a mode whose instructions file is missing: the reply says so", async (t) => {
@@ -2605,21 +2203,6 @@ mounts:
     assert.equal(github.requests.filter((r) => r.path === "/repos/org/repo/issues").length, 1);
   });
 
-  test("installed by someone not in ALLOWED_USERS, or with ONBOARDING=off: no issue", async (t) => {
-    const { github, listener, send } = await listen(t);
-    await send(installed("mallory"), "installation");
-    await listener.until("mallory not in ALLOWED_USERS, no onboarding issue for org/repo");
-    const off = await listen(t, {}, { ONBOARDING: "off" });
-    await off.send(installed(), "installation");
-    await off.listener.until("ONBOARDING=off, no onboarding issue for org/repo");
-    for (const g of [github, off.github]) {
-      assert.equal(
-        g.requests.some((r) => r.path === "/repos/org/repo/issues"),
-        false,
-      );
-    }
-  });
-
   test("/mode onboarding alone on an issue starts the conversation by hand", async (t) => {
     const { dir, github, send } = await listen(t, {}, { ONBOARDING: "off" });
     await send(comment("alice", "/mode onboarding"));
@@ -2675,9 +2258,10 @@ mounts:
       writeFileSync(join(dir, "hold"), "");
       return { GITHUB_URL: github.url };
     });
+    const base = `http://127.0.0.1:${port}`;
+    assert.equal((await (await fetch(`${base}/status`)).json()).idle, true);
     await send(comment("bob"));
     await until(() => exists(join(dir, "egress"))?.trim().split("\n").length === 9, "the sandbox");
-    const base = `http://127.0.0.1:${port}`;
     // Forwarded, so not a call from inside the container: the session decides.
     const get = (path, cookie) =>
       fetch(base + path, {
@@ -2696,9 +2280,14 @@ mounts:
     const seen = await (await get("/status", session)).json();
     assert.equal(seen.idle, false);
     assert.deepEqual(seen.reasons, []);
-    // From inside the container: everything.
+    // From inside the container: everything, without a session.
     const all = await (await fetch(`${base}/status`)).json();
     assert.match(all.reasons.join("\n"), /run org\/repo#12 since/);
+    // Forwarded by a reverse proxy on the host's network: from anyone, so not trusted.
+    for (const header of ["x-forwarded-for", "forwarded", "x-real-ip"]) {
+      const proxied = await fetch(`${base}/status`, { headers: { [header]: "203.0.113.9" } });
+      assert.equal(proxied.status, 401, header);
+    }
     writeFileSync(join(dir, "go"), "");
   });
 
@@ -2789,7 +2378,6 @@ mounts:
       mkdirSync(join(dist, "assets"), { recursive: true });
       writeFileSync(join(dist, "index.html"), "<title>Deckhand</title>");
       writeFileSync(join(dist, "assets", "app-1a2b.js"), "export {}");
-      writeFileSync(join(dir, "secret.js"), "nope");
       mkdirSync(join(dir, "logs"));
       const meta = { type: "listener", key: "org/repo#pr-3", repo: "org/repo", startedAt: 1000 };
       const result = { type: "result", result: "## Fixed\n\nThe typo.", duration_ms: 6000 };
@@ -2848,9 +2436,8 @@ mounts:
     assert.match(asset.headers.get("content-type"), /^text\/javascript/);
     assert.match(asset.headers.get("cache-control"), /immutable/);
     await asset.text();
-    for (const path of ["/assets/nope.js", "/../secret.js", "/assets/%2e%2e/%2e%2e/secret.js"]) {
-      assert.equal((await get(path, session)).status, 404, path);
-    }
+    // What is outside the build: static.test.mjs.
+    assert.equal((await get("/assets/nope.js", session)).status, 404);
     const board = await (await get("/api/state", session)).json();
     assert.equal(board.user, "alice");
     assert.equal(board.githubUrl, github.url);
@@ -3054,20 +2641,6 @@ mounts:
     assert.deepEqual(missing, [], `${name}: keys types.ts requires`);
   }
 
-  test("/status answers calls from inside the container without a session", async (t) => {
-    const { port } = await listen(t);
-    const res = await fetch(`http://127.0.0.1:${port}/status`);
-    assert.equal(res.status, 200);
-    assert.equal((await res.json()).idle, true);
-    // Forwarded by a reverse proxy on the host's network: from anyone, so not trusted.
-    for (const header of ["x-forwarded-for", "forwarded", "x-real-ip"]) {
-      const proxied = await fetch(`http://127.0.0.1:${port}/status`, {
-        headers: { [header]: "203.0.113.9" },
-      });
-      assert.equal(proxied.status, 401, header);
-    }
-  });
-
   test("a delivery GitHub sends again is handled once", async (t) => {
     const { port, listener } = await listen(t, {}, { DEBOUNCE_MS: "60000" });
     const body = JSON.stringify(comment("alice"));
@@ -3215,21 +2788,5 @@ mounts:
     await ctx.listener.until("org/repo#pr-41: done (ok)");
     assert.throws(() => readFileSync(join(dir, "engine-args")));
     assert.doesNotMatch(readFileSync(join(dir, "run-args"), "utf8"), /DOCKER_HOST/);
-  });
-
-  test("granted, but no SANDBOX_ENGINE: runs start as before, without an engine", async (t) => {
-    const { dir, github, send, listener } = await listen(
-      t,
-      { ".deckhand.yaml": "docker: true\n" },
-      (dir) => (writeGrant(dir, "allow_docker: true\n"), {}),
-    );
-    await send(comment("alice"));
-    await github.waitFor(
-      (r) => r.method === "POST" && r.path === "/repos/org/repo/issues/12/comments",
-    );
-    await listener.until("done (ok)");
-    assert.throws(() => readFileSync(join(dir, "engine-args")));
-    assert.doesNotMatch(readFileSync(join(dir, "run-args"), "utf8"), /DOCKER_HOST/);
-    assert.doesNotMatch(readFileSync(join(dir, "run-env"), "utf8"), /engine/);
   });
 });

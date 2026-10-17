@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
-import { createServer, request } from "node:http";
+import { request } from "node:http";
 import { test } from "node:test";
 import { createSlots, readDelivery, sourceOf } from "../listener/deliveries.mjs";
+import { serve } from "./helpers.mjs";
 
 test("sourceOf: IPv4 as is, IPv6 by its /64", () => {
   assert.equal(sourceOf("203.0.113.9"), "203.0.113.9");
@@ -96,18 +97,16 @@ test("slots: past the grace, a newcomer takes the oldest reader's place, its own
 });
 
 // A server reading each request with readDelivery; `results` gets what each one came to.
-async function serve(t, options) {
+async function serveReads(t, options) {
   const results = [];
-  const server = createServer((req, res) => {
+  const { port } = await serve(t, (req, res) => {
     readDelivery(req, options).then(
       (body) => (results.push(body.toString()), res.end("ok")),
       (error) => results.push(error.message),
     );
   });
-  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-  t.after(() => server.close());
   const send = () => {
-    const req = request({ port: server.address().port, method: "POST" });
+    const req = request({ port, method: "POST" });
     req.on("error", () => {});
     return req;
   };
@@ -119,7 +118,7 @@ const until = async (check) => {
 };
 
 test("readDelivery: a body, or a stalled one dropped after the idle timeout", async (t) => {
-  const { results, send } = await serve(t, { limit: 100, idleMs: 100, totalMs: 5000 });
+  const { results, send } = await serveReads(t, { limit: 100, idleMs: 100, totalMs: 5000 });
   const whole = send();
   whole.end("{}");
   await until(() => results.length === 1);
@@ -136,14 +135,14 @@ test("readDelivery: a body, or a stalled one dropped after the idle timeout", as
 });
 
 test("readDelivery: dropped past its total time, however steady, or past its size", async (t) => {
-  const steady = await serve(t, { limit: 100, idleMs: 100, totalMs: 200 });
+  const steady = await serveReads(t, { limit: 100, idleMs: 100, totalMs: 200 });
   const trickle = steady.send();
   const timer = setInterval(() => trickle.write(" "), 30);
   t.after(() => clearInterval(timer));
   await until(() => steady.results.length === 1);
   clearInterval(timer);
   assert.deepEqual(steady.results, ["body not received in 200 ms"]);
-  const small = await serve(t, { limit: 10, idleMs: 100, totalMs: 5000 });
+  const small = await serveReads(t, { limit: 10, idleMs: 100, totalMs: 5000 });
   small.send().end("x".repeat(11));
   await until(() => small.results.length === 1);
   assert.deepEqual(small.results, ["body over 10 bytes"]);

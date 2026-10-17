@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { createServer } from "node:http";
 import { test } from "node:test";
 import { escape, page, same } from "../listener/html.mjs";
 import {
@@ -12,14 +11,7 @@ import {
   sameOrigin,
   sendJson,
 } from "../listener/web.mjs";
-
-// A server answering with `handle(req, res)`, closed after the test.
-async function serve(t, handle) {
-  const server = createServer(handle);
-  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-  t.after(() => server.close());
-  return `http://127.0.0.1:${server.address().port}`;
-}
+import { serve } from "./helpers.mjs";
 
 test("html: escape, same, and a page with its own style", async (t) => {
   assert.equal(
@@ -29,7 +21,7 @@ test("html: escape, same, and a page with its own style", async (t) => {
   assert.ok(same("abc", "abc"));
   assert.ok(!same("abc", "abd"));
   assert.ok(!same("abc", "abcd"));
-  const url = await serve(t, (req, res) =>
+  const { url } = await serve(t, (req, res) =>
     page(res, 403, "<Nope>", "<p>body</p>", { headers: { "x-extra": "1" }, css: ".x { y: z; }" }),
   );
   const res = await fetch(url);
@@ -44,7 +36,7 @@ test("html: escape, same, and a page with its own style", async (t) => {
 });
 
 test("sendJson: never cached, with its status", async (t) => {
-  const url = await serve(t, (req, res) => sendJson(res, { ok: true }, 201));
+  const { url } = await serve(t, (req, res) => sendJson(res, { ok: true }, 201));
   const res = await fetch(url);
   assert.equal(res.status, 201);
   assert.equal(res.headers.get("content-type"), "application/json");
@@ -53,7 +45,7 @@ test("sendJson: never cached, with its status", async (t) => {
 });
 
 test("readBody: the body up to its limit; past it, the request is dropped", async (t) => {
-  const url = await serve(t, (req, res) =>
+  const { url } = await serve(t, (req, res) =>
     readBody(req, 10).then(
       (body) => res.end(`got ${body}`),
       (error) => res.end(error.message),
@@ -76,7 +68,7 @@ test("parseJson and readJsonBody: JSON, else a 400; past the limit, a 413", asyn
   assert.throws(() => parseJson("nope"), { status: 400, message: "Not JSON." });
   assert.ok(new Refused(409, "x") instanceof Error);
   assert.throws(() => refuse(409, "Busy."), { status: 409, message: "Busy." });
-  const url = await serve(t, (req, res) =>
+  const { url } = await serve(t, (req, res) =>
     readJsonBody(req, 20).then(
       (body) => sendJson(res, { body }),
       (error) => sendJson(res, { status: error.status, error: error.message }),
@@ -128,7 +120,7 @@ test("apiRoute: methods, sign-in, ALLOWED_REPOS and Origin, in that order, then 
     publicUrl: () => "https://deckhand.example.com",
     log: (line) => logs.push(line),
   });
-  const url = await serve(t, (req, res) => {
+  const { url } = await serve(t, (req, res) => {
     const user = req.headers["x-user"] || null;
     if (!handle(req, res, user)) sendJson(res, { error: "not ours" }, 404);
   });

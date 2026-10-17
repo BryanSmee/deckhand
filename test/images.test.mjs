@@ -1,13 +1,11 @@
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { claude } from "../listener/agents/claude.mjs";
-import { loadConfig } from "../listener/config.mjs";
 import { KEEP_TAGS, createImages, imageRef, imageTag } from "../listener/images.mjs";
+import { tempDir, testConfig } from "./helpers.mjs";
 
-const config = loadConfig({ ALLOWED_USERS: "a", CLAUDE_CODE_VERSION: "9.9.9" });
+const config = testConfig({ ALLOWED_USERS: "a", CLAUDE_CODE_VERSION: "9.9.9" });
 
 // Plays Docker: `images` are the tags that exist, `volumes` the volumes; every call is kept.
 function fakeDocker({
@@ -46,7 +44,7 @@ function fakeDocker({
   return { docker, calls, tags: images, volumes };
 }
 
-function setup(options, blob = "blob1") {
+function setup(t, options, blob = "blob1") {
   const fake = fakeDocker(options);
   const checkouts = [];
   const images = createImages({
@@ -56,14 +54,14 @@ function setup(options, blob = "blob1") {
       path === "missing" ? null : { sha: `${blob}@${ref}`, text: "" },
     checkout: async (repo, ref) => {
       checkouts.push(ref);
-      return mkdtempSync(join(tmpdir(), "deckhand-ctx-"));
+      return tempDir(t, "deckhand-ctx-");
     },
   });
   return { ...fake, images, checkouts };
 }
 
-test("a repo without a Dockerfile runs on the base image", async () => {
-  const { images, calls } = setup();
+test("a repo without a Dockerfile runs on the base image", async (t) => {
+  const { images, calls } = setup(t);
   assert.equal(
     await images.imageFor({ repo: "org/a", ref: "main", dockerfile: null }),
     "deckhand-sandbox",
@@ -71,13 +69,13 @@ test("a repo without a Dockerfile runs on the base image", async () => {
   assert.ok(!calls.some((c) => c.startsWith("build")));
 });
 
-test("a missing base image is a clear error", async () => {
-  const { images } = setup({ base: null });
+test("a missing base image is a clear error", async (t) => {
+  const { images } = setup(t, { base: null });
   await assert.rejects(images.imageFor({ repo: "org/a", ref: "main" }), /docker compose build/);
 });
 
-test("a repo's Dockerfile is built once from its ref, then reused", async () => {
-  const { images, calls, checkouts } = setup();
+test("a repo's Dockerfile is built once from its ref, then reused", async (t) => {
+  const { images, calls, checkouts } = setup(t);
   let builds = 0;
   const ask = () =>
     images.imageFor({
@@ -110,7 +108,7 @@ test("a new base image or a changed Dockerfile means a new tag", () => {
   assert.notEqual(branch, imageTag(config, "org/a", "sha256:1", "Dockerfile", "blob1", "def"));
 });
 
-test("a branch build never takes the default branch's tag", async () => {
+test("a branch build never takes the default branch's tag", async (t) => {
   const fake = fakeDocker();
   const checkouts = [];
   const images = createImages({
@@ -120,7 +118,7 @@ test("a branch build never takes the default branch's tag", async () => {
     readFile: async () => ({ sha: "same", text: "" }),
     checkout: async (repo, ref) => {
       checkouts.push(ref);
-      return mkdtempSync(join(tmpdir(), "deckhand-ctx-"));
+      return tempDir(t, "deckhand-ctx-");
     },
   });
   const ask = (ref, branch) =>
@@ -139,9 +137,9 @@ test("a branch build never takes the default branch's tag", async () => {
   assert.equal(fake.calls.filter((c) => c.startsWith("build")).length, 3);
 });
 
-test("pruning keeps the default branch's tag through branch builds", async () => {
+test("pruning keeps the default branch's tag through branch builds", async (t) => {
   const branches = Array.from({ length: 4 }, (_, k) => `deckhand-repo-org-a:branch-old${k}`);
-  const { images, tags: existing } = setup({
+  const { images, tags: existing } = setup(t, {
     images: new Set(["deckhand-repo-org-a:main1", ...branches]),
   });
   const tag = await images.imageFor({
@@ -156,9 +154,9 @@ test("pruning keeps the default branch's tag through branch builds", async () =>
   assert.ok(existing.has("deckhand-repo-org-a:branch-old3"));
 });
 
-test("old tags are pruned, the most recent kept", async () => {
+test("old tags are pruned, the most recent kept", async (t) => {
   const old = Array.from({ length: 5 }, (_, k) => `deckhand-repo-org-a:old${k}`);
-  const { images, tags: existing } = setup({ images: new Set(old) });
+  const { images, tags: existing } = setup(t, { images: new Set(old) });
   const tag = await images.imageFor({ repo: "org/a", ref: "main", dockerfile: "Dockerfile" });
   assert.ok(existing.has(tag));
   assert.equal(existing.size, KEEP_TAGS);
@@ -166,8 +164,8 @@ test("old tags are pruned, the most recent kept", async () => {
   assert.ok(!existing.has("deckhand-repo-org-a:old0"));
 });
 
-test("a failed build fails the run and is tried again next time", async () => {
-  const { images, calls } = setup({ fail: { build: "no such file" } });
+test("a failed build fails the run and is tried again next time", async (t) => {
+  const { images, calls } = setup(t, { fail: { build: "no such file" } });
   const ask = () => images.imageFor({ repo: "org/a", ref: "main", dockerfile: "Dockerfile" });
   await assert.rejects(ask(), /building Dockerfile of org\/a failed.*no such file/);
   await assert.rejects(ask());
@@ -212,8 +210,8 @@ test("branch images: with the operator's grant, a pull request's own branch, nev
   });
 });
 
-test("an agent installs once per version, in a container of its own", async () => {
-  const { images, calls } = setup();
+test("an agent installs once per version, in a container of its own", async (t) => {
+  const { images, calls } = setup(t);
   await Promise.all([images.installAgent(claude), images.installAgent(claude)]);
   await images.installAgent(claude);
   const installs = calls.filter((c) => c.includes("deckhand-install-claude-code"));
@@ -232,8 +230,8 @@ test("an agent installs once per version, in a container of its own", async () =
   );
 });
 
-test("cache volumes: created once per repo and path, owned by the sandbox's user", async () => {
-  const { images, calls } = setup();
+test("cache volumes: created once per repo and path, owned by the sandbox's user", async (t) => {
+  const { images, calls } = setup(t);
   const args = await images.caches("org/a", ["/home/node/.npm"], "img:1");
   assert.equal(args[0], "-v");
   assert.match(args[1], /^deckhand-cache-org-a-home-node-npm-\w+:\/home\/node\/\.npm$/);

@@ -1,13 +1,12 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
-import { loadConfig } from "../listener/config.mjs";
 import { pullRequest } from "../listener/events.mjs";
 import { createPulls } from "../listener/pulls.mjs";
+import { tempDir, testConfig } from "./helpers.mjs";
 
-const config = loadConfig({ ALLOWED_USERS: "alice", ALLOWED_REPOS: "org/repo" });
+const config = testConfig({ ALLOWED_REPOS: "org/repo" });
 const NOW = 1_800_000_000_000;
 
 function delivery(action, pr, { repo = "Org/Repo", installation = 7 } = {}) {
@@ -65,7 +64,7 @@ test("pull_request deliveries outside the allowlist, the App or the actions are 
   assert.equal(pullRequest(config, "issue_comment", delivery("opened"), NOW), null);
 });
 
-const tempPath = () => join(mkdtempSync(join(tmpdir(), "deckhand-")), "pulls.json");
+const tempPath = (t) => join(tempDir(t), "pulls.json");
 const pr = (number, state, readyAt = null) => ({
   number,
   url: `https://github.com/org/repo/pull/${number}`,
@@ -73,8 +72,8 @@ const pr = (number, state, readyAt = null) => ({
   readyAt,
 });
 
-test("pulls: recorded per task, and kept across a restart", () => {
-  const path = tempPath();
+test("pulls: recorded per task, and kept across a restart", (t) => {
+  const path = tempPath(t);
   const pulls = createPulls({ path, listPulls: async () => [] });
   pulls.record("org/repo#30", pr(31, "draft"));
   pulls.record("org/repo#30", pr(31, "ready", NOW));
@@ -89,8 +88,8 @@ test("pulls: recorded per task, and kept across a restart", () => {
   assert.deepEqual(next.get("org/repo#30"), pr(31, "merged", NOW));
 });
 
-test("pulls: an edited link moves the pull request; a closed one doesn't hide an open one", () => {
-  const pulls = createPulls({ path: tempPath(), listPulls: async () => [] });
+test("pulls: an edited link moves the pull request; a closed one doesn't hide an open one", (t) => {
+  const pulls = createPulls({ path: tempPath(t), listPulls: async () => [] });
   pulls.record("org/repo#pr-31", pr(31, "ready", NOW));
   // "Closes #30" added to its description.
   pulls.record("org/repo#30", pr(31, "ready"));
@@ -107,7 +106,7 @@ test("pulls: an edited link moves the pull request; a closed one doesn't hide an
   assert.equal(pulls.get("org/repo#30").number, 33);
 });
 
-test("pulls: older tasks looked up once per repo, by branch, link or number", async () => {
+test("pulls: older tasks looked up once per repo, by branch, link or number", async (t) => {
   const asked = [];
   const listPulls = async (repo) => {
     asked.push(repo);
@@ -140,7 +139,7 @@ test("pulls: older tasks looked up once per repo, by branch, link or number", as
       { number: 7, html_url: "u7", body: "", state: "closed", merged_at: null, head: { ref: "y" } },
     ];
   };
-  const pulls = createPulls({ path: tempPath(), listPulls });
+  const pulls = createPulls({ path: tempPath(t), listPulls });
   pulls.record("org/repo#1", pr(2, "draft"));
   const keys = [
     "org/repo#1",
@@ -168,8 +167,8 @@ test("pulls: older tasks looked up once per repo, by branch, link or number", as
   assert.equal(asked.length, 2);
 });
 
-test("pulls: the open ones, for the conflict watcher", () => {
-  const pulls = createPulls({ path: tempPath(), listPulls: async () => [] });
+test("pulls: the open ones, for the conflict watcher", (t) => {
+  const pulls = createPulls({ path: tempPath(t), listPulls: async () => [] });
   pulls.record("org/repo#30", pr(31, "draft"));
   pulls.record("org/repo#32", pr(33, "ready", NOW));
   pulls.record("org/repo#34", pr(35, "merged"));

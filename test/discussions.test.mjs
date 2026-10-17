@@ -1,10 +1,6 @@
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { test } from "node:test";
 import { MAX_TEXT } from "../listener/answers.mjs";
-import { loadConfig } from "../listener/config.mjs";
 import {
   MAX_TITLE,
   THREAD_MS,
@@ -14,6 +10,7 @@ import {
 } from "../listener/discussions.mjs";
 import { MARKER, workItem } from "../listener/events.mjs";
 import { createRepoCheck } from "../listener/repo-check.mjs";
+import { tempDir, testConfig } from "./helpers.mjs";
 
 const ORIGIN = "https://deckhand.example.com";
 const BOT = "deckhand[bot]";
@@ -66,9 +63,9 @@ function discussion8(extra = {}) {
 // The discussions API with a fake GitHub (GraphQL for the discussions, REST for the repo's
 // checks through the work area's), the repo's config as `settings` says.
 function setup({ env = {}, settings = {}, errors = [], categories, discussions } = {}) {
-  const config = loadConfig({
+  const config = testConfig({
     ALLOWED_USERS: "alice,bob",
-    DATA_DIR: mkdtempSync(join(tmpdir(), "deckhand-")),
+    DATA_DIR: tempDir(null),
     ...env,
   });
   config.bot = BOT;
@@ -209,7 +206,7 @@ const read = (w, opts) => call(w.api, "GET", "/api/repos/org/app/discussions/8",
 
 // What the webhook makes of the same discussion or comment, by its author.
 const repoConfig = {
-  ...loadConfig({ ALLOWED_USERS: "alice" }),
+  ...testConfig(),
   inbox: { discussions: "ask claude" },
 };
 const delivery = (event, d, c = null) =>

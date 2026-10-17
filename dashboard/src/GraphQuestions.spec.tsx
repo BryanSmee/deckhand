@@ -1,37 +1,23 @@
 // The graph's work area and an issue waiting for answers: starting or queueing it opens its
 // open questions first, and every one needs an answer before it goes (fetch mocked).
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/preact";
-import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { beforeEach, expect, test } from "vitest";
 import { Dashboard } from "./App";
-import fixture from "./fixture.json";
-import type { Backlog, State } from "./types";
+import { BACKLOG, makeState, mockApi } from "./testUtils";
+import type { State } from "./types";
 
-const state = fixture as State;
+const state = makeState();
 
-const BACKLOG: Backlog = { issues: [], modes: ["work", "review"], errors: false, readAt: 0 };
-
-let posted: { url: string; body: unknown }[];
-let answer: () => Response;
+let api: ReturnType<typeof mockApi>;
+// The answers' POST: what the listener says to them (a test changes it).
+let answer: () => unknown;
 beforeEach(() => {
-  posted = [];
-  answer = () => Response.json({ message: "Answers sent: #138 started." });
+  answer = () => ({ message: "Answers sent: #138 started." });
+  api = mockApi({
+    "api/repos/acme/api/issues": () => BACKLOG,
+    "POST api/repos/acme/api/answer": () => answer(),
+  });
   history.replaceState(null, "", "#/graph/acme/api");
-  Object.assign(globalThis, {
-    matchMedia: () => ({ matches: true, addEventListener() {}, removeEventListener() {} }),
-  });
-  vi.stubGlobal("fetch", async (url: string, init?: RequestInit) => {
-    if (url === "api/repos/acme/api/issues") return Response.json(BACKLOG);
-    if (init?.method === "POST") {
-      posted.push({ url, body: JSON.parse(String(init.body)) });
-      if (url === "api/repos/acme/api/answer") return answer();
-      return Response.json({ message: "done" });
-    }
-    return new Response("{}", { status: 404 });
-  });
-});
-afterEach(() => {
-  vi.unstubAllGlobals();
-  document.body.replaceChildren();
 });
 
 const area = async (shown: State = state) => {
@@ -55,14 +41,14 @@ test("Start on an issue waiting for answers opens its questions; it starts with 
   expect(within(dialog).getByText("Answer them to start #138")).toBeTruthy();
   const send = within(dialog).getByRole("button", { name: "Send answers and start" });
   // Nothing went yet, and a partial answer can't go: the picks ticked in advance answer two.
-  expect(posted).toEqual([]);
+  expect(api.posted).toEqual([]);
   expect((send as HTMLButtonElement).disabled).toBe(true);
   expect(within(dialog).getByText("Answer every question to start it (1 left).")).toBeTruthy();
   answerAll(dialog);
   expect((send as HTMLButtonElement).disabled).toBe(false);
   fireEvent.click(send);
   await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-  expect(posted).toEqual([
+  expect(api.posted).toEqual([
     {
       url: "api/repos/acme/api/answer",
       body: {
@@ -98,7 +84,7 @@ test("Queue after… sends the queue along; a refusal stays in the form", async 
     "textContent",
     "#141 was closed without being done.",
   );
-  expect(posted[0].body).toMatchObject({ number: 138, then: { action: "queue", after: 141 } });
+  expect(api.posted[0].body).toMatchObject({ number: 138, then: { action: "queue", after: 141 } });
 });
 
 test("An issue the backlog found open questions in, with no run, opens its form too", async () => {
@@ -142,7 +128,7 @@ test("An issue the backlog found open questions in, with no run, opens its form 
   const dialog = screen.getByRole("dialog", { name: "Answer #144's questions" });
   fireEvent.click(within(dialog).getByRole("button", { name: "Send answers and start" }));
   await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-  expect(posted).toEqual([
+  expect(api.posted).toEqual([
     {
       url: "api/repos/acme/api/answer",
       body: { number: 144, answers: [{ options: [0], text: "" }], then: { action: "start" } },
@@ -162,7 +148,7 @@ test("Cancel or Escape closes the questions: nothing is sent", async () => {
   fireEvent.click(within(list).getByRole("button", { name: "Start #138" }));
   fireEvent.keyDown(window, { key: "Escape" });
   await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-  expect(posted).toEqual([]);
+  expect(api.posted).toEqual([]);
 });
 
 test("a repo that doesn't wait for answers: Start goes without the questions", async () => {
@@ -174,7 +160,7 @@ test("a repo that doesn't wait for answers: Start goes without the questions", a
   fireEvent.click(within(list).getByRole("button", { name: "Start #138" }));
   expect(screen.queryByRole("dialog")).toBeNull();
   await waitFor(() =>
-    expect(posted).toEqual([
+    expect(api.posted).toEqual([
       { url: "api/repos/acme/api/work", body: { action: "start", number: 138 } },
     ]),
   );
@@ -205,7 +191,7 @@ test("a click on a node waiting for answers opens them; they go, Sending… unti
   // No start or queue: a partial answer goes too.
   fireEvent.click(within(dialog).getByRole("button", { name: "Send answers" }));
   await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-  expect(posted).toEqual([
+  expect(api.posted).toEqual([
     {
       url: "api/repos/acme/api/answer",
       body: {
@@ -235,7 +221,7 @@ test("on the All tab too; Escape and the backdrop close it without sending", asy
   const backdrop = screen.getByRole("dialog").parentElement!;
   fireEvent.click(backdrop);
   expect(screen.queryByRole("dialog")).toBeNull();
-  expect(posted).toEqual([]);
+  expect(api.posted).toEqual([]);
 });
 
 test("a modifier click, or a node without parsed questions, follows its link", () => {
@@ -284,7 +270,7 @@ test("a run that asked on a ready pull request: Needs input, answered where it a
   });
   fireEvent.click(within(dialog).getByRole("button", { name: "Send answers" }));
   await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-  expect(posted).toEqual([
+  expect(api.posted).toEqual([
     {
       url: "api/repos/acme/api/answer",
       body: { number: 141, pr: true, answers: [{ options: [], text: "Yes" }] },

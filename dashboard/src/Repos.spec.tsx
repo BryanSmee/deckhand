@@ -2,10 +2,11 @@
 // the refreshes and a repository's config panel.
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/preact";
 import { useState } from "preact/hooks";
-import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { beforeEach, expect, test } from "vitest";
 import { useRepos } from "./api";
 import { Dashboard } from "./App";
 import { Repos } from "./Repos";
+import { mockApi } from "./testUtils";
 import type { Repo, RepoConfig } from "./types";
 
 const repo = (name: string, extra: Partial<Repo> = {}): Repo => ({
@@ -71,48 +72,32 @@ const CONFIG: RepoConfig = {
   readAt: Date.now(),
 };
 
-let calls: { url: string; method: string }[] = [];
+let api: ReturnType<typeof mockApi>;
 beforeEach(() => {
-  calls = [];
-  history.replaceState(null, "", "/");
-  Object.assign(globalThis, {
-    matchMedia: () => ({ matches: true, addEventListener() {}, removeEventListener() {} }),
+  // Read now, not when the file loaded: "read 0s ago" holds however slow the tests before.
+  const config = () => ({ ...CONFIG, readAt: Date.now() });
+  api = mockApi({
+    "api/repos": () => ({ repos: REPOS, listedAt: Date.now() - 180000 }),
+    "POST api/repos/refresh": () => ({ repos: [...REPOS, repo("org/new")], listedAt: Date.now() }),
+    "api/repos/org/api/config": config,
+    "POST api/repos/org/api/refresh": config,
+    "api/repos/org/app/config": () => ({
+      ...CONFIG,
+      repo: repo("org/app"),
+      file: null,
+      errors: [],
+      warnings: [],
+      effective: { ...CONFIG.effective, settings: [CONFIG.effective.settings[1]], hosts: [] },
+    }),
+    "POST api/repos/org/app/onboard": () => ({
+      opened: true,
+      repo: repo("org/app", {
+        status: "onboarding",
+        issue: { number: 12, url: "https://github.com/org/app/issues/12" },
+      }),
+    }),
   });
-  vi.stubGlobal("fetch", async (url: string, init?: RequestInit) => {
-    calls.push({ url, method: init?.method ?? "GET" });
-    if (url === "api/repos") return Response.json({ repos: REPOS, listedAt: Date.now() - 180000 });
-    if (url === "api/repos/refresh") {
-      return Response.json({ repos: [...REPOS, repo("org/new")], listedAt: Date.now() });
-    }
-    if (url === "api/repos/org/api/config" || url === "api/repos/org/api/refresh") {
-      // Read now, not when the file loaded: "read 0s ago" holds however slow the tests before.
-      return Response.json({ ...CONFIG, readAt: Date.now() });
-    }
-    if (url === "api/repos/org/app/config") {
-      return Response.json({
-        ...CONFIG,
-        repo: repo("org/app"),
-        file: null,
-        errors: [],
-        warnings: [],
-        effective: { ...CONFIG.effective, settings: [CONFIG.effective.settings[1]], hosts: [] },
-      });
-    }
-    if (url === "api/repos/org/app/onboard") {
-      return Response.json({
-        opened: true,
-        repo: repo("org/app", {
-          status: "onboarding",
-          issue: { number: 12, url: "https://github.com/org/app/issues/12" },
-        }),
-      });
-    }
-    return Response.json({ error: "Its issues are disabled." }, { status: 409 });
-  });
-});
-afterEach(() => {
-  vi.unstubAllGlobals();
-  document.body.replaceChildren();
+  api.answer = () => Response.json({ error: "Its issues are disabled." }, { status: 409 });
 });
 
 function Page() {
@@ -148,7 +133,7 @@ test("Start onboarding posts, and the row switches to its issue", async () => {
   const issue = await within(row("org/app")).findByRole("link", { name: "Issue #12" });
   expect(issue.getAttribute("href")).toBe("https://github.com/org/app/issues/12");
   expect(within(row("org/app")).getByText("Onboarding")).toBeTruthy();
-  expect(calls).toContainEqual({ url: "api/repos/org/app/onboard", method: "POST" });
+  expect(api.posted).toContainEqual({ url: "api/repos/org/app/onboard", body: undefined });
 });
 
 test("the header counts the repositories not onboarded and opens the page", async () => {
@@ -180,7 +165,7 @@ test("Refresh lists the repositories again, and says when they were", async () =
   fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
   await screen.findByRole("button", { name: "org/new" });
   expect(screen.getByText("Listed 0s ago")).toBeTruthy();
-  expect(calls).toContainEqual({ url: "api/repos/refresh", method: "POST" });
+  expect(api.posted).toContainEqual({ url: "api/repos/refresh", body: undefined });
 });
 
 test("a repository's panel: errors first, then what runs get, then the file", async () => {
@@ -207,26 +192,22 @@ test("a repository's panel: errors first, then what runs get, then the file", as
   expect(screen.getByRole("heading", { name: /org\/api/ }).textContent).toContain("Invalid config");
   fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
   await waitFor(() =>
-    expect(calls).toContainEqual({ url: "api/repos/org/api/refresh", method: "POST" }),
+    expect(api.posted).toContainEqual({ url: "api/repos/org/api/refresh", body: undefined }),
   );
   fireEvent.click(screen.getByRole("button", { name: "← Repositories" }));
   expect(within(await screen.findByRole("list")).getAllByText("Invalid config")).toHaveLength(2);
 });
 
 test("a repository's broken grant: the file to fix, and only this repository stopped", async () => {
-  const listed = fetch;
-  vi.stubGlobal("fetch", async (url: string, init?: RequestInit) => {
-    if (url !== "api/repos/org/api/config") return listed(url, init);
-    return Response.json({
-      ...CONFIG,
-      errors: [],
-      grantsError: {
-        file: "org/api.yaml",
-        message: 'hosts: "bad host": not a host name',
-        everyRepo: false,
-      },
-      effective: { ...CONFIG.effective, hosts: [], grant: null },
-    });
+  api.routes["api/repos/org/api/config"] = () => ({
+    ...CONFIG,
+    errors: [],
+    grantsError: {
+      file: "org/api.yaml",
+      message: 'hosts: "bad host": not a host name',
+      everyRepo: false,
+    },
+    effective: { ...CONFIG.effective, hosts: [], grant: null },
   });
   render(<Page />);
   fireEvent.click(await screen.findByRole("button", { name: "org/api" }));
@@ -238,11 +219,9 @@ test("a repository's broken grant: the file to fix, and only this repository sto
 });
 
 test("a broken grant: what needs a grant is unknown, and only the grants error is listed", async () => {
-  const listed = fetch;
-  vi.stubGlobal("fetch", async (url: string, init?: RequestInit) => {
-    if (url !== "api/repos/org/api/config") return listed(url, init);
+  api.routes["api/repos/org/api/config"] = () => {
     const note = "depends on the operator's grants, which have errors";
-    return Response.json({
+    return {
       ...CONFIG,
       errors: [],
       grantsError: {
@@ -257,8 +236,8 @@ test("a broken grant: what needs a grant is unknown, and only the grants error i
         mounts: [{ path: "/srv/data", source: "unknown", readOnly: true, note }],
         grant: null,
       },
-    });
-  });
+    };
+  };
   render(<Page />);
   fireEvent.click(await screen.findByRole("button", { name: "org/api" }));
   const alert = await screen.findByRole("alert");
@@ -272,27 +251,23 @@ test("a broken grant: what needs a grant is unknown, and only the grants error i
 });
 
 test("a config that parses but asks for what isn't granted: Invalid config, not Configured", async () => {
-  const listed = fetch;
-  vi.stubGlobal("fetch", async (url: string, init?: RequestInit) => {
-    if (url !== "api/repos/org/api/config") return listed(url, init);
-    return Response.json({
-      ...CONFIG,
-      // The server's verdict: no run starts.
-      repo: repo("org/api", { status: "invalid", readAt: Date.now() }),
-      errors: [],
-      effective: {
-        ...CONFIG.effective,
-        settings: [
-          {
-            key: "dockerfile",
-            value: ".deckhand/Dockerfile",
-            source: "refused",
-            note: "the operator's grants don't set allow_dockerfile: true for this repository",
-          },
-        ],
-        hosts: [],
-      },
-    });
+  api.routes["api/repos/org/api/config"] = () => ({
+    ...CONFIG,
+    // The server's verdict: no run starts.
+    repo: repo("org/api", { status: "invalid", readAt: Date.now() }),
+    errors: [],
+    effective: {
+      ...CONFIG.effective,
+      settings: [
+        {
+          key: "dockerfile",
+          value: ".deckhand/Dockerfile",
+          source: "refused",
+          note: "the operator's grants don't set allow_dockerfile: true for this repository",
+        },
+      ],
+      hosts: [],
+    },
   });
   render(<Page />);
   expect(within(await screen.findByRole("list")).getAllByText("Configured")).toHaveLength(1);

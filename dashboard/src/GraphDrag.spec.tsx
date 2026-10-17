@@ -1,70 +1,30 @@
 // Dragging issues waiting for answers onto the graph: the work area's cards, and the graph's
 // own nodes (fetch mocked). Brainstorms are the column's: Brainstorms.spec.tsx.
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/preact";
-import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { beforeEach, expect, test } from "vitest";
 import { Dashboard } from "./App";
-import fixture from "./fixture.json";
-import type { Backlog, State, Task } from "./types";
 import { ISSUE_TYPE } from "./dnd";
+import { BACKLOG, makeState, makeTask, mockApi, transfer } from "./testUtils";
+import type { Task } from "./types";
 
-const state = fixture as State;
-
-const BACKLOG: Backlog = { issues: [], modes: ["work"], errors: false, readAt: 0 };
+const state = makeState();
 
 // What board.mjs lists for acme/api: an issue as each state and kind has it.
 const task = (number: number, kind: Task["kind"], taskState: Task["state"]) =>
-  ({
+  makeTask({
     key: `acme/api#${kind === "pr" ? "pr-" : ""}${number}`,
     repo: "acme/api",
-    project: "acme",
     number,
-    title: `Issue ${number}`,
     kind,
-    mode: null,
-    replyTo: number,
     state: taskState,
     since: 1791979300000,
-    closed: null,
-    pr: null,
-    runs: [],
-  }) as unknown as Task;
+  });
 
-let posted: { url: string; body: unknown }[];
+let api: ReturnType<typeof mockApi>;
 beforeEach(() => {
-  posted = [];
+  api = mockApi({ "api/repos/acme/api/issues": () => BACKLOG });
   history.replaceState(null, "", "#/graph/acme/api");
-  Object.assign(globalThis, {
-    matchMedia: () => ({ matches: true, addEventListener() {}, removeEventListener() {} }),
-  });
-  vi.stubGlobal("fetch", async (url: string, init?: RequestInit) => {
-    if (url === "api/repos/acme/api/issues") return Response.json(BACKLOG);
-    if (init?.method === "POST") {
-      posted.push({ url, body: JSON.parse(String(init.body)) });
-      return Response.json({ message: "done" });
-    }
-    return new Response("{}", { status: 404 });
-  });
 });
-afterEach(() => {
-  vi.unstubAllGlobals();
-  document.body.replaceChildren();
-});
-
-// The browser's DataTransfer, which jsdom doesn't have.
-function transfer(data: Record<string, string> = {}) {
-  return {
-    data,
-    get types() {
-      return Object.keys(data);
-    },
-    setData(type: string, value: string) {
-      data[type] = value;
-    },
-    getData: (type: string) => data[type] ?? "",
-    effectAllowed: "none",
-    dropEffect: "none",
-  };
-}
 
 const show = async (tasks: Task[] = []) => {
   render(<Dashboard state={{ ...state, tasks: [...state.tasks, ...tasks] }} error={null} />);
@@ -108,14 +68,14 @@ test("a card waiting for answers carries its issue; dropped, it opens the questi
     "text/uri-list": "https://github.example.com/acme/api/issues/138",
   });
   expect(screen.getByRole("dialog", { name: "Answer #138's questions" })).toBeTruthy();
-  expect(posted).toEqual([]);
+  expect(api.posted).toEqual([]);
 });
 
 test("a needs-input node after a brainstorm run can be dragged", async () => {
   await show([task(152, "brainstorm", "needs-input")]);
   dragNode(screen.getByRole("listitem", { name: /^#152 / }));
   await waitFor(() =>
-    expect(posted.map((p) => p.body)).toEqual([{ action: "start", number: 152 }]),
+    expect(api.posted.map((p) => p.body)).toEqual([{ action: "start", number: 152 }]),
   );
 });
 
@@ -125,7 +85,7 @@ test("a pull request waiting for answers stays where it is", async () => {
   expect(screen.queryByRole("list", { name: "Issues waiting for answers" })).toBeTruthy();
   expect(screen.queryByRole("button", { name: "Start #153" })).toBeNull();
   await new Promise((r) => setTimeout(r, 10));
-  expect(posted).toEqual([]);
+  expect(api.posted).toEqual([]);
 });
 
 test("dropped text that isn't an issue's link says to drag its card", async () => {
@@ -134,5 +94,5 @@ test("dropped text that isn't an issue's link says to drag its card", async () =
   fireEvent.dragOver(area, { dataTransfer });
   fireEvent.drop(area, { dataTransfer });
   expect(screen.getByRole("status").textContent).toMatch(/drag an issue's card/);
-  expect(posted).toEqual([]);
+  expect(api.posted).toEqual([]);
 });

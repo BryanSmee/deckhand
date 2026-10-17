@@ -3,20 +3,12 @@
 // listener picks them up (restart.mjs). Each run's reply, reactions and label once it is over.
 import { existsSync, readdirSync, rmdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { cantRun, configErrors, engineNote, recheckMounts, RunError } from "./access.mjs";
+import { engineNote, recheckMounts, RunError, validateRun } from "./access.mjs";
 import { agentFor } from "./agents/index.mjs";
 import { entryLabel, nextFallback, resolveEntry } from "./agents/select.mjs";
 import { commentsText, taskKey } from "./events.mjs";
 import { nextStep, replyFooter } from "./footer.mjs";
-import {
-  BUILT_IN,
-  customMode,
-  entryRun,
-  isFresh,
-  isLight,
-  permissionsFor,
-  sessionName,
-} from "./modes.mjs";
+import { customMode, entryRun, isFresh, isLight, permissionsFor, sessionName } from "./modes.mjs";
 import { branchConfigReport } from "./onboarding.mjs";
 import { createPreparation } from "./preparation.mjs";
 import { openingMessages, promptFor } from "./prompts.mjs";
@@ -163,7 +155,7 @@ export function createRuns(ctx) {
       await ctx.label(task.repo, task.number, false);
     }
     const note = writeHeader(task, run);
-    validateRun(task, run, note);
+    validateRun(agentOf(task), task, run, note);
     const parts = await prepareRun(task, items, run, note);
     if (ctx.stopping) return false;
     // Cancelled while it was prepared (its image building, say): no sandbox starts.
@@ -232,28 +224,6 @@ export function createRuns(ctx) {
     const note = (message) => writeEvent(logFile, "note", { message });
     if (foreign) note(`${foreign}: ${agent.displayName} runs its best model instead`);
     return note;
-  }
-
-  // A config with errors, an `/agent` the operator doesn't allow, a mode no longer in the
-  // config or a model of another agent's stop the run once its log has its first line.
-  function validateRun(task, { badPick, errors, warnings, own }, note) {
-    const agent = agentOf(task);
-    const { mode, record } = task.live;
-    if (badPick) throw new RunError(`${cantRun(agent)}: ${badPick}.`);
-    if (errors.length) throw new RunError(configErrors(task.base, errors, agent.displayName));
-    for (const warning of warnings) note(`${CONFIG_FILE}: ${warning}`);
-    if (!own && !BUILT_IN.has(mode)) {
-      throw new RunError(
-        `${cantRun(agent)}: the \`${mode}\` mode is no longer in \`${CONFIG_FILE}\` on \`${task.base}\`.`,
-      );
-    }
-    // A model of another agent's ("/model opus" for Codex): the run would only fail later.
-    const wrongModel = agent.modelProblem(record.model);
-    if (wrongModel) {
-      throw new RunError(
-        `${cantRun(agent)}: ${wrongModel}. Use a tier (\`/model best\`, \`balanced\` or \`fast\`) or one of its models.`,
-      );
-    }
   }
 
   // The prompt, the mounts checked again, and the sandbox started (sandbox-spec.mjs).

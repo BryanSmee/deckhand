@@ -1,85 +1,40 @@
 // The Brainstorm column between the backlog and the graph: its cards, the drags between the
 // three and the buttons that stand for them (fetch mocked).
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/preact";
-import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { beforeEach, expect, test } from "vitest";
 import { Dashboard } from "./App";
-import fixture from "./fixture.json";
-import type { Backlog, State, Task } from "./types";
+import { BACKLOG, makeState, makeTask, mockApi, transfer } from "./testUtils";
+import type { Task } from "./types";
 
-const state = fixture as State;
-
-const BACKLOG: Backlog = {
-  issues: [
-    { number: 31, title: "Backlog issue", url: "https://github.example.com/acme/api/issues/31" },
-  ],
-  modes: ["work", "brainstorm"],
-  errors: false,
-  readAt: 0,
-};
+const state = makeState();
 
 // A brainstorm as board.mjs lists it.
 const brainstorm = (number: number, taskState: Task["state"], extra: Partial<Task> = {}) =>
-  ({
-    key: `acme/api#${number}`,
+  makeTask({
     repo: "acme/api",
-    project: "acme",
     number,
     title: `Brainstorm ${number}`,
     kind: "brainstorm",
     mode: "brainstorm",
-    replyTo: number,
     state: taskState,
     since: 1791979300000,
     deadline: 1791979300000,
-    closed: null,
-    pr: null,
-    rerunnable: false,
-    runs: [],
     ...extra,
-  }) as Task;
+  });
 
-let posted: unknown[];
-// A POST's answer, held until `release()`: what shows while it is on its way.
-let release: (() => void) | null;
+let api: ReturnType<typeof mockApi>;
+// The POSTs' answers, held until `release()`: what shows while they are on their way.
+let release: () => void;
 beforeEach(() => {
-  posted = [];
-  release = null;
-  history.replaceState(null, "", "#/graph/acme/api");
-  Object.assign(globalThis, {
-    matchMedia: () => ({ matches: true, addEventListener() {}, removeEventListener() {} }),
-  });
-  vi.stubGlobal("fetch", async (url: string, init?: RequestInit) => {
-    if (url === "api/repos/acme/api/issues") return Response.json(BACKLOG);
-    if (init?.method === "POST") {
-      posted.push(JSON.parse(String(init.body)));
-      await new Promise<void>((resolve) => (release = resolve));
-      return Response.json({ message: "done" });
-    }
-    return new Response("{}", { status: 404 });
-  });
-});
-afterEach(() => {
-  release?.();
-  vi.unstubAllGlobals();
-  document.body.replaceChildren();
-});
-
-// The browser's DataTransfer, which jsdom doesn't have.
-function transfer() {
-  const data: Record<string, string> = {};
-  return {
-    data,
-    get types() {
-      return Object.keys(data);
-    },
-    setData(type: string, value: string) {
-      data[type] = value;
-    },
-    getData: (type: string) => data[type] ?? "",
-    effectAllowed: "none",
-    dropEffect: "none",
+  const issue = {
+    number: 31,
+    title: "Backlog issue",
+    url: "https://github.example.com/acme/api/issues/31",
   };
-}
+  api = mockApi({ "api/repos/acme/api/issues": () => ({ ...BACKLOG, issues: [issue] }) });
+  release = api.hold();
+  history.replaceState(null, "", "#/graph/acme/api");
+});
 
 const show = async (tasks: Task[] = []) => {
   render(<Dashboard state={{ ...state, tasks: [...state.tasks, ...tasks] }} error={null} />);
@@ -151,14 +106,14 @@ test("a backlog issue dropped on the column starts a brainstorm, its card pendin
   const data = drag(cardOf(work, "Backlog issue"), column);
   expect(data.types).not.toContain("application/x-deckhand-brainstorm");
   await waitFor(() =>
-    expect(posted).toEqual([{ action: "start", number: 31, mode: "brainstorm" }]),
+    expect(api.bodies()).toEqual([{ action: "start", number: 31, mode: "brainstorm" }]),
   );
   const card = cardOf(cards(), "Backlog issue");
   expect(card.textContent).toMatch(/Sending…/);
   // Out of the backlog meanwhile, and not a node.
   expect(within(work).queryByText("Backlog issue")).toBeNull();
   expect(screen.queryByRole("listitem", { name: /^#31 / })).toBeNull();
-  release!();
+  release();
   await waitFor(() => expect(within(cards()).queryByText("Backlog issue")).toBeNull());
 });
 
@@ -166,7 +121,7 @@ test("the backlog's Brainstorm button does what the drop does", async () => {
   const { work } = await show();
   fireEvent.click(within(work).getByRole("button", { name: "Brainstorm #31" }));
   await waitFor(() =>
-    expect(posted).toEqual([{ action: "start", number: 31, mode: "brainstorm" }]),
+    expect(api.bodies()).toEqual([{ action: "start", number: 31, mode: "brainstorm" }]),
   );
 });
 
@@ -175,7 +130,7 @@ test("a brainstorm dropped on the graph starts work, whatever Start in says", as
   fireEvent.change(within(work).getByRole("combobox"), { target: { value: "brainstorm" } });
   const data = drag(cardOf(cards(), "Brainstorm 150"), area);
   expect(data.data["application/x-deckhand-brainstorm"]).toBe("150");
-  await waitFor(() => expect(posted).toEqual([{ action: "start", number: 150 }]));
+  await waitFor(() => expect(api.bodies()).toEqual([{ action: "start", number: 150 }]));
   // On its way to the graph: Sending… there, gone from the column.
   expect(screen.getByRole("listitem", { name: /^#150 .*Sending…/ })).toBeTruthy();
   expect(within(cards()).queryByText("Brainstorm 150")).toBeNull();
@@ -188,7 +143,7 @@ test("After… on a card queues it after a node of the graph", async () => {
   const select = within(card).getByRole("combobox", { name: "Queue #150 after" });
   const after = Number((select as HTMLSelectElement).value);
   fireEvent.click(within(card).getByRole("button", { name: "Queue" }));
-  await waitFor(() => expect(posted).toEqual([{ action: "queue", number: 150, after }]));
+  await waitFor(() => expect(api.bodies()).toEqual([{ action: "queue", number: 150, after }]));
 });
 
 test("a brainstorm dropped on the backlog stops, and so does Stop", async () => {
@@ -197,10 +152,10 @@ test("a brainstorm dropped on the backlog stops, and so does Stop", async () => 
     brainstorm(151, "brainstorm"),
   ]);
   drag(cardOf(cards(), "Brainstorm 150"), work);
-  await waitFor(() => expect(posted).toEqual([{ action: "stop", number: 150 }]));
+  await waitFor(() => expect(api.bodies()).toEqual([{ action: "stop", number: 150 }]));
   // Still in the column until it is wrapped up.
   expect(cardOf(cards(), "Brainstorm 150").textContent).toMatch(/Sending…/);
-  release!();
+  release();
   await waitFor(() =>
     expect(
       within(cardOf(cards(), "Brainstorm 151")).getByRole("button", {
@@ -213,7 +168,7 @@ test("a brainstorm dropped on the backlog stops, and so does Stop", async () => 
       name: "Stop #151's brainstorm",
     }),
   );
-  await waitFor(() => expect(posted.at(-1)).toEqual({ action: "stop", number: 151 }));
+  await waitFor(() => expect(api.bodies().at(-1)).toEqual({ action: "stop", number: 151 }));
 });
 
 test("a backlog card dropped on the backlog, or a brainstorm on the column, does nothing", async () => {
@@ -221,7 +176,7 @@ test("a backlog card dropped on the backlog, or a brainstorm on the column, does
   drag(cardOf(work, "Backlog issue"), work);
   drag(cardOf(cards(), "Brainstorm 150"), column);
   await new Promise((r) => setTimeout(r, 10));
-  expect(posted).toEqual([]);
+  expect(api.bodies()).toEqual([]);
 });
 
 test("Start work on a card starts work", async () => {
@@ -229,7 +184,7 @@ test("Start work on a card starts work", async () => {
   fireEvent.click(
     within(cardOf(cards(), "Brainstorm 150")).getByRole("button", { name: "Start work on #150" }),
   );
-  await waitFor(() => expect(posted).toEqual([{ action: "start", number: 150 }]));
+  await waitFor(() => expect(api.bodies()).toEqual([{ action: "start", number: 150 }]));
 });
 
 test("an issue with open questions dropped on the column asks them first", async () => {
@@ -238,7 +193,7 @@ test("an issue with open questions dropped on the column asks them first", async
   const list = screen.getByRole("list", { name: "Issues waiting for answers" });
   drag(within(list).getByRole("button", { name: "Start #138" }).closest("li")!, column);
   expect(screen.getByRole("dialog", { name: "Answer #138's questions" })).toBeTruthy();
-  expect(posted).toEqual([]);
+  expect(api.bodies()).toEqual([]);
 });
 
 test("a card's whole title is in its title attribute", async () => {

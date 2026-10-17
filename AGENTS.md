@@ -16,13 +16,13 @@ brainstorm sessions). The plan and its decisions: PocketBerry's PB-135 and issue
 Node 26. The listener has no dependencies; the dashboard has build-time ones (see
 Conventions).
 
-| Task            | Command                                                                                                                                                                                                                                                                                                                                     |
-| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Tests           | `node --test`                                                                                                                                                                                                                                                                                                                               |
-| Dashboard       | `cd dashboard && npm ci && npm test && npm run build` (types, tests, build)                                                                                                                                                                                                                                                                 |
-| Syntax check    | `node --check listener/server.mjs`, `bash -n sandbox/*.sh sandbox/agents/*.sh sandbox/agents/claude/install sandbox/agents/codex/install sandbox/agents/npm-install sandbox/deckhand-broker sandbox/deckhand-token sandbox/gh sandbox/git-credential-deckhand sandbox/pre-push engine/entrypoint.sh`, `node --check sandbox/deckhand-inbox` |
-| Format          | `npx --yes prettier@3 --check .` (`--write` to fix)                                                                                                                                                                                                                                                                                         |
-| Dashboard (dev) | `cd dashboard && npm run dev` (proxies the API to a listener on `:8080`)                                                                                                                                                                                                                                                                    |
+| Task            | Command                                                                                                                                                                                                                                                                                                                                                                  |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Tests           | `node --test`                                                                                                                                                                                                                                                                                                                                                            |
+| Dashboard       | `cd dashboard && npm ci && npm test && npm run build` (types, tests, build)                                                                                                                                                                                                                                                                                              |
+| Syntax check    | `node --check listener/server.mjs`, `bash -n sandbox/*.sh sandbox/agents/*.sh sandbox/agents/claude/install sandbox/agents/codex/install sandbox/agents/npm-install sandbox/deckhand-broker sandbox/deckhand-token sandbox/gh sandbox/git-credential-deckhand sandbox/pre-push engine/entrypoint.sh test/fixtures/fake-docker.sh`, `node --check sandbox/deckhand-inbox` |
+| Format          | `npx --yes prettier@3 --check .` (`--write` to fix)                                                                                                                                                                                                                                                                                                                      |
+| Dashboard (dev) | `cd dashboard && npm run dev` (proxies the API to a listener on `:8080`)                                                                                                                                                                                                                                                                                                 |
 
 Run the first four before pushing (the dashboard's when it changed). Work runs on this
 repository start with the dashboard's packages installed (`setup` in `.deckhand.yaml`) and
@@ -112,6 +112,13 @@ docs/         setup, per-repo config reference, security model, architecture
 
 - `node --test` with `node:assert`. Inject what touches the outside: `fetch` for GitHub,
   the runner for Docker, a clock for timers, a temp dir for state files.
+- Shared fakes live in `test/helpers.mjs` (`listening`, `serve`, `tempDir`, `testConfig`,
+  `recordingFetch`) and `test/fixtures/` (the fake `docker` of `server.test.mjs`): reuse them
+  rather than write another copy. A temp dir goes with its test (`tempDir(t)`).
+- `server.test.mjs` starts a listener per test, the suite's slowest part: one wiring test per
+  area there, the cases themselves in the module's own unit tests.
+- Dashboard specs share `dashboard/src/testUtils.ts` (`mockApi`, `makeTask`, `makeState`) and
+  `vitest.setup.ts` (the global stubs and cleanup).
 - Cover the decisions that matter: allowlist and config narrowing, mount path checks,
   host wildcard matching, trigger parsing, queue persistence across a restart.
 

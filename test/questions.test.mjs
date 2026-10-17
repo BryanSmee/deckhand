@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { loadConfig } from "../listener/config.mjs";
 import {
   applyInput,
   hasOpenQuestions,
@@ -10,11 +9,12 @@ import {
   questionsSection,
   replyQuestions,
 } from "../listener/questions.mjs";
+import { testConfig } from "./helpers.mjs";
 
 // Real issue bodies: #77, #79, #130 and #134 (filed by an inbox run, questions pending), #67
 // ("None").
 const body = (n) => readFileSync(new URL(`fixtures/issue-${n}.md`, import.meta.url), "utf8");
-const config = loadConfig({ ALLOWED_USERS: "alice,bob", ALLOWED_REPOS: "org/repo" });
+const config = testConfig({ ALLOWED_USERS: "alice,bob", ALLOWED_REPOS: "org/repo" });
 const BOT = "deckhand-x[bot]";
 
 test("open questions in real issues: #77 and #79 ask, #67 says None", () => {
@@ -239,7 +239,7 @@ test("issues by others, on other repos, or with the label turned off are ignored
   const noApp = issues("opened", { text: asks });
   delete noApp.installation;
   assert.equal(inputEvent(config, "issues", noApp, BOT), null);
-  const off = loadConfig({ ALLOWED_USERS: "alice", NEEDS_INPUT_LABEL: "" });
+  const off = testConfig({ NEEDS_INPUT_LABEL: "" });
   assert.equal(map("opened", { text: asks }, "issues", off), null);
 });
 

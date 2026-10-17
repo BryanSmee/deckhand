@@ -1,90 +1,62 @@
 // The top bar's Analyze dialog against a fake API: the repos, the preview as the selection
 // changes, a started analysis and its run, a refusal.
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/preact";
-import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { beforeEach, expect, test } from "vitest";
 import { Dashboard } from "./App";
-import fixture from "./fixture.json";
+import { makeState, makeTask, mockApi, running } from "./testUtils";
 import type { State, Task } from "./types";
 
 let previews: string[];
-let posted: [string, unknown][];
+let api: ReturnType<typeof mockApi>;
 // The largest count the listener takes (listener/analysis.mjs MAX_RUNS).
 let max: number;
 beforeEach(() => {
   previews = [];
-  posted = [];
-  history.replaceState(null, "", "/");
   max = 50;
-  Object.assign(globalThis, {
-    EventSource: class {
-      addEventListener() {}
-      close() {}
-    },
-    matchMedia: () => ({ matches: true, addEventListener() {}, removeEventListener() {} }),
+  // The preview of the repos the tests pick.
+  const preview = ({ url }: { url: string }) => {
+    const analyze = /^api\/repos\/(.+)\/analyze(\?.*)$/.exec(url)!;
+    previews.push(`${analyze[1]}${analyze[2]}`);
+    const query = new URLSearchParams(analyze[2]);
+    const kinds = query.get("kinds")!.split(",").filter(Boolean);
+    const outcomes = query.get("outcomes")!.split(",").filter(Boolean);
+    // A run per kind and outcome picked, up to the count.
+    const n = Math.min(Number(query.get("count")), kinds.length * outcomes.length);
+    return {
+      runs: Array.from({ length: n }, (_, i) => `r${i}`),
+      included: n,
+      left: n > 4 ? 1 : 0,
+      bytes: n * 4000,
+      tokens: n * 1000,
+      kinds: ["bug", "review", "work"],
+      max,
+    };
+  };
+  api = mockApi({
+    "api/repos/acme/api/analyze": preview,
+    "api/repos/acme/app/analyze": preview,
+    "POST api/repos/acme/app/analyze": ({ body }) =>
+      body.count === 13
+        ? Response.json({ error: "acme/app has issues turned off." }, { status: 409 })
+        : {
+            message: "Analysis of 3 runs started on #31.",
+            url: "https://github.com/acme/app/issues/31",
+            number: 31,
+            task: "acme/app#31",
+          },
   });
-  vi.stubGlobal("fetch", async (url: string, init?: RequestInit) => {
-    const analyze = /^api\/repos\/(.+)\/analyze(\?.*)?$/.exec(url);
-    if (analyze && init?.method === "POST") {
-      const body = JSON.parse(String(init.body));
-      posted.push([analyze[1], body]);
-      if (body.count === 13) {
-        return Response.json({ error: "acme/app has issues turned off." }, { status: 409 });
-      }
-      return Response.json({
-        message: "Analysis of 3 runs started on #31.",
-        url: `https://github.com/${analyze[1]}/issues/31`,
-        number: 31,
-        task: `${analyze[1]}#31`,
-      });
-    }
-    if (analyze) {
-      previews.push(`${analyze[1]}${analyze[2]}`);
-      const query = new URLSearchParams(analyze[2]);
-      const kinds = query.get("kinds")!.split(",").filter(Boolean);
-      const outcomes = query.get("outcomes")!.split(",").filter(Boolean);
-      // A run per kind and outcome picked, up to the count.
-      const n = Math.min(Number(query.get("count")), kinds.length * outcomes.length);
-      return Response.json({
-        runs: Array.from({ length: n }, (_, i) => `r${i}`),
-        included: n,
-        left: n > 4 ? 1 : 0,
-        bytes: n * 4000,
-        tokens: n * 1000,
-        kinds: ["bug", "review", "work"],
-        max,
-      });
-    }
-    return new Response("{}", { status: 404 });
-  });
-});
-afterEach(() => {
-  vi.unstubAllGlobals();
-  document.body.replaceChildren();
 });
 
 const analysisTask = (runs: string[]): Task =>
-  ({
-    key: "acme/app#31",
-    repo: "acme/app",
-    project: "acme",
+  makeTask({
     number: 31,
     title: "Run analysis: last 3 runs",
-    kind: "issue",
     mode: "analyze",
-    replyTo: 31,
-    state: "working",
-    since: 0,
-    closed: null,
-    pr: null,
-    rerunnable: false,
-    runs: runs.map((id) => ({ id, status: "running", startedAt: 0 })),
-  }) as unknown as Task;
+    runs: running(runs),
+  });
 
-const stateWith = (tasks: Task[] = []): State => ({
-  ...(fixture as State),
-  tasks: [...(fixture as State).tasks, ...tasks],
-  inboxes: { "acme/other": { ideas: null, bugs: null, discussions: null } },
-});
+const stateWith = (tasks: Task[] = []): State =>
+  makeState({ inboxes: { "acme/other": { ideas: null, bugs: null, discussions: null } } }, tasks);
 
 const openDialog = (state: State, hash = "#/all") => {
   history.replaceState(null, "", hash);
@@ -164,15 +136,15 @@ test("Analyze N runs starts it, then links its issue and its run", async () => {
   await waitFor(() => expect(status(dialog)).toMatch(/^3 runs match/));
   fireEvent.click(within(dialog).getByRole("button", { name: "Analyze 3 runs" }));
   await waitFor(() => expect(within(dialog).getByText(/Started/)).toBeTruthy());
-  expect(posted).toEqual([
-    [
-      "acme/app",
-      {
+  expect(api.posted).toEqual([
+    {
+      url: "api/repos/acme/app/analyze",
+      body: {
         count: 3,
         kinds: ["bug", "review", "work"],
         outcomes: ["ok", "error", "needs-input", "interrupted", "cancelled"],
       },
-    ],
+    },
   ]);
   expect(within(dialog).getByRole("link", { name: "issue #31" }).getAttribute("href")).toBe(
     "https://github.com/acme/app/issues/31",

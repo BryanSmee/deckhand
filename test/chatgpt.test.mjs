@@ -1,11 +1,11 @@
 // A ChatGPT plan's login: the listener holds it, refreshes it once for every run, and writes
 // the rotated refresh token back.
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, stat, utimes, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { readFile, stat, utimes, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { test } from "node:test";
 import { createChatgptLogin } from "../listener/chatgpt.mjs";
+import { tempDir } from "./helpers.mjs";
 
 const NOW = Date.parse("2026-10-16T12:00:00Z");
 const jwt = (claims) => `h.${Buffer.from(JSON.stringify(claims)).toString("base64url")}.s`;
@@ -16,7 +16,7 @@ const idToken = jwt({
 });
 
 async function authFile(t, tokens = {}) {
-  const dir = await mkdtemp(join(tmpdir(), "deckhand-chatgpt-"));
+  const dir = tempDir(t, "deckhand-chatgpt-");
   const file = join(dir, "auth.json");
   await writeFile(
     file,

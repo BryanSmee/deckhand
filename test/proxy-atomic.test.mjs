@@ -1,16 +1,10 @@
 // Files the egress proxy keeps, written whole or not at all (proxy/atomic.mjs).
 import assert from "node:assert/strict";
-import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { atomicWrite, tempPath } from "../proxy/atomic.mjs";
-
-function tempDir(t) {
-  const dir = mkdtempSync(join(tmpdir(), "deckhand-atomic-"));
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
-  return dir;
-}
+import { tempDir } from "./helpers.mjs";
 
 test("tempPath: a new tmp- name in the folder, with an optional suffix", () => {
   assert.match(tempPath("/x"), /^\/x\/tmp-[0-9a-f]{16}$/);
@@ -19,7 +13,7 @@ test("tempPath: a new tmp- name in the folder, with an optional suffix", () => {
 });
 
 test("atomicWrite: replaces the file, with its mode, and leaves no temporary one", async (t) => {
-  const dir = tempDir(t);
+  const dir = tempDir(t, "deckhand-atomic-");
   const path = join(dir, "meta.json");
   await atomicWrite(path, "old");
   await atomicWrite(path, "new", { mode: 0o600 });
@@ -29,7 +23,7 @@ test("atomicWrite: replaces the file, with its mode, and leaves no temporary one
 });
 
 test("atomicWrite: a write that fails throws, and leaves no temporary file", async (t) => {
-  const dir = tempDir(t);
+  const dir = tempDir(t, "deckhand-atomic-");
   const path = join(dir, "hosts", "a.pem");
   await atomicWrite(join(dir, "a.pem"), "x");
   // A missing target folder: the rename fails, the temporary file is removed, the error thrown.

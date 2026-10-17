@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { claude } from "../listener/agents/claude.mjs";
 import { codex } from "../listener/agents/codex.mjs";
-import { loadConfig } from "../listener/config.mjs";
 import {
   egressPolicy,
   hostProblem,
@@ -13,8 +12,9 @@ import {
 } from "../listener/egress.mjs";
 import { grantFor, grantsFrom } from "../listener/grants.mjs";
 import { parseRepoConfig } from "../listener/repo-config.mjs";
+import { testConfig } from "./helpers.mjs";
 
-const config = loadConfig({ ALLOWED_USERS: "a" });
+const config = testConfig({ ALLOWED_USERS: "a" });
 
 // The grants folder's default.yaml and one repo's file, as grantFor() reads them.
 const grants = grantsFrom(
@@ -32,7 +32,7 @@ test("mandatory hosts: Anthropic's API and the configured GitHub", () => {
     "api.github.com",
     "*.githubusercontent.com",
   ]);
-  const enterprise = loadConfig({
+  const enterprise = testConfig({
     ALLOWED_USERS: "a",
     GITHUB_URL: "https://git.corp.example",
     GITHUB_API: "https://git.corp.example/api/v3",
@@ -59,7 +59,7 @@ test("a Codex run's hosts: GitHub's and its grant's, neither Anthropic's nor Ope
   // Claude Code's keep Anthropic's, for WebFetch's domain check.
   assert.ok(operatorHosts(config, grant, claude).includes("api.anthropic.com"));
   // Without an agent, the operator's: its mandatory hosts are SANDBOX_AGENT's.
-  const operator = loadConfig({ ALLOWED_USERS: "a", OPENAI_API_KEY: "k", SANDBOX_AGENT: "codex" });
+  const operator = testConfig({ ALLOWED_USERS: "a", OPENAI_API_KEY: "k", SANDBOX_AGENT: "codex" });
   assert.ok(!mandatoryHosts(operator).includes("api.anthropic.com"));
 });
 

@@ -1,17 +1,17 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, utimesSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { createHistory, pruneRuns } from "../listener/history.mjs";
 import { saveSummary } from "../listener/runlog.mjs";
+import { tempDir } from "./helpers.mjs";
 
 const DAY = 24 * 60 * 60 * 1000;
 const NOW = 1000 * DAY;
 
 // A run of `key` that ended `age` days before NOW, with its log, summary and screenshots.
-function fixture() {
-  const dir = mkdtempSync(join(tmpdir(), "deckhand-history-"));
+function fixture(t) {
+  const dir = tempDir(t, "deckhand-history-");
   const logDir = join(dir, "logs");
   const shotsDir = join(dir, "shots");
   mkdirSync(logDir);
@@ -38,8 +38,8 @@ function fixture() {
   return { shotsDir, run, files };
 }
 
-test("retention: runs past the limit lose their log, summary and screenshots, and leave the list", () => {
-  const { shotsDir, run, files } = fixture();
+test("retention: runs past the limit lose their log, summary and screenshots, and leave the list", (t) => {
+  const { shotsDir, run, files } = fixture(t);
   // Newest first, as ctx.runs.
   const fresh = run("org/repo#1", 10);
   const old = run("org/repo#1", 100);
@@ -58,8 +58,8 @@ test("retention: runs past the limit lose their log, summary and screenshots, an
   assert.deepEqual(files(lone), [false, false, false]);
 });
 
-test("retention: what a task still needs is kept, however old", () => {
-  const { shotsDir, run, files } = fixture();
+test("retention: what a task still needs is kept, however old", (t) => {
+  const { shotsDir, run, files } = fixture(t);
   const running = run("org/repo#1", 200, { status: "running", finishedAt: null });
   const asked = run("org/repo#2", 200, { status: "needs-input" });
   const askedBefore = run("org/repo#2", 300, { status: "needs-input" });
@@ -77,8 +77,8 @@ test("retention: what a task still needs is kept, however old", () => {
   assert.deepEqual(files(done), [false, false, false]);
 });
 
-test("retention: 0 keeps everything; folders of unknown runs go by their age", () => {
-  const { shotsDir, run, files } = fixture();
+test("retention: 0 keeps everything; folders of unknown runs go by their age", (t) => {
+  const { shotsDir, run, files } = fixture(t);
   const old = run("org/repo#1", 400);
   const runs = [old];
   const byId = new Map([[old.id, old]]);
@@ -102,8 +102,8 @@ test("retention: 0 keeps everything; folders of unknown runs go by their age", (
   assert.deepEqual(files(kept), [true, true, true]);
 });
 
-test("retention: at start, then daily, with what the listener's state still needs", () => {
-  const { shotsDir, run } = fixture();
+test("retention: at start, then daily, with what the listener's state still needs", (t) => {
+  const { shotsDir, run } = fixture(t);
   const brainstorm = run("org/repo#1", 200);
   const waiting = run("org/repo#2", 200);
   const labelled = run("org/repo#3", 200);

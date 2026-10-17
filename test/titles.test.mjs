@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { closedAs, createTitles } from "../listener/titles.mjs";
+import { tempDir } from "./helpers.mjs";
 
-test("titles: webhooks first, the rest fetched once and kept across a restart", async () => {
-  const path = join(mkdtempSync(join(tmpdir(), "deckhand-")), "titles.json");
+test("titles: webhooks first, the rest fetched once and kept across a restart", async (t) => {
+  const path = join(tempDir(t), "titles.json");
   const asked = [];
   const fetchTitle = async (repo, kind, number) => {
     asked.push(`${repo} ${kind} ${number}`);
@@ -38,8 +38,8 @@ test("titles: webhooks first, the rest fetched once and kept across a restart", 
   assert.equal(next.get("org/repo#pr-3"), "Title 3");
 });
 
-test("closed states: from webhooks and the lookup; what was open is asked again by the next listener", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "deckhand-"));
+test("closed states: from webhooks and the lookup; what was open is asked again by the next listener", async (t) => {
+  const dir = tempDir(t);
   const path = join(dir, "titles.json");
   const closedPath = join(dir, "closed.json");
   const asked = [];

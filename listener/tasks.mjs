@@ -13,10 +13,9 @@ import { hasOpenQuestions } from "./questions.mjs";
 import {
   CONFIG_FILE,
   effectiveConfig,
-  legacySandboxName,
   modeNames,
-  sandboxName,
   startable,
+  taskSandboxName,
 } from "./repo-config.mjs";
 import { writeEvent } from "./runlog.mjs";
 import { createTaskModes } from "./task-modes.mjs";
@@ -59,22 +58,11 @@ export function createTasks(ctx) {
   const { config, log, skip, tasks } = ctx;
   const { modeOf, unknownMode } = createTaskModes(ctx);
 
-  // A task's sandbox name. Tasks with a session from before names had a hash keep their old
-  // name, so they still find their volumes; the others get the new one. Old names collide
-  // ("acme/x" #pr-5 and "acme/x-pr" #5): a volume of that name is only this task's when one of
-  // its own runs had the name (run ids are "<name>-<start>"), else a new task would take over
-  // another repo's session and workspace.
+  // A task's sandbox name: the task's, else taskSandboxName()'s.
   async function containerName(repo, id) {
     const key = taskKey(repo, id);
     if (tasks.has(key)) return tasks.get(key).name;
-    const legacy = legacySandboxName(config, repo, id);
-    const ran = ctx.runs.some(
-      (r) =>
-        r.key.toLowerCase() === key.toLowerCase() &&
-        r.id.startsWith(`${legacy}-`) &&
-        /^\d+$/.test(r.id.slice(legacy.length + 1)),
-    );
-    return ran && (await ctx.runner.hasSession(legacy)) ? legacy : sandboxName(config, repo, id);
+    return taskSandboxName(config, repo, id, ctx.runs, (name) => ctx.runner.hasSession(name));
   }
 
   // A comment that passed the operator's checks, checked again with its repo's settings

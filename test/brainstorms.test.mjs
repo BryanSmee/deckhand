@@ -1,15 +1,15 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { mock, test } from "node:test";
 import { createBrainstorms, createIssueModes, REPLY_GRACE_MS } from "../listener/brainstorms.mjs";
+import { tempDir } from "./helpers.mjs";
 
 const saved = (path) => JSON.parse(readFileSync(path, "utf8"));
 
 test("brainstorms: active, idle once the deadline passes, restored, stopped, ended", (t) => {
   t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
-  const path = join(mkdtempSync(join(tmpdir(), "deckhand-")), "brainstorms.json");
+  const path = join(tempDir(t), "brainstorms.json");
   let busy = false;
   const make = () =>
     createBrainstorms({ path, idleMs: 60000, busy: () => busy, log: () => {}, now: Date.now });
@@ -47,10 +47,10 @@ test("brainstorms: active, idle once the deadline passes, restored, stopped, end
   brainstorms.end(key); // nothing to end
 });
 
-test("brainstorms: a restarted listener arms the idle timer of active ones", () => {
+test("brainstorms: a restarted listener arms the idle timer of active ones", (t) => {
   mock.timers.enable({ apis: ["setTimeout", "Date"] });
   try {
-    const path = join(mkdtempSync(join(tmpdir(), "deckhand-")), "brainstorms.json");
+    const path = join(tempDir(t), "brainstorms.json");
     const options = { path, idleMs: 1000, busy: () => false, log: () => {}, now: Date.now };
     createBrainstorms(options).activate("org/repo#1", { repo: "org/repo", number: 1 });
     const again = createBrainstorms(options);
@@ -61,8 +61,8 @@ test("brainstorms: a restarted listener arms the idle timer of active ones", () 
   }
 });
 
-test("issue modes: kept across a restart, removed with null", () => {
-  const path = join(mkdtempSync(join(tmpdir(), "deckhand-")), "modes.json");
+test("issue modes: kept across a restart, removed with null", (t) => {
+  const path = join(tempDir(t), "modes.json");
   const modes = createIssueModes(path);
   assert.equal(modes.has("org/repo#1"), false);
   modes.set("org/repo#1", "review");

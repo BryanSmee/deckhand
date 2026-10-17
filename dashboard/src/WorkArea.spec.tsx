@@ -1,13 +1,14 @@
 // The graph's work area against a fake API: the backlog, and each drag's button.
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/preact";
-import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/preact";
+import { beforeEach, expect, test, vi } from "vitest";
 import { Dashboard } from "./App";
-import fixture from "./fixture.json";
-import type { Backlog, State } from "./types";
+import { BACKLOG as EMPTY, makeState, mockApi } from "./testUtils";
+import type { Backlog } from "./types";
 
-const state = fixture as State;
+const state = makeState();
 
 const BACKLOG: Backlog = {
+  ...EMPTY,
   issues: [
     {
       number: 31,
@@ -20,40 +21,19 @@ const BACKLOG: Backlog = {
       url: "https://github.example.com/acme/app/issues/30",
     },
   ],
-  modes: ["work", "brainstorm", "review"],
-  errors: false,
-  readAt: 0,
 };
 
-let posted: unknown[];
+let api: ReturnType<typeof mockApi>;
 let backlog: Backlog;
-// Holds the work POST's answer until the test lets it go.
-let hold: Promise<void> | null;
 beforeEach(() => {
-  posted = [];
-  hold = null;
   backlog = BACKLOG;
-  history.replaceState(null, "", "/");
-  Object.assign(globalThis, {
-    matchMedia: () => ({ matches: true, addEventListener() {}, removeEventListener() {} }),
+  api = mockApi({
+    "api/repos/acme/app/issues": () => backlog,
+    "POST api/repos/acme/app/work": ({ body }) =>
+      body.number === 30
+        ? Response.json({ error: "#30 is closed." }, { status: 409 })
+        : { message: `#${body.number} done.` },
   });
-  vi.stubGlobal("fetch", async (url: string, init?: RequestInit) => {
-    if (url === "api/repos/acme/app/issues") return Response.json(backlog);
-    if (url === "api/repos/acme/app/work" && init?.method === "POST") {
-      const body = JSON.parse(String(init.body));
-      posted.push(body);
-      await hold;
-      if (body.number === 30) return Response.json({ error: "#30 is closed." }, { status: 409 });
-      return Response.json({ message: `#${body.number} done.` });
-    }
-    return new Response("{}", { status: 404 });
-  });
-});
-afterEach(() => {
-  vi.unstubAllGlobals();
-  // Unmounted, not only taken off the page: the next test's hash changes would reach it.
-  cleanup();
-  document.body.replaceChildren();
 });
 
 const open = (hash: string) => {
@@ -76,7 +56,7 @@ test("the backlog lists the repo's open issues; Start sends the mode picked", as
   });
   fireEvent.click(within(area).getByRole("button", { name: "Start #31" }));
   await waitFor(() =>
-    expect(posted).toEqual([{ action: "start", number: 31, mode: "brainstorm" }]),
+    expect(api.bodies()).toEqual([{ action: "start", number: 31, mode: "brainstorm" }]),
   );
   expect(await within(area).findByRole("status")).toHaveProperty("textContent", "#31 done.");
   // A refusal is shown as the listener says it.
@@ -97,7 +77,7 @@ test("Queue after…: the graph's issues to pick from", async () => {
   expect(options).toContain("#24 Per-repo budgets in the dashboard");
   fireEvent.change(select, { target: { value: "24" } });
   fireEvent.click(within(item).getByRole("button", { name: "Queue" }));
-  await waitFor(() => expect(posted).toEqual([{ action: "queue", number: 31, after: 24 }]));
+  await waitFor(() => expect(api.bodies()).toEqual([{ action: "queue", number: 31, after: 24 }]));
 });
 
 test("a waiting issue: Remove cancels its wait, Start now keeps its mode", async () => {
@@ -105,9 +85,9 @@ test("a waiting issue: Remove cancels its wait, Start now keeps its mode", async
   const waiting = screen.getByRole("list", { name: "Waiting issues" });
   expect(within(waiting).getByText("after #23 and #22")).toBeTruthy();
   fireEvent.click(within(waiting).getByRole("button", { name: "Remove #24's wait" }));
-  await waitFor(() => expect(posted).toEqual([{ action: "dequeue", number: 24 }]));
+  await waitFor(() => expect(api.bodies()).toEqual([{ action: "dequeue", number: 24 }]));
   fireEvent.click(within(waiting).getByRole("button", { name: "Start #24 now" }));
-  await waitFor(() => expect(posted.at(-1)).toEqual({ action: "start", number: 24 }));
+  await waitFor(() => expect(api.bodies().at(-1)).toEqual({ action: "start", number: 24 }));
 });
 
 test("a config with errors: nothing to start", async () => {
@@ -118,8 +98,8 @@ test("a config with errors: nothing to start", async () => {
 });
 
 test("a Start shows at once: a pending node, the issue out of the backlog; then the real one", async () => {
-  let answer = () => {};
-  hold = new Promise((resolve) => (answer = resolve));
+  // The work POST's answer held until the test lets it go.
+  const answer = api.hold();
   const refresh = vi.fn(async () => {});
   history.replaceState(null, "", "#/graph/acme/app");
   render(<Dashboard state={state} error={null} refresh={refresh} />);
@@ -138,8 +118,8 @@ test("a Start shows at once: a pending node, the issue out of the backlog; then 
 });
 
 test("a refused action: its pending node goes, the issue comes back, the error shows", async () => {
-  let answer = () => {};
-  hold = new Promise((resolve) => (answer = resolve));
+  // The work POST's answer held until the test lets it go.
+  const answer = api.hold();
   const refresh = vi.fn(async () => {});
   history.replaceState(null, "", "#/graph/acme/app");
   render(<Dashboard state={state} error={null} refresh={refresh} />);
@@ -170,13 +150,15 @@ test("a refused action: its pending node goes, the issue comes back, the error s
 function slowBacklogs() {
   const gate = { release: () => {}, fail: false };
   const reads: string[] = [];
-  vi.stubGlobal("fetch", async (url: string) => {
-    const repo = /^api\/repos\/(.+)\/issues$/.exec(url)?.[1];
-    if (!repo) return new Response("{}", { status: 404 });
+  const read = (repo: string) => async () => {
     reads.push(repo);
     await new Promise<void>((resolve) => (gate.release = resolve));
     if (gate.fail) return Response.json({ error: "GitHub is down." }, { status: 502 });
-    return Response.json(repo === "acme/app" ? backlog : { ...BACKLOG, issues: [] });
+    return repo === "acme/app" ? backlog : EMPTY;
+  };
+  mockApi({
+    "api/repos/acme/app/issues": read("acme/app"),
+    "api/repos/acme/api/issues": read("acme/api"),
   });
   return { gate, reads };
 }

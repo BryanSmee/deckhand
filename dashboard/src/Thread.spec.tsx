@@ -2,12 +2,12 @@
 // dashboard's posts shown as such, a reply in a thread and a new comment sent (fetch mocked),
 // the run's log a click away.
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/preact";
-import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { beforeEach, expect, test, vi } from "vitest";
 import { Dashboard } from "./App";
-import fixture from "./fixture.json";
-import type { State, Thread } from "./types";
+import { makeState, mockApi } from "./testUtils";
+import type { Thread } from "./types";
 
-const state = fixture as State;
+const state = makeState();
 const KEY = "acme/notes#discussion-8";
 
 const post = (id: string, author: string | null, body: string, deckhand = false) => ({
@@ -20,11 +20,9 @@ const post = (id: string, author: string | null, body: string, deckhand = false)
 });
 
 let thread: Thread;
-let posted: { url: string; body: unknown }[];
-let answer: () => Response;
+let api: ReturnType<typeof mockApi>;
 let refresh: ReturnType<typeof vi.fn<() => Promise<void>>>;
 beforeEach(() => {
-  posted = [];
   thread = {
     number: 8,
     title: "Weekly digest?",
@@ -40,27 +38,10 @@ beforeEach(() => {
     more: 2,
     readAt: state.now,
   };
-  answer = () => Response.json({ message: "Sent to discussion #8.", url: "u" });
+  // Read anew each time: a comment pushed to it shows with the next read.
+  api = mockApi({ "api/repos/acme/notes/discussions/8": () => thread });
+  api.answer = () => ({ message: "Sent to discussion #8.", url: "u" });
   refresh = vi.fn<() => Promise<void>>(async () => {});
-  Object.assign(globalThis, {
-    EventSource: class {
-      addEventListener() {}
-      close() {}
-    },
-    matchMedia: () => ({ matches: true, addEventListener() {}, removeEventListener() {} }),
-  });
-  vi.stubGlobal("fetch", async (url: string, init?: RequestInit) => {
-    if (init?.method === "POST") {
-      posted.push({ url, body: JSON.parse(String(init.body)) });
-      return answer();
-    }
-    if (url === "api/repos/acme/notes/discussions/8") return Response.json(thread);
-    return new Response("{}", { status: 404 });
-  });
-});
-afterEach(() => {
-  vi.unstubAllGlobals();
-  document.body.replaceChildren();
 });
 
 const show = () => {
@@ -86,7 +67,7 @@ test("the thread: the opening post, Deckhand's answer, the replies, older commen
   await screen.findByRole("region", { name: "Discussion" });
 });
 
-test("a reply in a thread, then a new comment: posted, the thread and the state read again", async () => {
+test("a reply in a thread, then a new comment: api.posted, the thread and the state read again", async () => {
   show();
   const view = await screen.findByRole("region", { name: "Discussion" });
   fireEvent.click(within(view).getByRole("button", { name: "Reply" }));
@@ -96,7 +77,7 @@ test("a reply in a thread, then a new comment: posted, the thread and the state 
   thread.comments[0].replies.push(post("DC_3", "bob", "Seconded."));
   fireEvent.click(within(reply).getByRole("button", { name: "Reply" }));
   await waitFor(() => expect(within(view).getByText("Seconded.")).toBeTruthy());
-  expect(posted).toEqual([
+  expect(api.posted).toEqual([
     {
       url: "api/repos/acme/notes/discussions/8/comments",
       body: { text: "Mondays it is", replyTo: "DC_1" },
@@ -108,12 +89,12 @@ test("a reply in a thread, then a new comment: posted, the thread and the state 
   const comment = within(view).getByRole("form", { name: "Comment" });
   fireEvent.input(within(comment).getByRole("textbox"), { target: { value: "And email?" } });
   fireEvent.click(within(comment).getByRole("button", { name: "Comment" }));
-  await waitFor(() => expect(posted).toHaveLength(2));
-  expect(posted[1].body).toEqual({ text: "And email?" });
+  await waitFor(() => expect(api.posted).toHaveLength(2));
+  expect(api.posted[1].body).toEqual({ text: "And email?" });
 });
 
 test("a refusal: the listener's message, the text kept", async () => {
-  answer = () =>
+  api.answer = () =>
     Response.json({ error: "acme/notes has no discussions category." }, { status: 409 });
   show();
   const view = await screen.findByRole("region", { name: "Discussion" });

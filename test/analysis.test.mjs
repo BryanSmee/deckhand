@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import {
@@ -16,6 +15,7 @@ import {
   toolStats,
 } from "../listener/analysis.mjs";
 import { REDACTED } from "../listener/secrets.mjs";
+import { tempDir } from "./helpers.mjs";
 
 const line = (event) => JSON.stringify(event);
 const tool = (name, input, id) =>
@@ -188,8 +188,8 @@ test("buildDigest: redacted, newest first, capped: older runs left out and said"
   assert.equal(tokens(400), 100);
 });
 
-test("createAnalysis: previews and digests from the logs, one repo's runs only", () => {
-  const dir = mkdtempSync(join(tmpdir(), "deckhand-analysis-"));
+test("createAnalysis: previews and digests from the logs, one repo's runs only", (t) => {
+  const dir = tempDir(t, "deckhand-analysis-");
   const secret = "ghs_0123456789abcdefghijklmnop";
   const runs = [
     run("mine-2", { status: "error", logPath: join(dir, "mine-2.log") }),

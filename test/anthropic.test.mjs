@@ -1,16 +1,12 @@
 import assert from "node:assert/strict";
-import { createServer, request } from "node:http";
+import { request } from "node:http";
 import { test } from "node:test";
 import { createAnthropicProxy, credentialName } from "../listener/anthropic.mjs";
 import { planWarning } from "../listener/upstream.mjs";
 import { createBroker } from "../listener/broker.mjs";
 import { AGENT_SECRETS } from "../listener/agents/index.mjs";
 import { operatorSecrets, redact } from "../listener/secrets.mjs";
-
-const listen = (server) =>
-  new Promise((resolve) =>
-    server.listen(0, "127.0.0.1", () => resolve(`http://127.0.0.1:${server.address().port}`)),
-  );
+import { serve } from "./helpers.mjs";
 
 // A fake Anthropic that records each request and streams two events, the second one only
 // once the test lets it (`release`), so streaming shows: the first arrives before.
@@ -18,7 +14,7 @@ async function fakeAnthropic(t) {
   const requests = [];
   let release;
   const released = new Promise((resolve) => (release = resolve));
-  const server = createServer((req, res) => {
+  const { url } = await serve(t, (req, res) => {
     let body = "";
     req.on("data", (d) => (body += d));
     req.on("end", async () => {
@@ -29,21 +25,17 @@ async function fakeAnthropic(t) {
       res.end("event: message_stop\ndata: {}\n\n");
     });
   });
-  const url = await listen(server);
-  t.after(() => server.close());
   return { url, requests, release };
 }
 
-async function serve(
+async function serveProxy(
   t,
   { name = "CLAUDE_CODE_OAUTH_TOKEN", credential = "sk-ant-oat01-real" } = {},
 ) {
   const upstream = await fakeAnthropic(t);
   const broker = createBroker({ app: () => null });
   const proxy = createAnthropicProxy({ broker, name, credential, upstream: upstream.url });
-  const server = createServer((req, res) => proxy.handle(req, res));
-  const url = await listen(server);
-  t.after(() => server.close());
+  const { url } = await serve(t, (req, res) => proxy.handle(req, res));
   return { url, broker, upstream };
 }
 
@@ -89,7 +81,7 @@ test("a plan's token is warned about at start, an API key or a gateway's token i
 });
 
 test("an OAuth run's secret is swapped for the token, and the answer streams back", async (t) => {
-  const { url, broker, upstream } = await serve(t);
+  const { url, broker, upstream } = await serveProxy(t);
   const secret = broker.register("org/repo");
   const res = await ask(url, {
     authorization: `Bearer ${secret}`,
@@ -119,7 +111,7 @@ test("an OAuth run's secret is swapped for the token, and the answer streams bac
 });
 
 test("an API key run's secret is swapped for the key", async (t) => {
-  const { url, broker, upstream } = await serve(t, {
+  const { url, broker, upstream } = await serveProxy(t, {
     name: "ANTHROPIC_API_KEY",
     credential: "sk-ant-api03-real",
   });
@@ -142,9 +134,7 @@ test("a gateway's token goes as a bearer, under the gateway's own path", async (
     credential: "sk-or-v1-real",
     upstream: `${upstream.url}/api`,
   });
-  const server = createServer((req, res) => proxy.handle(req, res));
-  const url = await listen(server);
-  t.after(() => server.close());
+  const { url } = await serve(t, (req, res) => proxy.handle(req, res));
   const res = await ask(url, { authorization: `Bearer ${broker.register("org/repo")}` });
   assert.equal(res.status, 200);
   await res.text();
@@ -167,7 +157,7 @@ test("only Anthropic's /v1 paths go on: the credential never reaches another hos
   const elsewhere = await fakeAnthropic(t);
   elsewhere.release();
   const host = new URL(elsewhere.url).host;
-  const { url, broker, upstream } = await serve(t, {
+  const { url, broker, upstream } = await serveProxy(t, {
     name: "ANTHROPIC_API_KEY",
     credential: "sk-ant-api03-real",
   });
@@ -190,7 +180,7 @@ test("only Anthropic's /v1 paths go on: the credential never reaches another hos
 });
 
 test("no secret, a wrong one or a finished run's: refused, and Anthropic never asked", async (t) => {
-  const { url, broker, upstream } = await serve(t);
+  const { url, broker, upstream } = await serveProxy(t);
   const secret = broker.register("org/repo");
   broker.revoke(secret);
   for (const headers of [{}, { authorization: "Bearer guess" }, { "x-api-key": secret }]) {
@@ -202,7 +192,7 @@ test("no secret, a wrong one or a finished run's: refused, and Anthropic never a
 });
 
 test("without a credential set, a live run gets an error rather than an empty header", async (t) => {
-  const { url, broker, upstream } = await serve(t, { name: null, credential: undefined });
+  const { url, broker, upstream } = await serveProxy(t, { name: null, credential: undefined });
   const res = await ask(url, { authorization: `Bearer ${broker.register("org/repo")}` });
   assert.equal(res.status, 503);
   assert.equal(upstream.requests.length, 0);
@@ -216,9 +206,7 @@ test("Anthropic out of reach: a 502 in Anthropic's error shape", async (t) => {
     credential: "k",
     upstream: "http://127.0.0.1:1",
   });
-  const server = createServer((req, res) => proxy.handle(req, res));
-  const url = await listen(server);
-  t.after(() => server.close());
+  const { url } = await serve(t, (req, res) => proxy.handle(req, res));
   const res = await ask(url, { "x-api-key": broker.register("org/repo") });
   assert.equal(res.status, 502);
   assert.equal((await res.json()).type, "error");
@@ -265,9 +253,7 @@ test("a run on another provider goes to its URL with its key; the provider's sta
       empty: { name: "OPENROUTER_API_KEY", credential: "", upstream: openrouter.url },
     },
   });
-  const server = createServer((req, res) => proxy.handle(req, res));
-  const url = await listen(server);
-  t.after(() => server.close());
+  const { url } = await serve(t, (req, res) => proxy.handle(req, res));
 
   const secret = broker.register("org/repo");
   broker.provide(secret, "openrouter");
@@ -296,9 +282,7 @@ test("a provider that can't be reached counts as a 502", async (t) => {
     credential: "sk-ant-api03-real",
     upstream: "http://127.0.0.1:1",
   });
-  const server = createServer((req, res) => proxy.handle(req, res));
-  const url = await listen(server);
-  t.after(() => server.close());
+  const { url } = await serve(t, (req, res) => proxy.handle(req, res));
   const secret = broker.register("org/repo");
   const res = await ask(url, { "x-api-key": secret });
   assert.equal(res.status, 502);

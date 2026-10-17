@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { createVerify, generateKeyPairSync } from "node:crypto";
-import { mkdtempSync, statSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { statSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import {
@@ -15,6 +14,7 @@ import {
   loadCredentials,
   saveCredentials,
 } from "../listener/github-app.mjs";
+import { recordingFetch, tempDir } from "./helpers.mjs";
 
 const { privateKey, publicKey } = generateKeyPairSync("rsa", {
   modulusLength: 2048,
@@ -30,26 +30,17 @@ const credentials = {
 
 // A fake GitHub: records the calls, answers installation lookups and token requests.
 function fakeGitHub(clock) {
-  const calls = [];
   let n = 0;
-  const fetch = async (url, init) => {
-    const path = new URL(url).pathname;
-    calls.push({
-      path,
-      method: init.method,
-      auth: init.headers.authorization,
-      body: init.body,
-    });
-    if (path === "/repos/org/repo/installation") return Response.json({ id: 7 });
-    if (path === "/repos/org/gone/installation") return new Response("nope", { status: 404 });
+  return recordingFetch(({ path }) => {
+    if (path === "/repos/org/repo/installation") return { id: 7 };
+    if (path === "/repos/org/gone/installation") return undefined;
     if (path === "/app/installations/7/access_tokens") {
       n++;
       const expires_at = new Date(clock.now + 60 * 60000).toISOString();
       return Response.json({ token: `tok-${n}`, expires_at }, { status: 201 });
     }
-    return Response.json({ id: 1 });
-  };
-  return { fetch, calls };
+    return { id: 1 };
+  });
 }
 
 function setup() {
@@ -161,8 +152,8 @@ test("commits come from the App's bot", () => {
   });
 });
 
-test("credentials are stored owner-only and read back", () => {
-  const dir = mkdtempSync(join(tmpdir(), "deckhand-"));
+test("credentials are stored owner-only and read back", (t) => {
+  const dir = tempDir(t);
   assert.equal(loadCredentials(dir), null);
   saveCredentials(dir, credentials);
   assert.equal(statSync(join(dir, "app.json")).mode & 0o777, 0o600);

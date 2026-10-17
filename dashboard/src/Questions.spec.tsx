@@ -1,44 +1,21 @@
 // A task waiting for input, answered from its page: the form for questions in the set format,
 // one text box for the others, and the listener's refusal (fetch mocked).
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/preact";
-import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { beforeEach, expect, test, vi } from "vitest";
 import { Dashboard } from "./App";
-import fixture from "./fixture.json";
-import type { State, Task } from "./types";
+import { makeState, mockApi } from "./testUtils";
+import type { Task } from "./types";
 
-const state = fixture as State;
+const state = makeState();
 const ASKING = "acme/api#138";
 
-let posted: unknown[];
-let answer: () => Response;
-// Holds the answer POST until the test lets it go.
-let hold: Promise<void> | null;
+let api: ReturnType<typeof mockApi>;
 let refresh: ReturnType<typeof vi.fn<() => Promise<void>>>;
 beforeEach(() => {
-  posted = [];
-  hold = null;
-  answer = () => Response.json({ message: "Answers sent: #138 continues." });
+  api = mockApi();
+  api.answer = () => ({ message: "Answers sent: #138 continues." });
   refresh = vi.fn<() => Promise<void>>(async () => {});
   history.replaceState(null, "", `#/all?task=${encodeURIComponent(ASKING)}`);
-  Object.assign(globalThis, {
-    EventSource: class {
-      addEventListener() {}
-      close() {}
-    },
-    matchMedia: () => ({ matches: true, addEventListener() {}, removeEventListener() {} }),
-  });
-  vi.stubGlobal("fetch", async (url: string, init?: RequestInit) => {
-    if (url === "api/repos/acme/api/answer" && init?.method === "POST") {
-      posted.push(JSON.parse(String(init.body)));
-      await hold;
-      return answer();
-    }
-    return new Response("{}", { status: 404 });
-  });
-});
-afterEach(() => {
-  vi.unstubAllGlobals();
-  document.body.replaceChildren();
 });
 
 // The fixture, with the asking task changed by `change`.
@@ -80,8 +57,8 @@ test("parsed questions: one option each, the pick ticked in advance, a note per 
   expect(within(form).getByText(/1 left blank: the run sees which/)).toBeTruthy();
   const send = within(form).getByRole("button", { name: "Send answers" });
 
-  let release = () => {};
-  hold = new Promise((r) => (release = r));
+  // Held until the test lets it go.
+  const release = api.hold();
   fireEvent.click(send);
   // Disabled while sending.
   await within(form).findByRole("button", { name: "Sending…" });
@@ -91,14 +68,17 @@ test("parsed questions: one option each, the pick ticked in advance, a note per 
     "textContent",
     "Answers sent: #138 continues.",
   );
-  expect(posted).toEqual([
+  expect(api.posted).toEqual([
     {
-      number: 138,
-      answers: [
-        { options: [0], text: "Try 250 if it lags" },
-        { options: [], text: "" },
-        { options: [], text: "No results" },
-      ],
+      url: "api/repos/acme/api/answer",
+      body: {
+        number: 138,
+        answers: [
+          { options: [0], text: "Try 250 if it lags" },
+          { options: [], text: "" },
+          { options: [], text: "No results" },
+        ],
+      },
     },
   ]);
   // api/state is read again: the task's new state shows.
@@ -114,11 +94,15 @@ test("questions not in the format: shown as written, one text box", async () => 
     target: { value: "1. cheap 2. blue" },
   });
   fireEvent.click(within(form).getByRole("button", { name: "Send answers" }));
-  await waitFor(() => expect(posted).toEqual([{ number: 138, text: "1. cheap 2. blue" }]));
+  await waitFor(() =>
+    expect(api.posted).toEqual([
+      { url: "api/repos/acme/api/answer", body: { number: 138, text: "1. cheap 2. blue" } },
+    ]),
+  );
 });
 
 test("a refusal is shown as the listener says it, and the answers stay to send again", async () => {
-  answer = () => Response.json({ error: "#138 isn't waiting for answers." }, { status: 409 });
+  api.answer = () => Response.json({ error: "#138 isn't waiting for answers." }, { status: 409 });
   const form = show();
   const box = within(form).getByRole("textbox", { name: "Answer to question 3" });
   fireEvent.input(box, { target: { value: "No results" } });
@@ -141,7 +125,11 @@ test("a pull request's own task sends `pr`; a task not waiting for input has no 
     target: { value: "No results" },
   });
   fireEvent.click(within(form).getByRole("button", { name: "Send answers" }));
-  await waitFor(() => expect(posted).toMatchObject([{ number: 138, pr: true }]));
+  await waitFor(() =>
+    expect(api.posted).toMatchObject([
+      { url: "api/repos/acme/api/answer", body: { number: 138, pr: true } },
+    ]),
+  );
   document.body.replaceChildren();
   history.replaceState(null, "", `#/all?task=${encodeURIComponent(ASKING)}`);
   expect(show((t) => ({ ...t, state: "done" }))).toBeNull();

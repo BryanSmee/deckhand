@@ -1,9 +1,6 @@
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { loadConfig } from "../listener/config.mjs";
 import {
   branchConfigReport,
   createOnboarding,
@@ -12,8 +9,9 @@ import {
   onboardingBody,
   onboardingTargets,
 } from "../listener/onboarding.mjs";
+import { tempDir, testConfig } from "./helpers.mjs";
 
-const config = loadConfig({ ALLOWED_USERS: "alice,bob", ALLOWED_REPOS: "org/app,org/lib" });
+const config = testConfig({ ALLOWED_USERS: "alice,bob", ALLOWED_REPOS: "org/app,org/lib" });
 
 function installation(event, sender = "alice", repos = ["org/app"]) {
   const list = repos.map((full_name) => ({ full_name }));
@@ -43,7 +41,7 @@ test("installation deliveries: the allowed repos, when the installer is an allow
     assert.deepEqual(reasons, [`${event}: org/other not in ALLOWED_REPOS`]);
   }
   // Without ALLOWED_REPOS, every repo of the installation.
-  const open = loadConfig({ ALLOWED_USERS: "alice" });
+  const open = testConfig();
   const many = Array.from({ length: 30 }, (_, i) => `org/r${i}`);
   assert.equal(
     targets(open, "installation", installation("installation", "alice", many)).repos.length,
@@ -66,7 +64,7 @@ test("installation deliveries: an unknown installer, other actions, ONBOARDING=o
   const forged = { ...installation("installation"), installation: undefined };
   assert.match(targets(config, "installation", forged).reasons[0], /not from an installation/);
 
-  const off = loadConfig({ ALLOWED_USERS: "alice", ONBOARDING: "off" });
+  const off = testConfig({ ONBOARDING: "off" });
   assert.equal(off.onboarding, false);
   assert.equal(config.onboarding, true);
   const skipped = targets(off, "installation", installation("installation"));
@@ -74,8 +72,8 @@ test("installation deliveries: an unknown installer, other actions, ONBOARDING=o
   assert.match(skipped.reasons[0], /ONBOARDING=off/);
 });
 
-test("onboarding.json: the onboarded repos are kept across a restart", () => {
-  const path = join(mkdtempSync(join(tmpdir(), "deckhand-")), "onboarding.json");
+test("onboarding.json: the onboarded repos are kept across a restart", (t) => {
+  const path = join(tempDir(t), "onboarding.json");
   const store = createOnboardingStore(path);
   assert.equal(store.get("org/app"), null);
   store.record("Org/App", 4, 1000);
@@ -102,10 +100,7 @@ const file = (text) => [
   { type: "file", sha: "x", content: Buffer.from(text).toString("base64") },
 ];
 
-function onboardingWith(
-  routes,
-  store = createOnboardingStore(join(mkdtempSync(join(tmpdir(), "deckhand-")), "o.json")),
-) {
+function onboardingWith(t, routes, store = createOnboardingStore(join(tempDir(t), "o.json"))) {
   const { request, calls } = fakeRequest({
     "GET /repos/org/app": [200, { default_branch: "trunk", has_issues: true }],
     "POST /repos/org/app/labels": [201, {}],
@@ -125,8 +120,8 @@ function onboardingWith(
   return { onboarding, calls, logs, store, accepted };
 }
 
-test("start: the onboarding issue, then a run on it in the onboarding mode; none without one", async () => {
-  const { onboarding, accepted } = onboardingWith({});
+test("start: the onboarding issue, then a run on it in the onboarding mode; none without one", async (t) => {
+  const { onboarding, accepted } = onboardingWith(t, {});
   await onboarding.onboard(["org/app"], "alice");
   assert.equal(accepted.length, 1);
   const [item] = accepted;
@@ -140,8 +135,8 @@ test("start: the onboarding issue, then a run on it in the onboarding mode; none
   assert.equal(accepted.length, 1);
 });
 
-test("the onboarding issue: labelled, mentioning the installer, recorded once", async () => {
-  const { onboarding, calls, store } = onboardingWith({});
+test("the onboarding issue: labelled, mentioning the installer, recorded once", async (t) => {
+  const { onboarding, calls, store } = onboardingWith(t, {});
   // Two deliveries at once: one issue.
   const [first, second] = await Promise.all([
     onboarding.open("org/app", "alice"),
@@ -168,15 +163,15 @@ test("the onboarding issue: labelled, mentioning the installer, recorded once", 
   assert.equal(calls.filter((c) => c.path === "/repos/org/app/issues").length, 1);
 });
 
-test("no onboarding issue with a config on the default branch, or issues disabled", async () => {
-  const configured = onboardingWith({
+test("no onboarding issue with a config on the default branch, or issues disabled", async (t) => {
+  const configured = onboardingWith(t, {
     "GET /repos/org/app/contents/.deckhand.yaml?ref=trunk": file("model: opus\n"),
   });
   assert.equal(await configured.onboarding.open("org/app", "alice"), null);
   assert.match(configured.logs[0], /\.deckhand\.yaml is already on trunk/);
   assert.equal(configured.store.get("org/app"), null);
 
-  const closed = onboardingWith({ "GET /repos/org/app": [200, { has_issues: false }] });
+  const closed = onboardingWith(t, { "GET /repos/org/app": [200, { has_issues: false }] });
   assert.equal(await closed.onboarding.open("org/app", "alice"), null);
   assert.match(closed.logs[0], /issues are disabled/);
   for (const { calls } of [configured, closed]) {
