@@ -1,8 +1,9 @@
 // The egress proxy's cache (proxy/cache.mjs) through the proxy, against a local upstream that
 // counts what reaches it, with a temp dir and a fake clock.
 import assert from "node:assert/strict";
-import { readdirSync, writeFileSync } from "node:fs";
+import { readdirSync, statSync, writeFileSync } from "node:fs";
 import { request } from "node:http";
+import { connect, createServer } from "node:net";
 import { join } from "node:path";
 import { test } from "node:test";
 import { createCache, lifetime, parseSize } from "../proxy/cache.mjs";
@@ -100,6 +101,182 @@ test("other hosts, and requests that aren't a plain GET, are forwarded as before
   assert.deepEqual(files(), []);
   // Credentials reach the host.
   assert.equal(seen[2].headers.authorization, "Bearer t");
+});
+
+// Sends `head` (and a body, when it has one) to the proxy as is: what Node's client wouldn't.
+function raw(port, head) {
+  return new Promise((resolve, reject) => {
+    const socket = connect(port, "127.0.0.1");
+    let data = "";
+    socket.on("data", (d) => (data += d));
+    socket.on("end", () => resolve(data));
+    socket.on("error", reject);
+    socket.write(head);
+  });
+}
+
+test("a GET with a body or credential-like headers is forwarded, never stored", async (t) => {
+  const { get, seen, files, proxyPort, url } = await setup(t);
+  const sent = [
+    `content-length: 4\r\n\r\nbody`,
+    `transfer-encoding: chunked\r\n\r\n4\r\nbody\r\n0\r\n\r\n`,
+    `expect: 100-continue\r\ncontent-length: 0\r\n\r\n`,
+  ];
+  for (const rest of sent) {
+    const answer = await raw(
+      proxyPort,
+      `GET ${url("/x")} HTTP/1.1\r\nhost: cached.test\r\nconnection: close\r\n${rest}`,
+    );
+    assert.match(answer, /HTTP\/1\.1 200[^]*body of \/x/);
+    assert.doesNotMatch(answer, /x-deckhand-cache/);
+  }
+  const credentials = [
+    { "private-token": "glpat" },
+    { "job-token": "j" },
+    { "x-jfrog-art-api": "k" },
+    { "x-api-key": "k" },
+    { "x-goog-api-key": "k" },
+  ];
+  for (const headers of credentials) {
+    const answer = await get("/x", headers);
+    assert.equal(answer.headers["x-deckhand-cache"], undefined, Object.keys(headers)[0]);
+  }
+  await wait(30);
+  assert.equal(seen.length, sent.length + credentials.length);
+  assert.deepEqual(files(), []);
+  // They reach the host, as before.
+  assert.equal(seen.at(-1).headers["x-goog-api-key"], "k");
+  // npm's, on every request, and the proxy's own aren't credentials.
+  const npm = await get("/y", { "npm-auth-type": "web", "proxy-authorization": "Basic eA==" });
+  assert.equal(npm.headers["x-deckhand-cache"], "miss");
+});
+
+test("only a short list of request headers reaches the host on the cache path", async (t) => {
+  const { get, seen, upstreamPort } = await setup(t);
+  await get("/pkg", {
+    accept: "*/*",
+    "accept-encoding": "gzip",
+    "accept-language": "en",
+    "user-agent": "apt",
+    "x-http-method-override": "DELETE",
+    "x-forwarded-host": "evil.test",
+    te: "trailers",
+    "keep-alive": "timeout=5",
+  });
+  const headers = { ...seen[0].headers };
+  // Node's own, for a connection that isn't pooled.
+  assert.equal(headers.connection, "close");
+  delete headers.connection;
+  assert.deepEqual(headers, {
+    host: `cached.test:${upstreamPort}`,
+    accept: "*/*",
+    "accept-encoding": "gzip",
+    "accept-language": "en",
+    "user-agent": "apt",
+  });
+});
+
+// The review's scenario, against a host that answers a GET before reading its body, then
+// takes the next Content-Length bytes on that connection as the body: a later request's
+// header then reads as a request of its own, whose answer the cache would keep under the
+// later one's URL.
+test("a host that answers before reading the body can't be made to poison an entry", async (t) => {
+  const host = createServer((socket) => {
+    let buffer = "";
+    let skip = 0;
+    socket.on("error", () => {});
+    socket.on("data", (data) => {
+      buffer += data;
+      for (;;) {
+        const dropped = Math.min(skip, buffer.length);
+        buffer = buffer.slice(dropped);
+        skip -= dropped;
+        const end = buffer.indexOf("\r\n\r\n");
+        if (end < 0) return;
+        const head = buffer.slice(0, end);
+        buffer = buffer.slice(end + 4);
+        const path = head.split(" ")[1];
+        skip = Number(/\r\ncontent-length: *(\d+)/i.exec(head)?.[1] ?? 0);
+        const body = `body of ${path}`;
+        socket.write(
+          `HTTP/1.1 200 OK\r\ncache-control: max-age=60\r\ncontent-length: ${body.length}\r\n\r\n${body}`,
+        );
+      }
+    });
+  });
+  const port = await listening(host);
+  t.after(() => host.close());
+  const cache = createCache({ dir: tempDir(t, "deckhand-egress-cache-") });
+  const proxy = createProxy({
+    policy: async () => ({ allowed: true, private: true, cache: true }),
+    lookup: async () => [{ address: "127.0.0.1", family: 4 }],
+    blocked: () => false,
+    cache,
+  });
+  const proxyPort = await listening(proxy);
+  t.after(() => proxy.close());
+  const url = (path) => `http://cached.test:${port}${path}`;
+  // What the host reads up to the header's value: the bytes it skips.
+  const skipped = `GET /victim HTTP/1.1\r\nhost: cached.test:${port}\r\nx-a: `.length;
+  const body = "b".repeat(skipped);
+  await raw(
+    proxyPort,
+    `GET ${url("/b")} HTTP/1.1\r\nhost: x\r\ncontent-length: ${skipped}\r\n` +
+      `connection: close\r\n\r\n${body}`,
+  );
+  await raw(
+    proxyPort,
+    `GET ${url("/victim")} HTTP/1.1\r\nhost: x\r\nx-a: GET /evil HTTP/1.1\r\n` +
+      `connection: close\r\n\r\n`,
+  );
+  for (let i = 0; i < 50 && !cache.has(cache.key(url("/victim"))); i++) await wait(5);
+  // Another repository's sandbox.
+  const answer = await raw(
+    proxyPort,
+    `GET ${url("/victim")} HTTP/1.1\r\nhost: x\r\nconnection: close\r\n\r\n`,
+  );
+  assert.match(answer, /body of \/victim$/);
+  assert.doesNotMatch(answer, /evil/);
+});
+
+test("parallel downloads keep what is written and kept under the cache's size", async (t) => {
+  const dir = tempDir(t, "deckhand-egress-cache-");
+  const cache = createCache({ dir, max: 250, entryMax: 200 });
+  const onDisk = () =>
+    readdirSync(dir)
+      .filter((name) => !name.endsWith(".json"))
+      .reduce((sum, name) => sum + statSync(join(dir, name)).size, 0);
+  const meta = (path) => ({ url: path, status: 200, headers: {} });
+  const old = cache.writer(cache.key("/old"), meta("/old"));
+  old.write(Buffer.alloc(100));
+  assert.equal(await old.commit(), true);
+  // Three downloads of 100 bytes at once, chunk by chunk.
+  const writers = ["/a", "/b", "/c"].map((path) => cache.writer(cache.key(path), meta(path)));
+  const kept = [];
+  for (let i = 0; i < 10; i++) {
+    for (const writer of writers) {
+      kept.push(writer.write(Buffer.alloc(10)));
+      assert.ok(cache.size <= 250, `${cache.size} bytes`);
+    }
+    // An aborted download's file is removed meanwhile, then no longer counted.
+    await wait(5);
+  }
+  // The oldest entry went first, then the download that found no room left.
+  assert.equal(cache.has(cache.key("/old")), false);
+  assert.ok(kept.includes(false));
+  const done = await Promise.all(writers.map((writer) => writer.commit()));
+  assert.deepEqual(done, [true, false, false]);
+  await wait(30);
+  assert.equal(cache.size, 100);
+  assert.ok(onDisk() <= 250, `${onDisk()} bytes on disk`);
+  // Once downloads fill it, a new one isn't even started: forwarded, not kept.
+  const big = { url: "/big", status: 200, headers: { "content-length": "200" } };
+  const a = cache.writer(cache.key("/d"), meta("/d"));
+  a.write(Buffer.alloc(100));
+  assert.equal(cache.writer(cache.key("/big"), big), null);
+  a.abort();
+  await wait(30);
+  assert.equal(cache.size, 100);
 });
 
 test("answers that aren't the same for everyone are never stored", async (t) => {

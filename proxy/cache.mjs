@@ -60,17 +60,51 @@ function directives(value) {
   return list;
 }
 
-// How a request uses the cache: "skip" (forwarded as before: not a GET, credentials, a
-// range, no-store), "revalidate" (the client wants it checked: no-cache, max-age=0) or "use".
+// Request headers that may carry a credential, by name (Private-Token, X-JFrog-Art-Api,
+// X-Goog-Api-Key…): the host may answer them with what isn't everyone's. Not the proxy's
+// own, which never reach the host, nor npm's `npm-auth-type`, sent on every request: it
+// names a login flow, not a secret.
+const CREDENTIAL = /auth|token|key|secret|password|credential|^x-jfrog-/;
+const NOT_CREDENTIALS = new Set(["npm-auth-type"]);
+const credentialLike = (name) =>
+  !name.startsWith("proxy-") && !NOT_CREDENTIALS.has(name) && CREDENTIAL.test(name);
+
+// A GET with a body: a host that answers before reading it reads the body as the next
+// request on its connection (request smuggling), and only the key's request is checked.
+const withBody = (h) =>
+  Number(h["content-length"]) > 0 || h["transfer-encoding"] !== undefined || "expect" in h;
+
+// How a request uses the cache: "skip" (forwarded as before: not a GET, a body, credentials,
+// a range, no-store), "revalidate" (the client wants it checked: no-cache, max-age=0) or "use".
 export function requestUse(req) {
   const h = req.headers;
-  if (req.method !== "GET" || h.authorization || h.cookie || h.range) return "skip";
+  if (req.method !== "GET" || withBody(h) || h.cookie || h.range) return "skip";
+  if (Object.keys(h).some(credentialLike)) return "skip";
   const cc = directives(h["cache-control"]);
   if (cc.has("no-store")) return "skip";
   if (cc.has("no-cache") || cc.get("max-age") === "0" || /no-cache/i.test(h.pragma ?? "")) {
     return "revalidate";
   }
   return "use";
+}
+
+// The only request headers that reach the host on the cache path, with `host`: what the
+// answer is kept for has to be what anyone asking for the key would send. Anything else
+// (X-HTTP-Method-Override, X-Forwarded-Host, hop-by-hop ones) could shape an answer kept for
+// every repository.
+const FORWARDED = [
+  "accept",
+  "accept-encoding",
+  "accept-language",
+  "user-agent",
+  "if-none-match",
+  "if-modified-since",
+];
+
+export function forwardedHeaders(headers, host) {
+  const kept = { host };
+  for (const name of FORWARDED) if (headers[name] !== undefined) kept[name] = headers[name];
+  return kept;
 }
 
 // Whether the client asked only for a change: its If-None-Match / If-Modified-Since.
@@ -148,6 +182,8 @@ export function createCache({
 }) {
   const index = new Map(); // key → { size, lastUsed }
   let total = 0;
+  // Bytes of downloads being written, not kept yet: on disk too, so counted against `max`.
+  let pending = 0;
   const enabled = max > 0 && !!dir;
   const limit = Math.min(entryMax, max);
   const bodyPath = (key) => join(dir, `${key}.body`);
@@ -170,14 +206,24 @@ export function createCache({
     await Promise.all([unlink(metaPath(key)), unlink(bodyPath(key))].map((p) => p.catch(() => {})));
   }
 
-  async function evict() {
-    if (total <= max) return;
-    const oldest = [...index].sort(([, a], [, b]) => a.lastUsed - b.lastUsed);
-    for (const [key] of oldest) {
-      if (total <= max) break;
-      log(`cache: removed ${key}, least recently used`);
-      await remove(key);
+  function oldest() {
+    let found = null;
+    for (const [key, { lastUsed }] of index) {
+      if (!found || lastUsed < found.lastUsed) found = { key, lastUsed };
     }
+    return found.key;
+  }
+
+  // Room for `bytes` more on disk, kept or being written: the least recently used entries go
+  // (out of the index at once, their files in the background). False when downloads alone
+  // fill it.
+  function makeRoom(bytes) {
+    while (total + pending + bytes > max && index.size) {
+      const key = oldest();
+      log(`cache: removed ${key}, least recently used`);
+      remove(key);
+    }
+    return total + pending + bytes <= max;
   }
 
   const writeMeta = (key, meta) => atomicWrite(metaPath(key), JSON.stringify(meta));
@@ -231,8 +277,9 @@ export function createCache({
       return ready;
     },
     limit,
+    // Bytes on disk: kept, and being written.
     get size() {
-      return total;
+      return total + pending;
     },
     has: (key) => index.has(key),
 
@@ -286,30 +333,36 @@ export function createCache({
 
     remove,
 
-    // A new entry, written as its body comes: write() each chunk (false once over the limit:
-    // dropped), then commit() once complete (`expected`: its Content-Length, checked), or
-    // abort().
+    // A new entry, written as its body comes: write() each chunk (false once over the limit,
+    // or with no room left: dropped), then commit() once complete (`expected`: its
+    // Content-Length, checked), or abort(). Null when the downloads being written leave no
+    // room for `expected`: the answer goes on without being kept.
     writer(key, { url, status, headers }) {
+      const expected = Number(headers?.["content-length"]) || 0;
+      if (pending + expected > max) return null;
       const path = tempPath(dir);
       const stream = createWriteStream(path, { flags: "wx" });
       let size = 0;
       let done = false;
       const closed = new Promise((resolve) => stream.on("close", resolve));
       stream.on("error", () => abort());
+      // Its bytes stay counted until its file is gone, or kept.
+      const release = () => (pending -= size);
       function abort() {
         if (done) return;
         done = true;
         stream.destroy();
-        closed.then(() => unlink(path).catch(() => {}));
+        closed.then(() => unlink(path).catch(() => {})).then(release);
       }
       return {
         write(chunk) {
           if (done) return false;
-          size += chunk.length;
-          if (size > limit) {
+          if (size + chunk.length > limit || !makeRoom(chunk.length)) {
             abort();
             return false;
           }
+          size += chunk.length;
+          pending += chunk.length;
           stream.write(chunk);
           return true;
         },
@@ -325,6 +378,7 @@ export function createCache({
           await closed;
           if (stream.errored) {
             await unlink(path).catch(() => {});
+            release();
             return false;
           }
           const at = now();
@@ -342,11 +396,13 @@ export function createCache({
           } catch (error) {
             log(`cache: storing ${url}: ${error.code ?? error.message}`);
             await unlink(path).catch(() => {});
+            release();
             await remove(key);
             return false;
           }
+          release();
           add(key, size, at);
-          await evict();
+          makeRoom(0);
           return true;
         },
       };
