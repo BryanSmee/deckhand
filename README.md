@@ -7,7 +7,8 @@ issue when it is done, or stops to ask when only you can decide.
 It is self-hosted and bring-your-own-key: you create your own private GitHub App, run your
 own server with Docker, and use your own Claude credential. It can run
 [Codex](docs/setup.md#codex) instead, with your own OpenAI API key, or Google's
-[Antigravity CLI](docs/setup.md#antigravity-cli) on your Google AI Pro/Ultra plan, for every
+[Antigravity CLI](docs/setup.md#antigravity-cli) with a Gemini API key or on your Google AI
+Pro/Ultra plan, for every
 repository or for those that pick it. One deployment serves one
 operator, across as many repositories as the App is installed on.
 

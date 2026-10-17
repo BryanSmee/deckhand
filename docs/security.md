@@ -179,16 +179,22 @@ again when you change `CODEX_VERSION`.
 
 ### The Antigravity CLI's login
 
+The Antigravity CLI's `GEMINI_API_KEY` is kept out the same way (`listener/google.mjs`): a
+sandbox's `agy` has `<broker>/google` as `GOOGLE_GEMINI_BASE_URL`, `modelProvider: "gemini"`
+in its settings, and the run's secret as `GEMINI_API_KEY`, sent as `x-goog-api-key`; the
+listener checks it against the broker, puts your key in its place and forwards the call to
+Google (or the operator's `GEMINI_BASE_URL`), on `/v1/` and `/v1beta/` paths only.
+
 A Google AI plan's login (`AGY_AUTH_FILE`, `listener/antigravity-login.mjs`) is the token file
 `agy` writes when you sign in: an access token for about an hour, and a refresh token that
-stands for the Google account. Neither enters a sandbox. `agy` has no base URL to point at the
-listener, and its calls go to Google directly, so it is kept out another way:
+stands for the Google account. Neither enters a sandbox. On a plan, `agy` has no base URL to
+point at the listener, and its calls go to Google directly, so it is kept out another way:
 
 - **The sandbox's token file holds the run's secret** as its access token, with an expiry in
   2099 and a placeholder refresh token (`sandbox/agents/antigravity.sh`): `agy` sends the token
   as it is and never tries to refresh it (checked against agy 1.4.0).
-- **The proxy relays the hosts that carry it.** For runs of the Antigravity CLI only (the
-  broker's run says which agent it is), the egress policy marks
+- **The proxy relays the hosts that carry it.** For runs of the Antigravity CLI on a plan
+  only (the broker's run says which agent it is), the egress policy marks
   `daily-cloudcode-pa.googleapis.com` and `www.googleapis.com` as relayed: the proxy ends the
   sandbox's TLS with Deckhand's CA (see [HTTPS and Deckhand's CA](#https-and-deckhands-ca)),
   cache on or off, and sends each request to the listener (`RELAY_URL`,

@@ -123,8 +123,8 @@ export function researchAccess(config, task, { agent, log }) {
 // none: their HTTPS would fail on a certificate the sandbox doesn't know. An agent whose calls
 // the proxy relays to the listener (its `relayed` hosts, agents/) can't do without it: the run
 // stops. `egressCa()`: the proxy's, or null.
-export async function egressCache(grant, egressCa, note, agent) {
-  const relays = !!agent?.relayed?.length;
+export async function egressCache(grant, egressCa, note, agent, config = {}) {
+  const relays = !!agent?.relayed?.length && !Object.keys(agent.env(config, "s")).length;
   if (!grant.cachedHosts.length && !relays) return { ca: null, cached: [] };
   const ca = await egressCa();
   if (!ca && relays) {

@@ -191,9 +191,18 @@ test("the agent: installed like Codex, its login out of the sandbox, no mid-run 
     versionVar: "AGY_VERSION",
     command: "deckhand-install-antigravity",
   });
-  // Nothing in its environment: the sandbox writes the run's secret in its token file.
+  // With a plan login: nothing in its environment, the sandbox writes the run's secret in its
+  // token file. With GEMINI_API_KEY: the run's secret as GEMINI_API_KEY and the listener's URL.
   assert.deepEqual(antigravity.env(config, "run-secret"), {});
-  assert.deepEqual(antigravity.secrets, ["AGY_AUTH_FILE"]);
+  assert.deepEqual(
+    antigravity.env(
+      { ...config, agyCredential: "GEMINI_API_KEY", brokerUrl: "http://b:8081" },
+      "s",
+    ),
+    { GEMINI_API_KEY: "s", GOOGLE_GEMINI_BASE_URL: "http://b:8081/google" },
+  );
+  assert.deepEqual(antigravity.secrets, ["GEMINI_API_KEY", "AGY_AUTH_FILE"]);
+  assert.ok(AGENT_SECRETS.includes("GEMINI_API_KEY"));
   assert.ok(AGENT_SECRETS.includes("AGY_AUTH_FILE"));
   assert.deepEqual(antigravity.relayed, [
     "daily-cloudcode-pa.googleapis.com",
@@ -411,6 +420,29 @@ test("its home: the run's secret as its token, the clone trusted, MCP, hooks and
     },
   });
   assert.equal(readFileSync(join(home, ".gemini/AGENTS.md"), "utf8"), "# Rules\n");
+
+  // With GEMINI_API_KEY: modelProvider is "gemini" and any plan token file is removed; switching
+  // back to a plan login clears modelProvider and writes the token file again.
+  const withKey = agyScript(
+    t,
+    `mkdir -p "$HOME/.gemini/antigravity-cli"
+     echo '{"token":"old"}' > "$HOME/.gemini/antigravity-cli/antigravity-oauth-token"
+     GEMINI_API_KEY=run-secret agy_home
+     jq -c . "$HOME/.gemini/antigravity-cli/settings.json"
+     [ ! -e "$HOME/.gemini/antigravity-cli/antigravity-oauth-token" ] && echo "no-token"
+     unset GEMINI_API_KEY
+     DECKHAND_RUN_SECRET=run-secret agy_home
+     jq -c . "$HOME/.gemini/antigravity-cli/settings.json"`,
+  );
+  const [geminiSettings, tokenGone, planSettings] = withKey.stdout.trim().split("\n");
+  assert.deepEqual(JSON.parse(geminiSettings), {
+    trustedWorkspaces: ["/workspace"],
+    modelProvider: "gemini",
+  });
+  assert.equal(tokenGone, "no-token");
+  assert.deepEqual(JSON.parse(planSettings), {
+    trustedWorkspaces: ["/workspace"],
+  });
 
   // Without the listener (by hand), the token file is the user's own.
   const plain = agyScript(t, 'agy_home; ls -A "$HOME/.gemini/antigravity-cli"');

@@ -42,21 +42,29 @@ agent_check() {
 agy_home() {
   local cli=$AGY_HOME/antigravity-cli config=$AGY_HOME/config settings
   mkdir -p "$cli" "$config"
-  # The run's secret as its access token, with an expiry `agy` never reaches: it sends the
-  # token as it is and never refreshes it. Without the listener (by hand), the file is yours.
-  if [ -n "${DECKHAND_RUN_SECRET:-}" ]; then
-    (
-      umask 077
-      jq -n --arg token "$DECKHAND_RUN_SECRET" '{auth_method: "consumer", token: {
-        access_token: $token, token_type: "Bearer", refresh_token: "deckhand-placeholder",
-        expiry: "2099-01-01T00:00:00Z"}}' > "$cli/antigravity-oauth-token"
-    )
-  fi
-  # The clone is trusted (nobody is there to say so); `agy`'s other settings stay.
   settings=$(cat "$cli/settings.json" 2> /dev/null || echo '{}')
-  jq '.trustedWorkspaces = ((.trustedWorkspaces // []) - ["/workspace"] + ["/workspace"])' \
-    <<< "$settings" > "$cli/settings.json" 2> /dev/null ||
-    echo '{"trustedWorkspaces":["/workspace"]}' > "$cli/settings.json"
+  # With a Gemini API key (the run's secret in GEMINI_API_KEY, and GOOGLE_GEMINI_BASE_URL),
+  # `agy` calls the Gemini API directly without signing in when modelProvider is "gemini".
+  # Otherwise the run's secret goes in its token file, with an expiry `agy` never reaches;
+  # without the listener (by hand), the token file is yours. The clone is trusted.
+  if [ -n "${GEMINI_API_KEY:-}" ]; then
+    rm -f "$cli/antigravity-oauth-token"
+    jq '.modelProvider = "gemini" | .trustedWorkspaces = ((.trustedWorkspaces // []) - ["/workspace"] + ["/workspace"])' \
+      <<< "$settings" > "$cli/settings.json" 2> /dev/null ||
+      echo '{"modelProvider":"gemini","trustedWorkspaces":["/workspace"]}' > "$cli/settings.json"
+  else
+    if [ -n "${DECKHAND_RUN_SECRET:-}" ]; then
+      (
+        umask 077
+        jq -n --arg token "$DECKHAND_RUN_SECRET" '{auth_method: "consumer", token: {
+          access_token: $token, token_type: "Bearer", refresh_token: "deckhand-placeholder",
+          expiry: "2099-01-01T00:00:00Z"}}' > "$cli/antigravity-oauth-token"
+      )
+    fi
+    jq 'del(.modelProvider) | .trustedWorkspaces = ((.trustedWorkspaces // []) - ["/workspace"] + ["/workspace"])' \
+      <<< "$settings" > "$cli/settings.json" 2> /dev/null ||
+      echo '{"trustedWorkspaces":["/workspace"]}' > "$cli/settings.json"
+  fi
   echo '{"mcpServers":{}}' > "$config/mcp_config.json"
   # The draft pull request when it stops: its user-level hooks, not the workspace's
   # .agents/hooks.json, which would land in the repo.

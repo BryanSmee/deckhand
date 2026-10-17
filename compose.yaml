@@ -70,10 +70,13 @@ services:
       CODEX_BEST_MODEL: ${CODEX_BEST_MODEL:-}
       CODEX_BALANCED_MODEL: ${CODEX_BALANCED_MODEL:-}
       CODEX_FAST_MODEL: ${CODEX_FAST_MODEL:-}
-      # The Antigravity CLI's Google AI plan login (docs/setup.md#antigravity-cli), which the
-      # listener alone holds and refreshes: agy-auth.json in the credentials folder below, or
-      # this file.
+      # The Antigravity CLI's Gemini API key (docs/setup.md#antigravity-cli), kept out of
+      # sandboxes the same way.
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      # Or a Google AI plan's login (docs/setup.md#with-a-google-ai-plan), which the listener
+      # alone holds and refreshes: agy-auth.json in the credentials folder below, or this file.
       AGY_AUTH_FILE: ${AGY_AUTH_FILE:-}
+      GEMINI_BASE_URL: ${GEMINI_BASE_URL:-}
       # Optional: the models best, balanced and fast stand for with the Antigravity CLI.
       AGY_BEST_MODEL: ${AGY_BEST_MODEL:-}
       AGY_BALANCED_MODEL: ${AGY_BALANCED_MODEL:-}

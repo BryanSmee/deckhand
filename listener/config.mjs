@@ -12,6 +12,7 @@ import {
   entryOf,
 } from "./agents/index.mjs";
 import { credentialName } from "./anthropic.mjs";
+import { GEMINI_URL, GOOGLE_CREDENTIALS } from "./google.mjs";
 import { OPENAI_CREDENTIALS } from "./openai.mjs";
 import { MODEL_NAME } from "./events.mjs";
 import { ENGINES } from "./runner/engine.mjs";
@@ -119,9 +120,11 @@ export const SETTINGS = {
   OPENAI_BASE_URL: { default: "https://api.openai.com/v1", parse: apiUrl },
   // What best, balanced and fast mean to Codex, when not its built-in models.
   ...tierSettings("CODEX", TIERS),
-  // The Antigravity CLI's, on a Google AI plan whose login the listener holds
-  // (agents/antigravity.mjs, antigravity-login.mjs), and what best, balanced and fast mean to it.
+  // The Antigravity CLI's, with a Gemini API key or a Google AI plan's login that the listener
+  // holds (agents/antigravity.mjs, google.mjs, antigravity-login.mjs), and what best, balanced
+  // and fast mean to it.
   AGY_VERSION: { default: "1.4.0" },
+  GEMINI_BASE_URL: { default: GEMINI_URL, parse: apiUrl },
   ...tierSettings("AGY", TIERS),
   // Where a run goes, in order, when its provider fails (runs.mjs). Empty: nowhere.
   FALLBACKS: { type: "list", default: [], parse: fallbacks },
@@ -320,8 +323,10 @@ export function loadConfig(env, file = NO_FILE) {
     openaiCredential: OPENAI_CREDENTIALS.find((name) => env[name]) ?? null,
     openaiUrl: s.OPENAI_BASE_URL,
     codexModels: aliasesFrom(s, "CODEX", TIERS),
-    // The Antigravity CLI's plan login (AGY_AUTH_FILE), which the listener holds and refreshes.
-    agyCredential: env.AGY_AUTH_FILE ? "AGY_AUTH_FILE" : null,
+    // The Antigravity CLI's: a Gemini API key, else a Google AI plan's login, which the
+    // listener holds and refreshes (antigravity-login.mjs).
+    agyCredential: GOOGLE_CREDENTIALS.find((name) => env[name]) ?? null,
+    geminiUrl: s.GEMINI_BASE_URL,
     agyModels: aliasesFrom(s, "AGY", TIERS),
     agent: s.SANDBOX_AGENT,
     brainstormAgent: s.BRAINSTORM_AGENT,

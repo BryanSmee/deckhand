@@ -67,6 +67,7 @@ async function fakeGitHub(files = {}) {
         method: req.method,
         path: req.url,
         auth: req.headers.authorization,
+        headers: req.headers,
         body,
       };
       requests.push(entry);
@@ -648,6 +649,31 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
       JSON.parse(stopped.body).body,
       /^Antigravity CLI can't run here: the egress proxy has no CA/,
     );
+  });
+
+  test("the Antigravity CLI with GEMINI_API_KEY: its key stays out, its calls go to GEMINI_BASE_URL without needing the proxy's CA", async (t) => {
+    const key = "AIza-operator-gemini-key";
+    const { dir, github, send, listener } = await listen(t, {}, (_dir, github) => ({
+      GEMINI_API_KEY: key,
+      GEMINI_BASE_URL: `${github.url}/gemini`,
+      SANDBOX_AGENT: "antigravity",
+      SANDBOX_MODEL: "fast",
+    }));
+    await send(comment("alice"));
+    await listener.until("done (ok)");
+
+    const secret = readFileSync(join(dir, "run-secret"), "utf8").trim();
+    const runEnv = readFileSync(join(dir, "run-env"), "utf8");
+    assert.ok(!runEnv.includes(key));
+    assert.match(runEnv, new RegExp(`^GEMINI_API_KEY=${secret}$`, "m"));
+    assert.match(runEnv, /^GOOGLE_GEMINI_BASE_URL=http:\/\/127\.0\.0\.1:\d+\/google$/m);
+    assert.doesNotMatch(readFileSync(join(dir, "run-args"), "utf8"), /DECKHAND_CA/);
+
+    const call = await github.waitFor((r) =>
+      r.path.startsWith("/gemini/v1beta/models/gemini-3.8-flash-medium:streamGenerateContent"),
+    );
+    assert.equal(call.headers["x-goog-api-key"], key);
+    assert.deepEqual(JSON.parse(readFileSync(join(dir, "google-answer"), "utf8")), { id: 1 });
   });
 
   // A Claude credential, an OpenRouter key and an OpenAI key, with FALLBACKS; `failing`: the

@@ -52,7 +52,7 @@ export function createPreparation(ctx) {
     live.hosts = access.hosts;
     live.trusted = access.trusted;
     live.uncached = mandatoryHosts(config, agent);
-    const { ca, cached } = await egressCache(access.grant, ctx.egressCa, note, agent);
+    const { ca, cached } = await egressCache(access.grant, ctx.egressCa, note, agent, config);
     live.cached = cached;
     return {
       // Another agent takes over: the branches are part of what it is handed.
@@ -89,7 +89,7 @@ export function createPreparation(ctx) {
     live.uncached = mandatoryHosts(config, agent);
     live.cached = [];
     // No cached hosts, but the CA an agent whose calls are relayed needs.
-    const { ca } = await egressCache(access.grant, ctx.egressCa, note, agent);
+    const { ca } = await egressCache(access.grant, ctx.egressCa, note, agent, config);
     return {
       message: handoff ? handoffMessage({ ...handoff, branches: [] }) : message,
       instructions: null,

@@ -260,7 +260,8 @@ are the repo's modes with `light: true`.
 ## Agent
 
 `agent` picks what runs the repository's work: `claude` (Claude Code), `codex` (OpenAI's
-Codex) or `antigravity` (Google's Antigravity CLI, on the operator's Google AI plan),
+Codex) or `antigravity` (Google's Antigravity CLI, with a Gemini API key or on the operator's
+Google AI plan),
 `brainstorm_agent` that of its light runs (brainstorms, inbox entries, discussions),
 and a mode's `agent` that of the mode. Without them, the operator's `SANDBOX_AGENT` and
 `BRAINSTORM_AGENT` (a light mode takes `brainstorm_agent`, a full one `agent`).
