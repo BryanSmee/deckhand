@@ -237,8 +237,8 @@ const MODES = `model: opus
 brainstorm_model: haiku
 brainstorm_effort: low
 modes:
-  Review:
-    instructions: .deckhand/review.md # from the default branch, like instructions
+  Audit:
+    instructions: .deckhand/audit.md # from the default branch, like instructions
     light: true
     model: sonnet
   triage:
@@ -256,15 +256,15 @@ test("modes: parsed, with the defaults of work or brainstorms", () => {
     "brainstorm",
     "onboarding",
     "research",
-    "review",
+    "audit",
     "triage",
   ]);
   // A light mode takes the brainstorms' defaults, a full one work's.
-  assert.deepEqual(customMode(settings, "review"), {
-    name: "review",
+  assert.deepEqual(customMode(settings, "audit"), {
+    name: "audit",
     light: true,
     fresh: false,
-    instructions: ".deckhand/review.md",
+    instructions: ".deckhand/audit.md",
     agent: "claude",
     model: "sonnet",
     effort: "low",
@@ -281,7 +281,7 @@ test("modes: parsed, with the defaults of work or brainstorms", () => {
   // The listener's own modes aren't the repo's.
   assert.equal(customMode(settings, "work"), null);
   assert.equal(customMode(settings, "brainstorm"), null);
-  assert.equal(customMode(defaultSettings(config), "review"), null);
+  assert.equal(customMode(defaultSettings(config), "audit"), null);
 });
 
 test("modes: built-in names, wrong names, unknown keys and bad paths are errors", () => {
@@ -317,7 +317,7 @@ test("modes: built-in names, wrong names, unknown keys and bad paths are errors"
     "modes.OK: defined twice (names are not case-sensitive)",
   ]);
   assert.deepEqual(Object.keys(settings.modes), ["ok"]);
-  assert.match(parseRepoConfig("modes: [review]", config).errors[0], /^modes: expected modes/);
+  assert.match(parseRepoConfig("modes: [audit]", config).errors[0], /^modes: expected modes/);
 });
 
 test("a mode can't grant anything: hosts, mounts and limits stay the repo's", () => {
@@ -344,7 +344,7 @@ modes:
   assert.deepEqual(settings.mounts, [{ path: "/nfs/work", readOnly: true }]);
   // What a valid mode's run gets: nothing about access.
   const { settings: valid } = parseRepoConfig(MODES, config);
-  assert.deepEqual(Object.keys(customMode(valid, "review")).sort(), [
+  assert.deepEqual(Object.keys(customMode(valid, "audit")).sort(), [
     "agent",
     "effort",
     "fresh",
@@ -456,8 +456,8 @@ test("agent: a repo picks among the operator's agents, per repo, light runs and 
     `agent: Codex
 brainstorm_agent: claude
 modes:
-  review:
-    instructions: review.md
+  lint:
+    instructions: lint.md
     light: true
   audit:
     instructions: audit.md
@@ -469,7 +469,7 @@ modes:
   assert.equal(settings.agent, "codex");
   assert.equal(settings.brainstormAgent, "claude");
   // A light mode takes the light runs' agent, a full one work's, unless it names its own.
-  assert.equal(customMode(settings, "review").agent, "claude");
+  assert.equal(customMode(settings, "lint").agent, "claude");
   assert.equal(customMode(settings, "audit").agent, "claude");
   assert.equal(effectiveConfig(both, settings).agent, "codex");
   // Without the keys, the operator's.
@@ -482,8 +482,8 @@ test("agent: one the operator hasn't configured is an error, at the top or in a 
     `agent: codex
 brainstorm_agent: gemini
 modes:
-  review:
-    instructions: review.md
+  audit:
+    instructions: audit.md
     agent: codex
 `,
     config,
@@ -491,10 +491,10 @@ modes:
   assert.deepEqual(errors, [
     "agent: the operator hasn't configured codex (configured: claude)",
     "brainstorm_agent: expected one of claude",
-    "modes.review.agent: the operator hasn't configured codex (configured: claude)",
+    "modes.audit.agent: the operator hasn't configured codex (configured: claude)",
   ]);
   assert.equal(settings.agent, "claude");
-  assert.equal(customMode(settings, "review"), null);
+  assert.equal(customMode(settings, "audit"), null);
   assert.deepEqual(parseRepoConfig("agent: [codex]", config).errors, [
     "agent: expected one of claude",
   ]);
@@ -506,4 +506,81 @@ modes:
   const picked = parseRepoConfig("agent: antigravity", google);
   assert.deepEqual(picked.errors, []);
   assert.equal(picked.settings.agent, "antigravity");
+});
+
+test("review: off without the block, manual with true, its keys checked", () => {
+  const off = parseRepoConfig("", config).settings;
+  assert.equal(off.review, null);
+  assert.equal(customMode(off, "review"), null);
+  assert.ok(!modeNames(off).includes("review"));
+  assert.equal(parseRepoConfig("review: false\n", config).settings.review, null);
+  const manual = parseRepoConfig("review: true\n", config).settings;
+  assert.equal(manual.review.on, "manual");
+  assert.deepEqual(modeNames(manual), ["work", "brainstorm", "onboarding", "research", "review"]);
+  // A light, fresh mode with the light runs' model and effort, unless the block says otherwise.
+  assert.deepEqual(customMode(manual, "review"), {
+    name: "review",
+    light: true,
+    fresh: true,
+    instructions: null,
+    agent: "claude",
+    model: "best",
+    effort: "medium",
+  });
+  const { settings, errors } = parseRepoConfig(
+    `brainstorm_model: sonnet
+review:
+  on: ready
+  instructions: .deckhand/review.md
+  model: opus
+  effort: high
+`,
+    config,
+  );
+  assert.deepEqual(errors, []);
+  assert.equal(settings.review.on, "ready");
+  const mode = customMode(settings, "review");
+  assert.deepEqual(
+    [mode.instructions, mode.model, mode.effort],
+    [".deckhand/review.md", "opus", "high"],
+  );
+  assert.equal(
+    customMode(
+      parseRepoConfig("brainstorm_model: sonnet\nreview: true\n", config).settings,
+      "review",
+    ).model,
+    "sonnet",
+  );
+  const bad = parseRepoConfig(
+    `review:
+  on: every_push
+  instructions: ../x.md
+  effort: huge
+  agent: codex
+  hosts: ["*"]
+`,
+    config,
+  );
+  assert.deepEqual(bad.errors, [
+    "review.on: expected ready or manual",
+    "review.instructions: expected a path in the repository (relative, no ..)",
+    "review.effort: expected one of low, medium, high, xhigh, max",
+    "review.agent: the operator hasn't configured codex (configured: claude)",
+    "review.hosts: unknown key (expected on, instructions, agent, model, effort)",
+  ]);
+  assert.equal(bad.settings.review, null);
+  assert.deepEqual(parseRepoConfig("review: [on]\n", config).errors, [
+    "review: expected true, or on, instructions, agent, model, effort",
+  ]);
+});
+
+test("review: a repo's own mode can't take the name, the error says what to do", () => {
+  const { settings, errors } = parseRepoConfig(
+    "modes:\n  Review:\n    instructions: .deckhand/review.md\n    light: true\n",
+    config,
+  );
+  assert.deepEqual(errors, [
+    "modes.Review: review is built in: remove it and turn it on with a top-level `review:` block, or rename it",
+  ]);
+  assert.deepEqual(settings.modes, {});
 });

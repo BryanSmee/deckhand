@@ -139,8 +139,8 @@ test("validateRun: an /agent the operator doesn't have, config errors, a mode go
     /^Claude can't run here: `\.deckhand\.yaml` on `trunk` has errors\.\n\n- agent: the operator hasn't configured codex$/,
   );
   assert.equal(
-    refused(claude, { mode: "review" }, {}),
-    "Claude can't run here: the `review` mode is no longer in `.deckhand.yaml` on `trunk`.",
+    refused(claude, { mode: "audit" }, {}),
+    "Claude can't run here: the `audit` mode is no longer in `.deckhand.yaml` on `trunk`.",
   );
   assert.match(
     refused(codex, { record: { model: "opus" } }, {}),

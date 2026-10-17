@@ -36,13 +36,21 @@ test("light runs have volumes of their own, apart from work's", () => {
 test("entryRun: only the ideas and bugs inboxes' entries are a run each", () => {
   assert.equal(entryRun("idea"), true);
   assert.equal(entryRun("bug"), true);
-  for (const mode of ["discussion", "brainstorm", "work", "stop", "review"]) {
+  for (const mode of ["discussion", "brainstorm", "work", "stop", "audit"]) {
     assert.equal(entryRun(mode), false, mode);
   }
 });
 
-test("every built-in mode's prompt is in prompts/", () => {
+test("every built-in mode's prompt is in prompts/, and copied into the listener's image", () => {
+  // The Dockerfile names each file: one left out stops the listener at start.
+  const dockerfile = readFileSync(new URL("../listener/Dockerfile", import.meta.url), "utf8");
   for (const [name, { prompt }] of Object.entries(MODES)) {
-    if (prompt) assert.ok(existsSync(new URL(`../prompts/${prompt}`, import.meta.url)), name);
+    if (!prompt) continue;
+    assert.ok(existsSync(new URL(`../prompts/${prompt}`, import.meta.url)), name);
+    assert.match(
+      dockerfile,
+      new RegExp(`^COPY .*\\bprompts/${prompt.replace(".", "\\.")}\\b`, "m"),
+      name,
+    );
   }
 });

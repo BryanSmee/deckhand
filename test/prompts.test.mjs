@@ -24,7 +24,7 @@ const settings = {
   brainstormEffort: "low",
   trigger: "Deckhand",
   modes: {
-    review: { light: true, instructions: "docs/review.md" },
+    audit: { light: true, instructions: "docs/audit.md" },
     triage: { session: "fresh", instructions: "docs/triage.md" },
   },
 };
@@ -41,7 +41,7 @@ const grant = { hosts: ["registry.npmjs.org"], mounts: [{ root: "/srv/data", rea
 test("modes: light, fresh and the dashboard's kind, built-in or the repo's own", () => {
   assert.equal(isLight(issue, "brainstorm"), true);
   assert.equal(isLight(issue, "discussion"), true);
-  assert.equal(isLight(issue, "review"), true);
+  assert.equal(isLight(issue, "audit"), true);
   assert.equal(isLight(issue, "work"), false);
   assert.equal(isLight(issue, "triage"), false);
   assert.equal(isFresh(issue, "idea"), true);
@@ -49,7 +49,7 @@ test("modes: light, fresh and the dashboard's kind, built-in or the repo's own",
   assert.equal(isFresh(issue, "discussion"), false);
   assert.equal(kindOf("stop", "issue"), "brainstorm");
   assert.equal(kindOf("bug", "issue"), "bug");
-  assert.equal(kindOf("review", "pr"), "pr");
+  assert.equal(kindOf("audit", "pr"), "pr");
   // An analysis reads the code and its digest, in a session of its own.
   assert.equal(isLight(issue, "analyze"), true);
   assert.equal(isFresh(issue, "analyze"), true);
@@ -63,7 +63,12 @@ test("modes: light, fresh and the dashboard's kind, built-in or the repo's own",
 test("modes: discussions may write them, onboarding and light repo modes only read", () => {
   assert.equal(permissionsFor("discussion", true), DISCUSSION_PERMISSIONS);
   assert.equal(permissionsFor("onboarding", true), READ_ONLY_PERMISSIONS);
-  assert.equal(permissionsFor("review", true), READ_ONLY_PERMISSIONS);
+  assert.equal(permissionsFor("audit", true), READ_ONLY_PERMISSIONS);
+  // A review only reads, whatever its repo says: the listener posts the review.
+  assert.equal(permissionsFor("review"), READ_ONLY_PERMISSIONS);
+  assert.equal(permissionsFor("review", false), READ_ONLY_PERMISSIONS);
+  assert.equal(isLight({ settings: {} }, "review"), true);
+  assert.equal(isFresh({ settings: {} }, "review"), true);
   // An analysis reports: it files nothing itself.
   assert.equal(permissionsFor("analyze", true), READ_ONLY_PERMISSIONS);
   // Brainstorms and inbox entries comment and create issues, never touch a pull request.
@@ -147,9 +152,9 @@ test("prompts: onboarding lists what this Deckhand allows the repo", () => {
 });
 
 test("prompts: a repo's mode, light or not, with its instructions", () => {
-  const own = { name: "review", light: true };
-  const light = promptFor(pr, { mode: "review", own, instructions: "Review it.\n", settings });
-  assert.match(light, /^You are in the "review" mode of this repository, on pull request #13/);
+  const own = { name: "audit", light: true };
+  const light = promptFor(pr, { mode: "audit", own, instructions: "Review it.\n", settings });
+  assert.match(light, /^You are in the "audit" mode of this repository, on pull request #13/);
   assert.match(light, /your GitHub token can only read/);
   assert.match(light, /from the repository:\n\nReview it\.$/);
   const heavy = promptFor(issue, {
@@ -391,4 +396,19 @@ test("the reply's footer: the provider when not the default or after a fallback,
     replyFooter({ agent: "claude", model: "opus", effort: "high" }, null, "", {}),
     "<sub>🤖 Claude opus · high effort</sub>",
   );
+});
+
+test("prompts: a review reads the pull request, the repo's instructions after the built-in ones", () => {
+  // On the issue's task Deckhand's pull request closes: the pull request is the one replied to.
+  const issue = { repo: "org/app", number: 12, kind: "issue", base: "main" };
+  const prompt = promptFor(issue, { mode: "review", pull: 31, instructions: "Mind the SQL.\n" });
+  assert.match(prompt, /^Review pull request #31 of org\/app\./);
+  assert.match(prompt, /`gh pr diff 31`/);
+  assert.match(prompt, /Verdict: request-changes/);
+  assert.match(prompt, /The repository's review instructions:\n\nMind the SQL\.$/);
+  const asked = promptFor(issue, { mode: "review", pull: 31, text: "Focus on the tests." });
+  assert.match(asked, /The maintainer asks:\n\nFocus on the tests\.$/);
+  assert.doesNotMatch(asked, /review instructions/);
+  // Its input is in the prompt: the first message is empty.
+  assert.equal(firstMessage({ mode: "review", text: "Focus on the tests." }), "");
 });

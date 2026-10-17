@@ -29,6 +29,11 @@ export const PLAIN_PATH = /^\/[\w./@+-]*$/;
 
 const MODE_KEYS = ["instructions", "light", "session", "agent", "model", "effort"];
 
+const REVIEW_KEYS = ["on", "instructions", "agent", "model", "effort"];
+// When a review starts by itself (reviews.mjs): `ready`, a pull request marked ready for review
+// or opened as ready; `manual`, only with a "/mode review" line.
+const REVIEW_ON = ["ready", "manual"];
+
 // The listener's own modes (modes.mjs): a repo's `modes:` can't take these names.
 export { customMode, RESERVED_MODES };
 
@@ -243,6 +248,52 @@ function parseConflicts(value, { key, settings, config, fail, warn }) {
   if (ok) settings.conflicts = { checkMinutes: Math.max(minutes, floor) };
 }
 
+// Opt-in: the built-in review mode (modes.mjs, reviews.mjs), `true` for "/mode review" only.
+// Every key is checked, like a mode's: a mistyped one would change what it does unnoticed.
+// It widens nothing (a light run with a read-only token), so no grant.
+function parseReview(value, { key, settings, config, fail }) {
+  if (value === false) return;
+  const review = { on: "manual", instructions: null, agent: null, model: null, effort: null };
+  if (value === true) {
+    settings.review = review;
+    return;
+  }
+  if (!isMap(value)) return fail(key, `expected true, or ${REVIEW_KEYS.join(", ")}`);
+  let ok = true;
+  const bad = (k, what) => {
+    ok = false;
+    fail(`review.${k}`, what);
+  };
+  for (const [k, v] of Object.entries(value)) {
+    if (v === null) continue;
+    if (!REVIEW_KEYS.includes(k)) bad(k, `unknown key (expected ${REVIEW_KEYS.join(", ")})`);
+    else if (k === "on") {
+      if (REVIEW_ON.includes(v)) review.on = v;
+      else bad(k, `expected ${REVIEW_ON.join(" or ")}`);
+    } else if (k === "instructions") {
+      review.instructions = repoPath(v);
+      if (!review.instructions) bad(k, "expected a path in the repository (relative, no ..)");
+    } else if (k === "agent") {
+      review.agent = agentName(v, `review.${k}`, config, (_, what) => bad(k, what));
+    } else if (k === "model") {
+      if (typeof v === "string" && MODEL_NAME.test(v)) review.model = v;
+      else
+        bad(
+          k,
+          "expected a model tier (best, balanced, fast) or name (opus, claude-…, openai/gpt-…)",
+        );
+    } else if (EFFORTS.includes(String(v).toLowerCase())) review.effort = String(v).toLowerCase();
+    else bad(k, `expected one of ${EFFORTS.join(", ")}`);
+  }
+  if (ok) settings.review = review;
+}
+
+function reviewText(review) {
+  if (!review) return "off";
+  const when = review.on === "ready" ? "when a pull request is ready" : '"/mode review" only';
+  return [when, review.instructions].filter(Boolean).join(" · ");
+}
+
 // The operator's value of `field`, as the repo's default: a file can only narrow or replace it.
 const operator = (config, field) => config[field];
 
@@ -418,6 +469,15 @@ export const KEYS = {
     },
     display: asIs,
   },
+  review: {
+    field: "review",
+    default: null,
+    parse: parseReview,
+    display: ({ value, settings, row }) => {
+      const mode = value && customMode(settings, "review");
+      return row(reviewText(value), mode ? `${mode.model}/${mode.effort}` : null);
+    },
+  },
   // One row per mode: only the repo's file defines them.
   modes: {
     field: "modes",
@@ -479,6 +539,12 @@ function parseMode(name, mode, settings, config, fail) {
         : "brainstorm_agent, brainstorm_model and brainstorm_effort";
     return fail(where, `${id} is built in: set it with ${keys} instead`);
   }
+  if (id === "review") {
+    return fail(
+      where,
+      "review is built in: remove it and turn it on with a top-level `review:` block, or rename it",
+    );
+  }
   if (RESERVED_MODES.includes(id)) return fail(where, `${id} is reserved by Deckhand`);
   if (!/^[a-z][a-z0-9_-]{0,31}$/.test(id)) {
     return fail(where, "expected a name of letters, digits, - and _ (32 at most)");
@@ -530,9 +596,11 @@ function parseMode(name, mode, settings, config, fail) {
   if (ok) settings.modes[id] = own;
 }
 
-// The modes "/mode" can pick in a repo, for the reply to an unknown one.
+// The modes "/mode" can pick in a repo, for the reply to an unknown one: review only once its
+// `review` block turns it on.
 export function modeNames(settings) {
-  return [...PICKED_MODES, ...Object.keys(settings?.modes ?? {})];
+  const review = settings?.review ? ["review"] : [];
+  return [...PICKED_MODES, ...review, ...Object.keys(settings?.modes ?? {})];
 }
 
 // "docker/Dockerfile" → itself; absolute paths, "..", odd characters → null.

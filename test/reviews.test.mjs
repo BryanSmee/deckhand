@@ -1,0 +1,286 @@
+// Pull request reviews: the final message's format, the review posted from it, and which
+// pull requests get one by themselves (once per head commit).
+import assert from "node:assert/strict";
+import { join } from "node:path";
+import { test } from "node:test";
+import { parseRepoConfig } from "../listener/repo-config.mjs";
+import {
+  createReviews,
+  parseReview,
+  postReview,
+  reviewBody,
+  reviewCandidate,
+  reviewEvent,
+} from "../listener/reviews.mjs";
+import { tempDir, testConfig } from "./helpers.mjs";
+
+const config = { ...testConfig(), bot: "deckhand-app[bot]" };
+
+const MESSAGE = `Adds the review mode. The token stays read-only, but one decision has no test.
+
+## Findings
+
+- **high** \`listener/reviews.mjs:42\`: a redelivery starts a second run. Fix: check the head first.
+  It costs a run each time.
+- **low** \`docs/repo-config.md:10\`: a typo. Fix: "the".
+- **Medium**: no location for this one. Fix: say where.
+
+Rating: 6/10
+Verdict: request-changes
+`;
+
+test("parseReview: summary, findings by severity with their place, rating and verdict", () => {
+  const review = parseReview(MESSAGE);
+  assert.equal(
+    review.summary,
+    "Adds the review mode. The token stays read-only, but one decision has no test.",
+  );
+  assert.deepEqual(review.findings, [
+    {
+      severity: "high",
+      path: "listener/reviews.mjs",
+      line: 42,
+      text: "a redelivery starts a second run. Fix: check the head first.\nIt costs a run each time.",
+    },
+    { severity: "low", path: "docs/repo-config.md", line: 10, text: 'a typo. Fix: "the".' },
+    {
+      severity: "medium",
+      path: null,
+      line: null,
+      text: "no location for this one. Fix: say where.",
+    },
+  ]);
+  assert.equal(review.rating, 6);
+  assert.equal(review.verdict, "request-changes");
+  // Bold labels, no findings.
+  const clean = parseReview(
+    "Fine.\n\n## Findings\n\nNone.\n\n**Rating:** 9/10\n**Verdict:** approve",
+  );
+  assert.deepEqual([clean.findings, clean.rating, clean.verdict], [[], 9, "approve"]);
+  // Without a rating or a verdict, or a rating out of range: not the format.
+  assert.equal(parseReview("Looks good to me."), null);
+  assert.equal(parseReview("Rating: 8/10"), null);
+  assert.equal(parseReview("Rating: 12/10\nVerdict: comment"), null);
+});
+
+test("reviewEvent: changes requested on critical or high findings only, never an approval", () => {
+  assert.equal(reviewEvent(parseReview(MESSAGE)), "REQUEST_CHANGES");
+  const low = parseReview("- **low** `a.mjs:1`: nit.\n\nRating: 9/10\nVerdict: approve");
+  assert.equal(reviewEvent(low), "COMMENT");
+  const critical = "- **critical** `a.mjs:1`: leak.\n\nRating: 2/10\nVerdict: comment";
+  assert.equal(reviewEvent(parseReview(critical)), "REQUEST_CHANGES");
+  assert.equal(reviewEvent(null), "COMMENT");
+});
+
+test("reviewBody: verdict and rating, then the findings grouped by severity, linked", () => {
+  const blob = "https://github.com/org/repo/blob/abc123";
+  const body = reviewBody(parseReview(MESSAGE), MESSAGE, "<sub>footer</sub>", blob);
+  assert.match(body, /^\*\*Verdict: request changes\*\* · Rating: 6\/10\n\nAdds the review mode/);
+  // Most severe first, whatever the message's order.
+  const high = body.indexOf("### 🟠 High (1)");
+  const medium = body.indexOf("### 🟡 Medium (1)");
+  const low = body.indexOf("### ⚪ Low (1)");
+  assert.ok(high > 0 && high < medium && medium < low, body);
+  assert.match(
+    body,
+    /- \[`listener\/reviews\.mjs:42`\]\(https:\/\/github\.com\/org\/repo\/blob\/abc123\/listener\/reviews\.mjs#L42\): a redelivery/,
+  );
+  assert.match(body, /\n {2}It costs a run each time\./);
+  assert.match(body, /- no location for this one/);
+  assert.match(body, /<sub>footer<\/sub>$/);
+  // Without the head commit: the places, unlinked.
+  assert.match(reviewBody(parseReview(MESSAGE), MESSAGE, "f"), /- `listener\/reviews\.mjs:42`: a/);
+  // Unparsed: the raw text, said so.
+  assert.match(reviewBody(null, "LGTM", "f"), /^LGTM\n\n_The review's format couldn't be read/);
+});
+
+// A fake GitHub for postReview(): `answers` by "METHOD path", each a status or a list of
+// statuses for successive calls.
+function fakeGitHub(answers = {}) {
+  const calls = [];
+  const replies = [];
+  const github = async (repo, method, path, body) => {
+    calls.push({ method, path, body });
+    const key = `${method} ${path}`;
+    const answer = Array.isArray(answers[key]) ? answers[key].shift() : answers[key];
+    if (key === "GET /repos/org/repo/pulls/5" && answer === undefined) {
+      return Response.json({
+        head: { sha: "abc123" },
+        base: { repo: { html_url: "https://github.com/org/repo" } },
+      });
+    }
+    return new Response("{}", { status: answer ?? 200 });
+  };
+  const reply = async (repo, number, text) => replies.push([repo, number, text]);
+  return { github, reply, calls, replies };
+}
+
+test("postReview: one review at the head commit, its event from the findings", async () => {
+  const gh = fakeGitHub();
+  const posted = await postReview(gh, "org/repo", 5, MESSAGE, "f");
+  assert.equal(posted.event, "REQUEST_CHANGES");
+  const post = gh.calls.find((c) => c.method === "POST");
+  assert.equal(post.path, "/repos/org/repo/pulls/5/reviews");
+  assert.equal(post.body.event, "REQUEST_CHANGES");
+  assert.equal(post.body.commit_id, "abc123");
+  assert.match(post.body.body, /### 🟠 High \(1\)/);
+  // Marked as ours: the delivery of our own review starts nothing.
+  assert.match(post.body.body, /<!-- deckhand -->$/);
+  assert.deepEqual(gh.replies, []);
+});
+
+test("postReview: the App's own pull request, unparsed messages, refusals", async () => {
+  // GitHub refuses changes requested by a pull request's author (the App's own): a comment.
+  const own = fakeGitHub({ "POST /repos/org/repo/pulls/5/reviews": [422, 200] });
+  assert.equal((await postReview(own, "org/repo", 5, MESSAGE, "f")).event, "COMMENT");
+  const events = own.calls.filter((c) => c.method === "POST").map((c) => c.body.event);
+  assert.deepEqual(events, ["REQUEST_CHANGES", "COMMENT"]);
+  assert.match(own.calls.at(-1).body.body, /Verdict: request changes/);
+  // A message that doesn't parse: a comment review with the raw text.
+  const raw = fakeGitHub();
+  await postReview(raw, "org/repo", 5, "Looks fine, no format.", "f");
+  const post = raw.calls.find((c) => c.method === "POST");
+  assert.equal(post.body.event, "COMMENT");
+  assert.match(post.body.body, /^Looks fine, no format\./);
+  // Refused otherwise (or the pull request can't be read): a plain comment, nothing lost.
+  const refused = fakeGitHub({
+    "GET /repos/org/repo/pulls/5": 500,
+    "POST /repos/org/repo/pulls/5/reviews": 403,
+  });
+  assert.equal((await postReview(refused, "org/repo", 5, MESSAGE, "f")).event, null);
+  assert.equal(refused.calls.find((c) => c.method === "POST").body.commit_id, undefined);
+  assert.equal(refused.replies.length, 1);
+  assert.match(refused.replies[0][2], /^\*\*Verdict: request changes\*\*/);
+});
+
+// A `pull_request` delivery for org/repo's #5, by `login`, on a branch of the repo.
+function delivery(action = "ready_for_review", pr = {}, login = "alice") {
+  return {
+    action,
+    installation: { id: 1 },
+    repository: { full_name: "org/repo", default_branch: "trunk" },
+    pull_request: {
+      number: 5,
+      title: "Add a thing",
+      state: "open",
+      draft: false,
+      body: "",
+      user: { login, type: login.endsWith("[bot]") ? "Bot" : "User" },
+      head: { sha: "sha-1", repo: { full_name: "org/repo" } },
+      ...pr,
+    },
+  };
+}
+
+test("reviewCandidate: ready pull requests of the repo, by the App or an allowed user", () => {
+  const candidate = (p) => reviewCandidate(config, "pull_request", p);
+  assert.deepEqual(candidate(delivery()), {
+    repo: "org/repo",
+    base: "trunk",
+    pr: delivery().pull_request,
+    author: "alice",
+  });
+  // Opened as ready, or marked ready; not a draft, a push, an edit or a reopening.
+  assert.ok(candidate(delivery("opened")));
+  assert.equal(candidate(delivery("opened", { draft: true })), null);
+  for (const action of ["synchronize", "edited", "reopened", "converted_to_draft"]) {
+    assert.equal(candidate(delivery(action)), null, action);
+  }
+  assert.equal(reviewCandidate(config, "issue_comment", delivery()), null);
+  // Deckhand's own: no user to check.
+  assert.equal(candidate(delivery("opened", {}, "deckhand-app[bot]")).author, null);
+  // Never a fork's, another bot's, an outsider's, or in a repo the operator doesn't allow.
+  const fork = { head: { sha: "x", repo: { full_name: "mallory/repo" } } };
+  assert.equal(candidate(delivery("ready_for_review", fork)), null);
+  assert.equal(candidate(delivery("ready_for_review", { head: { sha: "x" } })), null);
+  assert.equal(candidate(delivery("opened", {}, "dependabot[bot]")), null);
+  assert.equal(candidate(delivery("opened", {}, "mallory")), null);
+  const elsewhere = { ...config, repos: ["org/other"] };
+  assert.equal(reviewCandidate(elsewhere, "pull_request", delivery()), null);
+  assert.equal(candidate({ ...delivery(), installation: undefined }), null);
+});
+
+// The reviewer with a temp state file, a fake clock and queue, and the repo's `yaml`.
+function setup(
+  t,
+  yaml = "review:\n  on: ready\n",
+  { path = join(tempDir(t), "reviews.json") } = {},
+) {
+  let time = 1_800_000_000_000;
+  const accepted = [];
+  const read = parseRepoConfig(yaml, config);
+  const reviews = createReviews({
+    path,
+    config,
+    repoSettings: async () => read,
+    accept: async (item) => accepted.push(item),
+    now: () => time,
+  });
+  return { reviews, accepted, path, advance: (ms) => (time += ms) };
+}
+
+test("createReviews: one review per head commit, across redeliveries and restarts", async (t) => {
+  const { reviews, accepted, path, advance } = setup(t);
+  await reviews.consider("pull_request", delivery());
+  assert.equal(accepted.length, 1);
+  const [item] = accepted;
+  assert.equal(item.trigger, "review");
+  assert.equal(item.reason, "review");
+  assert.deepEqual(
+    [item.id, item.kind, item.number, item.replyTo, item.base, item.author],
+    ["pr-5", "pr", 5, 5, "trunk", "alice"],
+  );
+  // Redelivered: nothing more.
+  await reviews.consider("pull_request", delivery());
+  assert.equal(accepted.length, 1);
+  // A new listener on the same state file: still nothing for the same head.
+  advance(3600_000);
+  const again = setup(t, undefined, { path });
+  await again.reviews.consider("pull_request", delivery("opened"));
+  assert.equal(again.accepted.length, 0);
+  // Back to draft, new commits, ready again: a new review.
+  await again.reviews.consider(
+    "pull_request",
+    delivery("ready_for_review", { head: { sha: "sha-2", repo: { full_name: "org/repo" } } }),
+  );
+  assert.equal(again.accepted.length, 1);
+});
+
+test("createReviews: off without review.on, and the repo's users narrow the operator's", async (t) => {
+  for (const yaml of ["", "review: true\n", "review:\n  on: manual\n", "review: false\n"]) {
+    const { reviews, accepted } = setup(t, yaml);
+    await reviews.consider("pull_request", delivery());
+    assert.equal(accepted.length, 0, yaml);
+  }
+  // A config with errors: nothing either.
+  const broken = setup(t, "review:\n  on: always\n");
+  await broken.reviews.consider("pull_request", delivery());
+  assert.equal(broken.accepted.length, 0);
+  // Alice left the repo's users: her pull requests aren't reviewed, the App's still are.
+  const narrowed = setup(t, "users: [bob]\nreview:\n  on: ready\n");
+  await narrowed.reviews.consider("pull_request", delivery());
+  assert.equal(narrowed.accepted.length, 0);
+  await narrowed.reviews.consider("pull_request", delivery("opened", {}, "deckhand-app[bot]"));
+  assert.equal(narrowed.accepted.length, 1);
+  assert.equal(narrowed.accepted[0].author, undefined);
+});
+
+test("createReviews: Deckhand's pull request is its issue's task, the review goes on it", async (t) => {
+  const { reviews, accepted } = setup(t);
+  const pr = { user: { login: "deckhand-app[bot]", type: "Bot" }, body: "Closes #12" };
+  await reviews.consider("pull_request", delivery("ready_for_review", pr));
+  assert.deepEqual(
+    [accepted[0].id, accepted[0].kind, accepted[0].number, accepted[0].replyTo],
+    ["12", "issue", 12, 5],
+  );
+});
+
+test("createReviews: old pull requests are forgotten after 90 days", async (t) => {
+  const { reviews, accepted, advance } = setup(t);
+  await reviews.consider("pull_request", delivery());
+  advance(91 * 24 * 3600_000);
+  // Another pull request's review prunes the first one's record: it would start again.
+  await reviews.consider("pull_request", delivery("opened", { number: 6 }));
+  await reviews.consider("pull_request", delivery());
+  assert.equal(accepted.length, 3);
+});

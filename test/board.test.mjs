@@ -98,7 +98,7 @@ test("a comment waiting for other issues: its state and what it waits for", () =
       wait("acme/api#1"),
       wait("acme/api#2"),
       wait("acme/api#3"),
-      wait("acme/api#4", { mode: "review" }),
+      wait("acme/api#4", { mode: "audit" }),
     ],
   });
   const byKey = Object.fromEntries(tasks.map((t) => [t.key, t]));
@@ -110,7 +110,7 @@ test("a comment waiting for other issues: its state and what it waits for", () =
   assert.deepEqual(byKey["acme/api#1"].waitingFor, [77, 80]);
   // Only a wait: a task of its own.
   assert.equal(byKey["acme/api#4"].state, "waiting");
-  assert.equal(byKey["acme/api#4"].mode, "review");
+  assert.equal(byKey["acme/api#4"].mode, "audit");
   assert.equal(byKey["acme/api#4"].kind, "issue");
   assert.equal(byKey["acme/api#4"].replyTo, 4);
 });
@@ -145,9 +145,9 @@ test("pull requests and discussions keep their number and kind", () => {
 test("each entry names its mode, the repo's own ones included", () => {
   const tasks = board({
     runs: [
-      run("acme/api#1", 30, { taskMode: "review" }),
+      run("acme/api#1", 30, { taskMode: "audit" }),
       run("acme/api#2", 20, { taskMode: "work" }),
-      run("acme/api#3", 10, { taskMode: "review" }),
+      run("acme/api#3", 10, { taskMode: "audit" }),
     ],
     queued: [{ key: "acme/api#3", kind: "issue", mode: "triage", repo: "acme/api", replyTo: 3 }],
     brainstorms: [{ key: "acme/api#4", repo: "acme/api", number: 4, status: "active" }],
@@ -155,7 +155,7 @@ test("each entry names its mode, the repo's own ones included", () => {
   const modes = Object.fromEntries(tasks.map((t) => [t.key, t.mode]));
   // A queued comment says what the next run will be.
   assert.deepEqual(modes, {
-    "acme/api#1": "review",
+    "acme/api#1": "audit",
     "acme/api#2": "work",
     "acme/api#3": "triage",
     "acme/api#4": "brainstorm",
@@ -274,7 +274,7 @@ test("rerunnable: the latest run failed or was lost, work on an issue or pull re
   const tasks = board({
     runs: [
       failed("a/b#1", 100),
-      failed("a/b#2", 100, { status: "interrupted", taskMode: "review" }),
+      failed("a/b#2", 100, { status: "interrupted", taskMode: "audit" }),
       failed("a/b#pr-3", 100, { kind: "pr" }),
       failed("a/b#4", 100, { status: "ok" }),
       failed("a/b#5", 100, { status: "needs-input" }),

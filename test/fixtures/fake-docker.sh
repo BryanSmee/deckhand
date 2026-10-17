@@ -222,7 +222,12 @@ case "$1" in
       result="All done."
       # A run talked into posting secrets: its own, and whatever the test leaves in leak.
       [ -e "$dir/leak" ] && result="Leaked $DECKHAND_RUN_SECRET and $(cat "$dir/leak")."
-      echo "{\"type\":\"result\",\"result\":\"$result\",\"duration_ms\":60000}"
+      # The final message the test wrote (a review'"'"'s, say), else the line above.
+      if [ -e "$dir/result" ]; then
+        jq -nc --rawfile text "$dir/result" '"'"'{type: "result", result: $text, duration_ms: 60000}'"'"'
+      else
+        echo "{\"type\":\"result\",\"result\":\"$result\",\"duration_ms\":60000}"
+      fi
       # Its inbox, until the close line: what the image'"'"'s deckhand-inbox does (runner.test.mjs),
       # without a Node process per sandbox.
       close="{\"type\":\"deckhand\",\"event\":\"close\"}"

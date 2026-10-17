@@ -39,14 +39,14 @@ test("/mode with a name the repo doesn't have: a reply listing its modes, no run
     ],
   ]);
   // The repo's own modes are listed too, a light one as comments only.
-  const modes = "modes:\n  review:\n    instructions: .deckhand/review.md\n    light: true\n";
+  const modes = "modes:\n  audit:\n    instructions: .deckhand/audit.md\n    light: true\n";
   const own = await modeOf({ trigger: "work", modeLine: "reveiw" }, modes);
   assert.equal(own.mode, null);
   assert.match(
     own.replies[0][2],
-    /^Unknown mode `reveiw`\. The modes here: `work`, `brainstorm`, `onboarding`, `research` \(not granted here\), `review` \(comments only\)\./,
+    /^Unknown mode `reveiw`\. The modes here: `work`, `brainstorm`, `onboarding`, `research` \(not granted here\), `audit` \(comments only\)\./,
   );
-  assert.equal((await modeOf({ trigger: "work", modeLine: "review" }, modes)).mode, "review");
+  assert.equal((await modeOf({ trigger: "work", modeLine: "audit" }, modes)).mode, "audit");
 });
 
 test("/mode research: refused without the operator's grant, naming it; no run, no mode kept", async () => {
@@ -78,4 +78,29 @@ test("/mode research with the grant: it starts alone, and comments go on in it",
   assert.equal(after.mode, null);
   assert.match(after.replies[0][2], /allow_research/);
   assert.equal(issueModes.get("org/repo#12"), null);
+});
+
+test("/mode review: only with the repo's review block, and only on a pull request", async () => {
+  // Without the block: an unknown mode, nothing runs.
+  const off = await modeOf({ kind: "pr", id: "pr-12", trigger: "work", modeLine: "review" });
+  assert.equal(off.mode, null);
+  assert.match(off.replies[0][2], /^Unknown mode `review`\. The modes here: `work`, `brainstorm`/);
+  // With it, on a pull request (its own task, or the issue's it closes), even without a
+  // trigger line or a session: it starts its own.
+  const on = "review:\n  on: manual\n";
+  const pr = await modeOf({ kind: "pr", id: "pr-12", modeLine: "review" }, on);
+  assert.deepEqual([pr.mode, pr.replies], ["review", []]);
+  const linked = await modeOf({ kind: "issue", replyTo: 30, modeLine: "review" }, on);
+  assert.equal(linked.mode, "review");
+  // On an issue: refused, with a reply saying where to ask.
+  const issueModes = new Map();
+  const issue = await modeOf({ kind: "issue", trigger: "work", modeLine: "review" }, on, {
+    issueModes,
+  });
+  assert.equal(issue.mode, null);
+  assert.match(issue.replies[0][2], /^A review is of a pull request: comment `\/mode review` on/);
+  // A fresh mode: the issue's own mode is untouched.
+  assert.equal(issueModes.has("org/repo#12"), false);
+  // An automatic one (reviews.mjs) is its own trigger.
+  assert.equal((await modeOf({ kind: "pr", trigger: "review" }, on)).mode, "review");
 });

@@ -240,9 +240,10 @@ const GOING_ON = {
   continue: "Continuing the session",
 };
 
-// Runs the listener started itself (conflicts.mjs).
+// Runs the listener started itself (conflicts.mjs, reviews.mjs).
 const REASONS = {
   conflict: "Rebasing a pull request in conflict",
+  review: "Reviewing a pull request that turned ready",
 };
 
 // The listener's own lines: a run's first line (what it is), notes and delivered comments.

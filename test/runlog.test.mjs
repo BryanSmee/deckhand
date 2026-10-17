@@ -98,10 +98,7 @@ test("format: the listener's lines", () => {
     "Starting a brainstorm (sonnet, low effort): Go",
   );
   assert.equal(start({ mode: "continue", kind: "issue" }), "Continuing the session");
-  assert.equal(
-    start({ mode: "start", kind: "pr", taskMode: "review" }),
-    "Starting the review mode",
-  );
+  assert.equal(start({ mode: "start", kind: "pr", taskMode: "audit" }), "Starting the audit mode");
   assert.equal(
     start({ mode: "continue", kind: "issue", reason: "conflict" }),
     "Rebasing a pull request in conflict",

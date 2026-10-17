@@ -16,9 +16,12 @@ export function createTaskModes(ctx) {
   // line picks the mode, with or without a trigger line; without either, a comment goes on in
   // the issue's current mode. Keeps the issue's brainstorm and mode state up to date.
   async function modeOf(item, key, name) {
-    // The inbox issue or the discussion category is the trigger (workItem()), or the
-    // dashboard's Analyze (work.mjs analyze()), which no comment can ask for.
-    if (INBOX.has(item.trigger) || item.trigger === "analyze") return item.trigger;
+    // The inbox issue or the discussion category is the trigger (workItem()), the dashboard's
+    // Analyze (work.mjs analyze()), which no comment can ask for, or a pull request turning
+    // ready (reviews.mjs).
+    if (INBOX.has(item.trigger) || ["analyze", "review"].includes(item.trigger)) {
+      return item.trigger;
+    }
     if (item.trigger === "stop") return stopBrainstorm(item, key);
     let wanted = item.trigger;
     if (item.modeLine) {
@@ -30,6 +33,7 @@ export function createTaskModes(ctx) {
     if (!wanted && current && !talks(item, key)) return goOn(item, key, current);
     if (wanted === "onboarding") return startOnboarding(item, key);
     if (wanted === "research") return startResearch(item, key);
+    if (wanted === "review") return startReview(item);
     const own = customMode(item.settings, wanted);
     if (wanted === "work" || (own && !own.fresh)) {
       // The work (or the repo's mode) takes over from the brainstorm. Light and work runs keep
@@ -69,6 +73,11 @@ export function createTaskModes(ctx) {
     return item.replyTo === item.number;
   }
 
+  // A comment on a pull request: its own task, or the issue's it closes (events.mjs linkTo()).
+  function onPull(item) {
+    return item.kind === "pr" || (item.kind === "issue" && !onIssue(item));
+  }
+
   // A comment on the issue of a brainstorm that goes on.
   function talks(item, key) {
     const b = ctx.brainstorms.get(key);
@@ -82,7 +91,7 @@ export function createTaskModes(ctx) {
       await unknownMode(item, `Unknown mode \`${item.modeLine}\`.`);
       return false;
     }
-    if (item.trigger || ["onboarding", "research"].includes(item.modeLine)) return true;
+    if (item.trigger || ["onboarding", "research", "review"].includes(item.modeLine)) return true;
     if (ctx.brainstorms.get(key) || ctx.issueModes.has(key)) return true;
     if (await hasSession(key, name)) return true;
     skip(`#${item.replyTo} has no agent session and no trigger line`);
@@ -124,6 +133,18 @@ export function createTaskModes(ctx) {
     ctx.brainstorms.end(key);
     ctx.issueModes.set(key, "research");
     return "research";
+  }
+
+  // A review reads a pull request's diff: on an issue, a reply says where to ask. It runs once
+  // on a session of its own (fresh): the issue stays in the mode it was in.
+  async function startReview(item) {
+    if (onPull(item)) return "review";
+    const where = taskKey(item.repo, item.id);
+    log(`${where}: review refused: not a pull request`);
+    const text =
+      "A review is of a pull request: comment `/mode review` on the pull request itself.";
+    await ctx.reply(item.repo, item.replyTo, text).catch((error) => log(`${where}: ${error}`));
+    return null;
   }
 
   function brainstorm(item, key, wanted) {

@@ -66,6 +66,19 @@ and latest comments) is at \`$TASK_DIGEST\` (\`cat "$TASK_DIGEST"\`).
 ${modeInstructions.research}`;
 }
 
+// A review (reviews.mjs) of pull request `pull`: its task may be the issue the pull request
+// closes. `instructions`: the repo's `review.instructions` file, if any; `text`: what the
+// "/mode review" comment adds.
+function reviewPrompt(task, pull, instructions, text) {
+  const own = instructions?.trim()
+    ? `\n\nThe repository's review instructions:\n\n${instructions.trim()}`
+    : "";
+  const asked = text ? `\n\nThe maintainer asks:\n\n${text}` : "";
+  return `Review pull request #${pull} of ${task.repo}.
+
+${modeInstructions.review.replaceAll("<n>", String(pull))}${own}${asked}`;
+}
+
 function brainstormPrompt(task) {
   return `Brainstorm GitHub issue #${task.number} of ${task.repo} with the maintainer. Read it with
 \`gh issue view ${task.number} --comments\`.
@@ -228,15 +241,17 @@ ${instructions.trim()}`;
 }
 // The run's prompt, by what it is. `own`: the repo's mode, with its `instructions` text;
 // `onboardingWork`: a work run on an onboarding issue; `grant`: what the operator grants the
-// repo (grantFor()); `branches`: what the run may push (preparation.mjs pushBranches()).
+// repo (grantFor()); `branches`: what the run may push (preparation.mjs pushBranches());
+// `pull`: the issue or pull request the reply goes to, the one a review reads.
 export function promptFor(
   task,
-  { mode, text, settings, own, instructions, onboardingWork, config, grant, branches },
+  { mode, text, settings, own, instructions, onboardingWork, config, grant, branches, pull },
 ) {
   if (mode === "brainstorm" || mode === "stop") return brainstormPrompt(task);
   if (INBOX.has(mode)) return inboxPrompt(task, mode, text);
   if (mode === "analyze") return analyzePrompt(task, text);
   if (mode === "research") return researchPrompt(task);
+  if (mode === "review") return reviewPrompt(task, pull ?? task.number, instructions, text);
   if (mode === "onboarding") return onboardingPrompt(task, settings, config, grant);
   if (own) return modePrompt(task, own, instructions, branches);
   return onboardingWork ? onboardingWorkPrompt(task) : initialPrompt(task, branches);
@@ -251,8 +266,8 @@ export function firstMessage({ mode, text, restored, started }) {
     return `${body || "Continue."}\n\n(Don't post comments on GitHub yourself: your final message is posted as a reply.)`;
   }
   // A new inbox session reads its entries in the prompt (inboxPrompt()), an analysis its
-  // selection (analyzePrompt()).
-  return INBOX.has(mode) || mode === "analyze" ? "" : body;
+  // selection (analyzePrompt()), a review what the comment asks (reviewPrompt()).
+  return INBOX.has(mode) || mode === "analyze" || mode === "review" ? "" : body;
 }
 
 // A run that falls back to the same agent on another provider (runs.mjs): its session goes on,

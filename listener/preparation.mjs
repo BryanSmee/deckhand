@@ -43,7 +43,8 @@ export function createPreparation(ctx) {
     live.handoff = !!handoff;
     live.branches = branches;
     ctx.broker.allow(live.secret, live.branches);
-    const instructions = own && (await modeInstructions(task, own));
+    // A review's are optional (its `review` block); a repo's mode always has them.
+    const instructions = own?.instructions ? await modeInstructions(task, own) : null;
     const access = grantedAccess(config, task, settings, { agent, note, log });
     const engine = engineFor(config, task, settings, access, fork, note);
     const prepared = await prepareImage(task, items, settings, access.grant, note, pulls);

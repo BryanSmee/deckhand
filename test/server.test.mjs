@@ -1939,29 +1939,90 @@ mounts:
   const MODES = `setup: npm ci
 model: opus
 modes:
-  review:
-    instructions: .deckhand/review.md
+  audit:
+    instructions: .deckhand/audit.md
     light: true
     model: sonnet
     effort: high
 `;
 
-  test("/mode review: the repo's light mode, its instructions and model, the repo's grants", async (t) => {
+  test("review.on: a ready pull request gets one review run, posted as a GitHub review", async (t) => {
     const { dir, github, listener, send } = await listen(
       t,
-      { ".deckhand.yaml": MODES, ".deckhand/review.md": "Read the diff and list the risks." },
+      {
+        ".deckhand.yaml":
+          "brainstorm_model: sonnet\nwait_for_answers: false\nreview:\n  on: ready\n  effort: high\n",
+      },
+      (dir) => {
+        writeFileSync(
+          join(dir, "result"),
+          "Fine overall.\n\n## Findings\n\n- **high** `a.mjs:3`: no test. Fix: add one.\n\nRating: 6/10\nVerdict: request-changes\n",
+        );
+        return {};
+      },
+    );
+    // Deckhand's own pull request, which closes #12, turns ready.
+    const ready = {
+      action: "ready_for_review",
+      installation: { id: 7 },
+      repository: { full_name: "org/repo", default_branch: "trunk" },
+      pull_request: {
+        number: 13,
+        body: "Closes #12",
+        state: "open",
+        draft: false,
+        user: { login: "deckhand-x[bot]", type: "Bot" },
+        head: { sha: "head-1", ref: "issue-12-fix", repo: { full_name: "org/repo" } },
+      },
+      sender: { login: "deckhand-x[bot]", type: "Bot" },
+    };
+    await send(ready, "pull_request");
+    const review = await github.waitFor(
+      (r) => r.method === "POST" && r.path === "/repos/org/repo/pulls/13/reviews",
+    );
+    const posted = JSON.parse(review.body);
+    assert.equal(posted.event, "REQUEST_CHANGES");
+    assert.match(
+      posted.body,
+      /^\*\*Verdict: request changes\*\* · Rating: 6\/10\n\nFine overall\./,
+    );
+    assert.match(posted.body, /### 🟠 High \(1\)\n\n- `a\.mjs:3`: no test\. Fix: add one\./);
+    const runEnv = readFileSync(join(dir, "run-env"), "utf8");
+    assert.match(runEnv, /^TASK_MODE=review$/m);
+    assert.match(runEnv, /^SANDBOX_LIGHT=1$/m);
+    assert.match(runEnv, /^SANDBOX_MODEL=sonnet$/m);
+    assert.match(runEnv, /^SANDBOX_EFFORT=high$/m);
+    assert.match(runEnv, /^TASK_PROMPT=Review pull request #13 of org\/repo\./m);
+    // Its token only reads: the listener posted the review.
+    const mint = github.requests.find((r) => r.body.includes("repositories"));
+    assert.equal(JSON.parse(mint.body).permissions.pull_requests, "read");
+    // The issue's task, with no comment of its own on the pull request. It answers nothing:
+    // the issue's needs-input label stays.
+    await listener.until("org/repo#12: done (ok)");
+    assert.equal(replies(github).length, 0);
+    assert.ok(!github.requests.some((r) => r.method === "DELETE" && r.path.includes("/labels/")));
+    // The same head again (a redelivery): no second review.
+    await send(ready, "pull_request");
+    await listener.until("was reviewed already");
+    assert.equal(github.requests.filter((r) => r.path.endsWith("/pulls/13/reviews")).length, 1);
+  });
+
+  test("/mode audit: the repo's light mode, its instructions and model, the repo's grants", async (t) => {
+    const { dir, github, listener, send } = await listen(
+      t,
+      { ".deckhand.yaml": MODES, ".deckhand/audit.md": "Read the diff and list the risks." },
       (dir) => {
         writeGrant(dir, "hosts: [registry.npmjs.org, pypi.org]\n");
         return {};
       },
     );
-    await send(comment("alice", "Deckhand\n/mode review\nMind the tests."));
+    await send(comment("alice", "Deckhand\n/mode audit\nMind the tests."));
     const reply = await github.waitFor(
       (r) => r.method === "POST" && r.path === "/repos/org/repo/issues/12/comments",
     );
-    assert.match(JSON.parse(reply.body).body, /review mode: replies go on in it, `\/mode work`/);
+    assert.match(JSON.parse(reply.body).body, /audit mode: replies go on in it, `\/mode work`/);
     const runEnv = readFileSync(join(dir, "run-env"), "utf8");
-    assert.match(runEnv, /^TASK_MODE=review$/m);
+    assert.match(runEnv, /^TASK_MODE=audit$/m);
     assert.match(runEnv, /^SANDBOX_LIGHT=1$/m);
     assert.match(runEnv, /^TASK_SESSION=$/m);
     assert.match(runEnv, /^SANDBOX_MODEL=sonnet$/m);
@@ -1969,7 +2030,7 @@ modes:
     // Like a brainstorm: no branch, no setup.
     assert.match(runEnv, /^TASK_ISSUE=$/m);
     assert.match(runEnv, /^SANDBOX_SETUP=$/m);
-    assert.match(runEnv, /^TASK_PROMPT=You are in the "review" mode of this repository/m);
+    assert.match(runEnv, /^TASK_PROMPT=You are in the "audit" mode of this repository/m);
     assert.match(runEnv, /This mode only comments/);
     assert.match(runEnv, /Read the diff and list the risks\./);
     assert.match(runEnv, /^TASK_MESSAGE=Mind the tests\.$/m);
@@ -1993,14 +2054,14 @@ modes:
     // The run's record names the mode.
     const [log] = readdirSync(join(dir, "logs")).filter((f) => f.endsWith(".log"));
     const meta = JSON.parse(readFileSync(join(dir, "logs", log), "utf8").split("\n")[0]);
-    assert.equal(meta.taskMode, "review");
+    assert.equal(meta.taskMode, "audit");
     assert.equal(meta.kind, "issue");
     await listener.until("done (ok)");
 
     // A comment without a trigger line goes on in the mode; "/mode work" moves to work.
     await send(followUp(100, "And the docs?"));
     await until(() => replies(github).length === 2, "the second reply");
-    assert.match(readFileSync(join(dir, "run-env"), "utf8"), /^TASK_MODE=review$/m);
+    assert.match(readFileSync(join(dir, "run-env"), "utf8"), /^TASK_MODE=audit$/m);
     await send(followUp(101, "/mode work\nFix them."));
     await until(() => replies(github).length === 3, "the third reply");
     const work = readFileSync(join(dir, "run-env"), "utf8");
@@ -2331,13 +2392,13 @@ mounts:
 
   test("a mode whose instructions file is missing: the reply says so", async (t) => {
     const { dir, github, send } = await listen(t, { ".deckhand.yaml": MODES });
-    await send(comment("alice", "Deckhand\n/mode review"));
+    await send(comment("alice", "Deckhand\n/mode audit"));
     const reply = await github.waitFor(
       (r) => r.method === "POST" && r.path === "/repos/org/repo/issues/12/comments",
     );
     assert.match(
       JSON.parse(reply.body).body,
-      /the `review` mode's instructions, `\.deckhand\/review\.md`, are not on `trunk`/,
+      /the `audit` mode's instructions, `\.deckhand\/audit\.md`, are not on `trunk`/,
     );
     assert.equal(exists(join(dir, "run-args")), null);
   });
