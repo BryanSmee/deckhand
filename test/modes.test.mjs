@@ -8,7 +8,7 @@ test("built-in modes: one list, which the dashboard's copy follows", () => {
   assert.deepEqual([...BUILT_IN], RESERVED_MODES);
   assert.ok(RESERVED_MODES.includes("onboarding"));
   // "/mode" picks only some of them.
-  assert.deepEqual(modeNames(null), ["work", "brainstorm", "onboarding"]);
+  assert.deepEqual(modeNames(null), ["work", "brainstorm", "onboarding", "research"]);
   // The dashboard (format.ts) can't import the listener: its copy is checked here.
   const source = readFileSync(new URL("../dashboard/src/format.ts", import.meta.url), "utf8");
   const copy = /export const BUILT_IN_MODES = (\[[^\]]*\])/.exec(source);
@@ -22,6 +22,15 @@ test("built-in modes: one list, which the dashboard's copy follows", () => {
 test("light runs have volumes of their own, apart from work's", () => {
   assert.equal(sessionName("deckhand-org-repo-12", false), "deckhand-org-repo-12");
   assert.equal(sessionName("deckhand-org-repo-12", true), "deckhand-org-repo-12-light");
+  // Research runs' own again: what a web page leaves there never runs with a token.
+  assert.equal(
+    sessionName("deckhand-org-repo-12", true, "research"),
+    "deckhand-org-repo-12-research",
+  );
+  assert.equal(
+    sessionName("deckhand-org-repo-12", true, "brainstorm"),
+    "deckhand-org-repo-12-light",
+  );
 });
 
 test("entryRun: only the ideas and bugs inboxes' entries are a run each", () => {

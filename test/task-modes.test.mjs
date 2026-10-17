@@ -1,21 +1,24 @@
 // Which mode a comment runs in, and the reply when its "/mode" line names none the repo has.
 import assert from "node:assert/strict";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { test } from "node:test";
 import { parseRepoConfig } from "../listener/repo-config.mjs";
 import { createTaskModes } from "../listener/task-modes.mjs";
-import { testConfig } from "./helpers.mjs";
+import { tempDir, testConfig } from "./helpers.mjs";
 
 const config = testConfig();
 
 // modeOf() for a comment on org/repo#12 with the repo's `yaml`: what it ran, and the replies.
-async function modeOf(fields, yaml = "") {
+// `issueModes`: the issues' current modes, kept across calls.
+async function modeOf(fields, yaml = "", { cfg = config, issueModes = new Map() } = {}) {
   const replies = [];
   const ctx = {
-    config,
+    config: cfg,
     log: () => {},
     skip: () => null,
     tasks: new Map(),
-    issueModes: new Map(),
+    issueModes,
     brainstorms: { get: () => null, end: () => {} },
     reply: async (repo, number, text) => replies.push([repo, number, text]),
   };
@@ -32,7 +35,7 @@ test("/mode with a name the repo doesn't have: a reply listing its modes, no run
     [
       "org/repo",
       12,
-      "Unknown mode `foo`. The modes here: `work`, `brainstorm`, `onboarding`. Pick one with a `/mode <name>` line.",
+      "Unknown mode `foo`. The modes here: `work`, `brainstorm`, `onboarding`, `research` (not granted here). Pick one with a `/mode <name>` line.",
     ],
   ]);
   // The repo's own modes are listed too, a light one as comments only.
@@ -41,7 +44,38 @@ test("/mode with a name the repo doesn't have: a reply listing its modes, no run
   assert.equal(own.mode, null);
   assert.match(
     own.replies[0][2],
-    /^Unknown mode `reveiw`\. The modes here: `work`, `brainstorm`, `onboarding`, `review` \(comments only\)\./,
+    /^Unknown mode `reveiw`\. The modes here: `work`, `brainstorm`, `onboarding`, `research` \(not granted here\), `review` \(comments only\)\./,
   );
   assert.equal((await modeOf({ trigger: "work", modeLine: "review" }, modes)).mode, "review");
+});
+
+test("/mode research: refused without the operator's grant, naming it; no run, no mode kept", async () => {
+  const issueModes = new Map();
+  const { mode, replies } = await modeOf({ modeLine: "research" }, "", { issueModes });
+  assert.equal(mode, null);
+  assert.match(
+    replies[0][2],
+    /^Research can't run here: research runs need the operator's `allow_research: true` grant/,
+  );
+  assert.equal(issueModes.has("org/repo#12"), false);
+});
+
+test("/mode research with the grant: it starts alone, and comments go on in it", async (t) => {
+  const dir = tempDir(t);
+  writeFileSync(join(dir, "default.yaml"), "allow_research: true\n");
+  const cfg = testConfig({ GRANTS_DIR: dir });
+  const issueModes = new Map();
+  const first = await modeOf({ modeLine: "research" }, "", { cfg, issueModes });
+  assert.equal(first.mode, "research");
+  assert.deepEqual(first.replies, []);
+  assert.equal(issueModes.get("org/repo#12"), "research");
+  // A comment without a trigger or /mode line: still research.
+  assert.equal((await modeOf({}, "", { cfg, issueModes })).mode, "research");
+  // The grant gone meanwhile: refused, and the issue leaves the mode.
+  mkdirSync(join(dir, "org"));
+  writeFileSync(join(dir, "org", "repo.yaml"), "allow_research: false\n");
+  const after = await modeOf({}, "", { cfg, issueModes });
+  assert.equal(after.mode, null);
+  assert.match(after.replies[0][2], /allow_research/);
+  assert.equal(issueModes.get("org/repo#12"), null);
 });

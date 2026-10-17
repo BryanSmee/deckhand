@@ -34,6 +34,7 @@
 //   POST /api/repos/<owner>/<repo>/analyze { count, kinds, outcomes }
 //                                         a run analysis (analysis.mjs): a new issue labelled
 //                                         `analysis`, and a run in the `analyze` mode on it
+import { researchRefusal } from "./access.mjs";
 import {
   DEFAULT_RUNS,
   MAX_RUNS,
@@ -137,7 +138,8 @@ export function createWorkApi({
   const { seed: seedInputs } = createInputSeeder({ config, github, label, inputs, boardKeys, log });
 
   // The repo's open issues, newest first (pull requests are issues to this API: left out), and
-  // the modes the dashboard offers: onboarding is the listener's own.
+  // the modes the dashboard offers: onboarding is the listener's own, research only with its
+  // grant (access.mjs researchRefusal()).
   async function readBacklog(repo) {
     const base = await baseOf(repo);
     const { settings, errors } = await repoSettings(repo, base);
@@ -149,11 +151,16 @@ export function createWorkApi({
       issues: list
         .filter((i) => !i.pull_request)
         .map((i) => ({ number: i.number, title: i.title ?? null, url: i.html_url })),
-      modes: errors.length ? [] : modeNames(settings).filter((m) => m !== "onboarding"),
+      modes: errors.length ? [] : offeredModes(repo, settings),
       errors: errors.length > 0,
       // Who may see it, as for the dashboard's tasks: unknown while the config has errors.
       users: errors.length ? null : settings.users,
     };
+  }
+
+  function offeredModes(repo, settings) {
+    const granted = !researchRefusal(config, repo);
+    return modeNames(settings).filter((m) => m !== "onboarding" && (m !== "research" || granted));
   }
 
   // A repo's read, one at a time; `at` is when it started, `seq` its number, `version` the

@@ -8,7 +8,15 @@ import { agentFor } from "./agents/index.mjs";
 import { entryLabel, nextFallback, resolveEntry } from "./agents/select.mjs";
 import { commentsText, taskKey } from "./events.mjs";
 import { nextStep, replyFooter } from "./footer.mjs";
-import { customMode, entryRun, isFresh, isLight, permissionsFor, sessionName } from "./modes.mjs";
+import {
+  customMode,
+  entryRun,
+  isFresh,
+  isLight,
+  OPEN,
+  permissionsFor,
+  sessionName,
+} from "./modes.mjs";
 import { branchConfigReport } from "./onboarding.mjs";
 import { createPreparation } from "./preparation.mjs";
 import { openingMessages, promptFor } from "./prompts.mjs";
@@ -202,7 +210,7 @@ export function createRuns(ctx) {
     const started =
       !fresh &&
       !chosen.takeOver &&
-      (await ctx.runner.hasSession(sessionName(task.name, light), agentOf(task)));
+      (await ctx.runner.hasSession(sessionName(task.name, light, mode), agentOf(task)));
     const restored = items.some((i) => i.restored);
     record.mode =
       mode === "stop" ? "wrap-up" : restored ? "restore" : started ? "continue" : "start";
@@ -242,8 +250,10 @@ export function createRuns(ctx) {
       grant: access.grant,
       branches: live.branches,
     });
-    recheckMounts(agent, settings, access);
-    const digest = live.mode === "analyze" ? analysisDigest(task, items, note) : undefined;
+    // A research run mounts nothing (researchAccess()).
+    if (!OPEN.has(live.mode)) recheckMounts(agent, settings, access);
+    const digest =
+      parts.digest ?? (live.mode === "analyze" ? analysisDigest(task, items, note) : undefined);
     try {
       const bot = ctx.app.identity();
       const spec = sandboxSpec(

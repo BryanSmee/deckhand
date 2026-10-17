@@ -65,6 +65,14 @@ model and effort; a light one runs like a brainstorm and only comments (its toke
 reads), a fresh one starts a new session each time. Comments without a trigger or `/mode`
 line go on in the issue's current mode (`modes.json`).
 
+`/mode research` (repos granted `allow_research`) is a built-in light mode for the open web
+(`OPEN` in `modes.mjs`): any public host (`researchAccess()` in `access.mjs`), and nothing of
+the repo's. No clone (`SANDBOX_NO_CLONE`), no token (the broker's `NO_TOKEN`), the base
+image, no setup, caches, mounts, engine, CA or screenshots, and volumes of its own
+(`<name>-research-…`). Its input is the issue's thread, which `preparation.mjs`
+(`threadDigest()`) writes into the run's inbox like an analysis's digest; its output, its
+reply (`prompts/research.md`).
+
 ### Inboxes and discussions
 
 A repo's config may name an ideas issue, a bugs issue and a discussions category. Every

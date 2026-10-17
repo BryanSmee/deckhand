@@ -251,7 +251,14 @@ test("modes: parsed, with the defaults of work or brainstorms", () => {
   const { settings, errors, warnings } = parseRepoConfig(MODES, config);
   assert.deepEqual(errors, []);
   assert.deepEqual(warnings, []);
-  assert.deepEqual(modeNames(settings), ["work", "brainstorm", "onboarding", "review", "triage"]);
+  assert.deepEqual(modeNames(settings), [
+    "work",
+    "brainstorm",
+    "onboarding",
+    "research",
+    "review",
+    "triage",
+  ]);
   // A light mode takes the brainstorms' defaults, a full one work's.
   assert.deepEqual(customMode(settings, "review"), {
     name: "review",

@@ -97,6 +97,11 @@ async function fakeGitHub(files = {}) {
       if (req.method === "GET" && waitedFor && files[`issue:${waitedFor[1]}`]) {
         return res.end(files[`issue:${waitedFor[1]}`]);
       }
+      // An issue's comments, as JSON, when the test sets them (a research run's thread).
+      const thread = /^\/repos\/org\/repo\/issues\/(\d+)\/comments\?/.exec(req.url);
+      if (req.method === "GET" && thread && files[`comments:${thread[1]}`]) {
+        return res.end(req.url.endsWith("page=1") ? files[`comments:${thread[1]}`] : "[]");
+      }
       // A task from before titles were kept: the dashboard asks for its title once.
       if (req.method === "GET" && req.url === "/repos/org/repo/issues/3") {
         return res.end(JSON.stringify({ title: "An older pull request" }));
@@ -1851,6 +1856,78 @@ modes:
     assert.equal(JSON.parse(mints.at(-1).body).permissions.pull_requests, "write");
     assert.equal(JSON.parse(mints.at(-1).body).permissions.contents, "read");
     assert.deepEqual(JSON.parse(readFileSync(join(dir, "modes.json"), "utf8")), {});
+  });
+
+  test("/mode research: the grant, any public host, no clone or token, the thread in, the reply out", async (t) => {
+    const issue = {
+      title: "Which queue?",
+      body: "Compare BullMQ and pg-boss.",
+      user: { login: "alice" },
+    };
+    const thread = [{ user: { login: "alice" }, body: "Mind the licences." }];
+    const { dir, github, listener, send } = await listen(
+      t,
+      {
+        ".deckhand.yaml": "setup: npm ci\ninstructions: AGENTS.md\n",
+        "issue:12": JSON.stringify(issue),
+        "comments:12": JSON.stringify(thread),
+      },
+      (dir) => {
+        writeGrant(dir, "hosts: [registry.npmjs.org]\n");
+        return {};
+      },
+    );
+    // Without the grant: a reply naming it, and no sandbox.
+    await send(comment("alice", "Deckhand\n/mode research\nWhich one?"));
+    const refused = await github.waitFor(
+      (r) => r.method === "POST" && r.path === "/repos/org/repo/issues/12/comments",
+    );
+    assert.match(
+      JSON.parse(refused.body).body,
+      /^Research can't run here: .*`allow_research: true`/,
+    );
+    assert.ok(!exists(join(dir, "run-args")));
+
+    writeGrant(dir, "allow_research: true\nhosts: [registry.npmjs.org]\n");
+    await send(followUp(100, "Deckhand\n/mode research\nWhich one?"));
+    await until(() => replies(github).length === 2, "the research reply");
+    assert.match(JSON.parse(replies(github)[1].body).body, /🔎 research: replies go on in it/);
+    const runEnv = readFileSync(join(dir, "run-env"), "utf8");
+    assert.match(runEnv, /^TASK_MODE=research$/m);
+    assert.match(runEnv, /^SANDBOX_NO_CLONE=1$/m);
+    assert.match(runEnv, /^SANDBOX_SETUP=$/m);
+    assert.match(runEnv, /^SANDBOX_INSTRUCTIONS=$/m);
+    assert.match(runEnv, /^TASK_PROMPT=Research what GitHub issue #12 of org\/repo asks/m);
+    assert.match(runEnv, /^TASK_MESSAGE=Which one\?$/m);
+    const args = readFileSync(join(dir, "run-args"), "utf8");
+    assert.match(args, /-research-workspace:\/workspace/);
+    assert.doesNotMatch(args, /screenshots/);
+    assert.match(args, /^TASK_DIGEST=\/deckhand\/digest\.md$/m);
+    // No token: the broker refused the sandbox's ask, and none was minted for it.
+    assert.equal(readFileSync(join(dir, "broker-answer"), "utf8"), "");
+    assert.equal(github.requests.filter((r) => r.body.includes("repositories")).length, 0);
+    // Any public host, the operator's named ones no longer private.
+    const answers = egressAnswers(dir);
+    assert.deepEqual(answers["evil.example"], {
+      allowed: true,
+      private: false,
+      cache: false,
+      decrypt: false,
+    });
+    assert.equal(answers["registry.npmjs.org"].private, false);
+    assert.equal(answers["github.com"].private, true);
+    // The thread, in the run's inbox folder.
+    const [folder] = readdirSync(join(dir, "runs")).filter((f) =>
+      exists(join(dir, "runs", f, "digest.md")),
+    );
+    const digest = readFileSync(join(dir, "runs", folder, "digest.md"), "utf8");
+    assert.match(digest, /^# Which queue\?\n/);
+    assert.match(digest, /Compare BullMQ and pg-boss\./);
+    assert.match(digest, /### @alice, .*\n\nMind the licences\./);
+    const [log] = readdirSync(join(dir, "logs")).filter((f) => f.endsWith(".log"));
+    const meta = JSON.parse(readFileSync(join(dir, "logs", log), "utf8").split("\n")[0]);
+    assert.equal(meta.kind, "research");
+    await listener.until("done (ok)");
   });
 
   // The run's mode and whether it is light, from the fake sandbox's last environment.

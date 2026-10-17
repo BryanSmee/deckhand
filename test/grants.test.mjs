@@ -48,6 +48,7 @@ const NOTHING = {
   allowDockerfile: false,
   allowBranchDockerImages: false,
   allowDocker: false,
+  allowResearch: false,
   mounts: [],
   limits: config.limits,
   files: [],
@@ -72,6 +73,7 @@ mounts:
     allowDockerfile: false,
     allowBranchDockerImages: false,
     allowDocker: false,
+    allowResearch: false,
     limits: { cpus: "4", memory: "4g", pids: 4096 },
     mounts: [
       { root: "/nfs/work", readOnly: false },

@@ -1,6 +1,7 @@
 // Which mode a queued comment runs in (tasks.mjs accept()): a trigger line, a "/mode" line, or
 // the issue's current mode, its brainstorm or its work session. Keeps the issue's brainstorm
 // (brainstorms.json) and repo mode (modes.json) up to date, and replies when a mode can't run.
+import { researchRefusal } from "./access.mjs";
 import { AGENTS } from "./agents/index.mjs";
 import { taskKey } from "./events.mjs";
 import { customMode, INBOX, sessionName } from "./modes.mjs";
@@ -26,8 +27,9 @@ export function createTaskModes(ctx) {
     }
     // A comment without either goes on in the repo's own mode the issue is in, if any.
     const current = ctx.issueModes.get(key);
-    if (!wanted && current && !talks(item, key)) return goOn(item, current);
+    if (!wanted && current && !talks(item, key)) return goOn(item, key, current);
     if (wanted === "onboarding") return startOnboarding(item, key);
+    if (wanted === "research") return startResearch(item, key);
     const own = customMode(item.settings, wanted);
     if (wanted === "work" || (own && !own.fresh)) {
       // The work (or the repo's mode) takes over from the brainstorm. Light and work runs keep
@@ -74,13 +76,13 @@ export function createTaskModes(ctx) {
   }
 
   // A "/mode" line: a mode the repo has. Without a trigger line, a switch: the conversation so
-  // far carries over, so there must be one. Onboarding starts its own.
+  // far carries over, so there must be one. Onboarding and research start their own.
   async function switchable(item, key, name) {
     if (!modeNames(item.settings).includes(item.modeLine)) {
       await unknownMode(item, `Unknown mode \`${item.modeLine}\`.`);
       return false;
     }
-    if (item.trigger || item.modeLine === "onboarding") return true;
+    if (item.trigger || ["onboarding", "research"].includes(item.modeLine)) return true;
     if (ctx.brainstorms.get(key) || ctx.issueModes.has(key)) return true;
     if (await hasSession(key, name)) return true;
     skip(`#${item.replyTo} has no agent session and no trigger line`);
@@ -88,7 +90,8 @@ export function createTaskModes(ctx) {
   }
 
   // The issue's current mode, if it is still there.
-  async function goOn(item, current) {
+  async function goOn(item, key, current) {
+    if (current === "research") return startResearch(item, key);
     if (current === "onboarding" || customMode(item.settings, current)) return current;
     // Gone from the config: don't guess what to run instead (work could push).
     await unknownMode(item, `The mode \`${current}\` is no longer in \`${CONFIG_FILE}\`.`);
@@ -104,6 +107,23 @@ export function createTaskModes(ctx) {
     const { onboarded } = ctx;
     if (!onboarded.isIssue(item.repo, item.number)) onboarded.record(item.repo, item.number);
     return "onboarding";
+  }
+
+  // Research (modes.mjs OPEN), only with the operator's grant: without it, a reply that names
+  // it and no run. Kept in modes.json like the repo's modes: comments go on in it.
+  async function startResearch(item, key) {
+    const refused = researchRefusal(ctx.config, item.repo);
+    if (refused) {
+      const where = taskKey(item.repo, item.id);
+      log(`${where}: research refused: ${refused}`);
+      if (ctx.issueModes.get(key) === "research") ctx.issueModes.set(key, null);
+      const text = `Research can't run here: ${refused}.`;
+      await ctx.reply(item.repo, item.replyTo, text).catch((error) => log(`${where}: ${error}`));
+      return null;
+    }
+    ctx.brainstorms.end(key);
+    ctx.issueModes.set(key, "research");
+    return "research";
   }
 
   function brainstorm(item, key, wanted) {
@@ -125,8 +145,14 @@ export function createTaskModes(ctx) {
   // The reply to a "/mode" Claude can't run: the modes there are. No run starts.
   async function unknownMode(item, what) {
     const own = item.settings?.modes ?? {};
+    const note = (m) =>
+      own[m]?.light
+        ? " (comments only)"
+        : m === "research" && researchRefusal(ctx.config, item.repo)
+          ? " (not granted here)"
+          : "";
     const list = modeNames(item.settings)
-      .map((m) => `\`${m}\`${own[m]?.light ? " (comments only)" : ""}`)
+      .map((m) => `\`${m}\`${note(m)}`)
       .join(", ");
     const where = taskKey(item.repo, item.id);
     log(`${where}: ${what}`);

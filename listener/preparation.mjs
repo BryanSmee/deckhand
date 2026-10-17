@@ -1,18 +1,30 @@
 // Everything a run needs before its sandbox starts (runs.mjs start()): the branches it may
 // push, its mode's instructions, what it may reach (access.mjs), its image, agent and caches,
-// its screenshots' folder, the egress cache, and an analysis's digest. What fails stops the
-// run with a reply (RunError).
+// its screenshots' folder, the egress cache, and an analysis's digest or a research run's
+// thread. What fails stops the run with a reply (RunError).
 import { randomBytes } from "node:crypto";
 import { chmodSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
-import { cantRun, egressCache, engineFor, grantedAccess, RunError } from "./access.mjs";
+import {
+  cantRun,
+  egressCache,
+  engineFor,
+  grantedAccess,
+  researchAccess,
+  RunError,
+} from "./access.mjs";
 import { agentFor } from "./agents/index.mjs";
 import { mandatoryHosts } from "./egress.mjs";
 import { sameRepo } from "./events.mjs";
-import { getJson } from "./github.mjs";
+import { getJson, paginate } from "./github.mjs";
 import { imageRef } from "./images.mjs";
+import { OPEN } from "./modes.mjs";
 import { handoffMessage } from "./prompts.mjs";
 import { operatorSecrets, redact } from "./secrets.mjs";
+
+// What a research run reads of its issue: the last comments, each clipped.
+const THREAD_COMMENTS = 50;
+const THREAD_TEXT = 20_000;
 
 // `ctx` (server.mjs): the listener's state and services, read at call time.
 export function createPreparation(ctx) {
@@ -25,6 +37,7 @@ export function createPreparation(ctx) {
   // image and caches, its screenshots' folder and the egress cache.
   async function prepareRun(task, items, { settings, own, handoff, message }, note) {
     const { live } = task;
+    if (OPEN.has(live.mode)) return prepareResearch(task, settings, { handoff, message }, note);
     const agent = agentOf(task);
     const { branches, fork, pulls } = await pushBranches(task, items);
     live.handoff = !!handoff;
@@ -50,6 +63,70 @@ export function createPreparation(ctx) {
       prepared,
       ca,
     };
+  }
+
+  // A research run (modes.mjs OPEN): any public host, and nothing of the repo's (access.mjs
+  // researchAccess()): the base image, no branches, caches, engine, CA or screenshots. Its
+  // input is the issue's thread (threadDigest()): it has no token to read it with.
+  async function prepareResearch(task, settings, { handoff, message }, note) {
+    const { live } = task;
+    const agent = agentOf(task);
+    live.handoff = !!handoff;
+    live.branches = [];
+    const access = researchAccess(config, task, { agent, log });
+    note("Research: any public host, without the repository's code, image or a GitHub token");
+    try {
+      await ctx.images.installAgent(agent, (chunk) => live.logFile.write(chunk));
+    } catch (error) {
+      throw new RunError(
+        `${agent.displayName} couldn't start: ${error.message}\n\nThe run's log on the dashboard has the details.`,
+      );
+    }
+    live.shots = null;
+    live.record.shots = null;
+    live.hosts = access.hosts;
+    live.trusted = access.trusted;
+    live.uncached = mandatoryHosts(config, agent);
+    live.cached = [];
+    return {
+      message: handoff ? handoffMessage({ ...handoff, branches: [] }) : message,
+      instructions: null,
+      access,
+      engine: null,
+      prepared: { image: config.image, cacheArgs: [], settings },
+      ca: null,
+      digest: await threadDigest(task, note),
+    };
+  }
+
+  // The issue's (or pull request's) title, description and last comments, as a research run
+  // reads them (TASK_DIGEST), redacted like any output.
+  async function threadDigest(task, note) {
+    const { repo, number } = task;
+    const get = (path) => ctx.github(repo, "GET", path);
+    let issue, comments;
+    try {
+      issue = await getJson(ctx.github, repo, `/repos/${repo}/issues/${number}`);
+      comments = await paginate(get, `/repos/${repo}/issues/${number}/comments`);
+    } catch (error) {
+      throw new RunError(
+        `${cantRun(agentOf(task))}: #${number} couldn't be read (${error.message ?? error}). Comment again to retry.`,
+      );
+    }
+    const clip = (text) =>
+      !text ? "(empty)" : text.length > THREAD_TEXT ? `${text.slice(0, THREAD_TEXT)}…` : text;
+    const kept = comments.slice(-THREAD_COMMENTS);
+    const when = (at) => `${String(at).slice(0, 16).replace("T", " ")} UTC`;
+    const parts = [
+      `# ${issue.title}`,
+      `${repo}#${number}, opened by @${issue.user?.login ?? "?"} on ${when(issue.created_at)}`,
+      clip(issue.body),
+      `## Comments${comments.length > kept.length ? ` (the last ${kept.length} of ${comments.length})` : ""}`,
+      ...kept.map((c) => `### @${c.user?.login ?? "?"}, ${when(c.created_at)}\n\n${clip(c.body)}`),
+    ];
+    if (!kept.length) parts.push("None.");
+    note(`Thread: #${number}, ${kept.length} of ${comments.length} comment(s)`);
+    return redact(parts.join("\n\n") + "\n", [task.live.secret, ...operatorSecrets(ctx)]);
   }
 
   // An analysis's digest (analysis.mjs), built now from the runs picked when it was asked

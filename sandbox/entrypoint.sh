@@ -7,7 +7,8 @@
 # sandbox. With DOCKER_HOST (a run granted a container engine), the docker CLI goes through
 # the egress proxy and waits for the engine before the setup; every prompt ends with whether
 # the run has one. SANDBOX_LIGHT=1 (brainstorms, inbox entries, discussions) skips the branch and the
-# setup.
+# setup. SANDBOX_NO_CLONE=1 (research runs: the open internet, no GitHub token) skips the clone
+# and git's credential helper too: the agent starts in an empty /workspace.
 #
 #   (no arguments)      the agent, interactive
 #   -p "<task>" …       arguments for the agent's CLI, e.g. a headless task
@@ -79,7 +80,11 @@ agent_missing() {
 source "$agents/$SANDBOX_AGENT.sh"
 agent_check
 
-if [ ! -d /workspace/.git ]; then
+if [ -n "${SANDBOX_NO_CLONE:-}" ]; then
+  # No token to ask for (the broker refuses this run one): an empty helper list, so git asks
+  # nobody rather than fail on the broker.
+  git config --global credential.helper ""
+elif [ ! -d /workspace/.git ]; then
   # Blobless clone: full history for git log/blame, file contents fetched on demand. The
   # checkout's blob fetch ignores --quiet, so its output is only shown on failure.
   git clone --filter=blob:none --branch "$BASE_BRANCH" "$REPO_URL" /workspace \
@@ -87,12 +92,12 @@ if [ ! -d /workspace/.git ]; then
 fi
 cd /workspace
 # Every start, not just the clone's: the hook may change with the image.
-cp /usr/local/share/git-hooks/pre-push /workspace/.git/hooks/pre-push
+[ -n "${SANDBOX_NO_CLONE:-}" ] || cp /usr/local/share/git-hooks/pre-push /workspace/.git/hooks/pre-push
 # The broker's tokens only read: pushes go through the listener's git gateway, which refuses
 # the base branch whatever the hook above says (../listener/git-gateway.mjs). Not for light
 # runs, which the gateway refuses anyway: their push fails on the read-only token instead,
 # with GitHub's clear "permission denied".
-if [ -n "${DECKHAND_BROKER_URL:-}" ] && [ -z "${SANDBOX_LIGHT:-}" ]; then
+if [ -n "${DECKHAND_BROKER_URL:-}" ] && [ -z "${SANDBOX_LIGHT:-}" ] && [ -z "${SANDBOX_NO_CLONE:-}" ]; then
   git config --global "url.$DECKHAND_BROKER_URL/git/.pushInsteadOf" "${REPO_URL%/*/*}/"
 fi
 
@@ -136,7 +141,9 @@ it, and if it never answers, say so in your final message."
 }
 engine=$(engine_note)
 
-if [ -n "${SANDBOX_LIGHT:-}" ]; then
+if [ -n "${SANDBOX_NO_CLONE:-}" ]; then
+  : # Nothing to fetch, set up or open.
+elif [ -n "${SANDBOX_LIGHT:-}" ]; then
   # A light run reads the code and doesn't run it, so it answers quickly. Fresh
   # origin/<base> to read, and the base branch itself when nothing is in progress on it.
   git fetch --quiet origin

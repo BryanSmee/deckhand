@@ -337,6 +337,9 @@ allow_branch_docker_images: true
 # Its work runs get a container engine next to their sandbox (see Container engine below),
 # when its .deckhand.yaml asks with `docker` and SANDBOX_ENGINE is set. Per repository only.
 allow_docker: true
+# `/mode research` runs: any public host, without its code or a GitHub token (see Research
+# runs below).
+allow_research: true
 # Its own limits; missing ones keep default.yaml's, else the built-in 2 CPUs, 4g, 2048.
 limits: { cpus: 4, memory: 8g, pids: 4096 }
 # Roots it may mount from (read-only unless read_only: false).
@@ -599,6 +602,40 @@ in the engine only:
   `deckhand.run`: an engine is never taken for a sandbox). They go with the run, and the
   listener's check every minute removes those whose run is gone, after a restart too.
 
+## Research runs
+
+A run in the research mode (`/mode research`, [Per-repo config](repo-config.md#research))
+reaches the open internet, which no other run does: the only other way is `hosts: ["*"]` in
+a repository's grants file, which opens it for every run of that repository, next to its
+code and a token. A research run is one prompt-injected page away from sending whatever it
+holds to any host, so it holds almost nothing:
+
+| What                           | A research run                                                                          |
+| ------------------------------ | --------------------------------------------------------------------------------------- |
+| Hosts                          | any public one (`*`); private addresses only for the mandatory hosts, not the grant's   |
+| The repository's code          | none: no clone, `/workspace` starts empty                                               |
+| GitHub token                   | none: the broker refuses `/token`, the git gateway and `gh pr ready` refuse the run     |
+| Input                          | the issue's title, description and last 50 comments, written by the listener (redacted) |
+| Output                         | its final message, posted by the listener as the reply; no screenshots folder           |
+| Image, setup, caches, mounts   | the base image only; no `setup`, `caches`, host mounts or project `instructions`        |
+| Container engine, egress cache | none: no engine, no cached hosts, so no Deckhand CA to trust                            |
+| Volumes                        | `<name>-research-workspace` and its session volume: no work or light run mounts them    |
+
+- **The grant**: `allow_research: true`, in a repository's file or in `default.yaml` for
+  every repository; off by default. Without it, `/mode research` gets a reply naming it and
+  no sandbox starts; it is checked again when the run starts.
+- **Private addresses**: `*` never reaches one (see [Network](#network)), so the listener's
+  dashboard port, the engine and your LAN stay out of reach. Unlike other runs, a research
+  run doesn't get the private addresses of the hosts you grant its repository either: an
+  internal host next to the open internet would be a way out for what it serves.
+- **Its volumes are its own**: whatever a page gets it to write there (hooks, settings) never
+  runs in a run that has a token or the code.
+- **The agent's credential** works as for any run: the run's secret reaches the listener's
+  broker port only, on the run's network, and dies with the run.
+- **Search** (Claude Code's `WebSearch`, Codex's `web_search`) runs on the provider's side,
+  in the API call through the listener, in every run: it returns results and snippets, not
+  pages. Reading the pages, docs and PDFs themselves takes a research run.
+
 ## Network
 
 ```
@@ -823,6 +860,10 @@ runs on OpenAI's side, in the API call. Check it again when you change `CODEX_VE
   other sandboxes behind them.
 - **Allowed hosts are trusted entirely**: anything a sandbox can write to on one is a way
   out: its own repository on GitHub, a bucket or paste service behind `*`.
+- **A research run allows every public host**: everything it holds can leave, so it holds
+  little (see [Research runs](#research-runs)), but what it does hold can: the issue's
+  thread, what it read on the web, and what the agent's provider sends back. Don't grant
+  `allow_research` to a repository whose issues hold what must not leave.
 - The listener's own port (8080: dashboard, webhook) is reachable from sandboxes; it needs
   a dashboard session (a signed-in allowed user, see [Setup](setup.md#4-the-dashboard)) or
   the webhook's signature. `/status` also answers calls from inside the listener's container

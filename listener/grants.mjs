@@ -1,8 +1,8 @@
 // What the operator grants each repo, beyond what every sandbox gets: the hosts its sandboxes
 // may reach (the only place they are listed), whether its own .deckhand.yaml may run a preview
 // hook, build its Dockerfile (and that of its pull requests' branches), have a container
-// engine next to its sandboxes, host mounts under allowed roots, and its CPU, memory and pids
-// limits. It lives in the operator's GRANTS_DIR, never in a repo: a repo's .deckhand.yaml may
+// engine next to its sandboxes, research runs on the open internet (modes.mjs), host mounts
+// under allowed roots, and its CPU, memory and pids limits. It lives in the operator's GRANTS_DIR, never in a repo: a repo's .deckhand.yaml may
 // request a mount, a preview hook, a Dockerfile or an engine, but only a grant here makes it
 // happen. One file per repo, so a team can own its repos' files (CODEOWNERS), and a mistake
 // in one stops that repo's runs only. Read again at each run, so an edit applies without a
@@ -20,6 +20,7 @@
 //       allow_preview: true      # its `preview` hook runs, with the Docker socket (root)
 //       allow_branch_docker_images: true  # a pull request's runs build its branch's Dockerfile
 //       allow_docker: true       # its `docker` runs get a container engine (per repo only)
+//       allow_research: true     # `/mode research`: the open internet, without its code
 //       limits: { cpus: 4 }      # over default.yaml's, over the built-in ones
 //       mounts:                  # per repo only
 //         - root: /nfs/work
@@ -57,6 +58,7 @@ const FLAGS = {
   allow_dockerfile: "allowDockerfile",
   allow_branch_docker_images: "allowBranchDockerImages",
   allow_docker: "allowDocker",
+  allow_research: "allowResearch",
 };
 
 // Flags only a repository's own file grants: an engine runs that repo's code with more of the

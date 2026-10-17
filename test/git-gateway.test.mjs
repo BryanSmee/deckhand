@@ -16,6 +16,7 @@ import {
   refusal,
   rejection,
 } from "../listener/git-gateway.mjs";
+import { NO_TOKEN } from "../listener/github-app.mjs";
 import { serve, tempDir } from "./helpers.mjs";
 
 const ZERO = "0".repeat(40);
@@ -410,6 +411,16 @@ test("a light run can't push even with a token that writes pull requests", async
     register: (b) => b.register("org/repo", { pull_requests: "write" }, { push: false }),
   });
   const res = await git(work, "push", remote(), "HEAD:refs/heads/x");
+  assert.equal(res.ok, false);
+  assert.match(res.stderr, /this run can't push/);
+  assert.deepEqual(seen, []);
+});
+
+test("a research run can't push: it has no token, and no push right", async (t) => {
+  const { work, remote, seen } = await setup(t, {
+    register: (b) => b.register("org/repo", NO_TOKEN, { push: false }),
+  });
+  const res = await git(work, "push", remote(), "HEAD:refs/heads/issue-12-x");
   assert.equal(res.ok, false);
   assert.match(res.stderr, /this run can't push/);
   assert.deepEqual(seen, []);

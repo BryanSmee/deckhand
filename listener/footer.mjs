@@ -14,6 +14,7 @@ export function nextStep(mode, { talk, fresh, trigger }) {
   if (mode === "onboarding") {
     return ` · 💬 onboarding: reply to change the proposal, \`${triggerWord(trigger)}\` opens the pull request`;
   }
+  if (mode === "research") return " · 🔎 research: replies go on in it, `/mode work` switches";
   if (!BUILT_IN.has(mode) && !fresh) {
     return ` · ${mode} mode: replies go on in it, \`/mode work\` switches`;
   }
