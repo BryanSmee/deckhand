@@ -13,7 +13,7 @@ allowed_repos: []
 
 trigger: Deckhand
 # claude (Claude Code), codex (with OPENAI_API_KEY in .env: docs/setup.md#codex) or
-# antigravity (with AGY_AUTH_FILE in .env: docs/setup.md#antigravity-cli).
+# antigravity (with GEMINI_API_KEY or AGY_AUTH_FILE in .env: docs/setup.md#antigravity-cli).
 sandbox_agent: claude
 sandbox_model: opus
 # Through an Anthropic-compatible gateway (docs/setup.md#through-a-gateway), with

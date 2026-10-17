@@ -16,6 +16,7 @@ const ROUTES = [
   { prefix: "/git/", service: "gitGateway", name: "Git gateway", destroy: true },
   { prefix: "/anthropic/", service: "anthropic", name: "Anthropic", destroy: true },
   { prefix: "/openai/", service: "openai", name: "OpenAI", destroy: true },
+  { prefix: "/google/", service: "google", name: "Google", destroy: true },
   { prefix: "/relay/", service: "google", name: "Google", destroy: true },
   { prefix: "/pr/", service: "prReady", name: "Pull requests", destroy: false },
 ];

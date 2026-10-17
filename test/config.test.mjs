@@ -457,29 +457,42 @@ test("the plans' logins: found in the credentials folder unless their variable i
   ]);
 });
 
-test("the Antigravity CLI: a Google AI plan's login (AGY_AUTH_FILE), its version, tiers and volumes", () => {
+test("the Antigravity CLI: GEMINI_API_KEY or a Google AI plan's login (AGY_AUTH_FILE), its version, tiers and volumes", () => {
   const plan = loadConfig(
     { SANDBOX_AGENT: "antigravity", AGY_AUTH_FILE: "/data/agy-auth.json" },
-    file("allowed_users: [a]\nagy_best_model: gemini-4-argon-medium\nagy_version: 1.5.0"),
+    file(
+      "allowed_users: [a]\ngemini_base_url: https://gateway.example/gemini/\nagy_best_model: gemini-4-argon-medium\nagy_version: 1.5.0",
+    ),
   );
   assert.equal(plan.agyCredential, "AGY_AUTH_FILE");
+  assert.equal(plan.geminiUrl, "https://gateway.example/gemini");
   assert.deepEqual(plan.agents, ["antigravity"]);
   assert.deepEqual(plan.agyModels, { best: "gemini-4-argon-medium" });
   assert.equal(plan.agyVersion, "1.5.0");
   assert.equal(plan.agyVolume, "deckhand-antigravity");
   assert.equal(plan.agyLoginVolume, "deckhand-antigravity-login");
+  // GEMINI_API_KEY wins over AGY_AUTH_FILE, like OPENAI_API_KEY over CODEX_AUTH_FILE.
+  const both = loadConfig({
+    ALLOWED_USERS: "a",
+    GEMINI_API_KEY: "AIza-1",
+    AGY_AUTH_FILE: "/data/agy-auth.json",
+  });
+  assert.equal(both.agyCredential, "GEMINI_API_KEY");
+  assert.deepEqual(both.agents, ["claude", "antigravity"]);
   const defaults = loadConfig({ ALLOWED_USERS: "a", NAME_PREFIX: "dh" });
   assert.equal(defaults.agyCredential, null);
+  assert.equal(defaults.geminiUrl, "https://generativelanguage.googleapis.com");
   assert.equal(defaults.agyVersion, "1.4.0");
   assert.equal(defaults.agyLoginVolume, "dh-antigravity-login");
-  // Picked without a login: the listener doesn't start, and a repo can't pick it.
+  // Picked without a credential: the listener doesn't start, and a repo can't pick it.
   assert.throws(
     () => loadConfig({ ALLOWED_USERS: "a", SANDBOX_AGENT: "antigravity" }),
-    /SANDBOX_AGENT is antigravity, which needs AGY_AUTH_FILE in the environment/,
+    /SANDBOX_AGENT is antigravity, which needs GEMINI_API_KEY or AGY_AUTH_FILE in the environment/,
   );
   assert.deepEqual(defaults.agents, ["claude"]);
+  assert.throws(() => file("gemini_api_key: AIza-1"), /gemini_api_key: a secret/);
   assert.throws(() => file("agy_auth_file: /data/a.json"), /agy_auth_file: a secret/);
-  // antigravity@google as a fallback, with its login.
+  // antigravity@google as a fallback, with its key or login.
   const fallback = loadConfig({
     ALLOWED_USERS: "a",
     AGY_AUTH_FILE: "/data/agy-auth.json",
@@ -490,7 +503,7 @@ test("the Antigravity CLI: a Google AI plan's login (AGY_AUTH_FILE), its version
   assert.deepEqual(fallback.agents, ["claude", "codex", "antigravity"]);
   assert.throws(
     () => loadConfig({ ALLOWED_USERS: "a", FALLBACKS: "antigravity@google" }),
-    /FALLBACKS: antigravity@google needs AGY_AUTH_FILE in the environment/,
+    /FALLBACKS: antigravity@google needs GEMINI_API_KEY or AGY_AUTH_FILE in the environment/,
   );
 });
 

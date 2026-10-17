@@ -262,7 +262,12 @@ async function relay(t, options = {}) {
           refused: (authorization) => refusedTokens.push(authorization),
           secrets: () => ["ya29.plan", "1//refresh"],
         };
-  const endpoint = createGoogleRelay({ broker, login: plan, upstream: () => google.url });
+  const endpoint = createGoogleRelay({
+    broker,
+    credential: options.credential ?? null,
+    login: plan,
+    upstream: () => options.upstream ?? google.url,
+  });
   const { url } = await serve(t, (req, res) => endpoint.handle(req, res));
   // An Antigravity CLI run's secret, as runs.mjs registers it.
   const run = (provider = "google") => {
@@ -377,4 +382,58 @@ test("no plan's login: the model list is refused, the run told why", async (t) =
   assert.match((await res.json()).error.message, /the operator set no AGY_AUTH_FILE/);
   assert.equal(broker.runOf(secret).apiError, "the operator set no AGY_AUTH_FILE");
   assert.equal(google.requests.length, 0);
+});
+
+test("with GEMINI_API_KEY: /google/ swaps x-goog-api-key for the operator's key, under GEMINI_BASE_URL", async (t) => {
+  const google = await fakeGoogle(t);
+  const { url, run, endpoint } = await relay(t, {
+    credential: "AIza-operator-key",
+    login: null,
+    upstream: `${google.url}/gemini`,
+  });
+  const secret = run();
+  const res = await fetch(
+    `${url}/google/v1beta/models/gemini-3.8-flash-medium:streamGenerateContent?alt=sse`,
+    {
+      method: "POST",
+      headers: { "x-goog-api-key": secret, "content-type": "application/json" },
+      body: '{"contents":[]}',
+    },
+  );
+  assert.equal(res.status, 200);
+  assert.equal(await res.text(), 'data: {"candidates":[]}\n\ndata: {"done":true}\n\n');
+  const [sent] = google.requests;
+  assert.equal(
+    sent.url,
+    "/gemini/v1beta/models/gemini-3.8-flash-medium:streamGenerateContent?alt=sse",
+  );
+  assert.equal(sent.headers["x-goog-api-key"], "AIza-operator-key");
+  assert.ok(!JSON.stringify(sent).includes(secret));
+  assert.deepEqual(endpoint.secrets(), ["AIza-operator-key"]);
+
+  // Wrong secret, wrong provider, or a path outside /v1(beta)/ is refused; /relay/ is off when
+  // GEMINI_API_KEY is set.
+  const wrong = await fetch(`${url}/google/v1beta/models/gemini-3.8-flash-medium:generateContent`, {
+    method: "POST",
+    headers: { "x-goog-api-key": "not-a-run" },
+  });
+  assert.equal(wrong.status, 401);
+  await wrong.text();
+  for (const bad of [
+    "/google/v1beta/models/../../other",
+    "/google//evil.example/v1beta/models/x",
+    "/google/other/path",
+  ]) {
+    const r = await fetch(`${url}${bad}`, { headers: { "x-goog-api-key": secret } });
+    assert.equal(r.status, 404, bad);
+    await r.text();
+  }
+  const relayed = await call(
+    url,
+    "daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels",
+    secret,
+  );
+  assert.equal(relayed.status, 503);
+  await relayed.text();
+  assert.equal(google.requests.length, 1);
 });

@@ -3,10 +3,12 @@
 // `agy -p … --output-format stream-json` and joins an answer's text deltas into one line of its
 // own (`deckhand.text`, antigravity/text.jq): the dashboard shows a message, not its pieces.
 //
-// `agy` has no base URL: its calls go to Google through the egress proxy. The plan's login stays
-// in the listener (antigravity-login.mjs): the sandbox's token file holds the run's secret, and
-// the proxy hands the hosts that carry it (`relayed`) to the listener (google.mjs), which puts
-// the plan's access token in its place. Security model: ../../docs/security.md.
+// With a GEMINI_API_KEY, the sandbox gets the run's secret as GEMINI_API_KEY and
+// GOOGLE_GEMINI_BASE_URL=<broker>/google (google.mjs). With a Google AI plan's login instead
+// (antigravity-login.mjs), `agy` has no base URL: the sandbox's token file holds the run's
+// secret, and the proxy hands the hosts that carry it (`relayed`) to the listener (google.mjs),
+// which puts the plan's access token in its place. Security model: ../../docs/security.md.
+import { GOOGLE_CREDENTIALS } from "../google.mjs";
 import { installSpec, normalizer } from "./common.mjs";
 
 // Deckhand's tiers → the plan's models (`agy models` lists them, each with its effort as a
@@ -89,10 +91,14 @@ export const antigravity = {
       version: config.agyVersion,
       versionVar: "AGY_VERSION",
     }),
-  // Nothing: the sandbox writes its token file with the run's secret (antigravity.sh).
-  env: () => ({}),
-  secrets: ["AGY_AUTH_FILE"],
-  providers: { google: { secrets: ["AGY_AUTH_FILE"] } },
+  // With a Gemini API key, `agy` calls the listener's /google endpoint directly; with a plan's
+  // login, the sandbox writes its token file with the run's secret instead (antigravity.sh).
+  env: (config, secret) =>
+    config?.agyCredential === "GEMINI_API_KEY"
+      ? { GEMINI_API_KEY: secret, GOOGLE_GEMINI_BASE_URL: `${config.brokerUrl}/google` }
+      : {},
+  secrets: GOOGLE_CREDENTIALS,
+  providers: { google: { secrets: GOOGLE_CREDENTIALS } },
   defaultProvider: "google",
   hosts: [...RELAYED, "antigravity-unleash.goog", "lh3.googleusercontent.com"],
   // Decrypted by the egress proxy and handed to the listener (egress.mjs), for its runs only.

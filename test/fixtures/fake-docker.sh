@@ -196,6 +196,11 @@ case "$1" in
       # listener'"'"'s relay on a path it refuses (the real one would reach Google), and its
       # stream-json.
       if [ "$SANDBOX_AGENT" = antigravity ]; then
+        if [ -n "${GEMINI_API_KEY:-}" ]; then
+          curl -sS -X POST -H "x-goog-api-key: $GEMINI_API_KEY" \
+            -d "{}" "$GOOGLE_GEMINI_BASE_URL/v1beta/models/$SANDBOX_MODEL:streamGenerateContent?alt=sse" \
+            > "$dir/google-answer"
+        fi
         for host in daily-cloudcode-pa.googleapis.com www.googleapis.com antigravity-unleash.goog \
           play.googleapis.com lh3.googleusercontent.com; do
           echo "$host $(curl -sS "$DECKHAND_BROKER_URL/egress?ip=10.9.0.5&host=$host")"

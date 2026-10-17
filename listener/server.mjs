@@ -286,18 +286,25 @@ ctx.openai = createOpenAiProxy({
   upstream: config.openaiUrl,
   log,
 });
-// Their Antigravity CLI's, which the egress proxy hands to the listener: a Google AI plan's
-// login, which the listener holds and refreshes with `agy` itself.
-const agyLogin = config.agyCredential
-  ? createAntigravityLogin({
-      file: env.AGY_AUTH_FILE,
-      config,
-      docker,
-      install: () => ctx.images.installAgent(antigravity, () => {}),
-      log,
-    })
-  : null;
-ctx.google = createGoogleRelay({ broker: ctx.broker, login: agyLogin, log });
+// Their Antigravity CLI's: a Gemini API key, or a Google AI plan's login (relayed by the
+// egress proxy), which the listener holds and refreshes with `agy` itself.
+const agyLogin =
+  config.agyCredential === "AGY_AUTH_FILE"
+    ? createAntigravityLogin({
+        file: env.AGY_AUTH_FILE,
+        config,
+        docker,
+        install: () => ctx.images.installAgent(antigravity, () => {}),
+        log,
+      })
+    : null;
+ctx.google = createGoogleRelay({
+  broker: ctx.broker,
+  credential: config.agyCredential === "GEMINI_API_KEY" ? env.GEMINI_API_KEY : null,
+  login: agyLogin,
+  upstream: config.geminiUrl,
+  log,
+});
 // Their pull requests ready for review (or back to draft): their own token can't.
 ctx.prReady = createPrReady({
   broker: ctx.broker,
