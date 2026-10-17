@@ -367,6 +367,19 @@ test("its run: print mode with the model and its effort, then the conversation t
   assert.match(readFileSync(join(failed.home, "draft-pr.log"), "utf8"), /^hook /);
   assert.equal(JSON.parse(failed.stdout.trim().split("\n").at(-1)).result.status, "ERROR");
 
+  // On a Gemini API key, Argon is agy_home's custom model: its suffix becomes --effort. The
+  // catalog's models keep theirs.
+  const key = { GEMINI_API_KEY: "run-secret" };
+  assert.deepEqual(again("fresh", key).args, flags("gemini-3.8-flash-low"));
+  assert.deepEqual(again("fresh", { ...key, SANDBOX_MODEL: "gemini-4-argon-high" }).args, [
+    ...flags("gemini-4-argon"),
+    ...["--effort", "high"],
+  ]);
+  assert.deepEqual(
+    agyScript(t, `agent_run new "Do it"`, { ...env, ...key, SANDBOX_EFFORT: "low" }).args,
+    [...flags("gemini-4-argon"), "--effort", "low"],
+  );
+
   // By hand, progress lines rather than the raw events.
   const human = agyScript(t, `agent_run new "Do it"`);
   assert.equal(human.stdout, "\nDone it.\n\nDone in 0.5 min\n");
@@ -421,8 +434,9 @@ test("its home: the run's secret as its token, the clone trusted, MCP, hooks and
   });
   assert.equal(readFileSync(join(home, ".gemini/AGENTS.md"), "utf8"), "# Rules\n");
 
-  // With GEMINI_API_KEY: modelProvider is "gemini" and any plan token file is removed; switching
-  // back to a plan login clears modelProvider and writes the token file again.
+  // With GEMINI_API_KEY: modelProvider is "gemini", Argon a custom model (#1228 upstream) and
+  // any plan token file is removed; switching back to a plan login clears both, the operator's
+  // own custom models kept, and writes the token file again.
   const withKey = agyScript(
     t,
     `mkdir -p "$HOME/.gemini/antigravity-cli"
@@ -430,14 +444,40 @@ test("its home: the run's secret as its token, the clone trusted, MCP, hooks and
      GEMINI_API_KEY=run-secret agy_home
      jq -c . "$HOME/.gemini/antigravity-cli/settings.json"
      [ ! -e "$HOME/.gemini/antigravity-cli/antigravity-oauth-token" ] && echo "no-token"
-     unset GEMINI_API_KEY
+     jq '.customModelsConfig.customModels.mine = {}' "$HOME/.gemini/antigravity-cli/settings.json" > "$HOME/s"
+     mv "$HOME/s" "$HOME/.gemini/antigravity-cli/settings.json"
+     DECKHAND_RUN_SECRET=run-secret agy_home
+     jq -c . "$HOME/.gemini/antigravity-cli/settings.json"
+     rm "$HOME/.gemini/antigravity-cli/settings.json"; GEMINI_API_KEY=run-secret agy_home
      DECKHAND_RUN_SECRET=run-secret agy_home
      jq -c . "$HOME/.gemini/antigravity-cli/settings.json"`,
   );
-  const [geminiSettings, tokenGone, planSettings] = withKey.stdout.trim().split("\n");
+  const [geminiSettings, tokenGone, mineKept, planSettings] = withKey.stdout.trim().split("\n");
   assert.deepEqual(JSON.parse(geminiSettings), {
     trustedWorkspaces: ["/workspace"],
     modelProvider: "gemini",
+    customModelsConfig: {
+      customModels: {
+        "gemini-4-argon": {
+          modelId: "gemini-4-argon",
+          modelName: "gemini-api://gemini-4-argon",
+          label: "Gemini 4 Argon",
+          apiProvider: "API_PROVIDER_GOOGLE_GEMINI",
+          maxTokens: 1048576,
+          modelFeatures: {
+            supportsImages: true,
+            supportsPdf: true,
+            supportsToolCalls: true,
+            supportsThinking: true,
+            zeroShotCapable: true,
+          },
+        },
+      },
+    },
+  });
+  assert.deepEqual(JSON.parse(mineKept), {
+    trustedWorkspaces: ["/workspace"],
+    customModelsConfig: { customModels: { mine: {} } },
   });
   assert.equal(tokenGone, "no-token");
   assert.deepEqual(JSON.parse(planSettings), {
