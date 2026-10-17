@@ -94,6 +94,9 @@ without code; `/stop` wraps it up. `/cancel` (the whole first line) stops the is
 run now, and the task's page on the dashboard has a **Stop** button that does the same: the
 run's reply says who stopped it, its session and pushed commits stay, and the next comment
 resumes it. With nothing running, `/cancel` gets a reply saying so.
+`/mode`, `/after`, `/agent`, `/model` and `/effort` may share the trigger's line, alone or
+together (`Deckhand /agent codex /mode brainstorm`), as well as follow it on lines of their
+own; anything else on that line and it isn't the trigger.
 `Deckhand /mode research` answers a question from the open web, without the repository's
 code or a GitHub token, once you set `allow_research: true` in the repository's grants file
 or `grants/default.yaml` (see [Research runs](security.md#research-runs)).

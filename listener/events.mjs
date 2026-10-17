@@ -79,17 +79,19 @@ export function sameRepo(pr, repo) {
 // "/mode <name>" line asks for (lowercase, or null), what an "/after #12" line waits for
 // (parseAfter(), or null) and the rest of the comment; trigger null and the whole comment when
 // there is none. The trigger is the whole first line, so "Deckhand is down" starts nothing;
-// "/mode" and "/after" may follow it there ("Deckhand /mode brainstorm", "Deckhand /after #7").
+// "/mode", "/after", "/model", "/effort" and "/agent" may follow it there ("Deckhand /mode
+// brainstorm", "Deckhand /agent codex"): the last three stay in the text, for takeOptions().
 export function splitTrigger(config, body) {
   const [first, ...rest] = body.split(/\r?\n/);
   if (first.trim().toLowerCase() === "/stop") return takeCommands(rest.join("\n"), "stop");
   if (first.trim().toLowerCase() === "/cancel") return takeCommands(rest.join("\n"), "cancel");
-  const inline = /^(.*?)\s+(\/(?:mode|after)\s.*)$/i.exec(first);
+  const inline = /^(.*?)\s+(\/(?:mode|after|model|effort|agent)\s.*)$/i.exec(first);
   if (inline && normalize(inline[1]) === config.trigger) {
     // Each command its own line, as if written below; anything else on the line and it isn't
-    // the trigger line ("Deckhand /mode brainstorm please").
-    const lines = inline[2].trim().split(/\s+(?=\/(?:mode|after)\s)/i);
-    const known = (l) => /^\/mode\s+[\w-]+$/i.test(l) || /^\/after\s/i.test(l);
+    // the trigger line ("Deckhand /mode brainstorm please", "Deckhand /effort huge").
+    const lines = inline[2].trim().split(/\s+(?=\/(?:mode|after|model|effort|agent)\s)/i);
+    const known = (l) =>
+      /^\/mode\s+[\w-]+$/i.test(l) || /^\/after\s/i.test(l) || !takeOptions(l, {});
     if (lines.every(known)) return takeCommands([...lines, ...rest].join("\n"), "work");
   }
   if (normalize(first) === config.trigger) return takeCommands(rest.join("\n"), "work");
