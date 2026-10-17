@@ -41,6 +41,20 @@ next entry nor delivered to a running one, so each gets its own prompt and reply
 one entry after another under the inbox's task. A repo's `fresh` modes and discussions keep
 the usual batching.
 
+## How a run ends
+
+At each result the agent gives, the comments waiting for it go to its inbox, or the inbox
+closes and the agent exits: its last result is the reply, posted once its sandbox exits
+(`follow()`, `finish()`). Headless Claude Code runs with `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS`
+(`sandbox/agents/claude.sh`), and the prompt tells the agent to wait for its work in the
+foreground: an agent that ends its turn with background work left gives an early result, and
+may go on with a turn per background task, or never exit. As a safety net, a result with the
+inbox closed marks the run `answered` (saved state) and starts a 2-minute timer
+(`runs.mjs` `linger()`, `ANSWER_GRACE_MS`); any output restarts it, and a listener that
+restarts starts it again. If the sandbox is still running, silent, when it fires, the listener
+writes an `ended` line to the run's log ("Stopped at … after its answer" on the dashboard),
+stops the sandbox and ends the run as usual, with its last result as the reply.
+
 ### Brainstorms
 
 `Deckhand` then `/mode brainstorm` (or `Deckhand /mode brainstorm` on one line) starts a
@@ -326,7 +340,8 @@ reaches the agent's inbox, and gives it 👍. `runs.mjs` `cancel()` writes a `ca
 (who, when) to the run's log and its saved state, stops its inbox, then
 `runner.kill()` (`docker stop -t 10`). The follow loop sees the sandbox exit and `finish()`
 ends the run as `cancelled` whatever the exit looked like: a "Stopped by @user" reply with the
-usual footer, no fallback, 👀 off its comments, and `cleanUp()` as usual. The session volume
+usual footer (a run that had `answered` posts that answer, then "Stopped by @user after its
+answer"), no fallback, 👀 off its comments, and `cleanUp()` as usual. The session volume
 and pushed commits stay, so the next comment resumes it; comments queued for a follow-up run
 stay queued. A run still being prepared (its image building) doesn't start its sandbox; a task
 with only queued comments loses them instead (409 from the API when there is neither). A

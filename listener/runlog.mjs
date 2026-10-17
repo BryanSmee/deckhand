@@ -252,6 +252,12 @@ function listenerEntries(e, agent) {
     const time = new Date(e.at).toISOString().slice(11, 19);
     return [{ kind: "meta", text: `Stopped by @${e.by} at ${time} UTC` }];
   }
+  // A sandbox still running, silent, after its answer (runs.mjs linger()).
+  if (e.event === "ended") {
+    const time = new Date(e.at).toISOString().slice(11, 19);
+    const text = `Stopped at ${time} UTC, silent for ${minutes(e.after)} min after its answer: the answer is posted`;
+    return [{ kind: "meta", text }];
+  }
   if (e.event === "delivered") {
     const time = new Date(e.at).toISOString().slice(11, 19);
     const text = `New comment delivered to ${agent.displayName} at ${time} UTC: ${e.message}`;

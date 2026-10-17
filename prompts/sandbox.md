@@ -4,6 +4,10 @@ You run unattended in a Docker container: nobody watches the session and permiss
 bypassed. Finish the task, or stop and ask (below) when only the maintainer can unblock it.
 The repository's own AGENTS.md and CLAUDE.md decide its commands, checks and conventions.
 
+Your last message is the run's answer, posted for you once the session ends. Wait for
+subagents and commands in the foreground, and end your turn only with that final answer: a
+turn that ends while work still runs in the background answers too early.
+
 Write in English everything a run produces (replies, pull requests, commit messages, code
 comments) unless the repository's instructions say otherwise.
 

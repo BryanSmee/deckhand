@@ -159,6 +159,16 @@ test("Claude Code's run: a new, continued or fresh session, with the model and e
   assert.deepEqual(args("fresh"), [...common, "--no-session-persistence", "-p", ...out]);
 });
 
+test("Claude Code's run: no background tasks headless, so it ends with its answer", (t) => {
+  // claudeScript()'s `claude`, in CLAUDE_CONFIG_DIR, printing the setting instead.
+  const script = (call) =>
+    `printf '#!/bin/bash\\necho "bg=$%s"\\n' "{CLAUDE_CODE_DISABLE_BACKGROUND_TASKS:-}" \\
+       > "$CLAUDE_CONFIG_DIR/claude"; ${call}`;
+  const env = { TASK_OUTPUT: "json" };
+  assert.equal(claudeScript(t, script('agent_run new "Do it"'), env).stdout, "bg=1\n");
+  assert.equal(claudeScript(t, script("agent_interactive new"), env).stdout, "bg=\n");
+});
+
 test("Claude Code's own fallback model: headless only, and never the run's model", (t) => {
   const env = { TASK_OUTPUT: "json", SANDBOX_MODEL: "opus", SANDBOX_FALLBACK_MODEL: "sonnet" };
   const run = claudeScript(t, 'agent_run new "Do it"', env).stdout.split("\nstdin:")[0];

@@ -1345,6 +1345,31 @@ mounts:
     assert.deepEqual(readdirSync(join(dir, "containers")), []);
   });
 
+  test("/cancel on a run that answered but didn't exit, after a restart: its answer is posted", async (t) => {
+    const ctx = await listen(t, {}, (dir) => {
+      writeFileSync(join(dir, "linger"), "");
+      return {};
+    });
+    const { dir, github } = ctx;
+    await ctx.send(comment("alice"));
+    // Its answer read and its inbox closed, the sandbox still running.
+    const logs = join(dir, "logs");
+    const answered = () =>
+      readdirSync(logs)
+        .filter((f) => f.endsWith(".live.json"))
+        .some((f) => /"answered": true/.test(readFileSync(join(logs, f), "utf8")));
+    await until(answered, "the answer");
+    await ctx.restart();
+    await ctx.listener.until("picked up");
+    await ctx.send(followUp(101, "/cancel"));
+    await ctx.listener.until("done (cancelled)");
+    assert.equal(replies(github).length, 1);
+    assert.match(
+      JSON.parse(replies(github)[0].body).body,
+      /^All done\.\n\nStopped by @alice after its answer\.\n\n<sub>🤖 Claude/,
+    );
+  });
+
   test("a brainstorm can't push or mark a pull request ready, before or after a restart", async (t) => {
     const ctx = await holding(t, "Deckhand\n/mode brainstorm\nWhat about dark mode?");
     const refused = [/^403 Deckhand: this run can't push/, /^403 .*can't change pull requests/];

@@ -8,7 +8,8 @@
 # 127.0.0.1 (the fake sandbox asks the egress policy from there).
 # The fake sandbox asks the broker and the egress policy, prints a result (once $dir/go
 # exists, if $dir/hold does), then answers each comment of its inbox until the listener
-# closes it. What a test checks is logged in docker-calls, one call per line.
+# closes it (then never exits if $dir/linger exists). What a test checks is logged in
+# docker-calls, one call per line.
 # Builtins rather than dirname, cat, basename or grep on the paths called most: the tests
 # make thousands of calls, and each process counts.
 dir=${0%/*}
@@ -232,6 +233,10 @@ case "$1" in
         fi
         echo "{\"type\":\"result\",\"result\":\"Answered.\",\"duration_ms\":6000}"
       done < <(tail -n +1 -f --pid=$$ -s 0.05 "$dir/runs/$1/inbox.jsonl")
+      # Claude Code left with background work (#204): it doesn'"'"'t exit once its inbox closes.
+      if [ -e "$dir/linger" ]; then
+        while :; do nap; done
+      fi
     ' sandbox "$run" > "$c/$name/out" 2> "$c/$name/err" < /dev/null &
     echo $! > "$c/$name/pid"
     ;;

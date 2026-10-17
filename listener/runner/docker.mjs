@@ -8,10 +8,12 @@
 //   state(name)          "running", "exited"… or null when there is no such sandbox
 //   follow(name, opts)   its output, line by line, until it exits; `skip` what was already read
 //   send(run, text, agent)  a message for the agent (a comment that arrived mid-run)
-//   close(run)           no more messages: the agent exits once it has answered
+//   close(run)           no more messages: the agent exits once it has answered (or is
+//                        stopped if it stays silent after that, runs.mjs linger())
 //   closed(run)          whether close() was called, for a listener that restarts
 //   wait(name)           until it exits
-//   kill(name)           ends it now (a cancelled run): SIGTERM, then SIGKILL after 10 s
+//   kill(name)           ends it now (a cancelled run, or one silent after its answer):
+//                        SIGTERM, then SIGKILL after 10 s
 //   remove(name, run)    the sandbox, its engine, its network and its inbox
 //   hasSession(name, agent)  whether its issue has a session of that agent already (a
 //                        previous run)

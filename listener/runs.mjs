@@ -24,6 +24,7 @@ import { CONFIG_FILE } from "./repo-config.mjs";
 import {
   addRun,
   lastResult,
+  minutes,
   newRecord,
   openLog,
   outcome,
@@ -39,9 +40,15 @@ import { operatorSecrets, redact } from "./secrets.mjs";
 // A run cancelled before its sandbox started (cancel()): finish() ends it as cancelled.
 class Cancelled extends Error {}
 
+// How long a sandbox may stay silent after its answer, its inbox closed, before the listener
+// stops it and posts that answer (linger()): the agent should have exited, but one that left
+// background work behind can go on, or never exit (#204).
+export const ANSWER_GRACE_MS = 2 * 60_000;
+
 // `ctx` (server.mjs): the listener's state and services, read at call time.
 export function createRuns(ctx) {
   const { config, log } = ctx;
+  const graceMs = ctx.answerGraceMs ?? ANSWER_GRACE_MS;
 
   // The run's agent (agents/), by the name its record keeps across a restart.
   const agentOf = (task) => agentFor(task.live.record.agent);
@@ -148,6 +155,8 @@ export function createRuns(ctx) {
       unanswered: [], // delivered since the agent's last result
       handled: [...items], // its comments and those delivered to it, for their reactions
       cancelled: null, // { by, at } once someone stopped it (cancel())
+      answered: false, // whether it gave a result with its inbox closed: its final answer
+      lingering: null, // the timer that stops it if it stays silent after that (linger())
       saving: null,
     };
   }
@@ -278,6 +287,8 @@ export function createRuns(ctx) {
   // Also how a restarted listener picks a run up: what it already read is skipped.
   async function follow(task) {
     const live = task.live;
+    // A run that answered before the listener restarted: its grace starts again.
+    if (live.answered) linger(task);
     try {
       for (;;) {
         await ctx.runner.follow(task.name, {
@@ -288,6 +299,7 @@ export function createRuns(ctx) {
             if (ctx.stopping) return; // left for the next listener
             live.logFile.write(hidden(live, line) + "\n");
             live.lines.err++;
+            if (live.answered) linger(task);
           },
         });
         if (ctx.stopping || (await ctx.runner.state(task.name)) !== "running") break;
@@ -316,6 +328,8 @@ export function createRuns(ctx) {
     const line = hidden(live, raw);
     live.logFile.write(line + "\n");
     live.lines.out++;
+    // Still at work after its answer (a background task's turn): its stop waits.
+    if (live.answered) linger(task);
     const event = lastResult([line], agentOf(task));
     if (!event) return;
     // One result per turn: a comment answered after the first adds a turn.
@@ -324,7 +338,38 @@ export function createRuns(ctx) {
     // Comments still in their pause go now, rather than to a new container.
     clearTimeout(task.timer);
     if (!ctx.deliver(task)) close(task);
+    // Nothing more for it: it should exit now, with this as its answer.
+    if (!live.open && !live.cancelled && !live.finishing) {
+      live.answered = true;
+      linger(task);
+    }
     ctx.saveLive(task);
+  }
+
+  // (Re)starts the timer of a run that answered with its inbox closed: if its sandbox writes
+  // nothing more for graceMs, it is stopped, and finish() posts its last result as usual.
+  function linger(task) {
+    const live = task.live;
+    clearTimeout(live.lingering);
+    const timer = setTimeout(() => endSilent(task, live, timer), graceMs);
+    // A listener that stops leaves it to the next one (follow()).
+    timer.unref?.();
+    live.lingering = timer;
+  }
+
+  async function endSilent(task, live, timer) {
+    const current = () =>
+      task.live === live && live.lingering === timer && !live.finishing && !live.cancelled;
+    if (ctx.stopping || !current()) return;
+    const state = await ctx.runner.state(task.name).catch(() => null);
+    if (state !== "running" || ctx.stopping || !current()) return;
+    const message = `Silent for ${minutes(graceMs)} min after its answer: stopped, its answer posted`;
+    writeEvent(live.logFile, "ended", { after: graceMs });
+    log(`${live.key}: ${message}`);
+    // The follow loop sees it exit, and ends the run.
+    await ctx.runner
+      .kill(task.name)
+      .catch((error) => log(`${live.key}: stopping its sandbox: ${error.message ?? error}`));
   }
 
   // No more comments for this run: the agent exits once it has answered.
@@ -354,6 +399,7 @@ export function createRuns(ctx) {
     const live = task.live;
     if (live && !live.finishing && !live.cancelled) {
       live.cancelled = { by, at: Date.now() };
+      clearTimeout(live.lingering);
       // Nothing more goes to its inbox: what waits is for the next run.
       live.open = false;
       writeEvent(live.logFile, "cancelled", live.cancelled);
@@ -376,7 +422,8 @@ export function createRuns(ctx) {
   }
 
   // A cancelled run's end: a short reply, no fallback, and nothing put back in the queue
-  // (what was delivered went with the run). Its session and pushed commits stay.
+  // (what was delivered went with the run). Its session and pushed commits stay. One stopped
+  // after its final answer (output()) posts that answer, which would be lost otherwise.
   async function endCancelled(task) {
     const live = task.live;
     const { key, record } = live;
@@ -386,7 +433,11 @@ export function createRuns(ctx) {
       // How long it ran, setup included: it may have no result to say.
       const ran = { durationMs: live.cancelled.at - record.startedAt };
       const footer = replyFooter(record, ran, "", live.later);
-      await ctx.answer(target(task, live.replyTo), `Stopped by @${by}.\n\n${footer}`);
+      const answer = live.answered && outcome(live.result) !== "error" && live.result.text;
+      const text = answer
+        ? `${answer}\n\nStopped by @${by} after its answer.\n\n${footer}`
+        : `Stopped by @${by}.\n\n${footer}`;
+      await ctx.answer(target(task, live.replyTo), hidden(live, text));
       live.replied = true;
       ctx.saveLive(task);
     }
@@ -413,6 +464,7 @@ export function createRuns(ctx) {
     const { key, record } = live;
     live.open = false;
     live.finishing = true;
+    clearTimeout(live.lingering);
     // Its address goes back to Docker, which may give it to another sandbox before the
     // reply is posted: the egress proxy's answers for it stop now.
     live.hosts = null;

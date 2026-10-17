@@ -66,6 +66,9 @@ agent_run() {
     fresh) resume=(--no-session-persistence) ;;
   esac
   local prompt=$2
+  # Headless, the session ends at the turn's end: subagents and commands it would leave
+  # running in the background answer too late, or keep it going after its answer (#204).
+  export CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1
   local claude=(claude --dangerously-skip-permissions "${claude_model[@]}" "${claude_fallback[@]}"
     "${resume[@]}" -p)
   if [ "${TASK_OUTPUT:-}" = "json" ] && [ "${TASK_INPUT:-}" = "stream" ]; then
