@@ -1,9 +1,9 @@
 // Which mode a queued comment runs in (tasks.mjs accept()): a trigger line, a "/mode" line, or
 // the issue's current mode, its brainstorm or its work session. Keeps the issue's brainstorm
 // (brainstorms.json) and repo mode (modes.json) up to date, and replies when a mode can't run.
+import { researchRefusal } from "./access.mjs";
 import { AGENTS } from "./agents/index.mjs";
 import { taskKey } from "./events.mjs";
-import { researchRefusal } from "./access.mjs";
 import { customMode, INBOX, sessionName } from "./modes.mjs";
 import { CONFIG_FILE, modeNames } from "./repo-config.mjs";
 
