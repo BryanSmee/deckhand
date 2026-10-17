@@ -23,7 +23,9 @@ model in [security.md](security.md).
   [Picking an agent with `/agent`](#picking-an-agent-with-agent). These lines may also follow
   the trigger on its first line (`Deckhand /agent codex /effort high`): `splitTrigger()` moves
   each to a line of its own, for `takeOptions()`, and a value it would refuse (`/effort huge`)
-  makes the line no trigger at all.
+  makes the line no trigger at all. Inbox entries (ideas, bugs, discussions) have no trigger
+  line: `/model`, `/effort` and `/agent` may end any of their lines instead (`Do X /effort
+high`, `entry()`), and a run with a refused value stays text.
 - **Later**: `/after #77` (or `/after #77 #80`), with a trigger or `/mode` line, holds the
   comment back; see [Waiting for other issues](#waiting-for-other-issues).
 
