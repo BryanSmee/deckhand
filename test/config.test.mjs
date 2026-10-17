@@ -396,7 +396,7 @@ codex_version: 0.170.0
 test("agents: an unknown one, or Codex without its key, stops the listener", () => {
   assert.throws(
     () => loadConfig({ ALLOWED_USERS: "a", SANDBOX_AGENT: "gemini" }),
-    /SANDBOX_AGENT: expected claude or codex, got gemini/,
+    /SANDBOX_AGENT: expected claude, codex, antigravity, got gemini/,
   );
   assert.throws(
     () => loadConfig({ ALLOWED_USERS: "a", SANDBOX_AGENT: "codex" }),
@@ -431,6 +431,43 @@ test("Codex: an API key, else a ChatGPT plan's login (CODEX_AUTH_FILE), environm
   assert.throws(() => file("codex_auth_file: /data/a.json"), /codex_auth_file: a secret/);
 });
 
+test("the Antigravity CLI: a Google AI plan's login (AGY_AUTH_FILE), its version, tiers and volumes", () => {
+  const plan = loadConfig(
+    { SANDBOX_AGENT: "antigravity", AGY_AUTH_FILE: "/data/agy-auth.json" },
+    file("allowed_users: [a]\nagy_best_model: gemini-4-argon-medium\nagy_version: 1.5.0"),
+  );
+  assert.equal(plan.agyCredential, "AGY_AUTH_FILE");
+  assert.deepEqual(plan.agents, ["antigravity"]);
+  assert.deepEqual(plan.agyModels, { best: "gemini-4-argon-medium" });
+  assert.equal(plan.agyVersion, "1.5.0");
+  assert.equal(plan.agyVolume, "deckhand-antigravity");
+  assert.equal(plan.agyLoginVolume, "deckhand-antigravity-login");
+  const defaults = loadConfig({ ALLOWED_USERS: "a", NAME_PREFIX: "dh" });
+  assert.equal(defaults.agyCredential, null);
+  assert.equal(defaults.agyVersion, "1.4.0");
+  assert.equal(defaults.agyLoginVolume, "dh-antigravity-login");
+  // Picked without a login: the listener doesn't start, and a repo can't pick it.
+  assert.throws(
+    () => loadConfig({ ALLOWED_USERS: "a", SANDBOX_AGENT: "antigravity" }),
+    /SANDBOX_AGENT is antigravity, which needs AGY_AUTH_FILE in the environment/,
+  );
+  assert.deepEqual(defaults.agents, ["claude"]);
+  assert.throws(() => file("agy_auth_file: /data/a.json"), /agy_auth_file: a secret/);
+  // antigravity@google as a fallback, with its login.
+  const fallback = loadConfig({
+    ALLOWED_USERS: "a",
+    AGY_AUTH_FILE: "/data/agy-auth.json",
+    FALLBACKS: "codex, antigravity",
+    OPENAI_API_KEY: "k",
+  });
+  assert.deepEqual(fallback.fallbacks, ["codex@openai", "antigravity@google"]);
+  assert.deepEqual(fallback.agents, ["claude", "codex", "antigravity"]);
+  assert.throws(
+    () => loadConfig({ ALLOWED_USERS: "a", FALLBACKS: "antigravity@google" }),
+    /FALLBACKS: antigravity@google needs AGY_AUTH_FILE in the environment/,
+  );
+});
+
 test("FALLBACKS: none by default; agent@provider entries in order, each with its credential", () => {
   assert.deepEqual(loadConfig({ ALLOWED_USERS: "a" }).fallbacks, []);
   const config = loadConfig(
@@ -455,7 +492,7 @@ claude_fallback_model: sonnet
 test("FALLBACKS: an unknown entry, or one without its credential, stops the listener", () => {
   assert.throws(
     () => loadConfig({ ALLOWED_USERS: "a", FALLBACKS: "gemini" }),
-    /FALLBACKS: expected agent@provider \(claude@anthropic, claude@openrouter, codex@openai\), got gemini/,
+    /FALLBACKS: expected agent@provider \(claude@anthropic, claude@openrouter, codex@openai, antigravity@google\), got gemini/,
   );
   assert.throws(
     () => loadConfig({ ALLOWED_USERS: "a", OPENAI_API_KEY: "k", FALLBACKS: "codex@openrouter" }),

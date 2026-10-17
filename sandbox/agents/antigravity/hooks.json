@@ -1,0 +1,10 @@
+{
+  "deckhand": {
+    "Stop": [
+      {
+        "type": "command",
+        "command": "sandbox-draft-pr hook Stop"
+      }
+    ]
+  }
+}

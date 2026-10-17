@@ -5,16 +5,18 @@ import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 import { sendJson } from "./web.mjs";
 
-// Plans' credentials (`claude setup-token`, `codex login`): logged at start, as the operator
-// is responsible for how they are used, and a plan's terms may not cover a team's bot.
+// Plans' credentials (`claude setup-token`, `codex login`, `agy`'s sign-in): logged at start,
+// as the operator is responsible for how they are used, and a plan's terms may not cover a
+// team's bot.
 const PLANS = {
   CLAUDE_CODE_OAUTH_TOKEN: "a Claude plan's credential",
   CODEX_AUTH_FILE: "a ChatGPT plan's login",
+  AGY_AUTH_FILE: "a Google AI plan's login",
 };
 
 export function planWarning(name) {
   if (!Object.hasOwn(PLANS, name ?? "")) return null;
-  return `Warning: ${name} is ${PLANS[name]}. A subscription (Claude Pro/Max, a ChatGPT plan) is usually licensed to one person. Serving a team, or repositories other people write to, may break your provider's terms: check them before you do. You are responsible for how your Deckhand uses your credential. For teams, use an API key.`;
+  return `Warning: ${name} is ${PLANS[name]}. A subscription (Claude Pro/Max, a ChatGPT plan, Google AI Pro/Ultra) is usually licensed to one person. Serving a team, or repositories other people write to, may break your provider's terms: check them before you do. You are responsible for how your Deckhand uses your credential. For teams, use an API key.`;
 }
 
 // Per connection, or the listener's own business: never forwarded either way.

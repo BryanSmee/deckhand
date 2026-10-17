@@ -1,8 +1,10 @@
 // The broker's HTTP server, on the runs' networks only (compose.yaml doesn't publish its
 // port): the egress proxy's questions (may this sandbox reach this host?), the token broker
 // (broker.mjs), the git gateway (git-gateway.mjs), ready for review (pr-ready.mjs) and the
-// agents' API endpoints (anthropic.mjs, openai.mjs).
+// agents' API endpoints (anthropic.mjs, openai.mjs, and google.mjs, which the proxy sends the
+// Antigravity CLI's calls to).
 import { createServer } from "node:http";
+import { agentFor } from "./agents/index.mjs";
 import { egressPolicy } from "./egress.mjs";
 import { taskKey } from "./events.mjs";
 import { sendJson } from "./web.mjs";
@@ -14,6 +16,7 @@ const ROUTES = [
   { prefix: "/git/", service: "gitGateway", name: "Git gateway", destroy: true },
   { prefix: "/anthropic/", service: "anthropic", name: "Anthropic", destroy: true },
   { prefix: "/openai/", service: "openai", name: "OpenAI", destroy: true },
+  { prefix: "/relay/", service: "google", name: "Google", destroy: true },
   { prefix: "/pr/", service: "prReady", name: "Pull requests", destroy: false },
 ];
 
@@ -58,11 +61,15 @@ export function createBrokerHttp(ctx) {
     // Its container engine's plain HTTP is cached too, but its HTTPS never decrypted: its
     // builds and containers don't trust Deckhand's CA.
     const engine = !!live?.engineIp?.includes(ip);
+    // What its agent's calls need: hosts handed to the listener, hosts refused.
+    const agent = agentFor(live?.record?.agent);
     const answer = task
       ? egressPolicy(host, live.hosts, live.trusted, live.cached, live.uncached ?? [], {
           decrypt: !engine,
+          relayed: agent.relayed,
+          blocked: agent.blocked,
         })
-      : { allowed: false, private: false, cache: false, decrypt: false };
+      : { allowed: false, private: false, cache: false, decrypt: false, relay: false };
     if (!answer.allowed)
       log(`Egress: refused ${host} for ${task ? taskKey(task.repo, task.id) : ip}`);
     sendJson(res, answer);

@@ -1,10 +1,11 @@
 // The agents Deckhand can run, behind one seam: everything that differs between them is in
-// their module (claude.mjs, codex.mjs), and the listener only reads Deckhand's own events from
+// their module (claude.mjs, codex.mjs, antigravity.mjs), and the listener only reads Deckhand's own events from
 // them. docs/architecture.md describes it.
+import { antigravity } from "./antigravity.mjs";
 import { claude } from "./claude.mjs";
 import { codex } from "./codex.mjs";
 
-export const AGENTS = { claude, codex };
+export const AGENTS = { claude, codex, antigravity };
 
 // The agent of a deployment that picks none (SANDBOX_AGENT); also that of runs logged before
 // agents had names.
@@ -53,18 +54,19 @@ export const ENTRIES = Object.values(AGENTS).flatMap((a) =>
 );
 
 // What a provider's failure says, in an agent's error result (Claude Code's "API Error: 529
-// {…overloaded_error…}", Codex's "unexpected status 429 Too Many Requests"), and what each
+// {…overloaded_error…}", Codex's "unexpected status 429 Too Many Requests", the Antigravity
+// CLI's "Eligibility check failed: UNAUTHENTICATED (code 401)…"), and what each
 // HTTP status means. A failing test, a task the agent gave up on or a model's own refusal
 // is none of these.
 const PROVIDER_ERRORS = [
   [/overloaded/i, "overloaded"],
   [
-    /usage limit|limit reached|insufficient_quota|exceeded your current quota|credit balance/i,
+    /usage limit|limit reached|insufficient_quota|exceeded your current quota|credit balance|RESOURCE_EXHAUSTED/i,
     "quota reached",
   ],
   [/rate[ _-]?limit|too many requests/i, "rate limited"],
   [
-    /invalid (x-)?api[ _-]?key|incorrect api key|authentication_error|invalid bearer|oauth token (has )?expired/i,
+    /invalid (x-)?api[ _-]?key|incorrect api key|authentication_error|invalid bearer|oauth token (has )?expired|UNAUTHENTICATED|PERMISSION_DENIED|eligibility check failed/i,
     "invalid credentials",
   ],
 ];

@@ -67,13 +67,13 @@ const LIMIT_FORMAT = {
 };
 
 // What opus, sonnet and haiku mean to Claude Code (its variables), and best, balanced and fast
-// to Codex: each the setting <prefix>_<tier>_MODEL (aliasesFrom()).
+// to Codex and the Antigravity CLI: each the setting <prefix>_<tier>_MODEL (aliasesFrom()).
 const CLAUDE_TIERS = {
   ANTHROPIC_DEFAULT_OPUS_MODEL: "OPUS",
   ANTHROPIC_DEFAULT_SONNET_MODEL: "SONNET",
   ANTHROPIC_DEFAULT_HAIKU_MODEL: "HAIKU",
 };
-const CODEX_TIERS = { best: "BEST", balanced: "BALANCED", fast: "FAST" };
+const TIERS = { best: "BEST", balanced: "BALANCED", fast: "FAST" };
 
 // The operator's settings, by environment variable (in lowercase, its config.yaml key), in the
 // order they are read: a default can use the ones before it. Each one has
@@ -117,7 +117,11 @@ export const SETTINGS = {
   CODEX_VERSION: { default: "0.162.1" },
   OPENAI_BASE_URL: { default: "https://api.openai.com/v1", parse: apiUrl },
   // What best, balanced and fast mean to Codex, when not its built-in models.
-  ...tierSettings("CODEX", CODEX_TIERS),
+  ...tierSettings("CODEX", TIERS),
+  // The Antigravity CLI's, on a Google AI plan whose login the listener holds
+  // (agents/antigravity.mjs, antigravity-login.mjs), and what best, balanced and fast mean to it.
+  AGY_VERSION: { default: "1.4.0" },
+  ...tierSettings("AGY", TIERS),
   // Where a run goes, in order, when its provider fails (runs.mjs). Empty: nowhere.
   FALLBACKS: { type: "list", default: [], parse: fallbacks },
   // A tier (best, balanced, fast) each agent maps to one of its models, or a model's name.
@@ -149,6 +153,7 @@ export const SETTINGS = {
   NAME_PREFIX: { default: "deckhand" },
   CLAUDE_CODE_VOLUME: { default: (s) => `${s.NAME_PREFIX}-claude-code` },
   CODEX_VOLUME: { default: (s) => `${s.NAME_PREFIX}-codex` },
+  AGY_VOLUME: { default: (s) => `${s.NAME_PREFIX}-antigravity` },
   // What the operator grants each repo, one file per repo: hosts, host mounts, limits
   // (grants.mjs).
   GRANTS_DIR: { default: "/etc/deckhand/grants" },
@@ -294,7 +299,10 @@ export function loadConfig(env, file = NO_FILE) {
     // Without a key, a ChatGPT plan's login, which the listener holds and refreshes (chatgpt.mjs).
     openaiCredential: OPENAI_CREDENTIALS.find((name) => env[name]) ?? null,
     openaiUrl: s.OPENAI_BASE_URL,
-    codexModels: aliasesFrom(s, "CODEX", CODEX_TIERS),
+    codexModels: aliasesFrom(s, "CODEX", TIERS),
+    // The Antigravity CLI's plan login (AGY_AUTH_FILE), which the listener holds and refreshes.
+    agyCredential: env.AGY_AUTH_FILE ? "AGY_AUTH_FILE" : null,
+    agyModels: aliasesFrom(s, "AGY", TIERS),
     agent: s.SANDBOX_AGENT,
     brainstormAgent: s.BRAINSTORM_AGENT,
     agents: configuredAgents(env, s),
@@ -336,6 +344,10 @@ function sandboxConfig(env, s) {
     claudeCodeVersion: s.CLAUDE_CODE_VERSION,
     codexVolume: s.CODEX_VOLUME,
     codexVersion: s.CODEX_VERSION,
+    agyVolume: s.AGY_VOLUME,
+    agyVersion: s.AGY_VERSION,
+    // Where the listener refreshes the plan's login with `agy` itself (antigravity-login.mjs).
+    agyLoginVolume: `${s.AGY_VOLUME}-login`,
     maxParallel: s.MAX_PARALLEL,
     subnets: s.SANDBOX_SUBNETS,
     // Per sandbox, under the grants folder's: default.yaml's limits, then a repo's own.
@@ -477,7 +489,7 @@ function apiUrl(text, { label }) {
 function agentSetting(text, { label, env }) {
   const agent = text.trim().toLowerCase();
   if (!Object.hasOwn(AGENTS, agent)) {
-    throw new ConfigError(`${label}: expected ${Object.keys(AGENTS).join(" or ")}, got ${text}`);
+    throw new ConfigError(`${label}: expected ${Object.keys(AGENTS).join(", ")}, got ${text}`);
   }
   const secrets = AGENTS[agent].secrets;
   if (agent !== DEFAULT_AGENT && !secrets.some((secret) => env[secret])) {

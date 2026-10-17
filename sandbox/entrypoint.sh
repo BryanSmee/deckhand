@@ -1,5 +1,5 @@
 #!/bin/bash
-# Loads the run's agent (SANDBOX_AGENT, claude by default, or codex: agents/<name>.sh, which
+# Loads the run's agent (SANDBOX_AGENT, claude by default, codex or antigravity: agents/<name>.sh, which
 # finds its CLI in its shared, read-only volume, installed by the listener), clones the
 # repository over HTTPS (tokens from the listener's broker, git-credential-deckhand), opens the task's branch
 # and draft pull request (draft-pr.sh, for TASK_ISSUE), runs the repo's setup command
@@ -29,7 +29,8 @@ deckhand_messages() {
 }
 
 # The egress proxy's CA (DECKHAND_CA, a file from the listener when the repository's grant has
-# cached_hosts): the proxy decrypts those hosts' HTTPS to cache it. Trusted next to the
+# cached_hosts, or the agent's calls are relayed to the listener): the proxy decrypts those
+# hosts' HTTPS to cache it, or to hand it to the listener. Trusted next to the
 # image's own roots, in a bundle of ours (`node` can't run update-ca-certificates), through
 # the variables each tool reads, and by Chromium, which reads its own store (~/.pki/nssdb).
 if [ -n "${DECKHAND_CA:-}" ] && [ -f "$DECKHAND_CA" ]; then

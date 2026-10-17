@@ -130,7 +130,7 @@ test("normalize: what isn't Claude Code's JSON gives nothing", () => {
 });
 
 test("agents: Claude Code is the default, also for unknown names", () => {
-  assert.deepEqual(Object.keys(AGENTS), ["claude", "codex"]);
+  assert.deepEqual(Object.keys(AGENTS), ["claude", "codex", "antigravity"]);
   assert.equal(agentFor(), claude);
   assert.equal(agentFor("claude"), claude);
   assert.equal(agentFor("toString"), claude);

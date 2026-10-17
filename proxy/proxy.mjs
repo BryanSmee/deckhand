@@ -12,6 +12,9 @@
 // The hosts the listener says may be cached go through a cache on disk (cached.mjs, cache.mjs):
 // their plain HTTP, and their HTTPS, which the proxy decrypts with a certificate from
 // Deckhand's CA (authority.mjs), that sandboxes trust, then sends on over TLS it verifies.
+// The hosts the listener says to relay (an agent's calls that carry the run's secret in place of
+// the operator's credential, ../listener/google.mjs) are decrypted the same way, whether the
+// cache is on or not, and each request goes to the listener (RELAY_URL) instead of the host.
 // Everything else, and every CONNECT to another host, is forwarded as is: a raw tunnel.
 import { lookup as dnsLookup } from "node:dns/promises";
 import { createServer, request as httpRequest } from "node:http";
@@ -36,8 +39,8 @@ export function target(authority) {
   return { host: (match[1] ?? match[2]).toLowerCase().replace(/\.$/, ""), port };
 }
 
-// Asks the listener: { allowed, private, cache, decrypt }. Fails closed: no `decrypt`, a
-// tunnel.
+// Asks the listener: { allowed, private, cache, decrypt, relay }. Fails closed: no `decrypt`,
+// a tunnel.
 export function listenerPolicy(url, timeoutMs = 5000) {
   return async (ip, host) => {
     try {
@@ -50,6 +53,7 @@ export function listenerPolicy(url, timeoutMs = 5000) {
         private: answer.private === true,
         cache: answer.cache === true,
         decrypt: answer.decrypt === true,
+        relay: answer.relay === true,
       };
     } catch {
       return { allowed: false };
@@ -78,20 +82,21 @@ function firstChunk(socket) {
 }
 
 export function createProxy({
-  policy, // (client ip, host) → { allowed, private, cache, decrypt }
+  policy, // (client ip, host) → { allowed, private, cache, decrypt, relay }
   lookup = (host) => dnsLookup(host, { all: true }),
   blocked = blockedAddress,
   cache = null, // createCache()'s, or none
-  authority = null, // createAuthority()'s, ready: HTTPS to cached hosts is decrypted
+  authority = null, // createAuthority()'s, ready: HTTPS to cached and relayed hosts is decrypted
+  relayUrl = null, // where relayed requests go: <relayUrl>/<host><path>
   upstreamCa, // what verifies the hosts' certificates; default: Node's trust store
   now = Date.now,
   log = () => {},
 }) {
   // { address to connect to, whether its answers may be cached, and its HTTPS decrypted to do
-  // so }, or a Refused saying why not.
+  // so, or relayed }, or a Refused saying why not.
   async function decide(client, host) {
     const ip = client.replace(/^::ffff:/, "");
-    const { allowed, private: privateOk, cache: cacheOk, decrypt } = await policy(ip, host);
+    const { allowed, private: privateOk, cache: cacheOk, decrypt, relay } = await policy(ip, host);
     if (!allowed) {
       log(`refused ${host} for ${ip}`);
       throw new Refused(
@@ -99,6 +104,8 @@ export function createProxy({
           "The operator adds it to `hosts` in their grants folder: grants/<owner>/<repo>.yaml for one repository, grants/default.yaml for all.",
       );
     }
+    // Relayed: its requests go to the listener, never to the host's address.
+    if (relay === true) return { address: null, cache: false, decrypt: true, relay: true };
     let addresses;
     try {
       addresses = isIP(host) ? [{ address: host }] : await lookup(host);
@@ -112,7 +119,12 @@ export function createProxy({
         `Deckhand's egress proxy refused ${host}: it resolves to a private address`,
       );
     }
-    return { address: usable.address, cache: cacheOk === true, decrypt: decrypt === true };
+    return {
+      address: usable.address,
+      cache: cacheOk === true,
+      decrypt: decrypt === true,
+      relay: relay === true,
+    };
   }
 
   function refuse(socket, error) {
@@ -134,6 +146,17 @@ export function createProxy({
       decision = await decide(req.socket.remoteAddress, to.host);
     } catch (error) {
       return refuse(client, error);
+    }
+    // Never a tunnel: the sandbox's calls would reach the host with the run's secret alone.
+    if (decision.relay) {
+      if (authority && relayUrl && certifiable(to.host)) {
+        return intercept(client, head, to, decision.address, true);
+      }
+      log(`refused ${to.host}: no CA or RELAY_URL to relay it`);
+      return refuse(
+        client,
+        new Refused(`Deckhand's egress proxy can't relay ${to.host}: it has no CA`),
+      );
     }
     if (decision.cache && decision.decrypt && cache?.enabled && authority && certifiable(to.host)) {
       return intercept(client, head, to, decision.address);
@@ -161,21 +184,24 @@ export function createProxy({
 
   // The tunnel's TLS ends here, with a certificate for the host from Deckhand's CA: its
   // requests go through the cache like plain HTTP (relay()), and on to the host over TLS
-  // that is verified (send()). A client that doesn't start with TLS, or a host the CA can't
-  // make a certificate for, gets the raw tunnel.
-  async function intercept(client, head, to, address) {
+  // that is verified (send()), or to the listener when `relay`. A client that doesn't start
+  // with TLS, or a host the CA can't make a certificate for, gets the raw tunnel; never a
+  // relayed host.
+  async function intercept(client, head, to, address, relay = false) {
     let context;
     try {
       context = await contextFor(to.host);
     } catch (error) {
-      log(`no certificate for ${to.host}, tunnelled: ${error.message}`);
+      log(`no certificate for ${to.host}${relay ? "" : ", tunnelled"}: ${error.message}`);
+      if (relay)
+        return refuse(client, new Refused(`Deckhand's egress proxy can't relay ${to.host}`));
       return pipe(client, head, to, address, false);
     }
     client.write("HTTP/1.1 200 Connection Established\r\n\r\n");
     const first = head?.length ? head : await firstChunk(client);
     if (!first) return client.destroy();
     // A TLS record starts with 22, a handshake.
-    if (first[0] !== 22) return pipe(client, first, to, address, true);
+    if (first[0] !== 22) return relay ? client.destroy() : pipe(client, first, to, address, true);
     // What was read already is handed back: the TLS socket reads it first.
     client.unshift(first);
     const tls = new TLSSocket(client, {
@@ -187,7 +213,7 @@ export function createProxy({
       log(`TLS with the client for ${to.host}: ${error.code ?? error.message}`);
       tls.destroy();
     });
-    tls.deckhand = { to, address };
+    tls.deckhand = { to, address, relay };
     inside.emit("connection", tls);
   }
 
@@ -204,11 +230,12 @@ export function createProxy({
 
   // Requests inside an intercepted tunnel: to its host, whatever their Host header says.
   const inside = createServer((req, res) => {
-    const { to, address } = req.socket.deckhand;
+    const { to, address, relay: toListener } = req.socket.deckhand;
     if (!req.url.startsWith("/")) {
       res.writeHead(400, { "content-type": "text/plain" });
       return res.end("Deckhand's egress proxy: expected a path\n");
     }
+    if (toListener) return relayed(req, res, to.host);
     const name = isIP(to.host) === 6 ? `[${to.host}]` : to.host;
     const url = new URL(`https://${name}:${to.port}${req.url}`);
     relay(req, res, { address, url, host: to.host }, true);
@@ -222,7 +249,7 @@ export function createProxy({
       res.writeHead(pem ? 200 : 404, {
         "content-type": pem ? "application/x-pem-file" : "text/plain",
       });
-      return res.end(pem ?? "Deckhand's egress proxy has no CA: its cache is off\n");
+      return res.end(pem ?? "Deckhand's egress proxy has no CA\n");
     }
     let url;
     try {
@@ -243,6 +270,26 @@ export function createProxy({
       return res.end(`${error instanceof Refused ? error.message : "refused"}\n`);
     }
     relay(req, res, { address: decision.address, url, host }, decision.cache);
+  }
+
+  // A relayed host's request, to the listener as <relayUrl>/<host><path>: the listener checks
+  // the run's secret and sends it on with the operator's credential (../listener/google.mjs).
+  function relayed(req, res, host) {
+    const url = new URL(`${relayUrl}/${host}${req.url}`);
+    const headers = { ...req.headers, host: url.host };
+    for (const name of Object.keys(headers)) {
+      if (name.startsWith("proxy-")) delete headers[name];
+    }
+    const send = url.protocol === "https:" ? httpsRequest : httpRequest;
+    const upstream = send(url, { method: req.method, headers }, (answer) => {
+      res.writeHead(answer.statusCode, answer.headers);
+      answer.pipe(res);
+    });
+    upstream.on("error", () => unreachable(res, "the listener"));
+    res.on("close", () => {
+      if (!res.writableFinished) upstream.destroy();
+    });
+    req.pipe(upstream);
   }
 
   // A request on to its host: through the cache when the host's answers may be kept and the
@@ -319,19 +366,19 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
     entryMax: parseSize(process.env.EGRESS_CACHE_ENTRY_MAX, DEFAULT_ENTRY_MAX),
     log,
   });
-  // The CA lives next to the cache, in the proxy's volume, and only with the cache on.
-  let authority = null;
-  if (cache.enabled) {
-    authority = createAuthority({ dir: join(dir, "ca"), log });
-    try {
-      await authority.ready();
-    } catch (error) {
-      log(`HTTPS isn't cached: no CA (${error.message})`);
-      authority = null;
-    }
+  // The CA lives next to the cache, in the proxy's volume, cache on or off: relayed hosts need
+  // it too.
+  let authority = createAuthority({ dir: join(dir, "ca"), log });
+  try {
+    await authority.ready();
+  } catch (error) {
+    log(`HTTPS isn't cached or relayed: no CA (${error.message})`);
+    authority = null;
   }
+  // The listener's broker, where POLICY_URL is: relayed requests go to its /relay/.
+  const relayUrl = (process.env.RELAY_URL || new URL("/relay", url).href).replace(/\/$/, "");
   const https = authority ? ", HTTPS too" : "";
-  createProxy({ policy: listenerPolicy(url), cache, authority, log }).listen(port, () =>
+  createProxy({ policy: listenerPolicy(url), cache, authority, relayUrl, log }).listen(port, () =>
     log(`Egress proxy on :${port}, asking ${url}; cache ${cache.enabled ? `on${https}` : "off"}`),
   );
 }

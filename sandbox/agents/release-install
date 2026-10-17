@@ -1,0 +1,45 @@
+#!/bin/bash
+# Installs a release's binary at one version into an agent's shared volume, for its installer
+# (agents/<name>/install, run as root):
+#
+#   release-install <volume> <version> <owner/repo> <asset> <binary> <command> <name>
+#
+# downloads the GitHub release's <asset> (a .tar.gz) for tag <version>, checks it against the
+# asset's sha256 `digest` from GitHub's release API (refused when they differ or there is
+# none), unpacks it and links its <binary> as bin/<command>. Nothing if that version's
+# command is already there. One folder per version, installed aside then renamed, as
+# npm-install does. GITHUB_API and GITHUB_DOWNLOADS: other addresses, for the tests.
+set -euo pipefail
+
+root=$1 version=$2 repo=$3 asset=$4 binary=$5 command=$6 name=$7
+api=${GITHUB_API:-https://api.github.com}
+downloads=${GITHUB_DOWNLOADS:-https://github.com}
+umask 022
+home=$root/$version
+[ -x "$home/bin/$command" ] && exit 0
+
+digest=$(curl -fsSL "$api/repos/$repo/releases/tags/$version" |
+  jq -r --arg asset "$asset" '.assets[]? | select(.name == $asset) | .digest // empty') || true
+if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+  echo "$name $version: no sha256 digest for $asset in the release, not installed" >&2
+  exit 1
+fi
+tmp=$(mktemp -d "$root/.install-XXXXXX")
+trap 'rm -rf "$tmp"' EXIT
+curl -fsSLo "$tmp/$asset" "$downloads/$repo/releases/download/$version/$asset" || {
+  echo "$name $version: downloading $asset failed" >&2
+  exit 1
+}
+actual=sha256:$(sha256sum "$tmp/$asset" | cut -d' ' -f1)
+if [ "$actual" != "$digest" ]; then
+  echo "$name $version: $asset is $actual, but the release says $digest: not installed" >&2
+  exit 1
+fi
+tar -xzf "$tmp/$asset" -C "$tmp" "$binary"
+rm "$tmp/$asset"
+mkdir "$tmp/bin"
+ln -s "../$binary" "$tmp/bin/$command"
+chmod 755 "$tmp" "$tmp/$binary"
+trap - EXIT
+mv -T "$tmp" "$home" 2> /dev/null || rm -rf "$tmp" # another install got there first
+echo "$name $version installed" >&2
