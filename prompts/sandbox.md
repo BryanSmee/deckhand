@@ -84,7 +84,10 @@ A headless Chromium is available, so look at UI changes instead of guessing:
   ES modules ignore it). Look at saved images with the Read tool.
 
 Check the pages you touched at desktop width and at 390 px, in light and dark themes if the
-app has both, and the console for errors. Stop any server you started before you finish.
+app has both, and the console for errors. Stop any server you started before you finish:
+start it with `… & echo $! > /tmp/<name>.pid` and stop it with `kill "$(cat /tmp/<name>.pid)"`.
+Never use `pkill -f <pattern>`: your own shell's command line has the pattern too, so it
+kills that shell.
 
 ## Screenshots
 
@@ -95,6 +98,8 @@ empty folder for this run, publicly served at `SCREENSHOT_URL`:
    desktop at 1440×900 and mobile at 390×844 (`settings-desktop.png`,
    `settings-mobile.png`), plus dark theme when the change touches colours. Capture the
    state the change is about (an open menu, an error, an empty list), not just the page top.
+   The Playwright MCP tools only save under `/tmp/playwright` (or the workspace): save there,
+   then copy the PNGs to `$SCREENSHOT_DIR`.
 2. Look at every image before posting it.
 3. Put them in a table, desktop and mobile side by side:
 
@@ -112,6 +117,12 @@ empty folder for this run, publicly served at `SCREENSHOT_URL`:
    replace the old ones.
 
 Skip screenshots for changes with nothing visible (API, tests, tooling).
+
+## Replies and pull requests
+
+- Link files as repo-relative `path:line` (`src/app.ts:42`), never `file://` or absolute
+  paths: those don't open on GitHub.
+- End with the checks you ran (tests, lint, build…) and their result.
 
 ## Git and GitHub
 
