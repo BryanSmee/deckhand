@@ -2,7 +2,7 @@
 // requests: the hosts its sandbox may reach, its host mounts and limits, the egress proxy's
 // cache, and a container engine. What is refused stops the run with a reply (RunError).
 import { agentFor } from "./agents/index.mjs";
-import { operatorHosts } from "./egress.mjs";
+import { mandatoryHosts, operatorHosts } from "./egress.mjs";
 import { grantCheck, resolveMounts } from "./grants.mjs";
 import { BUILT_IN } from "./modes.mjs";
 import { CONFIG_FILE, engineCacheVolume } from "./repo-config.mjs";
@@ -78,6 +78,42 @@ export function grantedAccess(config, task, settings, { agent, note, log }) {
     hosts: operatorHosts(config, grant, agent),
     trusted: operatorHosts(config, grant, agent),
     mounts,
+    limits: grant.limits,
+  };
+}
+
+// Why a research run (modes.mjs OPEN) can't run in `repo`, or null: its grants have errors, or
+// don't set `allow_research`. Checked when `/mode research` is asked for (task-modes.mjs), and
+// again when the run starts (researchAccess()): the grant may be gone meanwhile.
+export function researchRefusal(config, repo, check = grantCheck(config, repo, { mounts: [] })) {
+  if (check.error) {
+    const where = check.error.file
+      ? `\`${check.error.file}\` in the operator's grants folder has errors`
+      : "the operator's grants folder has errors";
+    return `${where} (see the listener's logs)`;
+  }
+  if (!check.grant.allowResearch) {
+    return "research runs need the operator's `allow_research: true` grant for this repository (in its file of the grants folder, or `default.yaml`; see Deckhand's docs/security.md)";
+  }
+  return null;
+}
+
+// What a research run may reach: any public host, and private addresses only for the hosts
+// every run needs (mandatoryHosts()), not the repo's granted ones: an internal host next to
+// the open internet would be a way out for what it serves. Nothing else of the repo's: no
+// mounts, no cached hosts (no CA), its limits only. Its config's requests (a preview hook, a
+// Dockerfile) don't matter: none of it runs.
+export function researchAccess(config, task, { agent, log }) {
+  const check = grantCheck(config, task.repo, { mounts: [] });
+  if (check.error) log(`${task.repo}: ${check.error.message}`);
+  const refused = researchRefusal(config, task.repo, check);
+  if (refused) throw new RunError(`${cantRun(agent)}: ${refused}.`);
+  const { grant } = check;
+  return {
+    grant: { ...grant, cachedHosts: [] },
+    hosts: ["*"],
+    trusted: mandatoryHosts(config, agent),
+    mounts: [],
     limits: grant.limits,
   };
 }

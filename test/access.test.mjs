@@ -7,10 +7,13 @@ import {
   engineFor,
   grantedAccess,
   recheckMounts,
+  researchAccess,
+  researchRefusal,
   RunError,
   validateRun,
 } from "../listener/access.mjs";
 import { agentFor } from "../listener/agents/index.mjs";
+import { egressPolicy } from "../listener/egress.mjs";
 import { parseRepoConfig } from "../listener/repo-config.mjs";
 import { tempDir, testConfig } from "./helpers.mjs";
 
@@ -168,4 +171,59 @@ test("engineFor: the repo's `docker` with its grant and the operator's SANDBOX_E
     "No container engine: the operator hasn't set SANDBOX_ENGINE",
     "No container engine: a pull request from a fork",
   ]);
+});
+
+test("research: refused without allow_research, naming the grant; a broken grant file too", (t) => {
+  const io = { agent: claude, log: () => {} };
+  const research = task({ light: true, mode: "research" });
+  const without = granted(t, "hosts: [nas.lan.example]\n").config;
+  assert.match(researchRefusal(without, "org/repo"), /`allow_research: true`/);
+  assert.throws(
+    () => researchAccess(without, research, io),
+    (e) =>
+      e instanceof RunError &&
+      /^Claude can't run here: research runs need the operator's `allow_research: true` grant/.test(
+        e.message,
+      ),
+  );
+  const broken = granted(t, "allow_research: yes\n").config;
+  assert.match(researchRefusal(broken, "org/repo"), /`org\/repo\.yaml` in the operator's grants/);
+  // default.yaml grants it to every repo.
+  const dir = realpathSync(tempDir(t));
+  writeFileSync(join(dir, "default.yaml"), "allow_research: true\n");
+  assert.equal(researchRefusal(testConfig({ GRANTS_DIR: dir }), "org/repo"), null);
+});
+
+test("research: any public host, private addresses for the mandatory hosts only, nothing else", (t) => {
+  const { config } = granted(
+    t,
+    "allow_research: true\nhosts: [nas.lan.example]\ncached_hosts: [deb.debian.org]\nmounts: [/srv]\nlimits: { cpus: 3 }\n",
+  );
+  const research = task({ light: true, mode: "research" });
+  const access = researchAccess(config, research, { agent: claude, log: () => {} });
+  assert.deepEqual(access.hosts, ["*"]);
+  assert.deepEqual(access.mounts, []);
+  assert.deepEqual(access.grant.cachedHosts, []);
+  assert.equal(access.limits.cpus, "3");
+  const answer = (host) => egressPolicy(host, access.hosts, access.trusted, [], []);
+  assert.deepEqual(answer("example.org"), {
+    allowed: true,
+    private: false,
+    cache: false,
+    decrypt: false,
+  });
+  // The repo's granted internal host is public only here: next to the open internet, it
+  // would be a way out for what it serves.
+  assert.equal(answer("nas.lan.example").private, false);
+  assert.equal(answer("github.com").private, true);
+  // Its work runs still get the operator's hosts only.
+  const { settings } = parseRepoConfig("", config);
+  const work = grantedAccess(config, task(), settings, {
+    agent: claude,
+    note: () => {},
+    log: () => {},
+  });
+  assert.ok(!work.hosts.includes("*"));
+  assert.ok(work.hosts.includes("nas.lan.example"));
+  assert.equal(egressPolicy("example.org", work.hosts, work.trusted).allowed, false);
 });

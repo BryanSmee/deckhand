@@ -19,7 +19,7 @@ export type TaskState =
 
 export type RunStatus = "running" | "ok" | "needs-input" | "error" | "interrupted" | "cancelled";
 
-export type Kind = "issue" | "pr" | "discussion" | "brainstorm" | "idea" | "bug";
+export type Kind = "issue" | "pr" | "discussion" | "brainstorm" | "idea" | "bug" | "research";
 
 export interface Run {
   id: string;
@@ -252,6 +252,8 @@ export interface Grant {
   allowDockerfile: boolean;
   allowBranchDockerImages: boolean;
   allowDocker: boolean;
+  // `/mode research`: the open internet, without the repository's code or a token.
+  allowResearch: boolean;
   hosts: string[];
   // Those whose plain HTTP answers the egress proxy keeps in its cache.
   cachedHosts: string[];

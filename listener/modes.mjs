@@ -1,6 +1,11 @@
 // What each kind of run is: the built-in modes, and the repo's own (its config's `modes:`,
 // customMode()) that add their `light` and `fresh` to them. Pure: no state, no I/O.
-import { DISCUSSION_PERMISSIONS, LIGHT_PERMISSIONS, READ_ONLY_PERMISSIONS } from "./github-app.mjs";
+import {
+  DISCUSSION_PERMISSIONS,
+  LIGHT_PERMISSIONS,
+  NO_TOKEN,
+  READ_ONLY_PERMISSIONS,
+} from "./github-app.mjs";
 
 // The listener's own modes, each with its traits:
 // - picked: "/mode" picks it; the others come from the inbox, discussions, "/stop" and the
@@ -8,12 +13,16 @@ import { DISCUSSION_PERMISSIONS, LIGHT_PERMISSIONS, READ_ONLY_PERMISSIONS } from
 // - light: it reads the code and answers, without a branch or the repo's setup.
 // - fresh: a new session each time. An inbox issue collects unrelated entries, so each entry
 //   is a run of its own (entryRun()); an analysis reads its digest, nothing before.
+// - open: the open internet, with nothing of the repo's: no clone, no GitHub token, no
+//   image, setup, caches, mounts, engine or screenshots of the repo's, and volumes of its own
+//   (sessionName()). Only with the operator's `allow_research` (access.mjs researchAccess()).
 // - inbox: inbox issues and discussion categories are their own trigger (workItem()).
 // - kind: what the dashboard shows its runs as (kindOf()).
 // - permissions: its token's (permissionsFor()). No light run writes pull requests. A
 //   discussion run answers through GraphQL: its token needs Discussions too. Brainstorms and
 //   inbox entries comment and create issues. Onboarding proposes: nothing is pushed or created
 //   before the trigger line. An analysis reports: the maintainer files what they want of it.
+//   Research gets none (NO_TOKEN): a web page it reads can't make it read the repo.
 // - prompt: its instructions, in ../prompts/ (prompts.mjs).
 // Their names are reserved: a repo's `modes:` can't take them (repo-config.mjs). The
 // dashboard has a copy of the list (format.ts), checked by a test.
@@ -31,6 +40,15 @@ export const MODES = {
     light: true,
     permissions: READ_ONLY_PERMISSIONS,
     prompt: "onboarding.md",
+  },
+  // Research on the open web: its input is the issue's thread (preparation.mjs).
+  research: {
+    picked: true,
+    light: true,
+    open: true,
+    kind: "research",
+    permissions: NO_TOKEN,
+    prompt: "research.md",
   },
   // A brainstorm's wrap-up.
   stop: {
@@ -74,6 +92,7 @@ export const PICKED_MODES = RESERVED_MODES.filter((mode) => MODES[mode].picked);
 export const INBOX = having("inbox");
 export const LIGHT = having("light");
 export const FRESH = having("fresh");
+export const OPEN = having("open");
 
 // Any other mode is one of the repo's own.
 export const BUILT_IN = new Set(RESERVED_MODES);
@@ -117,8 +136,11 @@ export function entryRun(mode) {
 
 // The name of an issue's volumes for a run: light runs get their own clone and Claude session.
 // They can't push (the broker refuses them), but what they leave in a volume (git hooks,
-// Claude's hooks and settings) would run in the issue's next work run, which can.
-export function sessionName(name, light) {
+// Claude's hooks and settings) would run in the issue's next work run, which can. Research
+// runs (`mode`, OPEN) get their own again: what a web page leaves there would otherwise run
+// in a light run, which has a token.
+export function sessionName(name, light, mode) {
+  if (OPEN.has(mode)) return `${name}-research`;
   return light ? `${name}-light` : name;
 }
 

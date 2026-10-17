@@ -62,6 +62,8 @@ export const SANDBOX_PERMISSIONS = {
 export const LIGHT_PERMISSIONS = { pull_requests: "read" };
 // Added for discussion runs only: an App created before discussions keeps working elsewhere.
 export const DISCUSSION_PERMISSIONS = { ...LIGHT_PERMISSIONS, discussions: "write" };
+// A research run (modes.mjs) gets no token at all: the broker refuses it one (broker.mjs).
+export const NO_TOKEN = false;
 // The git gateway's own token for a push it lets through: never handed to a sandbox.
 export const PUSH_PERMISSIONS = { contents: "write" };
 // A repo's light modes (its config's `modes:`) only comment, and the listener posts their

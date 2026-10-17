@@ -10,6 +10,8 @@
 # allow_dockerfile: true
 # Its .deckhand.yaml's `preview` hook runs, with the Docker socket: root on the host.
 # allow_preview: true
+# `/mode research` runs: any public host, without its code or a GitHub token.
+# allow_research: true
 # Its own limits, over default.yaml's.
 # limits: { cpus: 4, memory: 8g }
 # Host roots it may mount from (read-only unless read_only: false); the listener must see

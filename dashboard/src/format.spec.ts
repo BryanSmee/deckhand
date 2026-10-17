@@ -3,6 +3,7 @@ import fixture from "./fixture.json";
 import {
   inChip,
   isPrTask,
+  kindName,
   ownMode,
   plural,
   repoTabs,
@@ -81,12 +82,9 @@ test("plurals, short repo names and pull requests' own tasks", () => {
 });
 
 test("run kinds as an analysis names them", () => {
-  expect(["work", "brainstorm", "bug", "discussion", "analyze"].map(runKindName)).toEqual([
-    "Work",
-    "Brainstorm",
-    "Bug",
-    "Discussion",
-    "Analysis",
-  ]);
+  expect(
+    ["work", "brainstorm", "bug", "discussion", "analyze", "research"].map(runKindName),
+  ).toEqual(["Work", "Brainstorm", "Bug", "Discussion", "Analysis", "Research"]);
+  expect(kindName({ kind: "research" })).toBe("Research");
   expect(runKindName("review")).toBe("review");
 });

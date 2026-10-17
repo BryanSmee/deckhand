@@ -3,7 +3,7 @@
 // its `live`, runs.mjs), agent (agents/), bot (the App's git identity), publicUrl }.
 import { proxyEnv } from "./egress.mjs";
 import { hardeningArgs, mountArgs } from "./grants.mjs";
-import { isFresh, sessionName } from "./modes.mjs";
+import { isFresh, OPEN, sessionName } from "./modes.mjs";
 import { ENGINE_HOST } from "./runner/engine.mjs";
 
 // The agent's first message is TASK_PROMPT (and TASK_MESSAGE); comments that arrive during the
@@ -17,7 +17,7 @@ export function sandboxSpec(
   const { config, task, agent } = run;
   const { live } = task;
   const n = task.name;
-  const volumes = sessionName(n, live.light);
+  const volumes = sessionName(n, live.light, live.mode);
   const install = agent.install(config);
   // Its network is its own (runner/docker.mjs).
   const args = [
@@ -26,9 +26,14 @@ export function sandboxSpec(
     // in them and in cache volumes. An image that needs root at runtime fails loudly.
     ...["--user", "1000:1000"],
     ...hardeningArgs(limits),
-    // Its own folder of the screenshots volume only: no run sees another's.
-    "--mount",
-    `type=volume,src=${config.shotsVolume},dst=/screenshots,volume-subpath=${live.shots}`,
+    // Its own folder of the screenshots volume only: no run sees another's. None for a
+    // research run, whose only output is its reply: the volume is publicly served.
+    ...(live.shots
+      ? [
+          "--mount",
+          `type=volume,src=${config.shotsVolume},dst=/screenshots,volume-subpath=${live.shots}`,
+        ]
+      : []),
     // The agent, installed by the listener before the run (images.installAgent()).
     // Read-only: shared by every repository, so a run that could rewrite it would run its
     // code in the next sandbox of any repository, with that run's broker secret.
@@ -72,6 +77,8 @@ export function sandboxEnv(
   const { live } = task;
   const mode = live.mode === "stop" ? "brainstorm" : live.mode;
   const { light } = live;
+  // Research (modes.mjs OPEN): no clone, nothing of the repo's to run or read.
+  const open = OPEN.has(live.mode);
   const install = agent.install(config);
   const provider = live.record.provider ?? agent.defaultProvider;
   return {
@@ -103,13 +110,14 @@ export function sandboxEnv(
     TASK_ISSUE: task.kind === "issue" && !light ? String(task.number) : "",
     // Reading and answering needs no project setup.
     SANDBOX_LIGHT: light ? "1" : "",
+    SANDBOX_NO_CLONE: open ? "1" : "",
     SANDBOX_SETUP: light ? "" : (settings.setup ?? ""),
     // Read by the sandbox from its default branch (origin/BASE_BRANCH), like the config.
-    SANDBOX_INSTRUCTIONS: settings.instructions ?? "",
+    SANDBOX_INSTRUCTIONS: open ? "" : (settings.instructions ?? ""),
     SANDBOX_MODEL: live.record.model,
     SANDBOX_EFFORT: live.record.effort,
-    SCREENSHOT_DIR: "/screenshots",
-    SCREENSHOT_URL: `${publicUrl}/shots/${live.shots}`,
+    SCREENSHOT_DIR: live.shots ? "/screenshots" : "",
+    SCREENSHOT_URL: live.shots ? `${publicUrl}/shots/${live.shots}` : "",
     // The engine is reached directly, on the run's network.
     ...proxyEnv(config, engine ? [ENGINE_HOST] : []),
   };

@@ -517,6 +517,7 @@ test("GET config: raw text, errors, warnings and what runs get; its row updated"
     allowDockerfile: false,
     allowBranchDockerImages: false,
     allowDocker: false,
+    allowResearch: false,
     hosts: ["registry.npmjs.org"],
     cachedHosts: [],
     mounts: [],

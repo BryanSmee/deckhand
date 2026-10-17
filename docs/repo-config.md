@@ -290,7 +290,8 @@ checks to run.
 ## Modes
 
 A run is in a mode: **work** (implement, the default), **brainstorm** (discuss, no code),
-**onboarding** (propose this file, see [Onboarding](#onboarding)), or one of the repository's own, declared under `modes:`. A `/mode <name>` line in a comment
+**onboarding** (propose this file, see [Onboarding](#onboarding)), **research** (the open
+web, without the code, see [Research](#research)), or one of the repository's own, declared under `modes:`. A `/mode <name>` line in a comment
 picks one, on its own line or after the trigger on the first one (`Deckhand /mode review`;
 `/mode` is never read as `/model`; names are not case-sensitive):
 
@@ -327,7 +328,7 @@ error, listed in the reply:
 - **Names**: letters, digits, `-` and `_`. `work` and `brainstorm` can't be redefined (set
   their agent and model with `agent`/`model`/`effort` and `brainstorm_agent`/
   `brainstorm_model`/`brainstorm_effort`);
-  `onboarding`, `stop`, `idea`, `bug`, `discussion` and `analyze` are reserved.
+  `onboarding`, `research`, `stop`, `idea`, `bug`, `discussion` and `analyze` are reserved.
 - **Prompt**: the generic sandbox instructions (`prompts/sandbox.md`, and the repo's
   `instructions`) as for every run, then a short frame (the issue or pull request to read,
   what the mode may do) and the mode's file.
@@ -344,6 +345,26 @@ error, listed in the reply:
   `mounts` add). A mode has no key for them.
 
 The dashboard names the repo's modes next to the issue, and in each run.
+
+### Research
+
+`/mode research` answers a question from the open web: comparing libraries, reading an API's
+docs, a vendor's changelog or terms. Its sandbox reaches any public host (`curl`, Claude
+Code's `WebFetch`, the browser), so it gets nothing of the repository's to leak:
+
+- **No code**: no clone, `/workspace` starts empty. Its input is the issue's thread (title,
+  description, the last 50 comments), which the listener writes into the run's inbox.
+- **No GitHub token**: the broker refuses it one, so `gh` and `git` can't reach the
+  repository, and it can't push. Its final message is its reply, posted by the listener.
+- **Nothing else of the repo's**: the base image (never `dockerfile` or a branch's), no
+  `setup`, `caches`, `instructions`, host mounts, container engine or screenshots.
+- **Its own session**, apart from work's and the light runs' (a page could leave anything
+  there): comments without a trigger or `/mode` line go on in it, `/mode work` switches.
+
+It only runs where the operator grants it: `allow_research: true` in the repository's
+grants file or `default.yaml` ([Security model](security.md#research-runs)). Without it,
+`/mode research` gets a reply naming the grant, and nothing runs. Its agent and model are
+those of brainstorms (`brainstorm_agent`, `brainstorm_model`).
 
 ## Inboxes
 

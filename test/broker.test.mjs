@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createBroker } from "../listener/broker.mjs";
+import { NO_TOKEN } from "../listener/github-app.mjs";
 import { serve } from "./helpers.mjs";
 
 async function serveBroker(t, app) {
@@ -55,6 +56,18 @@ test("no secret, a wrong one or another path: nothing", async (t) => {
   assert.equal((await get("/token", "guess")).status, 401);
   assert.equal((await get("/other", "guess")).status, 404);
   assert.deepEqual(asked, []);
+});
+
+test("a research run gets no token at all, but its secret still names the run", async (t) => {
+  const { broker, asked, get } = await serveBroker(t, true);
+  const research = broker.register("org/a", NO_TOKEN);
+  const res = await get("/token", research);
+  assert.equal(res.status, 403);
+  assert.deepEqual(await res.json(), { error: "this run gets no GitHub token" });
+  assert.deepEqual(asked, []);
+  // The agent's API calls (anthropic.mjs) find it; it pushes nothing.
+  assert.equal(broker.runOf(research).repo, "org/a");
+  assert.equal(broker.runOf(research).push, false);
 });
 
 test("before the App is set up, no token", async (t) => {

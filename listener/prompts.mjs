@@ -57,6 +57,15 @@ ${modeInstructions.analyze}
 ${text ? `\nThe selection:\n\n${text}\n` : ""}`;
 }
 
+// A research run (modes.mjs OPEN) has no token to read the issue with: its thread is a file in
+// the run's inbox (TASK_DIGEST, preparation.mjs threadDigest()).
+function researchPrompt(task) {
+  return `Research what GitHub issue #${task.number} of ${task.repo} asks. Its thread (title, description
+and latest comments) is at \`$TASK_DIGEST\` (\`cat "$TASK_DIGEST"\`).
+
+${modeInstructions.research}`;
+}
+
 function brainstormPrompt(task) {
   return `Brainstorm GitHub issue #${task.number} of ${task.repo} with the maintainer. Read it with
 \`gh issue view ${task.number} --comments\`.
@@ -227,6 +236,7 @@ export function promptFor(
   if (mode === "brainstorm" || mode === "stop") return brainstormPrompt(task);
   if (INBOX.has(mode)) return inboxPrompt(task, mode, text);
   if (mode === "analyze") return analyzePrompt(task, text);
+  if (mode === "research") return researchPrompt(task);
   if (mode === "onboarding") return onboardingPrompt(task, settings, config, grant);
   if (own) return modePrompt(task, own, instructions, branches);
   return onboardingWork ? onboardingWorkPrompt(task) : initialPrompt(task, branches);

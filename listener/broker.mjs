@@ -7,6 +7,7 @@
 // (git-gateway.mjs), which finds the run here by the same secret, with the branches it may
 // push (allow()).
 import { createHash, randomBytes } from "node:crypto";
+import { NO_TOKEN } from "./github-app.mjs";
 import { send } from "./web.mjs";
 
 // Kept by hash: the map never holds a usable secret, and lookups don't compare secrets.
@@ -35,7 +36,8 @@ export function createBroker({
   // `apiStatus`, the last status that provider answered.
   const runs = new Map();
 
-  // `extra`: permissions this run's token gets beyond or instead of the sandbox's usual ones.
+  // `extra`: permissions this run's token gets beyond or instead of the sandbox's usual ones,
+  // or NO_TOKEN (github-app.mjs): none at all, for a research run on the open internet.
   // `push`: whether it may push and change its pull requests, which only work runs do (light
   // runs' pushes would run in the issue's next work run). Decided by the kind of run, not
   // its token: fail closed. `secret`: a run's own again, when a restarted listener picks it up.
@@ -82,6 +84,7 @@ export function createBroker({
     const run = scheme === "Bearer" ? runOf(secret) : undefined;
     if (!run) return send(res, 401, { error: "unknown or finished run" });
     const { repo, extra } = run;
+    if (extra === NO_TOKEN) return send(res, 403, { error: "this run gets no GitHub token" });
     const github = app();
     if (!github) return send(res, 503, { error: "the GitHub App is not set up" });
     try {

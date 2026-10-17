@@ -95,6 +95,7 @@ export const BUILT_IN_MODES = [
   "work",
   "brainstorm",
   "onboarding",
+  "research",
   "stop",
   "idea",
   "bug",
@@ -106,6 +107,7 @@ export function kindName(t: Pick<Task, "kind">): string {
   if (t.kind === "brainstorm") return "Brainstorm";
   if (t.kind === "idea") return "Idea";
   if (t.kind === "bug") return "Bug report";
+  if (t.kind === "research") return "Research";
   return KIND_NAMES[t.kind ?? ""] ?? "Issue";
 }
 
@@ -120,7 +122,7 @@ const RUN_KIND_NAMES: Record<string, string> = {
 
 export function runKindName(kind: string): string {
   if (RUN_KIND_NAMES[kind]) return RUN_KIND_NAMES[kind];
-  return ["brainstorm", "idea", "discussion"].includes(kind)
+  return ["brainstorm", "idea", "discussion", "research"].includes(kind)
     ? kindName({ kind: kind as Kind })
     : kind;
 }
