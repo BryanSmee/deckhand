@@ -20,7 +20,10 @@ model in [security.md](security.md).
   `balanced` or `fast`, that the run's agent maps to one of its models (see [Agents](#agents)),
   or a model's own name (`sonnet`, `claude-opus-5-5`). `/agent codex` (or
   `claude@openrouter`) picks the agent, and the issue's later runs stay on it; see
-  [Picking an agent with `/agent`](#picking-an-agent-with-agent).
+  [Picking an agent with `/agent`](#picking-an-agent-with-agent). These lines may also follow
+  the trigger on its first line (`Deckhand /agent codex /effort high`): `splitTrigger()` moves
+  each to a line of its own, for `takeOptions()`, and a value it would refuse (`/effort huge`)
+  makes the line no trigger at all.
 - **Later**: `/after #77` (or `/after #77 #80`), with a trigger or `/mode` line, holds the
   comment back; see [Waiting for other issues](#waiting-for-other-issues).
 

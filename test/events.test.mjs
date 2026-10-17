@@ -382,7 +382,7 @@ test("a /mode line picks the mode, and is never taken for /model", () => {
     after: null,
     text: "Ideas?",
   });
-  assert.equal(splitTrigger(config, "Deckhand /model sonnet").trigger, null);
+  assert.equal(splitTrigger(config, "Deckhand /model sonnet").mode, null);
   assert.equal(splitTrigger(config, "Deckhand is down /mode work").trigger, null);
   // Without a trigger line: a switch, for an issue that has a session (server.mjs decides).
   assert.deepEqual(splitTrigger(config, "/mode work\nGo ahead."), {
@@ -449,6 +449,38 @@ test("/after: on the trigger line or its own, with /mode, /model, /effort and th
   assert.equal(splitTrigger(config, "do it /after #3 is merged").after, null);
   // Not "/afterwards".
   assert.equal(splitTrigger(config, "Deckhand\n/afterwards").after, null);
+});
+
+test("/agent, /model and /effort on the trigger line, each kept on its own line", () => {
+  const agent = splitTrigger(config, "Deckhand /agent codex\nDo X");
+  assert.deepEqual(agent, { trigger: "work", mode: null, after: null, text: "/agent codex\nDo X" });
+  const options = {};
+  assert.equal(takeOptions(agent.text, options), "Do X");
+  assert.deepEqual(options, { agent: "codex" });
+  for (const [line, want] of [
+    ["Deckhand /model sonnet", { model: "sonnet" }],
+    ["@deckhand /effort High", { effort: "high" }],
+    ["Deckhand /model sonnet /effort high", { model: "sonnet", effort: "high" }],
+  ]) {
+    const cmd = splitTrigger(config, line);
+    assert.equal(cmd.trigger, "work", line);
+    const got = {};
+    assert.equal(takeOptions(cmd.text, got), "");
+    assert.deepEqual(got, want);
+  }
+  const mix = splitTrigger(config, "Deckhand /mode brainstorm /agent claude@openrouter /after #7");
+  assert.equal(mix.trigger, "work");
+  assert.equal(mix.mode, "brainstorm");
+  assert.deepEqual(mix.after, { numbers: [7] });
+  assert.equal(mix.text, "/agent claude@openrouter");
+  // Anything else, or a value takeOptions() would refuse: not the trigger line.
+  assert.equal(splitTrigger(config, "Deckhand /agent codex please").trigger, null);
+  assert.equal(splitTrigger(config, "Deckhand /effort huge").trigger, null);
+  // Only the commands: no answer to open questions (saysMore()).
+  assert.equal(saysMore(config, "Deckhand /agent codex"), false);
+  const item = workItem(config, "issue_comment", comment("Deckhand /agent codex"));
+  assert.equal(item.trigger, "work");
+  assert.equal(item.text, "/agent codex");
 });
 
 test("/after takes this repo's numbers or none; anything else is an error", () => {

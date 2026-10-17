@@ -26,7 +26,8 @@ operator, across as many repositories as the App is installed on.
   - `/model <name>` and `/effort <level>` lines pick the model (`best`, `balanced`, `fast` or a
     model's name) and thinking effort of that run. `/agent <name>` (`codex`,
     `claude@openrouter`, among those the operator configured) picks the agent: the issue stays
-    with it, without fallbacks, until another `/agent` (`/agent default` goes back).
+    with it, without fallbacks, until another `/agent` (`/agent default` goes back). Like
+    `/mode` and `/after`, they may follow the trigger on its line (`Deckhand /agent codex`).
   - `/mode <name>` picks a mode: `work`, `brainstorm` or one the repository declares in its
     `.deckhand.yaml` (a review that only comments, say). Alone on an issue with a session,
     it switches modes and keeps the conversation (light modes keep theirs apart from work's).
