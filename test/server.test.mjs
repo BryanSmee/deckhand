@@ -2007,6 +2007,8 @@ modes:
       },
       (dir) => {
         writeGrant(dir, "hosts: [registry.npmjs.org]\n");
+        // Held, so its digest is read before the run ends and teardown removes its folder.
+        writeFileSync(join(dir, "hold"), "");
         return {};
       },
     );
@@ -2023,8 +2025,8 @@ modes:
 
     writeGrant(dir, "allow_research: true\nhosts: [registry.npmjs.org]\n");
     await send(followUp(100, "Deckhand\n/mode research\nWhich one?"));
-    await until(() => replies(github).length === 2, "the research reply");
-    assert.match(JSON.parse(replies(github)[1].body).body, /🔎 research: replies go on in it/);
+    const egress = join(dir, "egress");
+    await until(() => exists(egress)?.trim().split("\n").length === 9, "the sandbox");
     const runEnv = readFileSync(join(dir, "run-env"), "utf8");
     assert.match(runEnv, /^TASK_MODE=research$/m);
     assert.match(runEnv, /^SANDBOX_NO_CLONE=1$/m);
@@ -2058,6 +2060,9 @@ modes:
     assert.match(digest, /^# Which queue\?\n/);
     assert.match(digest, /Compare BullMQ and pg-boss\./);
     assert.match(digest, /### @alice, .*\n\nMind the licences\./);
+    writeFileSync(join(dir, "go"), "");
+    await until(() => replies(github).length === 2, "the research reply");
+    assert.match(JSON.parse(replies(github)[1].body).body, /🔎 research: replies go on in it/);
     const [log] = readdirSync(join(dir, "logs")).filter((f) => f.endsWith(".log"));
     const meta = JSON.parse(readFileSync(join(dir, "logs", log), "utf8").split("\n")[0]);
     assert.equal(meta.kind, "research");
