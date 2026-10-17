@@ -85,17 +85,29 @@ export function splitTrigger(config, body) {
   const [first, ...rest] = body.split(/\r?\n/);
   if (first.trim().toLowerCase() === "/stop") return takeCommands(rest.join("\n"), "stop");
   if (first.trim().toLowerCase() === "/cancel") return takeCommands(rest.join("\n"), "cancel");
-  const inline = /^(.*?)\s+(\/(?:mode|after|model|effort|agent)\s.*)$/i.exec(first);
-  if (inline && normalize(inline[1]) === config.trigger) {
-    // Each command its own line, as if written below; anything else on the line and it isn't
-    // the trigger line ("Deckhand /mode brainstorm please", "Deckhand /effort huge").
-    const lines = inline[2].trim().split(/\s+(?=\/(?:mode|after|model|effort|agent)\s)/i);
-    const known = (l) =>
-      /^\/mode\s+[\w-]+$/i.test(l) || /^\/after\s/i.test(l) || !takeOptions(l, {});
-    if (lines.every(known)) return takeCommands([...lines, ...rest].join("\n"), "work");
+  // Each command its own line, as if written below; anything else on the line and it isn't
+  // the trigger line ("Deckhand /mode brainstorm please", "Deckhand /effort huge").
+  const inline = trailingCommands(first, ["mode", "after", "model", "effort", "agent"]);
+  if (inline && normalize(inline.head) === config.trigger) {
+    return takeCommands([...inline.commands, ...rest].join("\n"), "work");
   }
   if (normalize(first) === config.trigger) return takeCommands(rest.join("\n"), "work");
   return takeCommands(body, null);
+}
+
+// The run of commands (`names`, without their slash) a line ends with, each a line of its own:
+// { head, commands } or null. The longest run whose commands are all known: "use /model x, then
+// /effort high" still ends with "/effort high"; a command in the middle of a sentence ("use
+// /effort high to …") or with a refused value ("/effort huge") ends none.
+export function trailingCommands(line, names) {
+  // Only from the start of a run of spaces: from inside one, the search would be quadratic.
+  const start = new RegExp(`(?<!\\s)\\s+(?=\\/(?:${names.join("|")})\\s)`, "gi");
+  const known = (l) => /^\/mode\s+[\w-]+$/i.test(l) || /^\/after\s/i.test(l) || !takeOptions(l, {});
+  for (const match of line.matchAll(start)) {
+    const commands = line.slice(match.index).trim().split(start);
+    if (commands.every(known)) return { head: line.slice(0, match.index), commands };
+  }
+  return null;
 }
 
 // Removes the "/mode <name>" and "/after …" lines. Their own lines, like "/model": the space
@@ -186,8 +198,22 @@ export function commentsText(items, options) {
 }
 
 // An inbox entry, as Claude reads it: who wrote it and where, so its reply can link back.
+// Entries have no trigger line: "/model", "/effort" and "/agent" may end any of their lines
+// ("Do X /effort high"), put on lines of their own for takeOptions(). "/mode" and "/after"
+// don't apply to entries: they stay text, and so do code blocks and quotes, where a bug report
+// shows a command rather than gives one.
 function entry(author, url, body) {
-  return `From @${author.login}${url ? ` (${url})` : ""}:\n\n${body.trim()}`;
+  let fenced = false;
+  const lines = body
+    .trim()
+    .split(/\r?\n/)
+    .map((line) => {
+      if (/^\s*(```|~~~)/.test(line)) fenced = !fenced;
+      if (fenced || /^\s*(```|~~~|>)/.test(line)) return line;
+      const run = trailingCommands(line, ["model", "effort", "agent"]);
+      return run ? [run.head.trimEnd(), ...run.commands].filter(Boolean).join("\n") : line;
+    });
+  return `From @${author.login}${url ? ` (${url})` : ""}:\n\n${lines.join("\n")}`;
 }
 
 // Returns { repo, id, kind, number, trigger, modeLine, text, replyTo, comment } or null to

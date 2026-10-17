@@ -4,6 +4,9 @@ import { test } from "node:test";
 import { normalize } from "../listener/config.mjs";
 import {
   closedItem,
+  commentsText,
+  discussionEntryItem,
+  inboxItem,
   issueItem,
   issueOutcome,
   linkTo,
@@ -229,6 +232,68 @@ test("inbox issues: every comment is an entry, trigger lines or not", () => {
   assert.equal(workItem(repoConfig, "issue_comment", payload).trigger, "work");
   // Still only allowed users.
   assert.equal(workItem(repoConfig, "issue_comment", comment("idea", { login: "mallory" })), null);
+});
+
+test("inbox entries: /model, /effort and /agent may end any line", () => {
+  const repoConfig = { ...config, inbox: { ideas: 12 } };
+  const ran = (body) => {
+    const options = {};
+    const item = workItem(repoConfig, "issue_comment", comment(body, { login: "alice" }));
+    return { text: commentsText([item], options).replace(/^From @alice[^\n]*\n\n/, ""), options };
+  };
+  assert.deepEqual(ran("Do X /effort high"), { text: "Do X", options: { effort: "high" } });
+  assert.deepEqual(ran("Do X /model sonnet /agent codex\nThen Y /effort MAX"), {
+    text: "Do X\nThen Y",
+    options: { model: "sonnet", agent: "codex", effort: "max" },
+  });
+  // A command earlier in the sentence stays: only the run at the end counts.
+  assert.deepEqual(ran("Use /model x, then /effort low"), {
+    text: "Use /model x, then",
+    options: { effort: "low" },
+  });
+  // In the middle of a line, refused values, "/mode" and "/after": text, no options.
+  for (const body of [
+    "use /effort high to review",
+    "Do X /effort huge",
+    "Do X /effort high /effort huge",
+    "Do X /mode review",
+    "Do X /after #3",
+  ]) {
+    assert.deepEqual(ran(body), { text: body, options: {} });
+  }
+  // Code blocks and quotes show commands, they don't give them.
+  for (const body of [
+    "It breaks on:\n```\nDeckhand /agent codex\n```",
+    "~~~md\nDo X /effort high\n~~~",
+    "> Do X /effort high\nSame here.",
+  ]) {
+    assert.deepEqual(ran(body), { text: body, options: {} });
+  }
+  // After a code block, lines count again.
+  assert.deepEqual(ran("```\nx\n```\nDo X /effort low"), {
+    text: "```\nx\n```\nDo X",
+    options: { effort: "low" },
+  });
+  // Long runs of spaces: linear, not quadratic.
+  const started = performance.now();
+  ran(`a${" ".repeat(60_000)}b`);
+  assert.ok(performance.now() - started < 1000);
+  // An own line still works.
+  assert.deepEqual(ran("Do X\n  /effort high"), { text: "Do X", options: { effort: "high" } });
+  // Sent from the dashboard (work.mjs), and in a discussion.
+  const issue = { number: 12, title: "Ideas", html_url: "u" };
+  const sent = inboxItem("Org/Repo", issue, "idea", { id: 1 }, { login: "bob" }, "Y /effort low");
+  const options = {};
+  assert.equal(commentsText([sent], options), "From @bob:\n\nY");
+  assert.deepEqual(options, { effort: "low" });
+  const d = { number: 8, title: "Runs?", html_url: "https://d/8", node_id: "D_5", id: 5 };
+  const asked = discussionEntryItem("Org/Repo", d, null, { login: "bob" }, "Kept? /agent codex");
+  const picked = {};
+  assert.equal(
+    commentsText([asked], picked),
+    "From @bob (https://d/8):\n\nKept?\n\n(Title: Runs?)",
+  );
+  assert.deepEqual(picked, { agent: "codex" });
 });
 
 function discussion(event, { category = "Ask Claude", login = "alice", parent = null } = {}) {

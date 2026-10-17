@@ -203,13 +203,13 @@ function Inbox({ repo, inboxes, tasks, submit, start, onSent }: Props) {
           class={styles.text}
           rows={6}
           aria-label={kind === "idea" ? "The idea" : kind === "bug" ? "The bug" : "The discussion"}
-          placeholder={
+          placeholder={`${
             kind === "idea"
               ? "What you'd like, as you would write it in an issue"
               : kind === "bug"
                 ? "What goes wrong, and how to see it"
                 : "What you'd like to talk over: Deckhand answers in the discussion"
-          }
+          }.\n\nEnd a line with /effort high, /model or /agent to pick them for its run.`}
           value={text}
           onInput={(e) => setText(e.currentTarget.value)}
         />
