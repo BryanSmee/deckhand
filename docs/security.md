@@ -31,8 +31,8 @@ that file asks for, so none can:
   - a work run on a pull request, or a comment on an issue's pull request: that pull
     request's head branch, read from GitHub when the run starts, a maintainer's included
     (they asked for the run); none when it is a fork's;
-  - light runs (brainstorms, onboarding, inbox entries, discussions, run analyses, a repo's
-    light modes):
+  - light runs (brainstorms, onboarding, inbox entries, discussions, run analyses, reviews,
+    a repo's light modes):
     none. The broker registers every one as a run that can't push, so the gateway refuses
     it whatever its token, and the same holds for a run a restarted listener picks up again.
 
@@ -117,7 +117,8 @@ the broker then refuses it. The installation tokens a sandbox already got are an
 - A token only reaches the run's repository, with the sandbox's permissions: it reads the
   code, can't push (pushes go through the gateway, with the run's secret), and can write
   issues and, for work runs only, pull requests (and discussions, for discussion runs)
-  there. Onboarding, run analyses and a repo's light modes only read issues and pull requests.
+  there. Onboarding, run analyses, reviews and a repo's light modes only read issues and pull
+  requests.
 
 So what a run copied out (through an allowed host) can be used against its own repository,
 with those permissions, for up to an hour. Uninstalling the App, or suspending its
@@ -652,6 +653,27 @@ in the engine only:
 - **Clean-up**: the engine and its run's volume carry the `deckhand.engine` label (not
   `deckhand.run`: an engine is never taken for a sandbox). They go with the run, and the
   listener's check every minute removes those whose run is gone, after a restart too.
+
+## Reviews
+
+A repository turns reviews on with a `review` block in its `.deckhand.yaml` (default branch
+only). It widens nothing, so it needs no grant: a review is a light run with a read-only token
+(`contents`, `issues`, `pull_requests: read`), no branch to push, no setup and no engine.
+
+- **The listener posts the review**, with its own token (`POST /repos/{repo}/pulls/{n}/reviews`),
+  from the run's final message. A diff written to talk the agent into something can't make
+  it write anything: the most it can do is change the review's text. The review never
+  approves (an App's approval may count toward branch protection): it requests changes on a
+  critical or high finding, and comments otherwise.
+- **Who gets one by itself** (`review.on: ready`): pull requests on a branch of the
+  repository, opened by the App or by a user of `ALLOWED_USERS` and the repo's `users`, when
+  they turn ready. Never a fork's, never another bot's (Dependabot, GitHub Actions), never an
+  outsider's: nobody outside the allowlist can make the operator pay for a run.
+- **No loops**: each pull request's head commit is reviewed by itself once (`reviews.json`),
+  and the App's review is a bot's `pull_request_review`, which starts nothing. Acting on a
+  review is the maintainer's call, with a trigger comment.
+- `/mode review` comes from an allowed user's comment, like any mode, on the pull request
+  itself.
 
 ## Research runs
 

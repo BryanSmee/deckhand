@@ -22,6 +22,7 @@ import {
 //   discussion run answers through GraphQL: its token needs Discussions too. Brainstorms and
 //   inbox entries comment and create issues. Onboarding proposes: nothing is pushed or created
 //   before the trigger line. An analysis reports: the maintainer files what they want of it.
+//   A review reads: the listener posts its GitHub review (reviews.mjs), a diff can't write.
 //   Research gets none (NO_TOKEN): a web page it reads can't make it read the repo.
 // - prompt: its instructions, in ../prompts/ (prompts.mjs).
 // Their names are reserved: a repo's `modes:` can't take them (repo-config.mjs). The
@@ -82,6 +83,9 @@ export const MODES = {
     prompt: "discussion.md",
   },
   analyze: { light: true, fresh: true, permissions: READ_ONLY_PERMISSIONS, prompt: "analyze.md" },
+  // A pull request's review, only in repos with a `review` block (repo-config.mjs): "/mode"
+  // picks it there (modeNames()), and reviews.mjs starts it when a pull request turns ready.
+  review: { light: true, fresh: true, permissions: READ_ONLY_PERMISSIONS, prompt: "review.md" },
 };
 
 const builtIn = (mode) => (Object.hasOwn(MODES, mode) ? MODES[mode] : null);
@@ -101,9 +105,10 @@ export const BUILT_IN = new Set(RESERVED_MODES);
 // (work, brainstorm and the inbox are the listener's): light (no branch, no setup, a read-only
 // token: it can only comment), fresh (a new session each time, the issue's kept as it is),
 // its instructions file, and its agent, model and effort, by default those of work or
-// brainstorms.
+// brainstorms. The built-in review takes its `review` block's the same way (reviewMode()).
 // No hosts, mounts or limits: those are the repo's grants, the same in every mode.
 export function customMode(settings, name) {
+  if (name === "review") return reviewMode(settings);
   const own = settings?.modes?.[name];
   if (!own) return null;
   const [agent, model, effort] = own.light
@@ -117,6 +122,23 @@ export function customMode(settings, name) {
     agent: own.agent ?? agent,
     model: own.model ?? model,
     effort: own.effort ?? effort,
+  };
+}
+
+// The repo's `review` block as a mode: light and fresh, its instructions optional (added to
+// prompts/review.md), its agent, model and effort those of light runs unless it says
+// otherwise. Null without the block: the repo hasn't turned reviews on.
+function reviewMode(settings) {
+  const own = settings?.review;
+  if (!own) return null;
+  return {
+    name: "review",
+    light: true,
+    fresh: true,
+    instructions: own.instructions,
+    agent: own.agent ?? settings.brainstormAgent,
+    model: own.model ?? settings.brainstormModel,
+    effort: own.effort ?? settings.brainstormEffort,
   };
 }
 

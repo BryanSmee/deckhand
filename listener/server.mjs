@@ -48,6 +48,7 @@ import { readRepoFile } from "./repo-config.mjs";
 import { createRepoSettings } from "./repo-settings.mjs";
 import { createRepoApi, createRepoList } from "./repos.mjs";
 import { createRestart } from "./restart.mjs";
+import { createReviews } from "./reviews.mjs";
 import { loadRuns } from "./runlog.mjs";
 import { createDiscussionApi } from "./discussions.mjs";
 import { createDockerRunner } from "./runner/docker.mjs";
@@ -341,6 +342,14 @@ ctx.conflicts = createConflicts({
   github,
   repoSettings,
   busy: taskBusy,
+  accept: (item) => ctx.accept(item),
+  log,
+});
+// Pull requests that turn ready in opted-in repos get a review run (`review.on`).
+ctx.reviews = createReviews({
+  path: join(config.dataDir, "reviews.json"),
+  config,
+  repoSettings,
   accept: (item) => ctx.accept(item),
   log,
 });

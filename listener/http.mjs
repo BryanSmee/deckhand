@@ -376,6 +376,8 @@ export function createHttp(ctx, { dashboardDir }) {
       staleFor(event, payload, (repo) => ctx.workApi?.stale(repo));
       return;
     }
+    // A pull request that turned ready, in a repo whose `review.on` asks for a review.
+    if (event === "pull_request") admitted(ctx.reviews.consider(event, payload, skip));
     const preview = previewEvent(config, event, payload, skip);
     if (preview) {
       previewHook(ctx, preview, payload).catch((error) => log(error.stack ?? error));

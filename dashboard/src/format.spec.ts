@@ -58,8 +58,8 @@ test("what a row says besides its state", () => {
 });
 
 test("own modes: the repo's, never one of the listener's", () => {
-  expect(ownMode("review")).toBe("review");
-  for (const mode of ["work", "brainstorm", "onboarding", "stop", "idea", "bug", "discussion"]) {
+  expect(ownMode("audit")).toBe("audit");
+  for (const mode of ["work", "brainstorm", "onboarding", "stop", "idea", "bug", "review"]) {
     expect(ownMode(mode)).toBeNull();
   }
   expect(ownMode(null)).toBeNull();
@@ -69,6 +69,9 @@ test("run names: why the listener started a run itself", () => {
   const run = { mode: "continue", taskMode: "work", reason: null } as Run;
   expect(runName(run)).toBe("Continue");
   expect(runName({ ...run, reason: "conflict" })).toBe("Conflict · Continue");
+  expect(runName({ mode: "start", taskMode: "review", reason: "review" } as Run)).toBe(
+    "Review · Start",
+  );
 });
 
 test("plurals, short repo names and pull requests' own tasks", () => {
@@ -86,5 +89,6 @@ test("run kinds as an analysis names them", () => {
     ["work", "brainstorm", "bug", "discussion", "analyze", "research"].map(runKindName),
   ).toEqual(["Work", "Brainstorm", "Bug", "Discussion", "Analysis", "Research"]);
   expect(kindName({ kind: "research" })).toBe("Research");
-  expect(runKindName("review")).toBe("review");
+  expect(runKindName("review")).toBe("Review");
+  expect(runKindName("audit")).toBe("audit");
 });

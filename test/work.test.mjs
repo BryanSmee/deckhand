@@ -245,7 +245,7 @@ test("leadsTo: follows the waits from blocker to blocker", () => {
 
 test("GET issues: the open issues without a task or pull request, and the repo's modes", async () => {
   const w = setup({
-    settings: { modes: { review: { light: true } } },
+    settings: { modes: { audit: { light: true } } },
     issues: {
       1: open("One"),
       2: open("On the board"),
@@ -257,7 +257,7 @@ test("GET issues: the open issues without a task or pull request, and the repo's
   const res = await call(w.api, "GET", "/api/repos/org/app/issues");
   assert.equal(res.status, 200);
   assert.deepEqual(res.body.issues, [{ number: 1, title: "One", url: "u/1" }]);
-  assert.deepEqual(res.body.modes, ["work", "brainstorm", "review"]);
+  assert.deepEqual(res.body.modes, ["work", "brainstorm", "audit"]);
   assert.equal(res.body.errors, false);
   // Cached: GitHub is asked again only after ISSUES_MS.
   const listed = () => w.calls.filter((c) => c.includes("/issues?")).length;
@@ -1067,20 +1067,20 @@ const rerun = (w, body, opts = {}) =>
 test("rerun: the App comments, then the failed run's comments are queued in its mode", async () => {
   const w = setup({
     issues: { 5: open("Five") },
-    settings: { modes: { review: {} } },
-    ...failed("org/app#5", { taskMode: "review", status: "interrupted" }),
+    settings: { modes: { audit: {} } },
+    ...failed("org/app#5", { taskMode: "audit", status: "interrupted" }),
   });
   const res = await rerun(w, { runId: "run-5" });
   assert.equal(res.status, 200);
   assert.equal(res.body.message, "Rerun of #5 queued.");
   assert.deepEqual(w.comments, [
-    [5, "Rerun from the dashboard by @alice in `review` mode: its last run was interrupted."],
+    [5, "Rerun from the dashboard by @alice in `audit` mode: its last run was interrupted."],
   ]);
   const [item] = w.accepted;
   assert.equal(item.id, "5");
   assert.equal(item.kind, "issue");
   assert.equal(item.trigger, "work");
-  assert.equal(item.modeLine, "review");
+  assert.equal(item.modeLine, "audit");
   assert.equal(item.text, "Fix it\n/model x\n\n---\n\nAnd this");
   assert.equal(item.author, "alice");
   assert.equal(item.replyTo, 5);
@@ -1131,7 +1131,7 @@ test("rerun refused: users, a broken config, closed, busy, not the latest, not f
     await refused(done, { runId: "run-5" }, 409);
   }
   // A mode gone from the config since.
-  await refused(failed("org/app#5", { taskMode: "review" }), { runId: "run-5" }, 422);
+  await refused(failed("org/app#5", { taskMode: "audit" }), { runId: "run-5" }, 422);
   // Another repo's run.
   await refused(failed("org/app#5", { repo: "org/other" }), { runId: "run-5" }, 404);
   // A pull request's task that is busy (its key isn't the issue's).

@@ -79,13 +79,21 @@ caches:
 
 # The repo's own modes, started with a "/mode <name>" line (see Modes below).
 modes:
-  review:
-    instructions: .deckhand/review.md # path in the repo, default branch
+  audit:
+    instructions: .deckhand/audit.md # path in the repo, default branch
     light: true # comments only: no branch, no setup, a read-only token
     session: issue # issue: kept, like a brainstorm | fresh: a new one each time
     agent: codex # only if the operator configured it
     model: balanced
     effort: medium
+
+# Review pull requests: one GitHub review with severities, a rating and a verdict (see
+# Reviews below). Off without the block; `review: true` for "/mode review" only.
+review:
+  on: ready # a pull request marked ready (or opened as ready) | manual: "/mode review" only
+  instructions: .deckhand/review.md # optional, added to the built-in review prompt
+  model: best # default: brainstorm_model, brainstorm_effort
+  effort: high
 
 # Where ideas, bug reports and questions go (see Inboxes below).
 inbox:
@@ -124,6 +132,9 @@ wait_for_answers: true
 | `caches`                                | none                                    | absolute paths in the sandbox kept in a volume per repo and path                         |
 | `mounts`                                | none                                    | host paths requested (`- path: /nfs/work/api`, `read_only`); only under granted roots    |
 | `modes.<name>`                          | none                                    | the repo's own modes, picked with `/mode <name>` (see Modes)                             |
+| `review.on`                             | none: off; `manual` with the block      | `ready`: a pull request that turns ready gets a review; `manual`: `/mode review` only    |
+| `review.instructions`                   | none                                    | Markdown file of the repo, added to the built-in review prompt                           |
+| `review.agent`, `.model`, `.effort`     | `brainstorm_agent`, `_model`, `_effort` | the reviews' agent, model and effort (see Reviews)                                       |
 | `inbox.ideas`, `inbox.bugs`             | none                                    | issue numbers whose comments are ideas or bug reports to file (see Inboxes)              |
 | `inbox.discussions`                     | none                                    | GitHub Discussions category whose discussions Claude answers (see Inboxes)               |
 | `preview.command`                       | none                                    | preview hook command (`preview: ./x.sh` works too); needs the operator's `allow_preview` |
@@ -296,21 +307,22 @@ checks to run.
 
 A run is in a mode: **work** (implement, the default), **brainstorm** (discuss, no code),
 **onboarding** (propose this file, see [Onboarding](#onboarding)), **research** (the open
-web, without the code, see [Research](#research)), or one of the repository's own, declared under `modes:`. A `/mode <name>` line in a comment
-picks one, on its own line or after the trigger on the first one (`Deckhand /mode review`;
+web, without the code, see [Research](#research)), **review** (a pull request's, when the
+`review` block turns it on, see [Reviews](#reviews)), or one of the repository's own, declared under `modes:`. A `/mode <name>` line in a comment
+picks one, on its own line or after the trigger on the first one (`Deckhand /mode audit`;
 `/mode` is never read as `/model`; names are not case-sensitive):
 
 ```text
 Deckhand
-/mode review
+/mode audit
 Focus on the error handling.
 ```
 
 - **With the trigger line**, it starts that mode. Without one, on an issue that already has
   a session, it **switches**: the new mode goes on in the same session, so it starts from
   the conversation so far, as long as both modes are light or neither is. A light run has
-  a clone and session of its own, apart from work's: `/mode work` after a light review starts
-  from the issue and its comments, where the review posted what it found.
+  a clone and session of its own, apart from work's: `/mode work` after a light audit starts
+  from the issue and its comments, where the audit posted what it found.
 - **A comment with neither** goes on in the issue's current mode. The trigger line alone,
   or `/mode work`, goes back to work; `/mode brainstorm` to a brainstorm, which `/stop` wraps
   up. Brainstorms stay on issues: `/mode brainstorm` on a pull request is ignored.
@@ -333,14 +345,15 @@ error, listed in the reply:
 - **Names**: letters, digits, `-` and `_`. `work` and `brainstorm` can't be redefined (set
   their agent and model with `agent`/`model`/`effort` and `brainstorm_agent`/
   `brainstorm_model`/`brainstorm_effort`);
-  `onboarding`, `research`, `stop`, `idea`, `bug`, `discussion` and `analyze` are reserved.
+  `onboarding`, `research`, `stop`, `idea`, `bug`, `discussion`, `analyze` and `review` are
+  reserved (`review` is set with the `review` block, see [Reviews](#reviews)).
 - **Prompt**: the generic sandbox instructions (`prompts/sandbox.md`, and the repo's
   `instructions`) as for every run, then a short frame (the issue or pull request to read,
   what the mode may do) and the mode's file.
 - **Light modes** run like a brainstorm: the shorter pause, before queued work, no branch
   and no `setup`. They only comment: their GitHub token can read the code, issues and pull
   requests, not push or write, and their final message is the reply. They can run on pull
-  requests, where a review mode is most useful.
+  requests, where an audit mode is most useful.
 - **Full modes** run like work: the issue's branch and draft pull request, `setup`, a token
   that can push.
 - **Fresh modes** (`session: fresh`) start a new session on every run and don't keep it:
@@ -370,6 +383,40 @@ It only runs where the operator grants it: `allow_research: true` in the reposit
 grants file or `default.yaml` ([Security model](security.md#research-runs)). Without it,
 `/mode research` gets a reply naming the grant, and nothing runs. Its agent and model are
 those of brainstorms (`brainstorm_agent`, `brainstorm_model`).
+
+### Reviews
+
+The built-in review reads a pull request and posts **one GitHub review**: its findings grouped
+by severity (`critical`, `high`, `medium`, `low`), each with its file and line and a suggested
+fix, a rating out of 10 and a verdict. It never pushes, edits code or creates issues: its
+token only reads, and the listener posts the review.
+
+- **Off by default.** Without a `review` block nothing reviews a pull request, and `/mode
+review` gets the "unknown mode" reply. `review: true` (or a block without `on`, or
+  `on: manual`) turns on `/mode review` alone.
+- **By itself** with `on: ready`: when a pull request is marked ready for review, or opened as
+  ready, if it is on a branch of the repository (never a fork's) and was opened by Deckhand
+  or by an allowed user (`users`); other bots' are skipped. Each head commit is reviewed by
+  itself once, across redeliveries and restarts: to review it again after new pushes,
+  comment `/mode review`.
+- **`/mode review`** on a pull request, from an allowed user, reviews it now; what the comment
+  adds is what the review should look at. On an issue it is refused, with a reply.
+- **The verdict on GitHub**: changes requested when there is a critical or high finding, a
+  comment otherwise. It never approves: that stays the maintainer's. GitHub doesn't let the
+  App request changes on its own pull requests: those get a comment review, the verdict in
+  its text. A reply whose format the listener can't read is posted as a comment review, as
+  it is.
+- **No loops**: the review starts no run. To act on it, comment with the trigger ("Deckhand,
+  fix the high findings").
+- **The run**: like an audit mode that is light and fresh, its own clone and session, no setup;
+  the agent, model and effort of light runs unless the block names others. Its instructions
+  are the built-in ones (security, correctness and tests, duplication, the repository's
+  conventions, scope), then the file `review.instructions` names, from the default branch.
+- **Cost**: each review is a run with the reviews' model, paid by the operator. `on: ready`
+  reviews every pull request that turns ready: keep `manual` where that is too many.
+
+`on`, `instructions`, `agent`, `model` and `effort` are its only keys: any other, or a bad
+value, is an error.
 
 ## Inboxes
 

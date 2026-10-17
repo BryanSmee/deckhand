@@ -21,6 +21,7 @@ import { branchConfigReport } from "./onboarding.mjs";
 import { createPreparation } from "./preparation.mjs";
 import { openingMessages, promptFor } from "./prompts.mjs";
 import { CONFIG_FILE } from "./repo-config.mjs";
+import { postReview } from "./reviews.mjs";
 import {
   addRun,
   lastResult,
@@ -157,8 +158,9 @@ export function createRuns(ctx) {
   async function start(task, items) {
     const run = await begin(task, items);
     // A new comment answers the questions, if any: the issue no longer waits for input. With
-    // the repo's `wait_for_answers`, a light run only helps answer them: the label stays.
-    const helps = task.live.light && task.settings?.waitForAnswers;
+    // the repo's `wait_for_answers`, a light run only helps answer them: the label stays. A
+    // review answers nothing, and often has no comment at all (reviews.mjs).
+    const helps = task.live.mode === "review" || (task.live.light && task.settings?.waitForAnswers);
     if (config.needsInputLabel && task.kind !== "discussion" && !helps) {
       await ctx.label(task.repo, task.number, false);
     }
@@ -249,6 +251,7 @@ export function createRuns(ctx) {
       config,
       grant: access.grant,
       branches: live.branches,
+      pull: live.replyTo,
     });
     // A research run mounts nothing (researchAccess()).
     if (!OPEN.has(live.mode)) recheckMounts(agent, settings, access);
@@ -483,7 +486,17 @@ export function createRuns(ctx) {
         ? `${result.text}\n\n${check ? `${check}\n\n` : ""}${footer}`
         : `${agentOf(task).displayName} stopped with an error.\n\n> ${result?.text || "No result: see the listener logs."}\n\n${why}${footer}`;
     // Already redacted line by line; again, as a result saved by an older listener wasn't.
-    await ctx.answer(target(task, live.replyTo), hidden(live, text));
+    // A review's result is one GitHub review, posted with the listener's token (reviews.mjs).
+    if (mode === "review" && status !== "error") {
+      const posted = await postReview(
+        ctx,
+        task.repo,
+        live.replyTo,
+        hidden(live, result.text),
+        footer,
+      );
+      log(`${live.key}: review posted on #${live.replyTo} (${posted.event ?? "as a comment"})`);
+    } else await ctx.answer(target(task, live.replyTo), hidden(live, text));
     live.replied = true;
     ctx.saveLive(task);
     // Light runs ask questions all along: no label for those.

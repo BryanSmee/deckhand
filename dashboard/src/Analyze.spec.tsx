@@ -28,7 +28,7 @@ beforeEach(() => {
       left: n > 4 ? 1 : 0,
       bytes: n * 4000,
       tokens: n * 1000,
-      kinds: ["bug", "review", "work"],
+      kinds: ["bug", "audit", "work"],
       max,
     };
   };
@@ -83,7 +83,7 @@ test("Analyze offers the repos the user sees, the open tab's first, and their ru
   const boxes = within(kinds).getAllByRole("checkbox") as HTMLInputElement[];
   expect(boxes.map((b) => [b.parentElement!.textContent, b.checked])).toEqual([
     ["Bug", true],
-    ["review", true],
+    ["audit", true],
     ["Work", true],
   ]);
   const outcomes = within(dialog).getByRole("group", { name: "Outcomes" });
@@ -93,7 +93,7 @@ test("Analyze offers the repos the user sees, the open tab's first, and their ru
       .every((b) => (b as HTMLInputElement).checked),
   );
   expect(previews.at(-1)).toBe(
-    "acme/api?count=10&kinds=bug%2Creview%2Cwork&outcomes=ok%2Cerror%2Cneeds-input%2Cinterrupted%2Ccancelled",
+    "acme/api?count=10&kinds=bug%2Caudit%2Cwork&outcomes=ok%2Cerror%2Cneeds-input%2Cinterrupted%2Ccancelled",
   );
   expect(status(dialog)).toBe(
     "10 runs match, about 10,000 tokens to read. 1 older run left out: over the digest's cap.",
@@ -110,7 +110,7 @@ test("the preview follows the selection; none matching, or a bad count, can't st
     fireEvent.click(within(outcomes).getByRole("checkbox", { name }));
   }
   const kinds = within(dialog).getByRole("group", { name: "Kinds" });
-  fireEvent.click(within(kinds).getByRole("checkbox", { name: "review" }));
+  fireEvent.click(within(kinds).getByRole("checkbox", { name: "audit" }));
   // Work and Bug, errors only: 2 runs.
   await waitFor(() => expect(status(dialog)).toBe("2 runs match, about 2,000 tokens to read."));
   expect(previews.at(-1)).toBe("acme/app?count=10&kinds=bug%2Cwork&outcomes=error");
@@ -141,7 +141,7 @@ test("Analyze N runs starts it, then links its issue and its run", async () => {
       url: "api/repos/acme/app/analyze",
       body: {
         count: 3,
-        kinds: ["bug", "review", "work"],
+        kinds: ["bug", "audit", "work"],
         outcomes: ["ok", "error", "needs-input", "interrupted", "cancelled"],
       },
     },

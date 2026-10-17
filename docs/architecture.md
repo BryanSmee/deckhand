@@ -273,6 +273,21 @@ if from a comment (`trigger: "work"`, no comment, no sender, `reason: "conflict"
 its task's session through `tasks.accept()`. The `(head, base)` commits of each attempt are
 kept in `conflicts.json`, so the same pair never starts a second run, even after a restart.
 
+## Reviews
+
+A repo whose `.deckhand.yaml` has a `review` block gets the built-in `review` mode
+(`modes.mjs`: light, fresh, a read-only token). `/mode review` on a pull request starts one;
+with `review.on: ready`, `reviews.mjs` also starts one from a `pull_request` delivery
+(`ready_for_review`, or `opened` when not a draft) for a pull request on a branch of the repo,
+opened by the App or an allowed user. It is a work item as if from a comment (`trigger:
+"review"`, no comment, `reason: "review"`), on the task of the issue the pull request closes
+or the pull request's own. Each pull request's reviewed head commit is kept in
+`reviews.json`, so a redelivery, a restart or the same commit again starts none. The run's
+final message follows `prompts/review.md`'s format; `runs.mjs` hands it to `postReview()`,
+which posts one GitHub review with the listener's token: findings grouped by severity, the
+rating, `REQUEST_CHANGES` on a critical or high finding and `COMMENT` otherwise (never
+`APPROVE`), and a comment review with the raw text when the format can't be read.
+
 ## Waiting for other issues
 
 `/after #77 #80` (on the trigger line or its own line, same repo only; `events.mjs`
@@ -507,6 +522,7 @@ tests fake it.
 | `images.mjs`, `checkout.mjs`                                      | Repo images, the agent's install, caches; checkouts.                                                                                                                                                                                                 |
 | `onboarding.mjs`, `previews.mjs`                                  | Onboarding issues and their run; preview hooks (`previewHook()`) and their queue.                                                                                                                                                                    |
 | `conflicts.mjs`                                                   | The conflict watcher: open task pull requests in conflict get a rebase run (`conflicts.json`).                                                                                                                                                       |
+| `reviews.mjs`                                                     | Pull request reviews: the ready pull requests that get one (`reviews.json`), and the GitHub review posted from the run's final message.                                                                                                              |
 | `waits.mjs`                                                       | Comments waiting for other issues to be done (`/after`, `waits.json`).                                                                                                                                                                               |
 | `work.mjs`                                                        | The graph's work area: the backlog, starting or queueing issues, answers, reruns, inbox entries, analyses.                                                                                                                                           |
 | `discussions.mjs`                                                 | Discussions from the dashboard: started, their thread read, replies.                                                                                                                                                                                 |

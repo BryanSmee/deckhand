@@ -101,6 +101,7 @@ export const BUILT_IN_MODES = [
   "bug",
   "discussion",
   "analyze",
+  "review",
 ];
 
 export function kindName(t: Pick<Task, "kind">): string {
@@ -118,6 +119,7 @@ const RUN_KIND_NAMES: Record<string, string> = {
   bug: "Bug",
   onboarding: "Onboarding",
   analyze: "Analysis",
+  review: "Review",
 };
 
 export function runKindName(kind: string): string {
@@ -137,7 +139,7 @@ export const shortRepo = (repo: string) => repo.slice(repo.indexOf("/") + 1);
 // "1 run", "3 runs"; `many` when adding an s won't do ("replies").
 export const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
-// The repo's own mode, if any: "review".
+// The repo's own mode, if any: "audit".
 export function ownMode(mode: string | null | undefined): string | null {
   return mode && !BUILT_IN_MODES.includes(mode) ? mode : null;
 }
@@ -197,7 +199,7 @@ export function issueList(numbers: number[]): string {
 
 // "Continue", "Wrap-up"…: what a run did, for its button in the run history.
 export function runName(r: Run): string {
-  const own = ownMode(r.taskMode);
+  const own = r.taskMode === "review" ? "Review" : ownMode(r.taskMode);
   const what = { start: "Start", continue: "Continue", restore: "Restore", "wrap-up": "Wrap-up" }[
     r.mode ?? ""
   ];

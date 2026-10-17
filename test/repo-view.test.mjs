@@ -29,8 +29,8 @@ test("settings: the repo's values tagged as such, the operator's otherwise", () 
       "max_parallel: 1",
       "dockerfile: docker/Dockerfile",
       "modes:",
-      "  review:",
-      "    instructions: .github/review.md",
+      "  audit:",
+      "    instructions: .github/audit.md",
       "    light: true",
     ].join("\n"),
   );
@@ -51,7 +51,7 @@ test("settings: the repo's values tagged as such, the operator's otherwise", () 
   assert.equal(byKey(settings, "dockerfile").source, "refused");
   assert.match(byKey(settings, "dockerfile").note, /allow_dockerfile: true/);
   // A light mode takes the brainstorms' model and effort by default (customMode()).
-  assert.equal(byKey(settings, "modes.review").value, ".github/review.md · best/medium · light");
+  assert.equal(byKey(settings, "modes.audit").value, ".github/audit.md · best/medium · light");
   assert.deepEqual(byKey(settings, "limits"), {
     key: "limits",
     value: "2 CPUs, 4g memory, 2048 processes",
@@ -219,7 +219,7 @@ test("settings: agent, brainstorm_agent and wait_for_answers have their rows", (
 test("settings: every key the file takes has its row, or a table of its own", () => {
   const elsewhere = Object.keys(KEYS).filter((key) => !KEYS[key].display);
   assert.deepEqual(elsewhere, ["hosts", "cached_hosts", "mounts"]);
-  const { settings } = view("modes:\n  review:\n    instructions: review.md\n");
+  const { settings } = view("modes:\n  audit:\n    instructions: audit.md\n");
   for (const key of Object.keys(KEYS).filter((k) => KEYS[k].display)) {
     assert.ok(
       settings.some((r) => r.key === key || r.key.startsWith(`${key}.`)),
