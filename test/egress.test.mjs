@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { claude } from "../listener/agents/claude.mjs";
 import { codex } from "../listener/agents/codex.mjs";
+import { agentFor } from "../listener/agents/index.mjs";
 import {
   egressPolicy,
   hostProblem,
@@ -107,18 +108,21 @@ test("private addresses only for hosts the operator named, default.yaml's too, n
     private: true,
     cache: false,
     decrypt: false,
+    relay: false,
   });
   assert.deepEqual(answer("nas.lan.example"), {
     allowed: true,
     private: true,
     cache: false,
     decrypt: false,
+    relay: false,
   });
   assert.deepEqual(answer("anything.net"), {
     allowed: true,
     private: false,
     cache: false,
     decrypt: false,
+    relay: false,
   });
   // A run restored from before repos lost their own hosts: those stay public.
   assert.deepEqual(egressPolicy("repo.dev", ["github.com", "repo.dev"], ["github.com"]), {
@@ -126,12 +130,14 @@ test("private addresses only for hosts the operator named, default.yaml's too, n
     private: false,
     cache: false,
     decrypt: false,
+    relay: false,
   });
   assert.deepEqual(egressPolicy("x.net", ["github.com"], ["github.com"]), {
     allowed: false,
     private: false,
     cache: false,
     decrypt: false,
+    relay: false,
   });
   // A run saved before `trusted` was: nothing private.
   assert.deepEqual(egressPolicy("github.com", ["github.com"], undefined), {
@@ -139,6 +145,7 @@ test("private addresses only for hosts the operator named, default.yaml's too, n
     private: false,
     cache: false,
     decrypt: false,
+    relay: false,
   });
 });
 
@@ -176,6 +183,7 @@ test("decrypt: cached hosts' HTTPS, but never a container engine's, whose plain 
     private: true,
     cache: true,
     decrypt: true,
+    relay: false,
   });
   const engine = { decrypt: false };
   assert.deepEqual(egressPolicy("deb.debian.org", hosts, hosts, cached, [], engine), {
@@ -183,8 +191,64 @@ test("decrypt: cached hosts' HTTPS, but never a container engine's, whose plain 
     private: true,
     cache: true,
     decrypt: false,
+    relay: false,
   });
   assert.equal(egressPolicy("pypi.org", hosts, hosts, cached).decrypt, false);
+});
+
+test("relay: an agent's relayed hosts, decrypted and handed to the listener, never cached", () => {
+  const agent = agentFor("antigravity");
+  const hosts = [...operatorHosts(config, grantFor(grants, config, "org/api"), agent), "*"];
+  const uncached = mandatoryHosts(config, agent);
+  const options = { relayed: agent.relayed, blocked: agent.blocked };
+  const answer = (host, more = {}) =>
+    egressPolicy(host, hosts, hosts, ["*"], uncached, { ...options, ...more });
+  for (const host of ["daily-cloudcode-pa.googleapis.com", "www.googleapis.com"]) {
+    assert.deepEqual(answer(host), {
+      allowed: true,
+      private: true,
+      cache: false,
+      decrypt: true,
+      relay: true,
+    });
+    // A container engine doesn't trust Deckhand's CA: a tunnel, which carries no plan.
+    assert.deepEqual(answer(host, { decrypt: false }), {
+      allowed: true,
+      private: true,
+      cache: false,
+      decrypt: false,
+      relay: false,
+    });
+  }
+  // Telemetry and the avatar: refused, even with "*" granted.
+  for (const host of ["play.googleapis.com", "lh3.googleusercontent.com"]) {
+    assert.deepEqual(answer(host), {
+      allowed: false,
+      private: false,
+      cache: false,
+      decrypt: false,
+      relay: false,
+    });
+  }
+  // The feature flags, and every other host: a tunnel as before.
+  for (const host of ["antigravity-unleash.goog", "github.com", "oauth2.googleapis.com"]) {
+    assert.equal(answer(host).relay, false, host);
+    assert.equal(answer(host).allowed, true, host);
+  }
+  assert.equal(answer("antigravity-unleash.goog").cache, false);
+  // Only for its runs: another agent relays and blocks nothing.
+  const plain = egressPolicy("www.googleapis.com", ["*"], [], [], [], {
+    relayed: codex.relayed,
+    blocked: codex.blocked,
+  });
+  assert.equal(plain.relay, false);
+  assert.equal(egressPolicy("play.googleapis.com", ["*"], [], []).allowed, true);
+  // Antigravity's mandatory hosts, without a grant.
+  assert.deepEqual(mandatoryHosts(config, agent).slice(0, 3), [
+    "daily-cloudcode-pa.googleapis.com",
+    "www.googleapis.com",
+    "antigravity-unleash.goog",
+  ]);
 });
 
 test("host matching: names, subdomain wildcards, *", () => {

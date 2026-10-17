@@ -34,7 +34,8 @@ export interface Run {
   taskMode: string | null;
   // Why the listener started it itself ("conflict": a pull request to rebase); null for comments.
   reason?: string | null;
-  // What ran it (listener/agents/): "claude", also for runs from before agents had names.
+  // What ran it (listener/agents/): "claude", "codex" or "antigravity"; "claude" also for runs
+  // from before agents had names.
   // Sent, not shown (nor are provider, fallback, picked and phase).
   agent?: string;
   // Where its agent's API calls went (listener/agents/), and why when a fallback picked it:

@@ -211,6 +211,7 @@ test("research: any public host, private addresses for the mandatory hosts only,
     private: false,
     cache: false,
     decrypt: false,
+    relay: false,
   });
   // The repo's granted internal host is public only here: next to the open internet, it
   // would be a way out for what it serves.

@@ -30,10 +30,11 @@ networks, see [Security model](security.md)), and the base sandbox image runs st
 
 To build the images from this checkout instead: `docker compose up -d --build`.
 
-**A plan's credential** (`CLAUDE_CODE_OAUTH_TOKEN`, from `claude setup-token`, or for Codex
-a ChatGPT plan's login in `CODEX_AUTH_FILE`, from `codex login`) works, and the listener's log
-warns about it at each start. A subscription (Claude Pro/Max, a ChatGPT plan) is
-usually licensed to one person. Serving a team, or repositories other people write to, may
+**A plan's credential** (`CLAUDE_CODE_OAUTH_TOKEN`, from `claude setup-token`, for Codex
+a ChatGPT plan's login in `CODEX_AUTH_FILE`, from `codex login`, or for the Antigravity CLI a
+Google AI plan's login in `AGY_AUTH_FILE`) works, and the listener's log warns about it at each
+start. A subscription (Claude Pro/Max, a ChatGPT plan, Google AI Pro/Ultra) is
+usually licensed to one person, and Google's terms may not allow a plan to drive a bot at all. Serving a team, or repositories other people write to, may
 break your provider's terms: check them before you do. You are responsible for how your
 Deckhand uses your credential. For teams, use an API key.
 
@@ -308,44 +309,47 @@ What every sandbox may reach and its limits aren't settings: they go in
 `grants/default.yaml`, read at each run (see
 [Where a sandbox's hosts come from](security.md#where-a-sandboxs-hosts-come-from)).
 
-| Setting                                                                                           | `config.yaml` key                                                                                 | Default                                              | What                                                                                                                                           |
-| ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- | ---------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ALLOWED_USERS`                                                                                   | `allowed_users`                                                                                   | none: required                                       | GitHub logins that can start runs                                                                                                              |
-| `ALLOWED_REPOS`                                                                                   | `allowed_repos`                                                                                   | all where the App is installed                       | narrows the repos (`owner/repo`, comma-separated in `.env`)                                                                                    |
-| `CLAUDE_CODE_OAUTH_TOKEN` / `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN`                          | none: a secret, `.env` only                                                                       |                                                      | Claude credential, added by the listener to the sandboxes' API calls (`ANTHROPIC_AUTH_TOKEN`: a gateway's)                                     |
-| `ANTHROPIC_BASE_URL`                                                                              | `anthropic_base_url`                                                                              | `https://api.anthropic.com`                          | where the listener sends the sandboxes' API calls: a [gateway](#through-a-gateway), say                                                        |
-| `ANTHROPIC_DEFAULT_OPUS_MODEL`, `ANTHROPIC_DEFAULT_SONNET_MODEL`, `ANTHROPIC_DEFAULT_HAIKU_MODEL` | `anthropic_default_opus_model`, `anthropic_default_sonnet_model`, `anthropic_default_haiku_model` | Claude Code's                                        | the models `opus`, `sonnet` and `haiku` stand for in the sandboxes (a gateway's names)                                                         |
-| `SANDBOX_AGENT`, `BRAINSTORM_AGENT`                                                               | `sandbox_agent`, `brainstorm_agent`                                                               | `claude`, `SANDBOX_AGENT`                            | the agent of work runs, and of brainstorms, inbox entries and discussions: `claude` or `codex` (see [Codex](#codex))                           |
-| `OPENAI_API_KEY`                                                                                  | none: a secret, `.env` only                                                                       |                                                      | Codex's OpenAI API key, added by the listener to the sandboxes' API calls                                                                      |
-| `CODEX_AUTH_FILE`                                                                                 | none: `.env` only                                                                                 |                                                      | or a ChatGPT plan's login: its `auth.json`, held and refreshed by the listener (see [With a ChatGPT plan](#with-a-chatgpt-plan))               |
-| `OPENAI_BASE_URL`                                                                                 | `openai_base_url`                                                                                 | `https://api.openai.com/v1`                          | where the listener sends Codex's API calls                                                                                                     |
-| `CODEX_BEST_MODEL`, `CODEX_BALANCED_MODEL`, `CODEX_FAST_MODEL`                                    | `codex_best_model`, `codex_balanced_model`, `codex_fast_model`                                    | `gpt-6-astra`, `gpt-6.1-sol`, `gpt-6-luna`           | the models the tiers `best`, `balanced` and `fast` stand for with Codex                                                                        |
-| `FALLBACKS`                                                                                       | `fallbacks`                                                                                       | none                                                 | where a run goes when its provider fails, in order: `claude@anthropic`, `claude@openrouter`, `codex@openai` (see [Fallbacks](#fallbacks))      |
-| `OPENROUTER_API_KEY`                                                                              | none: a secret, `.env` only                                                                       |                                                      | OpenRouter key of `claude@openrouter`, added by the listener to those runs' API calls                                                          |
-| `OPENROUTER_BASE_URL`                                                                             | `openrouter_base_url`                                                                             | `https://openrouter.ai/api`                          | where the listener sends the API calls of `claude@openrouter` runs                                                                             |
-| `OPENROUTER_OPUS_MODEL`, `OPENROUTER_SONNET_MODEL`, `OPENROUTER_HAIKU_MODEL`                      | `openrouter_opus_model`, `openrouter_sonnet_model`, `openrouter_haiku_model`                      | `ANTHROPIC_DEFAULT_*_MODEL`                          | what `opus`, `sonnet` and `haiku` stand for on `claude@openrouter` (OpenRouter's names)                                                        |
-| `CLAUDE_FALLBACK_MODEL`                                                                           | `claude_fallback_model`                                                                           | none                                                 | Claude Code's own `--fallback-model`, when the run's model is overloaded: a tier or a model's name                                             |
-| `PUBLIC_URL`                                                                                      | `public_url`                                                                                      | stored by `/setup`                                   | the listener's public address                                                                                                                  |
-| `PORT`                                                                                            | none: compose's                                                                                   | `8080`                                               | the host port compose publishes the listener on                                                                                                |
-| `CLAUDE_CODE_VERSION`                                                                             | `claude_code_version`                                                                             | `2.1.300`                                            | Claude Code version the sandboxes install on first use                                                                                         |
-| `CODEX_VERSION`                                                                                   | `codex_version`                                                                                   | `0.162.1`                                            | Codex version the sandboxes install on first use                                                                                               |
-| `SANDBOX_MODEL`, `SANDBOX_EFFORT`                                                                 | `sandbox_model`, `sandbox_effort`                                                                 | `best`, `medium`                                     | defaults; a comment's `/model` and `/effort` lines override them (models: below the table)                                                     |
-| `BRAINSTORM_MODEL`, `BRAINSTORM_EFFORT`                                                           | `brainstorm_model`, `brainstorm_effort`                                                           | `SANDBOX_MODEL`, `SANDBOX_EFFORT`                    | the same for brainstorms, inbox entries and discussions                                                                                        |
-| `BRAINSTORM_IDLE_MINUTES`                                                                         | `brainstorm_idle_minutes`                                                                         | `10`                                                 | minutes without a comment before a brainstorm shows as idle                                                                                    |
-| `MAX_PARALLEL`                                                                                    | `max_parallel`                                                                                    | `2`                                                  | sandboxes running at once (a repo's `max_parallel` within it)                                                                                  |
-| `SANDBOX_SUBNETS`, `SANDBOX_SUBNET_SIZE`                                                          | `sandbox_subnets`, `sandbox_subnet_size`                                                          | none (Docker's pools), `28`                          | an IPv4 range the runs' networks take their subnets from, in blocks of that size (below the table)                                             |
-| `SANDBOX_ENGINE`                                                                                  | `sandbox_engine`                                                                                  | none                                                 | the container engine runs of repositories granted `allow_docker` get: `sysbox`, `podman` or `auto` (see [Container engine](#container-engine)) |
-| `TRIGGER`                                                                                         | `trigger`                                                                                         | `Deckhand`                                           | first line of a comment that starts a run                                                                                                      |
-| `ONBOARDING`                                                                                      | `onboarding`                                                                                      | on                                                   | `off`: no onboarding issue when the App is installed on a repo without a config                                                                |
-| `NEEDS_INPUT_LABEL`                                                                               | `needs_input_label`                                                                               | `needs-input`                                        | label while a run or an issue waits for answers (empty: none)                                                                                  |
-| `CONFLICT_CHECK_MINUTES`                                                                          | `conflict_check_minutes`                                                                          | `5`                                                  | shortest interval of a repo's `conflicts.check_minutes`; `0` turns it off                                                                      |
-| `WAITS_CHECK_MINUTES`                                                                             | `waits_check_minutes`                                                                             | `5`                                                  | how often comments waiting for other issues (`/after`) ask GitHub again                                                                        |
-| `LOG_RETENTION_DAYS`                                                                              | `log_retention_days`                                                                              | `90`                                                 | days a run's log, its summary and its screenshots are kept; `0` keeps them forever (see below)                                                 |
-| `NAME_PREFIX`, `CLAUDE_CODE_VOLUME`, `CODEX_VOLUME`                                               | `name_prefix`, `claude_code_volume`, `codex_volume`                                               | `deckhand`, `deckhand-claude-code`, `deckhand-codex` | names of what the listener creates on Docker                                                                                                   |
-| `DOCKER_SOCKET`                                                                                   | none: compose's                                                                                   | `/var/run/docker.sock`                               | the host's Docker socket, as preview hooks mount it                                                                                            |
-| `DECKHAND_VERSION`                                                                                | none: compose's                                                                                   | `latest`                                             | the release compose runs (`1.2.3`, `1.2`), or `edge` to follow `main`: see [Updating](#updating)                                               |
-| `DECKHAND_REGISTRY`                                                                               | none: compose's                                                                                   | `ghcr.io/bryansmee`                                  | where compose pulls the images from                                                                                                            |
-| `SHOTS_VOLUME`, `RUNS_VOLUME`                                                                     | none: compose's                                                                                   | `deckhand-…`                                         | names of the volumes compose creates and the listener uses                                                                                     |
+| Setting                                                                                           | `config.yaml` key                                                                                 | Default                                                                      | What                                                                                                                                                                          |
+| ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ALLOWED_USERS`                                                                                   | `allowed_users`                                                                                   | none: required                                                               | GitHub logins that can start runs                                                                                                                                             |
+| `ALLOWED_REPOS`                                                                                   | `allowed_repos`                                                                                   | all where the App is installed                                               | narrows the repos (`owner/repo`, comma-separated in `.env`)                                                                                                                   |
+| `CLAUDE_CODE_OAUTH_TOKEN` / `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN`                          | none: a secret, `.env` only                                                                       |                                                                              | Claude credential, added by the listener to the sandboxes' API calls (`ANTHROPIC_AUTH_TOKEN`: a gateway's)                                                                    |
+| `ANTHROPIC_BASE_URL`                                                                              | `anthropic_base_url`                                                                              | `https://api.anthropic.com`                                                  | where the listener sends the sandboxes' API calls: a [gateway](#through-a-gateway), say                                                                                       |
+| `ANTHROPIC_DEFAULT_OPUS_MODEL`, `ANTHROPIC_DEFAULT_SONNET_MODEL`, `ANTHROPIC_DEFAULT_HAIKU_MODEL` | `anthropic_default_opus_model`, `anthropic_default_sonnet_model`, `anthropic_default_haiku_model` | Claude Code's                                                                | the models `opus`, `sonnet` and `haiku` stand for in the sandboxes (a gateway's names)                                                                                        |
+| `SANDBOX_AGENT`, `BRAINSTORM_AGENT`                                                               | `sandbox_agent`, `brainstorm_agent`                                                               | `claude`, `SANDBOX_AGENT`                                                    | the agent of work runs, and of brainstorms, inbox entries and discussions: `claude`, `codex` (see [Codex](#codex)) or `antigravity` (see [Antigravity CLI](#antigravity-cli)) |
+| `OPENAI_API_KEY`                                                                                  | none: a secret, `.env` only                                                                       |                                                                              | Codex's OpenAI API key, added by the listener to the sandboxes' API calls                                                                                                     |
+| `CODEX_AUTH_FILE`                                                                                 | none: `.env` only                                                                                 |                                                                              | or a ChatGPT plan's login: its `auth.json`, held and refreshed by the listener (see [With a ChatGPT plan](#with-a-chatgpt-plan))                                              |
+| `OPENAI_BASE_URL`                                                                                 | `openai_base_url`                                                                                 | `https://api.openai.com/v1`                                                  | where the listener sends Codex's API calls                                                                                                                                    |
+| `CODEX_BEST_MODEL`, `CODEX_BALANCED_MODEL`, `CODEX_FAST_MODEL`                                    | `codex_best_model`, `codex_balanced_model`, `codex_fast_model`                                    | `gpt-6-astra`, `gpt-6.1-sol`, `gpt-6-luna`                                   | the models the tiers `best`, `balanced` and `fast` stand for with Codex                                                                                                       |
+| `AGY_AUTH_FILE`                                                                                   | none: `.env` only                                                                                 |                                                                              | the Antigravity CLI's Google AI plan login: its token file, held and refreshed by the listener (see [Antigravity CLI](#antigravity-cli))                                      |
+| `AGY_BEST_MODEL`, `AGY_BALANCED_MODEL`, `AGY_FAST_MODEL`                                          | `agy_best_model`, `agy_balanced_model`, `agy_fast_model`                                          | `gemini-4-argon-high`, `gemini-4-argon-medium`, `gemini-3.8-flash-medium`    | the models the tiers `best`, `balanced` and `fast` stand for with the Antigravity CLI                                                                                         |
+| `FALLBACKS`                                                                                       | `fallbacks`                                                                                       | none                                                                         | where a run goes when its provider fails, in order: `claude@anthropic`, `claude@openrouter`, `codex@openai`, `antigravity@google` (see [Fallbacks](#fallbacks))               |
+| `OPENROUTER_API_KEY`                                                                              | none: a secret, `.env` only                                                                       |                                                                              | OpenRouter key of `claude@openrouter`, added by the listener to those runs' API calls                                                                                         |
+| `OPENROUTER_BASE_URL`                                                                             | `openrouter_base_url`                                                                             | `https://openrouter.ai/api`                                                  | where the listener sends the API calls of `claude@openrouter` runs                                                                                                            |
+| `OPENROUTER_OPUS_MODEL`, `OPENROUTER_SONNET_MODEL`, `OPENROUTER_HAIKU_MODEL`                      | `openrouter_opus_model`, `openrouter_sonnet_model`, `openrouter_haiku_model`                      | `ANTHROPIC_DEFAULT_*_MODEL`                                                  | what `opus`, `sonnet` and `haiku` stand for on `claude@openrouter` (OpenRouter's names)                                                                                       |
+| `CLAUDE_FALLBACK_MODEL`                                                                           | `claude_fallback_model`                                                                           | none                                                                         | Claude Code's own `--fallback-model`, when the run's model is overloaded: a tier or a model's name                                                                            |
+| `PUBLIC_URL`                                                                                      | `public_url`                                                                                      | stored by `/setup`                                                           | the listener's public address                                                                                                                                                 |
+| `PORT`                                                                                            | none: compose's                                                                                   | `8080`                                                                       | the host port compose publishes the listener on                                                                                                                               |
+| `CLAUDE_CODE_VERSION`                                                                             | `claude_code_version`                                                                             | `2.1.300`                                                                    | Claude Code version the sandboxes install on first use                                                                                                                        |
+| `AGY_VERSION`                                                                                     | `agy_version`                                                                                     | `1.4.0`                                                                      | Antigravity CLI version the sandboxes install on first use                                                                                                                    |
+| `CODEX_VERSION`                                                                                   | `codex_version`                                                                                   | `0.162.1`                                                                    | Codex version the sandboxes install on first use                                                                                                                              |
+| `SANDBOX_MODEL`, `SANDBOX_EFFORT`                                                                 | `sandbox_model`, `sandbox_effort`                                                                 | `best`, `medium`                                                             | defaults; a comment's `/model` and `/effort` lines override them (models: below the table)                                                                                    |
+| `BRAINSTORM_MODEL`, `BRAINSTORM_EFFORT`                                                           | `brainstorm_model`, `brainstorm_effort`                                                           | `SANDBOX_MODEL`, `SANDBOX_EFFORT`                                            | the same for brainstorms, inbox entries and discussions                                                                                                                       |
+| `BRAINSTORM_IDLE_MINUTES`                                                                         | `brainstorm_idle_minutes`                                                                         | `10`                                                                         | minutes without a comment before a brainstorm shows as idle                                                                                                                   |
+| `MAX_PARALLEL`                                                                                    | `max_parallel`                                                                                    | `2`                                                                          | sandboxes running at once (a repo's `max_parallel` within it)                                                                                                                 |
+| `SANDBOX_SUBNETS`, `SANDBOX_SUBNET_SIZE`                                                          | `sandbox_subnets`, `sandbox_subnet_size`                                                          | none (Docker's pools), `28`                                                  | an IPv4 range the runs' networks take their subnets from, in blocks of that size (below the table)                                                                            |
+| `SANDBOX_ENGINE`                                                                                  | `sandbox_engine`                                                                                  | none                                                                         | the container engine runs of repositories granted `allow_docker` get: `sysbox`, `podman` or `auto` (see [Container engine](#container-engine))                                |
+| `TRIGGER`                                                                                         | `trigger`                                                                                         | `Deckhand`                                                                   | first line of a comment that starts a run                                                                                                                                     |
+| `ONBOARDING`                                                                                      | `onboarding`                                                                                      | on                                                                           | `off`: no onboarding issue when the App is installed on a repo without a config                                                                                               |
+| `NEEDS_INPUT_LABEL`                                                                               | `needs_input_label`                                                                               | `needs-input`                                                                | label while a run or an issue waits for answers (empty: none)                                                                                                                 |
+| `CONFLICT_CHECK_MINUTES`                                                                          | `conflict_check_minutes`                                                                          | `5`                                                                          | shortest interval of a repo's `conflicts.check_minutes`; `0` turns it off                                                                                                     |
+| `WAITS_CHECK_MINUTES`                                                                             | `waits_check_minutes`                                                                             | `5`                                                                          | how often comments waiting for other issues (`/after`) ask GitHub again                                                                                                       |
+| `LOG_RETENTION_DAYS`                                                                              | `log_retention_days`                                                                              | `90`                                                                         | days a run's log, its summary and its screenshots are kept; `0` keeps them forever (see below)                                                                                |
+| `NAME_PREFIX`, `CLAUDE_CODE_VOLUME`, `CODEX_VOLUME`, `AGY_VOLUME`                                 | `name_prefix`, `claude_code_volume`, `codex_volume`, `agy_volume`                                 | `deckhand`, `deckhand-claude-code`, `deckhand-codex`, `deckhand-antigravity` | names of what the listener creates on Docker (the Antigravity CLI's login is refreshed in `<AGY_VOLUME>-login`)                                                               |
+| `DOCKER_SOCKET`                                                                                   | none: compose's                                                                                   | `/var/run/docker.sock`                                                       | the host's Docker socket, as preview hooks mount it                                                                                                                           |
+| `DECKHAND_VERSION`                                                                                | none: compose's                                                                                   | `latest`                                                                     | the release compose runs (`1.2.3`, `1.2`), or `edge` to follow `main`: see [Updating](#updating)                                                                              |
+| `DECKHAND_REGISTRY`                                                                               | none: compose's                                                                                   | `ghcr.io/bryansmee`                                                          | where compose pulls the images from                                                                                                                                           |
+| `SHOTS_VOLUME`, `RUNS_VOLUME`                                                                     | none: compose's                                                                                   | `deckhand-…`                                                                 | names of the volumes compose creates and the listener uses                                                                                                                    |
 
 Each running sandbox has a Docker network of its own (see
 [Security model](security.md#network)). By default Docker takes their subnets from its default
@@ -377,23 +381,28 @@ removed: set a longer retention, or `0`, to keep them.
 A model, in `SANDBOX_MODEL`, `BRAINSTORM_MODEL`, a repository's `model` or a comment's
 `/model`, is a tier the run's agent maps to one of its models, `best`, `balanced` or `fast`
 (Claude Code: `opus`, `sonnet`, `haiku`, which `ANTHROPIC_DEFAULT_*_MODEL` can point
-elsewhere; Codex: `gpt-6-astra`, `gpt-6.1-sol`, `gpt-6-luna`, or `CODEX_*_MODEL`), or a
-model's own name (`sonnet`, `claude-opus-5-5`, `gpt-6.1-sol`). Efforts (`low` to `max`) are
-the same for both. A run whose model belongs to another agent (`/model opus` on a Codex run)
+elsewhere; Codex: `gpt-6-astra`, `gpt-6.1-sol`, `gpt-6-luna`, or `CODEX_*_MODEL`; the
+Antigravity CLI: `gemini-4-argon-high`, `gemini-4-argon-medium`, `gemini-3.8-flash-medium`, or
+`AGY_*_MODEL`), or a model's own name (`sonnet`, `claude-opus-5-5`, `gpt-6.1-sol`,
+`gemini-4-argon`). Efforts (`low` to `max`) are the same for all three; the Antigravity CLI's
+models carry theirs in their name (`-low`, `-medium`, `-high`), so a name without one takes the
+run's (`xhigh` and `max`: `-high`). A run whose model belongs to another agent (`/model opus` on a Codex run)
 doesn't start: the reply says why.
 
 ### Agents and providers
 
-Deckhand runs two agents, Claude Code (`claude`) and Codex (`codex`), from one sandbox image:
-each installs on first use into a volume of its own. An agent calls a provider; sandboxes
-always call the listener, which adds your credential and forwards the call, so none of these
-needs a host in the grants folder (only GitHub's, which every run has).
+Deckhand runs three agents, Claude Code (`claude`), Codex (`codex`) and the Antigravity CLI
+(`antigravity`), from one sandbox image: each installs on first use into a volume of its own.
+An agent calls a provider; its calls go through the listener, which adds your credential and
+forwards them, so none of these needs a host in the grants folder (only GitHub's, which every
+run has, and the Antigravity CLI's own, which its runs have).
 
-| Entry               | Agent and provider                                           | Credential (`.env`)                                                                 | The listener calls                                                           |
-| ------------------- | ------------------------------------------------------------ | ----------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
-| `claude@anthropic`  | Claude Code on Anthropic, or [a gateway](#through-a-gateway) | `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN` (a plan's) or `ANTHROPIC_AUTH_TOKEN` | `ANTHROPIC_BASE_URL` (`api.anthropic.com`)                                   |
-| `claude@openrouter` | Claude Code through OpenRouter, as a [fallback](#fallbacks)  | `OPENROUTER_API_KEY`                                                                | `OPENROUTER_BASE_URL` (`openrouter.ai`)                                      |
-| `codex@openai`      | [Codex](#codex) on OpenAI                                    | `OPENAI_API_KEY`, or `CODEX_AUTH_FILE` (a ChatGPT plan's login)                     | `OPENAI_BASE_URL` (`api.openai.com`), or ChatGPT's Codex backend with a plan |
+| Entry                | Agent and provider                                           | Credential (`.env`)                                                                 | The listener calls                                                                            |
+| -------------------- | ------------------------------------------------------------ | ----------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| `claude@anthropic`   | Claude Code on Anthropic, or [a gateway](#through-a-gateway) | `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN` (a plan's) or `ANTHROPIC_AUTH_TOKEN` | `ANTHROPIC_BASE_URL` (`api.anthropic.com`)                                                    |
+| `claude@openrouter`  | Claude Code through OpenRouter, as a [fallback](#fallbacks)  | `OPENROUTER_API_KEY`                                                                | `OPENROUTER_BASE_URL` (`openrouter.ai`)                                                       |
+| `codex@openai`       | [Codex](#codex) on OpenAI                                    | `OPENAI_API_KEY`, or `CODEX_AUTH_FILE` (a ChatGPT plan's login)                     | `OPENAI_BASE_URL` (`api.openai.com`), or ChatGPT's Codex backend with a plan                  |
+| `antigravity@google` | [Antigravity CLI](#antigravity-cli) on a Google AI plan      | `AGY_AUTH_FILE` (a Google AI Pro/Ultra plan's login)                                | `daily-cloudcode-pa.googleapis.com` and `www.googleapis.com`, handed over by the egress proxy |
 
 What runs an issue, first match wins:
 
@@ -518,17 +527,94 @@ the listener reads the new file without a restart. `OPENAI_API_KEY`, when set to
 A plan is licensed to one person: the listener's log warns about it at each start (see
 [1. Start the listener](#1-start-the-listener)).
 
+### Antigravity CLI
+
+Deckhand can run Google's [Antigravity CLI](https://github.com/google-antigravity/antigravity-cli)
+(`agy`) on a Google AI Pro or Ultra plan, which gives it Gemini 4 Argon (and the plan's other
+models: `agy models` lists them). Only `agy` takes such a plan: Gemini CLI and the gateways
+need an API key.
+
+Google's terms may not allow a plan, licensed to one person, to drive an automated bot:
+check them before you set this up. The listener's log warns about it at each start.
+
+`agy` has no setting to send its calls to the listener, so its login is kept out of the
+sandboxes another way. The listener holds it; each sandbox gets a token file whose access token
+is the run's secret. For these runs only, the egress proxy decrypts the two hosts that carry
+the token (`daily-cloudcode-pa.googleapis.com`, `www.googleapis.com`) and hands each request to
+the listener, which checks the secret, puts the plan's access token in its place and sends the
+call on, on the paths `agy` uses only. `agy`'s telemetry (`play.googleapis.com`, which carries
+the token too) and your avatar (`lh3.googleusercontent.com`) are refused; its feature flags
+(`antigravity-unleash.goog`) go through untouched. See
+[Security model](security.md#the-antigravity-clis-login).
+
+1. Sign in once, for Deckhand alone, in a container (any machine with Docker; the image is
+   Deckhand's sandbox image, which has what `agy` needs):
+
+   ```sh
+   docker volume create agy-sign-in
+   docker run --rm -it --user 0 --entrypoint deckhand-install-antigravity \
+     -e AGY_VERSION=1.4.0 -v deckhand-antigravity:/opt/antigravity ghcr.io/bryansmee/deckhand-sandbox
+   docker run --rm -it --entrypoint /opt/antigravity/1.4.0/bin/agy \
+     -v deckhand-antigravity:/opt/antigravity:ro -v agy-sign-in:/home/node/.gemini \
+     ghcr.io/bryansmee/deckhand-sandbox
+   ```
+
+   `agy` prints a sign-in address: open it, sign in with the plan's Google account, paste the
+   code back, then `/quit`.
+
+2. Copy the token file it wrote into the listener's data volume, then remove that volume:
+
+   ```sh
+   docker run --rm -v agy-sign-in:/g ghcr.io/bryansmee/deckhand-sandbox \
+     cat /g/antigravity-cli/antigravity-oauth-token > agy-auth.json
+   docker compose cp agy-auth.json listener:/data/agy-auth.json
+   rm agy-auth.json && docker volume rm agy-sign-in
+   ```
+
+3. In `.env`, `AGY_AUTH_FILE=/data/agy-auth.json`, and in `config.yaml`, to make it the
+   default (or let repositories pick it, as with [Codex](#codex)):
+
+   ```yaml
+   sandbox_agent: antigravity
+   sandbox_model: best # gemini-4-argon-high; balanced and fast: gemini-4-argon-medium, gemini-3.8-flash-medium
+   ```
+
+The listener logs `Antigravity CLI: a Google AI plan's login, from /data/agy-auth.json` at
+start, or why it can't use it. `SANDBOX_AGENT=antigravity` without `AGY_AUTH_FILE` stops the
+listener at start. When the access token is within 5 minutes of its expiry, the listener has
+`agy` refresh it: it runs `agy models` in a short container of the sandbox image, on a volume of
+its own (`<AGY_VOLUME>-login`), outside the runs' networks (`INSTALL_NETWORK`, as the installs),
+once for all runs, and writes the new token back to the file. When Google refuses the refresh
+(the login was revoked), runs fail with "sign in with `agy` again": repeat the steps above; the
+listener reads the new file without a restart.
+
+The egress proxy needs its CA for these runs, cache on or off (it makes it at its first
+start, in its volume): a run stops when the proxy has none.
+
+What differs from Claude Code, as for Codex:
+
+- **Comments that arrive mid-run** wait for the run to end: `agy -p` takes no more input. The
+  next run resumes the same conversation (`agy --conversation <id>`).
+- **Sessions** are in a volume per issue, `<sandbox>-antigravity` (`~/.gemini`).
+- **Instructions:** Deckhand's rules and the repository's `instructions` file go to
+  `~/.gemini/AGENTS.md`; `agy` reads the repository's own `AGENTS.md` itself.
+- **Draft pull request:** a `Stop` hook in `agy`'s user-level hooks (`~/.gemini/config/hooks.json`,
+  not the repository's `.agents/hooks.json`), and again once it exits.
+- **A failed command** shows as any other in the run's log: `agy`'s output doesn't say a
+  command failed.
+
 ### Fallbacks
 
 When the model's API fails, a run can go on elsewhere instead of ending with "Claude stopped
 with an error". List where, in order, as `agent@provider` (`agent` alone is its default
 provider):
 
-| Entry               | What                                                                   | Needs                                 |
-| ------------------- | ---------------------------------------------------------------------- | ------------------------------------- |
-| `claude@anthropic`  | Claude Code on your `ANTHROPIC_BASE_URL` (Anthropic, unless a gateway) | a Claude credential                   |
-| `claude@openrouter` | Claude Code through OpenRouter, at `OPENROUTER_BASE_URL`               | `OPENROUTER_API_KEY`                  |
-| `codex@openai`      | Codex on your `OPENAI_BASE_URL` (OpenAI), or on a ChatGPT plan         | `OPENAI_API_KEY` or `CODEX_AUTH_FILE` |
+| Entry                | What                                                                   | Needs                                 |
+| -------------------- | ---------------------------------------------------------------------- | ------------------------------------- |
+| `claude@anthropic`   | Claude Code on your `ANTHROPIC_BASE_URL` (Anthropic, unless a gateway) | a Claude credential                   |
+| `claude@openrouter`  | Claude Code through OpenRouter, at `OPENROUTER_BASE_URL`               | `OPENROUTER_API_KEY`                  |
+| `codex@openai`       | Codex on your `OPENAI_BASE_URL` (OpenAI), or on a ChatGPT plan         | `OPENAI_API_KEY` or `CODEX_AUTH_FILE` |
+| `antigravity@google` | The Antigravity CLI on a Google AI plan                                | `AGY_AUTH_FILE`                       |
 
 In `.env`, the credentials, and in `config.yaml`:
 
@@ -566,7 +652,9 @@ one did.
 
 A model's own name (`/model claude-opus-5-5`) may mean nothing on another provider: use
 tiers (`best`) with fallbacks. A Claude model on a run that falls back to Codex runs Codex's
-`best`.
+`best`; the same for the Antigravity CLI. Its plan's quota (`RESOURCE_EXHAUSTED`) and a refused
+login (`UNAUTHENTICATED`, `PERMISSION_DENIED`, "Eligibility check failed") count as the
+provider's errors.
 
 Claude Code also has a fallback of its own, within one provider: `CLAUDE_FALLBACK_MODEL`
 (`claude_fallback_model: sonnet`) is the model it switches to when the run's model is
@@ -582,7 +670,7 @@ else set it in the service's `environment`, for example in a `compose.override.y
 | Setting                                 | Key                        | Default                                               | What                                                                                                                              |
 | --------------------------------------- | -------------------------- | ----------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
 | `GRANTS_DIR`                            | `grants_dir`               | `/etc/deckhand/grants`                                | what you grant each repo, one file each: hosts, cached hosts, host mounts, limits, preview hook, Dockerfile (the server folder's) |
-| `INSTALL_NETWORK`                       | `install_network`          | `bridge`                                              | network of the agents' install containers (they need npm)                                                                         |
+| `INSTALL_NETWORK`                       | `install_network`          | `bridge`                                              | network of the agents' install containers (they need npm and GitHub's releases), and of the Antigravity CLI's login refresh       |
 | `DEBOUNCE_MS`                           | `debounce_ms`              | `15000`                                               | pause after a comment before its run starts, so that comments posted together go in one run                                       |
 | `BRAINSTORM_DEBOUNCE_MS`                | `brainstorm_debounce_ms`   | `3000`                                                | the same before a light run (brainstorms, onboarding, light modes)                                                                |
 | `DATA_DIR`                              | none                       | `/data`                                               | the listener's state: the App's credentials, logs, queue, runs (the `data` volume)                                                |
@@ -595,6 +683,7 @@ else set it in the service's `environment`, for example in a `compose.override.y
 | `LISTENER_CONTAINER`                    | none                       | the container's host name (its id)                    | the listener's container, which joins each run's network                                                                          |
 | `EGRESS_CONTAINER`                      | none                       | labelled `deckhand.role=egress`                       | the egress proxy's container, which joins each run's network; by default, the one in the listener's compose project               |
 | `POLICY_URL` (egress proxy)             | none                       | `http://listener:8081/egress`                         | where the proxy asks whether a sandbox may reach a host; compose sets it                                                          |
+| `RELAY_URL` (egress proxy)              | none                       | `POLICY_URL`'s host, `/relay`                         | where the proxy hands the requests it relays to the listener (the [Antigravity CLI](#antigravity-cli)'s)                          |
 | `EGRESS_CACHE_DIR` (egress proxy)       | none                       | `/cache`                                              | where the proxy keeps the [egress cache](security.md#the-egress-cache) and its CA (`ca/`, the `egress-cache` volume)              |
 | `EGRESS_CACHE_MAX` (egress proxy)       | none                       | `10g`                                                 | the egress cache's size, in bytes or with `k`, `m`, `g`, `t`; the least recently used answers go beyond it; `0`: no cache         |
 | `EGRESS_CACHE_ENTRY_MAX` (egress proxy) | none                       | `1g`                                                  | the largest answer it keeps                                                                                                       |
@@ -759,11 +848,14 @@ Nor does a sandbox get your Claude credential. Its Claude Code calls the listene
 `ANTHROPIC_BASE_URL=<broker>/anthropic`) with the run's secret where the credential would
 be; the listener checks the secret, puts your credential in its place and forwards the call
 to Anthropic, streaming the answer back (see [Security model](security.md#tokens)). Codex
-does the same with `OPENAI_BASE_URL=<broker>/openai` and your `OPENAI_API_KEY`.
+does the same with `OPENAI_BASE_URL=<broker>/openai` and your `OPENAI_API_KEY`, and the
+Antigravity CLI's calls reach the listener through the egress proxy (see
+[Antigravity CLI](#antigravity-cli)).
 
 No agent is part of any image: before the first run that needs it, the listener installs the
 pinned `CLAUDE_CODE_VERSION` into the `deckhand-claude-code` volume (Codex: `CODEX_VERSION`,
-`deckhand-codex`), in a container of its own, and later runs reuse it, read-only.
+`deckhand-codex`; the Antigravity CLI: `AGY_VERSION`, `deckhand-antigravity`, its release
+checked against its digest), in a container of its own, and later runs reuse it, read-only.
 
 ## Isolation
 

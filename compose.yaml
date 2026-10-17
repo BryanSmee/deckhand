@@ -70,6 +70,14 @@ services:
       CODEX_BEST_MODEL: ${CODEX_BEST_MODEL:-}
       CODEX_BALANCED_MODEL: ${CODEX_BALANCED_MODEL:-}
       CODEX_FAST_MODEL: ${CODEX_FAST_MODEL:-}
+      # The Antigravity CLI's Google AI plan login (docs/setup.md#antigravity-cli): its token
+      # file in the data volume, /data/agy-auth.json say, which the listener alone holds and
+      # refreshes.
+      AGY_AUTH_FILE: ${AGY_AUTH_FILE:-}
+      # Optional: the models best, balanced and fast stand for with the Antigravity CLI.
+      AGY_BEST_MODEL: ${AGY_BEST_MODEL:-}
+      AGY_BALANCED_MODEL: ${AGY_BALANCED_MODEL:-}
+      AGY_FAST_MODEL: ${AGY_FAST_MODEL:-}
       # OpenRouter's key, for claude@openrouter in FALLBACKS (docs/setup.md#fallbacks), and
       # where a run goes when its provider fails (or fallbacks in config.yaml).
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
@@ -79,10 +87,12 @@ services:
       OPENROUTER_OPUS_MODEL: ${OPENROUTER_OPUS_MODEL:-}
       OPENROUTER_SONNET_MODEL: ${OPENROUTER_SONNET_MODEL:-}
       OPENROUTER_HAIKU_MODEL: ${OPENROUTER_HAIKU_MODEL:-}
-      # The agent of work runs, and of light runs (empty: SANDBOX_AGENT): claude or codex.
+      # The agent of work runs, and of light runs (empty: SANDBOX_AGENT): claude, codex or
+      # antigravity.
       SANDBOX_AGENT: ${SANDBOX_AGENT:-}
       BRAINSTORM_AGENT: ${BRAINSTORM_AGENT:-}
       CODEX_VERSION: ${CODEX_VERSION:-}
+      AGY_VERSION: ${AGY_VERSION:-}
       # Optional: /setup detects it from your browser's address and stores it.
       PUBLIC_URL: ${PUBLIC_URL:-}
       CLAUDE_CODE_VERSION: ${CLAUDE_CODE_VERSION:-}
@@ -113,6 +123,7 @@ services:
       NAME_PREFIX: ${NAME_PREFIX:-}
       CLAUDE_CODE_VOLUME: ${CLAUDE_CODE_VOLUME:-}
       CODEX_VOLUME: ${CODEX_VOLUME:-}
+      AGY_VOLUME: ${AGY_VOLUME:-}
       # Advanced (docs/setup.md#advanced-settings).
       GRANTS_DIR: ${GRANTS_DIR:-}
       INSTALL_NETWORK: ${INSTALL_NETWORK:-}

@@ -7,10 +7,10 @@
 #                            "#<n>: start work" commit when it is new, pushes it and opens the
 #                            draft.
 #   sandbox-draft-pr hook    the agent's hook (Claude Code's managed-settings.json, Codex's
-#                            hooks.json: after a `git push`, and when it stops): opens the
-#                            draft for the current branch if it is pushed and has no pull
-#                            request yet, whatever its name. Never blocks the agent: after a
-#                            push it only tells it the URL.
+#                            and agy's hooks.json: after a `git push`, and when it stops; `hook
+#                            Stop` without its payload): opens the draft for the current branch
+#                            if it is pushed and has no pull request yet, whatever its name.
+#                            Never blocks the agent: after a push it only tells it the URL.
 #
 # Only for work runs on an issue: TASK_ISSUE (GitHub issue number, from the listener).
 # Brainstorms and pull request runs don't set it, so nothing is created for them. Never
@@ -90,7 +90,11 @@ start() {
 
 hook() {
   local event url
-  event=$(jq -r '"\(.hook_event_name) \(.tool_input.command // "")"')
+  if [ -n "${1:-}" ]; then
+    event="$1 "
+  else
+    event=$(jq -r '"\(.hook_event_name) \(.tool_input.command // "")"')
+  fi
   case $event in
     "Stop "*) ensure > /dev/null ;;
     PostToolUse*"git push"*)
@@ -104,7 +108,7 @@ hook() {
 
 case "${1:-}" in
   start) start ;;
-  hook) hook ;;
+  hook) hook "${2:-}" ;;
   *)
     sed -n '4,12s/^# \{0,1\}//p' "$0" >&2
     exit 2

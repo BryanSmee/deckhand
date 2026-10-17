@@ -53,16 +53,34 @@ export function matchHost(host, patterns) {
 // the `uncached` ones (mandatoryHosts(): their traffic carries the run's tokens) whatever
 // `cached` says; `decrypt`: and its HTTPS, decrypted to do so, unless `decrypt` is false (a
 // container engine, whose builds and containers don't trust Deckhand's CA: plain HTTP only).
-export function egressPolicy(host, hosts, trusted, cached, uncached = [], { decrypt = true } = {}) {
+// `relayed` (the run's agent's, agents/): hosts whose HTTPS the proxy decrypts and hands to the
+// listener, which puts the operator's credential in place of the run's secret (google.mjs);
+// never cached. `blocked` (the agent's too): refused whatever the grants say.
+export function egressPolicy(
+  host,
+  hosts,
+  trusted,
+  cached,
+  uncached = [],
+  { decrypt = true, relayed = [], blocked = [] } = {},
+) {
+  if (matchHost(host, blocked) !== null) {
+    return { allowed: false, private: false, cache: false, decrypt: false, relay: false };
+  }
   const allowed = matchHost(host, hosts) !== null;
   const named = matchHost(host, trusted ?? []);
+  const relay = allowed && decrypt && matchHost(host, relayed) === "exact";
   const cache =
-    allowed && matchHost(host, cached ?? []) !== null && matchHost(host, uncached) === null;
+    allowed &&
+    !relay &&
+    matchHost(host, cached ?? []) !== null &&
+    matchHost(host, uncached) === null;
   return {
     allowed,
     private: allowed && (named === "exact" || named === "wildcard"),
     cache,
-    decrypt: cache && decrypt,
+    decrypt: (cache || relay) && decrypt,
+    relay,
   };
 }
 
@@ -84,8 +102,8 @@ export function proxyEnv(config, others = []) {
 }
 
 // The egress proxy's CA certificate (../proxy/authority.mjs), which sandboxes trust when their
-// grant has cached_hosts; null when it has none (its cache is off) or doesn't answer. Asked at
-// each such run: a new proxy volume is a new CA.
+// grant has cached_hosts or their agent has relayed hosts; null when it has none or doesn't
+// answer. Asked at each such run: a new proxy volume is a new CA.
 export async function fetchEgressCa(egressProxy) {
   try {
     const res = await fetch(`${egressProxy}/deckhand-ca.crt`, {

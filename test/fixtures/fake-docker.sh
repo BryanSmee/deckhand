@@ -192,6 +192,20 @@ case "$1" in
         jq -nc --arg text "$text" '"'"'{type: "deckhand.result", ok: true, text: $text, duration_ms: 60000}'"'"'
         exit 0
       fi
+      # The Antigravity CLI: what the egress proxy would ask about its own hosts, a call to the
+      # listener'"'"'s relay on a path it refuses (the real one would reach Google), and its
+      # stream-json.
+      if [ "$SANDBOX_AGENT" = antigravity ]; then
+        for host in daily-cloudcode-pa.googleapis.com www.googleapis.com antigravity-unleash.goog \
+          play.googleapis.com lh3.googleusercontent.com; do
+          echo "$host $(curl -sS "$DECKHAND_BROKER_URL/egress?ip=10.9.0.5&host=$host")"
+        done >> "$dir/egress-agy"
+        curl -sS -o /dev/null -w "%{http_code}" -H "Authorization: Bearer $DECKHAND_RUN_SECRET" \
+          "$DECKHAND_BROKER_URL/relay/www.googleapis.com/drive/v3/files" > "$dir/relay-answer"
+        echo '"'"'{"event":"init","conversation_id":"c1","init":{}}'"'"'
+        jq -nc --arg text "agy did: ${TASK_MESSAGE:-the issue}" '"'"'{event: "result", result: {status: "SUCCESS", response: $text, duration_seconds: 60}}'"'"'
+        exit 0
+      fi
       result="All done."
       # A run talked into posting secrets: its own, and whatever the test leaves in leak.
       [ -e "$dir/leak" ] && result="Leaked $DECKHAND_RUN_SECRET and $(cat "$dir/leak")."

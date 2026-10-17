@@ -21,7 +21,12 @@ export function redact(text, secrets) {
 }
 
 // The operator's credentials as the listener holds them: the agents' (AGENT_SECRETS, from its
-// environment) and the ChatGPT sign-in's (`ctx.openai`, openai.mjs), once there is one.
+// environment), the ChatGPT sign-in's (`ctx.openai`, openai.mjs) and the Google AI plan's
+// (`ctx.google`, google.mjs), once there is one.
 export function operatorSecrets(ctx, env = process.env) {
-  return [...AGENT_SECRETS.map((name) => env[name]), ...(ctx.openai?.secrets() ?? [])];
+  return [
+    ...AGENT_SECRETS.map((name) => env[name]),
+    ...(ctx.openai?.secrets() ?? []),
+    ...(ctx.google?.secrets() ?? []),
+  ];
 }

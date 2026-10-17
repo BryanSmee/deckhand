@@ -1,5 +1,5 @@
 # Deckhand's base sandbox image: a container per issue that clones the repository, runs an
-# agent (Claude Code or Codex) without permission prompts, and pushes a branch. Built from
+# agent (Claude Code, Codex or the Antigravity CLI) without permission prompts, and pushes a branch. Built from
 # the repository root (compose.yaml), as it also takes ../prompts/sandbox.md.
 #
 # The harness only: no project toolchain. A repo brings its own with a Dockerfile FROM this
@@ -9,7 +9,8 @@
 # No agent is in the image: each installs per version into a shared volume before the first
 # run that needs it (Claude Code: agents/claude/install puts the pinned CLAUDE_CODE_VERSION
 # into the /opt/claude-code volume; Codex: agents/codex/install, CODEX_VERSION, /opt/codex;
-# both through agents/npm-install).
+# both through agents/npm-install; the Antigravity CLI: agents/antigravity/install, AGY_VERSION,
+# /opt/antigravity, through agents/release-install).
 # One image for every agent: what is an agent's own is in agents/<name>.sh and
 # agents/<name>/, copied to /usr/local/share/deckhand-agents. GitHub
 # access goes through the listener's token broker (git-credential-deckhand, the gh wrapper):
@@ -83,6 +84,15 @@ RUN install -d -o node -g node /workspace && install -d /opt/claude-code
 # owner of this folder, node. /opt/codex: root's, like /opt/claude-code.
 RUN ln -s /usr/local/share/deckhand-agents/codex/install /usr/local/bin/deckhand-install-codex
 RUN install -d -o node -g node /home/node/.codex && install -d /opt/codex
+
+# The Antigravity CLI's: its installer, and the refresh of the listener's plan login, which runs
+# in a container of its own (../listener/antigravity-login.mjs). Its home (/home/node/.gemini,
+# the issue's session volume, or the login's own) gets its token file, settings, MCP servers
+# and hooks from agents/antigravity.sh on every start; a new volume mounted there takes the
+# owner of this folder, node. /opt/antigravity: root's, like /opt/claude-code.
+RUN ln -s /usr/local/share/deckhand-agents/antigravity/install /usr/local/bin/deckhand-install-antigravity \
+    && ln -s /usr/local/share/deckhand-agents/antigravity/refresh /usr/local/bin/deckhand-antigravity-refresh
+RUN install -d -o node -g node /home/node/.gemini && install -d /opt/antigravity
 
 # Run as `node` (uid 1000): Claude Code refuses --dangerously-skip-permissions as root anyway.
 USER node

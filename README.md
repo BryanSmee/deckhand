@@ -6,8 +6,9 @@ issue when it is done, or stops to ask when only you can decide.
 
 It is self-hosted and bring-your-own-key: you create your own private GitHub App, run your
 own server with Docker, and use your own Claude credential. It can run
-[Codex](docs/setup.md#codex) instead, with your own OpenAI API key, for every repository or
-for those that pick it. One deployment serves one
+[Codex](docs/setup.md#codex) instead, with your own OpenAI API key, or Google's
+[Antigravity CLI](docs/setup.md#antigravity-cli) on your Google AI Pro/Ultra plan, for every
+repository or for those that pick it. One deployment serves one
 operator, across as many repositories as the App is installed on.
 
 ## What it does
@@ -216,14 +217,15 @@ leave it on `latest` (for Watchtower). See [Updating](docs/setup.md#updating).
 
 Claude Code's version is pinned by `CLAUDE_CODE_VERSION`: change it in `.env` (or
 `claude_code_version` in `config.yaml`) to move to
-another one, and the next run installs it. Codex's is `CODEX_VERSION`, the same way.
+another one, and the next run installs it. Codex's is `CODEX_VERSION`, the same way, and the
+Antigravity CLI's `AGY_VERSION`.
 
 ## Claude Code and naming
 
 - Deckhand runs Claude Code; it is not made by or affiliated with Anthropic. Its name,
   images and logo don't use "Claude" or "Anthropic".
 - Claude Code is not bundled in any image: the listener installs it on first start, at the
-  pinned version, into a Docker volume. So is Codex, when it runs.
+  pinned version, into a Docker volume. So are Codex and the Antigravity CLI, when they run.
 - Each operator uses their own `ANTHROPIC_API_KEY` or their own Claude login (a token from
   `claude setup-token`), under their own agreement with Anthropic, and follows Anthropic's
   [Usage Policy](https://www.anthropic.com/legal/aup).

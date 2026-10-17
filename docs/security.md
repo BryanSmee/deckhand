@@ -177,6 +177,43 @@ runs on a plan. Codex's own "external tokens" mode (`chatgptAuthTokens`) only ex
 app server, not `codex exec`, and would still put the access token in the sandbox. Check it
 again when you change `CODEX_VERSION`.
 
+### The Antigravity CLI's login
+
+A Google AI plan's login (`AGY_AUTH_FILE`, `listener/antigravity-login.mjs`) is the token file
+`agy` writes when you sign in: an access token for about an hour, and a refresh token that
+stands for the Google account. Neither enters a sandbox. `agy` has no base URL to point at the
+listener, and its calls go to Google directly, so it is kept out another way:
+
+- **The sandbox's token file holds the run's secret** as its access token, with an expiry in
+  2099 and a placeholder refresh token (`sandbox/agents/antigravity.sh`): `agy` sends the token
+  as it is and never tries to refresh it (checked against agy 1.4.0).
+- **The proxy relays the hosts that carry it.** For runs of the Antigravity CLI only (the
+  broker's run says which agent it is), the egress policy marks
+  `daily-cloudcode-pa.googleapis.com` and `www.googleapis.com` as relayed: the proxy ends the
+  sandbox's TLS with Deckhand's CA (see [HTTPS and Deckhand's CA](#https-and-deckhands-ca)),
+  cache on or off, and sends each request to the listener (`RELAY_URL`,
+  `<broker>/relay/<host>/<path>`) instead of the host, never as a tunnel. The listener
+  (`listener/google.mjs`) checks the secret in `Authorization: Bearer` against the broker,
+  refuses any other agent's run, puts the plan's access token in its place and sends the call
+  on, streaming the answer back. Only the paths `agy` calls go through
+  (`daily-cloudcode-pa.googleapis.com/v1internal:*`, `www.googleapis.com/oauth2/v2/userinfo`):
+  the plan's token opens more than the CLI's API, and a sandbox can't reach the rest with it.
+- **Refused:** `agy`'s telemetry (`play.googleapis.com`, which carries the token too) and the
+  account's avatar (`lh3.googleusercontent.com`), whatever the grants say, for these runs.
+  `antigravity-unleash.goog` (feature flags, no token) stays a tunnel, as every other host.
+- **The refresh is `agy`'s own**: the listener doesn't reimplement Google's OAuth with a client
+  secret taken from the binary. When the access token is within 5 minutes of its expiry (or
+  Google refused it), the listener runs `agy models` in a short container of the sandbox image
+  (no capabilities, as `node`), on a volume of its own (`<AGY_VOLUME>-login`), outside the runs'
+  networks, with the file's expiry set in the past; it reads back the file `agy` wrote and
+  writes it to `AGY_AUTH_FILE` (`0600`). One refresh at a time, for all runs. The login's tokens
+  are redacted from runs' output like the other credentials.
+
+What this changes: the proxy reads those two hosts' requests and answers for these runs, as it
+does a cached host's, and the run's secret, which it sees, is worth what it is elsewhere: this
+run's calls, until it ends. A sandbox that trusts the CA gains nothing: it reaches the same
+hosts, through the same proxy. Check the hosts and paths again when you change `AGY_VERSION`.
+
 `OPENROUTER_API_KEY`, for runs that fall back to Claude Code through OpenRouter
 (`claude@openrouter` in `FALLBACKS`), is kept out the same way: such a run's Claude Code gets
 the run's secret as `ANTHROPIC_AUTH_TOKEN`, and the listener's Anthropic endpoint, which the
@@ -473,6 +510,7 @@ files holding secrets are the owner's only (`0600`):
 | `queue.json`           | comments queued when the listener stopped, with their authors    |
 | `waits.json`           | comments waiting for other issues (`/after`), with their authors |
 | `codex-auth.json`      | a ChatGPT plan's login, when `CODEX_AUTH_FILE` points there      |
+| `agy-auth.json`        | a Google AI plan's login, when `AGY_AUTH_FILE` points there      |
 
 Run logs (`logs/<run>.log`) have the Claude credential and the run's secret redacted (see
 [The Claude credential](#the-claude-credential)). Their summaries (`logs/<run>.json`) hold
@@ -678,8 +716,10 @@ inspect`) and answers from that run's list. Only the proxy may ask: the listener
   `2002::/16`) are checked as that IPv4 address, so `[::ffff:a9fe:a9fe]` is the metadata
   service too.
 - The proxy keeps answers from the hosts you list in `cached_hosts`, and decrypts their
-  HTTPS to do so (see [The egress cache](#the-egress-cache)). Every other `CONNECT` stays a
-  tunnel the proxy can't read.
+  HTTPS to do so (see [The egress cache](#the-egress-cache)). It also decrypts the hosts that
+  carry the Antigravity CLI's token, for its runs only, and hands their requests to the
+  listener (see [The Antigravity CLI's login](#the-antigravity-clis-login)). Every other
+  `CONNECT` stays a tunnel the proxy can't read.
 - The listener forgets a sandbox's address as soon as it sees the sandbox exit, before
   posting its reply: Docker may give the address to another sandbox, which must not get the
   finished run's hosts.
@@ -737,17 +777,19 @@ real server's certificate.
   in its volume (`ca/` in the `egress-cache` volume), and kept across restarts: a new
   volume is a new CA, which the next runs get. Its key (`ca.key`) never leaves that volume;
   no sandbox, engine or listener mounts it. Each host's certificate lasts 7 days, and is
-  made again 2 days before its end. The CA only exists with the cache on
-  (`EGRESS_CACHE_MAX` not `0`).
-- **Trust in the sandbox**: when its repository's grant has `cached_hosts`, the listener
+  made again 2 days before its end. It exists with the cache off too (`EGRESS_CACHE_MAX`
+  `0`): the Antigravity CLI's runs need it (see
+  [The Antigravity CLI's login](#the-antigravity-clis-login)).
+- **Trust in the sandbox**: when its repository's grant has `cached_hosts`, or its agent's
+  calls are relayed (the Antigravity CLI's), the listener
   asks the proxy for the CA's certificate (public, at `http://egress:3128/deckhand-ca.crt`)
   and puts it in the run's read-only inbox folder. The sandbox's entrypoint adds it to a
   bundle with the image's own roots, which `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`,
   `CURL_CA_BUNDLE`, `GIT_SSL_CAINFO`, `REQUESTS_CA_BUNDLE` and `PIP_CERT` point at, and to
   Chromium's store (`~/.pki/nssdb`, with `certutil`). A tool that reads none of them refuses
   cached hosts' certificates, and fails rather than going round the proxy. When the
-  listener can't get the CA (the proxy's cache is off, or it doesn't answer), the run has no
-  cached hosts at all, and says so in its log.
+  listener can't get the CA (the proxy doesn't answer), the run has no cached hosts at all,
+  and says so in its log; an Antigravity CLI run stops.
 - **Never decrypted**, whatever `cached_hosts` says: the agent's hosts and GitHub's (the
   mandatory hosts below). Their traffic carries the run's tokens, which the cache would
   refuse anyway. Nor a run's [container engine](#container-engine): its builds and
@@ -833,6 +875,14 @@ settings `sandbox/agents/codex.sh` writes (analytics, update check, plugins, app
 plugins off), it opens none. Without them it reaches `chatgpt.com`, `ab.chatgpt.com`,
 `github.com` and `api.github.com` for its plugin marketplace and analytics. Its web search
 runs on OpenAI's side, in the API call. Check it again when you change `CODEX_VERSION`.
+
+An Antigravity CLI run's mandatory hosts are GitHub's, the listener, and `agy`'s own:
+`daily-cloudcode-pa.googleapis.com` and `www.googleapis.com` (relayed to the listener, see
+[The Antigravity CLI's login](#the-antigravity-clis-login)) and `antigravity-unleash.goog`
+(feature flags). `play.googleapis.com` and `lh3.googleusercontent.com` are refused for its runs,
+whatever the grants say. Checked against agy 1.4.0 (the pinned `AGY_VERSION`) through a proxy
+that logged every connection; its update check is off (`AGY_CLI_DISABLE_AUTO_UPDATE`). Check
+it again when you change `AGY_VERSION`.
 
 ### Not covered
 

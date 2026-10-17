@@ -259,8 +259,9 @@ are the repo's modes with `light: true`.
 
 ## Agent
 
-`agent` picks what runs the repository's work: `claude` (Claude Code) or `codex` (OpenAI's
-Codex), `brainstorm_agent` that of its light runs (brainstorms, inbox entries, discussions),
+`agent` picks what runs the repository's work: `claude` (Claude Code), `codex` (OpenAI's
+Codex) or `antigravity` (Google's Antigravity CLI, on the operator's Google AI plan),
+`brainstorm_agent` that of its light runs (brainstorms, inbox entries, discussions),
 and a mode's `agent` that of the mode. Without them, the operator's `SANDBOX_AGENT` and
 `BRAINSTORM_AGENT` (a light mode takes `brainstorm_agent`, a full one `agent`).
 
@@ -271,14 +272,17 @@ other name is an error, listed in the reply, and nothing runs:
 agent: the operator hasn't configured codex (configured: claude)
 ```
 
-Models are the agent's: `best`, `balanced` and `fast` work with either. A model name of the
-other agent's (`model: opus` with `agent: codex`) stops the run, and the reply says why.
+Models are the agent's: `best`, `balanced` and `fast` work with each. A model name of another
+agent's (`model: opus` with `agent: codex` or `agent: antigravity`) stops the run, and the reply
+says why. The Antigravity CLI's models carry their effort in their name
+(`gemini-4-argon-high`); `model: gemini-4-argon` takes the run's `effort`.
 Each agent keeps its own session for an issue: switching agent starts the issue afresh with
 the new one, which reads the issue and its comments like any first run. A comment's
 `/agent codex` picks the agent for the issue instead, among the operator's, whatever these
 keys say: [Agents and providers](setup.md#agents-and-providers). With Codex, comments
 posted while a run works wait for it to end, and the next run answers them in the same
-session (see [Codex](setup.md#codex)).
+session (see [Codex](setup.md#codex)); the same with the Antigravity CLI
+([Antigravity CLI](setup.md#antigravity-cli)).
 
 ## Instructions
 

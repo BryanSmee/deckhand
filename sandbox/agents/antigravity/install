@@ -1,0 +1,19 @@
+#!/bin/bash
+# Installs the Antigravity CLI AGY_VERSION into the shared /opt/antigravity volume, once, as
+# ../claude/install does for Claude Code (see there for why as root, and per version): the
+# listener runs it in a container of its own before the first run that needs that version.
+# The release's tarball for this machine, checked against its digest (../release-install); it
+# holds one binary, `antigravity`, linked as `agy`.
+set -euo pipefail
+
+: "${AGY_VERSION:?AGY_VERSION: the Antigravity CLI version to install}"
+[ "$(id -u)" = 0 ] || { echo "install-antigravity: run it as root" >&2; exit 1; }
+
+case $(uname -m) in
+  x86_64 | amd64) arch=x64 ;;
+  aarch64 | arm64) arch=arm64 ;;
+  *) echo "install-antigravity: no Antigravity CLI for $(uname -m)" >&2; exit 1 ;;
+esac
+exec "$(dirname "$(readlink -f "$0")")/../release-install" /opt/antigravity "$AGY_VERSION" \
+  google-antigravity/antigravity-cli "agy_cli_linux_$arch.tar.gz" antigravity agy \
+  "Antigravity CLI"

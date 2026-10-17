@@ -25,9 +25,10 @@ await publicCa.ready();
 const nameOf = (pem) => new X509Certificate(pem).subject.replace(/^CN=/, "");
 
 // `decrypt`: the listener's answer for cached.test, false for a container engine's address.
+// relayed.test is relayed to `relayUrl` (the listener's /relay).
 async function setup(
   t,
-  { upstreamCa = publicCa.certificate(), cacheOn = true, decrypt = true } = {},
+  { upstreamCa = publicCa.certificate(), cacheOn = true, decrypt = true, relayUrl = null } = {},
 ) {
   const seen = [];
   const contexts = {};
@@ -52,13 +53,19 @@ async function setup(
     policy: async (ip, host) => {
       asked.push(host);
       const cache = host === "cached.test";
-      return { allowed: true, private: true, cache, decrypt: cache && decrypt };
+      const relay = host === "relayed.test";
+      return { allowed: true, private: true, cache, decrypt: (cache && decrypt) || relay, relay };
     },
-    lookup: async () => [{ address: "127.0.0.1", family: 4 }],
+    // A relayed host is never resolved: its requests go to the listener.
+    lookup: async (host) => {
+      if (host === "relayed.test") throw new Error("relayed.test resolved");
+      return [{ address: "127.0.0.1", family: 4 }];
+    },
     blocked: () => false,
     cache: createCache({ dir: temp(t, "egress-cache"), max: cacheOn ? 1024 * 1024 : 0 }),
     authority,
     upstreamCa,
+    relayUrl,
   });
   const proxyPort = await listening(proxy);
   t.after(() => {
@@ -168,6 +175,44 @@ test("a cached host's tunnel that doesn't start with TLS is passed on as is", as
   for await (const chunk of socket) text += chunk;
   assert.match(text, /^HTTP\/1\.1 200/);
   assert.match(text, /plain \/raw$/);
+});
+
+test("a relayed host: decrypted, cache on or off, each request to the listener instead", async (t) => {
+  const relayed = [];
+  const listener = await serve(t, (req, res) => {
+    let body = "";
+    req.on("data", (d) => (body += d));
+    req.on("end", () => {
+      relayed.push({ method: req.method, url: req.url, headers: req.headers, body });
+      res.writeHead(201, { "content-type": "text/event-stream" });
+      res.end("data: relayed\n\n");
+    });
+  });
+  for (const cacheOn of [true, false]) {
+    relayed.length = 0;
+    const { get, seen, authority } = await setup(t, {
+      cacheOn,
+      relayUrl: `${listener.url}/relay`,
+    });
+    const answer = await get(
+      "relayed.test",
+      "/v1internal:streamGenerateContent?alt=sse",
+      authority.certificate(),
+    );
+    assert.equal(answer.status, 201);
+    assert.equal(answer.body, "data: relayed\n\n");
+    assert.equal(answer.issuer, nameOf(authority.certificate()));
+    assert.equal(answer.headers["x-deckhand-cache"], undefined);
+    // To the listener, the host in the path; never to the host itself.
+    assert.equal(relayed.length, 1);
+    assert.equal(relayed[0].url, "/relay/relayed.test/v1internal:streamGenerateContent?alt=sse");
+    assert.equal(relayed[0].headers.host, new URL(listener.url).host);
+    assert.equal(seen.length, 0);
+  }
+
+  // No relay URL (or no CA): refused, never a tunnel that would reach the host.
+  const nowhere = await setup(t);
+  await assert.rejects(nowhere.tunnel("relayed.test", 443), /403/);
 });
 
 test("the CA's certificate is served at /deckhand-ca.crt; none with the cache off", async (t) => {

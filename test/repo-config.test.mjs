@@ -498,4 +498,12 @@ modes:
   assert.deepEqual(parseRepoConfig("agent: [codex]", config).errors, [
     "agent: expected one of claude",
   ]);
+  // Nor the Antigravity CLI without the operator's Google AI plan login.
+  assert.deepEqual(parseRepoConfig("agent: antigravity", config).errors, [
+    "agent: the operator hasn't configured antigravity (configured: claude)",
+  ]);
+  const google = testConfig({ AGY_AUTH_FILE: "/data/agy-auth.json" });
+  const picked = parseRepoConfig("agent: antigravity", google);
+  assert.deepEqual(picked.errors, []);
+  assert.equal(picked.settings.agent, "antigravity");
 });

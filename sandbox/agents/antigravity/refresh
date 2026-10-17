@@ -1,0 +1,23 @@
+#!/bin/bash
+# Refreshes a Google AI plan's login with the Antigravity CLI itself, for the listener
+# (../../../listener/antigravity-login.mjs), in a short container on the login's own volume
+# (~/.gemini): the token file on stdin, its expiry already past, so that `agy models` refreshes
+# it; then the file as `agy` left it on stdout, and `agy`'s exit status. When it fails, why the
+# refresh did, from its log, on stderr: `agy` itself only says to sign in, whether Google
+# refused the refresh token or couldn't be reached. No repo or agent input runs here.
+set -uo pipefail
+
+: "${AGY_VERSION:?AGY_VERSION: the Antigravity CLI version to run}"
+export AGY_CLI_DISABLE_AUTO_UPDATE=1
+dir=$HOME/.gemini/antigravity-cli
+token=$dir/antigravity-oauth-token
+mkdir -p "$dir"
+umask 077
+cat > "$token"
+"/opt/antigravity/$AGY_VERSION/bin/agy" models > /dev/null < /dev/null
+status=$?
+if [ "$status" != 0 ]; then
+  grep -h "token refresh failed" "$dir/cli.log" 2> /dev/null | tail -1 >&2
+fi
+cat "$token"
+exit "$status"

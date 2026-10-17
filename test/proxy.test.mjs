@@ -221,6 +221,7 @@ test("the listener's policy: its answer, or refused when it can't answer", async
     private: true,
     cache: false,
     decrypt: false,
+    relay: false,
   });
   assert.equal((await policy("10.0.0.5", "good.cached.com")).cache, true);
   assert.equal((await policy("10.0.0.5", "good.cached.com")).decrypt, false);

@@ -11,7 +11,10 @@ import { join } from "node:path";
 import { createAnalysis } from "./analysis.mjs";
 import { createAuth, sessionKey } from "./auth.mjs";
 import { createAnthropicProxy } from "./anthropic.mjs";
+import { antigravity } from "./agents/antigravity.mjs";
+import { createAntigravityLogin } from "./antigravity-login.mjs";
 import { createChatgptLogin } from "./chatgpt.mjs";
+import { createGoogleRelay } from "./google.mjs";
 import { createOpenAiProxy } from "./openai.mjs";
 import { planWarning } from "./upstream.mjs";
 import { createBroker } from "./broker.mjs";
@@ -281,6 +284,18 @@ ctx.openai = createOpenAiProxy({
   upstream: config.openaiUrl,
   log,
 });
+// Their Antigravity CLI's, which the egress proxy hands to the listener: a Google AI plan's
+// login, which the listener holds and refreshes with `agy` itself.
+const agyLogin = config.agyCredential
+  ? createAntigravityLogin({
+      file: env.AGY_AUTH_FILE,
+      config,
+      docker,
+      install: () => ctx.images.installAgent(antigravity, () => {}),
+      log,
+    })
+  : null;
+ctx.google = createGoogleRelay({ broker: ctx.broker, login: agyLogin, log });
 // Their pull requests ready for review (or back to draft): their own token can't.
 ctx.prReady = createPrReady({
   broker: ctx.broker,
@@ -390,7 +405,7 @@ log(`Deckhand ${ctx.version}`);
 log(
   `Agents: ${config.agent} for work, ${config.brainstormAgent} for light runs; repos may pick ${config.agents.join(", ")}${config.fallbacks.length ? `; on provider errors, falls back to ${config.fallbacks.join(", ")}` : ""}`,
 );
-for (const name of [config.claudeCredential, config.openaiCredential]) {
+for (const name of [config.claudeCredential, config.openaiCredential, config.agyCredential]) {
   const plan = planWarning(name);
   if (plan) log(plan);
 }
@@ -399,6 +414,10 @@ chatgptLogin
   ?.headers()
   .then(() => log(`Codex: a ChatGPT plan's login, from ${env.CODEX_AUTH_FILE}`))
   .catch((error) => log(`Codex: ${error.message}`));
+agyLogin
+  ?.headers()
+  .then(() => log(`Antigravity CLI: a Google AI plan's login, from ${env.AGY_AUTH_FILE}`))
+  .catch((error) => log(`Antigravity CLI: ${error.message}`));
 if (!ctx.app) log(`No GitHub App yet. Set it up at ${setup.link()}`);
 
 // Before any request is served: runs still going since the previous listener, then what it

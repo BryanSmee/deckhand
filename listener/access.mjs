@@ -119,14 +119,21 @@ export function researchAccess(config, task, { agent, log }) {
 }
 
 // The egress proxy's CA certificate, which the sandbox trusts so that the proxy may decrypt
-// the HTTPS of its cached hosts, and those hosts. Without the CA (the proxy's cache is off,
-// or it doesn't answer), none: their HTTPS would fail on a certificate the sandbox doesn't
-// know. `egressCa()`: the proxy's, or null.
-export async function egressCache(grant, egressCa, note) {
-  if (!grant.cachedHosts.length) return { ca: null, cached: [] };
+// the HTTPS of its cached hosts, and those hosts. Without the CA (the proxy doesn't answer),
+// none: their HTTPS would fail on a certificate the sandbox doesn't know. An agent whose calls
+// the proxy relays to the listener (its `relayed` hosts, agents/) can't do without it: the run
+// stops. `egressCa()`: the proxy's, or null.
+export async function egressCache(grant, egressCa, note, agent) {
+  const relays = !!agent?.relayed?.length;
+  if (!grant.cachedHosts.length && !relays) return { ca: null, cached: [] };
   const ca = await egressCa();
+  if (!ca && relays) {
+    throw new RunError(
+      `${cantRun(agent)}: the egress proxy has no CA, and its calls to its provider go through it. Check the egress service's log.`,
+    );
+  }
   if (ca) return { ca, cached: grant.cachedHosts };
-  note("Egress cache: off for this run, the egress proxy has no CA (its cache is off?)");
+  note("Egress cache: off for this run, the egress proxy has no CA");
   return { ca: null, cached: [] };
 }
 

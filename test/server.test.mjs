@@ -544,6 +544,89 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
     await settled(github, [99, 100]);
   });
 
+  test("the Antigravity CLI: its plan's login stays out, its hosts relayed with the proxy's CA", async (t) => {
+    const pem = "-----BEGIN CERTIFICATE-----\nx\n-----END CERTIFICATE-----\n";
+    let serving = true;
+    const proxy = createServer((req, res) => {
+      if (req.url !== "/deckhand-ca.crt" || !serving) return res.writeHead(404).end();
+      res.end(pem);
+    });
+    await new Promise((resolve) => proxy.listen(0, "127.0.0.1", resolve));
+    t.after(() => proxy.close());
+    const access = "ya29.operator-plan-access-token";
+    const { dir, github, send, brokerPort } = await listen(t, {}, (dir) => {
+      const file = join(dir, "agy-auth.json");
+      writeFileSync(
+        file,
+        JSON.stringify({
+          auth_method: "consumer",
+          token: { access_token: access, refresh_token: "1//plan", expiry: "2099-01-01T00:00:00Z" },
+        }),
+      );
+      return {
+        AGY_AUTH_FILE: file,
+        SANDBOX_AGENT: "antigravity",
+        EGRESS_PROXY: `http://127.0.0.1:${proxy.address().port}`,
+      };
+    });
+    await send(comment("alice"));
+    const reply = (r) => r.method === "POST" && r.path === "/repos/org/repo/issues/12/comments";
+    const posted = await github.waitFor(reply);
+    assert.match(JSON.parse(posted.body).body, /^agy did: /);
+    assert.match(
+      JSON.parse(posted.body).body,
+      /🤖 Antigravity CLI gemini-4-argon-high · medium effort/,
+    );
+
+    // Installed into its own volume, its session volume, the proxy's CA; nothing of the login.
+    const runEnv = readFileSync(join(dir, "run-env"), "utf8");
+    assert.ok(!runEnv.includes(access) && !runEnv.includes("1//plan"));
+    assert.match(runEnv, /^SANDBOX_AGENT=antigravity$/m);
+    assert.match(runEnv, /^SANDBOX_PROVIDER=google$/m);
+    assert.match(runEnv, /^AGY_VERSION=1\.4\.0$/m);
+    assert.match(runEnv, /^SANDBOX_MODEL=gemini-4-argon-high$/m);
+    const args = readFileSync(join(dir, "run-args"), "utf8");
+    assert.match(args, /^deckhand-antigravity:\/opt\/antigravity:ro$/m);
+    assert.match(args, /-antigravity:\/home\/node\/\.gemini$/m);
+    assert.match(args, /^DECKHAND_CA=\/deckhand\/egress-ca\.crt$/m);
+    assert.match(
+      readFileSync(join(dir, "docker-calls"), "utf8"),
+      /-e AGY_VERSION=1\.4\.0 -v deckhand-antigravity:\/opt\/antigravity --entrypoint deckhand-install-antigravity/,
+    );
+
+    // Its token's hosts relayed, telemetry and the avatar refused, the flags a tunnel.
+    const answers = Object.fromEntries(
+      readFileSync(join(dir, "egress-agy"), "utf8")
+        .trim()
+        .split("\n")
+        .map((l) => [l.split(" ")[0], JSON.parse(l.slice(l.indexOf(" ") + 1))]),
+    );
+    assert.equal(answers["daily-cloudcode-pa.googleapis.com"].relay, true);
+    assert.equal(answers["www.googleapis.com"].relay, true);
+    assert.deepEqual(answers["antigravity-unleash.goog"].relay, false);
+    assert.equal(answers["antigravity-unleash.goog"].allowed, true);
+    assert.equal(answers["play.googleapis.com"].allowed, false);
+    assert.equal(answers["lh3.googleusercontent.com"].allowed, false);
+    // The listener's relay knew the run's secret, and refused a path agy doesn't call.
+    assert.equal(readFileSync(join(dir, "relay-answer"), "utf8"), "404");
+    const stranger = await fetch(
+      `http://127.0.0.1:${brokerPort}/relay/www.googleapis.com/oauth2/v2/userinfo`,
+      { headers: { authorization: "Bearer not-a-run" } },
+    );
+    assert.equal(stranger.status, 401);
+
+    // Without the proxy's CA, its calls can't be relayed: the run stops, saying so.
+    serving = false;
+    await send(followUp(100, "Deckhand\nAgain"));
+    const stopped = await github.waitFor(
+      (r) => reply(r) && JSON.parse(r.body).body.includes("no CA"),
+    );
+    assert.match(
+      JSON.parse(stopped.body).body,
+      /^Antigravity CLI can't run here: the egress proxy has no CA/,
+    );
+  });
+
   // A Claude credential, an OpenRouter key and an OpenAI key, with FALLBACKS; `failing`: the
   // entries whose provider fails.
   function falling(t, fallbacks, failing) {
@@ -996,6 +1079,7 @@ mounts:
       private: false,
       cache: false,
       decrypt: false,
+      relay: false,
     });
     release();
   });
@@ -1913,6 +1997,7 @@ modes:
       private: false,
       cache: false,
       decrypt: false,
+      relay: false,
     });
     assert.equal(answers["registry.npmjs.org"].private, false);
     assert.equal(answers["github.com"].private, true);

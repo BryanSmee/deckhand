@@ -1,6 +1,6 @@
 # How the listener works
 
-The listener (`listener/`) receives the GitHub App's webhooks, runs an agent (Claude Code or Codex, see
+The listener (`listener/`) receives the GitHub App's webhooks, runs an agent (Claude Code, Codex or the Antigravity CLI, see
 [Agents](#agents)) in a sandbox container (`sandbox/`) for issue, pull request and discussion
 comments, one container and one set of volumes per issue, and posts the agent's final message
 back as a comment. This page is
@@ -355,8 +355,8 @@ in a brainstorm, waiting or waiting for input.
 
 ## Agents
 
-Two agents, Claude Code (`claude`) and Codex (`codex`), behind a seam that keeps what is each
-one's own in two files, so another agent is two more files rather than an `if` across the
+Three agents, Claude Code (`claude`), Codex (`codex`) and the Antigravity CLI (`antigravity`),
+behind a seam that keeps what is each one's own in two files, so another agent is two more files rather than an `if` across the
 listener. Which one runs: the repo's mode's `agent`, else the repo's `agent` (or
 `brainstorm_agent` for light runs), else the operator's `SANDBOX_AGENT` (`BRAINSTORM_AGENT`).
 A repo only picks among the agents the operator configured (`config.agents`: those it has a
@@ -374,7 +374,10 @@ credential for, and its defaults), checked when its config is read (`repo-config
   `deckhand_messages`) and `agent_interactive`. Its other files are in
   `sandbox/agents/<name>/` (Claude Code: its installer, settings, hooks, progress filter;
   Codex: its installer, hooks, progress filter and `result.jq`, which adds the
-  `deckhand.result` line its JSONL lacks).
+  `deckhand.result` line its JSONL lacks; the Antigravity CLI: its installer, through
+  `release-install`, which checks the release's digest, the login refresh the listener runs,
+  hooks, progress filter and `text.jq`, which joins an answer's text deltas into one
+  `deckhand.text` line).
   One base image serves every agent: no CLI is in it, each is installed per version into a
   shared volume.
 - **In the listener**, `listener/agents/<name>.mjs`, listed in `listener/agents/index.mjs`:
@@ -383,15 +386,21 @@ credential for, and its defaults), checked when its config is read (`repo-config
     where its credential would be, and the variables redacted from logs and replies;
   - `providers` and `defaultProvider`: where its API calls can go, and the credentials each
     takes (see [Providers and fallbacks](#providers-and-fallbacks));
-  - `hosts`: what the egress proxy always lets it reach (`egress.mjs`);
-  - `session`: the volume (`<sandbox>-claude`, `<sandbox>-codex`) and path of its sessions,
+  - `hosts`: what the egress proxy always lets it reach (`egress.mjs`); `relayed` and
+    `blocked`, for an agent whose calls can't be pointed at the listener (the Antigravity
+    CLI): the hosts the proxy decrypts and hands to the listener (`google.mjs`), and those it
+    refuses, for its runs only;
+  - `session`: the volume (`<sandbox>-claude`, `<sandbox>-codex`, `<sandbox>-antigravity`) and
+    path of its sessions,
     which `runner.hasSession()` checks;
   - `takesMessages` and `message(text)`: whether comments reach it mid-run, and as what
-    (Codex takes none: they wait for the next run, which resumes its session);
+    (Codex and the Antigravity CLI take none: they wait for the next run, which resumes its
+    session);
   - `models` and `efforts`: the tiers and effort levels, in its own names (Claude Code:
     `best` → `opus`, `balanced` → `sonnet`, `fast` → `haiku`; what those mean is the
     operator's `ANTHROPIC_DEFAULT_*_MODEL`; Codex: the pinned version's catalog, or the
-    operator's `CODEX_*_MODEL`), and `modelProblem(model)`, a model it can't run (another
+    operator's `CODEX_*_MODEL`; the Antigravity CLI: the plan's models, or `AGY_*_MODEL`), and
+    `modelProblem(model)`, a model it can't run (another
     agent's), which stops the run with a reply;
   - `normalize(line)`: a line of its output → Deckhand's own events, `started{model}`,
     `text{text}`, `tool{name, detail}`, `toolOutput{text, error}` and
@@ -406,7 +415,7 @@ run's agent (`displayName`).
 ### Providers and fallbacks
 
 An agent calls a provider: Claude Code `anthropic` (the operator's `ANTHROPIC_BASE_URL`) or
-`openrouter`, Codex `openai` (each agent's `providers` and `defaultProvider`; `env(config,
+`openrouter`, Codex `openai`, the Antigravity CLI `google` (each agent's `providers` and `defaultProvider`; `env(config,
 secret, provider)` gives the variables for one). Sandboxes always call the listener: the broker
 keeps each run's provider (`broker.provide()`), and the listener's endpoint
 (`anthropic.mjs`) forwards to that provider's URL with its credential. The endpoints also keep
@@ -488,6 +497,7 @@ tests fake it.
 | `pr-ready.mjs`                                                    | The sandboxes' pull requests marked ready for review or back to draft (`gh pr ready`).                                                                                                                                                               |
 | `anthropic.mjs`, `openai.mjs`, `upstream.mjs`                     | The sandboxes' Claude and OpenAI API calls, with the operator's credential; what both endpoints share (`createApiProxy()`).                                                                                                                          |
 | `chatgpt.mjs`                                                     | A ChatGPT plan's login for Codex, held and refreshed by the listener alone.                                                                                                                                                                          |
+| `google.mjs`, `antigravity-login.mjs`                             | The Antigravity CLI's calls, relayed by the egress proxy, with the plan's access token; its Google AI plan login, held by the listener and refreshed by `agy` in a container of its own.                                                             |
 | `secrets.mjs`                                                     | The operator's secrets, redacted from replies and logs.                                                                                                                                                                                              |
 | `setup.mjs`, `auth.mjs`                                           | `/setup` (creating the App) and signing in with GitHub.                                                                                                                                                                                              |
 | `docker.mjs`, `runner/`                                           | The docker CLI and its shared arguments (labels, hardening, limits); the Docker runner (`runner/docker.mjs`), composed of `inbox.mjs`, `networks.mjs`, `volumes.mjs` (container engines, `engine.mjs`, and their storage) and `gc.mjs` (`relink()`). |
