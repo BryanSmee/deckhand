@@ -335,6 +335,16 @@ test("runs: a cancelled run is cancelled after a restart, whatever its last resu
   ]);
 });
 
+test("log: a run stopped for its silence after its answer says so", () => {
+  const ended = { type: "listener", event: "ended", after: 120000, at: Date.UTC(2026, 0, 1, 9) };
+  assert.deepEqual(format(line(ended)), [
+    {
+      kind: "meta",
+      text: "Stopped at 09:00:00 UTC, silent for 2 min after its answer: the answer is posted",
+    },
+  ]);
+});
+
 test("runs: the comments a run ran on come back from its log, for a rerun, not for the dashboard", (t) => {
   const dir = tempDir(t);
   const items = [

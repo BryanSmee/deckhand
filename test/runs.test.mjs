@@ -1,0 +1,196 @@
+// runs.mjs's end of a run that answered with its inbox closed but whose sandbox goes on (#204):
+// a fake runner whose sandbox never exits by itself, and a grace period of a few ms.
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { test } from "node:test";
+import { createRuns } from "../listener/runs.mjs";
+import { openLog } from "../listener/runlog.mjs";
+import { tempDir, testConfig } from "./helpers.mjs";
+
+const result = (text) => JSON.stringify({ type: "result", result: text, duration_ms: 60000 });
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// A sandbox that runs until killed, its output written by the test (`out(line)`).
+function fakeRunner() {
+  const runner = {
+    running: true,
+    kills: 0,
+    closes: 0,
+    onOut: null,
+    exited: null,
+    state: async () => (runner.running ? "running" : "exited"),
+    follow: (name, { onOut }) => {
+      runner.onOut = onOut;
+      return new Promise((resolve) => (runner.exited = resolve));
+    },
+    kill: async () => {
+      runner.kills++;
+      runner.running = false;
+      runner.exited?.();
+    },
+    close: () => runner.closes++,
+    closed: () => false,
+    remove: async () => {},
+    out: (line) => runner.onOut(line),
+  };
+  return runner;
+}
+
+function setup(t, { mode = "idea", graceMs = 60 } = {}) {
+  const dir = tempDir(t);
+  const runner = fakeRunner();
+  const answers = [];
+  const logs = [];
+  const done = [];
+  const ctx = {
+    config: testConfig(),
+    log: (line) => logs.push(line),
+    logDir: dir,
+    shotsDir: dir,
+    answerGraceMs: graceMs,
+    runner,
+    running: 1,
+    stopping: false,
+    runs: [],
+    tasks: new Map(),
+    broker: { runOf: () => null, revoke: () => {} },
+    onboarded: { isIssue: () => false },
+    brainstorms: { replied: () => {} },
+    livePath: (id) => join(dir, `${id}.live.json`),
+    saveLive: async () => {},
+    // An inbox entry's run takes no more comments.
+    deliver: () => false,
+    answer: async (_, text) => answers.push(text),
+    label: async () => {},
+    track: () => {},
+    settle: () => {},
+    startLater: () => {},
+    schedule: () => done.push(true),
+  };
+  const runs = createRuns(ctx);
+  const key = "org/repo#12";
+  const logPath = join(dir, "run.log");
+  const task = {
+    repo: "org/repo",
+    id: "12",
+    kind: "issue",
+    number: 12,
+    name: "deckhand-org-repo-12",
+    pending: [],
+    next: {},
+    running: true,
+    settings: null,
+  };
+  task.live = {
+    id: "run",
+    key,
+    mode,
+    talk: false,
+    light: true,
+    record: { id: "run", key, agent: "claude", model: "opus", effort: "medium", startedAt: 0 },
+    logFile: openLog(logPath),
+    secret: "s3cret",
+    replyTo: { kind: "issue", number: 12 },
+    asked: { kind: "issue", number: 12 },
+    open: true,
+    replied: false,
+    lines: { out: 0, err: 0 },
+    result: null,
+    later: {},
+    unanswered: [],
+    handled: [],
+    cancelled: null,
+    answered: false,
+  };
+  task.live.record.logPath = logPath;
+  ctx.tasks.set(key, task);
+  const following = runs.follow(task);
+  return { ctx, runs, runner, task, answers, logs, done, following, logPath };
+}
+
+test("a run that answered, its inbox closed, and stays silent: stopped, its answer posted", async (t) => {
+  const { runner, answers, logs, following, logPath, task } = setup(t);
+  runner.out(result("Nothing to decide."));
+  // Background turns: each result is the answer so far.
+  runner.out(result("I filed #195 and its sub-issues."));
+  assert.equal(task.live.answered, true);
+  assert.equal(runner.closes, 1);
+  await following;
+  assert.equal(runner.kills, 1);
+  assert.equal(answers.length, 1);
+  assert.match(answers[0], /^I filed #195 and its sub-issues\.\n\n<sub>🤖 Claude opus/);
+  assert.doesNotMatch(answers[0], /Stopped by/);
+  assert.ok(logs.some((l) => /Silent for 0 min after its answer: stopped/.test(l)));
+  assert.ok(logs.some((l) => /done \(ok\)/.test(l)));
+  assert.match(readFileSync(logPath, "utf8"), /"event":"ended",.*"after":60/);
+});
+
+test("output after the answer postpones its stop", async (t) => {
+  const { runner, answers, following } = setup(t, { graceMs: 80 });
+  runner.out(result("A first answer."));
+  for (let i = 0; i < 4; i++) {
+    await sleep(40);
+    runner.out(JSON.stringify({ type: "assistant", message: { content: [] } }));
+  }
+  // 160 ms after the result, twice the grace: still running, as it wrote meanwhile.
+  assert.equal(runner.kills, 0);
+  runner.out(result("The final answer."));
+  await following;
+  assert.equal(runner.kills, 1);
+  assert.match(answers[0], /^The final answer\./);
+});
+
+test("a run whose inbox is still open isn't stopped after a result", async (t) => {
+  const { ctx, runner, task } = setup(t, { graceMs: 20 });
+  ctx.deliver = () => true;
+  runner.out(result("Answered; a comment was delivered meanwhile."));
+  await sleep(60);
+  assert.equal(task.live.answered, false);
+  assert.equal(runner.kills, 0);
+  runner.kill();
+});
+
+test("a sandbox that exits on its own after its answer: no stop", async (t) => {
+  const { runner, answers, following } = setup(t, { graceMs: 30 });
+  runner.out(result("Done."));
+  runner.running = false;
+  runner.exited();
+  await following;
+  await sleep(60);
+  assert.equal(runner.kills, 0);
+  assert.equal(answers.length, 1);
+});
+
+test("a Stop after the answer posts it with the Stopped by line", async (t) => {
+  const { runs, runner, answers, logs, following } = setup(t, { graceMs: 5000 });
+  runner.out(result("I filed #195."));
+  assert.equal(runs.cancel("org/repo#12", "bryansmee"), "running");
+  await following;
+  assert.equal(answers.length, 1);
+  assert.match(answers[0], /^I filed #195\.\n\nStopped by @bryansmee after its answer\.\n\n<sub>/);
+  assert.ok(logs.some((l) => /done \(cancelled\)/.test(l)));
+});
+
+test("a Stop before any answer: the short reply", async (t) => {
+  const { ctx, runs, answers, following } = setup(t, { graceMs: 5000 });
+  ctx.deliver = () => true;
+  // A result with its inbox still open: not the final answer.
+  ctx.runner.out(result("Half way."));
+  runs.cancel("org/repo#12", "bryansmee");
+  await following;
+  assert.match(answers[0], /^Stopped by @bryansmee\.\n\n<sub>/);
+});
+
+test("a run that answered before a restart: its grace starts again when it is followed", async (t) => {
+  const { ctx, runner, task, following } = setup(t, { graceMs: 5000 });
+  runner.out(result("Answered before the restart."));
+  // The next listener's: the same saved state, a runner without the old timer.
+  ctx.stopping = true;
+  runner.exited();
+  await following;
+  ctx.stopping = false;
+  const next = createRuns({ ...ctx, answerGraceMs: 30 });
+  await next.follow(task);
+  assert.equal(runner.kills, 1);
+});

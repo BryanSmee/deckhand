@@ -106,7 +106,7 @@ export function createRestart(ctx) {
         ...Object.fromEntries(
           ["id", "mode", "talk", "light", "secret", "asked", "replyTo", "replied", "hosts", "shots"]
             .concat(["trusted", "cached", "uncached", "branches", "lines", "result", "later"])
-            .concat(["cancelled"])
+            .concat(["cancelled", "answered"])
             .map((k) => [k, live[k]]),
         ),
         record,
