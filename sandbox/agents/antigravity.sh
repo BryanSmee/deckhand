@@ -28,6 +28,22 @@ agy_model() {
   esac
 }
 
+# On a Gemini API key, agy 1.4.0's catalog has no Gemini 4 Argon
+# (google-antigravity/antigravity-cli#1228): agy_home declares it as a custom model, which takes
+# its effort from --effort (Google's thinkingLevel) rather than from its name.
+AGY_KEY_MODEL=gemini-4-argon
+
+# The model's flags: on a key, Argon's suffix becomes its --effort. One argument per line.
+agy_model_args() {
+  local model
+  model=$(agy_model)
+  if [ -n "${GEMINI_API_KEY:-}" ] && [[ $model =~ ^$AGY_KEY_MODEL-(low|medium|high)$ ]]; then
+    printf '%s\n' --model "$AGY_KEY_MODEL" --effort "${BASH_REMATCH[1]}"
+  else
+    printf '%s\n' --model "$model"
+  fi
+}
+
 # Installed by the listener before the run, like Claude Code (claude.sh).
 agent_check() {
   local bin=/opt/antigravity/$AGY_VERSION/bin
@@ -49,7 +65,12 @@ agy_home() {
   # without the listener (by hand), the token file is yours. The clone is trusted.
   if [ -n "${GEMINI_API_KEY:-}" ]; then
     rm -f "$cli/antigravity-oauth-token"
-    jq '.modelProvider = "gemini" | .trustedWorkspaces = ((.trustedWorkspaces // []) - ["/workspace"] + ["/workspace"])' \
+    jq --arg id "$AGY_KEY_MODEL" '.modelProvider = "gemini"
+      | .customModelsConfig.customModels[$id] = {modelId: $id, modelName: "gemini-api://\($id)",
+          label: "Gemini 4 Argon", apiProvider: "API_PROVIDER_GOOGLE_GEMINI", maxTokens: 1048576,
+          modelFeatures: {supportsImages: true, supportsPdf: true, supportsToolCalls: true,
+            supportsThinking: true, zeroShotCapable: true}}
+      | .trustedWorkspaces = ((.trustedWorkspaces // []) - ["/workspace"] + ["/workspace"])' \
       <<< "$settings" > "$cli/settings.json" 2> /dev/null ||
       echo '{"modelProvider":"gemini","trustedWorkspaces":["/workspace"]}' > "$cli/settings.json"
   else
@@ -61,7 +82,9 @@ agy_home() {
           expiry: "2099-01-01T00:00:00Z"}}' > "$cli/antigravity-oauth-token"
       )
     fi
-    jq 'del(.modelProvider) | .trustedWorkspaces = ((.trustedWorkspaces // []) - ["/workspace"] + ["/workspace"])' \
+    jq --arg id "$AGY_KEY_MODEL" 'del(.modelProvider, .customModelsConfig.customModels[$id])
+      | if .customModelsConfig == {customModels: {}} then del(.customModelsConfig) else . end
+      | .trustedWorkspaces = ((.trustedWorkspaces // []) - ["/workspace"] + ["/workspace"])' \
       <<< "$settings" > "$cli/settings.json" 2> /dev/null ||
       echo '{"trustedWorkspaces":["/workspace"]}' > "$cli/settings.json"
   fi
@@ -96,8 +119,10 @@ agy_conversation() {
 }
 
 agent_run() {
-  local agy=(agy -p "$2" --output-format stream-json --dangerously-skip-permissions
-    --model "$(agy_model)") out status=0 id
+  local agy=(agy -p "$2" --output-format stream-json --dangerously-skip-permissions) model out
+  local status=0 id
+  mapfile -t model < <(agy_model_args)
+  agy+=("${model[@]}")
   [ "$1" = continue ] && agy+=(--conversation "$(agy_conversation)")
   out=$(mktemp)
   # Its stream-json with each answer's text joined (text.jq); people get progress lines rather
@@ -122,8 +147,9 @@ agent_run() {
 }
 
 agent_interactive() {
-  local resume=()
+  local resume=() model
   [ "$1" = continue ] && resume=(--conversation "$(agy_conversation)")
   shift
-  exec agy "${resume[@]}" --dangerously-skip-permissions --model "$(agy_model)" "$@"
+  mapfile -t model < <(agy_model_args)
+  exec agy "${resume[@]}" --dangerously-skip-permissions "${model[@]}" "$@"
 }

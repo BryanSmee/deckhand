@@ -571,10 +571,14 @@ and in `config.yaml`, to make it the default (or let repositories pick it, as wi
 
 ```yaml
 sandbox_agent: antigravity
-# With GEMINI_API_KEY, agy 1.4.0's static Gemini API catalog only includes gemini-3.8-flash-*
-# (fast); on a Google AI plan, best and balanced are gemini-4-argon-high and gemini-4-argon-medium.
-sandbox_model: fast
+sandbox_model: best # gemini-4-argon-high; balanced and fast: gemini-4-argon-medium, gemini-3.8-flash-medium
 ```
+
+On a key, `agy` 1.4.0 doesn't list Gemini 4 Argon yet
+([google-antigravity/antigravity-cli#1228](https://github.com/google-antigravity/antigravity-cli/issues/1228)):
+the sandbox declares it as a custom model in `agy`'s settings, and passes an Argon tier's
+effort as `--effort` (`gemini-4-argon-high` runs `--model gemini-4-argon --effort high`). The
+other models (`agy models`) need nothing.
 
 `SANDBOX_AGENT=antigravity` without `GEMINI_API_KEY` (or a Google AI plan's login) stops the
 listener at start.

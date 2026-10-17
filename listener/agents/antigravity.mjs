@@ -12,7 +12,8 @@ import { GOOGLE_CREDENTIALS } from "../google.mjs";
 import { installSpec, normalizer } from "./common.mjs";
 
 // Deckhand's tiers → the plan's models (`agy models` lists them, each with its effort as a
-// suffix). The operator can point them elsewhere (AGY_BEST_MODEL…, config.agyModels).
+// suffix; on a Gemini API key, antigravity.sh declares Argon itself). The operator can point
+// them elsewhere (AGY_BEST_MODEL…, config.agyModels).
 const MODELS = {
   best: "gemini-4-argon-high",
   balanced: "gemini-4-argon-medium",
