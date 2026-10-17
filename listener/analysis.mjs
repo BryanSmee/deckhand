@@ -80,6 +80,8 @@ const quote = (text) =>
     .join("\n");
 // Setup and other raw output worth a look: failures, refused hosts, slow steps the tools say.
 const NOTABLE = /error|fail|denied|refused|forbidden|\b403\b|timed? ?out|not found|warn/i;
+// git's hints after a push: they quote the branch name, which may say "fail" or "error".
+const PUSH_HINT = /^remote:\s+(Create a pull request|https:\/\/github\.com\/\S+\/pull\/new\/)/;
 
 // One run's part of the digest: what it was, how it ended, what went wrong on the way and its
 // final reply. `lines`: its log's lines (the first one the listener's).
@@ -128,7 +130,9 @@ function setupLines(entries) {
   if (notes.length) {
     out.push("", "Listener notes:", ...notes.slice(0, 20).map((e) => `- ${clip(e.text, 2, 300)}`));
   }
-  const raw = entries.filter((e) => e.kind === "raw" && NOTABLE.test(e.text));
+  const raw = entries.filter(
+    (e) => e.kind === "raw" && !PUSH_HINT.test(e.text) && NOTABLE.test(e.text),
+  );
   if (raw.length) {
     out.push(
       "",

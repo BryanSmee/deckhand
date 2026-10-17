@@ -82,6 +82,17 @@ test("runDigest: what the run was, what went wrong, its final reply", () => {
   assert.match(runDigest(run("x"), LOG.slice(0, 4)), /No final reply/);
 });
 
+test("runDigest: git's push hints aren't setup output that looks wrong", () => {
+  const hints = [
+    LOG[0],
+    "remote: Create a pull request for 'issue-1-x-fails' on GitHub by visiting:",
+    "remote:      https://github.com/o/r/pull/new/issue-1-x-fails",
+  ];
+  assert.doesNotMatch(runDigest(run("x"), hints), /Setup output that looks wrong/);
+  const text = runDigest(run("x"), [...hints, "remote: error: GH013: Repository rule violations"]);
+  assert.match(text, /Setup output that looks wrong \(1 line\):\n```\nremote: error: GH013/);
+});
+
 test("runDigest: clipped outputs, and a cap per run", () => {
   const long = [tool("Bash", { command: "make" }), output("x\n".repeat(500), true)];
   const text = runDigest(run("x"), long);
