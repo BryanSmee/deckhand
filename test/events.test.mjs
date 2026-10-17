@@ -261,6 +261,23 @@ test("inbox entries: /model, /effort and /agent may end any line", () => {
   ]) {
     assert.deepEqual(ran(body), { text: body, options: {} });
   }
+  // Code blocks and quotes show commands, they don't give them.
+  for (const body of [
+    "It breaks on:\n```\nDeckhand /agent codex\n```",
+    "~~~md\nDo X /effort high\n~~~",
+    "> Do X /effort high\nSame here.",
+  ]) {
+    assert.deepEqual(ran(body), { text: body, options: {} });
+  }
+  // After a code block, lines count again.
+  assert.deepEqual(ran("```\nx\n```\nDo X /effort low"), {
+    text: "```\nx\n```\nDo X",
+    options: { effort: "low" },
+  });
+  // Long runs of spaces: linear, not quadratic.
+  const started = performance.now();
+  ran(`a${" ".repeat(60_000)}b`);
+  assert.ok(performance.now() - started < 1000);
   // An own line still works.
   assert.deepEqual(ran("Do X\n  /effort high"), { text: "Do X", options: { effort: "high" } });
   // Sent from the dashboard (work.mjs), and in a discussion.

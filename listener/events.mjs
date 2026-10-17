@@ -100,7 +100,8 @@ export function splitTrigger(config, body) {
 // /effort high" still ends with "/effort high"; a command in the middle of a sentence ("use
 // /effort high to …") or with a refused value ("/effort huge") ends none.
 export function trailingCommands(line, names) {
-  const start = new RegExp(`\\s+(?=\\/(?:${names.join("|")})\\s)`, "gi");
+  // Only from the start of a run of spaces: from inside one, the search would be quadratic.
+  const start = new RegExp(`(?<!\\s)\\s+(?=\\/(?:${names.join("|")})\\s)`, "gi");
   const known = (l) => /^\/mode\s+[\w-]+$/i.test(l) || /^\/after\s/i.test(l) || !takeOptions(l, {});
   for (const match of line.matchAll(start)) {
     const commands = line.slice(match.index).trim().split(start);
@@ -199,12 +200,16 @@ export function commentsText(items, options) {
 // An inbox entry, as Claude reads it: who wrote it and where, so its reply can link back.
 // Entries have no trigger line: "/model", "/effort" and "/agent" may end any of their lines
 // ("Do X /effort high"), put on lines of their own for takeOptions(). "/mode" and "/after"
-// don't apply to entries: they stay text.
+// don't apply to entries: they stay text, and so do code blocks and quotes, where a bug report
+// shows a command rather than gives one.
 function entry(author, url, body) {
+  let fenced = false;
   const lines = body
     .trim()
     .split(/\r?\n/)
     .map((line) => {
+      if (/^\s*(```|~~~)/.test(line)) fenced = !fenced;
+      if (fenced || /^\s*(```|~~~|>)/.test(line)) return line;
       const run = trailingCommands(line, ["model", "effort", "agent"]);
       return run ? [run.head.trimEnd(), ...run.commands].filter(Boolean).join("\n") : line;
     });
