@@ -275,14 +275,16 @@ test("GET issues: an old read is served at once, and read again once in the back
   const get = () => call(w.api, "GET", "/api/repos/org/app/issues");
   const first = await get();
   assert.equal(first.body.readAt, 1000);
+  assert.equal(first.body.refreshing, false);
   w.clock += ISSUES_MS;
   w.issues[2] = open("Two");
   let release;
   w.hold = new Promise((resolve) => (release = resolve));
   // GitHub holds its answers: the requests don't wait for it, and start a single read.
+  // Each says a new read is on its way.
   const old = await get();
-  assert.deepEqual(old.body, first.body);
-  assert.deepEqual((await get()).body, first.body);
+  assert.deepEqual(old.body, { ...first.body, refreshing: true });
+  assert.deepEqual((await get()).body, old.body);
   assert.equal(w.calls.filter((c) => c === "GET /repos/org/app").length, 2);
   release();
   w.hold = null;
@@ -293,6 +295,7 @@ test("GET issues: an old read is served at once, and read again once in the back
     [1, 2],
   );
   assert.equal(fresh.body.readAt, 1000 + ISSUES_MS);
+  assert.equal(fresh.body.refreshing, false);
 });
 
 test("GET issues: a failed background read keeps the last one, and is tried again", async () => {
@@ -350,10 +353,15 @@ test("GET issues: an issues delivery makes the backlog stale", async () => {
   await settled();
   assert.equal((await get()).body.issues.length, 1);
   assert.equal(staleFor("issues", { action: "opened", repository }, w.api.stale), true);
-  // The next request gets the last read and reads again; the one after, the new issue.
-  assert.equal((await get()).body.issues.length, 1);
+  // The delivery starts the read: once it is done, the next request gets the new issue at
+  // once, without reading GitHub again.
   await settled();
-  assert.equal((await get()).body.issues.length, 2);
+  const listed = () => w.calls.filter((c) => c.includes("/issues?")).length;
+  assert.equal(listed(), 2);
+  const res = await get();
+  assert.equal(res.body.issues.length, 2);
+  assert.equal(res.body.refreshing, false);
+  assert.equal(listed(), 2);
   for (const action of ["closed", "reopened", "edited", "transferred", "deleted"]) {
     const calls = [];
     assert.equal(
@@ -364,7 +372,7 @@ test("GET issues: an issues delivery makes the backlog stale", async () => {
   }
 });
 
-test("GET issues: a delivery during a read makes the next request read again", async () => {
+test("GET issues: a delivery during a read reads once more after it, one read at a time", async () => {
   const w = setup({ issues: { 1: open("One") } });
   const get = () => call(w.api, "GET", "/api/repos/org/app/issues");
   await get();
@@ -372,14 +380,60 @@ test("GET issues: a delivery during a read makes the next request read again", a
   let release;
   w.hold = new Promise((resolve) => (release = resolve));
   await get();
+  const reads = () => w.calls.filter((c) => c === "GET /repos/org/app").length;
+  // The read going started before the new issue: two deliveries ask for a single one more,
+  // which waits for it.
+  w.issues[2] = open("Two");
   w.api.stale("org/app");
+  w.api.stale("org/app");
+  await settled();
+  assert.equal(reads(), 2);
   release();
   w.hold = null;
   await settled();
-  const reads = () => w.calls.filter((c) => c === "GET /repos/org/app").length;
-  assert.equal(reads(), 2);
-  await get();
   assert.equal(reads(), 3);
+  const res = await get();
+  assert.deepEqual(
+    res.body.issues.map((i) => i.number),
+    [1, 2],
+  );
+  assert.equal(res.body.refreshing, false);
+  assert.equal(reads(), 3);
+});
+
+test("GET issues: a delivery before any read starts none", async () => {
+  const w = setup({ issues: { 1: open("One") } });
+  w.api.stale("org/app");
+  await settled();
+  assert.deepEqual(w.calls, []);
+});
+
+test("GET issues: an issue whose task ended stays out until a new read says it is open", async () => {
+  const live = ["org/app#1", "org/app#2"];
+  const w = setup({
+    issues: { 1: open("Closed by its run"), 2: open("Run done, still open"), 3: open("Three") },
+    live,
+  });
+  const get = () => call(w.api, "GET", "/api/repos/org/app/issues");
+  const numbers = async () => (await get()).body.issues.map((i) => i.number);
+  assert.deepEqual(await numbers(), [3]);
+  // Both runs end; the first closed its issue. The cached read still has both open: neither
+  // comes back from it, and a read starts.
+  live.length = 0;
+  w.issues[1].state = "closed";
+  let release;
+  w.hold = new Promise((resolve) => (release = resolve));
+  const old = await get();
+  assert.deepEqual(
+    old.body.issues.map((i) => i.number),
+    [3],
+  );
+  assert.equal(old.body.refreshing, true);
+  assert.deepEqual(await numbers(), [3]);
+  release();
+  w.hold = null;
+  await settled();
+  assert.deepEqual(await numbers(), [2, 3]);
 });
 
 test("GET issues: an issue whose task is over is back, one with something live isn't", async () => {

@@ -368,7 +368,7 @@ export function createHttp(ctx, { dashboardDir }) {
     const input = inputEvent(config, event, payload, app.identity().name);
     if (input) admitted(applyInput(ctx, input));
     // Nothing runs for an issue being opened, edited, labelled or closed: the graph's backlog
-    // is read again on its next poll.
+    // is read again now, for its next poll.
     if (event === "issues") {
       staleFor(event, payload, (repo) => ctx.workApi?.stale(repo));
       return;

@@ -296,6 +296,8 @@ export interface Backlog {
   errors: boolean;
   // Sent, not shown.
   readAt: number;
+  // An old read: a new one is on its way at the listener, read again soon (api.ts).
+  refreshing: boolean;
 }
 
 // POST api/repos/<owner>/<repo>/work: start an issue, queue it after another ("/after"),

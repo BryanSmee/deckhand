@@ -217,3 +217,31 @@ test("a card's title, clamped to two lines, is whole in its title attribute", as
   const queued = within(waiting).getByText("Per-repo budgets in the dashboard");
   expect(queued.getAttribute("title")).toBe("Per-repo budgets in the dashboard");
 });
+
+test("an old backlog (refreshing) is read again in a few seconds, not at the next poll", async () => {
+  vi.useFakeTimers();
+  try {
+    // The listener's cached read first, a new one on its way; then the new one, without #31.
+    const answers: Backlog[] = [
+      { ...BACKLOG, refreshing: true },
+      { ...BACKLOG, issues: BACKLOG.issues.slice(1) },
+    ];
+    const reads = vi.fn(() => answers.shift() ?? answers.at(-1));
+    api.routes["api/repos/acme/app/issues"] = reads;
+    open("#/graph/acme/app");
+    const area = screen.getByRole("region", { name: "Work area" });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(within(area).getByText("Export the run log")).toBeTruthy();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(reads).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(reads).toHaveBeenCalledTimes(2);
+    expect(within(area).queryByText("Export the run log")).toBeNull();
+    expect(within(area).getByText("Keyboard shortcuts")).toBeTruthy();
+    // A fresh answer: the next read is the poll's.
+    await vi.advanceTimersByTimeAsync(20000);
+    expect(reads).toHaveBeenCalledTimes(2);
+  } finally {
+    vi.useRealTimers();
+  }
+});

@@ -103,4 +103,5 @@ export const BACKLOG: Backlog = {
   modes: ["work", "brainstorm", "review"],
   errors: false,
   readAt: 0,
+  refreshing: false,
 };

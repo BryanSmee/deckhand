@@ -286,6 +286,9 @@ export function useRepoConfig(repo: string, onRow: (row: Repo) => void): RepoCon
 
 // The listener reads GitHub at most every 30 seconds for it: polling costs nothing more.
 const BACKLOG_POLL_MS = 30000;
+// An old read (`refreshing`): the listener's new one lands in a moment, read again then rather
+// than at the next poll.
+const BACKLOG_AGAIN_MS = 2000;
 
 // Each repo's last backlog, for as long as the page is open: leaving the Graph or a repo's
 // tab and coming back shows it at once, while it is read again. Memory only: a reload waits
@@ -314,10 +317,18 @@ export function useWorkArea(
   repo: string | null,
   refresh: () => Promise<void> = async () => {},
 ): WorkAreaState {
+  const again = useRef<ReturnType<typeof setTimeout>>();
   const read = usePolled<Backlog>(repo && `api/repos/${repo}/issues`, BACKLOG_POLL_MS, {
-    onData: (backlog) => repo && backlogs.set(repo, backlog),
+    onData: (backlog) => {
+      if (!repo) return;
+      backlogs.set(repo, backlog);
+      // Once per answer: a later one replaces it.
+      clearTimeout(again.current);
+      if (backlog.refreshing) again.current = setTimeout(() => read.reload(), BACKLOG_AGAIN_MS);
+    },
     cached: () => (repo ? (backlogs.get(repo) ?? null) : null),
   });
+  useEffect(() => () => clearTimeout(again.current), [repo]);
   const backlog = read.data;
   const [pending, setPending] = useState<Pending[]>([]);
   const [result, setResult] = useState<WorkResult | null>(null);
