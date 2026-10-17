@@ -249,15 +249,19 @@ async function fakeGoogle(t, status = 200) {
   return { url, requests };
 }
 
-async function relay(t, { status, login } = {}) {
-  const google = await fakeGoogle(t, status);
+async function relay(t, options = {}) {
+  const google = await fakeGoogle(t, options.status);
   const broker = createBroker({ app: () => null });
   const refusedTokens = [];
-  const plan = login ?? {
-    headers: async () => ({ authorization: "Bearer ya29.plan" }),
-    refused: (authorization) => refusedTokens.push(authorization),
-    secrets: () => ["ya29.plan", "1//refresh"],
-  };
+  // `login: null`: the operator set none.
+  const plan =
+    "login" in options
+      ? options.login
+      : {
+          headers: async () => ({ authorization: "Bearer ya29.plan" }),
+          refused: (authorization) => refusedTokens.push(authorization),
+          secrets: () => ["ya29.plan", "1//refresh"],
+        };
   const endpoint = createGoogleRelay({ broker, login: plan, upstream: () => google.url });
   const { url } = await serve(t, (req, res) => endpoint.handle(req, res));
   // An Antigravity CLI run's secret, as runs.mjs registers it.
@@ -266,7 +270,7 @@ async function relay(t, { status, login } = {}) {
     broker.provide(secret, provider);
     return secret;
   };
-  return { url, google, run, endpoint, refusedTokens };
+  return { url, google, run, endpoint, refusedTokens, broker };
 }
 
 const call = (url, path, secret, init = {}) =>
@@ -330,11 +334,18 @@ test("a wrong secret, another agent's run or another path is refused, Google not
 });
 
 test("Google's 401 marks the plan's token for a refresh; a spent login refuses the call", async (t) => {
-  const { url, run, refusedTokens } = await relay(t, { status: 401 });
-  const res = await call(url, "daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist", run());
+  const { url, run, refusedTokens, broker } = await relay(t, { status: 401 });
+  const secret = run();
+  const res = await call(
+    url,
+    "daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist",
+    secret,
+  );
   assert.equal(res.status, 401);
   await res.text();
   assert.deepEqual(refusedTokens, ["Bearer ya29.plan"]);
+  // What the run's reply says, whatever agy makes of it (#224).
+  assert.equal(broker.runOf(secret).apiError, "Google answered 401");
 
   const spent = Object.assign(new Error("sign in with `agy` again for AGY_AUTH_FILE"), {
     status: 401,
@@ -342,12 +353,28 @@ test("Google's 401 marks the plan's token for a refresh; a spent login refuses t
   const broken = await relay(t, {
     login: { headers: async () => Promise.reject(spent), refused: () => {}, secrets: () => [] },
   });
+  const brokenRun = broken.run();
   const refused = await call(
     broken.url,
     "daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist",
-    broken.run(),
+    brokenRun,
   );
   assert.equal(refused.status, 503);
   assert.match((await refused.json()).error.message, /sign in with `agy` again/);
   assert.equal(broken.google.requests.length, 0);
+  assert.equal(broken.broker.runOf(brokenRun).apiError, spent.message);
+});
+
+test("no plan's login: the model list is refused, the run told why", async (t) => {
+  const { url, google, run, broker } = await relay(t, { login: null });
+  const secret = run();
+  const res = await call(
+    url,
+    "daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels",
+    secret,
+  );
+  assert.equal(res.status, 503);
+  assert.match((await res.json()).error.message, /the operator set no AGY_AUTH_FILE/);
+  assert.equal(broker.runOf(secret).apiError, "the operator set no AGY_AUTH_FILE");
+  assert.equal(google.requests.length, 0);
 });

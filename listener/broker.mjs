@@ -31,9 +31,10 @@ export function createBroker({
   random = () => randomBytes(32).toString("hex"),
   log = () => {},
 }) {
-  // hash(secret) → { repo, extra, push, branches, provider, apiStatus }: `provider`, where the
-  // listener sends its agent's API calls (anthropic.mjs; null: the agent's default), and
-  // `apiStatus`, the last status that provider answered.
+  // hash(secret) → { repo, extra, push, branches, provider, apiStatus, apiError }: `provider`,
+  // where the listener sends its agent's API calls (anthropic.mjs; null: the agent's default),
+  // `apiStatus`, the last status that provider answered, and `apiError`, why the last call the
+  // listener refused or the provider failed did (upstream.mjs): what an error reply adds.
   const runs = new Map();
 
   // `extra`: permissions this run's token gets beyond or instead of the sandbox's usual ones,
@@ -50,6 +51,7 @@ export function createBroker({
       branches: [],
       provider: null,
       apiStatus: null,
+      apiError: null,
     });
     return secret;
   }

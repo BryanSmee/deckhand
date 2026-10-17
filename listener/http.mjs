@@ -221,7 +221,10 @@ export function createHttp(ctx, { dashboardDir }) {
     const match = /^\/api\/runs\/([\w.-]+)\/stream$/.exec(url.pathname);
     const run = match && ctx.runsById.get(match[1]);
     const visible = () => ctx.auth.user(req) === user && sees(user, run.repo ?? repoOf(run.key));
-    if (run && visible()) return stream(req, res, run, visible);
+    if (run && visible())
+      return stream(req, res, run, visible, 1000, (error) =>
+        log(`${match[1]}: its log stream failed: ${error.stack ?? error}`),
+      );
     res.statusCode = 404;
     res.end();
   }
@@ -392,7 +395,18 @@ export function createHttp(ctx, { dashboardDir }) {
     done.finally(() => admitting.delete(done));
   }
 
+  // One request's unexpected throw answers 500 and is logged: it never takes the listener down.
   function handle(req, res) {
+    try {
+      route(req, res);
+    } catch (error) {
+      log(`${req.method} ${req.url}: ${error.stack ?? error}`);
+      if (!res.headersSent) res.writeHead(500);
+      res.end();
+    }
+  }
+
+  function route(req, res) {
     if (req.method === "GET" && req.url === "/health") return res.end("ok");
     if (req.method === "GET" && req.url.startsWith("/shots/")) return serveShot(req, res);
     if (ctx.setup.handle(req, res)) return;

@@ -304,8 +304,10 @@ export function format(line, agent = agentFor()) {
 
 // Server-sent events: the log so far, then new lines as they are written, until the run ends,
 // or until `allowed()` turns false (a sign-out, a repo's `users` narrowed): checked each second
-// (`every`, in ms: shorter in the tests).
-export function stream(req, res, run, allowed = () => true, every = 1000) {
+// (`every`, in ms: shorter in the tests). A run that hasn't written a line yet has no file
+// (openLog() creates it on its first write): it reads as empty. Any other error ends this
+// stream only, through `onError`, never the listener.
+export function stream(req, res, run, allowed = () => true, every = 1000, onError = () => {}) {
   res.writeHead(200, {
     "content-type": "text/event-stream",
     "cache-control": "no-cache",
@@ -316,8 +318,16 @@ export function stream(req, res, run, allowed = () => true, every = 1000) {
   let rest = "";
   const send = (event, data) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
   const pump = () => {
+    try {
+      read();
+    } catch (error) {
+      onError(error);
+      stop();
+    }
+  };
+  const read = () => {
     if (!allowed()) return stop();
-    const size = statSync(run.logPath).size;
+    const size = existsSync(run.logPath) ? statSync(run.logPath).size : 0;
     if (size > offset) {
       const fd = openSync(run.logPath, "r");
       const buffer = Buffer.alloc(size - offset);

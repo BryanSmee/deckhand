@@ -66,7 +66,7 @@ const PROVIDER_ERRORS = [
   ],
   [/rate[ _-]?limit|too many requests/i, "rate limited"],
   [
-    /invalid (x-)?api[ _-]?key|incorrect api key|authentication_error|invalid bearer|oauth token (has )?expired|UNAUTHENTICATED|PERMISSION_DENIED|eligibility check failed/i,
+    /invalid (x-)?api[ _-]?key|incorrect api key|authentication_error|invalid bearer|oauth token (has )?expired|UNAUTHENTICATED|PERMISSION_DENIED/i,
     "invalid credentials",
   ],
 ];

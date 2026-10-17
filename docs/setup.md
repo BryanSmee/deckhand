@@ -572,8 +572,8 @@ is the run's secret. For these runs only, the egress proxy decrypts the two host
 the token (`daily-cloudcode-pa.googleapis.com`, `www.googleapis.com`) and hands each request to
 the listener, which checks the secret, puts the plan's access token in its place and sends the
 call on, on the paths `agy` uses only. `agy`'s telemetry (`play.googleapis.com`, which carries
-the token too) and your avatar (`lh3.googleusercontent.com`) are refused; its feature flags
-(`antigravity-unleash.goog`) go through untouched. See
+the token too) is refused; its feature flags (`antigravity-unleash.goog`) and your avatar
+(`lh3.googleusercontent.com`, which its eligibility check fetches) go through untouched. See
 [Security model](security.md#the-antigravity-clis-login).
 
 1. Sign in once, for Deckhand alone, in a container (any machine with Docker; the image is
@@ -680,7 +680,7 @@ one did.
 
 A model's own name (`/model claude-opus-5-5`) may mean nothing on another provider: use
 tiers (`best`) with fallbacks. A Claude model on a run that falls back to Codex runs Codex's
-`best`; the same for the Antigravity CLI. Its plan's quota (`RESOURCE_EXHAUSTED`) and a refused
+login (`UNAUTHENTICATED`, `PERMISSION_DENIED`) count as the
 login (`UNAUTHENTICATED`, `PERMISSION_DENIED`, "Eligibility check failed") count as the
 provider's errors.
 

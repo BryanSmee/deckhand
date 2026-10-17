@@ -476,10 +476,12 @@ export function createRuns(ctx) {
     });
     const footer = replyFooter(live.record, result, hint, live.later);
     const check = status !== "error" && mode === "work" ? await configCheck(task) : null;
+    const apiError = ctx.broker.runOf(live.secret)?.apiError;
+    const why = apiError ? `Its last failed API call, through the listener: ${apiError}.\n\n` : "";
     const text =
       status !== "error"
         ? `${result.text}\n\n${check ? `${check}\n\n` : ""}${footer}`
-        : `${agentOf(task).displayName} stopped with an error.\n\n> ${result?.text || "No result: see the listener logs."}\n\n${footer}`;
+        : `${agentOf(task).displayName} stopped with an error.\n\n> ${result?.text || "No result: see the listener logs."}\n\n${why}${footer}`;
     // Already redacted line by line; again, as a result saved by an older listener wasn't.
     await ctx.answer(target(task, live.replyTo), hidden(live, text));
     live.replied = true;

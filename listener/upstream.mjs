@@ -109,13 +109,19 @@ export function createApiProxy({
 }) {
   const fail = (res, status, type, message) =>
     sendJson(res, errorShape.body(type, `Deckhand: ${message}`), status);
+  // An agent may hide what its call got (the Antigravity CLI's "model … is not recognized"
+  // when its model list failed, #224): the run's reply says it instead (runs.mjs).
+  const failRun = (run, res, status, type, message) => {
+    run.apiError = message;
+    return fail(res, status, type, message);
+  };
 
   async function handle(req, res) {
     const url = new URL(req.url, "http://broker");
     const run = broker.runOf(secretOf(req));
     if (!run) return fail(res, 401, errorShape.auth, "unknown or finished run");
     const { base, what, missing } = routeOf(run);
-    if (missing) return fail(res, 503, errorShape.unavailable, missing);
+    if (missing) return failRun(run, res, 503, errorShape.unavailable, missing);
     const path = pathRe.exec(req.url.split("?")[0])?.[1];
     if (!path) return fail(res, 404, errorShape.notFound, notApi);
     // /openai/responses?x=1 → <base>/responses?x=1
@@ -129,16 +135,17 @@ export function createApiProxy({
     } catch (error) {
       log(`${what}: ${error.message}`);
       run.apiStatus = error.status ?? 502;
-      return fail(res, 503, errorShape.unavailable, error.message);
+      return failRun(run, res, 503, errorShape.unavailable, error.message);
     }
     await forward(req, res, {
       target,
       headers,
-      unreachable: () => fail(res, 502, errorShape.unavailable, `${what} can't be reached`),
+      unreachable: () => failRun(run, res, 502, errorShape.unavailable, `${what} can't be reached`),
       log,
       what,
       answered: (status) => {
         run.apiStatus = status;
+        if (status >= 400) run.apiError = `${what} answered ${status}`;
         answered(run, status, headers);
       },
     });

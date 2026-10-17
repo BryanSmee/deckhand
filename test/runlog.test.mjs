@@ -264,6 +264,52 @@ test(
   },
 );
 
+// A run registered before its first line (a sandbox that never started) has no log file yet.
+test("stream: a running run with no log file yet waits for it", { timeout: 5000 }, async (t) => {
+  const logPath = join(tempDir(t, "deckhand-stream-"), "run.log");
+  const req = new EventEmitter();
+  const written = [];
+  const res = { writeHead() {}, write: (s) => written.push(s), end() {} };
+  const run = { status: "running", logPath, agent: "claude" };
+  stream(req, res, run, () => true, 20);
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  writeFileSync(logPath, line({ type: "listener", event: "note", message: "Hello", at: 0 }) + "\n");
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  req.emit("close");
+  assert.ok(written.some((w) => w.startsWith("event: entries") && w.includes("Hello")));
+});
+
+test("stream: a finished run with no log file ends", { timeout: 5000 }, async (t) => {
+  const logPath = join(tempDir(t, "deckhand-stream-"), "run.log");
+  const written = [];
+  let ended;
+  const done = new Promise((resolve) => (ended = resolve));
+  const res = { writeHead() {}, write: (s) => written.push(s), end: ended };
+  stream(new EventEmitter(), res, { status: "failed", logPath, agent: "claude" }, () => true, 20);
+  await done;
+  assert.ok(written.some((w) => w.startsWith("event: end")));
+});
+
+test("stream: an error reading the log ends that stream only", { timeout: 5000 }, async (t) => {
+  // A directory where the log should be: reading it throws.
+  const logPath = tempDir(t, "deckhand-stream-");
+  const errors = [];
+  let ended;
+  const done = new Promise((resolve) => (ended = resolve));
+  const res = { writeHead() {}, write() {}, end: ended };
+  const run = { status: "running", logPath, agent: "claude" };
+  stream(
+    new EventEmitter(),
+    res,
+    run,
+    () => true,
+    20,
+    (e) => errors.push(e),
+  );
+  await done;
+  assert.equal(errors.length, 1);
+});
+
 test("runs: a cancelled run is cancelled after a restart, whatever its last result; its log says who", (t) => {
   const dir = tempDir(t);
   const result = { type: "result", result: "Half done.", duration_ms: 1000 };

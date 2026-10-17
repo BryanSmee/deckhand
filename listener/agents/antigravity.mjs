@@ -22,10 +22,11 @@ const MODELS = {
 const EFFORTS = { low: "low", medium: "medium", high: "high", xhigh: "high", max: "high" };
 
 // What the token's hosts are, and what else `agy` calls (checked against agy 1.4.0): its feature
-// flags, which carry no token, stay a tunnel. Telemetry (which carries the token) and the
-// account's avatar are refused, whatever the grants say.
+// flags and the account's avatar, which carry no token, stay a tunnel (its eligibility check
+// stops without the avatar, #224). Telemetry, which carries the token, is refused, whatever the
+// grants say.
 export const RELAYED = ["daily-cloudcode-pa.googleapis.com", "www.googleapis.com"];
-const BLOCKED = ["play.googleapis.com", "lh3.googleusercontent.com"];
+const BLOCKED = ["play.googleapis.com"];
 
 // A step's tool call → Deckhand's name and what it is about.
 const TOOLS = {
@@ -93,7 +94,7 @@ export const antigravity = {
   secrets: ["AGY_AUTH_FILE"],
   providers: { google: { secrets: ["AGY_AUTH_FILE"] } },
   defaultProvider: "google",
-  hosts: [...RELAYED, "antigravity-unleash.goog"],
+  hosts: [...RELAYED, "antigravity-unleash.goog", "lh3.googleusercontent.com"],
   // Decrypted by the egress proxy and handed to the listener (egress.mjs), for its runs only.
   relayed: RELAYED,
   blocked: BLOCKED,
