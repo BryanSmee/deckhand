@@ -3,8 +3,8 @@
 // refused refresh says to sign in again. And its endpoint (google.mjs): the run's secret in,
 // the plan's access token out, on the paths `agy` calls only.
 import assert from "node:assert/strict";
-import { readFileSync, utimesSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { chmodSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { createAntigravityLogin } from "../listener/antigravity-login.mjs";
 import { createBroker } from "../listener/broker.mjs";
@@ -125,6 +125,32 @@ test("a token Google refused is refreshed on the next call, once", async (t) => 
   login.refused("Bearer ya29.current");
   assert.deepEqual(await login.headers(), { authorization: "Bearer ya29.fresh" });
   assert.equal(calls.length, 1);
+});
+
+test("a file the listener can't rewrite: refused before any refresh container", async (t) => {
+  const file = loginFile(t, tokenFile("ya29.old", "2026-10-17T12:04:00Z"));
+  chmodSync(dirname(file), 0o555);
+  const { docker, calls } = fakeDocker(refreshed);
+  let installs = 0;
+  const login = createAntigravityLogin({
+    file,
+    config,
+    docker,
+    install: async () => installs++,
+    now: () => NOW,
+  });
+  await assert.rejects(login.headers(), (error) => {
+    assert.match(
+      error.message,
+      /^AGY_AUTH_FILE \(.+\) must be in a folder the listener can write to \(EACCES\)/,
+    );
+    assert.match(error.message, /\/data\/credentials \(docs\/setup\.md#antigravity-cli\)/);
+    assert.equal(error.status, 401);
+    return true;
+  });
+  assert.equal(calls.length, 0);
+  assert.equal(installs, 0);
+  chmodSync(dirname(file), 0o755); // for tempDir()'s cleanup
 });
 
 // What the refresh container prints on stderr when it fails: `agy`'s error, then the line of

@@ -509,8 +509,12 @@ files holding secrets are the owner's only (`0600`):
 | `logs/<run>.live.json` | a running run's state, with its secret (gone once it is over)    |
 | `queue.json`           | comments queued when the listener stopped, with their authors    |
 | `waits.json`           | comments waiting for other issues (`/after`), with their authors |
-| `codex-auth.json`      | a ChatGPT plan's login, when `CODEX_AUTH_FILE` points there      |
-| `agy-auth.json`        | a Google AI plan's login, when `AGY_AUTH_FILE` points there      |
+| `credentials/`         | the plans' logins, a host folder (`DECKHAND_CREDENTIALS_DIR`)    |
+
+`credentials/` is a folder on the host, mounted read-write (`./credentials` by default): its
+`codex-auth.json` and `agy-auth.json` (or the files `CODEX_AUTH_FILE` and `AGY_AUTH_FILE` point
+at) are account-wide logins the listener rewrites at each refresh. Keep it out of git and
+readable by root alone, like `.env`.
 
 Run logs (`logs/<run>.log`) have the Claude credential and the run's secret redacted (see
 [The Claude credential](#the-claude-credential)). Their summaries (`logs/<run>.json`) hold

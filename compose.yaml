@@ -62,17 +62,17 @@ services:
       CLAUDE_FALLBACK_MODEL: ${CLAUDE_FALLBACK_MODEL:-}
       # Codex's OpenAI API key (docs/setup.md#codex), kept out of sandboxes the same way.
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      # Or a ChatGPT plan's login (docs/setup.md#with-a-chatgpt-plan): its auth.json in the
-      # data volume, /data/codex-auth.json say, which the listener alone holds and refreshes.
+      # Or a ChatGPT plan's login (docs/setup.md#with-a-chatgpt-plan), which the listener alone
+      # holds and refreshes: codex-auth.json in the credentials folder below, or this file.
       CODEX_AUTH_FILE: ${CODEX_AUTH_FILE:-}
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
       # Optional: the models best, balanced and fast stand for with Codex.
       CODEX_BEST_MODEL: ${CODEX_BEST_MODEL:-}
       CODEX_BALANCED_MODEL: ${CODEX_BALANCED_MODEL:-}
       CODEX_FAST_MODEL: ${CODEX_FAST_MODEL:-}
-      # The Antigravity CLI's Google AI plan login (docs/setup.md#antigravity-cli): its token
-      # file in the data volume, /data/agy-auth.json say, which the listener alone holds and
-      # refreshes.
+      # The Antigravity CLI's Google AI plan login (docs/setup.md#antigravity-cli), which the
+      # listener alone holds and refreshes: agy-auth.json in the credentials folder below, or
+      # this file.
       AGY_AUTH_FILE: ${AGY_AUTH_FILE:-}
       # Optional: the models best, balanced and fast stand for with the Antigravity CLI.
       AGY_BEST_MODEL: ${AGY_BEST_MODEL:-}
@@ -159,6 +159,10 @@ services:
       # what you grant each repo (hosts, preview hook, Dockerfile, host mounts, limits), one
       # file per repo and default.yaml, read at each run (docs/security.md). Both optional.
       - ${DECKHAND_SERVER_DIR:-./server}:/etc/deckhand:ro
+      # The plans' logins the listener refreshes and writes back (codex-auth.json,
+      # agy-auth.json), one folder on the host, git-ignored, read-write: you put them there
+      # when you sign in (docs/setup.md#the-credentials-folder).
+      - ${DECKHAND_CREDENTIALS_DIR:-./credentials}:/data/credentials
       # Each mount root you grant, at the same path and read-only: the listener resolves the
       # paths repos ask for (.., symlinks) in it before mounting them into a sandbox.
       # - /nfs/work:/nfs/work:ro

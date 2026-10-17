@@ -12,7 +12,9 @@
 //
 // The file: {"auth_method": "consumer", "token": {access_token, token_type, refresh_token,
 // expiry}}, `expiry` an RFC 3339 time (checked against agy 1.4.0).
-import { readFile, rename, stat, writeFile } from "node:fs/promises";
+import { constants } from "node:fs";
+import { access, readFile, rename, stat, writeFile } from "node:fs/promises";
+import { dirname } from "node:path";
 import { hardening } from "./docker.mjs";
 
 const EARLY_MS = 5 * 60_000;
@@ -59,10 +61,23 @@ export function createAntigravityLogin({
   let stale = null; // an access token Google refused: refreshed on the next call
   let broken = null; // a LoginError, until the file changes
 
+  // Its folder must take the refreshed file (a new one renamed over it): checked before any
+  // refresh, which would otherwise spend the login and lose its result.
+  async function writable() {
+    try {
+      await access(dirname(file), constants.W_OK);
+    } catch (error) {
+      throw new LoginError(
+        `AGY_AUTH_FILE (${file}) must be in a folder the listener can write to (${error.code}): it rewrites the file at each refresh. Put it in the credentials folder, /data/credentials (docs/setup.md#antigravity-cli)`,
+      );
+    }
+  }
+
   // The file again when someone replaced it (a new sign-in), else what we hold.
   async function load() {
     const { mtimeMs } = await stat(file);
     if (login?.mtimeMs === mtimeMs) return login.json;
+    await writable();
     const json = parseLogin(await readFile(file, "utf8"), file);
     login = { mtimeMs, json };
     broken = null;

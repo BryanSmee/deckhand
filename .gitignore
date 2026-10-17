@@ -4,3 +4,4 @@ compose.override.yaml
 grants.yaml
 config.yaml
 /server/
+/credentials/

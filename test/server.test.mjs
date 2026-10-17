@@ -554,8 +554,10 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
     await new Promise((resolve) => proxy.listen(0, "127.0.0.1", resolve));
     t.after(() => proxy.close());
     const access = "ya29.operator-plan-access-token";
-    const { dir, github, send, brokerPort } = await listen(t, {}, (dir) => {
-      const file = join(dir, "agy-auth.json");
+    const { dir, github, send, brokerPort, listener } = await listen(t, {}, (dir) => {
+      // In the credentials folder, under its fixed name: no AGY_AUTH_FILE needed.
+      mkdirSync(join(dir, "credentials"));
+      const file = join(dir, "credentials", "agy-auth.json");
       writeFileSync(
         file,
         JSON.stringify({
@@ -564,7 +566,6 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
         }),
       );
       return {
-        AGY_AUTH_FILE: file,
         SANDBOX_AGENT: "antigravity",
         EGRESS_PROXY: `http://127.0.0.1:${proxy.address().port}`,
       };
@@ -573,6 +574,10 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
     const reply = (r) => r.method === "POST" && r.path === "/repos/org/repo/issues/12/comments";
     const posted = await github.waitFor(reply);
     assert.match(JSON.parse(posted.body).body, /^agy did: /);
+    assert.match(
+      listener.output(),
+      /Antigravity CLI: a Google AI plan's login, from \S+\/credentials\/agy-auth\.json/,
+    );
     assert.match(
       JSON.parse(posted.body).body,
       /🤖 Antigravity CLI gemini-4-argon-high · medium effort/,
