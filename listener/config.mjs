@@ -1,7 +1,8 @@
 // The operator's settings, from the environment and config.yaml. Names of images, volumes and
 // networks come from here so nothing in the listener is tied to one deployment. What the
 // operator grants one repo (hosts, mounts, limits) is in its grants folder instead (grants.mjs).
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import {
   AGENT_SECRETS,
   AGENTS,
@@ -274,6 +275,25 @@ function readSettings(env, { setting, label }) {
     }
   }
   return values;
+}
+
+// The plans' logins the listener holds and refreshes, at their fixed names in the credentials
+// folder (compose.yaml mounts DECKHAND_CREDENTIALS_DIR there, read-write): one present turns
+// that login on. Its variable, when set, wins.
+export const CREDENTIAL_FILES = {
+  CODEX_AUTH_FILE: "codex-auth.json",
+  AGY_AUTH_FILE: "agy-auth.json",
+};
+
+// `env` with each unset login variable pointing at its file in the credentials folder, when
+// there is one. Everything else reads them from the environment as if the operator set them.
+export function withCredentialFiles(env, exists = existsSync) {
+  const dir = join(env.DATA_DIR || "/data", "credentials");
+  const found = {};
+  for (const [name, file] of Object.entries(CREDENTIAL_FILES)) {
+    if (!env[name] && exists(join(dir, file))) found[name] = join(dir, file);
+  }
+  return Object.keys(found).length ? { ...env, ...found } : env;
 }
 
 // The environment, over config.yaml's settings (readConfigFile()), over the defaults.

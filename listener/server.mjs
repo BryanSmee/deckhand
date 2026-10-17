@@ -25,7 +25,7 @@ import { createBrainstorms, createIssueModes } from "./brainstorms.mjs";
 import { checkout } from "./checkout.mjs";
 import { createComments } from "./comments.mjs";
 import { createConflicts } from "./conflicts.mjs";
-import { ConfigError, loadConfig, readConfigFile } from "./config.mjs";
+import { ConfigError, loadConfig, readConfigFile, withCredentialFiles } from "./config.mjs";
 import { docker } from "./docker.mjs";
 import {
   checkAppEvents,
@@ -64,7 +64,9 @@ import { createWorkApi } from "./work.mjs";
 // networks, should either have been recreated (restart.mjs relink()).
 const RELINK_MS = 60000;
 
-const env = process.env;
+// With the plans' logins found in the credentials folder (/data/credentials) when their
+// variables are unset.
+const env = withCredentialFiles(process.env);
 let config;
 try {
   config = loadConfig(env, readConfigFile(env));

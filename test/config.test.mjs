@@ -8,6 +8,7 @@ import {
   parseConfigFile,
   readConfigFile,
   repoAllowed,
+  withCredentialFiles,
 } from "../listener/config.mjs";
 
 test("refuses to start without allowed users", () => {
@@ -429,6 +430,31 @@ test("Codex: an API key, else a ChatGPT plan's login (CODEX_AUTH_FILE), environm
   assert.equal(both.openaiCredential, "OPENAI_API_KEY");
   assert.equal(loadConfig({ ALLOWED_USERS: "a" }).openaiCredential, null);
   assert.throws(() => file("codex_auth_file: /data/a.json"), /codex_auth_file: a secret/);
+});
+
+test("the plans' logins: found in the credentials folder unless their variable is set", () => {
+  const present = new Set(["/d/credentials/codex-auth.json", "/d/credentials/agy-auth.json"]);
+  const exists = (path) => present.has(path);
+  const env = { DATA_DIR: "/d", ALLOWED_USERS: "a" };
+  const found = withCredentialFiles(env, exists);
+  assert.equal(found.CODEX_AUTH_FILE, "/d/credentials/codex-auth.json");
+  assert.equal(found.AGY_AUTH_FILE, "/d/credentials/agy-auth.json");
+  assert.equal(loadConfig(found).openaiCredential, "CODEX_AUTH_FILE");
+  assert.equal(loadConfig(found).agyCredential, "AGY_AUTH_FILE");
+  assert.equal(env.CODEX_AUTH_FILE, undefined);
+  // The variable wins; /data by default; nothing found, the same environment.
+  const set = withCredentialFiles({ ...env, AGY_AUTH_FILE: "/elsewhere.json" }, exists);
+  assert.equal(set.AGY_AUTH_FILE, "/elsewhere.json");
+  const looked = [];
+  const none = { ALLOWED_USERS: "a" };
+  assert.equal(
+    withCredentialFiles(none, (path) => looked.push(path) && false),
+    none,
+  );
+  assert.deepEqual(looked, [
+    "/data/credentials/codex-auth.json",
+    "/data/credentials/agy-auth.json",
+  ]);
 });
 
 test("the Antigravity CLI: a Google AI plan's login (AGY_AUTH_FILE), its version, tiers and volumes", () => {

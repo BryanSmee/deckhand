@@ -1,8 +1,8 @@
 // A ChatGPT plan's login: the listener holds it, refreshes it once for every run, and writes
 // the rotated refresh token back.
 import assert from "node:assert/strict";
-import { readFile, stat, utimes, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { chmod, readFile, stat, utimes, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { createChatgptLogin } from "../listener/chatgpt.mjs";
 import { tempDir } from "./helpers.mjs";
@@ -162,6 +162,29 @@ test("a FedRAMP workspace gets its header; a token without expiry refreshes afte
     "x-openai-fedramp": "true",
   });
   now = Date.parse("2026-10-24T11:00:00Z");
+  await login.headers();
+  assert.equal(server.calls.length, 1);
+});
+
+test("a file the listener can't rewrite: refused before any refresh spends its token", async (t) => {
+  const file = await authFile(t, { access_token: access(1) });
+  await chmod(dirname(file), 0o555);
+  const server = tokenServer();
+  const login = createChatgptLogin({ file, fetch: server.fetch, now: () => NOW });
+  for (let i = 0; i < 2; i++) {
+    await assert.rejects(login.headers(), (error) => {
+      assert.match(
+        error.message,
+        /^CODEX_AUTH_FILE \(.+\) must be in a folder the listener can write to \(EACCES\)/,
+      );
+      assert.match(error.message, /\/data\/credentials/);
+      assert.equal(error.status, 401);
+      return true;
+    });
+  }
+  assert.equal(server.calls.length, 0);
+  // Writable again (a fixed mount): used at once.
+  await chmod(dirname(file), 0o755);
   await login.headers();
   assert.equal(server.calls.length, 1);
 });

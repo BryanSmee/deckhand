@@ -10,7 +10,9 @@
 // <access token>` and `ChatGPT-Account-ID`, and it refreshes the access token 5 minutes
 // before it expires (or 8 days after the last refresh, when the token has no expiry) at
 // auth.openai.com/oauth/token, with Codex's own OAuth client id.
-import { readFile, rename, stat, writeFile } from "node:fs/promises";
+import { constants } from "node:fs";
+import { access, readFile, rename, stat, writeFile } from "node:fs/promises";
+import { dirname } from "node:path";
 
 export const CHATGPT_URL = "https://chatgpt.com/backend-api/codex";
 const TOKEN_URL = "https://auth.openai.com/oauth/token";
@@ -53,10 +55,23 @@ export function createChatgptLogin({
   let stale = null; // an access token the upstream refused: refreshed on the next call
   let broken = null; // a LoginError, until the file changes
 
+  // Its folder must take the refreshed file (a new one renamed over it): checked before any
+  // refresh, which would otherwise spend the login and lose its result.
+  async function writable() {
+    try {
+      await access(dirname(file), constants.W_OK);
+    } catch (error) {
+      throw new LoginError(
+        `CODEX_AUTH_FILE (${file}) must be in a folder the listener can write to (${error.code}): it rewrites the file at each refresh. Put it in the credentials folder, /data/credentials (docs/setup.md#with-a-chatgpt-plan)`,
+      );
+    }
+  }
+
   // The file again when someone replaced it (a new `codex login`), else what we hold.
   async function load() {
     const { mtimeMs } = await stat(file);
     if (login?.mtimeMs === mtimeMs) return login.json;
+    await writable();
     const json = JSON.parse(await readFile(file, "utf8"));
     if (!json?.tokens?.access_token || !json.tokens.refresh_token) {
       throw new LoginError(`${file} holds no ChatGPT login (run \`codex login\` for one)`);
