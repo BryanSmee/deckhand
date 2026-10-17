@@ -8,7 +8,8 @@
 //
 //   GET  /api/repos/<owner>/<repo>/issues the backlog and the repo's modes: the last read at
 //                                         once, read again in the background after
-//                                         ISSUES_MS or an `issues` delivery
+//                                         ISSUES_MS, at an `issues` delivery or when a
+//                                         task ends (`refreshing` while it is going)
 //   POST /api/repos/<owner>/<repo>/work   { action: "start", number, mode? }
 //                                         { action: "queue", number, after, mode? }
 //                                         { action: "dequeue", number }
@@ -128,8 +129,8 @@ export function createWorkApi({
   now = Date.now,
   log = () => {},
 }) {
-  // "owner/repo" → { last: { issues, modes, errors, users, at, version } | null,
-  //                 read: Promise | null, version }
+  // "owner/repo" → { repo, last: { issues, modes, errors, users, at, seq, version } | null,
+  //                 read: Promise | null, again, seq, version, live, ended }
   const backlogs = new Map();
   const { baseOf, checkedRepo } = createRepoCheck({ config, github, repoSettings });
   // Open questions in the backlog's issues that never got the label (inputs.mjs).
@@ -155,53 +156,101 @@ export function createWorkApi({
     };
   }
 
-  // A repo's read, started once at a time; `at` is when it started, `version` the stale()
-  // calls it saw. A failed read is not kept: the next request tries again.
-  function refresh(known, repo) {
+  // A repo's read, one at a time; `at` is when it started, `seq` its number, `version` the
+  // stale() calls it saw. One asked for while a read is going (`again`) runs after it: that
+  // read started before the change. A failed read is not kept: the next request tries again.
+  function refresh(known) {
     const at = now();
+    const seq = ++known.seq;
     const version = known.version;
-    known.read = readBacklog(repo).then(
+    const next = () => {
+      known.read = null;
+      if (!known.again) return;
+      known.again = false;
+      quietly(known, refresh(known));
+    };
+    known.read = readBacklog(known.repo).then(
       (data) => {
-        known.last = { ...data, at, version };
-        known.read = null;
+        known.last = { ...data, at, seq, version };
+        next();
       },
       (error) => {
-        known.read = null;
+        next();
         throw error;
       },
     );
     return known.read;
   }
 
+  // A read nobody waits for: its failure is only logged.
+  const quietly = (known, read) =>
+    read.catch((error) => log(`Work area: ${known.repo}: backlog: ${error.message ?? error}`));
+
+  // A read now, or one more after the read going.
+  function readAgain(known) {
+    if (known.read) known.again = true;
+    else quietly(known, refresh(known));
+  }
+
+  // The repo's tasks with something live, as lowercase keys. Those that were live at the last
+  // request and no longer are ended since: in `known.ended`, with the number of the last read
+  // started before. Their run may have closed the issue, which that read still has open: a new
+  // read starts, and they stay out until one started after them lands.
+  function ending(known, name) {
+    const live = new Set(
+      [...liveKeys()].map((k) => k.toLowerCase()).filter((k) => k.startsWith(`${name}#`)),
+    );
+    let ended = false;
+    for (const key of known.live) {
+      if (live.has(key)) continue;
+      known.ended.set(key, known.seq);
+      ended = true;
+    }
+    known.live = live;
+    if (ended && known.last) {
+      known.version++;
+      readAgain(known);
+    }
+    return live;
+  }
+
   // The last read straight away, refreshed in the background once it is older than ISSUES_MS
-  // or an `issues` delivery made it stale: only a repo without one waits for GitHub.
+  // or stale(): only a repo without one waits for GitHub. `refreshing`: a newer read is on its
+  // way, which the dashboard asks for again soon.
   async function backlog(res, repo, user) {
     const name = repo.toLowerCase();
     let known = backlogs.get(name);
     if (!known) {
-      known = { last: null, read: null, version: 0 };
+      known = { repo, last: null, read: null, again: false, seq: 0, version: 0 };
+      Object.assign(known, { live: new Set(), ended: new Map() });
       backlogs.set(name, known);
     }
+    const live = ending(known, name);
     const { last } = known;
     const fresh = last && last.version === known.version && now() - last.at < ISSUES_MS;
     if (!fresh && !known.read) {
-      const read = refresh(known, repo);
-      if (last)
-        read.catch((error) => log(`Work area: ${repo}: backlog: ${error.message ?? error}`));
+      const read = refresh(known);
+      if (last) quietly(known, read);
     }
     if (!last) await known.read;
-    const { issues, modes, errors, users, at } = known.last;
+    const { issues, modes, errors, users, at, seq } = known.last;
     if (users && !users.includes(user.toLowerCase())) {
       refuse(404, `${user} is not among ${repo}'s users.`);
     }
     // The tasks change between two reads: an issue started a moment ago leaves at once. One
-    // whose task is over (a run done, a brainstorm stopped) is back.
-    const keys = liveKeys();
+    // whose task is over (a run done, a brainstorm stopped) is back, once a read started after
+    // it ended says it is still open.
+    for (const [key, before] of known.ended) if (before < seq) known.ended.delete(key);
+    const hidden = (n) => {
+      const key = taskKey(name, n);
+      return live.has(key) || known.ended.has(key);
+    };
     send(res, 200, {
-      issues: issues.filter((i) => !keys.has(taskKey(repo, i.number))),
+      issues: issues.filter((i) => !hidden(i.number)),
       modes,
       errors,
       readAt: at,
+      refreshing: known.read !== null,
     });
   }
 
@@ -584,11 +633,14 @@ export function createWorkApi({
     log,
   });
 
-  // An `issues` delivery for `repo`: its backlog is read again on the next request, which
-  // still gets the last one. A read already going started before it: it doesn't count.
+  // An `issues` delivery for `repo`: its backlog is read again now, for a repo read before,
+  // so that the next request gets the change; or after the read going, which started before
+  // it. Until then, requests get the last read.
   function stale(repo) {
     const known = backlogs.get(repo.toLowerCase());
-    if (known) known.version++;
+    if (!known) return;
+    known.version++;
+    if (known.last || known.read) readAgain(known);
   }
 
   return { handle, stale };
