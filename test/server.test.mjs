@@ -599,7 +599,7 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
       /-e AGY_VERSION=1\.4\.0 -v deckhand-antigravity:\/opt\/antigravity --entrypoint deckhand-install-antigravity/,
     );
 
-    // Its token's hosts relayed, telemetry and the avatar refused, the flags a tunnel.
+    // Its token's hosts relayed, telemetry refused, the flags and the avatar a tunnel.
     const answers = Object.fromEntries(
       readFileSync(join(dir, "egress-agy"), "utf8")
         .trim()
@@ -611,7 +611,8 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
     assert.deepEqual(answers["antigravity-unleash.goog"].relay, false);
     assert.equal(answers["antigravity-unleash.goog"].allowed, true);
     assert.equal(answers["play.googleapis.com"].allowed, false);
-    assert.equal(answers["lh3.googleusercontent.com"].allowed, false);
+    assert.equal(answers["lh3.googleusercontent.com"].allowed, true);
+    assert.equal(answers["lh3.googleusercontent.com"].relay, false);
     // The listener's relay knew the run's secret, and refused a path agy doesn't call.
     assert.equal(readFileSync(join(dir, "relay-answer"), "utf8"), "404");
     const stranger = await fetch(
@@ -619,6 +620,23 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
       { headers: { authorization: "Bearer not-a-run" } },
     );
     assert.equal(stranger.status, 401);
+
+    // A login that can't be refreshed fails agy's model list: the reply says why, not only
+    // agy's model error (#224).
+    const file = join(dir, "credentials", "agy-auth.json");
+    const login = JSON.parse(readFileSync(file, "utf8"));
+    login.token.expiry = "2000-01-01T00:00:00Z";
+    writeFileSync(file, JSON.stringify(login));
+    writeFileSync(join(dir, "agy-no-models"), "");
+    await send(followUp(101, "Deckhand\nOnce more"));
+    const failed = await github.waitFor(
+      (r) => reply(r) && JSON.parse(r.body).body.includes("stopped with an error"),
+    );
+    assert.match(
+      JSON.parse(failed.body).body,
+      /> invalid model selection [^\n]*\n\nIts last failed API call, through the listener: the Antigravity CLI's login can't be refreshed/,
+    );
+    rmSync(join(dir, "agy-no-models"));
 
     // Without the proxy's CA, its calls can't be relayed: the run stops, saying so.
     serving = false;

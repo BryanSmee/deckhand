@@ -198,9 +198,12 @@ listener, and its calls go to Google directly, so it is kept out another way:
   on, streaming the answer back. Only the paths `agy` calls go through
   (`daily-cloudcode-pa.googleapis.com/v1internal:*`, `www.googleapis.com/oauth2/v2/userinfo`):
   the plan's token opens more than the CLI's API, and a sandbox can't reach the rest with it.
-- **Refused:** `agy`'s telemetry (`play.googleapis.com`, which carries the token too) and the
-  account's avatar (`lh3.googleusercontent.com`), whatever the grants say, for these runs.
-  `antigravity-unleash.goog` (feature flags, no token) stays a tunnel, as every other host.
+- **Refused:** `agy`'s telemetry (`play.googleapis.com`, which carries the token too), whatever
+  the grants say, for these runs. `antigravity-unleash.goog` (feature flags, no token) and the
+  account's avatar (`lh3.googleusercontent.com`, a public image address) stay a tunnel, as
+  every other host: `agy`'s eligibility check fetches the avatar the userinfo call names and
+  stops if it can't (#224). Even if `agy` sent its token there, that token is the run's secret,
+  which works nowhere but the listener.
 - **The refresh is `agy`'s own**: the listener doesn't reimplement Google's OAuth with a client
   secret taken from the binary. When the access token is within 5 minutes of its expiry (or
   Google refused it), the listener runs `agy models` in a short container of the sandbox image
@@ -883,8 +886,8 @@ runs on OpenAI's side, in the API call. Check it again when you change `CODEX_VE
 An Antigravity CLI run's mandatory hosts are GitHub's, the listener, and `agy`'s own:
 `daily-cloudcode-pa.googleapis.com` and `www.googleapis.com` (relayed to the listener, see
 [The Antigravity CLI's login](#the-antigravity-clis-login)) and `antigravity-unleash.goog`
-(feature flags). `play.googleapis.com` and `lh3.googleusercontent.com` are refused for its runs,
-whatever the grants say. Checked against agy 1.4.0 (the pinned `AGY_VERSION`) through a proxy
+(feature flags) and `lh3.googleusercontent.com` (the account's avatar, which its eligibility
+check needs). `play.googleapis.com` is refused for its runs, whatever the grants say. Checked against agy 1.4.0 (the pinned `AGY_VERSION`) through a proxy
 that logged every connection; its update check is off (`AGY_CLI_DISABLE_AUTO_UPDATE`). Check
 it again when you change `AGY_VERSION`.
 

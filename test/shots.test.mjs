@@ -10,6 +10,7 @@ import { tempDir } from "./helpers.mjs";
 
 const folder = "0123456789abcdef01234567";
 let base, server;
+const logged = [];
 
 before(async () => {
   const dataDir = tempDir(null, "deckhand-shots-");
@@ -27,7 +28,13 @@ before(async () => {
   // The folder itself as a link: the run can't do that, but nothing should follow it either.
   symlinkSync(dir, join(shotsDir, "fedcba9876543210fedcba98"));
 
-  const ctx = { config: { port: 0 }, log: () => {}, skip: () => {}, tasks: new Map(), shotsDir };
+  const ctx = {
+    config: { port: 0 },
+    log: (line) => logged.push(line),
+    skip: () => {},
+    tasks: new Map(),
+    shotsDir,
+  };
   server = createHttp(ctx, { dashboardDir: join(dataDir, "dist") }).listen();
   await new Promise((resolve) => server.once("listening", resolve));
   base = `http://127.0.0.1:${server.address().port}/shots`;
@@ -61,4 +68,13 @@ test("missing files and other names are a 404", async () => {
   for (const path of [`${folder}/none.png`, `${folder}/page.txt`, "nothex/page.png"]) {
     assert.equal((await fetch(`${base}/${path}`)).status, 404, path);
   }
+});
+
+// A route that throws (here: this listener has no setup flow) answers 500 and leaves the
+// listener up, its error logged.
+test("an unexpected throw answers 500, and the listener keeps serving", async () => {
+  const res = await fetch(base.replace(/\/shots$/, "/anything"));
+  assert.equal(res.status, 500);
+  assert.ok(logged.some((line) => line.startsWith("GET /anything: TypeError")));
+  assert.equal((await fetch(`${base}/${folder}/page.png`)).status, 200);
 });

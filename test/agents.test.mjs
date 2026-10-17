@@ -411,6 +411,15 @@ test("providerError: a provider's failure, from the result or the endpoint's las
     null,
   );
   assert.equal(providerError({ ok: true, text: "Done: added a rate limit." }, 429), null);
+  // The Antigravity CLI's eligibility check: a refused login is, an unreachable avatar isn't.
+  const eligibility = "Eligibility check failed: ";
+  assert.equal(
+    providerError(failed(`${eligibility}UNAUTHENTICATED (code 401): Request had invalid…`)),
+    "invalid credentials",
+  );
+  const avatar =
+    'failed to get profile picture: Get "https://lh3.googleusercontent.com/a/x": Forbidden';
+  assert.equal(providerError(failed(eligibility + avatar), 200), null);
   assert.equal(providerError(null), null);
 });
 

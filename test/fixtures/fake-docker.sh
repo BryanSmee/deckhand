@@ -202,6 +202,13 @@ case "$1" in
         done >> "$dir/egress-agy"
         curl -sS -o /dev/null -w "%{http_code}" -H "Authorization: Bearer $DECKHAND_RUN_SECRET" \
           "$DECKHAND_BROKER_URL/relay/www.googleapis.com/drive/v3/files" > "$dir/relay-answer"
+        # Its model list refused (the test says so): agy only says the model is unknown.
+        if [ -e "$dir/agy-no-models" ]; then
+          curl -sS -o /dev/null -X POST -H "Authorization: Bearer $DECKHAND_RUN_SECRET" \
+            "$DECKHAND_BROKER_URL/relay/daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels"
+          echo '"'"'{"event":"result","result":{"status":"ERROR","error":"invalid model selection (--model \"gemini-4-argon-high\" --effort \"\"): model gemini-4-argon-high is not recognized"}}'"'"'
+          exit 0
+        fi
         echo '"'"'{"event":"init","conversation_id":"c1","init":{}}'"'"'
         jq -nc --arg text "agy did: ${TASK_MESSAGE:-the issue}" '"'"'{event: "result", result: {status: "SUCCESS", response: $text, duration_seconds: 60}}'"'"'
         exit 0

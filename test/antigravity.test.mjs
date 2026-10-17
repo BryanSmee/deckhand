@@ -199,8 +199,12 @@ test("the agent: installed like Codex, its login out of the sandbox, no mid-run 
     "daily-cloudcode-pa.googleapis.com",
     "www.googleapis.com",
   ]);
-  assert.deepEqual(antigravity.hosts, [...antigravity.relayed, "antigravity-unleash.goog"]);
-  assert.deepEqual(antigravity.blocked, ["play.googleapis.com", "lh3.googleusercontent.com"]);
+  assert.deepEqual(antigravity.hosts, [
+    ...antigravity.relayed,
+    "antigravity-unleash.goog",
+    "lh3.googleusercontent.com",
+  ]);
+  assert.deepEqual(antigravity.blocked, ["play.googleapis.com"]);
   assert.deepEqual(antigravity.session, { volume: "antigravity", path: "/home/node/.gemini" });
   assert.equal(antigravity.takesMessages, false);
   // antigravity@google, in FALLBACKS and `/agent`.

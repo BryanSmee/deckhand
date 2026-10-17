@@ -220,22 +220,22 @@ test("relay: an agent's relayed hosts, decrypted and handed to the listener, nev
       relay: false,
     });
   }
-  // Telemetry and the avatar: refused, even with "*" granted.
-  for (const host of ["play.googleapis.com", "lh3.googleusercontent.com"]) {
-    assert.deepEqual(answer(host), {
-      allowed: false,
-      private: false,
-      cache: false,
-      decrypt: false,
-      relay: false,
-    });
-  }
-  // The feature flags, and every other host: a tunnel as before.
-  for (const host of ["antigravity-unleash.goog", "github.com", "oauth2.googleapis.com"]) {
+  // Telemetry: refused, even with "*" granted.
+  assert.deepEqual(answer("play.googleapis.com"), {
+    allowed: false,
+    private: false,
+    cache: false,
+    decrypt: false,
+    relay: false,
+  });
+  // The feature flags, the avatar (#224), and every other host: a tunnel as before.
+  const tunnels = ["antigravity-unleash.goog", "lh3.googleusercontent.com", "github.com"];
+  for (const host of [...tunnels, "oauth2.googleapis.com"]) {
     assert.equal(answer(host).relay, false, host);
     assert.equal(answer(host).allowed, true, host);
   }
   assert.equal(answer("antigravity-unleash.goog").cache, false);
+  assert.equal(answer("lh3.googleusercontent.com").cache, false);
   // Only for its runs: another agent relays and blocks nothing.
   const plain = egressPolicy("www.googleapis.com", ["*"], [], [], [], {
     relayed: codex.relayed,
