@@ -1,8 +1,13 @@
 // Deckhand's CA, with which the egress proxy terminates TLS for the hosts the listener says
 // may be cached (proxy.mjs): sandboxes trust its certificate (ca.crt), never see its key
 // (ca.key), which stays in the proxy's volume. Created once, on the first start, and kept
-// across restarts. Each host gets a short-lived certificate of its own, kept in memory and
-// on disk, made again when it nears its end or the CA changed.
+// across restarts, for a year: made again a month before its end, which sandboxes pick up at
+// their next start (the listener asks the proxy for it at each run). Each host gets a
+// short-lived certificate of its own, kept in memory and on disk, made again when it nears its
+// end or the CA changed.
+//
+// The CA can't vouch for GitHub or the agents' providers (EXCLUDED, its name constraints): the
+// sandboxes' tokens go there, and its key, should it leak, mustn't open that traffic.
 //
 // Node can't create certificates: the `openssl` CLI does, as the listener uses the docker
 // CLI. No dependencies.
@@ -15,15 +20,31 @@ import { join } from "node:path";
 import { atomicWrite, tempPath } from "./atomic.mjs";
 
 const DAY = 24 * 3600 * 1000;
-export const CA_DAYS = 3650;
+export const CA_DAYS = 365;
 export const HOST_DAYS = 7;
-// A host certificate this close to its end is made again.
+// A host certificate this close to its end is made again; the CA, this close to its own.
 const RENEW_MS = 2 * DAY;
+const CA_RENEW_MS = 30 * DAY;
+
+// Names (and their subdomains) the CA may never certify: the mandatory hosts whose traffic
+// carries a run's tokens (../listener/egress.mjs mandatoryHosts()), never decrypted.
+export const EXCLUDED = [
+  "github.com",
+  "githubusercontent.com",
+  "anthropic.com",
+  "openai.com",
+  "chatgpt.com",
+];
+export const excluded = (host) =>
+  EXCLUDED.some((name) => host === name || host.endsWith(`.${name}`));
 
 // Only names and addresses go into a certificate: anything else could change openssl's
 // config it is written into.
 const NAME = /^[a-z0-9_-]+(\.[a-z0-9_-]+)*$/;
-export const certifiable = (host) => NAME.test(host) || isIP(host) !== 0;
+export const certifiable = (host) => (NAME.test(host) && !excluded(host)) || isIP(host) !== 0;
+
+// The DER of the nameConstraints extension's OID (2.5.29.30): a CA from before them lacks it.
+const NAME_CONSTRAINTS = Buffer.from([0x06, 0x03, 0x55, 0x1d, 0x1e]);
 
 function runOpenssl(args) {
   return new Promise((resolve, reject) => {
@@ -41,6 +62,7 @@ prompt = no
 basicConstraints = critical,CA:TRUE,pathlen:0
 keyUsage = critical,keyCertSign,cRLSign
 subjectKeyIdentifier = hash
+nameConstraints = critical,${EXCLUDED.map((name) => `excluded;DNS:${name}`).join(",")}
 `;
 
 const hostConfig = (host) => `[req]
@@ -64,6 +86,7 @@ export function createAuthority({ dir, openssl = runOpenssl, now = Date.now, log
   const hostsDir = join(dir, "hosts");
   const temp = (name) => tempPath(dir, name);
   let ca = null; // { pem, x509 }
+  let renewing = null; // ready()'s promise while it makes one, so concurrent calls make one
   const hosts = new Map(); // host → { key, cert, until }
   const making = new Map(); // host → its promise, so concurrent CONNECTs make one
 
@@ -73,15 +96,41 @@ export function createAuthority({ dir, openssl = runOpenssl, now = Date.now, log
     return { pem, x509: new X509Certificate(pem) };
   }
 
-  // The CA, made when there is none. Its key is written first: a crash in between leaves a
-  // key without a certificate, which is made again.
+  // Whether `found` is still the CA to use: not near its end, and made with the name
+  // constraints and lifetime of now (an older one lasted ten years and had none).
+  function current(found) {
+    const from = Date.parse(found.x509.validFrom);
+    const to = Date.parse(found.x509.validTo);
+    return (
+      to - now() > CA_RENEW_MS &&
+      to - from <= (CA_DAYS + 1) * DAY &&
+      found.x509.raw.includes(NAME_CONSTRAINTS)
+    );
+  }
+
+  // The CA, made when there is none, or when it isn't current() any more.
   async function ready() {
-    if (ca) return ca;
+    if (ca && current(ca)) return ca;
+    renewing ??= renew().finally(() => (renewing = null));
+    return renewing;
+  }
+
+  // Its key is written first: a crash in between leaves a key without a certificate, which is
+  // made again.
+  async function renew() {
     mkdirSync(hostsDir, { recursive: true });
-    try {
-      ca = await load();
-      return ca;
-    } catch {}
+    if (!ca) {
+      try {
+        const found = await load();
+        if (current(found)) {
+          ca = found;
+          return ca;
+        }
+        log(`CA in ${dir}: near its end, or without name constraints; making a new one`);
+      } catch {}
+    } else {
+      log(`CA in ${dir}: near its end; making a new one`);
+    }
     const config = temp("ca.cnf");
     const key = temp("ca.key");
     const crt = temp("ca.crt");
@@ -158,6 +207,8 @@ export function createAuthority({ dir, openssl = runOpenssl, now = Date.now, log
   // → { key, cert } (PEM) for `host`.
   async function certFor(host) {
     if (!certifiable(host)) throw new Error(`no certificate for ${host}`);
+    // A new CA clears `hosts`: their certificates are of no use to sandboxes started since.
+    await ready();
     const known = hosts.get(host);
     if (known && lasting(known.until)) return known;
     if (!making.has(host)) {
@@ -175,7 +226,8 @@ export function createAuthority({ dir, openssl = runOpenssl, now = Date.now, log
   return {
     ready,
     certFor,
-    // The CA's certificate (PEM): public, what sandboxes trust. Null until ready().
+    // The CA's certificate (PEM): public, what sandboxes trust. Null until ready(); call it
+    // first for one that is current.
     certificate: () => ca?.pem ?? null,
   };
 }
