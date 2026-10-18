@@ -775,9 +775,19 @@ can't list them (one there is ignored, with a warning): the cache is shared by e
 only you say what goes in it. A host in `cached_hosts` must be reachable too (in `hosts`, or
 mandatory): `cached_hosts` alone opens nothing.
 
-- **What is kept**: only what is the same for anyone. A `GET` without `Authorization`,
-  `Cookie` or `Range`, answered `200` without `Cache-Control: private` or `no-store`, and
-  within `EGRESS_CACHE_ENTRY_MAX`. Anything else is forwarded as before.
+- **What is kept**: only what is the same for anyone. A `GET` without a body
+  (`Content-Length` over 0, any `Transfer-Encoding`, or `Expect`), `Cookie`, `Range` or a
+  header whose name looks like a credential (with `auth`, `token`, `key`, `secret`,
+  `password` or `credential` in it, or starting with `x-jfrog-`: `Authorization`,
+  `Private-Token`, `X-Api-Key`…; npm's `npm-auth-type` and the proxy's own `Proxy-*` aside),
+  answered `200` without `Cache-Control: private` or `no-store`, and within
+  `EGRESS_CACHE_ENTRY_MAX`. Anything else is forwarded as before.
+- **What reaches the host**: on the cache path, only `Accept`, `Accept-Encoding`,
+  `Accept-Language`, `User-Agent`, `If-None-Match` and `If-Modified-Since` go on, with
+  `Host`: a header the key doesn't count (`X-HTTP-Method-Override`, `X-Forwarded-Host`) can't
+  shape an answer kept for every repository. Each request to a host gets a connection of its
+  own, never one another run's request used: a request whose body a host doesn't read (request
+  smuggling) can't put another URL's answer under a key.
 - **Cookies and `Vary`**: a cookie the answer sets goes to that client only, never into the
   cache: the request had none, so the answer is the one anyone gets, and CDNs set theirs on
   everything (Cloudflare's `__cf_bm` on npm's registry). `Accept-Encoding` and `Accept` are
@@ -793,8 +803,15 @@ mandatory): `cached_hosts` alone opens nothing.
 - **Downloads**: the first one is streamed to the client while it is written to a temporary
   file, renamed into place once complete. A client that disconnects, a host that stops
   midway or a body over the per-entry limit leaves nothing behind.
-- **Size**: over `EGRESS_CACHE_MAX` (10 GB by default), the least recently used answers are
-  removed. `EGRESS_CACHE_MAX=0` turns the cache off ([Setup](setup.md#advanced-settings)).
+- **Size**: `EGRESS_CACHE_MAX` (10 GB by default) counts the downloads being written too.
+  One with a `Content-Length` reserves it as it starts, and the least recently used answers
+  are removed to make room for it; one without makes room as it comes. Downloads under way
+  take half of it at most (`EGRESS_CACHE_ENTRY_MAX` when that is more): a download read slowly, or dropped before its end, never evicts
+  more than that, and one that finds no room goes on to its client without being kept. The
+  bodies are counted, not their small metadata files, and a removed answer a client is still
+  reading stays on disk until it is done: the volume can go slightly past it.
+  `EGRESS_CACHE_MAX=0` turns the cache off
+  ([Setup](setup.md#advanced-settings)).
 - **Trust**: plain HTTP can be tampered with on the way, cached or not, and a cached answer
   then reaches every run. Cache only what the client checks itself (apt's signed indexes and
   their package checksums do) or hosts you would trust over plain HTTP anyway.

@@ -312,7 +312,9 @@ export function createProxy({
 
   // HTTPS goes on over TLS verified against the trust store (`upstreamCa` in the tests): a
   // certificate that doesn't verify fails the request, rather than reaching the client
-  // under Deckhand's CA.
+  // under Deckhand's CA. A connection per request, never pooled: one sandbox's requests
+  // can't leave a host's connection out of step (request smuggling) for another's, whose
+  // answer the cache would keep for everyone.
   function send({ address, url, host }, method, headers, onAnswer) {
     const options = {
       host: address,
@@ -320,6 +322,7 @@ export function createProxy({
       path: url.pathname + url.search,
       headers,
       setHost: false,
+      agent: false,
     };
     if (url.protocol !== "https:")
       return httpRequest({ ...options, port: url.port || 80 }, onAnswer);

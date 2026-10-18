@@ -1,7 +1,7 @@
 // The egress proxy's requests through its cache (proxy.mjs decides which go here, cache.mjs
 // is the store): a GET answered from disk when fresh, revalidated when stale, else downloaded,
 // streamed to the client and stored as it comes when it may be. No dependencies.
-import { conditional, fits, isFresh, notModified, storable } from "./cache.mjs";
+import { conditional, fits, forwardedHeaders, isFresh, notModified, storable } from "./cache.mjs";
 
 const VALIDATORS = ["if-none-match", "if-modified-since", "if-match", "if-unmodified-since"];
 
@@ -20,7 +20,8 @@ export function createCachedPath({ cache, send, unreachable, now = Date.now }) {
       return serve(req, res, key, entry, "hit");
     // A client checking its own copy, with nothing here to check it against: as before.
     if (!entry && conditional(req)) return passThrough(req, res, to);
-    const upstream = send(to, "GET", revalidating(to.headers, entry), async (answer) => {
+    const headers = revalidating(forwardedHeaders(req.headers, to.url.host), entry);
+    const upstream = send(to, "GET", headers, async (answer) => {
       if (entry && answer.statusCode === 304) {
         answer.resume();
         const meta = await cache.refresh(key, entry.meta, answer.headers);
@@ -38,8 +39,7 @@ export function createCachedPath({ cache, send, unreachable, now = Date.now }) {
   }
 
   // The client's validators replaced by the kept entry's, if any: a 304 is about our copy.
-  function revalidating(requestHeaders, entry) {
-    const headers = { ...requestHeaders };
+  function revalidating(headers, entry) {
     for (const name of VALIDATORS) delete headers[name];
     if (entry?.meta.headers.etag) headers["if-none-match"] = entry.meta.headers.etag;
     if (entry?.meta.headers["last-modified"]) {
@@ -53,6 +53,7 @@ export function createCachedPath({ cache, send, unreachable, now = Date.now }) {
     const keep = storable(answer.statusCode, answer.headers, cache.limit, req);
     // What was kept is no longer what the host answers.
     if (!keep && cache.has(key)) cache.remove(key);
+    // None either when the downloads under way fill the cache: forwarded, not kept.
     const writer = keep
       ? cache.writer(key, { url: to.url.href, status: answer.statusCode, headers: answer.headers })
       : null;
