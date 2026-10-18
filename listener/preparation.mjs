@@ -136,7 +136,9 @@ export function createPreparation(ctx) {
   }
 
   // An analysis's digest (analysis.mjs), built now from the runs picked when it was asked
-  // for: those of its repo still listed, redacted like any output. None left: no run.
+  // for: those of its repo still listed, redacted like any output. None left: no run. Only an
+  // analysis asked for on a private repo quotes what only the dashboard showed: older ones
+  // didn't say.
   function analysisDigest(task, items, note) {
     const asked = items.findLast((i) => i.analysis)?.analysis;
     if (!asked?.runs?.length) {
@@ -144,7 +146,9 @@ export function createPreparation(ctx) {
         `${cantRun(agentOf(task))}: this analysis has no runs to read. Start one from the dashboard's Analyze.`,
       );
     }
-    const { text, included, left } = ctx.analysis.digest(task.repo, asked.runs, asked);
+    const { text, included, left } = ctx.analysis.digest(task.repo, asked.runs, asked, {
+      isPublic: asked.private !== true,
+    });
     if (!included.length) {
       throw new RunError(
         `${cantRun(agentOf(task))}: the runs this analysis was to read are gone (their logs were removed).`,

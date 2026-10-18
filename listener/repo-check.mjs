@@ -9,18 +9,25 @@ import { refuse } from "./web.mjs";
 // `github(repo, method, path, body, expected)`: the App's calls. `repoSettings(repo, base)`:
 // the default branch's config.
 export function createRepoCheck({ config, github, repoSettings }) {
-  // The repo's default branch, or a 404 when the App can't read it.
-  async function baseOf(repo) {
+  // The repo as GitHub describes it, or a 404 when the App can't read it.
+  async function infoOf(repo) {
     const info = await getJson(github, repo, `/repos/${repo}`, [404]);
     if (!info) refuse(404, `The App is not installed on ${repo}.`);
-    return info.default_branch || "main";
+    return info;
   }
 
-  // { settings, base } for `user` on `repo`; throws Refused.
+  // The repo's default branch, or a 404 when the App can't read it.
+  async function baseOf(repo) {
+    return (await infoOf(repo)).default_branch || "main";
+  }
+
+  // { settings, base, isPrivate } for `user` on `repo`; throws Refused. `isPrivate` only when
+  // GitHub says so.
   async function checkedRepo(repo, user) {
     const login = user.toLowerCase();
     if (!config.users.includes(login)) refuse(403, `${user} is not in ALLOWED_USERS.`);
-    const base = await baseOf(repo);
+    const info = await infoOf(repo);
+    const base = info.default_branch || "main";
     const { settings, errors } = await repoSettings(repo, base);
     if (errors.length) {
       refuse(
@@ -29,7 +36,7 @@ export function createRepoCheck({ config, github, repoSettings }) {
       );
     }
     if (!settings.users.includes(login)) refuse(403, `${user} is not among ${repo}'s users.`);
-    return { settings, base };
+    return { settings, base, isPrivate: info.private === true };
   }
 
   return { baseOf, checkedRepo };

@@ -105,6 +105,33 @@ test("runDigest: clipped outputs, and a cap per run", () => {
   assert.ok(runDigest(run("y"), huge).length <= 24_000 + 10);
 });
 
+test("runDigest on a public repo: no listener notes, setup output or failed outputs", () => {
+  const text = runDigest(run("x"), LOG, { isPublic: true });
+  assert.doesNotMatch(text, /Listener notes|Image deckhand-app|npm error 403|1 failing/);
+  assert.match(text, /Failed tool calls \(1\):\n\n```\nBash: npm test\n→\n\(output left out/);
+  assert.match(text, /Tool calls: 4/);
+  assert.match(text, /> Done: the pull request is ready\./);
+});
+
+test("research runs are never offered nor selected, nor in a digest asked for by id", () => {
+  const runs = [
+    run("r1", { taskMode: "research", kind: "research", status: "ok" }),
+    run("r0", { taskMode: null, kind: "research", status: "ok" }),
+    run("w1", { status: "ok" }),
+  ];
+  assert.deepEqual(runKinds(runs, "org/app"), ["work"]);
+  const sel = { count: 10, kinds: ["research", "work"], outcomes: ["ok"] };
+  assert.deepEqual(
+    selectRuns(runs, "org/app", sel).map((r) => r.id),
+    ["w1"],
+  );
+  const analysis = createAnalysis({ runs: () => runs, partOf: (r) => `part of ${r.id}` });
+  assert.deepEqual(analysis.preview("org/app", sel).runs, ["w1"]);
+  const digest = analysis.digest("org/app", ["r1", "r0", "w1"], sel);
+  assert.deepEqual(digest.included, ["w1"]);
+  assert.doesNotMatch(digest.text, /part of r/);
+});
+
 test("selectRuns: one repo's finished runs, by kind and outcome, the newest `count`", () => {
   const runs = [
     run("a", { status: "running" }),
@@ -219,7 +246,7 @@ test("createAnalysis: previews and digests from the logs, one repo's runs only",
   const analysis = createAnalysis({
     runs: () => runs,
     secrets: () => [secret],
-    partOf: (r) => (reads++, logPart(r)),
+    partOf: (r, options) => (reads++, logPart(r, options)),
   });
   const selection = { count: 10, kinds: ["work"], outcomes: ["error"] };
   const preview = analysis.preview("org/app", selection);
@@ -236,6 +263,12 @@ test("createAnalysis: previews and digests from the logs, one repo's runs only",
   assert.match(digest.text, /token \[redacted\]/);
   // Each run's part is read once.
   assert.equal(reads, 2);
+  // A public repo's digest is another part, kept on its own.
+  const open = analysis.digest("org/app", ["mine-2"], selection, { isPublic: true });
+  assert.doesNotMatch(open.text, /token \[redacted\]|Listener notes/);
+  assert.equal(reads, 3);
+  analysis.digest("org/app", ["mine-2"], selection);
+  assert.equal(reads, 3);
   // Nothing selected: the preview says so, with the kinds there are.
   const none = analysis.preview("org/app", { count: 10, kinds: [], outcomes: [] });
   assert.deepEqual([none.runs, none.included], [[], 0]);
