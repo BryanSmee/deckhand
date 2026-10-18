@@ -49,9 +49,7 @@ export function runKinds(runs, repo) {
 // kinds and outcomes. `runs`: newest first, as ctx.runs is.
 export function selectRuns(runs, repo, { count, kinds, outcomes }) {
   return runs
-    .filter(
-      (r) => readable(r, repo) && kinds.includes(runKind(r)) && outcomes.includes(r.status),
-    )
+    .filter((r) => readable(r, repo) && kinds.includes(runKind(r)) && outcomes.includes(r.status))
     .slice(0, count);
 }
 
@@ -201,7 +199,14 @@ function toolLines(entries, { isPublic = false } = {}) {
     );
     for (const { tool, output } of failed.slice(-10)) {
       const call = tool ? `${tool.name}: ${clip(tool.text, 3, 300)}` : "(unknown call)";
-      out.push("", "```", call, "→", isPublic ? "(output left out: public repository)" : clip(output, 12, 1200), "```");
+      out.push(
+        "",
+        "```",
+        call,
+        "→",
+        isPublic ? "(output left out: public repository)" : clip(output, 12, 1200),
+        "```",
+      );
     }
   }
   return out;

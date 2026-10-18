@@ -2,7 +2,7 @@
 // any of the ways an address can be written.
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { blockedAddress, embeddedV4, v6Bytes } from "../proxy/addresses.mjs";
+import { blockedAddress, embeddedV4, inSubnets, ownSubnets, v6Bytes } from "../proxy/addresses.mjs";
 
 test("v6Bytes: any spelling of an IPv6 address, as its 16 bytes", () => {
   const loopback = [...Array(15).fill(0), 1];
@@ -93,4 +93,45 @@ test("blockedAddress: public addresses go through; the edges of the ranges too",
     assert.equal(blockedAddress(ip, false), false, ip);
   }
   assert.equal(blockedAddress("example.com", true), true);
+});
+
+test("ownSubnets and inSubnets: the proxy's networks, any range, any spelling", () => {
+  const subnets = ownSubnets({
+    lo: [
+      { cidr: "127.0.0.1/8", internal: true },
+      { cidr: "::1/128", internal: true },
+    ],
+    eth0: [
+      { cidr: "11.4.0.3/16", internal: false },
+      { cidr: "2001:db8:5::3/64", internal: false },
+    ],
+    eth1: [{ cidr: "172.20.0.2/28", internal: false }],
+    eth2: [{ cidr: "100.64.3.2/23", internal: false }],
+  });
+  assert.equal(subnets.length, 4);
+  for (const inside of [
+    "11.4.0.1",
+    "11.4.255.254",
+    "::ffff:11.4.9.9",
+    "::ffff:b04:909",
+    "2001:db8:5::1",
+    "2001:DB8:5:0:ffff::1",
+    "172.20.0.15",
+    "100.64.2.1",
+    "100.64.3.255",
+  ]) {
+    assert.equal(inSubnets(inside, subnets), true, inside);
+  }
+  for (const outside of [
+    "11.5.0.1",
+    "2001:db8:6::1",
+    "172.20.0.16",
+    "100.64.4.1",
+    "127.0.0.1",
+    "::1",
+    "github.com",
+  ]) {
+    assert.equal(inSubnets(outside, subnets), false, outside);
+  }
+  assert.deepEqual(ownSubnets(undefined), []);
 });

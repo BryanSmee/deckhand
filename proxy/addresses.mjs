@@ -1,7 +1,7 @@
 // Which addresses the egress proxy may connect to (proxy.mjs): never loopback, link-local,
-// multicast or unspecified ones, the cloud's metadata service among them; private ones only
-// when the operator allowed the host by name. IPv6 forms of an IPv4 address are checked as
-// that address. No dependencies.
+// multicast or unspecified ones, the cloud's metadata service among them; private ones, and
+// those of the networks the proxy is on (ownSubnets()), only when the operator allowed the
+// host by name. IPv6 forms of an IPv4 address are checked as that address. No dependencies.
 import { isIP } from "node:net";
 
 function v4(address) {
@@ -76,4 +76,46 @@ export function blockedAddress(address, privateOk) {
     return isPrivate && !privateOk;
   }
   return true;
+}
+
+// An address as { family, bytes }, an IPv6 form of an IPv4 one as that IPv4 address; null
+// when it isn't one.
+function parsed(address) {
+  let ip = address.toLowerCase();
+  const bytes = v6Bytes(ip);
+  if (bytes) ip = embeddedV4(bytes) ?? ip;
+  if (isIP(ip) === 4) return { family: 4, bytes: v4(ip) };
+  return bytes ? { family: 6, bytes } : null;
+}
+
+// The subnets of the networks the proxy is on (os.networkInterfaces()'s shape), loopback
+// aside: { family, bytes, prefix }. Each run's network is one, and the compose network the
+// listener is on another: Deckhand's own sandboxes, engines and listener, whatever range the
+// operator or Docker gave them.
+export function ownSubnets(interfaces) {
+  const out = [];
+  for (const list of Object.values(interfaces ?? {})) {
+    for (const { cidr, internal } of list ?? []) {
+      if (internal || !cidr) continue;
+      const [address, prefix] = cidr.split("/");
+      const at = parsed(address);
+      if (at) out.push({ ...at, prefix: Number(prefix) });
+    }
+  }
+  return out;
+}
+
+// Whether `address` is inside one of `subnets` (ownSubnets()).
+export function inSubnets(address, subnets) {
+  const at = parsed(address);
+  if (!at) return false;
+  return subnets.some(({ family, bytes, prefix }) => {
+    if (family !== at.family) return false;
+    const whole = Math.floor(prefix / 8);
+    for (let i = 0; i < whole; i++) if (bytes[i] !== at.bytes[i]) return false;
+    const bits = prefix % 8;
+    if (!bits) return true;
+    const mask = (0xff << (8 - bits)) & 0xff;
+    return (bytes[whole] & mask) === (at.bytes[whole] & mask);
+  });
 }

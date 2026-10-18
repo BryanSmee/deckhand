@@ -393,7 +393,10 @@ find an available, non-overlapping IPv4 address pool`). Set aside a range of you
 `SANDBOX_SUBNETS=10.200.0.0/16` (`sandbox_subnets` in `config.yaml`): the listener cuts it
 into blocks of `SANDBOX_SUBNET_SIZE` (`/28` by default, 16 addresses: 4096 networks in a
 `/16`) and gives each run's network the lowest block no network on the host uses, so your
-other projects keep Docker's pools. Pick a range none of your networks or LANs use. When it is
+other projects keep Docker's pools. Pick a range none of your networks or LANs use, inside
+`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16` or `100.64.0.0/10`: the listener refuses to
+start with any other (a public range would make other runs' sandboxes look like public hosts
+to the egress proxy). When it is
 full, runs fail to start with an error naming `SANDBOX_SUBNETS`: set a larger range or a lower
 `MAX_PARALLEL`.
 

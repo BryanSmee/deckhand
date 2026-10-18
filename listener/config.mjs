@@ -16,7 +16,7 @@ import { GEMINI_URL, GOOGLE_CREDENTIALS } from "./google.mjs";
 import { OPENAI_CREDENTIALS } from "./openai.mjs";
 import { MODEL_NAME } from "./events.mjs";
 import { ENGINES } from "./runner/engine.mjs";
-import { parseCidr } from "./subnets.mjs";
+import { PRIVATE_RANGES, parseCidr, privateRange } from "./subnets.mjs";
 import { isMap, parseYaml } from "./yaml.mjs";
 
 export class ConfigError extends Error {}
@@ -476,6 +476,11 @@ function sandboxSubnets(text, { label, values, labelOf }) {
   if (!cidr) {
     throw new ConfigError(
       `${label}: expected an IPv4 range with its host bits at zero (10.200.0.0/16), got ${range}`,
+    );
+  }
+  if (!privateRange(range)) {
+    throw new ConfigError(
+      `${label}: ${range} is not a private range: expected one inside ${PRIVATE_RANGES.join(", ")}`,
     );
   }
   if (cidr.prefix > size) {
