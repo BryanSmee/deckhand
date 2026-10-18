@@ -940,7 +940,7 @@ caches:
     // Built from the default branch's Dockerfile, FROM the base image.
     assert.match(
       calls,
-      /^build .*--build-arg DECKHAND_BASE=deckhand-sandbox .*-t deckhand-repo-org-repo:[0-9a-f]{16} /m,
+      /^build .*--build-arg DECKHAND_BASE=deckhand-sandbox .*-t deckhand-repo-org-repo-[0-9a-f]{10}:[0-9a-f]{16} /m,
     );
     assert.match(readFileSync(join(dir, "built-dockerfile"), "utf8"), /FROM \$DECKHAND_BASE/);
     // Claude Code in its own container, then the cache volume, handed to the sandbox's user.
@@ -951,11 +951,11 @@ caches:
     assert.match(calls, /^volume create .*deckhand-cache-org-repo-home-node-npm-[0-9a-f]{10}$/m);
     assert.match(
       calls,
-      /--entrypoint chown -v deckhand-cache-org-repo-home-node-npm-\w+:\/home\/node\/\.npm deckhand-repo-org-repo:\w+ 1000:1000/,
+      /--entrypoint chown -v deckhand-cache-org-repo-home-node-npm-\w+:\/home\/node\/\.npm deckhand-repo-org-repo-[0-9a-f]{10}:\w+ 1000:1000/,
     );
 
     const args = readFileSync(join(dir, "run-args"), "utf8").split("\n");
-    assert.match(args.at(-2), /^deckhand-repo-org-repo:[0-9a-f]{16}$/);
+    assert.match(args.at(-2), /^deckhand-repo-org-repo-[0-9a-f]{10}:[0-9a-f]{16}$/);
     assert.ok(
       args.some((a) => /^deckhand-cache-org-repo-home-node-npm-\w+:\/home\/node\/\.npm$/.test(a)),
     );

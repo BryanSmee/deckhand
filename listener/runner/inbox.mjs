@@ -11,7 +11,7 @@ import { agentFor } from "../agents/index.mjs";
 export const CLOSE = JSON.stringify({ type: "deckhand", event: "close" });
 
 // Where the inbox is, inside the sandbox.
-const INBOX_DIR = "/deckhand";
+export const INBOX_DIR = "/deckhand";
 const CA_FILE = "egress-ca.crt";
 const DIGEST_FILE = "digest.md";
 const INBOX = "inbox.jsonl";

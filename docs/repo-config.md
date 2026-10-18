@@ -198,10 +198,12 @@ Every run starts from an image:
   image says, so what the image installs for its user must belong to `node`.
 
 The build context is the repository at the default branch (downloaded from GitHub), so the
-Dockerfile can `COPY` files from it. The image is tagged `deckhand-repo-<owner>-<repo>:<hash>`,
-the hash covering the base image and the Dockerfile: the listener builds again when either
-changes, and otherwise reuses the image. It keeps the three most recent tags per repo and
-removes older ones, the default branch's newest first among those kept. While an image builds, the run shows "building image" on the
+Dockerfile can `COPY` files from it. The image is tagged
+`deckhand-repo-<owner>-<repo>-<repo hash>:<hash>`: the repo's hash keeps repos whose names
+read alike (`acme/x.y`, `acme/x-y`) apart, and the tag's covers the repo, the base image and
+the Dockerfile: the listener builds again when either changes, and otherwise reuses the
+image. It keeps the three most recent tags per repo and removes older ones, the default
+branch's newest first among those kept, and the tags of the name from before the repo hash. While an image builds, the run shows "building image" on the
 dashboard, and the build log is in the run's log. A failed build fails the run, with a
 reply on GitHub.
 
@@ -212,7 +214,7 @@ image once the Dockerfile changes, or the base image does.
 for the repository (it is not a key of `.deckhand.yaml`: one there is ignored, with a
 warning), a run triggered from a pull request (a comment or review on it) uses the
 Dockerfile of the pull request's head commit, with that commit as the build context. Its
-image is tagged `deckhand-repo-<owner>-<repo>:branch-<hash>`, the hash covering the commit
+image is tagged `deckhand-repo-<owner>-<repo>-<repo hash>:branch-<hash>`, the hash covering the commit
 too: each new commit builds again (Docker's layer cache helps), and the default branch never
 runs on an image a branch built. Never for a pull request from a fork: those use the default
 branch's image. Builds run on the host's Docker, so operators only grant this to
@@ -256,8 +258,10 @@ Each path in `caches` gets a named Docker volume per repo and path
 (`deckhand-cache-<owner>-<repo>-<path>-<hash>`), mounted at that path in every run of the
 repo. Package manager caches are the usual use: `/home/node/.npm`, `/home/node/.cache/pip`,
 `/home/node/.local/share/pnpm`. A new volume is handed to the sandbox's user. Paths the
-sandbox mounts itself (`/workspace`, `/home/node/.claude`, `/opt/claude-code`,
-`/screenshots`) are refused.
+sandbox mounts itself are refused, and so is a host mount's target there: `/workspace`,
+`/screenshots`, `/deckhand` (the run's inbox), and each agent's session and install
+(`/home/node/.claude` and `/opt/claude-code`, `/home/node/.codex` and `/opt/codex`,
+`/home/node/.gemini` and `/opt/antigravity`), with what is inside or above them.
 
 ## Setup and light runs
 
