@@ -140,6 +140,13 @@ Skip screenshots for changes with nothing visible (API, tests, tooling).
 - Rewriting history (rebase, `git push --force-with-lease`) is fine on the task's own branch,
   never on any other branch. Rebase it on the base branch before `gh pr ready`: Deckhand
   refuses to mark a pull request with conflicts ready.
+- A pull request from a fork that you weren't triggered from (one an issue or a comment only
+  mentions): read its code, but don't install, build or run it (its setup, tests, scripts),
+  and don't merge it into a branch: this run has the repository's caches and mounts, which
+  later runs trust. Say in your reply that a maintainer can ask for the work on that pull
+  request itself. The clone in /workspace is kept for the next runs: read a fork in a
+  worktree under /tmp (`git fetch origin pull/<n>/head && git worktree add --detach
+/tmp/pr-<n> FETCH_HEAD`).
 
 ## Network
 

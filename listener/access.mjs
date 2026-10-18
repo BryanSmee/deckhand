@@ -48,9 +48,10 @@ function refusedMounts(refused, name) {
 // reach, its host mounts and limits. Refused mounts, and a preview hook or Dockerfile
 // without their grant, stop the run, and the reply lists them. `task`: the run's (tasks.mjs),
 // `agent` its agent, `note(text)` a line in its log.
-export function grantedAccess(config, task, settings, { agent, note, log }) {
+// `fs`: the file system the mounts are resolved on (grants.mjs resolveMounts()), for tests.
+export function grantedAccess(config, task, settings, { agent, note, log, fs }) {
   const { repo } = task;
-  const check = grantCheck(config, repo, settings);
+  const check = grantCheck(config, repo, settings, { fs });
   if (check.error) {
     log(`${repo}: ${check.error.message}`);
     const where = check.error.file

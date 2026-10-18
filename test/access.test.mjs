@@ -116,6 +116,35 @@ test("a mount that resolves elsewhere once the run is prepared stops it", (t) =>
   );
 });
 
+// A fork's code would leave something there for the repo's later runs (sandbox-spec.mjs).
+test("a run with a comment from a fork's pull request notes its read-write mounts read-only", (t) => {
+  const dir = realpathSync(tempDir(t));
+  mkdirSync(join(dir, "nfs", "api"), { recursive: true });
+  const grant = `mounts:\n  - root: ${join(dir, "nfs")}\n    read_only: false\n`;
+  const config = testConfig({ GRANTS_DIR: granted(t, grant).dir });
+  const { settings } = parseRepoConfig(
+    `mounts:\n  - path: ${dir}/nfs/api\n    read_only: false\n`,
+    config,
+  );
+  // Owned by root, as a granted root should be: these temp dirs are uid 1000's, the sandbox's.
+  const fs = { stat: () => ({ mode: 0o40755, uid: 0, gid: 0 }) };
+  const notes = (live) => {
+    const noted = [];
+    grantedAccess(config, task(live), settings, {
+      agent: claude,
+      note: (m) => noted.push(m),
+      log: () => {},
+      fs,
+    });
+    return noted;
+  };
+  assert.deepEqual(notes({}), [`Host mount ${dir}/nfs/api`]);
+  assert.deepEqual(notes({ fork: true }), [
+    `Host mount ${dir}/nfs/api (read-only: a pull request from a fork)`,
+  ]);
+  assert.deepEqual(notes({ light: true, fork: true }), [`Host mount ${dir}/nfs/api (read-only)`]);
+});
+
 test("validateRun: an /agent the operator doesn't have, config errors, a mode gone, another agent's model", () => {
   const ok = { badPick: null, errors: [], warnings: [], own: null };
   const noted = [];

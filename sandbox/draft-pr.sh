@@ -76,6 +76,13 @@ start() {
   branch=$(jq -r .branch <<< "$task")
   git fetch --quiet origin "$base"
   if git show-ref --verify --quiet "refs/heads/$branch"; then
+    # Commits that aren't on the repository may be a fork's, merged in by a run that stopped
+    # before pushing: entrypoint.sh left the branch for the agent to check out once it has
+    # read them, not for setup to run on.
+    if [ -n "$(git rev-list "$branch" --not --remotes=origin)" ]; then
+      echo "draft-pr: $branch has commits that aren't pushed, the agent checks it out" >&2
+      return 0
+    fi
     git checkout --quiet "$branch"
   elif git fetch --quiet origin "$branch" 2> /dev/null; then
     git checkout --quiet -b "$branch" --track "origin/$branch"

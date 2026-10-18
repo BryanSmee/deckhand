@@ -271,9 +271,11 @@ their code could leave something there that the repo's later runs would run.
 Claude starts, on every work run (a follow-up comment starts a new container). Its output
 goes to the run's log. If it fails, the run goes on and Claude is told. The clone is kept
 between an issue's runs, but each starts clean: on the branch it was on if that is one of the
-repository's own (the task's, a pull request's from the repository), else the default
-branch, with untracked and ignored files removed (`git clean -ffdx`, so `node_modules` too).
-Setup reinstalls what it needs, from the caches.
+repository's own (the task's, a pull request's from the repository) with all its commits
+pushed, else the default branch, with uncommitted changes stashed and ignored files removed
+(`git clean -ffdx`, so `node_modules` too). Setup reinstalls what it needs, from the caches.
+Git hooks and local git settings (`.git/hooks`, `.git/config` beyond the remote and branches)
+are reset too: set them up in `setup` if the repository needs them.
 
 Brainstorms are light runs: no branch, no setup command, so the answer comes quickly. So
 are the repo's modes with `light: true`.

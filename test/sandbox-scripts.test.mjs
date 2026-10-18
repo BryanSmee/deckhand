@@ -451,11 +451,16 @@ test("the prompt says whether the run has a container engine, and whether it ans
 });
 
 // The clone kept in a session volume, from the entrypoint's own reset_clone(), in a clone of a
-// local origin: whatever the last run checked out, setup and the agent start on trusted code.
-test("every start puts the kept clone back on a branch of the repository, with nothing untracked", (t) => {
+// local origin: whatever the last run checked out or left in .git, setup and the agent start
+// on trusted code, and nothing of the last run's is lost.
+function resetClone(t) {
   const script = readFileSync(`${bin}entrypoint.sh`, "utf8");
-  const fn = /^reset_clone\(\) \{[^]*?^\}$/m.exec(script)[0];
+  const fns = ["reset_clone", "clean_git_dir"]
+    .map((name) => new RegExp(`^${name}\\(\\) \\{[^]*?^\\}$`, "m").exec(script)[0])
+    .join("\n");
   const dir = tempDir(t, "reset-");
+  const origin = join(dir, "origin");
+  const clone = join(dir, "clone");
   const env = {
     PATH: process.env.PATH,
     HOME: dir,
@@ -464,6 +469,7 @@ test("every start puts the kept clone back on a branch of the repository, with n
     GIT_AUTHOR_EMAIL: "a@example",
     GIT_COMMITTER_NAME: "a",
     GIT_COMMITTER_EMAIL: "a@example",
+    REPO_URL: origin,
   };
   const sh = (cwd, command, extra = {}) => {
     const result = spawnSync("bash", ["-c", command], {
@@ -474,58 +480,122 @@ test("every start puts the kept clone back on a branch of the repository, with n
     assert.equal(result.status, 0, result.stderr);
     return result.stdout.trim();
   };
-  const origin = join(dir, "origin");
-  const clone = join(dir, "clone");
   sh(
     dir,
     `git init -q -b main origin && cd origin && echo ignored/ > .gitignore &&
     git add . && git commit -qm base && git branch feat`,
   );
   sh(dir, `git clone -q ${origin} clone && cd clone && git branch -q --track feat origin/feat`);
-  // A fork's head as `gh pr checkout` leaves it: a commit with project hooks, a git hook (as a
-  // fork's code run by a work run could write), untracked and ignored files.
+  // What a fork's code run by a work run could leave in .git: a hook, and settings git runs.
+  const hooked = join(dir, "hooked");
+  const plant = () =>
+    sh(
+      clone,
+      `printf '#!/bin/sh\ntouch "${hooked}"\n' > "${dir}/hook" && chmod +x "${dir}/hook" &&
+      cp "${dir}/hook" .git/hooks/post-checkout && git config core.fsmonitor "${dir}/hook" &&
+      git config remote.origin.url https://example.com/elsewhere.git`,
+    );
+  // A fork's head as `gh pr checkout` leaves it: project hooks, untracked and ignored files.
   const leave = (branch, remote, merge) =>
     sh(
       clone,
       `git checkout -q -B ${branch} origin/main && mkdir -p .claude ignored &&
       echo '{"hooks":{}}' > .claude/settings.json && git add .claude && git commit -qm fork &&
       git config branch.${branch}.remote ${remote} && git config branch.${branch}.merge ${merge} &&
-      printf '#!/bin/sh\ntouch "$HOME/hooked"\n' > .git/hooks/post-checkout &&
-      chmod +x .git/hooks/post-checkout && touch untracked ignored/tampered.tgz`,
+      touch untracked ignored/tampered.tgz`,
     );
-  const reset = (extra = {}) =>
-    sh(
+  const reset = (extra = {}) => {
+    plant();
+    return sh(
       clone,
-      `${fn}\nset -euo pipefail\nBASE_BRANCH=main\nreset_clone\necho "$(git branch --show-current) \${reset_from:-}"`,
+      `${fns}\nset -euo pipefail\nBASE_BRANCH=\${BASE_BRANCH:-main}\nreset_clone\n` +
+        `echo "$(git branch --show-current)|\${reset_from:-}|\${reset_stashed:-}"`,
       extra,
     );
+  };
   const clean = () => {
     assert.equal(sh(clone, "git status --porcelain --ignored"), "");
     assert.ok(!existsSync(join(clone, ".claude")));
-    assert.ok(!existsSync(join(dir, "hooked")), "a git hook ran");
-    sh(clone, "rm -f .git/hooks/post-checkout");
+    assert.deepEqual(readdirSync(join(clone, ".git", "hooks")), []);
+    assert.equal(sh(clone, "git config core.fsmonitor || true"), "");
+    assert.equal(sh(clone, "git config remote.origin.url"), origin);
+    // Not just during the reset: the checkout draft-pr.sh may do next runs no hook either.
+    sh(clone, "git checkout -q feat && git checkout -q -");
+    assert.ok(!existsSync(hooked), "a git hook ran");
   };
+  return { sh, origin, clone, leave, reset, clean, script };
+}
 
+test("every start puts the kept clone back on a branch of the repository, with nothing untracked", (t) => {
+  const { sh, clone, leave, reset, clean, script } = resetClone(t);
   // A fork whose maintainers may push: its URL. One whose maintainers can't: refs/pull/<n>/head.
+  // A work run's untracked files are stashed, not lost.
   leave("fork-head", "https://github.com/someone/repo.git", "refs/heads/feat");
-  assert.equal(reset(), "main fork-head");
+  assert.equal(reset(), "main|fork-head|1");
   clean();
+  assert.match(sh(clone, "git stash list"), /Left uncommitted by a run, on fork-head/);
+  assert.equal(sh(clone, "git stash show --include-untracked --name-only"), "untracked");
   leave("pr-7", "origin", "refs/pull/7/head");
-  assert.equal(reset(), "main pr-7");
+  assert.equal(reset(), "main|pr-7|1");
   clean();
-  // The repository's own branch: a work run stays there, a light run goes back to the base.
-  sh(clone, "git checkout -q feat && mkdir -p ignored && touch untracked ignored/x");
-  assert.equal(reset(), "feat");
+  // The repository's own branch: a work run stays there, a light run goes back to the base,
+  // with nothing stashed.
+  sh(clone, "git checkout -q feat && mkdir -p ignored && touch ignored/x");
+  assert.equal(reset(), "feat||");
   clean();
   sh(clone, "git checkout -q feat && touch untracked");
-  assert.equal(reset({ SANDBOX_LIGHT: "1" }), "main feat");
+  assert.equal(reset({ SANDBOX_LIGHT: "1" }), "main|feat|");
   clean();
+  // Commits that aren't on the repository (a fork's, merged in and not pushed): the base
+  // branch, and the branch kept as it is.
+  sh(clone, "git checkout -q feat && git commit -q --allow-empty -m unpushed");
+  assert.equal(reset(), "main|feat|");
+  clean();
+  assert.equal(sh(clone, "git log -1 --format=%s feat"), "unpushed");
 
   // Before anything runs on the clone: the setup, and the agent.
   assert.match(
     script,
     /\|\| reset_clone\n[^]*?bash -c "\$SANDBOX_SETUP"[^]*?agent_run "\$session"/,
   );
+});
+
+test("a kept clone resets whatever its worktrees and base branch became", (t) => {
+  const { sh, origin, clone, reset, clean } = resetClone(t);
+  // A worktree that held the base branch, gone with its container.
+  sh(clone, `git checkout -q feat && git worktree add -q ${clone}-wt main && rm -rf ${clone}-wt`);
+  sh(clone, "git checkout -q -b local");
+  assert.equal(reset(), "main|local|");
+  clean();
+  // The base branch renamed on the repository since the clone: fetched.
+  sh(origin, "git branch -m main trunk");
+  sh(clone, "git checkout -q local");
+  assert.equal(reset({ BASE_BRANCH: "trunk" }), "trunk|local|");
+  clean();
+});
+
+// After the reset, draft-pr.sh goes back to the issue's branch only when the repository has
+// all its commits: those it doesn't have may be a fork's, for the agent to read first.
+test("draft-pr's start leaves the issue's branch alone when it has commits that aren't pushed", (t) => {
+  const { sh, clone } = resetClone(t);
+  const fake = tempDir(t, "gh-");
+  writeFileSync(join(fake, "gh"), "#!/bin/sh\necho 1\n"); // its pull request exists
+  chmodSync(join(fake, "gh"), 0o755);
+  // Its functions only: the script itself works in /workspace.
+  const script = readFileSync(`${bin}draft-pr.sh`, "utf8");
+  const fns = ["info", "ensure", "start"]
+    .map((name) => new RegExp(`^${name}\\(\\) \\{[^]*?^\\}$`, "m").exec(script)[0])
+    .join("\n");
+  const start = () =>
+    sh(
+      clone,
+      `base=main\ncache=.git/deckhand-task.json\n${fns}\nstart\ngit branch --show-current`,
+      { PATH: `${fake}:${process.env.PATH}`, TASK_ISSUE: "5" },
+    );
+  sh(clone, `echo '{"title":"t","branch":"feat"}' > .git/deckhand-task.json`);
+  assert.equal(start(), "feat");
+  sh(clone, "git commit -q --allow-empty -m unpushed && git checkout -q main");
+  assert.equal(start(), "main");
 });
 
 // The branch's slug, from draft-pr.sh's own slug(): the gateway only takes issue-<n>-<slug>,

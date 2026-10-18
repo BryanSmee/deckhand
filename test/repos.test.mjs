@@ -456,7 +456,7 @@ test("the list's refused checks are the run preflight's: both go through grantCh
   const access = readFileSync(new URL("../listener/access.mjs", import.meta.url), "utf8");
   const preflight = access.slice(access.indexOf("function grantedAccess("));
   const body = preflight.slice(0, preflight.indexOf("\n}\n"));
-  assert.match(body, /grantCheck\(config, repo, settings\)/);
+  assert.match(body, /grantCheck\(config, repo, settings[,)]/);
   // None of the checks is made on the side, where the list wouldn't see it.
   for (const piece of ["loadGrants(", "grantFor(", "ungranted(", "resolveMounts("]) {
     assert.ok(!body.includes(piece), piece);
