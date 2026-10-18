@@ -4,6 +4,7 @@ import { request } from "node:http";
 import { test } from "node:test";
 import { createBroker } from "../listener/broker.mjs";
 import { createOpenAiProxy } from "../listener/openai.mjs";
+import { credentialFailure } from "../listener/upstream.mjs";
 import { serve } from "./helpers.mjs";
 
 // A fake OpenAI that records each request and streams two events, the second one only once
@@ -207,6 +208,7 @@ test("a plan's login the backend refuses is marked, for a refresh before the nex
 test("a plan's login that can't be used: a 503, and its status for fallbacks", async (t) => {
   const spent = Object.assign(new Error("the ChatGPT login can't be refreshed (401)"), {
     status: 401,
+    refused: true,
   });
   const login = {
     headers: async () => Promise.reject(spent),
@@ -224,4 +226,22 @@ test("a plan's login that can't be used: a 503, and its status for fallbacks", a
   assert.equal(broker.runOf(secret).apiError, message);
   assert.equal(broker.runOf(secret).apiStatus, 401);
   assert.equal(upstream.requests.length, 0);
+});
+
+test("what the sandbox is told of each kind of login failure, never the error itself", () => {
+  const error = (status, refused) =>
+    Object.assign(new Error("CODEX_AUTH_FILE (/x) must be in a folder…"), { status, refused });
+  assert.equal(
+    credentialFailure("OpenAI", error(401, true)),
+    "the operator's login for OpenAI was refused, and must be signed in again: see the listener's log",
+  );
+  // A folder it can't write, a file without a login: signing in again isn't the fix.
+  assert.equal(
+    credentialFailure("OpenAI", error(401, false)),
+    "the operator's login for OpenAI can't be used: see the listener's log",
+  );
+  assert.equal(
+    credentialFailure("OpenAI", new Error("fetch failed")),
+    "the operator's login for OpenAI can't be refreshed right now: see the listener's log",
+  );
 });

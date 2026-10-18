@@ -146,6 +146,8 @@ test("a file the listener can't rewrite: refused before any refresh container", 
     );
     assert.match(error.message, /\/data\/credentials \(docs\/setup\.md#antigravity-cli\)/);
     assert.equal(error.status, 401);
+    // Moving the file is the fix, not signing in again (upstream.mjs credentialFailure()).
+    assert.equal(error.refused, false);
     return true;
   });
   assert.equal(calls.length, 0);
@@ -172,6 +174,7 @@ test("a refused refresh says to sign in again, until the file is replaced", asyn
     assert.match(error.message, /can't be refreshed \(W1017 [^]*oauth2: "invalid_grant"/);
     assert.match(error.message, /sign in with `agy` again for AGY_AUTH_FILE/);
     assert.equal(error.status, 401);
+    assert.equal(error.refused, true);
     return true;
   });
   // Spent for good: no container again for the next calls.
@@ -368,6 +371,7 @@ test("Google's 401 marks the plan's token for a refresh; a spent login refuses t
 
   const spent = Object.assign(new Error("sign in with `agy` again for AGY_AUTH_FILE"), {
     status: 401,
+    refused: true,
   });
   const broken = await relay(t, {
     login: { headers: async () => Promise.reject(spent), refused: () => {}, secrets: () => [] },

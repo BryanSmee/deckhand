@@ -203,7 +203,9 @@ test("the GitHub tokens the broker gave the run are redacted from its log and it
   runner.out(
     JSON.stringify({
       type: "assistant",
-      message: { content: [{ type: "text", text: `gh auth token: ${issued}` }] },
+      message: {
+        content: [{ type: "text", text: `gh auth token: ${issued}\n$ gh auth token\n${other}` }],
+      },
     }),
   );
   runner.out(result(`Mine is ${issued}, and I found ${other}.`));
@@ -211,5 +213,6 @@ test("the GitHub tokens the broker gave the run are redacted from its log and it
   assert.match(answers[0], /^Mine is \[redacted\], and I found \[redacted\]\./);
   const log = readFileSync(logPath, "utf8");
   assert.ok(!log.includes(issued) && !log.includes(other));
-  assert.match(log, /gh auth token: \[redacted\]/);
+  // The raw line has `\n` before the second: still redacted (no word boundary needed).
+  assert.match(log, /gh auth token: \[redacted\]\\n\$ gh auth token\\n\[redacted\]/);
 });

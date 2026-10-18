@@ -82,11 +82,15 @@ export function forward(
 
 // What a sandbox and a run's reply learn of a credential the listener couldn't use: a fixed
 // text per kind, never the error's message, which may quote a credential file (#242). 401: a
-// login refused for good (agents/ providerError()).
+// login unusable until the operator acts (agents/ providerError()), `refused` when signing in
+// again is what fixes it (chatgpt.mjs, antigravity-login.mjs).
 export function credentialFailure(what, error) {
-  return error.status === 401
-    ? `the operator's login for ${what} was refused, and must be signed in again: see the listener's log`
-    : `the operator's login for ${what} can't be refreshed right now: see the listener's log`;
+  const why = error.refused
+    ? "was refused, and must be signed in again"
+    : error.status === 401
+      ? "can't be used"
+      : "can't be refreshed right now";
+  return `the operator's login for ${what} ${why}: see the listener's log`;
 }
 
 // A provider's endpoint: each call's run from its secret, then where it goes and with which

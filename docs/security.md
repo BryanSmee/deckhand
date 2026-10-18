@@ -159,11 +159,14 @@ and end up in a public comment.
   before writing the run's log (what the dashboard shows) and from its reply before posting
   it, as `[redacted]`. The value, or any part of it 16 characters long or more (a value cut off
   in an error message); an encoded or split one gets through, which is why the credential isn't
-  there to begin with.
+  there to begin with. A JWT's header and the `.eyJ` that starts its payload don't count
+  towards those 16 characters: every token its issuer signs shares them, so other JWTs in a
+  reply stay readable.
 - When the listener can't use an operator's login (a refresh that failed, a file it can't
-  read), the sandbox's call and the run's reply get a fixed text ("the operator's login for
-  Google can't be refreshed right now: see the listener's log"), never the error itself, which
-  could quote the credential file. The details go to the listener's log, redacted.
+  read), the sandbox's call and the run's reply get a fixed text per kind ("the operator's
+  login for Google can't be refreshed right now", "can't be used", or "was refused, and must
+  be signed in again", each followed by "see the listener's log"), never the error itself,
+  which could quote the credential file. The details go to the listener's log, redacted.
 
 Codex's `OPENAI_API_KEY` is kept out the same way (`listener/openai.mjs`): a sandbox's Codex
 has `<broker>/openai` as its provider's base URL and the run's secret as its key, sent as

@@ -16,7 +16,9 @@ import { send } from "./web.mjs";
 // What a run's secret sent from elsewhere than its sandbox gets.
 export const NOT_ITS_SANDBOX = "this run's secret only works from its own sandbox";
 
-// Kept by hash: the map never holds a usable secret, and lookups don't compare secrets.
+// Secrets are kept by hash: the map never holds a usable one, and lookups don't compare secrets.
+// Each run's entry does hold the installation tokens it already got (`tokens`), for redaction:
+// github-app.mjs caches them anyway.
 function hash(secret) {
   return createHash("sha256").update(secret).digest("hex");
 }

@@ -26,10 +26,15 @@ const EXPIRED = "2000-01-01T00:00:00Z";
 // it couldn't reach alike.
 const REFUSED = /invalid_grant|invalid_client|unauthorized_client|revoked/i;
 
-// Refused for good: signing in again is the fix. 401: a bad credential, for a fallback
-// (agents/ providerError()).
+// Unusable until the operator acts: 401, a bad credential, for a fallback (agents/
+// providerError()). `refused`: a refresh Google refused, which signing in again fixes; else the
+// file or its folder is the problem (upstream.mjs credentialFailure()).
 class LoginError extends Error {
   status = 401;
+  constructor(message, { refused = false } = {}) {
+    super(message);
+    this.refused = refused;
+  }
 }
 
 // The token file's JSON, or a LoginError naming `file`.
@@ -124,7 +129,9 @@ export function createAntigravityLogin({
         (result.err ?? "").trim().split("\n").at(-1) || `exit ${result.code}, nothing on stderr`;
       const message = `the Antigravity CLI's login can't be refreshed (${why.slice(0, 300)})`;
       if (result.code !== 0 && REFUSED.test(result.err ?? "")) {
-        throw new LoginError(`${message}: sign in with \`agy\` again for AGY_AUTH_FILE`);
+        throw new LoginError(`${message}: sign in with \`agy\` again for AGY_AUTH_FILE`, {
+          refused: true,
+        });
       }
       throw new Error(message);
     }

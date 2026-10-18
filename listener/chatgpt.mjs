@@ -38,9 +38,15 @@ function accountOf(tokens) {
   };
 }
 
-// Refused for good: an expired, reused or revoked refresh token. Signing in again is the fix.
+// Unusable until the operator acts: 401, a bad credential, for a fallback (agents/
+// providerError()). `refused`: an expired, reused or revoked refresh token, which signing in
+// again fixes; else the file or its folder is the problem (upstream.mjs credentialFailure()).
 class LoginError extends Error {
   status = 401;
+  constructor(message, { refused = false } = {}) {
+    super(message);
+    this.refused = refused;
+  }
 }
 
 export function createChatgptLogin({
@@ -112,7 +118,9 @@ export function createChatgptLogin({
       const message = `the ChatGPT login can't be refreshed (${res.status}${typeof code === "string" ? ` ${code}` : ""})`;
       // 400 invalid_grant and 401: the refresh token is spent, retrying won't help.
       if (res.status === 401 || res.status === 400) {
-        throw new LoginError(`${message}: run \`codex login\` again for CODEX_AUTH_FILE`);
+        throw new LoginError(`${message}: run \`codex login\` again for CODEX_AUTH_FILE`, {
+          refused: true,
+        });
       }
       throw new Error(message);
     }

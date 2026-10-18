@@ -108,6 +108,7 @@ test("a spent refresh token: a 401 for fallbacks, no retry until the file is rep
     await assert.rejects(login.headers(), (error) => {
       assert.equal(error.status, 401);
       assert.match(error.message, /refresh_token_reused.*run `codex login` again/);
+      assert.equal(error.refused, true);
       return true;
     });
   }
