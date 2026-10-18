@@ -10,18 +10,18 @@ import { AGENTS } from "./agents/index.mjs";
 import { EFFORTS, MODEL_NAME } from "./events.mjs";
 import { list, normalize } from "./config.mjs";
 import { customMode, PICKED_MODES, RESERVED_MODES } from "./modes.mjs";
+import { INBOX_DIR } from "./runner/inbox.mjs";
 import { isMap, parseYaml } from "./yaml.mjs";
 
 export const CONFIG_FILE = ".deckhand.yaml";
 
-// What the sandbox mounts itself: a cache can't take these over.
+// What the sandbox mounts itself: a cache or mount can't take these over. Every agent's
+// session and install, from its definition, so a new agent can't be left out.
 export const RESERVED = [
   "/workspace",
-  "/home/node/.claude",
-  "/opt/claude-code",
-  "/home/node/.codex",
-  "/opt/codex",
   "/screenshots",
+  INBOX_DIR,
+  ...Object.values(AGENTS).flatMap((a) => [a.session.path, a.install({}).mount]),
 ];
 
 // Docker's --mount is comma-separated: host and cache paths stay within these characters.
@@ -680,8 +680,14 @@ export async function taskSandboxName(config, repo, id, runs, hasSession) {
   return ran && (await hasSession(legacy)) ? legacy : sandboxName(config, repo, id);
 }
 
-// The image a repo's Dockerfile builds (its tags are hashes, see images.mjs).
+// The image a repo's Dockerfile builds (its tags are hashes, see images.mjs). The hash keeps
+// "acme/x.y", "acme/x-y" and "acme-x/y" apart: one repo never runs on another's image.
 export function repoImage(config, repo) {
+  return `${legacyRepoImage(config, repo).slice(0, 100)}-${shortHash(repo.toLowerCase())}`;
+}
+
+// The name before it had a hash, shared by repos whose names slug alike: only pruned.
+export function legacyRepoImage(config, repo) {
   return `${slug(config.prefix)}-repo-${slug(repo)}`;
 }
 

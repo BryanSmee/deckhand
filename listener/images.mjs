@@ -12,7 +12,7 @@ import { createHash } from "node:crypto";
 import { rmSync } from "node:fs";
 import { join } from "node:path";
 import { checked, hardening, labelArgs, removeVolume, volumeExists } from "./docker.mjs";
-import { cacheVolume, repoImage } from "./repo-config.mjs";
+import { cacheVolume, legacyRepoImage, repoImage } from "./repo-config.mjs";
 
 // Tags kept per repo image: the default branch's and those of a few branches in flight.
 export const KEEP_TAGS = 3;
@@ -32,9 +32,16 @@ export function imageRef(grant, settings, repo, base, pr) {
 }
 
 // A branch's tag also hashes its commit (`ref`): its build context (what the Dockerfile
-// COPYs or RUNs) may differ from the default branch's with the same Dockerfile.
+// COPYs or RUNs) may differ from the default branch's with the same Dockerfile. The repo is
+// hashed too, as two repos' contexts differ just the same.
 export function imageTag(config, repo, baseId, dockerfile, blob, branchRef = null) {
-  const parts = [baseId, dockerfile, blob, ...(branchRef ? ["branch", branchRef] : [])];
+  const parts = [
+    repo.toLowerCase(),
+    baseId,
+    dockerfile,
+    blob,
+    ...(branchRef ? ["branch", branchRef] : []),
+  ];
   const hash = createHash("sha256").update(parts.join("\0")).digest("hex");
   return `${repoImage(config, repo)}:${branchRef ? BRANCH : ""}${hash.slice(0, 16)}`;
 }
@@ -122,6 +129,14 @@ export function createImages({
     for (const tag of tags) if (kept.size < KEEP_TAGS) kept.add(tag);
     for (const tag of tags) {
       if (!kept.has(tag)) await docker(["image", "rm", `${name}:${tag}`]);
+    }
+    // Tags of the name before it had a hash: no run picks them any more, whichever repo built
+    // them.
+    const legacy = legacyRepoImage(config, repo);
+    const old = await docker(["image", "ls", "--format", "{{.Tag}}", legacy]);
+    if (old.code !== 0) return;
+    for (const tag of old.out.split("\n").filter((t) => t && t !== "<none>")) {
+      await docker(["image", "rm", `${legacy}:${tag}`]);
     }
   }
 

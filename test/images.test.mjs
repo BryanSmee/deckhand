@@ -3,9 +3,11 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { claude } from "../listener/agents/claude.mjs";
 import { KEEP_TAGS, createImages, imageRef, imageTag } from "../listener/images.mjs";
+import { legacyRepoImage, repoImage } from "../listener/repo-config.mjs";
 import { tempDir, testConfig } from "./helpers.mjs";
 
 const config = testConfig({ ALLOWED_USERS: "a", CLAUDE_CODE_VERSION: "9.9.9" });
+const A = repoImage(config, "org/a");
 
 // Plays Docker: `images` are the tags that exist, `volumes` the volumes; every call is kept.
 function fakeDocker({
@@ -29,6 +31,7 @@ function fakeDocker({
         code: 0,
         out: [...images]
           .reverse()
+          .filter((i) => i.split(":")[0] === args.at(-1))
           .map((i) => i.split(":")[1])
           .join("\n"),
         err: "",
@@ -87,7 +90,8 @@ test("a repo's Dockerfile is built once from its ref, then reused", async (t) =>
   // Two runs at once share one build.
   const [first, second] = await Promise.all([ask(), ask()]);
   assert.equal(first, second);
-  assert.match(first, /^deckhand-repo-org-a:[0-9a-f]{16}$/);
+  assert.match(first, /^deckhand-repo-org-a-[0-9a-f]{10}:[0-9a-f]{16}$/);
+  assert.equal(first.split(":")[0], A);
   assert.equal(calls.filter((c) => c.startsWith("build")).length, 1);
   assert.deepEqual(checkouts, ["main"]);
   assert.equal(builds, 2);
@@ -103,6 +107,12 @@ test("a new base image or a changed Dockerfile means a new tag", () => {
   assert.notEqual(tag, imageTag(config, "org/a", "sha256:2", "Dockerfile", "blob1"));
   assert.notEqual(tag, imageTag(config, "org/a", "sha256:1", "Dockerfile", "blob2"));
   assert.notEqual(tag, imageTag(config, "org/b", "sha256:1", "Dockerfile", "blob1"));
+  // Repos whose names slug alike: neither name nor tag is shared.
+  const [x, y] = ["acme/x.y", "acme/x-y"].map((r) =>
+    imageTag(config, r, "sha256:1", "Dockerfile", "blob1"),
+  );
+  assert.notEqual(x.split(":")[0], y.split(":")[0]);
+  assert.notEqual(x.split(":")[1], y.split(":")[1]);
   const branch = imageTag(config, "org/a", "sha256:1", "Dockerfile", "blob1", "abc");
   assert.notEqual(branch, tag);
   assert.notEqual(branch, imageTag(config, "org/a", "sha256:1", "Dockerfile", "blob1", "def"));
@@ -124,7 +134,7 @@ test("a branch build never takes the default branch's tag", async (t) => {
   const ask = (ref, branch) =>
     images.imageFor({ repo: "org/a", ref, branch, dockerfile: "Dockerfile" });
   const branch = await ask("abc", true);
-  assert.match(branch, /^deckhand-repo-org-a:branch-[0-9a-f]{16}$/);
+  assert.match(branch, /^deckhand-repo-org-a-[0-9a-f]{10}:branch-[0-9a-f]{16}$/);
   // Built from the branch first, the default branch still builds its own.
   const main = await ask("main", false);
   assert.notEqual(main, branch);
@@ -138,9 +148,9 @@ test("a branch build never takes the default branch's tag", async (t) => {
 });
 
 test("pruning keeps the default branch's tag through branch builds", async (t) => {
-  const branches = Array.from({ length: 4 }, (_, k) => `deckhand-repo-org-a:branch-old${k}`);
+  const branches = Array.from({ length: 4 }, (_, k) => `${A}:branch-old${k}`);
   const { images, tags: existing } = setup(t, {
-    images: new Set(["deckhand-repo-org-a:main1", ...branches]),
+    images: new Set([`${A}:main1`, ...branches]),
   });
   const tag = await images.imageFor({
     repo: "org/a",
@@ -150,18 +160,29 @@ test("pruning keeps the default branch's tag through branch builds", async (t) =
   });
   assert.equal(existing.size, KEEP_TAGS);
   assert.ok(existing.has(tag));
-  assert.ok(existing.has("deckhand-repo-org-a:main1"));
-  assert.ok(existing.has("deckhand-repo-org-a:branch-old3"));
+  assert.ok(existing.has(`${A}:main1`));
+  assert.ok(existing.has(`${A}:branch-old3`));
 });
 
 test("old tags are pruned, the most recent kept", async (t) => {
-  const old = Array.from({ length: 5 }, (_, k) => `deckhand-repo-org-a:old${k}`);
+  const old = Array.from({ length: 5 }, (_, k) => `${A}:old${k}`);
   const { images, tags: existing } = setup(t, { images: new Set(old) });
   const tag = await images.imageFor({ repo: "org/a", ref: "main", dockerfile: "Dockerfile" });
   assert.ok(existing.has(tag));
   assert.equal(existing.size, KEEP_TAGS);
-  assert.ok(existing.has("deckhand-repo-org-a:old4"));
-  assert.ok(!existing.has("deckhand-repo-org-a:old0"));
+  assert.ok(existing.has(`${A}:old4`));
+  assert.ok(!existing.has(`${A}:old0`));
+});
+
+test("pruning one repo's tags never removes another's, the unhashed names go", async (t) => {
+  const other = Array.from({ length: 5 }, (_, k) => `${repoImage(config, "org-a")}:old${k}`);
+  const legacy = [`${legacyRepoImage(config, "org/a")}:old`];
+  const old = Array.from({ length: 5 }, (_, k) => `${A}:old${k}`);
+  const { images, tags: existing } = setup(t, { images: new Set([...other, ...legacy, ...old]) });
+  await images.imageFor({ repo: "org/a", ref: "main", dockerfile: "Dockerfile" });
+  for (const tag of other) assert.ok(existing.has(tag), tag);
+  assert.ok(!existing.has(legacy[0]));
+  assert.equal([...existing].filter((i) => i.startsWith(`${A}:`)).length, KEEP_TAGS);
 });
 
 test("a failed build fails the run and is tried again next time", async (t) => {

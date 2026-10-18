@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { AGENTS } from "../listener/agents/index.mjs";
 import { workItem } from "../listener/events.mjs";
 import {
   cacheProblem,
@@ -12,7 +13,9 @@ import {
   loadRepoSettings,
   modeNames,
   parseRepoConfig,
+  repoImage,
   repoPath,
+  RESERVED,
   sandboxName,
   startable,
   taskSandboxName,
@@ -175,6 +178,25 @@ test("paths in the repo and cache paths", () => {
   for (const bad of ["/", "/home/node/.claude", "/home", "/opt/claude-code/x", "/a//b", "/a:b"]) {
     assert.ok(cacheProblem(bad), bad);
   }
+});
+
+test("every agent's session and install, and the inbox, are reserved", () => {
+  for (const agent of Object.values(AGENTS)) {
+    assert.ok(RESERVED.includes(agent.session.path), agent.name);
+    assert.ok(RESERVED.includes(agent.install(config).mount), agent.name);
+  }
+  for (const path of ["/home/node/.gemini/x", "/opt/antigravity", "/deckhand", "/screenshots"]) {
+    assert.ok(cacheProblem(path), path);
+  }
+  const { errors } = parseRepoConfig("caches:\n  - /home/node/.gemini/x\n", config);
+  assert.match(errors.join(""), /the sandbox uses \/home\/node\/\.gemini itself/);
+});
+
+test("one image name per repo, even when their names slug alike", () => {
+  const names = ["acme/x.y", "acme/x-y", "acme-x/y"].map((r) => repoImage(config, r));
+  assert.equal(new Set(names).size, 3);
+  for (const name of names) assert.match(name, /^deckhand-repo-acme-x-y-[0-9a-f]{10}$/);
+  assert.equal(repoImage(config, "Acme/X.Y"), names[0]);
 });
 
 test("one cache volume per repo and path", () => {
