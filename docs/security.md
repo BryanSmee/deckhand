@@ -199,7 +199,10 @@ point at the listener, and its calls go to Google directly, so it is kept out an
   `daily-cloudcode-pa.googleapis.com` and `www.googleapis.com` as relayed: the proxy ends the
   sandbox's TLS with Deckhand's CA (see [HTTPS and Deckhand's CA](#https-and-deckhands-ca)),
   cache on or off, and sends each request to the listener (`RELAY_URL`,
-  `<broker>/relay/<host>/<path>`) instead of the host, never as a tunnel. The listener
+  `<broker>/relay/<host>/<path>`) instead of the host, never as a tunnel. A path that could
+  leave `/relay/<host>/` once parsed (`..`, `%2e`, `\`, or not starting with `/`) gets a
+  `400` and never reaches the listener, whose other endpoints (`/egress`) trust the proxy's
+  address. The listener
   (`listener/google.mjs`) checks the secret in `Authorization: Bearer` against the broker,
   refuses any other agent's run, puts the plan's access token in its place and sends the call
   on, streaming the answer back. Only the paths `agy` calls go through
@@ -862,8 +865,13 @@ real server's certificate.
 
 - **The CA** is made by the proxy on its first start (the `openssl` CLI, in its image),
   in its volume (`ca/` in the `egress-cache` volume), and kept across restarts: a new
-  volume is a new CA, which the next runs get. Its key (`ca.key`) never leaves that volume;
-  no sandbox, engine or listener mounts it. Each host's certificate lasts 7 days, and is
+  volume is a new CA, which the next runs get. It lasts a year, and the proxy makes a new
+  one a month before its end (and replaces one from before name constraints): sandboxes get
+  it at their next start. Its key (`ca.key`) never leaves that volume;
+  no sandbox, engine or listener mounts it. Its **name constraints** exclude GitHub
+  (`github.com`, `githubusercontent.com` and their subdomains) and the agents' providers
+  (`anthropic.com`, `openai.com`, `chatgpt.com`): a certificate it signs for them fails
+  verification, and the proxy never asks for one. Each host's certificate lasts 7 days, and is
   made again 2 days before its end. It exists with the cache off too (`EGRESS_CACHE_MAX`
   `0`): the Antigravity CLI's runs need it (see
   [The Antigravity CLI's login](#the-antigravity-clis-login)).
@@ -897,7 +905,8 @@ sent on, never kept); the key never leaves the proxy's volume, which neither san
 engines can reach, and the proxy runs read-only, without capabilities; and a sandbox
 trusting the CA gains nothing it could use: it reaches the same hosts as before, through
 the same proxy. Someone who gets the key (from the host, or the proxy's volume) can
-impersonate any host to the sandboxes running then: treat the volume like the listener's
+impersonate any other host to the sandboxes running then, for at most the CA's year, but
+not GitHub or the agents' providers: treat the volume like the listener's
 data. Removing the volume (or `ca/` in it) and restarting the proxy makes a new CA.
 
 ### Where a sandbox's hosts come from

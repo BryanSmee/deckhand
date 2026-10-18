@@ -18,12 +18,20 @@ const BASE_CSS = `:root { color-scheme: light dark; --line: #d6d3d1; --accent: #
       body { font: 15px/1.5 system-ui, sans-serif; max-width: 30rem; margin: 3rem auto; padding: 0 1rem; }
       .muted { color: var(--muted); }`;
 
-// `body`: trusted HTML (escape() what isn't). `css`: added to the base style.
+// `body`: trusted HTML (escape() what isn't). `css`: added to the base style. No script, and
+// only that style (by its hash): HTML that slipped through escape() can't run or load anything.
+// Forms may still post to GitHub (setup.mjs): form-action isn't restricted.
 export function page(res, status, title, body, { headers = {}, css = "" } = {}) {
+  const style = `
+      ${BASE_CSS}${css ? `\n      ${css}` : ""}
+    `;
+  const hash = createHash("sha256").update(style).digest("base64");
   res.writeHead(status, {
     "content-type": "text/html; charset=utf-8",
     "cache-control": "no-store",
     "referrer-policy": "no-referrer",
+    "content-security-policy": `default-src 'none'; img-src 'self'; style-src 'sha256-${hash}'; frame-ancestors 'none'`,
+    "x-content-type-options": "nosniff",
     ...headers,
   });
   res.end(`<!doctype html>
@@ -32,9 +40,7 @@ export function page(res, status, title, body, { headers = {}, css = "" } = {}) 
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>${escape(title)} · Deckhand</title>
-    <style>
-      ${BASE_CSS}${css ? `\n      ${css}` : ""}
-    </style>
+    <style>${style}</style>
   </head>
   <body>
     <h1>${escape(title)}</h1>
