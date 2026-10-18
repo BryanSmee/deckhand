@@ -597,7 +597,7 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
     assert.match(args, /^DECKHAND_CA=\/deckhand\/egress-ca\.crt$/m);
     assert.match(
       readFileSync(join(dir, "docker-calls"), "utf8"),
-      /-e AGY_VERSION=1\.4\.0 -v deckhand-antigravity:\/opt\/antigravity --entrypoint deckhand-install-antigravity/,
+      /-e AGY_VERSION=1\.4\.0 -e AGY_SHA256=x64:[0-9a-f]{64},arm64:[0-9a-f]{64} -v deckhand-antigravity:\/opt\/antigravity --entrypoint deckhand-install-antigravity/,
     );
 
     // Its token's hosts relayed, telemetry refused, the flags and the avatar a tunnel.

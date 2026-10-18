@@ -220,7 +220,7 @@ leave it on `latest` (for Watchtower). See [Updating](docs/setup.md#updating).
 Claude Code's version is pinned by `CLAUDE_CODE_VERSION`: change it in `.env` (or
 `claude_code_version` in `config.yaml`) to move to
 another one, and the next run installs it. Codex's is `CODEX_VERSION`, the same way, and the
-Antigravity CLI's `AGY_VERSION`.
+Antigravity CLI's `AGY_VERSION`, with the sha256 of its tarballs in `AGY_SHA256`.
 
 ## Claude Code and naming
 

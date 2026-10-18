@@ -2,11 +2,12 @@
 # Installs the Antigravity CLI AGY_VERSION into the shared /opt/antigravity volume, once, as
 # ../claude/install does for Claude Code (see there for why as root, and per version): the
 # listener runs it in a container of its own before the first run that needs that version.
-# The release's tarball for this machine, checked against its digest (../release-install); it
-# holds one binary, `antigravity`, linked as `agy`.
+# The release's tarball for this machine, checked against the digest AGY_SHA256 pins for it
+# (../release-install); it holds one binary, `antigravity`, linked as `agy`.
 set -euo pipefail
 
 : "${AGY_VERSION:?AGY_VERSION: the Antigravity CLI version to install}"
+: "${AGY_SHA256:=}" # "x64:<hex>,arm64:<hex>"
 [ "$(id -u)" = 0 ] || { echo "install-antigravity: run it as root" >&2; exit 1; }
 
 case $(uname -m) in
@@ -14,6 +15,11 @@ case $(uname -m) in
   aarch64 | arm64) arch=arm64 ;;
   *) echo "install-antigravity: no Antigravity CLI for $(uname -m)" >&2; exit 1 ;;
 esac
+sha=$(tr ',' '\n' <<< "$AGY_SHA256" | sed -n "s/^$arch://p")
+[ -n "$sha" ] || {
+  echo "install-antigravity: AGY_SHA256 pins no sha256 for $arch: set it with AGY_VERSION" >&2
+  exit 1
+}
 exec "$(dirname "$(readlink -f "$0")")/../release-install" /opt/antigravity "$AGY_VERSION" \
   google-antigravity/antigravity-cli "agy_cli_linux_$arch.tar.gz" antigravity agy \
-  "Antigravity CLI"
+  "Antigravity CLI" "$sha"
