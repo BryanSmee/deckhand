@@ -182,10 +182,14 @@ export function createCache({
 }) {
   const index = new Map(); // key → { size, lastUsed }
   let total = 0;
-  // Bytes of downloads being written, not kept yet: on disk too, so counted against `max`.
+  // Bytes of downloads being written, not kept yet (their Content-Length when they have one,
+  // reserved as they start): on disk too, so counted against `max`.
   let pending = 0;
   const enabled = max > 0 && !!dir;
   const limit = Math.min(entryMax, max);
+  // At most this much being written: downloads read slowly, or dropped before the end, never
+  // evict more than half of what is kept (or one entry, for a cache that small).
+  const pendingMax = Math.max(limit, max / 2);
   const bodyPath = (key) => join(dir, `${key}.body`);
   const metaPath = (key) => join(dir, `${key}.json`);
 
@@ -214,10 +218,10 @@ export function createCache({
     return found.key;
   }
 
-  // Room for `bytes` more on disk, kept or being written: the least recently used entries go
-  // (out of the index at once, their files in the background). False when downloads alone
-  // fill it.
+  // Room for `bytes` more being written: the least recently used entries go (out of the
+  // index at once, their files in the background). False when downloads take their share.
   function makeRoom(bytes) {
+    if (pending + bytes > pendingMax) return false;
     while (total + pending + bytes > max && index.size) {
       const key = oldest();
       log(`cache: removed ${key}, least recently used`);
@@ -335,11 +339,14 @@ export function createCache({
 
     // A new entry, written as its body comes: write() each chunk (false once over the limit,
     // or with no room left: dropped), then commit() once complete (`expected`: its
-    // Content-Length, checked), or abort(). Null when the downloads being written leave no
-    // room for `expected`: the answer goes on without being kept.
+    // Content-Length, checked), or abort(). Room for its Content-Length is made once, as it
+    // starts; one without makes room as it comes. Null when the downloads being written take
+    // their share: the answer goes on without being kept.
     writer(key, { url, status, headers }) {
-      const expected = Number(headers?.["content-length"]) || 0;
-      if (pending + expected > max) return null;
+      const length = headers?.["content-length"];
+      const reserved = length === undefined ? null : Number(length);
+      if (reserved !== null && !makeRoom(reserved)) return null;
+      pending += reserved ?? 0;
       const path = tempPath(dir);
       const stream = createWriteStream(path, { flags: "wx" });
       let size = 0;
@@ -347,7 +354,7 @@ export function createCache({
       const closed = new Promise((resolve) => stream.on("close", resolve));
       stream.on("error", () => abort());
       // Its bytes stay counted until its file is gone, or kept.
-      const release = () => (pending -= size);
+      const release = () => (pending -= reserved ?? size);
       function abort() {
         if (done) return;
         done = true;
@@ -357,12 +364,13 @@ export function createCache({
       return {
         write(chunk) {
           if (done) return false;
-          if (size + chunk.length > limit || !makeRoom(chunk.length)) {
+          const over = size + chunk.length > (reserved ?? limit);
+          if (over || (reserved === null && !makeRoom(chunk.length))) {
             abort();
             return false;
           }
           size += chunk.length;
-          pending += chunk.length;
+          if (reserved === null) pending += chunk.length;
           stream.write(chunk);
           return true;
         },

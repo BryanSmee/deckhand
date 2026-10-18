@@ -803,10 +803,14 @@ mandatory): `cached_hosts` alone opens nothing.
 - **Downloads**: the first one is streamed to the client while it is written to a temporary
   file, renamed into place once complete. A client that disconnects, a host that stops
   midway or a body over the per-entry limit leaves nothing behind.
-- **Size**: `EGRESS_CACHE_MAX` (10 GB by default) counts the downloads being written too:
-  the least recently used answers are removed to make room as they come, and a download
-  that finds none (the others fill it) goes on to its client without being kept. Parallel
-  downloads can't take the volume past it. `EGRESS_CACHE_MAX=0` turns the cache off
+- **Size**: `EGRESS_CACHE_MAX` (10 GB by default) counts the downloads being written too.
+  One with a `Content-Length` reserves it as it starts, and the least recently used answers
+  are removed to make room for it; one without makes room as it comes. Downloads under way
+  take half of it at most (`EGRESS_CACHE_ENTRY_MAX` when that is more): a download read slowly, or dropped before its end, never evicts
+  more than that, and one that finds no room goes on to its client without being kept. The
+  bodies are counted, not their small metadata files, and a removed answer a client is still
+  reading stays on disk until it is done: the volume can go slightly past it.
+  `EGRESS_CACHE_MAX=0` turns the cache off
   ([Setup](setup.md#advanced-settings)).
 - **Trust**: plain HTTP can be tampered with on the way, cached or not, and a cached answer
   then reaches every run. Cache only what the client checks itself (apt's signed indexes and

@@ -239,44 +239,70 @@ test("a host that answers before reading the body can't be made to poison an ent
   assert.doesNotMatch(answer, /evil/);
 });
 
-test("parallel downloads keep what is written and kept under the cache's size", async (t) => {
+// A cache of 400 bytes (200 at most per entry, and being written) holding three entries of
+// 100, each used after the one before; `onDisk()`: the bodies' bytes, temporary files too.
+async function smallCache(t) {
   const dir = tempDir(t, "deckhand-egress-cache-");
-  const cache = createCache({ dir, max: 250, entryMax: 200 });
+  const clock = { now: 1000 };
+  const cache = createCache({ dir, max: 400, entryMax: 200, now: () => clock.now++ });
   const onDisk = () =>
     readdirSync(dir)
       .filter((name) => !name.endsWith(".json"))
       .reduce((sum, name) => sum + statSync(join(dir, name)).size, 0);
-  const meta = (path) => ({ url: path, status: 200, headers: {} });
-  const old = cache.writer(cache.key("/old"), meta("/old"));
-  old.write(Buffer.alloc(100));
-  assert.equal(await old.commit(), true);
-  // Three downloads of 100 bytes at once, chunk by chunk.
-  const writers = ["/a", "/b", "/c"].map((path) => cache.writer(cache.key(path), meta(path)));
-  const kept = [];
+  const write = (path, headers = {}) =>
+    cache.writer(cache.key(path), { url: path, status: 200, headers });
+  for (const path of ["/old1", "/old2", "/old3"]) {
+    const writer = write(path);
+    writer.write(Buffer.alloc(100));
+    assert.equal(await writer.commit(), true);
+  }
+  const kept = (path) => cache.has(cache.key(path));
+  return { cache, onDisk, write, kept };
+}
+
+test("parallel downloads stay under the cache's size, and evict half of it at most", async (t) => {
+  const { cache, onDisk, write, kept } = await smallCache(t);
+  // Three downloads of 100 bytes without a Content-Length at once, chunk by chunk.
+  const writers = ["/a", "/b", "/c"].map((path) => write(path));
+  const taken = [];
   for (let i = 0; i < 10; i++) {
     for (const writer of writers) {
-      kept.push(writer.write(Buffer.alloc(10)));
-      assert.ok(cache.size <= 250, `${cache.size} bytes`);
+      taken.push(writer.write(Buffer.alloc(10)));
+      assert.ok(cache.size <= 400, `${cache.size} bytes`);
     }
     // An aborted download's file is removed meanwhile, then no longer counted.
     await wait(5);
+    assert.ok(onDisk() <= 400, `${onDisk()} bytes on disk`);
   }
-  // The oldest entry went first, then the download that found no room left.
-  assert.equal(cache.has(cache.key("/old")), false);
-  assert.ok(kept.includes(false));
+  // The oldest entry went to make room; the downloads' share full, the last one was dropped.
+  assert.equal(kept("/old1"), false);
+  assert.ok(taken.includes(false));
+  // Half of the cache is never evicted for downloads under way.
+  assert.ok(kept("/old2") && kept("/old3"));
   const done = await Promise.all(writers.map((writer) => writer.commit()));
-  assert.deepEqual(done, [true, false, false]);
+  assert.deepEqual(done, [true, true, false]);
   await wait(30);
-  assert.equal(cache.size, 100);
-  assert.ok(onDisk() <= 250, `${onDisk()} bytes on disk`);
-  // Once downloads fill it, a new one isn't even started: forwarded, not kept.
-  const big = { url: "/big", status: 200, headers: { "content-length": "200" } };
-  const a = cache.writer(cache.key("/d"), meta("/d"));
-  a.write(Buffer.alloc(100));
-  assert.equal(cache.writer(cache.key("/big"), big), null);
-  a.abort();
+  assert.equal(cache.size, 400);
+  assert.ok(onDisk() <= 400, `${onDisk()} bytes on disk`);
+});
+
+test("a download's Content-Length is reserved as it starts, and evicts no more", async (t) => {
+  const { cache, write, kept } = await smallCache(t);
+  const big = write("/big", { "content-length": "150" });
+  assert.equal(cache.size, 450 - 100);
+  assert.equal(kept("/old1"), false);
+  for (let i = 0; i < 15; i++) assert.equal(big.write(Buffer.alloc(10)), true);
+  assert.ok(kept("/old2") && kept("/old3"));
+  // More than its Content-Length: dropped.
+  const liar = write("/liar", { "content-length": "10" });
+  assert.equal(liar.write(Buffer.alloc(20)), false);
+  // Past the downloads' share: not started, nothing evicted.
+  assert.equal(write("/more", { "content-length": "100" }), null);
+  assert.ok(kept("/old2") && kept("/old3"));
+  // Dropped before its end: its reservation is given back.
+  big.abort();
   await wait(30);
-  assert.equal(cache.size, 100);
+  assert.equal(cache.size, 200);
 });
 
 test("answers that aren't the same for everyone are never stored", async (t) => {
