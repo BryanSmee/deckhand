@@ -20,8 +20,9 @@ function fakeRunner() {
     onOut: null,
     exited: null,
     state: async () => (runner.running ? "running" : "exited"),
-    follow: (name, { onOut }) => {
+    follow: (name, { onOut, onErr }) => {
       runner.onOut = onOut;
+      runner.onErr = onErr;
       return new Promise((resolve) => (runner.exited = resolve));
     },
     kill: async () => {
@@ -33,18 +34,19 @@ function fakeRunner() {
     closed: () => false,
     remove: async () => {},
     out: (line) => runner.onOut(line),
+    err: (line) => runner.onErr(line),
   };
   return runner;
 }
 
-function setup(t, { mode = "idea", graceMs = 60, tokens = [] } = {}) {
+function setup(t, { mode = "idea", graceMs = 60, tokens = [], config = {} } = {}) {
   const dir = tempDir(t);
   const runner = fakeRunner();
   const answers = [];
   const logs = [];
   const done = [];
   const ctx = {
-    config: testConfig(),
+    config: { ...testConfig(), ...config },
     log: (line) => logs.push(line),
     logDir: dir,
     shotsDir: dir,
@@ -215,4 +217,32 @@ test("the GitHub tokens the broker gave the run are redacted from its log and it
   assert.ok(!log.includes(issued) && !log.includes(other));
   // The raw line has `\n` before the second: still redacted (no word boundary needed).
   assert.match(log, /gh auth token: \[redacted\]\\n\$ gh auth token\\n\[redacted\]/);
+});
+
+// #241: output without end (setup's, an agent's) would fill the data volume.
+test("a run whose output passes RUN_LOG_MAX_MB: stopped, failed, a note in its log", async (t) => {
+  const { ctx, runner, task, answers, logs, following, logPath } = setup(t, {
+    config: { runLogMax: 1000 },
+  });
+  const live = task.live;
+  for (let i = 0; i < 20; i++) runner.err("x".repeat(99));
+  // Past the cap, nothing more is written, its result neither.
+  runner.out(result("Done."));
+  await following;
+  assert.equal(runner.kills, 1);
+  assert.equal(live.record.status, "error");
+  assert.equal(
+    live.record.summary,
+    "Stopped as failed: its output passed RUN_LOG_MAX_MB (0 MB), the rest of it not kept",
+  );
+  assert.equal(answers.length, 1);
+  assert.match(answers[0], /^Claude was stopped as failed: its output passed RUN_LOG_MAX_MB/);
+  const lines = readFileSync(logPath, "utf8").trimEnd().split("\n");
+  assert.equal(lines.filter((l) => l.startsWith("x")).length, 10);
+  assert.match(JSON.parse(lines.at(-1)).message, /passed RUN_LOG_MAX_MB/);
+  assert.ok(!lines.some((l) => l.includes("Done.")));
+  // Every line counts as read: a restart doesn't read the dropped ones again.
+  assert.deepEqual(live.lines, { out: 1, err: 20 });
+  assert.ok(logs.some((l) => /: Stopped as failed: its output passed/.test(l)));
+  assert.equal(ctx.running, 0);
 });

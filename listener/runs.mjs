@@ -156,6 +156,7 @@ export function createRuns(ctx) {
       unanswered: [], // delivered since the agent's last result
       handled: [...items], // its comments and those delivered to it, for their reactions
       cancelled: null, // { by, at } once someone stopped it (cancel())
+      overflow: null, // { at, max } once its output passed RUN_LOG_MAX_MB (keep())
       answered: false, // whether it gave a result with its inbox closed: its final answer
       lingering: null, // the timer that stops it if it stays silent after that (linger())
       saving: null,
@@ -301,8 +302,9 @@ export function createRuns(ctx) {
           // Setup output (clone, install) before the agent starts.
           onErr: (line) => {
             if (ctx.stopping) return; // left for the next listener
-            live.logFile.write(hidden(live, line) + "\n");
+            const kept = keep(task, hidden(live, line));
             live.lines.err++;
+            if (!kept) return;
             if (live.answered) linger(task);
           },
         });
@@ -333,8 +335,9 @@ export function createRuns(ctx) {
     const live = task.live;
     if (ctx.stopping) return; // left for the next listener
     const line = hidden(live, raw);
-    live.logFile.write(line + "\n");
+    const kept = keep(task, line);
     live.lines.out++;
+    if (!kept) return;
     // Still at work after its answer (a background task's turn): its stop waits.
     if (live.answered) linger(task);
     const event = lastResult([line], agentOf(task));
@@ -352,6 +355,42 @@ export function createRuns(ctx) {
     }
     ctx.saveLive(task);
   }
+
+  // Writes a line of the sandbox's output to its log, unless that would take the log past
+  // RUN_LOG_MAX_MB: then nothing more is written, and the run is stopped (overflow()). False
+  // when the line isn't kept. The listener's own lines (writeEvent()) aren't capped: a few.
+  function keep(task, line) {
+    const live = task.live;
+    if (live.overflow) return false;
+    const max = config.runLogMax;
+    if (max && live.logFile.size + Buffer.byteLength(line) + 1 > max) {
+      overflow(task, max);
+      return false;
+    }
+    live.logFile.write(line + "\n");
+    return true;
+  }
+
+  // Its sandbox is stopped, and finish() ends the run as failed: output without end (a
+  // setup script's, a prompt-injected agent's) would fill the data volume.
+  function overflow(task, max) {
+    const live = task.live;
+    live.overflow = { at: Date.now(), max };
+    if (live.cancelled || live.finishing) return;
+    clearTimeout(live.lingering);
+    // Nothing more goes to its inbox: what waits is for the next run.
+    live.open = false;
+    const message = `Stopped as failed: ${overflowMessage(live)}`;
+    writeEvent(live.logFile, "note", { message });
+    log(`${live.key}: ${message}`);
+    ctx
+      .saveLive(task)
+      .then(() => ctx.runner.kill(task.name))
+      .catch((error) => log(`${live.key}: stopping its sandbox: ${error.message ?? error}`));
+  }
+
+  const overflowMessage = (live) =>
+    `its output passed RUN_LOG_MAX_MB (${Math.round(live.overflow.max / 1024 / 1024)} MB), the rest of it not kept`;
 
   // (Re)starts the timer of a run that answered with its inbox closed: if its sandbox writes
   // nothing more for graceMs, it is stopped, and finish() posts its last result as usual.
@@ -484,6 +523,12 @@ export function createRuns(ctx) {
       // Stopped on purpose: whatever the exit looked like, not an error.
       if (live.cancelled) return await endCancelled(task);
       if (error) throw error;
+      if (live.overflow) {
+        record.summary = `Stopped as failed: ${overflowMessage(live)}`;
+        throw new RunError(
+          `${agentOf(task).displayName} was stopped as failed: ${overflowMessage(live)}.`,
+        );
+      }
       // The agent exited before answering a delivered comment (a crash): the next run gets it.
       if (live.unanswered.length) task.pending.unshift(...live.unanswered);
       removeEmptyShots(live);

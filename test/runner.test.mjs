@@ -7,7 +7,13 @@ import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { test } from "node:test";
-import { aliasOf, CLOSE, createDockerRunner } from "../listener/runner/docker.mjs";
+import {
+  aliasOf,
+  CLOSE,
+  createDockerRunner,
+  LINE_CUT,
+  MAX_LINE,
+} from "../listener/runner/docker.mjs";
 import { overlaps, parseCidr } from "../listener/subnets.mjs";
 import { tempDir } from "./helpers.mjs";
 
@@ -608,6 +614,55 @@ test("follow: whole lines of each stream, skipping what was already read", async
   // A line cut short isn't read: the next follow() reads it whole.
   assert.deepEqual(out, ['{"a":3}']);
   assert.deepEqual(err, ["new"]);
+});
+
+// #241: unbounded, a line with no newline grew until its string couldn't, and the stream's
+// handler threw the listener down.
+test("follow: a line over MAX_LINE is cut there, its rest dropped up to its newline", async () => {
+  const child = new EventEmitter();
+  child.stdout = new PassThrough();
+  child.stderr = new PassThrough();
+  const { r } = runner({ spawn: () => child });
+  const err = [];
+  const done = r.follow("x", { onOut: () => {}, onErr: (line) => err.push(line) });
+  // 2 MB in 64 KB chunks, as a pipe gives them, then the next line.
+  const chunk = "x".repeat(64 * 1024);
+  for (let i = 0; i < 32; i++) child.stderr.write(chunk);
+  child.stderr.write("y\nnext\n");
+  await new Promise((resolve) => setImmediate(resolve));
+  child.emit("close", 0);
+  await done;
+  assert.equal(err.length, 2);
+  assert.equal(err[0], "x".repeat(MAX_LINE) + LINE_CUT);
+  assert.equal(err[1], "next");
+});
+
+test("follow: a handler that throws loses its line, not the listener", async () => {
+  const child = new EventEmitter();
+  child.stdout = new PassThrough();
+  child.stderr = new PassThrough();
+  const logs = [];
+  const r = createDockerRunner({
+    config,
+    docker: async () => ({ code: 0, out: "" }),
+    spawn: () => child,
+    inboxDir: tempDir(null, "deckhand-runs-"),
+    log: (line) => logs.push(line),
+  });
+  const out = [];
+  const done = r.follow("x", {
+    onOut: (line) => {
+      if (line === "bad") throw new Error("ENOSPC: no space left on device");
+      out.push(line);
+    },
+    onErr: () => {},
+  });
+  child.stdout.write("bad\ngood\n");
+  await new Promise((resolve) => setImmediate(resolve));
+  child.emit("close", 0);
+  await done;
+  assert.deepEqual(out, ["good"]);
+  assert.deepEqual(logs, ["docker logs x: ENOSPC: no space left on device"]);
 });
 
 // --- The container engine (engine.mjs) -------------------------------------------------

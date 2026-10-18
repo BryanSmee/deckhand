@@ -81,6 +81,15 @@ test("log retention: 90 days by default, 0 keeps everything, junk refused", () =
   }
 });
 
+test("RUN_LOG_MAX_MB: megabytes, 200 by default, never 0", () => {
+  const base = { ALLOWED_USERS: "alice" };
+  assert.equal(loadConfig(base).runLogMax, 200 * 1024 * 1024);
+  assert.equal(loadConfig({ ...base, RUN_LOG_MAX_MB: "50" }).runLogMax, 50 * 1024 * 1024);
+  for (const bad of ["0", "-1", "2.5", "big"]) {
+    assert.throws(() => loadConfig({ ...base, RUN_LOG_MAX_MB: bad }), ConfigError);
+  }
+});
+
 test("conflict watcher floor: 5 minutes by default, 0 turns it off, junk refused", () => {
   const base = { ALLOWED_USERS: "alice" };
   assert.equal(loadConfig(base).conflictCheckMinutes, 5);
