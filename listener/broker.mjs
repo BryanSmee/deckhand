@@ -6,9 +6,15 @@
 // Those tokens only read the code: pushes go through the listener's git gateway
 // (git-gateway.mjs), which finds the run here by the same secret, with the branches it may
 // push (allow()).
+//
+// A secret only works from its own run's sandbox (or engine): one that leaks, to a research run
+// on the open web say, gives another sandbox neither a token nor a push (sentBy()).
 import { createHash, randomBytes } from "node:crypto";
 import { NO_TOKEN } from "./github-app.mjs";
 import { send } from "./web.mjs";
+
+// What a run's secret sent from elsewhere than its sandbox gets.
+export const NOT_ITS_SANDBOX = "this run's secret only works from its own sandbox";
 
 // Kept by hash: the map never holds a usable secret, and lookups don't compare secrets.
 function hash(secret) {
@@ -28,6 +34,9 @@ export function branchAllowed(patterns, branch) {
 
 export function createBroker({
   app, // () => the GitHub App (github-app.mjs), or null before /setup
+  // (run, address) → whether that address is the run's sandbox's or its engine's
+  // (broker-http.mjs runAt()). None: every request is refused.
+  sentFrom = async () => false,
   random = () => randomBytes(32).toString("hex"),
   log = () => {},
 }) {
@@ -74,6 +83,12 @@ export function createBroker({
     return secret ? runs.get(hash(secret)) : undefined;
   }
 
+  // Whether `req` comes from `run`'s own sandbox: its source address, not just the secret.
+  async function sentBy(run, req) {
+    const ip = (req.socket?.remoteAddress ?? "").replace(/^::ffff:/, "");
+    return !!ip && (await sentFrom(run, ip)) === true;
+  }
+
   function revoke(secret) {
     if (secret) runs.delete(hash(secret));
   }
@@ -85,6 +100,7 @@ export function createBroker({
     const [scheme, secret] = (req.headers.authorization ?? "").split(" ");
     const run = scheme === "Bearer" ? runOf(secret) : undefined;
     if (!run) return send(res, 401, { error: "unknown or finished run" });
+    if (!(await sentBy(run, req))) return send(res, 403, { error: NOT_ITS_SANDBOX });
     const { repo, extra } = run;
     if (extra === NO_TOKEN) return send(res, 403, { error: "this run gets no GitHub token" });
     const github = app();
@@ -102,5 +118,5 @@ export function createBroker({
     }
   }
 
-  return { register, allow, provide, revoke, runOf, handle, size: () => runs.size };
+  return { register, allow, provide, revoke, runOf, sentBy, handle, size: () => runs.size };
 }

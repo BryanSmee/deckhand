@@ -17,7 +17,7 @@ import {
   rejection,
 } from "../listener/git-gateway.mjs";
 import { NO_TOKEN } from "../listener/github-app.mjs";
-import { serve, tempDir } from "./helpers.mjs";
+import { sandboxAt, serve, tempDir } from "./helpers.mjs";
 
 const ZERO = "0".repeat(40);
 const A = "a".repeat(40);
@@ -197,7 +197,10 @@ function issueRun(b, branches = ["issue-1-*"]) {
   return secret;
 }
 
-async function setup(t, { register = issueRun, app = true, headMs, drainMs } = {}) {
+async function setup(
+  t,
+  { register = issueRun, app = true, headMs, drainMs, sentFrom = sandboxAt() } = {},
+) {
   const dir = tempDir(t, "gateway-");
   const root = join(dir, "github");
   execFileSync("git", ["init", "-q", "--bare", "-b", "main", join(root, "org/repo.git")]);
@@ -214,7 +217,7 @@ async function setup(t, { register = issueRun, app = true, headMs, drainMs } = {
       return Response.json({ default_branch: "main" });
     },
   };
-  const broker = createBroker({ app: () => github });
+  const broker = createBroker({ app: () => github, sentFrom });
   const secret = register(broker);
   const logs = [];
   const gateway = createGitGateway({
@@ -273,6 +276,17 @@ test("a branch is pushed to GitHub with the gateway's token, not the sandbox's",
       "POST https://github.test/org/repo.git/git-receive-pack",
     ],
   );
+});
+
+test("a run's secret sent from another sandbox's address pushes nothing", async (t) => {
+  const { work, remote, seen, minted, upstream } = await setup(t, {
+    sentFrom: sandboxAt("10.9.0.5"),
+  });
+  const res = await git(work, "push", remote(), "HEAD:refs/heads/issue-1-x");
+  assert.equal(res.ok, false);
+  assert.match(res.stderr, /403|only works from its own sandbox/);
+  assert.equal(upstream("refs/"), "");
+  assert.deepEqual([seen, minted], [[], []]);
 });
 
 test("a push to the default branch is refused, even with --no-verify, and says why", async (t) => {

@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { createBroker } from "../listener/broker.mjs";
 import { createPrReady } from "../listener/pr-ready.mjs";
-import { serve, tempDir } from "./helpers.mjs";
+import { sandboxAt, serve, tempDir } from "./helpers.mjs";
 
 const bin = new URL("../sandbox/", import.meta.url).pathname;
 
@@ -19,6 +19,7 @@ async function broker(t) {
         expiresAt: Date.now() + 1,
       }),
     }),
+    sentFrom: sandboxAt(),
   });
   const { url } = await serve(t, (req, res) => b.handle(req, res));
   return { b, url };
@@ -654,7 +655,7 @@ async function prBroker(t) {
       });
     },
   };
-  const b = createBroker({ app: () => github });
+  const b = createBroker({ app: () => github, sentFrom: sandboxAt() });
   const prReady = createPrReady({
     broker: b,
     app: () => github,

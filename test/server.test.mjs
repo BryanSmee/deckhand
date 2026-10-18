@@ -1384,6 +1384,23 @@ mounts:
     await check();
   });
 
+  test("a run's secret sent from another address: no token, push or ready", async (t) => {
+    const ctx = await holding(t, undefined, (dir, github) => ({ GITHUB_URL: github.url }));
+    // The sandbox no longer has the address the requests come from; a restarted listener
+    // looks its addresses up again.
+    writeFileSync(join(ctx.dir, "elsewhere"), "");
+    await ctx.restart();
+    await ctx.listener.until("picked up deckhand-org-repo-12-0e9572aae2 again");
+    const secret = readFileSync(join(ctx.dir, "run-secret"), "utf8").trim();
+    const token = await fetch(`http://127.0.0.1:${ctx.brokerPort}/token`, {
+      headers: { authorization: `Bearer ${secret}` },
+    });
+    assert.equal(token.status, 403);
+    for (const answer of [`${token.status} ${await token.text()}`, ...(await pushAndReady(ctx))]) {
+      assert.match(answer, /^403 [^]*only works from its own sandbox/);
+    }
+  });
+
   test("a work run still pushes and marks ready, before and after a restart", async (t) => {
     const ctx = await holding(t, undefined, (dir, github) => ({ GITHUB_URL: github.url }));
     // Past the run checks: on to GitHub (here, a fake one that knows neither, rather than

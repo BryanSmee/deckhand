@@ -18,7 +18,7 @@ import { createGoogleRelay } from "./google.mjs";
 import { createOpenAiProxy } from "./openai.mjs";
 import { planWarning } from "./upstream.mjs";
 import { createBroker } from "./broker.mjs";
-import { createBrokerHttp } from "./broker-http.mjs";
+import { createBrokerHttp, runAt } from "./broker-http.mjs";
 import { createGitGateway } from "./git-gateway.mjs";
 import { createPrReady } from "./pr-ready.mjs";
 import { createBrainstorms, createIssueModes } from "./brainstorms.mjs";
@@ -244,8 +244,12 @@ Object.assign(ctx, {
     log,
   }),
   // The sandboxes' only way to GitHub: short-lived tokens for their run's repo, which only
-  // read the code.
-  broker: createBroker({ app: () => ctx.app, log }),
+  // read the code, for requests from that run's sandbox alone.
+  broker: createBroker({
+    app: () => ctx.app,
+    sentFrom: (run, ip) => runAt(ctx, run, ip),
+    log,
+  }),
   // The egress proxy's CA certificate, for runs whose grant has cached_hosts (egress.mjs).
   egressCa: () => fetchEgressCa(config.egressProxy),
   // Sandboxes are started, followed and removed through it; they run detached.

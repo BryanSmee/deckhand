@@ -21,22 +21,38 @@ const ROUTES = [
   { prefix: "/pr/", service: "prReady", name: "Pull requests", destroy: false },
 ];
 
+// Whether the running task's sandbox (or its engine) has address `ip`. Addresses are looked up
+// once per run, the first time its sandbox connects, and forgotten once it exits (runs.mjs
+// finish()): Docker may give the address to another sandbox.
+async function hasAddress(ctx, task, ip) {
+  const live = task.live;
+  if (!live?.hosts) return false;
+  if (!live.ip) {
+    live.ip = await ctx.runner.address(task.name);
+    live.engineIp = await ctx.runner.engineAddress(task.name);
+  }
+  return task.live === live && !!live.hosts && !!live.ip?.includes(ip);
+}
+
+// Whether `ip` is the sandbox's (or engine's) of the running task the broker's `run` is: what
+// binds a run's secret to its sandbox (broker.mjs sentBy()). The run is found by its record,
+// so no secret is compared here.
+export async function runAt(ctx, run, ip) {
+  for (const task of ctx.tasks.values()) {
+    if (!task.live?.secret || ctx.broker.runOf(task.live.secret) !== run) continue;
+    return hasAddress(ctx, task, ip);
+  }
+  return false;
+}
+
 // `ctx` (server.mjs): the listener's state and services, read at call time.
 export function createBrokerHttp(ctx) {
   const { config, log, tasks } = ctx;
 
-  // The running task whose sandbox has this address on its network. Addresses are
-  // looked up once per run, the first time its sandbox connects, and forgotten once it exits
-  // (runs.mjs finish()): Docker may give the address to another sandbox.
+  // The running task whose sandbox has this address on its network.
   async function taskAt(ip) {
     for (const task of tasks.values()) {
-      const live = task.live;
-      if (!live?.hosts) continue;
-      if (!live.ip) {
-        live.ip = await ctx.runner.address(task.name);
-        live.engineIp = await ctx.runner.engineAddress(task.name);
-      }
-      if (task.live === live && live.hosts && live.ip?.includes(ip)) return task;
+      if (await hasAddress(ctx, task, ip)) return task;
     }
     return null;
   }

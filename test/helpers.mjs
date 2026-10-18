@@ -22,6 +22,14 @@ export async function serve(t, handle) {
   return { url: `http://127.0.0.1:${port}`, server, port };
 }
 
+// A broker's `sentFrom` (broker.mjs) for a sandbox at `address`: the tests' requests come from
+// 127.0.0.1, so another address stands for a secret sent from another sandbox.
+export function sandboxAt(address = "127.0.0.1") {
+  const asked = [];
+  const sentFrom = async (run, ip) => (asked.push({ run, ip }), ip === address);
+  return Object.assign(sentFrom, { asked });
+}
+
 // Retried: a process the test stopped may still be writing there.
 const remove = (dir) => rmSync(dir, { recursive: true, force: true, maxRetries: 5 });
 
