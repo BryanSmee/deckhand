@@ -68,9 +68,11 @@ export function grantedAccess(config, task, settings, { agent, note, log }) {
   const { mounts, refused, notes } = check.mounts;
   if (refused.length) throw new RunError(refusedMounts(refused, agent.displayName));
   for (const text of notes) note(text);
-  const { light } = task.live;
+  // Read-only for a light run and a fork's (sandbox-spec.mjs).
+  const { light, fork } = task.live;
   for (const m of mounts) {
-    note(`Host mount ${m.target}${m.readOnly || light ? " (read-only)" : ""}`);
+    const why = !m.readOnly && !light && fork ? ": a pull request from a fork" : "";
+    note(`Host mount ${m.target}${m.readOnly || light || fork ? ` (read-only${why})` : ""}`);
   }
   return {
     grant,

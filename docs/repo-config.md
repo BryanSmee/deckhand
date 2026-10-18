@@ -261,13 +261,19 @@ repo. Package manager caches are the usual use: `/home/node/.npm`, `/home/node/.
 sandbox mounts itself are refused, and so is a host mount's target there: `/workspace`,
 `/screenshots`, `/deckhand` (the run's inbox), and each agent's session and install
 (`/home/node/.claude` and `/opt/claude-code`, `/home/node/.codex` and `/opt/codex`,
-`/home/node/.gemini` and `/opt/antigravity`), with what is inside or above them.
+`/home/node/.gemini` and `/opt/antigravity`), with what is inside or above them. Runs with a
+comment from a pull request from a fork get no caches, and their host mounts are read-only:
+their code could leave something there that the repo's later runs would run.
 
 ## Setup and light runs
 
 `setup` runs with `bash -c` in the clone, after the task's branch is checked out and before
 Claude starts, on every work run (a follow-up comment starts a new container). Its output
-goes to the run's log. If it fails, the run goes on and Claude is told.
+goes to the run's log. If it fails, the run goes on and Claude is told. The clone is kept
+between an issue's runs, but each starts clean: on the branch it was on if that is one of the
+repository's own (the task's, a pull request's from the repository), else the default
+branch, with untracked and ignored files removed (`git clean -ffdx`, so `node_modules` too).
+Setup reinstalls what it needs, from the caches.
 
 Brainstorms are light runs: no branch, no setup command, so the answer comes quickly. So
 are the repo's modes with `light: true`.

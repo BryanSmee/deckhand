@@ -405,6 +405,12 @@ test("prompts: a review reads the pull request, the repo's instructions after th
   assert.match(prompt, /^Review pull request #31 of org\/app\./);
   assert.match(prompt, /`gh pr diff 31`/);
   assert.match(prompt, /Verdict: request-changes/);
+  // Its code in a worktree under /tmp, never in the kept clone, which the next runs start in.
+  assert.match(
+    prompt,
+    /`git fetch origin pull\/31\/head && git worktree add --detach \/tmp\/pr-31 FETCH_HEAD`/,
+  );
+  assert.match(prompt, /Never check it out in \/workspace \(no `gh pr checkout`\)/);
   assert.match(prompt, /The repository's review instructions:\n\nMind the SQL\.$/);
   const asked = promptFor(issue, { mode: "review", pull: 31, text: "Focus on the tests." });
   assert.match(asked, /The maintainer asks:\n\nFocus on the tests\.$/);

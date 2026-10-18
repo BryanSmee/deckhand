@@ -92,6 +92,31 @@ elif [ ! -d /workspace/.git ]; then
     > /tmp/clone.log 2>&1 || { cat /tmp/clone.log >&2; exit 1; }
 fi
 cd /workspace
+
+# A kept clone may hold what the last run checked out: a fork's pull request, read by a review
+# or worked on. Setup and the agent's project hooks (.claude/settings.json…) run on what is
+# checked out, before anyone reads it, so every start goes back to trusted code, with nothing
+# untracked or ignored left: a work run's branch when it tracks one of the repository's own
+# (the task's, or a pull request's from the repository: `gh pr checkout` sets a fork's to
+# its URL, or to refs/pull/<n>/head), else the base branch. The agent checks a fork out again
+# if it needs it. Hooks off: .git/hooks is the volume's too.
+reset_clone() {
+  local branch target=$BASE_BRANCH
+  branch=$(git branch --show-current)
+  if [ -z "${SANDBOX_LIGHT:-}" ] && [ -n "$branch" ] &&
+    [ "$(git config "branch.$branch.remote")" = origin ] &&
+    [[ "$(git config "branch.$branch.merge")" == refs/heads/* ]]; then
+    target=$branch
+  fi
+  # Told to the agent if it is still elsewhere when it starts (draft-pr.sh may go back).
+  [ "$branch" = "$target" ] || reset_from=$branch
+  git -c core.hooksPath=/dev/null checkout --quiet --force "$target"
+  git clean -ffdxq
+  # Reviews read pull requests in worktrees under /tmp, gone with their container.
+  git worktree prune
+}
+[ -n "${SANDBOX_NO_CLONE:-}" ] || reset_clone
+
 # Every start, not just the clone's: the hook may change with the image.
 [ -n "${SANDBOX_NO_CLONE:-}" ] || cp /usr/local/share/git-hooks/pre-push /workspace/.git/hooks/pre-push
 # The broker's tokens only read: pushes go through the listener's git gateway, which refuses
@@ -146,11 +171,9 @@ if [ -n "${SANDBOX_NO_CLONE:-}" ]; then
   : # Nothing to fetch, set up or open.
 elif [ -n "${SANDBOX_LIGHT:-}" ]; then
   # A light run reads the code and doesn't run it, so it answers quickly. Fresh
-  # origin/<base> to read, and the base branch itself when nothing is in progress on it.
+  # origin/<base> to read, and the base branch itself (reset_clone() put it there).
   git fetch --quiet origin
-  if [ "$(git branch --show-current)" = "$BASE_BRANCH" ] && git diff --quiet HEAD; then
-    git merge --ff-only "origin/$BASE_BRANCH" > /dev/null 2>&1 || true
-  fi
+  git merge --ff-only "origin/$BASE_BRANCH" > /dev/null 2>&1 || true
 else
   # The task's branch and draft pull request first, so the run shows up on GitHub within
   # seconds (does nothing outside work runs on an issue).
@@ -249,6 +272,13 @@ feedback raises a blocker only the maintainer can resolve (contradictory feedbac
     prompt+="
 
 Also take this into account: $TASK_MESSAGE"
+  fi
+  if [ -n "${reset_from:-}" ] && [ "$(git branch --show-current)" != "$reset_from" ]; then
+    prompt+="
+
+The clone in /workspace was put back on \`$(git branch --show-current)\` before you started,
+with nothing untracked: the last run left it on \`$reset_from\`. Check that out again
+(\`gh pr checkout <n>\` for a pull request) if you need it."
   fi
   if [ -n "${setup_failed:-}" ]; then
     prompt+="

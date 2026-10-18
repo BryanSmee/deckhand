@@ -16,12 +16,19 @@ const config = {
 const limits = { cpus: "2", memory: "4g", pids: 512 };
 const bot = { name: "deckhand[bot]", email: "1+deckhand[bot]@users.noreply.github.com" };
 
-function runOf({ light = false, mode = "work", kind = "issue", agent = AGENTS.claude } = {}) {
+function runOf({
+  light = false,
+  fork = false,
+  mode = "work",
+  kind = "issue",
+  agent = AGENTS.claude,
+} = {}) {
   const live = {
     id: "deckhand-org-app-12-1",
     key: "org/app#12",
     mode,
     light,
+    fork,
     shots: "f".repeat(24),
     secret: "s".repeat(32),
     handoff: false,
@@ -71,6 +78,14 @@ test("sandboxSpec: a light run's mounts are read-only, and its volumes its own",
   const args = spec.args.join(" ");
   assert.match(args, /type=bind,src=\/srv\/data,dst=\/data,readonly/);
   assert.doesNotMatch(args, /deckhand-org-app-12-workspace/);
+});
+
+// Its code could leave a tampered file there for the repo's later work runs, which trust them.
+test("sandboxSpec: a work run with a comment from a fork's pull request mounts read-only", () => {
+  const spec = sandboxSpec(runOf({ fork: true }), "p", "m", { ...parts, cacheArgs: [] });
+  const args = spec.args.join(" ");
+  assert.match(args, /type=bind,src=\/srv\/data,dst=\/data,readonly/);
+  assert.match(args, /-v deckhand-org-app-12-workspace:\/workspace/);
 });
 
 test("sandboxEnv: the run's secret in place of a credential, its prompt, mode and setup", () => {

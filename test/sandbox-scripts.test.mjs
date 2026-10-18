@@ -450,6 +450,84 @@ test("the prompt says whether the run has a container engine, and whether it ans
   assert.match(script, /prompt\+="\n\n\$engine"\n[^]*?agent_run "\$session" "\$prompt"/);
 });
 
+// The clone kept in a session volume, from the entrypoint's own reset_clone(), in a clone of a
+// local origin: whatever the last run checked out, setup and the agent start on trusted code.
+test("every start puts the kept clone back on a branch of the repository, with nothing untracked", (t) => {
+  const script = readFileSync(`${bin}entrypoint.sh`, "utf8");
+  const fn = /^reset_clone\(\) \{[^]*?^\}$/m.exec(script)[0];
+  const dir = tempDir(t, "reset-");
+  const env = {
+    PATH: process.env.PATH,
+    HOME: dir,
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_AUTHOR_NAME: "a",
+    GIT_AUTHOR_EMAIL: "a@example",
+    GIT_COMMITTER_NAME: "a",
+    GIT_COMMITTER_EMAIL: "a@example",
+  };
+  const sh = (cwd, command, extra = {}) => {
+    const result = spawnSync("bash", ["-c", command], {
+      cwd,
+      env: { ...env, ...extra },
+      encoding: "utf8",
+    });
+    assert.equal(result.status, 0, result.stderr);
+    return result.stdout.trim();
+  };
+  const origin = join(dir, "origin");
+  const clone = join(dir, "clone");
+  sh(
+    dir,
+    `git init -q -b main origin && cd origin && echo ignored/ > .gitignore &&
+    git add . && git commit -qm base && git branch feat`,
+  );
+  sh(dir, `git clone -q ${origin} clone && cd clone && git branch -q --track feat origin/feat`);
+  // A fork's head as `gh pr checkout` leaves it: a commit with project hooks, a git hook (as a
+  // fork's code run by a work run could write), untracked and ignored files.
+  const leave = (branch, remote, merge) =>
+    sh(
+      clone,
+      `git checkout -q -B ${branch} origin/main && mkdir -p .claude ignored &&
+      echo '{"hooks":{}}' > .claude/settings.json && git add .claude && git commit -qm fork &&
+      git config branch.${branch}.remote ${remote} && git config branch.${branch}.merge ${merge} &&
+      printf '#!/bin/sh\ntouch "$HOME/hooked"\n' > .git/hooks/post-checkout &&
+      chmod +x .git/hooks/post-checkout && touch untracked ignored/tampered.tgz`,
+    );
+  const reset = (extra = {}) =>
+    sh(
+      clone,
+      `${fn}\nset -euo pipefail\nBASE_BRANCH=main\nreset_clone\necho "$(git branch --show-current) \${reset_from:-}"`,
+      extra,
+    );
+  const clean = () => {
+    assert.equal(sh(clone, "git status --porcelain --ignored"), "");
+    assert.ok(!existsSync(join(clone, ".claude")));
+    assert.ok(!existsSync(join(dir, "hooked")), "a git hook ran");
+    sh(clone, "rm -f .git/hooks/post-checkout");
+  };
+
+  // A fork whose maintainers may push: its URL. One whose maintainers can't: refs/pull/<n>/head.
+  leave("fork-head", "https://github.com/someone/repo.git", "refs/heads/feat");
+  assert.equal(reset(), "main fork-head");
+  clean();
+  leave("pr-7", "origin", "refs/pull/7/head");
+  assert.equal(reset(), "main pr-7");
+  clean();
+  // The repository's own branch: a work run stays there, a light run goes back to the base.
+  sh(clone, "git checkout -q feat && mkdir -p ignored && touch untracked ignored/x");
+  assert.equal(reset(), "feat");
+  clean();
+  sh(clone, "git checkout -q feat && touch untracked");
+  assert.equal(reset({ SANDBOX_LIGHT: "1" }), "main feat");
+  clean();
+
+  // Before anything runs on the clone: the setup, and the agent.
+  assert.match(
+    script,
+    /\|\| reset_clone\n[^]*?bash -c "\$SANDBOX_SETUP"[^]*?agent_run "\$session"/,
+  );
+});
+
 // The branch's slug, from draft-pr.sh's own slug(): the gateway only takes issue-<n>-<slug>,
 // so it is never empty.
 test("draft-pr's branch slug: accents dropped, and never empty", () => {

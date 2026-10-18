@@ -262,6 +262,30 @@ run in the issue's next work run, with its token. So light runs get their own `-
 session, no cache volumes (they run no setup), and granted host paths read-only. A work run
 after a brainstorm starts a new session, from the issue and its comments.
 
+### What a fork's code may reach
+
+Anyone can open a pull request from a fork, and an allowed user may ask for work on it (or
+mention it from an issue): its code then runs in a work run, through its setup, tests or
+the agent. It must not reach what the repository's later runs trust and execute:
+
+- **Container engine**: none, whatever the grant (see [Container engine](#container-engine)).
+- **Caches**: none. A `postinstall` could otherwise leave a tampered package in the
+  repository's `~/.npm` volume, which every later work run, on any issue, installs from with
+  push access. The run's log says "No caches: a pull request from a fork".
+- **Host mounts**: read-only, as for a light run (the log's `Host mount` lines say so).
+- **Branch images**: never built from a fork's branch (`allow_branch_docker_images`).
+- **Its clone and session**: the issue's volumes, kept for its next runs. Every run starts by
+  putting the clone back on trusted code before setup and the agent start (they would run a
+  checked-out fork's `SANDBOX_SETUP` and project hooks, `.claude/settings.json`, before the
+  model reads anything): `git checkout --force` (git hooks off) to the branch it was on when
+  that tracks a branch of the repository (`gh pr checkout` sets a fork's to its URL or to
+  `refs/pull/<n>/head`), else the base branch (always, for a light run), then
+  `git clean -ffdx`. The agent checks the fork out again if the task needs it, and is told
+  where the clone was. Reviews read a pull request in a `git worktree` under `/tmp`, gone with
+  their container, so the `-light-` clone never holds a fork's tree.
+
+What it can still reach is in [Not covered](#not-covered).
+
 Each run mounts only its own folder of the screenshots volume (`volume-subpath`, Docker
 Engine 26 or later), named with 24 random hex digits: it can't list or read another run's.
 The listener serves only the regular files of that folder: a symbolic link (opened with
@@ -946,6 +970,11 @@ it again when you change `AGY_VERSION`.
 - **An engine's containers** run what the run builds, with the run's hosts: a repository's
   Dockerfile pulling from a host the run may reach can bring anything in, as its setup
   command can.
+- **A fork's code in a work run** can still write to that run's own volumes outside the
+  checked-out files: `.git` (its config, its hooks) and the agent's session (`~/.claude`),
+  which the issue's next work run starts with. It ran with the same token and hosts as the
+  run it would reach, one an allowed user asked for: read what a fork's pull request does
+  before asking for work on it (see [What a fork's code may reach](#what-a-forks-code-may-reach)).
 - **Image builds** (a repo's `dockerfile`, with `allow_dockerfile`) and the **Claude Code
   install** run with normal network access: they run on the host's Docker, outside the
   sandboxes' networks. Builds run the repo's Dockerfile from its default branch (or its pull
