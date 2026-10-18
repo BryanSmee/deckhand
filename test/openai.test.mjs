@@ -208,12 +208,20 @@ test("a plan's login that can't be used: a 503, and its status for fallbacks", a
   const spent = Object.assign(new Error("the ChatGPT login can't be refreshed (401)"), {
     status: 401,
   });
-  const login = { headers: async () => Promise.reject(spent), refused: () => {} };
+  const login = {
+    headers: async () => Promise.reject(spent),
+    refused: () => {},
+    secrets: () => [],
+  };
   const { url, broker, upstream } = await servePlan(t, login);
   const secret = broker.register("org/repo");
   const res = await ask(url, { authorization: `Bearer ${secret}` });
   assert.equal(res.status, 503);
-  assert.match((await res.json()).error.message, /^Deckhand: the ChatGPT login can't be refreshed/);
+  // A fixed text: the error's own message may quote a credential file (#242).
+  const message =
+    "the operator's login for OpenAI was refused, and must be signed in again: see the listener's log";
+  assert.equal((await res.json()).error.message, `Deckhand: ${message}`);
+  assert.equal(broker.runOf(secret).apiError, message);
   assert.equal(broker.runOf(secret).apiStatus, 401);
   assert.equal(upstream.requests.length, 0);
 });

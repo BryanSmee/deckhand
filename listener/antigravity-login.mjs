@@ -119,9 +119,11 @@ export function createAntigravityLogin({
       next.token.access_token !== json.token.access_token &&
       Date.parse(next.token.expiry ?? "") > now();
     if (!fresh) {
-      const why = (result.err || result.out || `exit ${result.code}`).split("\n").at(-1);
+      // From stderr only: stdout is the token file (#242).
+      const why =
+        (result.err ?? "").trim().split("\n").at(-1) || `exit ${result.code}, nothing on stderr`;
       const message = `the Antigravity CLI's login can't be refreshed (${why.slice(0, 300)})`;
-      if (result.code !== 0 && REFUSED.test(`${result.err}\n${result.out}`)) {
+      if (result.code !== 0 && REFUSED.test(result.err ?? "")) {
         throw new LoginError(`${message}: sign in with \`agy\` again for AGY_AUTH_FILE`);
       }
       throw new Error(message);

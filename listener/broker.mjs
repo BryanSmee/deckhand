@@ -40,10 +40,12 @@ export function createBroker({
   random = () => randomBytes(32).toString("hex"),
   log = () => {},
 }) {
-  // hash(secret) → { repo, extra, push, branches, provider, apiStatus, apiError }: `provider`,
-  // where the listener sends its agent's API calls (anthropic.mjs; null: the agent's default),
-  // `apiStatus`, the last status that provider answered, and `apiError`, why the last call the
-  // listener refused or the provider failed did (upstream.mjs): what an error reply adds.
+  // hash(secret) → { repo, extra, push, branches, provider, apiStatus, apiError, tokens }:
+  // `provider`, where the listener sends its agent's API calls (anthropic.mjs; null: the
+  // agent's default), `apiStatus`, the last status that provider answered, and `apiError`, why
+  // the last call the listener refused or the provider failed did (upstream.mjs): what an
+  // error reply adds.
+  // `tokens`: the installation tokens it got, which its output must not publish (runs.mjs).
   const runs = new Map();
 
   // `extra`: permissions this run's token gets beyond or instead of the sandbox's usual ones,
@@ -61,6 +63,7 @@ export function createBroker({
       provider: null,
       apiStatus: null,
       apiError: null,
+      tokens: new Set(),
     });
     return secret;
   }
@@ -107,6 +110,7 @@ export function createBroker({
     if (!github) return send(res, 503, { error: "the GitHub App is not set up" });
     try {
       const { token, expiresAt } = await github.repoToken(repo, extra);
+      run.tokens.add(token);
       send(res, 200, {
         token,
         expires_at: new Date(expiresAt).toISOString(),

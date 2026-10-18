@@ -72,7 +72,13 @@ export function createChatgptLogin({
     const { mtimeMs } = await stat(file);
     if (login?.mtimeMs === mtimeMs) return login.json;
     await writable();
-    const json = JSON.parse(await readFile(file, "utf8"));
+    // Not JSON.parse()'s own error: it quotes part of the file (#242).
+    let json = null;
+    try {
+      json = JSON.parse(await readFile(file, "utf8"));
+    } catch (error) {
+      if (!(error instanceof SyntaxError)) throw error;
+    }
     if (!json?.tokens?.access_token || !json.tokens.refresh_token) {
       throw new LoginError(`${file} holds no ChatGPT login (run \`codex login\` for one)`);
     }

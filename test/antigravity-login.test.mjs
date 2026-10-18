@@ -217,6 +217,20 @@ test("a refresh that failed otherwise is retried by the next call", async (t) =>
   assert.equal(calls.length, 4);
 });
 
+test("a refresh that fails with nothing on stderr: no part of the token file in its message", async (t) => {
+  const file = loginFile(t, tokenFile("ya29.old-access-token-0123456789", "2026-10-17T11:00:00Z"));
+  // An older refresh script printed the file whatever happened: never quoted, even so (#242).
+  const { docker } = fakeDocker((json) => ({ code: 1, out: JSON.stringify(json), err: "" }));
+  const login = createAntigravityLogin({ file, config, docker, now: () => NOW });
+  await assert.rejects(login.headers(), (error) => {
+    assert.equal(
+      error.message,
+      "the Antigravity CLI's login can't be refreshed (exit 1, nothing on stderr)",
+    );
+    return true;
+  });
+});
+
 test("a file without a login is refused, naming it", async (t) => {
   for (const json of ["not json", { token: { access_token: "x" } }]) {
     const file = loginFile(t, json);
@@ -365,9 +379,46 @@ test("Google's 401 marks the plan's token for a refresh; a spent login refuses t
     brokenRun,
   );
   assert.equal(refused.status, 503);
-  assert.match((await refused.json()).error.message, /sign in with `agy` again/);
+  const message =
+    "the operator's login for Google was refused, and must be signed in again: see the listener's log";
+  assert.deepEqual(await refused.json(), {
+    error: { status: "UNAVAILABLE", message: `Deckhand: ${message}` },
+  });
   assert.equal(broken.google.requests.length, 0);
-  assert.equal(broken.broker.runOf(brokenRun).apiError, spent.message);
+  assert.equal(broken.broker.runOf(brokenRun).apiError, message);
+});
+
+test("a login that can't be refreshed: its error stays in the listener's log, redacted", async (t) => {
+  // What a failed refresh's message could quote: part of the token file (#242).
+  const leak = new Error('can\'t be refreshed ({"token":{"access_token":"ya29.plan-access-tok');
+  const logs = [];
+  const google = await fakeGoogle(t);
+  const broker = createBroker({ app: () => null });
+  const endpoint = createGoogleRelay({
+    broker,
+    login: {
+      headers: async () => Promise.reject(leak),
+      refused: () => {},
+      secrets: () => ["ya29.plan-access-token-0123456789", "1//refresh-token-0123456789"],
+    },
+    upstream: () => google.url,
+    log: (line) => logs.push(line),
+  });
+  const { url } = await serve(t, (req, res) => endpoint.handle(req, res));
+  const secret = broker.register("org/repo");
+  broker.provide(secret, "google");
+  const res = await call(
+    url,
+    "daily-cloudcode-pa.googleapis.com/v1internal:generateContent",
+    secret,
+  );
+  assert.equal(res.status, 503);
+  const message =
+    "the operator's login for Google can't be refreshed right now: see the listener's log";
+  assert.equal((await res.json()).error.message, `Deckhand: ${message}`);
+  assert.equal(broker.runOf(secret).apiError, message);
+  assert.equal(broker.runOf(secret).apiStatus, 502);
+  assert.deepEqual(logs, ['Google: can\'t be refreshed ({"token":{"access_token":"[redacted]']);
 });
 
 test("no plan's login: the model list is refused, the run told why", async (t) => {

@@ -322,8 +322,11 @@ export function createRuns(ctx) {
     return redact(line, secretValues(live));
   }
 
+  // Its GitHub tokens too (broker.mjs), while the broker holds the run: redact() also knows
+  // their shape, for those a restarted listener no longer lists.
   function secretValues(live) {
-    return [live.secret, ...operatorSecrets(ctx)];
+    const tokens = ctx.broker.runOf(live.secret)?.tokens ?? [];
+    return [live.secret, ...operatorSecrets(ctx), ...tokens];
   }
 
   function output(task, raw) {

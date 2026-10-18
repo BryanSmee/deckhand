@@ -635,7 +635,7 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
     );
     assert.match(
       JSON.parse(failed.body).body,
-      /> invalid model selection [^\n]*\n\nIts last failed API call, through the listener: the Antigravity CLI's login can't be refreshed/,
+      /> invalid model selection [^\n]*\n\nIts last failed API call, through the listener: the operator's login for Google can't be refreshed right now: see the listener's log\./,
     );
     rmSync(join(dir, "agy-no-models"));
 

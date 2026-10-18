@@ -145,6 +145,17 @@ test("an auth.json without a ChatGPT login, or none at all: an error", async (t)
   await assert.rejects(missing.headers(), /ENOENT/);
 });
 
+test("an auth.json that isn't JSON: an error that quotes none of it", async (t) => {
+  const file = await authFile(t);
+  await writeFile(file, '{"tokens": {"access_token": "eyJhbGciOiJSUzI1NiIs-cut-off');
+  const login = createChatgptLogin({ file, fetch: tokenServer().fetch, now: () => NOW });
+  await assert.rejects(login.headers(), (error) => {
+    assert.match(error.message, /holds no ChatGPT login/);
+    assert.doesNotMatch(error.message, /eyJ|access_token/);
+    return true;
+  });
+});
+
 test("a FedRAMP workspace gets its header; a token without expiry refreshes after 8 days", async (t) => {
   const fedramp = jwt({
     "https://api.openai.com/auth": {

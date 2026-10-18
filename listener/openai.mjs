@@ -56,6 +56,7 @@ export function createOpenAiProxy({
       // Expired early or revoked: the next call refreshes it first.
       if (plan && status === 401) login.refused(headers.authorization);
     },
+    secrets: () => (plan ? login.secrets() : [credential]),
     log,
   });
 

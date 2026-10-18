@@ -128,6 +128,13 @@ So what a run copied out (through an allowed host) can be used against its own r
 with those permissions, for up to an hour. Uninstalling the App, or suspending its
 installation, revokes its tokens at once.
 
+What a run prints doesn't publish them: the broker keeps the installation tokens it gave each
+run, and the listener redacts them from the run's log (what the dashboard shows), the run
+analysis digest and its reply, as `[redacted]`. Anything shaped like a GitHub token (`ghs_`,
+`ghp_`, `gho_`, `ghu_`, `ghr_` followed by 36 characters or more, `github_pat_…`) is redacted
+too, wherever it came from: a token a restarted listener no longer lists, or one the agent
+found elsewhere.
+
 ### The Claude credential
 
 Your `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN` outlives everything else a sandbox
@@ -150,8 +157,13 @@ and end up in a public comment.
   after: what a run copied out of its sandbox can't.
 - The listener redacts your credential and the run's secret from the sandbox's output
   before writing the run's log (what the dashboard shows) and from its reply before posting
-  it, as `[redacted]`. Only the exact value: an encoded or split one gets through, which is
-  why the credential isn't there to begin with.
+  it, as `[redacted]`. The value, or any part of it 16 characters long or more (a value cut off
+  in an error message); an encoded or split one gets through, which is why the credential isn't
+  there to begin with.
+- When the listener can't use an operator's login (a refresh that failed, a file it can't
+  read), the sandbox's call and the run's reply get a fixed text ("the operator's login for
+  Google can't be refreshed right now: see the listener's log"), never the error itself, which
+  could quote the credential file. The details go to the listener's log, redacted.
 
 Codex's `OPENAI_API_KEY` is kept out the same way (`listener/openai.mjs`): a sandbox's Codex
 has `<broker>/openai` as its provider's base URL and the run's secret as its key, sent as
@@ -565,7 +577,8 @@ files holding secrets are the owner's only (`0600`):
 at) are account-wide logins the listener rewrites at each refresh. Keep it out of git and
 readable by root alone, like `.env`.
 
-Run logs (`logs/<run>.log`) have the Claude credential and the run's secret redacted (see
+Run logs (`logs/<run>.log`) have the operator's credentials, the run's secret and its GitHub
+tokens redacted (see
 [The Claude credential](#the-claude-credential)). Their summaries (`logs/<run>.json`) hold
 what the log's first line does, the run's comments included, and its screenshots' folder.
 Both, and the screenshots, go after `LOG_RETENTION_DAYS` (90 by default).

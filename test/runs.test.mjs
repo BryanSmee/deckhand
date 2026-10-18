@@ -37,7 +37,7 @@ function fakeRunner() {
   return runner;
 }
 
-function setup(t, { mode = "idea", graceMs = 60 } = {}) {
+function setup(t, { mode = "idea", graceMs = 60, tokens = [] } = {}) {
   const dir = tempDir(t);
   const runner = fakeRunner();
   const answers = [];
@@ -54,7 +54,7 @@ function setup(t, { mode = "idea", graceMs = 60 } = {}) {
     stopping: false,
     runs: [],
     tasks: new Map(),
-    broker: { runOf: () => null, revoke: () => {} },
+    broker: { runOf: () => ({ tokens: new Set(tokens) }), revoke: () => {} },
     onboarded: { isIssue: () => false },
     brainstorms: { replied: () => {} },
     livePath: (id) => join(dir, `${id}.live.json`),
@@ -193,4 +193,23 @@ test("a run that answered before a restart: its grace starts again when it is fo
   const next = createRuns({ ...ctx, answerGraceMs: 30 });
   await next.follow(task);
   assert.equal(runner.kills, 1);
+});
+
+test("the GitHub tokens the broker gave the run are redacted from its log and its reply", async (t) => {
+  // One the broker issued (any shape), and one in GitHub's from elsewhere.
+  const issued = "v1.0123456789abcdef0123456789abcdef";
+  const other = "ghs_" + "Q".repeat(36);
+  const { runner, answers, following, logPath } = setup(t, { tokens: [issued] });
+  runner.out(
+    JSON.stringify({
+      type: "assistant",
+      message: { content: [{ type: "text", text: `gh auth token: ${issued}` }] },
+    }),
+  );
+  runner.out(result(`Mine is ${issued}, and I found ${other}.`));
+  await following;
+  assert.match(answers[0], /^Mine is \[redacted\], and I found \[redacted\]\./);
+  const log = readFileSync(logPath, "utf8");
+  assert.ok(!log.includes(issued) && !log.includes(other));
+  assert.match(log, /gh auth token: \[redacted\]/);
 });
