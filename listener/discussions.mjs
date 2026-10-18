@@ -10,10 +10,12 @@
 //                                                             THREAD_MS)
 //   POST /api/repos/<owner>/<repo>/discussions/<n>/comments   { text, replyTo? }: replyTo, a
 //                                                             comment's node id, for its thread
+import { createHmac } from "node:crypto";
 import { MAX_TEXT } from "./answers.mjs";
 import { addDiscussionComment, commentThread } from "./comments.mjs";
 import { normalize, repoAllowed } from "./config.mjs";
-import { MARKER, discussionEntryItem, taskKey } from "./events.mjs";
+import { MARKER, discussionEntryItem, taskKey, unmarked } from "./events.mjs";
+import { same } from "./html.mjs";
 import { CONFIG_FILE } from "./repo-config.mjs";
 import { apiRoute, readJsonBody, refuse, send } from "./web.mjs";
 
@@ -27,17 +29,43 @@ const MAX_BODY = 4 * MAX_TEXT + 4 * MAX_TITLE;
 const COMMENTS = 100;
 const REPLIES = 50;
 
-// The line that says who wrote an App post from the dashboard, as the dashboard shows it.
-export const fromLine = (user) => `From the dashboard by @${user}`;
+// The key that signs the "from" lines (fromLine()), from the App's webhook secret: the
+// listener's to know, and kept across restarts.
+export const fromKey = (secret) =>
+  secret ? createHmac("sha256", secret).update("deckhand-from").digest() : null;
+
+// The tag of `user`'s `text`: whitespace aside, as GitHub may give it back with \r\n.
+const fromTag = (key, user, text) =>
+  createHmac("sha256", key)
+    .update(`${user.toLowerCase()}\n${text.replace(/\s+/g, " ").trim()}`)
+    .digest("base64url")
+    .slice(0, 32);
+
+// The line that says who wrote an App post from the dashboard, as the dashboard shows it,
+// signed (`key`: fromKey()'s) for that text: a run posts as the App too, and could otherwise
+// write the line under its own text, or under someone else's name.
+export function fromLine(user, text, key) {
+  const line = `From the dashboard by @${user}`;
+  return key ? `${line} <!-- deckhand-from:${user}:${fromTag(key, user, text)} -->` : line;
+}
+
+// The App's post of `user`'s `text`, from the dashboard: the text, then who wrote it.
+export function fromDashboard(user, text, key) {
+  return `${text.trim()}\n\n${fromLine(user, text.trim(), key)}`;
+}
+
+const FROM = /\n*From the dashboard by @([\w-]+)[ \t]*<!-- deckhand-from:([\w-]+):([\w-]+) -->\s*$/;
 
 const AUTHOR = "author { login __typename }";
 const POST = `id databaseId url body createdAt ${AUTHOR}`;
 const THREAD = `query($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) { discussion(number: $number) { ${POST} number title category { name } comments(last: ${COMMENTS}) { totalCount nodes { ${POST} replies(last: ${REPLIES}) { totalCount nodes { ${POST} } } } } } } }`;
 
 // A post as the dashboard shows it: { id, url, author, deckhand, at, body }. The App's posts
-// are Deckhand's answers (they carry the marker, left out), or a dashboard user's (the last
-// line says who, left out too). Only the App's own: anyone may write that line.
-export function postOf(node, bot) {
+// are Deckhand's answers (they end with the marker, left out), or a dashboard user's (the last
+// line says who, with a tag `key` (fromKey()'s) signed for its text; left out too). Only the
+// App's own: anyone may write that line. Any other App post is shown as the App's: a run's,
+// say, whatever its last line claims.
+export function postOf(node, bot, key = null) {
   const login = node.author?.login ?? null;
   const app =
     node.author?.__typename === "Bot" &&
@@ -46,33 +74,38 @@ export function postOf(node, bot) {
   let body = node.body ?? "";
   let author = login;
   let deckhand = false;
-  if (app && body.includes(MARKER)) {
+  if (app && body.trimEnd().endsWith(MARKER)) {
     deckhand = true;
-    body = body.replace(MARKER, "").trim();
-  } else if (app) {
-    const from = /\n*From the dashboard by @([\w-]+)\s*$/.exec(body);
-    if (from) {
+    body = body.trimEnd().slice(0, -MARKER.length).trim();
+  } else if (app && key) {
+    const from = FROM.exec(body);
+    const text = from && body.slice(0, from.index).trim();
+    if (
+      from &&
+      from[1].toLowerCase() === from[2].toLowerCase() &&
+      same(from[3], fromTag(key, from[1], text))
+    ) {
       author = from[1];
-      body = body.slice(0, from.index).trim();
+      body = text;
     }
   }
   return { id: node.id, url: node.url ?? null, author, deckhand, at: node.createdAt ?? null, body };
 }
 
 // The GraphQL discussion → the dashboard's thread: the opening post, then each comment with its
-// replies. `more`: comments (or replies) older than those shown, on GitHub only.
-export function threadOf(d, bot) {
+// replies. `more`: comments (or replies) older than those shown, on GitHub only. `key`: postOf()'s.
+export function threadOf(d, bot, key = null) {
   const comments = d.comments?.nodes ?? [];
   return {
     number: d.number,
     title: d.title ?? null,
     url: d.url ?? null,
-    post: postOf(d, bot),
+    post: postOf(d, bot, key),
     more: Math.max(0, (d.comments?.totalCount ?? 0) - comments.length),
     comments: comments.map((c) => ({
-      ...postOf(c, bot),
+      ...postOf(c, bot, key),
       more: Math.max(0, (c.replies?.totalCount ?? 0) - (c.replies?.nodes?.length ?? 0)),
-      replies: (c.replies?.nodes ?? []).map((r) => postOf(r, bot)),
+      replies: (c.replies?.nodes ?? []).map((r) => postOf(r, bot, key)),
     })),
   };
 }
@@ -86,6 +119,8 @@ export function createDiscussionApi({
   checkedRepo,
   accept,
   publicUrl = () => null,
+  // The key of the dashboard's "from" lines (fromKey()), or null without an App.
+  key = () => null,
   now = Date.now,
   log = () => {},
 }) {
@@ -129,7 +164,7 @@ export function createDiscussionApi({
     if (normalize(d.category?.name ?? "") !== category) {
       refuse(404, `#${number} isn't in ${repo}'s discussions category.`);
     }
-    return { node: d, thread: threadOf(d, config.bot) };
+    return { node: d, thread: threadOf(d, config.bot, key()) };
   }
 
   // The checks and the thread are read together, and kept: each poll would ask GitHub for the
@@ -180,7 +215,7 @@ export function createDiscussionApi({
         repo: r.id,
         category: found.id,
         title: title.trim(),
-        body: `${body.trim()}\n\n${fromLine(user)}`,
+        body: fromDashboard(user, body, key()),
       },
     );
     const d = made.createDiscussion.discussion;
@@ -219,7 +254,7 @@ export function createDiscussionApi({
     const c = await addDiscussionComment(
       graphql,
       repo,
-      { id: d.id, thread, body: `${text.trim()}\n\n${fromLine(user)}` },
+      { id: d.id, thread, body: fromDashboard(user, text, key()) },
       "id databaseId url replyTo { databaseId }",
     );
     // Shown on the next read, not in THREAD_MS.
@@ -239,12 +274,12 @@ export function createDiscussionApi({
     return { message: `Sent to discussion #${number}.`, url: c.url };
   }
 
-  // A text field: a string, not blank, not over `max`.
+  // A text field: a string, not blank, not over `max`, without the App's marks (unmarked()).
   function field(value, what, max) {
-    if (typeof value !== "string" || !value.trim()) refuse(400, `Write ${what}.`);
+    if (typeof value !== "string" || !unmarked(value).trim()) refuse(400, `Write ${what}.`);
     if (value.length > max)
       refuse(413, `The ${what.replace(/^(a|an|the) /, "")} is over ${max} characters.`);
-    return value;
+    return unmarked(value);
   }
 
   async function started(req, res, user, repo) {

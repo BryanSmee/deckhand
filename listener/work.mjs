@@ -45,8 +45,8 @@ import {
 import { MAX_TEXT, answersComment, parseAnswers } from "./answers.mjs";
 import { labelFailed } from "./comments.mjs";
 import { repoAllowed } from "./config.mjs";
-import { fromLine } from "./discussions.mjs";
-import { inboxItem, issueItem, parseKey, prId, taskKey } from "./events.mjs";
+import { fromDashboard } from "./discussions.mjs";
+import { inboxItem, issueItem, parseKey, prId, taskKey, unmarked } from "./events.mjs";
 import { getJson } from "./github.mjs";
 import { createInputSeeder } from "./inputs.mjs";
 import { createRepoCheck } from "./repo-check.mjs";
@@ -127,6 +127,8 @@ export function createWorkApi({
   cancel = () => null,
   analysis = createAnalysis({ runs: () => [] }),
   publicUrl = () => null,
+  // The key of the dashboard's "from" lines (discussions.mjs fromKey()), or null.
+  fromKey = () => null,
   now = Date.now,
   log = () => {},
 }) {
@@ -542,7 +544,7 @@ export function createWorkApi({
     }
     const issue = await getJson(github, repo, `/repos/${repo}/issues/${number}`, [404, 410]);
     if (!issue) refuse(409, `${repo}'s ${kind} inbox, #${number}, isn't an issue.`);
-    const body = `${text.trim()}\n\n${fromLine(user)}`;
+    const body = fromDashboard(user, text, fromKey());
     const sent = await github(repo, "POST", `/repos/${repo}/issues/${number}/comments`, { body });
     if (!sent.ok) throw new Error(`GitHub POST a comment on #${number}: ${sent.status}`);
     const c = await sent.json();
@@ -600,9 +602,11 @@ export function createWorkApi({
   }
 
   async function inbox(req, res, user, repo) {
-    const { kind, text } = (await readJsonBody(req, MAX_ANSWER_BODY)) ?? {};
+    const { kind, text: sent } = (await readJsonBody(req, MAX_ANSWER_BODY)) ?? {};
     if (!Object.hasOwn(INBOXES, kind)) refuse(400, "`kind` is idea or bug.");
-    if (typeof text !== "string" || !text.trim()) refuse(400, "Write something to send.");
+    // Without the App's marks: posted as the App, they would pass for its own.
+    const text = typeof sent === "string" ? unmarked(sent) : null;
+    if (!text?.trim()) refuse(400, "Write something to send.");
     if (text.length > MAX_TEXT) refuse(413, `The text is over ${MAX_TEXT} characters.`);
     log(`Work area: ${user} sends a ${kind} to ${repo}'s inbox`);
     send(res, 200, await sendToInbox(repo, user, { kind, text }));

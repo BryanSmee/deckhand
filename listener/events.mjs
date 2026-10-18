@@ -6,6 +6,14 @@ import { normalize, repoAllowed } from "./config.mjs";
 // Marks our own comments, in case one ever reaches us from another account than the bot's.
 export const MARKER = "<!-- deckhand -->";
 
+// Text a dashboard user wrote, without the marks the listener puts on the App's posts (the
+// marker, the signed "from" line's tag, discussions.mjs fromLine()): posted as the App, it
+// would pass for Deckhand's answer or someone else's words.
+export const unmarked = (text) =>
+  String(text)
+    .replaceAll(MARKER, "")
+    .replace(/<!--\s*deckhand-from:[^]*?-->/g, "");
+
 // A task's key: "org/repo#12" (an issue), "org/repo#pr-5" (a pull request of its own),
 // "org/repo#discussion-8". `id`: its items' (prId(), String(n), discussion-<n>).
 export const taskKey = (repo, id) => `${repo}#${id}`;

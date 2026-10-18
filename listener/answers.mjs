@@ -5,6 +5,7 @@
 // The questions are api/state's (questions.mjs parseQuestions(), on the board's task): parsed
 // (`items`) the form sends one answer per question, `{ options: [i], text }`; not parsed, one
 // free text for them all.
+import { unmarked } from "./events.mjs";
 import { refuse } from "./web.mjs";
 
 // GitHub keeps 65536 characters of a comment (comments.mjs cuts longer ones): answers stay
@@ -18,7 +19,8 @@ const text = (s) => typeof s === "string" && s.length <= MAX_TEXT;
 // `answers` (one per question) or `text`. `then`: the work area's action to take once they are
 // in (the graph's drag that asked for them), as sent: work.mjs checks it. Throws Refused.
 export function parseAnswers(body) {
-  const { number, pr = false, answers, text: free, then = null } = body ?? {};
+  const { number, pr = false, answers, then = null } = body ?? {};
+  const free = typeof body?.text === "string" ? unmarked(body.text) : body?.text;
   if (!Number.isSafeInteger(number) || number <= 0) refuse(400, "`number` is an issue number.");
   if (typeof pr !== "boolean") refuse(400, "`pr` is true or false.");
   if ((answers === undefined) === (free === undefined)) {
@@ -33,7 +35,8 @@ export function parseAnswers(body) {
     refuse(400, "`answers` is a list, one per question.");
   }
   const checked = answers.map((a) => {
-    const { options = [], text: note = "" } = a ?? {};
+    const { options = [] } = a ?? {};
+    const note = typeof a?.text === "string" ? unmarked(a.text) : (a?.text ?? "");
     const index = (i) => Number.isSafeInteger(i) && i >= 0;
     if (!Array.isArray(options) || !options.every(index)) {
       refuse(400, "An answer's `options` are the indexes of the options ticked.");

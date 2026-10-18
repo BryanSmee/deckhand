@@ -201,7 +201,10 @@ post ends "From the dashboard by @user"; the run is the item a webhook would hav
 discussion or comment of that user (`events.mjs` `discussionEntryItem()`), queued with
 `accept()`, so a comment sent mid-run reaches the running session. Only discussions in the
 repo's category are read or written; the thread shows the App's posts with that line as the
-user's, and those with the marker as Deckhand's answers.
+user's when its tag checks (`<!-- deckhand-from:user:<hmac> -->`, an HMAC of the user and the
+text, with a key derived from the App's webhook secret), those ending with the marker as
+Deckhand's answers, and any other App post (a run's) as the App's. The marker and tags are
+taken out of what a user writes (`events.mjs` `unmarked()`) before it is posted.
 
 **Analyze**, also in the top bar, starts a run that reads a selection of a repository's past
 runs and replies with what would make sessions faster or more reliable (`analysis.mjs`). The

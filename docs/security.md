@@ -625,7 +625,12 @@ category: a discussion elsewhere, or a reply to a comment of another discussion,
 text is posted as the App's, ending "From the dashboard by @alice". Reading a thread
 (`GET …/discussions/<n>`) takes a signed-in user in `ALLOWED_USERS` and the repo's `users`,
 for a discussion in that category only. The thread shows a post as a dashboard user's only when
-the App wrote it: anyone else writing the same line is shown as themself.
+the App wrote it and its line carries a tag that checks: an HMAC of the user and the text, with
+a key derived from the App's webhook secret, which no run holds. Anyone else writing the same
+line is shown as themself; a run (which posts as the App, `discussions: write`) writing it, or
+copying a tag under other text, is shown as the App. Deckhand's answers are the App's posts
+that end with the marker. A dashboard user's text loses the marker and any tag before it is
+posted, so it can pass for neither. Posts from before the tags show as the App's.
 
 ## Hardening
 
