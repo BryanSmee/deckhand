@@ -42,6 +42,9 @@ export function createPreparation(ctx) {
     const { branches, fork, pulls } = await pushBranches(task, items);
     live.handoff = !!handoff;
     live.branches = branches;
+    // A fork's code may run in it: nothing it can leave for the repo's later runs, which
+    // trust what they find (prepareImage(), sandbox-spec.mjs).
+    live.fork = fork;
     ctx.broker.allow(live.secret, live.branches);
     // A review's are optional (its `review` block); a repo's mode always has them.
     const instructions = own?.instructions ? await modeInstructions(task, own) : null;
@@ -207,10 +210,14 @@ export function createPreparation(ctx) {
       if (image !== config.image)
         note(`Image ${image}${source.branch ? " (pull request branch)" : ""}`);
       await ctx.images.installAgent(agentOf(task), output);
-      // A light run runs no setup: no caches, which work runs trust.
-      const cacheArgs = task.live.light
-        ? []
-        : await ctx.images.caches(task.repo, settings.caches, image);
+      // A light run runs no setup: no caches, which work runs trust. Nor a run whose comments
+      // came from a fork's pull request: its code would write into what every later run uses.
+      if (task.live.fork && !task.live.light && settings.caches?.length)
+        note("No caches: a pull request from a fork");
+      const cacheArgs =
+        task.live.light || task.live.fork
+          ? []
+          : await ctx.images.caches(task.repo, settings.caches, image);
       return { image, cacheArgs, settings };
     } catch (error) {
       throw new RunError(

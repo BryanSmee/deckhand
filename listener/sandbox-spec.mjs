@@ -45,8 +45,9 @@ export function sandboxSpec(
     // The repo's caches (its config's `caches`), one volume per path, kept across its runs.
     ...cacheArgs,
     // Host paths the operator grants the repo and its config asks for (access.mjs
-    // grantedAccess()), read-only for a light run: a work run may trust what is there.
-    ...mountArgs(live.light ? mounts.map((m) => ({ ...m, readOnly: true })) : mounts),
+    // grantedAccess()), read-only for a light run and a fork's (preparation.mjs): a work run
+    // may trust what is there.
+    ...mountArgs(live.light || live.fork ? mounts.map((m) => ({ ...m, readOnly: true })) : mounts),
   ];
   const env = sandboxEnv(run, prompt, message, settings, engine);
   const labels = { "deckhand.task": live.key };

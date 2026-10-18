@@ -262,6 +262,41 @@ run in the issue's next work run, with its token. So light runs get their own `-
 session, no cache volumes (they run no setup), and granted host paths read-only. A work run
 after a brainstorm starts a new session, from the issue and its comments.
 
+### What a fork's code may reach
+
+Anyone can open a pull request from a fork, and an allowed user may ask for work on it: a
+comment on it, or on another of the issue's pull requests, triggers a run whose code then
+runs the fork's, through its setup, tests or the agent. Such a run is a fork's run (the
+listener looks up each pull request the run's comments came from), and must not reach what
+the repository's later runs trust and execute:
+
+- **Container engine**: none, whatever the grant (see [Container engine](#container-engine)).
+- **Caches**: none. A `postinstall` could otherwise leave a tampered package in the
+  repository's `~/.npm` volume, which every later work run, on any issue, installs from with
+  push access. The run's log says "No caches: a pull request from a fork".
+- **Host mounts**: read-only, as for a light run (the log's `Host mount` lines say so).
+- **Branch images**: never built from a fork's branch (`allow_branch_docker_images`).
+
+Every run, a fork's or not, protects the issue's clone, kept for its next runs: setup and the
+agent would otherwise run a fork left checked out there (its `SANDBOX_SETUP` and project
+hooks, `.claude/settings.json`, before the model reads anything). Before either starts:
+
+- `.git` loses its hooks and keeps only the config a clone needs (origin, its branches): no
+  `core.fsmonitor`, `core.hooksPath`, filter drivers or includes that a fork's code could
+  have left, for this start's commands and the checkouts after it (`draft-pr.sh`). The
+  `pre-push` hook is copied back.
+- The clone goes back to the branch it was on when that tracks a branch of the repository
+  (`gh pr checkout` sets a fork's to its URL or to `refs/pull/<n>/head`) and has no commit
+  that isn't on the repository (a fork's merged in, not pushed), else the base branch
+  (always, for a light run); `draft-pr.sh` goes back to the issue's branch on the same
+  condition. Untracked and ignored files go (`git clean -ffdx`), after a work run's
+  uncommitted changes are stashed (`git stash`). The agent is told where the clone was and
+  what was stashed, and checks them out again if it needs them, once it has read them.
+- Reviews read a pull request in a `git worktree` under `/tmp`, gone with their container, so
+  the `-light-` clone never holds a fork's tree. Stale worktrees are pruned first.
+
+What it can still reach is in [Not covered](#not-covered).
+
 Each run mounts only its own folder of the screenshots volume (`volume-subpath`, Docker
 Engine 26 or later), named with 24 random hex digits: it can't list or read another run's.
 The listener serves only the regular files of that folder: a symbolic link (opened with
@@ -946,6 +981,16 @@ it again when you change `AGY_VERSION`.
 - **An engine's containers** run what the run builds, with the run's hosts: a repository's
   Dockerfile pulling from a host the run may reach can bring anything in, as its setup
   command can.
+- **A fork's code in a work run** can still write to the agent's session (`~/.claude`) of
+  that run's issue, which its next work run starts with, and to what `.git` keeps besides
+  hooks and config (objects, refs, the stash). It ran with the same token and hosts as the
+  run it would reach, one an allowed user asked for: read what a fork's pull request does
+  before asking for work on it (see [What a fork's code may reach](#what-a-forks-code-may-reach)).
+- **A fork's pull request only mentioned** (in an issue, or a comment from elsewhere: "check
+  out #7 and fix it") isn't seen as a fork's run: the run gets the repository's caches,
+  read-write mounts and engine. The agent is told not to install, build or run such a pull
+  request's code (the sandbox's instructions), but nothing enforces it. Ask for work on a
+  fork's pull request from that pull request.
 - **Image builds** (a repo's `dockerfile`, with `allow_dockerfile`) and the **Claude Code
   install** run with normal network access: they run on the host's Docker, outside the
   sandboxes' networks. Builds run the repo's Dockerfile from its default branch (or its pull
