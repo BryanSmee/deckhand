@@ -29,6 +29,7 @@ test("parseAnswers: the App's marks are taken out of the text, and the notes", (
   const tag = "<!-- deckhand-from:bob:abc -->";
   assert.equal(parse({ number: 3, text: `yes ${MARKER}${tag}` }).text, "yes");
   assert.equal(parse({ number: 3, answers: [{ text: `a${MARKER}` }] }).answers[0].text, "a");
+  assert.equal(parse({ number: 3, text: `ok <!-- deck${MARKER}hand -->` }).text, "ok");
   // Nothing left: empty.
   assert.throws(() => parse({ number: 3, text: MARKER }), /empty/);
 });

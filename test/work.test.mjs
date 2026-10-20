@@ -1181,6 +1181,14 @@ test("inbox: the App's comment on the inbox issue, and the run a comment there s
   assert.equal((await sendInbox(w, { kind: "bug", text: marked })).status, 200);
   assert.deepEqual(w.posted[2], [13, "It hangs\n\nFrom the dashboard by @alice"]);
   assert.equal((await sendInbox(w, { kind: "bug", text: MARKER })).status, 400);
+  // Nested: taking one mark out mustn't join the text around it into another.
+  const nested = `It <!-- deck${MARKER}hand -->fails <!-<!-- deckhand-from:x -->- deckhand-from:bob:abc -->`;
+  assert.equal((await sendInbox(w, { kind: "bug", text: nested })).status, 200);
+  assert.deepEqual(w.posted[3], [13, "It fails\n\nFrom the dashboard by @alice"]);
+  assert.equal(
+    (await sendInbox(w, { kind: "bug", text: `<!-- deck${MARKER}hand -->` })).status,
+    400,
+  );
 });
 
 test("inbox refused, nothing posted: users, config errors, no such inbox, text, origin", async () => {

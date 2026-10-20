@@ -480,6 +480,12 @@ test("the App's marks in a dashboard user's text are taken out before it is post
   assert.equal(w.created[0].body, fromDashboard("alice", "Hi", KEY));
   await comment(w, { text: `More ${tag}\n${MARKER}` });
   assert.equal(w.added[0].body, fromDashboard("alice", "More", KEY));
+  // Nested marks: none left once the outer ones are taken out.
+  await comment(w, {
+    text: `Again <!-- deck${MARKER}hand --><!-<!-- deckhand-from:x -->- ${tag.slice(5)}`,
+  });
+  assert.equal(w.added[1].body, fromDashboard("alice", "Again", KEY));
+  assert.doesNotMatch(w.added[1].body.replace(/ <!-- deckhand-from:alice:[\w-]+ -->$/, ""), /<!--/);
   // Shown as alice's, not as Deckhand's answer.
   const shown = postOf({ id: "x", body: w.added[0].body, author: app }, BOT, KEY);
   assert.deepEqual([shown.author, shown.deckhand, shown.body], ["alice", false, "More"]);
