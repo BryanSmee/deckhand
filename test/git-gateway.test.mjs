@@ -199,7 +199,16 @@ function issueRun(b, branches = ["issue-1-*"]) {
 
 async function setup(
   t,
-  { register = issueRun, app = true, headMs, drainMs, sentFrom = sandboxAt() } = {},
+  {
+    register = issueRun,
+    app = true,
+    headMs,
+    drainMs,
+    sentFrom = sandboxAt(),
+    allowWorkflows,
+    // (extra) => the error minting a token with `extra` fails with, or nothing.
+    mintError = () => null,
+  } = {},
 ) {
   const dir = tempDir(t, "gateway-");
   const root = join(dir, "github");
@@ -210,6 +219,8 @@ async function setup(
   const github = {
     repoToken: async (repo, extra) => {
       minted.push({ repo, extra });
+      const error = mintError(extra);
+      if (error) throw error;
       return { token: "push-token", expiresAt: Date.now() + 3600000 };
     },
     request: async (repo, method, path) => {
@@ -226,6 +237,7 @@ async function setup(
     githubUrl: "https://github.test",
     fetch: backendFetch(root, seen),
     log: (line) => logs.push(line),
+    allowWorkflows,
     headMs,
     drainMs,
   });
@@ -276,6 +288,76 @@ test("a branch is pushed to GitHub with the gateway's token, not the sandbox's",
       "POST https://github.test/org/repo.git/git-receive-pack",
     ],
   );
+});
+
+test("allow_workflows: the push's token writes workflows, read again on each push", async (t) => {
+  let granted = true;
+  const asked = [];
+  const { work, remote, minted, upstream } = await setup(t, {
+    allowWorkflows: (repo) => {
+      asked.push(repo);
+      return granted;
+    },
+  });
+  const res = await git(work, "push", remote(), "HEAD:refs/heads/issue-1-x");
+  assert.ok(res.ok, res.stderr);
+  assert.equal(upstream("refs/heads/issue-1-x"), "refs/heads/issue-1-x");
+  // git's probe (info/refs) needs no more than contents; the push itself gets workflows.
+  assert.deepEqual(
+    minted.map((m) => m.extra),
+    [{ contents: "write" }, { contents: "write", workflows: "write" }],
+  );
+  assert.deepEqual(asked, ["org/repo"]);
+  // Taken back: the next push gets contents only.
+  granted = false;
+  minted.length = 0;
+  assert.ok((await git(work, "push", remote(), "HEAD:refs/heads/issue-1-y")).ok);
+  assert.deepEqual(
+    minted.map((m) => m.extra),
+    [{ contents: "write" }, { contents: "write" }],
+  );
+});
+
+test("allow_workflows: never for a refused push, nor when the grants can't be read", async (t) => {
+  const { work, remote, minted, logs } = await setup(t, {
+    allowWorkflows: () => {
+      throw new Error("org/repo.yaml: bad");
+    },
+  });
+  assert.ok((await git(work, "push", remote(), "HEAD:refs/heads/issue-1-x")).ok);
+  assert.ok(minted.every((m) => !m.extra.workflows));
+  assert.match(logs.join("\n"), /org\/repo\.yaml: bad/);
+
+  // A branch the run can't push (a fork's pull request has none): refused before any token.
+  const refused = await setup(t, { allowWorkflows: () => true });
+  assert.equal((await git(refused.work, "push", refused.remote(), "HEAD:refs/heads/x")).ok, false);
+  assert.ok(refused.minted.every((m) => !m.extra.workflows));
+});
+
+test("allow_workflows without the App's permission: refused, naming the grant and the setting", async (t) => {
+  const missing = Object.assign(new Error("token for installation 1: 422 not granted"), {
+    status: 422,
+  });
+  const { work, remote, seen, upstream } = await setup(t, {
+    allowWorkflows: () => true,
+    mintError: (extra) => (extra.workflows ? missing : null),
+  });
+  const res = await git(work, "push", remote(), "HEAD:refs/heads/issue-1-x");
+  assert.equal(res.ok, false);
+  assert.match(res.stderr, /\[remote rejected\] .*`allow_workflows` is granted but the App/);
+  assert.match(res.stderr, /Workflows: read and write/);
+  assert.equal(upstream("refs/"), "");
+  // Never pushed without it.
+  assert.ok(seen.every((s) => s.method === "GET"));
+
+  // Another failure: refused too, without blaming the App.
+  const down = await setup(t, {
+    allowWorkflows: () => true,
+    mintError: (extra) => (extra.workflows ? new Error("socket hang up") : null),
+  });
+  const again = await git(down.work, "push", down.remote(), "HEAD:refs/heads/issue-1-x");
+  assert.equal(again.ok, false);
+  assert.match(again.stderr, /couldn't get a token for this push/);
 });
 
 test("a run's secret sent from another sandbox's address pushes nothing", async (t) => {

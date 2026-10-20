@@ -60,8 +60,8 @@ What the App asks for:
 | ----------------------------------------------- | --------------------------------------------- |
 | Issues, Pull requests, Contents: read and write | `issues`, `issue_comment`, `pull_request`     |
 | Deployments, Discussions: read and write        | `pull_request_review`                         |
-| Actions, Metadata: read                         | `pull_request_review_comment`, `workflow_run` |
-|                                                 | `discussion`, `discussion_comment`            |
+| Workflows: read and write                       | `pull_request_review_comment`, `workflow_run` |
+| Actions, Metadata: read                         | `discussion`, `discussion_comment`            |
 |                                                 | `push`                                        |
 
 An App created before Deckhand answered discussions lacks the `discussion` events and the
@@ -70,6 +70,13 @@ the new permissions on its installation. Everything else works without them. `pu
 tells the dashboard's repository list that a default branch changed; an App without it
 (created before the list) sees a config pushed straight to the default branch within half an
 hour, and one merged through a pull request at once.
+
+Workflows lets the git gateway push changes to `.github/workflows/`, for the repositories
+whose grants file sets `allow_workflows` only ([security model](security.md#github-actions-on-deckhands-branches)):
+every other token is narrowed to what it's for and never carries it. An App created before
+then lacks it, which only matters once you grant `allow_workflows`: add **Workflows: read and
+write** in the App's settings (_Permissions & events_), then accept the new permission on its
+installation. Until then a granted repository's pushes are refused, with a message saying so.
 
 An App created before `/after` lacks the `issues` event: turn on **Issues** under _Subscribe
 to events_ in its settings. Without it, a comment waiting for an issue (`/after #77`) still
@@ -931,7 +938,8 @@ No sandbox gets a long-lived token, an SSH key or the host's git configuration:
 - Git fetches from GitHub over HTTPS with that token, and pushes through the listener's git
   gateway (same port, with the run's secret), which pushes the run's own branch only (its
   issue's `issue-<n>-*`, or its pull request's head), never the default one, with a token of
-  its own (see [Security model](security.md#the-default-branch)). The
+  its own (see [Security model](security.md#the-default-branch)): contents only, and
+  workflows too for a repository granted `allow_workflows`. The
   listener also opens a run's pull request, edits its title and body, and marks it ready for
   review (`gh pr create`, `edit` and `ready`), which that token can't: it only reads pull
   requests. Commits

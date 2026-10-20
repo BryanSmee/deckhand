@@ -107,6 +107,7 @@ function grantRows(grant) {
     allowBranchDockerImages: grant.allowBranchDockerImages,
     allowDocker: grant.allowDocker,
     allowResearch: grant.allowResearch,
+    allowWorkflows: grant.allowWorkflows,
     hosts: grant.hosts,
     cachedHosts: grant.cachedHosts,
     mounts: grant.mounts.map(({ root, readOnly }) => ({ root, readOnly })),

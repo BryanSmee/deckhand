@@ -49,6 +49,7 @@ const NOTHING = {
   allowBranchDockerImages: false,
   allowDocker: false,
   allowResearch: false,
+  allowWorkflows: false,
   mounts: [],
   limits: config.limits,
   files: [],
@@ -74,6 +75,7 @@ mounts:
     allowBranchDockerImages: false,
     allowDocker: false,
     allowResearch: false,
+    allowWorkflows: false,
     limits: { cpus: "4", memory: "4g", pids: 4096 },
     mounts: [
       { root: "/nfs/work", readOnly: false },
@@ -553,6 +555,24 @@ test("docker arguments: bind mounts, no capabilities, limits", () => {
     "--pids-limit",
     "512",
   ]);
+});
+
+test("allow_workflows: a repository's own file only", () => {
+  const own = { "org/repo.yaml": "allow_workflows: true\n" };
+  assert.equal(grantOf(own, "org/repo").allowWorkflows, true);
+  assert.equal(grantOf(own, "org/other").allowWorkflows, false);
+  // Workflow files run with the repo's Actions secrets: never every repo at once.
+  assert.throws(
+    () => grantsFrom({ "default.yaml": "allow_workflows: true\n" }, config),
+    (error) =>
+      error instanceof GrantsError &&
+      error.file === "default.yaml" &&
+      /default\.yaml: allow_workflows: only a repository's own file grants it/.test(error.message),
+  );
+  assert.throws(
+    () => grantOf({ "org/repo.yaml": "allow_workflows: 1\n" }, "org/repo"),
+    /allow_workflows: expected true or false/,
+  );
 });
 
 test("allow_docker: a repository's own file only, and `docker` without it is refused", () => {

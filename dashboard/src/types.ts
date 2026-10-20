@@ -269,6 +269,8 @@ export interface Grant {
   allowDocker: boolean;
   // `/mode research`: the open internet, without the repository's code or a token.
   allowResearch: boolean;
+  // Pushes that change .github/workflows/ (the git gateway's token gets `workflows: write`).
+  allowWorkflows: boolean;
   hosts: string[];
   // Those whose plain HTTP answers the egress proxy keeps in its cache.
   cachedHosts: string[];

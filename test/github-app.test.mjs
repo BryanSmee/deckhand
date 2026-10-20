@@ -9,6 +9,7 @@ import {
   READ_ONLY_PERMISSIONS,
   REFRESH_MS,
   SANDBOX_PERMISSIONS,
+  WORKFLOW_PUSH_PERMISSIONS,
   appSettingsUrl,
   checkAppEvents,
   createGitHubApp,
@@ -114,6 +115,30 @@ test("a light mode's read-only token is never a cached writing one, nor the reve
     contents: "read",
     issues: "read",
     pull_requests: "read",
+  });
+});
+
+test("a token the installation can't give fails with GitHub's status, and isn't cached", async () => {
+  const clock = { now: Date.parse("2026-10-14T12:00:00Z") };
+  let refuse = true;
+  const gh = recordingFetch(({ path, body }) => {
+    if (path === "/repos/org/repo/installation") return { id: 7 };
+    if (refuse && JSON.parse(body).permissions.workflows) {
+      return Response.json({ message: "not granted" }, { status: 422 });
+    }
+    const expires_at = new Date(clock.now + 60 * 60000).toISOString();
+    return Response.json({ token: "tok", expires_at }, { status: 201 });
+  });
+  const app = createGitHubApp({ credentials, fetch: gh.fetch, now: () => clock.now });
+  await assert.rejects(app.repoToken("org/repo", WORKFLOW_PUSH_PERMISSIONS), { status: 422 });
+  // Once the operator accepted the permission: the next push gets it.
+  refuse = false;
+  assert.equal((await app.repoToken("org/repo", WORKFLOW_PUSH_PERMISSIONS)).token, "tok");
+  const mint = gh.calls.filter((c) => c.path.endsWith("/access_tokens")).at(-1);
+  assert.deepEqual(JSON.parse(mint.body).permissions, {
+    ...SANDBOX_PERMISSIONS,
+    contents: "write",
+    workflows: "write",
   });
 });
 

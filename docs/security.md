@@ -81,9 +81,23 @@ and pushes made with an App's token do trigger them. Code a sandbox wrote can th
 - read any secret those workflows get and send it anywhere: Actions runners aren't behind
   the egress proxy.
 
-The workflow files themselves can't change: neither the sandbox's token nor the gateway's
-has the `workflows` permission, so GitHub refuses a push that adds or edits one. What they
-run can.
+By default the workflow files themselves can't change: neither the sandbox's token nor the
+gateway's has the `workflows` permission, so GitHub refuses a push that adds or edits one.
+What they run can.
+
+**`allow_workflows`** (a repository's own grants file only, never `default.yaml`) lifts that
+for one repository: the gateway then pushes the run's branches with a token that also has
+`workflows: write`, so a run can add a CI job or bump the Node version of a workflow. That
+token is still the gateway's alone: the sandbox's own token never has `workflows`, light and
+research runs never push, a fork's pull request has no branch to push, and the default branch
+stays refused. The grant is read again on each push, so taking it back applies to the next
+one. With it, code a sandbox wrote also decides what Actions runs on its branch: `on: push`
+and `on: pull_request` workflows run the branch's own workflow files, so a run can make them
+run anything, with any secret and `GITHUB_TOKEN` permission those workflows can reach. Keep
+it to repositories whose branch workflows hold no deploy or publishing secrets (put those in
+an environment with required reviewers, as below). The App needs the Workflows permission for
+it ([setup](setup.md#2-create-the-github-app)): without it, the gateway refuses the push and
+says so, rather than pushing without it.
 
 This is GitHub's model for any tool or person that pushes branches, not something Deckhand
 changes: your workflows are yours to set up. On each repository the App is installed on:
@@ -487,6 +501,10 @@ allow_docker: true
 # `/mode research` runs: any public host, without its code or a GitHub token (see Research
 # runs below).
 allow_research: true
+# Its runs' pushes may add or change files under .github/workflows/: the git gateway's token
+# gets `workflows: write` (see GitHub Actions on Deckhand's branches above). Per repository
+# only.
+allow_workflows: true
 # Its own limits; missing ones keep default.yaml's, else the built-in 2 CPUs, 4g, 2048.
 limits: { cpus: 4, memory: 8g, pids: 4096 }
 # Roots it may mount from (read-only unless read_only: false).
@@ -496,7 +514,8 @@ mounts:
   - /srv/datasets
 ```
 
-`default.yaml` takes the same keys but `mounts` and `allow_docker`, for every repository:
+`default.yaml` takes the same keys but `mounts`, `allow_docker` and `allow_workflows`, for
+every repository:
 
 ```yaml
 # default.yaml
@@ -511,9 +530,9 @@ cached_hosts: [deb.debian.org]
 limits: { memory: 8g }
 ```
 
-`mounts` and `allow_docker` in `default.yaml` are errors: a root or a container engine for
-every repository is too broad to grant by accident, so they are granted one repository at a
-time.
+`mounts`, `allow_docker` and `allow_workflows` in `default.yaml` are errors: a root, a
+container engine or workflow files run with the Actions secrets of every repository are too
+broad to grant by accident, so they are granted one repository at a time.
 
 **Errors stop runs, file by file.** A repository's file with errors grants that repository
 nothing: its runs stop, with a reply naming the file (the details are in the listener's logs,

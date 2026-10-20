@@ -6,8 +6,9 @@ import {
   LIGHT_PERMISSIONS,
   NO_TOKEN,
   READ_ONLY_PERMISSIONS,
+  SANDBOX_PERMISSIONS,
 } from "../listener/github-app.mjs";
-import { isFresh, isLight, kindOf, permissionsFor } from "../listener/modes.mjs";
+import { isFresh, isLight, kindOf, permissionsFor, RESERVED_MODES } from "../listener/modes.mjs";
 import {
   firstMessage,
   handoffMessage,
@@ -81,6 +82,13 @@ test("modes: discussions may write them, onboarding and light repo modes only re
   assert.equal(permissionsFor("research", true), NO_TOKEN);
   assert.equal(permissionsFor("work", false), undefined);
   assert.equal(permissionsFor("triage", false), undefined);
+  // Workflows: the git gateway's push token only (allow_workflows), never a sandbox's.
+  assert.equal(SANDBOX_PERMISSIONS.workflows, undefined);
+  for (const mode of [...RESERVED_MODES, "audit"]) {
+    for (const light of [true, false]) {
+      assert.equal(permissionsFor(mode, light)?.workflows, undefined, mode);
+    }
+  }
 });
 
 test("prompts: each kind of run gets its own", () => {
@@ -148,6 +156,10 @@ test("prompts: onboarding lists what this Deckhand allows the repo", () => {
   const open = promptFor(issue, { mode: "onboarding", settings, config, grant: granted });
   assert.match(open, /`preview` in `.deckhand.yaml`: allowed/);
   assert.match(open, /`dockerfile` in `.deckhand.yaml`: allowed\n/);
+  assert.match(text, /`\.github\/workflows\/`: not granted: .* sets `allow_workflows`/);
+  const workflows = { ...grant, allowWorkflows: true };
+  const editable = promptFor(issue, { mode: "onboarding", settings, config, grant: workflows });
+  assert.match(editable, /`\.github\/workflows\/`: allowed/);
   assert.match(text, /Models: work `opus` \(high effort\), brainstorms `sonnet` \(low\)/);
   assert.match(text, /## Reference: `.deckhand.yaml`/);
 });
@@ -191,6 +203,29 @@ test("prompts: a repo's mode, light or not, with its instructions", () => {
     branches: ["feature/x"],
   });
   assert.match(onPr, /push to its branch, `feature\/x`: Deckhand refuses pushes to any other/);
+});
+
+test("prompts: work runs are told whether their pushes may change workflow files", () => {
+  const granted = { ...grant, allowWorkflows: true };
+  const own = { name: "triage", light: false };
+  const mode = { mode: "triage", own, instructions: "Triage.", settings };
+  for (const [task, extra] of [
+    [issue, { mode: "work", settings }],
+    [pr, { mode: "work", settings, branches: ["feature/x"] }],
+    [issue, mode],
+  ]) {
+    assert.match(
+      promptFor(task, { ...extra, grant }),
+      /GitHub refuses pushes that add or change files under `\.github\/workflows\/`[^]*`allow_workflows`\): leave them out/,
+    );
+    assert.match(
+      promptFor(task, { ...extra, grant: granted }),
+      /Pushes may add or change files under `\.github\/workflows\/`/,
+    );
+  }
+  // A light mode never pushes: nothing to say.
+  const light = { ...mode, own: { name: "audit", light: true } };
+  assert.doesNotMatch(promptFor(issue, { ...light, grant }), /workflows/);
 });
 
 test("prompts: a pull request's run is told the one branch it may push, or none for a fork", () => {

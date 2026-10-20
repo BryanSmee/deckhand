@@ -34,7 +34,7 @@ import {
   saveCredentials,
 } from "./github-app.mjs";
 import { createGitHub, fetchTitle, listLabelled, listPulls } from "./github.mjs";
-import { grantErrors, loadGrants } from "./grants.mjs";
+import { grantErrors, grantFor, loadGrants } from "./grants.mjs";
 import { createHttp } from "./http.mjs";
 import { createHistory } from "./history.mjs";
 import { createImages } from "./images.mjs";
@@ -281,6 +281,8 @@ Object.assign(ctx, {
 ctx.gitGateway = createGitGateway({
   broker: ctx.broker,
   app: () => ctx.app,
+  // Read on each push: a grant taken back applies to the next one.
+  allowWorkflows: (repo) => grantFor(loadGrants(config), config, repo).allowWorkflows,
   githubUrl: config.githubUrl,
   log,
 });

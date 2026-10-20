@@ -106,6 +106,7 @@ ${modeInstructions.onboarding}
 - Host mount roots granted to this repository: ${roots.length ? none(roots) : "none: a \`mounts\` entry would be refused until the operator grants a root"}
 - \`preview\` in \`.deckhand.yaml\`: ${grant.allowPreview ? "allowed: the operator grants this repository a preview hook" : "not granted: a \`preview\` hook stops runs until the operator sets \`allow_preview\` for this repository"}
 - \`docker\` in \`.deckhand.yaml\`: ${grant.allowDocker ? (config.engine ? "allowed: its work runs get a container engine" : "granted, but the operator hasn't set up a container engine (SANDBOX_ENGINE): runs start without one") : "not granted: \`docker\` stops runs until the operator sets \`allow_docker\` for this repository"}
+- Pushes that change \`.github/workflows/\`: ${grant.allowWorkflows ? "allowed: the operator grants this repository \`allow_workflows\`" : "not granted: GitHub refuses them until the operator sets \`allow_workflows\` for this repository"}
 - \`dockerfile\` in \`.deckhand.yaml\`: ${grant.allowDockerfile ? `allowed${grant.allowBranchDockerImages ? ", from pull requests' own branches too" : ""}` : "not granted: a \`dockerfile\` stops runs until the operator sets \`allow_dockerfile\` for this repository"}
 - Models: work \`${settings.model}\` (${settings.effort} effort), brainstorms \`${settings.brainstormModel}\` (${settings.brainstormEffort})
 
@@ -174,9 +175,18 @@ function issueBranches(n, branches) {
   return `\`issue-${n}-…\`${extra}`;
 }
 
-function initialPrompt(task, branches = []) {
+// Whether the run's pushes may change workflow files (git-gateway.mjs), so a run that can't
+// says so rather than retrying GitHub's refusal.
+function workflowsNote(grant) {
+  return grant?.allowWorkflows
+    ? "Pushes may add or change files under `.github/workflows/` (the operator grants `allow_workflows`)."
+    : "GitHub refuses pushes that add or change files under `.github/workflows/` (the operator\ndoesn't grant `allow_workflows`): leave them out and say in the pull request what they need.";
+}
+
+function initialPrompt(task, branches = [], grant = null) {
   const { base } = task;
-  const common = `Follow the repository's AGENTS.md and CLAUDE.md if it has them, with tests where the
+  const common = `${workflowsNote(grant)}
+Follow the repository's AGENTS.md and CLAUDE.md if it has them, with tests where the
 code has them, and run the checks they list before pushing. Never push to ${base}. When
 something is ambiguous, pick the reasonable option and say so rather than stopping, unless it
 is a blocker only the maintainer can resolve: then push your work in progress and end with
@@ -211,7 +221,7 @@ ${common}`;
 // A run in one of the repo's own modes: its instructions (`instructions`, the file's text
 // from the default branch) after what every run of that kind is told. The agent's
 // instructions have the generic rules, as for work.
-function modePrompt(task, own, instructions, branches = []) {
+function modePrompt(task, own, instructions, branches = [], grant = null) {
   const { number: n, repo } = task;
   const { base } = task;
   const where =
@@ -230,9 +240,10 @@ Never push to ${base}.`
       : `The sandbox has already checked out the issue's branch, pushed it and opened a draft pull
 request (\`gh pr view\` shows it): if you change code, commit and push to that branch
 (Deckhand refuses pushes to branches not named ${issueBranches(n, branches)}). Never push to ${base}.`;
+  const workflows = own.light ? "" : `\n${workflowsNote(grant)}`;
   return `You are in the "${own.name}" mode of this repository, on ${where}.
 
-${rules}
+${rules}${workflows}
 Don't post comments on GitHub yourself: your final message is posted for you as the reply.
 
 The ${own.name} mode's instructions, from the repository:
@@ -253,8 +264,8 @@ export function promptFor(
   if (mode === "research") return researchPrompt(task);
   if (mode === "review") return reviewPrompt(task, pull ?? task.number, instructions, text);
   if (mode === "onboarding") return onboardingPrompt(task, settings, config, grant);
-  if (own) return modePrompt(task, own, instructions, branches);
-  return onboardingWork ? onboardingWorkPrompt(task) : initialPrompt(task, branches);
+  if (own) return modePrompt(task, own, instructions, branches, grant);
+  return onboardingWork ? onboardingWorkPrompt(task) : initialPrompt(task, branches, grant);
 }
 
 // The run's first message, after its prompt: the comments. `started`: the session goes on.

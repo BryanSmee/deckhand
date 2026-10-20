@@ -233,6 +233,7 @@ function GrantTable({ grant }: { grant: Grant }) {
     ["allow_preview", String(grant.allowPreview)],
     ["allow_docker", String(grant.allowDocker)],
     ["allow_research", String(grant.allowResearch)],
+    ["allow_workflows", String(grant.allowWorkflows)],
     ["hosts", grant.hosts.join(", ") || "none"],
     ["cached_hosts", grant.cachedHosts.join(", ") || "none"],
     [

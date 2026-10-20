@@ -14,6 +14,8 @@ export const APP_PERMISSIONS = {
   deployments: "write",
   actions: "read",
   discussions: "write",
+  // Only the git gateway's push token carries it, for repos granted `allow_workflows`.
+  workflows: "write",
 };
 // What workItem() routes, plus the previews' events (handled by a later hook), pushes,
 // which tell the dashboard's repository list (repos.mjs) a default branch changed, and
@@ -88,6 +90,9 @@ export const DISCUSSION_PERMISSIONS = { ...LIGHT_PERMISSIONS, discussions: "writ
 export const NO_TOKEN = false;
 // The git gateway's own token for a push it lets through: never handed to a sandbox.
 export const PUSH_PERMISSIONS = { contents: "write" };
+// Its token for a push of a repo granted `allow_workflows` (grants.mjs): GitHub refuses any
+// push that adds or changes a file under .github/workflows/ without it.
+export const WORKFLOW_PUSH_PERMISSIONS = { ...PUSH_PERMISSIONS, workflows: "write" };
 // A repo's light modes (its config's `modes:`) only comment, and the listener posts their
 // reply: their token can read the code, issues and pull requests, not push or write.
 export const READ_ONLY_PERMISSIONS = {
@@ -166,8 +171,13 @@ export function createGitHubApp({
     });
   }
 
+  // GitHub's status on the error, for callers that tell a refusal from an outage.
   async function json(res, what) {
-    if (!res.ok) throw new Error(`${what}: ${res.status} ${await res.text()}`);
+    if (!res.ok) {
+      throw Object.assign(new Error(`${what}: ${res.status} ${await res.text()}`), {
+        status: res.status,
+      });
+    }
     return res.json();
   }
 
