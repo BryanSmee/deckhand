@@ -43,10 +43,10 @@ export function createBroker({
   log = () => {},
 }) {
   // hash(secret) → { repo, extra, push, branches, provider, note, apiStatus, apiError, tokens }:
-  // `provider`, where the listener sends its agent's API calls (anthropic.mjs; null: the
-  // agent's default), `apiStatus`, the last status that provider answered, and `apiError`, why
-  // the last call the listener refused or the provider failed did (upstream.mjs): what an
-  // error reply adds.
+  // `provider`, where the listener sends its agent's API calls (anthropic.mjs; null: nowhere,
+  // no credential), `note`, a line in its log (provide()), `apiStatus`, the last status that
+  // provider answered, and `apiError`, why the last call the listener refused or the provider
+  // failed did (upstream.mjs): what an error reply adds.
   // `tokens`: the installation tokens it got, which its output must not publish (runs.mjs).
   const runs = new Map();
 

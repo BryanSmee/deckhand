@@ -1,9 +1,10 @@
-// What every API endpoint shares (upstream.mjs): a cap on each run's calls in flight, and a
-// provider that stops sending cut off.
+// What every API endpoint shares (upstream.mjs): a cap on each run's calls in flight, a
+// provider that stops sending cut off, and refused calls noted a bounded number of times.
 import assert from "node:assert/strict";
+import { request } from "node:http";
 import { test } from "node:test";
 import { createBroker } from "../listener/broker.mjs";
-import { baseOf, createApiProxy, MAX_IN_FLIGHT } from "../listener/upstream.mjs";
+import { baseOf, createApiProxy, MAX_IN_FLIGHT, MAX_NOTED } from "../listener/upstream.mjs";
 import { serve } from "./helpers.mjs";
 
 // A provider that answers each call's headers and a first event, then holds the rest until
@@ -72,7 +73,7 @@ async function proxyTo(t, upstream, options = {}) {
   const { url } = await serve(t, (req, res) => proxy.handle(req, res));
   const call = (secret) =>
     fetch(`${url}/api/call`, { method: "POST", headers: { "x-key": secret }, body: "{}" });
-  return { broker, call, logs };
+  return { url, broker, call, logs };
 }
 
 const until = async (check) => {
@@ -138,4 +139,47 @@ test("a provider that never answers: a 502 once the idle timer fires", async (t)
   assert.match((await res.json()).error.message, /Provider can't be reached/);
   assert.equal(broker.runOf(secret).apiStatus, 502);
   assert.equal(clock.timers.size, 0);
+});
+
+test("refused calls: each noted once in the run's log, and only so many", async (t) => {
+  const upstream = await slowProvider(t);
+  const { url, broker, logs } = await proxyTo(t, upstream);
+  const notes = [];
+  const secret = broker.register("org/repo");
+  broker.provide(secret, "test", (message) => notes.push(message));
+  const refuse = async (path) => {
+    const res = await fetch(`${url}/api/${path}`, { headers: { "x-key": secret } });
+    assert.equal(res.status, 404);
+    await res.text();
+  };
+  // A sandbox looping on one refused path: one line.
+  for (let i = 0; i < 50; i++) await refuse("files");
+  assert.deepEqual(notes, ["Deckhand refused the agent's call GET /api/files: not an API path"]);
+  // Many paths: the first MAX_NOTED, then one line saying the rest aren't noted.
+  for (let i = 1; i <= 3 * MAX_NOTED; i++) await refuse("x".repeat(i));
+  await refuse("files");
+  assert.equal(notes.length, MAX_NOTED + 1);
+  assert.match(notes.at(-1), new RegExp(`only the first ${MAX_NOTED} are noted`));
+  assert.equal(logs.filter((line) => /refused/.test(line)).length, MAX_NOTED);
+  assert.equal(upstream.requests.length, 0);
+});
+
+test("a request still uploading after the provider answered starts no timer", async (t) => {
+  // Answers at once, without reading the body: a 413, say.
+  const { url: early } = await serve(t, (req, res) => res.writeHead(413).end());
+  const clock = fakeClock();
+  const { url, broker } = await proxyTo(t, { url: early }, { clock });
+  const secret = broker.register("org/repo");
+  const req = request(`${url}/api/call`, { method: "POST", headers: { "x-key": secret } });
+  req.on("error", () => {});
+  req.write("first");
+  const res = await new Promise((resolve) => req.on("response", resolve));
+  assert.equal(res.statusCode, 413);
+  await new Promise((resolve) => res.resume().on("end", resolve));
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(clock.timers.size, 0);
+  req.write("late");
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(clock.timers.size, 0);
+  req.destroy();
 });

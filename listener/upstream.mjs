@@ -26,6 +26,25 @@ export const IDLE_MS = 10 * 60_000;
 export const MAX_IN_FLIGHT = 16;
 // run (broker.mjs) → its calls in flight, shared by every endpoint.
 const inFlight = new WeakMap();
+// The refused calls a run's log and the listener's log note, each once and only so many: a
+// sandbox looping on one mustn't grow its log past RUN_LOG_MAX_MB (writeEvent() isn't capped).
+export const MAX_NOTED = 20;
+// run → the refused calls noted for it.
+const noted = new WeakMap();
+
+// Notes `call` once per run, and up to MAX_NOTED of them; then a line saying the rest aren't.
+function noteRefused(run, call, notApi, log, what) {
+  const seen = noted.get(run) ?? new Set();
+  noted.set(run, seen);
+  if (seen.has(call) || seen.size > MAX_NOTED) return;
+  seen.add(call);
+  if (seen.size > MAX_NOTED) {
+    run.note?.(`Deckhand refused more of the agent's calls: only the first ${MAX_NOTED} are noted`);
+    return;
+  }
+  run.note?.(`Deckhand refused the agent's call ${call}: ${notApi}`);
+  log(`${what}: refused ${call}`);
+}
 
 // Per connection, or the listener's own business: never forwarded either way.
 const HOP = new Set([
@@ -74,7 +93,13 @@ export function forward(
   const send = target.protocol === "https:" ? httpsRequest : httpRequest;
   return new Promise((done) => {
     let timer = null;
-    const resolve = () => (clock.clearTimeout(timer), done());
+    let ended = false;
+    const resolve = () => {
+      ended = true;
+      clock.clearTimeout(timer);
+      req.off("data", idle);
+      done();
+    };
     const out = send(target, { method: req.method, headers }, (answer) => {
       answered(answer.statusCode);
       res.writeHead(answer.statusCode, forwarded(answer.headers));
@@ -84,14 +109,15 @@ export function forward(
       answer.on("end", resolve);
       answer.on("error", () => (res.destroy(), resolve()));
     });
-    const idle = () => {
+    function idle() {
+      if (ended) return;
       clock.clearTimeout(timer);
       timer = clock.setTimeout(() => {
         out.destroy(new Error(`no bytes for ${Math.round(idleMs / 1000)} s`));
         // Already answering: the agent sees its stream end early, and may retry.
         if (res.headersSent) (res.destroy(), resolve());
       }, idleMs);
-    };
+    }
     idle();
     req.on("data", idle);
     out.on("error", (error) => {
@@ -181,8 +207,7 @@ export function createApiProxy({
     if (!path || !routes.some(([method, re]) => method === req.method && re.test(path))) {
       // A newer agent that needs another path shows up in the run's log, not only as a 404.
       const call = `${req.method} ${req.url.split("?")[0]}`.slice(0, 200);
-      run.note?.(`Deckhand refused the agent's call ${call}: ${notApi}`);
-      log(`${what}: refused ${call}`);
+      noteRefused(run, call, notApi, log, what);
       return failRun(run, res, 404, errorShape.notFound, notApi);
     }
     // /openai/responses?x=1 → <base>/responses?x=1

@@ -280,7 +280,9 @@ endpoint forwards a fixed list of methods and paths, what its agent calls, and n
 
 - Anything else answers `404` in the provider's error shape, never reaching the provider, and
   is a line in the run's log ("Deckhand refused the agent's call …"): an agent version that
-  needs another path shows up there. Add it to the endpoint's list (`ROUTES`,
+  needs another path shows up there. Each call once, and the first 20 only, then one line
+  saying the rest aren't noted: a sandbox looping on refused calls can't grow its log past
+  `RUN_LOG_MAX_MB`, which the listener's own lines don't count towards. Add it to the endpoint's list (`ROUTES`,
   `GEMINI_ROUTES`, `RELAYED_PATHS`) when you change `CLAUDE_CODE_VERSION`, `CODEX_VERSION` or
   `AGY_VERSION` and it does.
 - Each endpoint serves its agent's runs only, from the provider the listener gave the run
