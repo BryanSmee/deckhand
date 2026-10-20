@@ -7,7 +7,7 @@ import { useRepos } from "./api";
 import { Dashboard } from "./App";
 import { Repos } from "./Repos";
 import { mockApi } from "./testUtils";
-import type { Repo, RepoConfig } from "./types";
+import type { AppLinks, Repo, RepoConfig } from "./types";
 
 const repo = (name: string, extra: Partial<Repo> = {}): Repo => ({
   repo: name,
@@ -30,6 +30,16 @@ const REPOS: Repo[] = [
   repo("org/wiki", { issues: false }),
   repo("org/bad", { status: "invalid" }),
 ];
+
+const APP: AppLinks = {
+  name: "Acme Deckhand",
+  installUrl: "https://github.com/apps/acme-deckhand/installations/new",
+  settingsUrl: "https://github.com/organizations/acme/settings/apps/acme-deckhand",
+  installations: [
+    { account: "org", url: "https://github.com/organizations/org/settings/installations/1" },
+    { account: "other", url: "https://github.com/settings/installations/2" },
+  ],
+};
 
 const CONFIG: RepoConfig = {
   repo: repo("org/api", { status: "invalid", readAt: Date.now() }),
@@ -78,8 +88,12 @@ beforeEach(() => {
   // Read now, not when the file loaded: "read 0s ago" holds however slow the tests before.
   const config = () => ({ ...CONFIG, readAt: Date.now() });
   api = mockApi({
-    "api/repos": () => ({ repos: REPOS, listedAt: Date.now() - 180000 }),
-    "POST api/repos/refresh": () => ({ repos: [...REPOS, repo("org/new")], listedAt: Date.now() }),
+    "api/repos": () => ({ repos: REPOS, app: APP, listedAt: Date.now() - 180000 }),
+    "POST api/repos/refresh": () => ({
+      repos: [...REPOS, repo("org/new")],
+      app: APP,
+      listedAt: Date.now(),
+    }),
     "api/repos/org/api/config": config,
     "POST api/repos/org/api/refresh": config,
     "api/repos/org/app/config": () => ({
@@ -140,6 +154,7 @@ test("Start onboarding posts, and the row switches to its issue", async () => {
 test("the header counts the repositories not onboarded and opens the page", async () => {
   const list = {
     repos: REPOS,
+    app: null,
     error: null,
     starting: null,
     failed: null,
@@ -158,6 +173,50 @@ test("the header counts the repositories not onboarded and opens the page", asyn
   dispatchEvent(new HashChangeEvent("hashchange"));
   await waitFor(() => screen.getByRole("heading", { name: "Repositories" }));
   expect(screen.queryByRole("tablist")).toBeNull();
+});
+
+test("Manage App: links to the App's installations and settings on GitHub, in a new tab", async () => {
+  render(<Page />);
+  const manage = await screen.findByRole("button", { name: /Manage App/ });
+  expect(manage.getAttribute("aria-expanded")).toBe("false");
+  expect(screen.queryByRole("link", { name: /App settings/ })).toBeNull();
+  fireEvent.click(manage);
+  expect(manage.getAttribute("aria-expanded")).toBe("true");
+  // Two installations: GitHub's install page, which lists them both.
+  const repos = screen.getByRole("link", { name: /Add or remove repositories/ });
+  expect(repos.getAttribute("href")).toBe(APP.installUrl);
+  const settings = screen.getByRole("link", { name: /App settings/ });
+  expect(settings.getAttribute("href")).toBe(APP.settingsUrl);
+  for (const link of [repos, settings]) {
+    expect(link.getAttribute("target")).toBe("_blank");
+    expect(link.getAttribute("rel")).toBe("noreferrer");
+  }
+  // Escape closes it, and so does a click beside it.
+  fireEvent.keyDown(window, { key: "Escape" });
+  await waitFor(() => expect(screen.queryByRole("link", { name: /App settings/ })).toBeNull());
+  fireEvent.click(manage);
+  screen.getByRole("link", { name: /App settings/ });
+  fireEvent.pointerDown(screen.getByRole("heading", { name: "Repositories" }));
+  await waitFor(() => expect(screen.queryByRole("link", { name: /App settings/ })).toBeNull());
+});
+
+test("Manage App with a single installation: its own page", async () => {
+  const one = { ...APP, installations: [APP.installations[1]] };
+  api = mockApi({ "api/repos": () => ({ repos: REPOS, app: one, listedAt: Date.now() }) });
+  render(<Page />);
+  fireEvent.click(await screen.findByRole("button", { name: /Manage App/ }));
+  const link = screen.getByRole("link", { name: /Add or remove repositories/ });
+  expect(link.getAttribute("href")).toBe("https://github.com/settings/installations/2");
+  expect(link.textContent).toContain("The installation on other");
+});
+
+test("no repository yet: a link that installs the App", async () => {
+  api = mockApi({ "api/repos": () => ({ repos: [], app: APP, listedAt: Date.now() }) });
+  render(<Page />);
+  await screen.findByText(/isn't installed on any allowed repository yet/);
+  const link = screen.getByRole("link", { name: "Install the App on a repository" });
+  expect(link.getAttribute("href")).toBe(APP.installUrl);
+  expect(link.getAttribute("target")).toBe("_blank");
 });
 
 test("Refresh lists the repositories again, and says when they were", async () => {

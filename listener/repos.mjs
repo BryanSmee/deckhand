@@ -15,6 +15,7 @@
 // onboarding status are read at each list, so their changes show at once.
 import { repoAllowed } from "./config.mjs";
 import { GrantsError, grantCheck, grantFor, loadGrants, refusedByGrants } from "./grants.mjs";
+import { appSettingsUrl } from "./github-app.mjs";
 import { CONFIG_FILE, defaultSettings, parseRepoConfig, readRepoFile } from "./repo-config.mjs";
 import { effectiveView } from "./repo-view.mjs";
 import { paginate } from "./github.mjs";
@@ -54,6 +55,22 @@ export function repoStatus(info, found, onboarded) {
   return row;
 }
 
+// The dashboard's Manage App links, all on GitHub: { name, installUrl, settingsUrl,
+// installations: [{ account, url }] }. `app`: the stored credentials ({ slug, owner, html_url })
+// with what GET /app said at start ({ name, owner, ownerType }, github-app.mjs
+// checkAppEvents()), which may not have answered yet. `installUrl`: GitHub's install page,
+// which lists every account the App can be installed on, with Configure on those where it is;
+// an installation's `url` is that account's Configure page.
+export function appLinks(githubUrl, app, installations = []) {
+  const page = app.html_url ?? `${githubUrl}/apps/${encodeURIComponent(app.slug)}`;
+  return {
+    name: app.name ?? app.slug,
+    installUrl: `${page}/installations/new`,
+    settingsUrl: appSettingsUrl(githubUrl, app),
+    installations,
+  };
+}
+
 // `app`: asApp(), asInstallation(), request() and remember() (github-app.mjs). `store`: the
 // onboarding store (onboarding.mjs). `grants()` and `fs` (realpath, stat): what a run reads
 // too, the operator's grants folder and the listener's filesystem.
@@ -68,6 +85,8 @@ export function createRepoList({
 }) {
   let listing = null; // Promise<repo infos>, while fresh
   let listedAt = 0;
+  // The installations as last listed, [{ account, url }]: the Manage App links.
+  let installed = [];
   // "owner/repo" → { at, base, has, errors, settings }: the parsed settings are kept (not the
   // text) so the grant checks run again at each list, without asking GitHub.
   const configs = new Map();
@@ -75,6 +94,7 @@ export function createRepoList({
   async function fetchRepos() {
     const installations = await paginate((path) => app.asApp("GET", path), "/app/installations");
     const infos = [];
+    installed = installations.map((i) => ({ account: i.account?.login ?? null, url: i.html_url }));
     for (const installation of installations) {
       const repos = await paginate(
         (path) => app.asInstallation(installation.id, "GET", path),
@@ -226,6 +246,7 @@ export function createRepoList({
     usersOf,
     known,
     listedAt: () => listedAt,
+    installations: () => installed,
   };
 }
 
@@ -271,10 +292,11 @@ function grantsErrorView(error, everyRepo) {
 // The /api/repos routes. `user`: the signed-in login or null; `start(repo, login)` opens the
 // repo's onboarding issue and its run, resolving to the issue or null (tasks.mjs). `grants()`
 // and `fs` (realpath, stat) are what a run reads too: the operator's grants folder and the
-// listener's filesystem.
+// listener's filesystem. `app()`: the App for its links (appLinks()), or null before /setup.
 export function createRepoApi({
   config,
   list,
+  app = () => null,
   publicUrl = () => null,
   start,
   grants = () => loadGrants(config),
@@ -283,6 +305,17 @@ export function createRepoApi({
   log = () => {},
 }) {
   const refreshed = new Map(); // "owner/repo" or "*" → when last refreshed
+
+  // The list's answer: its rows, when GitHub listed them, and the App's links.
+  async function listed() {
+    const repos = await list.list();
+    const current = app();
+    return {
+      repos,
+      listedAt: list.listedAt(),
+      app: current && appLinks(config.githubUrl, current, list.installations()),
+    };
+  }
 
   // The App isn't installed on it: a 404 (sent), else its row. ALLOWED_REPOS: apiRoute().
   async function known(res, repo) {
@@ -323,7 +356,7 @@ export function createRepoApi({
     if (!repo) {
       if (tooSoon("*")) return send(res, 429, { error: "Refreshed a moment ago." });
       list.refreshAll();
-      return send(res, 200, { repos: await list.list(), listedAt: list.listedAt() });
+      return send(res, 200, await listed());
     }
     if (!(await known(res, repo))) return;
     if (tooSoon(repo.toLowerCase())) return send(res, 429, { error: "Refreshed a moment ago." });
@@ -375,8 +408,7 @@ export function createRepoApi({
       return one && { repo: `${one[1]}/${one[2]}`, what: one[3] };
     },
     gets: {
-      list: async (req, res) =>
-        send(res, 200, { repos: await list.list(), listedAt: list.listedAt() }),
+      list: async (req, res) => send(res, 200, await listed()),
       config: repoConfig,
     },
     posts: { onboard, refresh },

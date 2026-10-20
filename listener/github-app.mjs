@@ -30,20 +30,38 @@ export const APP_EVENTS = [
   "workflow_run",
   "push",
 ];
+// The App's settings page on GitHub (permissions, events, webhook): under the organization
+// that owns it, or the user's settings when it isn't one (or isn't known).
+export function appSettingsUrl(githubUrl, { slug, owner, ownerType }) {
+  const app = encodeURIComponent(slug);
+  return ownerType === "Organization" && owner
+    ? `${githubUrl}/organizations/${encodeURIComponent(owner)}/settings/apps/${app}`
+    : `${githubUrl}/settings/apps/${app}`;
+}
+
 // The App's settings, read at start (`asApp`, the App's own calls): a warning for each event of
 // APP_EVENTS it isn't subscribed to. An App created before a feature lacks its events, and
-// nothing else tells the operator (docs/setup.md). Resolves to the missing ones.
-export async function checkAppEvents(asApp, log) {
+// nothing else tells the operator (docs/setup.md). Resolves to the missing ones and what the
+// dashboard's links need, { missing, app: { name, owner, ownerType } } (app null when GitHub
+// refused). `credentials`: the stored App, the fallback for its slug and owner.
+export async function checkAppEvents(asApp, log, { githubUrl, credentials = {} } = {}) {
   const res = await asApp("GET", "/app");
-  if (!res.ok) return [];
-  const { events = [] } = await res.json();
+  if (!res.ok) return { missing: [], app: null };
+  const { events = [], name, slug, owner: account } = await res.json();
+  const app = {
+    name: name ?? credentials.slug ?? null,
+    slug: slug ?? credentials.slug ?? null,
+    owner: account?.login ?? credentials.owner ?? null,
+    ownerType: account?.type ?? null,
+  };
   const missing = APP_EVENTS.filter((e) => !events.includes(e));
   if (missing.length) {
+    const where = githubUrl && app.slug ? ` (${appSettingsUrl(githubUrl, app)})` : "";
     log(
-      `The GitHub App isn't subscribed to ${missing.join(", ")}: turn ${missing.length > 1 ? "them" : "it"} on under Subscribe to events in its settings (docs/setup.md)`,
+      `The GitHub App isn't subscribed to ${missing.join(", ")}: turn ${missing.length > 1 ? "them" : "it"} on under Subscribe to events in its settings${where} (docs/setup.md)`,
     );
   }
-  return missing;
+  return { missing, app };
 }
 
 // A sandbox gets less than the App: no deployments, nothing outside its repo, and its code

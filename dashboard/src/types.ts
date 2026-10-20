@@ -202,11 +202,24 @@ export interface Repo {
   readAt: number | null;
 }
 
+// Where the App is managed on GitHub (repos.mjs appLinks()). installUrl: GitHub's page that
+// installs it on an account, or configures an installation; settingsUrl: its permissions,
+// events and webhook. installations: each account it is installed on, with that
+// installation's own page.
+export interface AppLinks {
+  name: string;
+  installUrl: string;
+  settingsUrl: string;
+  installations: { account: string | null; url: string }[];
+}
+
 // GET api/repos, and POST api/repos/refresh (429 when refreshed a moment ago).
 export interface Repos {
   repos: Repo[];
   // When the installations' repositories were last listed.
   listedAt: number;
+  // Null before the App is set up (the dashboard isn't served then anyway).
+  app: AppLinks | null;
 }
 
 // POST api/repos/<owner>/<repo>/onboard
