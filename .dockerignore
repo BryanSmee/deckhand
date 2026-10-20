@@ -1,5 +1,10 @@
 .git
-.env
+# Secrets an operator's checkout may hold anywhere: the sandbox image copies whole folders
+# (its source stage), which every run can read.
+**/.env
+**/.env.*
+**/*.pem
+**/*.key
 test
 dashboard/node_modules
 dashboard/dist

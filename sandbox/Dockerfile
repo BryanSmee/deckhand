@@ -20,8 +20,10 @@
 # Deckhand's own source, read-only, for the runs that write a repo's .deckhand.yaml
 # (../prompts/onboarding.md): the base image's tools, how setup and caches run, how the
 # listener reads the config. Assembled here so the final image gets it in one layer, root's
-# and not writable by node whatever the build context's modes. No dashboard/ or test/.
-FROM node:26-bookworm AS source
+# and not writable by node whatever the build context's modes. No dashboard/ or test/. On the
+# build machine's platform: the same files for every architecture, so no QEMU run for arm64.
+# A local build copies these folders as they are on disk (.dockerignore leaves out secrets).
+FROM --platform=$BUILDPLATFORM node:26-bookworm AS source
 WORKDIR /src
 COPY docs/ docs/
 COPY prompts/ prompts/
