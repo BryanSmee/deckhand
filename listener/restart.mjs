@@ -106,7 +106,7 @@ export function createRestart(ctx) {
         ...Object.fromEntries(
           ["id", "mode", "talk", "light", "secret", "asked", "replyTo", "replied", "hosts", "shots"]
             .concat(["trusted", "cached", "uncached", "branches", "lines", "result", "later"])
-            .concat(["cancelled", "answered"])
+            .concat(["cancelled", "overflow", "answered"])
             .map((k) => [k, live[k]]),
         ),
         record,
@@ -153,8 +153,8 @@ export function createRestart(ctx) {
       record,
       result: savedResult(saved.result),
       logFile: openLog(logPath),
-      // A cancelled run takes no more comments: they wait for the next one.
-      open: !saved.cancelled && !ctx.runner.closed(saved.id),
+      // A cancelled or overflowed run takes no more comments: they wait for the next one.
+      open: !saved.cancelled && !saved.overflow && !ctx.runner.closed(saved.id),
       // A run started before the proxy decrypted HTTPS doesn't trust its CA: nothing cached.
       cached: saved.uncached ? saved.cached : [],
       ip: null,
@@ -180,18 +180,19 @@ export function createRestart(ctx) {
 
   // Follows each restored run's sandbox to its end, as if the listener had never stopped. A
   // run whose sandbox never started gives its comments back to the queue, unless it was
-  // cancelled: it ends as such (runs.mjs), its sandbox stopped again if it runs. Sandboxes
-  // nobody knows about any more are told to finish (their next run waits for them). First, this
-  // listener joins the running sandboxes' networks: a new container isn't on them.
+  // cancelled or its output passed RUN_LOG_MAX_MB: it ends as such (runs.mjs), its sandbox
+  // stopped again if it runs. Sandboxes nobody knows about any more are told to finish (their
+  // next run waits for them). First, this listener joins the running sandboxes' networks: a
+  // new container isn't on them.
   async function reattach(restored) {
     await relink();
     const sandboxes = await listSandboxes();
     for (const task of restored) {
       const live = task.live;
       const sandbox = sandboxes.find((s) => s.run === live.id);
-      if (live.replied || live.cancelled || sandbox) {
+      if (live.replied || live.cancelled || live.overflow || sandbox) {
         log(`${live.key}: picked up ${task.name} again`);
-        if (live.cancelled && sandbox?.running) {
+        if ((live.cancelled || live.overflow) && sandbox?.running) {
           ctx.runner
             .kill(task.name)
             .catch((error) => log(`${live.key}: stopping its sandbox: ${error.message ?? error}`));

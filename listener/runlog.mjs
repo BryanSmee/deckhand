@@ -42,9 +42,20 @@ export function parse(line) {
   }
 }
 
-// Appended synchronously, so a line counted as read (live.lines) is on disk.
+// Appended synchronously, so a line counted as read (live.lines) is on disk. `size`: the
+// file's, in bytes, from what it had when opened (a run picked up after a restart): what
+// RUN_LOG_MAX_MB is checked against (runs.mjs).
 export function openLog(path) {
-  return { write: (text) => appendFileSync(path, text) };
+  let size = existsSync(path) ? statSync(path).size : 0;
+  return {
+    write: (text) => {
+      appendFileSync(path, text);
+      size += Buffer.byteLength(text);
+    },
+    get size() {
+      return size;
+    },
+  };
 }
 
 // One of the listener's own lines in a run's log (`file`: openLog()'s): `event` ("note",
@@ -60,8 +71,10 @@ export const minutes = (ms) => Math.round(ms / 6000) / 10;
 // Rebuilds the list after a restart, so the dashboard survives it. From the runs' summaries:
 // a log is read in full (a few MB each) only when its run has none, from before summaries or
 // a listener that died mid-run, and then gets one, so the next start skips it. A run still
-// live (its .live.json, restart.mjs) gets its summary when it ends. Newest first.
-export function loadRuns(logDir) {
+// live (its .live.json, restart.mjs) gets its summary when it ends. Newest first. A log over
+// `max` bytes is read by its ends alone (logLines()); one that can't be read at all is left
+// out, logged: no log stops the start.
+export function loadRuns(logDir, { max = READ_MAX, log = console.error } = {}) {
   return readdirSync(logDir)
     .filter((f) => f.endsWith(".log"))
     .map((file) => {
@@ -69,10 +82,17 @@ export function loadRuns(logDir) {
       const logPath = join(logDir, file);
       const saved = readJson(summaryPath(logPath));
       if (saved?.id === id) return { ...saved, logPath };
-      const run = runOf(logDir, file);
+      let run;
+      try {
+        run = runOf(logDir, file, max, log);
+      } catch (error) {
+        log(`Listing the run of ${file}: ${error.message}`);
+        return null;
+      }
       if (!existsSync(join(logDir, `${id}.live.json`))) saveSummary(run);
       return run;
     })
+    .filter(Boolean)
     .sort((a, b) => b.startedAt - a.startedAt);
 }
 
@@ -144,9 +164,37 @@ export function addRun(ctx, record) {
   ctx.runsById.set(record.id, record);
 }
 
-function runOf(logDir, file) {
+// The most of a log loadRuns() reads whole: a string can't hold much more than 512 MB, and
+// older logs had no cap (RUN_LOG_MAX_MB). Past it, its first and last ENDS bytes.
+const READ_MAX = 64 * 1024 * 1024;
+const ENDS = 4 * 1024 * 1024;
+
+// A log's lines, or for one over `max` bytes, the first (the listener's, what the run is) and
+// those of its last bytes (its result, a cancel), the line cut there dropped.
+function logLines(logPath, max, log) {
+  const size = statSync(logPath).size;
+  if (size <= max) return readFileSync(logPath, "utf8").split("\n");
+  log(`${logPath}: ${Math.round(size / 1024 / 1024)} MB, only its first line and its end read`);
+  const ends = Math.min(ENDS, max);
+  const fd = openSync(logPath, "r");
+  try {
+    const read = (at, length) => {
+      const buffer = Buffer.alloc(length);
+      return buffer.toString("utf8", 0, readSync(fd, buffer, 0, length, at));
+    };
+    const first = read(0, ends).split("\n")[0];
+    const tail = read(size - ends, ends)
+      .split("\n")
+      .slice(1);
+    return [first, ...tail];
+  } finally {
+    closeSync(fd);
+  }
+}
+
+function runOf(logDir, file, max = READ_MAX, log = console.error) {
   const logPath = join(logDir, file);
-  const lines = readFileSync(logPath, "utf8").split("\n");
+  const lines = logLines(logPath, max, log);
   const meta = parse(lines[0])?.type === "listener" ? parse(lines[0]) : {};
   // Logs from before agents had names are Claude Code's.
   const agent = agentFor(meta.agent);
@@ -299,12 +347,21 @@ function agentEntry(e, agent) {
   return null;
 }
 
+// The most of a line that isn't JSON the dashboard gets: setup output, or an agent's event cut
+// at follow()'s MAX_LINE (a screenshot read in a tool's result, say), which no longer parses.
+const RAW_MAX = 4000;
+
+function clipRaw(line) {
+  if (line.length <= RAW_MAX) return line;
+  return `${line.slice(0, RAW_MAX)}… (${Math.round(line.length / 1024)} KB in all)`;
+}
+
 // One log line (the listener's, the agent's, or setup output) → entries for the dashboard.
 // `agent`: the run's (agents/), Claude Code for logs from before agents had names.
 export function format(line, agent = agentFor()) {
   if (!line.trim()) return [];
   const e = parse(line);
-  if (!e) return [{ kind: "raw", text: line }];
+  if (!e) return [{ kind: "raw", text: clipRaw(line) }];
   if (e.type === "listener") return listenerEntries(e, agent);
   return agent.normalize(line).flatMap((event) => agentEntry(event, agent) ?? []);
 }

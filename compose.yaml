@@ -123,6 +123,8 @@ services:
       CONFLICT_CHECK_MINUTES: ${CONFLICT_CHECK_MINUTES:-}
       # How often comments waiting for other issues ("/after #77") ask GitHub again.
       WAITS_CHECK_MINUTES: ${WAITS_CHECK_MINUTES:-}
+      # Megabytes a run's log may hold: past it, the run is stopped as failed.
+      RUN_LOG_MAX_MB: ${RUN_LOG_MAX_MB:-}
       # Days a run's log, summary and screenshots are kept (0: forever).
       LOG_RETENTION_DAYS: ${LOG_RETENTION_DAYS:-}
       NAME_PREFIX: ${NAME_PREFIX:-}

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import {
@@ -9,6 +9,7 @@ import {
   lastResult,
   loadRuns,
   minutes,
+  openLog,
   outcome,
   publicRun,
   saveSummary,
@@ -415,4 +416,58 @@ test("runs: a few thousand runs with summaries load fast", (t) => {
   // Read from their logs, they would have a summary.
   assert.ok(runs.every((r) => r.summary === undefined));
   assert.ok(ms < 3000, `${count} runs took ${Math.round(ms)} ms`);
+});
+
+// #241: a log too big to read whole (a string can't hold over about 512 MB) doesn't stop the
+// start. Here with a small cap.
+test("runs: an oversized log is read by its first line and its end, and logged", (t) => {
+  const dir = tempDir(t);
+  const meta = { type: "listener", key: "org/repo#8", repo: "org/repo", startedAt: 1000 };
+  writeFileSync(
+    join(dir, "deckhand-org-repo-8-1000.log"),
+    [line(meta), "x".repeat(5000), line({ type: "result", result: "Done." })].join("\n"),
+  );
+  const logs = [];
+  const [run] = loadRuns(dir, { max: 1000, log: (l) => logs.push(l) });
+  assert.deepEqual(
+    [run.key, run.repo, run.status, run.summary],
+    ["org/repo#8", "org/repo", "ok", "Done."],
+  );
+  assert.match(
+    logs[0],
+    /deckhand-org-repo-8-1000\.log: 0 MB, only its first line and its end read/,
+  );
+});
+
+test("openLog: its size, from what the file had when opened", (t) => {
+  const path = join(tempDir(t), "run.log");
+  const file = openLog(path);
+  assert.equal(file.size, 0);
+  file.write("héllo\n");
+  assert.equal(file.size, 7);
+  assert.equal(openLog(path).size, 7);
+});
+
+test("runs: a log that can't be read is left out, logged, and the others listed", (t) => {
+  const dir = tempDir(t);
+  mkdirSync(join(dir, "deckhand-org-repo-9-1000.log"));
+  writeFileSync(
+    join(dir, "deckhand-org-repo-10-1000.log"),
+    line({ type: "listener", key: "org/repo#10", startedAt: 1000 }),
+  );
+  const logs = [];
+  const runs = loadRuns(dir, { log: (l) => logs.push(l) });
+  assert.deepEqual(
+    runs.map((r) => r.key),
+    ["org/repo#10"],
+  );
+  assert.match(logs[0], /^Listing the run of deckhand-org-repo-9-1000\.log: /);
+});
+
+test("format: a line that isn't JSON is clipped, an agent's event cut at MAX_LINE too", () => {
+  assert.deepEqual(format("npm warn deprecated"), [{ kind: "raw", text: "npm warn deprecated" }]);
+  const cut = `{"type":"user","message":"${"a".repeat(1024 * 1024)}`;
+  const [entry] = format(cut);
+  assert.equal(entry.kind, "raw");
+  assert.equal(entry.text, `${cut.slice(0, 4000)}… (1024 KB in all)`);
 });

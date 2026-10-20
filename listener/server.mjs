@@ -114,7 +114,7 @@ const ctx = {
   // key ("org/repo#12") → task (tasks.mjs).
   tasks: new Map(),
   // The dashboard's runs, newest first (runlog.mjs), and by id; pruned daily (history.mjs).
-  runs: loadRuns(logDir),
+  runs: loadRuns(logDir, { log }),
   runsById: new Map(),
   // Runs with a sandbox, for the parallel cap.
   running: 0,

@@ -41,6 +41,12 @@ export { aliasOf } from "./networks.mjs";
 // How long a cancelled run's sandbox has between SIGTERM and SIGKILL.
 const KILL_GRACE_S = 10;
 
+// The longest line follow() keeps: past it, the line is cut and the rest of it, up to its
+// newline, dropped. Unbounded, one line with no newline would grow until the string can't
+// (about 512 MB) and throw in the stream's handler, which takes the listener down (#241).
+export const MAX_LINE = 1024 * 1024;
+export const LINE_CUT = " … (line cut)";
+
 export function createDockerRunner({
   config,
   docker, // ../docker.mjs
@@ -157,7 +163,8 @@ export function createDockerRunner({
 
   // Resolves once the sandbox's output ends (it exited, or `docker logs` stopped: state()
   // tells). `skip`: { out, err } lines of each stream already read by a previous listener.
-  // Only whole lines count: one cut short is read again, whole, by the next follow().
+  // Only whole lines count: one cut short is read again, whole, by the next follow(). A line
+  // over MAX_LINE is cut there and counts as one line, the same for the next follow().
   function follow(name, { skip = { out: 0, err: 0 }, onOut, onErr }) {
     return new Promise((resolve) => {
       const child = spawn("docker", ["logs", "--follow", name], {
@@ -165,12 +172,38 @@ export function createDockerRunner({
       });
       const lines = (stream, n, each) => {
         let rest = "";
+        let cut = false; // the current line was cut: dropped up to its newline
         let seen = 0;
-        const emit = (line) => (seen++ < n ? null : each(line));
+        // A handler that throws (its log's disk full, say) loses that line, not the listener.
+        const emit = (line) => {
+          if (seen++ < n) return;
+          try {
+            each(line);
+          } catch (error) {
+            log(`docker logs ${name}: ${error.stack ?? error}`);
+          }
+        };
+        // A chunk is at most the pipe's buffer: `rest` stays near MAX_LINE.
+        const add = (part) => {
+          if (cut) return;
+          rest += part;
+          if (rest.length <= MAX_LINE) return;
+          emit(rest.slice(0, MAX_LINE) + LINE_CUT);
+          rest = "";
+          cut = true;
+        };
+        // Decoded across chunks: a character split between two isn't mangled.
+        stream.setEncoding("utf8");
         stream.on("data", (chunk) => {
-          const parts = (rest + chunk).split("\n");
-          rest = parts.pop();
-          parts.forEach(emit);
+          const parts = chunk.split("\n");
+          const last = parts.pop();
+          for (const part of parts) {
+            add(part);
+            if (!cut) emit(rest);
+            rest = "";
+            cut = false;
+          }
+          add(last);
         });
       };
       lines(child.stdout, skip.out, onOut);

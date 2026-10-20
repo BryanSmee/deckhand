@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
 import { createHash, createHmac, generateKeyPairSync } from "node:crypto";
 import {
+  appendFileSync,
   chmodSync,
   mkdirSync,
   readdirSync,
@@ -1340,6 +1341,29 @@ mounts:
     assert.equal(stops.length, 2);
     assert.equal(replies(github).length, 1);
     assert.match(JSON.parse(replies(github)[0].body).body, /^Stopped by @alice\./);
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    assert.doesNotMatch(ctx.listener.output(), /queued again|interrupted|queued \(work/);
+    assert.deepEqual(readdirSync(join(dir, "containers")), []);
+  });
+
+  test("a listener restarted after a run's output passed RUN_LOG_MAX_MB: stopped again, failed, nothing requeued", async (t) => {
+    const ctx = await holding(t, undefined, () => ({ RUN_LOG_MAX_MB: "1" }));
+    const { dir, github } = ctx;
+    writeFileSync(join(dir, "stuck"), "");
+    const [name] = readdirSync(join(dir, "containers"));
+    const line = "x".repeat(100 * 1024) + "\n";
+    appendFileSync(join(dir, "containers", name, "out"), line.repeat(12));
+    await until(() => /^stop /m.test(exists(join(dir, "docker-calls")) ?? ""), "the stop");
+    rmSync(join(dir, "stuck"));
+    await ctx.restart();
+    await ctx.listener.until("done");
+    const stops = readFileSync(join(dir, "docker-calls"), "utf8").match(/^stop /gm);
+    assert.equal(stops.length, 2);
+    assert.equal(replies(github).length, 1);
+    assert.match(
+      JSON.parse(replies(github)[0].body).body,
+      /^Claude was stopped as failed: its output passed RUN_LOG_MAX_MB \(1 MB\)/,
+    );
     await new Promise((resolve) => setTimeout(resolve, 200));
     assert.doesNotMatch(ctx.listener.output(), /queued again|interrupted|queued \(work/);
     assert.deepEqual(readdirSync(join(dir, "containers")), []);
