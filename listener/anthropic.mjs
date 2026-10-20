@@ -78,6 +78,7 @@ export function createAnthropicProxy({
         ? { "x-api-key": credential }
         : { authorization: `Bearer ${credential}` };
     },
+    secrets: () => [credential, ...Object.values(providers).map((p) => p.credential)],
     log,
   });
 }

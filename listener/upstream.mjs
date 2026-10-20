@@ -3,6 +3,7 @@
 // answer streams back as it comes.
 import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
+import { redact } from "./redact.mjs";
 import { sendJson } from "./web.mjs";
 
 // Plans' credentials (`claude setup-token`, `codex login`, `agy`'s sign-in): logged at start,
@@ -79,6 +80,19 @@ export function forward(
   });
 }
 
+// What a sandbox and a run's reply learn of a credential the listener couldn't use: a fixed
+// text per kind, never the error's message, which may quote a credential file (#242). 401: a
+// login unusable until the operator acts (agents/ providerError()), `refused` when signing in
+// again is what fixes it (chatgpt.mjs, antigravity-login.mjs).
+export function credentialFailure(what, error) {
+  const why = error.refused
+    ? "was refused, and must be signed in again"
+    : error.status === 401
+      ? "can't be used"
+      : "can't be refreshed right now";
+  return `the operator's login for ${what} ${why}: see the listener's log`;
+}
+
 // A provider's endpoint: each call's run from its secret, then where it goes and with which
 // credential, then on to the provider. What differs between providers:
 //
@@ -93,7 +107,9 @@ export function forward(
 //                messages, and why the operator's credential is missing, if it is
 //   drop         request headers the listener sets rather than the sandbox
 //   authHeaders  async (run) → the credential's headers; an error with a `status` (what a
-//                fallback reads) refuses the call
+//                fallback reads) refuses the call. Its message only goes to the listener's log
+//                (a token file's content, say): the sandbox and the run's reply get a fixed one
+//   secrets      () → the credential's values, redacted from that log line
 //   answered     (run, status, headers): the provider's status, once it answers
 export function createApiProxy({
   broker, // broker.mjs: the run a secret belongs to
@@ -105,6 +121,7 @@ export function createApiProxy({
   drop,
   authHeaders,
   answered = () => {},
+  secrets = () => [],
   log = () => {},
 }) {
   const fail = (res, status, type, message) =>
@@ -133,9 +150,9 @@ export function createApiProxy({
     try {
       Object.assign(headers, await authHeaders(run));
     } catch (error) {
-      log(`${what}: ${error.message}`);
+      log(redact(`${what}: ${error.message}`, secrets()));
       run.apiStatus = error.status ?? 502;
-      return failRun(run, res, 503, errorShape.unavailable, error.message);
+      return failRun(run, res, 503, errorShape.unavailable, credentialFailure(what, error));
     }
     await forward(req, res, {
       target,

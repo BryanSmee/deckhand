@@ -38,6 +38,9 @@ test("a run's secret gets a token for its repo, until the run ends", async (t) =
   });
   assert.equal((await (await get("/token", b)).json()).repo, "org/b");
   assert.deepEqual(asked, ["org/a", "org/b"]);
+  // Kept, for runs.mjs to redact from the run's output.
+  await (await get("/token", a)).text();
+  assert.deepEqual([...broker.runOf(a).tokens], ["token-for-org/a"]);
   broker.revoke(a);
   assert.equal((await get("/token", a)).status, 401);
   assert.equal(broker.size(), 1);

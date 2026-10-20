@@ -38,9 +38,15 @@ function accountOf(tokens) {
   };
 }
 
-// Refused for good: an expired, reused or revoked refresh token. Signing in again is the fix.
+// Unusable until the operator acts: 401, a bad credential, for a fallback (agents/
+// providerError()). `refused`: an expired, reused or revoked refresh token, which signing in
+// again fixes; else the file or its folder is the problem (upstream.mjs credentialFailure()).
 class LoginError extends Error {
   status = 401;
+  constructor(message, { refused = false } = {}) {
+    super(message);
+    this.refused = refused;
+  }
 }
 
 export function createChatgptLogin({
@@ -72,7 +78,13 @@ export function createChatgptLogin({
     const { mtimeMs } = await stat(file);
     if (login?.mtimeMs === mtimeMs) return login.json;
     await writable();
-    const json = JSON.parse(await readFile(file, "utf8"));
+    // Not JSON.parse()'s own error: it quotes part of the file (#242).
+    let json = null;
+    try {
+      json = JSON.parse(await readFile(file, "utf8"));
+    } catch (error) {
+      if (!(error instanceof SyntaxError)) throw error;
+    }
     if (!json?.tokens?.access_token || !json.tokens.refresh_token) {
       throw new LoginError(`${file} holds no ChatGPT login (run \`codex login\` for one)`);
     }
@@ -106,7 +118,9 @@ export function createChatgptLogin({
       const message = `the ChatGPT login can't be refreshed (${res.status}${typeof code === "string" ? ` ${code}` : ""})`;
       // 400 invalid_grant and 401: the refresh token is spent, retrying won't help.
       if (res.status === 401 || res.status === 400) {
-        throw new LoginError(`${message}: run \`codex login\` again for CODEX_AUTH_FILE`);
+        throw new LoginError(`${message}: run \`codex login\` again for CODEX_AUTH_FILE`, {
+          refused: true,
+        });
       }
       throw new Error(message);
     }

@@ -60,6 +60,7 @@ export function createGoogleRelay({
           : { missing: "the operator set no GEMINI_API_KEY" },
     drop: ["authorization", "x-goog-api-key"],
     authHeaders: async () => ({ "x-goog-api-key": credential }),
+    secrets: () => [credential],
     log,
   });
 
@@ -89,6 +90,7 @@ export function createGoogleRelay({
           // Expired early or revoked: the next call refreshes it first.
           if (status === 401) plan.refused(headers.authorization);
         },
+        secrets: () => (plan ? plan.secrets() : []),
         log,
       });
       return { prefix, handle };
