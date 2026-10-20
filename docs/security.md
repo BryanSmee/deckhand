@@ -1102,6 +1102,12 @@ it again when you change `AGY_VERSION`.
   use an image built from a branch.
 - **Preview hooks** (with `allow_preview`) run on Docker's default network with the Docker
   socket.
+- **Deckhand's own source** is in every sandbox, read-only (`/usr/local/share/deckhand/src`,
+  for onboarding: see [Onboarding](architecture.md#onboarding)), repo images built from the
+  base image included: whoever can steer a run can read it. In a one-operator deployment
+  those are the operator's own repositories and users, so it is accepted while Deckhand's
+  repository is private. It holds no secret: those are in the operator's settings and
+  grants folder, never in the image.
 - **DNS**: Docker's embedded resolver may forward lookups from the internal network to the
   host's resolvers, so a lookup of a made-up name could carry data out to that domain's DNS
   server.

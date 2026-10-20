@@ -4,7 +4,8 @@
 #
 # The harness only: no project toolchain. A repo brings its own with a Dockerfile FROM this
 # image (`ARG DECKHAND_BASE` / `FROM $DECKHAND_BASE`, see ../docs/repo-config.md), which the
-# listener builds; without one, its runs use this image as is.
+# listener builds; without one, its runs use this image as is. Both hold a read-only copy of
+# Deckhand's own source in /usr/local/share/deckhand/src (the source stage below).
 #
 # No agent is in the image: each installs per version into a shared volume before the first
 # run that needs it (Claude Code: agents/claude/install puts the pinned CLAUDE_CODE_VERSION
@@ -15,6 +16,22 @@
 # agents/<name>/, copied to /usr/local/share/deckhand-agents. GitHub
 # access goes through the listener's token broker (git-credential-deckhand, the gh wrapper):
 # no token or SSH key is ever mounted.
+
+# Deckhand's own source, read-only, for the runs that write a repo's .deckhand.yaml
+# (../prompts/onboarding.md): the base image's tools, how setup and caches run, how the
+# listener reads the config. Assembled here so the final image gets it in one layer, root's
+# and not writable by node whatever the build context's modes. No dashboard/ or test/.
+FROM node:26-bookworm AS source
+WORKDIR /src
+COPY docs/ docs/
+COPY prompts/ prompts/
+COPY sandbox/ sandbox/
+COPY listener/ listener/
+COPY server.example/ server.example/
+COPY compose.yaml AGENTS.md README.md ./
+# The release it is (a git tag, .github/workflows/release-workflow.yml); "dev" from source.
+ARG DECKHAND_VERSION=dev
+RUN echo "$DECKHAND_VERSION" > VERSION && chmod -R u=rwX,go=rX .
 
 FROM node:26-bookworm
 
@@ -93,6 +110,9 @@ RUN install -d -o node -g node /home/node/.codex && install -d /opt/codex
 RUN ln -s /usr/local/share/deckhand-agents/antigravity/install /usr/local/bin/deckhand-install-antigravity \
     && ln -s /usr/local/share/deckhand-agents/antigravity/refresh /usr/local/bin/deckhand-antigravity-refresh
 RUN install -d -o node -g node /home/node/.gemini && install -d /opt/antigravity
+
+# Deckhand's source, matching this image (the source stage above). Last: it changes most.
+COPY --from=source /src/ /usr/local/share/deckhand/src/
 
 # Run as `node` (uid 1000): Claude Code refuses --dangerously-skip-permissions as root anyway.
 USER node

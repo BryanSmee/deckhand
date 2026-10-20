@@ -109,6 +109,15 @@ token, where Claude proposes the file (`prompts/onboarding.md`). Comments go on 
 trigger line or `/mode work` opens the pull request, and the reply says what the listener
 makes of the branch's config. `/mode onboarding` starts it on any issue.
 
+The base sandbox image holds the harness (`sandbox/`'s scripts, `prompts/sandbox.md`, the
+agents' files) and a read-only copy of Deckhand's own source, the version it was built from,
+in `/usr/local/share/deckhand/src`: `docs/`, `prompts/`, `sandbox/`, `listener/`,
+`server.example/`, `compose.yaml`, `AGENTS.md`, `README.md` and a `VERSION` file (the
+release's `DECKHAND_VERSION`), without `dashboard/` or `test/`. Onboarding checks its proposal
+against it (the base image's tools, how `setup` and `caches` run) rather than guessing, and
+repo images built `FROM` the base image inherit it. It needs no network access or token, and
+can't run ahead of the operator's release as GitHub's `main` can.
+
 ### Replies, reactions and labels
 
 A run that stops to ask (its final message starts with `<!-- needs-input -->`, see
