@@ -193,6 +193,11 @@
 }
 
 @media (max-width: 760px) {
+  /* The button ends near the screen's right edge: the menu opens leftwards. */
+  .menu {
+    left: auto;
+    right: 0;
+  }
   .row {
     grid-template-columns: minmax(0, 1fr) auto;
   }
