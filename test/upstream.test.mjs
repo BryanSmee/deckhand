@@ -183,3 +183,28 @@ test("a request still uploading after the provider answered starts no timer", as
   assert.equal(clock.timers.size, 0);
   req.destroy();
 });
+
+test("a refused call's path is redacted, and doesn't hide a provider's failure", async (t) => {
+  const upstream = await slowProvider(t);
+  const { url, broker, logs } = await proxyTo(t, upstream, {
+    pathRe: /^\/api\/([A-Za-z0-9_]+)$/,
+  });
+  const notes = [];
+  const secret = broker.register("org/repo", undefined, { secret: "s".repeat(40) });
+  broker.provide(secret, "test", (message) => notes.push(message));
+  const token = `ghs_${"A".repeat(36)}`;
+  broker.runOf(secret).apiError = "Provider answered 529";
+  for (const path of [secret, token, `x/${secret}`]) {
+    const res = await fetch(`${url}/api/${path}`, { headers: { "x-key": secret } });
+    assert.equal(res.status, 404);
+    await res.text();
+  }
+  // The secret's and the token's paths read the same once redacted: noted once.
+  assert.equal(notes.length, 2);
+  for (const line of [...notes, ...logs]) {
+    assert.ok(!line.includes(secret) && !line.includes(token), line);
+  }
+  assert.match(notes[0], /GET \/api\/\[redacted\]/);
+  // The reply still quotes the provider's failure; the refusal is in the run's log.
+  assert.equal(broker.runOf(secret).apiError, "Provider answered 529");
+});

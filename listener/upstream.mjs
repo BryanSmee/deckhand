@@ -206,9 +206,16 @@ export function createApiProxy({
     const path = pathRe.exec(req.url.split("?")[0])?.[1];
     if (!path || !routes.some(([method, re]) => method === req.method && re.test(path))) {
       // A newer agent that needs another path shows up in the run's log, not only as a 404.
-      const call = `${req.method} ${req.url.split("?")[0]}`.slice(0, 200);
+      // The path is the sandbox's to choose: without the run's secret or tokens, as its output.
+      const call = redact(`${req.method} ${req.url.split("?")[0]}`, [
+        secretOf(req),
+        ...run.tokens,
+        ...secrets(),
+      ]).slice(0, 200);
       noteRefused(run, call, notApi, log, what);
-      return failRun(run, res, 404, errorShape.notFound, notApi);
+      // A provider's failure before it stays what the reply quotes: the note has this one.
+      run.apiError ??= notApi;
+      return fail(res, 404, errorShape.notFound, notApi);
     }
     // /openai/responses?x=1 → <base>/responses?x=1
     const target = new URL(base.href + path + url.search);

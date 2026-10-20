@@ -279,12 +279,13 @@ endpoint forwards a fixed list of methods and paths, what its agent calls, and n
 | `/relay/<host>/` (`google.mjs`) | the Antigravity CLI's on a plan                                                    | `POST v1internal:<method>` on `daily-cloudcode-pa.googleapis.com`, `GET oauth2/v2/userinfo` on `www.googleapis.com`                                |
 
 - Anything else answers `404` in the provider's error shape, never reaching the provider, and
-  is a line in the run's log ("Deckhand refused the agent's call …"): an agent version that
-  needs another path shows up there. Each call once, and the first 20 only, then one line
-  saying the rest aren't noted: a sandbox looping on refused calls can't grow its log past
-  `RUN_LOG_MAX_MB`, which the listener's own lines don't count towards. Add it to the endpoint's list (`ROUTES`,
-  `GEMINI_ROUTES`, `RELAYED_PATHS`) when you change `CLAUDE_CODE_VERSION`, `CODEX_VERSION` or
-  `AGY_VERSION` and it does.
+  is a line in the run's log ("Deckhand refused the agent's call …"), redacted like the
+  sandbox's output: an agent version that needs another path shows up there. Each call is
+  noted once, and the first 20 only, then one line saying the rest aren't: a sandbox looping
+  on refused calls can't grow its log past `RUN_LOG_MAX_MB`, which the listener's own lines
+  don't count towards. When a new `CLAUDE_CODE_VERSION`, `CODEX_VERSION` or `AGY_VERSION`
+  needs another path, add it to the endpoint's list (`ROUTES`, `GEMINI_ROUTES`,
+  `RELAYED_PATHS`).
 - Each endpoint serves its agent's runs only, from the provider the listener gave the run
   (`broker.provide()`): a Claude Code run's secret gets no OpenAI key, and a run without a
   provider gets no credential at all. A run a restarted listener picks up whose saved record
