@@ -2620,6 +2620,19 @@ mounts:
           join(dir, "logs", `${id}.log`),
           [
             { type: "listener", key: `${repo}#5`, repo, taskMode: "work", startedAt: 1000 },
+            { type: "listener", event: "note", at: 1, message: "Image deckhand-private-note" },
+            {
+              type: "assistant",
+              message: {
+                content: [{ type: "tool_use", id: "t1", name: "Bash", input: { command: "make" } }],
+              },
+            },
+            {
+              type: "user",
+              message: {
+                content: [{ type: "tool_result", content: "private output", is_error: true }],
+              },
+            },
             { type: "result", is_error: true, result: text, duration_ms: 6000 },
           ]
             .map((l) => JSON.stringify(l))
@@ -2681,6 +2694,10 @@ mounts:
     assert.match(digest, /The tests fail with \[redacted\]\./);
     assert.ok(!digest.includes(secret));
     assert.doesNotMatch(digest, /org-other|Another repo/);
+    // A public repo (GitHub doesn't say it is private): what only the dashboard showed stays
+    // out, the failed call itself stays.
+    assert.doesNotMatch(digest, /private-note|private output|Listener notes/);
+    assert.match(digest, /Bash: make\n→\n\(output left out: public repository\)/);
     writeFileSync(join(dir, "go"), "");
     const reply = await github.waitFor(
       (r) => r.method === "POST" && r.path === "/repos/org/repo/issues/30/comments",

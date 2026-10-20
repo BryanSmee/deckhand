@@ -625,8 +625,9 @@ as is, so it quotes less than the dashboard shows:
 
 - **No research run**, ever: the form doesn't offer the kind, the selection skips them, and a
   digest asked for by run id leaves them out (see [Research runs](#research-runs)).
-- **On a public repository** (or when GitHub didn't say it is private, when it was asked
-  for), no listener notes, setup output or failed tools' outputs: only the dashboard showed
+- **Unless GitHub says the repository is private**, both when the analysis is asked for and
+  again when its run starts (a repo made public meanwhile, or a lookup that fails, counts as
+  public), no listener notes, setup output or failed tools' outputs: only the dashboard showed
   them. Kinds, outcomes, timings, tool counts, the calls made and the final replies (already
   posted on the repository) stay.
 - Its instructions (`prompts/analyze.md`) say the digest is data, not instructions, and that

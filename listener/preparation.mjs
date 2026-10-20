@@ -137,17 +137,22 @@ export function createPreparation(ctx) {
 
   // An analysis's digest (analysis.mjs), built now from the runs picked when it was asked
   // for: those of its repo still listed, redacted like any output. None left: no run. Only an
-  // analysis asked for on a private repo quotes what only the dashboard showed: older ones
-  // didn't say.
-  function analysisDigest(task, items, note) {
+  // analysis asked for on a private repo, still private now, quotes what only the dashboard
+  // showed (analysis.mjs runDigest()): older ones didn't say, and a repo made public while
+  // the analysis waited would publish it. A lookup that fails counts as public.
+  async function analysisDigest(task, items, note) {
     const asked = items.findLast((i) => i.analysis)?.analysis;
     if (!asked?.runs?.length) {
       throw new RunError(
         `${cantRun(agentOf(task))}: this analysis has no runs to read. Start one from the dashboard's Analyze.`,
       );
     }
+    const isPrivate =
+      asked.private === true &&
+      (await getJson(ctx.github, task.repo, `/repos/${task.repo}`).catch(() => null))?.private ===
+        true;
     const { text, included, left } = ctx.analysis.digest(task.repo, asked.runs, asked, {
-      isPublic: asked.private !== true,
+      isPublic: !isPrivate,
     });
     if (!included.length) {
       throw new RunError(

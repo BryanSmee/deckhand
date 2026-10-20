@@ -222,3 +222,39 @@ test("a work run with a comment from the repo's own pull request keeps its cache
   assert.ok(!notes.some((n) => /fork/.test(n)));
   assert.deepEqual(task.live.branches, ["issue-12-*", "feat"]);
 });
+
+// An analysis's digest: the full one only when the analysis was asked for on a private repo
+// that GitHub still says is private when it starts; anything else, the public one.
+test("an analysis's digest is the public one unless the repo was and still is private", async (t) => {
+  const cases = [
+    [{ asked: true, now: true }, false],
+    [{ asked: true, now: false }, true],
+    [{ asked: true, now: "fails" }, true],
+    [{ asked: false, now: true }, true],
+    // Queued before analyses said.
+    [{ asked: undefined, now: true }, true],
+  ];
+  for (const [{ asked, now }, expected] of cases) {
+    const seen = [];
+    const ctx = {
+      config: testConfig(),
+      log: () => {},
+      analysis: {
+        digest: (repo, ids, selection, options) => {
+          seen.push(options);
+          return { text: "digest", included: ids, left: [] };
+        },
+      },
+      github: async () =>
+        now === "fails" ? new Response("{}", { status: 502 }) : Response.json({ private: now }),
+    };
+    const task = {
+      repo: "org/repo",
+      live: { secret: "s".repeat(32), record: { agent: "claude" } },
+    };
+    const analysis = { runs: ["r1"], kinds: ["work"], outcomes: ["error"], private: asked };
+    const text = await createPreparation(ctx).analysisDigest(task, [{ analysis }], () => {});
+    assert.equal(text, "digest");
+    assert.deepEqual(seen, [{ isPublic: expected }], JSON.stringify({ asked, now }));
+  }
+});

@@ -89,16 +89,18 @@ case "$1" in
       *deckhand.run*)
         [ -d "$c/$n" ] || exit 1
         cat "$c/$n/run" ;;
-      # A sandbox's address on its network, for the egress proxy's questions, and 127.0.0.1,
-      # where the fake sandbox and the tests send its secret from (the broker checks it is
-      # the run's own; not once $dir/elsewhere exists); the listener's and the proxy's on
-      # each network they are joined to.
+      # A sandbox's address on its network, for the egress proxy's questions, and 127.0.0.1
+      # on a second one, `loopback`: where the fake sandbox and the tests send its secret from
+      # (the broker checks it is the run's own; not once $dir/elsewhere exists). The
+      # listener's and the proxy's on each network they are joined to.
       *)
         if [ -d "$c/$n" ]; then
           read -r run < "$c/$n/run"
-          own=127.0.0.1
-          [ -e "$dir/elsewhere" ] && own=
-          printf '{"%s":{"IPAddress":"10.9.0.5","GlobalIPv6Address":"%s"}}\n' "$run" "$own"
+          if [ -e "$dir/elsewhere" ]; then
+            printf '{"%s":{"IPAddress":"10.9.0.5"}}\n' "$run"
+          else
+            printf '{"%s":{"IPAddress":"10.9.0.5"},"loopback":{"IPAddress":"127.0.0.1"}}\n' "$run"
+          fi
           exit
         fi
         ip=10.9.0.1

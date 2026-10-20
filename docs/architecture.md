@@ -216,7 +216,7 @@ selection, a count over 50, or a selection no run matches, with the checks of th
 form. It creates an issue "Run analysis: last N runs (…)", labelled `analysis` (created if
 missing), listing the selection and the run ids, then queues an item with the `analyze`
 trigger on it, as the user's, carrying those ids and whether GitHub said the repository is
-private: a public one's digest leaves out the listener's notes, setup output and failed
+private (checked again when the run starts): a public one's digest leaves out the listener's notes, setup output and failed
 tools' outputs. No comment can ask for that mode.
 
 `analyze` is a built-in light mode (`modes.mjs`): no branch, no setup, a fresh session, the
