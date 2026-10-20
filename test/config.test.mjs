@@ -34,6 +34,34 @@ test("repoAllowed: ALLOWED_REPOS whatever the case, every repo without it", () =
   assert.equal(repoAllowed(loadConfig({ ALLOWED_USERS: "alice" }), "any/repo"), true);
 });
 
+test("repoAllowed: owner/* lets every repo of that owner through, and only that owner", () => {
+  const config = loadConfig({ ALLOWED_USERS: "alice", ALLOWED_REPOS: "BryanSmee/*, Org/Repo" });
+  assert.deepEqual(config.repos, ["bryansmee/*", "org/repo"]);
+  assert.equal(repoAllowed(config, "bryansmee/anything"), true);
+  assert.equal(repoAllowed(config, "BryanSmee/Other"), true);
+  assert.equal(repoAllowed(config, "org/repo"), true);
+  assert.equal(repoAllowed(config, "org/other"), false);
+  assert.equal(repoAllowed(config, "bryansmeex/repo"), false);
+  assert.equal(repoAllowed(config, "bryansme/repo"), false);
+});
+
+test("ALLOWED_REPOS refuses entries that are neither owner/repo nor owner/*", () => {
+  for (const entry of ["*", "*/*", "owner", "own*/repo", "owner/re*", "a/b/c", "/repo", "owner/"]) {
+    assert.throws(
+      () => loadConfig({ ALLOWED_USERS: "alice", ALLOWED_REPOS: `org/app,${entry}` }),
+      (error) =>
+        error instanceof ConfigError &&
+        error.message.startsWith("ALLOWED_REPOS: ") &&
+        error.message.includes(entry.toLowerCase()),
+      entry,
+    );
+  }
+  assert.throws(
+    () => loadConfig({}, file("allowed_users: [a]\nallowed_repos: ['*']")),
+    /config\.yaml: allowed_repos: expected owner\/repo or owner\/\*, got \*/,
+  );
+});
+
 test("names come from settings, with a neutral default", () => {
   const defaults = loadConfig({ ALLOWED_USERS: "a" });
   assert.equal(defaults.image, "deckhand-sandbox");
@@ -169,7 +197,7 @@ test("config.yaml sets what the environment leaves out, as YAML lists and values
 allowed_users: [Alice, bob]
 allowed_repos:
   - org/api
-  - org/web
+  - Team/*
 trigger: Hey Bot
 sandbox_model: sonnet
 max_parallel: 3
@@ -180,7 +208,8 @@ claude_code_version: 2.1.300
 `),
   );
   assert.deepEqual(config.users, ["alice", "bob"]);
-  assert.deepEqual(config.repos, ["org/api", "org/web"]);
+  assert.deepEqual(config.repos, ["org/api", "team/*"]);
+  assert.equal(repoAllowed(config, "team/web"), true);
   assert.equal(config.trigger, "hey bot");
   assert.equal(config.model, "sonnet");
   assert.equal(config.brainstormModel, "sonnet");

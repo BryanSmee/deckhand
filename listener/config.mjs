@@ -30,8 +30,12 @@ export function list(value) {
 }
 
 // Whether ALLOWED_REPOS lets `repo` ("Owner/Name") through: empty, it lets all of them.
+// "owner/*" lets every repo of that owner through, compared whole: not "ownerx/…".
 export function repoAllowed(config, repo) {
-  return !config.repos.length || config.repos.includes(repo.toLowerCase());
+  if (!config.repos.length) return true;
+  const name = repo.toLowerCase();
+  const owner = name.split("/")[0];
+  return config.repos.includes(name) || config.repos.includes(`${owner}/*`);
 }
 
 // "@Deckhand:" matches "deckhand", "Let's go!" matches "lets go".
@@ -98,7 +102,7 @@ export const SETTINGS = {
   // Fail closed: required (requiredSettings()).
   ALLOWED_USERS: { type: "list", default: [], parse: list },
   // Optional: narrows the repos where the App is installed. Empty: all of them.
-  ALLOWED_REPOS: { type: "list", default: [], parse: list },
+  ALLOWED_REPOS: { type: "list", default: [], parse: repoList },
   // Where GitHub sends webhooks and screenshots are served. Optional: /setup detects it and
   // stores it with the App.
   PUBLIC_URL: { default: null, parse: noSlash },
@@ -438,6 +442,17 @@ function requiredSettings(env, { setting }) {
 }
 
 // The parsers of SETTINGS: (text, { label, env, values, labelOf }) → the value.
+
+// "Org/App, me/*" → ["org/app", "me/*"], or a ConfigError: a typo ("*", "org", "or*/app")
+// would otherwise let every repo through or none, silently.
+function repoList(text, { label }) {
+  const entries = list(text);
+  const bad = entries.filter((entry) => !/^[^/*\s]+\/(\*|[^/*\s]+)$/.test(entry));
+  if (bad.length) {
+    throw new ConfigError(`${label}: expected owner/repo or owner/*, got ${bad.join(", ")}`);
+  }
+  return entries;
+}
 
 function noSlash(text) {
   return text.replace(/\/$/, "");
