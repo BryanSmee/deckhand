@@ -265,7 +265,8 @@ export function createRuns(ctx) {
     // A research run mounts nothing (researchAccess()).
     if (!OPEN.has(live.mode)) recheckMounts(agent, settings, access);
     const digest =
-      parts.digest ?? (live.mode === "analyze" ? analysisDigest(task, items, note) : undefined);
+      parts.digest ??
+      (live.mode === "analyze" ? await analysisDigest(task, items, note) : undefined);
     try {
       const bot = ctx.app.identity();
       const spec = sandboxSpec(

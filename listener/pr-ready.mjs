@@ -7,7 +7,7 @@
 // sandbox never sees.
 //
 // Served on the broker's port, which only the runs' networks reach.
-import { branchAllowed } from "./broker.mjs";
+import { branchAllowed, NOT_ITS_SANDBOX } from "./broker.mjs";
 import { GITHUB_HEADERS, PUSH_PERMISSIONS } from "./github-app.mjs";
 import { graphqlData } from "./github.mjs";
 import { send } from "./web.mjs";
@@ -46,13 +46,14 @@ export function createPrReady({
 
   // The run and pull request a request is about, once the run may ask: { run, repo, number,
   // action, ref, github }, or nothing once refused.
-  function admit(req, res) {
+  async function admit(req, res) {
     const path = PATH.exec(new URL(req.url, "http://broker").pathname);
     if (!path) return send(res, 404, { error: "not found" });
     if (req.method !== "POST") return send(res, 405, { error: "method not allowed" });
     const [scheme, secret] = (req.headers.authorization ?? "").split(" ");
     const run = scheme === "Bearer" ? broker.runOf(secret) : undefined;
     if (!run) return send(res, 401, { error: "unknown or finished run" });
+    if (!(await broker.sentBy(run, req))) return send(res, 403, { error: NOT_ITS_SANDBOX });
 
     const repo = `${path[1]}/${path[2]}`.toLowerCase();
     const number = Number(path[3]);
@@ -103,7 +104,7 @@ export function createPrReady({
   }
 
   async function handle(req, res) {
-    const asked = admit(req, res);
+    const asked = await admit(req, res);
     if (!asked) return;
     const pr = await ownPullRequest(res, asked);
     if (!pr) return;

@@ -5,7 +5,7 @@ import { test } from "node:test";
 import { createBroker } from "../listener/broker.mjs";
 import { PUSH_PERMISSIONS } from "../listener/github-app.mjs";
 import { createPrReady } from "../listener/pr-ready.mjs";
-import { serve } from "./helpers.mjs";
+import { sandboxAt, serve } from "./helpers.mjs";
 
 function pull({
   number = 7,
@@ -32,7 +32,10 @@ function issueRun(broker, repo = "org/repo", branches = ["issue-1-*"]) {
   return secret;
 }
 
-async function servePrReady(t, { pulls = { 7: pull() }, app = true, graphql = {} } = {}) {
+async function servePrReady(
+  t,
+  { pulls = { 7: pull() }, app = true, graphql = {}, sentFrom = sandboxAt() } = {},
+) {
   const seen = { lookups: [], tokens: [], mutations: [] };
   const github = app && {
     request: async (repo, method, path) => {
@@ -56,7 +59,7 @@ async function servePrReady(t, { pulls = { 7: pull() }, app = true, graphql = {}
     });
     return Response.json(graphql);
   };
-  const broker = createBroker({ app: () => github });
+  const broker = createBroker({ app: () => github, sentFrom });
   const prReady = createPrReady({
     broker,
     app: () => github,
@@ -126,6 +129,16 @@ test("a pull request that conflicts with its base is refused ready, until it is 
   // Back to draft is always fine.
   pulls[7].draft = false;
   assert.equal((await post("/pr/org/repo/7/draft", secret)).status, 200);
+});
+
+test("a run's secret sent from another sandbox's address changes no pull request", async (t) => {
+  const { broker, seen, post } = await servePrReady(t, { sentFrom: sandboxAt("10.9.0.5") });
+  const res = await post("/pr/org/repo/7/ready", issueRun(broker));
+  assert.deepEqual(res, {
+    status: 403,
+    body: { error: "this run's secret only works from its own sandbox" },
+  });
+  assert.deepEqual(seen, { lookups: [], tokens: [], mutations: [] });
 });
 
 test("unknown or finished runs, other repos and runs that can't write are refused before GitHub", async (t) => {

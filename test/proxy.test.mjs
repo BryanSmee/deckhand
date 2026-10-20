@@ -3,6 +3,7 @@
 import assert from "node:assert/strict";
 import { connect } from "node:net";
 import { test } from "node:test";
+import { ownSubnets } from "../proxy/addresses.mjs";
 import { blockedAddress, createProxy, listenerPolicy, target, v6Bytes } from "../proxy/proxy.mjs";
 import { listening, serve } from "./helpers.mjs";
 
@@ -188,6 +189,36 @@ test("IPv6 addresses as bytes", () => {
   assert.deepEqual(v6Bytes("1::"), [0, 1, ...Array(14).fill(0)]);
   assert.equal(v6Bytes("127.0.0.1"), null);
   assert.equal(v6Bytes("not-an-ip"), null);
+});
+
+test("an address on one of the proxy's own networks: only for a host granted by name", async (t) => {
+  const { port: upstreamPort } = await serve(t, (req, res) => res.end("another sandbox"));
+  // As if 127.0.0.0/8 were a run's network, an address the fixed classes don't refuse.
+  const interfaces = {
+    lo: [{ cidr: "127.0.0.1/8", internal: true }],
+    eth1: [{ cidr: "127.0.0.9/8", internal: false }],
+  };
+  const proxy = createProxy({
+    policy: async (ip, host) => ({ allowed: true, private: host === "named.example" }),
+    lookup: async () => [{ address: "127.0.0.1", family: 4 }],
+    blocked: () => false,
+    subnets: () => ownSubnets(interfaces),
+  });
+  const port = await listening(proxy);
+  t.after(() => proxy.close());
+  const get = (host) =>
+    raw(
+      port,
+      `GET http://${host}:${upstreamPort}/ HTTP/1.1\r\nhost: x\r\nconnection: close\r\n\r\n`,
+    );
+  // Allowed through "*" only: refused, whatever range the network has.
+  assert.match(await get("attacker.example"), /^HTTP\/1\.1 403[^]*private address/);
+  assert.match(
+    await raw(port, `CONNECT attacker.example:${upstreamPort} HTTP/1.1\r\n\r\n`),
+    /^HTTP\/1\.1 403/,
+  );
+  // Granted by name: the operator meant it.
+  assert.match(await get("named.example"), /^HTTP\/1\.1 200[^]*another sandbox/);
 });
 
 test("CONNECT to a hex IPv4-mapped literal is refused", async (t) => {

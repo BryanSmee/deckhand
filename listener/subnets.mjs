@@ -15,6 +15,23 @@ export function parseCidr(text) {
   return { base, prefix };
 }
 
+// The ranges a run's network may be drawn from: RFC 1918's and CGNAT's (100.64/10), which the
+// egress proxy refuses unless a host is granted by name (proxy/addresses.mjs). A public range
+// would let a research run (any public host) reach another run's sandbox, its engine or the
+// listener by pointing a name at it.
+export const PRIVATE_RANGES = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10"];
+
+// Whether the CIDR `text` lies whole inside one of PRIVATE_RANGES.
+export function privateRange(text) {
+  const c = parseCidr(text);
+  if (!c) return false;
+  return PRIVATE_RANGES.map(parseCidr).some(
+    (r) =>
+      c.prefix >= r.prefix &&
+      Math.floor(c.base / 2 ** (32 - r.prefix)) === r.base / 2 ** (32 - r.prefix),
+  );
+}
+
 const format = (n, prefix) =>
   `${[24, 16, 8, 0].map((shift) => Math.floor(n / 2 ** shift) % 256).join(".")}/${prefix}`;
 

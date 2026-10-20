@@ -79,7 +79,7 @@ function setup({
     }
     if (path === `/repos/${repo}`) {
       return repo === "org/app"
-        ? Response.json({ default_branch: "main" })
+        ? Response.json({ default_branch: "main", private: !!w.private })
         : new Response("{}", { status: 404 });
     }
     if (path.startsWith(`/repos/${repo}/issues?`)) {
@@ -1273,6 +1273,8 @@ test("analyze: a new issue labelled analysis, and a run in the analyze mode on i
     count: 12,
     kinds: ["work", "bug"],
     outcomes: ["error", "needs-input"],
+    // Public as far as GitHub said: the digest quotes nothing only the dashboard showed.
+    private: false,
   });
   assert.match(item.text, /- Kinds: work, bug\n- Outcomes: error, needs-input\n/);
   // Every outcome: the title doesn't list them; the label is there already (422).
@@ -1285,6 +1287,9 @@ test("analyze: a new issue labelled analysis, and a run in the analyze mode on i
   assert.equal(all.status, 200);
   assert.equal(w.created[1].title, "Run analysis: last 1 run");
   assert.deepEqual(w.accepted[1].analysis.runs, ["r5"]);
+  w.private = true;
+  await analyze(w, { count: 1, kinds: ["work"], outcomes: ["error"] });
+  assert.equal(w.accepted[2].analysis.private, true);
 });
 
 test("analyze refused, nothing created: users, origin, config errors, selection, no runs", async () => {

@@ -6,8 +6,10 @@
 //
 // The proxy resolves the name itself and connects to the address it checked, so a name
 // can't be pointed at the host or the cloud's metadata service once allowed: loopback,
-// link-local and unspecified addresses are always refused, private ones unless the operator
-// allowed the host by name or domain (not only through "*").
+// link-local and unspecified addresses are always refused, private ones and those of the
+// networks the proxy is on (another run's sandbox or engine, the listener: public ones too,
+// when Docker's ranges are) unless the operator allowed the host by name or domain (not only
+// through "*").
 //
 // The hosts the listener says may be cached go through a cache on disk (cached.mjs, cache.mjs):
 // their plain HTTP, and their HTTPS, which the proxy decrypts with a certificate from
@@ -20,10 +22,11 @@ import { lookup as dnsLookup } from "node:dns/promises";
 import { createServer, request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 import { connect, isIP } from "node:net";
+import { networkInterfaces } from "node:os";
 import { join } from "node:path";
 import { createSecureContext, TLSSocket } from "node:tls";
 import { pathToFileURL } from "node:url";
-import { blockedAddress } from "./addresses.mjs";
+import { blockedAddress, inSubnets, ownSubnets } from "./addresses.mjs";
 import { certifiable, createAuthority } from "./authority.mjs";
 import { createCache, DEFAULT_ENTRY_MAX, DEFAULT_MAX, parseSize, requestUse } from "./cache.mjs";
 import { createCachedPath } from "./cached.mjs";
@@ -85,6 +88,9 @@ export function createProxy({
   policy, // (client ip, host) → { allowed, private, cache, decrypt, relay }
   lookup = (host) => dnsLookup(host, { all: true }),
   blocked = blockedAddress,
+  // The subnets of the networks it is on, read at each connection: the listener attaches it to
+  // each run's network as the run starts.
+  subnets = () => ownSubnets(networkInterfaces()),
   cache = null, // createCache()'s, or none
   authority = null, // createAuthority()'s, ready: HTTPS to cached and relayed hosts is decrypted
   relayUrl = null, // where relayed requests go: <relayUrl>/<host><path>
@@ -112,7 +118,10 @@ export function createProxy({
     } catch {
       throw new Refused(`Deckhand's egress proxy could not resolve ${host}`, { cause: 502 });
     }
-    const usable = addresses.find((a) => !blocked(a.address, privateOk));
+    const own = privateOk ? [] : subnets();
+    const usable = addresses.find(
+      (a) => !blocked(a.address, privateOk) && !inSubnets(a.address, own),
+    );
     if (!usable) {
       log(`refused ${host} for ${ip}: private address`);
       throw new Refused(

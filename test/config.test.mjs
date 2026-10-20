@@ -111,6 +111,10 @@ test("SANDBOX_SUBNETS: an IPv4 range cut into /28 blocks by default, checked, of
     SANDBOX_SUBNET_SIZE: "29",
   });
   assert.equal(sized.subnets.size, 29);
+  // CGNAT's and RFC 1918's ranges, whole.
+  for (const range of ["100.64.0.0/10", "172.16.0.0/12", "192.168.10.0/24", "10.0.0.0/8"]) {
+    assert.equal(loadConfig({ ...base, SANDBOX_SUBNETS: range }).subnets.range, range);
+  }
   // One block is enough.
   assert.equal(loadConfig({ ...base, SANDBOX_SUBNETS: "10.9.9.0/28" }).subnets.prefix, 28);
   const bad = [
@@ -120,6 +124,12 @@ test("SANDBOX_SUBNETS: an IPv4 range cut into /28 blocks by default, checked, of
     [{ SANDBOX_SUBNETS: "10.0.0.0/33" }, /SANDBOX_SUBNETS: expected an IPv4 range/],
     [{ SANDBOX_SUBNETS: "fd00::/64" }, /SANDBOX_SUBNETS: expected an IPv4 range/],
     [{ SANDBOX_SUBNETS: "10.9.9.0/29" }, /10\.9\.9\.0\/29 is smaller than one block of \/28/],
+    // Public ranges, and private ones that spill out of theirs: never a run's network.
+    [{ SANDBOX_SUBNETS: "11.0.0.0/8" }, /SANDBOX_SUBNETS: 11\.0\.0\.0\/8 is not a private range/],
+    [{ SANDBOX_SUBNETS: "8.8.0.0/16" }, /is not a private range/],
+    [{ SANDBOX_SUBNETS: "172.0.0.0/8" }, /is not a private range/],
+    [{ SANDBOX_SUBNETS: "100.0.0.0/8" }, /is not a private range/],
+    [{ SANDBOX_SUBNETS: "0.0.0.0/0" }, /is not a private range/],
     [{ SANDBOX_SUBNET_SIZE: "30" }, /SANDBOX_SUBNET_SIZE: expected a prefix length from 1 to 29/],
     [{ SANDBOX_SUBNET_SIZE: "0" }, /SANDBOX_SUBNET_SIZE: expected a prefix length from 1 to 29/],
     [{ SANDBOX_SUBNET_SIZE: "/28" }, /SANDBOX_SUBNET_SIZE: expected a prefix length/],

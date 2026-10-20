@@ -12,7 +12,7 @@
 // Served on the broker's port, which only the runs' networks reach.
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
-import { branchAllowed } from "./broker.mjs";
+import { branchAllowed, NOT_ITS_SANDBOX } from "./broker.mjs";
 import { PUSH_PERMISSIONS } from "./github-app.mjs";
 
 // The ref updates come first in a push: anything bigger than this before them is not git. A
@@ -217,9 +217,9 @@ export function createGitGateway({
   }
 
   // The run a request comes from, once it may go through: { repo, service, run, github }, or
-  // nothing once refused. Checked in this order: path, run, repo, push right, method, encoding,
-  // the App.
-  function admit(req, res, url) {
+  // nothing once refused. Checked in this order: path, run, its sandbox, repo, push right,
+  // method, encoding, the App.
+  async function admit(req, res, url) {
     const path = PATH.exec(url.pathname);
     if (!path) return fail(res, 404, "not found");
     const repo = `${path[1]}/${path[2]}`.toLowerCase();
@@ -232,6 +232,7 @@ export function createGitGateway({
         "www-authenticate": 'Basic realm="Deckhand"',
       });
     }
+    if (!(await broker.sentBy(run, req))) return fail(res, 403, `Deckhand: ${NOT_ITS_SANDBOX}`);
     if (run.repo !== repo) return fail(res, 403, `Deckhand: this run can only push to ${run.repo}`);
     if (!run.push) return fail(res, 403, "Deckhand: this run can't push");
 
@@ -323,7 +324,7 @@ export function createGitGateway({
 
   async function handle(req, res) {
     const url = new URL(req.url, "http://broker");
-    const admitted = admit(req, res, url);
+    const admitted = await admit(req, res, url);
     if (!admitted) return;
     let body;
     if (admitted.service !== "info/refs") {

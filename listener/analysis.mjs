@@ -8,6 +8,7 @@ import { readFileSync } from "node:fs";
 import { agentFor } from "./agents/index.mjs";
 import { ensureLabel } from "./comments.mjs";
 import { issueItem, taskKey } from "./events.mjs";
+import { OPEN } from "./modes.mjs";
 import { clip, format, minutes } from "./runlog.mjs";
 import { redact } from "./secrets.mjs";
 import { refuse } from "./web.mjs";
@@ -32,21 +33,23 @@ function runKind(run) {
 
 const ofRepo = (run, repo) => run.repo?.toLowerCase() === repo.toLowerCase();
 const finished = (run) => run.status !== "running";
+// A research run (modes.mjs OPEN) read the open web: what a page made it say would reach a run
+// that has the code and a token, and a report posted as is. Never in a digest.
+const research = (run) => OPEN.has(run.taskMode) || run.kind === "research";
+// The runs of `repo` an analysis may read.
+const readable = (run, repo) => ofRepo(run, repo) && finished(run) && !research(run);
 
 // The kinds of a repo's finished runs, for the form to offer.
 export function runKinds(runs, repo) {
-  const kinds = new Set(runs.filter((r) => ofRepo(r, repo) && finished(r)).map(runKind));
+  const kinds = new Set(runs.filter((r) => readable(r, repo)).map(runKind));
   return [...kinds].sort();
 }
 
-// The `count` newest finished runs of `repo` (never another repo's) of those kinds and
-// outcomes. `runs`: newest first, as ctx.runs is.
+// The `count` newest finished runs of `repo` (never another repo's, never research) of those
+// kinds and outcomes. `runs`: newest first, as ctx.runs is.
 export function selectRuns(runs, repo, { count, kinds, outcomes }) {
   return runs
-    .filter(
-      (r) =>
-        ofRepo(r, repo) && finished(r) && kinds.includes(runKind(r)) && outcomes.includes(r.status),
-    )
+    .filter((r) => readable(r, repo) && kinds.includes(runKind(r)) && outcomes.includes(r.status))
     .slice(0, count);
 }
 
@@ -84,11 +87,17 @@ const NOTABLE = /error|fail|denied|refused|forbidden|\b403\b|timed? ?out|not fou
 const PUSH_HINT = /^remote:\s+(Create a pull request|https:\/\/github\.com\/\S+\/pull\/new\/)/;
 
 // One run's part of the digest: what it was, how it ended, what went wrong on the way and its
-// final reply. `lines`: its log's lines (the first one the listener's).
-export function runDigest(run, lines) {
+// final reply. `lines`: its log's lines (the first one the listener's). `isPublic`: the repo is
+// public, and the report is posted there: no listener notes, setup output or failed tools'
+// outputs, which only the dashboard showed. Its final reply was posted already.
+export function runDigest(run, lines, { isPublic = false } = {}) {
   const agent = agentFor(run.agent);
   const entries = lines.flatMap((l) => format(l, agent));
-  const out = [...runHeader(run, agent), ...setupLines(entries), ...toolLines(entries)];
+  const out = [
+    ...runHeader(run, agent),
+    ...(isPublic ? [] : setupLines(entries)),
+    ...toolLines(entries, { isPublic }),
+  ];
   const result = entries.findLast((e) => e.kind === "result");
   out.push(
     "",
@@ -166,8 +175,8 @@ export function toolStats(entries) {
 }
 
 // The digest's lines on tool calls: the counts, the same call made again and again, the
-// failures.
-function toolLines(entries) {
+// failures (without what they gave back when `isPublic`).
+function toolLines(entries, { isPublic = false } = {}) {
   const { tools, calls, failed } = toolStats(entries);
   const out = [];
   const total = [...tools.values()].reduce((a, b) => a + b, 0);
@@ -190,7 +199,14 @@ function toolLines(entries) {
     );
     for (const { tool, output } of failed.slice(-10)) {
       const call = tool ? `${tool.name}: ${clip(tool.text, 3, 300)}` : "(unknown call)";
-      out.push("", "```", call, "→", clip(output, 12, 1200), "```");
+      out.push(
+        "",
+        "```",
+        call,
+        "→",
+        isPublic ? "(output left out: public repository)" : clip(output, 12, 1200),
+        "```",
+      );
     }
   }
   return out;
@@ -240,34 +256,36 @@ export function buildDigest(
 }
 
 // A run's part, from its log; null when the log is gone (removed by retention, say).
-export function logPart(run) {
+export function logPart(run, options) {
   let text;
   try {
     text = readFileSync(run.logPath, "utf8");
   } catch {
     return null;
   }
-  return runDigest(run, text.split("\n"));
+  return runDigest(run, text.split("\n"), options);
 }
 
 // The listener's half: previews for the form, the digest for the run. `runs()`: ctx.runs;
 // `secrets()`: the values no digest may carry (runs.mjs hidden()). Each run's part is kept
 // once built: a finished run's log no longer changes, and the form previews often.
 export function createAnalysis({ runs, secrets = () => [], partOf = logPart, max = MAX_DIGEST }) {
-  // run id → { finishedAt, part }: a few KB each, not the log.
+  // "<run id> <public>" → { id, finishedAt, part }: a few KB each, not the log.
   const cache = new Map();
-  const cached = (run) => {
-    const known = cache.get(run.id);
+  const cachedIn = (isPublic) => (run) => {
+    const key = `${run.id} ${isPublic}`;
+    const known = cache.get(key);
     if (known?.finishedAt === run.finishedAt) return known.part;
-    const part = partOf(run);
-    if (part !== null) cache.set(run.id, { finishedAt: run.finishedAt, part });
+    const part = partOf(run, { isPublic });
+    if (part !== null) cache.set(key, { id: run.id, finishedAt: run.finishedAt, part });
     return part;
   };
-  const digestOf = (selected, selection) => {
+  const digestOf = (selected, selection, isPublic = false) => {
     // Runs gone from the list (retention) leave the cache too.
     const ids = new Set(runs().map((r) => r.id));
-    for (const id of cache.keys()) if (!ids.has(id)) cache.delete(id);
-    return buildDigest(selected, { partOf: cached, secrets: secrets(), max, selection });
+    for (const [key, { id }] of cache) if (!ids.has(id)) cache.delete(key);
+    const partOf = cachedIn(isPublic);
+    return buildDigest(selected, { partOf, secrets: secrets(), max, selection });
   };
   return {
     // What the form shows: how many runs match, the digest's size and the kinds there are.
@@ -284,11 +302,13 @@ export function createAnalysis({ runs, secrets = () => [], partOf = logPart, max
       };
     },
     select: (repo, selection) => selectRuns(runs(), repo, selection),
-    // The digest of these runs, as they are now: those of `repo` still listed.
-    digest(repo, ids, selection = null) {
+    // The digest of these runs, as they are now: those of `repo` still listed, never research
+    // (an analysis asked for before they were left out may list some). `isPublic`: the repo is
+    // public (runDigest()).
+    digest(repo, ids, selection = null, { isPublic = false } = {}) {
       const byId = new Map(runs().map((r) => [r.id, r]));
-      const selected = ids.map((id) => byId.get(id)).filter((r) => r && ofRepo(r, repo));
-      return digestOf(selected, selection);
+      const selected = ids.map((id) => byId.get(id)).filter((r) => r && readable(r, repo));
+      return digestOf(selected, selection, isPublic);
     },
   };
 }
@@ -329,7 +349,7 @@ export async function startAnalysis(
   user,
   selection,
 ) {
-  const { settings, base } = await checkedRepo(repo, user);
+  const { settings, base, isPrivate } = await checkedRepo(repo, user);
   const runs = analysis.select(repo, selection);
   if (!runs.length) refuse(409, `No run of ${repo} matches: pick other kinds or outcomes.`);
   const { title, body, text } = analysisIssue(repo, user, runs, selection);
@@ -359,7 +379,9 @@ export async function startAnalysis(
       base,
       settings,
       comment: null,
-      analysis: { runs: runs.map((r) => r.id), count, kinds, outcomes },
+      // Whether the digest may quote what only the dashboard showed (runDigest()): only on a
+      // repo GitHub said was private.
+      analysis: { runs: runs.map((r) => r.id), count, kinds, outcomes, private: isPrivate },
     }),
   );
   return {

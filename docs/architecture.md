@@ -207,7 +207,7 @@ user's, and those with the marker as Deckhand's answers.
 runs and replies with what would make sessions faster or more reliable (`analysis.mjs`). The
 form picks the repository (those `api/state` shows the user), how many recent runs (10 by
 default, 50 at most), their kinds (`taskMode`: work, brainstorm, idea, bug, discussion, the
-repo's own modes…) and outcomes (ok, error, needs-input, interrupted, cancelled). As the
+repo's own modes…; never research: [Security model](security.md#research-runs)) and outcomes (ok, error, needs-input, interrupted, cancelled). As the
 selection changes, `GET /api/repos/<owner>/<repo>/analyze?count=&kinds=&outcomes=` says how
 many finished runs of that repository match, and about how many tokens their digest is
 (its size ÷ 4); the form warns that the run uses the operator's Claude budget. `POST` (the
@@ -215,7 +215,9 @@ same path, `{ count, kinds, outcomes }`, `analysis.mjs` `startAnalysis()`) refus
 selection, a count over 50, or a selection no run matches, with the checks of the inbox's
 form. It creates an issue "Run analysis: last N runs (…)", labelled `analysis` (created if
 missing), listing the selection and the run ids, then queues an item with the `analyze`
-trigger on it, as the user's, carrying those ids. No comment can ask for that mode.
+trigger on it, as the user's, carrying those ids and whether GitHub said the repository is
+private (checked again when the run starts): a public one's digest leaves out the listener's notes, setup output and failed
+tools' outputs. No comment can ask for that mode.
 
 `analyze` is a built-in light mode (`modes.mjs`): no branch, no setup, a fresh session, the
 model of light runs (`brainstorm_model`), and a token that only reads, so the reply is the
@@ -529,7 +531,7 @@ tests fake it.
 | `repo-check.mjs`                                                  | The checks a dashboard action makes on a repo and user before acting as a comment would.                                                                                                                                                             |
 | `grants.mjs`, `egress.mjs`, `subnets.mjs`                         | The operator's grants (hosts, mounts, limits), the egress policy and the proxy's CA; the runs' subnets.                                                                                                                                              |
 | `github-app.mjs`, `github.mjs`                                    | The App's tokens and calls; `createGitHub()`, `getJson`, `paginate`, `graphql` and the stores' lookups on top.                                                                                                                                       |
-| `broker.mjs`, `git-gateway.mjs`                                   | The sandboxes' token broker; their pushes, to the run's own branches only.                                                                                                                                                                           |
+| `broker.mjs`, `git-gateway.mjs`                                   | The sandboxes' token broker, for each run's own sandbox only; their pushes, to the run's own branches only.                                                                                                                                          |
 | `pr-ready.mjs`                                                    | The sandboxes' pull requests marked ready for review or back to draft (`gh pr ready`).                                                                                                                                                               |
 | `anthropic.mjs`, `openai.mjs`, `upstream.mjs`                     | The sandboxes' Claude and OpenAI API calls, with the operator's credential; what both endpoints share (`createApiProxy()`).                                                                                                                          |
 | `chatgpt.mjs`                                                     | A ChatGPT plan's login for Codex, held and refreshed by the listener alone.                                                                                                                                                                          |

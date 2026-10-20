@@ -106,7 +106,11 @@ Assume it could, and keep secrets away from workflows on `issue-*` branches as a
 ## Tokens
 
 A run's secret only lives as long as the run: the listener revokes it when the run ends, and
-the broker then refuses it. The installation tokens a sandbox already got are another matter:
+the broker then refuses it. It also only works from that run's sandbox (or its container
+engine): the broker's `/token`, the git gateway and `gh pr ready` compare the request's source
+address with that run's addresses on its networks (`docker inspect`, looked up once per run
+and forgotten when its sandbox exits) and answer `403` otherwise. A secret that leaks, to a
+research run on the open web say, gets another sandbox neither a token nor a push. The installation tokens a sandbox already got are another matter:
 
 - GitHub makes them valid for **one hour** from when they are minted, and the listener can't
   shorten that. The broker hands out a cached token while it has more than 10 minutes left,
@@ -616,6 +620,19 @@ folder: the listener writes a digest into the run's own read-only inbox folder
 outputs clipped), redacted of the operator's credentials (`secrets.mjs`) and capped at about
 400 KB. Its token only reads, as onboarding's: it replies, and files nothing itself.
 
+What the digest quotes reaches a run that has the code and a token, and its report is posted
+as is, so it quotes less than the dashboard shows:
+
+- **No research run**, ever: the form doesn't offer the kind, the selection skips them, and a
+  digest asked for by run id leaves them out (see [Research runs](#research-runs)).
+- **Unless GitHub says the repository is private**, both when the analysis is asked for and
+  again when its run starts (a repo made public meanwhile, or a lookup that fails, counts as
+  public), no listener notes, setup output or failed tools' outputs: only the dashboard showed
+  them. Kinds, outcomes, timings, tool counts, the calls made and the final replies (already
+  posted on the repository) stay.
+- Its instructions (`prompts/analyze.md`) say the digest is data, not instructions, and that
+  the report quotes no raw output from it.
+
 Discussions from the dashboard (`POST /api/repos/<owner>/<repo>/discussions`, and
 `…/discussions/<n>/comments`) pass the same checks, only in the repo's `inbox.discussions`
 category: a discussion elsewhere, or a reply to a comment of another discussion, is refused. Their
@@ -723,8 +740,10 @@ holds to any host, so it holds almost nothing:
 | Hosts                          | any public one (`*`); private addresses only for the mandatory hosts, not the grant's   |
 | The repository's code          | none: no clone, `/workspace` starts empty                                               |
 | GitHub token                   | none: the broker refuses `/token`, the git gateway and `gh pr ready` refuse the run     |
+| Other runs' secrets            | useless: a secret only works from its own run's sandbox ([Tokens](#tokens))             |
 | Input                          | the issue's title, description and last 50 comments, written by the listener (redacted) |
 | Output                         | its final message, posted by the listener as the reply; no screenshots folder           |
+| Run analyses                   | never in one: what a page made it say would reach a run with the code and a token       |
 | Image, setup, caches, mounts   | the base image only; no `setup`, `caches`, host mounts or project `instructions`        |
 | Container engine, egress cache | none: no engine, no cached hosts, so no Deckhand CA to trust                            |
 | Volumes                        | `<name>-research-workspace` and its session volume: no work or light run mounts them    |
@@ -732,8 +751,9 @@ holds to any host, so it holds almost nothing:
 - **The grant**: `allow_research: true`, in a repository's file or in `default.yaml` for
   every repository; off by default. Without it, `/mode research` gets a reply naming it and
   no sandbox starts; it is checked again when the run starts.
-- **Private addresses**: `*` never reaches one (see [Network](#network)), so the listener's
-  dashboard port, the engine and your LAN stay out of reach. Unlike other runs, a research
+- **Private addresses**: `*` never reaches one, nor an address on one of the egress proxy's
+  networks, whatever its range (see [Network](#network)), so the listener's dashboard port,
+  other runs' sandboxes and engines, and your LAN stay out of reach. Unlike other runs, a research
   run doesn't get the private addresses of the hosts you grant its repository either: an
   internal host next to the open internet would be a way out for what it serves.
 - **Its volumes are its own**: whatever a page gets it to write there (hooks, settings) never
@@ -761,7 +781,9 @@ sandbox ──(its run's network, internal: no route out)──▶ egress proxy 
   `--internal`, checks it (`docker network inspect`) and refuses to start the run otherwise.
   Its subnet comes from Docker's address pools, or from `SANDBOX_SUBNETS` when set (a block
   no other network on the host uses, [Setup](setup.md#settings)): either way the network is
-  internal, so the range changes addresses, not what a sandbox can reach.
+  internal, so the range changes addresses, not what a sandbox can reach. It must lie inside
+  `10/8`, `172.16/12`, `192.168/16` or `100.64/10`: the listener refuses to start with
+  another.
 - The listener finds its own container by its host name (Docker's default: the container's
   id) and the proxy's by its `deckhand.role=egress` label in the same compose project
   (`LISTENER_CONTAINER`, `EGRESS_CONTAINER` to name them instead). A new listener joins
@@ -781,7 +803,11 @@ inspect`) and answers from that run's list. Only the proxy may ask: the listener
   link-local (cloud metadata, `169.254.169.254`), multicast and unspecified addresses are
   always refused, and so is `198.18/15` (benchmarking); private ones (`10/8`, `172.16/12`,
   `192.168/16`, `100.64/10`, `fc00::/7`) only when the host is one you allow by name or
-  `*.domain` in the grants folder, never through `*` alone. IPv6 addresses are compared as bytes, and those standing for an
+  `*.domain` in the grants folder, never through `*` alone. The same goes for any address in
+  a subnet of the networks the proxy is on (read from its interfaces at each connection, so a
+  run's network counts as soon as it is joined): other runs' sandboxes and engines, the
+  listener, whatever range Docker gave those networks, a public one or a global IPv6 prefix
+  included. IPv6 addresses are compared as bytes, and those standing for an
   IPv4 one (`::ffff:0:0/96`, `::ffff:0:0:0/96`, `::/96`, NAT64's `64:ff9b::/96`, 6to4's
   `2002::/16`) are checked as that IPv4 address, so `[::ffff:a9fe:a9fe]` is the metadata
   service too.
