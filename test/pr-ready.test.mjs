@@ -1,5 +1,5 @@
-// Ready for review, or back to draft, from a sandbox: the listener calls the mutation with a
-// token the sandbox never sees, for its own repo's pull requests only.
+// Ready for review, or back to draft, opened or edited, from a sandbox: the listener makes the
+// change with a token the sandbox never sees, for its own repo's pull requests only.
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createBroker } from "../listener/broker.mjs";
@@ -34,12 +34,25 @@ function issueRun(broker, repo = "org/repo", branches = ["issue-1-*"]) {
 
 async function servePrReady(
   t,
-  { pulls = { 7: pull() }, app = true, graphql = {}, sentFrom = sandboxAt() } = {},
+  {
+    pulls = { 7: pull() },
+    app = true,
+    graphql = {},
+    sentFrom = sandboxAt(),
+    // What GitHub answers a pull request's creation or edit with.
+    written = (method, path, body) =>
+      Response.json({ number: 9, html_url: "https://pr/9", ...body }),
+  } = {},
 ) {
-  const seen = { lookups: [], tokens: [], mutations: [] };
+  const seen = { lookups: [], tokens: [], mutations: [], writes: [] };
   const github = app && {
-    request: async (repo, method, path) => {
+    request: async (repo, method, path, body) => {
+      if (method !== "GET") {
+        seen.writes.push({ method, path, body });
+        return written(method, path, body);
+      }
       seen.lookups.push(`${method} ${path}`);
+      if (path === `/repos/${repo}`) return Response.json({ default_branch: "trunk" });
       const number = Number(path.split("/").pop());
       const found = pulls[number];
       return found ? Response.json(found) : new Response("{}", { status: 404 });
@@ -67,10 +80,11 @@ async function servePrReady(
     fetch: graphqlFetch,
   });
   const { url } = await serve(t, (req, res) => prReady.handle(req, res));
-  const post = async (path, secret, method = "POST") => {
+  const post = async (path, secret, method = "POST", body) => {
     const res = await fetch(url + path, {
       method,
       headers: secret ? { authorization: `Bearer ${secret}` } : {},
+      body: body === undefined ? undefined : JSON.stringify(body),
     });
     return { status: res.status, body: await res.json() };
   };
@@ -138,7 +152,7 @@ test("a run's secret sent from another sandbox's address changes no pull request
     status: 403,
     body: { error: "this run's secret only works from its own sandbox" },
   });
-  assert.deepEqual(seen, { lookups: [], tokens: [], mutations: [] });
+  assert.deepEqual(seen, { lookups: [], tokens: [], mutations: [], writes: [] });
 });
 
 test("unknown or finished runs, other repos and runs that can't write are refused before GitHub", async (t) => {
@@ -238,4 +252,120 @@ test("only a pull request on one of the run's branches is changed", async (t) =>
     seen.mutations.map((m) => m.id),
     ["PR_7", "PR_9"],
   );
+});
+
+// --- gh pr create and gh pr edit: the run's token only reads pull requests ---------------------
+
+test("a work run opens a pull request from its own branch, into the default branch or its base", async (t) => {
+  const { broker, seen, post } = await servePrReady(t);
+  const secret = issueRun(broker);
+  const fields = { title: "Fix it", body: "Closes #1", head: "issue-1-x", draft: true };
+  const opened = await post("/pr/org/repo/create", secret, "POST", fields);
+  assert.deepEqual(opened, {
+    status: 201,
+    body: { message: "org/repo#9 is open", url: "https://pr/9" },
+  });
+  // No body, no draft: an empty one, ready.
+  const into = { title: "t", head: "issue-1-y", base: "release" };
+  assert.equal((await post("/pr/org/repo/create", secret, "POST", into)).status, 201);
+  assert.deepEqual(seen.lookups, ["GET /repos/org/repo"]);
+  assert.deepEqual(seen.writes, [
+    { method: "POST", path: "/repos/org/repo/pulls", body: { ...fields, base: "trunk" } },
+    {
+      method: "POST",
+      path: "/repos/org/repo/pulls",
+      body: { title: "t", body: "", head: "issue-1-y", base: "release", draft: false },
+    },
+  ]);
+});
+
+test("a pull request from another branch than the run's, or a fork's, is never opened", async (t) => {
+  const { broker, seen, post } = await servePrReady(t);
+  const secret = issueRun(broker, "org/repo", ["issue-12-*"]);
+  const create = (fields, who = secret) => post("/pr/org/repo/create", who, "POST", fields);
+  const other = await create({ title: "t", head: "issue-13-y" });
+  assert.deepEqual(other, { status: 403, body: { error: "issue-13-y is not this run's branch" } });
+  assert.equal((await create({ title: "t", head: "main" })).status, 403);
+  assert.equal((await create({ title: "t", head: "org:issue-12-x" })).status, 400);
+  assert.equal((await create({ title: "t", head: "someone:issue-12-x" })).status, 400);
+  // Malformed requests.
+  assert.equal((await create({ head: "issue-12-x" })).status, 400);
+  assert.equal((await create({ title: " ", head: "issue-12-x" })).status, 400);
+  assert.equal((await create({ title: "t" })).status, 400);
+  assert.equal((await create({ title: "t", head: "issue-12-x", draft: "yes" })).status, 400);
+  assert.equal((await create({ title: "t", head: "issue-12-x", body: 3 })).status, 400);
+  assert.equal((await create(["title"])).status, 400);
+  // Light runs, and other repos.
+  const light = broker.register("org/repo", { pull_requests: "read" });
+  assert.equal((await create({ title: "t", head: "issue-12-x" }, light)).status, 403);
+  const elsewhere = await post("/pr/org/other/create", secret, "POST", {
+    title: "t",
+    head: "issue-12-x",
+  });
+  assert.equal(elsewhere.status, 403);
+  assert.deepEqual(seen.writes, []);
+});
+
+test("GitHub's refusal to open a pull request is passed on", async (t) => {
+  const { broker, post } = await servePrReady(t, {
+    written: () =>
+      Response.json(
+        {
+          message: "Validation Failed",
+          errors: [{ message: "A pull request already exists for org:issue-1-x." }],
+        },
+        { status: 422 },
+      ),
+  });
+  const res = await post("/pr/org/repo/create", issueRun(broker), "POST", {
+    title: "t",
+    head: "issue-1-x",
+    base: "main",
+  });
+  assert.deepEqual(res, {
+    status: 422,
+    body: { error: "GitHub refused it: A pull request already exists for org:issue-1-x." },
+  });
+});
+
+test("a work run edits its own pull request's title and body, nothing else", async (t) => {
+  const { broker, seen, post } = await servePrReady(t, {
+    pulls: {
+      7: pull(),
+      8: pull({ number: 8, ref: "issue-2-y" }),
+      9: pull({ number: 9, head: "someone/repo" }),
+    },
+  });
+  const secret = issueRun(broker);
+  const edit = (n, fields) => post(`/pr/org/repo/${n}/edit`, secret, "POST", fields);
+  const res = await edit(7, { title: "Final", body: "Closes #1", state: "closed", base: "x" });
+  assert.equal(res.status, 200);
+  assert.equal(res.body.message, "org/repo#7 is edited");
+  assert.equal((await edit(7, { body: "" })).status, 200);
+  assert.deepEqual(seen.writes, [
+    {
+      method: "PATCH",
+      path: "/repos/org/repo/pulls/7",
+      body: { title: "Final", body: "Closes #1" },
+    },
+    { method: "PATCH", path: "/repos/org/repo/pulls/7", body: { body: "" } },
+  ]);
+  // Another task's pull request, a fork's, and requests with nothing to change.
+  const other = await edit(8, { title: "mine now" });
+  assert.equal(other.status, 403);
+  assert.match(other.body.error, /org\/repo#8's branch, issue-2-y, is not this run's/);
+  assert.equal((await edit(9, { title: "x" })).status, 403);
+  assert.equal((await edit(7, {})).status, 400);
+  assert.equal((await edit(7, { title: "" })).status, 400);
+  assert.equal(seen.writes.length, 2);
+});
+
+test("a request body past the limit is dropped before GitHub", async (t) => {
+  const { broker, seen, post } = await servePrReady(t);
+  // readBody() drops the connection: the answer may not get through.
+  const res = await post("/pr/org/repo/7/edit", issueRun(broker), "POST", {
+    body: "x".repeat(1024 * 1024),
+  }).catch(() => ({ status: 413 }));
+  assert.equal(res.status, 413);
+  assert.deepEqual(seen.writes, []);
 });

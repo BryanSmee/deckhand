@@ -81,6 +81,9 @@ test("a sandbox token covers its repo only, with the sandbox's permissions", asy
   assert.equal(SANDBOX_PERMISSIONS.deployments, undefined);
   // Pushes go through the git gateway: a sandbox token never writes the code.
   assert.equal(SANDBOX_PERMISSIONS.contents, "read");
+  // Nor reviews, which `pull_requests: write` would let it approve: the listener opens and
+  // edits its pull requests (pr-ready.mjs).
+  assert.equal(SANDBOX_PERMISSIONS.pull_requests, "read");
 });
 
 test("a discussion run's token adds discussions, cached apart from the others", async () => {

@@ -914,8 +914,9 @@ No sandbox gets a long-lived token, an SSH key or the host's git configuration:
   gateway (same port, with the run's secret), which pushes the run's own branch only (its
   issue's `issue-<n>-*`, or its pull request's head), never the default one, with a token of
   its own (see [Security model](security.md#the-default-branch)). The
-  listener also marks a run's pull request ready for review (`gh pr ready`), which that
-  token can't. Commits
+  listener also opens a run's pull request, edits its title and body, and marks it ready for
+  review (`gh pr create`, `edit` and `ready`), which that token can't: it only reads pull
+  requests. Commits
   and comments come from the App's bot (`<app>[bot]`, identity set through `GIT_AUTHOR_*`
   and `GIT_COMMITTER_*`).
 

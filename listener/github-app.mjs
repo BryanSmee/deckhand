@@ -68,15 +68,19 @@ export async function checkAppEvents(asApp, log, { githubUrl, credentials = {} }
 // read-only. It pushes through the listener's git gateway (git-gateway.mjs), which refuses
 // the default branch: GitHub can't be asked to (rulesets aren't enforced on free private
 // repos), and a token that writes contents could also push or merge into it directly.
+// Pull requests read-only too: `pull_requests: write` would let it approve any pull request of
+// its repo as the App, or replace the review mode's verdict (GitHub counts a reviewer's latest
+// review). The listener opens and edits its own pull requests for it (pr-ready.mjs).
 export const SANDBOX_PERMISSIONS = {
   contents: "read",
   issues: "write",
-  pull_requests: "write",
+  pull_requests: "read",
   metadata: "read",
   actions: "read",
 };
 // Built-in light runs (brainstorms, inbox entries, discussions) comment and create issues, and
-// never touch a pull request: they can't push either (the broker's `push`).
+// never touch a pull request: they can't push either (the broker's `push`), so the listener
+// changes none for them.
 export const LIGHT_PERMISSIONS = { pull_requests: "read" };
 // Added for discussion runs only: an App created before discussions keeps working elsewhere.
 export const DISCUSSION_PERMISSIONS = { ...LIGHT_PERMISSIONS, discussions: "write" };
