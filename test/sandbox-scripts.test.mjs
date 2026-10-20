@@ -645,21 +645,28 @@ test("for the broker's host, git gets the run's secret: what the git gateway tak
   assert.equal(res.stdout, `username=deckhand\npassword=${secret}\n`);
 });
 
-// --- gh pr ready, through the listener ---------------------------------------------------------
+// --- gh pr ready, create and edit, through the listener ----------------------------------------
 
-// A broker that also marks pull requests ready (pr-ready.mjs): `mutations` are its calls to
-// GitHub. Pull request 7 of org/repo is a draft, 8 is ready.
+// A broker that also changes pull requests (pr-ready.mjs): `mutations` are its GraphQL calls to
+// GitHub, `writes` its pull request creations and edits. Pull request 7 of org/repo is a
+// draft, 8 is ready; both are on issue-1-x, 9 on issue-2-y.
 async function prBroker(t) {
   const mutations = [];
+  const writes = [];
   const github = {
     repoToken: async () => ({ token: "token", expiresAt: Date.now() + 3600000 }),
-    request: async (repo, method, path) => {
+    request: async (repo, method, path, body) => {
+      if (method !== "GET") {
+        writes.push({ method, path, body });
+        return Response.json({ number: 7, html_url: `https://github.com/${repo}/pull/7` });
+      }
+      if (path === `/repos/${repo}`) return Response.json({ default_branch: "main" });
       const number = Number(path.split("/").pop());
       return Response.json({
         draft: number === 7,
         node_id: `PR_${number}`,
         base: { repo: { full_name: repo } },
-        head: { ref: "issue-1-x", repo: { full_name: repo } },
+        head: { ref: number === 9 ? "issue-2-y" : "issue-1-x", repo: { full_name: repo } },
       });
     },
   };
@@ -676,11 +683,11 @@ async function prBroker(t) {
   const { url } = await serve(t, (req, res) =>
     (req.url.startsWith("/pr/") ? prReady : b).handle(req, res),
   );
-  return { b, mutations, url };
+  return { b, mutations, writes, url };
 }
 
-// The real gh, played by a script: logs its arguments and token, and finds pull request 7 for
-// the current branch, or the number it was given.
+// The real gh, played by a script: logs its arguments and token, finds pull request 7 for
+// the current branch, or the number it was given, and org/repo for the repository.
 function fakeGh(t) {
   const dir = tempDir(t, "deckhand-gh-");
   const log = join(dir, "calls");
@@ -694,6 +701,8 @@ if [ "$1 $2" = "pr view" ]; then
   case \${3:-} in [0-9]*) n=$3 ;; esac
   echo "https://github.com/org/repo/pull/$n"
 fi
+[ "$1 $2" = "repo view" ] && echo org/repo
+exit 0
 `,
   );
   chmodSync(path, 0o755);
@@ -701,13 +710,20 @@ fi
 }
 
 function gh(env, ...args) {
+  return ghIn(undefined, env, ...args);
+}
+
+// gh in directory `cwd`, with `input` on stdin when it is a string.
+function ghIn(cwd, env, ...args) {
+  const input = typeof args.at(-1) === "object" ? args.pop().input : undefined;
   return new Promise((resolve) => {
-    execFile(
+    const child = execFile(
       `${bin}gh`,
       args,
-      { env: { PATH: `${bin}:${process.env.PATH}`, ...env }, timeout: 10000 },
+      { cwd, env: { PATH: `${bin}:${process.env.PATH}`, ...env }, timeout: 10000 },
       (error, stdout, stderr) => resolve({ status: error ? (error.code ?? 1) : 0, stdout, stderr }),
     );
+    child.stdin.end(input ?? "");
   });
 }
 
@@ -760,10 +776,105 @@ test("other gh commands go to the real gh, with a fresh token", async (t) => {
     DECKHAND_RUN_SECRET: b.register("org/repo", undefined, { push: true }),
     DECKHAND_REAL_GH: real.path,
   };
-  assert.equal((await gh(env, "pr", "edit", "7", "--title", "x")).status, 0);
+  assert.equal((await gh(env, "pr", "view", "7", "--comments")).status, 0);
   assert.equal((await gh(env, "issue", "view", "3")).status, 0);
-  assert.deepEqual(real.calls(), ["token pr edit 7 --title x", "token issue view 3"]);
+  assert.deepEqual(real.calls(), ["token pr view 7 --comments", "token issue view 3"]);
   assert.deepEqual(mutations, []);
+});
+
+// A work run on issue 1, whose token only reads pull requests.
+function workEnv(b, real) {
+  const env = {
+    DECKHAND_BROKER_URL: b.url,
+    DECKHAND_RUN_SECRET: b.b.register("org/repo", undefined, { push: true }),
+    DECKHAND_REAL_GH: real.path,
+  };
+  b.b.allow(env.DECKHAND_RUN_SECRET, ["issue-1-*"]);
+  return env;
+}
+
+test("gh pr create goes to the listener, as draft-pr.sh calls it, and prints the URL", async (t) => {
+  const broker = await prBroker(t);
+  const real = fakeGh(t);
+  const env = workEnv(broker, real);
+  // draft-pr.sh's own command line.
+  const draft = await gh(
+    env,
+    ...["pr", "create", "--draft", "--base", "main", "--head", "issue-1-x"],
+    ...["--title", "Fix it", "--body", "Closes #1\n\nWork in progress"],
+  );
+  assert.equal(draft.status, 0, draft.stderr);
+  assert.equal(draft.stdout, "https://github.com/org/repo/pull/7\n");
+  // The current branch, a body from a file or stdin, --flag=value.
+  const repo = tempDir(t, "deckhand-clone-");
+  spawnSync("git", ["init", "-q", "-b", "issue-1-y", repo]);
+  writeFileSync(join(repo, "body.md"), "From a file\n");
+  const own = await ghIn(repo, env, "pr", "create", "-t", "Two", "--body-file", "body.md");
+  assert.equal(own.status, 0, own.stderr);
+  const piped = await ghIn(repo, env, "pr", "create", "--title=Three", "-F", "-", {
+    input: "From stdin",
+  });
+  assert.equal(piped.status, 0, piped.stderr);
+  assert.deepEqual(broker.writes, [
+    {
+      method: "POST",
+      path: "/repos/org/repo/pulls",
+      body: {
+        title: "Fix it",
+        body: "Closes #1\n\nWork in progress",
+        head: "issue-1-x",
+        base: "main",
+        draft: true,
+      },
+    },
+    {
+      method: "POST",
+      path: "/repos/org/repo/pulls",
+      body: { title: "Two", body: "From a file\n", head: "issue-1-y", base: "main", draft: false },
+    },
+    {
+      method: "POST",
+      path: "/repos/org/repo/pulls",
+      body: { title: "Three", body: "From stdin", head: "issue-1-y", base: "main", draft: false },
+    },
+  ]);
+});
+
+test("gh pr create from another branch, or with a flag the listener doesn't take, fails", async (t) => {
+  const broker = await prBroker(t);
+  const real = fakeGh(t);
+  const env = workEnv(broker, real);
+  const other = await gh(env, "pr", "create", "--head", "issue-2-y", "--title", "t");
+  assert.equal(other.status, 1);
+  assert.match(other.stderr, /gh pr create: issue-2-y is not this run's branch/);
+  const label = await gh(env, "pr", "create", "--head", "issue-1-x", "-t", "t", "--label", "x");
+  assert.equal(label.status, 1);
+  assert.match(label.stderr, /--label isn't supported in a Deckhand run/);
+  assert.deepEqual(broker.writes, []);
+});
+
+test("gh pr edit changes the title and body of the run's own pull request only", async (t) => {
+  const broker = await prBroker(t);
+  const real = fakeGh(t);
+  const env = workEnv(broker, real);
+  const dir = tempDir(t, "deckhand-body-");
+  writeFileSync(join(dir, "body.md"), "Closes #1\n");
+  const own = await gh(env, "pr", "edit", "--title", "Final", "--body-file", join(dir, "body.md"));
+  assert.equal(own.status, 0, own.stderr);
+  assert.match(own.stderr, /org\/repo#7 is edited/);
+  assert.equal((await gh(env, "pr", "edit", "8", "-b", "")).status, 0);
+  const other = await gh(env, "pr", "edit", "9", "--title", "mine now");
+  assert.equal(other.status, 1);
+  assert.match(other.stderr, /org\/repo#9's branch, issue-2-y, is not this run's/);
+  assert.equal((await gh(env, "pr", "edit", "7", "--add-label", "bug")).status, 1);
+  assert.deepEqual(broker.writes, [
+    {
+      method: "PATCH",
+      path: "/repos/org/repo/pulls/7",
+      body: { title: "Final", body: "Closes #1\n" },
+    },
+    { method: "PATCH", path: "/repos/org/repo/pulls/8", body: { body: "" } },
+  ]);
 });
 
 // AGENTS.md's syntax check names the scripts one by one: a new one must join the list.

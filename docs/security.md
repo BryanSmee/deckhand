@@ -45,17 +45,20 @@ that file asks for, so none can:
 
 - The sandbox's `pre-push` hook only gives an earlier, clearer message: the gateway doesn't
   rely on it.
-- Marking a pull request ready for review, or back to draft, also takes `contents: write`
-  for an App's token (GitHub's `markPullRequestReadyForReview` and
-  `convertPullRequestToDraft`). The sandbox's `gh` wrapper sends `gh pr ready [--undo]` to
-  the listener instead (`POST /pr/<owner>/<repo>/<number>/ready` or `/draft` on the
-  broker's port, `listener/pr-ready.mjs`), with the run's secret. The listener checks that
-  the run is live and a work run, that the pull request belongs to the run's repository,
-  that its head branch is in that repository too (not a fork) and is one the run may push
-  (above): another task's pull request is refused. Then it calls
-  that one mutation with a token of its own, which the sandbox never sees. That token does
-  nothing else. A pull request that conflicts with its base (`mergeable_state: dirty`) is
-  refused ready with a 409 until the run rebases it.
+- A sandbox's token only reads pull requests (see [Tokens](#tokens)), and marking one ready
+  for review, or back to draft, also takes `contents: write` for an App's token (GitHub's
+  `markPullRequestReadyForReview` and `convertPullRequestToDraft`). The sandbox's `gh`
+  wrapper sends `gh pr ready [--undo]`, `gh pr create` and `gh pr edit` to the listener
+  instead (`POST /pr/<owner>/<repo>/<number>/ready`, `/draft` or `/edit`, and
+  `POST /pr/<owner>/<repo>/create`, on the broker's port, `listener/pr-ready.mjs`), with the
+  run's secret. The listener checks that the run is live and a work run, that the pull
+  request belongs to the run's repository, that its head branch is in that repository too
+  (not a fork) and is one the run may push (above): another task's pull request is refused,
+  and so is opening one from another branch. Then it makes that one change with a token of
+  its own, which the sandbox never sees: the ready mutation, or a pull request's creation or
+  its title and body (`gh pr edit`'s other flags, labels, reviewers or base, are refused).
+  A pull request that conflicts with its base (`mergeable_state: dirty`) is refused ready
+  with a 409 until the run rebases it.
 
 This doesn't depend on GitHub: branch protection and rulesets aren't enforced on private
 repositories of free plans. Where they are, a ruleset on the default branch (pull request
@@ -120,9 +123,14 @@ research run on the open web say, gets another sandbox neither a token nor a pus
   got before.
 - A token only reaches the run's repository, with the sandbox's permissions: it reads the
   code, can't push (pushes go through the gateway, with the run's secret), and can write
-  issues and, for work runs only, pull requests (and discussions, for discussion runs)
-  there. Onboarding, run analyses, reviews and a repo's light modes only read issues and pull
-  requests.
+  issues (and discussions, for discussion runs) there. Onboarding, run analyses, reviews and
+  a repo's light modes only read issues.
+- **No sandbox token writes pull requests** (`pull_requests: read`, work runs included), so
+  no sandbox can review one: `pull_requests: write` would let a run approve any pull request
+  of its repository as the App, its own included, or replace a review mode's request for
+  changes (GitHub counts a reviewer's latest review). The listener opens a work run's pull
+  requests and edits their title and body for it ([The default branch](#the-default-branch)).
+  Comments on a pull request take `issues: write`.
 
 So what a run copied out (through an allowed host) can be used against its own repository,
 with those permissions, for up to an hour. Uninstalling the App, or suspending its
@@ -277,8 +285,8 @@ otherwise a new task could take over the session and workspace of another reposi
 whose old name is the same.
 
 Light runs (brainstorms, onboarding, inbox entries, discussions, the repo's light modes) read
-and comment; work runs push. The git gateway and `gh pr ready` refuse light runs, and their
-tokens can't write pull requests. They never share a writable volume: what a light run could
+and comment; work runs push. The git gateway and `gh pr ready`, `create` and `edit` refuse
+light runs, and no sandbox's token writes pull requests. They never share a writable volume: what a light run could
 leave in a clone or a session (git hooks, Claude's hooks and settings, code) would otherwise
 run in the issue's next work run, with its token. So light runs get their own `-light-` clone and
 session, no cache volumes (they run no setup), and granted host paths read-only. A work run
@@ -741,6 +749,9 @@ only). It widens nothing, so it needs no grant: a review is a light run with a r
   it write anything: the most it can do is change the review's text. The review never
   approves (an App's approval may count toward branch protection): it requests changes on a
   critical or high finding, and comments otherwise.
+- **No sandbox reviews or approves**, a work run's included: their tokens only read pull
+  requests ([Tokens](#tokens)), so none can approve its own pull request or clear the
+  review's request for changes. Only the listener posts reviews, and never an approval.
 - **Who gets one by itself** (`review.on: ready`): pull requests on a branch of the
   repository, opened by the App or by a user of `ALLOWED_USERS` and the repo's `users`, when
   they turn ready. Never a fork's, never another bot's (Dependabot, GitHub Actions), never an

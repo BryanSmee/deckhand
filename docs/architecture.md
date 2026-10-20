@@ -253,9 +253,10 @@ Reactions on the triggering comment follow its run: 👀 when it is received, th
   broker (`BROKER_PORT`, only on the runs' networks) for a fresh token limited to their
   repo, with a secret that dies with the run. Those tokens only read the code: pushes go
   through the git gateway on the same port, which only lets through the run's own branches,
-  and `gh pr ready [--undo]` asks the listener on that port to mark the run's pull request
-  ready for review (or back to draft), which their tokens can't. Both only take work runs:
-  light runs can't push or change a pull request.
+  and `gh pr ready [--undo]`, `gh pr create` and `gh pr edit` ask the listener on that port
+  to mark the run's pull request ready for review (or back to draft), open it, or edit its
+  title and body, which their tokens can't: they only read pull requests, so no sandbox can
+  approve one. Both only take work runs: light runs can't push or change a pull request.
 - **Dashboard**: `GET /` shows every repo's issues and pull requests, their state and live
   logs, to `ALLOWED_USERS` signed in with GitHub through the App, built from `dashboard/`.
   `GET /status` says what is going on, to them and to calls from inside the container.
@@ -535,7 +536,7 @@ tests fake it.
 | `grants.mjs`, `egress.mjs`, `subnets.mjs`                         | The operator's grants (hosts, mounts, limits), the egress policy and the proxy's CA; the runs' subnets.                                                                                                                                              |
 | `github-app.mjs`, `github.mjs`                                    | The App's tokens and calls; `createGitHub()`, `getJson`, `paginate`, `graphql` and the stores' lookups on top.                                                                                                                                       |
 | `broker.mjs`, `git-gateway.mjs`                                   | The sandboxes' token broker, for each run's own sandbox only; their pushes, to the run's own branches only.                                                                                                                                          |
-| `pr-ready.mjs`                                                    | The sandboxes' pull requests marked ready for review or back to draft (`gh pr ready`).                                                                                                                                                               |
+| `pr-ready.mjs`                                                    | The sandboxes' pull requests opened, edited, and marked ready for review or back to draft (`gh pr create`, `edit`, `ready`).                                                                                                                         |
 | `anthropic.mjs`, `openai.mjs`, `upstream.mjs`                     | The sandboxes' Claude and OpenAI API calls, with the operator's credential; what both endpoints share (`createApiProxy()`).                                                                                                                          |
 | `chatgpt.mjs`                                                     | A ChatGPT plan's login for Codex, held and refreshed by the listener alone.                                                                                                                                                                          |
 | `google.mjs`, `antigravity-login.mjs`                             | The Antigravity CLI's calls (`/google/` with `GEMINI_API_KEY`, or `/relay/` from the egress proxy with the plan's access token); its Google AI plan login, held by the listener and refreshed by `agy` in a container of its own.                    |

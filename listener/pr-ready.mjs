@@ -1,18 +1,26 @@
-// Ready for review, or back to draft: GitHub only lets an App's token do either with
-// `contents: write` (markPullRequestReadyForReview, convertPullRequestToDraft), which a
-// sandbox's token lacks (github-app.mjs, SANDBOX_PERMISSIONS). The sandbox's gh wrapper
-// (../sandbox/gh) sends `gh pr ready [--undo]` here instead, with the run's secret; the
-// listener checks the pull request is the run's repo's own, from a branch of that repo the run
-// may push (broker.mjs allow()), and calls the mutation with a token of its own that the
-// sandbox never sees.
+// A work run's pull request writes, which its token can't make: it only reads pull requests
+// (github-app.mjs, SANDBOX_PERMISSIONS), since `pull_requests: write` would also let it approve
+// any pull request of its repo, or replace the review mode's verdict, as the App.
+//
+// - Ready for review, or back to draft: GitHub only lets an App's token do either with
+//   `contents: write` (markPullRequestReadyForReview, convertPullRequestToDraft).
+// - Open a pull request from one of the run's branches, or edit the title and body of one.
+//
+// The sandbox's gh wrapper (../sandbox/gh) sends `gh pr ready [--undo]`, `gh pr create` and
+// `gh pr edit` here instead, with the run's secret; the listener checks the pull request is
+// the run's repo's own, from a branch of that repo the run may push (broker.mjs allow()), and
+// makes the change with a token of its own that the sandbox never sees.
 //
 // Served on the broker's port, which only the runs' networks reach.
 import { branchAllowed, NOT_ITS_SANDBOX } from "./broker.mjs";
 import { GITHUB_HEADERS, PUSH_PERMISSIONS } from "./github-app.mjs";
 import { graphqlData } from "./github.mjs";
-import { send } from "./web.mjs";
+import { readJsonBody, Refused, send } from "./web.mjs";
 
-const PATH = /^\/pr\/([\w.-]+)\/([\w.-]+)\/(\d+)\/(ready|draft)$/;
+// /pr/<owner>/<repo>/<number>/<ready|draft|edit>, or /pr/<owner>/<repo>/create.
+const PATH = /^\/pr\/([\w.-]+)\/([\w.-]+)\/(?:(\d+)\/(ready|draft|edit)|(create))$/;
+// GitHub takes 65536 characters of body: up to four bytes each, escaped in JSON.
+const BODY_LIMIT = 1024 * 1024;
 
 const MUTATIONS = {
   ready: "markPullRequestReadyForReview",
@@ -56,9 +64,9 @@ export function createPrReady({
     if (!(await broker.sentBy(run, req))) return send(res, 403, { error: NOT_ITS_SANDBOX });
 
     const repo = `${path[1]}/${path[2]}`.toLowerCase();
-    const number = Number(path[3]);
-    const action = path[4];
-    const ref = `${repo}#${number}`;
+    const number = path[3] ? Number(path[3]) : null;
+    const action = path[4] ?? path[5];
+    const ref = number ? `${repo}#${number}` : repo;
     if (run.repo !== repo) {
       return send(res, 403, { error: `this run can only change ${run.repo}'s pull requests` });
     }
@@ -106,8 +114,10 @@ export function createPrReady({
   async function handle(req, res) {
     const asked = await admit(req, res);
     if (!asked) return;
+    if (asked.action === "create") return create(req, res, asked);
     const pr = await ownPullRequest(res, asked);
     if (!pr) return;
+    if (asked.action === "edit") return edit(req, res, asked);
     const { repo, action, ref, github } = asked;
 
     const wanted = action === "draft";
@@ -131,6 +141,109 @@ export function createPrReady({
     }
     log(`Pull requests: ${ref} marked as ${state}`);
     send(res, 200, { message: `${ref} is marked as ${state}` });
+  }
+
+  // The request's JSON object, or nothing once refused (400, 413).
+  async function readFields(req, res) {
+    try {
+      const fields = await readJsonBody(req, BODY_LIMIT);
+      if (fields && typeof fields === "object" && !Array.isArray(fields)) return fields;
+      return send(res, 400, { error: "expected a JSON object" });
+    } catch (error) {
+      if (error instanceof Refused) return send(res, error.status, { error: error.message });
+      throw error;
+    }
+  }
+
+  // The fields GitHub gets: `title` and `body` when given, as strings, and a title never blank.
+  // An error message for the first one that isn't.
+  function texts(fields) {
+    const out = {};
+    for (const name of ["title", "body"]) {
+      if (fields[name] === undefined) continue;
+      if (typeof fields[name] !== "string") return `${name} must be a string`;
+      out[name] = fields[name];
+    }
+    if (out.title !== undefined && !out.title.trim()) return "the title can't be empty";
+    return out;
+  }
+
+  // GitHub's reason for a 422 (a pull request already open for the branch, no commits
+  // between the branches…), else its status.
+  async function refusal(found) {
+    const answer = await found.json().catch(() => ({}));
+    const reasons = (answer.errors ?? []).map((e) => e.message ?? e.code).filter(Boolean);
+    return reasons.join("; ") || answer.message || `GitHub answered ${found.status}`;
+  }
+
+  // A pull request from one of the run's branches (`head`, a branch of its repo: never
+  // `owner:branch`), into `base` or the repo's default branch.
+  async function create(req, res, { run, repo, github }) {
+    const fields = await readFields(req, res);
+    if (!fields) return;
+    const asked = texts(fields);
+    if (typeof asked === "string") return send(res, 400, { error: asked });
+    const { head, base, draft = false } = fields;
+    if (!asked.title) return send(res, 400, { error: "a pull request needs a title" });
+    if (typeof head !== "string" || !head || head.includes(":")) {
+      return send(res, 400, { error: "head must be a branch of this repository" });
+    }
+    if (base !== undefined && (typeof base !== "string" || !base)) {
+      return send(res, 400, { error: "base must be a branch name" });
+    }
+    if (typeof draft !== "boolean") return send(res, 400, { error: "draft must be true or false" });
+    if (!branchAllowed(run.branches, head)) {
+      return send(res, 403, { error: `${head} is not this run's branch` });
+    }
+    let found;
+    try {
+      let into = base;
+      if (!into) {
+        const info = await github.request(repo, "GET", `/repos/${repo}`);
+        if (!info.ok) throw new Error(`repository lookup: ${info.status}`);
+        into = (await info.json()).default_branch;
+      }
+      found = await github.request(
+        repo,
+        "POST",
+        `/repos/${repo}/pulls`,
+        { ...asked, body: asked.body ?? "", head, base: into, draft },
+        [422],
+      );
+      if (found.status === 422) {
+        return send(res, 422, { error: `GitHub refused it: ${await refusal(found)}` });
+      }
+      if (!found.ok) throw new Error(`pull request creation: ${found.status}`);
+    } catch (error) {
+      log(`Pull requests: ${repo}: ${error.message ?? error}`);
+      return send(res, 502, { error: `couldn't open a pull request from ${head}; try again` });
+    }
+    const pr = await found.json();
+    log(`Pull requests: ${repo}#${pr.number} opened from ${head}`);
+    send(res, 201, { message: `${repo}#${pr.number} is open`, url: pr.html_url });
+  }
+
+  // The title or body of the run's own pull request (ownPullRequest()): nothing else.
+  async function edit(req, res, { repo, number, ref, github }) {
+    const fields = await readFields(req, res);
+    if (!fields) return;
+    const asked = texts(fields);
+    if (typeof asked === "string") return send(res, 400, { error: asked });
+    if (!Object.keys(asked).length) return send(res, 400, { error: "nothing to change" });
+    let found;
+    try {
+      found = await github.request(repo, "PATCH", `/repos/${repo}/pulls/${number}`, asked, [422]);
+      if (found.status === 422) {
+        return send(res, 422, { error: `GitHub refused it: ${await refusal(found)}` });
+      }
+      if (!found.ok) throw new Error(`pull request edit: ${found.status}`);
+    } catch (error) {
+      log(`Pull requests: ${ref}: ${error.message ?? error}`);
+      return send(res, 502, { error: `couldn't edit ${ref}; try again` });
+    }
+    const pr = await found.json();
+    log(`Pull requests: ${ref} edited (${Object.keys(asked).join(", ")})`);
+    send(res, 200, { message: `${ref} is edited`, url: pr.html_url });
   }
 
   return { handle };

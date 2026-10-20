@@ -2112,8 +2112,10 @@ modes:
     assert.match(work, /^SANDBOX_MODEL=opus$/m);
     assert.match(work, /^TASK_ISSUE=12$/m);
     const mints = github.requests.filter((r) => r.body.includes("repositories"));
-    // A work run writes pull requests; it pushes through the git gateway, its token only reads.
-    assert.equal(JSON.parse(mints.at(-1).body).permissions.pull_requests, "write");
+    // A work run writes issues; it pushes through the git gateway and has the listener change
+    // its pull requests: its token only reads both.
+    assert.equal(JSON.parse(mints.at(-1).body).permissions.issues, "write");
+    assert.equal(JSON.parse(mints.at(-1).body).permissions.pull_requests, "read");
     assert.equal(JSON.parse(mints.at(-1).body).permissions.contents, "read");
     assert.deepEqual(JSON.parse(readFileSync(join(dir, "modes.json"), "utf8")), {});
   });
@@ -2532,7 +2534,8 @@ mounts:
     const work = readFileSync(join(dir, "run-env"), "utf8");
     assert.match(work, /^TASK_ISSUE=30$/m);
     assert.match(work, /^TASK_PROMPT=The maintainer confirmed the onboarding proposal/m);
-    assert.equal(JSON.parse(mints().at(-1).body).permissions.pull_requests, "write");
+    assert.equal(JSON.parse(mints().at(-1).body).permissions.issues, "write");
+    assert.equal(JSON.parse(mints().at(-1).body).permissions.pull_requests, "read");
     const done = JSON.parse(onIssue30(github)[2].body).body;
     assert.match(done, /^All done\./);
     assert.match(done, /`\.deckhand\.yaml` on `issue-30-deckhand-config` has errors/);
