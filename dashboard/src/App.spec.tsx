@@ -272,6 +272,7 @@ test("Home from the repositories page opens the tab last open, and is current th
   history.replaceState(null, "", "#/repositories");
   const repos: RepoList = {
     repos: [],
+    app: null,
     listedAt: null,
     error: null,
     starting: null,

@@ -1,10 +1,12 @@
 // The repositories the App is installed on: which have a .deckhand.yaml (and whether it has
 // errors), which are being onboarded (with their issue), and a button that starts onboarding
-// on the others. A repository's name opens its config (ConfigPanel).
+// on the others. A repository's name opens its config (ConfigPanel); Manage App links to the
+// App on GitHub, where repositories are added or removed.
 import type { RepoList } from "./api";
 import { ConfigPanel } from "./ConfigPanel";
 import { ago } from "./format";
 import { useNow } from "./hooks";
+import { ManageApp } from "./ManageApp";
 import { RepoBadge } from "./RepoBadge";
 import type { Repo, RepoStatus } from "./types";
 import styles from "./Repos.module.css";
@@ -25,7 +27,7 @@ interface Props {
 }
 
 export function Repos({ list, onBack, open = null, onOpen = () => {} }: Props) {
-  const { repos, listedAt, error, starting, failed, onboard } = list;
+  const { repos, app, listedAt, error, starting, failed, onboard } = list;
   const now = useNow();
   if (open) {
     return (
@@ -70,6 +72,7 @@ export function Repos({ list, onBack, open = null, onOpen = () => {} }: Props) {
           >
             {list.refreshing ? "Refreshing…" : "Refresh"}
           </button>
+          {app && <ManageApp app={app} />}
           {list.refreshError && (
             <span class={styles.failed} role="alert">
               Couldn't refresh ({list.refreshError})
@@ -80,7 +83,17 @@ export function Repos({ list, onBack, open = null, onOpen = () => {} }: Props) {
       {error && <p class={styles.error}>Can't list the repositories ({error}).</p>}
       {!repos && !error && <p class={styles.empty}>Loading…</p>}
       {repos?.length === 0 && (
-        <p class={styles.empty}>The App isn't installed on any allowed repository yet.</p>
+        <p class={styles.empty}>
+          The App isn't installed on any allowed repository yet.
+          {app && (
+            <>
+              {" "}
+              <a href={app.installUrl} target="_blank" rel="noreferrer">
+                Install the App on a repository
+              </a>
+            </>
+          )}
+        </p>
       )}
       {sorted.length > 0 && (
         <ul class={styles.rows}>

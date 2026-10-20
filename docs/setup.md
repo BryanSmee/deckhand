@@ -81,7 +81,7 @@ default, and at each start). Issues opened with an **Open questions** section ar
 `NEEDS_INPUT_LABEL` until the graph page reads the repo's open issues, answering them doesn't
 take the label off unless a run starts, and the dashboard only sees the label change when the
 listener restarts. The listener logs a warning at each start naming the events the App
-misses.
+misses, with the address of its settings.
 
 ## 3. Use it
 
@@ -229,6 +229,12 @@ repository). The list is cached: the installations' repositories are
 read again every 5 minutes, each configuration every 30 minutes, or at once after a push or a
 merged pull request on its default branch. The grants folder is checked at each load, so
 editing it shows at once. **Refresh** reads everything again, in case a webhook was missed.
+**Manage App**, next to it, links to the App on GitHub (in a new tab): **Add or remove
+repositories** opens the page that installs it on an account or configures an installation
+(that installation's own page when there is only one), and **App settings** its permissions,
+events and webhook (under the organization that owns it, or your own settings). GitHub decides
+who may change them: someone who doesn't own the App sees its 404 or a read-only page. With no
+repository yet, the empty list links to the install page too.
 
 A repository's name opens its configuration, read from its default branch then: what stops
 its runs (errors, and what it asks for that the operator doesn't grant) and its warnings first, then

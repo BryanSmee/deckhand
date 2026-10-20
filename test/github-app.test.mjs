@@ -9,6 +9,7 @@ import {
   READ_ONLY_PERMISSIONS,
   REFRESH_MS,
   SANDBOX_PERMISSIONS,
+  appSettingsUrl,
   checkAppEvents,
   createGitHubApp,
   loadCredentials,
@@ -160,22 +161,52 @@ test("credentials are stored owner-only and read back", (t) => {
   assert.deepEqual(loadCredentials(dir), credentials);
 });
 
-test("checkAppEvents: a warning naming the events the App isn't subscribed to", async () => {
+test("checkAppEvents: a warning naming the events the App isn't subscribed to, and where", async () => {
   const logs = [];
   const asApp =
-    (events, status = 200) =>
+    (events, status = 200, owner = { login: "acme", type: "Organization" }) =>
     async (method, path) => {
       assert.equal(`${method} ${path}`, "GET /app");
-      return Response.json({ events }, { status });
+      return Response.json(
+        { events, name: "Acme Deckhand", slug: "acme-deckhand", owner },
+        { status },
+      );
     };
+  const where = { githubUrl: "https://github.com", credentials: { slug: "old", owner: "me" } };
   const without = APP_EVENTS.filter((e) => e !== "issues");
-  assert.deepEqual(await checkAppEvents(asApp(without), (l) => logs.push(l)), ["issues"]);
+  assert.deepEqual(await checkAppEvents(asApp(without), (l) => logs.push(l), where), {
+    missing: ["issues"],
+    app: { name: "Acme Deckhand", slug: "acme-deckhand", owner: "acme", ownerType: "Organization" },
+  });
   assert.equal(logs.length, 1);
   assert.match(logs[0], /isn't subscribed to issues: turn it on .*docs\/setup\.md/);
-  assert.deepEqual(await checkAppEvents(asApp(APP_EVENTS), (l) => logs.push(l)), []);
+  assert.ok(
+    logs[0].includes("(https://github.com/organizations/acme/settings/apps/acme-deckhand)"),
+    logs[0],
+  );
+  const user = await checkAppEvents(asApp(APP_EVENTS, 200, null), (l) => logs.push(l), where);
+  // No owner in the answer: the stored one, its type unknown.
+  assert.deepEqual(user, {
+    missing: [],
+    app: { name: "Acme Deckhand", slug: "acme-deckhand", owner: "me", ownerType: null },
+  });
   // GitHub refusing is logged by asApp already.
-  assert.deepEqual(await checkAppEvents(asApp([], 401), (l) => logs.push(l)), []);
+  assert.deepEqual(await checkAppEvents(asApp([], 401), (l) => logs.push(l)), {
+    missing: [],
+    app: null,
+  });
   assert.equal(logs.length, 1);
+});
+
+test("appSettingsUrl: under the organization that owns the App, else the user's settings", () => {
+  const app = { slug: "my-app", owner: "acme" };
+  const ghes = "https://ghe.example.com";
+  assert.equal(
+    appSettingsUrl(ghes, { ...app, ownerType: "Organization" }),
+    "https://ghe.example.com/organizations/acme/settings/apps/my-app",
+  );
+  assert.equal(appSettingsUrl(ghes, { ...app, ownerType: "User" }), `${ghes}/settings/apps/my-app`);
+  assert.equal(appSettingsUrl(ghes, { ...app, ownerType: null }), `${ghes}/settings/apps/my-app`);
 });
 
 test("APP_EVENTS: no event twice", () => {

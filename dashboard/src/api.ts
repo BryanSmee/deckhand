@@ -10,6 +10,7 @@ import type {
   AnalysisSelection,
   Answers,
   AnswersThen,
+  AppLinks,
   Backlog,
   CancelAction,
   DiscussionComment,
@@ -186,6 +187,8 @@ const REPOS_POLL_MS = 60000;
 
 export interface RepoList {
   repos: Repo[] | null;
+  // Where the App is managed on GitHub.
+  app: AppLinks | null;
   // When the listener last listed the installations' repositories.
   listedAt: number | null;
   error: string | null;
@@ -233,6 +236,7 @@ export function useRepos(): RepoList {
 
   return {
     repos: list.data?.repos ?? null,
+    app: list.data?.app ?? null,
     listedAt: list.data?.listedAt ?? null,
     error: list.error,
     starting,

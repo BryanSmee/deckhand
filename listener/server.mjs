@@ -109,6 +109,8 @@ const ctx = {
   shotsDir,
   // Null until /setup has stored an App: webhooks are refused meanwhile.
   app: null,
+  // What GET /app said at start, { name, slug, owner, ownerType }: the dashboard's App links.
+  appInfo: null,
   // key ("org/repo#12") → task (tasks.mjs).
   tasks: new Map(),
   // The dashboard's runs, newest first (runlog.mjs), and by id; pruned daily (history.mjs).
@@ -135,6 +137,23 @@ function useApp(credentials) {
   if (credentials) useApp(credentials);
 }
 
+// Events the App's settings miss (without `issues`, open questions get no label), and who
+// owns it, which the link to its settings needs.
+function checkApp() {
+  const app = ctx.app;
+  checkAppEvents(app.asApp, log, { githubUrl: config.githubUrl, credentials: app.credentials })
+    .then(({ app: info }) => ctx.app === app && info && (ctx.appInfo = info))
+    .catch((error) => log(`The GitHub App's events: ${error.message ?? error}`));
+}
+
+// The App as the dashboard links to it: the stored credentials' public parts (never its
+// secrets), with what GET /app said. Null before /setup.
+function appSummary() {
+  if (!ctx.app) return null;
+  const { slug, owner, html_url } = ctx.app.credentials;
+  return { slug, owner, html_url, ...ctx.appInfo };
+}
+
 // PUBLIC_URL, or the one /setup stored with the App.
 function publicUrl() {
   return config.publicUrl ?? ctx.app?.credentials.public_url ?? `http://localhost:${config.port}`;
@@ -149,6 +168,8 @@ const setup = createSetup({
   onConfigured: (credentials) => {
     saveCredentials(config.dataDir, credentials);
     useApp(credentials);
+    ctx.appInfo = null;
+    checkApp();
   },
   log,
 });
@@ -371,6 +392,7 @@ ctx.waits = createWaits({
 ctx.repoApi = createRepoApi({
   config,
   list: repoList,
+  app: appSummary,
   publicUrl,
   start: (repo, login) => ctx.onboarding.start(repo, login, true),
   log,
@@ -453,12 +475,7 @@ ctx.waits.start();
 // After restoreRuns() and loadQueue(): what they bring back is kept.
 const history = createHistory(ctx);
 history.start();
-// Events the App's settings miss: without `issues`, open questions get no label.
-if (ctx.app) {
-  checkAppEvents(ctx.app.asApp, log).catch((error) =>
-    log(`The GitHub App's events: ${error.message ?? error}`),
-  );
-}
+if (ctx.app) checkApp();
 // Labels added or removed while the listener was down.
 if (ctx.app && config.needsInputLabel) {
   repoList

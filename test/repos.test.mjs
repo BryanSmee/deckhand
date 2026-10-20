@@ -10,6 +10,7 @@ import {
   CONFIG_MS,
   LIST_MS,
   REPO_REFRESH_MS,
+  appLinks,
   createRepoApi,
   createRepoList,
   refreshFor,
@@ -75,7 +76,20 @@ function fakeGitHub({ first = [], second = [], configured = [], files = {} } = {
     const page = Number(searchParams.get("page") ?? 1);
     const per = Number(searchParams.get("per_page") ?? 30);
     const slice = (all) => all.slice((page - 1) * per, page * per);
-    if (pathname === "/app/installations") return slice([{ id: 1 }, { id: 2 }]);
+    if (pathname === "/app/installations") {
+      return slice([
+        {
+          id: 1,
+          account: { login: "org" },
+          html_url: "https://github.com/organizations/org/settings/installations/1",
+        },
+        {
+          id: 2,
+          account: { login: "other" },
+          html_url: "https://github.com/settings/installations/2",
+        },
+      ]);
+    }
     const minted = /^\/app\/installations\/(\d+)\/access_tokens$/.exec(pathname);
     if (minted) {
       const expires_at = new Date(Date.now() + 3600000).toISOString();
@@ -255,12 +269,13 @@ async function call(
   });
 }
 
-function apiSetup({ grants = {}, fs, ...opts } = {}) {
+function apiSetup({ grants = {}, fs, app = () => null, ...opts } = {}) {
   const s = setup({ grants, fs, ...opts });
   const started = [];
   const api = createRepoApi({
     config: s.config,
     list: s.list,
+    app,
     grants: grantsOf(grants, s.config),
     fs,
     now: () => s.clock.now,
@@ -285,6 +300,49 @@ test("GET /api/repos: signed in only", async () => {
   );
   assert.equal((await call(api, "POST", "/api/repos")).status, 405);
   assert.equal(api.handle({ method: "GET", url: "/api/state", headers: {} }, {}, "alice"), false);
+});
+
+test("GET /api/repos: the App's links, under GITHUB_URL, as its owner's type says", async () => {
+  const stored = { slug: "my-app", owner: "acme", html_url: "https://github.com/apps/my-app" };
+  const links = async (app) =>
+    (await call(apiSetup({ app: () => app }).api, "GET", "/api/repos")).body.app;
+  const installations = [
+    { account: "org", url: "https://github.com/organizations/org/settings/installations/1" },
+    { account: "other", url: "https://github.com/settings/installations/2" },
+  ];
+  const expected = {
+    name: "My App",
+    installUrl: "https://github.com/apps/my-app/installations/new",
+    settingsUrl: "https://github.com/organizations/acme/settings/apps/my-app",
+    installations,
+  };
+  assert.deepEqual(await links({ ...stored, name: "My App", ownerType: "Organization" }), expected);
+  assert.deepEqual(await links({ ...stored, name: "My App", ownerType: "User" }), {
+    ...expected,
+    settingsUrl: "https://github.com/settings/apps/my-app",
+  });
+  // GET /app hasn't answered: the slug as its name, the user's settings.
+  assert.deepEqual(await links(stored), {
+    ...expected,
+    name: "my-app",
+    settingsUrl: "https://github.com/settings/apps/my-app",
+  });
+  // Before /setup: none.
+  assert.equal(await links(null), null);
+});
+
+test("appLinks: GitHub Enterprise, without the App's page stored", () => {
+  const links = appLinks("https://ghe.example.com", {
+    slug: "my-app",
+    owner: "acme",
+    ownerType: "Organization",
+  });
+  assert.equal(links.installUrl, "https://ghe.example.com/apps/my-app/installations/new");
+  assert.equal(
+    links.settingsUrl,
+    "https://ghe.example.com/organizations/acme/settings/apps/my-app",
+  );
+  assert.deepEqual(links.installations, []);
 });
 
 test("POST onboard: opens the issue, and the row switches to onboarding", async () => {
