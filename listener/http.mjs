@@ -30,6 +30,15 @@ import { serveAsset } from "./static.mjs";
 import { closedAs } from "./titles.mjs";
 import { sendJson } from "./web.mjs";
 
+// On every answer: the dashboard's own scripts, styles and images only (its build has no
+// inline script), never in a frame (a page on a sibling domain, which SameSite=Lax lets
+// through, could get a signed-in user to click Start or Cancel), and never sniffed as another
+// type. The listener's own pages narrow the policy further (html.mjs page()).
+export const SECURITY_HEADERS = {
+  "content-security-policy": "default-src 'self'; frame-ancestors 'none'",
+  "x-content-type-options": "nosniff",
+};
+
 const imageTypes = {
   png: "image/png",
   jpg: "image/jpeg",
@@ -399,6 +408,7 @@ export function createHttp(ctx, { dashboardDir }) {
 
   // One request's unexpected throw answers 500 and is logged: it never takes the listener down.
   function handle(req, res) {
+    for (const [name, value] of Object.entries(SECURITY_HEADERS)) res.setHeader(name, value);
     try {
       route(req, res);
     } catch (error) {

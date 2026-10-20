@@ -18,6 +18,7 @@ import {
   providerError,
 } from "../listener/agents/index.mjs";
 import { resolveEntry } from "../listener/agents/select.mjs";
+import { loadConfig } from "../listener/config.mjs";
 import { lastResult, outcome } from "../listener/runlog.mjs";
 import { tempDir } from "./helpers.mjs";
 
@@ -181,7 +182,7 @@ test("normalize: a failure is a failed result with its error, a provider's for a
 });
 
 test("the agent: installed like Codex, its login out of the sandbox, no mid-run messages", () => {
-  const config = { agyVolume: "deckhand-antigravity", agyVersion: "1.4.0" };
+  const config = { agyVolume: "deckhand-antigravity", agyVersion: "1.4.0", agySha256: "x64:ab" };
   assert.equal(agentFor("antigravity"), antigravity);
   assert.equal(antigravity.displayName, "Antigravity CLI");
   assert.deepEqual(antigravity.install(config), {
@@ -190,6 +191,7 @@ test("the agent: installed like Codex, its login out of the sandbox, no mid-run 
     version: "1.4.0",
     versionVar: "AGY_VERSION",
     command: "deckhand-install-antigravity",
+    env: { AGY_SHA256: "x64:ab" },
   });
   // With a plan login: nothing in its environment, the sandbox writes the run's secret in its
   // token file. With GEMINI_API_KEY: the run's secret as GEMINI_API_KEY and the listener's URL.
@@ -498,26 +500,20 @@ test("a sandbox without its Antigravity CLI says how to install it", (t) => {
   );
 });
 
-// release-install with a `curl` that serves a fake release: its API answer and its tarball.
-function install(t, { digest, tarball } = {}) {
+// release-install with a `curl` that serves a fake release's tarball, checked against
+// `pinned` (by default the real tarball's sha256: what AGY_SHA256 says).
+function install(t, { pinned, tarball } = {}) {
   const dir = tempDir(t, "deckhand-release-");
   const files = join(dir, "files");
   mkdirSync(join(files, "pkg"), { recursive: true });
   writeFileSync(join(files, "pkg/antigravity"), "#!/bin/sh\necho agy 1.4.0\n");
   chmodSync(join(files, "pkg/antigravity"), 0o755);
   spawnSync("tar", ["-czf", join(files, "agy.tgz"), "-C", join(files, "pkg"), "antigravity"]);
-  // The release's digest is the real tarball's, whatever is downloaded instead.
   const sha = createHash("sha256")
     .update(readFileSync(join(files, "agy.tgz")))
     .digest("hex");
+  // A re-published asset: another tarball where the release's was.
   if (tarball) writeFileSync(join(files, "agy.tgz"), tarball);
-  const release = {
-    assets: [
-      { name: "agy_cli_linux_arm64.tar.gz", digest: `sha256:${"0".repeat(64)}` },
-      { name: "agy_cli_linux_x64.tar.gz", digest: digest ?? `sha256:${sha}` },
-    ],
-  };
-  writeFileSync(join(files, "release.json"), JSON.stringify(release));
   writeFileSync(
     join(dir, "curl"),
     `#!/bin/bash
@@ -525,7 +521,6 @@ out=; url=
 while [ $# -gt 0 ]; do case $1 in -fsSLo) out=$2; shift 2 ;; -*) shift ;; *) url=$1; shift ;; esac; done
 echo "curl $url" >&2
 case $url in
-  https://api.github.com/repos/google-antigravity/antigravity-cli/releases/tags/1.4.0) cat "${files}/release.json" ;;
   https://github.com/google-antigravity/antigravity-cli/releases/download/1.4.0/agy_cli_linux_x64.tar.gz) cp "${files}/agy.tgz" "$out" ;;
   *) exit 22 ;;
 esac
@@ -545,13 +540,14 @@ esac
         "antigravity",
         "agy",
         "Antigravity CLI",
+        ...(pinned === null ? [] : [pinned ?? sha]),
       ],
       { env: { PATH: `${dir}:${process.env.PATH}` }, encoding: "utf8" },
     );
   return { root, run };
 }
 
-test("installing a release: checked against its digest, linked as agy, once", (t) => {
+test("installing a release: checked against its pinned sha256, linked as agy, once", (t) => {
   const { root, run } = install(t);
   const first = run();
   assert.equal(first.status, 0, first.stderr);
@@ -564,25 +560,40 @@ test("installing a release: checked against its digest, linked as agy, once", (t
   assert.doesNotMatch(second.stderr, /curl/);
 });
 
-test("installing a release: a tarball that isn't the release's, or no digest, is refused", (t) => {
+test("installing a release: a tarball that isn't the pinned one, or no pin, is refused", (t) => {
   const tampered = install(t, { tarball: "not the release" });
   const refused = tampered.run();
   assert.equal(refused.status, 1);
   assert.match(
     refused.stderr,
-    /agy_cli_linux_x64\.tar\.gz is sha256:[0-9a-f]{64}, but the release says sha256:/,
+    /agy_cli_linux_x64\.tar\.gz is sha256:[0-9a-f]{64}, but sha256:[0-9a-f]{64} is pinned: not installed/,
   );
   assert.deepEqual(spawnSync("ls", ["-A", tampered.root], { encoding: "utf8" }).stdout, "");
 
-  const none = install(t, { digest: null });
-  // A release whose asset has no digest: nothing to check it against.
-  writeFileSync(
-    join(none.root, "..", "files", "release.json"),
-    JSON.stringify({ assets: [{ name: "agy_cli_linux_x64.tar.gz" }] }),
+  for (const pinned of [null, "", "sha256:abc"]) {
+    const none = install(t, { pinned });
+    const missing = none.run();
+    assert.equal(missing.status, 1);
+    assert.match(missing.stderr, /no sha256 pinned for agy_cli_linux_x64\.tar\.gz/);
+    assert.doesNotMatch(missing.stderr, /curl/);
+  }
+});
+
+test("the pinned sha256: the default version's by default, the operator's otherwise", () => {
+  const pinned = loadConfig({ ALLOWED_USERS: "a" });
+  assert.match(pinned.agySha256, /^x64:fd96967583c1[0-9a-f]{52},arm64:cf953adcc69f[0-9a-f]{52}$/);
+  assert.deepEqual(antigravity.install(pinned).env, { AGY_SHA256: pinned.agySha256 });
+  // Another version: none unless the operator pins it.
+  const other = loadConfig({ ALLOWED_USERS: "a", AGY_VERSION: "1.5.0" });
+  assert.equal(other.agySha256, null);
+  assert.deepEqual(antigravity.install(other).env, { AGY_SHA256: "" });
+  const sha = "a".repeat(64);
+  const own = loadConfig({ ALLOWED_USERS: "a", AGY_VERSION: "1.5.0", AGY_SHA256: ` X64:${sha} ` });
+  assert.equal(own.agySha256, `x64:${sha}`);
+  assert.throws(
+    () => loadConfig({ ALLOWED_USERS: "a", AGY_SHA256: sha }),
+    /AGY_SHA256: expected x64:<sha256>,arm64:<sha256>/,
   );
-  const missing = none.run();
-  assert.equal(missing.status, 1);
-  assert.match(missing.stderr, /no sha256 digest for agy_cli_linux_x64\.tar\.gz/);
 });
 
 test(

@@ -6,9 +6,17 @@ export const EFFORTS = { low: "low", medium: "medium", high: "high", xhigh: "xhi
 
 // How an agent is installed: per version into a shared, root-owned volume
 // (images.installAgent()), mounted read-only in sandboxes at /opt/<package>, by the base
-// image's deckhand-install-<package> (../../sandbox/agents/<agent>/install).
-export function installSpec(pkg, { volume, version, versionVar }) {
-  return { volume, mount: `/opt/${pkg}`, version, versionVar, command: `deckhand-install-${pkg}` };
+// image's deckhand-install-<package> (../../sandbox/agents/<agent>/install). `env`: more of
+// its variables (a pinned digest).
+export function installSpec(pkg, { volume, version, versionVar, env }) {
+  return {
+    volume,
+    mount: `/opt/${pkg}`,
+    version,
+    versionVar,
+    command: `deckhand-install-${pkg}`,
+    ...(env && { env }),
+  };
 }
 
 // An agent's normalize(): one line of its output → Deckhand's events, by the line's JSON

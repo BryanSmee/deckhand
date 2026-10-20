@@ -50,7 +50,7 @@ import { createRepoApi, createRepoList } from "./repos.mjs";
 import { createRestart } from "./restart.mjs";
 import { createReviews } from "./reviews.mjs";
 import { loadRuns } from "./runlog.mjs";
-import { createDiscussionApi } from "./discussions.mjs";
+import { createDiscussionApi, fromKey } from "./discussions.mjs";
 import { createDockerRunner } from "./runner/docker.mjs";
 import { operatorSecrets } from "./secrets.mjs";
 import { createRuns } from "./runs.mjs";
@@ -405,6 +405,10 @@ ctx.analysis = createAnalysis({
   secrets: () => operatorSecrets(ctx),
 });
 
+// What signs the dashboard's posts as their users' (discussions.mjs fromLine()): a run posts
+// as the App too, and can't make one.
+const dashboardKey = () => fromKey(ctx.app?.credentials?.webhook_secret);
+
 // The graph's work area: the backlog, starting or queueing issues by dragging them, and the
 // answers to open questions sent from a task's page.
 ctx.workApi = createWorkApi({
@@ -424,6 +428,7 @@ ctx.workApi = createWorkApi({
   cancel: (key, user) => ctx.cancel(key, user),
   analysis: ctx.analysis,
   publicUrl,
+  fromKey: dashboardKey,
   log,
 });
 
@@ -434,6 +439,7 @@ ctx.discussionApi = createDiscussionApi({
   checkedRepo: createRepoCheck({ config, github, repoSettings }).checkedRepo,
   accept: (item) => ctx.accept(item),
   publicUrl,
+  key: dashboardKey,
   log,
 });
 

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { join } from "node:path";
 import { test } from "node:test";
+import { antigravity } from "../listener/agents/antigravity.mjs";
 import { claude } from "../listener/agents/claude.mjs";
 import { KEEP_TAGS, createImages, imageRef, imageTag } from "../listener/images.mjs";
 import { legacyRepoImage, repoImage } from "../listener/repo-config.mjs";
@@ -249,6 +250,10 @@ test("an agent installs once per version, in a container of its own", async (t) 
     installs[0],
     / --user 0 --cap-drop ALL --cap-add CHOWN --security-opt no-new-privileges /,
   );
+  // The Antigravity CLI's: with the sha256 its tarball must have.
+  await images.installAgent(antigravity);
+  const agy = calls.find((c) => c.includes("deckhand-install-antigravity"));
+  assert.match(agy, /-e AGY_VERSION=1\.4\.0 -e AGY_SHA256=x64:[0-9a-f]{64},arm64:[0-9a-f]{64} -v /);
 });
 
 test("cache volumes: created once per repo and path, owned by the sandbox's user", async (t) => {

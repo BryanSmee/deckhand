@@ -2,26 +2,24 @@
 # Installs a release's binary at one version into an agent's shared volume, for its installer
 # (agents/<name>/install, run as root):
 #
-#   release-install <volume> <version> <owner/repo> <asset> <binary> <command> <name>
+#   release-install <volume> <version> <owner/repo> <asset> <binary> <command> <name> <sha256>
 #
-# downloads the GitHub release's <asset> (a .tar.gz) for tag <version>, checks it against the
-# asset's sha256 `digest` from GitHub's release API (refused when they differ or there is
-# none), unpacks it and links its <binary> as bin/<command>. Nothing if that version's
-# command is already there. One folder per version, installed aside then renamed, as
-# npm-install does. GITHUB_API and GITHUB_DOWNLOADS: other addresses, for the tests.
+# downloads the GitHub release's <asset> (a .tar.gz) for tag <version>, checks it against
+# <sha256>, the digest the operator's settings pin (refused when they differ or there is none:
+# the release's own digest comes from where the asset does, and would follow a re-published
+# one), unpacks it and links its <binary> as bin/<command>. Nothing if that version's command
+# is already there. One folder per version, installed aside then renamed, as npm-install does.
+# GITHUB_DOWNLOADS: another address, for the tests.
 set -euo pipefail
 
-root=$1 version=$2 repo=$3 asset=$4 binary=$5 command=$6 name=$7
-api=${GITHUB_API:-https://api.github.com}
+root=$1 version=$2 repo=$3 asset=$4 binary=$5 command=$6 name=$7 digest=${8:-}
 downloads=${GITHUB_DOWNLOADS:-https://github.com}
 umask 022
 home=$root/$version
 [ -x "$home/bin/$command" ] && exit 0
 
-digest=$(curl -fsSL "$api/repos/$repo/releases/tags/$version" |
-  jq -r --arg asset "$asset" '.assets[]? | select(.name == $asset) | .digest // empty') || true
-if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
-  echo "$name $version: no sha256 digest for $asset in the release, not installed" >&2
+if [[ ! "$digest" =~ ^[0-9a-f]{64}$ ]]; then
+  echo "$name $version: no sha256 pinned for $asset, not installed" >&2
   exit 1
 fi
 tmp=$(mktemp -d "$root/.install-XXXXXX")
@@ -30,9 +28,9 @@ curl -fsSLo "$tmp/$asset" "$downloads/$repo/releases/download/$version/$asset" |
   echo "$name $version: downloading $asset failed" >&2
   exit 1
 }
-actual=sha256:$(sha256sum "$tmp/$asset" | cut -d' ' -f1)
+actual=$(sha256sum "$tmp/$asset" | cut -d' ' -f1)
 if [ "$actual" != "$digest" ]; then
-  echo "$name $version: $asset is $actual, but the release says $digest: not installed" >&2
+  echo "$name $version: $asset is sha256:$actual, but sha256:$digest is pinned: not installed" >&2
   exit 1
 fi
 tar -xzf "$tmp/$asset" -C "$tmp" "$binary"

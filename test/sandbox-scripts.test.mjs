@@ -1,7 +1,15 @@
 // The sandbox's side of the broker: git's credential helper asks it for a token per call.
 import assert from "node:assert/strict";
 import { execFile, spawnSync } from "node:child_process";
-import { chmodSync, existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { createBroker } from "../listener/broker.mjs";
@@ -778,4 +786,48 @@ test("AGENTS.md's syntax check covers every script in sandbox/, and they pass it
       );
     } else assert.doesNotMatch(shebang, /^#!/, `${file}: a script AGENTS.md doesn't check`);
   }
+});
+
+test("npm-install: no install scripts but the package's own, then the version's folder", (t) => {
+  const dir = tempDir(t, "deckhand-npm-install-");
+  // A fake npm: logs its arguments, and `install` makes the package's bin.
+  writeFileSync(
+    join(dir, "npm"),
+    `#!/bin/bash
+echo "$*" >> "${dir}/calls"
+if [ "$1" = install ]; then
+  prefix=$3
+  mkdir -p "$prefix/node_modules/.bin"
+  printf '#!/bin/sh\\n' > "$prefix/node_modules/.bin/claude"
+  chmod +x "$prefix/node_modules/.bin/claude"
+fi
+`,
+  );
+  chmodSync(join(dir, "npm"), 0o755);
+  const root = join(dir, "opt");
+  mkdirSync(root);
+  const run = () =>
+    spawnSync(
+      `${bin}agents/npm-install`,
+      [root, "@anthropic-ai/claude-code", "9.9.9", "claude", "Claude Code"],
+      { env: { PATH: `${dir}:${process.env.PATH}` }, encoding: "utf8" },
+    );
+  const first = run();
+  assert.equal(first.status, 0, first.stderr);
+  assert.match(first.stderr, /Claude Code 9\.9\.9 installed/);
+  const [install, rebuild, ...rest] = readFileSync(join(dir, "calls"), "utf8").trim().split("\n");
+  assert.match(
+    install,
+    /^install --prefix \S+ --ignore-scripts .*@anthropic-ai\/claude-code@9\.9\.9$/,
+  );
+  // Only the package itself runs its scripts: not its dependencies.
+  assert.match(
+    rebuild,
+    /^rebuild --prefix \S+ --ignore-scripts=false --foreground-scripts .*@anthropic-ai\/claude-code$/,
+  );
+  assert.deepEqual(rest, []);
+  assert.ok(existsSync(join(root, "9.9.9/node_modules/.bin/claude")));
+  // Already there: npm isn't run again.
+  assert.equal(run().status, 0);
+  assert.equal(readFileSync(join(dir, "calls"), "utf8").trim().split("\n").length, 2);
 });

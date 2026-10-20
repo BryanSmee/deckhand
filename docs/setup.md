@@ -372,6 +372,7 @@ What every sandbox may reach and its limits aren't settings: they go in
 | `PORT`                                                                                            | none: compose's                                                                                   | `8080`                                                                       | the host port compose publishes the listener on                                                                                                                                                                                        |
 | `CLAUDE_CODE_VERSION`                                                                             | `claude_code_version`                                                                             | `2.1.300`                                                                    | Claude Code version the sandboxes install on first use                                                                                                                                                                                 |
 | `AGY_VERSION`                                                                                     | `agy_version`                                                                                     | `1.4.0`                                                                      | Antigravity CLI version the sandboxes install on first use                                                                                                                                                                             |
+| `AGY_SHA256`                                                                                      | `agy_sha256`                                                                                      | `1.4.0`'s                                                                    | sha256 of the Antigravity CLI's tarballs, `x64:<hex>,arm64:<hex>`: set it whenever you change `AGY_VERSION`, from the release's assets                                                                                                 |
 | `CODEX_VERSION`                                                                                   | `codex_version`                                                                                   | `0.162.1`                                                                    | Codex version the sandboxes install on first use                                                                                                                                                                                       |
 | `SANDBOX_MODEL`, `SANDBOX_EFFORT`                                                                 | `sandbox_model`, `sandbox_effort`                                                                 | `best`, `medium`                                                             | defaults; a comment's `/model` and `/effort` lines override them (models: below the table)                                                                                                                                             |
 | `BRAINSTORM_MODEL`, `BRAINSTORM_EFFORT`                                                           | `brainstorm_model`, `brainstorm_effort`                                                           | `SANDBOX_MODEL`, `SANDBOX_EFFORT`                                            | the same for brainstorms, inbox entries and discussions                                                                                                                                                                                |
@@ -639,7 +640,9 @@ the token too) is refused; its feature flags (`antigravity-unleash.goog`) and yo
    ```sh
    docker volume create agy-sign-in
    docker run --rm -it --user 0 --entrypoint deckhand-install-antigravity \
-     -e AGY_VERSION=1.4.0 -v deckhand-antigravity:/opt/antigravity ghcr.io/bryansmee/deckhand-sandbox
+     -e AGY_VERSION=1.4.0 \
+     -e AGY_SHA256=x64:fd96967583c1eed94733c039638fa59b71ddbd823c75ebc8dd0e677463565aad,arm64:cf953adcc69f87d00d71f97c3f35dc723a8669a350accf9a199df781f0523f56 \
+     -v deckhand-antigravity:/opt/antigravity ghcr.io/bryansmee/deckhand-sandbox
    docker run --rm -it --entrypoint /opt/antigravity/1.4.0/bin/agy \
      -v deckhand-antigravity:/opt/antigravity:ro -v agy-sign-in:/home/node/.gemini \
      ghcr.io/bryansmee/deckhand-sandbox
@@ -927,8 +930,11 @@ through the egress proxy with a Google AI plan's login (see
 
 No agent is part of any image: before the first run that needs it, the listener installs the
 pinned `CLAUDE_CODE_VERSION` into the `deckhand-claude-code` volume (Codex: `CODEX_VERSION`,
-`deckhand-codex`; the Antigravity CLI: `AGY_VERSION`, `deckhand-antigravity`, its release
-checked against its digest), in a container of its own, and later runs reuse it, read-only.
+`deckhand-codex`; the Antigravity CLI: `AGY_VERSION`, `deckhand-antigravity`, its release's
+tarball checked against the sha256 `AGY_SHA256` pins), in a container of its own, and later
+runs reuse it, read-only. npm packages install with `--ignore-scripts`; only the agent's own
+package then runs its install script (Claude Code's puts its native binary in place), never a
+dependency's.
 
 ## Isolation
 

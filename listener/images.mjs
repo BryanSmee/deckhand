@@ -146,7 +146,7 @@ export function createImages({
   // and this still holds if a mount ever isn't. CHOWN only to take over a volume uid 1000
   // owned before (../sandbox/agents/claude/install). `agent`: agents/.
   function installAgent(agent, output) {
-    const { volume, mount, version, versionVar, command } = agent.install(config);
+    const { volume, mount, version, versionVar, command, env = {} } = agent.install(config);
     const key = `${agent.name}@${version}`;
     if (!installs.has(key)) {
       const install = docker(
@@ -159,6 +159,7 @@ export function createImages({
           ...["--user", "0", ...hardening("CHOWN")],
           "-e",
           `${versionVar}=${version}`,
+          ...Object.entries(env).flatMap(([name, value]) => ["-e", `${name}=${value}`]),
           "-v",
           `${volume}:${mount}`,
           "--entrypoint",

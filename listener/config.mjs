@@ -77,6 +77,14 @@ const CLAUDE_TIERS = {
 };
 const TIERS = { best: "BEST", balanced: "BALANCED", fast: "FAST" };
 
+// The Antigravity CLI's default version, and the sha256 of its release's tarballs for Linux,
+// pinned here: the release's own digest, which comes with the download, would follow a
+// re-published asset.
+const AGY_DEFAULT_VERSION = "1.4.0";
+const AGY_DEFAULT_SHA256 =
+  "x64:fd96967583c1eed94733c039638fa59b71ddbd823c75ebc8dd0e677463565aad," +
+  "arm64:cf953adcc69f87d00d71f97c3f35dc723a8669a350accf9a199df781f0523f56";
+
 // The operator's settings, by environment variable (in lowercase, its config.yaml key), in the
 // order they are read: a default can use the ones before it. Each one has
 // - type: the YAML config.yaml takes (FILE_SETTINGS): scalar unless it says list or boolean;
@@ -123,7 +131,13 @@ export const SETTINGS = {
   // The Antigravity CLI's, with a Gemini API key or a Google AI plan's login that the listener
   // holds (agents/antigravity.mjs, google.mjs, antigravity-login.mjs), and what best, balanced
   // and fast mean to it.
-  AGY_VERSION: { default: "1.4.0" },
+  AGY_VERSION: { default: AGY_DEFAULT_VERSION },
+  // Its tarballs' sha256 by architecture, "x64:<hex>,arm64:<hex>" (one will do): the default
+  // version's are pinned above; another version needs its own, or it isn't installed.
+  AGY_SHA256: {
+    default: (s) => (s.AGY_VERSION === AGY_DEFAULT_VERSION ? AGY_DEFAULT_SHA256 : null),
+    parse: archDigests,
+  },
   GEMINI_BASE_URL: { default: GEMINI_URL, parse: apiUrl },
   ...tierSettings("AGY", TIERS),
   // Where a run goes, in order, when its provider fails (runs.mjs). Empty: nowhere.
@@ -371,6 +385,7 @@ function sandboxConfig(env, s) {
     codexVersion: s.CODEX_VERSION,
     agyVolume: s.AGY_VOLUME,
     agyVersion: s.AGY_VERSION,
+    agySha256: s.AGY_SHA256,
     // Where the listener refreshes the plan's login with `agy` itself (antigravity-login.mjs).
     agyLoginVolume: `${s.AGY_VOLUME}-login`,
     maxParallel: s.MAX_PARALLEL,
@@ -561,6 +576,13 @@ function fallbacks(text, { label, env }) {
     if (!names.includes(name)) names.push(name);
   }
   return names;
+}
+
+// "x64:<hex>,arm64:<hex>" (either, or both), as the installer reads it.
+function archDigests(text, { label }) {
+  const value = text.replace(/\s+/g, "").toLowerCase();
+  if (/^(x64|arm64):[0-9a-f]{64}(,(x64|arm64):[0-9a-f]{64})?$/.test(value)) return value;
+  throw new ConfigError(`${label}: expected x64:<sha256>,arm64:<sha256>, got ${text}`);
 }
 
 function modelName(text, { label }) {

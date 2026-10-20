@@ -2,7 +2,7 @@
 // sandbox (asks the broker for a token, prints a result), a local server plays GitHub.
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
-import { createHmac, generateKeyPairSync } from "node:crypto";
+import { createHash, createHmac, generateKeyPairSync } from "node:crypto";
 import {
   chmodSync,
   mkdirSync,
@@ -597,7 +597,7 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
     assert.match(args, /^DECKHAND_CA=\/deckhand\/egress-ca\.crt$/m);
     assert.match(
       readFileSync(join(dir, "docker-calls"), "utf8"),
-      /-e AGY_VERSION=1\.4\.0 -v deckhand-antigravity:\/opt\/antigravity --entrypoint deckhand-install-antigravity/,
+      /-e AGY_VERSION=1\.4\.0 -e AGY_SHA256=x64:[0-9a-f]{64},arm64:[0-9a-f]{64} -v deckhand-antigravity:\/opt\/antigravity --entrypoint deckhand-install-antigravity/,
     );
 
     // Its token's hosts relayed, telemetry refused, the flags and the avatar a tunnel.
@@ -2740,8 +2740,19 @@ mounts:
     // Signed out: a sign-in page, and nothing from the API.
     const home = await get("/");
     assert.equal(home.status, 200);
-    assert.match(await home.text(), /Sign in with GitHub/);
-    assert.equal((await get("/api/state")).status, 401);
+    const signIn = await home.text();
+    assert.match(signIn, /Sign in with GitHub/);
+    // The listener's own pages: no script, their one style by its hash, never in a frame.
+    const style = /<style>([^]*?)<\/style>/.exec(signIn)[1];
+    const styleHash = createHash("sha256").update(style).digest("base64");
+    assert.equal(
+      home.headers.get("content-security-policy"),
+      `default-src 'none'; img-src 'self'; style-src 'sha256-${styleHash}'; frame-ancestors 'none'`,
+    );
+    assert.equal(home.headers.get("x-content-type-options"), "nosniff");
+    const refused = await get("/api/state");
+    assert.equal(refused.status, 401);
+    assert.equal(refused.headers.get("x-content-type-options"), "nosniff");
     for (const path of ["/assets/app-1a2b.js", "/index.html", "/nope.js"]) {
       assert.equal((await get(path)).status, 401);
     }
@@ -2766,11 +2777,20 @@ mounts:
 
     const index = await get("/", session);
     assert.equal(index.headers.get("cache-control"), "no-store");
+    // The dashboard, and everything else: its own files only, never in a frame, never sniffed.
+    for (const answer of [index, await get("/auth/login")]) {
+      assert.equal(
+        answer.headers.get("content-security-policy"),
+        "default-src 'self'; frame-ancestors 'none'",
+      );
+      assert.equal(answer.headers.get("x-content-type-options"), "nosniff");
+    }
     assert.match(await index.text(), /<title>Deckhand<\/title>/);
     const asset = await get("/assets/app-1a2b.js", session);
     assert.equal(asset.status, 200);
     assert.match(asset.headers.get("content-type"), /^text\/javascript/);
     assert.match(asset.headers.get("cache-control"), /immutable/);
+    assert.equal(asset.headers.get("x-content-type-options"), "nosniff");
     await asset.text();
     // What is outside the build: static.test.mjs.
     assert.equal((await get("/assets/nope.js", session)).status, 404);

@@ -5,6 +5,11 @@
 #
 # One folder per version, installed aside then renamed, so two installs at once can't leave
 # a half-installed copy behind.
+#
+# No install scripts but the package's own: its dependencies' versions aren't locked, and the
+# volume is every repository's, so one of them can't run code here as root. The package's
+# own (Claude Code's postinstall puts its native binary in place) is the code the sandboxes
+# run anyway, pinned by version.
 set -euo pipefail
 
 root=$1 package=$2 version=$3 bin=$4 name=$5
@@ -13,8 +18,12 @@ home=$root/$version
 [ -x "$home/node_modules/.bin/$bin" ] && exit 0
 tmp=$(mktemp -d "$root/.install-XXXXXX")
 chmod 755 "$tmp"
-npm install --prefix "$tmp" --no-fund --no-audit --loglevel=error \
-  "$package@$version" > "/tmp/$bin-install.log" 2>&1 ||
+{
+  npm install --prefix "$tmp" --ignore-scripts --no-fund --no-audit --loglevel=error \
+    "$package@$version" &&
+    npm rebuild --prefix "$tmp" --ignore-scripts=false --foreground-scripts --loglevel=error \
+      "$package"
+} > "/tmp/$bin-install.log" 2>&1 ||
   { cat "/tmp/$bin-install.log" >&2; rm -rf "$tmp"; exit 1; }
 mv -T "$tmp" "$home" 2> /dev/null || rm -rf "$tmp" # another install got there first
 echo "$name $version installed" >&2

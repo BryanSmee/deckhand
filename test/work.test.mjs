@@ -7,7 +7,7 @@ import { ISSUES_MS, checkAction, createWorkApi, leadsTo, staleFor } from "../lis
 import { createAnalysis } from "../listener/analysis.mjs";
 import { MAX_TEXT } from "../listener/answers.mjs";
 import { board as boardOf } from "../listener/board.mjs";
-import { workItem } from "../listener/events.mjs";
+import { MARKER, workItem } from "../listener/events.mjs";
 import { tempDir, testConfig } from "./helpers.mjs";
 
 const ORIGIN = "https://deckhand.example.com";
@@ -1176,6 +1176,19 @@ test("inbox: the App's comment on the inbox issue, and the run a comment there s
   assert.equal((await sendInbox(w, { kind: "bug", text: "It crashes" })).status, 200);
   assert.deepEqual(w.posted[1], [13, "It crashes\n\nFrom the dashboard by @alice"]);
   assert.equal(w.accepted[1].trigger, "bug");
+  // The App's marks in the text are taken out: posted as the App, it would pass for its own.
+  const marked = `It ${MARKER}hangs <!-- deckhand-from:bob:x -->`;
+  assert.equal((await sendInbox(w, { kind: "bug", text: marked })).status, 200);
+  assert.deepEqual(w.posted[2], [13, "It hangs\n\nFrom the dashboard by @alice"]);
+  assert.equal((await sendInbox(w, { kind: "bug", text: MARKER })).status, 400);
+  // Nested: taking one mark out mustn't join the text around it into another.
+  const nested = `It <!-- deck${MARKER}hand -->fails <!-<!-- deckhand-from:x -->- deckhand-from:bob:abc -->`;
+  assert.equal((await sendInbox(w, { kind: "bug", text: nested })).status, 200);
+  assert.deepEqual(w.posted[3], [13, "It fails\n\nFrom the dashboard by @alice"]);
+  assert.equal(
+    (await sendInbox(w, { kind: "bug", text: `<!-- deck${MARKER}hand -->` })).status,
+    400,
+  );
 });
 
 test("inbox refused, nothing posted: users, config errors, no such inbox, text, origin", async () => {

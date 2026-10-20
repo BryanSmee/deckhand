@@ -96,6 +96,8 @@ services:
       BRAINSTORM_AGENT: ${BRAINSTORM_AGENT:-}
       CODEX_VERSION: ${CODEX_VERSION:-}
       AGY_VERSION: ${AGY_VERSION:-}
+      # x64:<sha256>,arm64:<sha256> of its release's tarballs: needed with another AGY_VERSION.
+      AGY_SHA256: ${AGY_SHA256:-}
       # Optional: /setup detects it from your browser's address and stores it.
       PUBLIC_URL: ${PUBLIC_URL:-}
       CLAUDE_CODE_VERSION: ${CLAUDE_CODE_VERSION:-}

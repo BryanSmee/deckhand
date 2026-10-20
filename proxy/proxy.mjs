@@ -64,6 +64,21 @@ export function listenerPolicy(url, timeoutMs = 5000) {
   };
 }
 
+// Where a relayed request goes: <relayUrl>/<host><path>, or null for a path that isn't plain
+// origin-form ("/…") or that could climb out of <relayUrl>/<host>/ once parsed ("..", "%2e",
+// "\\"), and checked again on the parsed URL.
+export function relayTarget(relayUrl, host, path) {
+  if (typeof path !== "string" || !path.startsWith("/") || /\.\.|%2e|\\/i.test(path)) return null;
+  let url;
+  try {
+    url = new URL(`${relayUrl}/${host}${path}`);
+  } catch {
+    return null;
+  }
+  const base = new URL(`${relayUrl}/${host}/`);
+  return url.origin === base.origin && url.pathname.startsWith(base.pathname) ? url : null;
+}
+
 class Refused extends Error {}
 
 // The first bytes a socket receives, read off it (null when it closes first).
@@ -254,7 +269,13 @@ export function createProxy({
   // listener's to hand to sandboxes, at /deckhand-ca.crt.
   async function forward(req, res) {
     if (req.url === "/deckhand-ca.crt") {
-      const pem = authority?.certificate();
+      // Made again when near its end: each run asks for it.
+      const pem = authority
+        ? await authority.ready().then(
+            () => authority.certificate(),
+            () => null,
+          )
+        : null;
       res.writeHead(pem ? 200 : 404, {
         "content-type": pem ? "application/x-pem-file" : "text/plain",
       });
@@ -283,8 +304,14 @@ export function createProxy({
 
   // A relayed host's request, to the listener as <relayUrl>/<host><path>: the listener checks
   // the run's secret and sends it on with the operator's credential (../listener/google.mjs).
+  // Only under <relayUrl>/<host>/: the URL parser resolves "..", so a path that climbs out
+  // would reach the listener's other endpoints (/egress) from the proxy's address.
   function relayed(req, res, host) {
-    const url = new URL(`${relayUrl}/${host}${req.url}`);
+    const url = relayTarget(relayUrl, host, req.url);
+    if (!url) {
+      res.writeHead(400, { "content-type": "text/plain" });
+      return res.end("Deckhand's egress proxy: not a path it relays\n");
+    }
     const headers = { ...req.headers, host: url.host };
     for (const name of Object.keys(headers)) {
       if (name.startsWith("proxy-")) delete headers[name];

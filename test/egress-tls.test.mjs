@@ -5,15 +5,15 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { X509Certificate } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { request } from "node:http";
 import { createServer as createHttpsServer } from "node:https";
 import { join } from "node:path";
 import { test } from "node:test";
 import { connect as tlsConnect, createSecureContext } from "node:tls";
-import { createAuthority } from "../proxy/authority.mjs";
+import { CA_DAYS, certifiable, createAuthority } from "../proxy/authority.mjs";
 import { createCache } from "../proxy/cache.mjs";
-import { createProxy } from "../proxy/proxy.mjs";
+import { createProxy, relayTarget } from "../proxy/proxy.mjs";
 import { listening, serve, tempDir } from "./helpers.mjs";
 
 // `t` null: the file's, removed when it ends.
@@ -208,6 +208,19 @@ test("a relayed host: decrypted, cache on or off, each request to the listener i
     assert.equal(relayed[0].url, "/relay/relayed.test/v1internal:streamGenerateContent?alt=sse");
     assert.equal(relayed[0].headers.host, new URL(listener.url).host);
     assert.equal(seen.length, 0);
+
+    // A path that climbs out of /relay/<host>/ never reaches the listener: its /egress would
+    // answer the proxy's address.
+    for (const path of [
+      "/../../egress?ip=10.0.0.2&host=x.test",
+      "/%2e%2e/%2E%2E/egress?ip=10.0.0.2&host=x.test",
+      "/.%2e/egress",
+      "/\\..\\egress",
+    ]) {
+      const refused = await get("relayed.test", path, authority.certificate());
+      assert.equal(refused.status, 400, path);
+    }
+    assert.equal(relayed.length, 1);
   }
 
   // No relay URL (or no CA): refused, never a tunnel that would reach the host.
@@ -257,4 +270,159 @@ test("the CA: made once, kept across restarts; host certificates reused, then re
   // Never a name that isn't one.
   await assert.rejects(again.certFor("a b\nsubjectAltName = DNS:*"), /no certificate/);
   await assert.rejects(again.certFor("../x"), /no certificate/);
+});
+
+test("relayTarget: only origin-form paths that stay under /relay/<host>/", () => {
+  const base = "http://listener:8081/relay";
+  assert.equal(
+    relayTarget(base, "a.test", "/v1internal:x?alt=sse")?.href,
+    "http://listener:8081/relay/a.test/v1internal:x?alt=sse",
+  );
+  assert.equal(relayTarget(base, "a.test", "/")?.href, "http://listener:8081/relay/a.test/");
+  for (const path of [
+    "/../../egress",
+    "/%2E%2e/egress",
+    "/a/%2e./b",
+    "/a\\b",
+    "http://elsewhere/x",
+    "*",
+    "",
+  ]) {
+    assert.equal(relayTarget(base, "a.test", path), null, path);
+  }
+});
+
+// A leaf for `name` signed with the CA's key, as a leaked key would make it, then checked by
+// openssl verify against the CA alone → its output.
+function forged(dir, name) {
+  const run = (args) => execFileSync("openssl", args, { cwd: dir, stdio: "pipe" });
+  writeFileSync(
+    join(dir, `${name}.cnf`),
+    `[req]\ndistinguished_name = dn\nprompt = no\n[dn]\n[leaf]\nsubjectAltName = DNS:${name}\nextendedKeyUsage = serverAuth\n`,
+  );
+  run([
+    "req",
+    "-x509",
+    ...["-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:prime256v1", "-nodes"],
+    ...["-keyout", `${name}.key`, "-out", `${name}.crt`, "-days", "7"],
+    ...["-subj", `/CN=${name}`, "-config", `${name}.cnf`, "-extensions", "leaf"],
+    ...["-CA", "ca.crt", "-CAkey", "ca.key"],
+  ]);
+  try {
+    return run(["verify", "-CAfile", "ca.crt", `${name}.crt`]).toString();
+  } catch (error) {
+    return `failed: ${error.stderr}${error.stdout}`;
+  }
+}
+
+test("the CA can't vouch for GitHub or the agents' providers, even with its key", async (t) => {
+  const dir = temp(t, "ca");
+  const authority = createAuthority({ dir });
+  await authority.ready();
+  for (const name of ["github.com", "api.github.com", "objects.githubusercontent.com"]) {
+    assert.match(forged(dir, name), /failed: .*excluded subtree violation/s, name);
+    // And the proxy never asks for one: such a host is tunnelled.
+    assert.equal(certifiable(name), false);
+    await assert.rejects(authority.certFor(name), /no certificate/);
+  }
+  assert.match(forged(dir, "registry.npmjs.org"), /: OK/);
+  // Nor a name that only ends the same way.
+  assert.match(forged(dir, "notgithub.com"), /: OK/);
+  assert.equal(certifiable("notgithub.com"), true);
+  // Node's TLS (OpenSSL's checks) refuses it too.
+  const server = createHttpsServer({
+    key: readFileSync(join(dir, "github.com.key")),
+    cert: readFileSync(join(dir, "github.com.crt")),
+  });
+  const port = await listening(server);
+  t.after(() => server.close());
+  const error = await new Promise((resolve) => {
+    const socket = tlsConnect({
+      port,
+      host: "127.0.0.1",
+      servername: "github.com",
+      ca: authority.certificate(),
+    });
+    socket.once("secureConnect", () => resolve(null));
+    socket.once("error", resolve);
+  });
+  assert.match(error?.message ?? "connected", /excluded subtree violation/);
+});
+
+test("the CA lasts a year, and is made again near its end or when it predates name constraints", async (t) => {
+  const dir = temp(t, "ca");
+  const fresh = createAuthority({ dir });
+  await fresh.ready();
+  const x509 = new X509Certificate(fresh.certificate());
+  const days = (Date.parse(x509.validTo) - Date.parse(x509.validFrom)) / (24 * 3600 * 1000);
+  assert.ok(days >= CA_DAYS - 1 && days <= CA_DAYS + 1, `${days} days`);
+
+  // What a CA made by openssl itself, of `days`, with `extensions` (none: name constraints).
+  const replaced = async (days, extensions) => {
+    const old = temp(t, "old-ca");
+    writeFileSync(
+      join(old, "ca.cnf"),
+      `[req]\ndistinguished_name = dn\nprompt = no\n[dn]\n[ca]\nbasicConstraints = critical,CA:TRUE\nkeyUsage = critical,keyCertSign\n${extensions}\n`,
+    );
+    execFileSync(
+      "openssl",
+      [
+        "req",
+        "-x509",
+        ...["-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:prime256v1", "-nodes"],
+        ...["-keyout", "ca.key", "-out", "ca.crt", "-days", String(days)],
+        ...["-subj", "/CN=old", "-config", "ca.cnf", "-extensions", "ca"],
+      ],
+      { cwd: old, stdio: "ignore" },
+    );
+    const before = readFileSync(join(old, "ca.crt"), "utf8");
+    const logged = [];
+    const authority = createAuthority({ dir: old, log: (line) => logged.push(line) });
+    await authority.ready();
+    return { kept: authority.certificate() === before, logged, authority, old };
+  };
+  // Ten years without name constraints: Deckhand's CAs before them.
+  const legacy = await replaced(3650, "");
+  assert.equal(legacy.kept, false);
+  assert.match(legacy.logged.join("\n"), /without name constraints; making a new one/);
+  assert.equal(readFileSync(join(legacy.old, "ca.crt"), "utf8"), legacy.authority.certificate());
+  // With them, twenty days from its end: a new one too.
+  const constraints = "nameConstraints = critical,excluded;DNS:github.com";
+  assert.equal((await replaced(20, constraints)).kept, false);
+  // Months from it: kept.
+  assert.equal((await replaced(200, constraints)).kept, true);
+});
+
+test("a CA made again while the proxy runs: the next run's certificate, and new host certificates", async (t) => {
+  const dir = temp(t, "ca");
+  // Forty days from its end: current today, not in a fortnight.
+  writeFileSync(
+    join(dir, "ca.cnf"),
+    "[req]\ndistinguished_name = dn\nprompt = no\n[dn]\n[ca]\nbasicConstraints = critical,CA:TRUE\nkeyUsage = critical,keyCertSign\nnameConstraints = critical,excluded;DNS:github.com\n",
+  );
+  execFileSync(
+    "openssl",
+    [
+      "req",
+      "-x509",
+      ...["-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:prime256v1", "-nodes"],
+      ...["-keyout", "ca.key", "-out", "ca.crt", "-days", "40"],
+      ...["-subj", "/CN=old", "-config", "ca.cnf", "-extensions", "ca"],
+    ],
+    { cwd: dir, stdio: "ignore" },
+  );
+  const clock = { now: Date.now() };
+  const authority = createAuthority({ dir, now: () => clock.now });
+  await authority.ready();
+  const first = authority.certificate();
+  assert.equal(first, readFileSync(join(dir, "ca.crt"), "utf8"));
+  const host = await authority.certFor("registry.npmjs.org");
+  clock.now += 15 * 24 * 3600 * 1000;
+  const again = await authority.certFor("registry.npmjs.org");
+  assert.notEqual(authority.certificate(), first);
+  assert.notEqual(again.cert, host.cert);
+  assert.equal(
+    new X509Certificate(again.cert).checkIssued(new X509Certificate(authority.certificate())),
+    true,
+  );
 });
