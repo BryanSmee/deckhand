@@ -352,6 +352,21 @@ test("a wrong secret, another agent's run or another path is refused, Google not
     assert.equal(res.status, 404, path);
     await res.text();
   }
+  // Another method on agy's own paths.
+  for (const [method, path] of [
+    ["GET", generate],
+    ["DELETE", generate],
+    ["POST", "www.googleapis.com/oauth2/v2/userinfo"],
+  ]) {
+    const res = await call(
+      url,
+      path,
+      secret,
+      method === "GET" ? { method, body: undefined } : { method },
+    );
+    assert.equal(res.status, 404, `${method} ${path}`);
+    await res.text();
+  }
   assert.equal(google.requests.length, 0);
 });
 
@@ -491,4 +506,37 @@ test("with GEMINI_API_KEY: /google/ swaps x-goog-api-key for the operator's key,
   assert.equal(relayed.status, 503);
   await relayed.text();
   assert.equal(google.requests.length, 1);
+});
+
+test("with GEMINI_API_KEY: only agy's calls go on, not files, cached contents or another method", async (t) => {
+  const { url, run, google } = await relay(t, { credential: "AIza-operator-key", login: null });
+  const secret = run();
+  const send = (method, path) =>
+    fetch(`${url}/google/${path}`, {
+      method,
+      headers: { "x-goog-api-key": secret },
+      body: method === "POST" ? "{}" : undefined,
+    }).then(async (r) => (await r.text(), r.status));
+  for (const [method, path] of [
+    ["GET", "v1beta/files"],
+    ["POST", "v1beta/files"],
+    ["POST", "v1beta/cachedContents"],
+    ["POST", "v1beta/tunedModels"],
+    ["POST", "v1beta/models/gemini-3.8-flash:batchGenerateContent"],
+    ["DELETE", "v1beta/models/gemini-3.8-flash"],
+    ["GET", "v1beta/models/gemini-3.8-flash:generateContent"],
+  ]) {
+    assert.equal(await send(method, path), 404, `${method} ${path}`);
+  }
+  assert.equal(google.requests.length, 0);
+  for (const [method, path] of [
+    ["POST", "v1beta/models/gemini-3.8-flash:generateContent"],
+    ["POST", "v1beta/models/gemini-3.8-flash:streamGenerateContent?alt=sse"],
+    ["POST", "v1/models/gemini-3.8-flash:countTokens"],
+    ["GET", "v1beta/models?pageSize=50"],
+    ["GET", "v1beta/models/gemini-3.8-flash"],
+  ]) {
+    assert.equal(await send(method, path), 200, `${method} ${path}`);
+  }
+  assert.equal(google.requests.length, 5);
 });

@@ -7,6 +7,13 @@ import { createOpenAiProxy } from "../listener/openai.mjs";
 import { credentialFailure } from "../listener/upstream.mjs";
 import { serve } from "./helpers.mjs";
 
+// A run of Codex's, on its provider as runs.mjs registers it.
+function codexRun(broker, provider = "openai") {
+  const secret = broker.register("org/repo");
+  broker.provide(secret, provider);
+  return secret;
+}
+
 // A fake OpenAI that records each request and streams two events, the second one only once
 // the test lets it (`release`).
 async function fakeOpenAi(t) {
@@ -45,7 +52,7 @@ const ask = (url, headers) =>
 
 test("a run's secret is swapped for the key, and the answer streams back", async (t) => {
   const { url, broker, upstream } = await serveProxy(t);
-  const secret = broker.register("org/repo");
+  const secret = codexRun(broker);
   const res = await ask(url, { authorization: `Bearer ${secret}` });
   assert.equal(res.status, 200);
   assert.equal(res.headers.get("x-request-id"), "req_1");
@@ -71,20 +78,21 @@ test("a run's secret is swapped for the key, and the answer streams back", async
 test("the operator's OPENAI_BASE_URL keeps its own path", async (t) => {
   const { url, broker, upstream } = await serveProxy(t, { path: "/openai/v1/" });
   upstream.release();
-  const res = await ask(url, { authorization: `Bearer ${broker.register("org/repo")}` });
+  const res = await ask(url, { authorization: `Bearer ${codexRun(broker)}` });
   assert.equal(res.status, 200);
   await res.text();
   assert.equal(upstream.requests[0].url, "/openai/v1/responses");
 });
 
 // A raw request line, since fetch() would normalise these paths before sending them.
-const raw = (url, path, secret) =>
+const raw = (url, path, secret, method = "POST") =>
   new Promise((resolve, reject) => {
     const headers = { authorization: `Bearer ${secret}` };
-    const req = request(`${url}/`, { path, method: "POST", headers });
+    const req = request(`${url}/`, { path, method, headers });
     req.on("response", (res) => res.resume().on("end", () => resolve(res.statusCode)));
     req.on("error", reject);
-    req.end("{}");
+    // Only POST has a body: Node frames none for the others.
+    req.end(method === "POST" ? "{}" : undefined);
   });
 
 test("only paths under the base URL go on: the key never reaches another host", async (t) => {
@@ -93,7 +101,7 @@ test("only paths under the base URL go on: the key never reaches another host", 
   const host = new URL(elsewhere.url).host;
   const { url, broker, upstream } = await serveProxy(t);
   upstream.release();
-  const secret = broker.register("org/repo");
+  const secret = codexRun(broker);
   for (const path of [
     `/openai///${host}/steal`,
     `/openai//${host}/steal`,
@@ -114,9 +122,50 @@ test("only paths under the base URL go on: the key never reaches another host", 
   assert.equal(upstream.requests[0].url, "/v1/responses/compact?x=1");
 });
 
+test("only Codex's calls go on: not files, stored responses, batches or another method", async (t) => {
+  const { url, broker, upstream } = await serveProxy(t);
+  upstream.release();
+  const notes = [];
+  const secret = broker.register("org/repo");
+  broker.provide(secret, "openai", (message) => notes.push(message));
+  for (const [method, path] of [
+    ["GET", "/openai/files"],
+    ["GET", "/openai/files/file-1/content"],
+    ["GET", "/openai/responses/resp_1"],
+    ["DELETE", "/openai/responses/resp_1"],
+    ["POST", "/openai/batches"],
+    ["POST", "/openai/fine_tuning/jobs"],
+    ["GET", "/openai/vector_stores"],
+    ["GET", "/openai/responses"],
+  ]) {
+    assert.equal(await raw(url, path, secret, method), 404, `${method} ${path}`);
+  }
+  assert.equal(upstream.requests.length, 0);
+  assert.equal(notes.length, 8);
+  assert.match(notes[0], /refused the agent's call GET \/openai\/files: not an OpenAI API path/);
+  for (const [method, path] of [
+    ["POST", "/openai/responses"],
+    ["POST", "/openai/responses/compact"],
+    ["GET", "/openai/models?client_version=0.162.1"],
+  ]) {
+    assert.equal(await raw(url, path, secret, method), 200, `${method} ${path}`);
+  }
+  assert.equal(upstream.requests.length, 3);
+});
+
+test("another agent's run, or one without a provider, gets no OpenAI key", async (t) => {
+  const { url, broker, upstream } = await serveProxy(t);
+  for (const provider of ["anthropic", "openrouter", "google", null]) {
+    const res = await ask(url, { authorization: `Bearer ${codexRun(broker, provider)}` });
+    assert.equal(res.status, 503, String(provider));
+    assert.match((await res.json()).error.message, /not a run of Codex/);
+  }
+  assert.equal(upstream.requests.length, 0);
+});
+
 test("no secret, a wrong one or a finished run's: refused, and OpenAI never asked", async (t) => {
   const { url, broker, upstream } = await serveProxy(t);
-  const secret = broker.register("org/repo");
+  const secret = codexRun(broker);
   broker.revoke(secret);
   for (const headers of [{}, { authorization: "Bearer guess" }, { authorization: secret }]) {
     const res = await ask(url, headers);
@@ -130,7 +179,7 @@ test("no secret, a wrong one or a finished run's: refused, and OpenAI never aske
 
 test("without OPENAI_API_KEY, a live run gets an error rather than an empty header", async (t) => {
   const { url, broker, upstream } = await serveProxy(t, { credential: null });
-  const res = await ask(url, { authorization: `Bearer ${broker.register("org/repo")}` });
+  const res = await ask(url, { authorization: `Bearer ${codexRun(broker)}` });
   assert.equal(res.status, 503);
   assert.equal(upstream.requests.length, 0);
 });
@@ -139,7 +188,7 @@ test("OpenAI out of reach: a 502 in OpenAI's error shape", async (t) => {
   const broker = createBroker({ app: () => null });
   const proxy = createOpenAiProxy({ broker, credential: "k", upstream: "http://127.0.0.1:1" });
   const { url } = await serve(t, (req, res) => proxy.handle(req, res));
-  const res = await ask(url, { authorization: `Bearer ${broker.register("org/repo")}` });
+  const res = await ask(url, { authorization: `Bearer ${codexRun(broker)}` });
   assert.equal(res.status, 502);
   assert.match((await res.json()).error.message, /OpenAI can't be reached/);
 });
@@ -167,7 +216,7 @@ test("a plan's login: the call goes to ChatGPT's Codex backend with its headers"
   };
   const { url, broker, upstream } = await servePlan(t, login);
   upstream.release();
-  const secret = broker.register("org/repo");
+  const secret = codexRun(broker);
   const res = await ask(url, {
     authorization: `Bearer ${secret}`,
     // The sandbox can't pick another workspace of the account.
@@ -198,7 +247,7 @@ test("a plan's login the backend refuses is marked, for a refresh before the nex
   const broker = createBroker({ app: () => null });
   const proxy = createOpenAiProxy({ broker, login, chatgptUrl: `${upstreamUrl}/codex` });
   const { url } = await serve(t, (req, res) => proxy.handle(req, res));
-  const secret = broker.register("org/repo");
+  const secret = codexRun(broker);
   const res = await ask(url, { authorization: `Bearer ${secret}` });
   assert.equal(res.status, 401);
   assert.deepEqual(refused, ["Bearer plan-access"]);
@@ -216,7 +265,7 @@ test("a plan's login that can't be used: a 503, and its status for fallbacks", a
     secrets: () => [],
   };
   const { url, broker, upstream } = await servePlan(t, login);
-  const secret = broker.register("org/repo");
+  const secret = codexRun(broker);
   const res = await ask(url, { authorization: `Bearer ${secret}` });
   assert.equal(res.status, 503);
   // A fixed text: the error's own message may quote a credential file (#242).

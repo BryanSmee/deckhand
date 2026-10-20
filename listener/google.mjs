@@ -17,11 +17,21 @@ export const GEMINI_URL = "https://generativelanguage.googleapis.com";
 // Gemini's API under /v1 or /v1beta (models/<name>:<method>), nothing else (createApiProxy()).
 const GEMINI_PATH = /^\/google\/(v1(?:beta)?(?:\/[A-Za-z0-9_][A-Za-z0-9._-]*)+(?::[A-Za-z]+)?)$/;
 
-// The paths each relayed host serves to `agy` (checked against agy 1.4.0), nothing else: the
+// What `agy` calls there: generating, counting tokens and the model list. Not files, cached
+// contents, tuned models or batches, which the operator's key opens too.
+const GEMINI_ROUTES = [
+  [
+    "POST",
+    /^v1(?:beta)?\/models\/[A-Za-z0-9._-]+:(?:generateContent|streamGenerateContent|countTokens)$/,
+  ],
+  ["GET", /^v1(?:beta)?\/models(?:\/[A-Za-z0-9._-]+)?$/],
+];
+
+// The calls each relayed host serves to `agy` (checked against agy 1.4.0), nothing else: the
 // plan's token opens more than the CLI's API, and a sandbox mustn't reach the rest with it.
 export const RELAYED_PATHS = {
-  "daily-cloudcode-pa.googleapis.com": "v1internal:[A-Za-z]+",
-  "www.googleapis.com": "oauth2/v2/userinfo",
+  "daily-cloudcode-pa.googleapis.com": ["POST", "v1internal:[A-Za-z]+"],
+  "www.googleapis.com": ["GET", "oauth2/v2/userinfo"],
 };
 
 // Errors in Google's shape, so `agy` shows them as such.
@@ -30,6 +40,7 @@ const ERRORS = {
   auth: "UNAUTHENTICATED",
   unavailable: "UNAVAILABLE",
   notFound: "NOT_FOUND",
+  busy: "RESOURCE_EXHAUSTED",
 };
 
 export function createGoogleRelay({
@@ -48,6 +59,7 @@ export function createGoogleRelay({
   const gemini = createApiProxy({
     broker,
     pathRe: GEMINI_PATH,
+    routes: GEMINI_ROUTES,
     errorShape: ERRORS,
     notApi: "not a Gemini API path",
     secretOf: (req) => req.headers["x-goog-api-key"],
@@ -66,11 +78,12 @@ export function createGoogleRelay({
 
   const proxies = [
     { prefix: "/google/", handle: gemini.handle },
-    ...Object.entries(RELAYED_PATHS).map(([host, path]) => {
+    ...Object.entries(RELAYED_PATHS).map(([host, [method, path]]) => {
       const prefix = `/relay/${host}/`;
       const { handle } = createApiProxy({
         broker,
         pathRe: new RegExp(`^${prefix.replaceAll(".", "\\.")}(${path})$`),
+        routes: [[method, /^/]],
         errorShape: ERRORS,
         notApi: `not a path the Antigravity CLI calls on ${host}`,
         secretOf: (req) => {

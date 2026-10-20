@@ -8,6 +8,13 @@ import { AGENT_SECRETS } from "../listener/agents/index.mjs";
 import { operatorSecrets, redact } from "../listener/secrets.mjs";
 import { serve } from "./helpers.mjs";
 
+// A run of Claude Code's, on its provider as runs.mjs registers it.
+function claudeRun(broker, provider = "anthropic") {
+  const secret = broker.register("org/repo");
+  broker.provide(secret, provider);
+  return secret;
+}
+
 // A fake Anthropic that records each request and streams two events, the second one only
 // once the test lets it (`release`), so streaming shows: the first arrives before.
 async function fakeAnthropic(t) {
@@ -82,7 +89,7 @@ test("a plan's token is warned about at start, an API key or a gateway's token i
 
 test("an OAuth run's secret is swapped for the token, and the answer streams back", async (t) => {
   const { url, broker, upstream } = await serveProxy(t);
-  const secret = broker.register("org/repo");
+  const secret = claudeRun(broker);
   const res = await ask(url, {
     authorization: `Bearer ${secret}`,
     "anthropic-beta": "claude-code-20250219,oauth-2025-04-20",
@@ -116,7 +123,7 @@ test("an API key run's secret is swapped for the key", async (t) => {
     credential: "sk-ant-api03-real",
   });
   upstream.release();
-  const secret = broker.register("org/repo");
+  const secret = claudeRun(broker);
   const res = await ask(url, { "x-api-key": secret });
   assert.equal(res.status, 200);
   await res.text();
@@ -135,7 +142,7 @@ test("a gateway's token goes as a bearer, under the gateway's own path", async (
     upstream: `${upstream.url}/api`,
   });
   const { url } = await serve(t, (req, res) => proxy.handle(req, res));
-  const res = await ask(url, { authorization: `Bearer ${broker.register("org/repo")}` });
+  const res = await ask(url, { authorization: `Bearer ${claudeRun(broker)}` });
   assert.equal(res.status, 200);
   await res.text();
   const [sent] = upstream.requests;
@@ -145,12 +152,13 @@ test("a gateway's token goes as a bearer, under the gateway's own path", async (
 });
 
 // A raw request line, since fetch() would normalise these paths before sending them.
-const raw = (url, path, secret) =>
+const raw = (url, path, secret, method = "POST") =>
   new Promise((resolve, reject) => {
-    const req = request(`${url}/`, { path, method: "POST", headers: { "x-api-key": secret } });
+    const req = request(`${url}/`, { path, method, headers: { "x-api-key": secret } });
     req.on("response", (res) => res.resume().on("end", () => resolve(res.statusCode)));
     req.on("error", reject);
-    req.end("{}");
+    // Only POST has a body: Node frames none for the others.
+    req.end(method === "POST" ? "{}" : undefined);
   });
 
 test("only Anthropic's /v1 paths go on: the credential never reaches another host", async (t) => {
@@ -161,7 +169,7 @@ test("only Anthropic's /v1 paths go on: the credential never reaches another hos
     name: "ANTHROPIC_API_KEY",
     credential: "sk-ant-api03-real",
   });
-  const secret = broker.register("org/repo");
+  const secret = claudeRun(broker);
   for (const path of [
     `/anthropic///${host}/steal`,
     `/anthropic//${host}/steal`,
@@ -179,9 +187,57 @@ test("only Anthropic's /v1 paths go on: the credential never reaches another hos
   assert.equal(upstream.requests.length, 0);
 });
 
+test("only Claude Code's calls go on: not files, batches or another method", async (t) => {
+  const { url, broker, upstream } = await serveProxy(t, {
+    name: "ANTHROPIC_API_KEY",
+    credential: "sk-ant-api03-real",
+  });
+  upstream.release();
+  const notes = [];
+  const secret = broker.register("org/repo");
+  broker.provide(secret, "anthropic", (message) => notes.push(message));
+  for (const [method, path] of [
+    ["GET", "/anthropic/v1/files"],
+    ["GET", "/anthropic/v1/files/file_1/content"],
+    ["POST", "/anthropic/v1/messages/batches"],
+    ["GET", "/anthropic/v1/messages"],
+    ["DELETE", "/anthropic/v1/models/claude-opus-5-5"],
+    ["POST", "/anthropic/v1/organizations/api_keys"],
+  ]) {
+    assert.equal(await raw(url, path, secret, method), 404, `${method} ${path}`);
+  }
+  assert.equal(upstream.requests.length, 0);
+  // Each refusal is a line in the run's log, and the reply's last failed call.
+  assert.equal(notes.length, 6);
+  assert.match(
+    notes[0],
+    /refused the agent's call GET \/anthropic\/v1\/files: not an Anthropic API path/,
+  );
+  assert.equal(broker.runOf(secret).apiError, "not an Anthropic API path");
+  for (const [method, path] of [
+    ["POST", "/anthropic/v1/messages?beta=true"],
+    ["POST", "/anthropic/v1/messages/count_tokens?beta=true"],
+    ["GET", "/anthropic/v1/models?limit=100"],
+    ["GET", "/anthropic/v1/models/claude-opus-5-5"],
+  ]) {
+    assert.equal(await raw(url, path, secret, method), 200, `${method} ${path}`);
+  }
+  assert.equal(upstream.requests.length, 4);
+});
+
+test("another agent's run, or one without a provider, gets no Claude credential", async (t) => {
+  const { url, broker, upstream } = await serveProxy(t);
+  for (const provider of ["openai", "google", null]) {
+    const res = await ask(url, { authorization: `Bearer ${claudeRun(broker, provider)}` });
+    assert.equal(res.status, 503, String(provider));
+    assert.match((await res.json()).error.message, /not a run of Claude Code/);
+  }
+  assert.equal(upstream.requests.length, 0);
+});
+
 test("no secret, a wrong one or a finished run's: refused, and Anthropic never asked", async (t) => {
   const { url, broker, upstream } = await serveProxy(t);
-  const secret = broker.register("org/repo");
+  const secret = claudeRun(broker);
   broker.revoke(secret);
   for (const headers of [{}, { authorization: "Bearer guess" }, { "x-api-key": secret }]) {
     const res = await ask(url, headers);
@@ -193,7 +249,7 @@ test("no secret, a wrong one or a finished run's: refused, and Anthropic never a
 
 test("without a credential set, a live run gets an error rather than an empty header", async (t) => {
   const { url, broker, upstream } = await serveProxy(t, { name: null, credential: undefined });
-  const res = await ask(url, { authorization: `Bearer ${broker.register("org/repo")}` });
+  const res = await ask(url, { authorization: `Bearer ${claudeRun(broker)}` });
   assert.equal(res.status, 503);
   assert.equal(upstream.requests.length, 0);
 });
@@ -207,7 +263,7 @@ test("Anthropic out of reach: a 502 in Anthropic's error shape", async (t) => {
     upstream: "http://127.0.0.1:1",
   });
   const { url } = await serve(t, (req, res) => proxy.handle(req, res));
-  const res = await ask(url, { "x-api-key": broker.register("org/repo") });
+  const res = await ask(url, { "x-api-key": claudeRun(broker) });
   assert.equal(res.status, 502);
   assert.equal((await res.json()).type, "error");
 });
@@ -255,7 +311,7 @@ test("a run on another provider goes to its URL with its key; the provider's sta
   });
   const { url } = await serve(t, (req, res) => proxy.handle(req, res));
 
-  const secret = broker.register("org/repo");
+  const secret = claudeRun(broker);
   broker.provide(secret, "openrouter");
   const res = await ask(url, { authorization: `Bearer ${secret}` });
   assert.equal(res.status, 200);
@@ -266,7 +322,7 @@ test("a run on another provider goes to its URL with its key; the provider's sta
   assert.equal(broker.runOf(secret).apiStatus, 200);
 
   // A provider without its credential answers so, and Anthropic gets nothing either.
-  const other = broker.register("org/repo");
+  const other = claudeRun(broker);
   broker.provide(other, "empty");
   const refused = await ask(url, { authorization: `Bearer ${other}` });
   assert.equal(refused.status, 503);
@@ -283,7 +339,7 @@ test("a provider that can't be reached counts as a 502", async (t) => {
     upstream: "http://127.0.0.1:1",
   });
   const { url } = await serve(t, (req, res) => proxy.handle(req, res));
-  const secret = broker.register("org/repo");
+  const secret = claudeRun(broker);
   const res = await ask(url, { "x-api-key": secret });
   assert.equal(res.status, 502);
   assert.equal(broker.runOf(secret).apiStatus, 502);
