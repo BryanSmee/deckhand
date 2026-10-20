@@ -493,6 +493,33 @@ export function createRuns(ctx) {
     record.questions = null;
   }
 
+  // The end of a run whose output passed RUN_LOG_MAX_MB (overflow()): failed, no fallback (its
+  // provider didn't fail). An answer it gave before is posted, which would be lost otherwise;
+  // comments delivered and not answered go to the next run, as after a crash.
+  async function endOverflowed(task) {
+    const live = task.live;
+    const { key, record } = live;
+    removeEmptyShots(live);
+    if (live.unanswered.length) task.pending.unshift(...live.unanswered);
+    const why = overflowMessage(live);
+    if (!live.replied) {
+      const ran = live.result ?? { durationMs: live.overflow.at - record.startedAt };
+      const footer = replyFooter(record, ran, "", live.later);
+      const name = agentOf(task).displayName;
+      const answer = live.answered && outcome(live.result) !== "error" && live.result.text;
+      const text = answer
+        ? `${answer}\n\n${name} was stopped as failed after its answer: ${why}.\n\n${footer}`
+        : `${name} was stopped as failed: ${why}.\n\n${footer}`;
+      await ctx.answer(target(task, live.replyTo), hidden(live, text));
+      live.replied = true;
+      ctx.saveLive(task);
+    }
+    log(`${key}: done (error, its output past RUN_LOG_MAX_MB)`);
+    record.status = "error";
+    record.summary = `Stopped as failed: ${why}`;
+    record.questions = null;
+  }
+
   function removeEmptyShots(live) {
     const shots = live.shots && join(ctx.shotsDir, live.shots);
     if (shots && existsSync(shots) && !readdirSync(shots).length) rmdirSync(shots);
@@ -523,12 +550,7 @@ export function createRuns(ctx) {
       // Stopped on purpose: whatever the exit looked like, not an error.
       if (live.cancelled) return await endCancelled(task);
       if (error) throw error;
-      if (live.overflow) {
-        record.summary = `Stopped as failed: ${overflowMessage(live)}`;
-        throw new RunError(
-          `${agentOf(task).displayName} was stopped as failed: ${overflowMessage(live)}.`,
-        );
-      }
+      if (live.overflow) return await endOverflowed(task);
       // The agent exited before answering a delivered comment (a crash): the next run gets it.
       if (live.unanswered.length) task.pending.unshift(...live.unanswered);
       removeEmptyShots(live);

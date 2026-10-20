@@ -246,3 +246,32 @@ test("a run whose output passes RUN_LOG_MAX_MB: stopped, failed, a note in its l
   assert.ok(logs.some((l) => /: Stopped as failed: its output passed/.test(l)));
   assert.equal(ctx.running, 0);
 });
+
+test("a run that answered, then passed RUN_LOG_MAX_MB: its answer posted, as failed", async (t) => {
+  const { runner, task, answers, following } = setup(t, {
+    graceMs: 5000,
+    config: { runLogMax: 1000 },
+  });
+  const live = task.live;
+  runner.out(result("I filed #195."));
+  assert.equal(live.answered, true);
+  // A background task's output, without end.
+  for (let i = 0; i < 20; i++) runner.err("x".repeat(99));
+  await following;
+  assert.equal(runner.kills, 1);
+  assert.equal(live.record.status, "error");
+  assert.equal(answers.length, 1);
+  assert.match(
+    answers[0],
+    /^I filed #195\.\n\nClaude was stopped as failed after its answer: its output passed RUN_LOG_MAX_MB \(0 MB\), the rest of it not kept\.\n\n<sub>🤖 Claude/,
+  );
+});
+
+test("a run that passed RUN_LOG_MAX_MB with a comment unanswered: the next run gets it", async (t) => {
+  const { runner, task, following } = setup(t, { config: { runLogMax: 1000 } });
+  const comment = { id: "c1", text: "And the tests?" };
+  task.live.unanswered = [comment];
+  for (let i = 0; i < 20; i++) runner.err("x".repeat(99));
+  await following;
+  assert.deepEqual(task.pending, [comment]);
+});

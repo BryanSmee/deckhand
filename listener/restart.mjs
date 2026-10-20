@@ -181,9 +181,9 @@ export function createRestart(ctx) {
   // Follows each restored run's sandbox to its end, as if the listener had never stopped. A
   // run whose sandbox never started gives its comments back to the queue, unless it was
   // cancelled or its output passed RUN_LOG_MAX_MB: it ends as such (runs.mjs), its sandbox
-  // stopped again if it runs. Sandboxes
-  // nobody knows about any more are told to finish (their next run waits for them). First, this
-  // listener joins the running sandboxes' networks: a new container isn't on them.
+  // stopped again if it runs. Sandboxes nobody knows about any more are told to finish (their
+  // next run waits for them). First, this listener joins the running sandboxes' networks: a
+  // new container isn't on them.
   async function reattach(restored) {
     await relink();
     const sandboxes = await listSandboxes();

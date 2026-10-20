@@ -180,7 +180,7 @@ export function createDockerRunner({
           try {
             each(line);
           } catch (error) {
-            log(`docker logs ${name}: ${error.message}`);
+            log(`docker logs ${name}: ${error.stack ?? error}`);
           }
         };
         // A chunk is at most the pipe's buffer: `rest` stays near MAX_LINE.

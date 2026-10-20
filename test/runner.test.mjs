@@ -662,7 +662,8 @@ test("follow: a handler that throws loses its line, not the listener", async () 
   child.emit("close", 0);
   await done;
   assert.deepEqual(out, ["good"]);
-  assert.deepEqual(logs, ["docker logs x: ENOSPC: no space left on device"]);
+  assert.equal(logs.length, 1);
+  assert.match(logs[0], /^docker logs x: Error: ENOSPC: no space left on device\n    at /);
 });
 
 // --- The container engine (engine.mjs) -------------------------------------------------

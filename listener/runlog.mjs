@@ -347,12 +347,21 @@ function agentEntry(e, agent) {
   return null;
 }
 
+// The most of a line that isn't JSON the dashboard gets: setup output, or an agent's event cut
+// at follow()'s MAX_LINE (a screenshot read in a tool's result, say), which no longer parses.
+const RAW_MAX = 4000;
+
+function clipRaw(line) {
+  if (line.length <= RAW_MAX) return line;
+  return `${line.slice(0, RAW_MAX)}… (${Math.round(line.length / 1024)} KB in all)`;
+}
+
 // One log line (the listener's, the agent's, or setup output) → entries for the dashboard.
 // `agent`: the run's (agents/), Claude Code for logs from before agents had names.
 export function format(line, agent = agentFor()) {
   if (!line.trim()) return [];
   const e = parse(line);
-  if (!e) return [{ kind: "raw", text: line }];
+  if (!e) return [{ kind: "raw", text: clipRaw(line) }];
   if (e.type === "listener") return listenerEntries(e, agent);
   return agent.normalize(line).flatMap((event) => agentEntry(event, agent) ?? []);
 }

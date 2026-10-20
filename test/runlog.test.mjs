@@ -463,3 +463,11 @@ test("runs: a log that can't be read is left out, logged, and the others listed"
   );
   assert.match(logs[0], /^Listing the run of deckhand-org-repo-9-1000\.log: /);
 });
+
+test("format: a line that isn't JSON is clipped, an agent's event cut at MAX_LINE too", () => {
+  assert.deepEqual(format("npm warn deprecated"), [{ kind: "raw", text: "npm warn deprecated" }]);
+  const cut = `{"type":"user","message":"${"a".repeat(1024 * 1024)}`;
+  const [entry] = format(cut);
+  assert.equal(entry.kind, "raw");
+  assert.equal(entry.text, `${cut.slice(0, 4000)}… (1024 KB in all)`);
+});
