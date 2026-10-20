@@ -42,11 +42,11 @@ export function createBroker({
   random = () => randomBytes(32).toString("hex"),
   log = () => {},
 }) {
-  // hash(secret) → { repo, extra, push, branches, provider, apiStatus, apiError, tokens }:
-  // `provider`, where the listener sends its agent's API calls (anthropic.mjs; null: the
-  // agent's default), `apiStatus`, the last status that provider answered, and `apiError`, why
-  // the last call the listener refused or the provider failed did (upstream.mjs): what an
-  // error reply adds.
+  // hash(secret) → { repo, extra, push, branches, provider, note, apiStatus, apiError, tokens }:
+  // `provider`, where the listener sends its agent's API calls (anthropic.mjs; null: nowhere,
+  // no credential), `note`, a line in its log (provide()), `apiStatus`, the last status that
+  // provider answered, and `apiError`, why the last call the listener refused or the provider
+  // failed did (upstream.mjs): what an error reply adds.
   // `tokens`: the installation tokens it got, which its output must not publish (runs.mjs).
   const runs = new Map();
 
@@ -70,10 +70,11 @@ export function createBroker({
     return secret;
   }
 
-  // The provider of the run's agent (agents/), once its settings are read.
-  function provide(secret, provider) {
+  // The provider of the run's agent (agents/), once its settings are read. `note(message)`:
+  // a line in the run's log, for the API calls the listener refused it (upstream.mjs).
+  function provide(secret, provider, note = null) {
     const run = runOf(secret);
-    if (run) run.provider = provider;
+    if (run) Object.assign(run, { provider, note });
   }
 
   // The branches a run may push and whose pull requests it may mark ready: names, or

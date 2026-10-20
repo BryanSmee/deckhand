@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { agentFor } from "./agents/index.mjs";
 import { taskKey } from "./events.mjs";
 import { permissionsFor } from "./modes.mjs";
-import { addRun, openLog } from "./runlog.mjs";
+import { addRun, openLog, writeEvent } from "./runlog.mjs";
 import { readJson, writeJsonAtomic } from "./store.mjs";
 import { newTask, noLongerAllowed } from "./tasks.mjs";
 
@@ -173,8 +173,14 @@ export function createRestart(ctx) {
     });
     // State saved before runs had branches: none, rather than any.
     ctx.broker.allow(saved.secret, saved.branches ?? []);
-    // Its agent's calls go on to the provider it started on (a fallback's).
-    ctx.broker.provide(saved.secret, record.provider ?? null);
+    const { logFile } = task.live;
+    // Its agent's calls go on to the provider it started on (a fallback's), or its agent's own
+    // when the record has none: never another agent's credential.
+    ctx.broker.provide(
+      saved.secret,
+      record.provider ?? agentFor(record.agent).defaultProvider,
+      (message) => writeEvent(logFile, "note", { message }),
+    );
     return task;
   }
 

@@ -15,12 +15,21 @@ export const OPENAI_CREDENTIALS = ["OPENAI_API_KEY", "CODEX_AUTH_FILE"];
 // Paths under the provider's base URL, nothing else (createApiProxy()).
 const API_PATH = /^\/openai\/([A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+)*)$/;
 
+// What Codex calls there, on the API as on ChatGPT's Codex backend: its responses, their
+// compaction and the model list. Not files, batches, stored responses or vector stores, which
+// the operator's key opens too.
+const ROUTES = [
+  ["POST", /^responses(?:\/compact)?$/],
+  ["GET", /^models(?:\/[A-Za-z0-9_-]+)?$/],
+];
+
 // Errors in OpenAI's shape, so Codex shows them as such.
 const ERRORS = {
   body: (type, message) => ({ error: { type, message } }),
   auth: "invalid_request_error",
   unavailable: "server_error",
   notFound: "not_found",
+  busy: "rate_limit_exceeded",
 };
 
 export function createOpenAiProxy({
@@ -37,16 +46,20 @@ export function createOpenAiProxy({
   const { handle } = createApiProxy({
     broker,
     pathRe: API_PATH,
+    routes: ROUTES,
     errorShape: ERRORS,
     notApi: "not an OpenAI API path",
     secretOf: (req) => {
       const [scheme, secret] = (req.headers.authorization ?? "").split(" ");
       return scheme === "Bearer" ? secret : undefined;
     },
-    routeOf: () =>
-      credential || login
-        ? { base, what: "OpenAI" }
-        : { missing: "the operator set no OPENAI_API_KEY or CODEX_AUTH_FILE" },
+    // Only Codex's runs: another agent's secret gets no key.
+    routeOf: (run) =>
+      run.provider !== "openai"
+        ? { missing: "not a run of Codex" }
+        : credential || login
+          ? { base, what: "OpenAI" }
+          : { missing: "the operator set no OPENAI_API_KEY or CODEX_AUTH_FILE" },
     // The plan's headers are the listener's to set, not the sandbox's.
     drop: ["authorization", "chatgpt-account-id", "x-openai-fedramp"],
     // A spent login refuses the call with its status: a bad credential, for a fallback

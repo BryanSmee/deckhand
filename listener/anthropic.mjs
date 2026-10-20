@@ -26,12 +26,20 @@ function secretOf(req) {
 // Anthropic's API under /v1, nothing else (createApiProxy()).
 const API_PATH = /^\/anthropic\/(v1(?:\/[A-Za-z0-9_-]+)+)$/;
 
+// What Claude Code calls there: its messages, their token counts and the model list. Not files,
+// batches or the admin API, which the operator's credential opens too.
+const ROUTES = [
+  ["POST", /^v1\/messages(?:\/count_tokens)?$/],
+  ["GET", /^v1\/models(?:\/[A-Za-z0-9_-]+)?$/],
+];
+
 // Errors in Anthropic's shape, so Claude Code shows them as such.
 const ERRORS = {
   body: (type, message) => ({ type: "error", error: { type, message } }),
   auth: "authentication_error",
   unavailable: "api_error",
   notFound: "not_found_error",
+  busy: "rate_limit_error",
 };
 
 export function createAnthropicProxy({
@@ -45,30 +53,36 @@ export function createAnthropicProxy({
   log = () => {},
 }) {
   const own = { name, credential, upstream };
-  // Anthropic (or the operator's gateway) unless the broker gives the run another provider.
-  const providerOf = (run) => (run.provider && run.provider !== "anthropic" ? run.provider : null);
-  const settingsOf = (run) => {
-    const provider = providerOf(run);
-    return provider ? (providers[provider] ?? {}) : own;
-  };
+  // Claude Code's runs only, each on its provider: Anthropic (or the operator's gateway), or
+  // one of `providers`. Another agent's run, or one whose provider isn't known (null), gets no
+  // credential.
+  const settingsOf = (run) =>
+    run.provider === "anthropic"
+      ? own
+      : Object.hasOwn(providers, run.provider ?? "")
+        ? providers[run.provider]
+        : null;
 
   return createApiProxy({
     broker,
     pathRe: API_PATH,
+    routes: ROUTES,
     errorShape: ERRORS,
     notApi: "not an Anthropic API path",
     secretOf,
     routeOf: (run) => {
-      const provider = providerOf(run);
-      const { name, credential, upstream } = settingsOf(run);
+      const settings = settingsOf(run);
+      if (!settings) return { missing: "not a run of Claude Code" };
+      const own = run.provider === "anthropic";
+      const { name, credential, upstream } = settings;
       if (!name || !credential) {
         return {
-          missing: provider
-            ? `the operator set no credential for ${provider}`
-            : "the operator set no Claude credential",
+          missing: own
+            ? "the operator set no Claude credential"
+            : `the operator set no credential for ${run.provider}`,
         };
       }
-      return { base: baseOf(upstream), what: provider ?? "Anthropic" };
+      return { base: baseOf(upstream), what: own ? "Anthropic" : run.provider };
     },
     drop: ["authorization", "x-api-key"],
     // In the header Claude Code sent the secret in.

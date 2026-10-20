@@ -180,7 +180,8 @@ Codex's `OPENAI_API_KEY` is kept out the same way (`listener/openai.mjs`): a san
 has `<broker>/openai` as its provider's base URL and the run's secret as its key, sent as
 `Authorization: Bearer`; the listener checks it, puts your key in its place and forwards the
 call to OpenAI (or the operator's `OPENAI_BASE_URL`), under its base path only: a path with
-`//host`, a scheme or `..` is refused, so the key can't be sent elsewhere. Both agents'
+`//host`, a scheme or `..` is refused, so the key can't be sent elsewhere, and only Codex's own
+calls go (see [What the API endpoints forward](#what-the-api-endpoints-forward)). Both agents'
 credentials are redacted
 from every run's log and reply, whichever agent ran.
 
@@ -211,7 +212,8 @@ The Antigravity CLI's `GEMINI_API_KEY` is kept out the same way (`listener/googl
 sandbox's `agy` has `<broker>/google` as `GOOGLE_GEMINI_BASE_URL`, `modelProvider: "gemini"`
 in its settings, and the run's secret as `GEMINI_API_KEY`, sent as `x-goog-api-key`; the
 listener checks it against the broker, puts your key in its place and forwards the call to
-Google (or the operator's `GEMINI_BASE_URL`), on `/v1/` and `/v1beta/` paths only.
+Google (or the operator's `GEMINI_BASE_URL`), for the model calls `agy` makes under `/v1/` and
+`/v1beta/` only (see [What the API endpoints forward](#what-the-api-endpoints-forward)).
 
 A Google AI plan's login (`AGY_AUTH_FILE`, `listener/antigravity-login.mjs`) is the token file
 `agy` writes when you sign in: an access token for about an hour, and a refresh token that
@@ -260,6 +262,39 @@ the run's secret as `ANTHROPIC_AUTH_TOKEN`, and the listener's Anthropic endpoin
 broker tells which provider the run is on, sends the call to `OPENROUTER_BASE_URL` with your
 key. A sandbox can't pick its provider: only the listener sets it, from `FALLBACKS`. The key is
 redacted like the others.
+
+### What the API endpoints forward
+
+A run's secret opens the operator's credential only for its own agent's calls. The
+credentials open far more (files, batches, stored responses, fine-tuning, an organisation's
+admin API), shared with every other run and with whatever else the operator uses them for, and
+a batch or a cached content would keep billing after the run's secret is revoked. So each
+endpoint forwards a fixed list of methods and paths, what its agent calls, and nothing else:
+
+| Endpoint                        | Runs                                                                               | Forwarded                                                                                                                                          |
+| ------------------------------- | ---------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/anthropic/` (`anthropic.mjs`) | Claude Code's, on `anthropic` or a provider the operator configured (`openrouter`) | `POST v1/messages`, `POST v1/messages/count_tokens`, `GET v1/models`, `GET v1/models/<id>`                                                         |
+| `/openai/` (`openai.mjs`)       | Codex's (`openai`)                                                                 | `POST responses`, `POST responses/compact`, `GET models`, `GET models/<id>`, under the API's base URL or ChatGPT's `backend-api/codex/`            |
+| `/google/` (`google.mjs`)       | the Antigravity CLI's (`google`)                                                   | `POST v1beta/models/<name>:generateContent`, `:streamGenerateContent`, `:countTokens`, `GET v1beta/models`, `GET v1beta/models/<name>` (`v1/` too) |
+| `/relay/<host>/` (`google.mjs`) | the Antigravity CLI's on a plan                                                    | `POST v1internal:<method>` on `daily-cloudcode-pa.googleapis.com`, `GET oauth2/v2/userinfo` on `www.googleapis.com`                                |
+
+- Anything else answers `404` in the provider's error shape, never reaching the provider, and
+  is a line in the run's log ("Deckhand refused the agent's call …"), redacted like the
+  sandbox's output: an agent version that needs another path shows up there. Each call is
+  noted once, and the first 20 only, then one line saying the rest aren't: a sandbox looping
+  on refused calls can't grow its log past `RUN_LOG_MAX_MB`, which the listener's own lines
+  don't count towards. When a new `CLAUDE_CODE_VERSION`, `CODEX_VERSION` or `AGY_VERSION`
+  needs another path, add it to the endpoint's list (`ROUTES`, `GEMINI_ROUTES`,
+  `RELAYED_PATHS`).
+- Each endpoint serves its agent's runs only, from the provider the listener gave the run
+  (`broker.provide()`): a Claude Code run's secret gets no OpenAI key, and a run without a
+  provider gets no credential at all. A run a restarted listener picks up whose saved record
+  names no provider gets its agent's default one.
+- A run has at most 16 calls in flight through all the endpoints together: the next one
+  answers `429` (agents retry those) until one ends. A call that gets no byte either way for 10
+  minutes is cut off: a stalled provider doesn't hold the listener, which every run shares.
+- So a provider's `401` on one of these paths, the only ones a run reaches, is what marks a
+  plan's token for a refresh: a sandbox can't force refreshes through some other path.
 
 ## Mounts
 

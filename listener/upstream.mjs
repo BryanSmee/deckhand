@@ -20,6 +20,32 @@ export function planWarning(name) {
   return `Warning: ${name} is ${PLANS[name]}. A subscription (Claude Pro/Max, a ChatGPT plan, Google AI Pro/Ultra) is usually licensed to one person. Serving a team, or repositories other people write to, may break your provider's terms: check them before you do. You are responsible for how your Deckhand uses your credential. For teams, use an API key.`;
 }
 
+// A call that gets no byte from the provider (or the agent) for this long is cut off.
+export const IDLE_MS = 10 * 60_000;
+// Calls one run may have in flight at once, through all of the listener's API endpoints.
+export const MAX_IN_FLIGHT = 16;
+// run (broker.mjs) → its calls in flight, shared by every endpoint.
+const inFlight = new WeakMap();
+// The refused calls a run's log and the listener's log note, each once and only so many: a
+// sandbox looping on one mustn't grow its log past RUN_LOG_MAX_MB (writeEvent() isn't capped).
+export const MAX_NOTED = 20;
+// run → the refused calls noted for it.
+const noted = new WeakMap();
+
+// Notes `call` once per run, and up to MAX_NOTED of them; then a line saying the rest aren't.
+function noteRefused(run, call, notApi, log, what) {
+  const seen = noted.get(run) ?? new Set();
+  noted.set(run, seen);
+  if (seen.has(call) || seen.size > MAX_NOTED) return;
+  seen.add(call);
+  if (seen.size > MAX_NOTED) {
+    run.note?.(`Deckhand refused more of the agent's calls: only the first ${MAX_NOTED} are noted`);
+    return;
+  }
+  run.note?.(`Deckhand refused the agent's call ${call}: ${notApi}`);
+  log(`${what}: refused ${call}`);
+}
+
 // Per connection, or the listener's own business: never forwarded either way.
 const HOP = new Set([
   "connection",
@@ -48,21 +74,52 @@ export function baseOf(upstream) {
 // `req` to `target` with `headers`, its answer back to `res`. `unreachable()` answers when the
 // provider can't be reached before anything was sent back. `answered(status)`: the provider's
 // status, 502 when it can't be reached (what a fallback reads, agents/ providerError()).
+// `idleMs`: how long the call may go without a byte either way before it is cut off, on
+// `clock`'s timers: a stalled provider doesn't hold a listener every run shares.
 export function forward(
   req,
   res,
-  { target, headers, unreachable, log, what, answered = () => {} },
+  {
+    target,
+    headers,
+    unreachable,
+    log,
+    what,
+    answered = () => {},
+    idleMs = IDLE_MS,
+    clock = globalThis,
+  },
 ) {
   const send = target.protocol === "https:" ? httpsRequest : httpRequest;
-  return new Promise((resolve) => {
+  return new Promise((done) => {
+    let timer = null;
+    let ended = false;
+    const resolve = () => {
+      ended = true;
+      clock.clearTimeout(timer);
+      req.off("data", idle);
+      done();
+    };
     const out = send(target, { method: req.method, headers }, (answer) => {
       answered(answer.statusCode);
       res.writeHead(answer.statusCode, forwarded(answer.headers));
       // Server-sent events: each chunk goes on as it arrives.
+      answer.on("data", idle);
       answer.pipe(res);
       answer.on("end", resolve);
       answer.on("error", () => (res.destroy(), resolve()));
     });
+    function idle() {
+      if (ended) return;
+      clock.clearTimeout(timer);
+      timer = clock.setTimeout(() => {
+        out.destroy(new Error(`no bytes for ${Math.round(idleMs / 1000)} s`));
+        // Already answering: the agent sees its stream end early, and may retry.
+        if (res.headersSent) (res.destroy(), resolve());
+      }, idleMs);
+    }
+    idle();
+    req.on("data", idle);
     out.on("error", (error) => {
       log(`${what}: ${req.method} ${target.pathname}: ${error.message}`);
       if (!res.headersSent) {
@@ -99,7 +156,10 @@ export function credentialFailure(what, error) {
 //   pathRe       the API paths a sandbox may call, the path under the base URL its first group:
 //                no "//host", "https://host", "\\host" or ".." that would send the credential to
 //                another host, or out of a base URL's path
-//   errorShape   { body(type, message), auth, unavailable, notFound }: errors in the
+//   routes       [method, RegExp] pairs: the calls the agent makes, that path matched whole.
+//                Anything else (files, batches, stored responses) is refused: the operator's
+//                credential opens more than the agent needs
+//   errorShape   { body(type, message), auth, unavailable, notFound, busy }: errors in the
 //                provider's shape and its types for each, so the agent shows them as such
 //   notApi       what a refused path says
 //   secretOf     req → the run's secret, from whichever header the agent sent it in
@@ -114,6 +174,7 @@ export function credentialFailure(what, error) {
 export function createApiProxy({
   broker, // broker.mjs: the run a secret belongs to
   pathRe,
+  routes,
   errorShape,
   notApi,
   secretOf,
@@ -123,6 +184,9 @@ export function createApiProxy({
   answered = () => {},
   secrets = () => [],
   log = () => {},
+  maxInFlight = MAX_IN_FLIGHT,
+  idleMs = IDLE_MS,
+  clock = globalThis,
 }) {
   const fail = (res, status, type, message) =>
     sendJson(res, errorShape.body(type, `Deckhand: ${message}`), status);
@@ -140,12 +204,37 @@ export function createApiProxy({
     const { base, what, missing } = routeOf(run);
     if (missing) return failRun(run, res, 503, errorShape.unavailable, missing);
     const path = pathRe.exec(req.url.split("?")[0])?.[1];
-    if (!path) return fail(res, 404, errorShape.notFound, notApi);
+    if (!path || !routes.some(([method, re]) => method === req.method && re.test(path))) {
+      // A newer agent that needs another path shows up in the run's log, not only as a 404.
+      // The path is the sandbox's to choose: without the run's secret or tokens, as its output.
+      const call = redact(`${req.method} ${req.url.split("?")[0]}`, [
+        secretOf(req),
+        ...run.tokens,
+        ...secrets(),
+      ]).slice(0, 200);
+      noteRefused(run, call, notApi, log, what);
+      // A provider's failure before it stays what the reply quotes: the note has this one.
+      run.apiError ??= notApi;
+      return fail(res, 404, errorShape.notFound, notApi);
+    }
     // /openai/responses?x=1 → <base>/responses?x=1
     const target = new URL(base.href + path + url.search);
     if (target.origin !== base.origin || !target.pathname.startsWith(base.pathname)) {
       return fail(res, 404, errorShape.notFound, notApi);
     }
+    const calls = inFlight.get(run) ?? 0;
+    if (calls >= maxInFlight) {
+      return fail(res, 429, errorShape.busy, `more than ${maxInFlight} calls at once`);
+    }
+    inFlight.set(run, calls + 1);
+    try {
+      await proxied(req, res, run, target, what);
+    } finally {
+      inFlight.set(run, inFlight.get(run) - 1);
+    }
+  }
+
+  async function proxied(req, res, run, target, what) {
     const headers = forwarded(req.headers, drop);
     try {
       Object.assign(headers, await authHeaders(run));
@@ -160,6 +249,8 @@ export function createApiProxy({
       unreachable: () => failRun(run, res, 502, errorShape.unavailable, `${what} can't be reached`),
       log,
       what,
+      idleMs,
+      clock,
       answered: (status) => {
         run.apiStatus = status;
         if (status >= 400) run.apiError = `${what} answered ${status}`;

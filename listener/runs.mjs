@@ -190,7 +190,7 @@ export function createRuns(ctx) {
   // The run's settings, agent, provider, model and effort (resolveEntry()), kept on its
   // record, and its first message.
   async function begin(task, items) {
-    const { key, mode, light, record } = task.live;
+    const { key, mode, light, record, logFile } = task.live;
     await makeRoom(task);
     // Fresh from the default branch: a config merged since the comment applies.
     const { settings, errors, warnings } = await ctx.repoSettings(task.repo, task.base);
@@ -218,7 +218,9 @@ export function createRuns(ctx) {
       model: chosen.model,
       effort: chosen.effort,
     });
-    ctx.broker.provide(task.live.secret, entry.provider);
+    ctx.broker.provide(task.live.secret, entry.provider, (message) =>
+      writeEvent(logFile, "note", { message }),
+    );
     const started =
       !fresh &&
       !chosen.takeOver &&
