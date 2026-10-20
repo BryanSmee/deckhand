@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import {
   DISCUSSION_PERMISSIONS,
@@ -149,6 +150,21 @@ test("prompts: onboarding lists what this Deckhand allows the repo", () => {
   assert.match(open, /`dockerfile` in `.deckhand.yaml`: allowed\n/);
   assert.match(text, /Models: work `opus` \(high effort\), brainstorms `sonnet` \(low\)/);
   assert.match(text, /## Reference: `.deckhand.yaml`/);
+});
+
+test("prompts: onboarding and the sandbox's rules point to Deckhand's own source", () => {
+  const text = promptFor(issue, { mode: "onboarding", settings, config, grant });
+  assert.match(
+    text,
+    /source, the version that runs here, is in `\/usr\/local\/share\/deckhand\/src`/,
+  );
+  assert.match(
+    text,
+    /tools against `sandbox\/Dockerfile`[^]*`caches` against `sandbox\/entrypoint\.sh`/,
+  );
+  assert.match(text, /as `deckhand:<path>:<line>`/);
+  const rules = readFileSync(new URL("../prompts/sandbox.md", import.meta.url), "utf8");
+  assert.match(rules, /`\/usr\/local\/share\/deckhand\/src`/);
 });
 
 test("prompts: a repo's mode, light or not, with its instructions", () => {
