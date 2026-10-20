@@ -122,6 +122,24 @@ comment on any issue starts the same conversation by hand, for repositories inst
 before, or skipped. The dashboard's **Repositories** page lists them and starts it with a
 button (see [the dashboard](#4-the-dashboard)).
 
+### Which repositories
+
+`ALLOWED_REPOS` names repositories as `owner/repo`, and `owner/*` allows every repository of
+that account or organization: `ALLOWED_REPOS=BryanSmee/*,MyOrg/api`. Names ignore case, and
+the owner is compared whole (`bryansmee/*` doesn't allow `BryanSmeeX/…`). Anything else
+(`*`, `*/*`, a bare `owner`, `own*/repo`, `owner/re*`) refuses to start, so a typo fails
+closed. With a wildcard:
+
+- a new repository of that account is allowed as soon as the App is installed on it, with no
+  edit or restart;
+- if the App is public, keep `ALLOWED_REPOS` set: empty, every account that installs the App
+  gets through (only `ALLOWED_USERS` start runs, but their repositories show on the
+  dashboard and their webhooks reach the listener);
+- remove the entry when the account is renamed or deleted: someone else could register its
+  name and install the App;
+- grants don't follow: a sandbox's hosts, mounts and limits still come from
+  `grants/default.yaml` and `grants/<owner>/<repo>.yaml`, one repository at a time.
+
 A repository can also declare inboxes in its `.deckhand.yaml`: an ideas issue and a bug
 reports issue, where every comment of an allowed user becomes a labelled GitHub issue (or an
 answer), and a GitHub Discussions category (for example "Ask Claude") where Claude answers
@@ -350,7 +368,7 @@ What every sandbox may reach and its limits aren't settings: they go in
 | Setting                                                                                           | `config.yaml` key                                                                                 | Default                                                                      | What                                                                                                                                                                                                                                   |
 | ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `ALLOWED_USERS`                                                                                   | `allowed_users`                                                                                   | none: required                                                               | GitHub logins that can start runs                                                                                                                                                                                                      |
-| `ALLOWED_REPOS`                                                                                   | `allowed_repos`                                                                                   | all where the App is installed                                               | narrows the repos (`owner/repo`, comma-separated in `.env`)                                                                                                                                                                            |
+| `ALLOWED_REPOS`                                                                                   | `allowed_repos`                                                                                   | all where the App is installed                                               | narrows the repos (`owner/repo`, or `owner/*` for every repo of an account, comma-separated in `.env`; see [Which repositories](#which-repositories))                                                                                  |
 | `CLAUDE_CODE_OAUTH_TOKEN` / `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN`                          | none: a secret, `.env` only                                                                       |                                                                              | Claude credential, added by the listener to the sandboxes' API calls (`ANTHROPIC_AUTH_TOKEN`: a gateway's)                                                                                                                             |
 | `ANTHROPIC_BASE_URL`                                                                              | `anthropic_base_url`                                                                              | `https://api.anthropic.com`                                                  | where the listener sends the sandboxes' API calls: a [gateway](#through-a-gateway), say                                                                                                                                                |
 | `ANTHROPIC_DEFAULT_OPUS_MODEL`, `ANTHROPIC_DEFAULT_SONNET_MODEL`, `ANTHROPIC_DEFAULT_HAIKU_MODEL` | `anthropic_default_opus_model`, `anthropic_default_sonnet_model`, `anthropic_default_haiku_model` | Claude Code's                                                                | the models `opus`, `sonnet` and `haiku` stand for in the sandboxes (a gateway's names)                                                                                                                                                 |

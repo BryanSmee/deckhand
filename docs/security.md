@@ -611,7 +611,8 @@ starts runs, so it is checked as a comment that waited is (`tasks.resume()`), at
 - a signed-in dashboard session, and an `Origin` header naming this listener (its
   `PUBLIC_URL`, or the host the browser asked for): a page elsewhere can't post for a
   signed-in user, on top of the session cookie's `SameSite=Lax`;
-- the repository in `ALLOWED_REPOS` (when set) and the App installed on it;
+- the repository in `ALLOWED_REPOS` (when set: by name, or through its owner's `owner/*`)
+  and the App installed on it;
 - its `.deckhand.yaml` on the default branch without errors, and a mode it has;
 - the user in both `ALLOWED_USERS` and the repository's own `users`;
 - an open issue, not a pull request, with no run going or queued (a running issue doesn't
