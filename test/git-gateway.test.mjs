@@ -3,10 +3,10 @@
 import assert from "node:assert/strict";
 import { execFile, execFileSync, spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { request } from "node:http";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { branchAllowed, createBroker } from "../listener/broker.mjs";
 import {
@@ -38,6 +38,10 @@ test("the ref updates of a push are read up to the flush", () => {
   );
   assert.deepEqual(readCommands(head), {
     refs: ["refs/heads/topic", "refs/heads/other"],
+    updates: [
+      { ref: "refs/heads/topic", old: A, new: B },
+      { ref: "refs/heads/other", old: ZERO, new: B },
+    ],
     caps: ["report-status", "side-band-64k"],
     end: head.indexOf("PACK"),
   });
@@ -138,12 +142,17 @@ test("a refused push gets a status report git can show, on the side band if aske
 // --- Through a real git client -------------------------------------------------------------
 
 // GitHub's side: `git http-backend` (CGI) over the repos in `root`, behind a fetch().
-function backendFetch(root, seen) {
+// `received`: the bodies of the pushes it gets. `down`: the services it fails, as GitHub
+// would when it can't be reached.
+function backendFetch(root, seen, received = [], down = new Set()) {
   return async (url, { method, headers, body }) => {
     const { pathname, search } = new URL(url);
     seen.push({ method, url, authorization: headers.authorization });
     const chunks = [];
     if (body) for await (const chunk of body) chunks.push(chunk);
+    if (pathname.endsWith("/git-receive-pack")) received.push(Buffer.concat(chunks));
+    const service = /service=([\w-]+)/.exec(search)?.[1] ?? pathname.split("/").pop();
+    if (down.has(service)) return new Response("down", { status: 503 });
     const child = spawn("git", ["http-backend"], {
       env: {
         ...process.env,
@@ -154,6 +163,7 @@ function backendFetch(root, seen) {
         PATH_INFO: pathname,
         QUERY_STRING: search.slice(1),
         CONTENT_TYPE: headers["content-type"] ?? "",
+        HTTP_CONTENT_ENCODING: headers["content-encoding"] ?? "",
         GIT_PROTOCOL: headers["git-protocol"] ?? "",
       },
     });
@@ -212,8 +222,24 @@ async function setup(
 ) {
   const dir = tempDir(t, "gateway-");
   const root = join(dir, "github");
-  execFileSync("git", ["init", "-q", "--bare", "-b", "main", join(root, "org/repo.git")]);
+  const bare = join(root, "org/repo.git");
+  execFileSync("git", ["init", "-q", "--bare", "-b", "main", bare]);
+  // So a client sends push options, as GitHub lets it.
+  execFileSync("git", ["-C", bare, "config", "receive.advertisePushOptions", "true"]);
   const seen = [];
+  const received = [];
+  const down = new Set();
+  // GitHub over HTTP: the gateway forwards pushes there, and fetches its mirrors from it.
+  const backend = backendFetch(root, seen, received, down);
+  const { url: githubUrl } = await serve(t, async (req, res) => {
+    const answer = await backend(`https://github.test${req.url}`, {
+      method: req.method,
+      headers: req.headers,
+      body: req.method === "POST" ? req : undefined,
+    });
+    res.writeHead(answer.status, Object.fromEntries(answer.headers));
+    res.end(Buffer.from(await answer.arrayBuffer()));
+  });
   const minted = [];
   const lookups = [];
   const github = {
@@ -231,17 +257,28 @@ async function setup(
   const broker = createBroker({ app: () => github, sentFrom });
   const secret = register(broker);
   const logs = [];
+  const mirrorDir = join(dir, "mirrors");
   const gateway = createGitGateway({
     broker,
     app: () => (app ? github : null),
-    githubUrl: "https://github.test",
-    fetch: backendFetch(root, seen),
+    githubUrl,
     log: (line) => logs.push(line),
     allowWorkflows,
+    mirrorDir,
     headMs,
     drainMs,
   });
-  const { port } = await serve(t, (req, res) => gateway.handle(req, res));
+  // What the client sends with each push, as the gateway reads it.
+  const sent = [];
+  const { port } = await serve(t, (req, res) => {
+    const read = req[Symbol.asyncIterator].bind(req);
+    const body = [];
+    if (req.url.endsWith("/git-receive-pack")) sent.push(body);
+    req[Symbol.asyncIterator] = async function* () {
+      for await (const chunk of read()) yield (body.push(chunk), chunk);
+    };
+    return gateway.handle(req, res);
+  });
   const remote = (s = secret, repo = "org/repo") =>
     `http://deckhand:${s}@127.0.0.1:${port}/git/${repo}.git`;
   const work = join(dir, "work");
@@ -269,7 +306,40 @@ async function setup(
     execFileSync("git", ["-C", join(root, "org/repo.git"), "rev-parse", "--verify", "-q", ref])
       .toString()
       .trim();
-  return { work, remote, seen, minted, lookups, logs, upstream, seed, sha, port };
+  const commit = (files, message = "change") => {
+    for (const [path, content] of Object.entries(files)) {
+      const file = join(work, path);
+      if (content === null) {
+        rmSync(file, { force: true });
+      } else {
+        mkdirSync(dirname(file), { recursive: true });
+        writeFileSync(file, content);
+      }
+    }
+    execFileSync("git", ["add", "-A"], { cwd: work, env: gitEnv });
+    execFileSync("git", ["commit", "-q", "--allow-empty", "-m", message], {
+      cwd: work,
+      env: gitEnv,
+    });
+  };
+  return {
+    work,
+    remote,
+    seen,
+    minted,
+    lookups,
+    logs,
+    upstream,
+    seed,
+    sha,
+    port,
+    commit,
+    sent: () => sent.map((body) => Buffer.concat(body)),
+    received,
+    down,
+    mirrorDir,
+    bare,
+  };
 }
 
 test("a branch is pushed to GitHub with the gateway's token, not the sandbox's", async (t) => {
@@ -302,10 +372,11 @@ test("allow_workflows: the push's token writes workflows, read again on each pus
   const res = await git(work, "push", remote(), "HEAD:refs/heads/issue-1-x");
   assert.ok(res.ok, res.stderr);
   assert.equal(upstream("refs/heads/issue-1-x"), "refs/heads/issue-1-x");
-  // git's probe (info/refs) needs no more than contents; the push itself gets workflows.
+  // git's probe (info/refs) needs no more than contents; the push itself gets workflows, and
+  // the mirror its workflow files are checked against is fetched with a token that reads.
   assert.deepEqual(
     minted.map((m) => m.extra),
-    [{ contents: "write" }, { contents: "write", workflows: "write" }],
+    [{ contents: "write" }, { contents: "write", workflows: "write" }, { contents: "read" }],
   );
   assert.deepEqual(asked, ["org/repo"]);
   // Taken back: the next push gets contents only.
@@ -610,4 +681,172 @@ test("a push bigger than git's post buffer is streamed through, after git's prob
   );
   assert.ok(res.ok, res.stderr);
   assert.equal(upstream("refs/heads/issue-1-big"), "refs/heads/issue-1-big");
+});
+
+// --- allow_workflows: the pushed workflow files are checked --------------------------------
+
+const SAFE = `name: CI
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: npm test
+`;
+
+// A grant of allow_workflows, its upstream's default branch holding `files`.
+async function granted(t, files = {}) {
+  const gateway = await setup(t, { allowWorkflows: () => true });
+  if (Object.keys(files).length) {
+    gateway.commit(files, "default branch");
+    gateway.seed("main");
+  }
+  return gateway;
+}
+
+test("allow_workflows: a workflow that only reads goes through, the same pack GitHub gets", async (t) => {
+  const { work, remote, commit, upstream, sent, received, mirrorDir } = await granted(t);
+  commit({ ".github/workflows/ci.yml": SAFE });
+  const res = await git(work, "push", remote(), "HEAD:refs/heads/issue-1-ci");
+  assert.ok(res.ok, res.stderr);
+  assert.equal(upstream("refs/heads/issue-1-ci"), "refs/heads/issue-1-ci");
+  assert.equal(received.length, 1);
+  assert.ok(received[0].equals(sent()[0]));
+  // The pushed objects stay out of the mirror, and the push's file goes.
+  assert.ok(existsSync(join(mirrorDir, "org/repo.git")));
+  // Removed once the answer is sent: soon after the client has it.
+  const pushes = () => readdirSync(mirrorDir).filter((f) => f.startsWith(".push-"));
+  for (let n = 0; pushes().length && n < 50; n++) await new Promise((r) => setTimeout(r, 20));
+  assert.deepEqual(pushes(), []);
+});
+
+test("allow_workflows: a workflow that writes, names a secret or hides from the parser is refused", async (t) => {
+  const { work, remote, commit, upstream, received } = await granted(t);
+  for (const [content, why] of [
+    [SAFE.replace("permissions:\n  contents: read\n", ""), /ci\.yml: no top-level `permissions:`/],
+    [
+      SAFE.replace("contents: read", "contents: write"),
+      /`permissions\.contents` must be read or none/,
+    ],
+    [
+      SAFE.replace("contents: read", "Contents: WRITE"),
+      /`permissions\.Contents` must be read or none/,
+    ],
+    [
+      SAFE.replace("permissions:\n  contents: read", "permissions: write-all"),
+      /`permissions: write-all` is not allowed/,
+    ],
+    [
+      SAFE.replace("    runs-on:", "    permissions: { id-token: write }\n    runs-on:"),
+      /`jobs\.test\.permissions\.id-token` must be read or none/,
+    ],
+    [`${SAFE}      - run: echo "\${{ secrets.TOKEN }}"\n`, /mentions `secrets` \(line 11\)/],
+    [`${SAFE}      - run: "echo \${{ \\x73ecrets.TOKEN }}"\n`, /mentions `secrets`/],
+    [SAFE.replace("name: CI", "name: &n CI"), /line 1: unsupported YAML/],
+    [`${SAFE}---\nname: again\n`, /line 11: several documents/],
+  ]) {
+    commit({ ".github/workflows/ci.yml": content });
+    const res = await git(work, "push", "--force", remote(), "HEAD:refs/heads/issue-1-ci");
+    assert.equal(res.ok, false, content);
+    assert.match(res.stderr, /\[remote rejected\] HEAD -> issue-1-ci \(Deckhand: workflow files/);
+    assert.match(res.stderr, /\.github\/workflows\/ci\.yml: /);
+    assert.match(res.stderr, why);
+  }
+  assert.equal(upstream("refs/"), "");
+  assert.deepEqual(received, []);
+});
+
+test("allow_workflows: a thin pack, its deltas against GitHub's objects, is read", async (t) => {
+  // A workflow already on GitHub, big enough for git to send a change to it as a delta.
+  const steps = Array.from({ length: 200 }, (_, n) => `      - run: echo step ${n}\n`).join("");
+  const { work, remote, commit, upstream, received, sent } = await granted(t, {
+    ".github/workflows/ci.yml": SAFE + steps,
+  });
+  commit({ ".github/workflows/ci.yml": `${SAFE}${steps}      - run: echo \${{ secrets.X }}\n` });
+  const refused = await git(work, "push", remote(), "HEAD:refs/heads/issue-1-thin");
+  assert.equal(refused.ok, false);
+  assert.match(refused.stderr, /mentions `secrets` \(line 211\)/);
+  // The pack had the change as a delta only: a blob the push doesn't carry whole.
+  assert.ok(sent()[0].length < 1000, `${sent()[0].length} bytes`);
+
+  commit({ ".github/workflows/ci.yml": `${SAFE}${steps}      - run: echo done\n` });
+  const res = await git(work, "push", remote(), "HEAD:refs/heads/issue-1-thin");
+  assert.ok(res.ok, res.stderr);
+  assert.equal(upstream("refs/heads/issue-1-thin"), "refs/heads/issue-1-thin");
+  assert.equal(received.length, 1);
+});
+
+test("allow_workflows: what the default branch already has, other files and deletions pass", async (t) => {
+  // The maintainers' own workflow, which the run couldn't push.
+  const theirs = `on: push\njobs:\n  deploy:\n    steps:\n      - run: echo \${{ secrets.DEPLOY }}\n`;
+  const { work, remote, commit, upstream } = await granted(t, {
+    ".github/workflows/deploy.yml": theirs,
+    ".github/workflows/old.yml": theirs,
+  });
+  commit({ "src/app.js": "1\n", ".github/workflows/README.md": "not YAML: {{" });
+  assert.ok((await git(work, "push", remote(), "HEAD:refs/heads/issue-1-a")).ok);
+  commit({ ".github/workflows/old.yml": null });
+  assert.ok((await git(work, "push", remote(), "HEAD:refs/heads/issue-1-a")).ok);
+  assert.ok((await git(work, "push", remote(), ":refs/heads/issue-1-a")).ok);
+  assert.equal(upstream("refs/heads/issue-1-a"), "");
+  // Changed, the same file is checked like any other.
+  commit({ ".github/workflows/deploy.yml": `${theirs}# tweaked\n` });
+  const changed = await git(work, "push", remote(), "HEAD:refs/heads/issue-1-b");
+  assert.equal(changed.ok, false);
+  assert.match(changed.stderr, /deploy\.yml: no top-level `permissions:`.*mentions `secrets`/);
+});
+
+test("allow_workflows: each branch of a push is checked; symlinks are refused", async (t) => {
+  const { work, remote, commit } = await granted(t);
+  commit({ ".github/workflows/ci.yml": SAFE }, "safe");
+  const safe = execFileSync("git", ["rev-parse", "HEAD"], { cwd: work }).toString().trim();
+  symlinkSync("../../secret.yml", join(work, ".github/workflows/link.yml"));
+  commit({}, "symlink");
+  const res = await git(
+    work,
+    "push",
+    remote(),
+    `${safe}:refs/heads/issue-1-safe`,
+    "HEAD:refs/heads/issue-1-link",
+  );
+  assert.equal(res.ok, false);
+  assert.match(res.stderr, /issue-1-safe \(Deckhand: another ref in this push was refused\)/);
+  assert.match(res.stderr, /issue-1-link .*link\.yml: not a plain UTF-8 file/);
+});
+
+test("allow_workflows: with push options, the pack after them is read", async (t) => {
+  const { work, remote, commit, upstream } = await granted(t);
+  commit({ ".github/workflows/ci.yml": SAFE.replace("read", "write") });
+  const refused = await git(work, "push", "-o", "ci.skip", remote(), "HEAD:refs/heads/issue-1-o");
+  assert.equal(refused.ok, false);
+  assert.match(refused.stderr, /must be read or none/);
+  commit({ ".github/workflows/ci.yml": SAFE });
+  const res = await git(work, "push", "-o", "ci.skip", remote(), "HEAD:refs/heads/issue-1-o");
+  assert.ok(res.ok, res.stderr);
+  assert.equal(upstream("refs/heads/issue-1-o"), "refs/heads/issue-1-o");
+});
+
+test("allow_workflows: without a mirror to check against, nothing is forwarded", async (t) => {
+  const { work, remote, commit, down, received, logs } = await granted(t);
+  down.add("git-upload-pack");
+  commit({ ".github/workflows/ci.yml": SAFE });
+  const res = await git(work, "push", remote(), "HEAD:refs/heads/issue-1-x");
+  assert.equal(res.ok, false);
+  assert.match(res.stderr, /couldn't check the workflow files of this push; try again/);
+  assert.deepEqual(received, []);
+  assert.match(logs.join("\n"), /git fetch: /);
+  // Back: the same push goes through.
+  down.clear();
+  assert.ok((await git(work, "push", remote(), "HEAD:refs/heads/issue-1-x")).ok);
+});
+
+test("without allow_workflows, pushes stream through: no mirror, nothing kept", async (t) => {
+  const { work, remote, commit, mirrorDir, received, sent } = await setup(t);
+  commit({ "a.txt": "a\n" });
+  assert.ok((await git(work, "push", remote(), "HEAD:refs/heads/issue-1-x")).ok);
+  assert.equal(existsSync(mirrorDir), false);
+  assert.ok(received[0].equals(sent()[0]));
 });

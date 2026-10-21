@@ -77,8 +77,9 @@ every other token is narrowed to what it's for and never carries it. An App crea
 then lacks it, which only matters once you grant `allow_workflows`: add **Workflows: read and
 write** in the App's settings (_Permissions & events_), then accept the new permission on its
 installation. Until then every push of a granted repository is refused, its runs' first one
-included, with a message saying so. Read what the grant opens before setting it: its branches'
-workflows can reach the default branch and the repository's secrets.
+included, with a message saying so. Read what the grant opens before setting it: the gateway
+refuses a pushed workflow that may write or names a secret, and what it doesn't check is
+listed there.
 
 An App created before `/after` lacks the `issues` event: turn on **Issues** under _Subscribe
 to events_ in its settings. Without it, a comment waiting for an issue (`/after #77`) still

@@ -11,14 +11,23 @@
 // That token writes contents only, so GitHub refuses a push that touches .github/workflows/,
 // unless the repo is granted `allow_workflows` (grants.mjs): then a push whose refs all pass
 // gets one with `workflows: write` too. The grant is read on each push, so revoking it
-// applies to the next one.
+// applies to the next one. Such a push is read whole first, and its workflow files checked
+// against the repo's mirror (git-mirror.mjs, workflow-check.mjs): GitHub runs a branch's own
+// workflows, so one that writes or names a secret is refused. Other repos' pushes stream
+// through unread.
 //
 // Only the smart HTTP push service: fetches go straight to GitHub with the read token.
 // Served on the broker's port, which only the runs' networks reach.
+import { createReadStream } from "node:fs";
+import { open } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { branchAllowed, NOT_ITS_SANDBOX } from "./broker.mjs";
+import { createMirrors } from "./git-mirror.mjs";
 import { PUSH_PERMISSIONS, WORKFLOW_PUSH_PERMISSIONS } from "./github-app.mjs";
+import { workflowProblems } from "./workflow-check.mjs";
 
 // The ref updates come first in a push: anything bigger than this before them is not git. A
 // ref update is a hundred bytes or so; a push of hundreds of branches still fits.
@@ -51,9 +60,9 @@ function takeBytes(chunks, n) {
 }
 
 // Reads the ref updates at the start of a receive-pack request (pkt-lines up to a flush) as
-// its chunks come: push(chunk) returns null while they are incomplete, then { refs, caps, end }
-// with `caps` the client's capabilities (after the first one) and `end` the offset of what
-// follows; it throws on anything else, or past `limit` bytes. Each byte is looked at once, and
+// its chunks come: push(chunk) returns null while they are incomplete, then { refs, updates,
+// caps, end } with `updates` each ref's { ref, old, new }, `caps` the client's capabilities
+// (after the first one) and `end` the offset of what follows; it throws on anything else, or past `limit` bytes. Each byte is looked at once, and
 // copied at most once (a pkt-line split across chunks): a client sending a few bytes at a
 // time costs no more than one sending it all. Signed pushes (push-cert) are refused rather than
 // parsed.
@@ -63,6 +72,7 @@ export function commandReader(limit = MAX_COMMANDS) {
   let consumed = 0;
   let length = null; // of the pkt-line being read, once its header is in
   const refs = [];
+  const updates = [];
   let caps = [];
 
   // The next `n` buffered bytes, removed from the buffer.
@@ -75,10 +85,11 @@ export function commandReader(limit = MAX_COMMANDS) {
     const [text, extra] = data.toString("utf8").replace(/\n$/, "").split("\0");
     if (text.startsWith("shallow ")) return;
     if (text.startsWith("push-cert")) throw new Error("signed pushes are not supported");
-    const match = /^[0-9a-f]{40,64} [0-9a-f]{40,64} (\S+)$/.exec(text);
+    const match = /^([0-9a-f]{40,64}) ([0-9a-f]{40,64}) (\S+)$/.exec(text);
     if (!match) throw new Error("not a git push");
     if (!refs.length && extra) caps = extra.trim().split(/\s+/);
-    refs.push(match[1]);
+    refs.push(match[3]);
+    updates.push({ ref: match[3], old: match[1], new: match[2] });
   }
 
   function push(chunk) {
@@ -91,7 +102,7 @@ export function commandReader(limit = MAX_COMMANDS) {
         consumed += 4;
         if (!/^[0-9a-f]{4}$/i.test(hex)) throw new Error("not a git push");
         length = parseInt(hex, 16);
-        if (length === 0) return { refs, caps, end: consumed };
+        if (length === 0) return { refs, updates, caps, end: consumed };
         if (length < 5) throw new Error("not a git push");
       }
       if (buffered < length - 4) break;
@@ -133,6 +144,60 @@ export function rejection(refs, caps, reasons) {
   return Buffer.concat([...out, Buffer.from("0000")]);
 }
 
+// Where the pack starts in a push spooled to `file`, its ref updates ending at `end`: past the
+// push options when the client sends some. Null when there is no pack (only deletions).
+export async function packStart(file, end, caps) {
+  const handle = await open(file);
+  try {
+    const { size } = await handle.stat();
+    let at = end;
+    if (caps.includes("push-options")) {
+      const head = Buffer.alloc(Math.min(MAX_COMMANDS, size - end));
+      await handle.read(head, 0, head.length, end);
+      for (let p = 0; ;) {
+        const hex = head.subarray(p, p + 4).toString("latin1");
+        if (!/^[0-9a-f]{4}$/i.test(hex)) throw new Error("bad push options");
+        const length = parseInt(hex, 16);
+        if (length === 0) {
+          at = end + p + 4;
+          break;
+        }
+        if (length < 4) throw new Error("bad push options");
+        p += length;
+      }
+    }
+    return at < size ? at : null;
+  } finally {
+    await handle.close();
+  }
+}
+
+// What git shows for a refused ref: one line, not too long.
+function oneLine(text, max = 1000) {
+  const line = text.replace(/[\0-\x1f\x7f]+/g, " ");
+  return line.length > max ? `${line.slice(0, max)}…` : line;
+}
+
+// Why the workflow files a branch changes (git-mirror.mjs changedWorkflows()) can't be
+// pushed, by ref: empty when they all pass.
+export function workflowRefusals(changed) {
+  const byRef = new Map();
+  for (const { ref, path, text } of changed) {
+    const problems =
+      text === null ? ["not a plain UTF-8 file of at most 512 KiB"] : workflowProblems(text);
+    if (!problems.length) continue;
+    byRef.set(ref, [...(byRef.get(ref) ?? []), `${path}: ${problems.join(", ")}`]);
+  }
+  return new Map(
+    [...byRef].map(([ref, files]) => [
+      ref,
+      oneLine(
+        `workflow files a sandbox pushes must cap their token at read and name no secret: ${files.join("; ")}`,
+      ),
+    ]),
+  );
+}
+
 // Why a sandbox may not update `ref`, or null when it may: the run's own branches
 // (`branches`, broker.mjs allow()), never the default one.
 export function refusal(ref, base, branches) {
@@ -155,11 +220,15 @@ export function createGitGateway({
   app, // () => the GitHub App (github-app.mjs), or null before /setup
   allowWorkflows = () => false, // (repo) => whether its grant sets `allow_workflows`
   githubUrl = "https://github.com",
+  // Where the mirrors of the repos granted `allow_workflows` are kept (git-mirror.mjs).
+  mirrorDir = join(tmpdir(), "deckhand-git-mirrors"),
   fetch = globalThis.fetch,
   log = () => {},
   headMs = HEAD_MS,
   drainMs = DRAIN_MS,
 }) {
+  const mirrors = createMirrors({ root: mirrorDir, githubUrl });
+
   // Git shows a text/plain error body as "remote: …" lines.
   function fail(res, status, message, headers = {}) {
     res.writeHead(status, { "content-type": "text/plain", ...headers });
@@ -206,7 +275,7 @@ export function createGitGateway({
         yield next.value;
       }
     }
-    return { refs: parsed.refs, caps: parsed.caps, body: body() };
+    return { ...parsed, body: body() };
   }
 
   // The rest of a refused push, read and dropped, so the client reads the answer. Not for
@@ -277,8 +346,9 @@ export function createGitGateway({
     res.end(report);
   }
 
-  // A push whose every ref update the run may make: { body, token }, `token` the gateway's own
-  // for it, or nothing once the push is refused.
+  // A push whose every ref update the run may make: { body, token, done }, `token` the
+  // gateway's own for it and `done` what to call once it is forwarded, or nothing once the
+  // push is refused.
   async function checkPush(req, res, { repo, run, github }) {
     let parsed;
     try {
@@ -303,9 +373,9 @@ export function createGitGateway({
     if (reasons.size) return refuse(req, res, repo, parsed, reasons);
     // Only now: a push of no branch of the run's (a fork's pull request has none) never gets it.
     if (!workflowsGranted(repo)) return { body: parsed.body, token: null };
+    let token;
     try {
-      const { token } = await github.repoToken(repo, WORKFLOW_PUSH_PERMISSIONS);
-      return { body: parsed.body, token };
+      ({ token } = await github.repoToken(repo, WORKFLOW_PUSH_PERMISSIONS));
     } catch (error) {
       log(`Git gateway: ${repo}: ${error.message ?? error}`);
       // GitHub answers 422 when the installation lacks a permission asked for. Never pushed
@@ -316,6 +386,49 @@ export function createGitGateway({
           : "couldn't get a token for this push; try again";
       return refuse(req, res, repo, parsed, new Map(parsed.refs.map((ref) => [ref, why])));
     }
+    return checkWorkflows(req, res, { repo, github }, parsed, base, token);
+  }
+
+  // The push of a repo granted `allow_workflows`, read whole: forwarded from disk once the
+  // workflow files it changes pass (workflow-check.mjs). Never forwarded unchecked: a mirror
+  // that can't be fetched, or a pack that can't be read, refuses it.
+  async function checkWorkflows(req, res, { repo, github }, parsed, base, token) {
+    const all = (why) => new Map(parsed.refs.map((ref) => [ref, why]));
+    let spooled;
+    try {
+      spooled = await mirrors.spool(parsed.body);
+    } catch (error) {
+      log(`Git gateway: ${repo}: ${error.message ?? error}`);
+      const why =
+        error.message === "push too large"
+          ? "this push is too large for GitHub"
+          : "couldn't receive this push; try again";
+      return refuse(req, res, repo, parsed, all(why));
+    }
+    const done = () => mirrors.remove(spooled.dir);
+    let reasons;
+    try {
+      const start = await packStart(spooled.file, parsed.end, parsed.caps);
+      const read = await github.repoToken(repo, { contents: "read" });
+      const changed = await mirrors.changedWorkflows({
+        repo,
+        token: read.token,
+        base,
+        updates: parsed.updates,
+        file: spooled.file,
+        start,
+        dir: spooled.dir,
+      });
+      reasons = workflowRefusals(changed);
+    } catch (error) {
+      log(`Git gateway: ${repo}: ${error.message ?? error}`);
+      reasons = all("couldn't check the workflow files of this push; try again");
+    }
+    if (reasons.size) {
+      await done();
+      return refuse(req, res, repo, parsed, reasons);
+    }
+    return { body: createReadStream(spooled.file), token, done };
   }
 
   // Whether the repo's grant sets `allow_workflows` now; not when it can't be read.
@@ -365,7 +478,12 @@ export function createGitGateway({
     if (!admitted) return;
     if (admitted.service === "info/refs") return forward(req, res, url, admitted);
     const push = await checkPush(req, res, admitted);
-    if (push) await forward(req, res, url, admitted, push.body, push.token);
+    if (!push) return;
+    try {
+      await forward(req, res, url, admitted, push.body, push.token);
+    } finally {
+      await push.done?.();
+    }
   }
 
   return { handle };

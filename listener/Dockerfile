@@ -15,7 +15,9 @@ RUN npm run build
 # The listener has no dependencies: only the dashboard's build, no node_modules.
 FROM node:26-alpine
 # buildx: repo images build with BuildKit. GNU tar: checkouts strip GitHub's top folder.
-RUN apk add --no-cache docker-cli docker-cli-buildx tar
+# git: the git gateway reads the workflow files a push of a repo granted `allow_workflows`
+# changes, against a mirror of it (git-mirror.mjs).
+RUN apk add --no-cache docker-cli docker-cli-buildx git tar
 WORKDIR /app
 COPY listener/*.mjs listener/
 COPY --from=dashboard /dashboard/dist/ dashboard/dist/

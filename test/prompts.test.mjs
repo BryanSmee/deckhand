@@ -159,7 +159,7 @@ test("prompts: onboarding lists what this Deckhand allows the repo", () => {
   assert.match(text, /`\.github\/workflows\/`: not granted: .* sets `allow_workflows`/);
   const workflows = { ...grant, allowWorkflows: true };
   const editable = promptFor(issue, { mode: "onboarding", settings, config, grant: workflows });
-  assert.match(editable, /`\.github\/workflows\/`: allowed/);
+  assert.match(editable, /`\.github\/workflows\/`: allowed: .* mentions `secrets`/);
   assert.match(text, /Models: work `opus` \(high effort\), brainstorms `sonnet` \(low\)/);
   assert.match(text, /## Reference: `.deckhand.yaml`/);
 });
@@ -220,7 +220,7 @@ test("prompts: work runs are told whether their pushes may change workflow files
     );
     assert.match(
       promptFor(task, { ...extra, grant: granted }),
-      /Pushes may add or change files under `\.github\/workflows\/`/,
+      /Pushes may add or change files under `\.github\/workflows\/`[^]*top-level `permissions:`[^]*mention `secrets`/,
     );
   }
   // A light mode never pushes, nor a fork's pull request: nothing to say.

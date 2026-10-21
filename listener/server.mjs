@@ -284,6 +284,8 @@ ctx.gitGateway = createGitGateway({
   // Read on each push: a grant taken back applies to the next one.
   allowWorkflows: (repo) => grantFor(loadGrants(config), config, repo).allowWorkflows,
   githubUrl: config.githubUrl,
+  // Granted repos' copies, their pushed workflow files checked against them (git-mirror.mjs).
+  mirrorDir: join(config.dataDir, "git-mirrors"),
   log,
 });
 // Their Claude Code's API calls, with the operator's credential that they never see.

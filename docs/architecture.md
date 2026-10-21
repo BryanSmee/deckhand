@@ -261,7 +261,9 @@ Reactions on the triggering comment follow its run: 👀 when it is received, th
   The listener calls GitHub with installation tokens; sandboxes get none up front and ask the
   broker (`BROKER_PORT`, only on the runs' networks) for a fresh token limited to their
   repo, with a secret that dies with the run. Those tokens only read the code: pushes go
-  through the git gateway on the same port, which only lets through the run's own branches,
+  through the git gateway on the same port, which only lets through the run's own branches
+  (and, for a repository granted `allow_workflows`, workflow files that only read and name no
+  secret, checked against a mirror of the repository in the data volume),
   and `gh pr ready [--undo]`, `gh pr create` and `gh pr edit` ask the listener on that port
   to mark the run's pull request ready for review (or back to draft), open it, or edit its
   title and body, which their tokens can't: they only read pull requests, so no sandbox can
@@ -555,6 +557,7 @@ tests fake it.
 | `grants.mjs`, `egress.mjs`, `subnets.mjs`                         | The operator's grants (hosts, mounts, limits), the egress policy and the proxy's CA; the runs' subnets.                                                                                                                                              |
 | `github-app.mjs`, `github.mjs`                                    | The App's tokens and calls; `createGitHub()`, `getJson`, `paginate`, `graphql` and the stores' lookups on top.                                                                                                                                       |
 | `broker.mjs`, `git-gateway.mjs`                                   | The sandboxes' token broker, for each run's own sandbox only; their pushes, to the run's own branches only.                                                                                                                                          |
+| `git-mirror.mjs`, `workflow-check.mjs`                            | The git gateway's mirrors of the repositories granted `allow_workflows`, and the checks on the workflow files their pushes change (a strict YAML subset).                                                                                            |
 | `pr-ready.mjs`                                                    | The sandboxes' pull requests opened, edited, and marked ready for review or back to draft (`gh pr create`, `edit`, `ready`).                                                                                                                         |
 | `anthropic.mjs`, `openai.mjs`, `upstream.mjs`                     | The sandboxes' Claude and OpenAI API calls, with the operator's credential; what both endpoints share (`createApiProxy()`).                                                                                                                          |
 | `chatgpt.mjs`                                                     | A ChatGPT plan's login for Codex, held and refreshed by the listener alone.                                                                                                                                                                          |
