@@ -525,6 +525,13 @@ nothing blocking. It takes both sides:
   nothing is merged; the reviews and fix runs go on as without `merge`.
 - **`on: ready`**: the merge follows the reviews that start by themselves, never a
   `/mode review` comment's. Without it, the config check warns and nothing is merged.
+- **With a [preview hook](#preview-hook)** granted (`allow_preview`), the operator's
+  `acknowledge_automerge_and_preview_is_highly_dangerous: true` too, in the repository's own
+  grants file. The hook runs the default branch's files as root on the host, and the
+  trusted-files gate below only sees the hook's command line, not what it runs (a script it
+  sources, a `Makefile`, `package.json`, a compose file, what its image `COPY`s). With both
+  on, an auto-merged change can reach root on the host with nobody reading it. Without the
+  acknowledgement, the config check warns, and each review's merge is refused with a comment.
 
 **The flow**, all in the listener (never in a sandbox, whose token can't merge):
 
@@ -535,8 +542,8 @@ nothing blocking. It takes both sides:
    has a critical or high finding: medium ones were the fix run's to address, and stay as the
    review's comments. Without `fix`, a medium finding blocks too.
 4. Anything else leaves the pull request to the maintainer, with a comment saying why: a review
-   that still blocks, a fix run that failed or pushed nothing, a gate that refuses, a merge
-   GitHub refuses. **No loop**: at most one fix run and one review after it, and one merge
+   that still blocks, a fix run that failed or pushed nothing, a gate that refuses, a GitHub
+   call that fails, a merge GitHub refuses. **No loop**: at most one fix run and one review after it, and one merge
    decision per pull request, kept in `reviews.json` across restarts.
 
 **The gates**, asked of GitHub right before the merge; each refusal is a comment:
@@ -547,9 +554,12 @@ nothing blocking. It takes both sides:
 - its head is still the commit the review read;
 - the repository is private, or the grant says `public`, as GitHub says at that moment;
 - it changes none of the files Deckhand trusts: `.deckhand.yaml`, `.deckhand/`, `.github/`,
-  any `CODEOWNERS`, and the files the config names (`instructions`, `dockerfile`, the preview
-  hook's script, `review.instructions`, the modes' instructions). Merging those by itself
-  would let a run widen its own config: such a pull request always waits for a human;
+  any `CODEOWNERS`, and the files the config names (`instructions`, `dockerfile`, the words of
+  the preview hook's command that are paths, `review.instructions`, the modes' instructions),
+  renames included. Merging those by itself would let a run widen its own config: such a
+  pull request always waits for a human. GitHub lists 3000 changed files at most: a pull
+  request with more than it lists is refused;
+- a granted preview hook only with the acknowledgement above;
 - `mergeable_state` is `clean`, and its GitHub Actions runs on the head commit are finished
   with none failed (read with the App's `actions: read`; no new permission).
 

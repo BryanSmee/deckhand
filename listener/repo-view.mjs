@@ -109,6 +109,7 @@ function grantRows(grant) {
     allowResearch: grant.allowResearch,
     allowWorkflows: grant.allowWorkflows,
     allowAutoMerge: grant.allowAutoMerge,
+    acknowledgeAutoMergePreview: grant.acknowledgeAutoMergePreview,
     hosts: grant.hosts,
     cachedHosts: grant.cachedHosts,
     mounts: grant.mounts.map(({ root, readOnly }) => ({ root, readOnly })),

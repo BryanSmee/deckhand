@@ -2243,6 +2243,7 @@ modes:
       draft: false,
       labels: [],
       mergeable_state: "clean",
+      changed_files: 0,
       html_url: "https://github.com/org/repo/pull/13",
       user: { login: "deckhand-x[bot]", type: "Bot" },
       head: { sha: "head-1", ref: "issue-12-fix", repo: { full_name: "org/repo" } },

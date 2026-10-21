@@ -23,6 +23,7 @@ import {
   hardeningArgs,
   loadGrants,
   mountArgs,
+  previewProblem,
   resolveMounts,
   ungranted,
 } from "../listener/grants.mjs";
@@ -53,6 +54,7 @@ const NOTHING = {
   allowResearch: false,
   allowWorkflows: false,
   allowAutoMerge: false,
+  acknowledgeAutoMergePreview: false,
   mounts: [],
   limits: config.limits,
   files: [],
@@ -80,6 +82,7 @@ mounts:
     allowResearch: false,
     allowWorkflows: false,
     allowAutoMerge: false,
+    acknowledgeAutoMergePreview: false,
     limits: { cpus: "4", memory: "4g", pids: 4096 },
     mounts: [
       { root: "/nfs/work", readOnly: false },
@@ -603,6 +606,32 @@ test("allow_auto_merge: a repository's own file only, true or public", () => {
     () => grantOf({ "org/repo.yaml": "allow_auto_merge: yes-please\n" }, "org/repo"),
     /allow_auto_merge: expected true, false or public/,
   );
+});
+
+test("acknowledge_automerge_and_preview_is_highly_dangerous: per repository only, and what it lets through", () => {
+  const key = "acknowledge_automerge_and_preview_is_highly_dangerous";
+  assert.equal(
+    grantOf({ "org/repo.yaml": `${key}: true\n` }, "org/repo").acknowledgeAutoMergePreview,
+    true,
+  );
+  assert.equal(grantOf({}, "org/repo").acknowledgeAutoMergePreview, false);
+  assert.throws(
+    () => grantsFrom({ "default.yaml": `${key}: true\n` }, config),
+    new RegExp(`default\\.yaml: ${key}: only a repository's own file grants it`),
+  );
+  const settings = {
+    review: { on: "ready", merge: true },
+    preview: { command: "./x.sh" },
+  };
+  const grant = { allowAutoMerge: true, allowPreview: true };
+  assert.equal(previewProblem(grant, settings).includes(key), true);
+  assert.match(autoMergeProblems(grant, settings, true)[0], new RegExp(`${key}: true\`, nothing`));
+  // The merge's gates say it themselves.
+  assert.deepEqual(autoMergeProblems(grant, settings, true, { preview: false }), []);
+  assert.equal(previewProblem({ ...grant, acknowledgeAutoMergePreview: true }, settings), null);
+  // A hook that isn't granted never runs: nothing to acknowledge.
+  assert.equal(previewProblem({ allowAutoMerge: true }, settings), null);
+  assert.equal(previewProblem(grant, { review: settings.review }), null);
 });
 
 test("autoMergeProblems: the grant, the repository's visibility and `review.on: ready`", () => {

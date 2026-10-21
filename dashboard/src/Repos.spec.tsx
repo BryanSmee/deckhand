@@ -77,6 +77,7 @@ const CONFIG: RepoConfig = {
       allowResearch: false,
       allowWorkflows: false,
       allowAutoMerge: false,
+      acknowledgeAutoMergePreview: false,
       hosts: ["pypi.org"],
       cachedHosts: [],
       mounts: [],
@@ -115,7 +116,12 @@ beforeEach(() => {
       readAt: Date.now(),
       effective: {
         ...CONFIG.effective,
-        grant: { ...CONFIG.effective.grant!, allowAutoMerge: "public" },
+        grant: {
+          ...CONFIG.effective.grant!,
+          allowAutoMerge: "public",
+          allowPreview: true,
+          acknowledgeAutoMergePreview: true,
+        },
       },
     }),
     "POST api/repos/org/app/onboard": () => ({
@@ -296,6 +302,7 @@ test("auto-merge: a red badge in the list, a red risk box and its grant in the p
   );
   // Public: said too.
   expect(box.textContent).toContain("This repository is public");
+  expect(box.textContent).toContain("Its preview hook runs the default branch as root on the host");
   expect(within(box).getByRole("link").getAttribute("href")).toBe(
     "https://github.com/BryanSmee/deckhand/blob/main/docs/security.md#auto-merge",
   );

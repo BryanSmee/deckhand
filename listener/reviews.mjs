@@ -20,7 +20,7 @@
 import { waitsForInput } from "./comments.mjs";
 import { repoAllowed } from "./config.mjs";
 import { linkedIssue, linkTo, MARKER, prId, sameRepo, taskKey } from "./events.mjs";
-import { autoMergeProblems } from "./grants.mjs";
+import { autoMergeProblems, previewProblem } from "./grants.mjs";
 import { getJson, paginate } from "./github.mjs";
 import { CONFIG_FILE } from "./repo-config.mjs";
 import { persistentMap } from "./store.mjs";
@@ -342,6 +342,8 @@ export async function mergeRefusal(
   { github, config, busy = () => false, sleep },
   { repo, number, sha, settings, grant },
 ) {
+  const hook = previewProblem(grant, settings);
+  if (hook) return { why: hook };
   let pr = await getJson(github, repo, `/repos/${repo}/pulls/${number}`, [404]);
   if (!pr) return { why: "the pull request can't be read" };
   const own = !!config.bot && pr.user?.login?.toLowerCase() === config.bot.toLowerCase();
@@ -388,6 +390,12 @@ export async function mergeRefusal(
   if (trusted.length) {
     const list = trusted.slice(0, 10).map((path) => `\`${path}\``);
     return { why: `it changes files Deckhand trusts: ${list.join(", ")}` };
+  }
+  // GitHub lists 3000 files at most, without saying so: a trusted one may be past the end.
+  if (!(files.length >= pr.changed_files)) {
+    return {
+      why: `GitHub lists ${files.length} of its ${pr.changed_files ?? "?"} changed files, so the files Deckhand trusts can't all be checked`,
+    };
   }
   for (let i = 1; pr.mergeable_state === "unknown" || pr.mergeable_state == null; i++) {
     if (i >= MERGEABLE_TRIES) break;
@@ -611,7 +619,7 @@ export function createReviews({
     const { settings, errors } = await repoSettings(repo, base);
     if (errors.length || !settings.review?.merge) return null;
     const grant = grantOf(repo);
-    if (autoMergeProblems(grant, settings).length) return null;
+    if (autoMergeProblems(grant, settings, null, { preview: false }).length) return null;
     return { settings, grant };
   }
 
@@ -655,18 +663,26 @@ export function createReviews({
     if (entry.head && sha !== entry.head) {
       return refuse(key, repo, number, "a commit was pushed while the review ran");
     }
-    const gate = await mergeRefusal(
-      { github, config, busy, sleep },
-      { repo, number, sha, settings, grant },
-    );
-    if (gate.why) return refuse(key, repo, number, gate.why);
-    const res = await github(
-      repo,
-      "PUT",
-      `/repos/${repo}/pulls/${number}/merge`,
-      { sha, merge_method: gate.method },
-      [405, 409, 422],
-    );
+    let gate;
+    let res;
+    try {
+      gate = await mergeRefusal(
+        { github, config, busy, sleep },
+        { repo, number, sha, settings, grant },
+      );
+      if (gate.why) return refuse(key, repo, number, gate.why);
+      res = await github(
+        repo,
+        "PUT",
+        `/repos/${repo}/pulls/${number}/merge`,
+        { sha, merge_method: gate.method },
+        [405, 409, 422],
+      );
+    } catch (error) {
+      // Decided already (mergeAt): said, rather than left with only a log line.
+      log(`${key}: auto-merge: ${error.stack ?? error}`);
+      return refuse(key, repo, number, `GitHub couldn't be read (${error.message ?? error})`);
+    }
     if (!res.ok) {
       const said = await res.json().catch(() => ({}));
       const detail = said?.message ? `: ${said.message}` : "";
@@ -694,7 +710,13 @@ export function createReviews({
       return refuse(key, repo, number, why);
     };
     if (status !== "ok") return stop(`the fix run ended with \`${status}\``);
-    const pr = await getJson(github, repo, `/repos/${repo}/pulls/${number}`, [404]);
+    let pr;
+    try {
+      pr = await getJson(github, repo, `/repos/${repo}/pulls/${number}`, [404]);
+    } catch (error) {
+      log(`${key}: after the fix run: ${error.stack ?? error}`);
+      return stop(`GitHub couldn't be read (${error.message ?? error})`);
+    }
     if (!pr || pr.state !== "open") return null;
     const head = pr.head?.sha ?? null;
     if (!head || head === entry.head) {

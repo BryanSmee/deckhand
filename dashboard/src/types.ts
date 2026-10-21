@@ -302,6 +302,9 @@ export interface Grant {
   allowWorkflows: boolean;
   // `review.merge` may merge Deckhand's pull requests; "public": on a public repository too.
   allowAutoMerge: boolean | "public";
+  // acknowledge_automerge_and_preview_is_highly_dangerous: auto-merge with a granted preview
+  // hook, which runs the default branch as root on the host.
+  acknowledgeAutoMergePreview: boolean;
   hosts: string[];
   // Those whose plain HTTP answers the egress proxy keeps in its cache.
   cachedHosts: string[];

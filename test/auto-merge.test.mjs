@@ -33,17 +33,21 @@ const PR = {
   user: { login: "deckhand-app[bot]", type: "Bot" },
   head: { sha: "sha-1", repo: { full_name: "org/repo" } },
   mergeable_state: "clean",
+  changed_files: 1,
 };
 
 // A fake GitHub with a mergeable pull request; `over` changes what it answers: `pr` (or
 // `pulls`, successive answers), `info` (the repo), `files`, `runs` (Actions), `issueLabels`,
-// `merge` (the merge's status).
+// `merge` (the merge's status), `pullStatus` (GET of the pull request failing).
 function fakeGitHub(over = {}) {
   const calls = [];
   const pulls = over.pulls ? [...over.pulls] : null;
   const github = async (repo, method, path, body) => {
     calls.push({ method, path, body });
     const p = path.replace(/[?&]per_page=\d+&page=\d+$/, "");
+    if (method === "GET" && p === "/repos/org/repo/pulls/5" && over.pullStatus) {
+      return new Response("{}", { status: over.pullStatus });
+    }
     if (method === "GET" && p === "/repos/org/repo/pulls/5") {
       return Response.json({
         ...PR,
@@ -78,7 +82,10 @@ function fakeGitHub(over = {}) {
 
 // The reviewer in auto-merge mode: a temp reviews.json, a fake clock, queue and GitHub, the
 // repo's `yaml`, and its grant (`allowAutoMerge`).
-function setup(t, { yaml = MERGE, grant = true, path, busy = () => false, ...over } = {}) {
+function setup(
+  t,
+  { yaml = MERGE, grant = true, granted = {}, path, busy = () => false, ...over } = {},
+) {
   let time = 1_800_000_000_000;
   const accepted = [];
   const replies = [];
@@ -93,7 +100,7 @@ function setup(t, { yaml = MERGE, grant = true, path, busy = () => false, ...ove
     github: gh.github,
     busy,
     reply: async (repo, number, text) => replies.push({ number, text }),
-    grantOf: () => ({ allowAutoMerge: grant }),
+    grantOf: () => ({ allowAutoMerge: grant, ...granted }),
     merged: (repo, pr) => merged.push(pr.number),
     sleep: async () => {},
     now: () => (time += 1000),
@@ -399,4 +406,55 @@ test("mergeRefusal: everything passes, the pull request and method come back", a
   assert.equal(gate.why, null);
   assert.equal(gate.method, "squash");
   assert.equal(gate.pr.number, 5);
+});
+
+test("auto-merge with a granted preview hook: only with the operator's long acknowledgement", async (t) => {
+  const yaml = `${MERGE}preview: ./deploy/preview.sh\n`;
+  const hook = setup(t, { yaml, granted: { allowPreview: true } });
+  assert.equal(await hook.settle(), null);
+  assert.equal(hook.merges().length, 0);
+  assert.match(
+    hook.replies[0].text,
+    /preview hook runs its default branch as root on the host.*`acknowledge_automerge_and_preview_is_highly_dangerous: true`/,
+  );
+  // Asked of nobody: the config alone refuses it.
+  assert.equal(hook.calls.length, 0);
+  const acknowledged = setup(t, {
+    yaml,
+    granted: { allowPreview: true, acknowledgeAutoMergePreview: true },
+  });
+  assert.ok(await acknowledged.settle());
+  // The hook's own script still waits for a human.
+  const script = setup(t, {
+    yaml,
+    granted: { allowPreview: true, acknowledgeAutoMergePreview: true },
+    files: [{ filename: "deploy/preview.sh" }],
+  });
+  assert.equal(await script.settle(), null);
+  assert.match(script.replies[0].text, /`deploy\/preview\.sh`/);
+});
+
+test("auto-merge: more changed files than GitHub lists refuses it", async (t) => {
+  const s = setup(t, { pr: { changed_files: 3001 } });
+  assert.equal(await s.settle(), null);
+  assert.equal(s.merges().length, 0);
+  assert.match(s.replies[0].text, /GitHub lists 1 of its 3001 changed files/);
+});
+
+test("auto-merge: GitHub failing during the gates or after the fix run is said, decided", async (t) => {
+  const s = setup(t, { pullStatus: 502 });
+  assert.equal(await s.settle(), null);
+  assert.equal(s.merges().length, 0);
+  assert.match(s.replies[0].text, /GitHub couldn't be read \(GitHub GET .*: 502\)/);
+  assert.equal(await s.settle(), null);
+  assert.equal(s.replies.length, 1);
+  const fix = setup(t, { pullStatus: 502 });
+  await fix.reviews.settle(fix.run, fix.posted(HIGH));
+  const run = { repo: "org/repo", number: 5, base: "trunk", status: "ok" };
+  assert.equal(await fix.reviews.fixed(run), null);
+  assert.match(fix.replies[0].text, /GitHub couldn't be read/);
+  assert.equal(fix.accepted.filter((i) => i.reason === "review").length, 0);
+  // Decided: a later review merges nothing.
+  assert.equal(await fix.settle(), null);
+  assert.equal(fix.merges().length, 0);
 });

@@ -625,6 +625,10 @@ allow_workflows: true
 # after a clean review, with no human reading them (see Auto-merge below). `true`: while the
 # repository is private; `public`: a public one too. Per repository only.
 allow_auto_merge: true
+# EVEN MORE UNSAFE: auto-merge in a repository whose preview hook is granted. The hook runs the
+# default branch as root on the host, so what an unread merge changes may run as root. Per
+# repository only.
+acknowledge_automerge_and_preview_is_highly_dangerous: true
 # Its own limits; missing ones keep default.yaml's, else the built-in 2 CPUs, 4g, 2048.
 limits: { cpus: 4, memory: 8g, pids: 4096 }
 # Roots it may mount from (read-only unless read_only: false).
@@ -634,8 +638,9 @@ mounts:
   - /srv/datasets
 ```
 
-`default.yaml` takes the same keys but `mounts`, `allow_docker`, `allow_workflows` and
-`allow_auto_merge`, for every repository:
+`default.yaml` takes the same keys but `mounts`, `allow_docker`, `allow_workflows`,
+`allow_auto_merge` and `acknowledge_automerge_and_preview_is_highly_dangerous`, for every
+repository:
 
 ```yaml
 # default.yaml
@@ -650,8 +655,8 @@ cached_hosts: [deb.debian.org]
 limits: { memory: 8g }
 ```
 
-`mounts`, `allow_docker`, `allow_workflows` and `allow_auto_merge` in `default.yaml` are
-errors: a root, a container engine, workflow files run with the Actions secrets or merges
+`mounts`, `allow_docker`, `allow_workflows`, `allow_auto_merge` and
+`acknowledge_automerge_and_preview_is_highly_dangerous` in `default.yaml` are errors: a root, a container engine, workflow files run with the Actions secrets or merges
 nobody reviewed, for every repository, are too broad to grant by accident, so they are
 granted one repository at a time.
 
@@ -1055,8 +1060,15 @@ branch, the last check of everything above. With it on:
   own checks.
 - **Nothing that widens Deckhand is merged by itself**: a pull request that changes
   `.deckhand.yaml`, `.deckhand/`, `.github/`, a `CODEOWNERS` or a file the config names (the
-  instructions, the Dockerfile, the preview hook's script) waits for a human, so a run can't
-  grant itself more through a merge.
+  instructions, the Dockerfile, the paths in the preview hook's command) waits for a human, so
+  a run can't grant itself more through a merge.
+- **Not with a preview hook, unless you say so at length**: the hook runs the default branch's
+  files as root on the host, with the Docker socket, and no gate can follow what its command
+  runs (a script it sources, a `Makefile`, `package.json`, a compose file, the files its image
+  `COPY`s). A repository with a granted hook doesn't auto-merge until its grants file also sets
+  `acknowledge_automerge_and_preview_is_highly_dangerous: true`. With it, a prompt injection
+  that gets a change merged can run as root on the host on the next pull request: the whole
+  deployment, every repository's secrets and the Claude credential. Don't set it.
 - **What was reviewed is what is merged**: the merge names the reviewed commit, so a push
   after the review fails it; the repository's visibility, `mergeable_state` and its GitHub
   Actions runs are read from GitHub at the merge, not taken from a webhook.
