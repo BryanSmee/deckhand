@@ -149,10 +149,14 @@ Assume it could, and keep secrets away from workflows on `issue-*` branches as a
 
 A run's secret only lives as long as the run: the listener revokes it when the run ends, and
 the broker then refuses it. It also only works from that run's sandbox (or its container
-engine): the broker's `/token`, the git gateway and `gh pr ready` compare the request's source
-address with that run's addresses on its networks (`docker inspect`, looked up once per run
-and forgotten when its sandbox exits) and answer `403` otherwise. A secret that leaks, to a
-research run on the open web say, gets another sandbox neither a token nor a push. The installation tokens a sandbox already got are another matter:
+engine): the broker's `/token`, the git gateway, `gh pr ready` and the agents' API endpoints
+`/anthropic/` and `/openai/` compare the request's source address with that run's addresses on
+its networks (`docker inspect`, looked up once per run and forgotten when its sandbox exits)
+and answer `403` otherwise. A secret that leaks, to a research run on the open web say, gets
+another sandbox neither a token, a push, nor calls on the operator's Claude or OpenAI
+credential. Google's endpoints (`/google/`, `/relay/`) still check the secret alone: relayed
+calls reach the listener through the egress proxy, whose address says nothing of the run.
+The installation tokens a sandbox already got are another matter:
 
 - GitHub makes them valid for **one hour** from when they are minted, and the listener can't
   shorten that. The broker hands out a cached token while it has more than 10 minutes left,

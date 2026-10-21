@@ -5,7 +5,7 @@ import { test } from "node:test";
 import { createBroker } from "../listener/broker.mjs";
 import { createOpenAiProxy } from "../listener/openai.mjs";
 import { credentialFailure } from "../listener/upstream.mjs";
-import { serve } from "./helpers.mjs";
+import { sandboxAt, serve } from "./helpers.mjs";
 
 // A run of Codex's, on its provider as runs.mjs registers it.
 function codexRun(broker, provider = "openai") {
@@ -34,9 +34,12 @@ async function fakeOpenAi(t) {
   return { url, requests, release };
 }
 
-async function serveProxy(t, { credential = "sk-proj-real", path = "/v1" } = {}) {
+async function serveProxy(
+  t,
+  { credential = "sk-proj-real", path = "/v1", sentFrom = sandboxAt() } = {},
+) {
   const upstream = await fakeOpenAi(t);
-  const broker = createBroker({ app: () => null });
+  const broker = createBroker({ app: () => null, sentFrom });
   const proxy = createOpenAiProxy({ broker, credential, upstream: `${upstream.url}${path}` });
   const { url } = await serve(t, (req, res) => proxy.handle(req, res));
   return { url, broker, upstream };
@@ -177,6 +180,19 @@ test("no secret, a wrong one or a finished run's: refused, and OpenAI never aske
   assert.equal(upstream.requests.length, 0);
 });
 
+test("a run's secret sent from another sandbox's address: 403, and OpenAI never asked", async (t) => {
+  const { url, broker, upstream } = await serveProxy(t, { sentFrom: sandboxAt("10.9.0.5") });
+  const secret = codexRun(broker);
+  const res = await ask(url, { authorization: `Bearer ${secret}` });
+  assert.equal(res.status, 403);
+  assert.deepEqual((await res.json()).error, {
+    type: "permission_denied",
+    message: "Deckhand: this run's secret only works from its own sandbox",
+  });
+  assert.equal(upstream.requests.length, 0);
+  assert.equal(broker.runOf(secret).apiError, null);
+});
+
 test("without OPENAI_API_KEY, a live run gets an error rather than an empty header", async (t) => {
   const { url, broker, upstream } = await serveProxy(t, { credential: null });
   const res = await ask(url, { authorization: `Bearer ${codexRun(broker)}` });
@@ -185,7 +201,7 @@ test("without OPENAI_API_KEY, a live run gets an error rather than an empty head
 });
 
 test("OpenAI out of reach: a 502 in OpenAI's error shape", async (t) => {
-  const broker = createBroker({ app: () => null });
+  const broker = createBroker({ app: () => null, sentFrom: sandboxAt() });
   const proxy = createOpenAiProxy({ broker, credential: "k", upstream: "http://127.0.0.1:1" });
   const { url } = await serve(t, (req, res) => proxy.handle(req, res));
   const res = await ask(url, { authorization: `Bearer ${codexRun(broker)}` });
@@ -196,7 +212,7 @@ test("OpenAI out of reach: a 502 in OpenAI's error shape", async (t) => {
 // With a ChatGPT plan's login (chatgpt.mjs) instead of a key.
 async function servePlan(t, login) {
   const upstream = await fakeOpenAi(t);
-  const broker = createBroker({ app: () => null });
+  const broker = createBroker({ app: () => null, sentFrom: sandboxAt() });
   const proxy = createOpenAiProxy({
     broker,
     credential: null,
@@ -244,7 +260,7 @@ test("a plan's login the backend refuses is marked, for a refresh before the nex
     res.writeHead(401, { "content-type": "application/json" });
     res.end('{"error":{"message":"token expired"}}');
   });
-  const broker = createBroker({ app: () => null });
+  const broker = createBroker({ app: () => null, sentFrom: sandboxAt() });
   const proxy = createOpenAiProxy({ broker, login, chatgptUrl: `${upstreamUrl}/codex` });
   const { url } = await serve(t, (req, res) => proxy.handle(req, res));
   const secret = codexRun(broker);

@@ -5,7 +5,7 @@ import { request } from "node:http";
 import { test } from "node:test";
 import { createBroker } from "../listener/broker.mjs";
 import { baseOf, createApiProxy, MAX_IN_FLIGHT, MAX_NOTED } from "../listener/upstream.mjs";
-import { serve } from "./helpers.mjs";
+import { sandboxAt, serve } from "./helpers.mjs";
 
 // A provider that answers each call's headers and a first event, then holds the rest until
 // the test lets it (`release`), or forever (`stall`).
@@ -49,7 +49,7 @@ function fakeClock() {
 }
 
 async function proxyTo(t, upstream, options = {}) {
-  const broker = createBroker({ app: () => null });
+  const broker = createBroker({ app: () => null, sentFrom: sandboxAt() });
   const logs = [];
   const proxy = createApiProxy({
     broker,
@@ -60,6 +60,7 @@ async function proxyTo(t, upstream, options = {}) {
       auth: "auth",
       unavailable: "unavailable",
       notFound: "not_found",
+      forbidden: "forbidden",
       busy: "busy",
     },
     notApi: "not an API path",

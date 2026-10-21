@@ -3,6 +3,7 @@
 // answer streams back as it comes.
 import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
+import { NOT_ITS_SANDBOX } from "./broker.mjs";
 import { redact } from "./redact.mjs";
 import { sendJson } from "./web.mjs";
 
@@ -159,7 +160,7 @@ export function credentialFailure(what, error) {
 //   routes       [method, RegExp] pairs: the calls the agent makes, that path matched whole.
 //                Anything else (files, batches, stored responses) is refused: the operator's
 //                credential opens more than the agent needs
-//   errorShape   { body(type, message), auth, unavailable, notFound, busy }: errors in the
+//   errorShape   { body(type, message), auth, forbidden, unavailable, notFound, busy }: errors in the
 //                provider's shape and its types for each, so the agent shows them as such
 //   notApi       what a refused path says
 //   secretOf     req → the run's secret, from whichever header the agent sent it in
@@ -171,6 +172,8 @@ export function credentialFailure(what, error) {
 //                (a token file's content, say): the sandbox and the run's reply get a fixed one
 //   secrets      () → the credential's values, redacted from that log line
 //   answered     (run, status, headers): the provider's status, once it answers
+//   bound        whether a secret only works from its run's sandbox (broker.mjs sentBy()): only
+//                for calls that come straight from it, not through the egress proxy (google.mjs)
 export function createApiProxy({
   broker, // broker.mjs: the run a secret belongs to
   pathRe,
@@ -182,6 +185,7 @@ export function createApiProxy({
   drop,
   authHeaders,
   answered = () => {},
+  bound = true,
   secrets = () => [],
   log = () => {},
   maxInFlight = MAX_IN_FLIGHT,
@@ -201,6 +205,11 @@ export function createApiProxy({
     const url = new URL(req.url, "http://broker");
     const run = broker.runOf(secretOf(req));
     if (!run) return fail(res, 401, errorShape.auth, "unknown or finished run");
+    // Before anything that writes to the run (its apiError, its notes): a leaked secret
+    // mustn't spend its budget, nor change what its reply says.
+    if (bound && !(await broker.sentBy(run, req))) {
+      return fail(res, 403, errorShape.forbidden, NOT_ITS_SANDBOX);
+    }
     const { base, what, missing } = routeOf(run);
     if (missing) return failRun(run, res, 503, errorShape.unavailable, missing);
     const path = pathRe.exec(req.url.split("?")[0])?.[1];
