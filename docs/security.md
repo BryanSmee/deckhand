@@ -66,7 +66,9 @@ This doesn't depend on GitHub: branch protection and rulesets aren't enforced on
 repositories of free plans. Where they are, a ruleset on the default branch (pull request
 required) is still worth adding: it also covers people and other tools. A sandbox's
 branches still reach the default branch through pull requests that a maintainer merges:
-review those that touch `.deckhand.yaml`, the Dockerfile or the preview hook's script.
+review those that touch `.deckhand.yaml`, the Dockerfile or the preview hook's script. The
+one exception is [Auto-merge](#auto-merge), where the listener merges, and only with your
+per-repository grant.
 
 ### GitHub Actions on Deckhand's branches
 
@@ -619,6 +621,10 @@ allow_research: true
 # branches above). Needs the App's Workflows permission, or every push of the repository is
 # refused. Per repository only.
 allow_workflows: true
+# UNSAFE: its .deckhand.yaml's `review.merge` lets the listener merge Deckhand's pull requests
+# after a clean review, with no human reading them (see Auto-merge below). `true`: while the
+# repository is private; `public`: a public one too. Per repository only.
+allow_auto_merge: true
 # Its own limits; missing ones keep default.yaml's, else the built-in 2 CPUs, 4g, 2048.
 limits: { cpus: 4, memory: 8g, pids: 4096 }
 # Roots it may mount from (read-only unless read_only: false).
@@ -628,8 +634,8 @@ mounts:
   - /srv/datasets
 ```
 
-`default.yaml` takes the same keys but `mounts`, `allow_docker` and `allow_workflows`, for
-every repository:
+`default.yaml` takes the same keys but `mounts`, `allow_docker`, `allow_workflows` and
+`allow_auto_merge`, for every repository:
 
 ```yaml
 # default.yaml
@@ -644,9 +650,10 @@ cached_hosts: [deb.debian.org]
 limits: { memory: 8g }
 ```
 
-`mounts`, `allow_docker` and `allow_workflows` in `default.yaml` are errors: a root, a
-container engine or workflow files run with the Actions secrets of every repository are too
-broad to grant by accident, so they are granted one repository at a time.
+`mounts`, `allow_docker`, `allow_workflows` and `allow_auto_merge` in `default.yaml` are
+errors: a root, a container engine, workflow files run with the Actions secrets or merges
+nobody reviewed, for every repository, are too broad to grant by accident, so they are
+granted one repository at a time.
 
 **Errors stop runs, file by file.** A repository's file with errors grants that repository
 nothing: its runs stop, with a reply naming the file (the details are in the listener's logs,
@@ -1013,6 +1020,53 @@ its token against its instructions. Turn `fix` on where the people who may comme
 request or its issue are trusted (a private repository, or `users` narrowed to them), read
 what a fix run pushed before merging, and keep `fix` off on public repositories with outside
 contributors whose threads you don't watch.
+
+### Auto-merge
+
+With `allow_auto_merge` in a repository's grants file and `review.merge: true` in its
+`.deckhand.yaml`, the listener merges Deckhand's own pull requests after a review with nothing
+blocking (and, after a fix run, one more review of what it pushed), with its own token
+(`PUT /pulls/{n}/merge`, the App's `contents` and `pull_requests: write`). The flow and its
+gates are in [Auto-merge](repo-config.md#auto-merge).
+
+**What it gives up**: the maintainer who reads a pull request before it reaches the default
+branch, the last check of everything above. With it on:
+
+- **Model output reaches the default branch with no human reading it.** A prompt injection in
+  an issue, a comment or a file the run read, or simply a wrong change or a wrong fix, ships.
+  The review is a model reading a model's work: it can miss what was planted, or be talked
+  out of reporting it.
+- **A merged change runs on the default branch**: the repository's workflows, with its
+  secrets, on `push` to the default branch; and deployments, releases or anything else that
+  follows a merge there.
+- **On a public repository, anyone can comment**: the review leaves outsiders' comments out,
+  but an issue's text, an allowed user quoting one, or the code itself still reach the runs.
+  `allow_auto_merge: true` stops at a public repository; only `public` lets it merge there,
+  and the dashboard says so in red.
+
+**What still holds**:
+
+- **The grant is yours, per repository**: `default.yaml` can't set it, a repository's
+  `.deckhand.yaml` can only ask, and the listener logs a warning at start for each repository
+  granted it. The dashboard shows a red badge on the repository and a red box in its config
+  panel.
+- **No sandbox can merge**: their tokens only read code and pull requests ([Tokens](#tokens)),
+  and the git gateway never pushes the default branch. Only the listener merges, after its
+  own checks.
+- **Nothing that widens Deckhand is merged by itself**: a pull request that changes
+  `.deckhand.yaml`, `.deckhand/`, `.github/`, a `CODEOWNERS` or a file the config names (the
+  instructions, the Dockerfile, the preview hook's script) waits for a human, so a run can't
+  grant itself more through a merge.
+- **What was reviewed is what is merged**: the merge names the reviewed commit, so a push
+  after the review fails it; the repository's visibility, `mergeable_state` and its GitHub
+  Actions runs are read from GitHub at the merge, not taken from a webhook.
+- **No loop**: one fix run and one review after it at most, one merge decision per pull
+  request (`reviews.json`). Every refusal is a comment on the pull request, every merge too,
+  and the dashboard marks each auto-merged task "Merged by Deckhand", so they can be found and
+  read afterwards.
+
+Use it only on private repositories where everyone who can open or comment on an issue is
+trusted, and whose default branch deploys nothing you couldn't roll back.
 
 ## Research runs
 

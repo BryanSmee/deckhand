@@ -336,12 +336,25 @@ rating (capped by the most severe finding, `parseReview()`), `REQUEST_CHANGES` a
 `APPROVE`), and a comment review with the raw text when the format can't be read.
 
 With `review.fix`, once the review's run is torn down (so it no longer makes the task busy),
-`runs.mjs` hands, without waiting for it, the posted review to `reviews.fix()`: a review that requests changes on the
+`runs.mjs` hands, without waiting for it, the posted review to `reviews.settle()`, whose `fix()`: a review that requests changes on the
 App's own pull request, linked to its issue, queues one work item on the issue's task
 (`trigger: "work"`, `sender: null`, `reason: "review-fix"`), its text the findings fenced off
 as untrusted claims (`fixMessage()`), as
 `conflicts.mjs` does for a rebase. `fixedAt` in `reviews.json`, written before the item is
 queued, makes it once per pull request.
+
+With `review.merge` and the operator's `allow_auto_merge` (`grants.mjs`
+`autoMergeProblems()`), `settle()` goes on, for a review that started by itself (an item with
+`reason: "review"`, not a `/mode review` comment's) and started no fix run: `autoMerge()`
+re-reads the repo's settings and grant, records `mergeAt` (one decision per pull request),
+checks `mergeBlockers()` and the gates (`mergeRefusal()`: the pull request, its labels, its
+head, the repository's visibility and merge methods, its changed files against
+`trustedFile()`, `mergeable_state`, its Actions runs), then merges with the listener's token at
+the reviewed head (`PUT /pulls/{n}/merge` with `sha`) or comments why not. A merge is recorded
+on the task's pull request (`pulls.mjs`, `autoMerged`) for the dashboard. A fix run's end
+(an item with `reason: "review-fix"`, in `cleanUp()`) calls `reviews.fixed()`: one more review
+of what it pushed (`rereviewAt`), or a comment when it failed or pushed nothing. At start,
+`server.mjs` logs a warning for each repository granted `allow_auto_merge`.
 
 ## Waiting for other issues
 
@@ -638,7 +651,7 @@ tests fake it.
 | `images.mjs`, `checkout.mjs`                                      | Repo images, the agent's install, caches; checkouts.                                                                                                                                                                                                 |
 | `onboarding.mjs`, `previews.mjs`                                  | Onboarding issues and their run; preview hooks (`previewHook()`) and their queue.                                                                                                                                                                    |
 | `conflicts.mjs`                                                   | The conflict watcher: open task pull requests in conflict get a rebase run (`conflicts.json`).                                                                                                                                                       |
-| `reviews.mjs`                                                     | Pull request reviews: the ready pull requests that get one (`reviews.json`), and the GitHub review posted from the run's final message.                                                                                                              |
+| `reviews.mjs`                                                     | Pull request reviews: the ready pull requests that get one (`reviews.json`), the GitHub review posted from the run's final message, its fix run and auto-merge.                                                                                      |
 | `waits.mjs`                                                       | Comments waiting for other issues to be done (`/after`, `waits.json`).                                                                                                                                                                               |
 | `work.mjs`                                                        | The graph's work area: the backlog, starting or queueing issues, answers, reruns, inbox entries, analyses.                                                                                                                                           |
 | `plans.mjs`                                                       | A parent issue dropped on the graph: its sub-issues' tree, all levels down, and what each waits for from their "blocked by" links.                                                                                                                   |
