@@ -331,7 +331,8 @@ is a file in the run's inbox (`TASK_DIGEST`, `reviewThread()`, written by `prepa
 the pull request's and its issue's, with what users outside the allowlist wrote left out. The run's
 final message follows `prompts/review.md`'s format; `runs.mjs` hands it to `postReview()`,
 which posts one GitHub review with the listener's token: findings grouped by severity, the
-rating, `REQUEST_CHANGES` on a critical or high finding and `COMMENT` otherwise (never
+rating (capped by the most severe finding, `parseReview()`), `REQUEST_CHANGES` and a
+"request changes" verdict on a critical, high or medium finding and `COMMENT` otherwise (never
 `APPROVE`), and a comment review with the raw text when the format can't be read.
 
 With `review.fix`, once the review's run is torn down (so it no longer makes the task busy),

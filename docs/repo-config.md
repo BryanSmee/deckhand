@@ -438,6 +438,18 @@ by severity (`critical`, `high`, `medium`, `low`), each with its file and line a
 fix, a rating out of 10 and a verdict. It never pushes, edits code or creates issues: its
 token only reads, and the listener posts the review.
 
+- **Claims and acceptance criteria first.** Before security, the review lists the
+  acceptance criteria of the issue the pull request closes (and the decisions settled in
+  its thread) and the claims of the pull request's description (what it changes, adds or
+  tests, the checks it ran), and checks each against the code. A criterion not met, or met
+  only in part, and a claim the code contradicts are **high** findings; a claim it can't
+  verify (a check it can't run) is said in the summary, not filed as a finding. Unsure
+  between two severities, it picks the higher one.
+- **The rating follows the findings**: at most 3/10 with a critical finding, 5 with a high
+  one, 8 with a medium one; 10 only with no finding above low. The listener caps the rating
+  it posts by these numbers, whatever the review wrote; below the cap, it is shown as
+  written.
+
 - **Off by default.** Without a `review` block nothing reviews a pull request, and `/mode
 review` gets the "unknown mode" reply. `review: true` (or a block without `on`, or
   `on: manual`) turns on `/mode review` alone.
@@ -448,23 +460,25 @@ review` gets the "unknown mode" reply. `review: true` (or a block without `on`, 
   comment `/mode review`.
 - **`/mode review`** on a pull request, from an allowed user, reviews it now; what the comment
   adds is what the review should look at. On an issue it is refused, with a reply.
-- **The verdict on GitHub**: changes requested when there is a critical or high finding, a
-  comment otherwise. It never approves: that stays the maintainer's. GitHub doesn't let the
-  App request changes on its own pull requests: those get a comment review, the verdict in
-  its text. A reply whose format the listener can't read is posted as a comment review, as
-  it is.
+- **The verdict on GitHub**: changes requested when there is a critical, high or medium
+  finding, a comment otherwise; the verdict in the review's text says "request changes" then
+  too, whatever the review wrote. It never approves: that stays the maintainer's. GitHub
+  doesn't let the App request changes on its own pull requests: those get a comment review, the
+  verdict in its text. A reply whose format the listener can't read is posted as a comment
+  review, as it is.
 - **No loops**: without `fix`, the review starts no run. To act on it, comment with the trigger
   ("Deckhand, fix the high findings").
-- **`fix: true`**: a review that requests changes (a critical or high finding) on Deckhand's
-  own pull request, linked to the issue it worked on, starts **one** work run in that issue's
-  session. Its message is the review's findings, all of them (medium and low too), with the
-  instruction to fix each one or say why not, rerun the checks and push; it pushes like any
-  work run, and replies on the pull request. Not while the issue has a run going or queued
-  (a maintainer's comment came first) or the pull request or its issue has the needs-input
-  label. **Once per pull request**, kept in `reviews.json` across restarts, and written before
-  the run is queued: the fix's push doesn't start a review (only turning ready does), and a
-  later review (`/mode review`) starts no second fix. Other pull requests' reviews, and
-  reviews that only comment, start nothing. To act again, comment with the trigger.
+- **`fix: true`**: a review that requests changes (a critical, high or medium finding) on
+  Deckhand's own pull request, linked to the issue it worked on, starts **one** work run in
+  that issue's session. Its message is the review's findings, all of them (medium and low too),
+  with the instruction to fix each one or say why not, rerun the checks and push; it pushes
+  like any work run, and replies on the pull request. Not while the issue has a run going or
+  queued (a maintainer's comment came first) or the pull request or its issue has the
+  needs-input label. **Once per pull request**, kept in `reviews.json` across restarts, and
+  written before the run is queued: the fix's push doesn't start a review (only turning ready
+  does), and a later review (`/mode review`) starts no second fix. Other pull requests'
+  reviews, and reviews that only comment, start nothing. To act again, comment with the
+  trigger.
 - **Security risk of `fix`**: the review's findings, a model's output, become the message of a
   run that can push. A comment written to steer the reviewer (a prompt injection) could turn
   into a finding the fix run carries out. Deckhand narrows it: the review reads only the

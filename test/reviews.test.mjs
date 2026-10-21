@@ -27,7 +27,7 @@ const MESSAGE = `Adds the review mode. The token stays read-only, but one decisi
 - **low** \`docs/repo-config.md:10\`: a typo. Fix: "the".
 - **Medium**: no location for this one. Fix: say where.
 
-Rating: 6/10
+Rating: 5/10
 Verdict: request-changes
 `;
 
@@ -52,7 +52,7 @@ test("parseReview: summary, findings by severity with their place, rating and ve
       text: "no location for this one. Fix: say where.",
     },
   ]);
-  assert.equal(review.rating, 6);
+  assert.equal(review.rating, 5);
   assert.equal(review.verdict, "request-changes");
   // Bold labels, no findings.
   const clean = parseReview(
@@ -65,19 +65,87 @@ test("parseReview: summary, findings by severity with their place, rating and ve
   assert.equal(parseReview("Rating: 12/10\nVerdict: comment"), null);
 });
 
-test("reviewEvent: changes requested on critical or high findings only, never an approval", () => {
+test("parseReview: the rating capped by the most severe finding, shown as written below it", () => {
+  const rating = (findings, written) =>
+    parseReview(`${findings}\n\nRating: ${written}/10\nVerdict: comment`).rating;
+  assert.equal(rating("- **critical** `a.mjs:1`: leak.\n- **low** `b.mjs:1`: nit.", 9), 3);
+  assert.equal(rating("- **high** `a.mjs:1`: bug.", 8), 5);
+  assert.equal(rating("- **medium** `a.mjs:1`: edge case.", 10), 8);
+  assert.equal(rating("- **low** `a.mjs:1`: nit.", 10), 10);
+  assert.equal(rating("None.", 10), 10);
+  // Below the cap: as written.
+  assert.equal(rating("- **high** `a.mjs:1`: bug.", 4), 4);
+  assert.equal(rating("- **medium** `a.mjs:1`: edge case.", 7.5), 7.5);
+});
+
+test("parseReview: a critical, high or medium finding makes the verdict request-changes", () => {
+  for (const severity of ["critical", "high", "medium"]) {
+    for (const written of ["approve", "comment", "request-changes"]) {
+      const text = `- **${severity}** \`a.mjs:1\`: wrong.\n\nRating: 2/10\nVerdict: ${written}`;
+      assert.equal(parseReview(text).verdict, "request-changes", `${severity}, ${written}`);
+    }
+  }
+  // Low findings or none: as written.
+  const low = parseReview("- **low** `a.mjs:1`: nit.\n\nRating: 9/10\nVerdict: approve");
+  assert.equal(low.verdict, "approve");
+  assert.equal(parseReview("None.\n\nRating: 9/10\nVerdict: comment").verdict, "comment");
+  const body = reviewBody(
+    parseReview("- **high** `a.mjs:1`: bug.\n\nRating: 9/10\nVerdict: approve"),
+    "",
+    "f",
+  );
+  assert.match(body, /^\*\*Verdict: request changes\*\* · Rating: 5\/10/);
+});
+
+test("parseReview: only unindented bullets with a severity of their own are findings", () => {
+  const review = parseReview(`Adds a cache.
+
+- Lowers the cost of a run.
+- Highlights the slow path.
+
+## Findings
+
+- **low** \`a.mjs:1\`: a nit.
+  - Highlighting this is optional.
+  - Medium-sized inputs are fine.
+- [medium] \`b.mjs:2\`: slow.
+- high: \`c.mjs:3\`: broken.
+- Critical – no location.
+
+Rating: 9/10
+Verdict: comment`);
+  assert.deepEqual(
+    review.findings.map((f) => [f.severity, f.path, f.text]),
+    [
+      ["low", "a.mjs", "a nit.\n- Highlighting this is optional.\n- Medium-sized inputs are fine."],
+      ["medium", "b.mjs", "slow."],
+      ["high", "c.mjs", "broken."],
+      ["critical", null, "no location."],
+    ],
+  );
+  assert.match(review.summary, /Lowers the cost of a run\.\n- Highlights the slow path\.$/);
+  const nit = parseReview(
+    "- **low** `a.mjs:1`: a nit.\n  - Highlighting this is optional.\n\nRating: 9/10\nVerdict: comment",
+  );
+  assert.deepEqual([nit.findings.length, nit.rating, nit.verdict], [1, 9, "comment"]);
+  assert.equal(reviewEvent(nit), "COMMENT");
+});
+
+test("reviewEvent: changes requested on critical, high or medium findings, never an approval", () => {
   assert.equal(reviewEvent(parseReview(MESSAGE)), "REQUEST_CHANGES");
   const low = parseReview("- **low** `a.mjs:1`: nit.\n\nRating: 9/10\nVerdict: approve");
   assert.equal(reviewEvent(low), "COMMENT");
   const critical = "- **critical** `a.mjs:1`: leak.\n\nRating: 2/10\nVerdict: comment";
   assert.equal(reviewEvent(parseReview(critical)), "REQUEST_CHANGES");
+  const medium = "- **medium** `a.mjs:1`: edge case.\n\nRating: 7/10\nVerdict: comment";
+  assert.equal(reviewEvent(parseReview(medium)), "REQUEST_CHANGES");
   assert.equal(reviewEvent(null), "COMMENT");
 });
 
 test("reviewBody: verdict and rating, then the findings grouped by severity, linked", () => {
   const blob = "https://github.com/org/repo/blob/abc123";
   const body = reviewBody(parseReview(MESSAGE), MESSAGE, "<sub>footer</sub>", blob);
-  assert.match(body, /^\*\*Verdict: request changes\*\* · Rating: 6\/10\n\nAdds the review mode/);
+  assert.match(body, /^\*\*Verdict: request changes\*\* · Rating: 5\/10\n\nAdds the review mode/);
   // Most severe first, whatever the message's order.
   const high = body.indexOf("### 🟠 High (1)");
   const medium = body.indexOf("### 🟡 Medium (1)");
@@ -393,13 +461,22 @@ test("review.fix: nothing without the key, an unreadable review or a blocking fi
   }
   const { fix, accepted } = fixSetup(t);
   assert.equal(await fix({ event: null, review: null, pr: posted().pr }), null);
-  const minor =
-    "- **medium** `a.mjs:1`: slow.\n- **low** `b.mjs:2`: nit.\n\nRating: 7/10\nVerdict: comment";
+  const minor = "- **low** `b.mjs:2`: nit.\n\nRating: 9/10\nVerdict: comment";
   assert.equal(await fix(posted(minor)), null);
   assert.equal(await fix(posted("All good.\n\nRating: 9/10\nVerdict: approve")), null);
   assert.equal(accepted.length, 0);
   // None of those used the pull request's one fix run.
   assert.ok(await fix());
+});
+
+test("review.fix: medium findings alone start the fix run too", async (t) => {
+  const { fix, accepted } = fixSetup(t);
+  const medium =
+    "- **medium** `a.mjs:1`: slow.\n- **low** `b.mjs:2`: nit.\n\nRating: 9/10\nVerdict: comment";
+  const item = await fix(posted(medium));
+  assert.equal(item?.reason, "review-fix");
+  assert.deepEqual(accepted, [item]);
+  assert.match(item.text, /### 🟡 Medium \(1\)\n\n- `a\.mjs:1`: slow\./);
 });
 
 test("review.fix: only Deckhand's own open pull requests, linked to their issue", async (t) => {

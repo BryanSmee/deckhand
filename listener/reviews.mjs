@@ -27,9 +27,14 @@ const HEADINGS = {
   low: "⚪ Low",
 };
 
-// What a review blocks on: GitHub's REQUEST_CHANGES. Never APPROVE: an App's approval may
-// count toward branch protection, and approving is the maintainer's call.
-const BLOCKING = new Set(["critical", "high"]);
+// What a review blocks on: GitHub's REQUEST_CHANGES (and, with `review.fix`, a fix run). Never
+// APPROVE: an App's approval may count toward branch protection, and approving is the
+// maintainer's call.
+const BLOCKING = new Set(["critical", "high", "medium"]);
+
+// The highest rating a review can give with a finding of each severity: a model's 8/10 next
+// to a high finding would contradict the verdict it is posted with.
+const RATING_CAPS = { critical: 3, high: 5, medium: 8, low: 10 };
 
 const VERDICTS = { approve: "approve", comment: "comment", "request-changes": "request changes" };
 
@@ -38,6 +43,8 @@ const KEEP_MS = 90 * 24 * 3600_000;
 
 // The run's final message (prompts/review.md's format) → { summary, findings: [{ severity,
 // path, line, text }], rating, verdict }, or null when it lacks the rating or the verdict.
+// The rating is capped by the most severe finding (RATING_CAPS), and a blocking finding makes
+// the verdict `request-changes`, whatever the message says.
 export function parseReview(text) {
   const lines = String(text ?? "").split(/\r?\n/);
   const rating = /^\W*rating\W*\s*(\d{1,2}(?:\.\d)?)\s*\/\s*10\b/im.exec(text ?? "");
@@ -48,9 +55,13 @@ export function parseReview(text) {
   let current = null;
   let started = false;
   for (const line of lines) {
-    const finding = /^\s*[-*]\s+\**\[?(critical|high|medium|low)\]?\**\s*[:–—-]?\s*(.*)$/i.exec(
-      line,
-    );
+    // An unindented bullet whose severity ends in bold, a bracket or a separator: not
+    // "- Highlights…" in the summary, nor an indented sub-bullet of a finding's text, which
+    // would otherwise cap the rating, block and, with `review.fix`, start the fix run.
+    const finding =
+      /^[-*]\s+\**\[?(critical|high|medium|low)(?:\]\**|\*+|\s*[:–—])\s*[:–—-]?\s*(.*)$/i.exec(
+        line,
+      );
     if (finding) {
       started = true;
       current = { severity: finding[1].toLowerCase(), ...located(finding[2]) };
@@ -72,11 +83,12 @@ export function parseReview(text) {
     else if (line.trim()) current = null;
     if (!started) summary.push(line);
   }
+  const blocking = findings.some((f) => BLOCKING.has(f.severity));
   return {
     summary: summary.join("\n").trim(),
     findings,
-    rating: Number(rating[1]),
-    verdict: verdict[1].toLowerCase().replace(" ", "-"),
+    rating: Math.min(Number(rating[1]), ...findings.map((f) => RATING_CAPS[f.severity])),
+    verdict: blocking ? "request-changes" : verdict[1].toLowerCase().replace(" ", "-"),
   };
 }
 
@@ -87,8 +99,8 @@ function located(text) {
   return { path: m[1], line: Number(m[2]), text: text.slice(m[0].length).trim() };
 }
 
-// GitHub's `event` for a parsed review (null: unparsed): changes requested on critical or high
-// findings, else a comment.
+// GitHub's `event` for a parsed review (null: unparsed): changes requested on critical, high
+// or medium findings, else a comment.
 export function reviewEvent(review) {
   return review?.findings.some((f) => BLOCKING.has(f.severity)) ? "REQUEST_CHANGES" : "COMMENT";
 }
