@@ -2734,13 +2734,19 @@ mounts:
   });
 
   test("Work area plan: a parent's sub-issues start or wait from their links, the parent last", async (t) => {
-    const subs = [11, 12].map((number) => ({ number, title: `Sub ${number}`, state: "open" }));
+    const repository_url = "https://api.github.com/repos/org/repo";
+    const subs = [11, 12].map((number) => ({
+      number,
+      title: `Sub ${number}`,
+      state: "open",
+      repository_url,
+    }));
     const { dir, github, port } = await listen(
       t,
       {
         "issue:10": JSON.stringify({ number: 10, title: "Epic", state: "open" }),
         "subs:10": JSON.stringify(subs),
-        "blocked:11": JSON.stringify([{ number: 12, state: "open" }]),
+        "blocked:11": JSON.stringify([{ number: 12, state: "open", repository_url }]),
       },
       (dir, github) => {
         writeFileSync(join(dir, "hold"), "");

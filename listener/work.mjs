@@ -53,7 +53,7 @@ import { inboxItem, issueItem, parseKey, prId, taskKey, unmarked } from "./event
 import { getJson } from "./github.mjs";
 import { createInputSeeder } from "./inputs.mjs";
 import { createRepoCheck } from "./repo-check.mjs";
-import { planSummary, readTree, waitsOf } from "./plans.mjs";
+import { leadsTo, planSummary, readTree, waitsOf } from "./plans.mjs";
 import { CONFIG_FILE, modeNames } from "./repo-config.mjs";
 import { issueList, waitsFor } from "./waits.mjs";
 import { apiRoute, readJsonBody, refuse, send } from "./web.mjs";
@@ -89,21 +89,6 @@ export function checkAction(body) {
     mode,
     pr: action === "cancel" && pr,
   };
-}
-
-// Whether the wait of `from` leads, from one blocker to the next, to issue `to`: queueing `to`
-// after `from` would then make each wait for the other, and neither would start.
-export function leadsTo(get, repo, from, to) {
-  const seen = new Set();
-  const stack = [from];
-  while (stack.length) {
-    const n = stack.pop();
-    if (n === to) return true;
-    if (seen.has(n)) continue;
-    seen.add(n);
-    stack.push(...(get(taskKey(repo, n))?.blockers ?? []));
-  }
-  return false;
 }
 
 // `github(repo, method, path, body, expected)`: the App's calls. `repoSettings(repo, base)`:
@@ -385,13 +370,17 @@ export function createWorkApi({
       const action = after === null ? "start" : "queue";
       return `${await act(repo, user, { action, number, after, mode, pr: false }, answers)}${away}`;
     }
+    let afterDone = "";
     if (after !== null) {
       if (tree.nodes.has(after))
         refuse(422, `#${after} is part of #${number}: it can't wait for it.`);
       const state = await waits.stateOf(repo, after);
       if (state === "missing") refuse(422, `#${after} isn't an issue or pull request of ${repo}.`);
       if (state === "not-done") refuse(422, `#${after} was closed without being done.`);
-      if (state !== "open") after = null;
+      if (state !== "open") {
+        afterDone = ` #${after} is done already: nothing waits for it.`;
+        after = null;
+      }
     }
     const order = [...tree.nodes.keys()];
     for (const n of order) {
@@ -406,50 +395,70 @@ export function createWorkApi({
       const wanted = mode ?? waits.get(key)?.item.modeLine ?? "work";
       if (!modeNames(settings).includes(wanted)) refuse(422, `${repo} has no mode \`${wanted}\`.`);
     }
-    const planned = waitsOf(tree, {
-      after,
-      existing: (n) => waits.get(taskKey(repo, n))?.blockers ?? [],
-    });
+    const planned = waitsOf(tree, { after, existing: blockersOf(repo) });
     // Those that wait first: the ones that start can't end before their waits are there.
     const waiting = order.filter((n) => planned.get(n).length);
-    for (const n of [...waiting, ...order.filter((n) => !planned.get(n).length)]) {
-      const key = taskKey(repo, n);
-      const wait = waits.get(key);
-      const wanted = mode ?? wait?.item.modeLine ?? "work";
-      const item = itemOf(repo, tree.nodes.get(n).issue, wanted, user, base, settings);
-      const also = n === number && answers ? `\n\n${answers}` : "";
-      if (also) item.text = answers;
-      const part = n === number ? "" : ` as part of #${number}`;
-      const was = wait ? ` It no longer waits for ${waitsFor(wait)}.` : "";
-      const blockers = planned.get(n);
-      if (blockers.length) {
-        const they = blockers.length > 1 ? "they are" : "it is";
-        item.comment = await comment(
-          repo,
-          n,
-          `Queued from the dashboard by @${user}${part}, after ${issueList(blockers)}${inMode(wanted)}.${was} It starts when ${they} done (closed as completed, or merged).${also}`,
-        );
-        await waits.hold(item, blockers);
-        continue;
+    const steps = [...waiting, ...order.filter((n) => !planned.get(n).length)];
+    const laid = [];
+    try {
+      for (const n of steps) {
+        await layOut(repo, user, { number, n, tree, planned, mode, base, settings, answers });
+        laid.push(n);
       }
-      waits.cancel(key, `started from the dashboard by @${user} as part of #${number}`);
+    } catch (error) {
+      // Checked, then GitHub failed halfway (an outage, a rate limit): what is done stays.
+      log(`Work area: ${taskKey(repo, number)}: plan: ${error.message ?? error}`);
+      const left = steps.filter((n) => !laid.includes(n));
+      const done = laid.length ? `${issueList(laid)} laid out, ` : "nothing laid out, ";
+      refuse(
+        502,
+        `GitHub failed on #${left[0]}: ${done}${issueList(left)} not. Start or queue those from the backlog.`,
+      );
+    }
+    const skipped = tree.done.length ? ` Done already: ${issueList(tree.done)}.` : "";
+    return `#${number} laid out: ${planSummary(order, planned)}.${afterDone}${skipped}${away}`;
+  }
+
+  // What a plan does for issue `n` of the tree: the App's comment, then its wait or its start.
+  async function layOut(repo, user, { number, n, tree, planned, mode, base, settings, answers }) {
+    const key = taskKey(repo, n);
+    const wait = waits.get(key);
+    const wanted = mode ?? wait?.item.modeLine ?? "work";
+    const item = itemOf(repo, tree.nodes.get(n).issue, wanted, user, base, settings);
+    const also = n === number && answers ? `\n\n${answers}` : "";
+    if (also) item.text = answers;
+    const part = n === number ? "" : ` as part of #${number}`;
+    const was = wait ? ` It no longer waits for ${waitsFor(wait)}.` : "";
+    const blockers = planned.get(n);
+    if (blockers.length) {
+      const they = blockers.length > 1 ? "they are" : "it is";
       item.comment = await comment(
         repo,
         n,
-        `Started from the dashboard by @${user}${inMode(wanted)}${part}.${was}`,
+        `Queued from the dashboard by @${user}${part}, after ${issueList(blockers)}${inMode(wanted)}.${was} It starts when ${they} done (closed as completed, or merged).${also}`,
       );
-      await accept(item);
+      await waits.hold(item, blockers);
+      return;
     }
-    const skipped = tree.done.length ? ` Done already: ${issueList(tree.done)}.` : "";
-    return `#${number} laid out: ${planSummary(order, planned)}.${skipped}${away}`;
+    waits.cancel(key, `started from the dashboard by @${user} as part of #${number}`);
+    item.comment = await comment(
+      repo,
+      n,
+      `Started from the dashboard by @${user}${inMode(wanted)}${part}.${was}`,
+    );
+    await accept(item);
   }
+
+  // What each issue of `repo` waits for already (waits.mjs), by number.
+  const blockersOf = (repo) => (n) => waits.get(taskKey(repo, n))?.blockers ?? [];
 
   // What "/after #n" does: `item` waits for issue `after`, its wait (`wait`, if any) moved
   // there. Null when `after` is done already: the caller starts it.
   async function queueAfter(repo, user, { item, after, mode, wanted, wait, also }) {
     const { number } = item;
     if (after === number) refuse(422, `#${number} can't wait for itself.`);
-    if (leadsTo(waits.get, repo, after, number)) {
+    // Queueing it after an issue whose waits lead back to it: neither would start.
+    if (leadsTo(blockersOf(repo), after, number)) {
       refuse(422, `#${after} waits for #${number}: each would wait for the other.`);
     }
     const state = await waits.stateOf(repo, after);

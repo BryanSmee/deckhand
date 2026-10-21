@@ -377,11 +377,14 @@ left out, and the reply says so), and for what their parent is blocked by; a par
 all its open sub-issues, and runs last, to finish the epic or close it. Dropped next to an
 issue, the tree's first issues wait for that one. A blocker reached through another is left
 out (#11 waits for #12, not for #12's own blockers too). Sub-issues closed as completed are
-skipped. One closed as not planned, running or queued, with open questions, or a loop in the
-links (through the waits already there too) refuses the whole drop before anything is posted.
-Each issue gets the App's comment ("Queued from the dashboard by @alice as part of #10, after
-#12"), and a sub-issue unblocks the next once it is done, as for `/after`: its pull request
-merged, so the next one builds on it.
+skipped. A parent "blocked by" its own sub-issues (an epic by its tasks) already waits for
+them: those links are left out, and not passed down. One closed without being done, running or
+queued, with open questions, a loop in the links (through the waits already there too), or a
+tree over 30 open issues (`MAX_TREE`) refuses the whole drop before anything is posted. If
+GitHub fails halfway through the comments, the reply says which issues are laid out and which
+aren't. Each issue gets the App's comment ("Queued from the dashboard by @alice as part of
+#10, after #12"), and a sub-issue unblocks the next once it is done, as for `/after`: its pull
+request merged, so the next one builds on it.
 
 The backlog is served from the last read and
 read again in the background once it is 30 seconds old or an `issues` delivery made it stale
