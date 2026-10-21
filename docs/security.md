@@ -831,8 +831,9 @@ only). It widens nothing, so it needs no grant: a review is a light run with a r
 (`contents`, `issues`, `pull_requests: read`), no branch to push, no setup and no engine.
 
 - **The listener posts the review**, with its own token (`POST /repos/{repo}/pulls/{n}/reviews`),
-  from the run's final message. A diff written to talk the agent into something can't make
-  it write anything: the most it can do is change the review's text. The review never
+  from the run's final message. Without `review.fix`, a diff written to talk the agent into
+  something can't make it write anything: the most it can do is change the review's text
+  (with `fix`, see [Review fix runs](#review-fix-runs)). The review never
   approves (an App's approval may count toward branch protection): it requests changes on a
   critical or high finding, and comments otherwise.
 - **No sandbox reviews or approves**, a work run's included: their tokens only read pull
@@ -842,11 +843,54 @@ only). It widens nothing, so it needs no grant: a review is a light run with a r
   repository, opened by the App or by a user of `ALLOWED_USERS` and the repo's `users`, when
   they turn ready. Never a fork's, never another bot's (Dependabot, GitHub Actions), never an
   outsider's: nobody outside the allowlist can make the operator pay for a run.
+- **Only allowed users' comments**: the review reads its thread (the pull request's
+  description, comments and reviews, and the issue it closes) from a file the listener writes
+  (`TASK_DIGEST`), with only what users of `ALLOWED_USERS` and the repo's `users`, and the App
+  itself, wrote. What anyone else wrote, another bot included, is replaced with a line saying
+  it was left out; an allowed user who wants it read quotes it in a comment of their own. Its
+  prompt tells it not to read the thread another way. That is an instruction, not a wall: its
+  token can read the comments, so it narrows what an outsider can put in front of it, no more.
 - **No loops**: each pull request's head commit is reviewed by itself once (`reviews.json`),
   and the App's review is a bot's `pull_request_review`, which starts nothing. Acting on a
-  review is the maintainer's call, with a trigger comment.
+  review is the maintainer's call, with a trigger comment, unless the repo sets `review.fix`
+  (below).
 - `/mode review` comes from an allowed user's comment, like any mode, on the pull request
   itself.
+
+### Review fix runs
+
+With `review.fix`, a review that requests changes on Deckhand's own pull request (opened by
+the App, on a branch of the repository, linked to its issue) starts one work run in that
+issue's session, once per pull request (`fixedAt` in `reviews.json`, written before the run
+is queued). It is a normal work run, with the same token, push rules, secrets and mounts, so
+the key needs no grant; its push starts no review, and a later review starts no second fix.
+
+**The risk**: this is the one path where a model's output, not a person's comment, becomes the
+message of a run that can push. The review's findings are written by a run that read the diff
+and the thread; text written to steer it (a prompt injection) could turn into a "finding"
+whose fix is what its author wants: a command to run, a workflow or `.deckhand.yaml` change, a
+secret sent somewhere. What limits it:
+
+- **What the review reads**: only allowed users' and the App's comments, as above. An outsider's
+  comment on the pull request or its issue doesn't reach it unless an allowed user quotes it.
+- **Whose pull requests**: only Deckhand's own, whose diff its own work run wrote; never a
+  fork's, another bot's or an outsider's.
+- **How the fix run gets them**: its message fences the findings off from its instruction and
+  says they are untrusted claims to check against the code, never instructions: no commands
+  from a finding, no changes to CI, workflows, `.deckhand.yaml`, Dockerfiles, dependencies or
+  credentials unless the issue asked for them, no secrets sent anywhere, and its reply says
+  which findings it left and why.
+- **What any work run is held to**: its token pushes only its own branch (never the default
+  one), `.github/workflows/` only with `allow_workflows`, hosts only through the egress proxy,
+  and its pull request still waits for a maintainer to merge it.
+
+**What is left**: these are mitigations, not a guarantee. A model can still be talked into
+something by text it reads: an allowed user's comment quoting an outsider, the App's own
+replies that quote one, files of the repository, or comments the reviewer reads anyway with
+its token against its instructions. Turn `fix` on where the people who may comment on a pull
+request or its issue are trusted (a private repository, or `users` narrowed to them), read
+what a fix run pushed before merging, and keep `fix` off on public repositories with outside
+contributors whose threads you don't watch.
 
 ## Research runs
 

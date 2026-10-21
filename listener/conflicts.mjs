@@ -8,7 +8,7 @@
 // never starts a second run, across restarts: a rebase that failed or stopped to ask waits
 // for a new push or a new base commit.
 import { repoAllowed } from "./config.mjs";
-import { hasLabel } from "./comments.mjs";
+import { waitsForInput } from "./comments.mjs";
 import { parseKey, sameRepo } from "./events.mjs";
 import { getJson } from "./github.mjs";
 import { persistentMap } from "./store.mjs";
@@ -103,7 +103,8 @@ export function createConflicts({
     // Conflicts only: a pull request merely behind its base merges as it is.
     if (pr.mergeable !== false && pr.mergeable_state !== "dirty") return null;
     const target = parseKey(key);
-    if (await waitsForInput(repo, pr, target)) return null;
+    const issue = target.kind === "issue" ? target.number : null;
+    if (await waitsForInput(github, config, repo, pr, issue)) return null;
     const baseSha = await baseHead(repo, pr.base.ref);
     if (!baseSha) return null;
     const pair = { pr: number, head: pr.head.sha, base: baseSha };
@@ -134,16 +135,6 @@ export function createConflicts({
       reason: "conflict",
     });
     return "started";
-  }
-
-  // The pull request, or its issue (where runs put the label), waits for the maintainer.
-  async function waitsForInput(repo, pr, target) {
-    const name = config.needsInputLabel;
-    if (!name) return false;
-    if (hasLabel(pr.labels, name)) return true;
-    if (target.kind !== "issue") return false;
-    const issue = await json(repo, `/repos/${repo}/issues/${target.number}`, [404, 410]);
-    return hasLabel(issue?.labels, name);
   }
 
   // The base branch's latest commit: a pull request's own base.sha can lag behind it.

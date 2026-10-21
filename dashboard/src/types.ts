@@ -33,7 +33,7 @@ export interface Run {
   // work, brainstorm, idea, bug, discussion or one of the repo's own modes
   taskMode: string | null;
   // Why the listener started it itself ("conflict": a pull request to rebase, "review": one
-  // that turned ready); null for comments.
+  // that turned ready, "review-fix": one whose review requested changes); null for comments.
   reason?: string | null;
   // What ran it (listener/agents/): "claude", "codex" or "antigravity"; "claude" also for runs
   // from before agents had names.

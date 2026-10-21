@@ -203,7 +203,7 @@ export function runName(r: Run): string {
   const what = { start: "Start", continue: "Continue", restore: "Restore", "wrap-up": "Wrap-up" }[
     r.mode ?? ""
   ];
-  const why = r.reason === "conflict" ? "Conflict" : null;
+  const why = { conflict: "Conflict", "review-fix": "Review fix" }[r.reason ?? ""] ?? null;
   return [why, own, what ?? "Run"].filter(Boolean).join(" · ");
 }
 

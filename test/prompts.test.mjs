@@ -458,6 +458,10 @@ test("prompts: a review reads the pull request, the repo's instructions after th
   const prompt = promptFor(issue, { mode: "review", pull: 31, instructions: "Mind the SQL.\n" });
   assert.match(prompt, /^Review pull request #31 of org\/app\./);
   assert.match(prompt, /`gh pr diff 31`/);
+  // Its thread from the listener, outsiders' comments left out: never read another way.
+  assert.match(prompt, /thread at `\$TASK_DIGEST` \(`cat "\$TASK_DIGEST"`\)/);
+  assert.match(prompt, /what anyone else wrote is left out on purpose/);
+  assert.doesNotMatch(prompt, /`gh pr view 31 --comments`/);
   assert.match(prompt, /Verdict: request-changes/);
   // Its code in a worktree under /tmp, never in the kept clone, which the next runs start in.
   assert.match(

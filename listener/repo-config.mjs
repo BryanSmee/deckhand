@@ -29,7 +29,7 @@ export const PLAIN_PATH = /^\/[\w./@+-]*$/;
 
 const MODE_KEYS = ["instructions", "light", "session", "agent", "model", "effort"];
 
-const REVIEW_KEYS = ["on", "instructions", "agent", "model", "effort"];
+const REVIEW_KEYS = ["on", "instructions", "agent", "model", "effort", "fix"];
 // When a review starts by itself (reviews.mjs): `ready`, a pull request marked ready for review
 // or opened as ready; `manual`, only with a "/mode review" line.
 const REVIEW_ON = ["ready", "manual"];
@@ -253,7 +253,14 @@ function parseConflicts(value, { key, settings, config, fail, warn }) {
 // It widens nothing (a light run with a read-only token), so no grant.
 function parseReview(value, { key, settings, config, fail }) {
   if (value === false) return;
-  const review = { on: "manual", instructions: null, agent: null, model: null, effort: null };
+  const review = {
+    on: "manual",
+    instructions: null,
+    agent: null,
+    model: null,
+    effort: null,
+    fix: false,
+  };
   if (value === true) {
     settings.review = review;
     return;
@@ -273,6 +280,10 @@ function parseReview(value, { key, settings, config, fail }) {
     } else if (k === "instructions") {
       review.instructions = repoPath(v);
       if (!review.instructions) bad(k, "expected a path in the repository (relative, no ..)");
+    } else if (k === "fix") {
+      // A normal work run, with the same push rules: no grant either.
+      if (typeof v === "boolean") review.fix = v;
+      else bad(k, "expected true or false");
     } else if (k === "agent") {
       review.agent = agentName(v, `review.${k}`, config, (_, what) => bad(k, what));
     } else if (k === "model") {
@@ -291,7 +302,8 @@ function parseReview(value, { key, settings, config, fail }) {
 function reviewText(review) {
   if (!review) return "off";
   const when = review.on === "ready" ? "when a pull request is ready" : '"/mode review" only';
-  return [when, review.instructions].filter(Boolean).join(" · ");
+  const fix = review.fix && "one fix run per pull request";
+  return [when, fix, review.instructions].filter(Boolean).join(" · ");
 }
 
 // The operator's value of `field`, as the repo's default: a file can only narrow or replace it.
