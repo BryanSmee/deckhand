@@ -27,6 +27,10 @@
 .closed {
   --tone: var(--err);
 }
+/* Merged with no human review: dashed, so it reads apart from a maintainer's merge. */
+.auto {
+  border-style: dashed;
+}
 
 .link {
   display: inline-flex;

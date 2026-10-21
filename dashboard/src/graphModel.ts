@@ -39,7 +39,7 @@ export interface GraphNode {
 export function lookOf(t: {
   state?: Task["state"] | null;
   closed: Task["closed"];
-  pr?: { state: PrState } | null;
+  pr?: { state: PrState; autoMerged?: boolean } | null;
 }): Look {
   if (t.state && ["building-image", "working", "stopping"].includes(t.state)) return "run";
   if (t.closed === "completed" || t.pr?.state === "merged") return "done";
@@ -52,8 +52,14 @@ export function lookOf(t: {
 
 function statusOf(
   look: Look,
-  t: { state?: Task["state"] | null; closed: Task["closed"]; pr?: { state: PrState } | null },
+  t: {
+    state?: Task["state"] | null;
+    closed: Task["closed"];
+    pr?: { state: PrState; autoMerged?: boolean } | null;
+  },
 ) {
+  // Merged with no human review: the graph says so, for a maintainer looking for them later.
+  if (look === "done" && t.pr?.state === "merged" && t.pr.autoMerged) return "Merged by Deckhand";
   if (look === "done") return t.closed === "completed" ? "Implemented" : "Merged";
   if (look === "ready") return "Ready for review";
   if (look === "input" && t.pr?.state === "ready") return "Needs input, PR ready";

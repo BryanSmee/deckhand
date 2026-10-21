@@ -151,6 +151,20 @@ test("a run that asked on a ready pull request says both", () => {
   expect(nodes.map((n) => [n.look, n.status])).toEqual([["input", "Needs input, PR ready"]]);
 });
 
+test("a pull request merged by Deckhand: done, and its node says who merged it", () => {
+  const pr = { number: 2, url: "", state: "merged" as const, readyAt: null, autoMerged: true };
+  const { nodes } = graphOf(
+    [task(1, { pr }), task(3, { pr: { ...pr, autoMerged: false } })],
+    [],
+    [],
+    { showClosed: true },
+  );
+  expect(nodes.map((n) => [n.look, n.status])).toEqual([
+    ["done", "Merged by Deckhand"],
+    ["done", "Merged"],
+  ]);
+});
+
 test("answers on their way: their node Sending…", () => {
   const tasks = [task(1, { state: "needs-input" }), task(2, { state: "needs-input" })];
   const { nodes } = graphOf(tasks, [], [], { sending: ["org/app#2"] });

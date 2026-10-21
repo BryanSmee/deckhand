@@ -72,6 +72,8 @@ export interface PullRequest {
   state: PrState;
   // When a webhook said it turned ready for review; null when looked up, or never ready.
   readyAt: number | null;
+  // Merged by Deckhand itself, with no human review (`review.merge`, listener/reviews.mjs).
+  autoMerged?: boolean;
 }
 
 export interface Task {
@@ -224,6 +226,9 @@ export interface Repo {
   // When its config was last read from GitHub; null when it couldn't be. Sent, not shown: the
   // config panel says when it read its own.
   readAt: number | null;
+  // Its `review.merge` merges Deckhand's pull requests with no human review: on in its config,
+  // granted, and allowed for its visibility (listener/grants.mjs autoMergeProblems()).
+  autoMerge: boolean;
 }
 
 // Where the App is managed on GitHub (repos.mjs appLinks()). installUrl: GitHub's page that
@@ -295,6 +300,8 @@ export interface Grant {
   allowResearch: boolean;
   // Pushes that change .github/workflows/ (the git gateway's token gets `workflows: write`).
   allowWorkflows: boolean;
+  // `review.merge` may merge Deckhand's pull requests; "public": on a public repository too.
+  allowAutoMerge: boolean | "public";
   hosts: string[];
   // Those whose plain HTTP answers the egress proxy keeps in its cache.
   cachedHosts: string[];

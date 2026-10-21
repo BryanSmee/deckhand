@@ -143,6 +143,14 @@ export function Repos({
                   {r.repo}
                 </button>
                 {r.private && <span class={styles.private}>private</span>}
+                {r.autoMerge && (
+                  <span
+                    class={styles.autoMerge}
+                    title="Deckhand merges its own pull requests after its review: nobody reads them before they reach the default branch"
+                  >
+                    Auto-merge: no human review
+                  </span>
+                )}
               </div>
               <RepoBadge status={r.status} class={styles.status} />
               <div class={styles.action}>
