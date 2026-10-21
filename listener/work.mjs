@@ -12,6 +12,9 @@
 //                                         task ends (`refreshing` while it is going)
 //   POST /api/repos/<owner>/<repo>/work   { action: "start", number, mode? }
 //                                         { action: "queue", number, after, mode? }
+//                                         { action: "plan", number, after?, mode? }: a parent
+//                                         issue and its sub-issues, laid out from their
+//                                         "blocked by" links (plans.mjs)
 //                                         { action: "dequeue", number }
 //                                         { action: "stop", number }: a brainstorm's wrap-up
 //                                         { action: "cancel", number, pr? }: stops the run
@@ -50,8 +53,9 @@ import { inboxItem, issueItem, parseKey, prId, taskKey, unmarked } from "./event
 import { getJson } from "./github.mjs";
 import { createInputSeeder } from "./inputs.mjs";
 import { createRepoCheck } from "./repo-check.mjs";
+import { planSummary, readTree, waitsOf } from "./plans.mjs";
 import { CONFIG_FILE, modeNames } from "./repo-config.mjs";
-import { waitsFor } from "./waits.mjs";
+import { issueList, waitsFor } from "./waits.mjs";
 import { apiRoute, readJsonBody, refuse, send } from "./web.mjs";
 
 // How long a repo's open issues are served before they are read again (in the background):
@@ -60,7 +64,7 @@ export const ISSUES_MS = 30_000;
 const MAX_BODY = 4096;
 // The answers' text, and the JSON around it (escapes, indexes).
 const MAX_ANSWER_BODY = 4 * MAX_TEXT;
-const ACTIONS = ["start", "queue", "dequeue", "stop", "cancel"];
+const ACTIONS = ["start", "queue", "plan", "dequeue", "stop", "cancel"];
 // An inbox entry's kind, and the repo config's key for its issue.
 const INBOXES = { idea: "ideas", bug: "bugs" };
 // An action's fields, checked (a body's, or answers' `then`): { action, number, after, mode,
@@ -71,6 +75,9 @@ export function checkAction(body) {
   if (!ACTIONS.includes(action)) refuse(400, `The action is one of ${ACTIONS.join(", ")}.`);
   if (!issue(number)) refuse(400, "`number` is an issue number.");
   if (action === "queue" && !issue(after)) refuse(400, "`after` is an issue number.");
+  if (action === "plan" && after !== null && !issue(after)) {
+    refuse(400, "`after` is an issue number.");
+  }
   if (mode !== null && (typeof mode !== "string" || !/^[\w-]+$/.test(mode))) {
     refuse(400, "`mode` is a mode's name.");
   }
@@ -78,7 +85,7 @@ export function checkAction(body) {
   return {
     action,
     number,
-    after: action === "queue" ? after : null,
+    after: action === "queue" || action === "plan" ? after : null,
     mode,
     pr: action === "cancel" && pr,
   };
@@ -139,9 +146,9 @@ export function createWorkApi({
   // Open questions in the backlog's issues that never got the label (inputs.mjs).
   const { seed: seedInputs } = createInputSeeder({ config, github, label, inputs, boardKeys, log });
 
-  // The repo's open issues, newest first (pull requests are issues to this API: left out), and
-  // the modes the dashboard offers: onboarding is the listener's own, research only with its
-  // grant (access.mjs researchRefusal()).
+  // The repo's open issues, newest first (pull requests are issues to this API: left out),
+  // with their open sub-issues (subIssues()), and the modes the dashboard offers: onboarding
+  // is the listener's own, research only with its grant (access.mjs researchRefusal()).
   async function readBacklog(repo) {
     const base = await baseOf(repo);
     const { settings, errors } = await repoSettings(repo, base);
@@ -152,12 +159,24 @@ export function createWorkApi({
     return {
       issues: list
         .filter((i) => !i.pull_request)
-        .map((i) => ({ number: i.number, title: i.title ?? null, url: i.html_url })),
+        .map((i) => ({
+          number: i.number,
+          title: i.title ?? null,
+          url: i.html_url,
+          ...subIssues(i),
+        })),
       modes: errors.length ? [] : offeredModes(repo, settings),
       errors: errors.length > 0,
       // Who may see it, as for the dashboard's tasks: unknown while the config has errors.
       users: errors.length ? null : settings.users,
     };
+  }
+
+  // `subIssues`: how many of its sub-issues are open, from the list's own summary, when any
+  // are: dropped on the graph, it is laid out with them (plan()).
+  function subIssues(issue) {
+    const { total = 0, completed = 0 } = issue.sub_issues_summary ?? {};
+    return total > completed ? { subIssues: total - completed } : {};
   }
 
   function offeredModes(repo, settings) {
@@ -312,16 +331,11 @@ export function createWorkApi({
     // Whatever the issue's state: a run may go on once it is closed.
     if (action === "cancel") return cancelTask(repo, user, number, pr);
     const key = taskKey(repo, number);
-    const { settings, base, issue } = await checked(repo, user, number);
-    const asking = taskOf(key);
+    const checks = await checked(repo, user, number);
+    const { settings, base, issue } = checks;
+    if (action === "plan") return plan(repo, user, checks, { after, mode }, answers);
     const asks = action === "start" || action === "queue";
-    if (
-      !answers &&
-      asks &&
-      settings.waitForAnswers &&
-      asking?.state === "needs-input" &&
-      asking.questions
-    ) {
+    if (!answers && asks && asking(settings, key)) {
       refuse(409, `#${number} has open questions: answer them first.`);
     }
     const wait = waits.get(key);
@@ -348,6 +362,86 @@ export function createWorkApi({
     );
     await accept(item);
     return `#${number} started.`;
+  }
+
+  // Whether the task of `key` has open questions that hold its start (`wait_for_answers`).
+  function asking(settings, key) {
+    const task = taskOf(key);
+    return settings.waitForAnswers && task?.state === "needs-input" && !!task.questions;
+  }
+
+  // A parent issue dropped on the graph: its whole tree laid out at once (plans.mjs). Each
+  // sub-issue with nothing to wait for starts, the others wait for their blockers, the parent
+  // for its sub-issues; all in the mode picked. Every issue is checked as checked() checks one
+  // before anything is posted: nothing half-done. `after`: the issue it was dropped next to,
+  // which the tree's first issues wait for. One without open sub-issues starts or queues.
+  async function plan(repo, user, { settings, base, issue }, { after, mode }, answers) {
+    const { number } = issue;
+    const tree = await readTree(github, repo, issue);
+    const away = tree.elsewhere.length
+      ? ` Left out, in another repository: ${tree.elsewhere.join(", ")}.`
+      : "";
+    if (tree.nodes.size === 1) {
+      const action = after === null ? "start" : "queue";
+      return `${await act(repo, user, { action, number, after, mode, pr: false }, answers)}${away}`;
+    }
+    if (after !== null) {
+      if (tree.nodes.has(after))
+        refuse(422, `#${after} is part of #${number}: it can't wait for it.`);
+      const state = await waits.stateOf(repo, after);
+      if (state === "missing") refuse(422, `#${after} isn't an issue or pull request of ${repo}.`);
+      if (state === "not-done") refuse(422, `#${after} was closed without being done.`);
+      if (state !== "open") after = null;
+    }
+    const order = [...tree.nodes.keys()];
+    for (const n of order) {
+      const key = taskKey(repo, n);
+      if (n !== number && busy(key)) {
+        refuse(409, `#${n} is running or queued: it can't be moved now.`);
+      }
+      if (!(n === number && answers) && asking(settings, key)) {
+        refuse(409, `#${n} has open questions: answer them first.`);
+      }
+      // A waiting one keeps its mode, unless another one is picked.
+      const wanted = mode ?? waits.get(key)?.item.modeLine ?? "work";
+      if (!modeNames(settings).includes(wanted)) refuse(422, `${repo} has no mode \`${wanted}\`.`);
+    }
+    const planned = waitsOf(tree, {
+      after,
+      existing: (n) => waits.get(taskKey(repo, n))?.blockers ?? [],
+    });
+    // Those that wait first: the ones that start can't end before their waits are there.
+    const waiting = order.filter((n) => planned.get(n).length);
+    for (const n of [...waiting, ...order.filter((n) => !planned.get(n).length)]) {
+      const key = taskKey(repo, n);
+      const wait = waits.get(key);
+      const wanted = mode ?? wait?.item.modeLine ?? "work";
+      const item = itemOf(repo, tree.nodes.get(n).issue, wanted, user, base, settings);
+      const also = n === number && answers ? `\n\n${answers}` : "";
+      if (also) item.text = answers;
+      const part = n === number ? "" : ` as part of #${number}`;
+      const was = wait ? ` It no longer waits for ${waitsFor(wait)}.` : "";
+      const blockers = planned.get(n);
+      if (blockers.length) {
+        const they = blockers.length > 1 ? "they are" : "it is";
+        item.comment = await comment(
+          repo,
+          n,
+          `Queued from the dashboard by @${user}${part}, after ${issueList(blockers)}${inMode(wanted)}.${was} It starts when ${they} done (closed as completed, or merged).${also}`,
+        );
+        await waits.hold(item, blockers);
+        continue;
+      }
+      waits.cancel(key, `started from the dashboard by @${user} as part of #${number}`);
+      item.comment = await comment(
+        repo,
+        n,
+        `Started from the dashboard by @${user}${inMode(wanted)}${part}.${was}`,
+      );
+      await accept(item);
+    }
+    const skipped = tree.done.length ? ` Done already: ${issueList(tree.done)}.` : "";
+    return `#${number} laid out: ${planSummary(order, planned)}.${skipped}${away}`;
   }
 
   // What "/after #n" does: `item` waits for issue `after`, its wait (`wait`, if any) moved
@@ -474,7 +568,7 @@ export function createWorkApi({
   // Answered, it no longer waits for input, whoever asked.
   async function answerThen(repo, user, task, asked) {
     const then = checkAction({ ...asked.then, number: asked.number });
-    if (asked.pr || !["start", "queue"].includes(then.action)) {
+    if (asked.pr || !["start", "queue", "plan"].includes(then.action)) {
       refuse(422, "Only an issue starts or queues once its questions are answered.");
     }
     const { comment: text, open } = answersComment(user, task.questions?.items ?? null, asked);

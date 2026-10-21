@@ -1,7 +1,7 @@
 // The graph page's model: what each issue looks like, and where it goes: the graph, or the
 // Brainstorm column beside it (brainstormsOf()). Where each node is drawn: graphLayout.ts.
 import { inChip, STATE_NAMES } from "./format";
-import type { Blocker, Edge, Pending, PrState, Task } from "./types";
+import type { Backlog, Blocker, Edge, Pending, PrState, Task } from "./types";
 
 // What a node looks like: the graph's own families, not the list's (format.ts toneOf()).
 // Purple, GitHub's colour for merged, stays out: merged is implemented, green. "pending": an
@@ -136,7 +136,8 @@ export function brainstormsOf(tasks: Task[], pending: Pending[] = []): Brainstor
 }
 
 // The tasks and arrows as they will be once `pending` is done: a queued issue gets an arrow
-// from what it waits for, a started one none, a dequeued one leaves (unless it ran before:
+// from what it waits for, a started one none, a parent laid out with its sub-issues ("plan")
+// waits, its arrows the listener's to tell, a dequeued one leaves (unless it ran before:
 // then it stays, without its arrows). A stopped brainstorm doesn't move. The keys it touches
 // come back too.
 function withPending(tasks: Task[], edges: Edge[], pending: Pending[]) {
@@ -165,7 +166,7 @@ function withPending(tasks: Task[], edges: Edge[], pending: Pending[]) {
         kind: "issue",
         mode: p.mode ?? null,
         replyTo: p.number,
-        state: p.action === "queue" ? "waiting" : "queued",
+        state: p.action === "start" ? "queued" : "waiting",
         since: 0,
         closed: null,
         pr: null,
@@ -288,3 +289,8 @@ export function workLists(tasks: Task[], pending: Pending[]) {
     ),
   };
 }
+
+// Whether backlog issue `number` has open sub-issues: started or queued, it is laid out with
+// them ("plan").
+export const isParent = (backlog: Backlog | null, number: number) =>
+  !!backlog?.issues.find((i) => i.number === number)?.subIssues;

@@ -96,3 +96,21 @@ test("dropped text that isn't an issue's link says to drag its card", async () =
   expect(screen.getByRole("status").textContent).toMatch(/drag an issue's card/);
   expect(api.posted).toEqual([]);
 });
+
+test("a parent issue's card shows its sub-issues; dropped on the graph, it lays them out", async () => {
+  const epic = { number: 10, title: "Epic", url: "https://github.example.com/acme/api/issues/10" };
+  api = mockApi({
+    "api/repos/acme/api/issues": () => ({ ...BACKLOG, issues: [{ ...epic, subIssues: 3 }] }),
+  });
+  render(<Dashboard state={state} error={null} />);
+  const work = screen.getByRole("region", { name: "Work area" });
+  const card = (await within(work).findByText("Epic")).closest("li")!;
+  expect(within(card).getByText("3 sub-issues")).toBeTruthy();
+  fireEvent.change(within(work).getByRole("combobox", { name: /Start in/ }), {
+    target: { value: "review" },
+  });
+  dragCard(card, screen.getByRole("list", { name: "Issues of acme/api" }).parentElement!);
+  await waitFor(() =>
+    expect(api.posted.map((p) => p.body)).toEqual([{ action: "plan", number: 10, mode: "review" }]),
+  );
+});
