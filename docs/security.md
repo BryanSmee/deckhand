@@ -748,7 +748,9 @@ Both, and the screenshots, go after `LOG_RETENTION_DAYS` (90 by default).
 The dashboard is read-only but for two kinds of POST: starting a repository's onboarding
 (`/api/repos/<owner>/<repo>/onboard`) and the graph's work area
 (`/api/repos/<owner>/<repo>/work`, `listener/work.mjs`), which starts an issue, queues it
-after another (`/after #n`), moves its wait or cancels it (`/after none`), or stops a
+after another (`/after #n`), lays out a parent issue and its sub-issues from their "blocked
+by" links (`plan`: each issue of the tree passes the checks below, or nothing is posted; blockers
+in another repository are left out), moves its wait or cancels it (`/after none`), or stops a
 brainstorm (`/stop`, refused unless it is active or idle), or stops a task's run (`cancel`,
 what a `/cancel` comment does: only the repository's half of the checks below applies, as a
 run may go on on a closed issue; refused when nothing runs or is queued). The work area

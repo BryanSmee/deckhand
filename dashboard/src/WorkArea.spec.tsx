@@ -64,6 +64,27 @@ test("the backlog lists the repo's open issues; Start sends the mode picked", as
   expect(await within(area).findByText("#30 is closed.")).toBeTruthy();
 });
 
+test("a parent issue's Start and Queue lay out its sub-issues with it", async () => {
+  backlog = { ...BACKLOG, issues: [{ ...BACKLOG.issues[0], subIssues: 1 }] };
+  open("#/graph/acme/app");
+  const area = screen.getByRole("region", { name: "Work area" });
+  const item = (await within(area).findByText("Export the run log")).closest("li")!;
+  expect(within(item).getByText("1 sub-issue")).toBeTruthy();
+  fireEvent.click(within(item).getByRole("button", { name: "Start #31" }));
+  await waitFor(() => expect(api.bodies()).toEqual([{ action: "plan", number: 31 }]));
+  await within(area).findByRole("status");
+  // Back in the backlog: the fake listener doesn't take it away.
+  const again = (await within(area).findByText("Export the run log")).closest("li")!;
+  fireEvent.click(within(again).getByRole("button", { name: "After…" }));
+  fireEvent.change(within(again).getByRole("combobox", { name: "Queue #31 after" }), {
+    target: { value: "24" },
+  });
+  fireEvent.click(within(again).getByRole("button", { name: "Queue" }));
+  await waitFor(() =>
+    expect(api.bodies().at(-1)).toEqual({ action: "plan", number: 31, after: 24 }),
+  );
+});
+
 test("Queue after…: the graph's issues to pick from", async () => {
   open("#/graph/acme/app");
   const area = screen.getByRole("region", { name: "Work area" });

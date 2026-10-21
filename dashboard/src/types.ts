@@ -304,6 +304,9 @@ export interface BacklogIssue {
   number: number;
   title: string | null;
   url: string;
+  // How many of its sub-issues are open, when any are: dropped on the graph, it is laid out
+  // with them ("plan").
+  subIssues?: number;
 }
 
 // GET api/repos/<owner>/<repo>/issues
@@ -319,11 +322,13 @@ export interface Backlog {
   refreshing: boolean;
 }
 
-// POST api/repos/<owner>/<repo>/work: start an issue, queue it after another ("/after"),
+// POST api/repos/<owner>/<repo>/work: start an issue, queue it after another ("/after"), lay
+// out a parent issue and its sub-issues from their "blocked by" links (after another, too),
 // cancel its wait ("/after none"), or stop its brainstorm ("/stop": the wrap-up).
 export type WorkAction =
   | { action: "start"; number: number; mode?: string }
   | { action: "queue"; number: number; after: number; mode?: string }
+  | { action: "plan"; number: number; after?: number; mode?: string }
   | { action: "dequeue"; number: number }
   | { action: "stop"; number: number };
 // A work area action sent and not confirmed yet (api.ts useWorkArea()): the graph shows what
@@ -342,7 +347,9 @@ export type Answers = { number: number; pr?: boolean; then?: AnswersThen } & (
 );
 
 export type AnswersThen =
-  { action: "start"; mode?: string } | { action: "queue"; after: number; mode?: string };
+  | { action: "start"; mode?: string }
+  | { action: "queue"; after: number; mode?: string }
+  | { action: "plan"; after?: number; mode?: string };
 
 export interface WorkResult {
   message?: string;

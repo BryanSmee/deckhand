@@ -366,7 +366,27 @@ instead. Between the backlog and the graph, a Brainstorm column lists the repo's
 (active, idle, wrapping up), which leave the graph unless an arrow touches them: a backlog
 issue dropped there starts a brainstorm, a brainstorm dropped on the graph starts work (and
 ends the brainstorm), dropped back on the backlog it stops (`stop`, what a `/stop` comment
-does: the wrap-up run). Each has a button too. The backlog is served from the last read and
+does: the wrap-up run). Each has a button too.
+
+A backlog issue with open sub-issues (its card says how many, from the issue list's
+`sub_issues_summary`) brings its whole tree along (`plan`, `plans.mjs`): the listener reads its
+sub-issues, all levels down, and each one's "blocked by" links, then holds or starts each issue
+in the mode picked. A sub-issue with nothing open to wait for starts; the others wait for all
+their blockers (open issues of the repo, in the tree or not; those of another repository are
+left out, and the reply says so), and for what their parent is blocked by; a parent waits for
+all its open sub-issues, and runs last, to finish the epic or close it. Dropped next to an
+issue, the tree's first issues wait for that one. A blocker reached through another is left
+out (#11 waits for #12, not for #12's own blockers too). Sub-issues closed as completed are
+skipped. A parent "blocked by" its own sub-issues (an epic by its tasks) already waits for
+them: those links are left out, and not passed down. One closed without being done, running or
+queued, with open questions, a loop in the links (through the waits already there too), or a
+tree over 30 open issues (`MAX_TREE`) refuses the whole drop before anything is posted. If
+GitHub fails halfway through the comments, the reply says which issues are laid out and which
+aren't. Each issue gets the App's comment ("Queued from the dashboard by @alice as part of
+#10, after #12"), and a sub-issue unblocks the next once it is done, as for `/after`: its pull
+request merged, so the next one builds on it.
+
+The backlog is served from the last read and
 read again in the background once it is 30 seconds old or an `issues` delivery made it stale
 (only a repo with no read yet waits for GitHub), and the dashboard keeps each repo's last one
 in memory, so coming back to the graph or a repo's tab shows it at once. The listener writes
@@ -571,6 +591,7 @@ tests fake it.
 | `reviews.mjs`                                                     | Pull request reviews: the ready pull requests that get one (`reviews.json`), and the GitHub review posted from the run's final message.                                                                                                              |
 | `waits.mjs`                                                       | Comments waiting for other issues to be done (`/after`, `waits.json`).                                                                                                                                                                               |
 | `work.mjs`                                                        | The graph's work area: the backlog, starting or queueing issues, answers, reruns, inbox entries, analyses.                                                                                                                                           |
+| `plans.mjs`                                                       | A parent issue dropped on the graph: its sub-issues' tree, all levels down, and what each waits for from their "blocked by" links.                                                                                                                   |
 | `discussions.mjs`                                                 | Discussions from the dashboard: started, their thread read, replies.                                                                                                                                                                                 |
 | `board.mjs`, `titles.mjs`, `pulls.mjs`, `repos.mjs`, `static.mjs` | The dashboard's tasks, titles and closed states, pull requests, repository list and files.                                                                                                                                                           |
 | `repo-view.mjs`                                                   | A repository's config as the dashboard shows it: what its runs get, from the runs' own checks.                                                                                                                                                       |

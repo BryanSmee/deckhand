@@ -100,6 +100,15 @@ async function fakeGitHub(files = {}) {
       if (req.method === "GET" && waitedFor && files[`issue:${waitedFor[1]}`]) {
         return res.end(files[`issue:${waitedFor[1]}`]);
       }
+      // An issue's sub-issues and blockers, as JSON lists, when the test sets them; none
+      // otherwise.
+      const tree =
+        /^\/repos\/org\/repo\/issues\/(\d+)\/(sub_issues|dependencies\/blocked_by)\?/.exec(req.url);
+      if (req.method === "GET" && tree) {
+        return res.end(
+          files[`${tree[2] === "sub_issues" ? "subs" : "blocked"}:${tree[1]}`] ?? "[]",
+        );
+      }
       // A pull request, as JSON, when the test sets it.
       const pull = /^\/repos\/org\/repo\/pulls\/(\d+)$/.exec(req.url);
       if (req.method === "GET" && pull && files[`pull:${pull[1]}`]) {
@@ -2721,6 +2730,66 @@ mounts:
       const proxied = await fetch(`${base}/status`, { headers: { [header]: "203.0.113.9" } });
       assert.equal(proxied.status, 401, header);
     }
+    writeFileSync(join(dir, "go"), "");
+  });
+
+  test("Work area plan: a parent's sub-issues start or wait from their links, the parent last", async (t) => {
+    const repository_url = "https://api.github.com/repos/org/repo";
+    const subs = [11, 12].map((number) => ({
+      number,
+      title: `Sub ${number}`,
+      state: "open",
+      repository_url,
+    }));
+    const { dir, github, port } = await listen(
+      t,
+      {
+        "issue:10": JSON.stringify({ number: 10, title: "Epic", state: "open" }),
+        "subs:10": JSON.stringify(subs),
+        "blocked:11": JSON.stringify([{ number: 12, state: "open", repository_url }]),
+      },
+      (dir, github) => {
+        writeFileSync(join(dir, "hold"), "");
+        return { GITHUB_URL: github.url };
+      },
+    );
+    const base = `http://127.0.0.1:${port}`;
+    const get = (path, cookie) =>
+      fetch(base + path, { redirect: "manual", headers: cookie ? { cookie } : {} });
+    const login = await get("/auth/login");
+    const to = new URL(login.headers.get("location"));
+    const state = login.headers.getSetCookie()[0].split(";")[0];
+    const back = await get(`/auth/callback?code=c&state=${to.searchParams.get("state")}`, state);
+    const session = back.headers
+      .getSetCookie()
+      .find((c) => c.startsWith("deckhand_session="))
+      .split(";")[0];
+    const res = await fetch(`${base}/api/repos/org/repo/work`, {
+      method: "POST",
+      headers: {
+        cookie: session,
+        origin: "https://hooks.example.com",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ action: "plan", number: 10 }),
+    });
+    assert.equal(res.status, 200);
+    assert.equal(
+      (await res.json()).message,
+      "#10 laid out: #12 starts; #10 waits for #11 and #12; #11 waits for #12.",
+    );
+    const waits = JSON.parse(readFileSync(join(dir, "waits.json"), "utf8"));
+    assert.deepEqual(waits["org/repo#10"].blockers, [11, 12]);
+    assert.deepEqual(waits["org/repo#11"].blockers, [12]);
+    const posted = github.requests.filter(
+      (r) => r.method === "POST" && r.path.endsWith("/comments"),
+    );
+    assert.deepEqual(
+      posted.map((r) => r.path),
+      [10, 11, 12].map((n) => `/repos/org/repo/issues/${n}/comments`),
+    );
+    await until(() => exists(join(dir, "run-env")), "#12's run");
+    assert.match(readFileSync(join(dir, "run-env"), "utf8"), /^TASK_ISSUE=12$/m);
     writeFileSync(join(dir, "go"), "");
   });
 

@@ -69,13 +69,16 @@ export function WorkArea({
   const said = notice ?? result?.error ?? result?.message ?? null;
   const failed = !!(notice || result?.error);
 
-  const chooser = (number: number, move: boolean) =>
+  // `parent`: a backlog issue with open sub-issues, laid out with them ("plan").
+  const chooser = (number: number, move: boolean, parent = false) =>
     choosing === number && (
       <Chooser
         number={number}
         targets={targets}
         disabled={busy}
-        onQueue={(after) => act({ action: "queue", number, after, ...(move ? {} : picked) })}
+        onQueue={(after) =>
+          act({ action: parent ? "plan" : "queue", number, after, ...(move ? {} : picked) })
+        }
         onCancel={() => setChoosing(null)}
       />
     );
@@ -113,7 +116,8 @@ export function WorkArea({
       <p class={styles.note}>
         Drag an issue (or a GitHub link to one) onto the graph to start it, next to an issue to
         queue it after that one, or onto the Brainstorm column to brainstorm it; one waiting for
-        answers too, which asks them first. Drag a waiting issue away to cancel its wait.
+        answers too, which asks them first. One with sub-issues brings them along, in the order
+        their "blocked by" links say. Drag a waiting issue away to cancel its wait.
       </p>
       {said && (
         <p class={`${styles.said} ${failed ? styles.failed : ""}`} role="status">
@@ -142,13 +146,20 @@ export function WorkArea({
                 onDragStart={dragOf(ISSUE_TYPE, i.number, i.url)}
               >
                 <IssueRow number={i.number} title={i.title} href={i.url} />
+                {!!i.subIssues && (
+                  <span class={styles.chip}>
+                    {i.subIssues} sub-issue{i.subIssues > 1 ? "s" : ""}
+                  </span>
+                )}
                 <div class={styles.buttons}>
                   <button
                     type="button"
                     class={styles.primary}
                     disabled={busy || blocked}
                     aria-label={`Start #${i.number}`}
-                    onClick={() => act({ action: "start", number: i.number, ...picked })}
+                    onClick={() =>
+                      act({ action: i.subIssues ? "plan" : "start", number: i.number, ...picked })
+                    }
                   >
                     Start
                   </button>
@@ -165,7 +176,7 @@ export function WorkArea({
                   )}
                   {afterButton(i.number)}
                 </div>
-                {chooser(i.number, false)}
+                {chooser(i.number, false, !!i.subIssues)}
               </li>
             ))}
           </ul>

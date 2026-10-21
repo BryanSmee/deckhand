@@ -3,7 +3,8 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { createWaits } from "../listener/waits.mjs";
-import { ISSUES_MS, checkAction, createWorkApi, leadsTo, staleFor } from "../listener/work.mjs";
+import { MAX_TREE, leadsTo } from "../listener/plans.mjs";
+import { ISSUES_MS, checkAction, createWorkApi, staleFor } from "../listener/work.mjs";
 import { createAnalysis } from "../listener/analysis.mjs";
 import { MAX_TEXT } from "../listener/answers.mjs";
 import { board as boardOf } from "../listener/board.mjs";
@@ -12,8 +13,8 @@ import { tempDir, testConfig } from "./helpers.mjs";
 
 const ORIGIN = "https://deckhand.example.com";
 
-// The work area with a fake GitHub behind it: `issues` by number (GET /issues/{n}, and the
-// open ones listed), `repoSettings` as the default branch's config says, real waits in a temp
+// The work area with a fake GitHub behind it: `issues` by number (GET /issues/{n}, the open
+// ones listed, and their sub-issues and blockers), `repoSettings` as the default branch's config says, real waits in a temp
 // dir.
 // `tasks`: the board's, by key (api/state's, with their questions). `events`: an issue's
 // timeline, by number. Issues the backlog lists as waiting for input are in `w.listed`, and on
@@ -89,6 +90,20 @@ function setup({
           .map(([n, i]) => ({ number: Number(n), html_url: `u/${n}`, ...i })),
       );
     }
+    // An issue's sub-issues (`subs`) and blockers (`blockedBy`): numbers of `issues`, or
+    // another repo's issues as GitHub describes them.
+    const tree = /\/issues\/(\d+)\/(sub_issues|dependencies\/blocked_by)\?/.exec(path);
+    if (tree) {
+      const refs =
+        (tree[2] === "sub_issues" ? w.issues[tree[1]]?.subs : w.issues[tree[1]]?.blockedBy) ?? [];
+      return Response.json(
+        refs.map((r) =>
+          typeof r === "number"
+            ? { number: r, repository_url: `https://api.github.com/repos/${repo}`, ...w.issues[r] }
+            : r,
+        ),
+      );
+    }
     const timeline = /\/issues\/(\d+)\/events\?/.exec(path)?.[1];
     if (timeline) return Response.json(w.events[timeline] ?? []);
     const n = /\/issues\/(\d+)$/.exec(path)?.[1];
@@ -98,6 +113,8 @@ function setup({
       : new Response("{}", { status: 404 });
   };
   const reply = async (repo, number, text) => {
+    // A test fails a comment with `w.failComment()` returning true.
+    if (w.failComment?.()) return new Response("{}", { status: 502 });
     w.comments.push([number, text]);
     return Response.json({ id: ++commentId, html_url: `c/${commentId}`, node_id: "N" });
   };
@@ -221,12 +238,15 @@ test("checkAction: an action, issue numbers, a mode's name", () => {
   // `pr` only means something to a cancel.
   assert.equal(checkAction({ action: "cancel", number: 3, pr: true }).pr, true);
   assert.equal(checkAction({ action: "start", number: 3, pr: true }).pr, false);
+  assert.equal(checkAction({ action: "plan", number: 3 }).after, null);
+  assert.equal(checkAction({ action: "plan", number: 3, after: 2 }).after, 2);
   for (const bad of [
     "null",
     '{"action":"merge","number":3}',
     '{"action":"start","number":"3"}',
     '{"action":"start","number":-1}',
     '{"action":"queue","number":3}',
+    '{"action":"plan","number":3,"after":"2"}',
     '{"action":"start","number":3,"mode":"a b"}',
     '{"action":"cancel","number":3,"pr":"yes"}',
   ]) {
@@ -235,12 +255,12 @@ test("checkAction: an action, issue numbers, a mode's name", () => {
 });
 
 test("leadsTo: follows the waits from blocker to blocker", () => {
-  const waits = { "o/r#2": { blockers: [1] }, "o/r#3": { blockers: [2, 9] } };
-  const get = (key) => waits[key];
-  assert.equal(leadsTo(get, "o/r", 3, 1), true);
-  assert.equal(leadsTo(get, "o/r", 3, 9), true);
-  assert.equal(leadsTo(get, "o/r", 2, 3), false);
-  assert.equal(leadsTo(get, "o/r", 4, 4), true);
+  const waits = { 2: [1], 3: [2, 9] };
+  const get = (n) => waits[n];
+  assert.equal(leadsTo(get, 3, 1), true);
+  assert.equal(leadsTo(get, 3, 9), true);
+  assert.equal(leadsTo(get, 2, 3), false);
+  assert.equal(leadsTo(get, 4, 4), true);
 });
 
 test("GET issues: the open issues without a task or pull request, and the repo's modes", async () => {
@@ -550,6 +570,23 @@ test("GET issues: only for the repo's own users, as the dashboard's tasks are", 
   assert.deepEqual(bob.body.issues, [{ number: 1, title: "One", url: "u/1" }]);
 });
 
+test("GET issues: how many open sub-issues an issue has, from the list's summary", async () => {
+  const w = setup({
+    issues: {
+      1: { ...open("Epic"), sub_issues_summary: { total: 3, completed: 1 } },
+      2: { ...open("Done epic"), sub_issues_summary: { total: 2, completed: 2 } },
+    },
+  });
+  const res = await call(w.api, "GET", "/api/repos/org/app/issues");
+  assert.deepEqual(
+    res.body.issues.map((i) => [i.number, i.subIssues]),
+    [
+      [1, 2],
+      [2, undefined],
+    ],
+  );
+});
+
 test("GET issues: a config with errors offers no mode", async () => {
   const w = setup({ errors: ["bad"], issues: { 1: open("One") } });
   const res = await call(w.api, "GET", "/api/repos/org/app/issues");
@@ -640,6 +677,206 @@ test("queue: refused for itself, a cycle, a missing or undone blocker; started w
   assert.equal(done.status, 200);
   assert.equal(w.accepted.length, 1);
   assert.equal(w.comments.at(-1)[1], "Started from the dashboard by @alice: #8 is done already.");
+});
+
+// #10's sub-issues are #11, #12 and #13, and #11 is blocked by #12: the issue's example.
+const epic = (extra = {}) => ({
+  10: { ...open("Epic"), subs: [11, 12, 13] },
+  11: { ...open("Eleven"), blockedBy: [12] },
+  12: open("Twelve"),
+  13: open("Thirteen"),
+  ...extra,
+});
+const blockersOf = (w, n) => w.waits.get(`org/app#${n}`)?.blockers;
+
+test("plan: the tree starts in order, from its sub-issues and their blockers", async () => {
+  const w = setup({ issues: epic() });
+  const res = await post(w, { action: "plan", number: 10, mode: "brainstorm" });
+  assert.equal(res.status, 200);
+  assert.equal(
+    res.body.message,
+    "#10 laid out: #12 and #13 start; #10 waits for #11, #12 and #13; #11 waits for #12.",
+  );
+  assert.deepEqual(
+    w.accepted.map((i) => [i.number, i.modeLine]),
+    [
+      [12, "brainstorm"],
+      [13, "brainstorm"],
+    ],
+  );
+  assert.deepEqual(blockersOf(w, 10), [11, 12, 13]);
+  assert.deepEqual(blockersOf(w, 11), [12]);
+  assert.equal(w.waits.get("org/app#11").item.modeLine, "brainstorm");
+  assert.deepEqual(w.comments, [
+    [
+      10,
+      "Queued from the dashboard by @alice, after #11, #12 and #13 in `brainstorm` mode. It starts when they are done (closed as completed, or merged).",
+    ],
+    [
+      11,
+      "Queued from the dashboard by @alice as part of #10, after #12 in `brainstorm` mode. It starts when it is done (closed as completed, or merged).",
+    ],
+    [12, "Started from the dashboard by @alice in `brainstorm` mode as part of #10."],
+    [13, "Started from the dashboard by @alice in `brainstorm` mode as part of #10."],
+  ]);
+  // Once #12 is done, #11 starts and #10 still waits.
+  await w.waits.closed("org/app", 12, "done");
+  assert.equal(blockersOf(w, 11), undefined);
+  assert.deepEqual(blockersOf(w, 10), [11, 13]);
+});
+
+test("plan: nested sub-issues, blockers outside the tree or in another repo, done ones", async () => {
+  const other = {
+    number: 5,
+    state: "open",
+    repository_url: "https://api.github.com/repos/org/other",
+  };
+  const w = setup({
+    issues: epic({
+      11: { ...open("Eleven"), subs: [14, 15], blockedBy: [12] },
+      12: { ...open("Twelve"), blockedBy: [20, 21, other] },
+      13: { state: "closed", state_reason: "completed" },
+      14: open("Fourteen"),
+      15: { ...open("Fifteen"), blockedBy: [14] },
+      20: open("Outside"),
+      21: { state: "closed", state_reason: "completed" },
+    }),
+  });
+  const res = await post(w, { action: "plan", number: 10 });
+  assert.equal(res.status, 200);
+  assert.match(
+    res.body.message,
+    /Done already: #13\. Left out, in another repository: org\/other#5\.$/,
+  );
+  // Nothing starts: #12 waits for #20, and #14 for #12 since its parent #11 does.
+  assert.deepEqual(w.accepted, []);
+  assert.deepEqual(blockersOf(w, 10), [11, 12]);
+  assert.deepEqual(blockersOf(w, 11), [14, 15]);
+  assert.deepEqual(blockersOf(w, 12), [20]);
+  assert.deepEqual(blockersOf(w, 14), [12]);
+  assert.deepEqual(blockersOf(w, 15), [14]);
+  assert.equal(blockersOf(w, 20), undefined);
+});
+
+test("plan next to an issue: the tree's first issues wait for it", async () => {
+  const w = setup({ issues: epic({ 30: open("Before") }) });
+  const res = await post(w, { action: "plan", number: 10, after: 30 });
+  assert.equal(res.status, 200);
+  assert.deepEqual(w.accepted, []);
+  assert.deepEqual(blockersOf(w, 12), [30]);
+  assert.deepEqual(blockersOf(w, 13), [30]);
+  assert.deepEqual(blockersOf(w, 11), [12]);
+  assert.deepEqual(blockersOf(w, 10), [11, 12, 13]);
+  // Not after one of its own sub-issues.
+  const own = setup({ issues: epic() });
+  assert.equal((await post(own, { action: "plan", number: 10, after: 12 })).status, 422);
+  assert.deepEqual(own.comments, []);
+});
+
+test("plan refused as a whole: a loop, a sub-issue busy or not planned", async () => {
+  const cases = [
+    [
+      { issues: epic({ 12: { ...open("Twelve"), blockedBy: [11] } }) },
+      422,
+      /#11 waits for #12, #12 waits for #11/,
+    ],
+    [{ issues: epic(), busy: ["org/app#13"] }, 409, /#13 is running or queued/],
+    [
+      { issues: epic({ 13: { state: "closed", state_reason: "duplicate" } }) },
+      422,
+      /#13, a sub-issue of #10, was closed without being done/,
+    ],
+    [
+      { issues: epic({ 13: { state: "closed", state_reason: "not_planned" } }) },
+      422,
+      /#13, a sub-issue of #10, was closed without being done/,
+    ],
+  ];
+  for (const [opts, status, error] of cases) {
+    const w = setup(opts);
+    const res = await post(w, { action: "plan", number: 10 });
+    assert.equal(res.status, status);
+    assert.match(res.body.error, error);
+    assert.deepEqual([w.comments, w.accepted, w.waits.list()], [[], [], []]);
+  }
+  // Through a wait already there: #20 waits for #10's #12, and #12 is blocked by #20.
+  const w = setup({
+    issues: epic({ 12: { ...open("Twelve"), blockedBy: [20] }, 20: open("Twenty") }),
+  });
+  await post(w, { action: "queue", number: 20, after: 12 });
+  const res = await post(w, { action: "plan", number: 10 });
+  assert.equal(res.status, 422);
+  assert.match(res.body.error, /#12 waits for #20, #20 waits for #12/);
+});
+
+test("plan: a parent blocked by its own sub-issues waits for them, as it would anyway", async () => {
+  // #10 is blocked by its sub-issue #11 and by #14, a sub-issue of #11; #11 by #14 too.
+  const w = setup({
+    issues: epic({
+      10: { ...open("Epic"), subs: [11, 12, 13], blockedBy: [11, 14] },
+      11: { ...open("Eleven"), subs: [14], blockedBy: [12, 14] },
+      14: open("Fourteen"),
+    }),
+  });
+  const res = await post(w, { action: "plan", number: 10 });
+  assert.equal(res.status, 200);
+  assert.deepEqual(
+    w.accepted.map((i) => i.number),
+    [12, 13],
+  );
+  assert.deepEqual(blockersOf(w, 10), [11, 12, 13]);
+  assert.deepEqual(blockersOf(w, 11), [14]);
+  assert.deepEqual(blockersOf(w, 14), [12]);
+});
+
+test("plan: over MAX_TREE open issues, or one of an unknown repo, is refused or left out", async () => {
+  const subs = Array.from({ length: MAX_TREE }, (_, i) => 100 + i);
+  const issues = { 10: { ...open("Epic"), subs } };
+  for (const n of subs) issues[n] = open(`Sub ${n}`);
+  const big = setup({ issues });
+  const refused = await post(big, { action: "plan", number: 10 });
+  assert.equal(refused.status, 422);
+  assert.match(refused.body.error, new RegExp(`over ${MAX_TREE} open issues`));
+  assert.deepEqual(big.comments, []);
+  // Without its repository, a sub-issue isn't taken for one of this repo's.
+  const w = setup({
+    issues: epic({ 10: { ...open("Epic"), subs: [12, { number: 5, state: "open" }] } }),
+  });
+  const res = await post(w, { action: "plan", number: 10 });
+  assert.match(res.body.message, /Left out, in another repository: an unknown repository#5\.$/);
+  assert.deepEqual(blockersOf(w, 10), [12]);
+});
+
+test("plan: GitHub failing halfway says what is laid out and what isn't", async () => {
+  const w = setup({ issues: epic() });
+  let posts = 0;
+  // The third comment fails: #10 and #11 wait, #12 and #13 don't start.
+  w.failComment = () => ++posts === 3;
+  const res = await post(w, { action: "plan", number: 10 });
+  assert.equal(res.status, 502);
+  assert.equal(
+    res.body.error,
+    "GitHub failed on #12: #10 and #11 laid out, #12 and #13 not. Start or queue those from the backlog.",
+  );
+  assert.deepEqual(blockersOf(w, 11), [12]);
+  assert.deepEqual(w.accepted, []);
+});
+
+test("plan next to an issue done already: it starts, and the reply says so", async () => {
+  const w = setup({ issues: epic({ 30: { state: "closed", state_reason: "completed" } }) });
+  const res = await post(w, { action: "plan", number: 10, after: 30 });
+  assert.match(res.body.message, /#30 is done already: nothing waits for it\.$/);
+  assert.deepEqual(
+    w.accepted.map((i) => i.number),
+    [12, 13],
+  );
+});
+
+test("plan without open sub-issues: it starts, or queues", async () => {
+  const w = setup({ issues: { 5: open("Five"), 7: open("Seven") } });
+  assert.equal((await post(w, { action: "plan", number: 5 })).body.message, "#5 started.");
+  const queued = await post(w, { action: "plan", number: 7, after: 5 });
+  assert.equal(queued.body.message, "#7 waits for #5.");
 });
 
 test("dequeue: the wait is cancelled, with the App's comment; start drops it too", async () => {
@@ -1018,6 +1255,21 @@ test("answer then queue: one App comment with the answers, held after the other 
   assert.equal(wait.item.modeLine, "brainstorm");
   assert.deepEqual(w.labels, [[5, false]]);
   assert.deepEqual(w.untracked, [["org/app#5", false]]);
+});
+
+test("plan with open questions: the parent's answered first, a sub-issue's refuse it", async () => {
+  const w = setup({ issues: epic(), tasks: { "org/app#10": asking(10, "issue") } });
+  assert.equal((await post(w, { action: "plan", number: 10 })).status, 409);
+  const res = await answer(w, { number: 10, text: "Yes", then: { action: "plan" } });
+  assert.equal(res.status, 200);
+  assert.match(res.body.message, /^Answers sent: #10 laid out:/);
+  assert.match(w.comments[0][1], /^Queued from the dashboard by @alice, after #11, #12 and #13\./);
+  assert.match(w.waits.get("org/app#10").item.text, /^Answers from @alice/);
+  const sub = setup({ issues: epic(), tasks: { "org/app#12": asking(12, "issue") } });
+  const refused = await post(sub, { action: "plan", number: 10 });
+  assert.equal(refused.status, 409);
+  assert.match(refused.body.error, /#12 has open questions/);
+  assert.deepEqual(sub.comments, []);
 });
 
 test("answer then start: a run's questions too, the work queued with them", async () => {

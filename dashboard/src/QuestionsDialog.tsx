@@ -36,7 +36,7 @@ export function QuestionsDialog({
       >
         <p class={styles.asks}>
           <b>
-            {action?.action === "queue"
+            {(action?.action === "queue" || action?.action === "plan") && action.after
               ? `Answer them to queue #${task.number} after #${action.after}`
               : action
                 ? `Answer them to start #${task.number}`
@@ -54,7 +54,7 @@ export function QuestionsDialog({
         <Questions
           task={task}
           questions={task.questions}
-          then={action ? (action.action === "queue" ? "queue" : "start") : undefined}
+          then={action ? ("after" in action && action.after ? "queue" : "start") : undefined}
           submit={submit}
           onSent={onSent}
           onCancel={onClose}

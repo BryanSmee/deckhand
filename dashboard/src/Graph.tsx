@@ -14,7 +14,7 @@ import { GraphDrawing, targetsOf } from "./GraphDrawing";
 import { useAnswering, useKeptLayout, useNodeDrag } from "./graphHooks";
 import { dropTarget } from "./graphLayout";
 import { GraphLegend } from "./GraphLegend";
-import { brainstormsOf, graphOf, type GraphNode, movable, workLists } from "./graphModel";
+import { brainstormsOf, graphOf, type GraphNode, isParent, movable, workLists } from "./graphModel";
 import { typesOf, useDropZone } from "./hooks";
 import { QuestionsDialog } from "./QuestionsDialog";
 import type { State, WorkAction } from "./types";
@@ -77,18 +77,19 @@ export function Graph({ state, refresh, repo, narrow, showClosed, onShowClosed }
 
   // Issue `number` let go on the area, after `onto` (a node) or in the open. A waiting node
   // keeps its mode, and the open cancels its wait rather than starts it; a brainstorm starts
-  // work.
+  // work. A backlog issue with open sub-issues is laid out with them ("plan").
   const dropped = (number: number, onto: string | null, what: Dragged) => {
     setNotice(null);
     const node = onto ? byKey.get(onto) : null;
     if (node?.number === number && node.repo === repo) return;
     const mode = what === "new" ? picked : {};
+    const parent = what === "new" && isParent(work.backlog, number);
     if (node?.number != null) {
-      return request({ action: "queue", number, after: node.number, ...mode });
+      const after = node.number;
+      return request({ action: parent ? "plan" : "queue", number, after, ...mode });
     }
-    request(
-      what === "waits" ? { action: "dequeue", number } : { action: "start", number, ...mode },
-    );
+    if (what === "waits") return request({ action: "dequeue", number });
+    request({ action: parent ? "plan" : "start", number, ...mode });
   };
 
   // An action, unless its issue has open questions: they are answered first, in a form (unless

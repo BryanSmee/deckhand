@@ -112,6 +112,17 @@ a.ref:hover {
   line-clamp: 2;
 }
 
+/* A parent issue's open sub-issues, which come along when it starts. */
+.chip {
+  align-self: flex-start;
+  padding: 0.05rem 0.45rem;
+  border-radius: 999px;
+  background: var(--idle-soft);
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
 .buttons,
 .chooser {
   display: flex;
