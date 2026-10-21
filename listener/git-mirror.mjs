@@ -10,12 +10,15 @@ import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pipeline } from "node:stream/promises";
+import { inspectWorkflow } from "./workflow-check.mjs";
 
 // GitHub refuses pushes over 2 GiB: a bigger one isn't kept on disk to find out.
 export const MAX_PUSH = 2 * 1024 ** 3;
 // A workflow file bigger than this isn't read: refused.
 export const MAX_WORKFLOW = 512 * 1024;
 const GIT_MS = 5 * 60_000;
+// A mirror's first fetch clones the whole repository: a big one takes longer.
+const CLONE_MS = 60 * 60_000;
 // Git's only setting from the listener's environment, which holds the operator's credentials.
 const { PATH } = process.env;
 
@@ -32,6 +35,7 @@ export function createMirrors({
   githubUrl = "https://github.com",
   maxPush = MAX_PUSH,
   timeoutMs = GIT_MS,
+  cloneMs = CLONE_MS,
 }) {
   // Per repo: one check at a time, so a fetch never runs under another push's reads.
   const queues = new Map();
@@ -46,7 +50,7 @@ export function createMirrors({
 
   // Runs git; resolves with its stdout, rejects with its stderr. Nothing from the system's or
   // the user's config, never a prompt.
-  function git(args, { env = {}, input, codes = [0] } = {}) {
+  function git(args, { env = {}, input, codes = [0], timeout = timeoutMs } = {}) {
     return new Promise((resolve, reject) => {
       const child = spawn("git", args, {
         env: {
@@ -57,7 +61,7 @@ export function createMirrors({
           ...env,
         },
         stdio: [input ? "pipe" : "ignore", "pipe", "pipe"],
-        timeout: timeoutMs,
+        timeout,
       });
       const out = [];
       const err = [];
@@ -66,7 +70,9 @@ export function createMirrors({
       child.on("error", reject);
       child.on("close", (code, signal) => {
         if (codes.includes(code)) return resolve(Object.assign(Buffer.concat(out), { code }));
-        const why = Buffer.concat(err).toString().trim().split("\n").pop() || signal || code;
+        const why = signal
+          ? `stopped after ${Math.round(timeout / 60_000)} min (${signal})`
+          : Buffer.concat(err).toString().trim().split("\n").pop() || code;
         reject(new Error(`git ${args[0] === "-C" ? args[2] : args[0]}: ${why}`));
       });
       if (input) pipeline(input, child.stdin).catch(() => {});
@@ -143,42 +149,20 @@ export function createMirrors({
     return files;
   }
 
-  // The workflow files each pushed branch changes from `base`, the default branch: [{ ref,
-  // path, mode, text, problem }], `text` null for what isn't a plain UTF-8 file of at most
-  // MAX_WORKFLOW bytes, `problem` set for a file that can't be merged. Deleted files aren't.
-  // Those of the branch's merge with `base` too: GitHub runs a pull request's workflows from
-  // that merge, which can hold what neither side checked alone (a step the branch edits, in a
-  // job the default branch has since given a secret). `updates`: { ref, new } of the push,
-  // `file` the push from `start` (null: no pack). `token` reads the repo. Throws when the
-  // mirror can't be fetched or the pack read.
-  async function changedWorkflows({ repo, token, base, updates, file, start, dir }) {
+  // The workflow files each pushed branch changes, that fail workflow-check.mjs's rules: [{ ref,
+  // path, problems }], `path` saying where. Changed means different from `base`'s, the default
+  // branch's, at the branch's tip, or from a base's in the branch's merge with it: GitHub runs
+  // a pull request's workflows from that merge, which can hold what neither side checked alone
+  // (a step the branch edits, in a job the base has since given a secret). The merges are with
+  // `base` and an update's `bases` (its pull requests'). The reusable workflows a checked one
+  // calls are checked too, changed or not. Deleted files aren't. `updates`: { ref, new, bases }
+  // of the push (`new` a commit or a ref of the mirror), `file` the push from `start` (null: no
+  // pack), `dir` where the push's objects go. `token` reads the repo. Throws when the mirror
+  // can't be fetched or the pack read.
+  async function check({ repo, token, base, updates, file = null, start = null, dir }) {
     const mirror = join(root, `${repo}.git`);
-    const auth = Buffer.from(`x-access-token:${token}`).toString("base64");
     return locked(repo, async () => {
-      await mkdir(mirror, { recursive: true });
-      await git(["init", "-q", "--bare", mirror]);
-      // The token in the environment, never in a command line or the mirror's config.
-      await git(
-        [
-          "-C",
-          mirror,
-          "fetch",
-          "-q",
-          "--prune",
-          "--no-tags",
-          "--no-write-fetch-head",
-          `${githubUrl}/${repo}.git`,
-          "+refs/heads/*:refs/heads/*",
-          "+refs/tags/*:refs/tags/*",
-        ],
-        {
-          env: {
-            GIT_CONFIG_COUNT: "1",
-            GIT_CONFIG_KEY_0: "http.extraHeader",
-            GIT_CONFIG_VALUE_0: `Authorization: Basic ${auth}`,
-          },
-        },
-      );
+      await fetch(repo, mirror, token);
       const objects = join(dir, "objects");
       await mkdir(join(objects, "pack"), { recursive: true });
       const env = {
@@ -192,42 +176,136 @@ export function createMirrors({
           input: createReadStream(file, { start }),
         });
       }
-      const known = await git(["rev-parse", "--verify", "-q", `refs/heads/${base}`], { env })
-        .then(() => true)
-        .catch(() => false);
-      const before = known ? await workflowFiles(`refs/heads/${base}`, env) : new Map();
-      const changed = [];
-      const texts = new Map();
-      // The files of `tree` that differ from the default branch's and aren't in `skip`.
-      const differing = async (tree, skip = new Map()) => {
-        const out = [];
-        for (const [path, entry] of await workflowFiles(tree, env)) {
-          const was = before.get(path);
-          if (was && was.oid === entry.oid && was.mode === entry.mode) continue;
-          if (skip.get(path)?.oid === entry.oid) continue;
-          if (!checked({ path, mode: entry.mode })) continue;
-          if (!texts.has(entry.oid)) texts.set(entry.oid, await read(entry, env));
-          out.push({ path, mode: entry.mode, text: texts.get(entry.oid) });
+      // Per branch: its workflow files, or null when it isn't on GitHub.
+      const branches = new Map();
+      const filesOf = async (branch) => {
+        if (!branches.has(branch)) {
+          const known = await git(["rev-parse", "--verify", "-q", `refs/heads/${branch}`], { env })
+            .then(() => true)
+            .catch(() => false);
+          branches.set(branch, known ? await workflowFiles(`refs/heads/${branch}`, env) : null);
         }
-        return out;
+        return branches.get(branch);
       };
-      for (const { ref, new: oid } of updates) {
-        if (/^0+$/.test(oid)) continue;
-        for (const file of await differing(oid)) changed.push({ ref, ...file });
-        if (!known) continue;
-        const merge = await mergeTree(`refs/heads/${base}`, oid, env);
-        for (const path of merge.conflicts) {
-          const problem = `conflicts with ${base}: rebase the branch on it`;
-          changed.push({ ref, path, mode: null, text: null, problem });
+      const inspected = new Map(); // blob → { problems, calls }
+      const inspect = async (entry) => {
+        if (!inspected.has(entry.oid)) {
+          const text = await read(entry, env);
+          inspected.set(
+            entry.oid,
+            text === null
+              ? {
+                  problems: [`not a plain UTF-8 file of at most ${MAX_WORKFLOW / 1024} KiB`],
+                  calls: [],
+                }
+              : inspectWorkflow(text),
+          );
         }
-        const conflicted = new Set(merge.conflicts);
-        for (const file of await differing(merge.tree, await workflowFiles(oid, env))) {
-          if (conflicted.has(file.path)) continue;
-          changed.push({ ref, ...file, path: `${file.path} (merged with ${base})` });
+        return inspected.get(entry.oid);
+      };
+      // The problems of `tree`'s files that differ from `before`'s and from `skip`'s, and of
+      // the workflows they call, `where` added to their paths.
+      const examine = async (tree, before, skip, where) => {
+        const files = await workflowFiles(tree, env);
+        const same = (a, b) => a && a.oid === b.oid && a.mode === b.mode;
+        const queue = [...files]
+          .filter(([path, entry]) => !same(before.get(path), entry) && !same(skip.get(path), entry))
+          .filter(([path, entry]) => checked({ path, mode: entry.mode }))
+          .map(([path, entry]) => ({ path, entry, label: path }));
+        const seen = new Set(queue.map((f) => f.path.toLowerCase()));
+        const found = [];
+        while (queue.length) {
+          const { path, entry, label } = queue.shift();
+          const { problems, calls } = await inspect(entry);
+          if (problems.length) found.push({ path: `${label}${where}`, problems });
+          for (const call of calls) {
+            // Without case, like the folder: never miss the file GitHub would call.
+            const callees = [...files].filter(([p]) => p.toLowerCase() === call.toLowerCase());
+            if (!callees.length) {
+              found.push({
+                path: `${label}${where}`,
+                problems: [`calls ${call}, which isn't there`],
+              });
+            }
+            for (const [p, e] of callees) {
+              if (seen.has(p.toLowerCase())) continue;
+              seen.add(p.toLowerCase());
+              queue.push({ path: p, entry: e, label: `${p} (called by ${path})` });
+            }
+          }
+        }
+        return found;
+      };
+      const found = [];
+      for (const { ref, new: tip, bases = [] } of updates) {
+        if (/^0+$/.test(tip)) continue;
+        const defaults = (await filesOf(base)) ?? new Map();
+        for (const f of await examine(tip, defaults, new Map(), "")) found.push({ ref, ...f });
+        const tipFiles = await workflowFiles(tip, env);
+        for (const into of new Set([base, ...bases])) {
+          const before = await filesOf(into);
+          if (!before) continue;
+          const merge = await mergeTree(`refs/heads/${into}`, tip, env);
+          const where = ` (merged with ${into})`;
+          for (const path of merge.conflicts) {
+            found.push({
+              ref,
+              path: `${path}${where}`,
+              problems: [`conflicts with ${into}: rebase the branch on it`],
+            });
+          }
+          if (merge.conflicts.length) continue;
+          for (const f of await examine(merge.tree, before, tipFiles, where)) {
+            found.push({ ref, ...f });
+          }
         }
       }
-      return changed;
+      return found;
     });
+  }
+
+  // The mirror brought up to date with GitHub. Its first fetch, a whole clone, gets longer.
+  async function fetch(repo, mirror, token) {
+    await mkdir(mirror, { recursive: true });
+    await git(["init", "-q", "--bare", mirror]);
+    const empty = !(await git(["-C", mirror, "for-each-ref", "--count=1"])).length;
+    const auth = Buffer.from(`x-access-token:${token}`).toString("base64");
+    // The token in the environment, never in a command line or the mirror's config.
+    await git(
+      [
+        "-C",
+        mirror,
+        "fetch",
+        "-q",
+        "--prune",
+        "--no-tags",
+        "--no-write-fetch-head",
+        `${githubUrl}/${repo}.git`,
+        "+refs/heads/*:refs/heads/*",
+        "+refs/tags/*:refs/tags/*",
+      ],
+      {
+        env: {
+          GIT_CONFIG_COUNT: "1",
+          GIT_CONFIG_KEY_0: "http.extraHeader",
+          GIT_CONFIG_VALUE_0: `Authorization: Basic ${auth}`,
+        },
+        timeout: empty ? cloneMs : timeoutMs,
+      },
+    );
+  }
+
+  // check() for a branch already on GitHub (`branch`), merged with `into`: before a pull
+  // request is opened into it or marked ready, which run its workflows from a new merge.
+  async function checkBranch({ repo, token, base, branch, into }) {
+    await mkdir(spoolRoot, { recursive: true });
+    const dir = await mkdtemp(join(spoolRoot, "branch-"));
+    try {
+      const ref = `refs/heads/${branch}`;
+      return await check({ repo, token, base, updates: [{ ref, new: ref, bases: [into] }], dir });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   }
 
   // The merge GitHub would make of `tip` into `base`: { tree, conflicts }, `conflicts` the
@@ -268,5 +346,5 @@ export function createMirrors({
     }
   }
 
-  return { spool, changedWorkflows, remove: (dir) => rm(dir, { recursive: true, force: true }) };
+  return { spool, check, checkBranch, remove: (dir) => rm(dir, { recursive: true, force: true }) };
 }

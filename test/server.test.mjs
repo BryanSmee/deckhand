@@ -162,6 +162,10 @@ async function fakeGitHub(files = {}) {
         const head = { ref: "issue-3-fix", repo: { full_name: "mallory/repo" } };
         return res.end(JSON.stringify({ number: 43, body: "Closes #3", head }));
       }
+      // A branch's open pull requests (the git gateway, for a repo granted allow_workflows).
+      if (req.url.startsWith("/repos/org/repo/pulls?state=open&per_page=100&head=")) {
+        return res.end("[]");
+      }
       // A listener that restarted looks the installation up instead of reading it from a
       // delivery.
       if (req.url === "/repos/org/repo/installation") return res.end(JSON.stringify({ id: 7 }));
@@ -3213,6 +3217,14 @@ mounts:
       "x-access-token:repo-token",
     );
     assert.deepEqual(pushedWith(), []);
+    // Opening its pull request checks the same, merged with its base: not without a mirror.
+    const opened = await fetch(`http://127.0.0.1:${brokerPort}/pr/org/repo/create`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${secret}` },
+      body: JSON.stringify({ title: "t", head: "issue-12-x" }),
+    });
+    assert.equal(opened.status, 502);
+    assert.match((await opened.json()).error, /couldn't check issue-12-x's workflow files/);
     // The push's token writes workflows; the sandbox's own tokens never do.
     const minted = github.requests.filter((r) => r.path.endsWith("/access_tokens"));
     assert.equal(minted.filter((r) => r.body.includes("workflows")).length, 1);

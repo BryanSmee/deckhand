@@ -105,11 +105,14 @@ It keeps a bare mirror of the repository in its data directory (`git-mirrors/`),
 a token that reads before each push; reads the push's pack against it (a push is a thin pack,
 its deltas pointing at objects GitHub already has) into a quarantine of its own, so a refused
 push leaves nothing behind; and checks each file under `.github/workflows/` that differs from
-the default branch's, at a pushed branch's tip and in that tip's merge with the default branch
-(`git merge-tree`): GitHub runs a pull request's workflows from that merge, which can hold a
-secret or a write permission the default branch added after the branch was cut, around a step
-the branch edits. A workflow that doesn't merge cleanly refuses the push until the branch is
-rebased. The push is refused, with git's `[remote rejected]` naming the file and the rule, when
+the default branch's at a pushed branch's tip, and each file that differs from a base's in
+the tip's merge (`git merge-tree`) with the default branch and with the base of each open pull
+request from that branch: GitHub runs a pull request's workflows from that merge, which can
+hold a secret or a write permission the base added after the branch was cut, around a step the
+branch edits. A workflow that doesn't merge cleanly refuses the push until the branch is
+rebased. The same merge check runs again before the listener opens a run's pull request (into
+whatever base it asks for) or marks one ready, since both run its workflows from a new merge.
+The push is refused, with git's `[remote rejected]` naming the file and the rule, when
 a changed workflow:
 
 - has no top-level `permissions:` (the repository's default would apply, and it may write),
@@ -135,9 +138,12 @@ can't be fetched or a pack that can't be read refuses the push with "try again":
 forwarded unchecked. Repositories without the grant don't change: their pushes stream through
 unread, and GitHub refuses their workflow changes.
 
-A checked workflow still runs the branch's code, with a `GITHUB_TOKEN` that reads. The
-reusable workflows it calls (`uses:`) are capped by its permissions, and the local actions it
-runs can't read `secrets`. Triggers that run the default branch's version
+A checked workflow still runs the branch's code, with a `GITHUB_TOKEN` that reads. A job that
+calls a reusable workflow from another repository (or another ref of this one,
+`uses: owner/repo/…@ref`) is refused: that file never goes through the gateway, and a job of
+its with an `environment:` reads that environment's secrets. One of this repository's
+(`uses: ./.github/workflows/x.yml`) is checked with the same rules, changed or not, and so are
+the ones it calls. The local actions a workflow runs can't read `secrets`. Triggers that run the default branch's version
 (`pull_request_target`, `workflow_run`, `schedule`, `workflow_dispatch`) run the maintainers'
 files, not the run's. Not checked:
 
@@ -146,18 +152,25 @@ files, not the run's. Not checked:
 - self-hosted runners: a workflow picks its runner with `runs-on`, so any self-hosted runner
   the repository can use runs a branch's code;
 - configuration variables (`vars`), which any workflow reads: keep secrets out of them;
-- the default branch's later changes: a pull request's next run merges its branch with the
-  default branch as it is then. The branch's next push is checked against it, but a workflow
-  run re-run by hand after the default branch's workflows changed uses a merge nobody checked.
+- a base's later changes: each pull request event (`labeled`, `edited`, `reopened`, a re-run
+  by hand…) merges the branch with its base as it is then. The branch's next push, and the
+  listener opening or readying its pull request, check the merge again, but an event in
+  between, after the base's workflows changed, runs a merge nobody checked. Limit
+  environments' deployment branches (below) so that such a merge still can't read their
+  secrets.
 
-The mirrors take a copy of each granted repository in the data volume. A push is saved in the
-listener's temporary directory while it is checked (not the data volume, whose state it would
-put at risk), one push per run at a time, up to GitHub's 2 GiB: plan for the repositories'
-size, plus up to 2 GiB per run in parallel.
+The mirrors take a copy of each granted repository in the data volume; a mirror's first fetch
+clones the repository, and may take up to an hour. A push is saved in the listener's temporary
+directory while it is checked, one push per run at a time, up to GitHub's 2 GiB. That
+directory is the listener container's own writable layer, usually on the same host disk as the
+data volume: plan for the repositories' size plus up to 2 GiB per run in parallel, or give
+`/tmp` a size-limited `tmpfs` (commented out in `compose.yaml`) so a full one only refuses
+pushes.
 
 Where GitHub enforces them, an enforced ruleset on the default branch (a pull request with an
-approval, no bypass for the App or GitHub Actions) and environment secrets behind required
-reviewers are still worth having, but the grant no longer depends on them.
+approval, no bypass for the App or GitHub Actions) and environments with required reviewers or
+deployment branches limited to the default branch are still worth having: they cover what the
+checks don't, above.
 
 The App needs the Workflows permission for it ([setup](setup.md#2-create-the-github-app)):
 without it, the gateway refuses every push of that repository, its runs' first one included,

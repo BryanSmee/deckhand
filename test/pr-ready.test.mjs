@@ -42,6 +42,7 @@ async function servePrReady(
     // What GitHub answers a pull request's creation or edit with.
     written = (method, path, body) =>
       Response.json({ number: 9, html_url: "https://pr/9", ...body }),
+    checkWorkflows,
   } = {},
 ) {
   const seen = { lookups: [], tokens: [], mutations: [], writes: [] };
@@ -78,6 +79,7 @@ async function servePrReady(
     app: () => github,
     api: "https://api.example",
     fetch: graphqlFetch,
+    checkWorkflows,
   });
   const { url } = await serve(t, (req, res) => prReady.handle(req, res));
   const post = async (path, secret, method = "POST", body) => {
@@ -368,4 +370,34 @@ test("a request body past the limit is dropped before GitHub", async (t) => {
   }).catch(() => ({ status: 413 }));
   assert.equal(res.status, 413);
   assert.deepEqual(seen.writes, []);
+});
+
+test("allow_workflows: a branch whose workflows fail merged with the base is neither opened nor made ready", async (t) => {
+  const checked = [];
+  let why = "workflow files …: .github/workflows/ci.yml (merged with release): mentions `secrets`";
+  const { broker, seen, post } = await servePrReady(t, {
+    checkWorkflows: async (repo, branch, base) => {
+      checked.push([repo, branch, base]);
+      if (why instanceof Error) throw why;
+      return why;
+    },
+  });
+  const secret = issueRun(broker);
+  const into = { title: "t", head: "issue-1-x", base: "release" };
+  const opened = await post("/pr/org/repo/create", secret, "POST", into);
+  assert.equal(opened.status, 422);
+  assert.match(opened.body.error, /^Deckhand: workflow files .*merged with release/);
+  const ready = await post("/pr/org/repo/7/ready", secret);
+  assert.equal(ready.status, 422);
+  assert.deepEqual(checked, [
+    ["org/repo", "issue-1-x", "release"],
+    ["org/repo", "issue-1-x", "main"],
+  ]);
+  assert.deepEqual([seen.writes, seen.mutations], [[], []]);
+  // Back to draft needs no check; a check that fails refuses, rather than skip it.
+  why = new Error("git fetch: down");
+  assert.equal((await post("/pr/org/repo/7/ready", secret)).status, 502);
+  why = null;
+  assert.equal((await post("/pr/org/repo/7/ready", secret)).status, 200);
+  assert.equal((await post("/pr/org/repo/create", secret, "POST", into)).status, 201);
 });

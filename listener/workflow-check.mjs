@@ -432,6 +432,16 @@ function spellsSecrets(value) {
 // repository's default applies, and that may write), and it names no secret: `secrets.X`,
 // `secrets[...]`, `toJSON(secrets)`, `secrets: inherit` all spell it, in a key or a value.
 export function workflowProblems(text) {
+  return inspectWorkflow(text).problems;
+}
+
+// What workflowProblems() finds, and `calls`: the reusable workflows of this repository its jobs
+// call (`uses: ./.github/workflows/x.yml`), as paths. They run with this one's token, and an
+// `environment:` of theirs reads that environment's secrets without the caller naming one: the
+// gateway checks them too, changed or not (git-mirror.mjs). One from anywhere else is never
+// pushed through it, so it is refused.
+export function inspectWorkflow(text) {
+  const calls = [];
   const secrets = new Set();
   const expressions = new Set();
   let doc;
@@ -444,10 +454,12 @@ export function workflowProblems(text) {
       }
     });
   } catch (error) {
-    if (error instanceof YamlError) return [`line ${error.line}: ${error.message}`];
+    if (error instanceof YamlError) {
+      return { problems: [`line ${error.line}: ${error.message}`], calls };
+    }
     throw error;
   }
-  if (!(doc instanceof Map)) return ["not a workflow (a mapping of keys)"];
+  if (!(doc instanceof Map)) return { problems: ["not a workflow (a mapping of keys)"], calls };
   const problems = [];
   const top = field(doc, "permissions");
   if (top === undefined) {
@@ -458,8 +470,19 @@ export function workflowProblems(text) {
   const jobs = field(doc, "jobs");
   if (jobs instanceof Map) {
     for (const [id, job] of jobs) {
-      const own = job instanceof Map ? field(job, "permissions") : undefined;
+      if (!(job instanceof Map)) continue;
+      const own = field(job, "permissions");
       if (own !== undefined) problems.push(...permissionProblems(own, `jobs.${id}.permissions`));
+      const uses = field(job, "uses");
+      if (uses === undefined) continue;
+      const local =
+        typeof uses === "string" && /^\.\/\.github\/workflows\/[^/]+$/i.test(strip(uses));
+      if (local) calls.push(strip(uses).slice(2));
+      else {
+        problems.push(
+          `\`jobs.${id}.uses\` calls a workflow from elsewhere: only this repository's \`./.github/workflows/…\` can be called`,
+        );
+      }
     }
   }
   if (secrets.size) problems.push(`mentions \`secrets\` (line ${[...secrets].join(", ")})`);
@@ -468,5 +491,5 @@ export function workflowProblems(text) {
       `non-ASCII characters in a \`\${{ }}\` expression (line ${[...expressions].join(", ")})`,
     );
   }
-  return problems;
+  return { problems, calls };
 }

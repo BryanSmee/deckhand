@@ -25,9 +25,8 @@ import { join } from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { branchAllowed, NOT_ITS_SANDBOX } from "./broker.mjs";
-import { createMirrors, MAX_WORKFLOW } from "./git-mirror.mjs";
+import { createMirrors } from "./git-mirror.mjs";
 import { PUSH_PERMISSIONS, WORKFLOW_PUSH_PERMISSIONS } from "./github-app.mjs";
-import { workflowProblems } from "./workflow-check.mjs";
 
 // The ref updates come first in a push: anything bigger than this before them is not git. A
 // ref update is a hundred bytes or so; a push of hundreds of branches still fits.
@@ -179,17 +178,11 @@ function oneLine(text, max = 1000) {
   return line.length > max ? `${line.slice(0, max)}…` : line;
 }
 
-// Why the workflow files a branch changes (git-mirror.mjs changedWorkflows()) can't be
-// pushed, by ref: empty when they all pass.
-export function workflowRefusals(changed) {
+// Why the workflow files of a push can't go through, by ref (git-mirror.mjs check()'s
+// findings, { ref, path, problems }): empty when they all pass.
+export function workflowRefusals(found) {
   const byRef = new Map();
-  for (const { ref, path, text, problem } of changed) {
-    const problems = problem
-      ? [problem]
-      : text === null
-        ? [`not a plain UTF-8 file of at most ${MAX_WORKFLOW / 1024} KiB`]
-        : workflowProblems(text);
-    if (!problems.length) continue;
+  for (const { ref, path, problems } of found) {
     byRef.set(ref, [...(byRef.get(ref) ?? []), `${path}: ${problems.join(", ")}`]);
   }
   return new Map(
@@ -439,16 +432,21 @@ export function createGitGateway({
     try {
       const start = await packStart(spooled.file, parsed.end, parsed.caps);
       const read = await github.repoToken(repo, { contents: "read" });
-      const changed = await mirrors.changedWorkflows({
+      const updates = [];
+      for (const update of parsed.updates) {
+        const bases = /^0+$/.test(update.new) ? [] : await pullBases(github, repo, update.ref);
+        updates.push({ ...update, bases });
+      }
+      const found = await mirrors.check({
         repo,
         token: read.token,
         base,
-        updates: parsed.updates,
+        updates,
         file: spooled.file,
         start,
         dir: spooled.dir,
       });
-      reasons = workflowRefusals(changed);
+      reasons = workflowRefusals(found);
     } catch (error) {
       log(`Git gateway: ${repo}: ${error.message ?? error}`);
       reasons = all("couldn't check the workflow files of this push; try again");
@@ -458,6 +456,35 @@ export function createGitGateway({
       return refuse(req, res, repo, parsed, reasons);
     }
     return { body: createReadStream(spooled.file), token, done };
+  }
+
+  // The bases of the open pull requests from `ref`, a branch: GitHub runs their workflows from
+  // a merge with each.
+  async function pullBases(github, repo, ref) {
+    const head = `${repo.split("/")[0]}:${ref.slice("refs/heads/".length)}`;
+    const res = await github.request(
+      repo,
+      "GET",
+      `/repos/${repo}/pulls?state=open&per_page=100&head=${encodeURIComponent(head)}`,
+    );
+    if (!res.ok) throw new Error(`pull requests lookup: ${res.status}`);
+    const pulls = await res.json();
+    if (!Array.isArray(pulls)) throw new Error("pull requests lookup: not a list");
+    return pulls.map((pr) => pr.base?.ref).filter(Boolean);
+  }
+
+  // Why the run's branch `branch`, already on GitHub, can't have a pull request into `into`
+  // opened or marked ready (pr-ready.mjs): its workflows, merged with `into`, as a push of it
+  // would be refused. Null when they pass, or the repo isn't granted `allow_workflows`.
+  // Throws when they can't be checked.
+  async function checkBranch(repo, branch, into) {
+    if (!workflowsGranted(repo)) return null;
+    const github = app();
+    if (!github) throw new Error("the GitHub App is not set up");
+    const base = await defaultBranch(github, repo);
+    const { token } = await github.repoToken(repo, { contents: "read" });
+    const found = await mirrors.checkBranch({ repo, token, base, branch, into });
+    return workflowRefusals(found.map((f) => ({ ...f, ref: branch }))).get(branch) ?? null;
   }
 
   // Whether the repo's grant sets `allow_workflows` now; not when it can't be read.
@@ -515,5 +542,5 @@ export function createGitGateway({
     }
   }
 
-  return { handle };
+  return { handle, checkBranch };
 }

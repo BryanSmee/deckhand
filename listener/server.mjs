@@ -341,6 +341,8 @@ ctx.prReady = createPrReady({
   app: () => ctx.app,
   api: config.githubApi,
   log,
+  // A granted repo's workflows, in the merge a new or ready pull request runs them from.
+  checkWorkflows: (repo, branch, base) => ctx.gitGateway.checkBranch(repo, branch, base),
 });
 
 // --- Tasks, runs and restarts --------------------------------------------------------------

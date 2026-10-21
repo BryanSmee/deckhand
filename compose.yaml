@@ -33,6 +33,11 @@ services:
     restart: unless-stopped
     # Stopping only saves the queue and the runs' state: sandboxes keep running.
     stop_grace_period: 30s
+    # Pushes of repositories granted allow_workflows are saved in /tmp while checked (up to
+    # 2 GiB each, one per run): a size-limited tmpfs keeps them off the host disk
+    # (docs/security.md#github-actions-on-deckhands-branches).
+    # tmpfs:
+    #   - /tmp:size=4g
     ports:
       - "${PORT:-8080}:8080"
     environment:

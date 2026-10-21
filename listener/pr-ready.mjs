@@ -11,6 +11,10 @@
 // the run's repo's own, from a branch of that repo the run may push (broker.mjs allow()), and
 // makes the change with a token of its own that the sandbox never sees.
 //
+// Opening a pull request, or marking it ready, runs its workflows from a new merge of its
+// branch with its base: for a repo granted `allow_workflows`, its workflow files are checked
+// in that merge first, as the git gateway checks a push (git-gateway.mjs checkBranch()).
+//
 // Served on the broker's port, which only the runs' networks reach.
 import { branchAllowed, NOT_ITS_SANDBOX } from "./broker.mjs";
 import { GITHUB_HEADERS, PUSH_PERMISSIONS } from "./github-app.mjs";
@@ -33,6 +37,8 @@ export function createPrReady({
   api = "https://api.github.com",
   fetch = globalThis.fetch,
   log = () => {},
+  // (repo, branch, base) => why its workflows can't run merged with `base`, or null.
+  checkWorkflows = async () => null,
 }) {
   async function mutate(token, action, id) {
     const name = MUTATIONS[action];
@@ -132,6 +138,7 @@ export function createPrReady({
         error: `${ref} conflicts with ${base}: rebase on origin/${base} first (git fetch origin, git rebase origin/${base}, git push --force-with-lease)`,
       });
     }
+    if (!wanted && !(await workflowsPass(res, ref, pr.head.ref, pr.base?.ref, asked))) return;
     try {
       const { token } = await github.repoToken(repo, PUSH_PERMISSIONS);
       await mutate(token, action, pr.node_id);
@@ -141,6 +148,22 @@ export function createPrReady({
     }
     log(`Pull requests: ${ref} marked as ${state}`);
     send(res, 200, { message: `${ref} is marked as ${state}` });
+  }
+
+  // Whether `branch`'s workflows may run merged with `base`; once refused, false.
+  async function workflowsPass(res, ref, branch, base, { repo }) {
+    let why;
+    try {
+      why = await checkWorkflows(repo, branch, base);
+    } catch (error) {
+      log(`Pull requests: ${ref}: ${error.message ?? error}`);
+      send(res, 502, { error: `couldn't check ${branch}'s workflow files; try again` });
+      return false;
+    }
+    if (!why) return true;
+    log(`Pull requests: ${ref}: refused: ${why}`);
+    send(res, 422, { error: `Deckhand: ${why}` });
+    return false;
   }
 
   // The request's JSON object, or nothing once refused (400, 413).
@@ -195,14 +218,20 @@ export function createPrReady({
     if (!branchAllowed(run.branches, head)) {
       return send(res, 403, { error: `${head} is not this run's branch` });
     }
-    let found;
-    try {
-      let into = base;
-      if (!into) {
+    let into = base;
+    if (!into) {
+      try {
         const info = await github.request(repo, "GET", `/repos/${repo}`);
         if (!info.ok) throw new Error(`repository lookup: ${info.status}`);
         into = (await info.json()).default_branch;
+      } catch (error) {
+        log(`Pull requests: ${repo}: ${error.message ?? error}`);
+        return send(res, 502, { error: `couldn't open a pull request from ${head}; try again` });
       }
+    }
+    if (!(await workflowsPass(res, repo, head, into, { repo }))) return;
+    let found;
+    try {
       found = await github.request(
         repo,
         "POST",

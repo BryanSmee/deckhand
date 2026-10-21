@@ -229,6 +229,7 @@ async function setup(
   execFileSync("git", ["-C", bare, "config", "receive.advertisePushOptions", "true"]);
   const seen = [];
   const received = [];
+  const pulls = {};
   const down = new Set();
   // GitHub over HTTP: the gateway forwards pushes there, and fetches its mirrors from it.
   const backend = backendFetch(root, seen, received, down);
@@ -252,6 +253,12 @@ async function setup(
     },
     request: async (repo, method, path) => {
       lookups.push(path);
+      // A branch's open pull requests: `pulls`, keyed by branch, the bases they go into.
+      const head = /\/pulls\?.*head=([^&]+)/.exec(path);
+      if (head) {
+        const branch = decodeURIComponent(head[1]).split(":")[1];
+        return Response.json((pulls[branch] ?? []).map((ref) => ({ base: { ref } })));
+      }
       return Response.json({ default_branch: "main" });
     },
   };
@@ -344,6 +351,8 @@ async function setup(
     mirrorDir,
     spoolDir,
     bare,
+    pulls,
+    gateway,
   };
 }
 
@@ -882,7 +891,10 @@ test("allow_workflows: the merge GitHub runs a pull request from is checked too"
   });
   const conflict = await git(work, "push", "--force", remote(), "HEAD:refs/heads/issue-1-old");
   assert.equal(conflict.ok, false);
-  assert.match(conflict.stderr, /ci\.yml: conflicts with main: rebase the branch on it/);
+  assert.match(
+    conflict.stderr,
+    /ci\.yml \(merged with main\): conflicts with main: rebase the branch on it/,
+  );
 
   // A branch of the default one that leaves the file alone: its merge is the default branch's
   // own workflow, which goes through.
@@ -940,4 +952,73 @@ test("allow_workflows: one push of a run's at a time; one too large is refused",
   assert.match(big.stderr, /413|too large/);
   assert.deepEqual(readdirSync(small.spoolDir), []);
   assert.deepEqual([received, small.received], [[], []]);
+});
+
+test("allow_workflows: the workflows a changed one calls are checked too, changed or not", async (t) => {
+  // The maintainers' deploy workflow: its environment's secrets, for whoever calls it.
+  const deploy = `on: workflow_call
+permissions: { contents: read }
+jobs:
+  deploy:
+    environment: production
+    runs-on: ubuntu-latest
+    steps:
+      - run: ./deploy.sh "\${{ secrets.DEPLOY_KEY }}"
+`;
+  const { work, remote, commit, upstream } = await granted(t, {
+    ".github/workflows/deploy.yml": deploy,
+  });
+  const caller = (uses) => `on: push
+permissions: { contents: read }
+jobs:
+  go:
+    uses: ${uses}
+`;
+  commit({ ".github/workflows/go.yml": caller("./.github/workflows/deploy.yml") });
+  const res = await git(work, "push", remote(), "HEAD:refs/heads/issue-1-x");
+  assert.equal(res.ok, false);
+  assert.match(
+    res.stderr,
+    /deploy\.yml \(called by \.github\/workflows\/go\.yml\): mentions `secrets`/,
+  );
+  commit({ ".github/workflows/go.yml": caller("./.github/workflows/gone.yml") });
+  const gone = await git(work, "push", remote(), "HEAD:refs/heads/issue-1-x");
+  assert.match(gone.stderr, /go\.yml: calls \.github\/workflows\/gone\.yml, which isn't there/);
+  // One that passes, calling one that passes: through.
+  commit({
+    ".github/workflows/go.yml": caller("./.github/workflows/ci.yml"),
+    ".github/workflows/ci.yml": SAFE.replace("on: [push, pull_request]", "on: workflow_call"),
+  });
+  const ok = await git(work, "push", remote(), "HEAD:refs/heads/issue-1-x");
+  assert.ok(ok.ok, ok.stderr);
+  assert.equal(upstream("refs/heads/issue-1-x"), "refs/heads/issue-1-x");
+});
+
+test("allow_workflows: merges with the bases of the branch's pull requests, and before one opens", async (t) => {
+  const { work, remote, commit, seed, pulls, gateway } = await granted(t, {
+    ".github/workflows/ci.yml": SAFE,
+  });
+  // A release branch whose ci.yml has since given the job a secret.
+  const withSecret = SAFE.replace(
+    "    steps:",
+    '    env: { TOKEN: "\${{ secrets.X }}" }\n    steps:',
+  );
+  execFileSync("git", ["checkout", "-q", "-b", "release"], { cwd: work, env: gitEnv });
+  commit({ ".github/workflows/ci.yml": withSecret }, "release");
+  seed("release");
+  execFileSync("git", ["checkout", "-q", "main"], { cwd: work, env: gitEnv });
+  commit({ ".github/workflows/ci.yml": SAFE.replace("npm test", "npm test -- --ci") });
+  // Merged with main: fine. Its pull request into release: refused.
+  pulls["issue-1-x"] = ["release"];
+  const res = await git(work, "push", remote(), "HEAD:refs/heads/issue-1-x");
+  assert.equal(res.ok, false);
+  assert.match(res.stderr, /ci\.yml \(merged with release\): mentions `secrets`/);
+  delete pulls["issue-1-x"];
+  assert.ok((await git(work, "push", remote(), "HEAD:refs/heads/issue-1-x")).ok);
+  // Before a pull request into release opens (pr-ready.mjs), the same check.
+  assert.match(
+    await gateway.checkBranch("org/repo", "issue-1-x", "release"),
+    /ci\.yml \(merged with release\): mentions `secrets`/,
+  );
+  assert.equal(await gateway.checkBranch("org/repo", "issue-1-x", "main"), null);
 });

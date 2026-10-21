@@ -2,7 +2,12 @@
 // read, and the rules.
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { parseYaml, workflowProblems, YamlError } from "../listener/workflow-check.mjs";
+import {
+  inspectWorkflow,
+  parseYaml,
+  workflowProblems,
+  YamlError,
+} from "../listener/workflow-check.mjs";
 
 // Maps as plain objects, to compare.
 const plain = (v) =>
@@ -244,4 +249,33 @@ test("letters that fold to `secrets`, or any non-ASCII in an expression, are ref
   assert.deepEqual(workflowProblems(`${WORKFLOW}      - name: Déploiement ✓\n`), []);
   // Keys folded the same way: `permiſſions` is a duplicate of `permissions`.
   assert.throws(() => parseYaml("permissions: {}\npermiſſions: write-all\n"), /duplicate key/);
+});
+
+test("a reusable workflow from anywhere but this repository is refused; local ones are listed", () => {
+  const calls = (uses) =>
+    WORKFLOW.replace(
+      "    runs-on: ubuntu-latest\n    steps:\n      - run: npm test\n",
+      `    uses: ${uses}\n`,
+    );
+  for (const uses of [
+    "evil/repo/.github/workflows/w.yml@main",
+    "org/repo/.github/workflows/w.yml@other",
+    "./.github/workflows/../x.yml",
+    "./other/w.yml",
+    "[./.github/workflows/w.yml]",
+  ]) {
+    assert.deepEqual(
+      workflowProblems(calls(uses)),
+      [
+        "`jobs.test.uses` calls a workflow from elsewhere: only this repository's `./.github/workflows/…` can be called",
+      ],
+      uses,
+    );
+  }
+  assert.deepEqual(inspectWorkflow(calls("./.github/workflows/deploy.yml")), {
+    problems: [],
+    calls: [".github/workflows/deploy.yml"],
+  });
+  // A step's `uses:` is an action: no secret of its own.
+  assert.deepEqual(inspectWorkflow(WORKFLOW).calls, []);
 });
