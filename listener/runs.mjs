@@ -654,11 +654,12 @@ export function createRuns(ctx) {
     const live = task.live;
     const { key, mode, light, record, reviewed } = live;
     await teardown(task);
-    // A review that requests changes may start a fix run (reviews.mjs fix()): now that the
-    // review's own run no longer makes the task busy.
+    // A review that requests changes may start a fix run (reviews.mjs fix()), now that the
+    // review's own run no longer makes the task busy. Not waited for: its GitHub call mustn't
+    // hold the slot this run freed, and fix() checks again for a run started meanwhile.
     if (reviewed) {
       const { repo, base, settings } = task;
-      await ctx.reviews
+      ctx.reviews
         ?.fix({ repo, number: reviewed.number, base, settings }, reviewed.posted)
         .catch((error) => log(`${key}: the review's fix run: ${error.stack ?? error}`));
     }

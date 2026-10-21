@@ -1,6 +1,7 @@
 // What the listener writes on GitHub for a run: its reply (a comment, or in a discussion's
 // thread), the reactions on the comments it handled, and the needs-input label.
 import { MARKER } from "./events.mjs";
+import { getJson } from "./github.mjs";
 
 // GitHub's reactions have no ✅: 🚀 reads as "shipped" and isn't mistaken for a manual 👍.
 // A wrap-up ("/stop") and a cancelled run's comments only lose their 👀; a `/cancel` gets 👍.
@@ -30,6 +31,17 @@ export function hasLabel(labels, name) {
   return (labels ?? []).some(
     (l) => (typeof l === "string" ? l : l?.name)?.toLowerCase() === wanted,
   );
+}
+
+// Whether pull request `pr` (as GitHub has it), or issue `issue` (its number, or null: none),
+// where runs put the label, waits for the maintainer's input. `github`: the App's calls.
+export async function waitsForInput(github, config, repo, pr, issue) {
+  const name = config.needsInputLabel;
+  if (!name) return false;
+  if (hasLabel(pr.labels, name)) return true;
+  if (!issue) return false;
+  const found = await getJson(github, repo, `/repos/${repo}/issues/${issue}`, [404, 410]);
+  return hasLabel(found?.labels, name);
 }
 
 // The label `label.name` ({ name, color, description }) on the repo, made when it isn't there

@@ -20,6 +20,7 @@ import { getJson, paginate } from "./github.mjs";
 import { imageRef } from "./images.mjs";
 import { OPEN } from "./modes.mjs";
 import { handoffMessage } from "./prompts.mjs";
+import { reviewThread } from "./reviews.mjs";
 import { operatorSecrets, redact } from "./secrets.mjs";
 
 // What a research run reads of its issue: the last comments, each clipped.
@@ -58,6 +59,7 @@ export function createPreparation(ctx) {
     live.uncached = mandatoryHosts(config, agent);
     const { ca, cached } = await egressCache(access.grant, ctx.egressCa, note, agent, config);
     live.cached = cached;
+    const digest = live.mode === "review" ? await reviewDigest(task, settings, note) : undefined;
     return {
       // Another agent takes over: the branches are part of what it is handed.
       message: handoff ? handoffMessage({ ...handoff, branches }) : message,
@@ -66,7 +68,25 @@ export function createPreparation(ctx) {
       engine,
       prepared,
       ca,
+      digest,
     };
+  }
+
+  // A review's thread (reviews.mjs reviewThread()): only what allowed users and the App
+  // wrote, redacted like any output. Not read: no review, rather than one on the whole thread.
+  async function reviewDigest(task, settings, note) {
+    const { repo } = task;
+    const number = task.live.replyTo;
+    let text;
+    try {
+      text = await reviewThread({ github: ctx.github, config, settings }, repo, number);
+    } catch (error) {
+      throw new RunError(
+        `${cantRun(agentOf(task))}: #${number}'s thread couldn't be read (${error.message ?? error}). Comment again to retry.`,
+      );
+    }
+    note(`Thread: #${number}, allowed users' and Deckhand's comments only`);
+    return redact(text, [task.live.secret, ...operatorSecrets(ctx)]);
   }
 
   // A research run (modes.mjs OPEN): any public host, and nothing of the repo's (access.mjs

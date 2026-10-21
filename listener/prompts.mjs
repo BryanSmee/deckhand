@@ -67,7 +67,7 @@ ${modeInstructions.research}`;
 }
 
 // A review (reviews.mjs) of pull request `pull`: its task may be the issue the pull request
-// closes. `instructions`: the repo's `review.instructions` file, if any; `text`: what the
+// closes. Its thread is a file in the run's inbox (TASK_DIGEST, reviews.mjs reviewThread()). `instructions`: the repo's `review.instructions` file, if any; `text`: what the
 // "/mode review" comment adds.
 function reviewPrompt(task, pull, instructions, text) {
   const own = instructions?.trim()

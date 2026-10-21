@@ -314,16 +314,19 @@ with `review.on: ready`, `reviews.mjs` also starts one from a `pull_request` del
 opened by the App or an allowed user. It is a work item as if from a comment (`trigger:
 "review"`, no comment, `reason: "review"`), on the task of the issue the pull request closes
 or the pull request's own. Each pull request's reviewed head commit is kept in
-`reviews.json`, so a redelivery, a restart or the same commit again starts none. The run's
+`reviews.json`, so a redelivery, a restart or the same commit again starts none. Its thread
+is a file in the run's inbox (`TASK_DIGEST`, `reviewThread()`, written by `preparation.mjs`):
+the pull request's and its issue's, with what users outside the allowlist wrote left out. The run's
 final message follows `prompts/review.md`'s format; `runs.mjs` hands it to `postReview()`,
 which posts one GitHub review with the listener's token: findings grouped by severity, the
 rating, `REQUEST_CHANGES` on a critical or high finding and `COMMENT` otherwise (never
 `APPROVE`), and a comment review with the raw text when the format can't be read.
 
 With `review.fix`, once the review's run is torn down (so it no longer makes the task busy),
-`runs.mjs` hands the posted review to `reviews.fix()`: a review that requests changes on the
+`runs.mjs` hands, without waiting for it, the posted review to `reviews.fix()`: a review that requests changes on the
 App's own pull request, linked to its issue, queues one work item on the issue's task
-(`trigger: "work"`, `sender: null`, `reason: "review-fix"`), its text the findings, as
+(`trigger: "work"`, `sender: null`, `reason: "review-fix"`), its text the findings fenced off
+as untrusted claims (`fixMessage()`), as
 `conflicts.mjs` does for a rebase. `fixedAt` in `reviews.json`, written before the item is
 queued, makes it once per pull request.
 
