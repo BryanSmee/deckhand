@@ -1,5 +1,14 @@
 // Names, groups and times the views share.
-import type { Kind, PrState, RepoStatus, Run, RunStatus, Task, TaskState } from "./types";
+import type {
+  Kind,
+  PrState,
+  RepoStatus,
+  Run,
+  RunStatus,
+  ServerInfo,
+  Task,
+  TaskState,
+} from "./types";
 
 export const STATE_NAMES: Record<TaskState, string> = {
   "building-image": "Building image",
@@ -168,6 +177,25 @@ export function ago(ms: number, now: number): string {
   if (s < 3600) return `${Math.round(s / 60)} min ago`;
   if (s < 86400) return `${Math.round(s / 3600)} h ago`;
   return new Date(ms).toLocaleDateString();
+}
+
+// "3 d 4 h", "4 h 12 min", "12 min": how long the listener has been up, by the server's clock.
+export function uptime(startedAt: number, now: number): string {
+  const min = Math.max(0, Math.floor((now - startedAt) / 60000));
+  if (min < 60) return `${min} min`;
+  const h = Math.floor(min / 60);
+  if (h < 24) return `${h} h ${min % 60} min`;
+  return `${Math.floor(h / 24)} d ${h % 24} h`;
+}
+
+// Where a version's code is: an edge build's commit, a release's page; null for "dev" or
+// without the repository it was built from.
+export function versionUrl({ version, source }: Pick<ServerInfo, "version" | "source">) {
+  if (!source) return null;
+  const edge = /^edge-([0-9a-f]{7,40})$/.exec(version);
+  if (edge) return `${source}/commit/${edge[1]}`;
+  if (/^\d+\.\d+\.\d+/.test(version)) return `${source}/releases/tag/v${version}`;
+  return null;
 }
 
 export function duration(r: Run, now: number): string {

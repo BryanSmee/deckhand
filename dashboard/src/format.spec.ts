@@ -11,6 +11,8 @@ import {
   runName,
   shortRepo,
   titleOf,
+  uptime,
+  versionUrl,
   when,
 } from "./format";
 import type { Run, State, Task } from "./types";
@@ -92,4 +94,21 @@ test("run kinds as an analysis names them", () => {
   expect(kindName({ kind: "research" })).toBe("Research");
   expect(runKindName("review")).toBe("Review");
   expect(runKindName("audit")).toBe("audit");
+});
+
+test("uptime and where a version's code is", () => {
+  const min = 60000;
+  expect([0, 12, 4 * 60 + 12, (3 * 24 + 4) * 60 + 59].map((m) => uptime(0, m * min))).toEqual([
+    "0 min",
+    "12 min",
+    "4 h 12 min",
+    "3 d 4 h",
+  ]);
+  // The browser's clock ahead of the server's never shows a negative uptime.
+  expect(uptime(5 * min, 0)).toBe("0 min");
+  const source = "https://github.com/acme/deckhand";
+  expect(versionUrl({ version: "edge-1713fa6", source })).toBe(`${source}/commit/1713fa6`);
+  expect(versionUrl({ version: "1.3.0-rc.1", source })).toBe(`${source}/releases/tag/v1.3.0-rc.1`);
+  expect(versionUrl({ version: "dev", source })).toBeNull();
+  expect(versionUrl({ version: "1.2.3", source: "" })).toBeNull();
 });

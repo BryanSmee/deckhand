@@ -193,6 +193,8 @@ export function createHttp(ctx, { dashboardDir }) {
       inboxes: Object.fromEntries((ctx.inboxes?.() ?? []).filter(([repo]) => sees(user, repo))),
       // GitHub Enterprise: the dashboard's links go where the listener's do.
       githubUrl: config.githubUrl,
+      // Which Deckhand runs and since when (status.mjs serverInfo()): the Repositories page.
+      server: ctx.server,
       now: Date.now(),
     };
   }

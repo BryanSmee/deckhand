@@ -267,6 +267,8 @@ export function Dashboard({ state, error, repos, refresh }: Props) {
             list={repos}
             onBack={() => go({ repo: stored("tab") || null, task: null, run: null })}
             open={route.config ?? null}
+            server={state?.server}
+            serverNow={state?.now}
             onOpen={(repo) =>
               go({ repo: null, task: null, run: null, page: "repositories", config: repo })
             }

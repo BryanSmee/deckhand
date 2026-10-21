@@ -271,6 +271,9 @@ Reactions on the triggering comment follow its run: 👀 when it is received, th
 - **Dashboard**: `GET /` shows every repo's issues and pull requests, their state and live
   logs, to `ALLOWED_USERS` signed in with GitHub through the App, built from `dashboard/`.
   `GET /status` says what is going on, to them and to calls from inside the container.
+  Both say which Deckhand runs and since when (`server` in `api/state`, `version` and
+  `startedAt` in `/status`, from `status.mjs` `serverInfo()`): the Repositories page shows
+  it, the version linked to its commit or release under `DECKHAND_SOURCE`.
 - **Screenshots**: `GET /shots/<token>/<file>` serves the screenshots runs save for their
   pull requests: GitHub cannot take image uploads through its API, so they need a public URL.
 - **Per-repo config**: each repo may bring a `.deckhand.yaml` on its default branch: its own
