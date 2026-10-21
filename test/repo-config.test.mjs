@@ -290,6 +290,7 @@ test("modes: parsed, with the defaults of work or brainstorms", () => {
     agent: "claude",
     model: "sonnet",
     effort: "low",
+    speed: null,
   });
   assert.deepEqual(customMode(settings, "triage"), {
     name: "triage",
@@ -299,6 +300,7 @@ test("modes: parsed, with the defaults of work or brainstorms", () => {
     agent: "claude",
     model: "opus",
     effort: "high",
+    speed: null,
   });
   // The listener's own modes aren't the repo's.
   assert.equal(customMode(settings, "work"), null);
@@ -356,10 +358,10 @@ modes:
     config,
   );
   assert.deepEqual(errors, [
-    "modes.wide.hosts: unknown key (expected instructions, light, session, agent, model, effort)",
-    "modes.wide.mounts: unknown key (expected instructions, light, session, agent, model, effort)",
-    "modes.wide.limits: unknown key (expected instructions, light, session, agent, model, effort)",
-    "modes.wide.allow_branch_docker_images: unknown key (expected instructions, light, session, agent, model, effort)",
+    "modes.wide.hosts: unknown key (expected instructions, light, session, agent, model, effort, speed)",
+    "modes.wide.mounts: unknown key (expected instructions, light, session, agent, model, effort, speed)",
+    "modes.wide.limits: unknown key (expected instructions, light, session, agent, model, effort, speed)",
+    "modes.wide.allow_branch_docker_images: unknown key (expected instructions, light, session, agent, model, effort, speed)",
   ]);
   // Refused as a whole, and the repo's own grants are untouched.
   assert.equal(customMode(settings, "wide"), null);
@@ -374,6 +376,7 @@ modes:
     "light",
     "model",
     "name",
+    "speed",
   ]);
 });
 
@@ -421,6 +424,35 @@ test("wait_for_answers: on by default, a boolean or an error", () => {
     assert.match(errors.join(), /wait_for_answers: expected true or false/, bad);
     assert.equal(settings.waitForAnswers, true);
   }
+});
+
+test("fast_mode: only narrows the operator's SANDBOX_FAST_MODE", () => {
+  const allowed = testConfig({ ALLOWED_USERS: "alice", SANDBOX_FAST_MODE: "allowed" });
+  assert.equal(config.fastMode, false);
+  assert.equal(allowed.fastMode, true);
+  assert.equal(defaultSettings(allowed).fastMode, true);
+  assert.equal(parseRepoConfig("fast_mode: false", allowed).settings.fastMode, false);
+  assert.equal(parseRepoConfig("fast_mode: true", allowed).settings.fastMode, true);
+  // The repo can't turn it on when the operator hasn't.
+  const widened = parseRepoConfig("fast_mode: true", config);
+  assert.equal(widened.settings.fastMode, false);
+  assert.match(widened.warnings.join(), /fast_mode: the operator hasn't allowed fast mode/);
+  assert.equal(effectiveConfig(allowed, widened.settings).fastMode, false);
+  assert.match(parseRepoConfig("fast_mode: yes please", allowed).errors.join(), /expected true/);
+});
+
+test("a mode's speed: fast or normal, anything else an error", () => {
+  const { settings, errors } = parseRepoConfig(
+    `modes:
+  hotfix: { instructions: h.md, speed: Fast }
+  calm: { instructions: c.md, speed: normal }
+  odd: { instructions: o.md, speed: warp }
+`,
+    config,
+  );
+  assert.deepEqual(errors, ["modes.odd.speed: expected normal or fast"]);
+  assert.equal(customMode(settings, "hotfix").speed, "fast");
+  assert.equal(customMode(settings, "calm").speed, "normal");
 });
 
 test("a gateway's model names, with a slash, at the top and in a mode", () => {

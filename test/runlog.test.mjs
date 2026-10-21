@@ -98,6 +98,10 @@ test("format: the listener's lines", () => {
     start({ mode: "start", kind: "brainstorm", model: "sonnet", effort: "low", message: "Go" }),
     "Starting a brainstorm (sonnet, low effort): Go",
   );
+  assert.equal(
+    start({ mode: "start", kind: "issue", model: "opus", effort: "high", speed: "fast" }),
+    "Starting (opus, high effort, fast)",
+  );
   assert.equal(start({ mode: "continue", kind: "issue" }), "Continuing the session");
   assert.equal(start({ mode: "start", kind: "pr", taskMode: "audit" }), "Starting the audit mode");
   assert.equal(
@@ -123,6 +127,17 @@ test("format: Claude's lines", () => {
   assert.deepEqual(format(line({ type: "system", subtype: "init", model: "opus" })), [
     { kind: "meta", text: "Claude started (opus)" },
   ]);
+  // Fast mode once Claude Code says it is on: it says "off" in every other run.
+  const init = { type: "system", subtype: "init", model: "opus" };
+  assert.equal(
+    format(line({ ...init, fast_mode_state: "on" }))[0].text,
+    "Claude started (opus, fast mode on)",
+  );
+  assert.equal(format(line({ ...init, fast_mode_state: "off" }))[0].text, "Claude started (opus)");
+  assert.equal(
+    format(line({ ...init, fast_mode_state: "toString" }))[0].text,
+    "Claude started (opus)",
+  );
   assert.deepEqual(format(line({ type: "system", subtype: "hook" })), []);
   const assistant = {
     type: "assistant",
@@ -208,7 +223,15 @@ test("runs: rebuilt from their log files, newest first, without their path for t
   };
   writeFileSync(
     join(dir, "deckhand-org-repo-1-1000.log"),
-    [line({ ...meta, startedAt: 1000 }), line({ type: "result", result: "Done." })].join("\n"),
+    [
+      line({
+        ...meta,
+        startedAt: 1000,
+        speed: "fast",
+        speedNote: "fast mode runs on opus, not sonnet",
+      }),
+      line({ type: "result", result: "Done." }),
+    ].join("\n"),
   );
   // No listener line and no result: an old log, interrupted.
   writeFileSync(join(dir, "deckhand-org-repo-2-2000.log"), "Cloning\n");
@@ -239,8 +262,13 @@ test("runs: rebuilt from their log files, newest first, without their path for t
     ],
   );
   assert.equal(runs[1].logPath, join(dir, "deckhand-org-repo-1-1000.log"));
-  // Logs from before agents had names are Claude Code's.
+  // Logs from before agents had names are Claude Code's; from before speeds, no speed.
   assert.equal(runs[1].agent, "claude");
+  assert.deepEqual(
+    [runs[1].speed, runs[1].speedNote],
+    ["fast", "fast mode runs on opus, not sonnet"],
+  );
+  assert.deepEqual([runs[0].speed, runs[0].speedNote], [null, null]);
   assert.equal("logPath" in publicRun(runs[1]), false);
 });
 

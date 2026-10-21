@@ -168,6 +168,22 @@ test("Claude Code's run: a new, continued or fresh session, with the model and e
   assert.deepEqual(args("fresh"), [...common, "--no-session-persistence", "-p", ...out]);
 });
 
+test("Claude Code's run: fast mode for this session only, its organization check skipped", (t) => {
+  const env = { TASK_OUTPUT: "json", SANDBOX_MODEL: "opus", SANDBOX_EFFORT: "high" };
+  const args = (more) =>
+    claudeScript(t, 'agent_run new "Do it"', { ...env, ...more }).stdout.split("\nstdin:")[0];
+  assert.match(
+    args({ SANDBOX_SPEED: "fast" }),
+    /^--effort\nhigh\n--settings\n\{"fastMode": true\}\n-p$/m,
+  );
+  assert.doesNotMatch(args({ SANDBOX_SPEED: "normal" }), /--settings/);
+  assert.doesNotMatch(args({}), /--settings/);
+  const script = `printf '#!/bin/bash\\necho "skip=$%s"\\n' "{CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK:-}" \\
+       > "$CLAUDE_CONFIG_DIR/claude"; agent_run new "Do it"`;
+  assert.equal(claudeScript(t, script, { ...env, SANDBOX_SPEED: "fast" }).stdout, "skip=1\n");
+  assert.equal(claudeScript(t, script, env).stdout, "skip=\n");
+});
+
 test("Claude Code's run: no background tasks headless, so it ends with its answer", (t) => {
   // claudeScript()'s `claude`, in CLAUDE_CONFIG_DIR, printing the setting instead.
   const script = (call) =>

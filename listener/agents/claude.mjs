@@ -26,9 +26,14 @@ function contentOf(message) {
   return Array.isArray(message?.content) ? message.content : [];
 }
 
+// Whether Claude Code runs in fast mode ("on", "cooldown": back to normal speed for a while
+// after a rate limit, "off"), as its init and result events say; older versions say nothing.
+const fastMode = (e) => (e.fast_mode_state ? { fastMode: e.fast_mode_state } : {});
+
 // stream-json event types → Deckhand's events; other types give none.
 const EVENTS = {
-  system: (e) => (e.subtype === "init" ? [{ type: "started", model: e.model }] : []),
+  system: (e) =>
+    e.subtype === "init" ? [{ type: "started", model: e.model, ...fastMode(e) }] : [],
   assistant: (e) =>
     contentOf(e.message).flatMap((c) => {
       if (c.type === "text") return [{ type: "text", text: c.text }];
@@ -47,7 +52,13 @@ const EVENTS = {
           : (c.content ?? ""),
       })),
   result: (e) => [
-    { type: "result", ok: !e.is_error, text: e.result ?? "", durationMs: e.duration_ms ?? 0 },
+    {
+      type: "result",
+      ok: !e.is_error,
+      text: e.result ?? "",
+      durationMs: e.duration_ms ?? 0,
+      ...fastMode(e),
+    },
   ],
 };
 
@@ -100,6 +111,10 @@ export const claude = {
   modelProblem: () => null,
   // Deckhand's efforts are Claude Code's own.
   efforts: EFFORTS,
+  // Its fast mode (`/speed fast`, claude.sh): Opus only, through Anthropic's API only. Agents
+  // without `speeds` run at normal speed.
+  speeds: ["normal", "fast"],
+  fastModels: /opus/i,
   // One line of its output (stream-json) → Deckhand's events: started{model}, text,
   // tool{name, detail}, toolOutput{text, error}, result{ok, text, durationMs}.
   normalize: normalizer(EVENTS),

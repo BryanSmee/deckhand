@@ -1002,6 +1002,19 @@ caches:
     assert.match(runEnv, /^SANDBOX_MODEL=sonnet$/m);
   });
 
+  test("/speed fast: fast mode once the operator allows it, the footer says so", async (t) => {
+    const { dir, github, send } = await listen(t, {}, { SANDBOX_FAST_MODE: "allowed" });
+    await send(comment("alice", "Deckhand /speed fast\nPatch the CVE"));
+    const reply = await github.waitFor(
+      (r) => r.method === "POST" && r.path === "/repos/org/repo/issues/12/comments",
+    );
+    const runEnv = readFileSync(join(dir, "run-env"), "utf8");
+    assert.match(runEnv, /^SANDBOX_SPEED=fast$/m);
+    assert.match(runEnv, /^SANDBOX_MODEL=opus$/m);
+    assert.match(runEnv, /^TASK_MESSAGE=Patch the CVE$/m);
+    assert.match(JSON.parse(reply.body).body, /🤖 Claude opus · medium effort · fast/);
+  });
+
   test("a preview hook runs only with allow_preview", async (t) => {
     const delivery = {
       action: "opened",
@@ -3174,6 +3187,8 @@ mounts:
       "picked",
       "model",
       "effort",
+      "speed",
+      "speedNote",
       "phase",
       "summary",
       "delivered",

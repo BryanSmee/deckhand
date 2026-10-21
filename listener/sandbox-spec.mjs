@@ -117,6 +117,8 @@ export function sandboxEnv(
     SANDBOX_INSTRUCTIONS: open ? "" : (settings.instructions ?? ""),
     SANDBOX_MODEL: live.record.model,
     SANDBOX_EFFORT: live.record.effort,
+    // "fast": the agent's fast mode, already checked against the settings (agents/select.mjs).
+    SANDBOX_SPEED: live.record.speed ?? "normal",
     SCREENSHOT_DIR: live.shots ? "/screenshots" : "",
     SCREENSHOT_URL: live.shots ? `${publicUrl}/shots/${live.shots}` : "",
     // The engine is reached directly, on the run's network.

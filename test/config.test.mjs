@@ -311,6 +311,7 @@ test("a bad value in config.yaml names its key, one in the environment its varia
   const bad = [
     ["max_parallel: lots", /config\.yaml: max_parallel: expected/],
     ["onboarding: maybe", /config\.yaml: onboarding: expected on or off/],
+    ["sandbox_fast_mode: on", /config\.yaml: sandbox_fast_mode: expected allowed or off/],
     ["debounce_ms: 1.5", /config\.yaml: debounce_ms: expected/],
   ];
   for (const [line, pattern] of bad) {
@@ -599,4 +600,12 @@ test("FALLBACKS: an unknown entry, or one without its credential, stops the list
     /config\.yaml: fallbacks: codex@openai needs OPENAI_API_KEY/,
   );
   assert.throws(() => file("openrouter_api_key: sk-or-1"), /openrouter_api_key: a secret/);
+});
+
+test("SANDBOX_FAST_MODE: off until the operator says allowed", () => {
+  const base = "allowed_users: [a]\n";
+  assert.equal(loadConfig({}, file(base)).fastMode, false);
+  assert.equal(loadConfig({}, file(`${base}sandbox_fast_mode: allowed`)).fastMode, true);
+  assert.equal(loadConfig({ SANDBOX_FAST_MODE: "Allowed" }, file(base)).fastMode, true);
+  assert.equal(loadConfig({ SANDBOX_FAST_MODE: "off" }, file(base)).fastMode, false);
 });

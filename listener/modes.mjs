@@ -104,8 +104,8 @@ export const BUILT_IN = new Set(RESERVED_MODES);
 // What a run in the repo's own mode `name` gets, or null when the repo has no such mode
 // (work, brainstorm and the inbox are the listener's): light (no branch, no setup, a read-only
 // token: it can only comment), fresh (a new session each time, the issue's kept as it is),
-// its instructions file, and its agent, model and effort, by default those of work or
-// brainstorms. The built-in review takes its `review` block's the same way (reviewMode()).
+// its instructions file, its agent, model and effort, by default those of work or
+// brainstorms, and its speed. The built-in review takes its `review` block's the same way (reviewMode()).
 // No hosts, mounts or limits: those are the repo's grants, the same in every mode.
 export function customMode(settings, name) {
   if (name === "review") return reviewMode(settings);
@@ -122,6 +122,8 @@ export function customMode(settings, name) {
     agent: own.agent ?? agent,
     model: own.model ?? model,
     effort: own.effort ?? effort,
+    // `fast`: `/speed fast` without the command (agents/select.mjs speedFor()).
+    speed: own.speed ?? null,
   };
 }
 

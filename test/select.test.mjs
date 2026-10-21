@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { resolveEntry } from "../listener/agents/select.mjs";
+import { resolveEntry, speedFor } from "../listener/agents/select.mjs";
 
 const settings = {
   agent: "claude",
@@ -73,4 +73,69 @@ test("resolveEntry: /agent hands the issue over from the previous run's agent, n
   // The same agent as before: nothing to hand over.
   const same = resolveEntry({ ...base, previous, options: { agent: "claude" } });
   assert.equal(same.takeOver, false);
+});
+
+test("speedFor: /speed fast on Claude, allowed by the operator, runs fast on Opus", () => {
+  const allowed = { ...config, fastMode: true };
+  const r = resolveEntry({ ...base, config: allowed, options: { speed: "fast" } });
+  assert.deepEqual([r.model, r.speed, r.speedNote], ["opus", "fast", null]);
+  // Without the command: normal, as before.
+  const plain = resolveEntry({ ...base, config: allowed });
+  assert.deepEqual([plain.model, plain.speed, plain.speedNote], ["opus", "normal", null]);
+  // A model's own name with opus in it is Opus.
+  const named = { ...base, config: allowed, settings: { ...settings, model: "claude-opus-5-5" } };
+  assert.equal(resolveEntry({ ...named, options: { speed: "fast" } }).speed, "fast");
+});
+
+test("speedFor: another model switches to the best tier, and says so", () => {
+  const allowed = { ...config, fastMode: true };
+  for (const model of ["balanced", "fast"]) {
+    const r = resolveEntry({ ...base, config: allowed, options: { speed: "fast", model } });
+    assert.deepEqual([r.model, r.speed], ["opus", "fast"], model);
+    assert.match(r.speedNote, /^fast mode runs on opus, not (sonnet|haiku)$/);
+  }
+});
+
+test("speedFor: off by the operator, the repo, the agent or the provider: normal, with why", () => {
+  const fast = { options: { speed: "fast" } };
+  const off = resolveEntry({ ...base, ...fast });
+  assert.deepEqual([off.speed, off.model], ["normal", "opus"]);
+  assert.equal(off.speedNote, "fast mode is off (the operator's SANDBOX_FAST_MODE): normal speed");
+  const allowed = { ...config, fastMode: true };
+  const repo = resolveEntry({
+    ...base,
+    ...fast,
+    config: allowed,
+    settings: { ...settings, fastMode: false },
+  });
+  assert.equal(repo.speed, "normal");
+  assert.match(repo.speedNote, /off for this repository \(`fast_mode: false`\)/);
+  // Codex has no fast mode: its model stays.
+  const codex = resolveEntry({
+    ...base,
+    config: allowed,
+    options: { speed: "fast", agent: "codex" },
+  });
+  assert.equal(codex.entry.agent, "codex");
+  assert.equal(codex.speed, "normal");
+  assert.equal(codex.speedNote, "fast mode isn't available for Codex: normal speed");
+  const openrouter = resolveEntry({
+    ...base,
+    config: allowed,
+    options: { speed: "fast", agent: "claude@openrouter" },
+  });
+  assert.equal(openrouter.speed, "normal");
+  assert.match(openrouter.speedNote, /through openrouter/);
+});
+
+test("speedFor: a mode's speed: fast without a command, /speed normal overrides it", () => {
+  const allowed = { ...config, fastMode: true };
+  const own = { agent: "claude", model: "opus", effort: "high", speed: "fast" };
+  assert.equal(resolveEntry({ ...base, config: allowed, own }).speed, "fast");
+  const normal = resolveEntry({ ...base, config: allowed, own, options: { speed: "normal" } });
+  assert.deepEqual([normal.speed, normal.speedNote], ["normal", null]);
+  // speedFor() alone: what it is given decides.
+  const agent = { displayName: "X", speeds: ["normal"], defaultProvider: "x" };
+  const r = speedFor({ config: allowed, settings, own: null, options: { speed: "fast" }, agent });
+  assert.equal(r.speed, "normal");
 });

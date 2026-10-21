@@ -116,6 +116,7 @@ export function Detail({ task: t, run: r, onRun, onBack, now, github, refresh }:
             <span>
               {new Date(r.startedAt).toLocaleString()} · {duration(r, now)}
               {r.model && ` · ${r.model}, ${r.effort} effort`}
+              {r.speed === "fast" && " · fast"}
             </span>
           )}
           {t.pr && <PrLink pr={t.pr} />}
@@ -189,7 +190,9 @@ export function Detail({ task: t, run: r, onRun, onBack, now, github, refresh }:
               }}
             >
               <StateDot state={x.status} />
-              {runName(x)} · {x.status === "running" ? duration(x, now) : ago(x.startedAt, now)}
+              {runName(x)}
+              {x.speed === "fast" && " · fast"} ·{" "}
+              {x.status === "running" ? duration(x, now) : ago(x.startedAt, now)}
             </button>
           ))}
         </nav>

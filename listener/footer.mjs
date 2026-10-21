@@ -1,4 +1,4 @@
-// The line under each reply (runs.mjs): agent, model, effort, duration, the next step and
+// The line under each reply (runs.mjs): agent, model, effort, speed, duration, the next step and
 // options that came too late for the run. Pure.
 import { agentFor } from "./agents/index.mjs";
 import { entryLabel } from "./agents/select.mjs";
@@ -21,9 +21,19 @@ export function nextStep(mode, { talk, fresh, trigger }) {
   return "";
 }
 
-// The line under each reply: agent, model, effort, duration, the next step and options that
-// came too late for the run.
-// The provider shows when it isn't the agent's default, or after a fallback, with why.
+// A fast run, by what its agent said of its fast mode at the end (agents/claude.mjs): "on"
+// (or nothing, from an older version) is plain fast, "cooldown" back to normal speed for a
+// while after a rate limit, "off" it couldn't turn it on (the organization's settings, an
+// OAuth token: docs/setup.md).
+const FAST = {
+  cooldown: " · fast, then normal speed for a while (rate limited)",
+  off: " · normal speed: the agent couldn't turn fast mode on",
+};
+
+// The line under each reply: agent, model, effort, speed, duration, the next step and options
+// that came too late for the run.
+// The provider shows when it isn't the agent's default, or after a fallback, with why; the
+// speed when it is fast, or when the run didn't get what it asked for (record.speedNote).
 export function replyFooter(record, result, hint, later) {
   const took = result ? minutes(result.durationMs) : null;
   const late = Object.entries(later)
@@ -40,5 +50,8 @@ export function replyFooter(record, result, hint, later) {
     fallback && !fallback.sticky
       ? ` · fell back from ${entryLabel(fallback.from)}: ${fallback.reason}`
       : "";
-  return `<sub>🤖 ${agent.displayName}${provider} ${record.model} · ${record.effort} effort${took !== null ? ` · ${took} min` : ""}${switched}${hint}${next}</sub>`;
+  const state = result?.fastMode ?? "on";
+  const fast = record.speed !== "fast" ? "" : Object.hasOwn(FAST, state) ? FAST[state] : " · fast";
+  const speedNote = record.speedNote ? ` · ${record.speedNote}` : "";
+  return `<sub>🤖 ${agent.displayName}${provider} ${record.model} · ${record.effort} effort${fast}${took !== null ? ` · ${took} min` : ""}${switched}${speedNote}${hint}${next}</sub>`;
 }

@@ -47,6 +47,11 @@ export interface Run {
   picked?: { sticky?: boolean } | null;
   model?: string | null;
   effort?: string | null;
+  // "fast" in Claude Code's fast mode, which costs more; "normal" or null otherwise.
+  speed?: string | null;
+  // Why it didn't get the speed or model asked for (the operator turned fast mode off…). Sent,
+  // not shown: the reply says it.
+  speedNote?: string | null;
   phase?: string | null;
   startedAt: number;
   finishedAt: number | null;

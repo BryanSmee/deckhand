@@ -92,15 +92,15 @@ export function sameRepo(pr, repo) {
 // "/mode <name>" line asks for (lowercase, or null), what an "/after #12" line waits for
 // (parseAfter(), or null) and the rest of the comment; trigger null and the whole comment when
 // there is none. The trigger is the whole first line, so "Deckhand is down" starts nothing;
-// "/mode", "/after", "/model", "/effort" and "/agent" may follow it there ("Deckhand /mode
-// brainstorm", "Deckhand /agent codex"): the last three stay in the text, for takeOptions().
+// "/mode", "/after", "/model", "/effort", "/speed" and "/agent" may follow it there ("Deckhand
+// /mode brainstorm", "Deckhand /agent codex"): the last four stay in the text, for takeOptions().
 export function splitTrigger(config, body) {
   const [first, ...rest] = body.split(/\r?\n/);
   if (first.trim().toLowerCase() === "/stop") return takeCommands(rest.join("\n"), "stop");
   if (first.trim().toLowerCase() === "/cancel") return takeCommands(rest.join("\n"), "cancel");
   // Each command its own line, as if written below; anything else on the line and it isn't
   // the trigger line ("Deckhand /mode brainstorm please", "Deckhand /effort huge").
-  const inline = trailingCommands(first, ["mode", "after", "model", "effort", "agent"]);
+  const inline = trailingCommands(first, ["mode", "after", ...OPTIONS]);
   if (inline && normalize(inline.head) === config.trigger) {
     return takeCommands([...inline.commands, ...rest].join("\n"), "work");
   }
@@ -166,6 +166,13 @@ export function parseAfter(text) {
 
 export const EFFORTS = ["low", "medium", "high", "xhigh", "max"];
 
+// Claude Code's fast mode (`/speed fast`): the same model, faster output, a higher price.
+// Agents without it run at normal speed (agents/select.mjs speedFor()).
+export const SPEEDS = ["normal", "fast"];
+
+// The commands takeOptions() records, without their slash.
+const OPTIONS = ["model", "effort", "speed", "agent"];
+
 // A model: a tier (best, balanced, fast: agents/), an alias (opus), an id
 // (claude-opus-5-5[1m]) or a gateway's (anthropic/claude-opus-5.5, openai/gpt-5,
 // meta-llama/llama-4:free).
@@ -175,17 +182,18 @@ export const MODEL_NAME = /^[\w.[\]/:-]+$/;
 // operator's when the run starts (agents/select.mjs pickProblem()).
 const AGENT_NAME = /^[\w.-]+(@[\w.-]+)?$/;
 
-// Removes "/model <name>", "/effort <level>" and "/agent <name>" lines from a comment,
-// recording them in options.
+// Removes "/model <name>", "/effort <level>", "/speed <speed>" and "/agent <name>" lines from a
+// comment, recording them in options.
 export function takeOptions(text, options) {
   return text
     .split(/\r?\n/)
     .filter((line) => {
-      const match = /^\s*\/(model|effort|agent)\s+(\S+)\s*$/i.exec(line);
+      const match = /^\s*\/(model|effort|speed|agent)\s+(\S+)\s*$/i.exec(line);
       if (!match) return true;
       const key = match[1].toLowerCase();
       const value = key === "model" ? match[2] : match[2].toLowerCase();
       if (key === "effort" && !EFFORTS.includes(value)) return true;
+      if (key === "speed" && !SPEEDS.includes(value)) return true;
       if (key === "model" && !MODEL_NAME.test(value)) return true;
       if (key === "agent" && !AGENT_NAME.test(value)) return true;
       options[key] = value;
@@ -196,13 +204,13 @@ export function takeOptions(text, options) {
 }
 
 // Whether a comment says anything besides its trigger and command lines ("/mode", "/after",
-// "/model", "/effort", "/agent"): only then does it answer an issue's open questions (tasks.mjs).
+// "/model", "/effort", "/speed", "/agent"): only then does it answer an issue's open questions (tasks.mjs).
 export function saysMore(config, body) {
   return !!takeOptions(splitTrigger(config, body ?? "").text, {});
 }
 
-// Comments as the agent reads them, one after the other, without their "/model", "/effort"
-// and "/agent" lines (collected in `options`).
+// Comments as the agent reads them, one after the other, without their "/model", "/effort",
+// "/speed" and "/agent" lines (collected in `options`).
 export function commentsText(items, options) {
   return items
     .map((i) => takeOptions(i.text, options))
@@ -211,7 +219,7 @@ export function commentsText(items, options) {
 }
 
 // An inbox entry, as Claude reads it: who wrote it and where, so its reply can link back.
-// Entries have no trigger line: "/model", "/effort" and "/agent" may end any of their lines
+// Entries have no trigger line: "/model", "/effort", "/speed" and "/agent" may end any of their lines
 // ("Do X /effort high"), put on lines of their own for takeOptions(). "/mode" and "/after"
 // don't apply to entries: they stay text, and so do code blocks and quotes, where a bug report
 // shows a command rather than gives one.
@@ -223,7 +231,7 @@ function entry(author, url, body) {
     .map((line) => {
       if (/^\s*(```|~~~)/.test(line)) fenced = !fenced;
       if (fenced || /^\s*(```|~~~|>)/.test(line)) return line;
-      const run = trailingCommands(line, ["model", "effort", "agent"]);
+      const run = trailingCommands(line, OPTIONS);
       return run ? [run.head.trimEnd(), ...run.commands].filter(Boolean).join("\n") : line;
     });
   return `From @${author.login}${url ? ` (${url})` : ""}:\n\n${lines.join("\n")}`;

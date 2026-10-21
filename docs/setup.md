@@ -104,10 +104,10 @@ without code; `/stop` wraps it up. `/cancel` (the whole first line) stops the is
 run now, and the task's page on the dashboard has a **Stop** button that does the same: the
 run's reply says who stopped it, its session and pushed commits stay, and the next comment
 resumes it. With nothing running, `/cancel` gets a reply saying so.
-`/mode`, `/after`, `/agent`, `/model` and `/effort` may share the trigger's line, alone or
+`/mode`, `/after`, `/agent`, `/model`, `/effort` and `/speed` may share the trigger's line, alone or
 together (`Deckhand /agent codex /mode brainstorm`), as well as follow it on lines of their
 own; anything else on that line and it isn't the trigger. In an inbox entry (an idea, a bug, a
-discussion), `/agent`, `/model` and `/effort` may end any line (`Dark mode /effort high`)
+discussion), `/agent`, `/model`, `/effort` and `/speed` may end any line (`Dark mode /effort high`)
 outside code blocks and quotes.
 `Deckhand /mode research` answers a question from the open web, without the repository's
 code or a GitHub token, once you set `allow_research: true` in the repository's grants file
@@ -404,6 +404,7 @@ What every sandbox may reach and its limits aren't settings: they go in
 | `CODEX_VERSION`                                                                                   | `codex_version`                                                                                   | `0.162.1`                                                                    | Codex version the sandboxes install on first use                                                                                                                                                                                       |
 | `SANDBOX_MODEL`, `SANDBOX_EFFORT`                                                                 | `sandbox_model`, `sandbox_effort`                                                                 | `best`, `medium`                                                             | defaults; a comment's `/model` and `/effort` lines override them (models: below the table)                                                                                                                                             |
 | `BRAINSTORM_MODEL`, `BRAINSTORM_EFFORT`                                                           | `brainstorm_model`, `brainstorm_effort`                                                           | `SANDBOX_MODEL`, `SANDBOX_EFFORT`                                            | the same for brainstorms, inbox entries and discussions                                                                                                                                                                                |
+| `SANDBOX_FAST_MODE`                                                                               | `sandbox_fast_mode`                                                                               | off                                                                          | `allowed`: `/speed fast` turns on Claude Code's fast mode, which costs more (see [Fast mode](#fast-mode))                                                                                                                              |
 | `BRAINSTORM_IDLE_MINUTES`                                                                         | `brainstorm_idle_minutes`                                                                         | `10`                                                                         | minutes without a comment before a brainstorm shows as idle                                                                                                                                                                            |
 | `MAX_PARALLEL`                                                                                    | `max_parallel`                                                                                    | `2`                                                                          | sandboxes running at once (a repo's `max_parallel` within it)                                                                                                                                                                          |
 | `SANDBOX_SUBNETS`, `SANDBOX_SUBNET_SIZE`                                                          | `sandbox_subnets`, `sandbox_subnet_size`                                                          | none (Docker's pools), `28`                                                  | an IPv4 range the runs' networks take their subnets from, in blocks of that size (below the table)                                                                                                                                     |
@@ -467,6 +468,44 @@ Antigravity CLI: `gemini-4-argon-high`, `gemini-4-argon-medium`, `gemini-3.8-fla
 models carry theirs in their name (`-low`, `-medium`, `-high`), so a name without one takes the
 run's (`xhigh` and `max`: `-high`). A run whose model belongs to another agent (`/model opus` on a Codex run)
 doesn't start: the reply says why.
+
+### Fast mode
+
+Claude Code's fast mode runs the same Opus model with output up to about 2.5× faster, at a
+higher price per token (about twice Opus's). It is for work that can't wait, like a critical
+fix: a `/speed fast` line in a comment (or ending its trigger line or an inbox entry's line)
+asks for it, `/speed normal` drops it, and a repository's mode may ask for it by default
+(`speed: fast`, see [Modes](repo-config.md#modes)). It is off until you allow it:
+
+```yaml
+# server/config.yaml
+sandbox_fast_mode: allowed
+```
+
+A repository's `fast_mode: false` turns it off there; it can't turn it on when you haven't.
+A run that asks for it and can't have it runs at normal speed, and the reply's footer says
+why: you haven't allowed it, the repository turned it off, the agent has none (Codex, the
+Antigravity CLI) or the provider is OpenRouter (`claude@openrouter`). Fast mode is Opus only:
+`/speed fast` with `/model balanced` or `/model fast` runs on `best` instead, and the footer
+says so. A `/speed` sent while a run goes on applies to the next run, like `/model`. A fast
+run's footer reads `🤖 Claude opus · high effort · fast · 4 min`, and the dashboard and the
+run's log show `fast` too, so you can see which runs cost more.
+
+What it needs from your credential:
+
+- **An API key** (`ANTHROPIC_API_KEY`): billed per token at the fast price. An admin of your
+  organization must allow fast mode in the Console's Claude Code preferences, else the API
+  refuses it and Claude Code goes on at normal speed (the footer then says the agent couldn't
+  turn fast mode on).
+- **A plan** (`CLAUDE_CODE_OAUTH_TOKEN`): not through Deckhand. Claude Code asks
+  `api.anthropic.com` whether the account may use fast mode with the token itself, which
+  sandboxes never hold (the listener adds it to their API calls), so the answer is no and
+  the run goes on at normal speed, saying so in its footer.
+- **A gateway** (`ANTHROPIC_AUTH_TOKEN`, Bedrock, Vertex, Foundry): usually not available;
+  Claude Code then runs at normal speed.
+
+Turning it on in a session that already has context bills that whole context once, uncached,
+at the fast price: a `/speed fast` on a long issue's session costs more than on a new one.
 
 ### Agents and providers
 

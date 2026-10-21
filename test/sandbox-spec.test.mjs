@@ -106,6 +106,7 @@ test("sandboxEnv: the run's secret in place of a credential, its prompt, mode an
   assert.equal(env.SCREENSHOT_URL, `https://deckhand.example/shots/${"f".repeat(24)}`);
   assert.equal(env.HTTPS_PROXY, "http://egress:3128");
   assert.doesNotMatch(env.NO_PROXY, /engine/);
+  assert.equal(env.SANDBOX_SPEED, "normal");
   // No value of the operator's: none is in the listener's config here, and none may be.
   for (const value of Object.values(env)) assert.equal(typeof value, "string");
 });
@@ -124,4 +125,10 @@ test("sandboxEnv: a wrap-up is a brainstorm, light runs skip setup, an engine is
   assert.equal(codex.SANDBOX_PROVIDER, "openai");
   assert.equal(codex.OPENAI_API_KEY, "s".repeat(32));
   assert.equal(codex.CODEX_VERSION, "0.50.0");
+});
+
+test("sandboxEnv: the run's speed, as speedFor() decided it", () => {
+  const run = runOf();
+  run.task.live.record.speed = "fast";
+  assert.equal(sandboxEnv(run, "p", "m", parts.settings, null).SANDBOX_SPEED, "fast");
 });

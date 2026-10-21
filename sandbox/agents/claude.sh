@@ -27,6 +27,14 @@ export AGENT_NAME=Claude
 # Model and thinking effort, from the listener (a tier already resolved, agents/claude.mjs)
 # or a comment's /model and /effort.
 claude_model=(--model "${SANDBOX_MODEL:-opus}" --effort "${SANDBOX_EFFORT:-medium}")
+# Fast mode (/speed fast), for this session only: flag settings aren't saved to the issue's
+# volume. Its organization check calls api.anthropic.com with the sandbox's stand-in for the
+# credential, which can only fail: skipped, the API itself refuses fast mode when the
+# organization doesn't allow it. Claude Code ignores the skip with an OAuth token.
+if [ "${SANDBOX_SPEED:-}" = fast ]; then
+  claude_model+=(--settings '{"fastMode": true}')
+  export CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK=1
+fi
 # Its own fallback when that model is overloaded (CLAUDE_FALLBACK_MODEL), headless only, and
 # never the model itself, which Claude Code refuses.
 claude_fallback=()
