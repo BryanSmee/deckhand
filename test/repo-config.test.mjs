@@ -620,12 +620,35 @@ review:
     "review.instructions: expected a path in the repository (relative, no ..)",
     "review.effort: expected one of low, medium, high, xhigh, max",
     "review.agent: the operator hasn't configured codex (configured: claude)",
-    "review.hosts: unknown key (expected on, instructions, agent, model, effort, fix)",
+    "review.hosts: unknown key (expected on, instructions, agent, model, effort, fix, merge, merge_method)",
   ]);
   assert.equal(bad.settings.review, null);
   assert.deepEqual(parseRepoConfig("review: [on]\n", config).errors, [
-    "review: expected true, or on, instructions, agent, model, effort, fix",
+    "review: expected true, or on, instructions, agent, model, effort, fix, merge, merge_method",
   ]);
+});
+
+test("review.merge and merge_method: off and squash by default, merge warns without on: ready", () => {
+  const manual = parseRepoConfig("review: true\n", config).settings.review;
+  assert.deepEqual([manual.merge, manual.mergeMethod], [false, "squash"]);
+  const on = parseRepoConfig(
+    "review:\n  on: ready\n  fix: true\n  merge: true\n  merge_method: rebase\n",
+    config,
+  );
+  assert.deepEqual([on.errors, on.warnings], [[], []]);
+  assert.deepEqual([on.settings.review.merge, on.settings.review.mergeMethod], [true, "rebase"]);
+  // Nothing merges without on: ready: the config check says so.
+  const manualMerge = parseRepoConfig("review:\n  merge: true\n", config);
+  assert.deepEqual(manualMerge.errors, []);
+  assert.deepEqual(manualMerge.warnings, [
+    "review.merge: needs `review.on: ready`, nothing is merged",
+  ]);
+  const bad = parseRepoConfig("review:\n  merge: yes\n  merge_method: ff\n", config);
+  assert.deepEqual(bad.errors, [
+    "review.merge: expected true or false",
+    "review.merge_method: expected squash, merge, rebase",
+  ]);
+  assert.equal(bad.settings.review, null);
 });
 
 test("review.fix: a boolean, off by default", () => {

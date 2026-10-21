@@ -160,6 +160,19 @@
   font-size: 0.7rem;
 }
 
+/* Red on purpose: model output reaches the default branch unread (docs/security.md). */
+.autoMerge {
+  flex: none;
+  padding: 0 0.4rem;
+  border: 1px solid var(--err);
+  border-radius: 999px;
+  background: var(--err-soft);
+  color: var(--err);
+  font-size: 0.7rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
 .status {
   justify-self: start;
 }

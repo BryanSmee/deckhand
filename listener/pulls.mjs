@@ -1,5 +1,5 @@
 // Each task's pull request for the dashboard, by task key ("org/repo#12", "org/repo#pr-3"):
-// { number, url, state, readyAt }. `pull_request` webhooks keep it current (events.mjs
+// { number, url, state, readyAt, autoMerged? }. `pull_request` webhooks keep it current (events.mjs
 // pullRequest()), and the listener's own changes (pr-ready.mjs); tasks older than that are
 // looked up once per listener start, from the repo's recent pull requests. Kept in pulls.json,
 // so a restart neither forgets nor asks again. The open ones are asked about again at start and
@@ -36,7 +36,10 @@ export function createPulls({ path, listPulls, getPull = async () => null, log =
     // (pr-ready.mjs): one notification, not two.
     const already = before?.state === "ready" && pr.state === "ready";
     const readyAt = already ? before.readyAt : (pr.readyAt ?? before?.readyAt ?? null);
-    pulls.set(key, { ...pr, readyAt });
+    // Merged by the listener (reviews.mjs autoMerge()): the `closed` delivery that follows
+    // doesn't know it.
+    const autoMerged = pr.autoMerged || before?.autoMerged;
+    pulls.set(key, { ...pr, readyAt, ...(autoMerged && { autoMerged: true }) });
     pulls.save();
     return true;
   }

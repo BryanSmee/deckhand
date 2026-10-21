@@ -14,7 +14,14 @@
 // it may have changed (refresh()), or the dashboard asks. The operator's grants and the
 // onboarding status are read at each list, so their changes show at once.
 import { repoAllowed } from "./config.mjs";
-import { GrantsError, grantCheck, grantFor, loadGrants, refusedByGrants } from "./grants.mjs";
+import {
+  autoMergeProblems,
+  GrantsError,
+  grantCheck,
+  grantFor,
+  loadGrants,
+  refusedByGrants,
+} from "./grants.mjs";
 import { appSettingsUrl } from "./github-app.mjs";
 import { CONFIG_FILE, defaultSettings, parseRepoConfig, readRepoFile } from "./repo-config.mjs";
 import { effectiveView } from "./repo-view.mjs";
@@ -30,8 +37,9 @@ const PARALLEL = 8;
 
 // One row: "configured", "invalid" (no run starts: its config has errors, or asks for what the
 // operator's grants refuse), "onboarding" (with its issue) or "not-onboarded"; "unknown" when
-// its config couldn't be read. `found`: { has, invalid, at } as last read, or null.
-// `issues: false`: it can't be onboarded, its issues are off.
+// its config couldn't be read. `found`: { has, invalid, autoMerge, at } as last read, or null.
+// `issues: false`: it can't be onboarded, its issues are off. `autoMerge`: its `review.merge`
+// merges Deckhand's pull requests with no human review (grants.mjs autoMergeProblems()).
 export function repoStatus(info, found, onboarded) {
   const row = {
     repo: info.full_name,
@@ -41,6 +49,7 @@ export function repoStatus(info, found, onboarded) {
     status: "not-onboarded",
     issue: null,
     readAt: found?.at ?? null,
+    autoMerge: !!found?.autoMerge,
   };
   if (found?.has) return { ...row, status: found.invalid ? "invalid" : "configured" };
   if (onboarded) {
@@ -133,16 +142,20 @@ export function createRepoList({
     }
   }
 
-  // What the row shows: { has, invalid, at }. Invalid when no run would start: the file's
-  // errors, or what the operator's grants refuse in it (as grantCheck() is the run's
+  // What the row shows: { has, invalid, autoMerge, at }. Invalid when no run would start: the
+  // file's errors, or what the operator's grants refuse in it (as grantCheck() is the run's
   // preflight). Checked at each call: an edited grant shows without reading GitHub.
   function judged(info, known, load) {
     if (!known) return null;
     const { at, has, errors, settings } = known;
-    const invalid =
-      has &&
-      (errors || refusedByGrants(grantCheck(config, info.full_name, settings, { load, fs })));
-    return { at, has, invalid: !!invalid };
+    const check =
+      has && !errors ? grantCheck(config, info.full_name, settings, { load, fs }) : null;
+    const invalid = has && (errors || refusedByGrants(check));
+    const autoMerge =
+      !invalid &&
+      !!settings?.review?.merge &&
+      !autoMergeProblems(check.grant, settings, info.private === true).length;
+    return { at, has, invalid: !!invalid, autoMerge };
   }
 
   // The config of the default branch, read now: { file, parsed } (file null without one).
@@ -382,6 +395,10 @@ export function createRepoApi({
       grantsError = grantsErrorView(error, everyRepo);
     }
     const settings = parsed?.settings ?? defaultSettings(config);
+    const warnings = parsed?.warnings ?? [];
+    // What stops its merges: the grant, the repository's visibility (the parse's own warning
+    // already says what its file lacks).
+    const merging = grant ? autoMergeProblems(grant, settings, info.private === true) : [];
     send(res, 200, {
       repo: row,
       base,
@@ -391,7 +408,7 @@ export function createRepoApi({
         url: `${info.html_url}/blob/${base.split("/").map(encodeURIComponent).join("/")}/${CONFIG_FILE}`,
       },
       errors: parsed?.errors ?? [],
-      warnings: parsed?.warnings ?? [],
+      warnings: [...warnings, ...merging.filter((w) => !warnings.includes(w))],
       grantsError,
       effective: effectiveView(config, info.full_name, settings, grant, fs),
       readAt: row.readAt,

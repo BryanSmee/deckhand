@@ -12,6 +12,13 @@
 # allow_preview: true
 # `/mode research` runs: any public host, without its code or a GitHub token.
 # allow_research: true
+# UNSAFE: its .deckhand.yaml's `review.merge` merges Deckhand's pull requests after a clean
+# review, with no human reading them (docs/security.md#auto-merge). `public`: on a public
+# repository too.
+# allow_auto_merge: true
+# EVEN MORE UNSAFE: auto-merge while allow_preview's hook runs the default branch as root on
+# the host. Don't.
+# acknowledge_automerge_and_preview_is_highly_dangerous: true
 # Its own limits, over default.yaml's.
 # limits: { cpus: 4, memory: 8g }
 # Host roots it may mount from (read-only unless read_only: false); the listener must see

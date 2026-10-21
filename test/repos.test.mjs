@@ -49,6 +49,7 @@ test("repoStatus: configured (or invalid) wins, then onboarding, then unknown, e
     status: "not-onboarded",
     issue: null,
     readAt: 7,
+    autoMerge: false,
   };
   const none = { has: false, invalid: false, at: 7 };
   const has = { has: true, invalid: false, at: 7 };
@@ -520,7 +521,11 @@ test("the list's refused checks are the run preflight's: both go through grantCh
     assert.ok(!body.includes(piece), piece);
   }
   const repos = readFileSync(new URL("../listener/repos.mjs", import.meta.url), "utf8");
-  assert.match(repos, /refusedByGrants\(grantCheck\(config, info\.full_name, settings/);
+  assert.match(
+    repos,
+    /check =\s+has && !errors \?\s+grantCheck\(config, info\.full_name, settings/,
+  );
+  assert.match(repos, /refusedByGrants\(check\)/);
 });
 
 test("GET config: raw text, errors, warnings and what runs get; its row updated", async () => {
@@ -577,11 +582,64 @@ test("GET config: raw text, errors, warnings and what runs get; its row updated"
     allowDocker: false,
     allowResearch: false,
     allowWorkflows: false,
+    allowAutoMerge: false,
+    acknowledgeAutoMergePreview: false,
     hosts: ["registry.npmjs.org"],
     cachedHosts: [],
     mounts: [],
     limits: { cpus: "2", memory: "4g", pids: 2048 },
   });
+});
+
+test("auto-merge: the row's badge and the config's warnings follow the grant, visibility and hook", async () => {
+  const merge = "review:\n  on: ready\n  fix: true\n  merge: true\n";
+  const repos = {
+    "org/priv": [{}, "allow_auto_merge: true\n", merge],
+    "org/pub": [{ private: false }, "allow_auto_merge: true\n", merge],
+    "org/pubok": [{ private: false }, "allow_auto_merge: public\n", merge],
+    "org/none": [{}, "", merge],
+    "org/hook": [{}, "allow_auto_merge: true\nallow_preview: true\n", `${merge}preview: ./x.sh\n`],
+    "org/ack": [
+      {},
+      "allow_auto_merge: true\nallow_preview: true\nacknowledge_automerge_and_preview_is_highly_dangerous: true\n",
+      `${merge}preview: ./x.sh\n`,
+    ],
+    "org/manual": [{}, "allow_auto_merge: true\n", "review:\n  merge: true\n"],
+  };
+  const grants = {};
+  for (const [repo, [, grant]] of Object.entries(repos)) {
+    if (grant) grants[`${repo}.yaml`] = grant;
+  }
+  const { api } = apiSetup({
+    grants,
+    first: Object.entries(repos).map(([repo, [extra]]) => info(repo, extra)),
+    files: Object.fromEntries(Object.entries(repos).map(([repo, [, , yaml]]) => [repo, yaml])),
+  });
+  const { body } = await call(api, "GET", "/api/repos");
+  const on = Object.fromEntries(body.repos.map((r) => [r.repo, r.autoMerge]));
+  assert.deepEqual(on, {
+    "org/ack": true,
+    "org/hook": false,
+    "org/manual": false,
+    "org/none": false,
+    "org/priv": true,
+    "org/pub": false,
+    "org/pubok": true,
+  });
+  const warnings = async (repo) =>
+    (await call(api, "GET", `/api/repos/${repo}/config`)).body.warnings;
+  for (const repo of ["org/priv", "org/pubok", "org/ack"])
+    assert.deepEqual(await warnings(repo), [], repo);
+  assert.match((await warnings("org/none"))[0], /don't set `allow_auto_merge: true`/);
+  assert.match((await warnings("org/pub"))[0], /is public.*`allow_auto_merge: true`, not `public`/);
+  assert.match(
+    (await warnings("org/hook"))[0],
+    /`acknowledge_automerge_and_preview_is_highly_dangerous: true`, nothing is merged/,
+  );
+  // The parse's own warning, once.
+  assert.deepEqual(await warnings("org/manual"), [
+    "review.merge: needs `review.on: ready`, nothing is merged",
+  ]);
 });
 
 test("GET config: an invalid file shows its errors, and its row turns invalid", async () => {

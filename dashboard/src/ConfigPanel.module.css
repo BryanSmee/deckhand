@@ -73,6 +73,15 @@
   color: var(--err);
 }
 
+.box p {
+  margin: 0.35rem 0 0;
+}
+
+.box a {
+  color: inherit;
+  font-weight: 600;
+}
+
 .warnings {
   border: 1px solid var(--warn);
   background: var(--warn-soft);

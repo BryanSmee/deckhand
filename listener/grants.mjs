@@ -23,6 +23,10 @@
 //       allow_docker: true       # its `docker` runs get a container engine (per repo only)
 //       allow_research: true     # `/mode research`: the open internet, without its code
 //       allow_workflows: true    # its pushes may change .github/workflows/ (per repo only)
+//       allow_auto_merge: true   # `review.merge` merges Deckhand's pull requests (per repo
+//                                # only; `public` lets it on a public repository too)
+//       acknowledge_automerge_and_preview_is_highly_dangerous: true  # auto-merge with a
+//                                # granted preview hook (per repo only)
 //       limits: { cpus: 4 }      # over default.yaml's, over the built-in ones
 //       mounts:                  # per repo only
 //         - root: /nfs/work
@@ -62,12 +66,27 @@ const FLAGS = {
   allow_docker: "allowDocker",
   allow_research: "allowResearch",
   allow_workflows: "allowWorkflows",
+  allow_auto_merge: "allowAutoMerge",
+  // Auto-merge while the repo's preview hook runs: what an unread merge changes may run as root
+  // on the host. Long on purpose: nobody sets it without reading it.
+  acknowledge_automerge_and_preview_is_highly_dangerous: "acknowledgeAutoMergePreview",
 };
 
 // Flags only a repository's own file grants: an engine runs that repo's code with more of the
-// kernel exposed (runner/engine.mjs), and a workflow file a sandbox pushes runs with the repo's
-// Actions secrets, so every repo at once would be too broad by accident.
-const REPO_ONLY = new Set(["allow_docker", "allow_workflows"]);
+// kernel exposed (runner/engine.mjs), a workflow file a sandbox pushes runs with the repo's
+// Actions secrets, and an auto-merge puts model output on the default branch with no human
+// reading it (reviews.mjs), so every repo at once would be too broad by accident.
+const REPO_ONLY = new Set([
+  "allow_docker",
+  "allow_workflows",
+  "allow_auto_merge",
+  "acknowledge_automerge_and_preview_is_highly_dangerous",
+]);
+
+// allow_auto_merge's values besides true and false: `public` also merges on a public
+// repository, where anyone's comment can steer a run. Visibility can change, so `true` alone
+// never covers a repository that turned public.
+const AUTO_MERGE_VALUES = ["public"];
 
 const NO_FLAGS = Object.fromEntries(Object.values(FLAGS).map((f) => [f, null]));
 
@@ -95,6 +114,9 @@ function parseGrant(text, file, base, { isDefault = false } = {}) {
       fail(`${key}: gone, list the hosts its sandboxes may reach under hosts here`);
     } else if (REPO_ONLY.has(key) && isDefault) {
       fail(`${key}: only a repository's own file grants it`);
+    } else if (key === "allow_auto_merge") {
+      if (typeof v === "boolean" || AUTO_MERGE_VALUES.includes(v)) grant[FLAGS[key]] = v;
+      else fail(`${key}: expected true, false or public`);
     } else if (Object.hasOwn(FLAGS, key)) {
       if (typeof v === "boolean") grant[FLAGS[key]] = v;
       else fail(`${key}: expected true or false`);
@@ -318,6 +340,21 @@ export function grantErrors(grants) {
   return errors;
 }
 
+// The repos whose own file grants `allow_auto_merge` (true or "public"), for the warning at
+// start: [{ repo, value }]. Files with errors are grantErrors()'s.
+export function autoMergeGrants(grants) {
+  const found = [];
+  for (const [repo, { load }] of grants.repos) {
+    try {
+      const value = load().allowAutoMerge;
+      if (value) found.push({ repo, value });
+    } catch {
+      // Said by grantErrors().
+    }
+  }
+  return found;
+}
+
 // What one repo gets: default.yaml's grants and its own file's, else nothing extra and the
 // operator's limits. Each flag is what its own file says, or else default.yaml, or else
 // false; hosts add up, and cached hosts too; limits are its own over default.yaml's over the built-in ones. `files`: where
@@ -372,6 +409,39 @@ export function ungranted(grant, settings) {
     );
   }
   return missing;
+}
+
+// Why the repo's `review.merge` merges nothing, one line each (empty: auto-merge is on). Not
+// in ungranted(): the reviews still run, only the merge waits for a human. `isPrivate`: what
+// GitHub says, null when unknown (the merge checks it again, reviews.mjs). `preview: false`
+// leaves out previewProblem(), which the merge's gates comment on (reviews.mjs).
+export function autoMergeProblems(grant, settings, isPrivate = null, { preview = true } = {}) {
+  if (!settings?.review?.merge) return [];
+  const problems = [];
+  if (!grant?.allowAutoMerge) {
+    problems.push(
+      "review.merge: the operator's grants don't set `allow_auto_merge: true` for this repository, nothing is merged",
+    );
+  } else if (isPrivate === false && grant.allowAutoMerge !== "public") {
+    problems.push(
+      "review.merge: the repository is public and the operator's grants set `allow_auto_merge: true`, not `public`: nothing is merged",
+    );
+  }
+  if (settings.review.on !== "ready") {
+    problems.push("review.merge: needs `review.on: ready`, nothing is merged");
+  }
+  const hook = preview && previewProblem(grant, settings);
+  if (hook) problems.push(`review.merge: ${hook}, nothing is merged`);
+  return problems;
+}
+
+// Why a repo with a granted preview hook doesn't auto-merge, or null. The hook runs the default
+// branch's files as root on the host (previews.mjs), and no gate can follow what its command
+// runs (a script it sources, a Makefile, package.json, what its image COPYs): an unread merge
+// would reach root. Only the operator's long acknowledgement lets both on.
+export function previewProblem(grant, settings) {
+  if (!settings?.preview || !grant?.allowPreview || grant.acknowledgeAutoMergePreview) return null;
+  return "the repository's preview hook runs its default branch as root on the host, and the operator's grants don't set `acknowledge_automerge_and_preview_is_highly_dangerous: true`";
 }
 
 // What the operator's grants refuse in a repo's settings, checked as a run checks them before

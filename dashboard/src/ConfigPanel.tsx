@@ -85,6 +85,15 @@ export function ConfigPanel({ repo, row, onRow, onBack, now }: Props) {
       {!config && loading && <p class={styles.muted}>Reading it from GitHub…</p>}
       {config && (
         <>
+          {config.repo.autoMerge && (
+            <AutoMergeBox
+              isPrivate={config.repo.private}
+              preview={
+                !!config.effective.grant?.allowPreview &&
+                !!config.effective.grant.acknowledgeAutoMergePreview
+              }
+            />
+          )}
           {(config.errors.length > 0 || config.grantsError || refused > 0) && (
             <div class={`${styles.box} ${styles.errors}`} role="alert">
               <strong>No run starts until these are fixed</strong>
@@ -221,6 +230,43 @@ function GrantsErrorItem({ error }: { error: NonNullable<RepoConfig["grantsError
   );
 }
 
+const AUTO_MERGE_DOCS =
+  "https://github.com/BryanSmee/deckhand/blob/main/docs/security.md#auto-merge";
+
+// What auto-merge gives up, at the top of the panel: it is on (granted and in the config).
+// `preview`: its preview hook is granted, and acknowledged with auto-merge.
+function AutoMergeBox({ isPrivate, preview }: { isPrivate: boolean; preview: boolean }) {
+  return (
+    <div class={`${styles.box} ${styles.errors}`} role="note">
+      <strong>Auto-merge: no human review</strong>
+      <p>
+        Deckhand merges its own pull requests here after its review (and fix run) finds nothing
+        blocking. Model output reaches the default branch with nobody reading it: a prompt injection
+        in an issue or comment, or a wrong fix, ships, and runs the repository's workflows on the
+        default branch with its secrets.
+      </p>
+      {!isPrivate && (
+        <p>
+          <strong>This repository is public:</strong> anyone can comment, so anyone can try to steer
+          what gets merged.
+        </p>
+      )}
+      {preview && (
+        <p>
+          <strong>Its preview hook runs the default branch as root on the host</strong>{" "}
+          (acknowledge_automerge_and_preview_is_highly_dangerous): an auto-merged change can reach
+          root on the host with nobody reading it.
+        </p>
+      )}
+      <p>
+        <a href={AUTO_MERGE_DOCS} target="_blank" rel="noreferrer">
+          What it gives up, and its gates
+        </a>
+      </p>
+    </div>
+  );
+}
+
 function GrantTable({ grant }: { grant: Grant }) {
   const { cpus, memory, pids } = grant.limits;
   const files = grant.files.length
@@ -234,6 +280,11 @@ function GrantTable({ grant }: { grant: Grant }) {
     ["allow_docker", String(grant.allowDocker)],
     ["allow_research", String(grant.allowResearch)],
     ["allow_workflows", String(grant.allowWorkflows)],
+    ["allow_auto_merge", String(grant.allowAutoMerge)],
+    [
+      "acknowledge_automerge_and_preview_is_highly_dangerous",
+      String(grant.acknowledgeAutoMergePreview),
+    ],
     ["hosts", grant.hosts.join(", ") || "none"],
     ["cached_hosts", grant.cachedHosts.join(", ") || "none"],
     [

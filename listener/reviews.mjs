@@ -11,10 +11,18 @@
 // starts nothing by itself. With `review.fix`, a review that requests changes starts one work
 // run that addresses it, once per pull request (fixedAt in reviews.json): its push is a
 // `synchronize`, which starts no review, and a later review finds fixedAt set.
+//
+// Auto-merge (`review.merge`, with the operator's per-repo `allow_auto_merge`): the listener,
+// never a sandbox, merges Deckhand's pull request after a review with nothing blocking, at the
+// reviewed head commit, once its gates pass (mergeRefusal()). After a fix run, one more review
+// (rereviewAt), and then the merge or a comment saying why not (mergeAt): at most one fix run
+// and one review after it, kept across restarts.
 import { waitsForInput } from "./comments.mjs";
 import { repoAllowed } from "./config.mjs";
 import { linkedIssue, linkTo, MARKER, prId, sameRepo, taskKey } from "./events.mjs";
+import { autoMergeProblems, previewProblem } from "./grants.mjs";
 import { getJson, paginate } from "./github.mjs";
+import { CONFIG_FILE } from "./repo-config.mjs";
 import { persistentMap } from "./store.mjs";
 
 // The repo's `severity: *` labels' names, most severe first.
@@ -272,6 +280,171 @@ function thread(heading, item, comments, allowed) {
   return parts;
 }
 
+// What an auto-merge blocks on: critical and high findings always; medium ones too, unless
+// `review.fix` is on and the fix run already had them (the maintainer's call, issue #284).
+export function mergeBlockers(review, { fix = false, fixed = false } = {}) {
+  const tolerated = fix && fixed ? new Set(["medium", "low"]) : new Set(["low"]);
+  return review.findings.filter((f) => !tolerated.has(f.severity));
+}
+
+// The files Deckhand trusts on the default branch: an auto-merge that changed one would let a
+// run widen its own config, so such a pull request always waits for a human. → whether `path`
+// (a changed file's, repo-relative) is one: the config and `.deckhand/`, `.github/`, any
+// CODEOWNERS, and the files the config names (instructions, Dockerfile, the preview hook's
+// script, the review instructions, the modes' instructions).
+export function trustedFile(settings, path) {
+  const named = new Set(
+    [
+      settings?.instructions,
+      settings?.dockerfile,
+      settings?.review?.instructions,
+      ...Object.values(settings?.modes ?? {}).map((m) => m?.instructions),
+      // Each word of the hook's command that may be a file of the repo: "./deploy/x.sh".
+      ...String(settings?.preview?.command ?? "")
+        .split(/\s+/)
+        .map((word) => word.replace(/^\.\//, "")),
+    ]
+      .filter((p) => typeof p === "string" && p)
+      .map((p) => p.replace(/^\.\//, "")),
+  );
+  return (
+    path === CONFIG_FILE ||
+    path.startsWith(".deckhand/") ||
+    path.startsWith(".github/") ||
+    /(^|\/)CODEOWNERS$/.test(path) ||
+    named.has(path)
+  );
+}
+
+// The repository's setting that allows each merge method (GET /repos/{repo}).
+const ALLOWS = {
+  squash: "allow_squash_merge",
+  merge: "allow_merge_commit",
+  rebase: "allow_rebase_merge",
+};
+
+// Actions conclusions that don't stop a merge.
+const PASSED = new Set(["success", "skipped", "neutral"]);
+
+// GitHub computes `mergeable_state` after the first ask: asked again this often, this many
+// times, while it says "unknown".
+const MERGEABLE_TRIES = 4;
+const MERGEABLE_WAIT_MS = 3000;
+
+// Why pull request `number` must not be merged now, or null with what the merge needs: { pr,
+// method }. Each gate is asked of GitHub now, not from the webhook or the config alone: the
+// pull request Deckhand's own, on a branch of the repo and linked to its issue, open, not a
+// draft, nothing waiting for the maintainer, still at the reviewed head `sha`, the repository
+// private (or granted `public`), the merge method allowed, no file Deckhand trusts changed,
+// `mergeable_state` clean, its GitHub Actions runs finished and none failed. `busy(task)`:
+// a run going or queued on the issue.
+export async function mergeRefusal(
+  { github, config, busy = () => false, sleep },
+  { repo, number, sha, settings, grant },
+) {
+  const hook = previewProblem(grant, settings);
+  if (hook) return { why: hook };
+  let pr = await getJson(github, repo, `/repos/${repo}/pulls/${number}`, [404]);
+  if (!pr) return { why: "the pull request can't be read" };
+  const own = !!config.bot && pr.user?.login?.toLowerCase() === config.bot.toLowerCase();
+  const issue = own && sameRepo(pr, repo) ? linkedIssue(pr, repo, config.bot) : null;
+  if (!issue) {
+    return {
+      why: "it isn't Deckhand's own pull request, on a branch of the repository and linked to its issue",
+    };
+  }
+  if (pr.state !== "open" || pr.merged) return { why: "it isn't open" };
+  if (pr.draft) return { why: "it is a draft" };
+  if (await waitsForInput(github, config, repo, pr, issue)) {
+    return { why: `it or #${issue} waits for the maintainer's input (${config.needsInputLabel})` };
+  }
+  if (busy(taskKey(repo, String(issue)))) return { why: `#${issue} has a run going or queued` };
+  if (!sha || pr.head?.sha !== sha) {
+    return {
+      why: `a commit was pushed after the review (reviewed ${short(sha)}, now ${short(pr.head?.sha)})`,
+    };
+  }
+  const info = await getJson(github, repo, `/repos/${repo}`);
+  if (info.private !== true && grant?.allowAutoMerge !== "public") {
+    return {
+      why: "the repository is public, and the operator's grant says `allow_auto_merge: true`, not `public`",
+    };
+  }
+  const method = settings.review?.mergeMethod ?? "squash";
+  if (info[ALLOWS[method]] === false) {
+    return {
+      why: `the repository doesn't allow the \`${method}\` merge method (\`review.merge_method\`)`,
+    };
+  }
+  const files = await paginate(
+    (path) => github(repo, "GET", path),
+    `/repos/${repo}/pulls/${number}/files`,
+  );
+  const trusted = [
+    ...new Set(
+      files
+        .flatMap((f) => [f.filename, f.previous_filename])
+        .filter((path) => path && trustedFile(settings, path)),
+    ),
+  ];
+  if (trusted.length) {
+    const list = trusted.slice(0, 10).map((path) => `\`${path}\``);
+    return { why: `it changes files Deckhand trusts: ${list.join(", ")}` };
+  }
+  // GitHub lists 3000 files at most, without saying so: a trusted one may be past the end.
+  if (!(files.length >= pr.changed_files)) {
+    return {
+      why: `GitHub lists ${files.length} of its ${pr.changed_files ?? "?"} changed files, so the files Deckhand trusts can't all be checked`,
+    };
+  }
+  for (let i = 1; pr.mergeable_state === "unknown" || pr.mergeable_state == null; i++) {
+    if (i >= MERGEABLE_TRIES) break;
+    await sleep(MERGEABLE_WAIT_MS);
+    pr = await getJson(github, repo, `/repos/${repo}/pulls/${number}`);
+  }
+  if (pr.head?.sha !== sha) return { why: "a commit was pushed after the review" };
+  if (pr.mergeable_state !== "clean") {
+    return {
+      why: `GitHub doesn't call it cleanly mergeable (\`mergeable_state: ${pr.mergeable_state ?? "unknown"}\`)`,
+    };
+  }
+  const res = await github(
+    repo,
+    "GET",
+    `/repos/${repo}/actions/runs?head_sha=${encodeURIComponent(sha)}&per_page=100`,
+    null,
+    [403, 404],
+  );
+  if (!res.ok) return { why: `its GitHub Actions runs can't be read (${res.status})` };
+  const runs = (await res.json()).workflow_runs ?? [];
+  const going = runs.filter((r) => r.status !== "completed");
+  if (going.length) {
+    return {
+      why: `${going.length} GitHub Actions run${going.length > 1 ? "s" : ""} on ${short(sha)} ha${going.length > 1 ? "ve" : "s"}n't finished`,
+    };
+  }
+  const failed = runs.filter((r) => !PASSED.has(r.conclusion));
+  if (failed.length) {
+    const names = failed.slice(0, 5).map((r) => `${r.name ?? "a run"} (${r.conclusion})`);
+    return { why: `GitHub Actions runs on ${short(sha)} failed: ${names.join(", ")}` };
+  }
+  return { why: null, pr, method };
+}
+
+const short = (sha) => (sha ? sha.slice(0, 7) : "?");
+
+// The comments an auto-merge posts on the pull request, for the maintainer to find later.
+export function mergedText(sha, method, fixed) {
+  const after = fixed ? ", after its fix run and a second review" : "";
+  return `🤖 **Merged by Deckhand** (\`review.merge\`, ${method}): the review of ${short(sha)} found nothing blocking${after}, the repository's checks passed, and it changes none of the files Deckhand trusts.
+
+⚠️ No human reviewed this pull request before the merge. Read what it changed, and revert it if it is wrong.`;
+}
+
+export function notMergedText(why) {
+  return `**Not merged automatically** (\`review.merge\`): ${why}. It waits for a maintainer's review and merge.`;
+}
+
 // A `pull_request` delivery that may start a review by itself → { repo, base, pr, author }, or
 // null. Only a pull request that turned ready (marked ready, or opened as ready), on a branch
 // of the repo (never a fork's), opened by the App (Deckhand's own) or an allowed user: other
@@ -299,6 +472,10 @@ export function reviewCandidate(config, event, p, skip = () => null) {
 // `repoSettings(repo, base)`: the repo's settings from its default branch; `accept(item)`:
 // queues a work item (tasks.mjs). `github`: the App's calls (server.mjs). `busy(key)`: the
 // task has a run going or queued. `now`: the clock, for forgetting old pull requests.
+// `reply(repo, number, text)`: a comment with the listener's token; `grantOf(repo)`: the
+// operator's grant for it (grants.mjs grantFor()), null when its grants have errors;
+// `merged(repo, pr)`: a pull request it merged, for the dashboard; `sleep(ms)`: the wait
+// between asks of `mergeable_state`.
 export function createReviews({
   path,
   config,
@@ -306,10 +483,15 @@ export function createReviews({
   accept,
   github,
   busy,
+  reply = async () => {},
+  grantOf = () => null,
+  merged = () => {},
   log = () => {},
   now = Date.now,
+  sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
 }) {
-  // "org/repo#pr-5" → { head, at, fixedAt } of its last automatic review, and of its fix run.
+  // "org/repo#pr-5" → { head, at, fixedAt, rereviewAt, mergeAt } of its last automatic review,
+  // its fix run, the review after it and its auto-merge (merged or refused).
   const reviewed = persistentMap(path);
 
   // A `pull_request` delivery: a review run, if the repo's `review.on` asks for one and this
@@ -332,6 +514,11 @@ export function createReviews({
     }
     remember(key, head);
     log(`${key}: pull request #${pr.number} is ready, starting a review`);
+    return queueReview({ repo, base, pr, settings, author });
+  }
+
+  // Queues a review run of `pr`, on the task of the issue it closes or its own.
+  async function queueReview({ repo, base, pr, settings, author = null }) {
     const item = {
       repo,
       id: prId(pr.number),
@@ -352,8 +539,9 @@ export function createReviews({
     };
     // Deckhand's own pull request is its issue's task, like a comment on it (events.mjs).
     const issue = linkedIssue(pr, repo, config.bot);
-    await accept(issue ? linkTo(item, issue) : item);
-    return item;
+    const queued = issue ? linkTo(item, issue) : item;
+    await accept(queued);
+    return queued;
   }
 
   function remember(key, head, fields = {}) {
@@ -415,5 +603,129 @@ export function createReviews({
     return item;
   }
 
-  return { consider, fix };
+  // A review run is over (runs.mjs cleanUp()): its fix run (fix(), the item queued), else, for
+  // an automatic review (`auto`) with `review.merge` on, the merge ({ sha, method }) or the
+  // comment saying why not (null).
+  async function settle(run, posted) {
+    const item = await fix(run, posted);
+    if (item || !run.auto) return item;
+    return autoMerge(run, posted);
+  }
+
+  // Whether `repo` merges by itself: its settings, re-read from the default branch now (a
+  // maintainer may have turned it off since), and the operator's grant. → { settings, grant }
+  // or null.
+  async function mergeMode(repo, base) {
+    const { settings, errors } = await repoSettings(repo, base);
+    if (errors.length || !settings.review?.merge) return null;
+    const grant = grantOf(repo);
+    if (autoMergeProblems(grant, settings, null, { preview: false }).length) return null;
+    return { settings, grant };
+  }
+
+  // Leaves the pull request to the maintainer: a comment says why. Once per pull request.
+  async function refuse(key, repo, number, why) {
+    log(`${key}: not merged, ${why}`);
+    await reply(repo, number, notMergedText(why));
+    return null;
+  }
+
+  // The merge decision after an automatic review: once per pull request (mergeAt), whatever it
+  // decides. Nothing blocking (mergeBlockers()) and every gate passed: merged at the reviewed
+  // head commit, so a push since makes GitHub refuse it.
+  async function autoMerge({ repo, number, base }, posted) {
+    const key = taskKey(repo, prId(number));
+    const mode = await mergeMode(repo, base);
+    if (!mode) return null;
+    const { settings, grant } = mode;
+    const entry = reviewed.get(key) ?? {};
+    if (entry.mergeAt) {
+      log(`${key}: its auto-merge was decided already`);
+      return null;
+    }
+    // Before any GitHub call: whatever happens next, never a second decision.
+    remember(key, entry.head ?? null, { mergeAt: now() });
+    const { review, pr } = posted ?? {};
+    if (!review) return refuse(key, repo, number, "the review's format couldn't be read");
+    const fixed = !!entry.fixedAt;
+    const blockers = mergeBlockers(review, { fix: settings.review.fix, fixed });
+    if (blockers.length) {
+      const what = SEVERITIES.filter((s) => blockers.some((f) => f.severity === s)).join(", ");
+      const why =
+        settings.review.fix && !fixed
+          ? `the review has ${what} findings and no fix run started`
+          : `the review${fixed ? " after the fix run" : ""} still has ${what} findings`;
+      return refuse(key, repo, number, why);
+    }
+    const sha = pr?.head?.sha ?? null;
+    // The review was queued at entry.head: a push before it posted means it may have read
+    // another commit than the one it was posted on.
+    if (entry.head && sha !== entry.head) {
+      return refuse(key, repo, number, "a commit was pushed while the review ran");
+    }
+    let gate;
+    let res;
+    try {
+      gate = await mergeRefusal(
+        { github, config, busy, sleep },
+        { repo, number, sha, settings, grant },
+      );
+      if (gate.why) return refuse(key, repo, number, gate.why);
+      res = await github(
+        repo,
+        "PUT",
+        `/repos/${repo}/pulls/${number}/merge`,
+        { sha, merge_method: gate.method },
+        [405, 409, 422],
+      );
+    } catch (error) {
+      // Decided already (mergeAt): said, rather than left with only a log line.
+      log(`${key}: auto-merge: ${error.stack ?? error}`);
+      return refuse(key, repo, number, `GitHub couldn't be read (${error.message ?? error})`);
+    }
+    if (!res.ok) {
+      const said = await res.json().catch(() => ({}));
+      const detail = said?.message ? `: ${said.message}` : "";
+      return refuse(key, repo, number, `GitHub refused the merge (${res.status}${detail})`);
+    }
+    remember(key, sha, { mergeAt: now(), mergedAt: now() });
+    log(`${key}: merged at ${short(sha)} (${gate.method}), auto-merge`);
+    merged(repo, { ...gate.pr, state: "closed", merged: true });
+    await reply(repo, number, mergedText(sha, gate.method, fixed));
+    return { sha, method: gate.method };
+  }
+
+  // A fix run is over (runs.mjs cleanUp(), `status` its outcome): in auto-merge mode, one more
+  // review of what it pushed, once per pull request (rereviewAt), whose end decides the merge
+  // (settle()). A fix that failed or pushed nothing leaves the pull request to the maintainer.
+  async function fixed({ repo, number, base, status }) {
+    const key = taskKey(repo, prId(number));
+    const mode = await mergeMode(repo, base);
+    if (!mode) return null;
+    const entry = reviewed.get(key) ?? {};
+    if (!entry.fixedAt || entry.rereviewAt || entry.mergeAt) return null;
+    remember(key, entry.head ?? null, { rereviewAt: now() });
+    const stop = (why) => {
+      remember(key, entry.head ?? null, { mergeAt: now() });
+      return refuse(key, repo, number, why);
+    };
+    if (status !== "ok") return stop(`the fix run ended with \`${status}\``);
+    let pr;
+    try {
+      pr = await getJson(github, repo, `/repos/${repo}/pulls/${number}`, [404]);
+    } catch (error) {
+      log(`${key}: after the fix run: ${error.stack ?? error}`);
+      return stop(`GitHub couldn't be read (${error.message ?? error})`);
+    }
+    if (!pr || pr.state !== "open") return null;
+    const head = pr.head?.sha ?? null;
+    if (!head || head === entry.head) {
+      return stop("the fix run pushed nothing, so the review's findings still stand");
+    }
+    remember(key, head, { rereviewAt: now() });
+    log(`${key}: the fix run pushed ${short(head)}, starting the review before the merge`);
+    return queueReview({ repo, base, pr, settings: mode.settings });
+  }
+
+  return { consider, fix, settle, fixed };
 }

@@ -49,6 +49,16 @@ test("rows show their pull request's state; the detail links to it", () => {
   expect(screen.queryByRole("link", { name: /Replies on/ })).toBeNull();
 });
 
+test("a pull request Deckhand merged by itself says so on its row and in the detail", () => {
+  const merged = withPr(state, { state: "merged", autoMerged: true });
+  render(<Dashboard state={merged} error={null} />);
+  const badges = screen.getAllByText("Merged by Deckhand");
+  expect(badges.length).toBeGreaterThanOrEqual(1);
+  expect(badges[0].title).toBe("Pull request #25, merged by Deckhand with no human review");
+  // A maintainer's merge stays "Merged".
+  expect(screen.getAllByText("Merged")).toHaveLength(1);
+});
+
 test("the Ready for review chip lists the pull requests waiting for a review", () => {
   render(<Dashboard state={state} error={null} />);
   fireEvent.click(screen.getByRole("button", { name: /^Ready for review/ }));

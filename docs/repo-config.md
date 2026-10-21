@@ -101,6 +101,9 @@ review:
   model: best # default: brainstorm_model, brainstorm_effort
   effort: high
   fix: true # one work run that addresses a review requesting changes, once per pull request
+  # merge: true # UNSAFE, no human review: Deckhand merges its own pull request after a clean
+  #             # review; needs the operator's allow_auto_merge (see Auto-merge below)
+  # merge_method: squash # squash (default) | merge | rebase
 
 # Where ideas, bug reports and questions go (see Inboxes below).
 inbox:
@@ -144,6 +147,8 @@ wait_for_answers: true
 | `review.instructions`                   | none                                    | Markdown file of the repo, added to the built-in review prompt                                                               |
 | `review.agent`, `.model`, `.effort`     | `brainstorm_agent`, `_model`, `_effort` | the reviews' agent, model and effort (see Reviews)                                                                           |
 | `review.fix`                            | `false`                                 | a review that requests changes starts one work run that addresses it (see Reviews)                                           |
+| `review.merge`                          | `false`                                 | **unsafe**: Deckhand merges its own pull request after a clean review; needs `allow_auto_merge` (see Auto-merge)             |
+| `review.merge_method`                   | `squash`                                | how an auto-merge merges: `squash`, `merge` or `rebase`, one the repository allows                                           |
 | `inbox.ideas`, `inbox.bugs`             | none                                    | issue numbers whose comments are ideas or bug reports to file (see Inboxes)                                                  |
 | `inbox.discussions`                     | none                                    | GitHub Discussions category whose discussions Claude answers (see Inboxes)                                                   |
 | `preview.command`                       | none                                    | preview hook command (`preview: ./x.sh` works too); needs the operator's `allow_preview`                                     |
@@ -500,8 +505,70 @@ review` gets the "unknown mode" reply. `review: true` (or a block without `on`, 
   reviews every pull request that turns ready: keep `manual` where that is too many. A fix is
   a work run, at the repo's work model.
 
-`on`, `instructions`, `agent`, `model`, `effort` and `fix` are its only keys: any other, or a bad
-value, is an error.
+`on`, `instructions`, `agent`, `model`, `effort`, `fix`, `merge` and `merge_method` are its only
+keys: any other, or a bad value, is an error.
+
+#### Auto-merge
+
+> **Unsafe: no human reads the code before it reaches the default branch.** Model output is
+> merged as it is: a prompt injection in an issue or a comment, or a wrong fix, ships, and a
+> merged change runs the repository's workflows on the default branch, with its secrets. Use
+> it only on private repositories where everyone who can comment is trusted. See
+> [Security model](security.md#auto-merge).
+
+With `merge: true`, the listener merges Deckhand's own pull request once its review finds
+nothing blocking. It takes both sides:
+
+- **The operator's grant**: `allow_auto_merge: true` in the repository's own grants file
+  (never `default.yaml`). `true` covers a private repository only; a public one needs
+  `allow_auto_merge: public`. Without it, the config check warns, naming the grant, and
+  nothing is merged; the reviews and fix runs go on as without `merge`.
+- **`on: ready`**: the merge follows the reviews that start by themselves, never a
+  `/mode review` comment's. Without it, the config check warns and nothing is merged.
+- **With a [preview hook](#preview-hook)** granted (`allow_preview`), the operator's
+  `acknowledge_automerge_and_preview_is_highly_dangerous: true` too, in the repository's own
+  grants file. The hook runs the default branch's files as root on the host, and the
+  trusted-files gate below only sees the hook's command line, not what it runs (a script it
+  sources, a `Makefile`, `package.json`, a compose file, what its image `COPY`s). With both
+  on, an auto-merged change can reach root on the host with nobody reading it. Without the
+  acknowledgement, the config check warns, and each review's merge is refused with a comment.
+
+**The flow**, all in the listener (never in a sandbox, whose token can't merge):
+
+1. The pull request turns ready, and the review runs as usual.
+2. Nothing blocking (no critical, high or medium finding): the merge, after the gates below.
+3. Blocking findings, with `fix: true`: the fix run starts as usual. Once it is over, the
+   listener starts **one** more review, of the commit it pushed. That review merges unless it
+   has a critical or high finding: medium ones were the fix run's to address, and stay as the
+   review's comments. Without `fix`, a medium finding blocks too.
+4. Anything else leaves the pull request to the maintainer, with a comment saying why: a review
+   that still blocks, a fix run that failed or pushed nothing, a gate that refuses, a GitHub
+   call that fails, a merge GitHub refuses. **No loop**: at most one fix run and one review after it, and one merge
+   decision per pull request, kept in `reviews.json` across restarts.
+
+**The gates**, asked of GitHub right before the merge; each refusal is a comment:
+
+- the pull request is Deckhand's own, on a branch of the repository (not a fork's), linked to
+  its issue; it is open, not a draft, and neither it nor its issue has the needs-input label;
+  its issue has no run going or queued;
+- its head is still the commit the review read;
+- the repository is private, or the grant says `public`, as GitHub says at that moment;
+- it changes none of the files Deckhand trusts: `.deckhand.yaml`, `.deckhand/`, `.github/`,
+  any `CODEOWNERS`, and the files the config names (`instructions`, `dockerfile`, the words of
+  the preview hook's command that are paths, `review.instructions`, the modes' instructions),
+  renames included. Merging those by itself would let a run widen its own config: such a
+  pull request always waits for a human. GitHub lists 3000 changed files at most: a pull
+  request with more than it lists is refused;
+- a granted preview hook only with the acknowledgement above;
+- `mergeable_state` is `clean`, and its GitHub Actions runs on the head commit are finished
+  with none failed (read with the App's `actions: read`; no new permission).
+
+The merge is `PUT /pulls/{n}/merge` with the reviewed commit as `sha`, so a push after the
+review makes GitHub refuse it. A comment then says Deckhand merged it, and why; the dashboard
+shows "Merged by Deckhand" on its task and in the graph, a red "Auto-merge: no human review"
+badge on the repository, and a red box at the top of its config panel. The listener logs a
+warning at start for each repository granted `allow_auto_merge`. The issue is closed by the
+pull request's `Closes #n`, as for any merge.
 
 ## Inboxes
 

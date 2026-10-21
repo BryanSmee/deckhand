@@ -17,6 +17,7 @@ const repo = (name: string, extra: Partial<Repo> = {}): Repo => ({
   status: "not-onboarded",
   issue: null,
   readAt: Date.now() - 120000,
+  autoMerge: false,
   ...extra,
 });
 
@@ -75,6 +76,8 @@ const CONFIG: RepoConfig = {
       allowDocker: false,
       allowResearch: false,
       allowWorkflows: false,
+      allowAutoMerge: false,
+      acknowledgeAutoMergePreview: false,
       hosts: ["pypi.org"],
       cachedHosts: [],
       mounts: [],
@@ -104,6 +107,22 @@ beforeEach(() => {
       errors: [],
       warnings: [],
       effective: { ...CONFIG.effective, settings: [CONFIG.effective.settings[1]], hosts: [] },
+    }),
+    "api/repos/org/auto/config": () => ({
+      ...CONFIG,
+      repo: repo("org/auto", { status: "configured", autoMerge: true, readAt: Date.now() }),
+      errors: [],
+      warnings: [],
+      readAt: Date.now(),
+      effective: {
+        ...CONFIG.effective,
+        grant: {
+          ...CONFIG.effective.grant!,
+          allowAutoMerge: "public",
+          allowPreview: true,
+          acknowledgeAutoMergePreview: true,
+        },
+      },
     }),
     "POST api/repos/org/app/onboard": () => ({
       opened: true,
@@ -265,6 +284,30 @@ test("a repository's panel: errors first, then what runs get, then the file", as
   );
   fireEvent.click(screen.getByRole("button", { name: "← Repositories" }));
   expect(within(await screen.findByRole("list")).getAllByText("Invalid config")).toHaveLength(2);
+});
+
+test("auto-merge: a red badge in the list, a red risk box and its grant in the panel", async () => {
+  const auto = repo("org/auto", { status: "configured", autoMerge: true });
+  api.routes["api/repos"] = () => ({ repos: [...REPOS, auto], app: APP, listedAt: Date.now() });
+  render(<Page />);
+  await screen.findByRole("button", { name: "org/auto" });
+  const badge = within(row("org/auto")).getByText("Auto-merge: no human review");
+  expect(badge.title).toMatch(/nobody reads them before they reach the default branch/);
+  expect(within(row("org/api")).queryByText("Auto-merge: no human review")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "org/auto" }));
+  const box = await screen.findByRole("note");
+  expect(box.textContent).toContain("Auto-merge: no human review");
+  expect(box.textContent).toContain(
+    "Model output reaches the default branch with nobody reading it",
+  );
+  // Public: said too.
+  expect(box.textContent).toContain("This repository is public");
+  expect(box.textContent).toContain("Its preview hook runs the default branch as root on the host");
+  expect(within(box).getByRole("link").getAttribute("href")).toBe(
+    "https://github.com/BryanSmee/deckhand/blob/main/docs/security.md#auto-merge",
+  );
+  const grant = screen.getByText("allow_auto_merge", { selector: "th code" }).closest("tr")!;
+  expect(within(grant).getByText("public")).toBeTruthy();
 });
 
 test("a repository's broken grant: the file to fix, and only this repository stopped", async () => {

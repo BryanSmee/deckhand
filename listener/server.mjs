@@ -35,7 +35,7 @@ import {
 } from "./github-app.mjs";
 import { pullEntry } from "./events.mjs";
 import { createGitHub, fetchPull, fetchTitle, listLabelled, listPulls } from "./github.mjs";
-import { grantErrors, grantFor, loadGrants } from "./grants.mjs";
+import { autoMergeGrants, grantErrors, grantFor, loadGrants } from "./grants.mjs";
 import { createHttp } from "./http.mjs";
 import { createHistory } from "./history.mjs";
 import { createImages } from "./images.mjs";
@@ -75,8 +75,15 @@ try {
   config = loadConfig(env, readConfigFile(env));
   // Read again at each run. A broken layout or default.yaml at start is the operator's to fix
   // now; a broken repo file stops that repo's runs only, so the others start.
-  for (const error of grantErrors(loadGrants(config))) {
+  const grants = loadGrants(config);
+  for (const error of grantErrors(grants)) {
     console.error(`${error.message} (no run starts in that repository until it is fixed)`);
+  }
+  // Loud on purpose: model output reaches these default branches with no human reading it.
+  for (const { repo, value } of autoMergeGrants(grants)) {
+    console.error(
+      `WARNING: auto-merge is granted to ${repo}${value === "public" ? ", public repositories included" : ""}: with review.merge in its .deckhand.yaml, Deckhand merges its own pull requests with no human review (docs/security.md#auto-merge)`,
+    );
   }
 } catch (error) {
   if (!(error instanceof ConfigError)) throw error;
@@ -384,8 +391,9 @@ ctx.conflicts = createConflicts({
   accept: (item) => ctx.accept(item),
   log,
 });
-// Pull requests that turn ready in opted-in repos get a review run (`review.on`), and a
-// review that requests changes one fix run (`review.fix`).
+// Pull requests that turn ready in opted-in repos get a review run (`review.on`), a review
+// that requests changes one fix run (`review.fix`), and with the operator's
+// `allow_auto_merge`, a clean review the merge (`review.merge`).
 ctx.reviews = createReviews({
   path: join(config.dataDir, "reviews.json"),
   config,
@@ -393,6 +401,20 @@ ctx.reviews = createReviews({
   accept: (item) => ctx.accept(item),
   github,
   busy: taskBusy,
+  reply: ctx.reply,
+  grantOf: (repo) => {
+    try {
+      return grantFor(loadGrants(config), config, repo);
+    } catch (error) {
+      log(`${repo}: its grants: ${error.message}`);
+      return null;
+    }
+  },
+  // The dashboard's "merged by Deckhand", at once.
+  merged: (repo, pr) => {
+    const { key, pr: entry } = pullEntry(repo, pr);
+    pulls.record(key, { ...entry, autoMerged: true });
+  },
   log,
 });
 // Comments that wait for other issues to be done ("/after #12").

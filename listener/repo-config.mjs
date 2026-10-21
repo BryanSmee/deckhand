@@ -29,10 +29,21 @@ export const PLAIN_PATH = /^\/[\w./@+-]*$/;
 
 const MODE_KEYS = ["instructions", "light", "session", "agent", "model", "effort", "speed"];
 
-const REVIEW_KEYS = ["on", "instructions", "agent", "model", "effort", "fix"];
+const REVIEW_KEYS = [
+  "on",
+  "instructions",
+  "agent",
+  "model",
+  "effort",
+  "fix",
+  "merge",
+  "merge_method",
+];
 // When a review starts by itself (reviews.mjs): `ready`, a pull request marked ready for review
 // or opened as ready; `manual`, only with a "/mode review" line.
 const REVIEW_ON = ["ready", "manual"];
+// How an auto-merge merges (`review.merge_method`), GitHub's merge_method values.
+export const MERGE_METHODS = ["squash", "merge", "rebase"];
 
 // The listener's own modes (modes.mjs): a repo's `modes:` can't take these names.
 export { customMode, RESERVED_MODES };
@@ -250,8 +261,9 @@ function parseConflicts(value, { key, settings, config, fail, warn }) {
 
 // Opt-in: the built-in review mode (modes.mjs, reviews.mjs), `true` for "/mode review" only.
 // Every key is checked, like a mode's: a mistyped one would change what it does unnoticed.
-// It widens nothing (a light run with a read-only token), so no grant.
-function parseReview(value, { key, settings, config, fail }) {
+// It widens nothing (a light run with a read-only token), so no grant; `merge` does, and only
+// the operator's `allow_auto_merge` makes it merge (grants.mjs autoMergeProblems()).
+function parseReview(value, { key, settings, config, fail, warn }) {
   if (value === false) return;
   const review = {
     on: "manual",
@@ -260,6 +272,8 @@ function parseReview(value, { key, settings, config, fail }) {
     model: null,
     effort: null,
     fix: false,
+    merge: false,
+    mergeMethod: "squash",
   };
   if (value === true) {
     settings.review = review;
@@ -284,6 +298,12 @@ function parseReview(value, { key, settings, config, fail }) {
       // A normal work run, with the same push rules: no grant either.
       if (typeof v === "boolean") review.fix = v;
       else bad(k, "expected true or false");
+    } else if (k === "merge") {
+      if (typeof v === "boolean") review.merge = v;
+      else bad(k, "expected true or false");
+    } else if (k === "merge_method") {
+      if (MERGE_METHODS.includes(v)) review.mergeMethod = v;
+      else bad(k, `expected ${MERGE_METHODS.join(", ")}`);
     } else if (k === "agent") {
       review.agent = agentName(v, `review.${k}`, config, (_, what) => bad(k, what));
     } else if (k === "model") {
@@ -296,6 +316,9 @@ function parseReview(value, { key, settings, config, fail }) {
     } else if (EFFORTS.includes(String(v).toLowerCase())) review.effort = String(v).toLowerCase();
     else bad(k, `expected one of ${EFFORTS.join(", ")}`);
   }
+  if (ok && review.merge && review.on !== "ready") {
+    warn("review.merge: needs `review.on: ready`, nothing is merged");
+  }
   if (ok) settings.review = review;
 }
 
@@ -303,7 +326,8 @@ function reviewText(review) {
   if (!review) return "off";
   const when = review.on === "ready" ? "when a pull request is ready" : '"/mode review" only';
   const fix = review.fix && "one fix run per pull request";
-  return [when, fix, review.instructions].filter(Boolean).join(" · ");
+  const merge = review.merge && `auto-merge (${review.mergeMethod})`;
+  return [when, fix, merge, review.instructions].filter(Boolean).join(" · ");
 }
 
 // The operator's value of `field`, as the repo's default: a file can only narrow or replace it.
@@ -508,9 +532,15 @@ export const KEYS = {
     field: "review",
     default: null,
     parse: parseReview,
-    display: ({ value, settings, row }) => {
+    display: ({ value, settings, grant, known, row }) => {
       const mode = value && customMode(settings, "review");
-      return row(reviewText(value), mode ? `${mode.model}/${mode.effort}` : null);
+      // Not refused: the reviews run, only the merge waits for a human (grants.mjs).
+      const merge =
+        value?.merge && known && !grant.allowAutoMerge
+          ? "nothing is merged: the operator's grants don't set allow_auto_merge"
+          : null;
+      const model = mode ? `${mode.model}/${mode.effort}` : null;
+      return row(reviewText(value), [model, merge].filter(Boolean).join("; ") || null);
     },
   },
   // One row per mode: only the repo's file defines them.
