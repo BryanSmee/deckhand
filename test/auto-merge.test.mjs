@@ -173,10 +173,16 @@ test("auto-merge: review.merge_method, checked against what the repository allow
   const yaml = `${MERGE}  merge_method: rebase\n`;
   const ok = setup(t, { yaml, info: { allow_rebase_merge: true } });
   assert.deepEqual(await ok.settle(), { sha: "sha-1", method: "rebase" });
+  const commit = setup(t, {
+    yaml: `${MERGE}  merge_method: merge\n`,
+    info: { allow_merge_commit: false },
+  });
+  assert.equal(await commit.settle(), null);
+  assert.match(commit.replies[0].text, /doesn't allow the `merge` merge method/);
   const refused = setup(t, { yaml, info: { allow_rebase_merge: false } });
   assert.equal(await refused.settle(), null);
   assert.equal(refused.merges().length, 0);
-  assert.match(refused.replies[0].text, /doesn't allow rebase merges/);
+  assert.match(refused.replies[0].text, /doesn't allow the `rebase` merge method/);
 });
 
 test("auto-merge: nothing without the grant, on: ready, review.merge, or from /mode review", async (t) => {

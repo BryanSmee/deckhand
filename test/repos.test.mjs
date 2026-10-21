@@ -521,7 +521,10 @@ test("the list's refused checks are the run preflight's: both go through grantCh
     assert.ok(!body.includes(piece), piece);
   }
   const repos = readFileSync(new URL("../listener/repos.mjs", import.meta.url), "utf8");
-  assert.match(repos, /check = has && !errors \? grantCheck\(config, info\.full_name, settings/);
+  assert.match(
+    repos,
+    /check =\s+has && !errors \?\s+grantCheck\(config, info\.full_name, settings/,
+  );
   assert.match(repos, /refusedByGrants\(check\)/);
 });
 

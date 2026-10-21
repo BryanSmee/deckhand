@@ -316,6 +316,13 @@ export function trustedFile(settings, path) {
   );
 }
 
+// The repository's setting that allows each merge method (GET /repos/{repo}).
+const ALLOWS = {
+  squash: "allow_squash_merge",
+  merge: "allow_merge_commit",
+  rebase: "allow_rebase_merge",
+};
+
 // Actions conclusions that don't stop a merge.
 const PASSED = new Set(["success", "skipped", "neutral"]);
 
@@ -362,8 +369,10 @@ export async function mergeRefusal(
     };
   }
   const method = settings.review?.mergeMethod ?? "squash";
-  if (info[`allow_${method}_merge`] === false) {
-    return { why: `the repository doesn't allow ${method} merges (\`review.merge_method\`)` };
+  if (info[ALLOWS[method]] === false) {
+    return {
+      why: `the repository doesn't allow the \`${method}\` merge method (\`review.merge_method\`)`,
+    };
   }
   const files = await paginate(
     (path) => github(repo, "GET", path),
