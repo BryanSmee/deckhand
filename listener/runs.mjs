@@ -626,8 +626,10 @@ export function createRuns(ctx) {
         footer,
       );
       log(`${live.key}: review posted on #${live.replyTo} (${posted.event ?? "as a comment"})`);
-      // Its fix run, if any, once this run is over (cleanUp()).
-      live.reviewed = { number: live.replyTo, posted };
+      // Its fix run or auto-merge, if any, once this run is over (cleanUp()). Only the
+      // listener's own reviews may merge, not a "/mode review" comment's.
+      const auto = live.handled.some((item) => item.reason === "review");
+      live.reviewed = { number: live.replyTo, posted, auto };
     } else await ctx.answer(target(task, live.replyTo), hidden(live, text));
     live.replied = true;
     ctx.saveLive(task);
@@ -659,14 +661,26 @@ export function createRuns(ctx) {
     const live = task.live;
     const { key, mode, light, record, reviewed } = live;
     await teardown(task);
-    // A review that requests changes may start a fix run (reviews.mjs fix()), now that the
-    // review's own run no longer makes the task busy. Not waited for: its GitHub call mustn't
-    // hold the slot this run freed, and fix() checks again for a run started meanwhile.
+    // A review that requests changes may start a fix run, and one with nothing blocking may
+    // merge (reviews.mjs settle()), now that the review's own run no longer makes the task
+    // busy. Not waited for: its GitHub calls mustn't hold the slot this run freed, and
+    // settle() checks again for a run started meanwhile.
     if (reviewed) {
       const { repo, base, settings } = task;
+      const { number, posted, auto } = reviewed;
       ctx.reviews
-        ?.fix({ repo, number: reviewed.number, base, settings }, reviewed.posted)
-        .catch((error) => log(`${key}: the review's fix run: ${error.stack ?? error}`));
+        ?.settle({ repo, number, base, settings, auto }, posted)
+        .catch((error) => log(`${key}: after the review: ${error.stack ?? error}`));
+    }
+    // A fix run that is over (not put back for a fallback): in auto-merge mode, the review of
+    // what it pushed (reviews.mjs fixed()).
+    const fixRun = live.handled.find(
+      (item) => item.reason === "review-fix" && !task.pending.includes(item),
+    );
+    if (fixRun) {
+      ctx.reviews
+        ?.fixed({ repo: task.repo, number: fixRun.replyTo, base: task.base, status: record.status })
+        .catch((error) => log(`${key}: after the fix run: ${error.stack ?? error}`));
     }
     // Comments put back for the next run keep their 👀 until that one is over. Light runs
     // ask questions all along, like for the label: their replies are "done".

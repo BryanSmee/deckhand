@@ -14,6 +14,8 @@ import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { loadConfig, parseConfigFile } from "../listener/config.mjs";
 import {
+  autoMergeGrants,
+  autoMergeProblems,
   GrantsError,
   grantErrors,
   grantFor,
@@ -50,6 +52,7 @@ const NOTHING = {
   allowDocker: false,
   allowResearch: false,
   allowWorkflows: false,
+  allowAutoMerge: false,
   mounts: [],
   limits: config.limits,
   files: [],
@@ -76,6 +79,7 @@ mounts:
     allowDocker: false,
     allowResearch: false,
     allowWorkflows: false,
+    allowAutoMerge: false,
     limits: { cpus: "4", memory: "4g", pids: 4096 },
     mounts: [
       { root: "/nfs/work", readOnly: false },
@@ -572,6 +576,53 @@ test("allow_workflows: a repository's own file only", () => {
   assert.throws(
     () => grantOf({ "org/repo.yaml": "allow_workflows: 1\n" }, "org/repo"),
     /allow_workflows: expected true or false/,
+  );
+});
+
+test("allow_auto_merge: a repository's own file only, true or public", () => {
+  const own = {
+    "org/repo.yaml": "allow_auto_merge: true\n",
+    "org/pub.yaml": "allow_auto_merge: public\n",
+  };
+  assert.equal(grantOf(own, "org/repo").allowAutoMerge, true);
+  assert.equal(grantOf(own, "org/pub").allowAutoMerge, "public");
+  assert.equal(grantOf(own, "org/other").allowAutoMerge, false);
+  assert.deepEqual(autoMergeGrants(grantsFrom(own, config)), [
+    { repo: "org/repo", value: true },
+    { repo: "org/pub", value: "public" },
+  ]);
+  // Model output on the default branch with no human reading it: never every repo at once.
+  assert.throws(
+    () => grantsFrom({ "default.yaml": "allow_auto_merge: true\n" }, config),
+    (error) =>
+      error instanceof GrantsError &&
+      error.file === "default.yaml" &&
+      /default\.yaml: allow_auto_merge: only a repository's own file grants it/.test(error.message),
+  );
+  assert.throws(
+    () => grantOf({ "org/repo.yaml": "allow_auto_merge: yes-please\n" }, "org/repo"),
+    /allow_auto_merge: expected true, false or public/,
+  );
+});
+
+test("autoMergeProblems: the grant, the repository's visibility and `review.on: ready`", () => {
+  const review = { on: "ready", fix: true, merge: true, mergeMethod: "squash" };
+  const settings = { review };
+  assert.deepEqual(autoMergeProblems({ allowAutoMerge: true }, settings, true), []);
+  assert.deepEqual(autoMergeProblems({ allowAutoMerge: "public" }, settings, false), []);
+  // Off: nothing to say.
+  assert.deepEqual(autoMergeProblems({}, { review: { ...review, merge: false } }), []);
+  assert.match(
+    autoMergeProblems({ allowAutoMerge: false }, settings, true)[0],
+    /allow_auto_merge: true/,
+  );
+  assert.match(autoMergeProblems(null, settings)[0], /allow_auto_merge: true/);
+  assert.match(autoMergeProblems({ allowAutoMerge: true }, settings, false)[0], /public/);
+  // Unknown visibility: the merge checks it.
+  assert.deepEqual(autoMergeProblems({ allowAutoMerge: true }, settings, null), []);
+  assert.match(
+    autoMergeProblems({ allowAutoMerge: true }, { review: { ...review, on: "manual" } })[0],
+    /review\.on: ready/,
   );
 });
 

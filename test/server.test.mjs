@@ -119,6 +119,15 @@ async function fakeGitHub(files = {}) {
       if (req.method === "GET" && thread && files[`comments:${thread[1]}`]) {
         return res.end(req.url.endsWith("page=1") ? files[`comments:${thread[1]}`] : "[]");
       }
+      // A pull request's changed files and its head's Actions runs (an auto-merge's gates):
+      // none unless the test sets them.
+      const changed = /^\/repos\/org\/repo\/pulls\/(\d+)\/files\?/.exec(req.url);
+      if (req.method === "GET" && changed) {
+        return res.end(req.url.endsWith("page=1") ? (files[`files:${changed[1]}`] ?? "[]") : "[]");
+      }
+      if (req.method === "GET" && req.url.startsWith("/repos/org/repo/actions/runs?")) {
+        return res.end(files.runs ?? JSON.stringify({ workflow_runs: [] }));
+      }
       // A pull request's reviews and an issue's comments otherwise: none.
       if (
         req.method === "GET" &&
@@ -2223,6 +2232,64 @@ modes:
       (r) => r.method === "POST" && r.path === "/repos/org/repo/issues/13/comments",
     );
     assert.equal(github.requests.filter((r) => r.path.endsWith("/pulls/13/reviews")).length, 1);
+  });
+
+  test("review.merge: a clean review of Deckhand's pull request merges it, with the listener's token", async (t) => {
+    const pr = {
+      number: 13,
+      title: "Fix the thing",
+      body: "Closes #12",
+      state: "open",
+      draft: false,
+      labels: [],
+      mergeable_state: "clean",
+      html_url: "https://github.com/org/repo/pull/13",
+      user: { login: "deckhand-x[bot]", type: "Bot" },
+      head: { sha: "head-1", ref: "issue-12-fix", repo: { full_name: "org/repo" } },
+    };
+    const { github, listener, send } = await listen(
+      t,
+      {
+        ".deckhand.yaml": "review:\n  on: ready\n  fix: true\n  merge: true\n",
+        "pull:13": JSON.stringify(pr),
+        runs: JSON.stringify({
+          workflow_runs: [{ name: "CI", status: "completed", conclusion: "success" }],
+        }),
+      },
+      (dir) => {
+        // The fake repository says nothing of its visibility: public, so `public`.
+        writeGrant(dir, "allow_auto_merge: public\n");
+        writeFileSync(join(dir, "result"), "Fine.\n\nRating: 9/10\nVerdict: approve\n");
+        return {};
+      },
+    );
+    await listener.until(
+      /WARNING: auto-merge is granted to org\/repo, public repositories included/,
+    );
+    await send(
+      {
+        action: "ready_for_review",
+        installation: { id: 7 },
+        repository: { full_name: "org/repo", default_branch: "trunk" },
+        pull_request: pr,
+        sender: { login: "deckhand-x[bot]", type: "Bot" },
+      },
+      "pull_request",
+    );
+    const merge = await github.waitFor(
+      (r) => r.method === "PUT" && r.path === "/repos/org/repo/pulls/13/merge",
+    );
+    assert.deepEqual(JSON.parse(merge.body), { sha: "head-1", merge_method: "squash" });
+    // The listener's own token, never a sandbox's.
+    assert.equal(merge.auth, "Bearer app-token");
+    const said = await github.waitFor(
+      (r) =>
+        r.method === "POST" &&
+        r.path === "/repos/org/repo/issues/13/comments" &&
+        r.body.includes("Merged by Deckhand"),
+    );
+    assert.match(JSON.parse(said.body).body, /No human reviewed this pull request/);
+    await listener.until("org/repo#pr-13: merged at head-1 (squash), auto-merge");
   });
 
   test("/mode audit: the repo's light mode, its instructions and model, the repo's grants", async (t) => {

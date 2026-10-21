@@ -49,6 +49,7 @@ test("repoStatus: configured (or invalid) wins, then onboarding, then unknown, e
     status: "not-onboarded",
     issue: null,
     readAt: 7,
+    autoMerge: false,
   };
   const none = { has: false, invalid: false, at: 7 };
   const has = { has: true, invalid: false, at: 7 };
@@ -520,7 +521,8 @@ test("the list's refused checks are the run preflight's: both go through grantCh
     assert.ok(!body.includes(piece), piece);
   }
   const repos = readFileSync(new URL("../listener/repos.mjs", import.meta.url), "utf8");
-  assert.match(repos, /refusedByGrants\(grantCheck\(config, info\.full_name, settings/);
+  assert.match(repos, /check = has && !errors \? grantCheck\(config, info\.full_name, settings/);
+  assert.match(repos, /refusedByGrants\(check\)/);
 });
 
 test("GET config: raw text, errors, warnings and what runs get; its row updated", async () => {
@@ -577,6 +579,7 @@ test("GET config: raw text, errors, warnings and what runs get; its row updated"
     allowDocker: false,
     allowResearch: false,
     allowWorkflows: false,
+    allowAutoMerge: false,
     hosts: ["registry.npmjs.org"],
     cachedHosts: [],
     mounts: [],
