@@ -430,11 +430,13 @@ dropped then; each run checks its comments' authors against the repository's `us
 when it begins, and so does the next listener for comments queued for a run still going.
 
 The dashboard's run list comes back from the runs' summaries (`logs/<run>.json`, written
-when a run ends): a log is read in full only for a run without one (from before summaries, or
-a listener that died mid-run), which then gets one. The list is held newest first with an
-index by id, and both lose the runs `history.mjs` removes, at start and daily: those older
-than `LOG_RETENTION_DAYS`, but for a running run and the latest run of a task still queued,
-in a brainstorm, waiting or waiting for input.
+when a run ends): a log is read only for a run without one (from before summaries, or a
+listener that died mid-run), which then gets one: in full up to 64 MB, else its first line and
+its last 4 MB, with a warning in the listener's log. A log that can't be read is left out of
+the list, logged. The list is held newest first with an index by id, and both lose the runs
+`history.mjs` removes, at start and daily: those older than `LOG_RETENTION_DAYS`, but for a
+running run and the latest run of a task still queued, in a brainstorm, waiting or waiting
+for input.
 
 ## Agents
 
@@ -458,9 +460,9 @@ credential for, and its defaults), checked when its config is read (`repo-config
   `sandbox/agents/<name>/` (Claude Code: its installer, settings, hooks, progress filter;
   Codex: its installer, hooks, progress filter and `result.jq`, which adds the
   `deckhand.result` line its JSONL lacks; the Antigravity CLI: its installer, through
-  `release-install`, which checks the release's digest, the login refresh the listener runs,
-  hooks, progress filter and `text.jq`, which joins an answer's text deltas into one
-  `deckhand.text` line).
+  `release-install`, which checks the tarball against the sha256 `AGY_SHA256` pins, the
+  login refresh the listener runs, hooks, progress filter and `text.jq`, which joins an
+  answer's text deltas into one `deckhand.text` line).
   One base image serves every agent: no CLI is in it, each is installed per version into a
   shared volume.
 - **In the listener**, `listener/agents/<name>.mjs`, listed in `listener/agents/index.mjs`:

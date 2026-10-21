@@ -454,7 +454,8 @@ removed: set a longer retention, or `0`, to keep them.
 A run's output can't fill the data volume: once its log would pass `RUN_LOG_MAX_MB` (200 MB
 by default), nothing more of it is written, its sandbox is stopped and the run fails, with a
 note in its log and a reply that says why. A single line over 1 MB (no newline in sight) is
-cut there, `… (line cut)` at its end, and the rest of it dropped up to its newline.
+cut there, `… (line cut)` at its end, and the rest of it dropped up to its newline. It can't
+be turned off (`0` is refused): it is what keeps a run from filling the volume.
 
 A model, in `SANDBOX_MODEL`, `BRAINSTORM_MODEL`, a repository's `model` or a comment's
 `/model`, is a tier the run's agent maps to one of its models, `best`, `balanced` or `fast`
@@ -897,9 +898,9 @@ cached_hosts: [deb.debian.org, dl-cdn.alpinelinux.org, registry.npmjs.org, files
   `.deckhand.yaml` can't. A cached host must be reachable too (in `hosts`, or mandatory):
   `cached_hosts` alone opens nothing. List public mirrors whose files are the same for
   everyone, not APIs.
-- **What is never kept**: a request with `Authorization`, `Cookie` or `Range`, anything but a
-  `GET` answered `200`, and an answer marked `Cache-Control: private` or `no-store`, or
-  larger than `EGRESS_CACHE_ENTRY_MAX` (1 GB). Those go through as before. Cookies an answer
+- **What is never kept**: a request with a body, `Cookie`, `Range` or a credential-like
+  header (`Authorization`, `Private-Token`, `X-Api-Key`…), anything but a `GET` answered
+  `200`, and an answer marked `Cache-Control: private` or `no-store`, or larger than `EGRESS_CACHE_ENTRY_MAX` (1 GB). Those go through as before. Cookies an answer
   sets reach that client only. Answers are kept as long as the host says they are fresh,
   then checked again with it.
 - **When**: a run's cached hosts are fixed when it starts, from the grants then: a change
@@ -934,10 +935,10 @@ No sandbox gets a long-lived token, an SSH key or the host's git configuration:
 - Its git credential helper and `gh` wrapper send that secret to the listener's token
   broker (port 8081, on the runs' networks only, not published) on every
   call, and get back an installation token limited to the run's repository. A work run's
-  has issues and pull requests (read and write), contents, actions and metadata (read).
-  Brainstorms and inbox runs read pull requests only; discussion runs also write
-  discussions, and only those. Onboarding and a repository's own light modes only read. Installation tokens
-  last an hour; the broker renews them before that, so a run can go on for hours.
+  writes issues, and reads contents, pull requests, actions and metadata: the listener opens
+  and edits its pull requests for it. Brainstorms and inbox runs get the same; discussion
+  runs also write discussions, and only those. Onboarding, run analyses, reviews and a
+  repository's own light modes only read. Installation tokens last an hour; the broker renews them before that, so a run can go on for hours.
 - Git fetches from GitHub over HTTPS with that token, and pushes through the listener's git
   gateway (same port, with the run's secret), which pushes the run's own branch only (its
   issue's `issue-<n>-*`, or its pull request's head), never the default one, with a token of

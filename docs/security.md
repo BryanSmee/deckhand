@@ -51,14 +51,16 @@ that file asks for, so none can:
   wrapper sends `gh pr ready [--undo]`, `gh pr create` and `gh pr edit` to the listener
   instead (`POST /pr/<owner>/<repo>/<number>/ready`, `/draft` or `/edit`, and
   `POST /pr/<owner>/<repo>/create`, on the broker's port, `listener/pr-ready.mjs`), with the
-  run's secret. The listener checks that the run is live and a work run, that the pull
-  request belongs to the run's repository, that its head branch is in that repository too
-  (not a fork) and is one the run may push (above): another task's pull request is refused,
+  run's secret. The listener checks that the run is live, that the call comes from its own
+  sandbox ([Tokens](#tokens)), and that it is a work run, that the pull request belongs to
+  the run's repository, that its head branch is in that repository too (not a fork) and is
+  one the run may push (above): another task's pull request is refused,
   and so is opening one from another branch. Then it makes that one change with a token of
   its own, which the sandbox never sees: the ready mutation, or a pull request's creation or
   its title and body (`gh pr edit`'s other flags, labels, reviewers or base, are refused).
   A pull request that conflicts with its base (`mergeable_state: dirty`) is refused ready
-  with a 409 until the run rebases it.
+  with a 409 until the run rebases it. Only the head is checked: a run may open its pull
+  request into any base branch, which it reaches only when a maintainer merges it.
 
 This doesn't depend on GitHub: branch protection and rulesets aren't enforced on private
 repositories of free plans. Where they are, a ruleset on the default branch (pull request
@@ -210,13 +212,14 @@ Assume it could, and keep secrets away from workflows on `issue-*` branches as a
 
 A run's secret only lives as long as the run: the listener revokes it when the run ends, and
 the broker then refuses it. It also only works from that run's sandbox (or its container
-engine): the broker's `/token`, the git gateway, `gh pr ready` and the agents' API endpoints
-`/anthropic/` and `/openai/` compare the request's source address with that run's addresses on
-its networks (`docker inspect`, looked up once per run and forgotten when its sandbox exits)
-and answer `403` otherwise. A secret that leaks, to a research run on the open web say, gets
+engine): the broker's `/token`, the git gateway, the pull request endpoints (`gh pr ready`,
+`create`, `edit`) and the agents' API endpoints `/anthropic/` and `/openai/` compare the
+request's source address with that run's addresses on its networks (`docker inspect`, looked
+up once per run and forgotten when its sandbox exits) and answer `403` otherwise. A secret that leaks, to a research run on the open web say, gets
 another sandbox neither a token, a push, nor calls on the operator's Claude or OpenAI
-credential. Google's endpoints (`/google/`, `/relay/`) still check the secret alone: relayed
-calls reach the listener through the egress proxy, whose address says nothing of the run.
+credential. Google's endpoints still check the secret alone: `/relay/`'s calls reach the
+listener through the egress proxy, whose address says nothing of the run, and `/google/`'s,
+which come from the sandbox itself, aren't bound yet (#254).
 The installation tokens a sandbox already got are another matter:
 
 - GitHub makes them valid for **one hour** from when they are minted, and the listener can't
@@ -270,8 +273,9 @@ and end up in a public comment.
 - The listener redacts your credential and the run's secret from the sandbox's output
   before writing the run's log (what the dashboard shows) and from its reply before posting
   it, as `[redacted]`. The value, or any part of it 16 characters long or more (a value cut off
-  in an error message); an encoded or split one gets through, which is why the credential isn't
-  there to begin with. A JWT's header and the `.eyJ` that starts its payload don't count
+  in an error message); a value shorter than that isn't redacted (it would be no credential,
+  and would redact ordinary words), and an encoded or split one gets through, which is why
+  the credential isn't there to begin with. A JWT's header and the `.eyJ` that starts its payload don't count
   towards those 16 characters: every token its issuer signs shares them, so other JWTs in a
   reply stay readable.
 - When the listener can't use an operator's login (a refresh that failed, a file it can't
@@ -385,10 +389,10 @@ endpoint forwards a fixed list of methods and paths, what its agent calls, and n
 - Anything else answers `404` in the provider's error shape, never reaching the provider, and
   is a line in the run's log ("Deckhand refused the agent's call …"), redacted like the
   sandbox's output: an agent version that needs another path shows up there. Each call is
-  noted once, and the first 20 only, then one line saying the rest aren't: a sandbox looping
-  on refused calls can't grow its log past `RUN_LOG_MAX_MB`, which the listener's own lines
-  don't count towards. When a new `CLAUDE_CODE_VERSION`, `CODEX_VERSION` or `AGY_VERSION`
-  needs another path, add it to the endpoint's list (`ROUTES`, `GEMINI_ROUTES`,
+  noted once, and the first 20 only, then one line saying the rest aren't: the listener's own
+  lines are written even past `RUN_LOG_MAX_MB` (see [Output](#output)), so a sandbox looping
+  on refused calls can't grow its log without end. When a new `CLAUDE_CODE_VERSION`,
+  `CODEX_VERSION` or `AGY_VERSION` needs another path, add it to the endpoint's list (`ROUTES`, `GEMINI_ROUTES`,
   `RELAYED_PATHS`).
 - Each endpoint serves its agent's runs only, from the provider the listener gave the run
   (`broker.provide()`): a Claude Code run's secret gets no OpenAI key, and a run without a
@@ -404,16 +408,20 @@ endpoint forwards a fixed list of methods and paths, what its agent calls, and n
 
 A sandbox only gets Docker named volumes:
 
-| Volume                                               | What                                                              |
-| ---------------------------------------------------- | ----------------------------------------------------------------- |
-| `<prefix>-<owner>-<repo>-<n>-<hash>-workspace`       | the issue's clone, kept between its runs                          |
-| `<prefix>-<owner>-<repo>-<n>-<hash>-claude`          | the issue's Claude session                                        |
-| `<prefix>-<owner>-<repo>-<n>-<hash>-light-workspace` | the clone of the issue's light runs                               |
-| `<prefix>-<owner>-<repo>-<n>-<hash>-light-claude`    | the Claude session of its light runs                              |
-| `deckhand-claude-code`, **read-only**                | Claude Code, installed by the listener                            |
-| `deckhand-cache-<owner>-<repo>-<path>-…`             | the repo's `caches`, its own                                      |
-| `deckhand-screenshots`, **its run's folder only**    | screenshots, served under `/shots/<folder>/` (regular files only) |
-| `deckhand-runs`, **its run's folder, read-only**     | its inbox: comments that arrive mid-run                           |
+| Volume                                                          | What                                                              |
+| --------------------------------------------------------------- | ----------------------------------------------------------------- |
+| `<prefix>-<owner>-<repo>-<n>-<hash>-workspace`                  | the issue's clone, kept between its runs                          |
+| `<prefix>-<owner>-<repo>-<n>-<hash>-<agent>`                    | the issue's agent session (`~/.claude`, `~/.codex`, `~/.gemini`)  |
+| `<prefix>-<owner>-<repo>-<n>-<hash>-light-workspace`            | the clone of the issue's light runs                               |
+| `<prefix>-<owner>-<repo>-<n>-<hash>-light-<agent>`              | the agent session of its light runs                               |
+| `<prefix>-<owner>-<repo>-<n>-<hash>-research-…`                 | a research run's own (see [Research runs](#research-runs))        |
+| `<prefix>-claude-code`, `-codex`, `-antigravity`, **read-only** | the run's agent, installed by the listener                        |
+| `<prefix>-cache-<owner>-<repo>-<path>-<hash>`                   | the repo's `caches`, its own                                      |
+| `<prefix>-screenshots`, **its run's folder only**               | screenshots, served under `/shots/<folder>/` (regular files only) |
+| `<prefix>-runs`, **its run's folder, read-only**                | its inbox: comments that arrive mid-run                           |
+
+`<agent>` is the run's agent (`claude`, `codex`, `antigravity`), and `<prefix>` the
+deployment's `NAME_PREFIX` (`deckhand` by default).
 
 `<hash>` (10 hex digits of the repository and task) keeps apart names that would otherwise
 be the same, such as `acme/x` pull request 5 and `acme/x-pr` issue 5. Tasks whose session
@@ -450,19 +458,20 @@ Every run, a fork's or not, protects the issue's clone, kept for its next runs: 
 agent would otherwise run a fork left checked out there (its `SANDBOX_SETUP` and project
 hooks, `.claude/settings.json`, before the model reads anything). Before either starts:
 
-- `.git` loses its hooks and keeps only the config a clone needs (origin, its branches): no
-  `core.fsmonitor`, `core.hooksPath`, filter drivers or includes that a fork's code could
-  have left, for this start's commands and the checkouts after it (`draft-pr.sh`). The
-  `pre-push` hook is copied back.
+- `.git` loses its hooks and keeps only the config a clone needs (origin, set back to the
+  repository's URL, and its branches): no `core.fsmonitor`, `core.hooksPath`, filter
+  drivers or includes that a fork's code could have left, for this start's commands and the
+  checkouts after it (`draft-pr.sh`). The `pre-push` hook is copied back.
 - The clone goes back to the branch it was on when that tracks a branch of the repository
   (`gh pr checkout` sets a fork's to its URL or to `refs/pull/<n>/head`) and has no commit
   that isn't on the repository (a fork's merged in, not pushed), else the base branch
   (always, for a light run); `draft-pr.sh` goes back to the issue's branch on the same
   condition. Untracked and ignored files go (`git clean -ffdx`), after a work run's
-  uncommitted changes are stashed (`git stash`). The agent is told where the clone was and
+  uncommitted changes are stashed (`git stash`). Stale worktrees are pruned first, so one
+  can't keep a branch from being checked out. The agent is told where the clone was and
   what was stashed, and checks them out again if it needs them, once it has read them.
 - Reviews read a pull request in a `git worktree` under `/tmp`, gone with their container, so
-  the `-light-` clone never holds a fork's tree. Stale worktrees are pruned first.
+  the `-light-` clone never holds a fork's tree.
 
 What it can still reach is in [Not covered](#not-covered).
 
@@ -475,13 +484,21 @@ Its inbox folder is mounted the same way, read-only: the listener writes the com
 delivered to the run there (a file rather than the container's stdin, so a run outlives a
 listener restart).
 
-The Claude Code volume is shared by every repository, so it is read-only in sandboxes: a run
-that could replace `claude` there would run its code in the next sandbox of any repository,
-with that run's broker secret and grants. The listener installs each version before the
-first run that needs it, as root, so its files don't belong to the sandboxes' user, uid
-1000, either. An install that finds the volume owned by uid 1000 (from an older Deckhand)
-takes it over and reinstalls from npm rather than keep what a sandbox could have changed. A
-sandbox whose version isn't installed stops with a message instead of installing it.
+Each agent's install volume (Claude Code's, Codex's, the Antigravity CLI's) is shared by
+every repository, so it is read-only in sandboxes: a run that could replace `claude` there
+would run its code in the next sandbox of any repository, with that run's broker secret and
+grants. The listener installs each version before the first run that needs it, as root, so
+its files don't belong to the sandboxes' user, uid 1000, either. A Claude Code install that
+finds the volume owned by uid 1000 (from an older Deckhand) takes it over and reinstalls from
+npm rather than keep what a sandbox could have changed. A sandbox whose version isn't
+installed stops with a message instead of installing it.
+
+What is installed is pinned: Claude Code and Codex by their npm version, the Antigravity CLI
+by the sha256 of its release's tarball (`AGY_SHA256`, the operator's setting, not the
+release's own digest, which comes from where the tarball does): a tarball that doesn't match,
+or a version without a sha256, isn't installed. npm agents install with `--ignore-scripts`,
+then only the agent's own package runs its install script, not its dependencies'. Those
+dependencies' versions aren't locked: they are what npm resolves at install time.
 
 No host path is ever mounted by default: no `~/.ssh`, `~/.gitconfig`, Docker socket or
 source tree.
@@ -513,9 +530,14 @@ symlink) and checks that the result is the root or inside it. With `/nfs/work` g
 | `/nfs/other`                       | refused                                           |
 
 A refused mount stops the run, and the reply on the issue lists each refused path and why.
-A read-write request under a read-only root is mounted read-only (noted in the run's log). Paths the sandbox uses itself (`/workspace`, `/home/node/.claude`, `/opt/claude-code`,
-`/screenshots`) and the repo's `caches` can't be mount targets. Paths are limited to
-letters, digits and `./@+-_`.
+A read-write request under a read-only root is mounted read-only (noted in the run's log).
+
+Paths the sandbox mounts itself can't be mount targets, nor anything inside or above them:
+`/workspace`, `/screenshots`, `/deckhand` (the run's inbox), and each agent's session and
+install (`/home/node/.claude` and `/opt/claude-code`, `/home/node/.codex` and `/opt/codex`,
+`/home/node/.gemini` and `/opt/antigravity`), for every agent, whichever the run has. The
+list comes from the agents' definitions, so a new agent's paths are reserved too. Neither
+can the repo's `caches`. Paths are limited to letters, digits and `./@+-_`.
 
 **Between the check and the mount.** The sandbox mounts the resolved path rather than the
 one asked for, but Docker resolves that path again when the container starts, minutes later
@@ -707,6 +729,13 @@ repositories only. An open live log stops within a second of its viewer signing 
 leaving the repository's `users`. The repositories tab and its configs are shown to every
 allowed user.
 
+Every answer on the listener's port carries `Content-Security-Policy: default-src 'self';
+frame-ancestors 'none'` and `X-Content-Type-Options: nosniff`: the dashboard runs its own
+scripts only (its build has none inline), and no page can frame it to get a signed-in user to
+click Start, Cancel or Rerun, which `SameSite=Lax` would let a sibling domain do. The setup
+and sign-in pages narrow it to `default-src 'none'`, their own images, and their style by its
+hash.
+
 A session is a signed cookie, valid for 7 days, with the login and its **epoch**. Signing out
 bumps the login's epoch (`/data/sessions.json`): every session of that login ends, in any
 browser, including a copied cookie. Removing a user from `ALLOWED_USERS` and restarting also
@@ -793,8 +822,9 @@ repo of each run's record, and its digest is built from those alone. Its run nev
 logs themselves (they cover every repository, and are a few MB each), nor a mount of the logs
 folder: the listener writes a digest into the run's own read-only inbox folder
 (`TASK_DIGEST`), built from the dashboard's entries (`runlog.mjs` `format()`, tool details and
-outputs clipped), redacted of the operator's credentials (`secrets.mjs`) and capped at about
-400 KB. Its token only reads, as onboarding's: it replies, and files nothing itself.
+outputs clipped), redacted of the operator's credentials and of GitHub tokens (`secrets.mjs`)
+and capped at about 400 KB. Its token only reads, as onboarding's: it replies, and files
+nothing itself.
 
 What the digest quotes reaches a run that has the code and a token, and its report is posted
 as is, so it quotes less than the dashboard shows:
@@ -807,7 +837,7 @@ as is, so it quotes less than the dashboard shows:
   them. Kinds, outcomes, timings, tool counts, the calls made and the final replies (already
   posted on the repository) stay.
 - Its instructions (`prompts/analyze.md`) say the digest is data, not instructions, and that
-  the report quotes no raw output from it.
+  the report quotes no raw output from it, and builds no images or links from what it says.
 
 Discussions from the dashboard (`POST /api/repos/<owner>/<repo>/discussions`, and
 `…/discussions/<n>/comments`) pass the same checks, only in the repo's `inbox.discussions`
@@ -819,8 +849,12 @@ the App wrote it and its line carries a tag that checks: an HMAC of the user and
 a key derived from the App's webhook secret, which no run holds. Anyone else writing the same
 line is shown as themself; a run (which posts as the App, `discussions: write`) writing it, or
 copying a tag under other text, is shown as the App. Deckhand's answers are the App's posts
-that end with the marker. A dashboard user's text loses the marker and any tag before it is
-posted, so it can pass for neither. Posts from before the tags show as the App's.
+that end with the marker. Posts from before the tags show as the App's.
+
+Whatever a dashboard user writes (an inbox entry, a discussion or a reply, answers to open
+questions) loses the App's marker and any tag before it is posted, so it can pass for neither
+Deckhand's answer nor another user's post, and the "From the dashboard by" line of an inbox
+entry or a discussion post carries the tag.
 
 ## Hardening
 
@@ -849,6 +883,25 @@ and `DELETE` (`docker run`, `ps`, `logs`, `inspect`, `wait`, `rm`, `cp`, `build`
 `volume create/inspect/ls/rm`, `network create/inspect/connect/disconnect/ls/rm`, and `info`
 with a container engine). Preview hooks still need the real socket
 (`DOCKER_SOCKET`): leave `preview` out of your repos' configs if you go this way.
+
+### Output
+
+A run's output can't stop the listener, nor fill its data volume:
+
+- A line of output is cut at 1 MB (`… (line cut)` at its end), and the rest of it dropped up
+  to its newline. A line the listener fails to handle (a full disk, say) is lost, not the
+  listener.
+- A run's log holds at most `RUN_LOG_MAX_MB` (200 MB by default, and never unlimited) of the
+  sandbox's output. Past it, nothing more of it is written: the sandbox is stopped and the
+  run fails, with a note in its log and a reply saying why. The listener's own lines (a few
+  notes) are still written. A restarted listener counts what the log already holds, and
+  stops the sandbox again if it still runs.
+- At start, a log without its summary (`logs/<run>.json`) is read whole up to 64 MB, else
+  only its first line and its last 4 MB. One that can't be read is left out of the run list,
+  and logged: no log keeps the listener from starting.
+
+The cap is per run: the logs together can take up to that much for each run kept, until
+`LOG_RETENTION_DAYS`.
 
 ## Container engine
 
@@ -943,9 +996,10 @@ secret sent somewhere. What limits it:
   from a finding, no changes to CI, workflows, `.deckhand.yaml`, Dockerfiles, dependencies or
   credentials unless the issue asked for them, no secrets sent anywhere, and its reply says
   which findings it left and why.
-- **What any work run is held to**: its token pushes only its own branch (never the default
-  one), `.github/workflows/` only with `allow_workflows`, hosts only through the egress proxy,
-  and its pull request still waits for a maintainer to merge it.
+- **What any work run is held to**: its token can't push or write pull requests, the git
+  gateway pushes only its own branch (never the default one), `.github/workflows/` only
+  with `allow_workflows`, hosts only through the egress proxy, and its pull request still
+  waits for a maintainer to merge it.
 
 **What is left**: these are mitigations, not a guarantee. A model can still be talked into
 something by text it reads: an allowed user's comment quoting an outsider, the App's own
@@ -967,13 +1021,13 @@ holds to any host, so it holds almost nothing:
 | ------------------------------ | --------------------------------------------------------------------------------------- |
 | Hosts                          | any public one (`*`); private addresses only for the mandatory hosts, not the grant's   |
 | The repository's code          | none: no clone, `/workspace` starts empty                                               |
-| GitHub token                   | none: the broker refuses `/token`, the git gateway and `gh pr ready` refuse the run     |
+| GitHub token                   | none: `/token`, the git gateway and the pull request endpoints refuse the run           |
 | Other runs' secrets            | useless: a secret only works from its own run's sandbox ([Tokens](#tokens))             |
 | Input                          | the issue's title, description and last 50 comments, written by the listener (redacted) |
 | Output                         | its final message, posted by the listener as the reply; no screenshots folder           |
 | Run analyses                   | never in one: what a page made it say would reach a run with the code and a token       |
 | Image, setup, caches, mounts   | the base image only; no `setup`, `caches`, host mounts or project `instructions`        |
-| Container engine, egress cache | none: no engine, no cached hosts, so no Deckhand CA to trust                            |
+| Container engine, egress cache | none: no engine, no cached hosts; Deckhand's CA only for the Antigravity CLI on a plan  |
 | Volumes                        | `<name>-research-workspace` and its session volume: no work or light run mounts them    |
 
 - **The grant**: `allow_research: true`, in a repository's file or in `default.yaml` for
@@ -1028,10 +1082,11 @@ inspect`) and answers from that run's list. Only the proxy may ask: the listener
   the caller with the proxy's addresses on all of its networks (`docker inspect`). An unknown address, an unknown host, or a
   listener that doesn't answer: refused, with a `403` saying why.
 - The proxy resolves names itself and connects to the address it checked. Loopback,
-  link-local (cloud metadata, `169.254.169.254`), multicast and unspecified addresses are
-  always refused, and so is `198.18/15` (benchmarking); private ones (`10/8`, `172.16/12`,
-  `192.168/16`, `100.64/10`, `fc00::/7`) only when the host is one you allow by name or
-  `*.domain` in the grants folder, never through `*` alone. The same goes for any address in
+  link-local (cloud metadata, `169.254.169.254`), `0/8`, multicast and reserved (`224/4` and
+  up), IPv6 site-local (`fec0::/10`) and anything that isn't an IP address are always
+  refused, and so is `198.18/15` (benchmarking); private ones (`10/8`, `172.16/12`,
+  `192.168/16`, `100.64/10`, `fc00::/7`, NAT64's local-use `64:ff9b:1::/48`) only when the
+  host is one you allow by name or `*.domain` in the grants folder, never through `*` alone. The same goes for any address in
   a subnet of the networks the proxy is on (read from its interfaces at each connection, so a
   run's network counts as soon as it is joined): other runs' sandboxes and engines, the
   listener, whatever range Docker gave those networks, a public one or a global IPv6 prefix
@@ -1072,11 +1127,16 @@ mandatory): `cached_hosts` alone opens nothing.
   answered `200` without `Cache-Control: private` or `no-store`, and within
   `EGRESS_CACHE_ENTRY_MAX`. Anything else is forwarded as before.
 - **What reaches the host**: on the cache path, only `Accept`, `Accept-Encoding`,
-  `Accept-Language`, `User-Agent`, `If-None-Match` and `If-Modified-Since` go on, with
-  `Host`: a header the key doesn't count (`X-HTTP-Method-Override`, `X-Forwarded-Host`) can't
-  shape an answer kept for every repository. Each request to a host gets a connection of its
-  own, never one another run's request used: a request whose body a host doesn't read (request
-  smuggling) can't put another URL's answer under a key.
+  `Accept-Language` and `User-Agent` go on, with `Host`; to check a kept answer, its own
+  `If-None-Match` and `If-Modified-Since`, never the client's. Any other header
+  (`X-HTTP-Method-Override`, `X-Forwarded-Host`) is dropped, so it can't shape an answer kept
+  for every repository. `Accept-Language` and `User-Agent` aren't in the key (see `Vary`
+  below). A request the cache doesn't answer (one checking its own copy when nothing is
+  kept, or one sending a header the kept answer varies on) goes on as it is, and its answer
+  isn't kept.
+- **Connections**: every request the proxy sends to a host, cached or not, gets a new
+  connection, never reused: a request whose body a host doesn't read (request smuggling)
+  can't put another URL's answer under a key.
 - **Cookies and `Vary`**: a cookie the answer sets goes to that client only, never into the
   cache: the request had none, so the answer is the one anyone gets, and CDNs set theirs on
   everything (Cloudflare's `__cf_bm` on npm's registry). `Accept-Encoding` and `Accept` are
@@ -1098,7 +1158,10 @@ mandatory): `cached_hosts` alone opens nothing.
   take half of it at most (`EGRESS_CACHE_ENTRY_MAX` when that is more): a download read slowly, or dropped before its end, never evicts
   more than that, and one that finds no room goes on to its client without being kept. The
   bodies are counted, not their small metadata files, and a removed answer a client is still
-  reading stays on disk until it is done: the volume can go slightly past it.
+  reading stays on disk until it is done: the volume can go past it by the answers being
+  read then. That half holds at any one time: over time, a run that fetches many different
+  URLs (a query string changed each time, say) can still push every other repository's
+  answers out. The cache stays within its size, not its contents.
   `EGRESS_CACHE_MAX=0` turns the cache off
   ([Setup](setup.md#advanced-settings)).
 - **Trust**: plain HTTP can be tampered with on the way, cached or not, and a cached answer
@@ -1118,8 +1181,9 @@ real server's certificate.
   in its volume (`ca/` in the `egress-cache` volume), and kept across restarts: a new
   volume is a new CA, which the next runs get. It lasts a year, and the proxy makes a new
   one a month before its end (and replaces one from before name constraints): sandboxes get
-  it at their next start. Its key (`ca.key`) never leaves that volume;
-  no sandbox, engine or listener mounts it. Its **name constraints** exclude GitHub
+  it at their next start, and runs going on then lose their cached and relayed hosts' HTTPS
+  (their certificates are the old CA's) until their next run. Its key (`ca.key`) never
+  leaves that volume; no sandbox, engine or listener mounts it. Its **name constraints** exclude GitHub
   (`github.com`, `githubusercontent.com` and their subdomains) and the agents' providers
   (`anthropic.com`, `openai.com`, `chatgpt.com`): a certificate it signs for them fails
   verification, and the proxy never asks for one. Each host's certificate lasts 7 days, and is
@@ -1136,9 +1200,9 @@ real server's certificate.
   cached hosts' certificates, and fails rather than going round the proxy. When the
   listener can't get the CA (the proxy doesn't answer), the run has no cached hosts at all,
   and says so in its log; an Antigravity CLI run stops.
-- **Never decrypted**, whatever `cached_hosts` says: the agent's hosts and GitHub's (the
-  mandatory hosts below). Their traffic carries the run's tokens, which the cache would
-  refuse anyway. Nor a run's [container engine](#container-engine): its builds and
+- **Never decrypted**, whatever `cached_hosts` says: the agent's hosts (but those relayed to
+  the listener, above) and GitHub's (the mandatory hosts below). Their traffic carries the
+  run's tokens, which the cache would refuse anyway. Nor a run's [container engine](#container-engine): its builds and
   containers don't trust the CA, so its connections keep the tunnel, and only plain HTTP is
   cached for them; caching in the engine itself is `docker: { cache: true }`'s.
 - **An upstream certificate that doesn't verify** (expired, self-signed, for another name)
@@ -1149,16 +1213,19 @@ real server's certificate.
   as is.
 
 What this changes: the proxy now reads the requests and answers of the hosts you list in
-`cached_hosts`, and holds a key that sandboxes trust for any host. It stays acceptable
-because the proxy only uses it for the hosts you listed, which are what you would cache
-anyway (public mirrors, without credentials: a request with `Authorization` or `Cookie` is
-sent on, never kept); the key never leaves the proxy's volume, which neither sandboxes nor
-engines can reach, and the proxy runs read-only, without capabilities; and a sandbox
+`cached_hosts`, and holds a key that sandboxes trust for any host but those its name
+constraints exclude. It stays acceptable because the proxy only uses it for the hosts you
+listed, which are what you would cache anyway (public mirrors, without credentials: a
+request with `Authorization`, `Cookie` or another credential-like header is sent on, never
+kept); the key never leaves the proxy's volume, which neither sandboxes nor engines can
+reach, and the proxy runs read-only, without capabilities; and a sandbox
 trusting the CA gains nothing it could use: it reaches the same hosts as before, through
 the same proxy. Someone who gets the key (from the host, or the proxy's volume) can
 impersonate any other host to the sandboxes running then, for at most the CA's year, but
-not GitHub or the agents' providers: treat the volume like the listener's
-data. Removing the volume (or `ca/` in it) and restarting the proxy makes a new CA.
+not `github.com`, `githubusercontent.com`, Anthropic's or OpenAI's hosts (a GitHub Enterprise
+host isn't excluded, though never decrypted either, nor are Google's, which the Antigravity
+CLI's runs relay): treat the volume like the listener's data. Removing the volume (or `ca/`
+in it) and restarting the proxy makes a new CA.
 
 ### Where a sandbox's hosts come from
 
@@ -1241,11 +1308,14 @@ it again when you change `AGY_VERSION`.
 - **An engine's containers** run what the run builds, with the run's hosts: a repository's
   Dockerfile pulling from a host the run may reach can bring anything in, as its setup
   command can.
-- **A fork's code in a work run** can still write to the agent's session (`~/.claude`) of
-  that run's issue, which its next work run starts with, and to what `.git` keeps besides
-  hooks and config (objects, refs, the stash). It ran with the same token and hosts as the
-  run it would reach, one an allowed user asked for: read what a fork's pull request does
-  before asking for work on it (see [What a fork's code may reach](#what-a-forks-code-may-reach)).
+- **A fork's code in a work run** can still write to the agent's session (`~/.claude`,
+  `~/.codex` or `~/.gemini`) of that run's issue, which its next work run starts with, and to
+  what `.git` keeps besides hooks (objects, refs, the stash, and the branches' `remote` and
+  `merge`): enough to make a branch of its own look like one of the repository's, which the
+  next work run then stays on, and runs its setup on. It can also push the run's own branch,
+  which a repository granted `allow_branch_docker_images` builds. It ran with the same token
+  and hosts as the run it would reach, one an allowed user asked for: read what a fork's pull
+  request does before asking for work on it (see [What a fork's code may reach](#what-a-forks-code-may-reach)).
 - **A fork's pull request only mentioned** (in an issue, or a comment from elsewhere: "check
   out #7 and fix it") isn't seen as a fork's run: the run gets the repository's caches,
   read-write mounts and engine. The agent is told not to install, build or run such a pull
@@ -1256,7 +1326,9 @@ it again when you change `AGY_VERSION`.
   sandboxes' networks. Builds run the repo's Dockerfile from its default branch (or its pull
   requests' branches with `allow_branch_docker_images`). A branch's image gets a tag of its
   own (`branch-…`, hashing its commit), so the default branch's runs and preview hooks never
-  use an image built from a branch.
+  use an image built from a branch. A repo's image name and tags hash the repository too
+  (`<prefix>-repo-<owner>-<repo>-<hash>`): repositories whose names read alike (`acme/x.y`,
+  `acme/x-y`) never run, or prune, each other's image, nor do their preview hooks.
 - **Preview hooks** (with `allow_preview`) run on Docker's default network with the Docker
   socket.
 - **Deckhand's own source** is in every sandbox, read-only (`/usr/local/share/deckhand/src`,
