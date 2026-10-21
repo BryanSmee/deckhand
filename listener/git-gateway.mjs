@@ -183,9 +183,10 @@ function oneLine(text, max = 1000) {
 // pushed, by ref: empty when they all pass.
 export function workflowRefusals(changed) {
   const byRef = new Map();
-  for (const { ref, path, text } of changed) {
-    const problems =
-      text === null
+  for (const { ref, path, text, problem } of changed) {
+    const problems = problem
+      ? [problem]
+      : text === null
         ? [`not a plain UTF-8 file of at most ${MAX_WORKFLOW / 1024} KiB`]
         : workflowProblems(text);
     if (!problems.length) continue;
@@ -225,12 +226,17 @@ export function createGitGateway({
   githubUrl = "https://github.com",
   // Where the mirrors of the repos granted `allow_workflows` are kept (git-mirror.mjs).
   mirrorDir = join(tmpdir(), "deckhand-git-mirrors"),
+  // Where their pushes are saved while checked; their size cap (git-mirror.mjs).
+  spoolDir,
+  maxPush,
   fetch = globalThis.fetch,
   log = () => {},
   headMs = HEAD_MS,
   drainMs = DRAIN_MS,
 }) {
-  const mirrors = createMirrors({ root: mirrorDir, githubUrl });
+  const mirrors = createMirrors({ root: mirrorDir, spoolRoot: spoolDir, githubUrl, maxPush });
+  // The runs with a push being saved and checked.
+  const saving = new Set();
 
   // Git shows a text/plain error body as "remote: …" lines.
   function fail(res, status, message, headers = {}) {
@@ -389,26 +395,46 @@ export function createGitGateway({
           : "couldn't get a token for this push; try again";
       return refuse(req, res, repo, parsed, new Map(parsed.refs.map((ref) => [ref, why])));
     }
-    return checkWorkflows(req, res, { repo, github }, parsed, base, token);
+    return checkWorkflows(req, res, { repo, run, github }, parsed, base, token);
   }
 
   // The push of a repo granted `allow_workflows`, read whole: forwarded from disk once the
   // workflow files it changes pass (workflow-check.mjs). Never forwarded unchecked: a mirror
   // that can't be fetched, or a pack that can't be read, refuses it.
-  async function checkWorkflows(req, res, { repo, github }, parsed, base, token) {
+  async function checkWorkflows(req, res, { repo, run, github }, parsed, base, token) {
     const all = (why) => new Map(parsed.refs.map((ref) => [ref, why]));
+    // One push of a run's on disk at a time: a run can't fill it with pushes sent at once.
+    if (saving.has(run)) {
+      return refuse(
+        req,
+        res,
+        repo,
+        parsed,
+        all("another push of this run is being checked; try again"),
+      );
+    }
+    saving.add(run);
     let spooled;
     try {
       spooled = await mirrors.spool(parsed.body);
     } catch (error) {
+      saving.delete(run);
       log(`Git gateway: ${repo}: ${error.message ?? error}`);
-      const why =
-        error.message === "push too large"
-          ? "this push is too large for GitHub"
-          : "couldn't receive this push; try again";
-      return refuse(req, res, repo, parsed, all(why));
+      // The request was dropped with the body: no report the client would still read.
+      const tooLarge = error.message === "push too large";
+      return fail(
+        res,
+        tooLarge ? 413 : 400,
+        tooLarge
+          ? "Deckhand: this push is too large for GitHub"
+          : "Deckhand: couldn't receive this push; try again",
+        { connection: "close" },
+      );
     }
-    const done = () => mirrors.remove(spooled.dir);
+    const done = async () => {
+      saving.delete(run);
+      await mirrors.remove(spooled.dir);
+    };
     let reasons;
     try {
       const start = await packStart(spooled.file, parsed.end, parsed.caps);

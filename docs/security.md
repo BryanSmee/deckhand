@@ -104,21 +104,30 @@ So the gateway reads the workflow files of a granted repository's pushes before 
 It keeps a bare mirror of the repository in its data directory (`git-mirrors/`), fetched with
 a token that reads before each push; reads the push's pack against it (a push is a thin pack,
 its deltas pointing at objects GitHub already has) into a quarantine of its own, so a refused
-push leaves nothing behind; and checks each file under `.github/workflows/` that differs, at a
-pushed branch's tip, from the default branch's. The push is refused, with git's
-`[remote rejected]` naming the file and the rule, when a changed workflow:
+push leaves nothing behind; and checks each file under `.github/workflows/` that differs from
+the default branch's, at a pushed branch's tip and in that tip's merge with the default branch
+(`git merge-tree`): GitHub runs a pull request's workflows from that merge, which can hold a
+secret or a write permission the default branch added after the branch was cut, around a step
+the branch edits. A workflow that doesn't merge cleanly refuses the push until the branch is
+rebased. The push is refused, with git's `[remote rejected]` naming the file and the rule, when
+a changed workflow:
 
 - has no top-level `permissions:` (the repository's default would apply, and it may write),
   or a `permissions:`, at the top or in a job, other than `read-all`, `{}` or scopes set to
   `read` or `none`: `write-all`, any `write` scope (`contents`, `actions`, `id-token`,
   `packages`…) and an expression are refused, keys matched without case;
 - mentions `secrets` anywhere, in a key or a value, YAML escapes decoded: `secrets.X`,
-  `secrets[...]`, `toJSON(secrets)`, `secrets: inherit`;
+  `secrets[...]`, `toJSON(secrets)`, `secrets: inherit`, and letters that fold to it
+  (`ſecrets`, full-width); or has a non-ASCII character inside a `${{ }}` expression, whose
+  names GitHub reads without case;
 - uses YAML outside the strict subset the gateway reads (`listener/workflow-check.mjs`):
   anchors, aliases, tags, merge keys, several documents, duplicate keys (without case),
-  multi-line plain or quoted scalars, flow collections over several lines. A file the gateway
-  could read differently from GitHub is refused, not guessed at;
-- is a symlink or a submodule, isn't UTF-8 text, or is over 512 KiB.
+  multi-line plain or quoted scalars, flow collections over several lines, and line breaks other
+  than `\n` and `\r\n` (NEL, U+2028, U+2029, a lone `\r`) or control characters. Only a space
+  or a tab separates, as in YAML: a non-breaking or other Unicode space is text. A file the
+  gateway could read differently from GitHub is refused, not guessed at;
+- is a symlink or a submodule, isn't UTF-8 text, or is over 512 KiB; so is a `.github` or
+  `.github/workflows` that isn't a folder, unless the default branch has the same one.
 
 Workflows identical to the default branch's, files the run deletes and pushes that don't touch
 `.github/workflows/` go through, the pack GitHub gets the one the client sent. A mirror that
@@ -136,7 +145,15 @@ files, not the run's. Not checked:
   secrets (true without the grant too: see below);
 - self-hosted runners: a workflow picks its runner with `runs-on`, so any self-hosted runner
   the repository can use runs a branch's code;
-- configuration variables (`vars`), which any workflow reads: keep secrets out of them.
+- configuration variables (`vars`), which any workflow reads: keep secrets out of them;
+- the default branch's later changes: a pull request's next run merges its branch with the
+  default branch as it is then. The branch's next push is checked against it, but a workflow
+  run re-run by hand after the default branch's workflows changed uses a merge nobody checked.
+
+The mirrors take a copy of each granted repository in the data volume. A push is saved in the
+listener's temporary directory while it is checked (not the data volume, whose state it would
+put at risk), one push per run at a time, up to GitHub's 2 GiB: plan for the repositories'
+size, plus up to 2 GiB per run in parallel.
 
 Where GitHub enforces them, an enforced ruleset on the default branch (a pull request with an
 approval, no bypass for the App or GitHub Actions) and environment secrets behind required

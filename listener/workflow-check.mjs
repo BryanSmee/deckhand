@@ -6,10 +6,12 @@
 // The listener has no dependencies, so it reads them with its own parser. Not yaml.mjs's: a
 // config the default branch owns can be read loosely (JSON escapes, typed scalars, `...`
 // ending the file), a file a sandbox wrote can't: this one decodes every escape GitHub does
-// and refuses the rest. A strict subset of YAML: block mappings and sequences, plain, quoted and block scalars, flow collections on
-// one line. Anything else (anchors, aliases, tags, merge keys, several documents, duplicate
-// keys, multi-line flow scalars…) is refused rather than guessed at, so the checks never read
-// a file differently from GitHub.
+// and refuses the rest. A strict subset of YAML: block mappings and sequences, plain, quoted
+// and block scalars, flow collections on one line. Anything else (anchors, aliases, tags,
+// merge keys, several documents, duplicate keys, multi-line flow scalars…) is refused rather
+// than guessed at, so the checks never read a file differently from GitHub. Only a space or a
+// tab separates, as in YAML: never JS's `\s`, which also matches NBSP and other Unicode spaces
+// YAML reads as text. Line breaks other than \n and \r\n are refused.
 
 export class YamlError extends Error {
   constructor(line, message) {
@@ -17,6 +19,16 @@ export class YamlError extends Error {
     this.line = line;
   }
 }
+
+// YAML's whitespace, and nothing else.
+const strip = (text) => text.replace(/^[ \t]+|[ \t]+$/g, "");
+const stripEnd = (text) => text.replace(/[ \t]+$/, "");
+// Keys compared without case, with the folds GitHub's case-insensitive matching may make
+// (`ſ` is an `S` once in upper case).
+const fold = (text) => text.toUpperCase().toLowerCase();
+// Line breaks YAML 1.1 parsers know besides \n (NEL, LS, PS, a lone CR), control characters
+// and a BOM past the start: refused, so no line reads differently there and here.
+const REFUSED_CHARACTERS = /[\0-\x08\x0b\x0c\r\x0e-\x1f\x7f\x85\u2028\u2029\ufeff]/;
 
 // Characters a plain scalar or key can't start with, in this subset.
 const INDICATORS = new Set([..."&*!|>%@`?,[]{}#"]);
@@ -81,19 +93,19 @@ function quoted(text, start, line) {
 // What may follow a value on its line: spaces, then a comment.
 function trailing(text, end, line) {
   const rest = text.slice(end);
-  if (rest.trim() && !/^\s+#/.test(rest)) {
-    throw new YamlError(line, `unexpected \`${rest.trim()}\` after a value`);
+  if (strip(rest) && !/^[ \t]+#/.test(rest)) {
+    throw new YamlError(line, `unexpected \`${strip(rest)}\` after a value`);
   }
 }
 
 // A plain scalar on its own, its comment removed.
 function plain(text, line) {
-  const comment = /\s#/.exec(text);
-  const value = (comment ? text.slice(0, comment.index) : text).trim();
-  if (INDICATORS.has(value[0]) || /^-(\s|$)/.test(value)) {
+  const comment = /[ \t]#/.exec(text);
+  const value = strip(comment ? text.slice(0, comment.index) : text);
+  if (INDICATORS.has(value[0]) || /^-([ \t]|$)/.test(value)) {
     throw new YamlError(line, `unsupported YAML: \`${value[0]}\` (anchors, aliases, tags…)`);
   }
-  if (/:(\s|$)/.test(value)) throw new YamlError(line, "a mapping isn't allowed here");
+  if (/:([ \t]|$)/.test(value)) throw new YamlError(line, "a mapping isn't allowed here");
   return value;
 }
 
@@ -101,6 +113,13 @@ export function parseYaml(text, onScalar = () => {}) {
   const lines = text.replace(/^\uFEFF/, "").split(/\r?\n/);
   // The text's last newline ends its last line: no empty one after it.
   if (lines.at(-1) === "") lines.pop();
+  lines.forEach((raw, n) => {
+    const bad = REFUSED_CHARACTERS.exec(raw);
+    if (bad) {
+      const code = bad[0].codePointAt(0).toString(16).toUpperCase().padStart(4, "0");
+      throw new YamlError(n + 1, `unsupported character U+${code}`);
+    }
+  });
   // Lines read from the middle: a sequence item's content ("- key: value"), as if it started
   // its own line at its column.
   const inline = new Map();
@@ -114,11 +133,11 @@ export function parseYaml(text, onScalar = () => {}) {
     for (; i < lines.length; i++) {
       if (inline.has(i)) return inline.get(i);
       const raw = lines[i];
-      if (/^\s*(#.*)?$/.test(raw)) continue;
+      if (/^[ \t]*(#.*)?$/.test(raw)) continue;
       const indent = /^ */.exec(raw)[0].length;
       if (raw[indent] === "\t") throw new YamlError(i + 1, "tabs can't indent YAML");
-      const text = raw.slice(indent).trimEnd();
-      if (indent === 0 && /^(---|\.\.\.)(\s|$)/.test(text)) {
+      const text = stripEnd(raw.slice(indent));
+      if (indent === 0 && /^(---|\.\.\.)([ \t]|$)/.test(text)) {
         throw new YamlError(i + 1, "several documents aren't supported");
       }
       return { indent, text, line: i + 1 };
@@ -131,30 +150,30 @@ export function parseYaml(text, onScalar = () => {}) {
     i++;
   }
 
-  const isItem = (text) => /^-(\s|$)/.test(text);
+  const isItem = (text) => /^-([ \t]|$)/.test(text);
 
   // A mapping entry's key and what follows its colon, or null when the text isn't one.
   function entry(text, line) {
     let key, rest;
     if (text[0] === '"' || text[0] === "'") {
       const q = quoted(text, 0, line);
-      const colon = /^\s*:(\s|$)/.exec(text.slice(q.end));
+      const colon = /^[ \t]*:([ \t]|$)/.exec(text.slice(q.end));
       if (!colon) return null;
       key = q.value;
       rest = text.slice(q.end + colon[0].length);
     } else {
       if (text[0] === "[" || text[0] === "{") return null;
-      const colon = /:(\s|$)/.exec(text);
-      const comment = /\s#/.exec(text);
+      const colon = /:([ \t]|$)/.exec(text);
+      const comment = /[ \t]#/.exec(text);
       if (!colon || (comment && comment.index < colon.index)) return null;
-      key = text.slice(0, colon.index).trimEnd();
+      key = stripEnd(text.slice(0, colon.index));
       rest = text.slice(colon.index + colon[0].length);
       if (!key || INDICATORS.has(key[0]) || key[0] === "-") {
         throw new YamlError(line, `unsupported key \`${key}\` (anchors, aliases, tags…)`);
       }
       if (key === "<<") throw new YamlError(line, "merge keys (`<<`) aren't supported");
     }
-    return { key, rest: rest.trim() };
+    return { key, rest: strip(rest) };
   }
 
   // The node below a line at `parent`'s indent: more indented, or a sequence at the same
@@ -183,10 +202,10 @@ export function parseYaml(text, onScalar = () => {}) {
       const found = entry(line.text, line.line);
       if (!found) throw new YamlError(line.line, "expected `key: value`");
       // Without case: GitHub's keys are, some of them, and a near-duplicate is never needed.
-      if (keys.has(found.key.toLowerCase())) {
+      if (keys.has(fold(found.key))) {
         throw new YamlError(line.line, `duplicate key \`${found.key}\``);
       }
-      keys.add(found.key.toLowerCase());
+      keys.add(fold(found.key));
       scalar(found.key, line.line);
       next();
       map.set(found.key, value(found.rest, indent, line.line, true));
@@ -200,7 +219,7 @@ export function parseYaml(text, onScalar = () => {}) {
       if (line.indent > indent) throw new YamlError(line.line, "unexpected indentation");
       if (!isItem(line.text)) break;
       const after = line.text.slice(1);
-      const content = after.trimStart();
+      const content = after.replace(/^[ \t]+/, "");
       if (!content || content[0] === "#") {
         next();
         list.push(node(indent));
@@ -247,8 +266,8 @@ export function parseYaml(text, onScalar = () => {}) {
   // indented than `indent`.
   function block(header, indent, line) {
     const h =
-      /^([|>])([1-9])?([+-])?\s*(#.*)?$/.exec(header) ??
-      /^([|>])([+-])([1-9])\s*(#.*)?$/.exec(header);
+      /^([|>])([1-9])?([+-])?([ \t]+#.*)?$/.exec(header) ??
+      /^([|>])([+-])([1-9])([ \t]+#.*)?$/.exec(header);
     if (!h) throw new YamlError(line, `unsupported block scalar header \`${header}\``);
     const [, style] = h;
     const flags = (h[2] ?? "") + (h[3] ?? "");
@@ -259,7 +278,7 @@ export function parseYaml(text, onScalar = () => {}) {
     for (; i < lines.length; i++) {
       const raw = lines[i];
       const spaces = /^ */.exec(raw)[0].length;
-      if (!raw.trim()) {
+      if (!strip(raw)) {
         body.push(column !== null && spaces > column ? raw.slice(column) : "");
         continue;
       }
@@ -319,11 +338,11 @@ export function parseYaml(text, onScalar = () => {}) {
             const at = p;
             const key = item();
             if (typeof key !== "string") throw new YamlError(line, "flow keys must be scalars");
-            if (keys.has(key.toLowerCase())) throw new YamlError(line, `duplicate key \`${key}\``);
+            if (keys.has(fold(key))) throw new YamlError(line, `duplicate key \`${key}\``);
             if (key === "<<" && text[at] !== '"' && text[at] !== "'") {
               throw new YamlError(line, "merge keys (`<<`) aren't supported");
             }
-            keys.add(key.toLowerCase());
+            keys.add(fold(key));
             space();
             if (text[p] !== ":") throw new YamlError(line, "flow mappings need `key: value`");
             p++;
@@ -344,7 +363,7 @@ export function parseYaml(text, onScalar = () => {}) {
         p = q.end;
         return scalar(q.value, line);
       }
-      if (c === undefined || INDICATORS.has(c) || /^-(\s|$)/.test(text.slice(p, p + 2))) {
+      if (c === undefined || INDICATORS.has(c) || /^-([ \t]|$)/.test(text.slice(p, p + 2))) {
         throw new YamlError(
           line,
           `unsupported YAML in a flow collection: \`${c ?? "end of line"}\``,
@@ -353,22 +372,22 @@ export function parseYaml(text, onScalar = () => {}) {
       // Plain: up to a separator, a colon before one, or a comment.
       const from = p;
       while (p < text.length && !",[]{}".includes(text[p])) {
-        if (text[p] === ":" && /^:([\s,[\]{}]|$)/.test(text.slice(p, p + 2))) break;
-        if (text[p] === "#" && /\s/.test(text[p - 1])) {
+        if (text[p] === ":" && /^:([ \t,[\]{}]|$)/.test(text.slice(p, p + 2))) break;
+        if (text[p] === "#" && /[ \t]/.test(text[p - 1])) {
           throw new YamlError(line, "flow collections must fit on one line");
         }
         p++;
       }
-      return scalar(text.slice(from, p).trim(), line);
+      return scalar(strip(text.slice(from, p)), line);
     }
     const value = item();
     return { value, end: p };
   }
 
   // One document: an optional `---` first, no directive.
-  while (i < lines.length && /^\s*(#.*)?$/.test(lines[i])) i++;
+  while (i < lines.length && /^[ \t]*(#.*)?$/.test(lines[i])) i++;
   if (/^%/.test(lines[i] ?? "")) throw new YamlError(i + 1, "YAML directives aren't supported");
-  if (/^---\s*(#.*)?$/.test(lines[i] ?? "")) i++;
+  if (/^---([ \t]+#.*|[ \t]*)$/.test(lines[i] ?? "")) i++;
   const doc = node(-1);
   const rest = peek();
   if (rest) throw new YamlError(rest.line, "unexpected content");
@@ -377,7 +396,7 @@ export function parseYaml(text, onScalar = () => {}) {
 
 // A mapping's value for `name`, its key matched without case (duplicates are refused).
 function field(map, name) {
-  for (const [key, value] of map) if (key.toLowerCase() === name) return value;
+  for (const [key, value] of map) if (fold(key) === name) return value;
   return undefined;
 }
 
@@ -387,18 +406,25 @@ const short = (value) => (value.length > 40 ? `${value.slice(0, 40)}…` : value
 // {} and read or none scopes only.
 function permissionProblems(value, where) {
   if (typeof value === "string") {
-    return value.trim().toLowerCase() === "read-all"
+    return strip(value).toLowerCase() === "read-all"
       ? []
       : [`\`${where}: ${short(value)}\` is not allowed`];
   }
   if (!(value instanceof Map)) return [`\`${where}\` must be read-all or a mapping of scopes`];
   const problems = [];
   for (const [scope, level] of value) {
-    if (typeof level !== "string" || !["read", "none"].includes(level.trim().toLowerCase())) {
+    if (typeof level !== "string" || !["read", "none"].includes(strip(level).toLowerCase())) {
       problems.push(`\`${where}.${scope}\` must be read or none`);
     }
   }
   return problems;
+}
+
+// Whether `value` spells `secrets`, also through letters that fold to it (`ſ`, full-width).
+function spellsSecrets(value) {
+  return [value, value.toUpperCase(), value.toLowerCase(), value.normalize("NFKC")].some((v) =>
+    /secrets/i.test(v),
+  );
 }
 
 // Why a workflow file a sandbox pushed can't run, as short sentences; none when it may. Its
@@ -407,10 +433,15 @@ function permissionProblems(value, where) {
 // `secrets[...]`, `toJSON(secrets)`, `secrets: inherit` all spell it, in a key or a value.
 export function workflowProblems(text) {
   const secrets = new Set();
+  const expressions = new Set();
   let doc;
   try {
     doc = parseYaml(text, (value, line) => {
-      if (/secrets/i.test(value)) secrets.add(line);
+      if (spellsSecrets(value)) secrets.add(line);
+      // GitHub reads an expression's names without case: no look-alike letter there.
+      for (const [, inside] of value.matchAll(/\$\{\{([^]*?)(\}\}|$)/g)) {
+        if (/[^\x00-\x7f]/.test(inside)) expressions.add(line);
+      }
     });
   } catch (error) {
     if (error instanceof YamlError) return [`line ${error.line}: ${error.message}`];
@@ -432,5 +463,10 @@ export function workflowProblems(text) {
     }
   }
   if (secrets.size) problems.push(`mentions \`secrets\` (line ${[...secrets].join(", ")})`);
+  if (expressions.size) {
+    problems.push(
+      `non-ASCII characters in a \`\${{ }}\` expression (line ${[...expressions].join(", ")})`,
+    );
+  }
   return problems;
 }

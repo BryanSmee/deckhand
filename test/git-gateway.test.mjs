@@ -218,6 +218,7 @@ async function setup(
     allowWorkflows,
     // (extra) => the error minting a token with `extra` fails with, or nothing.
     mintError = () => null,
+    maxPush,
   } = {},
 ) {
   const dir = tempDir(t, "gateway-");
@@ -258,6 +259,7 @@ async function setup(
   const secret = register(broker);
   const logs = [];
   const mirrorDir = join(dir, "mirrors");
+  const spoolDir = join(dir, "pushes");
   const gateway = createGitGateway({
     broker,
     app: () => (app ? github : null),
@@ -265,6 +267,8 @@ async function setup(
     log: (line) => logs.push(line),
     allowWorkflows,
     mirrorDir,
+    spoolDir,
+    maxPush,
     headMs,
     drainMs,
   });
@@ -338,6 +342,7 @@ async function setup(
     received,
     down,
     mirrorDir,
+    spoolDir,
     bare,
   };
 }
@@ -708,7 +713,7 @@ async function granted(t, files = {}) {
 }
 
 test("allow_workflows: a workflow that only reads goes through, the same pack GitHub gets", async (t) => {
-  const { work, remote, commit, upstream, sent, received, mirrorDir } = await granted(t);
+  const { work, remote, commit, upstream, sent, received, mirrorDir, spoolDir } = await granted(t);
   commit({ ".github/workflows/ci.yml": SAFE });
   const res = await git(work, "push", remote(), "HEAD:refs/heads/issue-1-ci");
   assert.ok(res.ok, res.stderr);
@@ -718,7 +723,7 @@ test("allow_workflows: a workflow that only reads goes through, the same pack Gi
   // The pushed objects stay out of the mirror, and the push's file goes.
   assert.ok(existsSync(join(mirrorDir, "org/repo.git")));
   // Removed once the answer is sent: soon after the client has it.
-  const pushes = () => readdirSync(mirrorDir).filter((f) => f.startsWith(".push-"));
+  const pushes = () => readdirSync(spoolDir);
   for (let n = 0; pushes().length && n < 50; n++) await new Promise((r) => setTimeout(r, 20));
   assert.deepEqual(pushes(), []);
 });
@@ -844,9 +849,95 @@ test("allow_workflows: without a mirror to check against, nothing is forwarded",
 });
 
 test("without allow_workflows, pushes stream through: no mirror, nothing kept", async (t) => {
-  const { work, remote, commit, mirrorDir, received, sent } = await setup(t);
+  const { work, remote, commit, mirrorDir, spoolDir, received, sent } = await setup(t);
   commit({ "a.txt": "a\n" });
   assert.ok((await git(work, "push", remote(), "HEAD:refs/heads/issue-1-x")).ok);
   assert.equal(existsSync(mirrorDir), false);
+  assert.equal(existsSync(spoolDir), false);
   assert.ok(received[0].equals(sent()[0]));
+});
+
+test("allow_workflows: the merge GitHub runs a pull request from is checked too", async (t) => {
+  const { work, remote, commit, seed, received } = await granted(t, {
+    ".github/workflows/ci.yml": SAFE,
+  });
+  const old = execFileSync("git", ["rev-parse", "HEAD"], { cwd: work }).toString().trim();
+  // The default branch gives the job a secret after the branch was cut.
+  const withSecret = SAFE.replace(
+    "    steps:",
+    '    env: { TOKEN: "${{ secrets.X }}" }\n    steps:',
+  );
+  commit({ ".github/workflows/ci.yml": withSecret }, "a secret on main");
+  seed("main");
+  // The run edits a step of the old version: alone it passes, merged it has the secret too.
+  execFileSync("git", ["checkout", "-q", "-b", "topic", old], { cwd: work, env: gitEnv });
+  commit({ ".github/workflows/ci.yml": SAFE.replace("npm test", "npm test -- --ci") });
+  const res = await git(work, "push", remote(), "HEAD:refs/heads/issue-1-old");
+  assert.equal(res.ok, false);
+  assert.match(res.stderr, /ci\.yml \(merged with main\): mentions `secrets` \(line 8\)/);
+
+  // An edit that conflicts with the default branch's: refused until rebased.
+  commit({
+    ".github/workflows/ci.yml": SAFE.replace("    steps:", "    timeout-minutes: 5\n    steps:"),
+  });
+  const conflict = await git(work, "push", "--force", remote(), "HEAD:refs/heads/issue-1-old");
+  assert.equal(conflict.ok, false);
+  assert.match(conflict.stderr, /ci\.yml: conflicts with main: rebase the branch on it/);
+
+  // A branch of the default one that leaves the file alone: its merge is the default branch's
+  // own workflow, which goes through.
+  execFileSync("git", ["checkout", "-q", "main"], { cwd: work, env: gitEnv });
+  commit({ "src/a.js": "1\n" });
+  assert.ok((await git(work, "push", remote(), "HEAD:refs/heads/issue-1-new")).ok);
+  assert.equal(received.length, 1);
+});
+
+test("allow_workflows: a .github/workflows that is a symlink is refused", async (t) => {
+  const { work, remote, commit } = await granted(t);
+  mkdirSync(join(work, ".github"), { recursive: true });
+  mkdirSync(join(work, "ci"));
+  writeFileSync(join(work, "ci/ci.yml"), SAFE.replace("read", "write"));
+  symlinkSync("../ci", join(work, ".github/workflows"));
+  commit({});
+  const res = await git(work, "push", remote(), "HEAD:refs/heads/issue-1-x");
+  assert.equal(res.ok, false);
+  assert.match(res.stderr, /\.github\/workflows: not a plain UTF-8 file/);
+});
+
+test("allow_workflows: one push of a run's at a time; one too large is refused", async (t) => {
+  const { work, remote, port, commit, received, spoolDir } = await granted(t);
+  // A push whose pack never ends: saved, waiting for the rest.
+  const secret = new URL(remote()).password;
+  const first = request({
+    port,
+    method: "POST",
+    path: "/git/org/repo.git/git-receive-pack",
+    headers: {
+      authorization: `Basic ${Buffer.from(`deckhand:${secret}`).toString("base64")}`,
+      "transfer-encoding": "chunked",
+    },
+  });
+  first.on("error", () => {});
+  first.write(pkt(`${ZERO} ${B} refs/heads/issue-1-slow\0report-status\n`) + "0000PACK");
+  for (let n = 0; !(existsSync(spoolDir) && readdirSync(spoolDir).length) && n < 100; n++) {
+    await new Promise((r) => setTimeout(r, 20));
+  }
+  commit({ "a.txt": "a\n" });
+  const second = await git(work, "push", remote(), "HEAD:refs/heads/issue-1-x");
+  assert.equal(second.ok, false);
+  assert.match(second.stderr, /another push of this run is being checked; try again/);
+  first.destroy();
+  for (let n = 0; readdirSync(spoolDir).length && n < 100; n++) {
+    await new Promise((r) => setTimeout(r, 20));
+  }
+  assert.deepEqual(readdirSync(spoolDir), []);
+  // Over the cap: refused, nothing kept, nothing forwarded.
+  const small = await setup(t, { allowWorkflows: () => true, maxPush: 2048 });
+  writeFileSync(join(small.work, "big"), randomBytes(64 * 1024));
+  small.commit({});
+  const big = await git(small.work, "push", small.remote(), "HEAD:refs/heads/issue-1-big");
+  assert.equal(big.ok, false);
+  assert.match(big.stderr, /413|too large/);
+  assert.deepEqual(readdirSync(small.spoolDir), []);
+  assert.deepEqual([received, small.received], [[], []]);
 });

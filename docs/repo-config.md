@@ -183,8 +183,11 @@ GitHub gets it, and refuses the push, naming the file and the rule, unless the w
   several documents, and no plain or quoted value or flow collection over several lines (use
   `|` or `>` blocks).
 
-Workflows the default branch already has, and deleted ones, aren't checked. A workflow that
-needs more (a deploy, a secret) is the maintainers' to write. See
+The same goes for the branch's merge with the default branch, which GitHub runs a pull
+request's workflows from: a workflow that doesn't merge cleanly refuses the push until the
+branch is rebased on the default branch. Workflows the default branch already has, and deleted
+ones, aren't checked. A workflow that needs more (a deploy, a secret) is the maintainers' to
+write. See
 [GitHub Actions on Deckhand's branches](security.md#github-actions-on-deckhands-branches).
 
 ## Images

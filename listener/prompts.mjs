@@ -181,7 +181,7 @@ function issueBranches(n, branches) {
 function workflowsNote(task, grant, branches) {
   if (task.kind === "pr" && !branches.length) return "";
   return grant?.allowWorkflows
-    ? "Pushes may add or change files under `.github/workflows/` (the operator grants `allow_workflows`),\nbut Deckhand refuses a changed workflow unless it has a top-level `permissions:` (`read-all`, `{}`,\nor scopes set to `read` or `none`), no `write` scope in any job, and doesn't mention `secrets`\nanywhere; it reads a strict YAML subset (no anchors, aliases, tags, merge keys, duplicate keys or\nmulti-line quoted scalars). Say in the pull request what a workflow would need beyond that."
+    ? "Pushes may add or change files under `.github/workflows/` (the operator grants `allow_workflows`),\nbut Deckhand refuses a changed workflow unless it has a top-level `permissions:` (`read-all`, `{}`,\nor scopes set to `read` or `none`), no `write` scope in any job, and doesn't mention `secrets`\nanywhere; it reads a strict YAML subset (no anchors, aliases, tags, merge keys, duplicate keys or\nmulti-line quoted scalars). It checks the branch merged with the default branch too: rebase on it\nfirst. Say in the pull request what a workflow would need beyond that."
     : "GitHub refuses pushes that add or change files under `.github/workflows/` (the operator\ndoesn't grant `allow_workflows`): leave them out and say in the pull request what they need.";
 }
 
