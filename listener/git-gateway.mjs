@@ -25,7 +25,7 @@ import { join } from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { branchAllowed, NOT_ITS_SANDBOX } from "./broker.mjs";
-import { createMirrors } from "./git-mirror.mjs";
+import { createMirrors, MAX_WORKFLOW } from "./git-mirror.mjs";
 import { PUSH_PERMISSIONS, WORKFLOW_PUSH_PERMISSIONS } from "./github-app.mjs";
 import { workflowProblems } from "./workflow-check.mjs";
 
@@ -62,9 +62,10 @@ function takeBytes(chunks, n) {
 // Reads the ref updates at the start of a receive-pack request (pkt-lines up to a flush) as
 // its chunks come: push(chunk) returns null while they are incomplete, then { refs, updates,
 // caps, end } with `updates` each ref's { ref, old, new }, `caps` the client's capabilities
-// (after the first one) and `end` the offset of what follows; it throws on anything else, or past `limit` bytes. Each byte is looked at once, and
-// copied at most once (a pkt-line split across chunks): a client sending a few bytes at a
-// time costs no more than one sending it all. Signed pushes (push-cert) are refused rather than
+// (after the first one) and `end` the offset of what follows; it throws on anything else, or
+// past `limit` bytes. Each byte is looked at once, and copied at most once (a pkt-line split
+// across chunks): a client sending a few bytes at a time costs no more than one sending it
+// all. Signed pushes (push-cert) are refused rather than
 // parsed.
 export function commandReader(limit = MAX_COMMANDS) {
   const chunks = []; // received, not parsed yet
@@ -184,7 +185,9 @@ export function workflowRefusals(changed) {
   const byRef = new Map();
   for (const { ref, path, text } of changed) {
     const problems =
-      text === null ? ["not a plain UTF-8 file of at most 512 KiB"] : workflowProblems(text);
+      text === null
+        ? [`not a plain UTF-8 file of at most ${MAX_WORKFLOW / 1024} KiB`]
+        : workflowProblems(text);
     if (!problems.length) continue;
     byRef.set(ref, [...(byRef.get(ref) ?? []), `${path}: ${problems.join(", ")}`]);
   }
