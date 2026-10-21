@@ -114,7 +114,7 @@ function runHeader(run, agent) {
   const took = run.finishedAt && run.startedAt ? minutes(run.finishedAt - run.startedAt) : null;
   const what = [
     `kind ${runKind(run)}${run.mode ? ` (${run.mode})` : ""}`,
-    `${agent.name}${run.provider ? `@${run.provider}` : ""} ${run.model ?? "?"}, ${run.effort ?? "?"} effort`,
+    `${agent.name}${run.provider ? `@${run.provider}` : ""} ${run.model ?? "?"}, ${run.effort ?? "?"} effort${run.speed === "fast" ? ", fast" : ""}`,
     `${run.status}${took !== null ? ` after ${took} min` : ""}`,
     `started ${time(run.startedAt)} UTC`,
   ];

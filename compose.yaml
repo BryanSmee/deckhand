@@ -108,6 +108,8 @@ services:
       CLAUDE_CODE_VERSION: ${CLAUDE_CODE_VERSION:-}
       SANDBOX_MODEL: ${SANDBOX_MODEL:-}
       SANDBOX_EFFORT: ${SANDBOX_EFFORT:-}
+      # `allowed`: `/speed fast` turns on Claude Code's fast mode (Opus, faster, pricier).
+      SANDBOX_FAST_MODE: ${SANDBOX_FAST_MODE:-}
       # Brainstorms, inbox entries and discussions. Empty: SANDBOX_MODEL, SANDBOX_EFFORT.
       BRAINSTORM_MODEL: ${BRAINSTORM_MODEL:-}
       BRAINSTORM_EFFORT: ${BRAINSTORM_EFFORT:-}

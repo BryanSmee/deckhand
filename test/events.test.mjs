@@ -548,6 +548,38 @@ test("/agent, /model and /effort on the trigger line, each kept on its own line"
   assert.equal(item.text, "/agent codex");
 });
 
+test("/speed: fast or normal, on its own line, ending the trigger line or an entry's line", () => {
+  const options = {};
+  assert.equal(takeOptions("Fix it now\n/speed fast", options), "Fix it now");
+  assert.deepEqual(options, { speed: "fast" });
+  const normal = {};
+  assert.equal(takeOptions("/speed Normal", normal), "");
+  assert.deepEqual(normal, { speed: "normal" });
+  // A refused value, or in a sentence: text, like a refused /effort.
+  for (const text of ["/speed huge", "/speed", "use /speed fast for this", "/speed fast please"]) {
+    const none = {};
+    assert.equal(takeOptions(text, none), text);
+    assert.deepEqual(none, {}, text);
+  }
+  const cmd = splitTrigger(config, "Deckhand /speed fast /effort high\nPatch the CVE");
+  assert.equal(cmd.trigger, "work");
+  const got = {};
+  assert.equal(takeOptions(cmd.text, got), "Patch the CVE");
+  assert.deepEqual(got, { speed: "fast", effort: "high" });
+  assert.equal(splitTrigger(config, "Deckhand /speed huge").trigger, null);
+  assert.equal(saysMore(config, "Deckhand /speed fast"), false);
+  // An inbox entry's line.
+  const repoConfig = { ...config, inbox: { ideas: 12 } };
+  const item = workItem(
+    repoConfig,
+    "issue_comment",
+    comment("Fix login /speed fast", { login: "alice" }),
+  );
+  const entry = {};
+  assert.match(commentsText([item], entry), /\n\nFix login$/);
+  assert.deepEqual(entry, { speed: "fast" });
+});
+
 test("/after takes this repo's numbers or none; anything else is an error", () => {
   assert.deepEqual(parseAfter("#77 #77, #80"), { numbers: [77, 80] });
   assert.deepEqual(parseAfter("None"), { none: true });

@@ -152,7 +152,7 @@ export function createRuns(ctx) {
       shots: null,
       lines: { out: 0, err: 0 }, // of its output read so far, so a restart skips them
       result: null, // its last result, with the duration of all
-      later: {}, // "/model" and "/effort" that came too late for this run
+      later: {}, // "/model", "/effort", "/speed"… that came too late for this run
       unanswered: [], // delivered since the agent's last result
       handled: [...items], // its comments and those delivered to it, for their reactions
       cancelled: null, // { by, at } once someone stopped it (cancel())
@@ -187,7 +187,7 @@ export function createRuns(ctx) {
     return true;
   }
 
-  // The run's settings, agent, provider, model and effort (resolveEntry()), kept on its
+  // The run's settings, agent, provider, model, effort and speed (resolveEntry()), kept on its
   // record, and its first message.
   async function begin(task, items) {
     const { key, mode, light, record, logFile } = task.live;
@@ -199,7 +199,7 @@ export function createRuns(ctx) {
     const previous = ctx.runs.find(
       (r) => r !== record && r.key === key && !!r.light === light && r.status !== "running",
     );
-    // "/model", "/effort" and "/agent" sent during the previous run, unless these comments say
+    // "/model", "/effort", "/speed" and "/agent" sent during the previous run, unless these comments say
     // otherwise.
     const options = task.next;
     task.next = {};
@@ -217,6 +217,9 @@ export function createRuns(ctx) {
       picked: entry.picked ?? null,
       model: chosen.model,
       effort: chosen.effort,
+      speed: chosen.speed,
+      // Why it isn't the speed or model asked for (speedFor()), for the reply.
+      speedNote: chosen.speedNote,
     });
     ctx.broker.provide(task.live.secret, entry.provider, (message) =>
       writeEvent(logFile, "note", { message }),
@@ -238,13 +241,15 @@ export function createRuns(ctx) {
     const { key, mode, record, logFile } = task.live;
     const agent = agentOf(task);
     const on = record.fallback || record.picked ? `@${record.provider}` : "";
+    const fast = record.speed === "fast" ? "/fast" : "";
     log(
-      `${key}: running ${task.name} (${mode}, ${record.mode}, ${agent.name}${on} ${record.model}/${record.effort}), log ${record.logPath}`,
+      `${key}: running ${task.name} (${mode}, ${record.mode}, ${agent.name}${on} ${record.model}/${record.effort}${fast}), log ${record.logPath}`,
     );
     const { logPath: _, ...meta } = record;
     logFile.write(JSON.stringify({ type: "listener", ...meta, message: text }) + "\n");
     const note = (message) => writeEvent(logFile, "note", { message });
     if (foreign) note(`${foreign}: ${agent.displayName} runs its best model instead`);
+    if (record.speedNote) note(record.speedNote);
     return note;
   }
 

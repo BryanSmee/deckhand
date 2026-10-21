@@ -32,6 +32,10 @@ test("normalize: Claude Code's init gives the model it started on", () => {
     permissionMode: "bypassPermissions",
   };
   assert.deepEqual(claude.normalize(line(init)), [{ type: "started", model: "claude-opus-5-5" }]);
+  // Its fast mode, when the version says it (agents/claude.mjs).
+  assert.deepEqual(claude.normalize(line({ ...init, fast_mode_state: "on" })), [
+    { type: "started", model: "claude-opus-5-5", fastMode: "on" },
+  ]);
   // Hooks and other system events say nothing.
   assert.deepEqual(claude.normalize(line({ type: "system", subtype: "hook_response" })), []);
 });
@@ -113,6 +117,9 @@ test("normalize: results, ok, needs-input and errors", () => {
   const failed = { type: "result", subtype: "error_during_execution", is_error: true };
   assert.deepEqual(claude.normalize(line(failed)), [
     { type: "result", ok: false, text: "", durationMs: 0 },
+  ]);
+  assert.deepEqual(claude.normalize(line({ ...ok, fast_mode_state: "off" })), [
+    { type: "result", ok: true, text: ok.result, durationMs: 125000, fastMode: "off" },
   ]);
   const overloaded = { type: "result", is_error: true, result: "API Error: 529", duration_ms: 9 };
   assert.deepEqual(claude.normalize(line(overloaded)), [

@@ -69,6 +69,9 @@ test("runDigest: what the run was, what went wrong, its final reply", () => {
   const text = runDigest(run("dh-app-12-1"), LOG);
   assert.match(text, /^## Run dh-app-12-1\n\n- org\/app#12: Dark mode\n/);
   assert.match(text, /kind work \(start\) · claude opus, high effort · ok after 12 min/);
+  // A fast run says so: it cost more.
+  const fast = runDigest(run("dh-app-12-2", { speed: "fast" }), LOG);
+  assert.match(fast, /claude opus, high effort, fast · ok/);
   assert.match(text, /started 2026-10-01 12:00 UTC/);
   assert.match(text, /Listener notes:\n- Image deckhand-app:abc/);
   // Setup output: only the line that looks wrong.

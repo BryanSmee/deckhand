@@ -223,6 +223,10 @@ function runOf(logDir, file, max = READ_MAX, log = console.error) {
     items: meta.items ?? null,
     model: meta.model ?? null,
     effort: meta.effort ?? null,
+    // "fast" in Claude Code's fast mode, which costs more (agents/select.mjs speedFor()), and
+    // why it didn't get the speed or model asked for. None in logs from before speeds.
+    speed: meta.speed ?? null,
+    speedNote: meta.speedNote ?? null,
     startedAt: meta.startedAt ?? Number(id.match(/-(\d+)$/)?.[1] ?? 0),
     finishedAt: statSync(logPath).mtimeMs,
     // Unfinished and not ours: the listener restarted during the run.
@@ -316,7 +320,7 @@ function listenerEntries(e, agent) {
   const own = e.taskMode && e.taskMode !== "work" ? `Starting the ${e.taskMode} mode` : null;
   const what =
     (REASONS[e.reason] ?? GOING_ON[e.mode] ?? STARTING[e.kind] ?? own ?? "Starting") +
-    (e.model ? ` (${e.model}, ${e.effort} effort)` : "");
+    (e.model ? ` (${e.model}, ${e.effort} effort${e.speed === "fast" ? ", fast" : ""})` : "");
   // A fallback's run (runs.mjs): what it took over from, and why.
   const fell = e.fallback && !e.fallback.sticky;
   const from = fell
@@ -326,15 +330,21 @@ function listenerEntries(e, agent) {
   return [{ kind: "meta", text: from + picked + what + (e.message ? `: ${e.message}` : "") }];
 }
 
+// What Claude Code says of its fast mode as it starts (agents/claude.mjs), when on.
+const FAST_MODE = { on: ", fast mode on", cooldown: ", fast mode cooling down" };
+
 // The agent's events (its normalize()) → the dashboard's entries.
 function agentEntry(e, agent) {
   switch (e.type) {
-    case "started":
-      // Codex doesn't say its model there: the run's first line does.
+    case "started": {
+      // Codex doesn't say its model there: the run's first line does. Fast mode only once
+      // on: an agent that has it says "off" in every run.
+      const fast = Object.hasOwn(FAST_MODE, e.fastMode ?? "") ? FAST_MODE[e.fastMode] : "";
       return {
         kind: "meta",
-        text: `${agent.displayName} started${e.model ? ` (${e.model})` : ""}`,
+        text: `${agent.displayName} started${e.model ? ` (${e.model}${fast})` : ""}`,
       };
+    }
     case "text":
       return { kind: "text", text: e.text };
     case "tool":

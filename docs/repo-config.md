@@ -52,6 +52,9 @@ effort: high
 brainstorm_model: sonnet
 brainstorm_effort: medium
 
+# false: no fast mode here (/speed fast), even if the operator allows it.
+fast_mode: false
+
 # Runs of this repo at once, within the operator's MAX_PARALLEL.
 max_parallel: 1
 
@@ -86,6 +89,9 @@ modes:
     agent: codex # only if the operator configured it
     model: balanced
     effort: medium
+  hotfix:
+    instructions: .deckhand/hotfix.md
+    speed: fast # Claude Code's fast mode, without a /speed line: see Modes below
 
 # Review pull requests: one GitHub review with severities, a rating and a verdict (see
 # Reviews below). Off without the block; `review: true` for "/mode review" only.
@@ -118,32 +124,33 @@ wait_for_answers: true
 
 ## Keys
 
-| Key                                     | Default                                 | What                                                                                     |
-| --------------------------------------- | --------------------------------------- | ---------------------------------------------------------------------------------------- |
-| `users`                                 | `ALLOWED_USERS`                         | GitHub logins that may start runs here; those not in `ALLOWED_USERS` are ignored         |
-| `trigger`                               | `TRIGGER`                               | the whole first line of a comment that starts a run; `/mode` picks another mode          |
-| `agent`, `brainstorm_agent`             | `SANDBOX_AGENT`, `BRAINSTORM_AGENT`     | the agent of work runs, and of brainstorms, inbox entries and discussions (see Agent)    |
-| `model`, `effort`                       | `SANDBOX_MODEL`, `SANDBOX_EFFORT`       | work runs' model (`best`, `balanced`, `fast` or a name) and effort (`low` … `max`)       |
-| `brainstorm_model`, `brainstorm_effort` | `BRAINSTORM_MODEL`, `BRAINSTORM_EFFORT` | the same for brainstorms, inbox entries and discussions                                  |
-| `max_parallel`                          | `MAX_PARALLEL`                          | runs of this repo at once; capped by `MAX_PARALLEL`                                      |
-| `setup`                                 | none                                    | shell command run in `/workspace` before the agent, on work runs                         |
-| `instructions`                          | none                                    | Markdown file of the repo, appended to the agent's instructions                          |
-| `dockerfile`                            | none: the base image                    | Dockerfile of the repo for its runs' image; needs the operator's `allow_dockerfile`      |
-| `docker`                                | none                                    | a container engine for work runs (`true`, or `cache: true`); needs `allow_docker`        |
-| `caches`                                | none                                    | absolute paths in the sandbox kept in a volume per repo and path                         |
-| `mounts`                                | none                                    | host paths requested (`- path: /nfs/work/api`, `read_only`); only under granted roots    |
-| `modes.<name>`                          | none                                    | the repo's own modes, picked with `/mode <name>` (see Modes)                             |
-| `review.on`                             | none: off; `manual` with the block      | `ready`: a pull request that turns ready gets a review; `manual`: `/mode review` only    |
-| `review.instructions`                   | none                                    | Markdown file of the repo, added to the built-in review prompt                           |
-| `review.agent`, `.model`, `.effort`     | `brainstorm_agent`, `_model`, `_effort` | the reviews' agent, model and effort (see Reviews)                                       |
-| `review.fix`                            | `false`                                 | a review that requests changes starts one work run that addresses it (see Reviews)       |
-| `inbox.ideas`, `inbox.bugs`             | none                                    | issue numbers whose comments are ideas or bug reports to file (see Inboxes)              |
-| `inbox.discussions`                     | none                                    | GitHub Discussions category whose discussions Claude answers (see Inboxes)               |
-| `preview.command`                       | none                                    | preview hook command (`preview: ./x.sh` works too); needs the operator's `allow_preview` |
-| `preview.image`                         | the repo's image                        | image the hook runs in; it needs a Docker client                                         |
-| `preview.timeout_minutes`               | `30`                                    | the hook is stopped after that (120 at most)                                             |
-| `conflicts.check_minutes`               | none: off                               | minutes between conflict checks; at least `CONFLICT_CHECK_MINUTES` (see Conflicts)       |
-| `wait_for_answers`                      | `true`                                  | an issue's work runs wait until its open questions are answered (see Open questions)     |
+| Key                                     | Default                                 | What                                                                                                                         |
+| --------------------------------------- | --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `users`                                 | `ALLOWED_USERS`                         | GitHub logins that may start runs here; those not in `ALLOWED_USERS` are ignored                                             |
+| `trigger`                               | `TRIGGER`                               | the whole first line of a comment that starts a run; `/mode` picks another mode                                              |
+| `agent`, `brainstorm_agent`             | `SANDBOX_AGENT`, `BRAINSTORM_AGENT`     | the agent of work runs, and of brainstorms, inbox entries and discussions (see Agent)                                        |
+| `model`, `effort`                       | `SANDBOX_MODEL`, `SANDBOX_EFFORT`       | work runs' model (`best`, `balanced`, `fast` or a name) and effort (`low` … `max`)                                           |
+| `brainstorm_model`, `brainstorm_effort` | `BRAINSTORM_MODEL`, `BRAINSTORM_EFFORT` | the same for brainstorms, inbox entries and discussions                                                                      |
+| `fast_mode`                             | `SANDBOX_FAST_MODE`                     | `false`: `/speed fast` and a mode's `speed: fast` run at normal speed here; `true` can't turn it on when the operator hasn't |
+| `max_parallel`                          | `MAX_PARALLEL`                          | runs of this repo at once; capped by `MAX_PARALLEL`                                                                          |
+| `setup`                                 | none                                    | shell command run in `/workspace` before the agent, on work runs                                                             |
+| `instructions`                          | none                                    | Markdown file of the repo, appended to the agent's instructions                                                              |
+| `dockerfile`                            | none: the base image                    | Dockerfile of the repo for its runs' image; needs the operator's `allow_dockerfile`                                          |
+| `docker`                                | none                                    | a container engine for work runs (`true`, or `cache: true`); needs `allow_docker`                                            |
+| `caches`                                | none                                    | absolute paths in the sandbox kept in a volume per repo and path                                                             |
+| `mounts`                                | none                                    | host paths requested (`- path: /nfs/work/api`, `read_only`); only under granted roots                                        |
+| `modes.<name>`                          | none                                    | the repo's own modes, picked with `/mode <name>` (see Modes)                                                                 |
+| `review.on`                             | none: off; `manual` with the block      | `ready`: a pull request that turns ready gets a review; `manual`: `/mode review` only                                        |
+| `review.instructions`                   | none                                    | Markdown file of the repo, added to the built-in review prompt                                                               |
+| `review.agent`, `.model`, `.effort`     | `brainstorm_agent`, `_model`, `_effort` | the reviews' agent, model and effort (see Reviews)                                                                           |
+| `review.fix`                            | `false`                                 | a review that requests changes starts one work run that addresses it (see Reviews)                                           |
+| `inbox.ideas`, `inbox.bugs`             | none                                    | issue numbers whose comments are ideas or bug reports to file (see Inboxes)                                                  |
+| `inbox.discussions`                     | none                                    | GitHub Discussions category whose discussions Claude answers (see Inboxes)                                                   |
+| `preview.command`                       | none                                    | preview hook command (`preview: ./x.sh` works too); needs the operator's `allow_preview`                                     |
+| `preview.image`                         | the repo's image                        | image the hook runs in; it needs a Docker client                                                                             |
+| `preview.timeout_minutes`               | `30`                                    | the hook is stopped after that (120 at most)                                                                                 |
+| `conflicts.check_minutes`               | none: off                               | minutes between conflict checks; at least `CONFLICT_CHECK_MINUTES` (see Conflicts)                                           |
+| `wait_for_answers`                      | `true`                                  | an issue's work runs wait until its open questions are answered (see Open questions)                                         |
 
 ## Network and mounts
 
@@ -372,14 +379,15 @@ Focus on the error handling.
 Each mode of `modes:` takes these keys; any other key, a built-in name or a bad path is an
 error, listed in the reply:
 
-| Key            | Default                                   | What                                                                         |
-| -------------- | ----------------------------------------- | ---------------------------------------------------------------------------- |
-| `instructions` | required                                  | Markdown file of the repo, read from the default branch, like `instructions` |
-| `light`        | `false`                                   | `true`: no branch, no `setup`, a read-only token: it can only comment        |
-| `session`      | `issue`                                   | `issue`: the issue's session, kept; `fresh`: a new one each run, not kept    |
-| `agent`        | `agent`, or `brainstorm_agent` if light   | its agent, among the operator's (see [Agent](#agent))                        |
-| `model`        | `model`, or `brainstorm_model` if light   | its model                                                                    |
-| `effort`       | `effort`, or `brainstorm_effort` if light | its thinking effort                                                          |
+| Key            | Default                                   | What                                                                                                                                                                      |
+| -------------- | ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `instructions` | required                                  | Markdown file of the repo, read from the default branch, like `instructions`                                                                                              |
+| `light`        | `false`                                   | `true`: no branch, no `setup`, a read-only token: it can only comment                                                                                                     |
+| `session`      | `issue`                                   | `issue`: the issue's session, kept; `fresh`: a new one each run, not kept                                                                                                 |
+| `agent`        | `agent`, or `brainstorm_agent` if light   | its agent, among the operator's (see [Agent](#agent))                                                                                                                     |
+| `model`        | `model`, or `brainstorm_model` if light   | its model                                                                                                                                                                 |
+| `effort`       | `effort`, or `brainstorm_effort` if light | its thinking effort                                                                                                                                                       |
+| `speed`        | `normal`                                  | `fast`: Claude Code's fast mode, as with `/speed fast` (which `/speed normal` overrides), within `fast_mode` and the operator's [`SANDBOX_FAST_MODE`](setup.md#fast-mode) |
 
 - **Names**: letters, digits, `-` and `_`. `work` and `brainstorm` can't be redefined (set
   their agent and model with `agent`/`model`/`effort` and `brainstorm_agent`/
@@ -579,7 +587,7 @@ An issue whose body has an `## Open questions` section that asks something is la
 off: they answered. With `wait_for_answers: true` (the default), work doesn't start on an
 issue while it carries the label:
 
-- A comment that is only the trigger line (with `/mode`, `/model`, `/effort`, `/agent` or `/after`
+- A comment that is only the trigger line (with `/mode`, `/model`, `/effort`, `/speed`, `/agent` or `/after`
   lines at most) starts nothing: the App replies that the issue has open questions, points
   to the dashboard's form, and the label stays. A trigger comment with text is the answer:
   the label comes off and the run starts.

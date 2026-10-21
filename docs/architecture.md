@@ -20,11 +20,18 @@ model in [security.md](security.md).
   `balanced` or `fast`, that the run's agent maps to one of its models (see [Agents](#agents)),
   or a model's own name (`sonnet`, `claude-opus-5-5`). `/agent codex` (or
   `claude@openrouter`) picks the agent, and the issue's later runs stay on it; see
-  [Picking an agent with `/agent`](#picking-an-agent-with-agent). These lines may also follow
+  [Picking an agent with `/agent`](#picking-an-agent-with-agent). `/speed fast` turns on
+  Claude Code's fast mode (Opus, faster output, a higher price), `/speed normal` drops it or
+  a repo's mode's `speed: fast`: `speedFor()` (`agents/select.mjs`) runs it at normal speed
+  when the operator (`SANDBOX_FAST_MODE`) or the repo (`fast_mode: false`) turned it off, the
+  agent has no `speeds` with `fast` or the provider isn't its default, and on its `best` tier
+  when the model isn't one fast mode takes; the footer says which (`record.speedNote`). The
+  sandbox gets `SANDBOX_SPEED`, which `claude.sh` turns into `--settings '{"fastMode": true}'`
+  (see [Fast mode](setup.md#fast-mode)). These lines may also follow
   the trigger on its first line (`Deckhand /agent codex /effort high`): `splitTrigger()` moves
   each to a line of its own, for `takeOptions()`, and a value it would refuse (`/effort huge`)
   makes the line no trigger at all. Inbox entries (ideas, bugs, discussions) have no trigger
-  line: `/model`, `/effort` and `/agent` may end any of their lines instead
+  line: `/model`, `/effort`, `/speed` and `/agent` may end any of their lines instead
   (`Do X /effort high`, `entry()`), outside code blocks and `>` quotes; a run with a refused
   value stays text.
 - **Later**: `/after #77` (or `/after #77 #80`), with a trigger or `/mode` line, holds the
@@ -34,7 +41,7 @@ A comment that arrives while its issue's run is working goes to that run: after 
 pause (so a burst is one message), the listener writes it to the run's inbox (in the agent's
 input format, `TASK_INPUT=stream` in `sandbox/entrypoint.sh`), and the agent sees it after its
 current tool call; the run's final message is still the one reply and covers it. `/model`,
-`/effort` and `/agent` cannot change a live process: they apply to the next run, and the reply says so.
+`/effort`, `/speed` and `/agent` cannot change a live process: they apply to the next run, and the reply says so.
 Comments the run cannot take (a trigger that switches between work and brainstorm, a wrap-up,
 or one arriving once the agent's input is closed, or any for an agent that takes no messages
 mid-run) wait for a follow-up run.
@@ -490,9 +497,13 @@ credential for, and its defaults), checked when its config is read (`repo-config
     operator's `CODEX_*_MODEL`; the Antigravity CLI: the plan's models, or `AGY_*_MODEL`), and
     `modelProblem(model)`, a model it can't run (another
     agent's), which stops the run with a reply;
+  - `speeds` (optional) and `fastModels`: `["normal", "fast"]` when it has a fast mode
+    (Claude Code), and the models it takes (`/opus/i`); without it, `/speed fast` runs at
+    normal speed;
   - `normalize(line)`: a line of its output → Deckhand's own events, `started{model}`,
     `text{text}`, `tool{name, detail}`, `toolOutput{text, error}` and
-    `result{ok, text, durationMs}`.
+    `result{ok, text, durationMs}`, the last and the first with `fastMode` (`on`,
+    `cooldown`, `off`) when the agent says it.
 
 The rest of the listener reads only those events: `runs.mjs` the results (the reply, its
 duration, needs-input), `runlog.mjs` all of them (the dashboard's entries). Logs keep the
@@ -563,7 +574,7 @@ tests fake it.
 | `preparation.mjs`                                                 | Before a run's sandbox starts: its branches, mode instructions, image, agent, caches, screenshots, egress cache, digest.                                                                                                                             |
 | `access.mjs`                                                      | What a run may reach from the operator's grants: hosts, mounts (checked twice), limits, the egress cache, an engine.                                                                                                                                 |
 | `sandbox-spec.mjs`                                                | The container a run starts: image, volumes, hardening, environment. Pure.                                                                                                                                                                            |
-| `footer.mjs`                                                      | The line under each reply: agent, provider, model, effort, duration, the next step. Pure.                                                                                                                                                            |
+| `footer.mjs`                                                      | The line under each reply: agent, provider, model, effort, speed, duration, the next step. Pure.                                                                                                                                                     |
 | `restart.mjs`                                                     | `queue.json` and `logs/<run>.live.json`: what a listener leaves to the next one, and picking it up.                                                                                                                                                  |
 | `brainstorms.mjs`                                                 | Each issue's brainstorm (`brainstorms.json`) and repo mode (`modes.json`).                                                                                                                                                                           |
 | `comments.mjs`                                                    | Replies (comments, discussion threads), reactions, labels (`hasLabel`, `ensureLabel`).                                                                                                                                                               |

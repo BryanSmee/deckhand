@@ -151,6 +151,9 @@ export const SETTINGS = {
   SANDBOX_EFFORT: { default: "medium" },
   BRAINSTORM_MODEL: { default: (s) => s.SANDBOX_MODEL },
   BRAINSTORM_EFFORT: { default: (s) => s.SANDBOX_EFFORT },
+  // Whether `/speed fast` may turn on Claude Code's fast mode, which costs more: off until the
+  // operator says `allowed`. A repo's `fast_mode: false` turns it off there.
+  SANDBOX_FAST_MODE: { default: false, parse: fastModeSetting },
   BRAINSTORM_IDLE_MINUTES: { default: 10, parse: whole("a whole number of minutes") },
   MAX_PARALLEL: { default: 2, parse: whole("a whole number of sandboxes") },
   // The container engine sidecar of runs whose repo is granted allow_docker
@@ -367,6 +370,7 @@ export function loadConfig(env, file = NO_FILE) {
     effort: s.SANDBOX_EFFORT,
     brainstormModel: s.BRAINSTORM_MODEL,
     brainstormEffort: s.BRAINSTORM_EFFORT,
+    fastMode: s.SANDBOX_FAST_MODE,
     needsInputLabel: s.NEEDS_INPUT_LABEL,
     conflictCheckMinutes: s.CONFLICT_CHECK_MINUTES,
     waitsCheckMinutes: s.WAITS_CHECK_MINUTES,
@@ -526,6 +530,14 @@ function sandboxSubnets(text, { label, values, labelOf }) {
 
 // SANDBOX_ENGINE: sysbox, podman, auto, or nothing (null). A typo is an error rather than
 // no engine.
+// "allowed" → true; "off" or nothing → false. Not on/off: what it allows is spending more.
+function fastModeSetting(text, { label }) {
+  const value = text.trim().toLowerCase();
+  if (value === "allowed") return true;
+  if (["", "off"].includes(value)) return false;
+  throw new ConfigError(`${label}: expected allowed or off, got ${text}`);
+}
+
 function engineSetting(text, { label }) {
   const engine = text.trim().toLowerCase();
   if (!engine) return null;

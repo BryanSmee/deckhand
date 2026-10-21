@@ -1,4 +1,4 @@
-// Which agent, provider, model and effort a run gets: the settings', a fallback's, `/agent`'s,
+// Which agent, provider, model, effort and speed a run gets: the settings', a fallback's, `/agent`'s,
 // or the one that stuck to the issue (docs/architecture.md, Agents). Pure.
 import { agentFor, effortOf, entryName, entryOf, modelOf, providerError } from "./index.mjs";
 
@@ -87,12 +87,38 @@ export function modelFor(settings, own, light, options, agent = agentFor(), conf
   ];
 }
 
+// The speed of a run (`/speed`, else the repo's mode's): { speed, note, model }. Fast mode
+// costs more, so each gate turns it off rather than fail the run, and `note` says why for the
+// reply: the agent has none, the operator (SANDBOX_FAST_MODE) or the repo (`fast_mode: false`)
+// turned it off, or the provider is a gateway it doesn't work through (OpenRouter). On another
+// model than one the agent's fast mode takes (Opus), the run switches to its best tier:
+// whoever asks for speed wants it now. `model`: the run's, as modelFor() gave it.
+export function speedFor({ config, settings, own, options, agent, provider, model }) {
+  const asked = options.speed ?? own?.speed ?? "normal";
+  const normal = (why) => ({ speed: "normal", note: why && `${why}: normal speed`, model });
+  if (asked !== "fast") return normal(null);
+  if (!agent.speeds?.includes("fast")) {
+    return normal(`fast mode isn't available for ${agent.displayName}`);
+  }
+  if (!config.fastMode) return normal("fast mode is off (the operator's SANDBOX_FAST_MODE)");
+  if (settings.fastMode === false) {
+    return normal("fast mode is off for this repository (`fast_mode: false`)");
+  }
+  if (provider !== agent.defaultProvider) {
+    return normal(`fast mode isn't available through ${provider}`);
+  }
+  if (agent.fastModels.test(model)) return { speed: "fast", note: null, model };
+  const best = modelOf(agent, "best", config);
+  return { speed: "fast", note: `fast mode runs on ${best}, not ${model}`, model: best };
+}
+
 // Everything begin() (runs.mjs) decides about a run's agent before its log has a first line:
 // the entry (entryFor()), the `/agent` it can't follow (`badPick`), whether another agent takes
 // over the issue's session (`takeOver`: after a fallback, `switched`, or by `/agent` from the
-// previous run's, `handedBy`), and the model and effort, `foreign` when the one asked for is
-// another agent's (its best instead). `own`: the repo's mode, if any; `previous`: the task's
-// previous run of the same kind; `options`: the comments' "/model", "/effort" and "/agent";
+// previous run's, `handedBy`), the model and effort, `foreign` when the one asked for is
+// another agent's (its best instead), and the speed (speedFor(), `speedNote`). `own`: the
+// repo's mode, if any; `previous`: the task's previous run of the same kind; `options`: the
+// comments' "/model", "/effort", "/speed" and "/agent";
 // `marker`: the fallback its comments carry; `fresh`: an inbox entry, with no run to hand over.
 export function resolveEntry({ config, settings, own, light, previous, options, marker, fresh }) {
   const chosen = agentFor(agentNameFor(settings, own, light)).name;
@@ -112,5 +138,19 @@ export function resolveEntry({ config, settings, own, light, previous, options, 
   // settings' model of another agent than the one picked: its best.
   const foreign = (takeOver || (entry.picked && !options.model)) && agent.modelProblem(model);
   if (foreign) model = modelOf(agent, "best", config);
-  return { entry, badPick, pick, switched, handedBy, takeOver, model, effort, foreign };
+  const { provider } = entry;
+  const fast = speedFor({ config, settings, own, options, agent, provider, model });
+  return {
+    entry,
+    badPick,
+    pick,
+    switched,
+    handedBy,
+    takeOver,
+    model: fast.model,
+    effort,
+    foreign,
+    speed: fast.speed,
+    speedNote: fast.note,
+  };
 }

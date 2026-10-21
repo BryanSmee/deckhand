@@ -7,7 +7,7 @@
 import { createHash } from "node:crypto";
 import { posix } from "node:path";
 import { AGENTS } from "./agents/index.mjs";
-import { EFFORTS, MODEL_NAME } from "./events.mjs";
+import { EFFORTS, MODEL_NAME, SPEEDS } from "./events.mjs";
 import { list, normalize } from "./config.mjs";
 import { customMode, PICKED_MODES, RESERVED_MODES } from "./modes.mjs";
 import { INBOX_DIR } from "./runner/inbox.mjs";
@@ -27,7 +27,7 @@ export const RESERVED = [
 // Docker's --mount is comma-separated: host and cache paths stay within these characters.
 export const PLAIN_PATH = /^\/[\w./@+-]*$/;
 
-const MODE_KEYS = ["instructions", "light", "session", "agent", "model", "effort"];
+const MODE_KEYS = ["instructions", "light", "session", "agent", "model", "effort", "speed"];
 
 const REVIEW_KEYS = ["on", "instructions", "agent", "model", "effort", "fix"];
 // When a review starts by itself (reviews.mjs): `ready`, a pull request marked ready for review
@@ -367,6 +367,29 @@ export const KEYS = {
     parse: effortKey,
     display: asIs,
   },
+  // Whether `/speed fast` (and a mode's `speed: fast`) may turn on fast mode: only narrows the
+  // operator's SANDBOX_FAST_MODE, which costs more.
+  fast_mode: {
+    field: "fastMode",
+    default: operator,
+    effective: true,
+    parse: (value, { key, settings, config, fail, warn }) => {
+      if (typeof value !== "boolean") return fail(key, "expected true or false");
+      if (value && !config.fastMode) {
+        warn(`${key}: the operator hasn't allowed fast mode (SANDBOX_FAST_MODE), ignored`);
+      }
+      settings.fastMode = value && config.fastMode;
+    },
+    display: ({ value, row, changed, config }) =>
+      row(
+        value ? "allowed" : "off",
+        !config.fastMode
+          ? "the operator hasn't allowed it (SANDBOX_FAST_MODE)"
+          : changed
+            ? "turned off for this repository"
+            : null,
+      ),
+  },
   // The operator's MAX_PARALLEL stays the ceiling.
   max_parallel: {
     field: "maxParallel",
@@ -508,7 +531,7 @@ function modeRow(settings, name) {
   const mode = customMode(settings, name);
   const traits = [
     mode.instructions,
-    `${mode.model}/${mode.effort}`,
+    `${mode.model}/${mode.effort}${mode.speed === "fast" ? "/fast" : ""}`,
     mode.light ? "light" : null,
     mode.fresh ? "fresh session" : null,
   ];
@@ -562,7 +585,7 @@ function parseMode(name, mode, settings, config, fail) {
     return fail(where, "expected a name of letters, digits, - and _ (32 at most)");
   }
   if (!isMap(mode)) {
-    return fail(where, "expected instructions, light, session, agent, model, effort");
+    return fail(where, `expected ${MODE_KEYS.join(", ")}`);
   }
   const before = settings.modes[id];
   const own = {
@@ -572,6 +595,7 @@ function parseMode(name, mode, settings, config, fail) {
     agent: null,
     model: null,
     effort: null,
+    speed: null,
   };
   let ok = true;
   const bad = (key, what) => {
@@ -599,6 +623,11 @@ function parseMode(name, mode, settings, config, fail) {
           key,
           "expected a model tier (best, balanced, fast) or name (opus, claude-…, openai/gpt-…)",
         );
+    } else if (key === "speed") {
+      // Checked against the operator's and the repo's fast_mode when a run starts, so the
+      // reply can say why it ran at normal speed.
+      if (SPEEDS.includes(String(value).toLowerCase())) own.speed = String(value).toLowerCase();
+      else bad(key, `expected ${SPEEDS.join(" or ")}`);
     } else if (EFFORTS.includes(String(value).toLowerCase())) {
       own.effort = String(value).toLowerCase();
     } else bad(key, `expected one of ${EFFORTS.join(", ")}`);
