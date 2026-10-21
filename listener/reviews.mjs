@@ -55,9 +55,13 @@ export function parseReview(text) {
   let current = null;
   let started = false;
   for (const line of lines) {
-    const finding = /^\s*[-*]\s+\**\[?(critical|high|medium|low)\]?\**\s*[:–—-]?\s*(.*)$/i.exec(
-      line,
-    );
+    // An unindented bullet whose severity ends in bold, a bracket or a separator: not
+    // "- Highlights…" in the summary, nor an indented sub-bullet of a finding's text, which
+    // would otherwise cap the rating, block and, with `review.fix`, start the fix run.
+    const finding =
+      /^[-*]\s+\**\[?(critical|high|medium|low)(?:\]\**|\*+|\s*[:–—])\s*[:–—-]?\s*(.*)$/i.exec(
+        line,
+      );
     if (finding) {
       started = true;
       current = { severity: finding[1].toLowerCase(), ...located(finding[2]) };

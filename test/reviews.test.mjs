@@ -97,6 +97,40 @@ test("parseReview: a critical, high or medium finding makes the verdict request-
   assert.match(body, /^\*\*Verdict: request changes\*\* · Rating: 5\/10/);
 });
 
+test("parseReview: only unindented bullets with a severity of their own are findings", () => {
+  const review = parseReview(`Adds a cache.
+
+- Lowers the cost of a run.
+- Highlights the slow path.
+
+## Findings
+
+- **low** \`a.mjs:1\`: a nit.
+  - Highlighting this is optional.
+  - Medium-sized inputs are fine.
+- [medium] \`b.mjs:2\`: slow.
+- high: \`c.mjs:3\`: broken.
+- Critical – no location.
+
+Rating: 9/10
+Verdict: comment`);
+  assert.deepEqual(
+    review.findings.map((f) => [f.severity, f.path, f.text]),
+    [
+      ["low", "a.mjs", "a nit.\n- Highlighting this is optional.\n- Medium-sized inputs are fine."],
+      ["medium", "b.mjs", "slow."],
+      ["high", "c.mjs", "broken."],
+      ["critical", null, "no location."],
+    ],
+  );
+  assert.match(review.summary, /Lowers the cost of a run\.\n- Highlights the slow path\.$/);
+  const nit = parseReview(
+    "- **low** `a.mjs:1`: a nit.\n  - Highlighting this is optional.\n\nRating: 9/10\nVerdict: comment",
+  );
+  assert.deepEqual([nit.findings.length, nit.rating, nit.verdict], [1, 9, "comment"]);
+  assert.equal(reviewEvent(nit), "COMMENT");
+});
+
 test("reviewEvent: changes requested on critical, high or medium findings, never an approval", () => {
   assert.equal(reviewEvent(parseReview(MESSAGE)), "REQUEST_CHANGES");
   const low = parseReview("- **low** `a.mjs:1`: nit.\n\nRating: 9/10\nVerdict: approve");

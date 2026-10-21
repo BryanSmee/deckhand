@@ -462,22 +462,23 @@ review` gets the "unknown mode" reply. `review: true` (or a block without `on`, 
   adds is what the review should look at. On an issue it is refused, with a reply.
 - **The verdict on GitHub**: changes requested when there is a critical, high or medium
   finding, a comment otherwise; the verdict in the review's text says "request changes" then
-  too, whatever the review wrote. It never approves: that stays the maintainer's. GitHub doesn't let the
-  App request changes on its own pull requests: those get a comment review, the verdict in
-  its text. A reply whose format the listener can't read is posted as a comment review, as
-  it is.
+  too, whatever the review wrote. It never approves: that stays the maintainer's. GitHub
+  doesn't let the App request changes on its own pull requests: those get a comment review, the
+  verdict in its text. A reply whose format the listener can't read is posted as a comment
+  review, as it is.
 - **No loops**: without `fix`, the review starts no run. To act on it, comment with the trigger
   ("Deckhand, fix the high findings").
-- **`fix: true`**: a review that requests changes (a critical, high or medium finding) on Deckhand's
-  own pull request, linked to the issue it worked on, starts **one** work run in that issue's
-  session. Its message is the review's findings, all of them (medium and low too), with the
-  instruction to fix each one or say why not, rerun the checks and push; it pushes like any
-  work run, and replies on the pull request. Not while the issue has a run going or queued
-  (a maintainer's comment came first) or the pull request or its issue has the needs-input
-  label. **Once per pull request**, kept in `reviews.json` across restarts, and written before
-  the run is queued: the fix's push doesn't start a review (only turning ready does), and a
-  later review (`/mode review`) starts no second fix. Other pull requests' reviews, and
-  reviews that only comment, start nothing. To act again, comment with the trigger.
+- **`fix: true`**: a review that requests changes (a critical, high or medium finding) on
+  Deckhand's own pull request, linked to the issue it worked on, starts **one** work run in
+  that issue's session. Its message is the review's findings, all of them (medium and low too),
+  with the instruction to fix each one or say why not, rerun the checks and push; it pushes
+  like any work run, and replies on the pull request. Not while the issue has a run going or
+  queued (a maintainer's comment came first) or the pull request or its issue has the
+  needs-input label. **Once per pull request**, kept in `reviews.json` across restarts, and
+  written before the run is queued: the fix's push doesn't start a review (only turning ready
+  does), and a later review (`/mode review`) starts no second fix. Other pull requests'
+  reviews, and reviews that only comment, start nothing. To act again, comment with the
+  trigger.
 - **Security risk of `fix`**: the review's findings, a model's output, become the message of a
   run that can push. A comment written to steer the reviewer (a prompt injection) could turn
   into a finding the fix run carries out. Deckhand narrows it: the review reads only the
