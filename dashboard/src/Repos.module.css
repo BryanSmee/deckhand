@@ -46,6 +46,12 @@
   padding: 0.2rem 0.7rem;
 }
 
+/* Which Deckhand runs: at the toolbar's end, or on a line of its own when narrow. */
+.version {
+  margin-left: auto;
+  color: var(--muted);
+}
+
 /* Manage App: its links below the button, over the list. */
 .manage {
   position: relative;

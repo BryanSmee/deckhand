@@ -1,14 +1,15 @@
 // The repositories the App is installed on: which have a .deckhand.yaml (and whether it has
 // errors), which are being onboarded (with their issue), and a button that starts onboarding
 // on the others. A repository's name opens its config (ConfigPanel); Manage App links to the
-// App on GitHub, where repositories are added or removed.
+// App on GitHub, where repositories are added or removed. The toolbar also says which Deckhand
+// runs and since when (api/state's `server`).
 import type { RepoList } from "./api";
 import { ConfigPanel } from "./ConfigPanel";
-import { ago } from "./format";
+import { ago, uptime, versionUrl } from "./format";
 import { useNow } from "./hooks";
 import { ManageApp } from "./ManageApp";
 import { RepoBadge } from "./RepoBadge";
-import type { Repo, RepoStatus } from "./types";
+import type { Repo, RepoStatus, ServerInfo } from "./types";
 import styles from "./Repos.module.css";
 
 // The ones that need the maintainer first, then by name (the listener sorts by name).
@@ -24,9 +25,41 @@ interface Props {
   // The repository whose config is open, and how to open one (null: back to the list).
   open?: string | null;
   onOpen?: (repo: string | null) => void;
+  // api/state's, and its clock: the uptime counts on it, refreshed with the state.
+  server?: ServerInfo | null;
+  serverNow?: number;
 }
 
-export function Repos({ list, onBack, open = null, onOpen = () => {} }: Props) {
+// "Deckhand edge-1713fa6 · up 3 d 4 h · Node 26.1.0", the version linked to its code.
+function Version({ server, now }: { server: ServerInfo; now: number }) {
+  const url = versionUrl(server);
+  return (
+    <span class={styles.version}>
+      Deckhand{" "}
+      {url ? (
+        <a href={url} target="_blank" rel="noreferrer">
+          {server.version}
+        </a>
+      ) : (
+        server.version
+      )}
+      {" · "}
+      <span title={`Since ${new Date(server.startedAt).toLocaleString()}`}>
+        up {uptime(server.startedAt, now)}
+      </span>
+      {` · Node ${server.node.replace(/^v/, "")}`}
+    </span>
+  );
+}
+
+export function Repos({
+  list,
+  onBack,
+  open = null,
+  onOpen = () => {},
+  server = null,
+  serverNow,
+}: Props) {
   const { repos, app, listedAt, error, starting, failed, onboard } = list;
   const now = useNow();
   if (open) {
@@ -78,6 +111,7 @@ export function Repos({ list, onBack, open = null, onOpen = () => {} }: Props) {
               Couldn't refresh ({list.refreshError})
             </span>
           )}
+          {server && <Version server={server} now={serverNow ?? now} />}
         </div>
       </div>
       {error && <p class={styles.error}>Can't list the repositories ({error}).</p>}

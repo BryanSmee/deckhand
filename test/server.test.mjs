@@ -2725,6 +2725,8 @@ mounts:
     // From inside the container: everything, without a session.
     const all = await (await fetch(`${base}/status`)).json();
     assert.match(all.reasons.join("\n"), /run org\/repo#12 since/);
+    // When this listener started: scripts that poll /status get its uptime too.
+    assert.ok(all.startedAt > 0 && all.startedAt <= all.now);
     // Forwarded by a reverse proxy on the host's network: from anyone, so not trusted.
     for (const header of ["x-forwarded-for", "forwarded", "x-real-ip"]) {
       const proxied = await fetch(`${base}/status`, { headers: { [header]: "203.0.113.9" } });
@@ -2982,6 +2984,10 @@ mounts:
     assert.equal(board.githubUrl, github.url);
     // The shape dashboard/src/types.ts expects: change both together.
     assertShape(board, STATE_KEYS, "State");
+    assertShape(board.server, SERVER_KEYS, "ServerInfo");
+    // Built from source: no version to link, and up since this listener started.
+    assert.deepEqual([board.server.version, board.server.source], ["dev", ""]);
+    assert.ok(board.server.startedAt <= board.now);
     for (const t of board.tasks) {
       assertShape(t, TASK_KEYS, "Task");
       for (const r of t.runs) assertShape(r, RUN_KEYS, "Run");
@@ -3120,10 +3126,12 @@ mounts:
       "queued",
       "maxParallel",
       "githubUrl",
+      "server",
       "now",
     ],
     ["previews", "inboxes"],
   ];
+  const SERVER_KEYS = [["version", "startedAt", "node", "source"], []];
   const TASK_KEYS = [
     [
       "key",

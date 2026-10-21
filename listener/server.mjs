@@ -55,7 +55,7 @@ import { createDockerRunner } from "./runner/docker.mjs";
 import { operatorSecrets } from "./secrets.mjs";
 import { createRuns } from "./runs.mjs";
 import { createSetup } from "./setup.mjs";
-import { createStatus } from "./status.mjs";
+import { createStatus, serverInfo } from "./status.mjs";
 import { createTasks } from "./tasks.mjs";
 import { createTitles } from "./titles.mjs";
 import { createWaits } from "./waits.mjs";
@@ -100,8 +100,8 @@ function skip(reason) {
 // it (a finished run schedules the next one, the queue starts runs) and see `app` once /setup
 // has stored one.
 const ctx = {
-  // The release (a git tag) the images were built from; "dev" from source.
-  version: env.DECKHAND_VERSION || "dev",
+  // The version the images were built from, its repository and when this listener started.
+  server: serverInfo(env),
   config,
   log,
   skip,
@@ -460,7 +460,7 @@ const http = createHttp(ctx, {
 http.listen();
 createBrokerHttp(ctx).listen();
 
-log(`Deckhand ${ctx.version}`);
+log(`Deckhand ${ctx.server.version}`);
 log(
   `Agents: ${config.agent} for work, ${config.brainstormAgent} for light runs; repos may pick ${config.agents.join(", ")}${config.fallbacks.length ? `; on provider errors, falls back to ${config.fallbacks.join(", ")}` : ""}`,
 );

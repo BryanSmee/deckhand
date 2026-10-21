@@ -30,6 +30,10 @@ ENV NODE_ENV=production
 # The release it is (a git tag, .github/workflows/release.yml); "dev" when built from source.
 ARG DECKHAND_VERSION=dev
 ENV DECKHAND_VERSION=$DECKHAND_VERSION
+# The repository it was built from (https://github.com/<owner>/<repo>): the dashboard links
+# the version to its commit or release there. Empty from source: no link.
+ARG DECKHAND_SOURCE=
+ENV DECKHAND_SOURCE=$DECKHAND_SOURCE
 # 8080: webhooks, /setup, dashboard (published). 8081: token broker (sandboxes only).
 EXPOSE 8080
 # Root: it drives the host's Docker socket, which is root-equivalent anyway.

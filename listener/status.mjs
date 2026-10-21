@@ -3,6 +3,19 @@
 // (track()) as runs end and queued comments are dropped.
 import { parseKey } from "./events.mjs";
 
+// Which Deckhand runs and since when, for api/state and /status. DECKHAND_VERSION: the release
+// (a git tag), edge-<short sha> for a push to main, "dev" from source. DECKHAND_SOURCE: the
+// repository the image was built from, where the dashboard links the version ("" without
+// one: a fork's images link to the fork). `now`: injected by the tests.
+export function serverInfo(env, now = Date.now) {
+  return {
+    version: env.DECKHAND_VERSION || "dev",
+    startedAt: now(),
+    node: process.version,
+    source: (env.DECKHAND_SOURCE || "").replace(/\/+$/, ""),
+  };
+}
+
 // `ctx` (server.mjs): the listener's state and services, read at call time.
 export function createStatus(ctx) {
   const { tasks } = ctx;
@@ -37,7 +50,8 @@ export function createStatus(ctx) {
         ),
     ];
     return {
-      version: ctx.version,
+      version: ctx.server.version,
+      startedAt: ctx.server.startedAt,
       idle: ctx.running === 0 && !reasons(() => true).length,
       previews: previews.filter((h) => sees(h.repo)),
       reasons: reasons(sees),

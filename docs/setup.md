@@ -801,6 +801,7 @@ else set it in the service's `environment`, for example in a `compose.override.y
 | `GITHUB_URL`, `GITHUB_API`              | `github_url`, `github_api` | `https://github.com`, `https://api.github.com`        | GitHub's web and API addresses, always allowed through the egress proxy                                                           |
 | `CONFIG_FILE`                           | none                       | `/etc/deckhand/config.yaml`                           | the settings file above; set on purpose, it has to exist                                                                          |
 | `DECKHAND_VERSION` (in the image)       | none                       | set when the image is built                           | the version the dashboard shows                                                                                                   |
+| `DECKHAND_SOURCE` (in the image)        | none                       | set when the image is built; empty from source        | the repository the image was built from: the dashboard links the version to its commit or release there                           |
 
 ## Updating
 
@@ -822,6 +823,11 @@ docker compose up -d
   progress, so a burst of merges builds once), and the dashboard shows the commit it runs as
   `edge-<short sha>`. The same two
   commands (or Watchtower) update it.
+
+To check which version runs and that a restart happened, open the dashboard's Repositories
+page: its toolbar shows the version (linked to its commit or release), the listener's uptime
+and its Node version, as in "Deckhand edge-1713fa6 · up 3 d 4 h · Node 26.1.0". `/status`
+returns the same `version` and `startedAt` for scripts.
 
 You can update at any time, runs in progress included. The listener stops within its grace
 period without waiting for them: it starts no new run, saves the comments still waiting for

@@ -155,6 +155,17 @@ export interface Preview {
   since: number;
 }
 
+// Which Deckhand runs and since when (listener/status.mjs serverInfo()).
+export interface ServerInfo {
+  // DECKHAND_VERSION: a release ("1.2.3"), "edge-<short sha>" for a push to main, or "dev".
+  version: string;
+  startedAt: number;
+  // process.version: "v26.1.0".
+  node: string;
+  // DECKHAND_SOURCE: the repository the image was built from, "" without one.
+  source: string;
+}
+
 export interface State {
   user: string;
   tasks: Task[];
@@ -172,6 +183,7 @@ export interface State {
   inboxes?: Record<string, Inboxes>;
   // GITHUB_URL, without a trailing slash: where links go.
   githubUrl: string;
+  server: ServerInfo;
   // The server's clock: run times are compared with it.
   now: number;
 }

@@ -7,7 +7,7 @@ import { useRepos } from "./api";
 import { Dashboard } from "./App";
 import { Repos } from "./Repos";
 import { mockApi } from "./testUtils";
-import type { AppLinks, Repo, RepoConfig } from "./types";
+import type { AppLinks, Repo, RepoConfig, ServerInfo } from "./types";
 
 const repo = (name: string, extra: Partial<Repo> = {}): Repo => ({
   repo: name,
@@ -116,9 +116,9 @@ beforeEach(() => {
   api.answer = () => Response.json({ error: "Its issues are disabled." }, { status: 409 });
 });
 
-function Page() {
+function Page(props: { server?: ServerInfo; serverNow?: number }) {
   const [open, setOpen] = useState<string | null>(null);
-  return <Repos list={useRepos()} onBack={() => {}} open={open} onOpen={setOpen} />;
+  return <Repos list={useRepos()} onBack={() => {}} open={open} onOpen={setOpen} {...props} />;
 }
 
 const row = (name: string) => screen.getByRole("button", { name }).closest("li")!;
@@ -354,4 +354,37 @@ test("a repository without a config: the operator's defaults, said so", async ()
   expect(document.body.textContent).toContain("No .deckhand.yaml on main");
   expect(screen.queryByRole("alert")).toBeNull();
   expect(document.querySelector("pre")).toBeNull();
+});
+
+test("the toolbar says which Deckhand runs, linked to its code, and since when", async () => {
+  const startedAt = Date.UTC(2026, 9, 18, 8);
+  // The server's clock, 3 days, 4 hours and 5 minutes later: not the browser's.
+  const serverNow = startedAt + ((3 * 24 + 4) * 60 + 5) * 60000;
+  const server = {
+    version: "edge-1713fa6",
+    startedAt,
+    node: "v26.1.0",
+    source: "https://github.com/acme/deckhand",
+  };
+  const { rerender } = render(<Page server={server} serverNow={serverNow} />);
+  await screen.findByRole("button", { name: "org/app" });
+  const version = screen.getByText(/^Deckhand/);
+  expect(version.textContent).toBe("Deckhand edge-1713fa6 · up 3 d 4 h · Node 26.1.0");
+  const commit = within(version).getByRole("link", { name: "edge-1713fa6" });
+  expect(commit.getAttribute("href")).toBe("https://github.com/acme/deckhand/commit/1713fa6");
+  expect(commit.getAttribute("target")).toBe("_blank");
+  // A release: its page, under its tag.
+  rerender(<Page server={{ ...server, version: "1.2.3" }} serverNow={startedAt + 7 * 60000} />);
+  const release = screen.getByRole("link", { name: "1.2.3" });
+  expect(release.getAttribute("href")).toBe("https://github.com/acme/deckhand/releases/tag/v1.2.3");
+  expect(screen.getByText(/^Deckhand/).textContent).toContain("up 7 min");
+  // Built from source, or without the repository it came from: plain text.
+  for (const plain of [
+    { ...server, version: "dev" },
+    { ...server, source: "" },
+  ]) {
+    rerender(<Page server={plain} serverNow={serverNow} />);
+    expect(within(screen.getByText(/^Deckhand/)).queryByRole("link")).toBeNull();
+    expect(screen.getByText(/^Deckhand/).textContent).toContain(plain.version);
+  }
 });

@@ -458,5 +458,11 @@
   "maxParallel": 4,
   "previews": [],
   "githubUrl": "https://github.example.com",
+  "server": {
+    "version": "edge-1713fa6",
+    "startedAt": 1791720000000,
+    "node": "v26.1.0",
+    "source": "https://github.com/acme/deckhand"
+  },
   "now": 1791990000000
 }
