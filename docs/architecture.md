@@ -459,14 +459,23 @@ back to the last scan (less 10 minutes, at most 3 days, GitHub's retention), kep
 `redeliveries.json`. Each GUID none of whose attempts succeeded, whose latest attempt couldn't
 connect, timed out or got a 5xx, is redelivered (`POST …/attempts`), once: the GUIDs asked for
 are kept 3 days, and a 4xx is the listener's own refusal (a bad signature), which would come
-again. A redelivery keeps its GUID: one the listener did handle (`http.mjs` `firstTime()`) is
-neither asked for nor handled twice. Comments come back oldest first, whatever their age.
+again. A redelivery keeps its GUID: one the same listener process did handle (`http.mjs`
+`firstTime()`, its last 500 GUIDs, in memory) is neither asked for nor handled twice. A
+delivery GitHub recorded as failed (a timeout, say) that a listener since restarted did handle
+is redelivered and handled again; the listener answers `202` as soon as it has the body, so
+GitHub rarely times one out. Comments come back oldest first, whatever their age. A
+redelivered `pull_request` delivery (`redeliveries.mjs` `redelivered()`, the GUIDs it asked
+for) is handled as its pull request is now (`events.mjs` `replayedPull()`): its payload is as
+old as the failed attempt, maybe older than deliveries handled since. Its current state is
+recorded, and an action the pull request no longer matches (ready since merged) becomes
+`edited`, so nothing turns ready, closes or starts a review from it.
 
 A delivery whose handling throws (`dispatch()`) is logged with its event and action; the
 listener goes on with the next one. GitHub got its `202` already, so it isn't redelivered.
 
 Pull request states don't hang on deliveries alone: the listener records the changes it makes
-for runs (`pr-ready.mjs`: ready, draft, opened, edited) in `pulls.json` at once, and asks
+for runs (`pr-ready.mjs`: ready, draft, opened, edited) in `pulls.json` at once (the
+`ready_for_review` delivery that follows keeps its `readyAt`: one notification), and asks
 GitHub about every open pull request it knows again at start and from Sync
 (`pulls.mjs` `resync()`), so a `ready_for_review`, merge or close older than the redelivery
 window still shows.

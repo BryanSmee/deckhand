@@ -327,11 +327,13 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
       BROKER_PORT: String(brokerPort),
       BROKER_URL: `http://127.0.0.1:${brokerPort}`,
     });
-    const send = (payload, event = "issue_comment") => {
+    // `id`: its GUID (X-GitHub-Delivery), for a redelivery.
+    const send = (payload, event = "issue_comment", id) => {
       const body = JSON.stringify(payload);
       return fetch(`http://127.0.0.1:${port}/webhook`, {
         method: "POST",
         headers: {
+          ...(id && { "x-github-delivery": id }),
           "x-github-event": event,
           "x-hub-signature-256": `sha256=${createHmac("sha256", SECRET).update(body).digest("hex")}`,
         },
@@ -448,15 +450,42 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
       { id: 3, guid: "g-ok", delivered_at: at(1), status_code: 202, event: "issue_comment" },
       { id: 2, guid: "g-lost", delivered_at: at(2), status_code: 0, event: "issue_comment" },
       { id: 1, guid: "g-ok", delivered_at: at(3), status_code: 503, event: "issue_comment" },
+      { id: 0, guid: "g-pr", delivered_at: at(4), status_code: 503, event: "pull_request" },
     ]);
-    const { github, listener, restart } = await listen(t, { deliveries });
+    // Merged since its ready_for_review failed.
+    const merged = {
+      number: 13,
+      html_url: "https://github.com/org/repo/pull/13",
+      body: "Closes #12",
+      state: "closed",
+      merged: true,
+      draft: false,
+      head: { ref: "issue-12-fix", repo: { full_name: "org/repo" } },
+    };
+    const { github, listener, restart, send } = await listen(t, {
+      deliveries,
+      "pull:13": JSON.stringify(merged),
+    });
     await listener.until("Redelivered g-lost (issue_comment");
     const attempts = () =>
       github.requests.filter((r) => r.method === "POST" && r.path.endsWith("/attempts"));
+    await listener.until("Redelivered g-pr (pull_request");
     assert.deepEqual(
       attempts().map((r) => r.path),
-      ["/app/hook/deliveries/2/attempts"],
+      ["/app/hook/deliveries/0/attempts", "/app/hook/deliveries/2/attempts"],
     );
+    // GitHub sends it again, as it was then: handled as the pull request is now, merged.
+    const then = {
+      action: "ready_for_review",
+      installation: { id: 7 },
+      repository: { full_name: "org/repo", default_branch: "trunk" },
+      pull_request: { ...merged, state: "open", merged: false },
+      sender: { login: "alice" },
+    };
+    await send(then, "pull_request", "g-pr");
+    await listener.until("org/repo#12: pull request #13 merged");
+    assert.match(listener.output(), /Delivery pull_request ready_for_review: redelivered, as/);
+    assert.doesNotMatch(listener.output(), /pull request #13 ready/);
     // Asked once: a restart remembers it.
     const scans = () =>
       github.requests.filter((r) => r.path.startsWith("/app/hook/deliveries?")).length;
@@ -466,7 +495,7 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
     }
     assert.equal(scans(), 2);
     await new Promise((resolve) => setTimeout(resolve, 100));
-    assert.equal(attempts().length, 1);
+    assert.equal(attempts().length, 2);
   });
 
   test("the Claude credential stays out of sandboxes, and a reply leaking secrets is redacted", async (t) => {

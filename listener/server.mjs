@@ -476,6 +476,8 @@ const redeliveries = createRedeliveries({
   handled: http.handled,
   log,
 });
+// A pull request delivery the listener asked for again is handled as it is now (http.mjs).
+ctx.redelivered = redeliveries.redelivered;
 // The dashboard's Sync: the same now, and the open pull requests' states asked again.
 ctx.sync = async () => {
   const [redelivered, changed] = await Promise.all([redeliveries.scan(), pulls.resync()]);

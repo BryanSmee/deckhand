@@ -158,3 +158,30 @@ test("a listing that fails throws, and the next scan still looks back as far", a
   down = false;
   assert.equal(await redeliveries.scan(), 1);
 });
+
+test("a redelivery request that fails outright doesn't lose the others asked in that scan", async (t) => {
+  const path = join(tempDir(t), "redeliveries.json");
+  let down = true;
+  const github = fakeApp(
+    { "": [delivery(2, "second", 1, 0), delivery(1, "first", 2, 0)] },
+    {
+      attempt: (path) => {
+        if (down && path.includes("/2/")) throw new Error("socket hang up");
+        return new Response(null, { status: 202 });
+      },
+    },
+  );
+  const logs = [];
+  const make = () =>
+    createRedeliveries({ path, app: github.app, now: () => NOW, log: (l) => logs.push(l) });
+  const first = make();
+  assert.equal(await first.scan(), 1);
+  assert.ok(logs.includes("Redeliveries: second: socket hang up"));
+  // Kept for the next listener: only the failed one is asked again.
+  down = false;
+  const next = make();
+  assert.equal(next.redelivered("first"), true);
+  assert.equal(next.redelivered("second"), false);
+  assert.equal(await next.scan(), 1);
+  assert.deepEqual(github.redelivered(), ["1", "2", "2"]);
+});

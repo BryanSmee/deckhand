@@ -100,10 +100,19 @@ export function createRedeliveries({
       let count = 0;
       for (const d of failedDeliveries(list)) {
         if (asked.has(d.guid) || handled(d.guid)) continue;
-        const res = await github.asApp("POST", `/app/hook/deliveries/${d.id}/attempts`);
-        // Not marked: the next scan tries again.
-        if (!res.ok) continue;
+        // Marked before asking: GitHub may deliver it before it answers (redelivered()).
         asked.set(d.guid, started);
+        let res = null;
+        try {
+          res = await github.asApp("POST", `/app/hook/deliveries/${d.id}/attempts`);
+        } catch (error) {
+          log(`Redeliveries: ${d.guid}: ${error.message ?? error}`);
+        }
+        // Not asked: the next scan tries again. The others are saved whatever happens.
+        if (!res?.ok) {
+          asked.delete(d.guid);
+          continue;
+        }
         count++;
         const what = [d.event, d.action].filter(Boolean).join(" ");
         log(`Redelivered ${d.guid} (${what}, ${d.delivered_at}: ${d.status_code || d.status})`);
@@ -130,5 +139,9 @@ export function createRedeliveries({
     timer = null;
   }
 
-  return { scan, start, stop };
+  // Whether the delivery with this GUID is one the listener asked GitHub for again: its
+  // payload is as old as the failed attempt (http.mjs replays pull requests as they are now).
+  const redelivered = (guid) => !!guid && asked.has(guid);
+
+  return { scan, start, stop, redelivered };
 }

@@ -473,6 +473,25 @@ export function pullRequest(config, event, p, now, skip = () => null) {
   return pullEntry(repo, pr, turnedReady ? now : null);
 }
 
+// A redelivered `pull_request` delivery (redeliveries.mjs), with the pull request as GitHub
+// has it now (`current`): its payload is as old as the attempt that failed, maybe older than
+// deliveries handled since. An action the pull request no longer matches (ready since merged,
+// a draft since made ready) becomes `edited`: its current state is recorded, and nothing
+// turns ready, closes or starts a review from it.
+export function replayedPull(payload, current) {
+  const state = prState(current);
+  const open = state === "ready" || state === "draft";
+  const still =
+    {
+      ready_for_review: state === "ready",
+      converted_to_draft: state === "draft",
+      opened: open,
+      reopened: open,
+      closed: !open,
+    }[payload.action] ?? true;
+  return { ...payload, action: still ? payload.action : "edited", pull_request: current };
+}
+
 // A pull request as GitHub has it → { key, pr } for the dashboard (pulls.mjs record()): the
 // task of the issue it closes, else its own. `readyAt`: when it turned ready, if it just did.
 export function pullEntry(repo, pr, readyAt = null) {

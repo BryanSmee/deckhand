@@ -31,8 +31,11 @@ export function createPulls({ path, listPulls, getPull = async () => null, log =
       before = p;
       if (other !== key) pulls.delete(other);
     }
-    // An edit or a close says nothing about when it turned ready: the earlier event did.
-    const readyAt = pr.readyAt ?? before?.readyAt ?? null;
+    // An edit or a close says nothing about when it turned ready: the earlier event did. Nor
+    // does the `ready_for_review` delivery of a change the listener recorded already
+    // (pr-ready.mjs): one notification, not two.
+    const already = before?.state === "ready" && pr.state === "ready";
+    const readyAt = already ? before.readyAt : (pr.readyAt ?? before?.readyAt ?? null);
     pulls.set(key, { ...pr, readyAt });
     pulls.save();
     return true;

@@ -14,11 +14,13 @@ import {
   previewEvent,
   prId,
   pullRequest,
+  replayedPull,
   taskKey,
   touchedItems,
   verified,
   workItem,
 } from "./events.mjs";
+import { fetchPull } from "./github.mjs";
 import { kindOf } from "./modes.mjs";
 import { onboardingTargets } from "./onboarding.mjs";
 import { previewHook } from "./previews.mjs";
@@ -311,7 +313,7 @@ export function createHttp(ctx, { dashboardDir }) {
           } catch {
             return;
           }
-          guarded(req.headers["x-github-event"], payload);
+          guarded(req.headers["x-github-event"], payload, id);
         },
         (error) => log(`Rejected a delivery: ${error.message}`),
       );
@@ -350,12 +352,28 @@ export function createHttp(ctx, { dashboardDir }) {
 
   // A delivery's unexpected throw is logged: it never takes the listener down, nor the
   // deliveries that come after it (already answered 202, it isn't redelivered).
-  function guarded(event, payload) {
+  function guarded(event, payload, id) {
     try {
+      if (event === "pull_request" && ctx.redelivered?.(id)) return replay(event, payload);
       dispatch(event, payload);
     } catch (error) {
       log(`Delivery ${event} ${payload?.action ?? ""} failed: ${error.stack ?? error}`);
     }
+  }
+
+  // A redelivered pull request delivery, handled as its pull request is now (events.mjs
+  // replayedPull()): its own snapshot may be older than what the listener handled since.
+  function replay(event, payload) {
+    const repo = payload?.repository?.full_name;
+    const number = payload?.pull_request?.number;
+    if (!repo || !number) return dispatch(event, payload);
+    admitted(
+      fetchPull(ctx.github, repo, number).then((current) => {
+        if (!current) return log(`Delivery ${event} ${payload.action}: ${repo}#${number} is gone`);
+        log(`Delivery ${event} ${payload.action}: redelivered, as ${repo}#${number} is now`);
+        dispatch(event, replayedPull(payload, current));
+      }),
+    );
   }
 
   // A verified delivery: onboarding, a pull request's state, a preview hook or a comment.
