@@ -176,8 +176,10 @@ function issueBranches(n, branches) {
 }
 
 // Whether the run's pushes may change workflow files (git-gateway.mjs), so a run that can't
-// says so rather than retrying GitHub's refusal.
-function workflowsNote(grant) {
+// says so rather than retrying GitHub's refusal. Nothing for a run that can't push at all (a
+// fork's pull request): prPush() already says so.
+function workflowsNote(task, grant, branches) {
+  if (task.kind === "pr" && !branches.length) return "";
   return grant?.allowWorkflows
     ? "Pushes may add or change files under `.github/workflows/` (the operator grants `allow_workflows`)."
     : "GitHub refuses pushes that add or change files under `.github/workflows/` (the operator\ndoesn't grant `allow_workflows`): leave them out and say in the pull request what they need.";
@@ -185,8 +187,8 @@ function workflowsNote(grant) {
 
 function initialPrompt(task, branches = [], grant = null) {
   const { base } = task;
-  const common = `${workflowsNote(grant)}
-Follow the repository's AGENTS.md and CLAUDE.md if it has them, with tests where the
+  const workflows = workflowsNote(task, grant, branches);
+  const common = `${workflows && `${workflows}\n`}Follow the repository's AGENTS.md and CLAUDE.md if it has them, with tests where the
 code has them, and run the checks they list before pushing. Never push to ${base}. When
 something is ambiguous, pick the reasonable option and say so rather than stopping, unless it
 is a blocker only the maintainer can resolve: then push your work in progress and end with
@@ -240,7 +242,8 @@ Never push to ${base}.`
       : `The sandbox has already checked out the issue's branch, pushed it and opened a draft pull
 request (\`gh pr view\` shows it): if you change code, commit and push to that branch
 (Deckhand refuses pushes to branches not named ${issueBranches(n, branches)}). Never push to ${base}.`;
-  const workflows = own.light ? "" : `\n${workflowsNote(grant)}`;
+  const note = own.light ? "" : workflowsNote(task, grant, branches);
+  const workflows = note && `\n${note}`;
   return `You are in the "${own.name}" mode of this repository, on ${where}.
 
 ${rules}${workflows}

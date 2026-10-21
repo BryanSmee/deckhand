@@ -157,7 +157,12 @@ async function fakeGitHub(files = {}) {
         const expires_at = new Date(Date.now() + 3600000).toISOString();
         return res.end(
           JSON.stringify({
-            token: scoped ? "repo-token" : "app-token",
+            // The git gateway's for a repo granted allow_workflows: told apart.
+            token: !scoped
+              ? "app-token"
+              : body.includes("workflows")
+                ? "workflows-token"
+                : "repo-token",
             expires_at,
           }),
         );
@@ -3097,6 +3102,34 @@ mounts:
         await ctx.listener.until("picked up");
       }
     }
+    writeFileSync(join(dir, "go"), "");
+    await ctx.listener.until("done (ok)");
+  });
+
+  test("allow_workflows: the gateway's push token writes workflows, until the grant goes", async (t) => {
+    const ctx = await listen(t, {}, (dir, github) => {
+      writeFileSync(join(dir, "hold"), "");
+      writeGrant(dir, "allow_workflows: true\n");
+      return { GITHUB_URL: github.url };
+    });
+    const { dir, github, brokerPort } = ctx;
+    await ctx.send(comment("alice"));
+    await until(() => exists(join(dir, "egress"))?.trim().split("\n").length === 9, "the sandbox");
+    const secret = readFileSync(join(dir, "run-secret"), "utf8").trim();
+    // The token each push reached GitHub with.
+    const pushedWith = () =>
+      github.requests
+        .filter((r) => r.path === "/org/repo.git/git-receive-pack")
+        .map((r) => Buffer.from(r.auth.split(" ")[1], "base64").toString().split(":")[1]);
+    await pushProbe(brokerPort, secret, "refs/heads/issue-12-x");
+    assert.deepEqual(pushedWith(), ["workflows-token"]);
+    // The sandbox's own tokens never have it.
+    const minted = github.requests.filter((r) => r.path.endsWith("/access_tokens"));
+    assert.equal(minted.filter((r) => r.body.includes("workflows")).length, 1);
+    // Taken back: the next push goes without it, no restart.
+    writeGrant(dir, "");
+    await pushProbe(brokerPort, secret, "refs/heads/issue-12-x");
+    assert.deepEqual(pushedWith(), ["workflows-token", "repo-token"]);
     writeFileSync(join(dir, "go"), "");
     await ctx.listener.until("done (ok)");
   });

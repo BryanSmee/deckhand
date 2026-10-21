@@ -76,7 +76,9 @@ whose grants file sets `allow_workflows` only ([security model](security.md#gith
 every other token is narrowed to what it's for and never carries it. An App created before
 then lacks it, which only matters once you grant `allow_workflows`: add **Workflows: read and
 write** in the App's settings (_Permissions & events_), then accept the new permission on its
-installation. Until then a granted repository's pushes are refused, with a message saying so.
+installation. Until then every push of a granted repository is refused, its runs' first one
+included, with a message saying so. Read what the grant opens before setting it: its branches'
+workflows can reach the default branch and the repository's secrets.
 
 An App created before `/after` lacks the `issues` event: turn on **Issues** under _Subscribe
 to events_ in its settings. Without it, a comment waiting for an issue (`/after #77`) still

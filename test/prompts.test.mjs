@@ -223,9 +223,12 @@ test("prompts: work runs are told whether their pushes may change workflow files
       /Pushes may add or change files under `\.github\/workflows\/`/,
     );
   }
-  // A light mode never pushes: nothing to say.
+  // A light mode never pushes, nor a fork's pull request: nothing to say.
   const light = { ...mode, own: { name: "audit", light: true } };
   assert.doesNotMatch(promptFor(issue, { ...light, grant }), /workflows/);
+  const fork = { settings, branches: [], grant: granted };
+  assert.doesNotMatch(promptFor(pr, { ...fork, mode: "work" }), /workflows/);
+  assert.doesNotMatch(promptFor(pr, { ...fork, ...mode, branches: [] }), /workflows/);
 });
 
 test("prompts: a pull request's run is told the one branch it may push, or none for a fork", () => {
