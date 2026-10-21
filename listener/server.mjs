@@ -284,6 +284,8 @@ ctx.gitGateway = createGitGateway({
   // Read on each push: a grant taken back applies to the next one.
   allowWorkflows: (repo) => grantFor(loadGrants(config), config, repo).allowWorkflows,
   githubUrl: config.githubUrl,
+  // Granted repos' copies, their pushed workflow files checked against them (git-mirror.mjs).
+  mirrorDir: join(config.dataDir, "git-mirrors"),
   log,
 });
 // Their Claude Code's API calls, with the operator's credential that they never see.
@@ -339,6 +341,8 @@ ctx.prReady = createPrReady({
   app: () => ctx.app,
   api: config.githubApi,
   log,
+  // A granted repo's workflows, in the merge a new or ready pull request runs them from.
+  checkWorkflows: (repo, branch, base) => ctx.gitGateway.checkBranch(repo, branch, base),
 });
 
 // --- Tasks, runs and restarts --------------------------------------------------------------

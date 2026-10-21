@@ -6,6 +6,7 @@ import { createHash, createHmac, generateKeyPairSync } from "node:crypto";
 import {
   appendFileSync,
   chmodSync,
+  existsSync,
   mkdirSync,
   readdirSync,
   readFileSync,
@@ -160,6 +161,10 @@ async function fakeGitHub(files = {}) {
       if (req.method === "GET" && req.url === "/repos/org/repo/pulls/43") {
         const head = { ref: "issue-3-fix", repo: { full_name: "mallory/repo" } };
         return res.end(JSON.stringify({ number: 43, body: "Closes #3", head }));
+      }
+      // A branch's open pull requests (the git gateway, for a repo granted allow_workflows).
+      if (req.url.startsWith("/repos/org/repo/pulls?state=open&per_page=100&head=")) {
+        return res.end("[]");
       }
       // A listener that restarted looks the installation up instead of reading it from a
       // delivery.
@@ -3183,7 +3188,7 @@ mounts:
     await ctx.listener.until("done (ok)");
   });
 
-  test("allow_workflows: the gateway's push token writes workflows, until the grant goes", async (t) => {
+  test("allow_workflows: pushes are checked against a mirror in the data dir, until the grant goes", async (t) => {
     const ctx = await listen(t, {}, (dir, github) => {
       writeFileSync(join(dir, "hold"), "");
       writeGrant(dir, "allow_workflows: true\n");
@@ -3198,15 +3203,39 @@ mounts:
       github.requests
         .filter((r) => r.path === "/org/repo.git/git-receive-pack")
         .map((r) => Buffer.from(r.auth.split(" ")[1], "base64").toString().split(":")[1]);
-    await pushProbe(brokerPort, secret, "refs/heads/issue-12-x");
-    assert.deepEqual(pushedWith(), ["workflows-token"]);
-    // The sandbox's own tokens never have it.
+    // Its workflow files are read first, against a mirror fetched from GitHub with a token
+    // that reads: this fake GitHub doesn't serve git, so the push is refused, never forwarded.
+    assert.match(
+      await pushProbe(brokerPort, secret, "refs/heads/issue-12-x"),
+      /ng refs\/heads\/issue-12-x Deckhand: couldn't check the workflow files of this push; try again/,
+    );
+    assert.ok(existsSync(join(dir, "git-mirrors", "org/repo.git")));
+    const fetched = github.requests.find((r) => r.path.startsWith("/org/repo.git/info/refs"));
+    assert.match(fetched.path, /service=git-upload-pack/);
+    assert.equal(
+      Buffer.from(fetched.auth.split(" ")[1], "base64").toString(),
+      "x-access-token:repo-token",
+    );
+    assert.deepEqual(pushedWith(), []);
+    // Opening its pull request checks the same, merged with its base, against the mirror
+    // fetched again. This fake GitHub has no branch there, which runs nothing: it opens.
+    const mirrorFetches = () =>
+      github.requests.filter((r) => r.path.startsWith("/org/repo.git/info/refs")).length;
+    const before = mirrorFetches();
+    const opened = await fetch(`http://127.0.0.1:${brokerPort}/pr/org/repo/create`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${secret}` },
+      body: JSON.stringify({ title: "t", head: "issue-12-x" }),
+    });
+    assert.equal(opened.status, 201);
+    assert.equal(mirrorFetches(), before + 1);
+    // The push's token writes workflows; the sandbox's own tokens never do.
     const minted = github.requests.filter((r) => r.path.endsWith("/access_tokens"));
     assert.equal(minted.filter((r) => r.body.includes("workflows")).length, 1);
-    // Taken back: the next push goes without it, no restart.
+    // Taken back: the next push streams through without it, no restart.
     writeGrant(dir, "");
     await pushProbe(brokerPort, secret, "refs/heads/issue-12-x");
-    assert.deepEqual(pushedWith(), ["workflows-token", "repo-token"]);
+    assert.deepEqual(pushedWith(), ["repo-token"]);
     writeFileSync(join(dir, "go"), "");
     await ctx.listener.until("done (ok)");
   });
