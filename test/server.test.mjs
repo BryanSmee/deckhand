@@ -3217,14 +3217,18 @@ mounts:
       "x-access-token:repo-token",
     );
     assert.deepEqual(pushedWith(), []);
-    // Opening its pull request checks the same, merged with its base: not without a mirror.
+    // Opening its pull request checks the same, merged with its base, against the mirror
+    // fetched again. This fake GitHub has no branch there, which runs nothing: it opens.
+    const mirrorFetches = () =>
+      github.requests.filter((r) => r.path.startsWith("/org/repo.git/info/refs")).length;
+    const before = mirrorFetches();
     const opened = await fetch(`http://127.0.0.1:${brokerPort}/pr/org/repo/create`, {
       method: "POST",
       headers: { authorization: `Bearer ${secret}` },
       body: JSON.stringify({ title: "t", head: "issue-12-x" }),
     });
-    assert.equal(opened.status, 502);
-    assert.match((await opened.json()).error, /couldn't check issue-12-x's workflow files/);
+    assert.equal(opened.status, 201);
+    assert.equal(mirrorFetches(), before + 1);
     // The push's token writes workflows; the sandbox's own tokens never do.
     const minted = github.requests.filter((r) => r.path.endsWith("/access_tokens"));
     assert.equal(minted.filter((r) => r.body.includes("workflows")).length, 1);

@@ -279,3 +279,14 @@ test("a reusable workflow from anywhere but this repository is refused; local on
   // A step's `uses:` is an action: no secret of its own.
   assert.deepEqual(inspectWorkflow(WORKFLOW).calls, []);
 });
+
+test("a job deploying to an environment is refused", () => {
+  for (const environment of ["production", "{ name: prod, url: https://x.example }"]) {
+    const text = WORKFLOW.replace("    runs-on:", `    environment: ${environment}\n    runs-on:`);
+    assert.deepEqual(
+      workflowProblems(text),
+      ["`jobs.test.environment`: deploying to an environment is not allowed"],
+      environment,
+    );
+  }
+});

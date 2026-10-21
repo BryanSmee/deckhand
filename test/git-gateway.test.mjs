@@ -3,7 +3,15 @@
 import assert from "node:assert/strict";
 import { execFile, execFileSync, spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  rmSync,
+  symlinkSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { request } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -768,6 +776,8 @@ test("allow_workflows: a workflow that writes, names a secret or hides from the 
     assert.match(res.stderr, /\[remote rejected\] HEAD -> issue-1-ci \(Deckhand: workflow files/);
     assert.match(res.stderr, /\.github\/workflows\/ci\.yml: /);
     assert.match(res.stderr, why);
+    // Refused at the tip: said once, not again for its merge with main.
+    assert.doesNotMatch(res.stderr, /merged with main/);
   }
   assert.equal(upstream("refs/"), "");
   assert.deepEqual(received, []);
@@ -979,7 +989,7 @@ jobs:
   assert.equal(res.ok, false);
   assert.match(
     res.stderr,
-    /deploy\.yml \(called by \.github\/workflows\/go\.yml\): mentions `secrets`/,
+    /deploy\.yml \(called by \.github\/workflows\/go\.yml\): `jobs\.deploy\.environment`: deploying to an environment is not allowed, mentions `secrets`/,
   );
   commit({ ".github/workflows/go.yml": caller("./.github/workflows/gone.yml") });
   const gone = await git(work, "push", remote(), "HEAD:refs/heads/issue-1-x");
@@ -1021,4 +1031,58 @@ test("allow_workflows: merges with the bases of the branch's pull requests, and 
     /ci\.yml \(merged with release\): mentions `secrets`/,
   );
   assert.equal(await gateway.checkBranch("org/repo", "issue-1-x", "main"), null);
+});
+
+test("allow_workflows: a caller the branch adds meets the default branch's newer callee in the merge", async (t) => {
+  const helper = `on: workflow_call\npermissions: { contents: read }\njobs:\n  h:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo hi\n`;
+  const { work, remote, commit, seed, gateway } = await granted(t, {
+    ".github/workflows/helper.yml": helper,
+  });
+  const old = execFileSync("git", ["rev-parse", "HEAD"], { cwd: work }).toString().trim();
+  // Since then, main's helper deploys with a secret.
+  commit(
+    {
+      ".github/workflows/helper.yml": helper.replace("echo hi", 'echo "${{ secrets.DEPLOY }}"'),
+    },
+    "helper deploys",
+  );
+  seed("main");
+  // The run's branch, cut from the old main, only adds a caller.
+  execFileSync("git", ["checkout", "-q", "-b", "topic", old], { cwd: work, env: gitEnv });
+  const caller = `on: pull_request\npermissions: { contents: read }\njobs:\n  call:\n    uses: ./.github/workflows/helper.yml\n`;
+  commit({ ".github/workflows/ci.yml": caller });
+  const res = await git(work, "push", remote(), "HEAD:refs/heads/issue-1-x");
+  assert.equal(res.ok, false);
+  assert.match(
+    res.stderr,
+    /helper\.yml \(called by \.github\/workflows\/ci\.yml\) \(merged with main\): mentions `secrets`/,
+  );
+  // The tip alone passes: its own helper is the old one. Reported once, for the merge only.
+  assert.equal(res.stderr.match(/called by/g).length, 1);
+  // The same before a pull request opens, for a branch pushed some other way.
+  seed("issue-1-x");
+  assert.match(
+    await gateway.checkBranch("org/repo", "issue-1-x", "main"),
+    /helper\.yml \(called by \.github\/workflows\/ci\.yml\) \(merged with main\)/,
+  );
+  // A branch that isn't on GitHub runs nothing: no problem, GitHub refuses the pull request.
+  assert.equal(await gateway.checkBranch("org/repo", "issue-1-gone", "main"), null);
+});
+
+test("saved pushes a stopped listener left are swept, never a check's in progress", async (t) => {
+  const dir = tempDir(t, "sweep-");
+  const spoolDir = join(dir, "pushes");
+  mkdirSync(join(spoolDir, "push-old"), { recursive: true });
+  mkdirSync(join(spoolDir, "push-new"));
+  const old = new Date(Date.now() - 3 * 3600_000);
+  utimesSync(join(spoolDir, "push-old"), old, old);
+  const broker = createBroker({ app: () => null, sentFrom: sandboxAt() });
+  const gateway = createGitGateway({ broker, app: () => null, mirrorDir: dir, spoolDir });
+  // The sweep runs before any check: a branch check of an ungranted repo is a no-op that
+  // doesn't wait for it, so wait for it here.
+  assert.equal(await gateway.checkBranch("org/repo", "x", "main"), null);
+  for (let n = 0; existsSync(join(spoolDir, "push-old")) && n < 50; n++) {
+    await new Promise((r) => setTimeout(r, 20));
+  }
+  assert.deepEqual(readdirSync(spoolDir), ["push-new"]);
 });

@@ -473,6 +473,12 @@ export function inspectWorkflow(text) {
       if (!(job instanceof Map)) continue;
       const own = field(job, "permissions");
       if (own !== undefined) problems.push(...permissionProblems(own, `jobs.${id}.permissions`));
+      // An environment's secrets are its jobs' (through `secrets`, refused here, or a callee's),
+      // and a job deploying to one creates a deployment, which may start the `on: deployment`
+      // workflows of the deployed commit: the maintainers' copies, with their secrets.
+      if (field(job, "environment") !== undefined) {
+        problems.push(`\`jobs.${id}.environment\`: deploying to an environment is not allowed`);
+      }
       const uses = field(job, "uses");
       if (uses === undefined) continue;
       const local =

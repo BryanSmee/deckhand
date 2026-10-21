@@ -6,7 +6,7 @@
 // in the mirror.
 import { spawn } from "node:child_process";
 import { createReadStream, createWriteStream } from "node:fs";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pipeline } from "node:stream/promises";
@@ -27,6 +27,20 @@ const { PATH } = process.env;
 const PLAIN = /^100[0-7]{3}$/;
 const checked = (entry) => /\.ya?ml$/i.test(entry.path) || !PLAIN.test(entry.mode);
 
+// Removes what `dir` holds that is older than `ms`. Never fails: a sweep is only tidying.
+async function sweep(dir, ms) {
+  try {
+    for (const name of await readdir(dir)) {
+      const path = join(dir, name);
+      if (Date.now() - (await stat(path)).mtimeMs > ms) {
+        await rm(path, { recursive: true, force: true });
+      }
+    }
+  } catch {
+    // No such dir yet, or one going: nothing to tidy.
+  }
+}
+
 export function createMirrors({
   root, // where the mirrors are kept
   // Where pushes are saved while they are checked: not the data volume, whose state a run
@@ -37,6 +51,9 @@ export function createMirrors({
   timeoutMs = GIT_MS,
   cloneMs = CLONE_MS,
 }) {
+  // What a listener that stopped mid-check left: older than any check lasts.
+  const swept = sweep(spoolRoot, cloneMs + 2 * timeoutMs);
+
   // Per repo: one check at a time, so a fetch never runs under another push's reads.
   const queues = new Map();
 
@@ -81,6 +98,7 @@ export function createMirrors({
 
   // The push's whole body, on disk: { dir, file }. The caller removes `dir`.
   async function spool(body) {
+    await swept;
     await mkdir(spoolRoot, { recursive: true });
     const dir = await mkdtemp(join(spoolRoot, "push-"));
     const file = join(dir, "push");
@@ -203,13 +221,15 @@ export function createMirrors({
         }
         return inspected.get(entry.oid);
       };
-      // The problems of `tree`'s files that differ from `before`'s and from `skip`'s, and of
-      // the workflows they call, `where` added to their paths.
-      const examine = async (tree, before, skip, where) => {
+      // The problems of `tree`'s files that differ from `before`'s, and of the workflows they
+      // call, changed or not: { path, oid, problems }, `where` added to their paths. Each file
+      // is followed even when the tip has it too: in a merge, the branch's caller can meet the
+      // base's newer callee.
+      const examine = async (tree, before, where) => {
         const files = await workflowFiles(tree, env);
         const same = (a, b) => a && a.oid === b.oid && a.mode === b.mode;
         const queue = [...files]
-          .filter(([path, entry]) => !same(before.get(path), entry) && !same(skip.get(path), entry))
+          .filter(([path, entry]) => !same(before.get(path), entry))
           .filter(([path, entry]) => checked({ path, mode: entry.mode }))
           .map(([path, entry]) => ({ path, entry, label: path }));
         const seen = new Set(queue.map((f) => f.path.toLowerCase()));
@@ -217,13 +237,14 @@ export function createMirrors({
         while (queue.length) {
           const { path, entry, label } = queue.shift();
           const { problems, calls } = await inspect(entry);
-          if (problems.length) found.push({ path: `${label}${where}`, problems });
+          if (problems.length) found.push({ path: `${label}${where}`, oid: entry.oid, problems });
           for (const call of calls) {
             // Without case, like the folder: never miss the file GitHub would call.
             const callees = [...files].filter(([p]) => p.toLowerCase() === call.toLowerCase());
             if (!callees.length) {
               found.push({
                 path: `${label}${where}`,
+                oid: null,
                 problems: [`calls ${call}, which isn't there`],
               });
             }
@@ -237,11 +258,18 @@ export function createMirrors({
         return found;
       };
       const found = [];
-      for (const { ref, new: tip, bases = [] } of updates) {
+      for (const { ref, new: tip, bases = [], ifExists = false } of updates) {
         if (/^0+$/.test(tip)) continue;
+        if (ifExists && !(await filesOf(ref.slice("refs/heads/".length)))) continue;
         const defaults = (await filesOf(base)) ?? new Map();
-        for (const f of await examine(tip, defaults, new Map(), "")) found.push({ ref, ...f });
-        const tipFiles = await workflowFiles(tip, env);
+        // A file refused at the tip is said once, not again for each merge it is in.
+        const said = new Set();
+        const report = (f) => {
+          if (f.oid && said.has(f.oid)) return;
+          if (f.oid) said.add(f.oid);
+          found.push({ ref, path: f.path, problems: f.problems });
+        };
+        for (const f of await examine(tip, defaults, "")) report(f);
         for (const into of new Set([base, ...bases])) {
           const before = await filesOf(into);
           if (!before) continue;
@@ -255,9 +283,7 @@ export function createMirrors({
             });
           }
           if (merge.conflicts.length) continue;
-          for (const f of await examine(merge.tree, before, tipFiles, where)) {
-            found.push({ ref, ...f });
-          }
+          for (const f of await examine(merge.tree, before, where)) report(f);
         }
       }
       return found;
@@ -298,11 +324,15 @@ export function createMirrors({
   // check() for a branch already on GitHub (`branch`), merged with `into`: before a pull
   // request is opened into it or marked ready, which run its workflows from a new merge.
   async function checkBranch({ repo, token, base, branch, into }) {
+    await swept;
     await mkdir(spoolRoot, { recursive: true });
     const dir = await mkdtemp(join(spoolRoot, "branch-"));
     try {
       const ref = `refs/heads/${branch}`;
-      return await check({ repo, token, base, updates: [{ ref, new: ref, bases: [into] }], dir });
+      // Fetched first, then read only if GitHub has it: a branch it doesn't have runs nothing,
+      // and GitHub refuses its pull request.
+      const updates = [{ ref, new: ref, bases: [into], ifExists: true }];
+      return await check({ repo, token, base, updates, dir });
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

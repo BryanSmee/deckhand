@@ -11,9 +11,10 @@
 // the run's repo's own, from a branch of that repo the run may push (broker.mjs allow()), and
 // makes the change with a token of its own that the sandbox never sees.
 //
-// Opening a pull request, or marking it ready, runs its workflows from a new merge of its
-// branch with its base: for a repo granted `allow_workflows`, its workflow files are checked
-// in that merge first, as the git gateway checks a push (git-gateway.mjs checkBranch()).
+// Opening, editing, readying or drafting a pull request runs its workflows from a new merge of
+// its branch with its base: for a repo granted `allow_workflows`, its workflow files are
+// checked in that merge first, as the git gateway checks a push (git-gateway.mjs
+// checkBranch()).
 //
 // Served on the broker's port, which only the runs' networks reach.
 import { branchAllowed, NOT_ITS_SANDBOX } from "./broker.mjs";
@@ -123,7 +124,10 @@ export function createPrReady({
     if (asked.action === "create") return create(req, res, asked);
     const pr = await ownPullRequest(res, asked);
     if (!pr) return;
-    if (asked.action === "edit") return edit(req, res, asked);
+    // Each change is an event (`edited`, `ready_for_review`, `converted_to_draft`) that runs
+    // the pull request's workflows from a new merge with its base.
+    const pass = () => workflowsPass(res, asked.ref, pr.head.ref, pr.base?.ref, asked);
+    if (asked.action === "edit") return (await pass()) && edit(req, res, asked);
     const { repo, action, ref, github } = asked;
 
     const wanted = action === "draft";
@@ -138,7 +142,7 @@ export function createPrReady({
         error: `${ref} conflicts with ${base}: rebase on origin/${base} first (git fetch origin, git rebase origin/${base}, git push --force-with-lease)`,
       });
     }
-    if (!wanted && !(await workflowsPass(res, ref, pr.head.ref, pr.base?.ref, asked))) return;
+    if (!(await pass())) return;
     try {
       const { token } = await github.repoToken(repo, PUSH_PERMISSIONS);
       await mutate(token, action, pr.node_id);

@@ -110,8 +110,12 @@ the tip's merge (`git merge-tree`) with the default branch and with the base of 
 request from that branch: GitHub runs a pull request's workflows from that merge, which can
 hold a secret or a write permission the base added after the branch was cut, around a step the
 branch edits. A workflow that doesn't merge cleanly refuses the push until the branch is
-rebased. The same merge check runs again before the listener opens a run's pull request (into
-whatever base it asks for) or marks one ready, since both run its workflows from a new merge.
+rebased. A merge's workflows are followed into the reusable workflows they call, as merged,
+even when the tip has the same caller: a branch cut from an older default branch can pair its
+caller with the base's newer callee. The same merge check runs again before the listener
+opens, edits, readies or drafts a run's pull request (into whatever base it asks for), since
+each runs its workflows from a new merge (`opened`, `edited`, `ready_for_review`,
+`converted_to_draft`).
 The push is refused, with git's `[remote rejected]` naming the file and the rule, when
 a changed workflow:
 
@@ -119,6 +123,9 @@ a changed workflow:
   or a `permissions:`, at the top or in a job, other than `read-all`, `{}` or scopes set to
   `read` or `none`: `write-all`, any `write` scope (`contents`, `actions`, `id-token`,
   `packages`…) and an expression are refused, keys matched without case;
+- has a job with an `environment:`: it would read that environment's secrets through a
+  workflow it calls, and the deployment it creates may start the `on: deployment` workflows of
+  the deployed commit: the maintainers' copies, with their secrets, over the run's code;
 - mentions `secrets` anywhere, in a key or a value, YAML escapes decoded: `secrets.X`,
   `secrets[...]`, `toJSON(secrets)`, `secrets: inherit`, and letters that fold to it
   (`ſecrets`, full-width); or has a non-ASCII character inside a `${{ }}` expression, whose
@@ -139,25 +146,26 @@ forwarded unchecked. Repositories without the grant don't change: their pushes s
 unread, and GitHub refuses their workflow changes.
 
 A checked workflow still runs the branch's code, with a `GITHUB_TOKEN` that reads. A job that
-calls a reusable workflow from another repository (or another ref of this one,
-`uses: owner/repo/…@ref`) is refused: that file never goes through the gateway, and a job of
-its with an `environment:` reads that environment's secrets. One of this repository's
-(`uses: ./.github/workflows/x.yml`) is checked with the same rules, changed or not, and so are
-the ones it calls. The local actions a workflow runs can't read `secrets`. Triggers that run the default branch's version
-(`pull_request_target`, `workflow_run`, `schedule`, `workflow_dispatch`) run the maintainers'
-files, not the run's. Not checked:
+calls a reusable workflow from another repository (or another ref of this one, `uses:
+owner/repo/…@ref`) is refused: that file never goes through the gateway, and a job of its with
+an `environment:` reads that environment's secrets. One of this repository's (`uses:
+./.github/workflows/x.yml`) is checked with the same rules, changed or not, and so are the ones
+it calls. The local actions a workflow runs can't read `secrets`. Triggers that run the default
+branch's version (`pull_request_target`, `workflow_run`, `schedule`) run the maintainers'
+files, not the run's; `workflow_dispatch` runs the file of the ref it is given, which for a
+run's branch was checked at its tip. Not checked:
 
 - workflows already on the default branch that run a branch's code with write permissions or
   secrets (true without the grant too: see below);
 - self-hosted runners: a workflow picks its runner with `runs-on`, so any self-hosted runner
   the repository can use runs a branch's code;
 - configuration variables (`vars`), which any workflow reads: keep secrets out of them;
-- a base's later changes: each pull request event (`labeled`, `edited`, `reopened`, a re-run
-  by hand…) merges the branch with its base as it is then. The branch's next push, and the
-  listener opening or readying its pull request, check the merge again, but an event in
-  between, after the base's workflows changed, runs a merge nobody checked. Limit
-  environments' deployment branches (below) so that such a merge still can't read their
-  secrets.
+- a base's later changes: each pull request event a maintainer causes (`labeled`, `reopened`, a
+  re-run by hand, a merge queue's `merge_group`…) merges the branch with its base as it is
+  then. The branch's next push, and the listener opening, editing, readying or drafting its
+  pull request, check the merge again, but an event in between, after the base's workflows
+  changed, runs a merge nobody checked. Limit environments' deployment branches (below) so that
+  such a merge still can't read their secrets.
 
 The mirrors take a copy of each granted repository in the data volume; a mirror's first fetch
 clones the repository, and may take up to an hour. A push is saved in the listener's temporary

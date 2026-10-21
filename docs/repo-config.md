@@ -179,19 +179,20 @@ GitHub gets it, and refuses the push, naming the file and the rule, unless the w
 - has a top-level `permissions:` of `read-all`, `{}` or scopes set to `read` or `none`, and no
   `write` scope or expression in a job's `permissions:` either;
 - doesn't mention `secrets` anywhere (`secrets.X`, `toJSON(secrets)`, `secrets: inherit`…);
+- has no job with an `environment:`;
 - calls no reusable workflow from another repository or ref (`uses: owner/repo/…@ref`); one of
   this repository's (`uses: ./.github/workflows/x.yml`) must pass these rules too;
 - keeps to a strict YAML subset: no anchors, aliases, tags, merge keys, duplicate keys or
   several documents, and no plain or quoted value or flow collection over several lines (use
   `|` or `>` blocks).
 
-The same goes for the branch's merge with the default branch and with its pull requests'
-bases, which GitHub runs a pull request's workflows from, checked again when the pull request
-is opened or marked ready: a workflow that doesn't merge cleanly refuses the push until the
-branch is rebased on the default branch. Workflows the default branch already has, and deleted
-ones, aren't checked. A workflow that needs more (a deploy, a secret) is the maintainers' to
-write. See
-[GitHub Actions on Deckhand's branches](security.md#github-actions-on-deckhands-branches).
+The same goes for the branch's merge with the default branch and with its pull requests' bases,
+which GitHub runs a pull request's workflows from, checked again when the pull request is
+opened, edited, marked ready or turned back into a draft: a workflow that doesn't merge cleanly
+refuses the push until the branch is rebased on the default branch. Workflows the default
+branch already has, and deleted ones, aren't checked. A workflow that needs more (a deploy, a
+secret) is the maintainers' to write. See [GitHub Actions on Deckhand's
+branches](security.md#github-actions-on-deckhands-branches).
 
 ## Images
 

@@ -394,10 +394,27 @@ test("allow_workflows: a branch whose workflows fail merged with the base is nei
     ["org/repo", "issue-1-x", "main"],
   ]);
   assert.deepEqual([seen.writes, seen.mutations], [[], []]);
-  // Back to draft needs no check; a check that fails refuses, rather than skip it.
+  // Editing it runs its workflows too (`edited`): the same check.
+  const edited = await post("/pr/org/repo/7/edit", secret, "POST", { title: "New" });
+  assert.equal(edited.status, 422);
+  assert.deepEqual(seen.writes, []);
+  // A check that fails refuses, rather than skip it.
   why = new Error("git fetch: down");
   assert.equal((await post("/pr/org/repo/7/ready", secret)).status, 502);
   why = null;
   assert.equal((await post("/pr/org/repo/7/ready", secret)).status, 200);
   assert.equal((await post("/pr/org/repo/create", secret, "POST", into)).status, 201);
+  assert.equal((await post("/pr/org/repo/7/edit", secret, "POST", { title: "New" })).status, 200);
+});
+
+test("allow_workflows: back to draft (`converted_to_draft`) is checked too", async (t) => {
+  const checked = [];
+  const { broker, seen, post } = await servePrReady(t, {
+    pulls: { 7: pull({ draft: false }) },
+    checkWorkflows: async (...args) => (checked.push(args), "no"),
+  });
+  const res = await post("/pr/org/repo/7/draft", issueRun(broker));
+  assert.deepEqual(res, { status: 422, body: { error: "Deckhand: no" } });
+  assert.deepEqual(checked, [["org/repo", "issue-1-x", "main"]]);
+  assert.deepEqual(seen.mutations, []);
 });
