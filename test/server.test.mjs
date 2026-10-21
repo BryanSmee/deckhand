@@ -2134,9 +2134,10 @@ modes:
     );
     const posted = JSON.parse(review.body);
     assert.equal(posted.event, "REQUEST_CHANGES");
+    // The model's 6/10, capped by its high finding.
     assert.match(
       posted.body,
-      /^\*\*Verdict: request changes\*\* · Rating: 6\/10\n\nFine overall\./,
+      /^\*\*Verdict: request changes\*\* · Rating: 5\/10\n\nFine overall\./,
     );
     assert.match(posted.body, /### 🟠 High \(1\)\n\n- `a\.mjs:3`: no test\. Fix: add one\./);
     const runEnv = readFileSync(join(dir, "run-env"), "utf8");
