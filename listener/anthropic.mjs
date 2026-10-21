@@ -37,6 +37,7 @@ const ROUTES = [
 const ERRORS = {
   body: (type, message) => ({ type: "error", error: { type, message } }),
   auth: "authentication_error",
+  forbidden: "permission_error",
   unavailable: "api_error",
   notFound: "not_found_error",
   busy: "rate_limit_error",

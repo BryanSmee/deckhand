@@ -38,6 +38,7 @@ export const RELAYED_PATHS = {
 const ERRORS = {
   body: (status, message) => ({ error: { status, message } }),
   auth: "UNAUTHENTICATED",
+  forbidden: "PERMISSION_DENIED",
   unavailable: "UNAVAILABLE",
   notFound: "NOT_FOUND",
   busy: "RESOURCE_EXHAUSTED",
@@ -73,6 +74,8 @@ export function createGoogleRelay({
     drop: ["authorization", "x-goog-api-key"],
     authHeaders: async () => ({ "x-goog-api-key": credential }),
     secrets: () => [credential],
+    // Not bound to the sandbox's address yet (#254): see the relay's below.
+    bound: false,
     log,
   });
 
@@ -104,6 +107,9 @@ export function createGoogleRelay({
           if (status === 401) plan.refused(headers.authorization);
         },
         secrets: () => (plan ? plan.secrets() : []),
+        // Relayed calls arrive from the egress proxy, not the sandbox: their source address
+        // says nothing of the run (#254).
+        bound: false,
         log,
       });
       return { prefix, handle };
