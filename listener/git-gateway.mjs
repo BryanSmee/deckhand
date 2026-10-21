@@ -8,12 +8,17 @@
 // force-pushes and deletes alike: another task's branch, a maintainer's pull request or
 // gh-pages stay out of reach.
 //
+// That token writes contents only, so GitHub refuses a push that touches .github/workflows/,
+// unless the repo is granted `allow_workflows` (grants.mjs): then a push whose refs all pass
+// gets one with `workflows: write` too. The grant is read on each push, so revoking it
+// applies to the next one.
+//
 // Only the smart HTTP push service: fetches go straight to GitHub with the read token.
 // Served on the broker's port, which only the runs' networks reach.
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { branchAllowed, NOT_ITS_SANDBOX } from "./broker.mjs";
-import { PUSH_PERMISSIONS } from "./github-app.mjs";
+import { PUSH_PERMISSIONS, WORKFLOW_PUSH_PERMISSIONS } from "./github-app.mjs";
 
 // The ref updates come first in a push: anything bigger than this before them is not git. A
 // ref update is a hundred bytes or so; a push of hundreds of branches still fits.
@@ -148,6 +153,7 @@ export function refusal(ref, base, branches) {
 export function createGitGateway({
   broker, // broker.mjs: the run a secret belongs to
   app, // () => the GitHub App (github-app.mjs), or null before /setup
+  allowWorkflows = () => false, // (repo) => whether its grant sets `allow_workflows`
   githubUrl = "https://github.com",
   fetch = globalThis.fetch,
   log = () => {},
@@ -254,8 +260,25 @@ export function createGitGateway({
     return { repo, service, run, github };
   }
 
-  // The body of a push whose every ref update the run may make, or nothing once the push is
-  // refused (answered with git's own rejection report when the client reads one).
+  // The push's refs refused with `reasons` (ref → why): what's left of the pack is read and
+  // dropped, and git's own rejection report sent when the client reads one.
+  async function refuse(req, res, repo, parsed, reasons) {
+    log(`Git gateway: refused a push to ${repo}: ${[...reasons.values()].join("; ")}`);
+    // The pack is not forwarded: let the client finish sending it.
+    await drain(req, parsed.body);
+    const report = rejection(parsed.refs, parsed.caps, reasons);
+    if (!report) {
+      return fail(res, 403, [...reasons.values()].map((r) => `Deckhand: ${r}`).join("\n"));
+    }
+    res.writeHead(200, {
+      "content-type": "application/x-git-receive-pack-result",
+      "cache-control": "no-cache",
+    });
+    res.end(report);
+  }
+
+  // A push whose every ref update the run may make: { body, token }, `token` the gateway's own
+  // for it, or nothing once the push is refused.
   async function checkPush(req, res, { repo, run, github }) {
     let parsed;
     try {
@@ -277,26 +300,40 @@ export function createGitGateway({
       const why = refusal(ref, base, run.branches);
       if (why) reasons.set(ref, why);
     }
-    if (!reasons.size) return parsed.body;
-    log(`Git gateway: refused a push to ${repo}: ${[...reasons.values()].join("; ")}`);
-    // The pack is not forwarded: let the client finish sending it.
-    await drain(req, parsed.body);
-    const report = rejection(parsed.refs, parsed.caps, reasons);
-    if (!report) {
-      return fail(res, 403, [...reasons.values()].map((r) => `Deckhand: ${r}`).join("\n"));
+    if (reasons.size) return refuse(req, res, repo, parsed, reasons);
+    // Only now: a push of no branch of the run's (a fork's pull request has none) never gets it.
+    if (!workflowsGranted(repo)) return { body: parsed.body, token: null };
+    try {
+      const { token } = await github.repoToken(repo, WORKFLOW_PUSH_PERMISSIONS);
+      return { body: parsed.body, token };
+    } catch (error) {
+      log(`Git gateway: ${repo}: ${error.message ?? error}`);
+      // GitHub answers 422 when the installation lacks a permission asked for. Never pushed
+      // without it: the run would see GitHub's refusal and not know the grant is there.
+      const why =
+        error.status === 422
+          ? "`allow_workflows` is granted but the App doesn't have the Workflows permission: add Workflows: read and write in its settings and accept it on the installation (docs/setup.md)"
+          : "couldn't get a token for this push; try again";
+      return refuse(req, res, repo, parsed, new Map(parsed.refs.map((ref) => [ref, why])));
     }
-    res.writeHead(200, {
-      "content-type": "application/x-git-receive-pack-result",
-      "cache-control": "no-cache",
-    });
-    res.end(report);
   }
 
-  // Sends the request on to GitHub with the gateway's own push token, and its answer back.
-  async function forward(req, res, url, { repo, service, github }, body) {
+  // Whether the repo's grant sets `allow_workflows` now; not when it can't be read.
+  function workflowsGranted(repo) {
+    try {
+      return allowWorkflows(repo) === true;
+    } catch (error) {
+      log(`Git gateway: ${repo}: ${error.message ?? error}`);
+      return false;
+    }
+  }
+
+  // Sends the request on to GitHub with the gateway's own push token (`token`, or one with
+  // PUSH_PERMISSIONS), and its answer back.
+  async function forward(req, res, url, { repo, service, github }, body, token) {
     let upstream;
     try {
-      const { token } = await github.repoToken(repo, PUSH_PERMISSIONS);
+      token ??= (await github.repoToken(repo, PUSH_PERMISSIONS)).token;
       const headers = {
         authorization: `Basic ${Buffer.from(`x-access-token:${token}`).toString("base64")}`,
         "user-agent": req.headers["user-agent"] ?? "git/deckhand",
@@ -326,12 +363,9 @@ export function createGitGateway({
     const url = new URL(req.url, "http://broker");
     const admitted = await admit(req, res, url);
     if (!admitted) return;
-    let body;
-    if (admitted.service !== "info/refs") {
-      body = await checkPush(req, res, admitted);
-      if (!body) return;
-    }
-    await forward(req, res, url, admitted, body);
+    if (admitted.service === "info/refs") return forward(req, res, url, admitted);
+    const push = await checkPush(req, res, admitted);
+    if (push) await forward(req, res, url, admitted, push.body, push.token);
   }
 
   return { handle };

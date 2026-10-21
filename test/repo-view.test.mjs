@@ -184,6 +184,9 @@ test("docker: refused without allow_docker; granted, its engine noted when there
     note: "the operator hasn't set SANDBOX_ENGINE",
   });
   assert.equal(granted.grant.allowDocker, true);
+  assert.equal(granted.grant.allowWorkflows, false);
+  const workflows = view("", { "org/app.yaml": "allow_workflows: true\n" });
+  assert.equal(workflows.grant.allowWorkflows, true);
   const withEngine = { ...config, engine: "sysbox" };
   const { settings } = parseRepoConfig("docker: true\n", withEngine);
   const grant = grantFor(grantsFrom(grants, withEngine), withEngine, "org/app");

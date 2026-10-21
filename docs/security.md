@@ -81,9 +81,47 @@ and pushes made with an App's token do trigger them. Code a sandbox wrote can th
 - read any secret those workflows get and send it anywhere: Actions runners aren't behind
   the egress proxy.
 
-The workflow files themselves can't change: neither the sandbox's token nor the gateway's
-has the `workflows` permission, so GitHub refuses a push that adds or edits one. What they
-run can.
+By default the workflow files themselves can't change: neither the sandbox's token nor the
+gateway's has the `workflows` permission, so GitHub refuses a push that adds or edits one.
+What they run can.
+
+**`allow_workflows`** (a repository's own grants file only, never `default.yaml`) lifts that
+for one repository: the gateway then pushes the run's branches with a token that also has
+`workflows: write`, so a run can add a CI job or bump the Node version of a workflow. That
+token is still the gateway's alone: the sandbox's own token never has `workflows`, light and
+research runs never push, and a fork's pull request has no branch to push. The grant is read
+again on each push, so taking it back applies to the next one.
+
+It opens much more than the workflows a repository already has. `on: push` and
+`on: pull_request` run the branch's own workflow files, so code a sandbox wrote decides what
+Actions runs, and with what:
+
+- **The default branch, around the gateway.** The gateway still refuses pushes to it, but a
+  workflow the run pushed can declare `permissions: contents: write` for itself: a
+  same-repository workflow's `GITHUB_TOKEN` gets what it asks for, whatever the repository's
+  default workflow permissions say (only fork pull requests are capped at read). That workflow
+  can then push to the default branch, or merge into it. Only an enforced ruleset or branch
+  protection on the default branch stops it, and GitHub doesn't enforce them on private
+  repositories of a free plan.
+- **Every secret outside a protected environment.** A workflow can name any repository or
+  organization secret the repository can use (`${{ secrets.NAME }}`), not just those its
+  existing workflows use, and send it anywhere: Actions runners aren't behind the egress
+  proxy. Limiting the existing deploy workflows to the default branch doesn't help: the run
+  writes its own.
+
+So grant it only to a repository where both hold:
+
+- the default branch has an enforced ruleset (or branch protection) requiring a pull request
+  with an approval, with no bypass for the App or for GitHub Actions, and **Allow GitHub
+  Actions to create and approve pull requests** is off (_Settings → Actions → General_);
+- every deploy and publishing secret is an
+  [environment](https://docs.github.com/en/actions/deployment/targeting-different-environments/using-environments-for-deployment)
+  secret, behind required reviewers or deployment branches limited to the default branch, and
+  the repository and organization secrets it can reach are ones you'd accept a sandbox reading.
+
+The App needs the Workflows permission for it ([setup](setup.md#2-create-the-github-app)):
+without it, the gateway refuses every push of that repository, its runs' first one included,
+and says so, rather than pushing without it.
 
 This is GitHub's model for any tool or person that pushes branches, not something Deckhand
 changes: your workflows are yours to set up. On each repository the App is installed on:
@@ -94,7 +132,8 @@ changes: your workflows are yours to set up. On each repository the App is insta
 - keep deploy and publishing secrets out of `push` and `pull_request` workflows that run on
   any branch: put them in an
   [environment](https://docs.github.com/en/actions/deployment/targeting-different-environments/using-environments-for-deployment)
-  with required reviewers, or limit those workflows to the default branch;
+  with required reviewers, or limit those workflows to the default branch (not enough with
+  `allow_workflows`, above: a run writes its own workflows);
 - treat pull requests from the App's bot (`<app>[bot]`) like an outsider's in workflows
   and in the [preview hook](repo-config.md#preview-hook): they are same-repository and look
   trusted, but their code comes from a sandbox.
@@ -487,6 +526,12 @@ allow_docker: true
 # `/mode research` runs: any public host, without its code or a GitHub token (see Research
 # runs below).
 allow_research: true
+# Its runs' pushes may add or change files under .github/workflows/: the git gateway's token
+# gets `workflows: write`. Its branches' workflows can then reach the default branch and its
+# secrets: only with a ruleset and environment secrets (see GitHub Actions on Deckhand's
+# branches above). Needs the App's Workflows permission, or every push of the repository is
+# refused. Per repository only.
+allow_workflows: true
 # Its own limits; missing ones keep default.yaml's, else the built-in 2 CPUs, 4g, 2048.
 limits: { cpus: 4, memory: 8g, pids: 4096 }
 # Roots it may mount from (read-only unless read_only: false).
@@ -496,7 +541,8 @@ mounts:
   - /srv/datasets
 ```
 
-`default.yaml` takes the same keys but `mounts` and `allow_docker`, for every repository:
+`default.yaml` takes the same keys but `mounts`, `allow_docker` and `allow_workflows`, for
+every repository:
 
 ```yaml
 # default.yaml
@@ -511,9 +557,9 @@ cached_hosts: [deb.debian.org]
 limits: { memory: 8g }
 ```
 
-`mounts` and `allow_docker` in `default.yaml` are errors: a root or a container engine for
-every repository is too broad to grant by accident, so they are granted one repository at a
-time.
+`mounts`, `allow_docker` and `allow_workflows` in `default.yaml` are errors: a root, a
+container engine or workflow files run with the Actions secrets of every repository are too
+broad to grant by accident, so they are granted one repository at a time.
 
 **Errors stop runs, file by file.** A repository's file with errors grants that repository
 nothing: its runs stop, with a reply naming the file (the details are in the listener's logs,

@@ -74,6 +74,7 @@ const CONFIG: RepoConfig = {
       allowBranchDockerImages: false,
       allowDocker: false,
       allowResearch: false,
+      allowWorkflows: false,
       hosts: ["pypi.org"],
       cachedHosts: [],
       mounts: [],
@@ -243,6 +244,9 @@ test("a repository's panel: errors first, then what runs get, then the file", as
   const pypi = screen.getByText("pypi.org", { selector: "th code" }).closest("tr")!;
   expect(within(pypi).getByText("grants/org/api.yaml")).toBeTruthy();
   expect(within(pypi).getByText("from operator")).toBeTruthy();
+  // What the operator grants, workflow pushes included.
+  const workflows = screen.getByText("allow_workflows", { selector: "th code" }).closest("tr")!;
+  expect(within(workflows).getByText("false")).toBeTruthy();
   expect(screen.getByText(/users: \[alice\]/, { selector: "pre" })).toBeTruthy();
   expect(screen.getByRole("link", { name: "on GitHub" }).getAttribute("href")).toBe(
     "https://github.com/org/api/blob/main/.deckhand.yaml",
