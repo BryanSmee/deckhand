@@ -33,7 +33,8 @@ import {
   loadCredentials,
   saveCredentials,
 } from "./github-app.mjs";
-import { createGitHub, fetchTitle, listLabelled, listPulls } from "./github.mjs";
+import { pullEntry } from "./events.mjs";
+import { createGitHub, fetchPull, fetchTitle, listLabelled, listPulls } from "./github.mjs";
 import { grantErrors, grantFor, loadGrants } from "./grants.mjs";
 import { createHttp } from "./http.mjs";
 import { createHistory } from "./history.mjs";
@@ -42,6 +43,7 @@ import { createInputs } from "./inputs.mjs";
 import { createOnboarding, createOnboardingStore } from "./onboarding.mjs";
 import { createPreviews } from "./previews.mjs";
 import { createPulls } from "./pulls.mjs";
+import { createRedeliveries } from "./redeliveries.mjs";
 import { fetchEgressCa } from "./egress.mjs";
 import { createRepoCheck } from "./repo-check.mjs";
 import { readRepoFile } from "./repo-config.mjs";
@@ -198,6 +200,7 @@ const pulls = createPulls({
   path: join(config.dataDir, "pulls.json"),
   log,
   listPulls: (repo) => listPulls(github, repo),
+  getPull: (repo, number) => fetchPull(github, repo, number),
 });
 
 // Open issues labelled needs-input: from webhooks, and looked up once per start (inputs.mjs).
@@ -343,6 +346,11 @@ ctx.prReady = createPrReady({
   log,
   // A granted repo's workflows, in the merge a new or ready pull request runs them from.
   checkWorkflows: (repo, branch, base) => ctx.gitGateway.checkBranch(repo, branch, base),
+  // The dashboard has the change at once, whether its delivery comes or not.
+  record: (repo, pr, readyAt) => {
+    const { key, pr: entry } = pullEntry(repo, pr, readyAt);
+    if (pulls.record(key, entry)) log(`${key}: pull request #${entry.number} ${entry.state}`);
+  },
 });
 
 // --- Tasks, runs and restarts --------------------------------------------------------------
@@ -460,6 +468,22 @@ const http = createHttp(ctx, {
 http.listen();
 createBrokerHttp(ctx).listen();
 
+// Deliveries GitHub couldn't hand over (the listener down, restarting, unreachable), asked for
+// again at start and every few minutes (redeliveries.mjs).
+const redeliveries = createRedeliveries({
+  path: join(config.dataDir, "redeliveries.json"),
+  app: () => ctx.app,
+  handled: http.handled,
+  log,
+});
+// A pull request delivery the listener asked for again is handled as it is now (http.mjs).
+ctx.redelivered = redeliveries.redelivered;
+// The dashboard's Sync: the same now, and the open pull requests' states asked again.
+ctx.sync = async () => {
+  const [redelivered, changed] = await Promise.all([redeliveries.scan(), pulls.resync()]);
+  return { redelivered: redelivered ?? 0, pulls: changed };
+};
+
 log(`Deckhand ${ctx.server.version}`);
 log(
   `Agents: ${config.agent} for work, ${config.brainstormAgent} for light runs; repos may pick ${config.agents.join(", ")}${config.fallbacks.length ? `; on provider errors, falls back to ${config.fallbacks.join(", ")}` : ""}`,
@@ -490,7 +514,10 @@ ctx.waits.start();
 // After restoreRuns() and loadQueue(): what they bring back is kept.
 const history = createHistory(ctx);
 history.start();
+redeliveries.start();
 if (ctx.app) checkApp();
+// Pull requests that changed while the listener was down, or whose delivery was lost.
+if (ctx.app) pulls.resync().catch((error) => log(`Pull requests: ${error.message ?? error}`));
 // Labels added or removed while the listener was down.
 if (ctx.app && config.needsInputLabel) {
   repoList
@@ -508,6 +535,7 @@ process.on("SIGTERM", () => {
   ctx.conflicts.stop();
   ctx.waits.stop();
   history.stop();
+  redeliveries.stop();
   clearInterval(relinking);
   log("Stopping: running sandboxes go on, the next listener picks them up");
   // Replies being posted and comments being admitted first, then what they leave.

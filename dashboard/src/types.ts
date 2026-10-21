@@ -160,6 +160,13 @@ export interface Preview {
   since: number;
 }
 
+// What the header's Sync did (POST api/sync, listener/server.mjs sync()): deliveries GitHub
+// couldn't hand over, asked for again, and pull requests whose state changed.
+export interface SyncResult {
+  redelivered: number;
+  pulls: number;
+}
+
 // Which Deckhand runs and since when (listener/status.mjs serverInfo()).
 export interface ServerInfo {
   // DECKHAND_VERSION: a release ("1.2.3"), "edge-<short sha>" for a push to main, or "dev".

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
-import { pullRequest } from "../listener/events.mjs";
+import { pullRequest, replayedPull } from "../listener/events.mjs";
 import { createPulls } from "../listener/pulls.mjs";
 import { tempDir, testConfig } from "./helpers.mjs";
 
@@ -177,4 +177,89 @@ test("pulls: the open ones, for the conflict watcher", (t) => {
     pulls.open().map(([key]) => key),
     ["org/repo#30", "org/repo#32"],
   );
+});
+
+test("pulls: resync asks GitHub about the open ones again, so a lost delivery is caught up", async (t) => {
+  const path = tempPath(t);
+  const listed = [];
+  const fetched = [];
+  const listPulls = async (repo) => {
+    listed.push(repo);
+    if (repo === "org/broken") throw new Error("Not Found");
+    return [
+      { number: 31, html_url: "u31", state: "open", draft: false },
+      { number: 33, html_url: "u33", state: "closed", merged_at: "2026-10-21" },
+    ];
+  };
+  // Not in the recent list: asked one by one.
+  const getPull = async (repo, number) => {
+    fetched.push(`${repo}#${number}`);
+    return { number, html_url: `u${number}`, state: "closed", merged: false };
+  };
+  const pulls = createPulls({ path, listPulls, getPull });
+  pulls.record("org/repo#30", pr(31, "draft"));
+  pulls.record("org/repo#32", pr(33, "ready", NOW));
+  pulls.record("org/repo#34", pr(35, "draft"));
+  pulls.record("org/repo#36", pr(37, "merged"));
+  pulls.record("org/broken#1", pr(2, "draft"));
+  assert.equal(await pulls.resync(), 4);
+  assert.deepEqual(listed, ["org/repo", "org/broken"]);
+  assert.deepEqual(fetched, ["org/repo#35", "org/broken#2"]);
+  assert.deepEqual(pulls.get("org/repo#30"), { ...pr(31, "ready"), url: "u31" });
+  // When it turned ready stays.
+  assert.deepEqual(pulls.get("org/repo#32"), { ...pr(33, "merged", NOW), url: "u33" });
+  assert.equal(pulls.get("org/repo#34").state, "closed");
+  assert.equal(pulls.get("org/broken#1").state, "closed");
+  // Kept, and nothing more to change.
+  const next = createPulls({ path, listPulls, getPull });
+  assert.equal(next.get("org/repo#30").state, "ready");
+  assert.equal(await next.resync(), 0);
+});
+
+test("pulls: resync lets fill() look up the tasks without one again", async (t) => {
+  let asked = 0;
+  const listPulls = async () => (asked++, []);
+  const pulls = createPulls({ path: tempPath(t), listPulls });
+  await pulls.fill(["org/repo#4"]);
+  await pulls.fill(["org/repo#4"]);
+  assert.equal(asked, 1);
+  await pulls.resync();
+  await pulls.fill(["org/repo#4"]);
+  assert.equal(asked, 2);
+});
+
+test("pulls: a ready pull request recorded ready again keeps when it turned ready", (t) => {
+  const pulls = createPulls({ path: tempPath(t), listPulls: async () => [] });
+  // pr-ready.mjs, then its ready_for_review delivery: one readyAt, one notification.
+  pulls.record("org/repo#30", pr(31, "ready", NOW));
+  pulls.record("org/repo#30", pr(31, "ready", NOW + 5000));
+  assert.equal(pulls.get("org/repo#30").readyAt, NOW);
+  // Back to draft, then ready again: a new one.
+  pulls.record("org/repo#30", pr(31, "draft"));
+  pulls.record("org/repo#30", pr(31, "ready", NOW + 9000));
+  assert.equal(pulls.get("org/repo#30").readyAt, NOW + 9000);
+});
+
+test("a redelivered pull_request delivery: as the pull request is now", () => {
+  const now = (pr) => ({ number: 31, state: "open", draft: false, merged: false, ...pr });
+  const replay = (action, current) => replayedPull(delivery(action), now(current)).action;
+  // Still what it says: kept, with the current pull request.
+  assert.equal(replay("ready_for_review", {}), "ready_for_review");
+  assert.equal(replay("converted_to_draft", { draft: true }), "converted_to_draft");
+  assert.equal(replay("opened", { draft: true }), "opened");
+  assert.equal(replay("closed", { state: "closed", merged: true }), "closed");
+  assert.equal(replay("synchronize", { state: "closed" }), "synchronize");
+  // No longer: an edit, which records its state and nothing else.
+  assert.equal(replay("ready_for_review", { state: "closed", merged: true }), "edited");
+  assert.equal(replay("ready_for_review", { draft: true }), "edited");
+  assert.equal(replay("converted_to_draft", {}), "edited");
+  assert.equal(replay("reopened", { state: "closed" }), "edited");
+  assert.equal(replay("closed", {}), "edited");
+  const merged = replayedPull(delivery("ready_for_review"), now({ state: "closed", merged: true }));
+  assert.deepEqual(pullRequest(config, "pull_request", merged, NOW).pr, {
+    number: 31,
+    url: undefined,
+    state: "merged",
+    readyAt: null,
+  });
 });

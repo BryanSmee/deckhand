@@ -14,11 +14,13 @@ import {
   previewEvent,
   prId,
   pullRequest,
+  replayedPull,
   taskKey,
   touchedItems,
   verified,
   workItem,
 } from "./events.mjs";
+import { fetchPull } from "./github.mjs";
 import { kindOf } from "./modes.mjs";
 import { onboardingTargets } from "./onboarding.mjs";
 import { previewHook } from "./previews.mjs";
@@ -28,7 +30,7 @@ import { staleFor } from "./work.mjs";
 import { publicRun, stream } from "./runlog.mjs";
 import { serveAsset } from "./static.mjs";
 import { closedAs } from "./titles.mjs";
-import { sendJson } from "./web.mjs";
+import { apiRoute, send, sendJson } from "./web.mjs";
 
 // On every answer: the dashboard's own scripts, styles and images only (its build has no
 // inline script), never in a frame (a page on a sibling domain, which SameSite=Lax lets
@@ -71,6 +73,9 @@ export function local(req) {
 // GitHub's delivery ids remembered, newest last: a redelivery of one of them (by hand, or after
 // a timeout on GitHub's side) would queue its comment twice.
 const RECENT_DELIVERIES = 500;
+
+// The dashboard's Sync asks GitHub at most this often: each one lists the App's deliveries.
+const SYNC_MS = 30_000;
 
 // The graph's arrows, blocker → waiting task, for the waits of the tasks `shown`, and the keys
 // of the blockers that aren't shown. A wait names numbers: a pull request on the board is
@@ -308,7 +313,7 @@ export function createHttp(ctx, { dashboardDir }) {
           } catch {
             return;
           }
-          dispatch(req.headers["x-github-event"], payload);
+          guarded(req.headers["x-github-event"], payload, id);
         },
         (error) => log(`Rejected a delivery: ${error.message}`),
       );
@@ -345,6 +350,32 @@ export function createHttp(ctx, { dashboardDir }) {
     return false;
   }
 
+  // A delivery's unexpected throw is logged: it never takes the listener down, nor the
+  // deliveries that come after it (already answered 202, it isn't redelivered).
+  function guarded(event, payload, id) {
+    try {
+      if (event === "pull_request" && ctx.redelivered?.(id)) return replay(event, payload);
+      dispatch(event, payload);
+    } catch (error) {
+      log(`Delivery ${event} ${payload?.action ?? ""} failed: ${error.stack ?? error}`);
+    }
+  }
+
+  // A redelivered pull request delivery, handled as its pull request is now (events.mjs
+  // replayedPull()): its own snapshot may be older than what the listener handled since.
+  function replay(event, payload) {
+    const repo = payload?.repository?.full_name;
+    const number = payload?.pull_request?.number;
+    if (!repo || !number) return dispatch(event, payload);
+    admitted(
+      fetchPull(ctx.github, repo, number).then((current) => {
+        if (!current) return log(`Delivery ${event} ${payload.action}: ${repo}#${number} is gone`);
+        log(`Delivery ${event} ${payload.action}: redelivered, as ${repo}#${number} is now`);
+        dispatch(event, replayedPull(payload, current));
+      }),
+    );
+  }
+
   // A verified delivery: onboarding, a pull request's state, a preview hook or a comment.
   function dispatch(event, payload) {
     const { app } = ctx;
@@ -357,7 +388,7 @@ export function createHttp(ctx, { dashboardDir }) {
       const added = [...(payload.repositories ?? []), ...(payload.repositories_added ?? [])];
       for (const r of added) app.remember(r.full_name, payload.installation?.id);
       const repos = onboardingTargets(config, event, payload, skip);
-      if (repos.length) admitted(ctx.onboarding.onboard(repos, payload.sender.login));
+      if (repos.length) admitted(ctx.onboarding.onboard(repos, payload.sender?.login));
       return;
     }
     const pr = pullRequest(config, event, payload, Date.now(), skip);
@@ -402,6 +433,26 @@ export function createHttp(ctx, { dashboardDir }) {
     }
   }
 
+  // The dashboard's Sync: what GitHub couldn't deliver, asked for again, and the open pull
+  // requests' states (server.mjs sync()).
+  let synced = null;
+  const syncApi = apiRoute({
+    name: "Sync",
+    route: (pathname) => (pathname === "/api/sync" ? { what: "sync" } : null),
+    posts: {
+      sync: async (req, res, user) => {
+        if (synced !== null && Date.now() - synced < SYNC_MS) {
+          return send(res, 429, { error: "Synced a moment ago." });
+        }
+        synced = Date.now();
+        log(`Sync: asked by ${user}`);
+        send(res, 200, await ctx.sync());
+      },
+    },
+    publicUrl: ctx.publicUrl,
+    log,
+  });
+
   function admitted(promise) {
     const done = promise.catch((error) => log(error.stack ?? error));
     admitting.add(done);
@@ -432,6 +483,10 @@ export function createHttp(ctx, { dashboardDir }) {
       return sendJson(res, ctx.status(user ? (repo) => sees(user, repo) : undefined));
     }
     if (req.method === "POST" && req.url === "/webhook") return webhook(req, res);
+    if (req.url.startsWith("/api/sync")) {
+      if (!ctx.app) return res.writeHead(503).end();
+      if (syncApi(req, res, ctx.auth.user(req))) return;
+    }
     if (req.url.startsWith("/api/repos")) {
       if (!ctx.app) return res.writeHead(503).end();
       const user = ctx.auth.user(req);
@@ -466,5 +521,8 @@ export function createHttp(ctx, { dashboardDir }) {
   // A task as the dashboard has it (questions and all), or null.
   const taskOf = (key) => shownTasks().shown.find((t) => t.key === key) ?? null;
 
-  return { listen, admitting, boardKeys, liveKeys, taskOf };
+  // Whether the delivery with this GUID was handled (redeliveries.mjs).
+  const handled = (id) => deliveries.has(id);
+
+  return { listen, admitting, boardKeys, liveKeys, taskOf, handled };
 }

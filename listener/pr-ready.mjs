@@ -16,6 +16,9 @@
 // checked in that merge first, as the git gateway checks a push (git-gateway.mjs
 // checkBranch()).
 //
+// Each change is recorded for the dashboard at once (`record`): the `pull_request` delivery that
+// follows may never come.
+//
 // Served on the broker's port, which only the runs' networks reach.
 import { branchAllowed, NOT_ITS_SANDBOX } from "./broker.mjs";
 import { GITHUB_HEADERS, PUSH_PERMISSIONS } from "./github-app.mjs";
@@ -40,7 +43,19 @@ export function createPrReady({
   log = () => {},
   // (repo, branch, base) => why its workflows can't run merged with `base`, or null.
   checkWorkflows = async () => null,
+  // (repo, pull request as GitHub has it after the change, readyAt or null): pulls.mjs's.
+  record = () => {},
+  now = Date.now,
 }) {
+  // A failure to record only leaves the dashboard behind: the change itself is made.
+  function noted(repo, pr, readyAt) {
+    try {
+      record(repo, pr, readyAt);
+    } catch (error) {
+      log(`Pull requests: ${repo}#${pr.number}: ${error.stack ?? error}`);
+    }
+  }
+
   async function mutate(token, action, id) {
     const name = MUTATIONS[action];
     const res = await fetch(`${api}/graphql`, {
@@ -151,6 +166,7 @@ export function createPrReady({
       return send(res, 502, { error: `GitHub refused to mark ${ref} as ${state}` });
     }
     log(`Pull requests: ${ref} marked as ${state}`);
+    noted(repo, { ...pr, draft: wanted }, wanted ? null : now());
     send(res, 200, { message: `${ref} is marked as ${state}` });
   }
 
@@ -253,6 +269,7 @@ export function createPrReady({
     }
     const pr = await found.json();
     log(`Pull requests: ${repo}#${pr.number} opened from ${head}`);
+    noted(repo, pr, pr.draft ? null : now());
     send(res, 201, { message: `${repo}#${pr.number} is open`, url: pr.html_url });
   }
 
@@ -276,6 +293,7 @@ export function createPrReady({
     }
     const pr = await found.json();
     log(`Pull requests: ${ref} edited (${Object.keys(asked).join(", ")})`);
+    noted(repo, pr, null);
     send(res, 200, { message: `${ref} is edited`, url: pr.html_url });
   }
 

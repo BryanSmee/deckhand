@@ -815,6 +815,11 @@ repository's half of these checks (same origin, the user in `ALLOWED_USERS` and 
 posted on the inbox issue as the App's comment, ending "From the dashboard by @alice", and its
 run reads it as that user's entry, as it would read their own comment there.
 
+Sync (`POST /api/sync`) takes a signed-in session and this dashboard's `Origin`, at most once
+every 30 seconds for everyone. It starts nothing itself: it asks GitHub to redeliver the
+App's deliveries that failed (signed by GitHub as any delivery, then checked as one) and reads
+the open pull requests' states again, for every repository, as the listener does at start.
+
 A run analysis (Analyze in the top bar, `POST /api/repos/<owner>/<repo>/analyze`) passes the
 repository's half of these checks too; its preview (`GET`, the same path) all but the origin,
 as it changes nothing. It only ever reads runs of that repository: they are picked by the

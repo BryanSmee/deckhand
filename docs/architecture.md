@@ -448,6 +448,38 @@ the list, logged. The list is held newest first with an index by id, and both lo
 running run and the latest run of a task still queued, in a brainstorm, waiting or waiting
 for input.
 
+### Missed deliveries
+
+GitHub never retries a failed webhook delivery by itself: one sent while the listener is down
+or restarting, answered `503` while it stops or while its places for unverified bodies are
+full, or cut by a reverse proxy, is lost unless it is redelivered. `redeliveries.mjs` lists
+the App's deliveries with its JWT (`GET /app/hook/deliveries`, newest first, by cursor) at
+start, every 5 minutes, and from the dashboard's Sync (`POST /api/sync`, once per 30 seconds),
+back to the last scan (less 10 minutes, at most 3 days, GitHub's retention), kept in
+`redeliveries.json`. Each GUID none of whose attempts succeeded, whose latest attempt couldn't
+connect, timed out or got a 5xx, is redelivered (`POST …/attempts`), once: the GUIDs asked for
+are kept 3 days, and a 4xx is the listener's own refusal (a bad signature), which would come
+again. A redelivery keeps its GUID: one the same listener process did handle (`http.mjs`
+`firstTime()`, its last 500 GUIDs, in memory) is neither asked for nor handled twice. A
+delivery GitHub recorded as failed (a timeout, say) that a listener since restarted did handle
+is redelivered and handled again; the listener answers `202` as soon as it has the body, so
+GitHub rarely times one out. Comments come back oldest first, whatever their age. A
+redelivered `pull_request` delivery (`redeliveries.mjs` `redelivered()`, the GUIDs it asked
+for) is handled as its pull request is now (`events.mjs` `replayedPull()`): its payload is as
+old as the failed attempt, maybe older than deliveries handled since. Its current state is
+recorded, and an action the pull request no longer matches (ready since merged) becomes
+`edited`, so nothing turns ready, closes or starts a review from it.
+
+A delivery whose handling throws (`dispatch()`) is logged with its event and action; the
+listener goes on with the next one. GitHub got its `202` already, so it isn't redelivered.
+
+Pull request states don't hang on deliveries alone: the listener records the changes it makes
+for runs (`pr-ready.mjs`: ready, draft, opened, edited) in `pulls.json` at once (the
+`ready_for_review` delivery that follows keeps its `readyAt`: one notification), and asks
+GitHub about every open pull request it knows again at start and from Sync
+(`pulls.mjs` `resync()`), so a `ready_for_review`, merge or close older than the redelivery
+window still shows.
+
 ## Agents
 
 Three agents, Claude Code (`claude`), Codex (`codex`) and the Antigravity CLI (`antigravity`),
@@ -566,6 +598,7 @@ tests fake it.
 | `server.mjs`                                                      | Wiring: settings, the GitHub App, `ctx`, the modules; starts the servers, restores runs, handles SIGTERM.                                                                                                                                            |
 | `config.mjs`, `yaml.mjs`                                          | The operator's settings (environment and `config.yaml`), one `SETTINGS` table: each one's type, default and parser; the YAML subset both config files use.                                                                                           |
 | `http.mjs`, `deliveries.mjs`                                      | The public server: webhook deliveries, the dashboard and its API, `/status`, screenshots; the places for unverified bodies.                                                                                                                          |
+| `redeliveries.mjs`                                                | Deliveries GitHub couldn't hand over, found in the App's delivery list and redelivered once (`redeliveries.json`).                                                                                                                                   |
 | `broker-http.mjs`                                                 | The broker's server, on the runs' networks: egress answers, tokens, git, ready for review, the agents' API calls.                                                                                                                                    |
 | `status.mjs`                                                      | `/status`: running runs, reaction updates in flight (`track()`), preview hooks; whether the listener is idle.                                                                                                                                        |
 | `tasks.mjs`                                                       | One queue per issue: admission (`admit()`, `resume()`, open questions), the pause, delivery to a running session.                                                                                                                                    |

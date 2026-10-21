@@ -187,12 +187,23 @@ had them, the listener asks GitHub once and keeps them in `titles.json` in its d
 
 Each task also links to its pull request (the one that closes its issue, or the pull request
 itself), with a badge for its state: draft, ready for review, merged or closed. The
-`pull_request` webhooks keep it current, in `pulls.json`; for tasks from before, the listener
-looks through each repository's 100 most recently updated pull requests once per start. The
+`pull_request` webhooks keep it current, in `pulls.json`, and so do the changes the listener
+makes itself (a run's `gh pr ready`); for tasks from before, the listener looks through each
+repository's 100 most recently updated pull requests once per start, and asks again about the
+open ones at each start, so one that changed while it was down shows its current state. The
 **Ready for review** chip lists the pull requests waiting for you, and the tab's title counts
 them ("(2) Deckhand"). **Notify me** (top right) asks your browser for notifications: while a
 dashboard tab is open, a pull request that turns ready for review raises one, which opens it
 when clicked.
+
+GitHub doesn't retry a webhook it couldn't deliver (the listener down or restarting, a
+reverse proxy or tunnel timing out, an outage on GitHub's side). The listener reads the App's
+**Recent Deliveries** itself at start and every 5 minutes, and asks GitHub to redeliver each
+one that failed, once, within GitHub's 3 days: a comment posted meanwhile still gets its run,
+whatever its age. The App needs no extra permission or event for that: an App can always read
+its own deliveries. **Sync** (in the top bar, after the running and queued counts) does it
+now, and asks GitHub about the open pull requests' states again: for when GitHub is unstable
+and you'd rather not wait.
 
 **Graph** (top right, `#/graph`, or `#/graph/<owner>/<repo>` for one tab) draws the same
 tasks as a graph: an arrow goes from an issue to each one waiting for it (`/after`), drawn left
