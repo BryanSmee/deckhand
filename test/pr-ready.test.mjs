@@ -46,6 +46,8 @@ async function servePrReady(
   } = {},
 ) {
   const seen = { lookups: [], tokens: [], mutations: [], writes: [] };
+  // What the dashboard was told, apart from `seen`: most tests check that one whole.
+  const recorded = [];
   const github = app && {
     request: async (repo, method, path, body) => {
       if (method !== "GET") {
@@ -80,6 +82,9 @@ async function servePrReady(
     api: "https://api.example",
     fetch: graphqlFetch,
     checkWorkflows,
+    record: (repo, pr, readyAt) =>
+      recorded.push({ repo, number: pr.number, draft: pr.draft, readyAt }),
+    now: () => 1000,
   });
   const { url } = await serve(t, (req, res) => prReady.handle(req, res));
   const post = async (path, secret, method = "POST", body) => {
@@ -90,7 +95,7 @@ async function servePrReady(
     });
     return { status: res.status, body: await res.json() };
   };
-  return { broker, seen, post };
+  return { broker, seen, post, recorded };
 }
 
 test("a work run marks its pull request ready, and back to draft, with the gateway's token", async (t) => {
@@ -417,4 +422,24 @@ test("allow_workflows: back to draft (`converted_to_draft`) is checked too", asy
   assert.deepEqual(res, { status: 422, body: { error: "Deckhand: no" } });
   assert.deepEqual(checked, [["org/repo", "issue-1-x", "main"]]);
   assert.deepEqual(seen.mutations, []);
+});
+
+test("the dashboard is told of each change at once, with no pull_request delivery", async (t) => {
+  const pulls = { 7: pull(), 8: pull({ number: 8, draft: false }) };
+  const { broker, post, recorded } = await servePrReady(t, { pulls });
+  const secret = issueRun(broker);
+  assert.equal((await post("/pr/org/repo/7/ready", secret)).status, 200);
+  assert.equal((await post("/pr/org/repo/8/draft", secret)).status, 200);
+  const head = { head: "issue-1-x", title: "Fix" };
+  assert.equal((await post("/pr/org/repo/create", secret, "POST", head)).status, 201);
+  assert.equal((await post("/pr/org/repo/7/edit", secret, "POST", { title: "T" })).status, 200);
+  assert.deepEqual(recorded, [
+    { repo: "org/repo", number: 7, draft: false, readyAt: 1000 },
+    { repo: "org/repo", number: 8, draft: true, readyAt: null },
+    { repo: "org/repo", number: 9, draft: false, readyAt: 1000 },
+    { repo: "org/repo", number: 9, draft: undefined, readyAt: null },
+  ]);
+  // Nothing changed, nothing told.
+  assert.equal((await post("/pr/org/repo/7/draft", secret)).status, 200);
+  assert.equal(recorded.length, 4);
 });

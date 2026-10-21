@@ -93,6 +93,11 @@ export function listPulls(github, repo) {
   );
 }
 
+// One pull request, or null when it is gone (pulls.mjs resync()).
+export function fetchPull(github, repo, number) {
+  return getJson(github, repo, `/repos/${repo}/pulls/${number}`, [404]);
+}
+
 // The repo's open issues labelled `label` (inputs.mjs).
 export function listLabelled(github, repo, label) {
   const name = encodeURIComponent(label);

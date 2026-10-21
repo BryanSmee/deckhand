@@ -175,6 +175,9 @@ async function fakeGitHub(files = {}) {
       if (req.url.startsWith("/repos/org/repo/pulls?state=open&per_page=100&head=")) {
         return res.end("[]");
       }
+      // The App's deliveries (redeliveries.mjs), as JSON, when the test sets them; none
+      // otherwise.
+      if (req.url.startsWith("/app/hook/deliveries?")) return res.end(files.deliveries ?? "[]");
       // A listener that restarted looks the installation up instead of reading it from a
       // delivery.
       if (req.url === "/repos/org/repo/installation") return res.end(JSON.stringify({ id: 7 }));
@@ -429,6 +432,41 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
     assert.equal(delivered, 202);
     // Stalled bodies are dropped after a while: readDelivery() in deliveries.test.mjs.
     for (const req of held) req.destroy();
+  });
+
+  test("a delivery whose handling throws is logged, and the next one is still handled", async (t) => {
+    const { listener, send } = await listen(t);
+    assert.equal((await send(null)).status, 202);
+    await listener.until(/Delivery issue_comment {2}failed: TypeError/);
+    await send(comment("alice"));
+    await listener.until("done (ok)");
+  });
+
+  test("deliveries GitHub couldn't hand over are redelivered at start, once", async (t) => {
+    const at = (minutes) => new Date(Date.now() - minutes * 60_000).toISOString();
+    const deliveries = JSON.stringify([
+      { id: 3, guid: "g-ok", delivered_at: at(1), status_code: 202, event: "issue_comment" },
+      { id: 2, guid: "g-lost", delivered_at: at(2), status_code: 0, event: "issue_comment" },
+      { id: 1, guid: "g-ok", delivered_at: at(3), status_code: 503, event: "issue_comment" },
+    ]);
+    const { github, listener, restart } = await listen(t, { deliveries });
+    await listener.until("Redelivered g-lost (issue_comment");
+    const attempts = () =>
+      github.requests.filter((r) => r.method === "POST" && r.path.endsWith("/attempts"));
+    assert.deepEqual(
+      attempts().map((r) => r.path),
+      ["/app/hook/deliveries/2/attempts"],
+    );
+    // Asked once: a restart remembers it.
+    const scans = () =>
+      github.requests.filter((r) => r.path.startsWith("/app/hook/deliveries?")).length;
+    await restart();
+    for (let i = 0; i < 200 && scans() < 2; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    assert.equal(scans(), 2);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.equal(attempts().length, 1);
   });
 
   test("the Claude credential stays out of sandboxes, and a reply leaking secrets is redacted", async (t) => {
@@ -3125,6 +3163,15 @@ mounts:
     assert.equal(stream.status, 200);
     assert.match(await stream.text(), /event: end/);
     assert.equal((await get(`/api/runs/${task.runs[0].id}/stream`)).status, 401);
+    // Sync: the deliveries and pull requests asked again, from this dashboard only, not twice
+    // in a row.
+    const sync = (headers) =>
+      fetch(`${base}/api/sync`, { method: "POST", headers: { cookie: session, ...headers } });
+    assert.equal((await sync({ origin: "https://evil.example" })).status, 403);
+    const synced = await sync({ origin: "https://hooks.example.com" });
+    assert.equal(synced.status, 200);
+    assert.deepEqual(await synced.json(), { redelivered: 0, pulls: 0 });
+    assert.equal((await sync({ origin: "https://hooks.example.com" })).status, 429);
   });
 
   // dashboard/src/types.ts, key by key: [required, optional].

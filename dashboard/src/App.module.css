@@ -109,6 +109,20 @@
     order: 3;
     flex: 1 1 auto;
   }
+  /* Sync beside the status, Sign out after it; what it did on a line of its own below. */
+  .top .sync {
+    display: contents;
+  }
+  .top .syncButton {
+    order: 3;
+  }
+  .top .synced,
+  .top .syncFailed {
+    order: 5;
+    flex-basis: 100%;
+    font-size: 0.8rem;
+    white-space: normal;
+  }
   .who {
     order: 4;
     margin-left: auto;
@@ -180,6 +194,45 @@ button.link {
 
 .notify:hover {
   color: var(--ink);
+}
+
+.sync {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  min-width: 0;
+  font-size: 0.8rem;
+}
+
+.syncButton {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.syncButton:hover:not(:disabled) {
+  color: var(--ink);
+}
+
+.syncButton:disabled {
+  cursor: progress;
+}
+
+.synced,
+.syncFailed {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+}
+
+.syncFailed {
+  color: var(--err);
 }
 
 .waiting {

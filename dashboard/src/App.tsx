@@ -13,6 +13,7 @@ import { type ChipId, CHIPS, inChip, isLive, plural } from "./format";
 import { useReadyNotifications } from "./notify";
 import { notOnboarded, Repos } from "./Repos";
 import { formatRoute, parseRoute, type Route } from "./route";
+import { SyncButton } from "./Sync";
 import { Tabs } from "./Tabs";
 import { TaskList } from "./TaskList";
 import type { State } from "./types";
@@ -153,6 +154,7 @@ export function Dashboard({ state, error, repos, refresh }: Props) {
           </a>
         </h1>
         <span class={`${styles.status} ${error ? styles.error : ""}`}>{status}</span>
+        {state && <SyncButton onSynced={refresh} />}
         <nav class={styles.pages} aria-label="Pages">
           <a
             class={`${styles.link} ${styles.home}`}

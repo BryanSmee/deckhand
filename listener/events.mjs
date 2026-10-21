@@ -467,14 +467,18 @@ export function pullRequest(config, event, p, now, skip = () => null) {
   if (!repoAllowed(config, repo)) {
     return skip(`${repo} not in ALLOWED_REPOS`);
   }
-  const issue = linkedIssue(pr, repo);
-  const state = prState(pr);
   const turnedReady =
     p.action === "ready_for_review" ||
-    (["opened", "reopened"].includes(p.action) && state === "ready");
+    (["opened", "reopened"].includes(p.action) && prState(pr) === "ready");
+  return pullEntry(repo, pr, turnedReady ? now : null);
+}
+
+// A pull request as GitHub has it → { key, pr } for the dashboard (pulls.mjs record()): the
+// task of the issue it closes, else its own. `readyAt`: when it turned ready, if it just did.
+export function pullEntry(repo, pr, readyAt = null) {
   return {
-    key: taskKey(repo, issue ?? prId(pr.number)),
-    pr: { number: pr.number, url: pr.html_url, state, readyAt: turnedReady ? now : null },
+    key: taskKey(repo, linkedIssue(pr, repo) ?? prId(pr.number)),
+    pr: { number: pr.number, url: pr.html_url, state: prState(pr), readyAt },
   };
 }
 
