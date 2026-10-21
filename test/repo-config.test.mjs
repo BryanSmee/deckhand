@@ -588,12 +588,25 @@ review:
     "review.instructions: expected a path in the repository (relative, no ..)",
     "review.effort: expected one of low, medium, high, xhigh, max",
     "review.agent: the operator hasn't configured codex (configured: claude)",
-    "review.hosts: unknown key (expected on, instructions, agent, model, effort)",
+    "review.hosts: unknown key (expected on, instructions, agent, model, effort, fix)",
   ]);
   assert.equal(bad.settings.review, null);
   assert.deepEqual(parseRepoConfig("review: [on]\n", config).errors, [
-    "review: expected true, or on, instructions, agent, model, effort",
+    "review: expected true, or on, instructions, agent, model, effort, fix",
   ]);
+});
+
+test("review.fix: a boolean, off by default", () => {
+  assert.equal(parseRepoConfig("review: true\n", config).settings.review.fix, false);
+  assert.equal(parseRepoConfig("review:\n  on: ready\n", config).settings.review.fix, false);
+  const on = parseRepoConfig("review:\n  on: ready\n  fix: true\n", config);
+  assert.deepEqual(on.errors, []);
+  assert.equal(on.settings.review.fix, true);
+  for (const bad of ['"yes"', "1", "[high]"]) {
+    const parsed = parseRepoConfig(`review:\n  fix: ${bad}\n`, config);
+    assert.deepEqual(parsed.errors, ["review.fix: expected true or false"]);
+    assert.equal(parsed.settings.review, null);
+  }
 });
 
 test("review: a repo's own mode can't take the name, the error says what to do", () => {

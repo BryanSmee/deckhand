@@ -844,7 +844,12 @@ only). It widens nothing, so it needs no grant: a review is a light run with a r
   outsider's: nobody outside the allowlist can make the operator pay for a run.
 - **No loops**: each pull request's head commit is reviewed by itself once (`reviews.json`),
   and the App's review is a bot's `pull_request_review`, which starts nothing. Acting on a
-  review is the maintainer's call, with a trigger comment.
+  review is the maintainer's call, with a trigger comment, unless the repo sets `review.fix`:
+  then a review requesting changes on Deckhand's own pull request starts one work run, once
+  per pull request (`fixedAt` in `reviews.json`). It is a normal work run (same token, same
+  push rules), so the key needs no grant; its push starts no review, and a later review no
+  second fix. The findings it is given came from a run that read the diff: data, like a
+  comment.
 - `/mode review` comes from an allowed user's comment, like any mode, on the pull request
   itself.
 

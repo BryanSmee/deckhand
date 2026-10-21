@@ -104,6 +104,10 @@ test("format: the listener's lines", () => {
     start({ mode: "continue", kind: "issue", reason: "conflict" }),
     "Rebasing a pull request in conflict",
   );
+  assert.equal(
+    start({ mode: "continue", kind: "issue", reason: "review-fix" }),
+    "Addressing the findings of a review that requested changes",
+  );
   // A fallback's run says where it came from; one that stuck to it doesn't again.
   const fallback = { from: "claude@anthropic", reason: "overloaded (529)", tried: [] };
   const fell = { mode: "start", kind: "issue", agent: "codex", provider: "openai", fallback };

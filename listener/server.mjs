@@ -372,12 +372,15 @@ ctx.conflicts = createConflicts({
   accept: (item) => ctx.accept(item),
   log,
 });
-// Pull requests that turn ready in opted-in repos get a review run (`review.on`).
+// Pull requests that turn ready in opted-in repos get a review run (`review.on`), and a
+// review that requests changes one fix run (`review.fix`).
 ctx.reviews = createReviews({
   path: join(config.dataDir, "reviews.json"),
   config,
   repoSettings,
   accept: (item) => ctx.accept(item),
+  github,
+  busy: taskBusy,
   log,
 });
 // Comments that wait for other issues to be done ("/after #12").

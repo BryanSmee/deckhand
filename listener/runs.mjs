@@ -621,6 +621,8 @@ export function createRuns(ctx) {
         footer,
       );
       log(`${live.key}: review posted on #${live.replyTo} (${posted.event ?? "as a comment"})`);
+      // Its fix run, if any, once this run is over (cleanUp()).
+      live.reviewed = { number: live.replyTo, posted };
     } else await ctx.answer(target(task, live.replyTo), hidden(live, text));
     live.replied = true;
     ctx.saveLive(task);
@@ -650,8 +652,16 @@ export function createRuns(ctx) {
   // next run starts after the usual pause.
   async function cleanUp(task) {
     const live = task.live;
-    const { key, mode, light, record } = live;
+    const { key, mode, light, record, reviewed } = live;
     await teardown(task);
+    // A review that requests changes may start a fix run (reviews.mjs fix()): now that the
+    // review's own run no longer makes the task busy.
+    if (reviewed) {
+      const { repo, base, settings } = task;
+      await ctx.reviews
+        ?.fix({ repo, number: reviewed.number, base, settings }, reviewed.posted)
+        .catch((error) => log(`${key}: the review's fix run: ${error.stack ?? error}`));
+    }
     // Comments put back for the next run keep their 👀 until that one is over. Light runs
     // ask questions all along, like for the label: their replies are "done".
     const status =

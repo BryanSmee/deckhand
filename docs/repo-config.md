@@ -94,6 +94,7 @@ review:
   instructions: .deckhand/review.md # optional, added to the built-in review prompt
   model: best # default: brainstorm_model, brainstorm_effort
   effort: high
+  fix: true # one work run that addresses a review requesting changes, once per pull request
 
 # Where ideas, bug reports and questions go (see Inboxes below).
 inbox:
@@ -135,6 +136,7 @@ wait_for_answers: true
 | `review.on`                             | none: off; `manual` with the block      | `ready`: a pull request that turns ready gets a review; `manual`: `/mode review` only    |
 | `review.instructions`                   | none                                    | Markdown file of the repo, added to the built-in review prompt                           |
 | `review.agent`, `.model`, `.effort`     | `brainstorm_agent`, `_model`, `_effort` | the reviews' agent, model and effort (see Reviews)                                       |
+| `review.fix`                            | `false`                                 | a review that requests changes starts one work run that addresses it (see Reviews)       |
 | `inbox.ideas`, `inbox.bugs`             | none                                    | issue numbers whose comments are ideas or bug reports to file (see Inboxes)              |
 | `inbox.discussions`                     | none                                    | GitHub Discussions category whose discussions Claude answers (see Inboxes)               |
 | `preview.command`                       | none                                    | preview hook command (`preview: ./x.sh` works too); needs the operator's `allow_preview` |
@@ -418,16 +420,27 @@ review` gets the "unknown mode" reply. `review: true` (or a block without `on`, 
   App request changes on its own pull requests: those get a comment review, the verdict in
   its text. A reply whose format the listener can't read is posted as a comment review, as
   it is.
-- **No loops**: the review starts no run. To act on it, comment with the trigger ("Deckhand,
-  fix the high findings").
+- **No loops**: without `fix`, the review starts no run. To act on it, comment with the trigger
+  ("Deckhand, fix the high findings").
+- **`fix: true`**: a review that requests changes (a critical or high finding) on Deckhand's
+  own pull request, linked to the issue it worked on, starts **one** work run in that issue's
+  session. Its message is the review's findings, all of them (medium and low too), with the
+  instruction to fix each one or say why not, rerun the checks and push; it pushes like any
+  work run, and replies on the pull request. Not while the issue has a run going or queued
+  (a maintainer's comment came first) or the pull request or its issue has the needs-input
+  label. **Once per pull request**, kept in `reviews.json` across restarts, and written before
+  the run is queued: the fix's push doesn't start a review (only turning ready does), and a
+  later review (`/mode review`) starts no second fix. Other pull requests' reviews, and
+  reviews that only comment, start nothing. To act again, comment with the trigger.
 - **The run**: like an audit mode that is light and fresh, its own clone and session, no setup;
   the agent, model and effort of light runs unless the block names others. Its instructions
   are the built-in ones (security, correctness and tests, duplication, the repository's
   conventions, scope), then the file `review.instructions` names, from the default branch.
 - **Cost**: each review is a run with the reviews' model, paid by the operator. `on: ready`
-  reviews every pull request that turns ready: keep `manual` where that is too many.
+  reviews every pull request that turns ready: keep `manual` where that is too many. A fix is
+  a work run, at the repo's work model.
 
-`on`, `instructions`, `agent`, `model` and `effort` are its only keys: any other, or a bad
+`on`, `instructions`, `agent`, `model`, `effort` and `fix` are its only keys: any other, or a bad
 value, is an error.
 
 ## Inboxes

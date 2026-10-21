@@ -320,6 +320,13 @@ which posts one GitHub review with the listener's token: findings grouped by sev
 rating, `REQUEST_CHANGES` on a critical or high finding and `COMMENT` otherwise (never
 `APPROVE`), and a comment review with the raw text when the format can't be read.
 
+With `review.fix`, once the review's run is torn down (so it no longer makes the task busy),
+`runs.mjs` hands the posted review to `reviews.fix()`: a review that requests changes on the
+App's own pull request, linked to its issue, queues one work item on the issue's task
+(`trigger: "work"`, `sender: null`, `reason: "review-fix"`), its text the findings, as
+`conflicts.mjs` does for a rebase. `fixedAt` in `reviews.json`, written before the item is
+queued, makes it once per pull request.
+
 ## Waiting for other issues
 
 `/after #77 #80` (on the trigger line or its own line, same repo only; `events.mjs`

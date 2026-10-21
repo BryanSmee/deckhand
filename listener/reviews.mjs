@@ -6,7 +6,10 @@
 // No loops: each pull request's reviewed head commit is kept in reviews.json, so a redelivered
 // webhook, a restart or the same commit again never pays for a second review. The App's own
 // review is a bot's `pull_request_review`, which workItem() ignores: a "request changes"
-// starts nothing by itself.
+// starts nothing by itself. With `review.fix`, a review that requests changes starts one work
+// run that addresses it, once per pull request (fixedAt in reviews.json): its push is a
+// `synchronize`, which starts no review, and a later review finds fixedAt set.
+import { hasLabel } from "./comments.mjs";
 import { repoAllowed } from "./config.mjs";
 import { linkedIssue, linkTo, MARKER, prId, sameRepo, taskKey } from "./events.mjs";
 import { getJson } from "./github.mjs";
@@ -97,15 +100,32 @@ export function reviewBody(review, raw, footer, blob = null) {
   const head = `**Verdict: ${VERDICTS[review.verdict]}** · Rating: ${review.rating}/10`;
   const parts = [head];
   if (review.summary) parts.push(review.summary);
+  parts.push(...findingSections(review, blob));
+  if (!review.findings.length) parts.push("No findings.");
+  parts.push(footer);
+  return parts.join("\n\n");
+}
+
+// The findings, one section per severity, most severe first.
+function findingSections(review, blob = null) {
+  const parts = [];
   for (const severity of SEVERITIES) {
     const found = review.findings.filter((f) => f.severity === severity);
     if (!found.length) continue;
     const items = found.map((f) => `- ${where(f, blob)}${f.text.replace(/\n/g, "\n  ")}`);
     parts.push(`### ${HEADINGS[severity]} (${found.length})\n\n${items.join("\n")}`);
   }
-  if (!review.findings.length) parts.push("No findings.");
-  parts.push(footer);
-  return parts.join("\n\n");
+  return parts;
+}
+
+// What a fix run is asked to do, as if a maintainer had commented it, with every finding (the
+// medium and low ones too) so the run doesn't have to look the review up. The findings came
+// from a run that read the diff: to the fix run they are data, like a comment.
+export function fixMessage(review) {
+  return [
+    "Address the findings of the review above: fix each one, or say in your reply why you leave it (a wrong finding, out of scope). Rerun the checks and push. Stop and ask if a fix needs a decision only the maintainer can make.",
+    ...findingSections(review),
+  ].join("\n\n");
 }
 
 function where({ path, line }, blob) {
@@ -148,10 +168,10 @@ export async function postReview({ github, reply, log = () => {} }, repo, number
   let event = reviewEvent(review);
   let res = await post(event);
   if (res.status === 422 && event !== "COMMENT") res = await post((event = "COMMENT"));
-  if (res.ok) return { event, review };
+  if (res.ok) return { event, review, pr };
   log(`${repo}#${number}: the review was refused (${res.status}), posted as a comment`);
   await reply(repo, number, body.replace(`\n\n${MARKER}`, ""));
-  return { event: null, review };
+  return { event: null, review, pr };
 }
 
 // A `pull_request` delivery that may start a review by itself → { repo, base, pr, author }, or
@@ -179,16 +199,19 @@ export function reviewCandidate(config, event, p, skip = () => null) {
 }
 
 // `repoSettings(repo, base)`: the repo's settings from its default branch; `accept(item)`:
-// queues a work item (tasks.mjs). `now`: the clock, for forgetting old pull requests.
+// queues a work item (tasks.mjs). `github`: the App's calls (server.mjs). `busy(key)`: the
+// task has a run going or queued. `now`: the clock, for forgetting old pull requests.
 export function createReviews({
   path,
   config,
   repoSettings,
   accept,
+  github,
+  busy = () => false,
   log = () => {},
   now = Date.now,
 }) {
-  // "org/repo#pr-5" → { head, at } of its last automatic review.
+  // "org/repo#pr-5" → { head, at, fixedAt } of its last automatic review, and of its fix run.
   const reviewed = persistentMap(path);
 
   // A `pull_request` delivery: a review run, if the repo's `review.on` asks for one and this
@@ -235,12 +258,71 @@ export function createReviews({
     return item;
   }
 
-  function remember(key, head) {
+  function remember(key, head, fields = {}) {
     const cutoff = now() - KEEP_MS;
     for (const [k, v] of reviewed) if (v.at < cutoff) reviewed.delete(k);
-    reviewed.set(key, { head, at: now() });
+    reviewed.set(key, { ...reviewed.get(key), head, at: now(), ...fields });
     reviewed.save();
   }
 
-  return { consider };
+  // A review was posted on pull request `number` (`posted`: postReview()'s result, with the
+  // pull request as GitHub had it): one work run that addresses its findings, if the repo's
+  // `review.fix` asks for it, the review requests changes, the pull request is Deckhand's own
+  // and has never had one. Returns the item queued, or null (the reason logged).
+  async function fix({ repo, number, base, settings }, posted) {
+    const key = taskKey(repo, prId(number));
+    const skip = (why) => {
+      log(`${key}: no fix run, ${why}`);
+      return null;
+    };
+    const { review, pr } = posted ?? {};
+    if (!settings?.review?.fix) return null;
+    if (!review) return skip("the review couldn't be read");
+    if (reviewEvent(review) !== "REQUEST_CHANGES") return null;
+    if (reviewed.get(key)?.fixedAt) return skip("it had its fix run already");
+    // Deckhand's own pull request, on a branch of the repo and linked to the issue it worked
+    // on: the fix pushes where its runs already push.
+    const own = !!config.bot && pr?.user?.login?.toLowerCase() === config.bot.toLowerCase();
+    const issue = own ? linkedIssue(pr, repo, config.bot) : null;
+    if (!issue || pr.state !== "open") return skip("not an open pull request of Deckhand's own");
+    const task = taskKey(repo, String(issue));
+    // A maintainer's comment came first, or the maintainer is to answer.
+    if (busy(task)) return skip(`#${issue} has a run going or queued`);
+    if (await waitsForInput(repo, pr, issue)) return skip("it waits for the maintainer's input");
+    // Checked again: a comment may have come during the call above.
+    if (busy(task)) return skip(`#${issue} has a run going or queued`);
+    // Before queuing: whatever happens next, never a second one.
+    remember(key, reviewed.get(key)?.head ?? null, { fixedAt: now() });
+    log(`${key}: the review requests changes, starting a fix run`);
+    const item = {
+      repo,
+      id: String(issue),
+      kind: "issue",
+      number: issue,
+      title: null,
+      trigger: "work",
+      modeLine: null,
+      text: fixMessage(review),
+      replyTo: number,
+      comment: null,
+      base,
+      settings,
+      // From the listener, for a task an allowed user started: no comment, nobody to check.
+      sender: null,
+      reason: "review-fix",
+    };
+    await accept(item);
+    return item;
+  }
+
+  // The pull request, or its issue (where runs put the label), waits for the maintainer.
+  async function waitsForInput(repo, pr, issue) {
+    const name = config.needsInputLabel;
+    if (!name) return false;
+    if (hasLabel(pr.labels, name)) return true;
+    const found = await getJson(github, repo, `/repos/${repo}/issues/${issue}`, [404, 410]);
+    return hasLabel(found?.labels, name);
+  }
+
+  return { consider, fix };
 }
