@@ -194,7 +194,8 @@ export function versionUrl({ version, source }: Pick<ServerInfo, "version" | "so
   if (!source) return null;
   const edge = /^edge-([0-9a-f]{7,40})$/.exec(version);
   if (edge) return `${source}/commit/${edge[1]}`;
-  if (/^\d+\.\d+\.\d+/.test(version)) return `${source}/releases/tag/v${version}`;
+  if (/^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/.test(version))
+    return `${source}/releases/tag/v${version}`;
   return null;
 }
 
