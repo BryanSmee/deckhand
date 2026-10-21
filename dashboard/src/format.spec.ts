@@ -110,5 +110,6 @@ test("uptime and where a version's code is", () => {
   expect(versionUrl({ version: "edge-1713fa6", source })).toBe(`${source}/commit/1713fa6`);
   expect(versionUrl({ version: "1.3.0-rc.1", source })).toBe(`${source}/releases/tag/v1.3.0-rc.1`);
   expect(versionUrl({ version: "dev", source })).toBeNull();
+  expect(versionUrl({ version: "1.2.3foo", source })).toBeNull();
   expect(versionUrl({ version: "1.2.3", source: "" })).toBeNull();
 });

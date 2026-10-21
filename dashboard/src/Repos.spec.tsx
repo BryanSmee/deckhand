@@ -6,7 +6,7 @@ import { beforeEach, expect, test } from "vitest";
 import { useRepos } from "./api";
 import { Dashboard } from "./App";
 import { Repos } from "./Repos";
-import { mockApi } from "./testUtils";
+import { makeState, mockApi } from "./testUtils";
 import type { AppLinks, Repo, RepoConfig, ServerInfo } from "./types";
 
 const repo = (name: string, extra: Partial<Repo> = {}): Repo => ({
@@ -166,7 +166,8 @@ test("the header counts the repositories not onboarded and opens the page", asyn
     refresh: async () => {},
     update: () => {},
   };
-  render(<Dashboard state={null} error={null} repos={list} />);
+  // The fixture's server: started 3 days and 3 hours before its `now`.
+  render(<Dashboard state={makeState()} error={null} repos={list} />);
   const link = screen.getByRole("link", { name: /Repositories/ });
   expect(link.textContent).toBe("Repositories2");
   expect(screen.queryByRole("heading", { name: "Repositories" })).toBeNull();
@@ -174,6 +175,10 @@ test("the header counts the repositories not onboarded and opens the page", asyn
   dispatchEvent(new HashChangeEvent("hashchange"));
   await waitFor(() => screen.getByRole("heading", { name: "Repositories" }));
   expect(screen.queryByRole("tablist")).toBeNull();
+  // App passes the state's server and its clock: the uptime counts on the server's `now`.
+  expect(screen.getByRole("link", { name: "edge-1713fa6" }).parentElement!.textContent).toBe(
+    "Deckhand edge-1713fa6 · up 3 d 3 h · Node 26.1.0",
+  );
 });
 
 test("Manage App: links to the App's installations and settings on GitHub, in a new tab", async () => {
