@@ -2,6 +2,7 @@
 // comment (work.mjs, discussions.mjs, analysis.mjs): the App installed, the repo's config
 // without errors, the user in both the operator's and the repo's users. Failures throw
 // Refused (web.mjs), which the API answers with their status.
+import { sameRepo } from "./events.mjs";
 import { getJson } from "./github.mjs";
 import { CONFIG_FILE } from "./repo-config.mjs";
 import { Refused, refuse } from "./web.mjs";
@@ -16,7 +17,9 @@ export function createRepoCheck({ config, github, repoSettings }) {
   async function infoOf(repo) {
     const info = await getJson(github, repo, `/repos/${repo}`, [404]);
     if (!info) refuse(404, `The App is not installed on ${repo}.`);
-    names.set(repo.toLowerCase(), info.full_name ?? repo);
+    // A repo renamed or transferred answers with another name entirely, which ALLOWED_REPOS
+    // was never checked for: the name asked for stays.
+    names.set(repo.toLowerCase(), sameRepo(info.full_name, repo) ? info.full_name : repo);
     return info;
   }
 

@@ -86,3 +86,13 @@ test("the startup lookup adds labels added meanwhile and drops those removed", a
   assert.equal(questions["org/repo#4"], null);
   assert.equal(createInputs({ path, listLabelled }).has("org/repo#2"), true);
 });
+
+test("respell: an issue waiting for input under another spelling moves to the one given", (t) => {
+  const path = join(tempDir(t), "inputs.json");
+  const inputs = createInputs({ path, listLabelled: async () => [], now: () => 5 });
+  inputs.set("org/repo#4", true, null);
+  inputs.respell((repo) => (repo.toLowerCase() === "org/repo" ? "Org/repo" : repo));
+  assert.deepEqual(inputs.keys(), ["Org/repo#4"]);
+  assert.equal(inputs.list()[0].repo, "Org/repo");
+  assert.equal(createInputs({ path, listLabelled: async () => [] }).has("Org/repo#4"), true);
+});

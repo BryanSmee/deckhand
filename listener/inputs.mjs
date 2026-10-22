@@ -7,6 +7,7 @@ import { hasLabel } from "./comments.mjs";
 import { parseKey, sameRepo, taskKey } from "./events.mjs";
 import { paginate } from "./github.mjs";
 import { parseQuestions, questionsSection } from "./questions.mjs";
+import { respellMap } from "./spelling.mjs";
 import { persistentMap } from "./store.mjs";
 
 // `listLabelled(repo)`: the repo's open issues with the label, as GET /repos/{repo}/issues
@@ -88,7 +89,16 @@ export function createInputs({ path, listLabelled, now = Date.now, log = () => {
       questions,
     }));
 
-  return { set, update, sync, list, has: (key) => inputs.has(key) };
+  return {
+    set,
+    update,
+    sync,
+    list,
+    has: (key) => inputs.has(key),
+    keys: () => [...inputs.keys()],
+    // One spelling per repo (spelling.mjs, at a restart).
+    respell: (spelled) => respellMap(inputs, spelled) && save(),
+  };
 }
 
 // Open questions in the bodies of a repo's open issues (the work area's backlog, work.mjs)

@@ -1,5 +1,6 @@
 // Each issue's conversation state, kept across listener restarts: its brainstorm
 // (brainstorms.json) and the repo's own mode its session is in (modes.json).
+import { respellMap } from "./spelling.mjs";
 import { persistentMap, readJson, writeJsonAtomic } from "./store.mjs";
 
 // Claude's reply keeps a brainstorm active at least this long, so an answer can follow it.
@@ -81,7 +82,27 @@ export function createBrainstorms({ path, idleMs, busy, log, now = Date.now }) {
     return [...brainstorms].map(([key, { timer, ...b }]) => ({ key, ...b }));
   }
 
-  return { get: (key) => brainstorms.get(key), activate, stop, end, replied, list };
+  // One spelling per repo (spelling.mjs, at a restart): the timers armed for the old keys go.
+  function respell(spelled) {
+    const fix = (b) => {
+      clearTimeout(b.timer);
+      return { ...b, repo: spelled(b.repo), timer: null };
+    };
+    if (!respellMap(brainstorms, spelled, fix)) return;
+    for (const [key, b] of brainstorms) if (b.status === "active" && !b.timer) armIdle(key, b);
+    save();
+  }
+
+  return {
+    get: (key) => brainstorms.get(key),
+    keys: () => [...brainstorms.keys()],
+    respell,
+    activate,
+    stop,
+    end,
+    replied,
+    list,
+  };
 }
 
 // key → mode name: a comment without a trigger or "/mode" line goes on in that mode
@@ -94,5 +115,12 @@ export function createIssueModes(path) {
     else modes.delete(key);
     modes.save();
   }
-  return { get: (key) => modes.get(key), has: (key) => modes.has(key), set };
+  return {
+    get: (key) => modes.get(key),
+    has: (key) => modes.has(key),
+    set,
+    keys: () => [...modes.keys()],
+    // One spelling per repo (spelling.mjs, at a restart).
+    respell: (spelled) => respellMap(modes, spelled) && modes.save(),
+  };
 }

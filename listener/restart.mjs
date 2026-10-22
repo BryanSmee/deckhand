@@ -8,6 +8,7 @@ import { agentFor } from "./agents/index.mjs";
 import { parseKey, taskKey } from "./events.mjs";
 import { permissionsFor } from "./modes.mjs";
 import { addRun, openLog, writeEvent } from "./runlog.mjs";
+import { ambiguous, githubNames, respelled, spellings } from "./spelling.mjs";
 import { readJson, writeJsonAtomic } from "./store.mjs";
 import { newTask, noLongerAllowed } from "./tasks.mjs";
 
@@ -42,49 +43,52 @@ function pick({ repo, id, kind, number, name, base, discussionId, settings }) {
   return { repo, id, kind, number, name, base, discussionId, settings };
 }
 
-// One spelling per repo for `records` ({ repo, startedAt }): GitHub's names ignore case, and
-// a listener from before dashboard actions took GitHub's spelling (work.mjs) may have runs of
-// one repo under two, "Org/app" from webhooks, "org/app" from a typed address. The most recent
-// run's wins. Returns spelled(repo): the spelling a repo's runs and tasks take.
-export function spellings(records) {
-  const newest = new Map();
-  for (const r of [...records].sort((a, b) => (b.startedAt ?? 0) - (a.startedAt ?? 0))) {
-    const name = r.repo?.toLowerCase();
-    if (name && !newest.has(name)) newest.set(name, r.repo);
-  }
-  return (repo) => (typeof repo === "string" && newest.get(repo.toLowerCase())) || repo;
-}
-
-// A task's key with its repo spelled as spelled() has it.
-export function respelled(key, spelled) {
-  const parsed = parseKey(key ?? "");
-  return parsed ? taskKey(spelled(parsed.repo), parsed.id) : key;
-}
-
 // `ctx` (server.mjs): the listener's state and services, read at call time.
 export function createRestart(ctx) {
   const { config, log, tasks } = ctx;
   const queuePath = join(config.dataDir, "queue.json");
-  // Set by restoreRuns(), which reads the runs still going too; the runs' alone before it.
+  // spelled(repo) (spelling.mjs): set by unifySpellings(), or by restoreRuns() without GitHub's names.
   let spelled = null;
 
-  // The runs' list (runlog.mjs loadRuns()) and the saved runs going (`live`), each repo under
-  // one spelling: the dashboard shows it once, and their tasks are one. In memory only: the
-  // next start does it again.
-  function unify(live = []) {
-    spelled = spellings([
+  const readLive = () =>
+    readdirSync(ctx.logDir)
+      .filter((f) => f.endsWith(".live.json"))
+      .map((file) => readJson(join(ctx.logDir, file)))
+      .filter(Boolean);
+
+  // Every repo the runs, the runs going, the queue and `keys` (other state's task keys) have,
+  // for spellings().
+  function records(keys = []) {
+    const queued = readJson(queuePath);
+    return [
       ...ctx.runs,
-      ...live.map((saved) => ({ repo: saved.task?.repo, startedAt: saved.record?.startedAt })),
-    ]);
+      ...readLive().map((saved) => ({
+        repo: saved.task?.repo,
+        startedAt: saved.record?.startedAt,
+        live: true,
+      })),
+      ...(Array.isArray(queued) ? queued : []).map((t) => ({ repo: t.repo })),
+      ...keys.map((key) => ({ repo: parseKey(key)?.repo })),
+    ];
+  }
+
+  // One spelling per repo, before restoreRuns() and loadQueue(): GitHub's for a repo the state
+  // has under two, asked with `nameOf(repo)` (repo-check.mjs), for at most `waitMs`. Else
+  // spellings()'. The runs' list (runlog.mjs loadRuns()) takes it now: the dashboard shows the
+  // repo once, and its tasks are one. In memory only: the next start does it again. Returns
+  // spelled(), for the other state keyed by task (server.mjs).
+  async function unifySpellings({ nameOf = null, keys = [], waitMs } = {}) {
+    const all = records(keys);
+    const known = nameOf ? await githubNames(ambiguous(all), nameOf, waitMs) : new Map();
+    for (const full of known.values()) log(`${full}: other spellings of it are now this one`);
+    return respellRuns(spellings(all, known));
+  }
+
+  function respellRuns(spell) {
+    spelled = spell;
     for (const run of ctx.runs) {
       run.repo = spelled(run.repo);
       run.key = respelled(run.key, spelled);
-    }
-    for (const saved of live) {
-      saved.task.repo = spelled(saved.task.repo);
-      saved.record.repo = spelled(saved.record.repo);
-      saved.record.key = respelled(saved.record.key, spelled);
-      for (const item of saved.handled ?? []) item.repo = spelled(item.repo);
     }
     return spelled;
   }
@@ -106,7 +110,7 @@ export function createRestart(ctx) {
     const saved = readJson(queuePath);
     if (!Array.isArray(saved)) return; // Nothing was waiting.
     rmSync(queuePath, { force: true });
-    const spell = spelled ?? unify();
+    const spell = spelled ?? respellRuns(spellings(records()));
     for (const t of saved) {
       t.repo = spell(t.repo);
       for (const item of t.pending) item.repo = spell(item.repo);
@@ -171,11 +175,14 @@ export function createRestart(ctx) {
   // Runs a previous listener left behind, from their saved state: their tokens and egress work
   // again at once, and comments find them. reattach() then follows their sandboxes.
   function restoreRuns() {
-    const live = readdirSync(ctx.logDir)
-      .filter((f) => f.endsWith(".live.json"))
-      .map((file) => readJson(join(ctx.logDir, file)))
-      .filter(Boolean);
-    unify(live);
+    if (!spelled) respellRuns(spellings(records()));
+    const live = readLive();
+    for (const saved of live) {
+      saved.task.repo = spelled(saved.task.repo);
+      saved.record.repo = spelled(saved.record.repo);
+      saved.record.key = respelled(saved.record.key, spelled);
+      for (const item of saved.handled ?? []) item.repo = spelled(item.repo);
+    }
     return live.map(restoreRun);
   }
 
@@ -293,6 +300,7 @@ export function createRestart(ctx) {
   }
 
   return {
+    unifySpellings,
     saveQueue,
     loadQueue,
     livePath,

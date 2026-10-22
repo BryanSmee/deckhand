@@ -486,6 +486,15 @@ ctx.discussionApi = createDiscussionApi({
 
 // --- Servers -------------------------------------------------------------------------------
 
+// Before any request is served, as restoreRuns() wants: one spelling per repo in the state
+// (GitHub's for one it has under two, restart.mjs), the task keys of the rest too.
+const keyed = [ctx.waits, ctx.brainstorms, ctx.issueModes, inputs];
+const spelled = await ctx.unifySpellings({
+  nameOf: discussionChecks.nameOf,
+  keys: keyed.flatMap((state) => state.keys()),
+});
+for (const state of keyed) state.respell(spelled);
+
 const http = createHttp(ctx, {
   dashboardDir: env.DASHBOARD_DIR || new URL("../dashboard/dist", import.meta.url).pathname,
 });

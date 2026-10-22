@@ -9,6 +9,7 @@
 import { issueOutcome, parseKey, sameRepo, taskKey } from "./events.mjs";
 import { getJson } from "./github.mjs";
 import { plain, revive } from "./restart.mjs";
+import { respellMap } from "./spelling.mjs";
 import { persistentMap } from "./store.mjs";
 
 // How often GitHub is asked about what the waits wait for (the operator's WAITS_CHECK_MINUTES).
@@ -319,7 +320,20 @@ export function createWaits({
     }));
   }
 
+  // Its task keys, and the same with one spelling per repo (spelling.mjs, at a restart).
+  const keys = () => [...waits.keys()];
+  function respell(spelled) {
+    const fix = (w) => ({
+      ...w,
+      repo: spelled(w.repo),
+      item: { ...w.item, repo: spelled(w.item.repo) },
+    });
+    if (respellMap(waits, spelled, fix)) save();
+  }
+
   return {
+    keys,
+    respell,
     request,
     hold,
     cancel,

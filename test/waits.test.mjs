@@ -352,3 +352,15 @@ test("merged: the issue a merged pull request closes, asked again later while st
   assert.equal(await w.waits.merged("org/repo", 80), "done");
   assert.equal(w.timers.length, 1);
 });
+
+test("respell: a wait saved under another spelling of its repo moves to the one given", async () => {
+  const w = setup();
+  await w.waits.request(item({ numbers: [77] }));
+  assert.deepEqual(w.waits.keys(), ["org/repo#78"]);
+  w.waits.respell((repo) => (repo.toLowerCase() === "org/repo" ? "Org/repo" : repo));
+  assert.deepEqual(w.waits.keys(), ["Org/repo#78"]);
+  const wait = w.waits.get("Org/repo#78");
+  assert.equal(wait.repo, "Org/repo");
+  assert.equal(wait.item.repo, "Org/repo");
+  assert.deepEqual(Object.keys(JSON.parse(readFileSync(w.path, "utf8"))), ["Org/repo#78"]);
+});

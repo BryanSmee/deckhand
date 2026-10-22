@@ -70,3 +70,29 @@ test("issue modes: kept across a restart, removed with null", (t) => {
   modes.set("org/repo#1", null);
   assert.equal(createIssueModes(path).has("org/repo#1"), false);
 });
+
+test("respell: brainstorms and modes saved under another spelling move, timers and all", (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
+  const dir = tempDir(t);
+  const spelled = (repo) => (repo.toLowerCase() === "org/repo" ? "Org/repo" : repo);
+  const brainstorms = createBrainstorms({
+    path: join(dir, "brainstorms.json"),
+    idleMs: 60000,
+    busy: () => false,
+    log: () => {},
+    now: Date.now,
+  });
+  brainstorms.activate("org/repo#12", { repo: "org/repo", number: 12 });
+  brainstorms.respell(spelled);
+  assert.deepEqual(brainstorms.keys(), ["Org/repo#12"]);
+  assert.equal(brainstorms.get("Org/repo#12").repo, "Org/repo");
+  t.mock.timers.tick(60000);
+  assert.equal(brainstorms.get("Org/repo#12").status, "idle");
+  assert.deepEqual(Object.keys(saved(join(dir, "brainstorms.json"))), ["Org/repo#12"]);
+
+  const modes = createIssueModes(join(dir, "modes.json"));
+  modes.set("org/repo#3", "audit");
+  modes.respell(spelled);
+  assert.deepEqual(modes.keys(), ["Org/repo#3"]);
+  assert.deepEqual(saved(join(dir, "modes.json")), { "Org/repo#3": "audit" });
+});
