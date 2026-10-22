@@ -9,7 +9,7 @@
 // for a new push or a new base commit.
 import { repoAllowed } from "./config.mjs";
 import { waitsForInput } from "./comments.mjs";
-import { parseKey, sameRepo } from "./events.mjs";
+import { parseKey, headInRepo } from "./events.mjs";
 import { getJson } from "./github.mjs";
 import { persistentMap } from "./store.mjs";
 
@@ -96,7 +96,7 @@ export function createConflicts({
   async function checkPull(repo, key, number, { base, settings }) {
     if (busy(key)) return null;
     const pr = await json(repo, `/repos/${repo}/pulls/${number}`, [404]);
-    if (!pr || pr.state !== "open" || !sameRepo(pr, repo)) return null;
+    if (!pr || pr.state !== "open" || !headInRepo(pr, repo)) return null;
     if (pr.mergeable === null || pr.mergeable === undefined || pr.mergeable_state === "unknown") {
       return "pending";
     }

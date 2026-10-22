@@ -24,6 +24,7 @@ import {
 } from "./grants.mjs";
 import { appSettingsUrl } from "./github-app.mjs";
 import { CONFIG_FILE, defaultSettings, parseRepoConfig, readRepoFile } from "./repo-config.mjs";
+import { sameRepo } from "./events.mjs";
 import { effectiveView } from "./repo-view.mjs";
 import { paginate } from "./github.mjs";
 import { apiRoute, send } from "./web.mjs";
@@ -207,13 +208,13 @@ export function createRepoList({
   }
 
   async function get(repo) {
-    return (await list()).find((r) => r.repo.toLowerCase() === repo.toLowerCase()) ?? null;
+    return (await list()).find((r) => sameRepo(r.repo, repo)) ?? null;
   }
 
   // The dashboard's config panel: the repo's config read now (its row too), or null when the
   // App isn't installed on it. GitHub errors throw.
   async function readConfig(repo) {
-    const info = (await repos()).find((r) => r.full_name.toLowerCase() === repo.toLowerCase());
+    const info = (await repos()).find((r) => sameRepo(r.full_name, repo));
     if (!info) return null;
     const { file, parsed, known } = await read(info);
     const found = judged(info, known, grantsOnce());

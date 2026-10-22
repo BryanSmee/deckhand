@@ -13,6 +13,7 @@ import { BRAINSTORM_TYPE, droppedIssue, ISSUE_TYPE, LINK_TYPES } from "./dnd";
 import { GraphDrawing, targetsOf } from "./GraphDrawing";
 import { useAnswering, useKeptLayout, useNodeDrag } from "./graphHooks";
 import { dropTarget } from "./graphLayout";
+import { sameRepo } from "./format";
 import { GraphLegend } from "./GraphLegend";
 import { brainstormsOf, graphOf, type GraphNode, isParent, movable, workLists } from "./graphModel";
 import { typesOf, useDropZone } from "./hooks";
@@ -50,7 +51,7 @@ export function Graph({ state, refresh, repo, narrow, showClosed, onShowClosed }
   // The node a drop there would queue after.
   const [target, setTarget] = useState<string | null>(null);
   const svg = useRef<SVGSVGElement>(null);
-  const tasks = (state?.tasks ?? []).filter((t) => !repo || t.repo === repo);
+  const tasks = (state?.tasks ?? []).filter((t) => !repo || sameRepo(t.repo, repo));
   const brainstorms = brainstormsOf(tasks, work.pending);
   const { nodes, edges, hidden } = graphOf(tasks, state?.edges ?? [], state?.blockers ?? [], {
     showClosed,
@@ -81,7 +82,7 @@ export function Graph({ state, refresh, repo, narrow, showClosed, onShowClosed }
   const dropped = (number: number, onto: string | null, what: Dragged) => {
     setNotice(null);
     const node = onto ? byKey.get(onto) : null;
-    if (node?.number === number && node.repo === repo) return;
+    if (node?.number === number && sameRepo(node.repo, repo)) return;
     const mode = what === "new" ? picked : {};
     const parent = what === "new" && isParent(work.backlog, number);
     if (node?.number != null) {

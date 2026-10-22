@@ -4,7 +4,7 @@
 // looked up once per listener start, from the repo's recent pull requests. Kept in pulls.json,
 // so a restart neither forgets nor asks again. The open ones are asked about again at start and
 // from the dashboard's Sync (resync()): a lost delivery would leave one a draft forever.
-import { linkedIssue, parseKey, prState, sameRepo } from "./events.mjs";
+import { linkedIssue, parseKey, prState, headInRepo } from "./events.mjs";
 import { persistentMap } from "./store.mjs";
 
 const open = (pr) => pr?.state === "draft" || pr?.state === "ready";
@@ -135,7 +135,7 @@ export function createPulls({ path, listPulls, getPull = async () => null, log =
 function match(list, repo, { kind, number }) {
   if (kind === "pr") return list.find((p) => p.number === number);
   return (
-    list.find((p) => sameRepo(p, repo) && p.head.ref?.startsWith(`issue-${number}-`)) ??
+    list.find((p) => headInRepo(p, repo) && p.head.ref?.startsWith(`issue-${number}-`)) ??
     list.find((p) => linkedIssue(p, repo) === number)
   );
 }

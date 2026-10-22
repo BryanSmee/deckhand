@@ -4,7 +4,7 @@
 // here, with GitHub injected, so they are tested on their own (../test/onboarding.test.mjs).
 import { ensureLabel } from "./comments.mjs";
 import { repoAllowed } from "./config.mjs";
-import { issueItem, linkedIssue, sameRepo } from "./events.mjs";
+import { issueItem, linkedIssue, headInRepo } from "./events.mjs";
 import { CONFIG_FILE, parseRepoConfig, readRepoFile } from "./repo-config.mjs";
 import { readJson, writeJsonAtomic } from "./store.mjs";
 
@@ -182,7 +182,7 @@ async function issuePullRequest(request, repo, number) {
   const pulls = await res.json();
   if (!Array.isArray(pulls)) return null;
   return (
-    pulls.find((p) => sameRepo(p, repo) && p.head.ref?.startsWith(`issue-${number}-`)) ??
+    pulls.find((p) => headInRepo(p, repo) && p.head.ref?.startsWith(`issue-${number}-`)) ??
     pulls.find((p) => linkedIssue(p, repo) === number) ??
     null
   );

@@ -472,10 +472,12 @@ ctx.workApi = createWorkApi({
 });
 
 // Discussions started, read and answered from the dashboard, with the work area's checks.
+const discussionChecks = createRepoCheck({ config, github, repoSettings });
 ctx.discussionApi = createDiscussionApi({
   config,
   graphql,
-  checkedRepo: createRepoCheck({ config, github, repoSettings }).checkedRepo,
+  checkedRepo: discussionChecks.checkedRepo,
+  nameOf: discussionChecks.nameOf,
   accept: (item) => ctx.accept(item),
   publicUrl,
   key: dashboardKey,

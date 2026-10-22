@@ -3,6 +3,7 @@
 // Escape, a click beside it or a link that opens another view closes it.
 import type { ComponentChildren } from "preact";
 import { useState } from "preact/hooks";
+import { sameRepo } from "./format";
 import { useDismiss } from "./hooks";
 import styles from "./Dialog.module.css";
 
@@ -21,7 +22,7 @@ interface Props {
 }
 
 export function RepoDialog({ label, title, repos, tab, onClose, notes, children }: Props) {
-  const [picked, setPicked] = useState(() => (tab && repos.includes(tab) ? tab : null));
+  const [picked, setPicked] = useState(() => repos.find((r) => sameRepo(r, tab)) ?? null);
   const repo = picked && repos.includes(picked) ? picked : (repos[0] ?? null);
   useDismiss(onClose);
   return (

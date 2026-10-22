@@ -6,6 +6,7 @@
 // api/state lists it.
 import { useState } from "preact/hooks";
 import { sendToInbox, startDiscussion } from "./api";
+import { sameRepo, uniqueRepos } from "./format";
 import { useSubmit } from "./hooks";
 import { RepoDialog } from "./RepoDialog";
 import { formatRoute } from "./route";
@@ -35,9 +36,7 @@ const hasInbox = (i: Inboxes | undefined) => !!(i?.ideas || i?.bugs || i?.discus
 
 // The repos the form offers: those with an inbox, by name.
 export const inboxRepos = (inboxes: Record<string, Inboxes> | undefined) =>
-  Object.keys(inboxes ?? {})
-    .filter((r) => hasInbox(inboxes![r]))
-    .sort();
+  uniqueRepos(Object.keys(inboxes ?? {}).filter((r) => hasInbox(inboxes![r]))).sort();
 
 interface DialogProps {
   // api/state's: the repos whose config the listener has read.
@@ -63,7 +62,8 @@ export function InboxDialog({
 }: DialogProps) {
   const repos = inboxRepos(inboxes);
   // The tab's repo, read and without an inbox: said, with the way to set one up.
-  const without = tab && inboxes?.[tab] && !hasInbox(inboxes[tab]) ? tab : null;
+  const read = Object.keys(inboxes ?? {}).find((r) => sameRepo(r, tab));
+  const without = read && !hasInbox(inboxes![read]) ? tab : null;
 
   return (
     <RepoDialog

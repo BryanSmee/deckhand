@@ -236,15 +236,31 @@ export function runName(r: Run): string {
   return [why, own, what ?? "Run"].filter(Boolean).join(" · ");
 }
 
+// GitHub's repo names ignore case: Owner/Repo and owner/repo are the same repo, which the
+// listener can see spelled both ways (a rename, a hand-typed setting).
+export const sameRepo = (a: string | null | undefined, b: string | null | undefined) =>
+  !!a && !!b && a.toLowerCase() === b.toLowerCase();
+
+// Repo names without their duplicates in another case: the first spelling of each stays.
+export function uniqueRepos(repos: string[]): string[] {
+  const seen = new Map<string, string>();
+  for (const r of repos) if (!seen.has(r.toLowerCase())) seen.set(r.toLowerCase(), r);
+  return [...seen.values()];
+}
+
 // The repos' tabs: the most recently active first. Repo names alone, unless they come from
-// more than one owner.
+// more than one owner. A repo spelled in two cases is one tab, under its latest spelling.
 export function repoTabs(tasks: Task[]): { repo: string; label: string }[] {
-  const latest = new Map<string, number>();
-  for (const t of tasks) latest.set(t.repo, Math.max(latest.get(t.repo) ?? 0, t.since));
-  const repos = [...latest.keys()].sort(
-    (a, b) => latest.get(b)! - latest.get(a)! || a.localeCompare(b),
-  );
-  const owners = new Set(repos.map((r) => r.split("/")[0]));
+  const latest = new Map<string, { repo: string; since: number }>();
+  for (const t of tasks) {
+    const key = t.repo.toLowerCase();
+    const seen = latest.get(key);
+    if (!seen || t.since > seen.since) latest.set(key, { repo: t.repo, since: t.since });
+  }
+  const repos = [...latest.values()]
+    .sort((a, b) => b.since - a.since || a.repo.localeCompare(b.repo))
+    .map((r) => r.repo);
+  const owners = new Set(repos.map((r) => r.split("/")[0].toLowerCase()));
   return repos.map((repo) => ({
     repo,
     label: owners.size > 1 ? repo : shortRepo(repo),

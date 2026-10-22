@@ -4,7 +4,7 @@
 // the listener was down are caught by one lookup per repo when it starts (sync()). Kept in
 // inputs.json, so a restart doesn't forget them meanwhile.
 import { hasLabel } from "./comments.mjs";
-import { parseKey, taskKey } from "./events.mjs";
+import { parseKey, sameRepo, taskKey } from "./events.mjs";
 import { paginate } from "./github.mjs";
 import { parseQuestions, questionsSection } from "./questions.mjs";
 import { persistentMap } from "./store.mjs";
@@ -62,7 +62,7 @@ export function createInputs({ path, listLabelled, now = Date.now, log = () => {
         titles.push([key, issue.title]);
       }
       for (const key of inputs.keys()) {
-        if (parseKey(key)?.repo.toLowerCase() !== repo.toLowerCase() || found.has(key)) continue;
+        if (!sameRepo(parseKey(key)?.repo, repo) || found.has(key)) continue;
         inputs.delete(key);
         changed = true;
       }

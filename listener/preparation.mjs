@@ -15,7 +15,7 @@ import {
 } from "./access.mjs";
 import { agentFor } from "./agents/index.mjs";
 import { mandatoryHosts } from "./egress.mjs";
-import { sameRepo } from "./events.mjs";
+import { headInRepo } from "./events.mjs";
 import { getJson, paginate } from "./github.mjs";
 import { imageRef } from "./images.mjs";
 import { OPEN } from "./modes.mjs";
@@ -278,7 +278,7 @@ export function createPreparation(ctx) {
       }
       pulls.set(number, pr);
       const ref = pr.head?.ref;
-      if (!sameRepo(pr, task.repo)) fork = true;
+      if (!headInRepo(pr, task.repo)) fork = true;
       else if (ref && !branches.includes(ref)) branches.push(ref);
     }
     return { branches, fork, pulls };

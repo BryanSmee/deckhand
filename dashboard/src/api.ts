@@ -29,6 +29,7 @@ import type {
   WorkAction,
   WorkResult,
 } from "./types";
+import { sameRepo } from "./format";
 
 // What the listener answers, or why it refused: its `error`, else the status.
 export type Answer<T> = T & { error?: string };
@@ -360,7 +361,7 @@ export function useWorkArea(
     return said;
   };
 
-  const mine = pending.filter((p) => p.repo === repo);
+  const mine = pending.filter((p) => sameRepo(p.repo, repo));
   return {
     backlog,
     error: read.error,

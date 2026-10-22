@@ -79,8 +79,13 @@ function setup({
       return Response.json({ number, title: body.title, html_url: `u/${number}` });
     }
     if (path === `/repos/${repo}`) {
-      return repo === "org/app"
-        ? Response.json({ default_branch: "main", private: !!w.private })
+      // GitHub's spelling of the name, whatever the request's (`w.fullName`).
+      return repo.toLowerCase() === "org/app"
+        ? Response.json({
+            full_name: w.fullName ?? "org/app",
+            default_branch: "main",
+            private: !!w.private,
+          })
         : new Response("{}", { status: 404 });
     }
     if (path.startsWith(`/repos/${repo}/issues?`)) {
@@ -305,7 +310,8 @@ test("GET issues: an old read is served at once, and read again once in the back
   const old = await get();
   assert.deepEqual(old.body, { ...first.body, refreshing: true });
   assert.deepEqual((await get()).body, old.body);
-  assert.equal(w.calls.filter((c) => c === "GET /repos/org/app").length, 2);
+  // The first request's two: its name (nameOf()), then its backlog.
+  assert.equal(w.calls.filter((c) => c === "GET /repos/org/app").length, 3);
   release();
   w.hold = null;
   await settled();
@@ -328,7 +334,8 @@ test("GET issues: a failed background read keeps the last one, and is tried agai
   await settled();
   assert.match(w.logs.at(-1), /org\/app: backlog: GitHub GET \/repos\/org\/app: 502/);
   // Still the last read, and another try.
-  const reads = () => w.calls.filter((c) => c === "GET /repos/org/app").length;
+  // One more than the backlog's: the first request read the repo's name too (nameOf()).
+  const reads = () => w.calls.filter((c) => c === "GET /repos/org/app").length - 1;
   assert.equal((await get()).status, 200);
   assert.equal(reads(), 3);
   await settled();
@@ -400,7 +407,8 @@ test("GET issues: a delivery during a read reads once more after it, one read at
   let release;
   w.hold = new Promise((resolve) => (release = resolve));
   await get();
-  const reads = () => w.calls.filter((c) => c === "GET /repos/org/app").length;
+  // One more than the backlog's: the first request read the repo's name too (nameOf()).
+  const reads = () => w.calls.filter((c) => c === "GET /repos/org/app").length - 1;
   // The read going started before the new issue: two deliveries ask for a single one more,
   // which waits for it.
   w.issues[2] = open("Two");
@@ -1625,4 +1633,44 @@ test("analyze preview: how many runs match, the tokens, the kinds there are", as
   // Other methods.
   assert.equal((await call(w.api, "PUT", "/api/repos/org/app/analyze")).status, 405);
   assert.equal((await call(w.api, "POST", "/api/repos/org/app/issues", { body: {} })).status, 405);
+});
+
+// GitHub names repos regardless of case: "Org/app" for a dashboard address in lowercase.
+test("a repo spelled otherwise: work starts under GitHub's name, refused while its run goes", async () => {
+  const w = setup({ issues: { 5: open("Five"), 6: open("Six") }, busy: ["Org/app#6"] });
+  w.fullName = "Org/app";
+  const res = await post(w, { action: "start", number: 5 });
+  assert.equal(res.status, 200);
+  assert.equal(w.accepted[0].repo, "Org/app");
+  assert.ok(w.calls.includes("GET /repos/Org/app/issues/5"));
+  // The webhook's run on #6 is keyed "Org/app#6": the lowercase address doesn't miss it.
+  const busy = await post(w, { action: "start", number: 6 });
+  assert.equal(busy.status, 409);
+  assert.match(busy.body.error, /#6 is running or queued/);
+  assert.equal(w.accepted.length, 1);
+  // GitHub is asked for the name once.
+  assert.equal(w.calls.filter((c) => c === "GET /repos/org/app").length, 1);
+});
+
+test("a repo spelled otherwise: inbox, answers, reruns and analyses use GitHub's name", async () => {
+  const w = setup({
+    settings: INBOX,
+    issues: { 5: open("Five"), 7: open("Seven"), 12: open("Ideas") },
+    history: HISTORY,
+    ...failed("Org/app#7"),
+  });
+  w.tasks["Org/app#5"] = asking(5, "run", QUESTIONS, { key: "Org/app#5" });
+  w.fullName = "Org/app";
+  const sent = await sendInbox(w, { kind: "idea", text: "Dark mode" });
+  assert.equal(sent.body.task, "Org/app#12");
+  assert.equal(w.accepted.at(-1).repo, "Org/app");
+  const answered = await answer(w, { number: 5, text: "Yes" });
+  assert.equal(answered.status, 200);
+  assert.equal(w.accepted.at(-1).repo, "Org/app");
+  const rerun7 = await rerun(w, { runId: "run-7" });
+  assert.equal(rerun7.status, 200);
+  assert.equal(w.accepted.at(-1).repo, "Org/app");
+  const analysis = await analyze(w, { count: 2, kinds: ["work"], outcomes: ["error"] });
+  assert.equal(analysis.body.task, "Org/app#901");
+  assert.equal(w.accepted.at(-1).repo, "Org/app");
 });

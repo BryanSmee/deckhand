@@ -9,7 +9,7 @@ import { type RepoList, useAppState, useRepos } from "./api";
 import { Detail } from "./Detail";
 import { Graph } from "./Graph";
 import { InboxDialog } from "./Inbox";
-import { type ChipId, CHIPS, inChip, isLive, plural } from "./format";
+import { type ChipId, CHIPS, inChip, isLive, plural, repoTabs, sameRepo } from "./format";
 import { useReadyNotifications } from "./notify";
 import { notOnboarded, Repos } from "./Repos";
 import { formatRoute, parseRoute, type Route } from "./route";
@@ -101,7 +101,10 @@ export function Dashboard({ state, error, repos, refresh }: Props) {
   const wide = useWide();
   const tasks = state?.tasks ?? [];
   const now = state?.now ?? Date.now();
-  const inTab = route.repo ? tasks.filter((t) => t.repo === route.repo) : tasks;
+  // The address's repo as its tab spells it: GitHub ignores case, a link may not match.
+  const tabRepo =
+    (route.repo && repoTabs(tasks).find((t) => sameRepo(t.repo, route.repo))?.repo) || route.repo;
+  const inTab = route.repo ? tasks.filter((t) => sameRepo(t.repo, route.repo)) : tasks;
 
   const task = (route.task && tasks.find((t) => t.key === route.task)) || null;
   const run = (task && route.run && task.runs.find((r) => r.id === route.run)) || task?.runs[0];
@@ -110,9 +113,13 @@ export function Dashboard({ state, error, repos, refresh }: Props) {
   const first = visible.find(isLive) ?? visible[0];
   const onRepos = route.page === "repositories";
   const onGraph = route.page === "graph";
+  // The address takes the tab's spelling, so links copied from it are the canonical ones.
+  useEffect(() => {
+    if (tabRepo !== route.repo) go({ ...route, repo: tabRepo }, true);
+  }, [tabRepo, route.repo]);
   useEffect(() => {
     if (wide && !route.page && !route.task && first)
-      go({ ...route, task: first.key, run: null }, true);
+      go({ ...route, repo: tabRepo, task: first.key, run: null }, true);
   }, [wide, route.page, route.task, first?.key]);
 
   const selectTab = (repo: string | null) => {

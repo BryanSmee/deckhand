@@ -28,7 +28,7 @@ export function TaskList({
 }: Props) {
   const visible = tasks.filter((t) => inChip(chip, t));
   // Named as their tabs are.
-  const labels = new Map(repoTabs(tasks).map((r) => [r.repo, r.label]));
+  const labels = new Map(repoTabs(tasks).map((r) => [r.repo.toLowerCase(), r.label]));
   return (
     <div class={styles.list}>
       <div class={styles.chips} role="group" aria-label="State">
@@ -52,7 +52,7 @@ export function TaskList({
               <Row
                 task={t}
                 current={t.key === selected}
-                repo={showRepo ? (labels.get(t.repo) ?? t.repo) : null}
+                repo={showRepo ? (labels.get(t.repo.toLowerCase()) ?? t.repo) : null}
                 {...{ onSelect, now }}
               />
             </li>

@@ -19,7 +19,7 @@
 // and one review after it, kept across restarts.
 import { waitsForInput } from "./comments.mjs";
 import { repoAllowed } from "./config.mjs";
-import { linkedIssue, linkTo, MARKER, prId, sameRepo, taskKey } from "./events.mjs";
+import { linkedIssue, linkTo, MARKER, prId, headInRepo, taskKey } from "./events.mjs";
 import { autoMergeProblems, previewProblem } from "./grants.mjs";
 import { getJson, paginate } from "./github.mjs";
 import { CONFIG_FILE } from "./repo-config.mjs";
@@ -347,7 +347,7 @@ export async function mergeRefusal(
   let pr = await getJson(github, repo, `/repos/${repo}/pulls/${number}`, [404]);
   if (!pr) return { why: "the pull request can't be read" };
   const own = !!config.bot && pr.user?.login?.toLowerCase() === config.bot.toLowerCase();
-  const issue = own && sameRepo(pr, repo) ? linkedIssue(pr, repo, config.bot) : null;
+  const issue = own && headInRepo(pr, repo) ? linkedIssue(pr, repo, config.bot) : null;
   if (!issue) {
     return {
       why: "it isn't Deckhand's own pull request, on a branch of the repository and linked to its issue",
@@ -459,7 +459,7 @@ export function reviewCandidate(config, event, p, skip = () => null) {
   if (!p.installation?.id || !repo) return skip("not from an installation of the App");
   if (!repoAllowed(config, repo)) return skip(`${repo} not in ALLOWED_REPOS`);
   if (pr.state && pr.state !== "open") return skip(`review: #${pr.number} isn't open`);
-  if (!sameRepo(pr, repo)) return skip(`review: #${pr.number} is from a fork`);
+  if (!headInRepo(pr, repo)) return skip(`review: #${pr.number} is from a fork`);
   const login = pr.user?.login?.toLowerCase() ?? "";
   const own = !!config.bot && login === config.bot.toLowerCase();
   if (!own && (pr.user?.type === "Bot" || !config.users.includes(login))) {
