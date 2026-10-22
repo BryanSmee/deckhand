@@ -6,9 +6,10 @@
 // missed while the listener was down, or never subscribed to, still starts the work. Once
 // they are done, an issue whose open questions aren't answered yet (the repo's
 // `wait_for_answers`) waits for its answers too: `blockers` empty, `answers` true.
-import { issueOutcome, parseKey, taskKey } from "./events.mjs";
+import { issueOutcome, parseKey, sameRepo, taskKey } from "./events.mjs";
 import { getJson } from "./github.mjs";
 import { plain, revive } from "./restart.mjs";
+import { respellMap } from "./spelling.mjs";
 import { persistentMap } from "./store.mjs";
 
 // How often GitHub is asked about what the waits wait for (the operator's WAITS_CHECK_MINUTES).
@@ -162,7 +163,7 @@ export function createWaits({
       log(`${own}: closed, its wait is dropped`);
     }
     const waiting = [...waits].filter(
-      ([, w]) => w.repo.toLowerCase() === repo.toLowerCase() && w.blockers.includes(number),
+      ([, w]) => sameRepo(w.repo, repo) && w.blockers.includes(number),
     );
     for (const [key, wait] of waiting) {
       // Another delivery or check may have handled it meanwhile.
@@ -250,9 +251,7 @@ export function createWaits({
 
   // Whether a wait of `repo` is for its issue or pull request `number`.
   const waitedFor = (repo, number) =>
-    [...waits.values()].some(
-      (w) => w.repo.toLowerCase() === repo.toLowerCase() && w.blockers.includes(number),
-    );
+    [...waits.values()].some((w) => sameRepo(w.repo, repo) && w.blockers.includes(number));
 
   // Something happened to `number` of `repo` (a delivery, a run on it ended): GitHub is asked
   // about that one only, and nothing when no wait is for it. Resolves to its state, or null.
@@ -321,7 +320,20 @@ export function createWaits({
     }));
   }
 
+  // Its task keys, and the same with one spelling per repo (spelling.mjs, at a restart).
+  const keys = () => [...waits.keys()];
+  function respell(spelled) {
+    const fix = (w) => ({
+      ...w,
+      repo: spelled(w.repo),
+      item: { ...w.item, repo: spelled(w.item.repo) },
+    });
+    if (respellMap(waits, spelled, fix)) save();
+  }
+
   return {
+    keys,
+    respell,
     request,
     hold,
     cancel,

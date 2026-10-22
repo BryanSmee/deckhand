@@ -2,18 +2,41 @@
 // comment (work.mjs, discussions.mjs, analysis.mjs): the App installed, the repo's config
 // without errors, the user in both the operator's and the repo's users. Failures throw
 // Refused (web.mjs), which the API answers with their status.
+import { sameRepo } from "./events.mjs";
 import { getJson } from "./github.mjs";
 import { CONFIG_FILE } from "./repo-config.mjs";
-import { refuse } from "./web.mjs";
+import { Refused, refuse } from "./web.mjs";
 
 // `github(repo, method, path, body, expected)`: the App's calls. `repoSettings(repo, base)`:
 // the default branch's config.
 export function createRepoCheck({ config, github, repoSettings }) {
+  // Lowercase name → GitHub's spelling of it, as each read of the repo says.
+  const names = new Map();
+
   // The repo as GitHub describes it, or a 404 when the App can't read it.
   async function infoOf(repo) {
     const info = await getJson(github, repo, `/repos/${repo}`, [404]);
     if (!info) refuse(404, `The App is not installed on ${repo}.`);
+    // A repo renamed or transferred answers with another name entirely, which ALLOWED_REPOS
+    // was never checked for: the name asked for stays.
+    names.set(repo.toLowerCase(), sameRepo(info.full_name, repo) ? info.full_name : repo);
     return info;
+  }
+
+  // The repo as GitHub spells it, which webhooks give too: a dashboard address typed in
+  // lowercase would key its tasks apart from theirs, and busy() would miss their runs. Read
+  // once, then as each check reads the repo. One the App can't read keeps its name: its checks
+  // refuse it.
+  async function nameOf(repo) {
+    const known = names.get(repo.toLowerCase());
+    if (known) return known;
+    try {
+      await infoOf(repo);
+      return names.get(repo.toLowerCase());
+    } catch (error) {
+      if (error instanceof Refused) return repo;
+      throw error;
+    }
   }
 
   // The repo's default branch, or a 404 when the App can't read it.
@@ -39,5 +62,5 @@ export function createRepoCheck({ config, github, repoSettings }) {
     return { settings, base, isPrivate: info.private === true };
   }
 
-  return { baseOf, checkedRepo };
+  return { baseOf, checkedRepo, nameOf };
 }

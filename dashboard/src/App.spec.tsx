@@ -3,7 +3,7 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/pre
 import { beforeEach, expect, test, vi } from "vitest";
 import type { RepoList } from "./api";
 import { Dashboard } from "./App";
-import { makeState } from "./testUtils";
+import { makeState, makeTask } from "./testUtils";
 import type { Entry } from "./types";
 
 const state = makeState();
@@ -88,6 +88,20 @@ test("a repo's tab and the state chips filter the list", () => {
   expect(localStorage.getItem("deckhand.tab")).toBe("acme/api");
   fireEvent.click(screen.getByRole("button", { name: /^Done/ }));
   expect(rows()).toEqual(["Dark mode for the settings page"]);
+});
+
+test("a repo's address in another case opens its tab, under GitHub's spelling", async () => {
+  wide = false;
+  const repo = "Storywake/storywake";
+  const tasks = [makeTask({ repo, number: 1 }), makeTask({ repo, number: 2, since: 5 })];
+  history.replaceState(null, "", "#/storywake/storywake");
+  render(<Dashboard state={makeState({ tasks })} error={null} />);
+  const tabs = screen.getAllByRole("tab");
+  expect(tabs.map((t) => t.title)).toEqual(["Every repo", repo]);
+  expect(tabs[1].textContent).toMatch(/^storywake/);
+  expect(tabs[1].getAttribute("aria-selected")).toBe("true");
+  expect(rows().sort()).toEqual(["Issue 1", "Issue 2"]);
+  await waitFor(() => expect(location.hash).toBe("#/Storywake/storywake"));
 });
 
 test("a task waiting for other issues links them", () => {

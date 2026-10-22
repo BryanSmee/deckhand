@@ -7,6 +7,7 @@ import {
   ownMode,
   plural,
   repoTabs,
+  sameRepo,
   runKindName,
   runName,
   shortRepo,
@@ -30,6 +31,26 @@ describe("repo tabs", () => {
     expect(repoTabs([...state.tasks, other]).map((t) => t.label)).toContain("other/site");
     expect(repoTabs([...state.tasks, other]).map((t) => t.label)).toContain("acme/app");
   });
+
+  test("a repo spelled in two cases is one tab, under its latest spelling", () => {
+    const old = {
+      ...task("acme/notes#4"),
+      key: "Storywake/storywake#1",
+      repo: "Storywake/storywake",
+      since: 1,
+    };
+    const recent = { ...old, key: "storywake/storywake#2", repo: "storywake/storywake", since: 2 };
+    expect(repoTabs([old, recent])).toEqual([{ repo: "storywake/storywake", label: "storywake" }]);
+    expect(repoTabs([{ ...old, since: 3 }, recent])).toEqual([
+      { repo: "Storywake/storywake", label: "storywake" },
+    ]);
+  });
+});
+
+test("repo names compare without case", () => {
+  expect(sameRepo("Storywake/storywake", "storywake/StoryWake")).toBe(true);
+  expect(sameRepo("acme/app", "acme/api")).toBe(false);
+  expect(sameRepo(null, null)).toBe(false);
 });
 
 test("state chips group states: a waiting brainstorm needs input", () => {

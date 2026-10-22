@@ -112,11 +112,12 @@ export function threadOf(d, bot, key = null) {
 
 // `graphql(repo, query, variables)`: the App's calls, throwing on errors (github.mjs).
 // `checkedRepo(repo, user)`: the dashboard's checks for the repo (repo-check.mjs): { settings, base }.
-// `accept(item)` (tasks.mjs).
+// `nameOf(repo)`: GitHub's spelling of its name (repo-check.mjs). `accept(item)` (tasks.mjs).
 export function createDiscussionApi({
   config,
   graphql,
   checkedRepo,
+  nameOf = async (repo) => repo,
   accept,
   publicUrl = () => null,
   // The key of the dashboard's "from" lines (fromKey()), or null without an App.
@@ -323,6 +324,7 @@ export function createDiscussionApi({
     posts: { start: started, comment: numbered(commented) },
     gets: { thread: numbered((req, res, user, repo, number) => read(res, repo, user, number)) },
     allowed: (repo) => repoAllowed(config, repo),
+    named: nameOf,
     publicUrl,
     log,
   });

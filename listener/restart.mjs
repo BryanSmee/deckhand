@@ -5,9 +5,10 @@
 import { readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { agentFor } from "./agents/index.mjs";
-import { taskKey } from "./events.mjs";
+import { parseKey, taskKey } from "./events.mjs";
 import { permissionsFor } from "./modes.mjs";
 import { addRun, openLog, writeEvent } from "./runlog.mjs";
+import { ambiguous, githubNames, respelled, spellings } from "./spelling.mjs";
 import { readJson, writeJsonAtomic } from "./store.mjs";
 import { newTask, noLongerAllowed } from "./tasks.mjs";
 
@@ -46,6 +47,51 @@ function pick({ repo, id, kind, number, name, base, discussionId, settings }) {
 export function createRestart(ctx) {
   const { config, log, tasks } = ctx;
   const queuePath = join(config.dataDir, "queue.json");
+  // spelled(repo) (spelling.mjs): set by unifySpellings(), or by restoreRuns() without GitHub's names.
+  let spelled = null;
+
+  const readLive = () =>
+    readdirSync(ctx.logDir)
+      .filter((f) => f.endsWith(".live.json"))
+      .map((file) => readJson(join(ctx.logDir, file)))
+      .filter(Boolean);
+
+  // Every repo the runs, the runs going, the queue and `keys` (other state's task keys) have,
+  // for spellings().
+  function records(keys = []) {
+    const queued = readJson(queuePath);
+    return [
+      ...ctx.runs,
+      ...readLive().map((saved) => ({
+        repo: saved.task?.repo,
+        startedAt: saved.record?.startedAt,
+        live: true,
+      })),
+      ...(Array.isArray(queued) ? queued : []).map((t) => ({ repo: t.repo })),
+      ...keys.map((key) => ({ repo: parseKey(key)?.repo })),
+    ];
+  }
+
+  // One spelling per repo, before restoreRuns() and loadQueue(): GitHub's for a repo the state
+  // has under two, asked with `nameOf(repo)` (repo-check.mjs), for at most `waitMs`. Else
+  // spellings()'. The runs' list (runlog.mjs loadRuns()) takes it now: the dashboard shows the
+  // repo once, and its tasks are one. In memory only: the next start does it again. Returns
+  // spelled(), for the other state keyed by task (server.mjs).
+  async function unifySpellings({ nameOf = null, keys = [], waitMs } = {}) {
+    const all = records(keys);
+    const known = nameOf ? await githubNames(ambiguous(all), nameOf, waitMs) : new Map();
+    for (const full of known.values()) log(`${full}: other spellings of it are now this one`);
+    return respellRuns(spellings(all, known));
+  }
+
+  function respellRuns(spell) {
+    spelled = spell;
+    for (const run of ctx.runs) {
+      run.repo = spelled(run.repo);
+      run.key = respelled(run.key, spelled);
+    }
+    return spelled;
+  }
 
   // Comments that wait for a run, with the 👀 they got, so the next listener runs them.
   async function saveQueue() {
@@ -64,7 +110,10 @@ export function createRestart(ctx) {
     const saved = readJson(queuePath);
     if (!Array.isArray(saved)) return; // Nothing was waiting.
     rmSync(queuePath, { force: true });
+    const spell = spelled ?? respellRuns(spellings(records()));
     for (const t of saved) {
+      t.repo = spell(t.repo);
+      for (const item of t.pending) item.repo = spell(item.repo);
       const key = taskKey(t.repo, t.id);
       // ALLOWED_REPOS or ALLOWED_USERS may have changed with the restart. The repo's own
       // users are checked when the run begins (runs.mjs), or below for a run still going.
@@ -126,12 +175,15 @@ export function createRestart(ctx) {
   // Runs a previous listener left behind, from their saved state: their tokens and egress work
   // again at once, and comments find them. reattach() then follows their sandboxes.
   function restoreRuns() {
-    const restored = [];
-    for (const file of readdirSync(ctx.logDir).filter((f) => f.endsWith(".live.json"))) {
-      const saved = readJson(join(ctx.logDir, file));
-      if (saved) restored.push(restoreRun(saved));
+    if (!spelled) respellRuns(spellings(records()));
+    const live = readLive();
+    for (const saved of live) {
+      saved.task.repo = spelled(saved.task.repo);
+      saved.record.repo = spelled(saved.record.repo);
+      saved.record.key = respelled(saved.record.key, spelled);
+      for (const item of saved.handled ?? []) item.repo = spelled(item.repo);
     }
-    return restored;
+    return live.map(restoreRun);
   }
 
   function restoreRun(saved) {
@@ -248,6 +300,7 @@ export function createRestart(ctx) {
   }
 
   return {
+    unifySpellings,
     saveQueue,
     loadQueue,
     livePath,

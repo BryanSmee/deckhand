@@ -4,9 +4,10 @@
 // the listener was down are caught by one lookup per repo when it starts (sync()). Kept in
 // inputs.json, so a restart doesn't forget them meanwhile.
 import { hasLabel } from "./comments.mjs";
-import { parseKey, taskKey } from "./events.mjs";
+import { parseKey, sameRepo, taskKey } from "./events.mjs";
 import { paginate } from "./github.mjs";
 import { parseQuestions, questionsSection } from "./questions.mjs";
+import { respellMap } from "./spelling.mjs";
 import { persistentMap } from "./store.mjs";
 
 // `listLabelled(repo)`: the repo's open issues with the label, as GET /repos/{repo}/issues
@@ -62,7 +63,7 @@ export function createInputs({ path, listLabelled, now = Date.now, log = () => {
         titles.push([key, issue.title]);
       }
       for (const key of inputs.keys()) {
-        if (parseKey(key)?.repo.toLowerCase() !== repo.toLowerCase() || found.has(key)) continue;
+        if (!sameRepo(parseKey(key)?.repo, repo) || found.has(key)) continue;
         inputs.delete(key);
         changed = true;
       }
@@ -88,7 +89,16 @@ export function createInputs({ path, listLabelled, now = Date.now, log = () => {
       questions,
     }));
 
-  return { set, update, sync, list, has: (key) => inputs.has(key) };
+  return {
+    set,
+    update,
+    sync,
+    list,
+    has: (key) => inputs.has(key),
+    keys: () => [...inputs.keys()],
+    // One spelling per repo (spelling.mjs, at a restart).
+    respell: (spelled) => respellMap(inputs, spelled) && save(),
+  };
 }
 
 // Open questions in the bodies of a repo's open issues (the work area's backlog, work.mjs)

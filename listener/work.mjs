@@ -49,7 +49,7 @@ import { MAX_TEXT, answersComment, parseAnswers } from "./answers.mjs";
 import { labelFailed } from "./comments.mjs";
 import { repoAllowed } from "./config.mjs";
 import { fromDashboard } from "./discussions.mjs";
-import { inboxItem, issueItem, parseKey, prId, taskKey, unmarked } from "./events.mjs";
+import { inboxItem, issueItem, parseKey, prId, sameRepo, taskKey, unmarked } from "./events.mjs";
 import { getJson } from "./github.mjs";
 import { createInputSeeder } from "./inputs.mjs";
 import { createRepoCheck } from "./repo-check.mjs";
@@ -127,7 +127,7 @@ export function createWorkApi({
   // "owner/repo" → { repo, last: { issues, modes, errors, users, at, seq, version } | null,
   //                 read: Promise | null, again, seq, version, live, ended }
   const backlogs = new Map();
-  const { baseOf, checkedRepo } = createRepoCheck({ config, github, repoSettings });
+  const { baseOf, checkedRepo, nameOf } = createRepoCheck({ config, github, repoSettings });
   // Open questions in the backlog's issues that never got the label (inputs.mjs).
   const { seed: seedInputs } = createInputSeeder({ config, github, label, inputs, boardKeys, log });
 
@@ -594,7 +594,7 @@ export function createWorkApi({
   // reactions. The issue's session volume carries what the run had done.
   async function rerun(repo, user, runId) {
     const run = runOf(runId);
-    if (run?.repo?.toLowerCase() !== repo.toLowerCase()) refuse(404, `No run ${runId} in ${repo}.`);
+    if (!sameRepo(run?.repo, repo)) refuse(404, `No run ${runId} in ${repo}.`);
     const target = parseKey(run.key);
     if (!target || target.kind === "discussion") {
       refuse(409, "Only work on an issue or pull request runs again.");
@@ -743,6 +743,7 @@ export function createWorkApi({
       analyze: previewAnalysis,
     },
     allowed: (repo) => repoAllowed(config, repo),
+    named: nameOf,
     publicUrl,
     log,
   });

@@ -85,13 +85,15 @@ export function sameOrigin(req, publicUrl) {
 // for a path of this API (`repo` null for one that names none), or null. `gets` and `posts`:
 // what → handler(req, res, user, repo, route). The handler throws Refused for what the
 // dashboard shows as it is; any other error is a 502, the stack in the logs.
-// `allowed(repo)`: ALLOWED_REPOS (config.mjs repoAllowed()). `name`: the log lines' prefix.
+// `allowed(repo)`: ALLOWED_REPOS (config.mjs repoAllowed()). `named(repo)`: the name the
+// handler gets, GitHub's spelling (repo-check.mjs nameOf()). `name`: the log lines' prefix.
 export function apiRoute({
   name,
   route,
   gets = {},
   posts = {},
   allowed = () => true,
+  named = async (repo) => repo,
   publicUrl = () => null,
   log = () => {},
 }) {
@@ -111,12 +113,12 @@ export function apiRoute({
       if (repo && !allowed(repo)) {
         return send(res, 404, { error: `${repo} is not in ALLOWED_REPOS.` });
       }
-      if (req.method === "GET") return get(req, res, user, repo, found);
-      if (!sameOrigin(req, publicUrl())) {
+      if (req.method === "POST" && !sameOrigin(req, publicUrl())) {
         log(`${name}: refused for ${user}: Origin ${req.headers.origin ?? "missing"}`);
         return send(res, 403, { error: "Not from this dashboard." });
       }
-      return post(req, res, user, repo, found);
+      const spelled = repo && (await named(repo));
+      return (req.method === "GET" ? get : post)(req, res, user, spelled, found);
     };
     run().catch((error) => {
       if (error instanceof Refused) {

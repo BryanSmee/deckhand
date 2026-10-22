@@ -7,7 +7,7 @@
 import { readFileSync } from "node:fs";
 import { agentFor } from "./agents/index.mjs";
 import { ensureLabel } from "./comments.mjs";
-import { issueItem, taskKey } from "./events.mjs";
+import { issueItem, sameRepo, taskKey } from "./events.mjs";
 import { OPEN } from "./modes.mjs";
 import { clip, format, minutes } from "./runlog.mjs";
 import { redact } from "./secrets.mjs";
@@ -31,7 +31,7 @@ function runKind(run) {
   return run.taskMode ?? run.kind ?? "work";
 }
 
-const ofRepo = (run, repo) => run.repo?.toLowerCase() === repo.toLowerCase();
+const ofRepo = (run, repo) => sameRepo(run.repo, repo);
 const finished = (run) => run.status !== "running";
 // A research run (modes.mjs OPEN) read the open web: what a page made it say would reach a run
 // that has the code and a token, and a report posted as is. Never in a digest.

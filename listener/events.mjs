@@ -23,6 +23,10 @@ export function unmarked(text) {
 // "org/repo#discussion-8". `id`: its items' (prId(), String(n), discussion-<n>).
 export const taskKey = (repo, id) => `${repo}#${id}`;
 
+// GitHub's repo names ignore case: "Org/Repo" and "org/repo" are one repo.
+export const sameRepo = (a, b) =>
+  typeof a === "string" && typeof b === "string" && a.toLowerCase() === b.toLowerCase();
+
 // The id of a pull request's own task (one that closes no issue it may speak for).
 export const prId = (number) => `pr-${number}`;
 
@@ -77,14 +81,13 @@ function closesIssue(pr) {
 // others are looked up (tasks.mjs admit()). Not any bot: github-actions or another App may
 // open pull requests from outsiders' input.
 function trustedPull(pr, repo, bot) {
-  if (pr.head) return sameRepo(pr, repo);
+  if (pr.head) return headInRepo(pr, repo);
   return !!bot && pr.user?.login?.toLowerCase() === bot.toLowerCase();
 }
 
 // Whether a pull request's head branch is in `repo`, not a fork (whose head repo may be gone).
-export function sameRepo(pr, repo) {
-  const head = pr.head?.repo?.full_name;
-  return !!head && head.toLowerCase() === repo.toLowerCase();
+export function headInRepo(pr, repo) {
+  return sameRepo(pr.head?.repo?.full_name, repo);
 }
 
 // The command on the first line ("work" for the trigger, "stop" for "/stop", "cancel" for

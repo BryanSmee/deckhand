@@ -6,7 +6,7 @@
 import { useState } from "preact/hooks";
 import { Chooser, type Target } from "./Chooser";
 import { BRAINSTORM_TYPE, dragOf, droppedIssue, ISSUE_TYPE, LINK_TYPES } from "./dnd";
-import { shortRepo, STATE_NAMES, when } from "./format";
+import { sameRepo, shortRepo, STATE_NAMES, when } from "./format";
 import type { BrainstormCard } from "./graphModel";
 import { typesOf, useDropZone } from "./hooks";
 import { IssueRow } from "./IssueRow";
@@ -70,7 +70,7 @@ export function Brainstorms({
         );
         return;
       }
-      if (cards.some((c) => c.number === number && c.repo === repo)) return;
+      if (cards.some((c) => c.number === number && sameRepo(c.repo, repo))) return;
       act({ action: "start", number, mode: "brainstorm" });
     },
   );

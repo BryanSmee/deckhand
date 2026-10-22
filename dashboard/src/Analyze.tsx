@@ -5,7 +5,7 @@
 // analysis's issue, then its task.
 import { useEffect, useRef, useState } from "preact/hooks";
 import { previewAnalysis, startAnalysis } from "./api";
-import { plural, runKindName } from "./format";
+import { plural, repoTabs, runKindName, uniqueRepos } from "./format";
 import { useSubmit } from "./hooks";
 import { RepoDialog } from "./RepoDialog";
 import { formatRoute } from "./route";
@@ -27,7 +27,7 @@ const OUTCOMES: { id: Outcome; label: string }[] = [
 
 // The repos the form offers: those api/state shows the user, by name.
 export const analysisRepos = (inboxes: Record<string, unknown> | undefined, tasks: Task[]) =>
-  [...new Set([...Object.keys(inboxes ?? {}), ...tasks.map((t) => t.repo)])].sort();
+  uniqueRepos([...repoTabs(tasks).map((t) => t.repo), ...Object.keys(inboxes ?? {})]).sort();
 
 interface Props {
   repos: string[];

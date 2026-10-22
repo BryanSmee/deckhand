@@ -11,6 +11,7 @@
 import { createHash } from "node:crypto";
 import { rmSync } from "node:fs";
 import { join } from "node:path";
+import { sameRepo } from "./events.mjs";
 import { checked, hardening, labelArgs, removeVolume, volumeExists } from "./docker.mjs";
 import { cacheVolume, legacyRepoImage, repoImage } from "./repo-config.mjs";
 
@@ -24,7 +25,7 @@ const BRANCH = "branch-";
 // the operator grants the repo branch images (`grant`, grants.mjs) and the pull request's
 // branch lives in the repo itself.
 export function imageRef(grant, settings, repo, base, pr) {
-  const own = pr?.head?.repo?.full_name?.toLowerCase() === repo.toLowerCase();
+  const own = sameRepo(pr?.head?.repo?.full_name, repo);
   if (grant.allowBranchDockerImages && settings.dockerfile && pr?.head?.sha && own) {
     return { ref: pr.head.sha, branch: true };
   }

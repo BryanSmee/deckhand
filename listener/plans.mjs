@@ -1,7 +1,7 @@
 // A parent issue dropped on the graph (work.mjs plan()): its open sub-issues, all levels down,
 // read from GitHub, and what each of them waits for, from their "blocked by" links. A parent
 // waits for its sub-issues, and they for what it is blocked by: the work it needs comes first.
-import { issueOutcome } from "./events.mjs";
+import { issueOutcome, sameRepo } from "./events.mjs";
 import { paginate } from "./github.mjs";
 import { issueList } from "./waits.mjs";
 import { refuse } from "./web.mjs";
@@ -43,7 +43,7 @@ export function leadsTo(blockersOf, from, to) {
 // (422): its parent can't be done as planned; so does a tree over MAX_TREE open issues.
 export async function readTree(github, repo, root) {
   const list = (path) => paginate((p) => github(repo, "GET", p), path);
-  const here = (issue) => repoOf(issue)?.toLowerCase() === repo.toLowerCase();
+  const here = (issue) => sameRepo(repoOf(issue), repo);
   const where = (issue) => `${repoOf(issue) ?? "an unknown repository"}#${issue.number}`;
   const nodes = new Map([[root.number, { issue: root, parent: null, children: [], blockers: [] }]]);
   const elsewhere = [];
