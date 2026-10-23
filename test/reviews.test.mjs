@@ -142,6 +142,24 @@ test("reviewEvent: changes requested on critical, high or medium findings, never
   assert.equal(reviewEvent(null), "COMMENT");
 });
 
+test("parseReview with medium allowed: medium posted as a comment, the model's own verdict kept", () => {
+  const allowed = { allowed: "medium" };
+  const medium = "- **medium** `a.mjs:1`: edge case.\n\nRating: 7/10\nVerdict: request-changes";
+  const tolerated = parseReview(medium, allowed);
+  assert.deepEqual([tolerated.verdict, reviewEvent(tolerated)], ["comment", "COMMENT"]);
+  // High still requests changes; a "request changes" with low findings only stays one.
+  const high = parseReview(MESSAGE, allowed);
+  assert.deepEqual([high.verdict, reviewEvent(high)], ["request-changes", "REQUEST_CHANGES"]);
+  const low = parseReview(
+    "- **low** `a.mjs:1`: nit.\n\nRating: 8/10\nVerdict: request-changes",
+    allowed,
+  );
+  assert.deepEqual([low.verdict, reviewEvent(low)], ["request-changes", "COMMENT"]);
+  // Low (the default): medium requests changes.
+  assert.equal(parseReview(medium).verdict, "request-changes");
+  assert.equal(reviewEvent(parseReview(medium)), "REQUEST_CHANGES");
+});
+
 test("reviewBody: verdict and rating, then the findings grouped by severity, linked", () => {
   const blob = "https://github.com/org/repo/blob/abc123";
   const body = reviewBody(parseReview(MESSAGE), MESSAGE, "<sub>footer</sub>", blob);

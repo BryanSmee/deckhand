@@ -620,11 +620,11 @@ review:
     "review.instructions: expected a path in the repository (relative, no ..)",
     "review.effort: expected one of low, medium, high, xhigh, max",
     "review.agent: the operator hasn't configured codex (configured: claude)",
-    "review.hosts: unknown key (expected on, instructions, agent, model, effort, fix, merge, merge_method)",
+    "review.hosts: unknown key (expected on, instructions, agent, model, effort, fix, merge, merge_method, max_allowed_severity)",
   ]);
   assert.equal(bad.settings.review, null);
   assert.deepEqual(parseRepoConfig("review: [on]\n", config).errors, [
-    "review: expected true, or on, instructions, agent, model, effort, fix, merge, merge_method",
+    "review: expected true, or on, instructions, agent, model, effort, fix, merge, merge_method, max_allowed_severity",
   ]);
 });
 
@@ -649,6 +649,18 @@ test("review.merge and merge_method: off and squash by default, merge warns with
     "review.merge_method: expected squash, merge, rebase",
   ]);
   assert.equal(bad.settings.review, null);
+});
+
+test("review.max_allowed_severity: low by default, or medium, nothing more severe", () => {
+  assert.equal(parseRepoConfig("review: true\n", config).settings.review.maxAllowedSeverity, "low");
+  const medium = parseRepoConfig("review:\n  max_allowed_severity: medium\n", config);
+  assert.deepEqual(medium.errors, []);
+  assert.equal(medium.settings.review.maxAllowedSeverity, "medium");
+  for (const bad of ["high", "critical", "true"]) {
+    assert.deepEqual(parseRepoConfig(`review:\n  max_allowed_severity: ${bad}\n`, config).errors, [
+      "review.max_allowed_severity: expected low or medium",
+    ]);
+  }
 });
 
 test("review.fix: a boolean, off by default", () => {

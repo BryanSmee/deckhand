@@ -38,12 +38,16 @@ const REVIEW_KEYS = [
   "fix",
   "merge",
   "merge_method",
+  "max_allowed_severity",
 ];
 // When a review starts by itself (reviews.mjs): `ready`, a pull request marked ready for review
 // or opened as ready; `manual`, only with a "/mode review" line.
 const REVIEW_ON = ["ready", "manual"];
 // How an auto-merge merges (`review.merge_method`), GitHub's merge_method values.
 export const MERGE_METHODS = ["squash", "merge", "rebase"];
+// `review.max_allowed_severity`'s values: the most severe finding the review that decides an
+// auto-merge (reviews.mjs) may have and still merge. Critical and high always block.
+export const ALLOWED_SEVERITIES = ["low", "medium"];
 
 // The listener's own modes (modes.mjs): a repo's `modes:` can't take these names.
 export { customMode, RESERVED_MODES };
@@ -274,6 +278,7 @@ function parseReview(value, { key, settings, config, fail, warn }) {
     fix: false,
     merge: false,
     mergeMethod: "squash",
+    maxAllowedSeverity: "low",
   };
   if (value === true) {
     settings.review = review;
@@ -304,6 +309,10 @@ function parseReview(value, { key, settings, config, fail, warn }) {
     } else if (k === "merge_method") {
       if (MERGE_METHODS.includes(v)) review.mergeMethod = v;
       else bad(k, `expected ${MERGE_METHODS.join(", ")}`);
+    } else if (k === "max_allowed_severity") {
+      // Critical and high always block a merge: no value lets them through.
+      if (ALLOWED_SEVERITIES.includes(v)) review.maxAllowedSeverity = v;
+      else bad(k, `expected ${ALLOWED_SEVERITIES.join(" or ")}`);
     } else if (k === "agent") {
       review.agent = agentName(v, `review.${k}`, config, (_, what) => bad(k, what));
     } else if (k === "model") {
@@ -326,7 +335,8 @@ function reviewText(review) {
   if (!review) return "off";
   const when = review.on === "ready" ? "when a pull request is ready" : '"/mode review" only';
   const fix = review.fix && "one fix run per pull request";
-  const merge = review.merge && `auto-merge (${review.mergeMethod})`;
+  const medium = review.maxAllowedSeverity === "medium" ? ", medium findings allowed" : "";
+  const merge = review.merge && `auto-merge (${review.mergeMethod}${medium})`;
   return [when, fix, merge, review.instructions].filter(Boolean).join(" · ");
 }
 
