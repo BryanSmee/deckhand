@@ -618,17 +618,21 @@ export function createRuns(ctx) {
     // Already redacted line by line; again, as a result saved by an older listener wasn't.
     // A review's result is one GitHub review, posted with the listener's token (reviews.mjs).
     if (mode === "review" && status !== "error") {
+      // Its fix run or auto-merge, if any, once this run is over (cleanUp()). Only the
+      // listener's own reviews may merge, not a "/mode review" comment's. The one that decides
+      // the merge may tolerate medium findings (`review.max_allowed_severity`).
+      const auto = live.handled.some((item) => item.reason === "review");
+      const at = { repo: task.repo, number: live.replyTo, base: task.base, auto };
+      const allowed = (await ctx.reviews?.tolerance(at)) ?? "low";
       const posted = await postReview(
         ctx,
         task.repo,
         live.replyTo,
         hidden(live, result.text),
         footer,
+        { allowed },
       );
       log(`${live.key}: review posted on #${live.replyTo} (${posted.event ?? "as a comment"})`);
-      // Its fix run or auto-merge, if any, once this run is over (cleanUp()). Only the
-      // listener's own reviews may merge, not a "/mode review" comment's.
-      const auto = live.handled.some((item) => item.reason === "review");
       live.reviewed = { number: live.replyTo, posted, auto };
     } else await ctx.answer(target(task, live.replyTo), hidden(live, text));
     live.replied = true;

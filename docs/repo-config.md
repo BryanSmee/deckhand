@@ -104,6 +104,7 @@ review:
   # merge: true # UNSAFE, no human review: Deckhand merges its own pull request after a clean
   #             # review; needs the operator's allow_auto_merge (see Auto-merge below)
   # merge_method: squash # squash (default) | merge | rebase
+  # max_allowed_severity: low # low (default) | medium: the most severe finding a merge allows
 
 # Where ideas, bug reports and questions go (see Inboxes below).
 inbox:
@@ -149,6 +150,7 @@ wait_for_answers: true
 | `review.fix`                            | `false`                                 | a review that requests changes starts one work run that addresses it (see Reviews)                                           |
 | `review.merge`                          | `false`                                 | **unsafe**: Deckhand merges its own pull request after a clean review; needs `allow_auto_merge` (see Auto-merge)             |
 | `review.merge_method`                   | `squash`                                | how an auto-merge merges: `squash`, `merge` or `rebase`, one the repository allows                                           |
+| `review.max_allowed_severity`           | `low`                                   | the most severe finding the review that decides an auto-merge may have: `low` or `medium` (see Auto-merge)                   |
 | `inbox.ideas`, `inbox.bugs`             | none                                    | issue numbers whose comments are ideas or bug reports to file (see Inboxes)                                                  |
 | `inbox.discussions`                     | none                                    | GitHub Discussions category whose discussions Claude answers (see Inboxes)                                                   |
 | `preview.command`                       | none                                    | preview hook command (`preview: ./x.sh` works too); needs the operator's `allow_preview`                                     |
@@ -505,8 +507,8 @@ review` gets the "unknown mode" reply. `review: true` (or a block without `on`, 
   reviews every pull request that turns ready: keep `manual` where that is too many. A fix is
   a work run, at the repo's work model.
 
-`on`, `instructions`, `agent`, `model`, `effort`, `fix`, `merge` and `merge_method` are its only
-keys: any other, or a bad value, is an error.
+`on`, `instructions`, `agent`, `model`, `effort`, `fix`, `merge`, `merge_method` and
+`max_allowed_severity` are its only keys: any other, or a bad value, is an error.
 
 #### Auto-merge
 
@@ -536,15 +538,27 @@ nothing blocking. It takes both sides:
 **The flow**, all in the listener (never in a sandbox, whose token can't merge):
 
 1. The pull request turns ready, and the review runs as usual.
-2. Nothing blocking (no critical, high or medium finding): the merge, after the gates below.
+2. Nothing blocking (no critical, high or medium finding; medium allowed with
+   `max_allowed_severity`, below): the merge, after the gates below.
 3. Blocking findings, with `fix: true`: the fix run starts as usual. Once it is over, the
-   listener starts **one** more review, of the commit it pushed. That review merges unless it
-   has a critical or high finding: medium ones were the fix run's to address, and stay as the
-   review's comments. Without `fix`, a medium finding blocks too.
-4. Anything else leaves the pull request to the maintainer, with a comment saying why: a review
+   listener starts **one** more review, of the commit it pushed, which decides the merge
+   (without `fix`, the first review decides it). It merges only with nothing blocking, as in
+   step 2.
+4. **A review that requests changes never merges**: posted on GitHub as "request changes", or
+   whose verdict says "request changes" (the review may ask for it with only low findings), it
+   leaves the pull request to the maintainer with a "Not merged automatically" comment.
+5. Anything else leaves the pull request to the maintainer, with a comment saying why: a review
    that still blocks, a fix run that failed or pushed nothing, a gate that refuses, a GitHub
    call that fails, a merge GitHub refuses. **No loop**: at most one fix run and one review after it, and one merge
    decision per pull request, kept in `reviews.json` across restarts.
+
+**`max_allowed_severity: medium`** lets the review that decides the merge (after the fix run,
+or the first one without `fix`) have medium findings: that review is posted as a comment
+rather than "request changes" (the review prompt asks for "request changes" on any medium
+finding, so that verdict reads "comment" too), and merges, the medium findings left as its
+comments for the maintainer. A first review with `fix: true` still requests changes on them,
+for the fix run. Critical and high findings always block, and a "request changes" verdict
+with only low findings still does. `low`, the default: any medium finding blocks.
 
 **The gates**, asked of GitHub right before the merge; each refusal is a comment:
 

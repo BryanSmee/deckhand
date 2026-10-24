@@ -9,6 +9,7 @@ import {
   mergeBlockers,
   mergeRefusal,
   parseReview,
+  reviewEvent,
   trustedFile,
 } from "../listener/reviews.mjs";
 import { tempDir, testConfig } from "./helpers.mjs";
@@ -18,6 +19,8 @@ const config = { ...testConfig(), bot: "deckhand-app[bot]", needsInputLabel: "ne
 const CLEAN = "Reads well.\n\n- **low** `a.mjs:1`: a typo.\n\nRating: 9/10\nVerdict: approve";
 const MEDIUM = "- **medium** `a.mjs:1`: a missing test.\n\nRating: 7/10\nVerdict: comment";
 const HIGH = "- **high** `a.mjs:1`: a hole.\n\nRating: 4/10\nVerdict: request-changes";
+// The model's own "request changes", on low findings only.
+const LOW_CHANGES = "- **low** `a.mjs:1`: a typo.\n\nRating: 8/10\nVerdict: request-changes";
 
 const MERGE = "review:\n  on: ready\n  fix: true\n  merge: true\n";
 
@@ -106,24 +109,23 @@ function setup(
     now: () => (time += 1000),
   });
   const run = { repo: "org/repo", number: 5, base: "trunk", settings: read.settings, auto: true };
-  const posted = (message, pr = {}) => ({
-    event: "COMMENT",
-    review: parseReview(message),
-    pr: { ...PR, ...pr },
-  });
+  // As postReview() posts it: its event from the review, as parsed with its tolerance.
+  const posted = (message, pr = {}, allowed = "low") => {
+    const review = parseReview(message, { allowed });
+    return { event: reviewEvent(review), review, pr: { ...PR, ...pr } };
+  };
   const settle = (message = CLEAN, extra = {}) =>
     reviews.settle({ ...run, ...extra }, posted(message));
   const merges = () => gh.calls.filter((c) => c.method === "PUT");
   return { reviews, accepted, replies, merged, calls: gh.calls, settle, merges, posted, run, read };
 }
 
-test("mergeBlockers: critical and high always, medium unless the fix run had it", () => {
+test("mergeBlockers: critical and high always, medium unless allowed, low never", () => {
   const review = parseReview(`${HIGH}\n- **medium** b: x.\n- **low** c: y.`);
   const severities = (list) => list.map((f) => f.severity);
   assert.deepEqual(severities(mergeBlockers(review)), ["high", "medium"]);
-  assert.deepEqual(severities(mergeBlockers(review, { fix: true })), ["high", "medium"]);
-  assert.deepEqual(severities(mergeBlockers(review, { fix: true, fixed: true })), ["high"]);
-  assert.deepEqual(mergeBlockers(parseReview(MEDIUM), { fix: true, fixed: true }), []);
+  assert.deepEqual(severities(mergeBlockers(review, "medium")), ["high"]);
+  assert.deepEqual(mergeBlockers(parseReview(MEDIUM), "medium"), []);
   assert.deepEqual(mergeBlockers(parseReview(CLEAN)), []);
 });
 
@@ -233,6 +235,20 @@ test("auto-merge: blocking findings leave it to the maintainer, or start the fix
   const busy = setup(t, { busy: () => true });
   assert.equal(await busy.settle(HIGH), null);
   assert.match(busy.replies[0].text, /high findings and no fix run started/);
+  // The model's "request changes" on low findings only: posted as a comment, never merged.
+  const lowChanges = setup(t);
+  assert.equal(await lowChanges.settle(LOW_CHANGES), null);
+  assert.equal(lowChanges.merges().length + lowChanges.accepted.length, 0);
+  assert.match(
+    lowChanges.replies[0].text,
+    /^\*\*Not merged automatically\*\*.*: the review requests changes\./,
+  );
+  // Posted as REQUEST_CHANGES (the settings changed since, say): never merged either.
+  const requested = setup(t, { yaml: "review:\n  on: ready\n  merge: true\n" });
+  const clean = { ...requested.posted(CLEAN), event: "REQUEST_CHANGES" };
+  assert.equal(await requested.reviews.settle(requested.run, clean), null);
+  assert.equal(requested.merges().length, 0);
+  assert.match(requested.replies[0].text, /the review requests changes/);
   // Unreadable: never merged.
   const odd = setup(t);
   assert.equal(await odd.settle("LGTM"), null);
@@ -349,10 +365,71 @@ test("auto-merge: after the fix run, one review of its push, then the merge", as
   const again = setup(t, { path, pr: pushed });
   assert.equal(await again.reviews.fixed(fixedRun), null);
   assert.equal(s.accepted.length + again.accepted.length, 2);
-  // Its review: medium left as it is (review.fix had its turn), merged at the pushed head.
-  const done = await again.reviews.settle(again.run, again.posted(MEDIUM, pushed));
+  // Its review, clean: merged at the pushed head.
+  const done = await again.reviews.settle(again.run, again.posted(CLEAN, pushed));
   assert.deepEqual(done, { sha: "sha-2", method: "squash" });
   assert.match(again.replies[0].text, /after its fix run and a second review/);
+});
+
+// Issue #288: GitHub showed "request changes" on the review after the fix run, and it merged.
+test("auto-merge: after the fix run, a medium finding requests changes and blocks", async (t) => {
+  const path = join(tempDir(t), "reviews.json");
+  const pushed = { head: { sha: "sha-2", repo: { full_name: "org/repo" } } };
+  const s = setup(t, { path, pr: pushed });
+  await s.reviews.settle(s.run, s.posted(HIGH));
+  await s.reviews.fixed({ repo: "org/repo", number: 5, base: "trunk", status: "ok" });
+  const at = { repo: "org/repo", number: 5, base: "trunk", auto: true };
+  assert.equal(await s.reviews.tolerance(at), "low");
+  const second = s.posted(MEDIUM, pushed);
+  assert.equal(second.event, "REQUEST_CHANGES");
+  assert.equal(await s.reviews.settle(s.run, second), null);
+  assert.equal(s.merges().length, 0);
+  assert.equal(s.accepted.filter((i) => i.reason === "review-fix").length, 1);
+  assert.match(
+    s.replies[0].text,
+    /^\*\*Not merged automatically\*\*.*the review after the fix run still has medium findings/,
+  );
+});
+
+test("auto-merge: review.max_allowed_severity medium, the deciding review posted as a comment", async (t) => {
+  const yaml = `${MERGE}  max_allowed_severity: medium\n`;
+  const path = join(tempDir(t), "reviews.json");
+  const pushed = { head: { sha: "sha-2", repo: { full_name: "org/repo" } } };
+  const s = setup(t, { yaml, path, pr: pushed });
+  const at = { repo: "org/repo", number: 5, base: "trunk", auto: true };
+  // The first review, with review.fix: medium still requests changes, for the fix run.
+  assert.equal(await s.reviews.tolerance(at), "low");
+  assert.equal(await s.reviews.tolerance({ ...at, auto: false }), "low");
+  const first = s.posted(MEDIUM);
+  assert.equal(first.event, "REQUEST_CHANGES");
+  assert.equal((await s.reviews.settle(s.run, first)).reason, "review-fix");
+  await s.reviews.fixed({ repo: "org/repo", number: 5, base: "trunk", status: "ok" });
+  // The review after it decides the merge: medium allowed, even with the prompt's verdict.
+  assert.equal(await s.reviews.tolerance(at), "medium");
+  const message = MEDIUM.replace("Verdict: comment", "Verdict: request-changes");
+  const second = s.posted(message, pushed, "medium");
+  assert.deepEqual([second.event, second.review.verdict], ["COMMENT", "comment"]);
+  assert.deepEqual(await s.reviews.settle(s.run, second), { sha: "sha-2", method: "squash" });
+  assert.match(s.replies[0].text, /medium findings allowed by `review.max_allowed_severity`/);
+  // High still blocks; without review.fix the first review decides; low + "request changes"
+  // still blocks.
+  const high = setup(t, {
+    yaml: "review:\n  on: ready\n  merge: true\n  max_allowed_severity: medium\n",
+  });
+  assert.equal(await high.reviews.tolerance(at), "medium");
+  const posted = high.posted(`${HIGH}\n- **medium** b: x.`, {}, "medium");
+  assert.equal(posted.event, "REQUEST_CHANGES");
+  assert.equal(await high.reviews.settle(high.run, posted), null);
+  assert.match(high.replies[0].text, /the review still has high findings/);
+  const low = setup(t, {
+    yaml: "review:\n  on: ready\n  merge: true\n  max_allowed_severity: medium\n",
+  });
+  assert.equal(await low.reviews.settle(low.run, low.posted(LOW_CHANGES, {}, "medium")), null);
+  assert.match(low.replies[0].text, /the review requests changes/);
+  const plain = setup(t, {
+    yaml: "review:\n  on: ready\n  merge: true\n  max_allowed_severity: medium\n",
+  });
+  assert.ok(await plain.reviews.settle(plain.run, plain.posted(MEDIUM, {}, "medium")));
 });
 
 test("auto-merge: a second review that still blocks merges nothing, starts no fix", async (t) => {

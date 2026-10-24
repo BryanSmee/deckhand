@@ -37,8 +37,17 @@ const HEADINGS = {
 
 // What a review blocks on: GitHub's REQUEST_CHANGES (and, with `review.fix`, a fix run). Never
 // APPROVE: an App's approval may count toward branch protection, and approving is the
-// maintainer's call.
+// maintainer's call. The review that decides an auto-merge may tolerate medium findings too
+// (`review.max_allowed_severity`, reviews' tolerance()).
 const BLOCKING = new Set(["critical", "high", "medium"]);
+
+// The findings of `review` more severe than `allowed`, among those that block at all.
+function above(review, allowed = "low") {
+  const limit = SEVERITIES.indexOf(allowed);
+  return review.findings.filter(
+    (f) => BLOCKING.has(f.severity) && SEVERITIES.indexOf(f.severity) < limit,
+  );
+}
 
 // The highest rating a review can give with a finding of each severity: a model's 8/10 next
 // to a high finding would contradict the verdict it is posted with.
@@ -50,10 +59,14 @@ const VERDICTS = { approve: "approve", comment: "comment", "request-changes": "r
 const KEEP_MS = 90 * 24 * 3600_000;
 
 // The run's final message (prompts/review.md's format) → { summary, findings: [{ severity,
-// path, line, text }], rating, verdict }, or null when it lacks the rating or the verdict.
-// The rating is capped by the most severe finding (RATING_CAPS), and a blocking finding makes
-// the verdict `request-changes`, whatever the message says.
-export function parseReview(text) {
+// path, line, text }], rating, verdict, allowed }, or null when it lacks the rating or the
+// verdict. The rating is capped by the most severe finding (RATING_CAPS), and a blocking finding
+// makes the verdict `request-changes`, whatever the message says. `allowed`: the most severe
+// finding that doesn't block (`review.max_allowed_severity`, for the review that decides an
+// auto-merge). The prompt asks for `request-changes` on any medium finding: with medium
+// allowed and found, that verdict says nothing more than the finding, so it reads `comment`.
+// Otherwise the model's `request-changes` stays, and blocks the merge.
+export function parseReview(text, { allowed = "low" } = {}) {
   const lines = String(text ?? "").split(/\r?\n/);
   const rating = /^\W*rating\W*\s*(\d{1,2}(?:\.\d)?)\s*\/\s*10\b/im.exec(text ?? "");
   const verdict = /^\W*verdict\W*\s*(approve|comment|request[- ]changes)\b/im.exec(text ?? "");
@@ -91,12 +104,17 @@ export function parseReview(text) {
     else if (line.trim()) current = null;
     if (!started) summary.push(line);
   }
-  const blocking = findings.some((f) => BLOCKING.has(f.severity));
+  const said = verdict[1].toLowerCase().replace(" ", "-");
+  const review = { summary: summary.join("\n").trim(), findings, allowed };
+  const tolerated = findings.some((f) => BLOCKING.has(f.severity));
   return {
-    summary: summary.join("\n").trim(),
-    findings,
+    ...review,
     rating: Math.min(Number(rating[1]), ...findings.map((f) => RATING_CAPS[f.severity])),
-    verdict: blocking ? "request-changes" : verdict[1].toLowerCase().replace(" ", "-"),
+    verdict: above(review, allowed).length
+      ? "request-changes"
+      : tolerated && said === "request-changes"
+        ? "comment"
+        : said,
   };
 }
 
@@ -108,9 +126,9 @@ function located(text) {
 }
 
 // GitHub's `event` for a parsed review (null: unparsed): changes requested on critical, high
-// or medium findings, else a comment.
+// or medium findings (those above the review's `allowed`), else a comment.
 export function reviewEvent(review) {
-  return review?.findings.some((f) => BLOCKING.has(f.severity)) ? "REQUEST_CHANGES" : "COMMENT";
+  return review && above(review, review.allowed).length ? "REQUEST_CHANGES" : "COMMENT";
 }
 
 // The review's body: verdict and rating, the summary, then the findings by severity, each
@@ -178,9 +196,17 @@ const cut = (text) => (text.length > 60000 ? `${text.slice(0, 60000)}\n\n…` : 
 // /repos/{repo}/pulls/{n}/reviews), at its current head commit. The App can't request changes
 // on its own pull request (GitHub answers 422): then a comment review, the verdict in its
 // text. A review GitHub refuses otherwise goes as a plain comment (`reply`): nothing is lost.
-// `github`: the App's calls (server.mjs).
-export async function postReview({ github, reply, log = () => {} }, repo, number, text, footer) {
-  const review = parseReview(text);
+// `github`: the App's calls (server.mjs); `allowed`: the review's tolerance (reviews'
+// tolerance()).
+export async function postReview(
+  { github, reply, log = () => {} },
+  repo,
+  number,
+  text,
+  footer,
+  { allowed = "low" } = {},
+) {
+  const review = parseReview(text, { allowed });
   let pr = null;
   try {
     pr = await getJson(github, repo, `/repos/${repo}/pulls/${number}`, [404]);
@@ -281,10 +307,10 @@ function thread(heading, item, comments, allowed) {
 }
 
 // What an auto-merge blocks on: critical and high findings always; medium ones too, unless
-// `review.fix` is on and the fix run already had them (the maintainer's call, issue #284).
-export function mergeBlockers(review, { fix = false, fixed = false } = {}) {
-  const tolerated = fix && fixed ? new Set(["medium", "low"]) : new Set(["low"]);
-  return review.findings.filter((f) => !tolerated.has(f.severity));
+// `allowed` (`review.max_allowed_severity`, for the review that decides the merge) is medium.
+// Low ones never: a "request changes" verdict still blocks (autoMerge()), issue #288.
+export function mergeBlockers(review, allowed = "low") {
+  return above(review, allowed);
 }
 
 // The files Deckhand trusts on the default branch: an auto-merge that changed one would let a
@@ -434,9 +460,12 @@ export async function mergeRefusal(
 const short = (sha) => (sha ? sha.slice(0, 7) : "?");
 
 // The comments an auto-merge posts on the pull request, for the maintainer to find later.
-export function mergedText(sha, method, fixed) {
+export function mergedText(sha, method, fixed, review = null) {
   const after = fixed ? ", after its fix run and a second review" : "";
-  return `🤖 **Merged by Deckhand** (\`review.merge\`, ${method}): the review of ${short(sha)} found nothing blocking${after}, the repository's checks passed, and it changes none of the files Deckhand trusts.
+  const medium = review?.findings.some((f) => f.severity === "medium")
+    ? " (its medium findings allowed by `review.max_allowed_severity`)"
+    : "";
+  return `🤖 **Merged by Deckhand** (\`review.merge\`, ${method}): the review of ${short(sha)} found nothing blocking${medium}${after}, the repository's checks passed, and it changes none of the files Deckhand trusts.
 
 ⚠️ No human reviewed this pull request before the merge. Read what it changed, and revert it if it is wrong.`;
 }
@@ -623,6 +652,25 @@ export function createReviews({
     return { settings, grant };
   }
 
+  // The most severe finding the review of `number` about to be posted may have without
+  // requesting changes: `review.max_allowed_severity` for the review that decides an
+  // auto-merge (an automatic one, in auto-merge mode, without `review.fix` or after its fix
+  // run), else low. autoMerge() reads the settings again and refuses a review posted as
+  // REQUEST_CHANGES whatever they say now, so the two never disagree.
+  async function tolerance({ repo, number, base, auto }) {
+    if (!auto) return "low";
+    try {
+      const mode = await mergeMode(repo, base);
+      const review = mode?.settings.review;
+      if (!review) return "low";
+      const fixed = !!reviewed.get(taskKey(repo, prId(number)))?.fixedAt;
+      return !review.fix || fixed ? review.maxAllowedSeverity : "low";
+    } catch (error) {
+      log(`${repo}#${number}: the review's tolerance: ${error.message ?? error}`);
+      return "low";
+    }
+  }
+
   // Leaves the pull request to the maintainer: a comment says why. Once per pull request.
   async function refuse(key, repo, number, why) {
     log(`${key}: not merged, ${why}`);
@@ -631,8 +679,9 @@ export function createReviews({
   }
 
   // The merge decision after an automatic review: once per pull request (mergeAt), whatever it
-  // decides. Nothing blocking (mergeBlockers()) and every gate passed: merged at the reviewed
-  // head commit, so a push since makes GitHub refuse it.
+  // decides. Nothing blocking (mergeBlockers()), a review that doesn't request changes (neither
+  // posted as REQUEST_CHANGES nor with that verdict) and every gate passed: merged at the
+  // reviewed head commit, so a push since makes GitHub refuse it.
   async function autoMerge({ repo, number, base }, posted) {
     const key = taskKey(repo, prId(number));
     const mode = await mergeMode(repo, base);
@@ -648,14 +697,21 @@ export function createReviews({
     const { review, pr } = posted ?? {};
     if (!review) return refuse(key, repo, number, "the review's format couldn't be read");
     const fixed = !!entry.fixedAt;
-    const blockers = mergeBlockers(review, { fix: settings.review.fix, fixed });
+    // The review that decides the merge: without review.fix, or after its fix run.
+    const deciding = !settings.review.fix || fixed;
+    const allowed = deciding ? settings.review.maxAllowedSeverity : "low";
+    const blockers = mergeBlockers(review, allowed);
+    const after = fixed ? " after the fix run" : "";
     if (blockers.length) {
       const what = SEVERITIES.filter((s) => blockers.some((f) => f.severity === s)).join(", ");
-      const why =
-        settings.review.fix && !fixed
-          ? `the review has ${what} findings and no fix run started`
-          : `the review${fixed ? " after the fix run" : ""} still has ${what} findings`;
+      const why = deciding
+        ? `the review${after} still has ${what} findings`
+        : `the review has ${what} findings and no fix run started`;
       return refuse(key, repo, number, why);
+    }
+    // GitHub shows what the review decided: a merge never contradicts it (issue #288).
+    if (posted.event === "REQUEST_CHANGES" || review.verdict === "request-changes") {
+      return refuse(key, repo, number, `the review${after} requests changes`);
     }
     const sha = pr?.head?.sha ?? null;
     // The review was queued at entry.head: a push before it posted means it may have read
@@ -691,7 +747,7 @@ export function createReviews({
     remember(key, sha, { mergeAt: now(), mergedAt: now() });
     log(`${key}: merged at ${short(sha)} (${gate.method}), auto-merge`);
     merged(repo, { ...gate.pr, state: "closed", merged: true });
-    await reply(repo, number, mergedText(sha, gate.method, fixed));
+    await reply(repo, number, mergedText(sha, gate.method, fixed, review));
     return { sha, method: gate.method };
   }
 
@@ -727,5 +783,5 @@ export function createReviews({
     return queueReview({ repo, base, pr, settings: mode.settings });
   }
 
-  return { consider, fix, settle, fixed };
+  return { consider, fix, settle, fixed, tolerance };
 }

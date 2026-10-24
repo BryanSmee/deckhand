@@ -968,7 +968,9 @@ only). It widens nothing, so it needs no grant: a review is a light run with a r
   something can't make it write anything: the most it can do is change the review's text
   (with `fix`, see [Review fix runs](#review-fix-runs)). The review never
   approves (an App's approval may count toward branch protection): it requests changes on a
-  critical, high or medium finding, and comments otherwise.
+  critical, high or medium finding, and comments otherwise (on medium ones too, in the review
+  that decides an auto-merge with `review.max_allowed_severity: medium`). A review that requests
+  changes, on GitHub or in its verdict, never auto-merges.
 - **No sandbox reviews or approves**, a work run's included: their tokens only read pull
   requests ([Tokens](#tokens)), so none can approve its own pull request or clear the
   review's request for changes. Only the listener posts reviews, and never an approval.
