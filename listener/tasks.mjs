@@ -18,6 +18,7 @@ import {
   taskSandboxName,
 } from "./repo-config.mjs";
 import { writeEvent } from "./runlog.mjs";
+import { sameTask } from "./spelling.mjs";
 import { createTaskModes } from "./task-modes.mjs";
 
 // Why a queued comment may no longer run, or null: its repo left ALLOWED_REPOS, or its author
@@ -48,6 +49,16 @@ export function newTask(fields) {
     live: null,
     next: {},
   };
+}
+
+// Whether task `key` of `tasks` has a run going or comments waiting for one, under any
+// spelling of its repo: a key kept from before a restart unified them (spelling.mjs) mustn't
+// start a second sandbox on the same branch.
+export function busyTask(tasks, key) {
+  const busy = (task) => !!(task?.running || task?.pending.length);
+  if (busy(tasks.get(key))) return true;
+  for (const [other, task] of tasks) if (sameTask(other, key) && busy(task)) return true;
+  return false;
 }
 
 // `ctx` (server.mjs): the listener's state and services, read at call time. Tasks are

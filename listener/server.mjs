@@ -58,7 +58,7 @@ import { operatorSecrets } from "./secrets.mjs";
 import { createRuns } from "./runs.mjs";
 import { createSetup } from "./setup.mjs";
 import { createStatus, serverInfo } from "./status.mjs";
-import { createTasks } from "./tasks.mjs";
+import { busyTask, createTasks } from "./tasks.mjs";
 import { createTitles } from "./titles.mjs";
 import { createWaits } from "./waits.mjs";
 import { createWorkApi } from "./work.mjs";
@@ -362,11 +362,8 @@ ctx.prReady = createPrReady({
 
 // --- Tasks, runs and restarts --------------------------------------------------------------
 
-// A task with a run going or comments waiting for one.
-function taskBusy(key) {
-  const task = ctx.tasks.get(key);
-  return !!(task?.running || task?.pending.length);
-}
+// A task with a run going or comments waiting for one, under any spelling of its repo.
+const taskBusy = (key) => busyTask(ctx.tasks, key);
 
 Object.assign(ctx, {
   brainstorms: createBrainstorms({
@@ -488,7 +485,16 @@ ctx.discussionApi = createDiscussionApi({
 
 // Before any request is served, as restoreRuns() wants: one spelling per repo in the state
 // (GitHub's for one it has under two, restart.mjs), the task keys of the rest too.
-const keyed = [ctx.waits, ctx.brainstorms, ctx.issueModes, inputs];
+const keyed = [
+  ctx.waits,
+  ctx.brainstorms,
+  ctx.issueModes,
+  inputs,
+  pulls,
+  ctx.conflicts,
+  ctx.reviews,
+  titles,
+];
 const spelled = await ctx.unifySpellings({
   nameOf: discussionChecks.nameOf,
   keys: keyed.flatMap((state) => state.keys()),

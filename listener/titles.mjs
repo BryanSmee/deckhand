@@ -3,6 +3,7 @@
 // request is closed, which the graph shows. Webhooks bring most of them; the rest are fetched
 // from GitHub and kept in titles.json and closed.json, so a restart doesn't ask again.
 import { parseKey } from "./events.mjs";
+import { respellMap } from "./spelling.mjs";
 import { persistentMap } from "./store.mjs";
 
 // events.mjs issueOutcome() ("open", "done", "not-done") → the dashboard's closed state: null
@@ -82,5 +83,11 @@ export function createTitles({ path, closedPath, fetchTitle, log = () => {} }) {
     setClosed,
     seed,
     fill,
+    keys: () => [...new Set([...titles.keys(), ...closed.keys()])],
+    // Rekeyed with spelled() (restart.mjs unifySpellings()), as the tasks they name are.
+    respell(spelled) {
+      if (respellMap(titles, spelled)) save();
+      if (respellMap(closed, spelled) && closedPath) closed.save();
+    },
   };
 }

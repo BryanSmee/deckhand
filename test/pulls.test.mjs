@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { pullRequest, replayedPull } from "../listener/events.mjs";
@@ -104,6 +104,39 @@ test("pulls: an edited link moves the pull request; a closed one doesn't hide an
   pulls.record("org/repo#30", pr(32, "closed"));
   pulls.record("org/repo#30", pr(33, "merged"));
   assert.equal(pulls.get("org/repo#30").number, 33);
+});
+
+test("pulls: the same pull request under another spelling of the repo leaves it", (t) => {
+  const pulls = createPulls({ path: tempPath(t), listPulls: async () => [] });
+  // From a dashboard address before #287, then a webhook under GitHub's spelling.
+  pulls.record("storywake/storywake#5", pr(6, "ready", NOW));
+  pulls.record("Storywake/storywake#5", pr(6, "ready"));
+  assert.deepEqual(pulls.keys(), ["Storywake/storywake#5"]);
+  assert.deepEqual(pulls.get("Storywake/storywake#5"), pr(6, "ready", NOW));
+  // Another repo's pull request with the same number stays.
+  pulls.record("storywake/other#5", pr(6, "draft"));
+  assert.equal(pulls.keys().length, 2);
+});
+
+test("pulls: respelled, both spellings of one pull request merged, the open one of two kept", (t) => {
+  const path = tempPath(t);
+  writeFileSync(
+    path,
+    JSON.stringify({
+      "org/repo#30": { ...pr(31, "merged", NOW), autoMerged: true },
+      "Org/repo#30": pr(31, "merged"),
+      "org/repo#40": pr(41, "draft"),
+      "Org/repo#40": pr(42, "closed"),
+      "org/repo#50": pr(51, "draft"),
+    }),
+  );
+  const pulls = createPulls({ path, listPulls: async () => [] });
+  pulls.respell((repo) => (repo.toLowerCase() === "org/repo" ? "Org/repo" : repo));
+  assert.deepEqual(JSON.parse(readFileSync(path, "utf8")), {
+    "Org/repo#30": { ...pr(31, "merged", NOW), autoMerged: true },
+    "Org/repo#40": pr(41, "draft"),
+    "Org/repo#50": pr(51, "draft"),
+  });
 });
 
 test("pulls: older tasks looked up once per repo, by branch, link or number", async (t) => {

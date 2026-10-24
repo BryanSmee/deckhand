@@ -1,6 +1,7 @@
 // Pull request reviews: the final message's format, the review posted from it, and which
 // pull requests get one by themselves (once per head commit).
 import assert from "node:assert/strict";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { parseRepoConfig } from "../listener/repo-config.mjs";
@@ -334,6 +335,25 @@ test("createReviews: one review per head commit, across redeliveries and restart
     delivery("ready_for_review", { head: { sha: "sha-2", repo: { full_name: "org/repo" } } }),
   );
   assert.equal(again.accepted.length, 1);
+});
+
+test("createReviews: respelled, the later review kept with the other's fix run", async (t) => {
+  const path = join(tempDir(t), "reviews.json");
+  writeFileSync(
+    path,
+    JSON.stringify({
+      "org/repo#pr-5": { head: "sha-0", at: 1, fixedAt: 2 },
+      "Org/repo#pr-5": { head: "sha-1", at: 3 },
+      "org/repo#pr-6": { head: "sha-6", at: 4 },
+    }),
+  );
+  const { reviews } = setup(t, undefined, { path });
+  reviews.respell((repo) => (repo.toLowerCase() === "org/repo" ? "Org/repo" : repo));
+  assert.deepEqual(reviews.keys().sort(), ["Org/repo#pr-5", "Org/repo#pr-6"]);
+  assert.deepEqual(JSON.parse(readFileSync(path, "utf8")), {
+    "Org/repo#pr-5": { head: "sha-1", at: 3, fixedAt: 2 },
+    "Org/repo#pr-6": { head: "sha-6", at: 4 },
+  });
 });
 
 test("createReviews: off without review.on, and the repo's users narrow the operator's", async (t) => {

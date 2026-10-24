@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { createBroker } from "../listener/broker.mjs";
 import { board } from "../listener/board.mjs";
+import { createPulls } from "../listener/pulls.mjs";
 import { createRestart } from "../listener/restart.mjs";
 import { ambiguous, respellMap, respelled, spellings } from "../listener/spelling.mjs";
 import { loadRuns } from "../listener/runlog.mjs";
@@ -191,4 +192,37 @@ test("spellings: GitHub's, else a run going's, else the most recent; whatever th
     "ORG/App#2": { repo: "ORG/App" },
   });
   assert.equal(respellMap(map, spelled, fix), false);
+});
+
+test("pulls.json under an old spelling loads under GitHub's: one entry, one task on the board", async (t) => {
+  const ctx = twoSpellings(t, { live: "Storywake/storywake", newest: "storywake/storywake" });
+  const path = join(ctx.config.dataDir, "pulls.json");
+  writeFileSync(
+    path,
+    JSON.stringify({
+      // Started from a typed address before #287, then a webhook under GitHub's spelling.
+      "storywake/storywake#5": { number: 6, state: "ready", readyAt: 100 },
+      "Storywake/storywake#5": { number: 6, state: "ready", readyAt: null },
+      "storywake/storywake#2": { number: 7, state: "draft", readyAt: null },
+    }),
+  );
+  const pulls = createPulls({ path, listPulls: async () => [] });
+  const nameOf = async () => "Storywake/storywake";
+  const spelled = await restarted(ctx, { nameOf, keys: pulls.keys() });
+  pulls.respell(spelled);
+  assert.deepEqual(JSON.parse(readFileSync(path, "utf8")), {
+    "Storywake/storywake#5": { number: 6, state: "ready", readyAt: 100 },
+    "Storywake/storywake#2": { number: 7, state: "draft", readyAt: null },
+  });
+  assert.deepEqual(
+    pulls.open().map(([key]) => key),
+    ["Storywake/storywake#5", "Storywake/storywake#2"],
+  );
+  const keys = board({ runs: ctx.runs, queued: [], brainstorms: [] }).map((t) => t.key);
+  assert.deepEqual(keys.sort(), [
+    "Storywake/storywake#1",
+    "Storywake/storywake#2",
+    "Storywake/storywake#5",
+    "org/other#3",
+  ]);
 });

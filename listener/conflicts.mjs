@@ -11,6 +11,7 @@ import { repoAllowed } from "./config.mjs";
 import { waitsForInput } from "./comments.mjs";
 import { parseKey, headInRepo } from "./events.mjs";
 import { getJson } from "./github.mjs";
+import { respellMap } from "./spelling.mjs";
 import { persistentMap } from "./store.mjs";
 
 // How often the watcher wakes up; each repo is checked at its own interval.
@@ -157,5 +158,13 @@ export function createConflicts({
     timer = null;
   }
 
-  return { tick, start, stop };
+  return {
+    tick,
+    start,
+    stop,
+    keys: () => [...attempts.keys()],
+    // Rekeyed with spelled() (restart.mjs unifySpellings()), so an attempt is found again
+    // under the key pulls.mjs now has.
+    respell: (spelled) => respellMap(attempts, spelled) && attempts.save(),
+  };
 }

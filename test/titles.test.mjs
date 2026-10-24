@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { closedAs, createTitles } from "../listener/titles.mjs";
@@ -70,4 +70,17 @@ test("closed states: from webhooks and the lookup; what was open is asked again 
   await next.fill(keys);
   assert.deepEqual(asked, [1, 2, 3, 4, 2]);
   assert.equal(next.closed("org/repo#2"), "completed");
+});
+
+test("respell: titles and closed states under another spelling move to the one given", (t) => {
+  const dir = tempDir(t);
+  const path = join(dir, "titles.json");
+  const closedPath = join(dir, "closed.json");
+  writeFileSync(path, JSON.stringify({ "org/repo#1": "Old", "Org/repo#1": "New", "x/y#2": "Y" }));
+  writeFileSync(closedPath, JSON.stringify({ "org/repo#1": "completed" }));
+  const titles = createTitles({ path, closedPath, fetchTitle: async () => null });
+  titles.respell((repo) => (repo.toLowerCase() === "org/repo" ? "Org/repo" : repo));
+  assert.deepEqual(titles.keys().sort(), ["Org/repo#1", "x/y#2"]);
+  assert.deepEqual(JSON.parse(readFileSync(path, "utf8")), { "Org/repo#1": "New", "x/y#2": "Y" });
+  assert.deepEqual(JSON.parse(readFileSync(closedPath, "utf8")), { "Org/repo#1": "completed" });
 });

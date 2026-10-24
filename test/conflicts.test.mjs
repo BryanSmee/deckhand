@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { createConflicts, rebaseMessage } from "../listener/conflicts.mjs";
 import { parseRepoConfig } from "../listener/repo-config.mjs";
+import { busyTask } from "../listener/tasks.mjs";
 import { tempDir, testConfig } from "./helpers.mjs";
 
 const MIN = 60_000;
@@ -166,6 +167,22 @@ test("running or queued tasks, forks, closed pull requests and needs-input are l
   assert.ok(!cases.busy.calls.some((u) => u.includes("/pulls/")));
 });
 
+test("a run on another spelling of the task's repo holds the rebase run until it ends", async () => {
+  // A key kept from before a restart unified the spellings, the run under GitHub's.
+  const tasks = new Map([["Org/Repo#30", { running: true, pending: [] }]]);
+  const w = setup({ busy: (key) => busyTask(tasks, key) });
+  await w.conflicts.tick();
+  assert.deepEqual(w.accepted, []);
+  tasks.set("Org/Repo#30", { running: false, pending: [{}] });
+  w.advance(10 * MIN);
+  await w.conflicts.tick();
+  assert.deepEqual(w.accepted, []);
+  tasks.get("Org/Repo#30").pending = [];
+  w.advance(10 * MIN);
+  await w.conflicts.tick();
+  assert.equal(w.accepted.length, 1);
+});
+
 test("only the open pull requests pulls.mjs knows as tasks', in allowed repos", async () => {
   const w = setup({ open: [] });
   await w.conflicts.tick();
@@ -249,4 +266,14 @@ test("the same (head, base) never starts a second run, across a restart", async 
   next.advance(10 * MIN);
   await next.conflicts.tick();
   assert.equal(next.accepted.length, 2);
+});
+
+test("respell: attempts saved under another spelling move to the one given", (t) => {
+  const path = tempPath(t);
+  const pair = { pr: 31, head: "head-1", base: "base-1" };
+  writeFileSync(path, JSON.stringify({ "org/repo#30": pair, "other/repo#2": pair }));
+  const w = setup({ path });
+  w.conflicts.respell((repo) => (repo.toLowerCase() === "org/repo" ? "Org/repo" : repo));
+  assert.deepEqual(w.conflicts.keys(), ["other/repo#2", "Org/repo#30"]);
+  assert.deepEqual(JSON.parse(readFileSync(path, "utf8"))["Org/repo#30"], pair);
 });

@@ -4,7 +4,8 @@
 // looked up once per listener start, from the repo's recent pull requests. Kept in pulls.json,
 // so a restart neither forgets nor asks again. The open ones are asked about again at start and
 // from the dashboard's Sync (resync()): a lost delivery would leave one a draft forever.
-import { linkedIssue, parseKey, prState, headInRepo } from "./events.mjs";
+import { linkedIssue, parseKey, prState, headInRepo, sameRepo } from "./events.mjs";
+import { respellMap } from "./spelling.mjs";
 import { persistentMap } from "./store.mjs";
 
 const open = (pr) => pr?.state === "draft" || pr?.state === "ready";
@@ -19,7 +20,8 @@ export function createPulls({ path, listPulls, getPull = async () => null, log =
   let resyncing = null;
 
   // Records `pr` on task `key`, the latest event winning: the same pull request leaves the
-  // task it was on (its "Closes #n" was edited). A closed pull request doesn't replace another
+  // task it was on (its "Closes #n" was edited, or a listener from before #287 kept it under
+  // another spelling of the repo). A closed pull request doesn't replace another
   // one still open on the task: a new attempt was opened before the old one was closed.
   function record(key, pr) {
     const repo = parseKey(key)?.repo;
@@ -27,7 +29,7 @@ export function createPulls({ path, listPulls, getPull = async () => null, log =
     if (current && current.number !== pr.number && open(current) && !open(pr)) return false;
     let before = null;
     for (const [other, p] of pulls) {
-      if (!other.startsWith(`${repo}#`) || p.number !== pr.number) continue;
+      if (p.number !== pr.number || !sameRepo(parseKey(other)?.repo, repo)) continue;
       before = p;
       if (other !== key) pulls.delete(other);
     }
@@ -127,7 +129,34 @@ export function createPulls({ path, listPulls, getPull = async () => null, log =
     return resyncing;
   }
 
-  return { get: (key) => pulls.get(key) ?? null, record, fill, resync, open: openPulls };
+  // Rekeyed with spelled() (restart.mjs unifySpellings()): the conflict watcher would start
+  // runs under a key the rest of the state no longer has. Both spellings of one task: merged.
+  function respell(spelled) {
+    if (respellMap(pulls, spelled, undefined, mergePulls)) pulls.save();
+  }
+
+  return {
+    get: (key) => pulls.get(key) ?? null,
+    record,
+    fill,
+    resync,
+    open: openPulls,
+    keys: () => [...pulls.keys()],
+    respell,
+  };
+}
+
+// One task's pull request under two spellings: `kept` (GitHub's, where webhooks record it) is
+// the newer, but the other may know when it turned ready or that the listener merged it. Two
+// pull requests: the open one, as record() has it.
+function mergePulls(kept, moved) {
+  if (kept.number !== moved.number) return open(moved) && !open(kept) ? moved : kept;
+  const autoMerged = kept.autoMerged || moved.autoMerged;
+  return {
+    ...kept,
+    readyAt: kept.readyAt ?? moved.readyAt ?? null,
+    ...(autoMerged && { autoMerged: true }),
+  };
 }
 
 // A task's pull request in a listing, newest first: itself for "#pr-n"; for an issue, the
