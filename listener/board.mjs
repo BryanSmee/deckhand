@@ -18,6 +18,7 @@
 // again.
 import { parseKey } from "./events.mjs";
 import { LIGHT } from "./modes.mjs";
+import { taskId } from "./spelling.mjs";
 
 export const STATES = [
   "building-image",
@@ -84,26 +85,32 @@ function questionsFor(t, last, input) {
 // of its last run when it stopped to ask, else from its issue's body (questions.mjs).
 export function board({ runs, queued, brainstorms, waits = [], inputs = [] }) {
   const tasks = gather(runs, [queued, brainstorms, waits, inputs]);
-  const byKey = (list) => new Map(list.map((x) => [x.key, x]));
+  const byKey = (list) => new Map(list.map((x) => [one(x.key), x]));
   const waiting = byKey(queued);
   const talks = byKey(brainstorms);
   const held = byKey(waits);
   const labelled = byKey(inputs);
   for (const t of tasks.values()) {
-    settle(t, waiting.get(t.key), talks.get(t.key), held.get(t.key), labelled.get(t.key));
+    const k = one(t.key);
+    settle(t, waiting.get(k), talks.get(k), held.get(k), labelled.get(k));
   }
   // Most recent activity first, the live ones on top.
   const live = (t) => ["building-image", "working", "stopping", "queued"].includes(t.state);
   return [...tasks.values()].sort((a, b) => Number(live(b)) - Number(live(a)) || b.since - a.since);
 }
 
-// One task per key, in the order they first appear: the runs' (each keeps its latest
-// RUNS_PER_TASK), then each of `lists`' (queued, brainstorms, waits, inputs).
+// A task key whatever the case of its repo: a restart unifies the spellings (spelling.mjs),
+// but a run summary on disk may still have one of a listener from before; its task is one.
+const one = taskId;
+
+// One task per key (one() of it), in the order they first appear, with the first one's
+// spelling: the runs' (each keeps its latest RUNS_PER_TASK), then each of `lists`' (queued,
+// brainstorms, waits, inputs).
 function gather(runs, lists) {
   const tasks = new Map();
   const entry = (key, repo) => {
-    if (!tasks.has(key)) tasks.set(key, newTask(key, repo));
-    return tasks.get(key);
+    if (!tasks.has(one(key))) tasks.set(one(key), newTask(key, repo));
+    return tasks.get(one(key));
   };
   for (const r of runs) {
     const t = entry(r.key, r.repo);

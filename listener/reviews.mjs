@@ -23,6 +23,7 @@ import { linkedIssue, linkTo, MARKER, prId, headInRepo, taskKey } from "./events
 import { autoMergeProblems, previewProblem } from "./grants.mjs";
 import { getJson, paginate } from "./github.mjs";
 import { CONFIG_FILE } from "./repo-config.mjs";
+import { respellMap } from "./spelling.mjs";
 import { persistentMap } from "./store.mjs";
 
 // The repo's `severity: *` labels' names, most severe first.
@@ -783,5 +784,21 @@ export function createReviews({
     return queueReview({ repo, base, pr, settings: mode.settings });
   }
 
-  return { consider, fix, settle, fixed, tolerance };
+  // Rekeyed with spelled() (restart.mjs unifySpellings()). Both spellings of one pull request:
+  // the later review's, with what only the other had (a fix run, an auto-merge), so neither
+  // happens twice.
+  function respell(spelled) {
+    const merge = (a, b) => ((a.at ?? 0) >= (b.at ?? 0) ? { ...b, ...a } : { ...a, ...b });
+    if (respellMap(reviewed, spelled, undefined, merge)) reviewed.save();
+  }
+
+  return {
+    consider,
+    fix,
+    settle,
+    fixed,
+    tolerance,
+    keys: () => [...reviewed.keys()],
+    respell,
+  };
 }

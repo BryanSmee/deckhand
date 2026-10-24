@@ -4,7 +4,8 @@
 // looked up once per listener start, from the repo's recent pull requests. Kept in pulls.json,
 // so a restart neither forgets nor asks again. The open ones are asked about again at start and
 // from the dashboard's Sync (resync()): a lost delivery would leave one a draft forever.
-import { linkedIssue, parseKey, prState, headInRepo } from "./events.mjs";
+import { linkedIssue, parseKey, prState, headInRepo, sameRepo } from "./events.mjs";
+import { respellMap, sameTask } from "./spelling.mjs";
 import { persistentMap } from "./store.mjs";
 
 const open = (pr) => pr?.state === "draft" || pr?.state === "ready";
@@ -19,7 +20,8 @@ export function createPulls({ path, listPulls, getPull = async () => null, log =
   let resyncing = null;
 
   // Records `pr` on task `key`, the latest event winning: the same pull request leaves the
-  // task it was on (its "Closes #n" was edited). A closed pull request doesn't replace another
+  // task it was on (its "Closes #n" was edited, or a listener from before #287 kept it under
+  // another spelling of the repo). A closed pull request doesn't replace another
   // one still open on the task: a new attempt was opened before the old one was closed.
   function record(key, pr) {
     const repo = parseKey(key)?.repo;
@@ -27,7 +29,7 @@ export function createPulls({ path, listPulls, getPull = async () => null, log =
     if (current && current.number !== pr.number && open(current) && !open(pr)) return false;
     let before = null;
     for (const [other, p] of pulls) {
-      if (!other.startsWith(`${repo}#`) || p.number !== pr.number) continue;
+      if (p.number !== pr.number || !sameRepo(parseKey(other)?.repo, repo)) continue;
       before = p;
       if (other !== key) pulls.delete(other);
     }
@@ -44,10 +46,14 @@ export function createPulls({ path, listPulls, getPull = async () => null, log =
     return true;
   }
 
+  // Whether the task has a pull request under any spelling of its repo: a key spelled as the
+  // state was at restart (GitHub's name not known in time) mustn't add a second entry.
+  const has = (key) => pulls.has(key) || [...pulls.keys()].some((k) => sameTask(k, key));
+
   // Looks up the pull requests of the tasks in `keys` that have none: one listing per repo.
   function fill(keys) {
     const missing = [...new Set(keys)]
-      .filter((k) => !pulls.has(k))
+      .filter((k) => !has(k))
       .map((key) => ({ key, ...parseKey(key) }))
       .filter((t) => t.repo && t.kind !== "discussion" && !listed.has(t.repo));
     if (fetching || !missing.length) return fetching;
@@ -64,7 +70,7 @@ export function createPulls({ path, listPulls, getPull = async () => null, log =
         }
         for (const t of missing.filter((m) => m.repo === repo)) {
           const pr = match(list, repo, t);
-          if (!pr || pulls.has(t.key)) continue;
+          if (!pr || has(t.key)) continue;
           // readyAt unknown: the dashboard doesn't notify for what it finds this way.
           pulls.set(t.key, {
             number: pr.number,
@@ -127,7 +133,35 @@ export function createPulls({ path, listPulls, getPull = async () => null, log =
     return resyncing;
   }
 
-  return { get: (key) => pulls.get(key) ?? null, record, fill, resync, open: openPulls };
+  // Rekeyed with spelled() (restart.mjs unifySpellings()): the conflict watcher would start
+  // runs under a key the rest of the state no longer has. Both spellings of one task: merged.
+  function respell(spelled) {
+    if (respellMap(pulls, spelled, undefined, mergePulls)) pulls.save();
+  }
+
+  return {
+    get: (key) => pulls.get(key) ?? null,
+    record,
+    fill,
+    resync,
+    open: openPulls,
+    keys: () => [...pulls.keys()],
+    respell,
+  };
+}
+
+// One task's pull request under two spellings, `kept` the one respellMap() met first under the
+// new key. Which is newer isn't known: the open one of two pull requests, as record() has it;
+// for one pull request, kept's state (resync() asks GitHub about the open ones at start), with
+// when it turned ready and whether the listener merged it from either.
+function mergePulls(kept, moved) {
+  if (kept.number !== moved.number) return open(moved) && !open(kept) ? moved : kept;
+  const autoMerged = kept.autoMerged || moved.autoMerged;
+  return {
+    ...kept,
+    readyAt: kept.readyAt ?? moved.readyAt ?? null,
+    ...(autoMerged && { autoMerged: true }),
+  };
 }
 
 // A task's pull request in a listing, newest first: itself for "#pr-n"; for an issue, the

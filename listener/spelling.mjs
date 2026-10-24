@@ -63,15 +63,23 @@ export function respelled(key, spelled) {
 }
 
 // A Map keyed by task keys, rekeyed with spelled(), each moved value through `fix`. When both
-// spellings of a task are there, the one already under the new key stays. Whether it changed.
-export function respellMap(map, spelled, fix = (value) => value) {
+// spellings of a task are there, merge(kept, moved) says what stays under the new key: by
+// default the one already there. Whether it changed.
+export function respellMap(map, spelled, fix = (value) => value, merge = (kept) => kept) {
   let changed = false;
   for (const [key, value] of [...map]) {
     const to = respelled(key, spelled);
     if (to === key) continue;
     map.delete(key);
-    if (!map.has(to)) map.set(to, fix(value));
+    map.set(to, map.has(to) ? merge(map.get(to), fix(value)) : fix(value));
     changed = true;
   }
   return changed;
 }
+
+// Whether two task keys are one task: their repos differ by case at most, as sameRepo() has
+// it (the ids, "12", "pr-3", "discussion-8", have no case of their own).
+export const sameTask = sameRepo;
+
+// The one key of each task sameTask() says is one, to group them by.
+export const taskId = (key) => (typeof key === "string" ? key.toLowerCase() : key);

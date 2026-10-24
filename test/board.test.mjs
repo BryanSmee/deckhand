@@ -326,3 +326,23 @@ test("isLive: a stopped brainstorm whose wrap-up is done is over, an idle one is
     "o/r#5": true,
   });
 });
+
+test("a task's runs under two spellings of its repo are one task, the newest run's spelling", () => {
+  // A run summary on disk from a listener before the spellings were unified.
+  const tasks = board({
+    runs: [
+      run("Storywake/storywake#98", 3000, { status: "running" }),
+      run("storywake/storywake#98", 2000),
+      run("storywake/storywake#100", 1000),
+    ],
+    queued: [{ key: "STORYWAKE/storywake#100", kind: "issue", repo: "STORYWAKE/storywake" }],
+    brainstorms: [],
+  });
+  assert.deepEqual(
+    tasks.map((t) => [t.key, t.state, t.runs.length]),
+    [
+      ["Storywake/storywake#98", "working", 2],
+      ["storywake/storywake#100", "queued", 1],
+    ],
+  );
+});
