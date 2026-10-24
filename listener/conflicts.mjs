@@ -17,6 +17,9 @@ import { persistentMap } from "./store.mjs";
 // How often the watcher wakes up; each repo is checked at its own interval.
 const TICK_MS = 60_000;
 
+// Of one task's two attempts (respell()), the later; `moved` when neither knows when.
+const later = (kept, moved) => ((kept.at ?? 0) > (moved.at ?? 0) ? kept : moved);
+
 // What the run is asked to do, as if a maintainer had commented it.
 export function rebaseMessage(base) {
   return `This pull request conflicts with \`${base}\`: rebase it on \`origin/${base}\`, resolve the conflicts, rerun the checks and push with \`--force-with-lease\`. If the conflicts can't be resolved safely, stop and ask.`;
@@ -36,7 +39,7 @@ export function createConflicts({
   log = () => {},
   now = Date.now,
 }) {
-  // "org/repo#12" → { pr, head, base } of its last attempt.
+  // "org/repo#12" → { pr, head, base, at } of its last attempt.
   const attempts = persistentMap(path);
   // repo (lowercase) → when it is next due. A restart checks every repo at once.
   const due = new Map();
@@ -115,7 +118,7 @@ export function createConflicts({
     }
     // Checked again: a comment may have come during the calls above.
     if (busy(key)) return null;
-    attempts.set(key, pair);
+    attempts.set(key, { ...pair, at: now() });
     attempts.save();
     log(`${key}: pull request #${number} conflicts with ${pr.base.ref}, starting a rebase run`);
     await accept({
@@ -164,7 +167,8 @@ export function createConflicts({
     stop,
     keys: () => [...attempts.keys()],
     // Rekeyed with spelled() (restart.mjs unifySpellings()), so an attempt is found again
-    // under the key pulls.mjs now has.
-    respell: (spelled) => respellMap(attempts, spelled) && attempts.save(),
+    // under the key pulls.mjs now has. Both spellings: the later attempt, or without times
+    // (saved before they were), the old spelling's: the watcher ran under it, not the rest.
+    respell: (spelled) => respellMap(attempts, spelled, undefined, later) && attempts.save(),
   };
 }

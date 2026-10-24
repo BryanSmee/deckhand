@@ -77,6 +77,9 @@ export function respellMap(map, spelled, fix = (value) => value, merge = (kept) 
   return changed;
 }
 
-// Whether two task keys are one task: their repos differ by case at most.
-export const sameTask = (a, b) =>
-  typeof a === "string" && typeof b === "string" && a.toLowerCase() === b.toLowerCase();
+// Whether two task keys are one task: their repos differ by case at most, as sameRepo() has
+// it (the ids, "12", "pr-3", "discussion-8", have no case of their own).
+export const sameTask = sameRepo;
+
+// The one key of each task sameTask() says is one, to group them by.
+export const taskId = (key) => (typeof key === "string" ? key.toLowerCase() : key);

@@ -18,6 +18,7 @@
 // again.
 import { parseKey } from "./events.mjs";
 import { LIGHT } from "./modes.mjs";
+import { taskId } from "./spelling.mjs";
 
 export const STATES = [
   "building-image",
@@ -100,7 +101,7 @@ export function board({ runs, queued, brainstorms, waits = [], inputs = [] }) {
 
 // A task key whatever the case of its repo: a restart unifies the spellings (spelling.mjs),
 // but a run summary on disk may still have one of a listener from before; its task is one.
-const one = (key) => (typeof key === "string" ? key.toLowerCase() : key);
+const one = taskId;
 
 // One task per key (one() of it), in the order they first appear, with the first one's
 // spelling: the runs' (each keeps its latest RUNS_PER_TASK), then each of `lists`' (queued,

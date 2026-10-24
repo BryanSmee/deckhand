@@ -5,7 +5,7 @@
 // so a restart neither forgets nor asks again. The open ones are asked about again at start and
 // from the dashboard's Sync (resync()): a lost delivery would leave one a draft forever.
 import { linkedIssue, parseKey, prState, headInRepo, sameRepo } from "./events.mjs";
-import { respellMap } from "./spelling.mjs";
+import { respellMap, sameTask } from "./spelling.mjs";
 import { persistentMap } from "./store.mjs";
 
 const open = (pr) => pr?.state === "draft" || pr?.state === "ready";
@@ -46,10 +46,14 @@ export function createPulls({ path, listPulls, getPull = async () => null, log =
     return true;
   }
 
+  // Whether the task has a pull request under any spelling of its repo: a key spelled as the
+  // state was at restart (GitHub's name not known in time) mustn't add a second entry.
+  const has = (key) => pulls.has(key) || [...pulls.keys()].some((k) => sameTask(k, key));
+
   // Looks up the pull requests of the tasks in `keys` that have none: one listing per repo.
   function fill(keys) {
     const missing = [...new Set(keys)]
-      .filter((k) => !pulls.has(k))
+      .filter((k) => !has(k))
       .map((key) => ({ key, ...parseKey(key) }))
       .filter((t) => t.repo && t.kind !== "discussion" && !listed.has(t.repo));
     if (fetching || !missing.length) return fetching;
@@ -66,7 +70,7 @@ export function createPulls({ path, listPulls, getPull = async () => null, log =
         }
         for (const t of missing.filter((m) => m.repo === repo)) {
           const pr = match(list, repo, t);
-          if (!pr || pulls.has(t.key)) continue;
+          if (!pr || has(t.key)) continue;
           // readyAt unknown: the dashboard doesn't notify for what it finds this way.
           pulls.set(t.key, {
             number: pr.number,
@@ -146,9 +150,10 @@ export function createPulls({ path, listPulls, getPull = async () => null, log =
   };
 }
 
-// One task's pull request under two spellings: `kept` (GitHub's, where webhooks record it) is
-// the newer, but the other may know when it turned ready or that the listener merged it. Two
-// pull requests: the open one, as record() has it.
+// One task's pull request under two spellings, `kept` the one respellMap() met first under the
+// new key. Which is newer isn't known: the open one of two pull requests, as record() has it;
+// for one pull request, kept's state (resync() asks GitHub about the open ones at start), with
+// when it turned ready and whether the listener merged it from either.
 function mergePulls(kept, moved) {
   if (kept.number !== moved.number) return open(moved) && !open(kept) ? moved : kept;
   const autoMerged = kept.autoMerged || moved.autoMerged;

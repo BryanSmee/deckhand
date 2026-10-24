@@ -118,6 +118,27 @@ test("pulls: the same pull request under another spelling of the repo leaves it"
   assert.equal(pulls.keys().length, 2);
 });
 
+test("pulls: fill() doesn't look up a task that has its pull request under another spelling", async (t) => {
+  const asked = [];
+  const listPulls = async (repo) => {
+    asked.push(repo);
+    return [
+      {
+        number: 6,
+        html_url: "u",
+        draft: true,
+        state: "open",
+        head: { ref: "issue-5-x", repo: { full_name: repo } },
+      },
+    ];
+  };
+  const pulls = createPulls({ path: tempPath(t), listPulls });
+  pulls.record("storywake/storywake#5", pr(6, "draft"));
+  await pulls.fill(["Storywake/storywake#5"]);
+  assert.deepEqual(asked, []);
+  assert.deepEqual(pulls.keys(), ["storywake/storywake#5"]);
+});
+
 test("pulls: respelled, both spellings of one pull request merged, the open one of two kept", (t) => {
   const path = tempPath(t);
   writeFileSync(
