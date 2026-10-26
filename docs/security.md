@@ -827,6 +827,11 @@ repository's half of these checks (same origin, the user in `ALLOWED_USERS` and 
 posted on the inbox issue as the App's comment, ending "From the dashboard by @alice", and its
 run reads it as that user's entry, as it would read their own comment there.
 
+A lane's name (`POST /api/repos/<owner>/<repo>/lane`) passes the repository's half too, for
+keys of that repository's issues and pull requests only. It is the listener's own state
+(`lanes.json`), never posted on GitHub nor read by a run: one line of at most 60 characters,
+shown as text.
+
 Sync (`POST /api/sync`) takes a signed-in session and this dashboard's `Origin`, at most once
 every 30 seconds for everyone. It starts nothing itself: it asks GitHub to redeliver the
 App's deliveries that failed (signed by GitHub as any delivery, then checked as one) and reads

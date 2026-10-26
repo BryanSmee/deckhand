@@ -2941,6 +2941,27 @@ mounts:
     );
     await until(() => exists(join(dir, "run-env")), "#12's run");
     assert.match(readFileSync(join(dir, "run-env"), "utf8"), /^TASK_ISSUE=12$/m);
+    // Their lane is the parent's, until a maintainer names it otherwise.
+    const named = await fetch(`${base}/api/repos/org/repo/lane`, {
+      method: "POST",
+      headers: {
+        cookie: session,
+        origin: "https://hooks.example.com",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ keys: ["org/repo#11"], name: "Budgets" }),
+    });
+    assert.equal(named.status, 200);
+    const lanes = async () => (await (await get("/api/state", session)).json()).lanes;
+    // The parent's title comes with a later poll.
+    let now = await lanes();
+    for (let i = 0; i < 200 && now["org/repo#10"]?.name !== "Epic"; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      now = await lanes();
+    }
+    assert.deepEqual(now["org/repo#10"], { name: "Epic", source: "parent" });
+    assert.equal(now["org/repo#11"].name, "Budgets");
+    assert.equal(now["org/repo#11"].source, "user");
     writeFileSync(join(dir, "go"), "");
   });
 
@@ -3313,7 +3334,7 @@ mounts:
       "server",
       "now",
     ],
-    ["previews", "inboxes"],
+    ["previews", "inboxes", "lanes"],
   ];
   const SERVER_KEYS = [["version", "startedAt", "node", "source"], []];
   const TASK_KEYS = [

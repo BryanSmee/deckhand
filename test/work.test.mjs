@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { ReplyError } from "../listener/comments.mjs";
 import { createWaits } from "../listener/waits.mjs";
+import { createLanes } from "../listener/lanes.mjs";
 import { MAX_TREE, leadsTo } from "../listener/plans.mjs";
 import { ISSUES_MS, checkAction, createWorkApi, staleFor } from "../listener/work.mjs";
 import { createAnalysis } from "../listener/analysis.mjs";
@@ -134,6 +135,7 @@ function setup({
     settle: async (i, status) => w.settled.push([i.comment.id, status]),
     resume: async () => true,
   });
+  w.lanes = createLanes({ now: () => w.clock });
   w.api = createWorkApi({
     config,
     github,
@@ -175,6 +177,7 @@ function setup({
     },
     // Each run's digest is its id: the endpoint's checks are what is tested here.
     analysis: createAnalysis({ runs: () => history, partOf: (r) => `part of ${r.id}` }),
+    lanes: w.lanes,
     publicUrl: () => ORIGIN,
     now: () => w.clock,
     log: (line) => w.logs.push(line),
@@ -733,6 +736,8 @@ test("plan: the tree starts in order, from its sub-issues and their blockers", a
   await w.waits.closed("org/app", 12, "done");
   assert.equal(blockersOf(w, 11), undefined);
   assert.deepEqual(blockersOf(w, 10), [11, 13]);
+  // Their lane is named after the parent.
+  for (const n of [10, 11, 12, 13]) assert.equal(w.lanes.get(`org/app#${n}`).parent, 10);
 });
 
 test("plan: nested sub-issues, blockers outside the tree or in another repo, done ones", async () => {
@@ -870,6 +875,9 @@ test("plan: GitHub failing halfway says what is laid out and what isn't", async 
   );
   assert.deepEqual(blockersOf(w, 11), [12]);
   assert.deepEqual(w.accepted, []);
+  // What is laid out is the parent's lane; the rest isn't.
+  assert.equal(w.lanes.get("org/app#11").parent, 10);
+  assert.equal(w.lanes.get("org/app#12"), null);
 });
 
 test("plan next to an issue done already: it starts, and the reply says so", async () => {
@@ -880,6 +888,43 @@ test("plan next to an issue done already: it starts, and the reply says so", asy
     w.accepted.map((i) => i.number),
     [12, 13],
   );
+});
+
+const lane = (w, body, opts = {}) =>
+  call(w.api, "POST", "/api/repos/org/app/lane", { body, ...opts });
+
+test("lane: the name typed goes on each of its issues, and comes off with an empty one", async () => {
+  const w = setup();
+  const keys = ["org/app#18", "Org/App#22", "org/app#pr-23"];
+  const res = await lane(w, { keys, name: "  Per-repo\n budgets " });
+  assert.deepEqual(res, { status: 200, body: { message: "Lane named “Per-repo budgets”." } });
+  for (const key of keys) assert.equal(w.lanes.get(key).name, "Per-repo budgets");
+  assert.deepEqual(await lane(w, { keys: keys.slice(1), name: "" }), {
+    status: 200,
+    body: { message: "Lane name taken off." },
+  });
+  assert.equal(w.lanes.get("org/app#18").name, "Per-repo budgets");
+  assert.equal(w.lanes.get("org/app#22"), null);
+});
+
+test("lane refused: keys of another repo or a discussion, a long name, users, a broken config", async () => {
+  const w = setup();
+  const refused = async (body, status, opts) => {
+    const res = await lane(w, body, opts);
+    assert.equal(res.status, status, JSON.stringify(body));
+    return res.body.error;
+  };
+  assert.match(await refused({ keys: ["org/other#1"], name: "A" }, 400), /issues of org\/app/);
+  await refused({ keys: ["org/app#discussion-3"], name: "A" }, 400);
+  await refused({ keys: [], name: "A" }, 400);
+  await refused({ keys: "org/app#1", name: "A" }, 400);
+  assert.match(await refused({ keys: ["org/app#1"], name: "x".repeat(61) }, 400), /60 characters/);
+  await refused({ keys: ["org/app#1"] }, 400);
+  await refused({ keys: ["org/app#1"], name: "A" }, 403, { user: "mallory" });
+  await refused({ keys: ["org/app#1"], name: "A" }, 403, { origin: "https://evil.example" });
+  const broken = setup({ errors: ["bad"] });
+  assert.equal((await lane(broken, { keys: ["org/app#1"], name: "A" })).status, 409);
+  assert.equal(w.lanes.get("org/app#1"), null);
 });
 
 test("plan without open sub-issues: it starts, or queues", async () => {
