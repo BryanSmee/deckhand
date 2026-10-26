@@ -164,9 +164,12 @@ export function createWorkApi({
     return total > completed ? { subIssues: total - completed } : {};
   }
 
+  // Not `policy`: a dry run of a pull request's policies, never an issue's run.
   function offeredModes(repo, settings) {
     const granted = !researchRefusal(config, repo);
-    return modeNames(settings).filter((m) => m !== "onboarding" && (m !== "research" || granted));
+    return modeNames(settings).filter(
+      (m) => !["onboarding", "policy"].includes(m) && (m !== "research" || granted),
+    );
   }
 
   // A repo's read, one at a time; `at` is when it started, `seq` its number, `version` the

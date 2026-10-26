@@ -34,6 +34,7 @@ export function createTaskModes(ctx) {
     if (wanted === "onboarding") return startOnboarding(item, key);
     if (wanted === "research") return startResearch(item, key);
     if (wanted === "review") return startReview(item);
+    if (wanted === "policy") return policyDryRun(item);
     const own = customMode(item.settings, wanted);
     if (wanted === "work" || (own && !own.fresh)) {
       // The work (or the repo's mode) takes over from the brainstorm. Light and work runs keep
@@ -91,7 +92,9 @@ export function createTaskModes(ctx) {
       await unknownMode(item, `Unknown mode \`${item.modeLine}\`.`);
       return false;
     }
-    if (item.trigger || ["onboarding", "research", "review"].includes(item.modeLine)) return true;
+    if (item.trigger || ["onboarding", "research", "review", "policy"].includes(item.modeLine)) {
+      return true;
+    }
     if (ctx.brainstorms.get(key) || ctx.issueModes.has(key)) return true;
     if (await hasSession(key, name)) return true;
     skip(`#${item.replyTo} has no agent session and no trigger line`);
@@ -143,6 +146,28 @@ export function createTaskModes(ctx) {
     log(`${where}: review refused: not a pull request`);
     const text =
       "A review is of a pull request: comment `/mode review` on the pull request itself.";
+    await ctx.reply(item.repo, item.replyTo, text).catch((error) => log(`${where}: ${error}`));
+    return null;
+  }
+
+  // `/mode policy`: the policies evaluated on the pull request now, as a reply (reviews.mjs
+  // dryRun()). No run, nothing reviewed, fixed or merged; on an issue, a reply says where.
+  async function policyDryRun(item) {
+    const where = taskKey(item.repo, item.id);
+    let text;
+    if (!onPull(item)) {
+      log(`${where}: policy dry run refused: not a pull request`);
+      text =
+        "A policy dry run is of a pull request: comment `/mode policy` on the pull request itself.";
+    } else {
+      try {
+        log(`${where}: policy dry run on #${item.replyTo}`);
+        text = await ctx.reviews.dryRun({ repo: item.repo, base: item.base, number: item.replyTo });
+      } catch (error) {
+        log(`${where}: policy dry run: ${error.stack ?? error}`);
+        text = `The policy dry run failed: GitHub couldn't be read (${error.message ?? error}).`;
+      }
+    }
     await ctx.reply(item.repo, item.replyTo, text).catch((error) => log(`${where}: ${error}`));
     return null;
   }

@@ -307,9 +307,11 @@ function grantsErrorView(error, everyRepo) {
 // repo's onboarding issue and its run, resolving to the issue or null (tasks.mjs). `grants()`
 // and `fs` (realpath, stat) are what a run reads too: the operator's grants folder and the
 // listener's filesystem. `app()`: the App for its links (appLinks()), or null before /setup.
+// `policies`: the policies' engine (policies.mjs), for the files that apply; none without.
 export function createRepoApi({
   config,
   list,
+  policies = null,
   app = () => null,
   publicUrl = () => null,
   start,
@@ -412,8 +414,28 @@ export function createRepoApi({
       warnings: [...warnings, ...merging.filter((w) => !warnings.includes(w))],
       grantsError,
       effective: effectiveView(config, info.full_name, settings, grant, fs),
+      policies: await policyView(info.full_name, base),
       readAt: row.readAt,
     });
+  }
+
+  // The policies that apply on `repo`'s default branch `base`, read now, as the panel shows
+  // them: { files, errors, warnings } (policies.mjs describe()), without their text.
+  async function policyView(repo, base) {
+    if (!policies) return { files: [], errors: [], warnings: [] };
+    try {
+      const { files, errors, warnings } = await policies.describe(repo, base);
+      // Written for GitHub replies; the panel shows text.
+      const plain = (list) => list.map((text) => text.replaceAll("`", ""));
+      return { files, errors: plain(errors), warnings: plain(warnings) };
+    } catch (error) {
+      log(`Repositories: ${repo}'s policies: ${error.message ?? error}`);
+      return {
+        files: [],
+        errors: ["the policies can't be read (see the listener's logs)"],
+        warnings: [],
+      };
+    }
   }
 
   // Handles /api/repos*; false for any other path.

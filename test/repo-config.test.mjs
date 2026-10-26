@@ -278,6 +278,7 @@ test("modes: parsed, with the defaults of work or brainstorms", () => {
     "brainstorm",
     "onboarding",
     "research",
+    "policy",
     "audit",
     "triage",
   ]);
@@ -570,7 +571,14 @@ test("review: off without the block, manual with true, its keys checked", () => 
   assert.equal(parseRepoConfig("review: false\n", config).settings.review, null);
   const manual = parseRepoConfig("review: true\n", config).settings;
   assert.equal(manual.review.on, "manual");
-  assert.deepEqual(modeNames(manual), ["work", "brainstorm", "onboarding", "research", "review"]);
+  assert.deepEqual(modeNames(manual), [
+    "work",
+    "brainstorm",
+    "onboarding",
+    "research",
+    "policy",
+    "review",
+  ]);
   // A light, fresh mode with the light runs' model and effort, unless the block says otherwise.
   assert.deepEqual(customMode(manual, "review"), {
     name: "review",

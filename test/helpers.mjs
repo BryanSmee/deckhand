@@ -104,6 +104,7 @@ export function policyEngine(
     },
     run: async (args, { input }) => {
       if (args[0] === "capabilities") return { code: 0, stdout: '{"builtins":[]}' };
+      if (args[0] === "check") return { code: 0, stdout: "" };
       const rule = args.at(-1).replace("data.deckhand.", "");
       evals.push({ ...JSON.parse(input), rule });
       if (failure) return failure;

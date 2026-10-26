@@ -410,6 +410,88 @@ test("checkRepo: a branch's policies over the operator's; none on the branch, no
   assert.equal(none.opa.calls.length, 0);
 });
 
+test("decide: whether a policy was asked, with deny()'s messages", async (t) => {
+  const none = setup(t);
+  assert.deepEqual(await none.policies.decide("deny_merge", "org/repo", "main", input), {
+    applied: false,
+    messages: [],
+  });
+  const opa = fakeOpa({ answer: () => evalResult([]) });
+  const { policies } = setup(t, { opa, repoFiles: { "a.rego": DENY } });
+  assert.deepEqual(await policies.decide("deny_merge", "org/repo", "main", input), {
+    applied: true,
+    messages: [],
+  });
+  // A folder GitHub can't list: applied, and refused (fail closed).
+  const broken = setup(t, { status: 500 });
+  const said = await broken.policies.decide("deny_merge", "org/repo", "main", input);
+  assert.equal(said.applied, true);
+  assert.match(said.messages[0], /^policy error: the policies can't be read/);
+});
+
+test("describe: each file with its source and rules, the check of them all", async (t) => {
+  const opa = fakeOpa({
+    checked: (files) =>
+      files["bad.rego"]
+        ? {
+            code: 1,
+            stdout: "",
+            stderr: JSON.stringify({
+              errors: [
+                { message: "unexpected eof", location: { file: "policy/bad.rego", row: 3 } },
+              ],
+            }),
+          }
+        : { code: 0, stdout: "" },
+  });
+  const { policies } = setup(t, {
+    opa,
+    operator: { "a.rego": DENY, "b.rego": 'package deckhand\ndeny_review contains "x" if true\n' },
+    repoFiles: {
+      "a.rego": "# drops it\npackage deckhand\n",
+      "bad.rego": `${DENY}deny_merged contains "y" if true\n`,
+    },
+  });
+  const described = await policies.describe("org/repo", "main");
+  assert.deepEqual(described.files, [
+    { name: "b.rego", source: "operator", replaces: false, url: null, rules: ["deny_review"] },
+    { name: "a.rego", source: "repo", replaces: true, url: null, rules: [] },
+    {
+      name: "bad.rego",
+      source: "repo",
+      replaces: false,
+      url: null,
+      rules: ["deny_merge", "deny_merged"],
+    },
+  ]);
+  assert.deepEqual(described.errors, ["policy error: bad.rego:3: unexpected eof"]);
+  assert.equal(described.warnings.length, 1);
+  assert.match(described.warnings[0], /^bad.rego: `deny_merged` isn't a rule/);
+  // What deny() would evaluate: the repo's a.rego over the operator's.
+  assert.equal(described.policies.get("a.rego"), "# drops it\npackage deckhand\n");
+  assert.equal(described.policies.size, 3);
+});
+
+test("describe: no policy anywhere, no opa call; an operator folder that can't be read, said", async (t) => {
+  const { policies, opa } = setup(t);
+  const described = await policies.describe("org/repo", "main");
+  assert.deepEqual(described.files, []);
+  assert.deepEqual(described.errors, []);
+  assert.equal(opa.calls.length, 0);
+  const broken = createPolicies({
+    config: {},
+    github: fakeGitHub().github,
+    run: fakeOpa().run,
+    readOperator: () => {
+      throw new Error("policy/x.rego leads outside the grants folder");
+    },
+    tmp: tempDir(t),
+  });
+  assert.deepEqual((await broken.describe("org/repo", "main")).errors, [
+    "the operator's policies can't be read: policy/x.rego leads outside the grants folder",
+  ]);
+});
+
 test("mergeInput: what deny_merge reads", () => {
   const doc = mergeInput({
     info: { full_name: "org/repo", private: true, default_branch: "main" },

@@ -220,10 +220,10 @@ export function createPolicies({
     return listed;
   }
 
-  // A repo's policies on `ref`, name → text: its listing (`cached`: the default branch's, kept
-  // until it moves), then the files not seen yet.
-  async function repoPolicies(repo, ref, { cached = false } = {}) {
-    const files = new Map();
+  // A repo's policy files on `ref`, [{ name, url, text }]: its listing (`cached`: the default
+  // branch's, kept until it moves), then the files not seen yet.
+  async function repoFiles(repo, ref, cached) {
+    const files = [];
     const listed = await listing(repo, ref, cached);
     if (!Array.isArray(listed)) return files;
     for (const entry of listed) {
@@ -233,9 +233,14 @@ export function createPolicies({
         if (blobs.size >= MAX_BLOBS) blobs.delete(blobs.keys().next().value);
         blobs.set(entry.sha, Buffer.from(blob.content ?? "", blob.encoding ?? "base64").toString());
       }
-      files.set(entry.name, blobs.get(entry.sha));
+      files.push({ name: entry.name, url: entry.html_url ?? null, text: blobs.get(entry.sha) });
     }
     return files;
+  }
+
+  // A repo's policies on `ref`, name → text.
+  async function repoPolicies(repo, ref, { cached = false } = {}) {
+    return new Map((await repoFiles(repo, ref, cached)).map((f) => [f.name, f.text]));
   }
 
   // The operator's policies with the repo's over them, by file name. Empty: nothing applies.
@@ -329,14 +334,28 @@ export function createPolicies({
   // [] when nothing denies. `input()` builds the input, called only when a policy applies (it may
   // read GitHub). Fail closed: an error reading the policies is a denial too.
   async function deny(rule, repo, ref, input) {
+    return (await decide(rule, repo, ref, input)).messages;
+  }
+
+  // deny()'s work → { applied, messages }: `applied`, whether any policy was asked (none
+  // anywhere: false, and nothing for the task's page to show).
+  async function decide(rule, repo, ref, input) {
     let files;
     try {
       files = await policiesFor(repo, ref);
     } catch (error) {
       log(`${repo}: reading its policies: ${error.message ?? error}`);
-      return failure(`the policies can't be read (${error.message ?? error})`);
+      return {
+        applied: true,
+        messages: failure(`the policies can't be read (${error.message ?? error})`),
+      };
     }
-    if (!files.size) return [];
+    if (!files.size) return { applied: false, messages: [] };
+    return { applied: true, messages: await denied(rule, repo, files, input) };
+  }
+
+  // `rule` of `files` on the input `input()` builds, version added → its messages, logged.
+  async function denied(rule, repo, files, input) {
     let doc;
     try {
       doc = { version: INPUT_VERSION, ...(await input()) };
@@ -344,9 +363,9 @@ export function createPolicies({
       log(`${repo}: the ${rule} input: ${error.message ?? error}`);
       return failure(`its input can't be built (${error.message ?? error})`);
     }
-    const denied = await evaluate(rule, files, doc);
-    if (denied.length) log(`${repo}: ${rule} denies: ${denied.join(" | ")}`);
-    return denied;
+    const messages = await evaluate(rule, files, doc);
+    if (messages.length) log(`${repo}: ${rule} denies: ${messages.join(" | ")}`);
+    return messages;
   }
 
   // The config check of `files` (name → text): compile errors and rules nobody evaluates, as
@@ -399,11 +418,55 @@ export function createPolicies({
     return check(new Map([...operator, ...own]));
   }
 
+  // What applies on `repo` (its policies on `ref`, its default branch, read now), for the
+  // dashboard's config panel and `/mode policy`: { files: [{ name, source, replaces, rules, url
+  // }], errors, warnings }, the operator's files first, each repo file `replaces` an operator
+  // one of its name. `errors`: the check of the merged files (check()), and why the operator's
+  // can't be read (every decision refuses then). `policies`: name → text, what deny() would
+  // evaluate. No policy anywhere: no `opa` call.
+  async function describe(repo, ref) {
+    let operator = new Map();
+    const errors = [];
+    try {
+      operator = readOperator();
+    } catch (error) {
+      errors.push(`the operator's policies can't be read: ${error.message ?? error}`);
+    }
+    const own = await repoFiles(repo, ref, false);
+    const names = new Set(own.map((f) => f.name));
+    const files = [
+      ...[...operator]
+        .filter(([name]) => !names.has(name))
+        .map(([name, text]) => ({ name, source: "operator", replaces: false, text, url: null })),
+      ...own.map((f) => ({ ...f, source: "repo", replaces: operator.has(f.name) })),
+    ].map(({ text, ...f }) => ({ ...f, rules: deniesOf(text), text }));
+    const policies = new Map(files.map((f) => [f.name, f.text]));
+    const checked = await check(policies);
+    return {
+      files: files.map(({ text: _, ...f }) => f),
+      errors: [...errors, ...checked.errors],
+      warnings: checked.warnings,
+      policies,
+    };
+  }
+
   // `repo`'s default branch moved (a push, a merge: repos.mjs refreshFor()): its policies are
   // listed again at the next decision.
   function forget(repo) {
     listings.delete(repo.toLowerCase());
   }
 
-  return { deny, evaluate, check, checkOperator, checkRepo, repoPolicies, policiesFor, forget };
+  return {
+    deny,
+    decide,
+    denied,
+    describe,
+    evaluate,
+    check,
+    checkOperator,
+    checkRepo,
+    repoPolicies,
+    policiesFor,
+    forget,
+  };
 }

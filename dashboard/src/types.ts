@@ -76,6 +76,19 @@ export interface PullRequest {
   autoMerged?: boolean;
 }
 
+// What a repo's policies (Rego `deny_*` rules, listener/policies.mjs) decided about a task's
+// pull request: its review, fix run or auto-merge (listener/reviews.mjs). `messages`: the
+// reasons, capped and redacted; a failure is one "policy error: …".
+export interface PolicyDecision {
+  decision: "merge" | "review" | "fix";
+  rule: string;
+  denied: boolean;
+  messages: string[];
+  // The pull request it was about.
+  pr: number;
+  at: number;
+}
+
 export interface Task {
   key: string;
   repo: string;
@@ -96,6 +109,9 @@ export interface Task {
   // merging), or null while open or not known yet (listener/titles.mjs).
   closed: Closed;
   pr: PullRequest | null;
+  // Its pull request's last policy decisions, newest first (listener/decisions.mjs); absent
+  // when no policy was ever asked.
+  decisions?: PolicyDecision[];
   // Its last run failed or was lost, and may run again from its page (listener/board.mjs).
   rerunnable: boolean;
   runs: Run[]; // newest first
@@ -330,7 +346,28 @@ export interface RepoConfig {
     mounts: MountRow[];
     grant: Grant | null;
   };
+  // The policy files that apply, from the operator's grants folder and the repo's
+  // .deckhand/policy/ on its default branch (listener/policies.mjs describe()).
+  policies: Policies;
   readAt: number;
+}
+
+// A policy file: `replaces`, a repo file with the name of an operator one, which it replaces.
+// `rules`: the `deny_*` rules it defines. `url`: the repo's file on GitHub.
+export interface PolicyFile {
+  name: string;
+  source: "operator" | "repo";
+  replaces: boolean;
+  rules: string[];
+  url: string | null;
+}
+
+// `errors`: the config check's (compile errors, a folder that can't be read): every decision a
+// policy is asked for refuses until they are fixed. `warnings`: rules nobody evaluates.
+export interface Policies {
+  files: PolicyFile[];
+  errors: string[];
+  warnings: string[];
 }
 
 // An open issue with no task yet, which the graph's work area can start or queue.
