@@ -1,5 +1,6 @@
 // Auto-merge (`review.merge`, reviews.mjs): what blocks it, its gates, the review after a fix
-// run, and that each pull request gets one decision.
+// run, and that each pull request gets one decision; the policies of the reviews and fix runs
+// that lead to it (`deny_review`, `deny_fix`).
 import assert from "node:assert/strict";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -12,8 +13,7 @@ import {
   reviewEvent,
   trustedFile,
 } from "../listener/reviews.mjs";
-import { createPolicies } from "../listener/policies.mjs";
-import { tempDir, testConfig } from "./helpers.mjs";
+import { policyEngine, tempDir, testConfig } from "./helpers.mjs";
 
 const config = { ...testConfig(), bot: "deckhand-app[bot]", needsInputLabel: "needs-input" };
 
@@ -24,6 +24,7 @@ const HIGH = "- **high** `a.mjs:1`: a hole.\n\nRating: 4/10\nVerdict: request-ch
 const LOW_CHANGES = "- **low** `a.mjs:1`: a typo.\n\nRating: 8/10\nVerdict: request-changes";
 
 const MERGE = "review:\n  on: ready\n  fix: true\n  merge: true\n";
+const FIX_ONLY = "review:\n  on: ready\n  fix: true\n";
 
 // Deckhand's own pull request #5, closing #12, at sha-1, as GitHub has it.
 const PR = {
@@ -487,35 +488,6 @@ test("mergeRefusal: everything passes, the pull request and method come back", a
   assert.equal(gate.pr.number, 5);
 });
 
-// The policies' engine with a fake `opa` and the repo's policy files: its `deny_merge` says
-// `messages` (a function of the input), or fails as `failure` says.
-function policyEngine(t, { files = null, messages = () => [], failure = null } = {}) {
-  const evals = [];
-  const engine = createPolicies({
-    config: {},
-    github: async (repo, method, path) => {
-      if (files && path === "/repos/org/repo/contents/.deckhand/policy?ref=main") {
-        return Response.json(Object.keys(files).map((name) => ({ type: "file", name, sha: name })));
-      }
-      if (files && path.startsWith("/repos/org/repo/git/blobs/")) {
-        const text = files[path.split("/").pop()];
-        return Response.json({ content: Buffer.from(text).toString("base64"), encoding: "base64" });
-      }
-      return new Response("{}", { status: 404 });
-    },
-    run: async (args, { input }) => {
-      if (args[0] === "capabilities") return { code: 0, stdout: '{"builtins":[]}' };
-      evals.push(JSON.parse(input));
-      if (failure) return failure;
-      const value = messages(JSON.parse(input));
-      return { code: 0, stdout: JSON.stringify({ result: [{ expressions: [{ value }] }] }) };
-    },
-    readOperator: () => new Map(),
-    tmp: tempDir(t),
-  });
-  return { engine, evals };
-}
-
 test("auto-merge: deny_merge refuses with its reasons, after every built-in gate", async (t) => {
   const policy = policyEngine(t, {
     files: { "size.rego": "package deckhand" },
@@ -560,6 +532,140 @@ test("auto-merge: a policy error refuses; no policy, no opa call and the merge",
   assert.ok(await clean.settle());
   assert.equal(none.evals.length, 0);
   assert.equal(clean.merges().length, 1);
+});
+
+// A pull request turned ready, as its webhook says.
+const ready = (pr = {}) => ({
+  action: "ready_for_review",
+  installation: { id: 1 },
+  repository: { full_name: "org/repo", default_branch: "trunk" },
+  pull_request: { ...PR, ...pr },
+});
+
+const REVIEW_ON = "review:\n  on: ready\n";
+
+test("deny_review: a matching rule skips the automatic review, said as a skip, no comment", async (t) => {
+  const policy = policyEngine(t, {
+    ref: "trunk",
+    files: { "wip.rego": "package deckhand" },
+    messages: (input, rule) =>
+      rule === "deny_review" && input.pr.labels.includes("wip") ? ["work in progress"] : [],
+  });
+  const skipped = [];
+  const s = setup(t, {
+    yaml: REVIEW_ON,
+    policies: policy.engine,
+    issueLabels: [{ name: "area: docs" }],
+  });
+  const wip = ready({ labels: [{ name: "wip" }] });
+  assert.equal(
+    await s.reviews.consider("pull_request", wip, (why) => (skipped.push(why), null)),
+    null,
+  );
+  assert.equal(s.accepted.length + s.replies.length, 0);
+  assert.deepEqual(skipped, [
+    "review: #5, the policies refuse it (`deny_review`): `work in progress`",
+  ]);
+  const [input] = policy.evals;
+  assert.deepEqual(
+    [input.version, input.decision, input.rule, input.pr.number, input.pr.labels],
+    [1, "review", "deny_review", 5, ["wip"]],
+  );
+  assert.deepEqual(input.pr.files, [
+    { path: "listener/x.mjs", previous_path: null, status: null, additions: 0, deletions: 0 },
+  ]);
+  assert.deepEqual(input.issue, { number: 12, title: "", labels: ["area: docs"] });
+  assert.equal(input.review, null);
+  // Not remembered: without the label, the same head commit is reviewed.
+  assert.ok(await s.reviews.consider("pull_request", ready()));
+  assert.equal(s.accepted.length, 1);
+  // A review a maintainer asked for (`/mode review`) settles without asking deny_review.
+  const asked = policy.evals.length;
+  await s.reviews.settle({ ...s.run, auto: false }, s.posted(CLEAN, { labels: ["wip"] }));
+  assert.equal(policy.evals.filter((e) => e.rule === "deny_review").length, asked);
+});
+
+test("deny_review: a policy error skips the review; no policy, no extra GitHub call", async (t) => {
+  const broken = policyEngine(t, {
+    ref: "trunk",
+    files: { "bad.rego": "package deckhand" },
+    failure: { code: 1, stdout: '{"errors":[{"message":"rego_parse_error: unexpected eof"}]}' },
+  });
+  const skipped = [];
+  const s = setup(t, { yaml: REVIEW_ON, policies: broken.engine });
+  await s.reviews.consider("pull_request", ready(), (why) => (skipped.push(why), null));
+  assert.equal(s.accepted.length, 0);
+  assert.match(skipped[0], /`policy error: rego_parse_error: unexpected eof`/);
+  const none = policyEngine(t, { ref: "trunk" });
+  const clean = setup(t, { yaml: REVIEW_ON, policies: none.engine });
+  assert.ok(await clean.reviews.consider("pull_request", ready()));
+  assert.deepEqual([none.evals.length, clean.calls.length], [0, 0]);
+});
+
+test("deny_review: the review after a fix run, refused, leaves the merge to the maintainer", async (t) => {
+  const policy = policyEngine(t, {
+    ref: "trunk",
+    files: { "big.rego": "package deckhand" },
+    messages: (input, rule) => (rule === "deny_review" ? ["too big for a second look"] : []),
+  });
+  const pushed = { head: { sha: "sha-2", repo: { full_name: "org/repo" } } };
+  const s = setup(t, { pr: pushed, policies: policy.engine });
+  assert.equal((await s.reviews.settle(s.run, s.posted(HIGH))).reason, "review-fix");
+  const run = { repo: "org/repo", number: 5, base: "trunk", status: "ok" };
+  assert.equal(await s.reviews.fixed(run), null);
+  assert.equal(s.accepted.filter((i) => i.reason === "review").length, 0);
+  assert.match(
+    s.replies[0].text,
+    /^\*\*Not merged automatically\*\*.*the policies refuse it \(`deny_review`\): `too big for a second look`/,
+  );
+  assert.equal(s.merges().length, 0);
+});
+
+test("deny_fix: a finding's path starts no fix run, a comment quotes why, nothing merged", async (t) => {
+  const policy = policyEngine(t, {
+    ref: "trunk",
+    files: { "paths.rego": "package deckhand" },
+    messages: (input, rule) =>
+      rule === "deny_fix" && input.review.findings.some((f) => f.path?.startsWith("a."))
+        ? ["a finding in `a.mjs`: a human fixes it"]
+        : [],
+  });
+  const s = setup(t, { policies: policy.engine });
+  assert.equal(await s.reviews.settle(s.run, s.posted(HIGH)), null);
+  assert.equal(s.accepted.length + s.merges().length, 0);
+  assert.equal(
+    s.replies[0].text,
+    "**No fix run** (`review.fix`): the policies refuse it (`deny_fix`): `a finding in 'a.mjs': a human fixes it`. The review's findings wait for a maintainer.",
+  );
+  assert.match(
+    s.replies[1].text,
+    /^\*\*Not merged automatically\*\*.*the review has high findings and no fix run started \(the policies refuse it \(`deny_fix`\): `a finding in 'a.mjs': a human fixes it`\)/,
+  );
+  const [input] = policy.evals;
+  assert.deepEqual([input.decision, input.rule, input.issue.number], ["fix", "deny_fix", 12]);
+  assert.deepEqual(input.review.findings, [
+    { severity: "high", path: "a.mjs", line: 1, text: "a hole." },
+  ]);
+  assert.equal(input.review.verdict, "request-changes");
+  // Without auto-merge: the comment alone; the pull request's fix run isn't used up.
+  const plain = setup(t, { yaml: FIX_ONLY, policies: policy.engine });
+  assert.equal(await plain.reviews.fix(plain.run, plain.posted(HIGH)), null);
+  assert.equal(plain.replies.length, 1);
+  assert.match(plain.replies[0].text, /^\*\*No fix run\*\*/);
+  const elsewhere = "- **high** `b.mjs:1`: a hole.\n\nRating: 4/10\nVerdict: request-changes";
+  assert.equal((await plain.reviews.fix(plain.run, plain.posted(elsewhere))).reason, "review-fix");
+});
+
+test("deny_fix: a policy error starts no fix run, the comment says so", async (t) => {
+  const broken = policyEngine(t, {
+    ref: "trunk",
+    files: { "bad.rego": "package deckhand" },
+    failure: { code: 0, stdout: '{"result":[{"expressions":[{"value":[1]}]}]}' },
+  });
+  const s = setup(t, { yaml: FIX_ONLY, policies: broken.engine });
+  assert.equal(await s.reviews.fix(s.run, s.posted(HIGH)), null);
+  assert.equal(s.accepted.length, 0);
+  assert.match(s.replies[0].text, /`policy error: 'deny_fix' must be a set of strings`/);
 });
 
 test("auto-merge with a granted preview hook: only with the operator's long acknowledgement", async (t) => {
