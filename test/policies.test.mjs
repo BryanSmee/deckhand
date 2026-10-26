@@ -21,6 +21,9 @@ const CAPABILITIES = {
     { name: "net.cidr_contains" },
     { name: "net.lookup_ip_addr" },
     { name: "opa.runtime" },
+    { name: "json.match_schema" },
+    { name: "json.verify_schema" },
+    { name: "json.marshal" },
     { name: "trace" },
     { name: "time.now_ns" },
   ],
@@ -89,7 +92,10 @@ const evalResult = (value) => ({
   }),
 });
 
-function setup(t, { repoFiles = null, operator = {}, opa = fakeOpa(), secrets = [], status } = {}) {
+function setup(
+  t,
+  { repoFiles = null, operator = {}, opa = fakeOpa(), secrets = [], status, now } = {},
+) {
   const gh = fakeGitHub(repoFiles, { status });
   const logs = [];
   const policies = createPolicies({
@@ -100,17 +106,18 @@ function setup(t, { repoFiles = null, operator = {}, opa = fakeOpa(), secrets = 
     readOperator: () => new Map(Object.entries(operator)),
     tmp: tempDir(t),
     log: (line) => logs.push(line),
+    ...(now ? { now } : {}),
   });
   return { policies, gh, opa, logs };
 }
 
 const input = () => ({ decision: "merge", pr: { additions: 500 } });
 
-test("restrictedCapabilities: no environment, network or trace, and no host", () => {
+test("restrictedCapabilities: no environment, network, files or trace, and no host", () => {
   const caps = restrictedCapabilities(JSON.stringify(CAPABILITIES));
   assert.deepEqual(
     caps.builtins.map((b) => b.name),
-    ["count", "time.now_ns"],
+    ["count", "json.marshal", "time.now_ns"],
   );
   assert.deepEqual(caps.allow_net, []);
   assert.deepEqual(caps.features, ["rego_v1"]);
@@ -233,10 +240,30 @@ test("deny: fail closed, each failure one policy error", async (t) => {
       {
         code: 1,
         stdout: JSON.stringify({
-          errors: [{ message: "eval_cancel_error: caller cancelled query execution" }],
+          errors: [
+            {
+              message: "numbers.range: timed out before generating all numbers in range",
+              code: "eval_cancel_error",
+            },
+          ],
         }),
       },
-      /took more than/,
+      /^policy error: `deny_merge` took more than 2 s$/,
+    ],
+    // An error that only names a `timeout` isn't one.
+    [
+      {
+        code: 1,
+        stdout: JSON.stringify({
+          errors: [{ message: "var timeout is unsafe", code: "rego_unsafe_var_error" }],
+        }),
+      },
+      /^policy error: var timeout is unsafe$/,
+    ],
+    // Too much output: opaRunner() says so on stderr, not as a timeout.
+    [
+      { code: -1, stdout: "", stderr: "stdout maxBuffer length exceeded", timedOut: false },
+      /^policy error: stdout maxBuffer length exceeded$/,
     ],
     [evalResult([1, "x"]), /^policy error: `deny_merge` must be a set of strings$/],
     [evalResult("x"), /must be a set of strings/],
@@ -285,12 +312,47 @@ test("deny: fail closed, each failure one policy error", async (t) => {
   assert.match((await operator.deny("deny_merge", "org/repo", "main", input))[0], /EACCES/);
 });
 
-test("deny: a policy file is fetched once per blob", async (t) => {
-  const { policies, gh } = setup(t, { repoFiles: { "a.rego": DENY } });
+test("deny: failures are capped and redacted like messages", async (t) => {
+  const secret = "s3cr3t-value-0123456789abcdef";
+  const long = `rego_parse_error: ${secret} ${"y".repeat(400)}\nsecond line`;
+  const opa = fakeOpa({ answer: () => ({ code: 1, stdout: "", stderr: long }) });
+  const { policies } = setup(t, { opa, repoFiles: { "a.rego": DENY }, secrets: [secret] });
+  const [denied] = await policies.deny("deny_merge", "org/repo", "main", input);
+  assert.match(denied, /^policy error: rego_parse_error: \[redacted\] y+…$/);
+  assert.equal(denied.length, MAX_MESSAGE_LENGTH);
+  const check = await policies.check(new Map([["a.rego", DENY]]));
+  assert.ok(check.errors.every((e) => e.length <= MAX_MESSAGE_LENGTH && !e.includes(secret)));
+});
+
+test("deny: a policy file is fetched once per blob, the listing once per push", async (t) => {
+  let time = 1_000_000;
+  const { policies, gh } = setup(t, { repoFiles: { "a.rego": DENY }, now: () => time });
+  const listings = () => gh.calls.filter((p) => p.includes("/contents/")).length;
   await policies.deny("deny_merge", "org/repo", "main", input);
   await policies.deny("deny_merge", "org/repo", "main", input);
   assert.equal(gh.calls.filter((p) => p.includes("/git/blobs/")).length, 1);
-  assert.equal(gh.calls.filter((p) => p.includes("/contents/")).length, 2);
+  assert.equal(listings(), 1);
+  // The default branch moved: listed again.
+  policies.forget("Org/Repo");
+  await policies.deny("deny_merge", "org/repo", "main", input);
+  assert.equal(listings(), 2);
+  // A push whose webhook never came: listed again after a while.
+  time += 11 * 60_000;
+  await policies.deny("deny_merge", "org/repo", "main", input);
+  assert.equal(listings(), 3);
+  // A branch's (the config check's) is never kept.
+  await policies.checkRepo("org/repo", "main");
+  await policies.checkRepo("org/repo", "main");
+  assert.equal(listings(), 5);
+});
+
+test("deny: no policy anywhere, one listing until the default branch moves", async (t) => {
+  const { policies, gh, opa } = setup(t);
+  for (let i = 0; i < 3; i++) {
+    assert.deepEqual(await policies.deny("deny_merge", "org/repo", "main", input), []);
+  }
+  assert.equal(gh.calls.length, 1);
+  assert.equal(opa.calls.length, 0);
 });
 
 test("check: compile errors and rules nobody evaluates; nothing to check, no opa call", async (t) => {
@@ -464,5 +526,23 @@ test(
       /n\.rego:2: undefined function opa\.runtime/,
     );
     assert.match((await policies.check(net)).errors[0], /undefined function opa\.runtime/);
+    // Nothing that reads the environment, the network or the listener's files compiles.
+    for (const call of [
+      "opa.runtime().env.HOME",
+      'http.send({"method": "get", "url": "https://example.com"}).body',
+      'net.lookup_ip_addr("example.com")',
+      'json.match_schema({}, {"$ref": "file:///etc/hostname"})',
+      'json.verify_schema({"$ref": "file:///etc/hostname"})',
+    ]) {
+      const name = call.slice(0, call.indexOf("("));
+      const file = new Map([
+        [
+          "x.rego",
+          `package deckhand\ndeny_merge contains sprintf("%v", [x]) if { x := ${call} }\n`,
+        ],
+      ]);
+      const [denied] = await policies.evaluate("deny_merge", file, {});
+      assert.match(denied, new RegExp(`undefined function ${name.replace(/\./g, "\\.")}`), name);
+    }
   },
 );

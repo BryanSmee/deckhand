@@ -715,7 +715,8 @@ subfolders), in package `deckhand`; a file in another package is a library the o
 import. The operator can ship defaults in their grants folder's `policy/` folder
 ([security model](security.md#policies)): a repository file **with the same name** as an
 operator file replaces it (a file with only `package deckhand` drops it), any other name adds
-to them. With no policy anywhere, nothing changes: `opa` isn't run.
+to them. With no policy anywhere, nothing changes: `opa` isn't run, and the repository's
+folder is listed once, then again only after a push to its default branch (or 10 minutes).
 
 **The rules**: one set of strings per decision, each string a reason shown to the
 maintainer. Today, one decision:
@@ -731,9 +732,9 @@ anything but a set of strings refuses the decision, with a single `policy error:
 saying why. So does a policy folder that GitHub can't list. The onboarding pull request's
 config check compiles its branch's policies and reports their errors.
 
-**What a policy can call**: Rego's builtins, without those that read the environment or the
-network (`opa.runtime`, `http.send`, `net.*`) and `trace`: a policy decides from its input
-only. `time.now_ns()` works, so "not on Fridays" does.
+**What a policy can call**: Rego's builtins, without those that read the environment, the
+network or the listener's files (`opa.runtime`, `http.send`, `net.*`, `json.match_schema`,
+`json.verify_schema`) and `trace`: a policy decides from its input only. `time.now_ns()` works, so "not on Fridays" does.
 
 ### The merge input
 

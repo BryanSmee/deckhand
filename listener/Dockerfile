@@ -20,6 +20,8 @@ FROM node:26-alpine
 RUN apk add --no-cache docker-cli docker-cli-buildx git tar
 # opa: evaluates the operator's and the repos' policies (policies.mjs). The static release,
 # pinned by version and by the sha256 of each architecture's binary (its release's .sha256).
+# A new version may bring builtins that read files or the network: check them against
+# policies.mjs's REMOVED before raising it.
 ARG TARGETARCH
 ARG OPA_VERSION=1.21.4
 RUN case "$TARGETARCH" in \

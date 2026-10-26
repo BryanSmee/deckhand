@@ -1102,9 +1102,15 @@ add to them.
 - **They run in the listener, isolated**: the pinned `opa` binary of the listener's image
   (version and sha256 in `listener/Dockerfile`), one process per decision, with an empty
   environment, a 2-second limit, and a capabilities file without `opa.runtime` (the
-  environment), `http.send`, `net.*` (the network, DNS included) and `trace`, and no host
-  allowed (`allow_net: []`). A policy decides from its input only: it can't read the
-  listener's secrets or reach anything.
+  environment), `http.send`, `net.*` (the network, DNS included), `json.match_schema` and
+  `json.verify_schema` (a schema's `$ref` reads a local `file://` path, `allow_net` or not) and
+  `trace`, and no host allowed (`allow_net: []`). A policy decides from its input only: it
+  can't read the listener's secrets or files, or reach anything. The capabilities are the
+  pinned binary's own minus these, so a new `opa` version is checked for builtins that read
+  files or the network before it is pinned (`test/policies.test.mjs` tries the known ones
+  with the real binary).
+- **Their errors too**: what a failure says (opa's error, GitHub's) is cut and redacted like a
+  message below: an error may quote what a policy read.
 - **What they say is shown, not trusted**: each message is put on one line, cut to 200
   characters, redacted like the runs' output (the operator's secrets, GitHub token shapes),
   quoted as code (no mention, no formatting), and five at most are posted.

@@ -8,8 +8,8 @@
 //
 // Isolation: the policies are code a repo's maintainers write, and the listener holds the
 // Docker socket and the App's key. `opa` runs with an empty environment, under a timeout, and
-// with a capabilities file without the builtins that read the environment or the network
-// (opa.runtime, http.send, net.*) or trace. Fail closed: a policy that doesn't compile, times
+// with a capabilities file without the builtins that read the environment, the network or
+// files (opa.runtime, http.send, net.*, the JSON schema ones) or trace. Fail closed: a policy that doesn't compile, times
 // out or returns anything but a set of strings denies, with that reason. Format:
 // ../docs/repo-config.md#policies; trust: ../docs/security.md#policies.
 import { execFile } from "node:child_process";
@@ -44,9 +44,11 @@ export const MAX_MESSAGE_LENGTH = 200;
 const FILE = /^[\w][\w.-]*\.rego$/;
 
 // The builtins a policy can't call: the environment (opa.runtime), the network (http.send,
-// net.lookup_ip_addr and the rest of net.*, pure as most are: one rule, easy to read) and trace
-// (output nobody reads).
-const REMOVED = /^(?:opa\.runtime|http\.send|net\..*|trace)$/;
+// net.lookup_ip_addr and the rest of net.*, pure as most are: one rule, easy to read), the
+// listener's files (json.match_schema and json.verify_schema follow a schema's `$ref` to a
+// `file://` path, allow_net or not) and trace (output nobody reads).
+const REMOVED =
+  /^(?:opa\.runtime|http\.send|net\..*|json\.match_schema|json\.verify_schema|trace)$/;
 
 // `opa capabilities --current`'s JSON → the same without REMOVED and with no host allowed
 // (allow_net: remote schemas, http.send and net.lookup_ip_addr).
@@ -87,7 +89,8 @@ export function opaRunner(bin = "opa") {
         args,
         { env: {}, cwd, timeout: timeoutMs, killSignal: "SIGKILL", maxBuffer: 4 << 20 },
         (error, stdout, stderr) => {
-          const timedOut = !!error?.killed;
+          // Killed at the timeout; not for too much output (maxBuffer), said as a failure.
+          const timedOut = !!error?.killed && error.code !== "ERR_CHILD_PROCESS_STDIO_MAXBUFFER";
           // Not started at all (ENOENT): said as a failure of its own.
           const code = error ? (typeof error.code === "number" ? error.code : -1) : 0;
           resolve({ code, stdout, stderr: stderr || (code === -1 ? error.message : ""), timedOut });
@@ -152,12 +155,9 @@ export function deniesOf(text) {
   return [...new Set([...text.matchAll(/^(deny_\w*)\b/gm)].map((m) => m[1]))];
 }
 
-// "policy error: …": the single refusal a failure gives.
-const failure = (what) => [`policy error: ${what}`];
-
-// `opa`'s compile errors (its JSON output, on stdout for `eval` and stderr for `check`) → one
-// line, with each file's own name.
-function compileErrors(stdout, stderr) {
+// `opa`'s errors (its JSON output, on stdout for `eval` and stderr for `check`) → { text, one
+// line with each file's own name, cancelled: whether `eval` stopped at its --timeout }.
+function opaErrors(stdout, stderr) {
   for (const out of [stdout, stderr]) {
     let errors;
     try {
@@ -166,7 +166,7 @@ function compileErrors(stdout, stderr) {
       continue;
     }
     if (Array.isArray(errors) && errors.length) {
-      return errors
+      const text = errors
         .slice(0, 3)
         .map((e) => {
           const file = e.location?.file?.replace(/^.*\//, "");
@@ -174,14 +174,19 @@ function compileErrors(stdout, stderr) {
           return `${at}${e.message ?? e.code ?? "error"}`;
         })
         .join("; ");
+      return { text, cancelled: errors.some((e) => e.code === "eval_cancel_error") };
     }
   }
-  return (stderr || stdout || "opa failed").trim().split("\n")[0];
+  return { text: (stderr || stdout || "opa failed").trim().split("\n")[0], cancelled: false };
 }
+
+// How long a repo's listing of POLICY_DIR is kept: a push to its default branch forgets it
+// sooner (forget()), so this only bounds a push whose webhook never came.
+const LISTING_MS = 10 * 60_000;
 
 // `github`: the App's calls; `run(args, { input, cwd })`: opaRunner()'s; `secrets()`: what
 // redaction hides of the messages (secrets.mjs); `readOperator()`: the operator's policies
-// (operatorPolicies()); `tmp`: where each decision's files go.
+// (operatorPolicies()); `tmp`: where each decision's files go; `now`: the clock, for listings.
 export function createPolicies({
   config,
   github,
@@ -190,22 +195,36 @@ export function createPolicies({
   readOperator = () => operatorPolicies(config),
   tmp = tmpdir(),
   log = () => {},
+  now = Date.now,
 }) {
   // A file's text by its blob sha: the same policy is fetched once.
   const blobs = new Map();
   const MAX_BLOBS = 500;
+  // "org/repo" (lower case) → { ref, at, listed }: its default branch's POLICY_DIR, as last
+  // listed (null: none), so a repo without policies costs no call per decision.
+  const listings = new Map();
   // restrictedCapabilities() of the binary, once it answered.
   let capabilities = null;
 
-  // A repo's policies on `ref`, name → text: one listing, then the files not seen yet.
-  async function repoPolicies(repo, ref) {
-    const files = new Map();
+  async function listing(repo, ref, cached) {
+    const key = repo.toLowerCase();
+    const kept = listings.get(key);
+    if (cached && kept?.ref === ref && now() - kept.at < LISTING_MS) return kept.listed;
     const listed = await getJson(
       github,
       repo,
       `/repos/${repo}/contents/${POLICY_DIR}?ref=${encodeURIComponent(ref)}`,
       [404],
     );
+    if (cached) listings.set(key, { ref, at: now(), listed });
+    return listed;
+  }
+
+  // A repo's policies on `ref`, name → text: its listing (`cached`: the default branch's, kept
+  // until it moves), then the files not seen yet.
+  async function repoPolicies(repo, ref, { cached = false } = {}) {
+    const files = new Map();
+    const listed = await listing(repo, ref, cached);
     if (!Array.isArray(listed)) return files;
     for (const entry of listed) {
       if (entry.type !== "file" || !FILE.test(entry.name)) continue;
@@ -221,14 +240,14 @@ export function createPolicies({
 
   // The operator's policies with the repo's over them, by file name. Empty: nothing applies.
   async function policiesFor(repo, ref) {
-    return new Map([...readOperator(), ...(await repoPolicies(repo, ref))]);
+    return new Map([...readOperator(), ...(await repoPolicies(repo, ref, { cached: true }))]);
   }
 
   async function capabilitiesFile() {
     if (capabilities) return capabilities;
     const res = await run(["capabilities", "--current"], {});
     if (res.code !== 0)
-      throw new Error(`opa capabilities: ${compileErrors(res.stdout, res.stderr)}`);
+      throw new Error(`opa capabilities: ${opaErrors(res.stdout, res.stderr).text}`);
     capabilities = JSON.stringify(restrictedCapabilities(res.stdout));
     return capabilities;
   }
@@ -268,14 +287,11 @@ export function createPolicies({
     } catch (error) {
       return failure(error.message ?? String(error));
     }
-    if (res.timedOut) return failure(`\`${rule}\` took more than ${TIMEOUT_MS / 1000} s`);
+    const late = `\`${rule}\` took more than ${TIMEOUT_MS / 1000} s`;
+    if (res.timedOut) return failure(late);
     if (res.code !== 0) {
-      const said = compileErrors(res.stdout, res.stderr);
-      return failure(
-        /cancel|deadline|timed? ?out/i.test(said)
-          ? `\`${rule}\` took more than ${TIMEOUT_MS / 1000} s`
-          : said,
-      );
+      const { text, cancelled } = opaErrors(res.stdout, res.stderr);
+      return failure(cancelled ? late : text);
     }
     let value;
     try {
@@ -292,15 +308,22 @@ export function createPolicies({
     return messages(value);
   }
 
-  // At most MAX_MESSAGES, each on one line and cut, without the operator's secrets.
+  // At most MAX_MESSAGES, each shown().
   function messages(list) {
-    const shown = list.slice(0, MAX_MESSAGES).map((m) => {
-      const line = redact(m, secrets()).replace(/\s+/g, " ").trim() || "(empty message)";
-      return line.length > MAX_MESSAGE_LENGTH ? `${line.slice(0, MAX_MESSAGE_LENGTH - 1)}…` : line;
-    });
+    const shown = list.slice(0, MAX_MESSAGES).map(line);
     if (list.length > MAX_MESSAGES) shown.push(`and ${list.length - MAX_MESSAGES} more`);
     return shown;
   }
+
+  // A message as posted: on one line, cut, without the operator's secrets. Failures too: an
+  // error of opa or GitHub may quote a policy's text or what it read.
+  function line(text) {
+    const one = redact(text, secrets()).replace(/\s+/g, " ").trim() || "(empty message)";
+    return one.length > MAX_MESSAGE_LENGTH ? `${one.slice(0, MAX_MESSAGE_LENGTH - 1)}…` : one;
+  }
+
+  // "policy error: …": the single refusal a failure gives.
+  const failure = (what) => [line(`policy error: ${what}`)];
 
   // Why `rule` refuses on `repo` (its policies on `ref`, its default branch): the messages, or
   // [] when nothing denies. `input()` builds the input, called only when a policy applies (it may
@@ -346,10 +369,9 @@ export function createPolicies({
         run(["check", "--format=json", "--capabilities=capabilities.json", OPERATOR_DIR], { cwd }),
       );
       if (res.timedOut) errors.push(`the policies' check took too long`);
-      else if (res.code !== 0)
-        errors.push(`policy error: ${compileErrors(res.stdout, res.stderr)}`);
+      else if (res.code !== 0) errors.push(...failure(opaErrors(res.stdout, res.stderr).text));
     } catch (error) {
-      errors.push(`policy error: ${error.message ?? error}`);
+      errors.push(...failure(error.message ?? error));
     }
     return { errors, warnings };
   }
@@ -377,5 +399,11 @@ export function createPolicies({
     return check(new Map([...operator, ...own]));
   }
 
-  return { deny, evaluate, check, checkOperator, checkRepo, repoPolicies, policiesFor };
+  // `repo`'s default branch moved (a push, a merge: repos.mjs refreshFor()): its policies are
+  // listed again at the next decision.
+  function forget(repo) {
+    listings.delete(repo.toLowerCase());
+  }
+
+  return { deny, evaluate, check, checkOperator, checkRepo, repoPolicies, policiesFor, forget };
 }
