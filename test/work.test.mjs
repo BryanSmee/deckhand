@@ -5,7 +5,7 @@ import { test } from "node:test";
 import { ReplyError } from "../listener/comments.mjs";
 import { createWaits } from "../listener/waits.mjs";
 import { MAX_TREE, leadsTo } from "../listener/plans.mjs";
-import { ISSUES_MS, checkAction, createWorkApi, staleFor } from "../listener/work.mjs";
+import { COUNT_MS, ISSUES_MS, checkAction, createWorkApi, staleFor } from "../listener/work.mjs";
 import { createAnalysis } from "../listener/analysis.mjs";
 import { MAX_TEXT } from "../listener/answers.mjs";
 import { board as boardOf } from "../listener/board.mjs";
@@ -477,6 +477,98 @@ test("GET issues: an issue whose task is over is back, one with something live i
     res.body.issues.map((i) => i.number),
     [1, 3],
   );
+});
+
+test("counts: none before a first read, which starts in the background, then the backlog's", async () => {
+  const w = setup({
+    issues: { 1: open("One"), 2: open("Live"), 3: { ...open("A pull request"), pull_request: {} } },
+    live: ["org/app#2"],
+  });
+  let release;
+  w.hold = new Promise((resolve) => (release = resolve));
+  // Nothing waits for GitHub: the read is on its way, and a second call starts no other.
+  assert.deepEqual(w.api.counts(["Org/App"], "alice"), { "org/app": null });
+  assert.deepEqual(w.api.counts(["Org/App"], "alice"), { "org/app": null });
+  release();
+  w.hold = null;
+  await settled();
+  const listed = () => w.calls.filter((c) => c.includes("/issues?")).length;
+  assert.equal(listed(), 1);
+  assert.deepEqual(w.api.counts(["Org/App"], "alice"), {
+    "org/app": { count: 1, readAt: 1000 },
+  });
+  // The board's read is the same: no read of its own, and the count follows it.
+  w.issues[4] = open("Four");
+  w.clock += ISSUES_MS;
+  await call(w.api, "GET", "/api/repos/org/app/issues");
+  await settled();
+  assert.equal(listed(), 2);
+  assert.deepEqual(w.api.counts(["org/app"], "alice"), {
+    "org/app": { count: 2, readAt: 1000 + ISSUES_MS },
+  });
+  assert.equal(listed(), 2);
+});
+
+test("counts: read again once COUNT_MS old, or at an issues delivery", async () => {
+  const w = setup({ issues: { 1: open("One") } });
+  const listed = () => w.calls.filter((c) => c.includes("/issues?")).length;
+  w.api.counts(["org/app"], "alice");
+  await settled();
+  w.clock += COUNT_MS - 1;
+  w.issues[2] = open("Two");
+  assert.equal(w.api.counts(["org/app"], "alice")["org/app"].count, 1);
+  await settled();
+  assert.equal(listed(), 1);
+  // Old: the last count at once, the new one at the next call.
+  w.clock += 1;
+  assert.equal(w.api.counts(["org/app"], "alice")["org/app"].count, 1);
+  await settled();
+  assert.equal(listed(), 2);
+  assert.equal(w.api.counts(["org/app"], "alice")["org/app"].count, 2);
+  w.issues[3] = open("Three");
+  staleFor("issues", { action: "opened", repository: { full_name: "org/app" } }, w.api.stale);
+  await settled();
+  assert.equal(w.api.counts(["org/app"], "alice")["org/app"].count, 3);
+  assert.equal(listed(), 3);
+});
+
+test("counts: a failing read is tried again only after COUNT_MS", async () => {
+  const w = setup({ issues: { 1: open("One") } });
+  w.down = true;
+  const reads = () => w.calls.filter((c) => c === "GET /repos/org/app").length;
+  assert.deepEqual(w.api.counts(["org/app"], "alice"), { "org/app": null });
+  await settled();
+  assert.equal(reads(), 1);
+  assert.match(w.logs.at(-1), /org\/app: backlog: GitHub GET \/repos\/org\/app: 502/);
+  w.clock += COUNT_MS - 1;
+  w.api.counts(["org/app"], "alice");
+  await settled();
+  assert.equal(reads(), 1);
+  w.down = false;
+  w.clock += 1;
+  w.api.counts(["org/app"], "alice");
+  await settled();
+  assert.deepEqual(w.api.counts(["org/app"], "alice"), {
+    "org/app": { count: 1, readAt: 1000 + COUNT_MS },
+  });
+});
+
+test("counts: only for the repo's own users, and without the issues whose task just ended", async () => {
+  const live = ["org/app#1"];
+  const w = setup({ settings: { users: ["alice"] }, issues: { 1: open("One") }, live });
+  w.api.counts(["org/app"], "alice");
+  await settled();
+  assert.deepEqual(w.api.counts(["org/app"], "bob"), { "org/app": null });
+  assert.equal(w.api.counts(["org/app"], "Alice")["org/app"].count, 0);
+  // Its run ended: out until a read started after says it is still open, as on the board.
+  live.length = 0;
+  let release;
+  w.hold = new Promise((resolve) => (release = resolve));
+  assert.equal(w.api.counts(["org/app"], "alice")["org/app"].count, 0);
+  release();
+  w.hold = null;
+  await settled();
+  assert.equal(w.api.counts(["org/app"], "alice")["org/app"].count, 1);
 });
 
 // #144's body: an inbox issue with three questions in the format.

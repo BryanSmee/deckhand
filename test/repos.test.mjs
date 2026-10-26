@@ -270,13 +270,14 @@ async function call(
   });
 }
 
-function apiSetup({ grants = {}, fs, app = () => null, policies, ...opts } = {}) {
+function apiSetup({ grants = {}, fs, app = () => null, policies, backlogs, ...opts } = {}) {
   const s = setup({ grants, fs, ...opts });
   const started = [];
   const api = createRepoApi({
     config: s.config,
     list: s.list,
     policies,
+    backlogs,
     app,
     grants: grantsOf(grants, s.config),
     fs,
@@ -302,6 +303,30 @@ test("GET /api/repos: signed in only", async () => {
   );
   assert.equal((await call(api, "POST", "/api/repos")).status, 405);
   assert.equal(api.handle({ method: "GET", url: "/api/state", headers: {} }, {}, "alice"), false);
+});
+
+test("GET /api/repos: each configured repo's backlog count for the user, the others none", async () => {
+  const asked = [];
+  const { api } = apiSetup({
+    first: [info("org/App"), info("org/new"), info("org/unread")],
+    configured: ["org/App", "org/unread"],
+    backlogs: (repos, user) => {
+      asked.push([repos, user]);
+      return { "org/app": { count: 3, readAt: 5 } };
+    },
+  });
+  const res = await call(api, "GET", "/api/repos", { user: "bob" });
+  assert.deepEqual(
+    res.body.repos.map((r) => [r.repo, r.backlog]),
+    [
+      ["org/App", { count: 3, readAt: 5 }],
+      ["org/new", undefined],
+      ["org/unread", null],
+    ],
+  );
+  assert.deepEqual(asked, [[["org/App", "org/unread"], "bob"]]);
+  // Refreshed too.
+  assert.equal((await call(api, "POST", "/api/repos/refresh")).body.repos[0].backlog.count, 3);
 });
 
 test("GET /api/repos: the App's links, under GITHUB_URL, as its owner's type says", async () => {

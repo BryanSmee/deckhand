@@ -456,6 +456,8 @@ ctx.repoApi = createRepoApi({
   publicUrl,
   start: (repo, login) => ctx.onboarding.start(repo, login, true),
   policies,
+  // The Overview's repository cards: no GitHub read per repo when they show.
+  backlogs: (repos, user) => ctx.workApi.counts(repos, user),
   log,
 });
 
