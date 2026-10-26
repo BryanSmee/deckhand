@@ -10,6 +10,7 @@ import {
   opaRunner,
   operatorPolicies,
   restrictedCapabilities,
+  TIMEOUT_MS,
 } from "../listener/policies.mjs";
 import { mergeInput } from "../listener/reviews.mjs";
 import { tempDir } from "./helpers.mjs";
@@ -628,5 +629,35 @@ test(
       const [denied] = await policies.evaluate("deny_merge", file, {});
       assert.match(denied, new RegExp(`undefined function ${name.replace(/\./g, "\\.")}`), name);
     }
+  },
+);
+
+test(
+  "the real opa: a repo file drops the operator's of its name, a slow policy times out",
+  { skip: !opa && "no opa on the PATH" },
+  async (t) => {
+    // The operator's size.rego denies; the repo's, only `package deckhand`, drops it.
+    const merged = setup(t, {
+      opa: { run: opaRunner() },
+      operator: { "size.rego": DENY },
+      repoFiles: { "size.rego": "package deckhand\n" },
+    });
+    assert.deepEqual(await merged.policies.deny("deny_merge", "org/repo", "main", input), []);
+    const kept = setup(t, { opa: { run: opaRunner() }, operator: { "size.rego": DENY } });
+    assert.deepEqual(await kept.policies.deny("deny_merge", "org/repo", "main", input), [
+      "too big",
+    ]);
+    // opa stops itself at --timeout: the decision is refused, saying so.
+    const slow = new Map([
+      [
+        "slow.rego",
+        'package deckhand\ndeny_merge contains "x" if { count([n | some n in numbers.range(1, 100000000); n % 7 == 0]) > 0 }\n',
+      ],
+    ]);
+    const start = Date.now();
+    assert.deepEqual(await kept.policies.evaluate("deny_merge", slow, {}), [
+      "policy error: `deny_merge` took more than 2 s",
+    ]);
+    assert.ok(Date.now() - start < TIMEOUT_MS + 3000);
   },
 );
