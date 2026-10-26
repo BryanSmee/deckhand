@@ -44,6 +44,7 @@ import { createOnboarding, createOnboardingStore } from "./onboarding.mjs";
 import { createPolicies } from "./policies.mjs";
 import { createPreviews } from "./previews.mjs";
 import { createPulls } from "./pulls.mjs";
+import { createDecisions } from "./decisions.mjs";
 import { createRedeliveries } from "./redeliveries.mjs";
 import { fetchEgressCa } from "./egress.mjs";
 import { createRepoCheck } from "./repo-check.mjs";
@@ -406,6 +407,8 @@ ctx.conflicts = createConflicts({
 // Pull requests that turn ready in opted-in repos get a review run (`review.on`), a review
 // that requests changes one fix run (`review.fix`), and with the operator's
 // `allow_auto_merge`, a clean review the merge (`review.merge`).
+// Each task's last policy decisions, for its page (decisions.mjs).
+ctx.decisions = createDecisions({ path: join(config.dataDir, "decisions.json") });
 ctx.reviews = createReviews({
   path: join(config.dataDir, "reviews.json"),
   config,
@@ -415,6 +418,7 @@ ctx.reviews = createReviews({
   busy: taskBusy,
   reply: ctx.reply,
   policies,
+  decided: (repo, pr, entry) => ctx.decisions.record(pullEntry(repo, pr).key, entry),
   grantOf: (repo) => {
     try {
       return grantFor(loadGrants(config), config, repo);
@@ -447,6 +451,7 @@ ctx.repoApi = createRepoApi({
   app: appSummary,
   publicUrl,
   start: (repo, login) => ctx.onboarding.start(repo, login, true),
+  policies,
   log,
 });
 
@@ -509,6 +514,7 @@ const keyed = [
   pulls,
   ctx.conflicts,
   ctx.reviews,
+  ctx.decisions,
   titles,
 ];
 const spelled = await ctx.unifySpellings({

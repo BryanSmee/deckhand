@@ -37,3 +37,42 @@
   align-items: center;
   gap: 0.4rem;
 }
+
+/* The task's policy decisions, under its last reply. */
+.decisions {
+  margin: 0.75rem 0 0;
+  padding: 0.5rem 0.75rem;
+  border-radius: 6px;
+  background: var(--raised);
+  border: 1px solid var(--line);
+  font-size: 0.85rem;
+  overflow-wrap: anywhere;
+}
+.decisions > b {
+  color: var(--muted);
+  font-weight: 600;
+}
+.decisions ul {
+  margin: 0.3rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+.decisions li + li {
+  margin-top: 0.3rem;
+}
+.decisions ul.messages {
+  margin: 0.2rem 0 0 1rem;
+  list-style: disc;
+}
+.verdict {
+  composes: badge;
+}
+.denied {
+  --tone: var(--err);
+}
+.allowed {
+  --tone: var(--ok);
+}
+.when {
+  color: var(--muted);
+}

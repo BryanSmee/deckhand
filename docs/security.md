@@ -1121,7 +1121,12 @@ add to them.
   human, as with any refusal; for `deny_review`, the review is skipped (the log says why); for
   `deny_fix`, no fix run starts and a comment says why. A refusal only ever costs a run or a
   merge, never starts one. Your folder's compile errors are logged at start; a repository's
-  appear in its onboarding pull request's config check.
+  appear in its onboarding pull request's config check and its config panel on the dashboard.
+- **A dry run decides nothing**: `/mode policy` on a pull request, only from an allowed user
+  (like any comment that reaches Deckhand), evaluates the rules and replies with their results
+  and the input. Nothing is reviewed, fixed, merged or kept, and the input it posts is what
+  GitHub already shows that user about the pull request. Your policies' file names and compile
+  errors (redacted) appear in the reply and the config panel, not their text.
 
 ## Research runs
 

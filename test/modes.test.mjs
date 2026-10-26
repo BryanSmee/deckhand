@@ -8,7 +8,7 @@ test("built-in modes: one list, which the dashboard's copy follows", () => {
   assert.deepEqual([...BUILT_IN], RESERVED_MODES);
   assert.ok(RESERVED_MODES.includes("onboarding"));
   // "/mode" picks only some of them.
-  assert.deepEqual(modeNames(null), ["work", "brainstorm", "onboarding", "research"]);
+  assert.deepEqual(modeNames(null), ["work", "brainstorm", "onboarding", "research", "policy"]);
   // The dashboard (format.ts) can't import the listener: its copy is checked here.
   const source = readFileSync(new URL("../dashboard/src/format.ts", import.meta.url), "utf8");
   const copy = /export const BUILT_IN_MODES = (\[[^\]]*\])/.exec(source);

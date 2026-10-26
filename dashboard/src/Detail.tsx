@@ -17,7 +17,7 @@ import {
   titleOf,
 } from "./format";
 import { Log } from "./Log";
-import { PrLink } from "./PullRequest";
+import { PolicyDecisions, PrLink } from "./PullRequest";
 import { Questions } from "./Questions";
 import { StateBadge, StateDot } from "./State";
 import { Thread } from "./Thread";
@@ -174,6 +174,7 @@ export function Detail({ task: t, run: r, onRun, onBack, now, github, refresh }:
             {reply.summary}
           </p>
         )}
+        <PolicyDecisions decisions={t.decisions} now={now} />
       </header>
       {t.runs.length > 1 && (
         <nav class={styles.runs} aria-label="Runs">

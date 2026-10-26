@@ -11,7 +11,11 @@ const config = testConfig();
 
 // modeOf() for a comment on org/repo#12 with the repo's `yaml`: what it ran, and the replies.
 // `issueModes`: the issues' current modes, kept across calls.
-async function modeOf(fields, yaml = "", { cfg = config, issueModes = new Map() } = {}) {
+async function modeOf(
+  fields,
+  yaml = "",
+  { cfg = config, issueModes = new Map(), reviews = null } = {},
+) {
   const replies = [];
   const ctx = {
     config: cfg,
@@ -21,6 +25,7 @@ async function modeOf(fields, yaml = "", { cfg = config, issueModes = new Map() 
     issueModes,
     brainstorms: { get: () => null, end: () => {} },
     reply: async (repo, number, text) => replies.push([repo, number, text]),
+    reviews,
   };
   const { settings } = parseRepoConfig(yaml, config);
   const item = { repo: "org/repo", id: "12", number: 12, replyTo: 12, settings, ...fields };
@@ -35,7 +40,7 @@ test("/mode with a name the repo doesn't have: a reply listing its modes, no run
     [
       "org/repo",
       12,
-      "Unknown mode `foo`. The modes here: `work`, `brainstorm`, `onboarding`, `research` (not granted here). Pick one with a `/mode <name>` line.",
+      "Unknown mode `foo`. The modes here: `work`, `brainstorm`, `onboarding`, `research` (not granted here), `policy`. Pick one with a `/mode <name>` line.",
     ],
   ]);
   // The repo's own modes are listed too, a light one as comments only.
@@ -44,7 +49,7 @@ test("/mode with a name the repo doesn't have: a reply listing its modes, no run
   assert.equal(own.mode, null);
   assert.match(
     own.replies[0][2],
-    /^Unknown mode `reveiw`\. The modes here: `work`, `brainstorm`, `onboarding`, `research` \(not granted here\), `audit` \(comments only\)\./,
+    /^Unknown mode `reveiw`\. The modes here: `work`, `brainstorm`, `onboarding`, `research` \(not granted here\), `policy`, `audit` \(comments only\)\./,
   );
   assert.equal((await modeOf({ trigger: "work", modeLine: "audit" }, modes)).mode, "audit");
 });
@@ -103,4 +108,47 @@ test("/mode review: only with the repo's review block, and only on a pull reques
   assert.equal(issueModes.has("org/repo#12"), false);
   // An automatic one (reviews.mjs) is its own trigger.
   assert.equal((await modeOf({ kind: "pr", trigger: "review" }, on)).mode, "review");
+});
+
+test("/mode policy: a dry run replied on the pull request, no run; on an issue, refused", async () => {
+  const asked = [];
+  const reviews = {
+    dryRun: async (what) => {
+      asked.push(what);
+      return "**Policy dry run** on #30";
+    },
+  };
+  // Deckhand's own pull request #30, linked to issue #12, in a repo without a review block.
+  const linked = await modeOf(
+    { kind: "issue", replyTo: 30, base: "trunk", modeLine: "policy" },
+    "",
+    { reviews },
+  );
+  assert.equal(linked.mode, null);
+  assert.deepEqual(asked, [{ repo: "org/repo", base: "trunk", number: 30 }]);
+  assert.deepEqual(linked.replies, [["org/repo", 30, "**Policy dry run** on #30"]]);
+  const pr = await modeOf({ kind: "pr", id: "pr-12", modeLine: "policy" }, "", { reviews });
+  assert.deepEqual([pr.mode, pr.replies[0][2]], [null, "**Policy dry run** on #30"]);
+  const issue = await modeOf({ kind: "issue", trigger: "work", modeLine: "policy" }, "", {
+    reviews,
+  });
+  assert.equal(issue.mode, null);
+  assert.equal(asked.length, 2);
+  assert.match(
+    issue.replies[0][2],
+    /^A policy dry run is of a pull request: comment `\/mode policy`/,
+  );
+  // GitHub failing: said in the reply.
+  const failing = {
+    dryRun: async () => {
+      throw new Error("GitHub said 502");
+    },
+  };
+  const failed = await modeOf({ kind: "pr", id: "pr-12", modeLine: "policy" }, "", {
+    reviews: failing,
+  });
+  assert.match(
+    failed.replies[0][2],
+    /^The policy dry run failed: GitHub couldn't be read \(GitHub said 502\)/,
+  );
 });

@@ -84,6 +84,7 @@ const CONFIG: RepoConfig = {
       limits: { cpus: "2", memory: "4g", pids: 2048 },
     },
   },
+  policies: { files: [], errors: [], warnings: [] },
   readAt: Date.now(),
 };
 
@@ -122,6 +123,34 @@ beforeEach(() => {
           allowPreview: true,
           acknowledgeAutoMergePreview: true,
         },
+      },
+    }),
+    "api/repos/org/policed/config": () => ({
+      ...CONFIG,
+      repo: repo("org/policed", { status: "configured", readAt: Date.now() }),
+      errors: [],
+      warnings: [],
+      readAt: Date.now(),
+      policies: {
+        files: [
+          {
+            name: "size.rego",
+            source: "operator",
+            replaces: false,
+            rules: ["deny_merge"],
+            url: null,
+          },
+          {
+            name: "base.rego",
+            source: "repo",
+            replaces: true,
+            rules: ["deny_merge", "deny_review"],
+            url: "https://github.com/org/policed/blob/main/.deckhand/policy/base.rego",
+          },
+          { name: "lib.rego", source: "repo", replaces: false, rules: [], url: null },
+        ],
+        errors: ["policy error: base.rego:4: rego_parse_error: unexpected eof token"],
+        warnings: ["lib.rego: `deny_merged` isn't a rule Deckhand evaluates"],
       },
     }),
     "POST api/repos/org/app/onboard": () => ({
@@ -395,10 +424,35 @@ test("a config that parses but asks for what isn't granted: Invalid config, not 
   expect(within(list).queryByText("Configured")).toBeNull();
 });
 
+test("its policies: each file with its rules and source, and the check's errors", async () => {
+  const policed = repo("org/policed", { status: "configured" });
+  api.routes["api/repos"] = () => ({ repos: [...REPOS, policed], app: APP, listedAt: Date.now() });
+  render(<Page />);
+  fireEvent.click(await screen.findByRole("button", { name: "org/policed" }));
+  await screen.findByRole("heading", { name: "Policies" });
+  const alert = screen.getByRole("alert");
+  expect(alert.textContent).toContain("Every decision a policy is asked for refuses");
+  expect(alert.textContent).toContain("base.rego:4: rego_parse_error");
+  expect(screen.getByText(/deny_merged/).textContent).toContain("isn't a rule Deckhand evaluates");
+  const size = screen.getByText("size.rego").closest("tr")!;
+  expect(within(size).getByText("deny_merge")).toBeTruthy();
+  expect(within(size).getByText("from operator")).toBeTruthy();
+  const base = screen.getByText("base.rego").closest("tr")!;
+  expect(within(base).getByText("deny_merge, deny_review")).toBeTruthy();
+  expect(within(base).getByText(/replaces the operator's file/)).toBeTruthy();
+  expect(within(base).getByText("from repo")).toBeTruthy();
+  expect(within(base).getByRole("link").getAttribute("href")).toBe(
+    "https://github.com/org/policed/blob/main/.deckhand/policy/base.rego",
+  );
+  const lib = screen.getByText("lib.rego").closest("tr")!;
+  expect(within(lib).getByText("no deny_* rule")).toBeTruthy();
+});
+
 test("a repository without a config: the operator's defaults, said so", async () => {
   render(<Page />);
   fireEvent.click(await screen.findByRole("button", { name: "org/app" }));
   await screen.findByText(/the operator's defaults/);
+  expect(screen.getByText(/Only the built-in gates decide/)).toBeTruthy();
   expect(document.body.textContent).toContain("No .deckhand.yaml on main");
   expect(screen.queryByRole("alert")).toBeNull();
   expect(document.querySelector("pre")).toBeNull();

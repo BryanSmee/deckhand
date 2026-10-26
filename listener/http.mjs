@@ -174,6 +174,8 @@ export function createHttp(ctx, { dashboardDir }) {
         title: ctx.titles.get(t.key),
         closed: ctx.titles.closed(t.key),
         pr: ctx.pulls.get(t.key),
+        // Its pull request's last policy decisions (decisions.mjs), newest first.
+        ...(ctx.decisions?.get(t.key).length && { decisions: ctx.decisions.get(t.key) }),
         // Closed: the listener would refuse it.
         rerunnable: t.rerunnable && !ctx.titles.closed(t.key),
         // Off: Start and Queue don't open its open questions first (work.mjs act()).

@@ -361,7 +361,8 @@ checks to run.
 A run is in a mode: **work** (implement, the default), **brainstorm** (discuss, no code),
 **onboarding** (propose this file, see [Onboarding](#onboarding)), **research** (the open
 web, without the code, see [Research](#research)), **review** (a pull request's, when the
-`review` block turns it on, see [Reviews](#reviews)), or one of the repository's own, declared under `modes:`. A `/mode <name>` line in a comment
+`review` block turns it on, see [Reviews](#reviews)), **policy** (a dry run of the
+[policies](#a-dry-run-and-the-dashboard), no run), or one of the repository's own, declared under `modes:`. A `/mode <name>` line in a comment
 picks one, on its own line or after the trigger on the first one (`Deckhand /mode audit`;
 `/mode` is never read as `/model`; names are not case-sensitive):
 
@@ -399,8 +400,9 @@ error, listed in the reply:
 - **Names**: letters, digits, `-` and `_`. `work` and `brainstorm` can't be redefined (set
   their agent and model with `agent`/`model`/`effort` and `brainstorm_agent`/
   `brainstorm_model`/`brainstorm_effort`);
-  `onboarding`, `research`, `stop`, `idea`, `bug`, `discussion`, `analyze` and `review` are
-  reserved (`review` is set with the `review` block, see [Reviews](#reviews)).
+  `onboarding`, `research`, `stop`, `idea`, `bug`, `discussion`, `analyze`, `review` and
+  `policy` are reserved (`review` is set with the `review` block, see [Reviews](#reviews);
+  `policy` is a [dry run](#a-dry-run-and-the-dashboard)).
 - **Prompt**: the generic sandbox instructions (`prompts/sandbox.md`, and the repo's
   `instructions`) as for every run, then a short frame (the issue or pull request to read,
   what the mode may do) and the mode's file.
@@ -781,6 +783,24 @@ deny_fix contains msg if {
   msg := sprintf("a finding in %s: migrations are fixed by a human", [f.path])
 }
 ```
+
+### A dry run and the dashboard
+
+**`/mode policy`**, commented on a pull request by an allowed user, evaluates `deny_merge`,
+`deny_review` and `deny_fix` on the pull request as it is now, and replies with each rule's
+result (denies, with its messages, or allows) and the input, in a collapsed block. Nothing is
+reviewed, fixed or merged, and nothing is kept: it debugs a rule without waiting for a pull
+request to turn ready. The input is the merge's, read now, with `review: null` (no review
+ran); `deny_review` and `deny_fix` get it with their own `decision`, without `fixed` and
+`checks`. It works without a `review` block. On an issue, a reply says to comment it on the
+pull request.
+
+**The dashboard**: the repository's config panel lists the policy files that apply (the
+operator's and the repository's, read from the default branch when the panel opens), the
+`deny_*` rules each defines, and the config check's errors. A task's page shows its pull
+request's last policy decisions (the rule, whether it denied, its messages, when), the last
+10 of them; a decision is kept only when a policy was asked, so a repository without
+policies shows none.
 
 ## Open questions
 
