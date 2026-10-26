@@ -7,7 +7,7 @@ import { engineNote, recheckMounts, RunError, validateRun } from "./access.mjs";
 import { agentFor } from "./agents/index.mjs";
 import { entryLabel, nextFallback, resolveEntry } from "./agents/select.mjs";
 import { ReplyError } from "./comments.mjs";
-import { commentsText, taskKey } from "./events.mjs";
+import { commentsText, dashboardLink, taskKey } from "./events.mjs";
 import { nextStep, replyFooter } from "./footer.mjs";
 import {
   customMode,
@@ -549,7 +549,7 @@ export function createRuns(ctx) {
   function runLink(task) {
     const url = ctx.publicUrl?.();
     const { key, id } = task.live;
-    return url ? `${url}/#/${task.repo}?task=${encodeURIComponent(key)}&run=${id}` : null;
+    return url ? dashboardLink(url, task.repo, key, id) : null;
   }
 
   // Once the sandbox exited (or couldn't start): the reply, reactions and label, then the next
@@ -594,7 +594,7 @@ export function createRuns(ctx) {
       if (error instanceof ReplyError) {
         // Its comments get 👎 (cleanUp()), and the dashboard says why.
         log(`${key}: done (error, its reply refused): ${error.message}`);
-        record.summary = `The reply couldn't be posted: ${error.status ?? "GitHub didn't answer"}`;
+        record.summary = `The reply couldn't be posted: ${error.reason}`;
         record.questions = null;
         writeEvent(live.logFile, "note", { message: `${record.summary} (${error.message})` });
       } else log(`${key}: ${error.stack ?? error}`);

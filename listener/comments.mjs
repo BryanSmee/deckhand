@@ -93,11 +93,14 @@ function shorten(text, full) {
   return `${text.slice(0, SHORT)}\n\n…\n\n_Cut: GitHub refused the whole answer. The full answer is ${rest}._`;
 }
 
-// A reply GitHub didn't take, retries included. `status`: its last answer's (null: no answer).
+// A reply GitHub didn't take, retries included. `status`: its last answer's (null: none, or a
+// GraphQL error); `reason`: that status, else what GitHub or the call said.
 export class ReplyError extends Error {
   constructor(what, status, detail = "") {
     super(`${what}: ${status ?? "no answer"}${detail ? ` ${detail}` : ""}`);
+    this.name = "ReplyError";
     this.status = status;
+    this.reason = status ?? (detail.slice(0, 120) || "GitHub didn't answer");
   }
 }
 
@@ -106,9 +109,9 @@ const RETRY_DELAYS = [5000, 30000, 90000];
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // Whether a refusal may pass later: GitHub's 5xx, its rate limits (429, or a 403 that says so),
-// no answer at all.
-const transient = (status, detail) =>
-  status === null ||
+// no answer at all (not a GraphQL error: `refused`).
+const transient = (status, detail, refused) =>
+  (status === null && !refused) ||
   status >= 500 ||
   status === 429 ||
   (status === 403 && /rate limit/i.test(detail));
@@ -181,18 +184,22 @@ export function createComments({
   }
 
   // Posts `text` with `send(body)`, which answers { value } once posted, else { status,
-  // detail }: tried again after a 5xx or a rate limit, shortened once after a 422 (too long,
-  // most likely: `full` is where the whole answer is). What still fails throws a ReplyError.
+  // detail, refused }: tried again after a 5xx or a rate limit, shortened once after a 422
+  // (too long, most likely: `full` is where the whole answer is). What still fails throws a
+  // ReplyError.
   async function deliver(what, send, text, full) {
     let body = cut(text);
+    let shortened = false;
     for (let tries = 0; ;) {
       const sent = await send(`${body}\n\n${MARKER}`);
       if (!("status" in sent)) return sent.value;
-      const { status, detail } = sent;
-      if ((status === 422 || /too long/i.test(detail)) && body.length > SHORT) {
-        log(`${what}: ${status}, posted again shortened`);
+      const { status, detail, refused } = sent;
+      // Once: a 422 that has nothing to do with its length would come back each time.
+      if ((status === 422 || /too long/i.test(detail)) && !shortened && text.length > SHORT) {
+        log(`${what}: ${status ?? "too long"}, posted again shortened`);
         body = shorten(text, full);
-      } else if (transient(status, detail) && tries < delays.length) {
+        shortened = true;
+      } else if (transient(status, detail, refused) && tries < delays.length) {
         log(`${what}: ${status ?? detail}, tried again in ${delays[tries] / 1000} s`);
         await sleep(delays[tries++]);
       } else throw new ReplyError(what, status, detail.slice(0, 200));
@@ -237,9 +244,11 @@ export function createComments({
         return { value: await addDiscussionComment(graphql, target.repo, { id, thread, body }) };
       } catch (error) {
         const detail = error.message ?? String(error);
-        const status = Number(/: (\d{3}) /.exec(detail)?.[1]) || null;
-        // Its rate limit comes with a 200.
-        return { status: /RATE_LIMITED/.test(detail) ? 429 : status, detail };
+        const status = Number(/^GraphQL: (\d{3}) /.exec(detail)?.[1]) || null;
+        // Its errors come with a 200, its rate limit too.
+        if (/RATE_LIMITED/.test(detail)) return { status: 429, detail };
+        if (status && status < 300) return { status: null, detail, refused: true };
+        return { status, detail };
       }
     };
     return deliver(`A comment in discussion ${target.discussionId}`, send, text, full);

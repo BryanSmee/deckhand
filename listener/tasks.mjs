@@ -5,7 +5,15 @@ import { configErrors } from "./access.mjs";
 import { agentFor } from "./agents/index.mjs";
 import { repoAllowed } from "./config.mjs";
 import { hasLabel } from "./comments.mjs";
-import { commentsText, linkedIssue, linkTo, takeOptions, taskKey, workItem } from "./events.mjs";
+import {
+  commentsText,
+  dashboardLink,
+  linkedIssue,
+  linkTo,
+  takeOptions,
+  taskKey,
+  workItem,
+} from "./events.mjs";
 import { getJson } from "./github.mjs";
 import { customMode, entryRun, isLight } from "./modes.mjs";
 import { liveMessage } from "./prompts.mjs";
@@ -154,8 +162,7 @@ export function createTasks(ctx) {
     const key = taskKey(item.repo, item.id);
     log(`${key}: not started, its open questions aren't answered`);
     const url = ctx.publicUrl?.();
-    const task = `${url}/#/${item.repo}?task=${encodeURIComponent(key)}`;
-    const form = url ? ` or [on the dashboard](${task})` : "";
+    const form = url ? ` or [on the dashboard](${dashboardLink(url, item.repo, key)})` : "";
     const text = `#${item.number} has open questions: nothing starts until they are answered. A trigger comment with the answers starts the run with them; answered in a comment${form}, a new trigger comment starts it. (\`wait_for_answers: false\` in \`${CONFIG_FILE}\` turns this off.)`;
     await ctx.reply(item.repo, item.replyTo, text).catch((error) => log(`${key}: ${error}`));
     await ctx.settle(item, "needs-input");

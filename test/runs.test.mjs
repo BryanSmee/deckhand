@@ -5,6 +5,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { createComments } from "../listener/comments.mjs";
+import { RunError } from "../listener/access.mjs";
 import { createRuns } from "../listener/runs.mjs";
 import { openLog } from "../listener/runlog.mjs";
 import { recordingFetch, tempDir, testConfig } from "./helpers.mjs";
@@ -12,8 +13,9 @@ import { recordingFetch, tempDir, testConfig } from "./helpers.mjs";
 const result = (text) => JSON.stringify({ type: "result", result: text, duration_ms: 60000 });
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-// A sandbox that runs until killed, its output written by the test (`out(line)`).
-function fakeRunner() {
+// A sandbox that runs until killed, its output written by the test (`out(line)`). `fails`: an
+// error following it throws instead.
+function fakeRunner(fails = null) {
   const runner = {
     running: true,
     kills: 0,
@@ -22,6 +24,7 @@ function fakeRunner() {
     exited: null,
     state: async () => (runner.running ? "running" : "exited"),
     follow: (name, { onOut, onErr }) => {
+      if (fails) return Promise.reject(fails);
       runner.onOut = onOut;
       runner.onErr = onErr;
       return new Promise((resolve) => (runner.exited = resolve));
@@ -40,9 +43,9 @@ function fakeRunner() {
   return runner;
 }
 
-function setup(t, { mode = "idea", graceMs = 60, tokens = [], config = {}, answer } = {}) {
+function setup(t, { mode = "idea", graceMs = 60, tokens = [], config = {}, answer, fails } = {}) {
   const dir = tempDir(t);
-  const runner = fakeRunner();
+  const runner = fakeRunner(fails);
   const answers = [];
   const logs = [];
   const done = [];
@@ -325,4 +328,60 @@ test("a reply GitHub keeps refusing: the run fails, 👎, and says why", async (
   assert.equal(live.record.summary, "The reply couldn't be posted: 500");
   assert.ok(logs.some((l) => /done \(error, its reply refused\): GitHub POST .*: 500/.test(l)));
   assert.match(readFileSync(logPath, "utf8"), /The reply couldn't be posted: 500/);
+});
+
+// A cancelled or overflowed run's reply goes through the same check: refused, the run fails.
+test("a Stop whose reply GitHub keeps refusing: failed, 👎, its reply still to post", async (t) => {
+  const github = replyingWith([500, 500, 500]);
+  const { runs, runner, task, settled, following } = setup(t, {
+    graceMs: 5000,
+    answer: github.answer,
+  });
+  const live = task.live;
+  live.handled.push({ comment: { id: 7 } });
+  runner.out(result("I filed #195."));
+  runs.cancel("org/repo#12", "bryansmee");
+  await following;
+  await sleep(20);
+  assert.equal(github.bodies().length, 3);
+  assert.match(github.bodies()[0], /Stopped by @bryansmee after its answer/);
+  assert.equal(live.replied, false);
+  assert.equal(live.record.status, "error");
+  assert.equal(live.record.summary, "The reply couldn't be posted: 500");
+  assert.deepEqual(settled, ["error"]);
+});
+
+test("an overflowed run whose reply GitHub refuses: failed, 👎, said why", async (t) => {
+  const github = replyingWith([403]);
+  const { runner, task, settled, following } = setup(t, {
+    config: { runLogMax: 1000 },
+    answer: github.answer,
+  });
+  const live = task.live;
+  live.handled.push({ comment: { id: 7 } });
+  for (let i = 0; i < 20; i++) runner.err("x".repeat(99));
+  await following;
+  await sleep(20);
+  assert.equal(github.bodies().length, 1);
+  assert.match(github.bodies()[0], /stopped as failed: its output passed RUN_LOG_MAX_MB/);
+  assert.equal(live.replied, false);
+  assert.equal(live.record.status, "error");
+  assert.equal(live.record.summary, "The reply couldn't be posted: 403");
+  assert.deepEqual(settled, ["error"]);
+});
+
+// The error path's own reply (a RunError's message): a refusal is logged, the run fails as it was.
+test("an error whose reply GitHub refuses: logged", async (t) => {
+  const github = replyingWith([404]);
+  const fails = new RunError("Not allowed here.");
+  const { task, logs, settled, following } = setup(t, { answer: github.answer, fails });
+  const live = task.live;
+  live.handled.push({ comment: { id: 7 } });
+  await following;
+  await sleep(20);
+  assert.equal(github.bodies().length, 1);
+  assert.match(github.bodies()[0], /^Not allowed here\./);
+  assert.equal(live.record.status, "error");
+  assert.ok(logs.some((l) => /org\/repo#12: ReplyError: GitHub POST .*comments: 404/.test(l)));
+  assert.deepEqual(settled, ["error"]);
 });

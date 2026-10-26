@@ -120,6 +120,12 @@ test("reply: a 422 posts again shortened, with where the full answer is", async 
   assert.match(logs[0], /issues\/3\/comments: 422, posted again shortened/);
 });
 
+test("reply: shortened once only, a second 422 throws", async () => {
+  const { comments, calls } = replying([422, 422, 201]);
+  await assert.rejects(comments.reply("o/r", 3, "x".repeat(30000)), { status: 422 });
+  assert.equal(calls.length, 2);
+});
+
 test("reply: a 422 on a short reply, or any other refusal, throws at once", async () => {
   for (const status of [422, 404, 403]) {
     const { comments, calls } = replying([status, 201]);
@@ -162,4 +168,13 @@ test("answer in a discussion: too long posts again shortened, a refusal throws",
   assert.match(posted[1], /Cut: GitHub refused the whole answer/);
   refusals = ["GraphQL: 403 {}"];
   await assert.rejects(comments.answer(target, "hi"), { status: 403 });
+  // A GraphQL error comes with a 200: not tried again, and its message says why, not "200".
+  posted.length = 0;
+  refusals = ['GraphQL: 200 [{"message":"Discussion is locked"}]'];
+  await assert.rejects(comments.answer(target, "hi"), (error) => {
+    assert.equal(error.status, null);
+    assert.match(error.reason, /Discussion is locked/);
+    return true;
+  });
+  assert.equal(posted.length, 1);
 });
