@@ -150,7 +150,7 @@ beforeEach(() => {
           { name: "lib.rego", source: "repo", replaces: false, rules: [], url: null },
         ],
         errors: ["policy error: base.rego:4: rego_parse_error: unexpected eof token"],
-        warnings: ["lib.rego: `deny_merged` isn't a rule Deckhand evaluates"],
+        warnings: ["lib.rego: deny_merged isn't a rule Deckhand evaluates"],
       },
     }),
     "POST api/repos/org/app/onboard": () => ({

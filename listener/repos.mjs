@@ -425,7 +425,9 @@ export function createRepoApi({
     if (!policies) return { files: [], errors: [], warnings: [] };
     try {
       const { files, errors, warnings } = await policies.describe(repo, base);
-      return { files, errors, warnings };
+      // Written for GitHub replies; the panel shows text.
+      const plain = (list) => list.map((text) => text.replaceAll("`", ""));
+      return { files, errors: plain(errors), warnings: plain(warnings) };
     } catch (error) {
       log(`Repositories: ${repo}'s policies: ${error.message ?? error}`);
       return {
