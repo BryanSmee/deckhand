@@ -270,12 +270,13 @@ async function call(
   });
 }
 
-function apiSetup({ grants = {}, fs, app = () => null, ...opts } = {}) {
+function apiSetup({ grants = {}, fs, app = () => null, policies, ...opts } = {}) {
   const s = setup({ grants, fs, ...opts });
   const started = [];
   const api = createRepoApi({
     config: s.config,
     list: s.list,
+    policies,
     app,
     grants: grantsOf(grants, s.config),
     fs,
@@ -495,6 +496,40 @@ test("a repo's broken grant makes that repo invalid only", async () => {
   const other = (await call(api, "GET", "/api/repos/org/other/config")).body;
   assert.equal(other.grantsError, null);
   assert.deepEqual(other.effective.grant.files, ["default.yaml"]);
+});
+
+test("a repo's config: the policies that apply, without their text; none without an engine", async () => {
+  const asked = [];
+  const policies = {
+    describe: async (repo, base) => {
+      asked.push([repo, base]);
+      return {
+        files: [
+          { name: "a.rego", source: "repo", replaces: false, rules: ["deny_merge"], url: null },
+        ],
+        errors: ["policy error: a.rego:1: unexpected eof"],
+        warnings: [],
+        policies: new Map([["a.rego", "package deckhand"]]),
+      };
+    },
+  };
+  const { api } = apiSetup({ first: [info("org/app")], configured: ["org/app"], policies });
+  const { body } = await call(api, "GET", "/api/repos/org/app/config");
+  assert.deepEqual(asked, [["org/app", "main"]]);
+  assert.deepEqual(body.policies, {
+    files: [{ name: "a.rego", source: "repo", replaces: false, rules: ["deny_merge"], url: null }],
+    errors: ["policy error: a.rego:1: unexpected eof"],
+    warnings: [],
+  });
+  // GitHub failing to list them: said, without its details.
+  policies.describe = async () => {
+    throw new Error("GET /repos/org/app/contents: 502");
+  };
+  const failed = (await call(api, "GET", "/api/repos/org/app/config")).body.policies;
+  assert.deepEqual(failed.errors, ["the policies can't be read (see the listener's logs)"]);
+  const none = apiSetup({ first: [info("org/app")], configured: ["org/app"] });
+  const bare = (await call(none.api, "GET", "/api/repos/org/app/config")).body.policies;
+  assert.deepEqual(bare, { files: [], errors: [], warnings: [] });
 });
 
 test("a grants folder with errors makes every configured repo invalid, not the others", async () => {

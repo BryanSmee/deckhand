@@ -5,7 +5,7 @@
 import { useRepoConfig } from "./api";
 import { ago } from "./format";
 import { RepoBadge } from "./RepoBadge";
-import type { Grant, Repo, RepoConfig, Source } from "./types";
+import type { Grant, Policies, Repo, RepoConfig, Source } from "./types";
 import controls from "./controls.module.css";
 import styles from "./ConfigPanel.module.css";
 
@@ -199,6 +199,8 @@ export function ConfigPanel({ repo, row, onRow, onBack, now }: Props) {
             <p class={styles.muted}>Unknown: the operator's grants have errors.</p>
           )}
 
+          <PolicySection policies={config.policies} />
+
           {config.file && (
             <>
               <h3>
@@ -210,6 +212,77 @@ export function ConfigPanel({ repo, row, onRow, onBack, now }: Props) {
         </>
       )}
     </div>
+  );
+}
+
+// The policy files that apply, their `deny_*` rules, and the config check's errors: those
+// don't stop runs, they refuse every decision a policy is asked for (fail closed).
+function PolicySection({ policies }: { policies: Policies | undefined }) {
+  if (!policies) return null;
+  const { files, errors, warnings } = policies;
+  return (
+    <>
+      <h3>Policies</h3>
+      {errors.length > 0 && (
+        <div class={`${styles.box} ${styles.errors}`} role="alert">
+          <strong>Every decision a policy is asked for refuses until these are fixed</strong>
+          <ul>
+            {errors.map((e) => (
+              <li key={e}>{e}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {warnings.length > 0 && (
+        <div class={`${styles.box} ${styles.warnings}`}>
+          <strong>Policy warnings</strong>
+          <ul>
+            {warnings.map((w) => (
+              <li key={w}>{w}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {files.length === 0 ? (
+        <p class={styles.muted}>
+          None: no <code>.deckhand/policy/*.rego</code> on the default branch, and none in the
+          operator's grants folder. Only the built-in gates decide.
+        </p>
+      ) : (
+        <table class={styles.table}>
+          <tbody>
+            {files.map((f) => (
+              <tr key={f.name}>
+                <th scope="row">
+                  {f.url ? (
+                    <a href={f.url} target="_blank" rel="noreferrer">
+                      <code>{f.name}</code>
+                    </a>
+                  ) : (
+                    <code>{f.name}</code>
+                  )}
+                </th>
+                <td>
+                  <span class={styles.value}>
+                    {f.rules.length ? f.rules.join(", ") : "no deny_* rule"}
+                  </span>
+                  <span class={styles.note}>
+                    {f.source === "operator"
+                      ? "policy/ in the operator's grants folder"
+                      : f.replaces
+                        ? ".deckhand/policy/, replaces the operator's file of this name"
+                        : ".deckhand/policy/"}
+                  </span>
+                </td>
+                <td class={styles.source}>
+                  <Tag source={f.source} />
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </>
   );
 }
 

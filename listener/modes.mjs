@@ -86,6 +86,9 @@ export const MODES = {
   // A pull request's review, only in repos with a `review` block (repo-config.mjs): "/mode"
   // picks it there (modeNames()), and reviews.mjs starts it when a pull request turns ready.
   review: { light: true, fresh: true, permissions: READ_ONLY_PERMISSIONS, prompt: "review.md" },
+  // A dry run of the repo's policies on a pull request: no run, the listener evaluates them
+  // and replies (task-modes.mjs, reviews.mjs dryRun()).
+  policy: { picked: true },
 };
 
 const builtIn = (mode) => (Object.hasOwn(MODES, mode) ? MODES[mode] : null);

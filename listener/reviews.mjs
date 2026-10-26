@@ -22,6 +22,7 @@ import { repoAllowed } from "./config.mjs";
 import { linkedIssue, linkTo, MARKER, prId, headInRepo, taskKey } from "./events.mjs";
 import { autoMergeProblems, previewProblem } from "./grants.mjs";
 import { getJson, paginate } from "./github.mjs";
+import { INPUT_VERSION, RULES } from "./policies.mjs";
 import { CONFIG_FILE } from "./repo-config.mjs";
 import { respellMap } from "./spelling.mjs";
 import { persistentMap } from "./store.mjs";
@@ -198,14 +199,15 @@ const cut = (text) => (text.length > 60000 ? `${text.slice(0, 60000)}\n\n…` : 
 // on its own pull request (GitHub answers 422): then a comment review, the verdict in its
 // text. A review GitHub refuses otherwise goes as a plain comment (`reply`): nothing is lost.
 // `github`: the App's calls (server.mjs); `allowed`: the review's tolerance (reviews'
-// tolerance()).
+// tolerance()); `full`: where the whole text is, should GitHub take only its start. The
+// comment fallback throws when GitHub refuses it too (comments.mjs reply()).
 export async function postReview(
   { github, reply, log = () => {} },
   repo,
   number,
   text,
   footer,
-  { allowed = "low" } = {},
+  { allowed = "low", full } = {},
 ) {
   const review = parseReview(text, { allowed });
   let pr = null;
@@ -231,7 +233,7 @@ export async function postReview(
   if (res.status === 422 && event !== "COMMENT") res = await post((event = "COMMENT"));
   if (res.ok) return { event, review, pr };
   log(`${repo}#${number}: the review was refused (${res.status}), posted as a comment`);
-  await reply(repo, number, body.replace(`\n\n${MARKER}`, ""));
+  await reply(repo, number, body.replace(`\n\n${MARKER}`, ""), { full });
   return { event: null, review, pr };
 }
 
@@ -363,11 +365,14 @@ const MERGEABLE_WAIT_MS = 3000;
 // pull request Deckhand's own, on a branch of the repo and linked to its issue, open, not a
 // draft, nothing waiting for the maintainer, still at the reviewed head `sha`, the repository
 // private (or granted `public`), the merge method allowed, no file Deckhand trusts changed,
-// `mergeable_state` clean, its GitHub Actions runs finished and none failed. `busy(task)`:
-// a run going or queued on the issue.
+// `mergeable_state` clean, its GitHub Actions runs finished and none failed; last, the
+// operator's and the repo's policies (`deny_merge`, policies.mjs), which only add refusals.
+// `busy(task)`: a run going or queued on the issue; `policies`: createPolicies(), none without;
+// `review`, `fixed`: the review deciding the merge and whether a fix run came before it, for
+// the policies' input.
 export async function mergeRefusal(
-  { github, config, busy = () => false, sleep },
-  { repo, number, sha, settings, grant },
+  { github, config, busy = () => false, sleep, policies = null, now = Date.now },
+  { repo, number, sha, settings, grant, review = null, fixed = false },
 ) {
   const hook = previewProblem(grant, settings);
   if (hook) return { why: hook };
@@ -455,7 +460,115 @@ export async function mergeRefusal(
     const names = failed.slice(0, 5).map((r) => `${r.name ?? "a run"} (${r.conclusion})`);
     return { why: `GitHub Actions runs on ${short(sha)} failed: ${names.join(", ")}` };
   }
+  if (policies) {
+    const input = async () => {
+      const found = await getJson(github, repo, `/repos/${repo}/issues/${issue}`, [404, 410]);
+      return mergeInput({
+        info,
+        pr,
+        files,
+        issue: found ?? { number: issue },
+        review,
+        fixed,
+        runs,
+        now,
+      });
+    };
+    const denied = await policies.deny("deny_merge", repo, info.default_branch || "main", input);
+    if (denied.length) return { why: policyWhy("deny_merge", denied) };
+  }
   return { why: null, pr, method };
+}
+
+// The input of `deny_merge` (docs/repo-config.md#the-merge-input), from what mergeRefusal()
+// read: names as GitHub's API spells them where they are its own, the review as parsed.
+export function mergeInput({ info, pr, files, issue, review, fixed, runs, now = Date.now }) {
+  return {
+    ...pullInput({ decision: "merge", info, pr, files, issue, review, now }),
+    fixed: !!fixed,
+    checks: runs.map((r) => ({
+      name: r.name ?? null,
+      status: r.status ?? null,
+      conclusion: r.conclusion ?? null,
+    })),
+  };
+}
+
+// What every decision's input has about a pull request (docs/repo-config.md#the-merge-input):
+// the repo (`info`, GET /repos/{repo}), the pull request and its `files`, its linked `issue`,
+// and the `review` when there is one.
+export function pullInput({ decision, info, pr, files, issue, review = null, now = Date.now }) {
+  const names = (labels) => (labels ?? []).map((l) => (typeof l === "string" ? l : l?.name));
+  return {
+    decision,
+    time: new Date(now()).toISOString(),
+    repo: {
+      name: info.full_name ?? null,
+      private: info.private === true,
+      default_branch: info.default_branch ?? null,
+    },
+    pr: {
+      number: pr.number,
+      author: pr.user?.login ?? null,
+      title: pr.title ?? "",
+      labels: names(pr.labels),
+      base: pr.base?.ref ?? null,
+      head: pr.head?.ref ?? null,
+      head_sha: pr.head?.sha ?? null,
+      draft: !!pr.draft,
+      additions: pr.additions ?? 0,
+      deletions: pr.deletions ?? 0,
+      changed_files: pr.changed_files ?? files.length,
+      files: files.map((f) => ({
+        path: f.filename,
+        previous_path: f.previous_filename ?? null,
+        status: f.status ?? null,
+        additions: f.additions ?? 0,
+        deletions: f.deletions ?? 0,
+      })),
+    },
+    issue: issue
+      ? { number: issue.number ?? null, title: issue.title ?? "", labels: names(issue.labels) }
+      : null,
+    review: review
+      ? {
+          verdict: review.verdict,
+          rating: review.rating,
+          allowed: review.allowed ?? "low",
+          findings: review.findings.map(({ severity, path, line, text }) => ({
+            severity,
+            path,
+            line,
+            text,
+          })),
+        }
+      : null,
+  };
+}
+
+// The input of `deny_review` and `deny_fix` (docs/repo-config.md#the-review-and-fix-input),
+// read from GitHub now: only called when a policy applies (policies.mjs deny()), so a repo
+// without any pays no extra call. `issue`: the number of the issue the pull request closes,
+// or null.
+async function readPullInput(github, { decision, repo, pr, issue, review = null, now }) {
+  const info = await getJson(github, repo, `/repos/${repo}`);
+  const files = await paginate(
+    (path) => github(repo, "GET", path),
+    `/repos/${repo}/pulls/${pr.number}/files`,
+  );
+  const found = issue
+    ? {
+        number: issue,
+        ...(await getJson(github, repo, `/repos/${repo}/issues/${issue}`, [404, 410])),
+      }
+    : null;
+  return pullInput({ decision, info, pr, files, issue: found, review, now });
+}
+
+// A policy's refusal, its messages quoted as code: a message may repeat what a pull request's
+// title or a finding says, which mustn't mention anyone or format the comment.
+export function policyWhy(rule, messages) {
+  return `the policies refuse it (\`${rule}\`): ${messages.map(quote).join(", ")}`;
 }
 
 const short = (sha) => (sha ? sha.slice(0, 7) : "?");
@@ -470,6 +583,46 @@ export function mergedText(sha, method, fixed, review = null) {
 
 ⚠️ No human reviewed this pull request before the merge. Read what it changed, and revert it if it is wrong.`;
 }
+
+// What a fix run the policies refused (`deny_fix`) says on the pull request.
+export function noFixText(why) {
+  return `**No fix run** (\`review.fix\`): ${why}. The review's findings wait for a maintainer.`;
+}
+
+// The reply to `/mode policy` (reviews' dryRun()): which files apply, each rule's result, and
+// the input in a collapsed block. Messages are quoted as code, as policyWhy()'s. `files`: none,
+// no policy applies here.
+export function dryRunText({ number, sha = null, files, errors = [], results = [], input = null }) {
+  const head = `**Policy dry run** on #${number}${sha ? ` at ${short(sha)}` : ""}: nothing was reviewed, fixed or merged.`;
+  if (!files.length) {
+    return `${head}\n\nNo policy applies here: neither \`.deckhand/policy/\` on the default branch nor the operator's policies have a file.`;
+  }
+  const source = (f) =>
+    f.source === "operator" ? "operator" : f.replaces ? "repo, replaces the operator's" : "repo";
+  const parts = [head, `Policies: ${files.map((f) => `\`${f.name}\` (${source(f)})`).join(", ")}.`];
+  if (errors.length) {
+    parts.push(`The config check has errors:\n\n${errors.map((e) => `- ${quote(e)}`).join("\n")}`);
+  }
+  const result = ({ rule, defined, messages }) => {
+    if (messages.length) return `- \`${rule}\`: **denies**: ${messages.map(quote).join(", ")}`;
+    return `- \`${rule}\`: ${defined ? "allows" : "allows (no file defines it)"}`;
+  };
+  parts.push(results.map(result).join("\n"));
+  let json = JSON.stringify(input, null, 2);
+  if (json.length > DRY_RUN_INPUT) json = `${json.slice(0, DRY_RUN_INPUT)}\n… (cut)`;
+  const longest = Math.max(0, ...(json.match(/`+/g) ?? []).map((run) => run.length));
+  const fence = "`".repeat(Math.max(3, longest + 1));
+  parts.push(
+    `<details><summary>The input (\`deny_merge\`'s: review and fix get the same without \`fixed\` and \`checks\`; no review here)</summary>\n\n${fence}json\n${json}\n${fence}\n\n</details>`,
+  );
+  return parts.join("\n\n");
+}
+
+// How much of the input a dry run's reply shows: GitHub takes 65536 characters a comment.
+const DRY_RUN_INPUT = 50_000;
+
+// A message as code: it may repeat a pull request's title, which mustn't mention anyone.
+const quote = (m) => `\`${m.replace(/`/g, "'")}\``;
 
 export function notMergedText(why) {
   return `**Not merged automatically** (\`review.merge\`): ${why}. It waits for a maintainer's review and merge.`;
@@ -505,7 +658,9 @@ export function reviewCandidate(config, event, p, skip = () => null) {
 // `reply(repo, number, text)`: a comment with the listener's token; `grantOf(repo)`: the
 // operator's grant for it (grants.mjs grantFor()), null when its grants have errors;
 // `merged(repo, pr)`: a pull request it merged, for the dashboard; `sleep(ms)`: the wait
-// between asks of `mergeable_state`.
+// between asks of `mergeable_state`; `policies`: the policies' engine (policies.mjs), none
+// without; `decided(repo, pr, entry)`: a decision a policy was asked for, for the task's page
+// (decisions.mjs).
 export function createReviews({
   path,
   config,
@@ -516,6 +671,8 @@ export function createReviews({
   reply = async () => {},
   grantOf = () => null,
   merged = () => {},
+  policies = null,
+  decided = () => {},
   log = () => {},
   now = Date.now,
   sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
@@ -542,9 +699,42 @@ export function createReviews({
     if (head && reviewed.get(key)?.head === head) {
       return skip(`review: #${pr.number} at ${head.slice(0, 7)} was reviewed already`);
     }
+    const denied = await denyReview(repo, base, pr);
+    if (denied.length) return skip(`review: #${pr.number}, ${policyWhy("deny_review", denied)}`);
     remember(key, head);
     log(`${key}: pull request #${pr.number} is ready, starting a review`);
     return queueReview({ repo, base, pr, settings, author });
+  }
+
+  // The policies, asked about pull request `pr`: what they decide, when one applies, is kept
+  // for its task's page (`decided`). Null without policies.
+  function asking(pr) {
+    if (!policies) return null;
+    return {
+      deny: async (rule, repo, ref, input) => {
+        const { applied, messages } = await policies.decide(rule, repo, ref, input);
+        if (applied) {
+          const decision = rule.replace(/^deny_/, "");
+          const entry = { decision, rule, denied: messages.length > 0, messages, pr: pr.number };
+          try {
+            decided(repo, pr, entry);
+          } catch (error) {
+            log(`${repo}#${pr.number}: keeping its ${rule} decision: ${error.message ?? error}`);
+          }
+        }
+        return messages;
+      },
+    };
+  }
+
+  // Why the policies refuse an automatic review of `pr` (`deny_review`): their messages, or []
+  // (always without policies). A review a maintainer asked for (`/mode review`) never asks.
+  async function denyReview(repo, base, pr) {
+    if (!policies) return [];
+    const issue = linkedIssue(pr, repo, config.bot);
+    return asking(pr).deny("deny_review", repo, base, () =>
+      readPullInput(github, { decision: "review", repo, pr, issue, now }),
+    );
   }
 
   // Queues a review run of `pr`, on the task of the issue it closes or its own.
@@ -584,17 +774,23 @@ export function createReviews({
   // A review was posted on pull request `number` (`posted`: postReview()'s result, with the
   // pull request as GitHub had it): one work run that addresses its findings, if the repo's
   // `review.fix` asks for it, the review requests changes, the pull request is Deckhand's own
-  // and has never had one. Returns the item queued, or null (the reason logged).
-  async function fix({ repo, number, base, settings }, posted) {
+  // and has never had one, and the policies don't refuse it (`deny_fix`, said on the pull
+  // request). Returns the item queued, or null (the reason logged).
+  async function fix(run, posted) {
+    return (await startFix(run, posted)).item;
+  }
+
+  // fix()'s work → { item, denied }: `denied`, why the policies refused the fix run.
+  async function startFix({ repo, number, base, settings }, posted) {
     const key = taskKey(repo, prId(number));
     const skip = (why) => {
       log(`${key}: no fix run, ${why}`);
-      return null;
+      return { item: null };
     };
     const { review, pr } = posted ?? {};
-    if (!settings?.review?.fix) return null;
+    if (!settings?.review?.fix) return { item: null };
     if (!review) return skip("the review couldn't be read");
-    if (reviewEvent(review) !== "REQUEST_CHANGES") return null;
+    if (reviewEvent(review) !== "REQUEST_CHANGES") return { item: null };
     if (reviewed.get(key)?.fixedAt) return skip("it had its fix run already");
     // Deckhand's own pull request, on a branch of the repo and linked to the issue it worked
     // on: the fix pushes where its runs already push.
@@ -607,7 +803,18 @@ export function createReviews({
     if (await waitsForInput(github, config, repo, pr, issue)) {
       return skip("it waits for the maintainer's input");
     }
-    // Checked again: a comment may have come during the call above.
+    if (policies) {
+      const denied = await asking(pr).deny("deny_fix", repo, base, () =>
+        readPullInput(github, { decision: "fix", repo, pr, issue, review, now }),
+      );
+      if (denied.length) {
+        const why = policyWhy("deny_fix", denied);
+        skip(why);
+        await reply(repo, number, noFixText(why));
+        return { item: null, denied: why };
+      }
+    }
+    // Checked again: a comment may have come during the calls above.
     if (busy(task)) return skip(`#${issue} has a run going or queued`);
     // Before queuing: whatever happens next, never a second one.
     remember(key, reviewed.get(key)?.head ?? null, { fixedAt: now() });
@@ -630,16 +837,16 @@ export function createReviews({
       reason: "review-fix",
     };
     await accept(item);
-    return item;
+    return { item };
   }
 
   // A review run is over (runs.mjs cleanUp()): its fix run (fix(), the item queued), else, for
   // an automatic review (`auto`) with `review.merge` on, the merge ({ sha, method }) or the
   // comment saying why not (null).
   async function settle(run, posted) {
-    const item = await fix(run, posted);
+    const { item, denied } = await startFix(run, posted);
     if (item || !run.auto) return item;
-    return autoMerge(run, posted);
+    return autoMerge(run, posted, denied);
   }
 
   // Whether `repo` merges by itself: its settings, re-read from the default branch now (a
@@ -682,8 +889,9 @@ export function createReviews({
   // The merge decision after an automatic review: once per pull request (mergeAt), whatever it
   // decides. Nothing blocking (mergeBlockers()), a review that doesn't request changes (neither
   // posted as REQUEST_CHANGES nor with that verdict) and every gate passed: merged at the
-  // reviewed head commit, so a push since makes GitHub refuse it.
-  async function autoMerge({ repo, number, base }, posted) {
+  // reviewed head commit, so a push since makes GitHub refuse it. `fixDenied`: why the policies
+  // refused the fix run of this review (startFix()), said in the refusal.
+  async function autoMerge({ repo, number, base }, posted, fixDenied = null) {
     const key = taskKey(repo, prId(number));
     const mode = await mergeMode(repo, base);
     if (!mode) return null;
@@ -707,7 +915,7 @@ export function createReviews({
       const what = SEVERITIES.filter((s) => blockers.some((f) => f.severity === s)).join(", ");
       const why = deciding
         ? `the review${after} still has ${what} findings`
-        : `the review has ${what} findings and no fix run started`;
+        : `the review has ${what} findings and no fix run started${fixDenied ? ` (${fixDenied})` : ""}`;
       return refuse(key, repo, number, why);
     }
     // GitHub shows what the review decided: a merge never contradicts it (issue #288).
@@ -724,8 +932,8 @@ export function createReviews({
     let res;
     try {
       gate = await mergeRefusal(
-        { github, config, busy, sleep },
-        { repo, number, sha, settings, grant },
+        { github, config, busy, sleep, policies: asking(pr ?? { number }), now },
+        { repo, number, sha, settings, grant, review, fixed },
       );
       if (gate.why) return refuse(key, repo, number, gate.why);
       res = await github(
@@ -779,6 +987,9 @@ export function createReviews({
     if (!head || head === entry.head) {
       return stop("the fix run pushed nothing, so the review's findings still stand");
     }
+    // The review after a fix run is an automatic one too: refused, the merge is the maintainer's.
+    const denied = await denyReview(repo, base, pr);
+    if (denied.length) return stop(policyWhy("deny_review", denied));
     remember(key, head, { rereviewAt: now() });
     log(`${key}: the fix run pushed ${short(head)}, starting the review before the merge`);
     return queueReview({ repo, base, pr, settings: mode.settings });
@@ -792,8 +1003,75 @@ export function createReviews({
     if (respellMap(reviewed, spelled, undefined, merge)) reviewed.save();
   }
 
+  // `/mode policy` on pull request `number` (task-modes.mjs): every rule evaluated on its input
+  // now, as a reply (dryRunText()). Nothing is reviewed, fixed, merged or kept: a maintainer
+  // debugging a rule doesn't wait for a ready event.
+  async function dryRun({ repo, base, number }) {
+    if (!policies) return dryRunText({ number, files: [] });
+    const { files, errors, policies: texts } = await policies.describe(repo, base);
+    if (!files.length) return dryRunText({ number, files });
+    const pr = await getJson(github, repo, `/repos/${repo}/pulls/${number}`);
+    const info = await getJson(github, repo, `/repos/${repo}`);
+    const prFiles = await paginate(
+      (path) => github(repo, "GET", path),
+      `/repos/${repo}/pulls/${number}/files`,
+    );
+    const issue = linkedIssue(pr, repo, config.bot);
+    const found = issue
+      ? {
+          number: issue,
+          ...(await getJson(github, repo, `/repos/${repo}/issues/${issue}`, [404, 410])),
+        }
+      : null;
+    const sha = pr.head?.sha;
+    const res = sha
+      ? await github(
+          repo,
+          "GET",
+          `/repos/${repo}/actions/runs?head_sha=${encodeURIComponent(sha)}&per_page=100`,
+          null,
+          [403, 404],
+        )
+      : null;
+    const runs = res?.ok ? ((await res.json()).workflow_runs ?? []) : [];
+    const fixed = !!reviewed.get(taskKey(repo, prId(number)))?.fixedAt;
+    // The merge's input is the fullest: review and fix get the same without `fixed` and
+    // `checks`, and with their own `decision`.
+    const input = mergeInput({
+      info,
+      pr,
+      files: prFiles,
+      issue: found,
+      review: null,
+      fixed,
+      runs,
+      now,
+    });
+    const results = [];
+    for (const rule of RULES) {
+      const defined = files.some((f) => f.rules.includes(rule));
+      const decision = rule.replace(/^deny_/, "");
+      const own = { ...input, decision };
+      if (decision !== "merge") {
+        delete own.fixed;
+        delete own.checks;
+      }
+      const messages = await policies.denied(rule, repo, texts, () => own);
+      results.push({ rule, defined, messages });
+    }
+    return dryRunText({
+      number,
+      sha,
+      files,
+      errors,
+      results,
+      input: { version: INPUT_VERSION, ...input },
+    });
+  }
+
   return {
     consider,
+    dryRun,
     fix,
     settle,
     fixed,

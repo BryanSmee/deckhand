@@ -127,6 +127,14 @@ can't run ahead of the operator's release as GitHub's `main` can.
 
 ### Replies, reactions and labels
 
+A run's reply counts once GitHub took it (`comments.mjs` `reply()` and `answer()`, a
+discussion's included). A 5xx or a rate limit is tried again three times, over about two
+minutes; a reply refused with a 422 (too long, most likely) goes again cut to its first 20 000
+characters, with a link to the run on the dashboard for the rest. A reply still refused ends the
+run as `error`: its comments get 👎, and the dashboard's summary says "The reply couldn't be
+posted: <status>". A listener restarting before then posts it again (`live.replied` is still
+false).
+
 A run that stops to ask (its final message starts with `<!-- needs-input -->`, see
 `prompts/sandbox.md`) shows as `needs-input` on the dashboard and labels the issue or pull
 request `NEEDS_INPUT_LABEL` (default `needs-input`) until the next run starts.
@@ -351,7 +359,7 @@ With `review.merge` and the operator's `allow_auto_merge` (`grants.mjs`
 re-reads the repo's settings and grant, records `mergeAt` (one decision per pull request),
 checks `mergeBlockers()` and the gates (`mergeRefusal()`: the pull request, its labels, its
 head, the repository's visibility and merge methods, its changed files against
-`trustedFile()`, `mergeable_state`, its Actions runs), then merges with the listener's token at
+`trustedFile()`, `mergeable_state`, its Actions runs, last the policies' `deny_merge`), then merges with the listener's token at
 the reviewed head (`PUT /pulls/{n}/merge` with `sha`) or comments why not. A merge is recorded
 on the task's pull request (`pulls.mjs`, `autoMerged`) for the dashboard. A fix run's end
 (an item with `reason: "review-fix"`, in `cleanUp()`) calls `reviews.fixed()`: one more review
@@ -654,6 +662,7 @@ tests fake it.
 | `onboarding.mjs`, `previews.mjs`                                  | Onboarding issues and their run; preview hooks (`previewHook()`) and their queue.                                                                                                                                                                    |
 | `conflicts.mjs`                                                   | The conflict watcher: open task pull requests in conflict get a rebase run (`conflicts.json`).                                                                                                                                                       |
 | `reviews.mjs`                                                     | Pull request reviews: the ready pull requests that get one (`reviews.json`), the GitHub review posted from the run's final message, its fix run and auto-merge.                                                                                      |
+| `policies.mjs`                                                    | Rules as code: the operator's (`GRANTS_DIR/policy/`) and the repos' (`.deckhand/policy/`) Rego policies, merged by file name and evaluated by `opa` (no environment, no network, a timeout), fail closed.                                            |
 | `waits.mjs`                                                       | Comments waiting for other issues to be done (`/after`, `waits.json`).                                                                                                                                                                               |
 | `work.mjs`                                                        | The graph's work area: the backlog, starting or queueing issues, answers, reruns, inbox entries, analyses.                                                                                                                                           |
 | `plans.mjs`                                                       | A parent issue dropped on the graph: its sub-issues' tree, all levels down, and what each waits for from their "blocked by" links.                                                                                                                   |

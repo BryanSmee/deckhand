@@ -174,6 +174,8 @@ export function createHttp(ctx, { dashboardDir }) {
         title: ctx.titles.get(t.key),
         closed: ctx.titles.closed(t.key),
         pr: ctx.pulls.get(t.key),
+        // Its pull request's last policy decisions (decisions.mjs), newest first.
+        ...(ctx.decisions?.get(t.key).length && { decisions: ctx.decisions.get(t.key) }),
         // Closed: the listener would refuse it.
         rerunnable: t.rerunnable && !ctx.titles.closed(t.key),
         // Off: Start and Queue don't open its open questions first (work.mjs act()).
@@ -381,7 +383,10 @@ export function createHttp(ctx, { dashboardDir }) {
     const { app } = ctx;
     log(`Delivery: ${event} ${payload.action ?? ""} from ${payload.sender?.login ?? "?"}`);
     app.remember(payload.repository?.full_name, payload.installation?.id);
-    refreshFor(event, payload, ctx.repoList.refresh);
+    // A default branch that moved: the repository list and the policies read it again.
+    if (refreshFor(event, payload, ctx.repoList.refresh) && payload.repository?.full_name) {
+      ctx.policies?.forget(payload.repository.full_name);
+    }
     // Only the repository list's: nothing runs on a push.
     if (event === "push") return;
     if (event === "installation" || event === "installation_repositories") {

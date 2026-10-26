@@ -92,7 +92,7 @@ export function checkAction(body) {
 }
 
 // `github(repo, method, path, body, expected)`: the App's calls. `repoSettings(repo, base)`:
-// the default branch's config. `reply(repo, number, text)`: the App's comment (comments.mjs).
+// the default branch's config. `reply(repo, number, text)`: the App's comment, or it throws (comments.mjs).
 // `waits` (waits.mjs), `accept(item)` (tasks.mjs). `boardKeys()`: the keys of the tasks on the
 // dashboard; `liveKeys()`: those with something live, which the backlog leaves out;
 // `busy(key)`: a run going or queued, which can't be moved.
@@ -164,9 +164,12 @@ export function createWorkApi({
     return total > completed ? { subIssues: total - completed } : {};
   }
 
+  // Not `policy`: a dry run of a pull request's policies, never an issue's run.
   function offeredModes(repo, settings) {
     const granted = !researchRefusal(config, repo);
-    return modeNames(settings).filter((m) => m !== "onboarding" && (m !== "research" || granted));
+    return modeNames(settings).filter(
+      (m) => !["onboarding", "policy"].includes(m) && (m !== "research" || granted),
+    );
   }
 
   // A repo's read, one at a time; `at` is when it started, `seq` its number, `version` the
@@ -289,7 +292,6 @@ export function createWorkApi({
   // go, as on the comment it stands for.
   async function comment(repo, number, text) {
     const res = await reply(repo, number, text);
-    if (!res.ok) throw new Error(`GitHub POST a comment on #${number}: ${res.status}`);
     const c = await res.json();
     return { id: c.id, html_url: c.html_url, node_id: c.node_id };
   }

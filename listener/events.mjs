@@ -23,6 +23,12 @@ export function unmarked(text) {
 // "org/repo#discussion-8". `id`: its items' (prId(), String(n), discussion-<n>).
 export const taskKey = (repo, id) => `${repo}#${id}`;
 
+// Task `key` of `repo` on the dashboard at `url` (PUBLIC_URL), one of its runs open when `run`
+// is given: the address dashboard/src/route.ts formatRoute() makes.
+export function dashboardLink(url, repo, key, run = null) {
+  return `${url}/#/${repo}?task=${encodeURIComponent(key)}${run ? `&run=${encodeURIComponent(run)}` : ""}`;
+}
+
 // GitHub's repo names ignore case: "Org/Repo" and "org/repo" are one repo.
 export const sameRepo = (a, b) =>
   typeof a === "string" && typeof b === "string" && a.toLowerCase() === b.toLowerCase();

@@ -3066,6 +3066,12 @@ mounts:
         join(dir, "logs", "org-repo-pr-4-500.log"),
         `${JSON.stringify({ ...meta, key: "org/repo#pr-4", startedAt: 500 })}\n${JSON.stringify(asked)}\n`,
       );
+      // What the policies decided about #pr-3 (decisions.mjs).
+      const refused = { decision: "merge", rule: "deny_merge", denied: true, pr: 3, at: 900 };
+      writeFileSync(
+        join(dir, "decisions.json"),
+        JSON.stringify({ "org/repo#pr-3": [{ ...refused, messages: ["too big"] }] }),
+      );
       return { GITHUB_URL: github.url, DASHBOARD_DIR: dist };
     });
     const base = `http://127.0.0.1:${port}`;
@@ -3161,6 +3167,16 @@ mounts:
     }
     assert.equal(fetched.title, "An older pull request");
     assert.equal(fetched.runs[0].summary, "The typo.");
+    assert.deepEqual(fetched.decisions, [
+      {
+        decision: "merge",
+        rule: "deny_merge",
+        denied: true,
+        pr: 3,
+        at: 900,
+        messages: ["too big"],
+      },
+    ]);
     // Waiting for input: the questions of the run that stopped to ask, and of an issue's body.
     const tasks = async () => (await (await get("/api/state", session)).json()).tasks;
     const stopped = (await tasks()).find((x) => x.key === "org/repo#pr-4");
@@ -3307,7 +3323,7 @@ mounts:
       "rerunnable",
       "runs",
     ],
-    ["deadline", "waitingFor", "questions", "waitForAnswers"],
+    ["deadline", "waitingFor", "questions", "waitForAnswers", "decisions"],
   ];
   const QUESTIONS_KEYS = [["source", "items", "raw"], ["runId"]];
   const RUN_KEYS = [

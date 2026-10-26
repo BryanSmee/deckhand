@@ -361,7 +361,8 @@ checks to run.
 A run is in a mode: **work** (implement, the default), **brainstorm** (discuss, no code),
 **onboarding** (propose this file, see [Onboarding](#onboarding)), **research** (the open
 web, without the code, see [Research](#research)), **review** (a pull request's, when the
-`review` block turns it on, see [Reviews](#reviews)), or one of the repository's own, declared under `modes:`. A `/mode <name>` line in a comment
+`review` block turns it on, see [Reviews](#reviews)), **policy** (a dry run of the
+[policies](#a-dry-run-and-the-dashboard), no run), or one of the repository's own, declared under `modes:`. A `/mode <name>` line in a comment
 picks one, on its own line or after the trigger on the first one (`Deckhand /mode audit`;
 `/mode` is never read as `/model`; names are not case-sensitive):
 
@@ -399,8 +400,9 @@ error, listed in the reply:
 - **Names**: letters, digits, `-` and `_`. `work` and `brainstorm` can't be redefined (set
   their agent and model with `agent`/`model`/`effort` and `brainstorm_agent`/
   `brainstorm_model`/`brainstorm_effort`);
-  `onboarding`, `research`, `stop`, `idea`, `bug`, `discussion`, `analyze` and `review` are
-  reserved (`review` is set with the `review` block, see [Reviews](#reviews)).
+  `onboarding`, `research`, `stop`, `idea`, `bug`, `discussion`, `analyze`, `review` and
+  `policy` are reserved (`review` is set with the `review` block, see [Reviews](#reviews);
+  `policy` is a [dry run](#a-dry-run-and-the-dashboard)).
 - **Prompt**: the generic sandbox instructions (`prompts/sandbox.md`, and the repo's
   `instructions`) as for every run, then a short frame (the issue or pull request to read,
   what the mode may do) and the mode's file.
@@ -464,7 +466,7 @@ review` gets the "unknown mode" reply. `review: true` (or a block without `on`, 
   ready, if it is on a branch of the repository (never a fork's) and was opened by Deckhand
   or by an allowed user (`users`); other bots' are skipped. Each head commit is reviewed by
   itself once, across redeliveries and restarts: to review it again after new pushes,
-  comment `/mode review`.
+  comment `/mode review`. A [policy](#policies) can skip it (`deny_review`).
 - **`/mode review`** on a pull request, from an allowed user, reviews it now; what the comment
   adds is what the review should look at. On an issue it is refused, with a reply.
 - **The verdict on GitHub**: changes requested when there is a critical, high or medium
@@ -485,7 +487,7 @@ review` gets the "unknown mode" reply. `review: true` (or a block without `on`, 
   written before the run is queued: the fix's push doesn't start a review (only turning ready
   does), and a later review (`/mode review`) starts no second fix. Other pull requests'
   reviews, and reviews that only comment, start nothing. To act again, comment with the
-  trigger.
+  trigger. A [policy](#policies) can refuse it (`deny_fix`): a comment says why.
 - **Security risk of `fix`**: the review's findings, a model's output, become the message of a
   run that can push. A comment written to steer the reviewer (a prompt injection) could turn
   into a finding the fix run carries out. Deckhand narrows it: the review reads only the
@@ -575,7 +577,9 @@ with only low findings still does. `low`, the default: any medium finding blocks
   request with more than it lists is refused;
 - a granted preview hook only with the acknowledgement above;
 - `mergeable_state` is `clean`, and its GitHub Actions runs on the head commit are finished
-  with none failed (read with the App's `actions: read`; no new permission).
+  with none failed (read with the App's `actions: read`; no new permission);
+- last, the operator's and the repository's [policies](#policies) (`deny_merge`): any message
+  refuses the merge, and the comment quotes it.
 
 The merge is `PUT /pulls/{n}/merge` with the reviewed commit as `sha`, so a push after the
 review makes GitHub refuse it. A comment then says Deckhand merged it, and why; the dashboard
@@ -674,6 +678,129 @@ It is off without the key, and each conflict found is a run, so a bill.
   `check_minutes` gets that one (with a warning in the run logs), and `0` turns conflict
   checks off for every repository. `check_minutes` must be a whole number above 0; any
   other key under `conflicts` is an error.
+
+## Policies
+
+Rules of your own, written as code in [Rego](https://www.openpolicyagent.org/docs/policy-language)
+(Open Policy Agent), for what the built-in gates don't cover: "a human merges any pull
+request over 400 lines", "nothing under `migrations/` is merged by itself", "a medium finding
+in payments code blocks". **Policies can only refuse**: they run after every built-in gate,
+and add refusals to them; they never let through what a gate or the operator's grants stop.
+
+```rego
+# .deckhand/policy/merge.rego (default branch)
+package deckhand
+
+deny_merge contains msg if {
+  input.pr.additions + input.pr.deletions > 400
+  msg := "more than 400 changed lines: a human merges this one"
+}
+
+deny_merge contains msg if {
+  some f in input.pr.files
+  startswith(f.path, "migrations/")
+  msg := sprintf("it changes %s: migrations wait for a human", [f.path])
+}
+
+deny_merge contains msg if {
+  some f in input.review.findings
+  f.severity == "medium"
+  startswith(f.path, "src/payments/")
+  msg := sprintf("medium finding in payments code: %s:%d", [f.path, f.line])
+}
+
+deny_merge contains "labelled do-not-merge" if "do-not-merge" in input.pr.labels
+```
+
+**The files**: every `*.rego` file of `.deckhand/policy/` on the default branch (not its
+subfolders), in package `deckhand`; a file in another package is a library the others can
+import. The operator can ship defaults in their grants folder's `policy/` folder
+([security model](security.md#policies)): a repository file **with the same name** as an
+operator file replaces it (a file with only `package deckhand` drops it), any other name adds
+to them. With no policy anywhere, nothing changes: `opa` isn't run, and the repository's
+folder is listed once, then again only after a push to its default branch (or 10 minutes).
+
+**The rules**: one set of strings per decision, each string a reason shown to the
+maintainer. Three decisions:
+
+| Rule          | When                                                                                                                                                                                     | A message does                                                                                                                                                                                                                  |
+| ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `deny_merge`  | An [auto-merge](#auto-merge), after every other gate passed, right before the merge. Only with `review.merge` and its grant.                                                             | Refuses the merge: the "Not merged automatically" comment quotes the messages (5 at most, 200 characters each).                                                                                                                 |
+| `deny_review` | A review that starts by itself ([`review.on: ready`](#reviews)), after its own checks, and the review after a fix run in auto-merge mode. Never a `/mode review` a maintainer asked for. | Skips the review: the listener's log says why, nothing is posted. After a fix run, the merge waits for a maintainer, the "Not merged automatically" comment quoting the messages.                                               |
+| `deny_fix`    | A [`review.fix`](#reviews) run, after its own checks, right before it is queued.                                                                                                         | Starts no fix run: a "No fix run" comment on the pull request quotes the messages. With `review.merge`, nothing is merged: the refusal quotes them too. The pull request's one fix run isn't used: a later review may start it. |
+
+Another `deny_*` rule is reported by the config check, as probably misspelled.
+
+**Fail closed**: a policy that doesn't compile, takes more than 2 seconds, or makes the rule
+anything but a set of strings refuses the decision, with a single `policy error: …` reason
+saying why. So does a policy folder that GitHub can't list. The onboarding pull request's
+config check compiles its branch's policies and reports their errors.
+
+**What a policy can call**: Rego's builtins, without those that read the environment, the
+network or the listener's files (`opa.runtime`, `http.send`, `net.*`, `json.match_schema`,
+`json.verify_schema`) and `trace`: a policy decides from its input only. `time.now_ns()` works, so "not on Fridays" does.
+
+### The merge input
+
+`input` of `deny_merge`, read from GitHub at the merge (the pull request, its files, its
+issue, its Actions runs) and the review that decides it (`deny_review` and `deny_fix`
+[read most of it](#the-review-and-fix-input)):
+
+| Field               | What                                                                                                                                                   |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `version`           | `1`: the input's format, raised when a field changes meaning or goes.                                                                                  |
+| `decision`          | `"merge"`.                                                                                                                                             |
+| `time`              | Now, RFC 3339 in UTC (`"2026-10-26T10:00:00.000Z"`): `time.parse_rfc3339_ns(input.time)`.                                                              |
+| `repo`              | `name` (`"owner/repo"`), `private`, `default_branch`.                                                                                                  |
+| `pr`                | `number`, `author` (a login), `title`, `labels` (names), `base` and `head` (branches), `head_sha`, `draft`, `additions`, `deletions`, `changed_files`. |
+| `pr.files[]`        | `path`, `previous_path` (a rename's, else `null`), `status` (`added`, `modified`, `removed`, `renamed`…), `additions`, `deletions`.                    |
+| `issue`             | The issue the pull request closes: `number`, `title`, `labels` (names).                                                                                |
+| `review`            | The review that decides the merge: `verdict` (`approve`, `comment`), `rating` (out of 10), `allowed` (`max_allowed_severity`).                         |
+| `review.findings[]` | `severity` (`critical`, `high`, `medium`, `low`), `path` and `line` (`null` when the finding names none), `text`.                                      |
+| `fixed`             | Whether a fix run came before this review.                                                                                                             |
+| `checks[]`          | The head commit's GitHub Actions runs: `name`, `status`, `conclusion`.                                                                                 |
+
+### The review and fix input
+
+`input` of `deny_review` and `deny_fix`: the [merge input](#the-merge-input)'s `version`,
+`time`, `repo`, `pr` (with `pr.files[]`), `issue` and `review`, read from GitHub when the
+decision is made (only when a policy applies), without `fixed` and `checks`:
+
+| Field      | `deny_review`                                                                 | `deny_fix`                                                                              |
+| ---------- | ----------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| `decision` | `"review"`.                                                                   | `"fix"`.                                                                                |
+| `issue`    | The issue the pull request closes, or `null` when its description names none. | The issue Deckhand worked on.                                                           |
+| `review`   | `null`: the review hasn't run.                                                | The review that requests changes: `verdict`, `rating`, `allowed`, and its `findings[]`. |
+
+```rego
+deny_review contains "work in progress" if "wip" in input.pr.labels
+
+deny_review contains "docs only" if every f in input.pr.files { startswith(f.path, "docs/") }
+
+deny_fix contains msg if {
+  some f in input.review.findings
+  startswith(f.path, "migrations/")
+  msg := sprintf("a finding in %s: migrations are fixed by a human", [f.path])
+}
+```
+
+### A dry run and the dashboard
+
+**`/mode policy`**, commented on a pull request by an allowed user, evaluates `deny_merge`,
+`deny_review` and `deny_fix` on the pull request as it is now, and replies with each rule's
+result (denies, with its messages, or allows) and the input, in a collapsed block. Nothing is
+reviewed, fixed or merged, and nothing is kept: it debugs a rule without waiting for a pull
+request to turn ready. The input is the merge's, read now, with `review: null` (no review
+ran); `deny_review` and `deny_fix` get it with their own `decision`, without `fixed` and
+`checks`. It works without a `review` block. On an issue, a reply says to comment it on the
+pull request.
+
+**The dashboard**: the repository's config panel lists the policy files that apply (the
+operator's and the repository's, read from the default branch when the panel opens), the
+`deny_*` rules each defines, and the config check's errors. A task's page shows its pull
+request's last policy decisions (the rule, whether it denied, its messages, when), the last
+10 of them; a decision is kept only when a policy was asked, so a repository without
+policies shows none.
 
 ## Open questions
 
