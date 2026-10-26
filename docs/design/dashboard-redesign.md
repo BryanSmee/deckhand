@@ -174,9 +174,32 @@ reads ⌘.
 
 ## Implementation plan
 
-Each item is an issue; an item starts when the ones it depends on are merged.
+Each item is an issue, a sub-issue of #299; an item starts when the ones it depends on are
+merged.
 
-<!-- Filled in with the issue numbers. -->
+| Issue | What                                                     | Depends on             |
+| ----- | -------------------------------------------------------- | ---------------------- |
+| #300  | Tokens, themes and reusable components                   | this document          |
+| #301  | Data: the server's setup (engine, proxy, grants, access) |                        |
+| #302  | Data: the last sync with GitHub, kept and sent           |                        |
+| #303  | Data: run log phases and image build steps               |                        |
+| #304  | Data: a run's outcome facts and its last push            |                        |
+| #305  | Data: backlog and lane counts per repository             |                        |
+| #306  | Later: names for the board's lanes                       |                        |
+| #307  | App shell, sidebar, navigation and routes                | #300                   |
+| #308  | Tasks page                                               | #307                   |
+| #309  | Run log                                                  | #308, #303, #304       |
+| #310  | Board page                                               | #307 (#306 later)      |
+| #311  | Overview                                                 | #307, #305             |
+| #312  | Dialogs                                                  | #307 (#304 for Stop)   |
+| #313  | Keyboard shortcuts and the Ctrl K palette                | #308, #309, #310, #312 |
+| #314  | Settings › Repositories and onboarding                   | #307                   |
+| #315  | Settings › a repository's config                         | #314                   |
+| #316  | Settings › Preferences                                   | #314                   |
+| #317  | Settings › Server                                        | #314, #301, #302       |
+| #318  | Delete the reference pages                               | #307–#317              |
+
+The data issues (#301–#305) can go in parallel with #300 and the shell.
 
 ## The reference pages
 
