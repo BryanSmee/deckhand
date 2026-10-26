@@ -129,10 +129,10 @@
   }
   .theme {
     order: 4;
-    margin-left: auto;
   }
   .who {
     order: 4;
+    margin-left: auto;
   }
   .top {
     flex-wrap: wrap;

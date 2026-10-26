@@ -9,7 +9,9 @@ export default defineConfig({
   plugins: [preact()],
   // Relative asset URLs: the page works under any path a reverse proxy gives it.
   base: "./",
-  build: { outDir: "dist", emptyOutDir: true },
+  // Every asset a file of its own: the listener's CSP (default-src 'self') refuses the data:
+  // URLs Vite would inline small ones as (a font's smaller subsets).
+  build: { outDir: "dist", emptyOutDir: true, assetsInlineLimit: 0 },
   server: { proxy: { "/api": listener, "/auth": listener } },
   test: {
     environment: "jsdom",

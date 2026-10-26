@@ -80,6 +80,8 @@
 
 .states {
   display: grid;
+  max-width: 100%;
+  overflow-x: auto;
   grid-template-columns: 76px repeat(4, auto);
   align-items: center;
   justify-content: start;

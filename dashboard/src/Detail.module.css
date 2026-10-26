@@ -14,6 +14,10 @@
 
 .back {
   composes: button ghost small from "./ui/Button.module.css";
+}
+
+/* Weighs more than the button's own display, whichever comes first in the bundle. */
+button.back {
   display: none;
   margin: 0 0 0.5rem;
 }
@@ -200,8 +204,8 @@
 }
 
 @media (max-width: 760px) {
-  .back {
-    display: inline;
+  button.back {
+    display: inline-flex;
     margin: 0 0.75rem 0 0;
   }
   .head {
