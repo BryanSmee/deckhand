@@ -611,5 +611,6 @@
     "node": "v26.1.0",
     "source": "https://github.com/acme/deckhand"
   },
+  "lastSync": { "at": 1791989280000, "by": "octocat", "redelivered": 2, "pulls": 1 },
   "now": 1791990000000
 }

@@ -10,7 +10,10 @@ import styles from "./App.module.css";
 // How long what it did stays shown.
 const SHOWN_MS = 8000;
 
-export function syncMessage({ redelivered, pulls }: SyncResult): string {
+export function syncMessage({
+  redelivered,
+  pulls,
+}: Pick<SyncResult, "redelivered" | "pulls">): string {
   if (!redelivered && !pulls) return "Up to date with GitHub";
   const done = [
     redelivered && `${plural(redelivered, "missed delivery", "missed deliveries")} asked again`,

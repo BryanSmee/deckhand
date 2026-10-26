@@ -43,6 +43,28 @@ test("a refused sync says why, and reads nothing again", async () => {
   expect(refresh).not.toHaveBeenCalled();
 });
 
+test("a sync that failed says GitHub's error", async () => {
+  api.answer = () =>
+    Response.json(
+      {
+        at: 1,
+        by: "octocat",
+        redelivered: 0,
+        pulls: 0,
+        error: "GitHub GET /app/hook/deliveries: 502",
+      },
+      { status: 502 },
+    );
+  show();
+  fireEvent.click(screen.getByRole("button", { name: "Sync" }));
+  await waitFor(() =>
+    expect(screen.getByRole("status").textContent).toBe(
+      "Couldn't sync (GitHub GET /app/hook/deliveries: 502)",
+    ),
+  );
+  expect(refresh).not.toHaveBeenCalled();
+});
+
 test("nothing to catch up, or one of each", () => {
   expect(syncMessage({ redelivered: 0, pulls: 0 })).toBe("Up to date with GitHub");
   expect(syncMessage({ redelivered: 1, pulls: 0 })).toBe("Synced: 1 missed delivery asked again");
