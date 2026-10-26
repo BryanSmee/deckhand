@@ -1,0 +1,82 @@
+/* Surfaces and feedback: a card, a notice in a status tone, a toast, a skeleton. */
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+}
+
+.notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--s-bg);
+  color: var(--s-fg);
+  font-size: 13px;
+  line-height: 18px;
+}
+
+.notice > svg {
+  flex: none;
+  margin-top: 1px;
+}
+
+.notice a {
+  color: inherit;
+  font-weight: 600;
+}
+
+.toast {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 8px 8px 14px;
+  border-radius: var(--radius-card);
+  background: var(--primary);
+  color: var(--on-primary);
+  box-shadow: var(--shadow);
+  font-size: 13px;
+  animation: rise var(--slide) ease-out;
+}
+
+/* Only the message: no action button to leave room for. */
+.toast:not(:has(button)) {
+  padding-right: 14px;
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+
+.skeleton {
+  display: block;
+  background: var(--surface-3);
+  border-radius: var(--radius-sm);
+  animation: fade 1.4s ease-in-out infinite;
+}
+
+@keyframes fade {
+  50% {
+    opacity: 0.5;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .toast {
+    animation-name: appear;
+  }
+
+  .skeleton {
+    animation: none;
+  }
+}
+
+@keyframes appear {
+  from {
+    opacity: 0;
+  }
+}

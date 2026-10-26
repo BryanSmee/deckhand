@@ -3,23 +3,24 @@
 // from, the operator's grant, and the raw .deckhand.yaml. Read from GitHub when it opens and
 // on Refresh; changing it is a commit on the default branch.
 import { useRepoConfig } from "./api";
-import { ago } from "./format";
+import { ago, type Tone } from "./format";
 import { RepoBadge } from "./RepoBadge";
 import type { Grant, Policies, Repo, RepoConfig, Source } from "./types";
-import controls from "./controls.module.css";
+import { toneClass } from "./ui/Status";
 import styles from "./ConfigPanel.module.css";
 
-// A source's tag and its tone: unknown is yellow (a grant to fix), unlike an unknown status.
-const TAGS: Record<Source, [string, string]> = {
-  repo: ["from repo", controls.run],
-  operator: ["from operator", controls.quiet],
-  refused: ["refused", controls.err],
-  unknown: ["unknown", controls.warn],
+// A source's tag and its tone: unknown asks for a look (a grant to fix), unlike an unknown
+// status.
+const TAGS: Record<Source, [string, Tone]> = {
+  repo: ["from repo", "run"],
+  operator: ["from operator", "idle"],
+  refused: ["refused", "err"],
+  unknown: ["unknown", "input"],
 };
 
 function Tag({ source }: { source: Source }) {
   const [label, tone] = TAGS[source];
-  return <span class={`${styles.tag} ${tone}`}>{label}</span>;
+  return <span class={`${styles.tag} ${toneClass(tone)}`}>{label}</span>;
 }
 
 interface Props {

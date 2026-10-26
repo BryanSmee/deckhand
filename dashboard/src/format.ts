@@ -69,8 +69,9 @@ export function inChip(chip: ChipId, t: Task): boolean {
 
 export const isReady = (t: Task) => t.pr?.state === "ready";
 
-// What a state looks like: its colour family.
-export type Tone = "run" | "input" | "ok" | "err" | "stop" | "idle";
+// What a state looks like: one of the six status tones (global.css .s-*), which only ever
+// mean a state. A stopped run is over, not failed: idle, like a queued one.
+export type Tone = "run" | "input" | "ready" | "done" | "err" | "idle";
 
 export function toneOf(state: TaskState | RunStatus): Tone {
   switch (state) {
@@ -84,15 +85,20 @@ export function toneOf(state: TaskState | RunStatus): Tone {
       return "input";
     case "done":
     case "ok":
-      return "ok";
+      return "done";
     case "error":
     case "interrupted":
       return "err";
-    case "cancelled":
-      return "stop";
     default:
       return "idle";
   }
+}
+
+// A task's tone: its state's, but a pull request ready for review is what it waits on once
+// no run is going and nothing failed or asks.
+export function taskTone(t: Pick<Task, "state" | "pr">): Tone {
+  const tone = toneOf(t.state);
+  return t.pr?.state === "ready" && (tone === "done" || tone === "idle") ? "ready" : tone;
 }
 
 export const isLive = (t: Task) => ["building-image", "working", "stopping"].includes(t.state);

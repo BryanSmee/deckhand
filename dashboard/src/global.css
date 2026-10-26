@@ -1,56 +1,157 @@
-/* Theme colours: the system's light or dark scheme. Components use these only. */
-:root {
-  --bg: #f6f5f3;
-  --panel: #ffffff;
-  --raised: #fbfaf9;
-  --ink: #1c1917;
-  --muted: #6f6964;
-  --line: #e5e2df;
-  --code: #f3f1ef;
-  --hover: #f1efec;
-  --accent: #c2410c;
-  --accent-soft: #fdeee5;
+/* Tokens (docs/design/dashboard-redesign.md, Foundations): light, then dark. public/theme.js
+   puts .t-light or .t-dark on the root before the first paint, from the Theme choice (ui/theme.ts);
+   a block of the page can set either to show the other theme (ui/Gallery.tsx). Components use
+   these only, never a literal colour. tokens.spec.ts checks the text pairs' contrast. */
+:root,
+.t-light {
+  --bg: #f6f7f9;
+  --surface: #ffffff;
+  --surface-2: #f0f2f5;
+  --surface-3: #e6e9ee;
+  --border: #e1e4ea;
+  --border-strong: #c5cbd5;
+  --text: #14171f;
+  --text-2: #475061;
+  --text-3: #5f6878;
+  --primary: #14171f;
+  --on-primary: #ffffff;
+  --primary-hover: #2e3440;
+  --focus: #2563eb;
   --run: #1d4ed8;
-  --run-soft: #e6edfd;
-  --ok: #15803d;
-  --ok-soft: #e5f4ea;
-  --err: #b91c1c;
-  --err-soft: #fbe9e9;
-  --warn: #a16207;
-  --warn-soft: #fdf3dc;
-  --idle: #8a837d;
-  --idle-soft: #efedeb;
-  --merged: #8250df;
-  --radius: 8px;
-  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --run-bg: #e7eefd;
+  --run-solid: #3b6ff0;
+  --input: #9a4a06;
+  --input-bg: #fdf0dc;
+  --input-solid: #e8890c;
+  --ready: #6a2dd0;
+  --ready-bg: #f0eafd;
+  --ready-solid: #8b5cf6;
+  --done: #146c34;
+  --done-bg: #e3f3e8;
+  --done-solid: #22a355;
+  --err: #b42318;
+  --err-bg: #fdebea;
+  --err-solid: #c8322a;
+  --idle: #4b5463;
+  --idle-bg: #edeff3;
+  --idle-solid: #98a1b0;
+  --dots: #d5dae2;
+  --scrim: rgba(20, 23, 31, 0.42);
+  --shadow: 0 1px 2px rgba(20, 23, 31, 0.06), 0 6px 16px rgba(20, 23, 31, 0.08);
+  --dlg-shadow: 0 24px 64px rgba(20, 23, 31, 0.22), 0 2px 6px rgba(20, 23, 31, 0.08);
+  --sheet-shadow: 0 -8px 24px rgba(20, 23, 31, 0.12);
   color-scheme: light;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #0f0d0c;
-    --panel: #181514;
-    --raised: #1f1b1a;
-    --ink: #f3f1ef;
-    --muted: #a39d98;
-    --line: #2c2725;
-    --code: #121010;
-    --hover: #24201e;
-    --accent: #fb923c;
-    --accent-soft: #3a2316;
-    --run: #7aa2ff;
-    --run-soft: #1a2440;
-    --ok: #4ade80;
-    --ok-soft: #142a1c;
-    --err: #f87171;
-    --err-soft: #361819;
-    --warn: #fbbf24;
-    --warn-soft: #33280f;
-    --idle: #8f8883;
-    --idle-soft: #26221f;
-    --merged: #a371f7;
-    color-scheme: dark;
-  }
+.t-dark {
+  --bg: #0d0f14;
+  --surface: #151820;
+  --surface-2: #1c2029;
+  --surface-3: #252a35;
+  --border: #262b36;
+  --border-strong: #3a4150;
+  --text: #e9ecf2;
+  --text-2: #b3bac7;
+  --text-3: #8c95a5;
+  --primary: #e9ecf2;
+  --on-primary: #0d0f14;
+  --primary-hover: #ffffff;
+  --focus: #6e9bff;
+  --run: #8fb1ff;
+  --run-bg: #16213d;
+  --run-solid: #5b86f5;
+  --input: #f4b35e;
+  --input-bg: #33240e;
+  --input-solid: #e8930f;
+  --ready: #c3a6ff;
+  --ready-bg: #271c44;
+  --ready-solid: #9670f5;
+  --done: #6ccf8b;
+  --done-bg: #11281a;
+  --done-solid: #2da55a;
+  --err: #ff8e86;
+  --err-bg: #3a1614;
+  --err-solid: #c93a31;
+  --idle: #aab1be;
+  --idle-bg: #20242d;
+  --idle-solid: #6b7383;
+  --dots: #232833;
+  --scrim: rgba(0, 0, 0, 0.6);
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 24px rgba(0, 0, 0, 0.4);
+  --dlg-shadow: 0 24px 64px rgba(0, 0, 0, 0.6), 0 2px 6px rgba(0, 0, 0, 0.4);
+  --sheet-shadow: 0 -8px 32px rgba(0, 0, 0, 0.55);
+  color-scheme: dark;
+}
+
+/* Type, radii and motion: the same in both themes. The fonts are the dashboard's own
+   (main.tsx imports them), with the system's while they load or if they don't. */
+:root {
+  --font: "Inter Variable", Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono:
+    "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --radius-sm: 6px;
+  --radius: 8px;
+  --radius-card: 12px;
+  --radius-dialog: 16px;
+  --fast: 0.12s;
+  --slide: 0.18s;
+}
+
+/* The old dashboard's names, for the views not redrawn yet: each is one of the tokens above,
+   so they follow the theme too. A view drops them when its own issue redraws it. */
+:root,
+.t-light,
+.t-dark {
+  --panel: var(--surface);
+  --raised: var(--surface-2);
+  --ink: var(--text);
+  --muted: var(--text-2);
+  --line: var(--border);
+  --code: var(--surface-2);
+  --hover: var(--surface-2);
+  --accent: var(--focus);
+  --accent-soft: color-mix(in srgb, var(--focus) 12%, var(--surface));
+  --run-soft: var(--run-bg);
+  --ok: var(--done);
+  --ok-soft: var(--done-bg);
+  --err-soft: var(--err-bg);
+  --warn: var(--input);
+  --warn-soft: var(--input-bg);
+  --idle-soft: var(--idle-bg);
+  --merged: var(--ready);
+}
+
+/* Status tones (format.ts toneOf()): a tone sets --s-fg (text), --s-bg (soft fill) and
+   --s-solid (dot, border), which badges, dots and notices read. Only states use these. */
+.s-run {
+  --s-fg: var(--run);
+  --s-bg: var(--run-bg);
+  --s-solid: var(--run-solid);
+}
+.s-input {
+  --s-fg: var(--input);
+  --s-bg: var(--input-bg);
+  --s-solid: var(--input-solid);
+}
+.s-ready {
+  --s-fg: var(--ready);
+  --s-bg: var(--ready-bg);
+  --s-solid: var(--ready-solid);
+}
+.s-done {
+  --s-fg: var(--done);
+  --s-bg: var(--done-bg);
+  --s-solid: var(--done-solid);
+}
+.s-err {
+  --s-fg: var(--err);
+  --s-bg: var(--err-bg);
+  --s-solid: var(--err-solid);
+}
+.s-idle {
+  --s-fg: var(--idle);
+  --s-bg: var(--idle-bg);
+  --s-solid: var(--idle-solid);
 }
 
 * {
@@ -65,12 +166,10 @@ body {
 
 body {
   background: var(--bg);
-  color: var(--ink);
-  font:
-    14px/1.5 system-ui,
-    -apple-system,
-    "Segoe UI",
-    sans-serif;
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 13.5px;
+  line-height: 20px;
   -webkit-font-smoothing: antialiased;
 }
 
@@ -80,15 +179,18 @@ body {
 }
 
 a {
-  color: var(--accent);
+  color: var(--focus);
 }
 
-button {
+button,
+input,
+select,
+textarea {
   font: inherit;
   color: inherit;
 }
 
 :focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--focus);
   outline-offset: 2px;
 }

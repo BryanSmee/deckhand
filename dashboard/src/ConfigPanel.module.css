@@ -14,7 +14,7 @@
 }
 
 .back {
-  composes: back from "./controls.module.css";
+  composes: button ghost small from "./ui/Button.module.css";
 }
 
 .toolbar {
@@ -40,8 +40,7 @@
 }
 
 .refresh {
-  composes: button from "./controls.module.css";
-  padding: 0.2rem 0.7rem;
+  composes: button small from "./ui/Button.module.css";
 }
 
 .failed {
@@ -134,12 +133,9 @@
   text-align: right;
 }
 
-/* Where a value comes from: its tone is controls.module.css's (ConfigPanel.tsx TAGS). */
+/* Where a value comes from: ui/Status's badge, in its tone (ConfigPanel.tsx TAGS). */
 .tag {
-  composes: pill from "./controls.module.css";
-  display: inline-block;
-  padding: 0.05rem 0.5rem;
-  font-size: 0.72rem;
+  composes: badge from "./ui/Status.module.css";
 }
 
 .raw {

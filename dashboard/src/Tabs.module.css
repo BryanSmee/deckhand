@@ -51,6 +51,6 @@
 }
 
 .input {
-  background: var(--accent-soft);
-  color: var(--accent);
+  background: var(--input-bg);
+  color: var(--input);
 }

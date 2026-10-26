@@ -160,15 +160,11 @@
 }
 
 .send {
-  composes: primary from "./controls.module.css";
-  padding: 0.35rem 0.9rem;
-  font-size: 0.85rem;
+  composes: button primary small from "./ui/Button.module.css";
 }
 
 .cancel {
-  composes: button from "./controls.module.css";
-  padding: 0.35rem 0.9rem;
-  font-size: 0.85rem;
+  composes: button small from "./ui/Button.module.css";
 }
 
 .hint {

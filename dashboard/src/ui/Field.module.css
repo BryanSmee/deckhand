@@ -1,0 +1,132 @@
+/* A field: its label, the control (with a leading icon, a trailing chevron or key hint), then
+   its help or its error. */
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.label {
+  font-size: 12.5px;
+  font-weight: 500;
+  line-height: 16px;
+  color: var(--text-2);
+}
+
+.help {
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--text-3);
+}
+
+.error {
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--err);
+}
+
+.affix {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.lead,
+.trail {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  color: var(--text-3);
+  pointer-events: none;
+}
+
+.lead {
+  left: 11px;
+}
+
+.trail {
+  right: 10px;
+}
+
+.input {
+  width: 100%;
+  height: 36px;
+  padding: 0 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 13.5px;
+  line-height: 20px;
+  transition:
+    border-color var(--fast),
+    box-shadow var(--fast);
+}
+
+.input::placeholder {
+  color: var(--text-3);
+}
+
+.input:hover:not(:disabled) {
+  border-color: var(--text-3);
+}
+
+.input:focus,
+.input:focus-visible {
+  outline: none;
+  border-color: var(--focus);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--focus) 24%, transparent);
+}
+
+.input[aria-invalid="true"] {
+  border-color: var(--err-solid);
+}
+
+.input:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+textarea.input {
+  height: auto;
+  padding: 8px 12px;
+  resize: vertical;
+}
+
+select.input {
+  appearance: none;
+  padding-right: 32px;
+  cursor: pointer;
+}
+
+.hasLead {
+  padding-left: 34px;
+}
+
+.hasHint {
+  padding-right: 36px;
+}
+
+.small {
+  height: 28px;
+  font-size: 12.5px;
+  border-radius: var(--radius-sm);
+}
+
+.touch {
+  height: 44px;
+  font-size: 15px;
+  border-radius: 10px;
+}
+
+/* A label kept for screen readers only. */
+.unseen {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}

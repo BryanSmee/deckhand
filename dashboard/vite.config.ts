@@ -15,5 +15,7 @@ export default defineConfig({
     environment: "jsdom",
     include: ["src/**/*.spec.{ts,tsx}"],
     setupFiles: ["src/vitest.setup.ts"],
+    // Read as it is by tokens.spec.ts (`?raw`): Vitest leaves other CSS out.
+    css: { include: [/global\.css/] },
   },
 });

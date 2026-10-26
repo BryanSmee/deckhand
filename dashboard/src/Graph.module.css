@@ -57,21 +57,22 @@
   font-size: 12px;
 }
 
-/* Each look: a fill, its border and its text. Needs input, a brainstorm's turn and ready for
-   review are all orange: softly filled with a "?" badge, an outline, filled. */
+/* Each look: a fill, its border and its text, from the status tones (global.css). Needs
+   input is softly filled with a "?" badge, a brainstorm's turn an outline; ready for review is
+   its own tone. */
 .idle {
   --fill: var(--idle-soft);
   --stroke: var(--idle);
   --text: var(--ink);
 }
 .input {
-  --fill: var(--accent-soft);
-  --stroke: var(--accent);
+  --fill: var(--input-bg);
+  --stroke: var(--input-solid);
   --text: var(--ink);
 }
 .talk {
   --fill: transparent;
-  --stroke: var(--accent);
+  --stroke: var(--input-solid);
   --text: var(--ink);
 }
 .run {
@@ -86,9 +87,9 @@
 }
 /* As the list's "Ready for review" badge (PullRequest.module.css). */
 .ready {
-  --fill: var(--accent);
-  --stroke: var(--accent);
-  --text: var(--panel);
+  --fill: var(--ready-bg);
+  --stroke: var(--ready-solid);
+  --text: var(--ready);
 }
 .done {
   --fill: var(--ok-soft);
@@ -141,7 +142,7 @@
 
 /* "?" and the open question count, where a pending node's spinner goes. */
 .node .badge rect {
-  fill: var(--accent);
+  fill: var(--input-solid);
   stroke: none;
 }
 

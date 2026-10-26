@@ -11,7 +11,9 @@ import {
   runKindName,
   runName,
   shortRepo,
+  taskTone,
   titleOf,
+  toneOf,
   uptime,
   versionUrl,
   when,
@@ -133,4 +135,55 @@ test("uptime and where a version's code is", () => {
   expect(versionUrl({ version: "dev", source })).toBeNull();
   expect(versionUrl({ version: "1.2.3foo", source })).toBeNull();
   expect(versionUrl({ version: "1.2.3", source: "" })).toBeNull();
+});
+
+describe("status tones", () => {
+  test("each state has one of the six tones", () => {
+    const tones = Object.fromEntries(
+      (
+        [
+          "building-image",
+          "working",
+          "stopping",
+          "running",
+          "needs-input",
+          "brainstorm",
+          "idle-brainstorm",
+          "queued",
+          "waiting",
+          "cancelled",
+          "done",
+          "ok",
+          "error",
+          "interrupted",
+        ] as const
+      ).map((s) => [s, toneOf(s)]),
+    );
+    expect(tones).toEqual({
+      "building-image": "run",
+      working: "run",
+      stopping: "run",
+      running: "run",
+      "needs-input": "input",
+      brainstorm: "input",
+      "idle-brainstorm": "idle",
+      queued: "idle",
+      waiting: "idle",
+      cancelled: "idle",
+      done: "done",
+      ok: "done",
+      error: "err",
+      interrupted: "err",
+    });
+  });
+
+  test("a ready pull request is the task's tone once nothing runs, fails or asks", () => {
+    const ready = { number: 1, url: "", state: "ready" as const, readyAt: null };
+    expect(taskTone({ state: "done", pr: ready })).toBe("ready");
+    expect(taskTone({ state: "queued", pr: ready })).toBe("ready");
+    expect(taskTone({ state: "working", pr: ready })).toBe("run");
+    expect(taskTone({ state: "needs-input", pr: ready })).toBe("input");
+    expect(taskTone({ state: "error", pr: ready })).toBe("err");
+    expect(taskTone({ state: "done", pr: null })).toBe("done");
+  });
 });

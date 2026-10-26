@@ -17,9 +17,9 @@
   --tone: var(--idle);
 }
 .ready {
-  --tone: var(--accent);
-  background: var(--accent);
-  color: var(--panel);
+  --tone: var(--ready-solid);
+  background: var(--ready-bg);
+  color: var(--ready);
 }
 .merged {
   --tone: var(--merged);
