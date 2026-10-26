@@ -245,13 +245,39 @@ export interface State {
   now: number;
 }
 
+// The parts of a run, each its own section of its log (listener/runlog.mjs PHASES). A phase
+// may come back: setup after the image's build, work after a push. Logs from before phases
+// have none: all of them is work.
+export type Phase = "setup" | "image" | "work" | "push" | "wrap-up";
+
+// How a step of an image's build is (`docker build --progress plain`): the latest `step`
+// entry of a number says it.
+export type StepStatus = "running" | "cached" | "done" | "error" | "cancelled";
+
+// What the log stream sends, in order. Failures: an `output` with `error`, a `step` with
+// status "error" (its `error` says why).
 export type Entry =
   | { kind: "text"; text: string }
   | { kind: "meta"; text: string }
-  | { kind: "raw"; text: string }
+  // Setup output; with `step`, the output of that image build step, without BuildKit's prefix.
+  | { kind: "raw"; text: string; step?: number }
   | { kind: "tool"; name: string; text: string }
   | { kind: "output"; text: string; error: boolean }
-  | { kind: "result"; status: "ok" | "needs-input" | "error"; text: string; minutes: number };
+  | { kind: "result"; status: "ok" | "needs-input" | "error"; text: string; minutes: number }
+  // The entries after it, up to the next one, are this phase's; `at`: when it started (ms).
+  | { kind: "phase"; phase: Phase; at: number }
+  // An image build step as it starts, then as its status changes. `stage`: "build 5/9" in
+  // "[build 5/9] RUN npm ci", "internal" for BuildKit's own steps, null for those it doesn't
+  // name ("exporting to image"); `seconds` once done.
+  | {
+      kind: "step";
+      step: number;
+      stage: string | null;
+      name: string;
+      status: StepStatus;
+      seconds: number | null;
+      error: string | null;
+    };
 
 // configured: its default branch has .deckhand.yaml; invalid: it has, but no run starts (the
 // file has errors, or asks for what the operator's grants refuse); onboarding: its onboarding

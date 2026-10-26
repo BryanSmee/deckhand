@@ -1,0 +1,44 @@
+#0 building with "default" instance using docker driver
+
+#1 [internal] load build definition from Dockerfile
+#1 transferring dockerfile: 221B done
+#1 DONE 0.0s
+
+#2 [internal] load metadata for docker.io/library/busybox:1.36
+#2 DONE 0.2s
+
+#3 [internal] load .dockerignore
+#3 transferring context: 2B done
+#3 DONE 0.0s
+
+#4 [base 1/2] FROM docker.io/library/busybox:1.36@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662
+#4 DONE 0.0s
+
+#5 [base 2/2] RUN echo cached step
+#5 CACHED
+
+#6 [stage-1 1/4] WORKDIR /app
+#6 CACHED
+
+#7 [stage-1 2/4] RUN for i in 1 2 3; do echo "line $i"; sleep 1; done
+#7 0.319 line 1
+#7 1.319 line 2
+#7 2.319 line 3
+#7 DONE 3.4s
+
+#8 [stage-1 3/4] RUN echo "about to fail" && exit 3
+#8 0.310 about to fail
+#8 ERROR: process "/bin/sh -c echo \"about to fail\" && exit 3" did not complete successfully: exit code: 3
+------
+ > [stage-1 3/4] RUN echo "about to fail" && exit 3:
+0.310 about to fail
+------
+Dockerfile:7
+--------------------
+   5 |     ARG BUST
+   6 |     RUN for i in 1 2 3; do echo "line $i"; sleep 1; done
+   7 | >>> RUN echo "about to fail" && exit 3
+   8 |     RUN echo never
+   9 |     
+--------------------
+ERROR: failed to build: failed to solve: process "/bin/sh -c echo \"about to fail\" && exit 3" did not complete successfully: exit code: 3

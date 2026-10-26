@@ -270,6 +270,22 @@ longer changes).
 Reactions on the triggering comment follow its run: 👀 when it is received, then 🚀 (done),
 😕 (needs input) or 👎 (error) once the run that handled it is over.
 
+### A run's log
+
+A run's log (`logs/<run>.log`) holds the listener's own lines and the sandbox's output as it
+came. The listener also writes a `phase` line at each change of the run's part, with when it
+started (`runlog.mjs` `enterPhase()`, its state saved for a restart): `setup` as the run
+begins, `image` while the repo's image builds (then `setup` again: the sandbox starts after
+the build), `work` at the agent's first event, `push` at a tool call that runs `git push` or
+`gh pr create|edit|ready|merge` (and `work` again at the next other tool call), `wrap-up`
+after its final answer. Logs from before phases have none, and read as one Work section.
+
+The log stream (`stream()`) reads lines in order (`reader()`): in the image phase, BuildKit's
+plain progress (`#12 [build 5/9] RUN npm ci`, `#12 CACHED`, `#12 DONE 41.2s`,
+`#12 ERROR: …`) comes as `step` entries, one when a step starts and one each time its status
+changes, and its output as `raw` entries with the step's number; the lines of no step
+(BuildKit's error summary) stay `raw`. `dashboard/src/types.ts` `Entry` is the contract.
+
 ## Around the runs
 
 - **GitHub**: the operator's private App, created at `/setup` and stored in the data volume.

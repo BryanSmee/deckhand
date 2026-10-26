@@ -21,6 +21,7 @@ import { imageRef } from "./images.mjs";
 import { OPEN } from "./modes.mjs";
 import { handoffMessage } from "./prompts.mjs";
 import { reviewThread } from "./reviews.mjs";
+import { enterPhase } from "./runlog.mjs";
 import { operatorSecrets, redact } from "./secrets.mjs";
 
 // What a research run reads of its issue: the last comments, each clipped.
@@ -229,6 +230,7 @@ export function createPreparation(ctx) {
         dockerfile: settings.dockerfile,
         onBuild: (tag) => {
           record.phase = "building image";
+          enterPhase(task.live, "image");
           note(
             `Building ${tag} from ${settings.dockerfile} (${source.branch ? "pull request branch" : base})`,
           );
@@ -236,6 +238,8 @@ export function createPreparation(ctx) {
         output,
       });
       record.phase = null;
+      // The sandbox's part of the setup comes after the image's build.
+      enterPhase(task.live, "setup");
       if (image !== config.image)
         note(`Image ${image}${source.branch ? " (pull request branch)" : ""}`);
       await ctx.images.installAgent(agentOf(task), output);

@@ -154,8 +154,8 @@ test("a research run without allow_research stops before anything is asked for",
 });
 
 // A work run on issue #12 asked from pull request #7, from `head` (a repo's full name), and
-// what it asked of the images.
-async function workRun(t, head) {
+// what it asked of the images. `imageFor`: the images' own, `written`: what goes to its log.
+async function workRun(t, head, { imageFor, written = [] } = {}) {
   const dir = realpathSync(tempDir(t));
   const config = testConfig({ GRANTS_DIR: dir });
   const calls = [];
@@ -165,7 +165,7 @@ async function workRun(t, head) {
     shotsDir: tempDir(t),
     images: {
       installAgent: async () => {},
-      imageFor: async () => config.image,
+      imageFor: imageFor ?? (async () => config.image),
       caches: async (repo, paths) => {
         calls.push(`caches ${paths.join(" ")}`);
         return ["-v", "cache-npm:/home/node/.npm"];
@@ -192,7 +192,7 @@ async function workRun(t, head) {
       light: false,
       secret: "s".repeat(32),
       record: { agent: "claude", model: "opus", effort: "high" },
-      logFile: { write: () => {} },
+      logFile: { write: (text) => written.push(text) },
     },
   };
   const { settings } = parseRepoConfig("setup: npm ci\ncaches: [/home/node/.npm]\n", config);
@@ -221,6 +221,30 @@ test("a work run with a comment from the repo's own pull request keeps its cache
   assert.deepEqual(calls, ["caches /home/node/.npm"]);
   assert.ok(!notes.some((n) => /fork/.test(n)));
   assert.deepEqual(task.live.branches, ["issue-12-*", "feat"]);
+});
+
+test("a run whose image builds: its log's image phase, then setup again", async (t) => {
+  const written = [];
+  const imageFor = async ({ onBuild, output }) => {
+    onBuild("deckhand-repo:abc");
+    output("#1 [a 1/1] RUN make\n#1 DONE 1.0s\n");
+    return "deckhand-repo:abc";
+  };
+  const { task } = await workRun(t, "org/repo", { imageFor, written });
+  const phases = written.map((w) => (w.startsWith("{") ? JSON.parse(w).phase : w));
+  assert.deepEqual(phases, ["image", "#1 [a 1/1] RUN make\n#1 DONE 1.0s\n", "setup"]);
+  assert.equal(task.live.logPhase, "setup");
+});
+
+test("a run whose image is built already: no image phase", async (t) => {
+  const written = [];
+  const { task } = await workRun(t, "org/repo", { written });
+  // The run starts in no phase here (runs.mjs enters setup first): setup is a change.
+  assert.deepEqual(
+    written.map((w) => JSON.parse(w).phase),
+    ["setup"],
+  );
+  assert.equal(task.live.logPhase, "setup");
 });
 
 // An analysis's digest: the full one only when the analysis was asked for on a private repo

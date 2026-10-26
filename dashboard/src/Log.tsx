@@ -25,6 +25,19 @@ export function blocks(entries: Entry[]): Block[] {
   return out;
 }
 
+export function stepLine(s: Extract<Entry, { kind: "step" }>): string {
+  const name = s.stage ? `[${s.stage}] ${s.name}` : s.name;
+  const status =
+    s.status === "done"
+      ? `DONE ${s.seconds}s`
+      : s.status === "error"
+        ? `ERROR: ${s.error}`
+        : s.status === "running"
+          ? ""
+          : s.status.toUpperCase();
+  return `#${s.step} ${name}${status ? ` · ${status}` : ""}`;
+}
+
 export function Log({ runId }: { runId: string }) {
   const { entries } = useRunLog(runId);
   const scroller = useRef<HTMLDivElement>(null);
@@ -67,6 +80,15 @@ function BlockView({ block: b }: { block: Block }) {
           <pre class={styles.pre}>{b.text}</pre>
         </div>
       );
+    // Until the log folds into its phases: a step as BuildKit wrote it, no phase marks.
+    case "step":
+      return (
+        <div class={`${styles.entry} ${styles.raw}`}>
+          <pre class={styles.pre}>{stepLine(b)}</pre>
+        </div>
+      );
+    case "phase":
+      return null;
     case "tool":
       return (
         <details class={`${styles.entry} ${styles.tool}`} open={b.outputs.some((o) => o.error)}>

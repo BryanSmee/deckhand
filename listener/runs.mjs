@@ -25,11 +25,12 @@ import { CONFIG_FILE } from "./repo-config.mjs";
 import { postReview } from "./reviews.mjs";
 import {
   addRun,
-  lastResult,
+  enterPhase,
   minutes,
   newRecord,
   openLog,
   outcome,
+  phaseOf,
   questionsOf,
   saveSummary,
   summaryOf,
@@ -152,6 +153,7 @@ export function createRuns(ctx) {
       branches: [],
       shots: null,
       lines: { out: 0, err: 0 }, // of its output read so far, so a restart skips them
+      logPhase: null, // the part of the run its log is in (runlog.mjs PHASES, enterPhase())
       result: null, // its last result, with the duration of all
       later: {}, // "/model", "/effort", "/speed"… that came too late for this run
       unanswered: [], // delivered since the agent's last result
@@ -176,6 +178,7 @@ export function createRuns(ctx) {
       await ctx.label(task.repo, task.number, false);
     }
     const note = writeHeader(task, run);
+    enterPhase(task.live, "setup");
     validateRun(agentOf(task), task, run, note);
     const parts = await prepareRun(task, items, run, note);
     if (ctx.stopping) return false;
@@ -343,12 +346,16 @@ export function createRuns(ctx) {
     const live = task.live;
     if (ctx.stopping) return; // left for the next listener
     const line = hidden(live, raw);
+    const events = agentOf(task).normalize(line);
+    // Before the line that starts it, unless the line isn't kept anyway.
+    const phase = live.overflow ? null : phaseOf(live.logPhase, events);
+    if (phase) enterPhase(live, phase);
     const kept = keep(task, line);
     live.lines.out++;
     if (!kept) return;
     // Still at work after its answer (a background task's turn): its stop waits.
     if (live.answered) linger(task);
-    const event = lastResult([line], agentOf(task));
+    const event = events.findLast((e) => e.type === "result");
     if (!event) return;
     // One result per turn: a comment answered after the first adds a turn.
     live.result = { ...event, durationMs: (live.result?.durationMs ?? 0) + event.durationMs };
@@ -359,6 +366,7 @@ export function createRuns(ctx) {
     // Nothing more for it: it should exit now, with this as its answer.
     if (!live.open && !live.cancelled && !live.finishing) {
       live.answered = true;
+      enterPhase(live, "wrap-up");
       linger(task);
     }
     ctx.saveLive(task);
