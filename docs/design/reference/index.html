@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Deckhand dashboard redesign: reference</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<link rel="stylesheet" href="design.css">
+<style>
+body { margin: 0; background: var(--bg); }
+main { max-width: 880px; margin: 0 auto; padding: 48px 16px; display: flex; flex-direction: column; gap: 28px; }
+h1 { margin: 0; font-size: 28px; line-height: 36px; letter-spacing: -0.02em; }
+h2 { margin: 0 0 8px; font-size: 13px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-3); }
+ul { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 8px; }
+a.card { display: flex; flex-direction: column; gap: 2px; padding: 12px 14px; color: var(--text); text-decoration: none; }
+a.card:hover { border-color: var(--border-strong); }
+a.card span { font-size: 12.5px; color: var(--text-3); }
+</style>
+</head>
+<body class="ui t-light">
+<main>
+  <header>
+    <h1>Dashboard redesign: reference</h1>
+    <p style="color: var(--text-2)">Static pages of the design in <a href="../dashboard-redesign.md">docs/design/dashboard-redesign.md</a>. Open them in a browser at the width given; desktop pages are fluid. Interactions (tabs, drags, dialogs) are drawn, not wired: the details/summary folds open. Delete this folder once the redesign ships.</p>
+  </header>
+  <section><h2>System</h2><ul>
+    <li><a class="card" href="foundations.html">Foundations<span>Palette, status colours, type, spacing, motion</span></a></li>
+    <li><a class="card" href="components.html">Components<span>Buttons, fields, status, tabs, feedback, light and dark</span></a></li>
+    <li><a class="card" href="design.css">design.css<span>Tokens and components in one file</span></a></li>
+  </ul></section>
+  <section><h2>Desktop · 1440 wide</h2><ul>
+    <li><a class="card" href="tasks.html">Tasks<span>One repository: list, task, live log</span></a></li>
+    <li><a class="card" href="board.html">Board<span>Work queue, graph, a drag in progress</span></a></li>
+    <li><a class="card" href="overview.html">Overview<span>All repositories: waiting on you, repo cards</span></a></li>
+    <li><a class="card" href="run-log.html">Run log<span>Outcome, foldable sections, search</span></a></li>
+    <li><a class="card" href="dialogs.html">Dialogs<span>New request, questions, queue after, stop</span></a></li>
+    <li><a class="card" href="shortcuts.html">Keyboard shortcuts<span>The ? sheet</span></a></li>
+    <li><a class="card" href="palette.html">Jump to<span>Ctrl K palette</span></a></li>
+    <li><a class="card" href="settings.html">Settings · Repositories<span>List and onboarding</span></a></li>
+    <li><a class="card" href="repo-config.html">Settings · A config with errors<span>acme/site</span></a></li>
+    <li><a class="card" href="repo-config-ok.html">Settings · A config that is fine<span>acme/api</span></a></li>
+    <li><a class="card" href="preferences.html">Settings · Preferences<span>Draft</span></a></li>
+    <li><a class="card" href="server.html">Settings · Server<span>Draft</span></a></li>
+  </ul></section>
+  <section><h2>Phone · 390 × 844</h2><ul>
+    <li><a class="card" href="mobile-tasks.html">Tasks</a></li>
+    <li><a class="card" href="mobile-board.html">Board as lanes</a></li>
+    <li><a class="card" href="mobile-run-log.html">Run log</a></li>
+    <li><a class="card" href="mobile-run-log-search.html">Run log, searching</a></li>
+  </ul></section>
+</main>
+</body>
+</html>

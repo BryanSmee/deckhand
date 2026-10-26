@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<title>Deckhand — Server</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com"><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet"><style>
+body{margin:0}
+.t-light{--bg:#F6F7F9;--surface:#FFFFFF;--surface-2:#F0F2F5;--surface-3:#E6E9EE;--border:#E1E4EA;--border-strong:#C5CBD5;--text:#14171F;--text-2:#475061;--text-3:#5F6878;--primary:#14171F;--on-primary:#FFFFFF;--focus:#2563EB;--run:#1D4ED8;--run-bg:#E7EEFD;--run-solid:#3B6FF0;--done:#146C34;--done-bg:#E3F3E8;--done-solid:#22A355;--input:#9A4A06;--input-bg:#FDF0DC;--input-solid:#E8890C;--idle:#4B5463;--idle-bg:#EDEFF3;--idle-solid:#98A1B0;color-scheme:light}
+.t-dark{--bg:#0D0F14;--surface:#151820;--surface-2:#1C2029;--surface-3:#252A35;--border:#262B36;--border-strong:#3A4150;--text:#E9ECF2;--text-2:#B3BAC7;--text-3:#8C95A5;--primary:#E9ECF2;--on-primary:#0D0F14;--focus:#6E9BFF;--run:#8FB1FF;--run-bg:#16213D;--run-solid:#5B86F5;--done:#6CCF8B;--done-bg:#11281A;--done-solid:#2DA55A;--input:#F4B35E;--input-bg:#33240E;--input-solid:#E8930F;--idle:#AAB1BE;--idle-bg:#20242D;--idle-solid:#6B7383;color-scheme:dark}
+.ui{font-family:Inter,system-ui,sans-serif;font-size:13.5px;line-height:20px;color:var(--text);-webkit-font-smoothing:antialiased}
+.mono{font-family:"JetBrains Mono",ui-monospace,monospace}
+.s-run{--s-fg:var(--run);--s-bg:var(--run-bg);--s-solid:var(--run-solid)}
+.s-done{--s-fg:var(--done);--s-bg:var(--done-bg);--s-solid:var(--done-solid)}
+.s-idle{--s-fg:var(--idle);--s-bg:var(--idle-bg);--s-solid:var(--idle-solid)}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:32px;padding:0 12px;box-sizing:border-box;border-radius:8px;border:1px solid var(--border-strong);background:var(--surface);color:var(--text);font:500 13px/1 Inter,system-ui,sans-serif;cursor:pointer;white-space:nowrap;text-decoration:none}
+.btn:hover{background:var(--surface-2)}
+.btn:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+.badge{display:inline-flex;align-items:center;gap:6px;height:22px;padding:0 8px;border-radius:999px;font:600 11.5px/1 Inter,system-ui,sans-serif;white-space:nowrap;background:var(--s-bg);color:var(--s-fg);box-sizing:border-box}
+.sdot{width:8px;height:8px;border-radius:50%;background:var(--s-solid);flex:none}
+.pulse{animation:pulse 1.6s ease-out infinite}
+@keyframes pulse{0%{box-shadow:0 0 0 0 color-mix(in srgb,var(--s-solid) 60%,transparent)}100%{box-shadow:0 0 0 6px transparent}}
+@media (prefers-reduced-motion:reduce){.pulse{animation:none}}
+.tabs{display:flex;gap:2px}
+.tab{display:inline-flex;align-items:center;gap:7px;height:40px;padding:0 10px;color:var(--text-2);font:500 13px/1 Inter,system-ui,sans-serif;text-decoration:none;box-shadow:inset 0 -2px 0 transparent}
+.tab:hover{color:var(--text)}
+.tab[aria-current="page"]{color:var(--text);box-shadow:inset 0 -2px 0 var(--text)}
+.count{display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:18px;padding:0 5px;box-sizing:border-box;border-radius:999px;background:var(--input-bg);color:var(--input);font:600 11px/1 Inter,system-ui,sans-serif}
+.nav{display:flex;align-items:center;justify-content:center;width:40px;height:40px;border-radius:10px;color:var(--text-2);text-decoration:none}
+.nav:hover{background:var(--surface-2);color:var(--text)}
+.nav[aria-current="page"]{background:var(--surface-3);color:var(--text)}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden}
+.card h2{margin:0;font-size:15px;font-weight:600}
+.head{display:flex;flex-wrap:wrap;align-items:center;gap:10px 12px;padding:14px 18px}
+.kv{display:grid;grid-template-columns:180px minmax(0,1fr);gap:12px;padding:10px 18px;border-top:1px solid var(--border);font-size:13px}
+.kv dt{color:var(--text-3)}
+.kv dd{margin:0}
+.row{display:grid;grid-template-columns:minmax(0,1.4fr) 110px minmax(0,1fr) 110px 70px;align-items:center;gap:12px;padding:10px 18px;border-top:1px solid var(--border);font-size:13px}
+a{color:var(--focus)}a:hover{color:var(--text)}
+</style></head>
+<body>
+
+
+<div class="ui t-dark" style="display: flex; flex-wrap: wrap; align-items: stretch; min-height: 100vh; background: var(--bg)">
+  <aside aria-label="Deckhand" style="flex: 1 1 64px; max-width: 64px; display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 14px 0; box-sizing: border-box; background: var(--surface); border-right: 1px solid var(--border)">
+    <span style="display: flex; align-items: center; justify-content: center; width: 32px; height: 32px; border-radius: 9px; background: var(--primary); color: var(--on-primary); margin-bottom: 6px"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="5" r="2"></circle><path d="M12 7v14M5 13H3a9 9 0 0 0 18 0h-2M8 10h8"></path></svg></span>
+    <a class="nav" href="overview.html" aria-label="All repositories"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5"></rect><rect x="14" y="3" width="7" height="7" rx="1.5"></rect><rect x="3" y="14" width="7" height="7" rx="1.5"></rect><rect x="14" y="14" width="7" height="7" rx="1.5"></rect></svg></a>
+    <span style="flex: 1"></span>
+    <a class="nav" href="settings.html" aria-current="page" aria-label="Settings"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1"></path><circle cx="15" cy="6" r="2"></circle><circle cx="9" cy="12" r="2"></circle><circle cx="17" cy="18" r="2"></circle></svg></a>
+  </aside>
+
+  <div style="flex: 999 1 560px; min-width: 0; display: flex; flex-direction: column">
+    <header style="display: flex; flex-direction: column; gap: 4px; padding: 14px 24px 0; border-bottom: 1px solid var(--border); background: var(--surface)">
+      <h1 style="margin: 0; font-size: 18px; line-height: 26px; font-weight: 600; letter-spacing: -0.01em">Settings</h1>
+      <nav class="tabs" aria-label="Settings">
+        <a class="tab" href="settings.html">Repositories <span class="count">3</span></a>
+        <a class="tab" href="preferences.html">Preferences</a>
+        <a class="tab" href="#" aria-current="page">Server</a>
+      </nav>
+    </header>
+
+    <main style="display: flex; flex-direction: column; gap: 16px; padding: 24px; max-width: 980px; width: 100%; box-sizing: border-box">
+      <section class="card s-done" aria-labelledby="srv" style="display: flex; flex-wrap: wrap; align-items: center; gap: 14px; padding: 16px 18px">
+        <span style="display: flex; align-items: center; justify-content: center; width: 36px; height: 36px; border-radius: 50%; background: var(--done-bg); color: var(--done); flex: none"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12l5 5 9-10"></path></svg></span>
+        <div style="flex: 1 1 360px; display: flex; flex-direction: column">
+          <h2 id="srv" style="margin: 0; font-size: 15px; font-weight: 600">The listener is up</h2>
+          <span style="font-size: 13px; color: var(--text-2)">Deckhand <a href="#" class="mono">edge-1713fa6</a> · up 3 d 4 h, since 23 Oct 09:12 · Node 26.1.0 · built from <a href="#" class="mono">BryanSmee/deckhand</a></span>
+        </div>
+        <span style="font-size: 12.5px; color: var(--text-3)">Its operator changes these in the server's environment and grants folder.</span>
+      </section>
+
+      <section class="card" aria-labelledby="cap">
+        <div class="head"><h2 id="cap">Runs</h2><span style="margin-left: auto; font-size: 12.5px; color: var(--text-3)">MAX_PARALLEL 4</span></div>
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); border-top: 1px solid var(--border)">
+          <div style="padding: 14px 18px; display: flex; flex-direction: column; gap: 6px">
+            <span style="font-size: 12px; color: var(--text-3)">Slots</span>
+            <span style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; max-width: 160px" role="img" aria-label="3 of 4 slots in use"><span style="height: 8px; border-radius: 4px; background: var(--run-solid)"></span><span style="height: 8px; border-radius: 4px; background: var(--run-solid)"></span><span style="height: 8px; border-radius: 4px; background: var(--run-solid)"></span><span style="height: 8px; border-radius: 4px; background: var(--surface-3)"></span></span>
+            <span style="font-size: 14px; font-weight: 600">3 running · 1 queued</span>
+          </div>
+          <div style="padding: 14px 18px; display: flex; flex-direction: column; gap: 2px; border-left: 1px solid var(--border)"><span style="font-size: 12px; color: var(--text-3)">Container engine</span><span style="font-size: 14px; font-weight: 600">Sysbox</span></div>
+          <div style="padding: 14px 18px; display: flex; flex-direction: column; gap: 2px; border-left: 1px solid var(--border)"><span style="font-size: 12px; color: var(--text-3)">Egress proxy</span><span style="font-size: 14px; font-weight: 600">On · 14 hosts granted</span></div>
+          <div style="padding: 14px 18px; display: flex; flex-direction: column; gap: 2px; border-left: 1px solid var(--border)"><span style="font-size: 12px; color: var(--text-3)">Grants folder</span><span style="font-size: 14px; font-weight: 600; color: var(--done)">Read, no errors</span></div>
+        </div>
+      </section>
+
+      <section class="card" aria-labelledby="prev">
+        <div class="head"><h2 id="prev">Preview hooks</h2><span style="font-size: 12.5px; color: var(--text-3)">2 going on</span></div>
+        <div class="row" style="font-size: 12px; color: var(--text-3); padding-top: 6px; padding-bottom: 6px"><span>Container</span><span>Repository</span><span>Event</span><span>State</span><span style="text-align: right">Since</span></div>
+        <div class="row"><span class="mono" style="overflow: hidden; text-overflow: ellipsis">acme-app-preview-pr-33</span><span class="mono">acme/app</span><span>pull_request · synchronize</span><span><span class="badge s-run"><span class="sdot pulse"></span>Running</span></span><span style="text-align: right; color: var(--text-3)">4 min</span></div>
+        <div class="row"><span class="mono" style="overflow: hidden; text-overflow: ellipsis">acme-site-preview-main</span><span class="mono">acme/site</span><span>workflow_run · completed</span><span><span class="badge s-idle"><span class="sdot"></span>Waiting</span></span><span style="text-align: right; color: var(--text-3)">1 min</span></div>
+      </section>
+
+      <section class="card" aria-labelledby="app">
+        <div class="head"><h2 id="app">GitHub App</h2>
+          <span style="margin-left: auto; display: flex; gap: 8px"><a href="#" class="btn">App settings ↗</a><a href="#" class="btn">Install on another account ↗</a></span></div>
+        <dl style="margin: 0">
+          <div class="kv"><dt>Name</dt><dd class="mono">deckhand-bryansmee</dd></div>
+          <div class="kv"><dt>Installed on</dt><dd style="display: flex; flex-wrap: wrap; gap: 16px"><span><span class="mono">BryanSmee</span> · <a href="#">configure ↗</a></span><span><span class="mono">acme</span> · <a href="#">configure ↗</a></span></dd></div>
+          <div class="kv"><dt>Webhook deliveries</dt><dd style="display: flex; flex-wrap: wrap; align-items: center; gap: 12px"><span>Last sync 12 min ago: 2 missed deliveries asked again, 1 pull request's state updated.</span><button type="button" class="btn" style="height: 28px; font-size: 12.5px">Sync now</button></dd></div>
+          <div class="kv"><dt>Who can sign in</dt><dd>alice, bob, bryansmee <span style="color: var(--text-3)">· ALLOWED_USERS</span></dd></div>
+          <div class="kv"><dt>Allowed repositories</dt><dd><span class="mono">acme/*</span>, <span class="mono">BryanSmee/deckhand</span> <span style="color: var(--text-3)">· ALLOWED_REPOS</span></dd></div>
+        </dl>
+      </section>
+    </main>
+  </div>
+</div>
+
+
+
+
+</body></html>

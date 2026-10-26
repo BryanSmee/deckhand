@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<title>Deckhand — Preferences</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com"><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet"><style>
+body{margin:0}
+.t-light{--bg:#F6F7F9;--surface:#FFFFFF;--surface-2:#F0F2F5;--surface-3:#E6E9EE;--border:#E1E4EA;--border-strong:#C5CBD5;--text:#14171F;--text-2:#475061;--text-3:#5F6878;--primary:#14171F;--on-primary:#FFFFFF;--focus:#2563EB;--done:#146C34;--done-bg:#E3F3E8;--done-solid:#22A355;--input:#9A4A06;--input-bg:#FDF0DC;color-scheme:light}
+.t-dark{--bg:#0D0F14;--surface:#151820;--surface-2:#1C2029;--surface-3:#252A35;--border:#262B36;--border-strong:#3A4150;--text:#E9ECF2;--text-2:#B3BAC7;--text-3:#8C95A5;--primary:#E9ECF2;--on-primary:#0D0F14;--focus:#6E9BFF;--done:#6CCF8B;--done-bg:#11281A;--done-solid:#2DA55A;--input:#F4B35E;--input-bg:#33240E;color-scheme:dark}
+.ui{font-family:Inter,system-ui,sans-serif;font-size:13.5px;line-height:20px;color:var(--text);-webkit-font-smoothing:antialiased}
+.mono{font-family:"JetBrains Mono",ui-monospace,monospace}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:32px;padding:0 12px;box-sizing:border-box;border-radius:8px;border:1px solid var(--border-strong);background:var(--surface);color:var(--text);font:500 13px/1 Inter,system-ui,sans-serif;cursor:pointer;white-space:nowrap;text-decoration:none}
+.btn:hover{background:var(--surface-2)}
+.btn:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+.seg{display:inline-flex;padding:3px;gap:2px;background:var(--surface-2);border:1px solid var(--border);border-radius:10px}
+.seg button{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 12px;border:0;border-radius:7px;background:transparent;color:var(--text-2);font:500 12.5px/1 Inter,system-ui,sans-serif;cursor:pointer}
+.seg button:hover{color:var(--text)}
+.seg [aria-pressed="true"]{background:var(--surface);color:var(--text);box-shadow:0 1px 2px rgba(0,0,0,.12),0 0 0 1px var(--border)}
+.switch{position:relative;display:inline-flex;align-items:center;cursor:pointer}
+.switch input{position:absolute;opacity:0;width:1px;height:1px;margin:0}
+.switch .track{position:relative;width:36px;height:22px;box-sizing:border-box;border-radius:999px;background:var(--surface-3);border:1px solid var(--border-strong);transition:background .12s}
+.switch .track::after{content:"";position:absolute;top:3px;left:3px;width:14px;height:14px;border-radius:50%;background:var(--text-3);transition:transform .12s}
+.switch input:checked + .track{background:var(--primary);border-color:var(--primary)}
+.switch input:checked + .track::after{transform:translateX(14px);background:var(--on-primary)}
+.switch input:focus-visible + .track{outline:2px solid var(--focus);outline-offset:2px}
+.input{height:32px;box-sizing:border-box;padding:0 30px 0 12px;border:1px solid var(--border-strong);border-radius:8px;background:var(--surface);color:var(--text);font:400 13px/20px Inter,system-ui,sans-serif;appearance:none;-webkit-appearance:none;cursor:pointer}
+.tabs{display:flex;gap:2px}
+.tab{display:inline-flex;align-items:center;gap:7px;height:40px;padding:0 10px;color:var(--text-2);font:500 13px/1 Inter,system-ui,sans-serif;text-decoration:none;box-shadow:inset 0 -2px 0 transparent}
+.tab:hover{color:var(--text)}
+.tab[aria-current="page"]{color:var(--text);box-shadow:inset 0 -2px 0 var(--text)}
+.count{display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:18px;padding:0 5px;box-sizing:border-box;border-radius:999px;background:var(--input-bg);color:var(--input);font:600 11px/1 Inter,system-ui,sans-serif}
+.nav{display:flex;align-items:center;justify-content:center;width:40px;height:40px;border-radius:10px;color:var(--text-2);text-decoration:none}
+.nav:hover{background:var(--surface-2);color:var(--text)}
+.nav[aria-current="page"]{background:var(--surface-3);color:var(--text)}
+.group{background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden}
+.group h2{margin:0;padding:14px 18px 4px;font-size:15px;font-weight:600}
+.pref{display:flex;flex-wrap:wrap;align-items:center;gap:8px 24px;padding:12px 18px;border-top:1px solid var(--border)}
+.group h2 + .pref{border-top:0}
+.pref .txt{flex:1 1 320px;display:flex;flex-direction:column}
+.pref .txt b{font-weight:500}
+.pref .txt span{font-size:12.5px;color:var(--text-3)}
+.kbd{font:500 11px/1 "JetBrains Mono",monospace;padding:3px 5px;border:1px solid var(--border-strong);border-bottom-width:2px;border-radius:4px;color:var(--text-2)}
+a{color:var(--focus)}a:hover{color:var(--text)}
+</style></head>
+<body>
+
+
+<div class="ui t-light" style="display: flex; flex-wrap: wrap; align-items: stretch; min-height: 100vh; background: var(--bg)">
+  <aside aria-label="Deckhand" style="flex: 1 1 64px; max-width: 64px; display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 14px 0; box-sizing: border-box; background: var(--surface); border-right: 1px solid var(--border)">
+    <span style="display: flex; align-items: center; justify-content: center; width: 32px; height: 32px; border-radius: 9px; background: var(--primary); color: var(--on-primary); margin-bottom: 6px"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="5" r="2"></circle><path d="M12 7v14M5 13H3a9 9 0 0 0 18 0h-2M8 10h8"></path></svg></span>
+    <a class="nav" href="overview.html" aria-label="All repositories"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5"></rect><rect x="14" y="3" width="7" height="7" rx="1.5"></rect><rect x="3" y="14" width="7" height="7" rx="1.5"></rect><rect x="14" y="14" width="7" height="7" rx="1.5"></rect></svg></a>
+    <span style="flex: 1"></span>
+    <a class="nav" href="settings.html" aria-current="page" aria-label="Settings"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1"></path><circle cx="15" cy="6" r="2"></circle><circle cx="9" cy="12" r="2"></circle><circle cx="17" cy="18" r="2"></circle></svg></a>
+  </aside>
+
+  <div style="flex: 999 1 560px; min-width: 0; display: flex; flex-direction: column">
+    <header style="display: flex; flex-direction: column; gap: 4px; padding: 14px 24px 0; border-bottom: 1px solid var(--border); background: var(--surface)">
+      <h1 style="margin: 0; font-size: 18px; line-height: 26px; font-weight: 600; letter-spacing: -0.01em">Settings</h1>
+      <nav class="tabs" aria-label="Settings">
+        <a class="tab" href="settings.html">Repositories <span class="count">3</span></a>
+        <a class="tab" href="#" aria-current="page">Preferences</a>
+        <a class="tab" href="server.html">Server</a>
+      </nav>
+    </header>
+
+    <main style="display: flex; flex-direction: column; gap: 16px; padding: 24px; max-width: 860px; width: 100%; box-sizing: border-box">
+      <p style="margin: 0; font-size: 13px; color: var(--text-3)">Kept in this browser, not on the server: another device has its own.</p>
+
+      <section class="group" aria-labelledby="g1">
+        <h2 id="g1">Appearance</h2>
+        <div class="pref"><span class="txt"><b>Theme</b><span>System follows your device's light or dark setting.</span></span>
+          <div class="seg" role="group" aria-label="Theme"><button type="button" aria-pressed="true">System</button><button type="button" aria-pressed="false">Light</button><button type="button" aria-pressed="false">Dark</button></div></div>
+        <div class="pref"><span class="txt"><b>Density</b><span>Compact fits more tasks and log lines on a screen.</span></span>
+          <div class="seg" role="group" aria-label="Density"><button type="button" aria-pressed="true">Comfortable</button><button type="button" aria-pressed="false">Compact</button></div></div>
+        <div class="pref"><span class="txt"><b>Motion</b><span>Pulsing dots, sliding panels. Reduced keeps fades only.</span></span>
+          <div class="seg" role="group" aria-label="Motion"><button type="button" aria-pressed="true">System</button><button type="button" aria-pressed="false">Full</button><button type="button" aria-pressed="false">Reduced</button></div></div>
+        <div class="pref"><span class="txt"><b>Open on</b><span>What the dashboard shows when you come back.</span></span>
+          <select class="input" aria-label="Open on"><option>The repository open last</option><option>Overview</option></select></div>
+      </section>
+
+      <section class="group" aria-labelledby="g2">
+        <h2 id="g2">Notifications</h2>
+        <div class="pref"><span class="txt"><b>Browser notifications</b><span>While a Deckhand tab is open. <span style="color: var(--done); font-weight: 500">Allowed in this browser.</span></span></span>
+          <button type="button" class="btn">Send a test</button></div>
+        
+          <label class="pref" style="cursor: pointer"><span class="txt"><b>A pull request is ready for review</b><span>The notification opens its task.</span></span>
+            <span class="switch"><input type="checkbox" role="switch" checked=""><span class="track" aria-hidden="true"></span></span></label>
+        
+          <label class="pref" style="cursor: pointer"><span class="txt"><b>A run needs your answers</b><span>Open questions, or a brainstorm waiting for your turn.</span></span>
+            <span class="switch"><input type="checkbox" role="switch" checked=""><span class="track" aria-hidden="true"></span></span></label>
+        
+          <label class="pref" style="cursor: pointer"><span class="txt"><b>A run failed</b><span>Errors and interrupted runs.</span></span>
+            <span class="switch"><input type="checkbox" role="switch"><span class="track" aria-hidden="true"></span></span></label>
+        
+      </section>
+
+      <section class="group" aria-labelledby="g3">
+        <h2 id="g3">Board and run log</h2>
+        <div class="pref"><span class="txt"><b>Board on a phone</b><span>The graph is hard to read on a small screen.</span></span>
+          <div class="seg" role="group" aria-label="Board on a phone"><button type="button" aria-pressed="true">Lanes</button><button type="button" aria-pressed="false">Graph</button></div></div>
+        
+          <label class="pref" style="cursor: pointer"><span class="txt"><b>Show closed issues on the board</b><span>Implemented and not planned ones, and merged pull requests.</span></span>
+            <span class="switch"><input type="checkbox" role="switch"><span class="track" aria-hidden="true"></span></span></label>
+        
+          <label class="pref" style="cursor: pointer"><span class="txt"><b>Follow a running log live</b><span>Scrolls with new lines until you scroll up.</span></span>
+            <span class="switch"><input type="checkbox" role="switch" checked=""><span class="track" aria-hidden="true"></span></span></label>
+        
+          <label class="pref" style="cursor: pointer"><span class="txt"><b>Open the sections with errors</b><span>A failed command or build step opens by itself.</span></span>
+            <span class="switch"><input type="checkbox" role="switch" checked=""><span class="track" aria-hidden="true"></span></span></label>
+        
+          <label class="pref" style="cursor: pointer"><span class="txt"><b>Wrap long log lines</b><span>Off: long lines scroll sideways.</span></span>
+            <span class="switch"><input type="checkbox" role="switch"><span class="track" aria-hidden="true"></span></span></label>
+        
+      </section>
+
+      <section class="group" aria-labelledby="g4">
+        <h2 id="g4">Keyboard and account</h2>
+        <label class="pref" style="cursor: pointer"><span class="txt"><b>Keyboard shortcuts</b><span>Press <span class="kbd">?</span> to see them all. They never fire while you type.</span></span>
+          <span class="switch"><input type="checkbox" role="switch" checked=""><span class="track" aria-hidden="true"></span></span></label>
+        <div class="pref"><span class="txt"><b>Signed in as @bryansmee</b><span>Through GitHub. The operator's ALLOWED_USERS lets you in.</span></span>
+          <form method="post" action="#"><button type="submit" class="btn">Sign out</button></form></div>
+      </section>
+    </main>
+  </div>
+</div>
+
+
+
+
+</body></html>
