@@ -41,6 +41,7 @@ import { createHistory } from "./history.mjs";
 import { createImages } from "./images.mjs";
 import { createInputs } from "./inputs.mjs";
 import { createOnboarding, createOnboardingStore } from "./onboarding.mjs";
+import { createPolicies } from "./policies.mjs";
 import { createPreviews } from "./previews.mjs";
 import { createPulls } from "./pulls.mjs";
 import { createRedeliveries } from "./redeliveries.mjs";
@@ -241,11 +242,25 @@ const repoList = createRepoList({
 // Each repo's settings as last read: its runs' and comments', its `users` for the dashboard.
 const { repoSettings, ...repoReads } = createRepoSettings({ github, config, repoList });
 
+// The operator's and the repos' policies (rules as code), evaluated by `opa` after the built-in
+// gates. The operator's are checked now, as the grants are: an error refuses each decision a
+// policy is asked for (fail closed), so it is said at once.
+const policies = createPolicies({ config, github, secrets: () => operatorSecrets(ctx), log });
+policies.checkOperator().then(({ errors, warnings }) => {
+  for (const error of errors) {
+    console.error(
+      `GRANTS_DIR/policy: ${error} (every decision a policy is asked for refuses until it is fixed)`,
+    );
+  }
+  for (const warning of warnings) console.error(`GRANTS_DIR/policy: ${warning}`);
+});
+
 Object.assign(ctx, {
   github,
   graphql,
   publicUrl,
   repoSettings,
+  policies,
   ...repoReads,
   repoFile,
   setup,
@@ -399,6 +414,7 @@ ctx.reviews = createReviews({
   github,
   busy: taskBusy,
   reply: ctx.reply,
+  policies,
   grantOf: (repo) => {
     try {
       return grantFor(loadGrants(config), config, repo);

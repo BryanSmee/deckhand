@@ -718,7 +718,7 @@ export function createRuns(ctx) {
   async function configCheck(task) {
     if (!onboardingWork(task)) return null;
     try {
-      return await branchConfigReport(ctx.github, config, task.repo, task.number);
+      return await branchConfigReport(ctx.github, config, task.repo, task.number, ctx.policies);
     } catch (error) {
       log(`${taskKey(task.repo, task.id)}: checking the branch's config: ${error.stack ?? error}`);
       return `⚠️ The listener couldn't check the branch's \`${CONFIG_FILE}\`: ${error.message}`;

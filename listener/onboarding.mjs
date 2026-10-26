@@ -5,6 +5,7 @@
 import { ensureLabel } from "./comments.mjs";
 import { repoAllowed } from "./config.mjs";
 import { issueItem, linkedIssue, headInRepo } from "./events.mjs";
+import { POLICY_DIR } from "./policies.mjs";
 import { CONFIG_FILE, parseRepoConfig, readRepoFile } from "./repo-config.mjs";
 import { readJson, writeJsonAtomic } from "./store.mjs";
 
@@ -189,9 +190,10 @@ async function issuePullRequest(request, repo, number) {
 }
 
 // What the onboarding pull request's config says, for the reply: its errors and warnings
-// from parseRepoConfig(), and the files it names that the branch doesn't have. Null when the
-// issue has no open pull request.
-export async function branchConfigReport(request, config, repo, number) {
+// from parseRepoConfig(), the files it names that the branch doesn't have, and its policies'
+// compile errors (`policies`: policies.mjs createPolicies()). Null when the issue has no open
+// pull request.
+export async function branchConfigReport(request, config, repo, number, policies = null) {
   const pr = await issuePullRequest(request, repo, number);
   if (!pr) return null;
   const branch = pr.head.ref;
@@ -211,6 +213,11 @@ export async function branchConfigReport(request, config, repo, number) {
     if (!(await readRepoFile(request, repo, path, branch))) {
       errors.push(`${key}: \`${path}\` is not on the branch`);
     }
+  }
+  if (policies) {
+    const checked = await policies.checkRepo(repo, branch);
+    errors.push(...checked.errors.map((e) => `\`${POLICY_DIR}/\`: ${e}`));
+    warnings.push(...checked.warnings.map((w) => `\`${POLICY_DIR}/\`: ${w}`));
   }
   if (!errors.length && !warnings.length) return `✅ ${where} checked: no errors or warnings.`;
   const lines = [...errors.map((e) => `- ❌ ${e}`), ...warnings.map((w) => `- ⚠️ ${w}`)];

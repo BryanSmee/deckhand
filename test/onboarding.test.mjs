@@ -228,6 +228,32 @@ test("the config on the onboarding pull request's branch: errors, warnings, miss
   assert.equal(await branchConfigReport(empty.request, config, "org/app", 30), null);
 });
 
+test("the onboarding branch's policies: their errors and warnings in the report", async () => {
+  const branch = "issue-30-deckhand-config";
+  const { request } = fakeRequest({
+    "GET /repos/org/app/pulls?state=open&per_page=100": PULLS,
+    [`GET /repos/org/app/contents/.deckhand.yaml?ref=${branch}`]: file("setup: npm ci\n"),
+  });
+  const asked = [];
+  const policies = {
+    checkRepo: async (repo, ref) => {
+      asked.push([repo, ref]);
+      return {
+        errors: ["policy error: a.rego:2: undefined function http.send"],
+        warnings: ["a.rego: `deny_reveiw` isn't a rule Deckhand evaluates (`deny_merge`)"],
+      };
+    },
+  };
+  const report = await branchConfigReport(request, config, "org/app", 30, policies);
+  assert.deepEqual(asked, [["org/app", branch]]);
+  assert.match(report, /has errors/);
+  assert.match(
+    report,
+    /- ❌ `\.deckhand\/policy\/`: policy error: a\.rego:2: undefined function http\.send/,
+  );
+  assert.match(report, /- ⚠️ `\.deckhand\/policy\/`: a\.rego: `deny_reveiw` isn't a rule/);
+});
+
 test("the issue says who started it: the installer, or someone on the dashboard", () => {
   assert.match(
     onboardingBody("alice", "Deckhand"),

@@ -1082,6 +1082,38 @@ branch, the last check of everything above. With it on:
 Use it only on private repositories where everyone who can open or comment on an issue is
 trusted, and whose default branch deploys nothing you couldn't roll back.
 
+## Policies
+
+[Policies](repo-config.md#policies) are Rego rules that refuse a decision (`deny_merge`, the
+last gate of an auto-merge). Yours are the `*.rego` files of `policy/` in the grants folder,
+read again at each decision: the defaults of every repository. A repository's own are in
+`.deckhand/policy/` on its default branch; one with the same name as yours replaces it, others
+add to them.
+
+- **They can't widen anything**: they run after every built-in gate and can only add refusals.
+  The grants (`allow_auto_merge` and the rest) and the built-in gates stay what they are, so
+  any repository may have policies, with no grant: overriding one of yours by its file name
+  only drops a refusal you added, never one of Deckhand's. If a rule must hold for every
+  repository whatever it says, it belongs in a grant or a built-in gate, not in a default
+  policy.
+- **A pull request can't change them for itself**: they are read from the default branch, and
+  `.deckhand/` is among the files Deckhand trusts, so a pull request that changes a policy is
+  never merged by itself.
+- **They run in the listener, isolated**: the pinned `opa` binary of the listener's image
+  (version and sha256 in `listener/Dockerfile`), one process per decision, with an empty
+  environment, a 2-second limit, and a capabilities file without `opa.runtime` (the
+  environment), `http.send`, `net.*` (the network, DNS included) and `trace`, and no host
+  allowed (`allow_net: []`). A policy decides from its input only: it can't read the
+  listener's secrets or reach anything.
+- **What they say is shown, not trusted**: each message is put on one line, cut to 200
+  characters, redacted like the runs' output (the operator's secrets, GitHub token shapes),
+  quoted as code (no mention, no formatting), and five at most are posted.
+- **Fail closed**: a policy that doesn't compile, takes too long, or gives anything but a set
+  of strings refuses the decision with a `policy error: …` reason; so does a policy folder
+  that can't be read (yours or GitHub's). For `deny_merge`, the pull request then waits for a
+  human, as with any refusal. Your folder's compile errors are logged at start; a repository's
+  appear in its onboarding pull request's config check.
+
 ## Research runs
 
 A run in the research mode (`/mode research`, [Per-repo config](repo-config.md#research))
