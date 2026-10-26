@@ -382,7 +382,9 @@ test("check: compile errors and rules nobody evaluates; nothing to check, no opa
   ]);
   assert.deepEqual(await policies.check(files), {
     errors: ["policy error: bad.rego:2: undefined function http.send"],
-    warnings: ["a.rego: `deny_reveiw` isn't a rule Deckhand evaluates (`deny_merge`)"],
+    warnings: [
+      "a.rego: `deny_reveiw` isn't a rule Deckhand evaluates (`deny_merge`, `deny_review`, `deny_fix`)",
+    ],
   });
   const check = opa.calls.find((c) => c.args[0] === "check");
   assert.deepEqual(check.args, [

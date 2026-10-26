@@ -1085,7 +1085,8 @@ trusted, and whose default branch deploys nothing you couldn't roll back.
 ## Policies
 
 [Policies](repo-config.md#policies) are Rego rules that refuse a decision (`deny_merge`, the
-last gate of an auto-merge). Yours are the `*.rego` files of `policy/` in the grants folder,
+last gate of an auto-merge; `deny_review`, a review that starts by itself; `deny_fix`, a
+review's fix run). Yours are the `*.rego` files of `policy/` in the grants folder,
 read again at each decision: the defaults of every repository. A repository's own are in
 `.deckhand/policy/` on its default branch; one with the same name as yours replaces it, others
 add to them.
@@ -1117,7 +1118,9 @@ add to them.
 - **Fail closed**: a policy that doesn't compile, takes too long, or gives anything but a set
   of strings refuses the decision with a `policy error: …` reason; so does a policy folder
   that can't be read (yours or GitHub's). For `deny_merge`, the pull request then waits for a
-  human, as with any refusal. Your folder's compile errors are logged at start; a repository's
+  human, as with any refusal; for `deny_review`, the review is skipped (the log says why); for
+  `deny_fix`, no fix run starts and a comment says why. A refusal only ever costs a run or a
+  merge, never starts one. Your folder's compile errors are logged at start; a repository's
   appear in its onboarding pull request's config check.
 
 ## Research runs

@@ -464,7 +464,7 @@ review` gets the "unknown mode" reply. `review: true` (or a block without `on`, 
   ready, if it is on a branch of the repository (never a fork's) and was opened by Deckhand
   or by an allowed user (`users`); other bots' are skipped. Each head commit is reviewed by
   itself once, across redeliveries and restarts: to review it again after new pushes,
-  comment `/mode review`.
+  comment `/mode review`. A [policy](#policies) can skip it (`deny_review`).
 - **`/mode review`** on a pull request, from an allowed user, reviews it now; what the comment
   adds is what the review should look at. On an issue it is refused, with a reply.
 - **The verdict on GitHub**: changes requested when there is a critical, high or medium
@@ -485,7 +485,7 @@ review` gets the "unknown mode" reply. `review: true` (or a block without `on`, 
   written before the run is queued: the fix's push doesn't start a review (only turning ready
   does), and a later review (`/mode review`) starts no second fix. Other pull requests'
   reviews, and reviews that only comment, start nothing. To act again, comment with the
-  trigger.
+  trigger. A [policy](#policies) can refuse it (`deny_fix`): a comment says why.
 - **Security risk of `fix`**: the review's findings, a model's output, become the message of a
   run that can push. A comment written to steer the reviewer (a prompt injection) could turn
   into a finding the fix run carries out. Deckhand narrows it: the review reads only the
@@ -719,11 +719,13 @@ to them. With no policy anywhere, nothing changes: `opa` isn't run, and the repo
 folder is listed once, then again only after a push to its default branch (or 10 minutes).
 
 **The rules**: one set of strings per decision, each string a reason shown to the
-maintainer. Today, one decision:
+maintainer. Three decisions:
 
-| Rule         | When                                                                                                                         | A message does                                                                                                  |
-| ------------ | ---------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| `deny_merge` | An [auto-merge](#auto-merge), after every other gate passed, right before the merge. Only with `review.merge` and its grant. | Refuses the merge: the "Not merged automatically" comment quotes the messages (5 at most, 200 characters each). |
+| Rule          | When                                                                                                                                                                                     | A message does                                                                                                                                                                                                                  |
+| ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `deny_merge`  | An [auto-merge](#auto-merge), after every other gate passed, right before the merge. Only with `review.merge` and its grant.                                                             | Refuses the merge: the "Not merged automatically" comment quotes the messages (5 at most, 200 characters each).                                                                                                                 |
+| `deny_review` | A review that starts by itself ([`review.on: ready`](#reviews)), after its own checks, and the review after a fix run in auto-merge mode. Never a `/mode review` a maintainer asked for. | Skips the review: the listener's log says why, nothing is posted. After a fix run, the merge waits for a maintainer, the "Not merged automatically" comment quoting the messages.                                               |
+| `deny_fix`    | A [`review.fix`](#reviews) run, after its own checks, right before it is queued.                                                                                                         | Starts no fix run: a "No fix run" comment on the pull request quotes the messages. With `review.merge`, nothing is merged: the refusal quotes them too. The pull request's one fix run isn't used: a later review may start it. |
 
 Another `deny_*` rule is reported by the config check, as probably misspelled.
 
@@ -739,7 +741,8 @@ network or the listener's files (`opa.runtime`, `http.send`, `net.*`, `json.matc
 ### The merge input
 
 `input` of `deny_merge`, read from GitHub at the merge (the pull request, its files, its
-issue, its Actions runs) and the review that decides it:
+issue, its Actions runs) and the review that decides it (`deny_review` and `deny_fix`
+[read most of it](#the-review-and-fix-input)):
 
 | Field               | What                                                                                                                                                   |
 | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -754,6 +757,30 @@ issue, its Actions runs) and the review that decides it:
 | `review.findings[]` | `severity` (`critical`, `high`, `medium`, `low`), `path` and `line` (`null` when the finding names none), `text`.                                      |
 | `fixed`             | Whether a fix run came before this review.                                                                                                             |
 | `checks[]`          | The head commit's GitHub Actions runs: `name`, `status`, `conclusion`.                                                                                 |
+
+### The review and fix input
+
+`input` of `deny_review` and `deny_fix`: the [merge input](#the-merge-input)'s `version`,
+`time`, `repo`, `pr` (with `pr.files[]`), `issue` and `review`, read from GitHub when the
+decision is made (only when a policy applies), without `fixed` and `checks`:
+
+| Field      | `deny_review`                                                                 | `deny_fix`                                                                              |
+| ---------- | ----------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| `decision` | `"review"`.                                                                   | `"fix"`.                                                                                |
+| `issue`    | The issue the pull request closes, or `null` when its description names none. | The issue Deckhand worked on.                                                           |
+| `review`   | `null`: the review hasn't run.                                                | The review that requests changes: `verdict`, `rating`, `allowed`, and its `findings[]`. |
+
+```rego
+deny_review contains "work in progress" if "wip" in input.pr.labels
+
+deny_review contains "docs only" if every f in input.pr.files { startswith(f.path, "docs/") }
+
+deny_fix contains msg if {
+  some f in input.review.findings
+  startswith(f.path, "migrations/")
+  msg := sprintf("a finding in %s: migrations are fixed by a human", [f.path])
+}
+```
 
 ## Open questions
 

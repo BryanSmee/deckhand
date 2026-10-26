@@ -240,7 +240,9 @@ test("the onboarding branch's policies: their errors and warnings in the report"
       asked.push([repo, ref]);
       return {
         errors: ["policy error: a.rego:2: undefined function http.send"],
-        warnings: ["a.rego: `deny_reveiw` isn't a rule Deckhand evaluates (`deny_merge`)"],
+        warnings: [
+          "a.rego: `deny_reveiw` isn't a rule Deckhand evaluates (`deny_merge`, `deny_review`, `deny_fix`)",
+        ],
       };
     },
   };

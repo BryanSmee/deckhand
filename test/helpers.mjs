@@ -6,6 +6,7 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadConfig } from "../listener/config.mjs";
+import { createPolicies } from "../listener/policies.mjs";
 
 // Listens on 127.0.0.1, on a port the OS picks; resolves to that port.
 export async function listening(server) {
@@ -79,4 +80,38 @@ export function recordingFetch(answer) {
     return Response.json(answered);
   };
   return { fetch, calls };
+}
+
+// The policies' engine (policies.mjs) with a fake `opa` and org/repo's policy `files` (name →
+// text) on `ref`: each rule says `messages(input, rule)`, or fails as `failure` says. `evals`:
+// the inputs it was asked about, with their `rule`.
+export function policyEngine(
+  t,
+  { files = null, messages = () => [], failure = null, ref = "main" } = {},
+) {
+  const evals = [];
+  const engine = createPolicies({
+    config: {},
+    github: async (repo, method, path) => {
+      if (files && path === `/repos/org/repo/contents/.deckhand/policy?ref=${ref}`) {
+        return Response.json(Object.keys(files).map((name) => ({ type: "file", name, sha: name })));
+      }
+      if (files && path.startsWith("/repos/org/repo/git/blobs/")) {
+        const text = files[path.split("/").pop()];
+        return Response.json({ content: Buffer.from(text).toString("base64"), encoding: "base64" });
+      }
+      return new Response("{}", { status: 404 });
+    },
+    run: async (args, { input }) => {
+      if (args[0] === "capabilities") return { code: 0, stdout: '{"builtins":[]}' };
+      const rule = args.at(-1).replace("data.deckhand.", "");
+      evals.push({ ...JSON.parse(input), rule });
+      if (failure) return failure;
+      const value = messages(JSON.parse(input), rule);
+      return { code: 0, stdout: JSON.stringify({ result: [{ expressions: [{ value }] }] }) };
+    },
+    readOperator: () => new Map(),
+    tmp: tempDir(t),
+  });
+  return { engine, evals };
 }

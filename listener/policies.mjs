@@ -3,8 +3,8 @@
 // decision. The operator's defaults are GRANTS_DIR/policy/*.rego, read again at each decision
 // like the grants; a repo's are .deckhand/policy/*.rego on its default branch, like its
 // .deckhand.yaml. A repo file with the same name as an operator file replaces it, any other
-// name adds rules. Each decision is a set rule of package `deckhand` (`deny_merge`), whose
-// strings are the reasons shown to the maintainer.
+// name adds rules. Each decision is a set rule of package `deckhand` (`deny_merge`,
+// `deny_review`, `deny_fix`), whose strings are the reasons shown to the maintainer.
 //
 // Isolation: the policies are code a repo's maintainers write, and the listener holds the
 // Docker socket and the App's key. `opa` runs with an empty environment, under a timeout, and
@@ -25,7 +25,7 @@ export const POLICY_DIR = ".deckhand/policy";
 const OPERATOR_DIR = "policy";
 
 // The rules the listener evaluates: another `deny_*` rule is a mistake the config check says.
-export const RULES = ["deny_merge"];
+export const RULES = ["deny_merge", "deny_review", "deny_fix"];
 
 // What the input looks like (docs/repo-config.md#the-merge-input): a policy can check it.
 export const INPUT_VERSION = 1;
