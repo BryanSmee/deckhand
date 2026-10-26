@@ -246,6 +246,8 @@ export function createHttp(ctx, { dashboardDir }) {
         );
     }
     if (url.pathname === "/api/state") return sendJson(res, state(user));
+    // Read when Settings › Server opens, not at each poll: it scans the grants folder.
+    if (url.pathname === "/api/server") return sendJson(res, ctx.serverSetup());
     const match = /^\/api\/runs\/([\w.-]+)\/stream$/.exec(url.pathname);
     const run = match && ctx.runsById.get(match[1]);
     const visible = () => ctx.auth.user(req) === user && sees(user, run.repo ?? repoOf(run.key));

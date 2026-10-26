@@ -3202,6 +3202,7 @@ mounts:
     assert.equal(home.headers.get("x-content-type-options"), "nosniff");
     const refused = await get("/api/state");
     assert.equal(refused.status, 401);
+    assert.equal((await get("/api/server")).status, 401);
     assert.equal(refused.headers.get("x-content-type-options"), "nosniff");
     for (const path of ["/assets/app-1a2b.js", "/index.html", "/nope.js"]) {
       assert.equal((await get(path)).status, 401);
@@ -3254,6 +3255,10 @@ mounts:
     // Built from source: no version to link, and up since this listener started.
     assert.deepEqual([board.server.version, board.server.source], ["dev", ""]);
     assert.ok(board.server.startedAt <= board.now);
+    // How it is set up, for Settings › Server (status.mjs serverSetup()).
+    const setup = await (await get("/api/server", session)).json();
+    assertShape(setup, SETUP_KEYS, "ServerSetup");
+    assert.deepEqual(setup.allowedUsers, ["alice", "bob"]);
     for (const t of board.tasks) {
       assertShape(t, TASK_KEYS, "Task");
       for (const r of t.runs) assertShape(r, RUN_KEYS, "Run");
@@ -3449,6 +3454,7 @@ mounts:
   ];
   const SERVER_KEYS = [["version", "startedAt", "node", "source"], []];
   const SYNC_KEYS = [["at", "by", "redelivered", "pulls"], ["error"]];
+  const SETUP_KEYS = [["engine", "proxy", "grants", "allowedUsers", "allowedRepos"], []];
   const TASK_KEYS = [
     [
       "key",
