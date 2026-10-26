@@ -18,6 +18,23 @@ FROM node:26-alpine
 # git: the git gateway reads the workflow files a push of a repo granted `allow_workflows`
 # changes, against a mirror of it (git-mirror.mjs).
 RUN apk add --no-cache docker-cli docker-cli-buildx git tar
+# opa: evaluates the operator's and the repos' policies (policies.mjs). The static release,
+# pinned by version and by the sha256 of each architecture's binary (its release's .sha256).
+# A new version may bring builtins that read files or the network: check them against
+# policies.mjs's REMOVED before raising it.
+ARG TARGETARCH
+ARG OPA_VERSION=1.21.4
+RUN case "$TARGETARCH" in \
+      amd64) sum=2ab571f367f293bb19523b76f92f1945bbf245003392c7f392903f95c2b9b630 ;; \
+      arm64) sum=810aa96e44f1f852d044888cf830324e44eafd0f510345339011347ab4deaab1 ;; \
+      *) echo "no opa for $TARGETARCH" >&2; exit 1 ;; \
+    esac \
+    && apk add --no-cache --virtual .opa curl \
+    && curl -fsSLo /usr/local/bin/opa "https://github.com/open-policy-agent/opa/releases/download/v${OPA_VERSION}/opa_linux_${TARGETARCH}_static" \
+    && echo "$sum  /usr/local/bin/opa" | sha256sum -c - \
+    && chmod 755 /usr/local/bin/opa \
+    && apk del .opa \
+    && opa version
 WORKDIR /app
 COPY listener/*.mjs listener/
 COPY --from=dashboard /dashboard/dist/ dashboard/dist/

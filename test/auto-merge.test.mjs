@@ -12,6 +12,7 @@ import {
   reviewEvent,
   trustedFile,
 } from "../listener/reviews.mjs";
+import { createPolicies } from "../listener/policies.mjs";
 import { tempDir, testConfig } from "./helpers.mjs";
 
 const config = { ...testConfig(), bot: "deckhand-app[bot]", needsInputLabel: "needs-input" };
@@ -87,7 +88,7 @@ function fakeGitHub(over = {}) {
 // repo's `yaml`, and its grant (`allowAutoMerge`).
 function setup(
   t,
-  { yaml = MERGE, grant = true, granted = {}, path, busy = () => false, ...over } = {},
+  { yaml = MERGE, grant = true, granted = {}, path, busy = () => false, policies, ...over } = {},
 ) {
   let time = 1_800_000_000_000;
   const accepted = [];
@@ -105,6 +106,7 @@ function setup(
     reply: async (repo, number, text) => replies.push({ number, text }),
     grantOf: () => ({ allowAutoMerge: grant, ...granted }),
     merged: (repo, pr) => merged.push(pr.number),
+    policies,
     sleep: async () => {},
     now: () => (time += 1000),
   });
@@ -483,6 +485,81 @@ test("mergeRefusal: everything passes, the pull request and method come back", a
   assert.equal(gate.why, null);
   assert.equal(gate.method, "squash");
   assert.equal(gate.pr.number, 5);
+});
+
+// The policies' engine with a fake `opa` and the repo's policy files: its `deny_merge` says
+// `messages` (a function of the input), or fails as `failure` says.
+function policyEngine(t, { files = null, messages = () => [], failure = null } = {}) {
+  const evals = [];
+  const engine = createPolicies({
+    config: {},
+    github: async (repo, method, path) => {
+      if (files && path === "/repos/org/repo/contents/.deckhand/policy?ref=main") {
+        return Response.json(Object.keys(files).map((name) => ({ type: "file", name, sha: name })));
+      }
+      if (files && path.startsWith("/repos/org/repo/git/blobs/")) {
+        const text = files[path.split("/").pop()];
+        return Response.json({ content: Buffer.from(text).toString("base64"), encoding: "base64" });
+      }
+      return new Response("{}", { status: 404 });
+    },
+    run: async (args, { input }) => {
+      if (args[0] === "capabilities") return { code: 0, stdout: '{"builtins":[]}' };
+      evals.push(JSON.parse(input));
+      if (failure) return failure;
+      const value = messages(JSON.parse(input));
+      return { code: 0, stdout: JSON.stringify({ result: [{ expressions: [{ value }] }] }) };
+    },
+    readOperator: () => new Map(),
+    tmp: tempDir(t),
+  });
+  return { engine, evals };
+}
+
+test("auto-merge: deny_merge refuses with its reasons, after every built-in gate", async (t) => {
+  const policy = policyEngine(t, {
+    files: { "size.rego": "package deckhand" },
+    messages: (input) => (input.pr.files.length >= 1 ? ["a human merges `listener/` changes"] : []),
+  });
+  const s = setup(t, { policies: policy.engine });
+  assert.equal(await s.settle(), null);
+  assert.equal(s.merges().length, 0);
+  assert.match(
+    s.replies[0].text,
+    /^\*\*Not merged automatically\*\* \(`review\.merge`\): the policies refuse it \(`deny_merge`\): `a human merges 'listener\/' changes`\. It waits/,
+  );
+  const [input] = policy.evals;
+  assert.equal(input.version, 1);
+  assert.equal(input.decision, "merge");
+  assert.equal(input.pr.number, 5);
+  assert.deepEqual(
+    input.pr.files.map((f) => f.path),
+    ["listener/x.mjs"],
+  );
+  assert.equal(input.review.verdict, "approve");
+  assert.equal(input.fixed, false);
+  assert.deepEqual(input.checks, [{ name: "CI", status: "completed", conclusion: "success" }]);
+  // A built-in gate that refuses first: no policy asked.
+  const draft = policyEngine(t, { files: { "size.rego": "package deckhand" } });
+  const early = setup(t, { policies: draft.engine, pr: { draft: true } });
+  assert.equal(await early.settle(), null);
+  assert.equal(draft.evals.length, 0);
+});
+
+test("auto-merge: a policy error refuses; no policy, no opa call and the merge", async (t) => {
+  const broken = policyEngine(t, {
+    files: { "bad.rego": "package deckhand" },
+    failure: { code: 1, stdout: '{"errors":[{"message":"rego_parse_error: unexpected eof"}]}' },
+  });
+  const s = setup(t, { policies: broken.engine });
+  assert.equal(await s.settle(), null);
+  assert.equal(s.merges().length, 0);
+  assert.match(s.replies[0].text, /`policy error: rego_parse_error: unexpected eof`/);
+  const none = policyEngine(t);
+  const clean = setup(t, { policies: none.engine });
+  assert.ok(await clean.settle());
+  assert.equal(none.evals.length, 0);
+  assert.equal(clean.merges().length, 1);
 });
 
 test("auto-merge with a granted preview hook: only with the operator's long acknowledgement", async (t) => {

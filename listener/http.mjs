@@ -381,7 +381,10 @@ export function createHttp(ctx, { dashboardDir }) {
     const { app } = ctx;
     log(`Delivery: ${event} ${payload.action ?? ""} from ${payload.sender?.login ?? "?"}`);
     app.remember(payload.repository?.full_name, payload.installation?.id);
-    refreshFor(event, payload, ctx.repoList.refresh);
+    // A default branch that moved: the repository list and the policies read it again.
+    if (refreshFor(event, payload, ctx.repoList.refresh) && payload.repository?.full_name) {
+      ctx.policies?.forget(payload.repository.full_name);
+    }
     // Only the repository list's: nothing runs on a push.
     if (event === "push") return;
     if (event === "installation" || event === "installation_repositories") {

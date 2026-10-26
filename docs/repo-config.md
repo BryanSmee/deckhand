@@ -575,7 +575,9 @@ with only low findings still does. `low`, the default: any medium finding blocks
   request with more than it lists is refused;
 - a granted preview hook only with the acknowledgement above;
 - `mergeable_state` is `clean`, and its GitHub Actions runs on the head commit are finished
-  with none failed (read with the App's `actions: read`; no new permission).
+  with none failed (read with the App's `actions: read`; no new permission);
+- last, the operator's and the repository's [policies](#policies) (`deny_merge`): any message
+  refuses the merge, and the comment quotes it.
 
 The merge is `PUT /pulls/{n}/merge` with the reviewed commit as `sha`, so a push after the
 review makes GitHub refuse it. A comment then says Deckhand merged it, and why; the dashboard
@@ -674,6 +676,84 @@ It is off without the key, and each conflict found is a run, so a bill.
   `check_minutes` gets that one (with a warning in the run logs), and `0` turns conflict
   checks off for every repository. `check_minutes` must be a whole number above 0; any
   other key under `conflicts` is an error.
+
+## Policies
+
+Rules of your own, written as code in [Rego](https://www.openpolicyagent.org/docs/policy-language)
+(Open Policy Agent), for what the built-in gates don't cover: "a human merges any pull
+request over 400 lines", "nothing under `migrations/` is merged by itself", "a medium finding
+in payments code blocks". **Policies can only refuse**: they run after every built-in gate,
+and add refusals to them; they never let through what a gate or the operator's grants stop.
+
+```rego
+# .deckhand/policy/merge.rego (default branch)
+package deckhand
+
+deny_merge contains msg if {
+  input.pr.additions + input.pr.deletions > 400
+  msg := "more than 400 changed lines: a human merges this one"
+}
+
+deny_merge contains msg if {
+  some f in input.pr.files
+  startswith(f.path, "migrations/")
+  msg := sprintf("it changes %s: migrations wait for a human", [f.path])
+}
+
+deny_merge contains msg if {
+  some f in input.review.findings
+  f.severity == "medium"
+  startswith(f.path, "src/payments/")
+  msg := sprintf("medium finding in payments code: %s:%d", [f.path, f.line])
+}
+
+deny_merge contains "labelled do-not-merge" if "do-not-merge" in input.pr.labels
+```
+
+**The files**: every `*.rego` file of `.deckhand/policy/` on the default branch (not its
+subfolders), in package `deckhand`; a file in another package is a library the others can
+import. The operator can ship defaults in their grants folder's `policy/` folder
+([security model](security.md#policies)): a repository file **with the same name** as an
+operator file replaces it (a file with only `package deckhand` drops it), any other name adds
+to them. With no policy anywhere, nothing changes: `opa` isn't run, and the repository's
+folder is listed once, then again only after a push to its default branch (or 10 minutes).
+
+**The rules**: one set of strings per decision, each string a reason shown to the
+maintainer. Today, one decision:
+
+| Rule         | When                                                                                                                         | A message does                                                                                                  |
+| ------------ | ---------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `deny_merge` | An [auto-merge](#auto-merge), after every other gate passed, right before the merge. Only with `review.merge` and its grant. | Refuses the merge: the "Not merged automatically" comment quotes the messages (5 at most, 200 characters each). |
+
+Another `deny_*` rule is reported by the config check, as probably misspelled.
+
+**Fail closed**: a policy that doesn't compile, takes more than 2 seconds, or makes the rule
+anything but a set of strings refuses the decision, with a single `policy error: …` reason
+saying why. So does a policy folder that GitHub can't list. The onboarding pull request's
+config check compiles its branch's policies and reports their errors.
+
+**What a policy can call**: Rego's builtins, without those that read the environment, the
+network or the listener's files (`opa.runtime`, `http.send`, `net.*`, `json.match_schema`,
+`json.verify_schema`) and `trace`: a policy decides from its input only. `time.now_ns()` works, so "not on Fridays" does.
+
+### The merge input
+
+`input` of `deny_merge`, read from GitHub at the merge (the pull request, its files, its
+issue, its Actions runs) and the review that decides it:
+
+| Field               | What                                                                                                                                                   |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `version`           | `1`: the input's format, raised when a field changes meaning or goes.                                                                                  |
+| `decision`          | `"merge"`.                                                                                                                                             |
+| `time`              | Now, RFC 3339 in UTC (`"2026-10-26T10:00:00.000Z"`): `time.parse_rfc3339_ns(input.time)`.                                                              |
+| `repo`              | `name` (`"owner/repo"`), `private`, `default_branch`.                                                                                                  |
+| `pr`                | `number`, `author` (a login), `title`, `labels` (names), `base` and `head` (branches), `head_sha`, `draft`, `additions`, `deletions`, `changed_files`. |
+| `pr.files[]`        | `path`, `previous_path` (a rename's, else `null`), `status` (`added`, `modified`, `removed`, `renamed`…), `additions`, `deletions`.                    |
+| `issue`             | The issue the pull request closes: `number`, `title`, `labels` (names).                                                                                |
+| `review`            | The review that decides the merge: `verdict` (`approve`, `comment`), `rating` (out of 10), `allowed` (`max_allowed_severity`).                         |
+| `review.findings[]` | `severity` (`critical`, `high`, `medium`, `low`), `path` and `line` (`null` when the finding names none), `text`.                                      |
+| `fixed`             | Whether a fix run came before this review.                                                                                                             |
+| `checks[]`          | The head commit's GitHub Actions runs: `name`, `status`, `conclusion`.                                                                                 |
 
 ## Open questions
 

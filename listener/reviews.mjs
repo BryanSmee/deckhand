@@ -363,11 +363,14 @@ const MERGEABLE_WAIT_MS = 3000;
 // pull request Deckhand's own, on a branch of the repo and linked to its issue, open, not a
 // draft, nothing waiting for the maintainer, still at the reviewed head `sha`, the repository
 // private (or granted `public`), the merge method allowed, no file Deckhand trusts changed,
-// `mergeable_state` clean, its GitHub Actions runs finished and none failed. `busy(task)`:
-// a run going or queued on the issue.
+// `mergeable_state` clean, its GitHub Actions runs finished and none failed; last, the
+// operator's and the repo's policies (`deny_merge`, policies.mjs), which only add refusals.
+// `busy(task)`: a run going or queued on the issue; `policies`: createPolicies(), none without;
+// `review`, `fixed`: the review deciding the merge and whether a fix run came before it, for
+// the policies' input.
 export async function mergeRefusal(
-  { github, config, busy = () => false, sleep },
-  { repo, number, sha, settings, grant },
+  { github, config, busy = () => false, sleep, policies = null, now = Date.now },
+  { repo, number, sha, settings, grant, review = null, fixed = false },
 ) {
   const hook = previewProblem(grant, settings);
   if (hook) return { why: hook };
@@ -455,7 +458,86 @@ export async function mergeRefusal(
     const names = failed.slice(0, 5).map((r) => `${r.name ?? "a run"} (${r.conclusion})`);
     return { why: `GitHub Actions runs on ${short(sha)} failed: ${names.join(", ")}` };
   }
+  if (policies) {
+    const input = async () => {
+      const found = await getJson(github, repo, `/repos/${repo}/issues/${issue}`, [404, 410]);
+      return mergeInput({
+        info,
+        pr,
+        files,
+        issue: found ?? { number: issue },
+        review,
+        fixed,
+        runs,
+        now,
+      });
+    };
+    const denied = await policies.deny("deny_merge", repo, info.default_branch || "main", input);
+    if (denied.length) return { why: policyWhy("deny_merge", denied) };
+  }
   return { why: null, pr, method };
+}
+
+// The input of `deny_merge` (docs/repo-config.md#the-merge-input), from what mergeRefusal()
+// read: names as GitHub's API spells them where they are its own, the review as parsed.
+export function mergeInput({ info, pr, files, issue, review, fixed, runs, now = Date.now }) {
+  const names = (labels) => (labels ?? []).map((l) => (typeof l === "string" ? l : l?.name));
+  return {
+    decision: "merge",
+    time: new Date(now()).toISOString(),
+    repo: {
+      name: info.full_name ?? null,
+      private: info.private === true,
+      default_branch: info.default_branch ?? null,
+    },
+    pr: {
+      number: pr.number,
+      author: pr.user?.login ?? null,
+      title: pr.title ?? "",
+      labels: names(pr.labels),
+      base: pr.base?.ref ?? null,
+      head: pr.head?.ref ?? null,
+      head_sha: pr.head?.sha ?? null,
+      draft: !!pr.draft,
+      additions: pr.additions ?? 0,
+      deletions: pr.deletions ?? 0,
+      changed_files: pr.changed_files ?? files.length,
+      files: files.map((f) => ({
+        path: f.filename,
+        previous_path: f.previous_filename ?? null,
+        status: f.status ?? null,
+        additions: f.additions ?? 0,
+        deletions: f.deletions ?? 0,
+      })),
+    },
+    issue: { number: issue.number ?? null, title: issue.title ?? "", labels: names(issue.labels) },
+    review: review
+      ? {
+          verdict: review.verdict,
+          rating: review.rating,
+          allowed: review.allowed ?? "low",
+          findings: review.findings.map(({ severity, path, line, text }) => ({
+            severity,
+            path,
+            line,
+            text,
+          })),
+        }
+      : null,
+    fixed: !!fixed,
+    checks: runs.map((r) => ({
+      name: r.name ?? null,
+      status: r.status ?? null,
+      conclusion: r.conclusion ?? null,
+    })),
+  };
+}
+
+// A policy's refusal, its messages quoted as code: a message may repeat what a pull request's
+// title or a finding says, which mustn't mention anyone or format the comment.
+export function policyWhy(rule, messages) {
+  const quoted = messages.map((m) => `\`${m.replace(/`/g, "'")}\``);
+  return `the policies refuse it (\`${rule}\`): ${quoted.join(", ")}`;
 }
 
 const short = (sha) => (sha ? sha.slice(0, 7) : "?");
@@ -505,7 +587,8 @@ export function reviewCandidate(config, event, p, skip = () => null) {
 // `reply(repo, number, text)`: a comment with the listener's token; `grantOf(repo)`: the
 // operator's grant for it (grants.mjs grantFor()), null when its grants have errors;
 // `merged(repo, pr)`: a pull request it merged, for the dashboard; `sleep(ms)`: the wait
-// between asks of `mergeable_state`.
+// between asks of `mergeable_state`; `policies`: the policies' engine (policies.mjs), none
+// without.
 export function createReviews({
   path,
   config,
@@ -516,6 +599,7 @@ export function createReviews({
   reply = async () => {},
   grantOf = () => null,
   merged = () => {},
+  policies = null,
   log = () => {},
   now = Date.now,
   sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
@@ -724,8 +808,8 @@ export function createReviews({
     let res;
     try {
       gate = await mergeRefusal(
-        { github, config, busy, sleep },
-        { repo, number, sha, settings, grant },
+        { github, config, busy, sleep, policies, now },
+        { repo, number, sha, settings, grant, review, fixed },
       );
       if (gate.why) return refuse(key, repo, number, gate.why);
       res = await github(
