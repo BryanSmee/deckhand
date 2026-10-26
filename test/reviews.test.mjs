@@ -240,6 +240,15 @@ test("postReview: the App's own pull request, unparsed messages, refusals", asyn
   assert.equal(refused.calls.find((c) => c.method === "POST").body.commit_id, undefined);
   assert.equal(refused.replies.length, 1);
   assert.match(refused.replies[0][2], /^\*\*Verdict: request changes\*\*/);
+  // Where the full review is goes with it, and a comment GitHub refuses too throws.
+  const both = fakeGitHub({ "POST /repos/org/repo/pulls/5/reviews": 403 });
+  const options = [];
+  both.reply = async (...args) => {
+    options.push(args[3]);
+    throw new Error("GitHub POST /repos/org/repo/issues/5/comments: 500");
+  };
+  await assert.rejects(postReview(both, "org/repo", 5, MESSAGE, "f", { full: "u" }), /: 500/);
+  assert.deepEqual(options, [{ full: "u" }]);
 });
 
 // A `pull_request` delivery for org/repo's #5, by `login`, on a branch of the repo.

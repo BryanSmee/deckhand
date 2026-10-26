@@ -198,14 +198,15 @@ const cut = (text) => (text.length > 60000 ? `${text.slice(0, 60000)}\n\n…` : 
 // on its own pull request (GitHub answers 422): then a comment review, the verdict in its
 // text. A review GitHub refuses otherwise goes as a plain comment (`reply`): nothing is lost.
 // `github`: the App's calls (server.mjs); `allowed`: the review's tolerance (reviews'
-// tolerance()).
+// tolerance()); `full`: where the whole text is, should GitHub take only its start. The
+// comment fallback throws when GitHub refuses it too (comments.mjs reply()).
 export async function postReview(
   { github, reply, log = () => {} },
   repo,
   number,
   text,
   footer,
-  { allowed = "low" } = {},
+  { allowed = "low", full } = {},
 ) {
   const review = parseReview(text, { allowed });
   let pr = null;
@@ -231,7 +232,7 @@ export async function postReview(
   if (res.status === 422 && event !== "COMMENT") res = await post((event = "COMMENT"));
   if (res.ok) return { event, review, pr };
   log(`${repo}#${number}: the review was refused (${res.status}), posted as a comment`);
-  await reply(repo, number, body.replace(`\n\n${MARKER}`, ""));
+  await reply(repo, number, body.replace(`\n\n${MARKER}`, ""), { full });
   return { event: null, review, pr };
 }
 

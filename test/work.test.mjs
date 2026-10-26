@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
+import { ReplyError } from "../listener/comments.mjs";
 import { createWaits } from "../listener/waits.mjs";
 import { MAX_TREE, leadsTo } from "../listener/plans.mjs";
 import { ISSUES_MS, checkAction, createWorkApi, staleFor } from "../listener/work.mjs";
@@ -118,8 +119,9 @@ function setup({
       : new Response("{}", { status: 404 });
   };
   const reply = async (repo, number, text) => {
-    // A test fails a comment with `w.failComment()` returning true.
-    if (w.failComment?.()) return new Response("{}", { status: 502 });
+    // A test fails a comment with `w.failComment()` returning true: it throws, as comments.mjs's.
+    if (w.failComment?.())
+      throw new ReplyError(`GitHub POST /repos/${repo}/issues/${number}/comments`, 502);
     w.comments.push([number, text]);
     return Response.json({ id: ++commentId, html_url: `c/${commentId}`, node_id: "N" });
   };
