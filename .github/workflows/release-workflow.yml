@@ -27,7 +27,9 @@ permissions:
 
 jobs:
   images:
-    runs-on: ubuntu-latest
+    # The operator's own runners: GitHub-hosted minutes ran out. They need Docker (buildx and
+    # QEMU run as containers, QEMU's privileged).
+    runs-on: [self-hosted, Linux]
     strategy:
       matrix:
         include:
@@ -43,8 +45,9 @@ jobs:
             dockerfile: engine/podman/Dockerfile
     steps:
       - uses: actions/checkout@v4
-      # Only releases build arm64, through QEMU: edge skips most of the compute.
-      - if: github.ref_type == 'tag'
+      # Only releases build arm64, through QEMU: edge skips most of the compute. A runner that
+      # isn't x64 needs it for edge's amd64 too.
+      - if: github.ref_type == 'tag' || runner.arch != 'X64'
         uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
