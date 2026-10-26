@@ -1,0 +1,781 @@
+/* The dashboard redesign's tokens and components (docs/design/dashboard-redesign.md): the
+   reference the implementation copies into dashboard/src (global.css for the tokens, CSS
+   Modules for the components). The pages next to this file inline their own copy of what they
+   use; this file is the one list. Delete it with the reference pages once the redesign ships. */
+
+/* Tokens: light, then dark. A page sets .t-light or .t-dark on its root; the dashboard will
+   set them from System / Light / Dark (prefers-color-scheme for System). */
+.t-light {
+  --bg: #f6f7f9;
+  --surface: #ffffff;
+  --surface-2: #f0f2f5;
+  --surface-3: #e6e9ee;
+  --border: #e1e4ea;
+  --border-strong: #c5cbd5;
+  --text: #14171f;
+  --text-2: #475061;
+  --text-3: #5f6878;
+  --primary: #14171f;
+  --on-primary: #ffffff;
+  --primary-hover: #2e3440;
+  --focus: #2563eb;
+  --run: #1d4ed8;
+  --run-bg: #e7eefd;
+  --run-solid: #3b6ff0;
+  --input: #9a4a06;
+  --input-bg: #fdf0dc;
+  --input-solid: #e8890c;
+  --ready: #6a2dd0;
+  --ready-bg: #f0eafd;
+  --ready-solid: #8b5cf6;
+  --done: #146c34;
+  --done-bg: #e3f3e8;
+  --done-solid: #22a355;
+  --err: #b42318;
+  --err-bg: #fdebea;
+  --err-solid: #c8322a;
+  --idle: #4b5463;
+  --idle-bg: #edeff3;
+  --idle-solid: #98a1b0;
+  --dots: #d5dae2;
+  --scrim: rgba(20, 23, 31, 0.42);
+  --shadow: 0 1px 2px rgba(20, 23, 31, 0.06), 0 6px 16px rgba(20, 23, 31, 0.08);
+  --dlg-shadow: 0 24px 64px rgba(20, 23, 31, 0.22), 0 2px 6px rgba(20, 23, 31, 0.08);
+  --sheet-shadow: 0 -8px 24px rgba(20, 23, 31, 0.12);
+  color-scheme: light;
+}
+
+.t-dark {
+  --bg: #0d0f14;
+  --surface: #151820;
+  --surface-2: #1c2029;
+  --surface-3: #252a35;
+  --border: #262b36;
+  --border-strong: #3a4150;
+  --text: #e9ecf2;
+  --text-2: #b3bac7;
+  --text-3: #8c95a5;
+  --primary: #e9ecf2;
+  --on-primary: #0d0f14;
+  --primary-hover: #ffffff;
+  --focus: #6e9bff;
+  --run: #8fb1ff;
+  --run-bg: #16213d;
+  --run-solid: #5b86f5;
+  --input: #f4b35e;
+  --input-bg: #33240e;
+  --input-solid: #e8930f;
+  --ready: #c3a6ff;
+  --ready-bg: #271c44;
+  --ready-solid: #9670f5;
+  --done: #6ccf8b;
+  --done-bg: #11281a;
+  --done-solid: #2da55a;
+  --err: #ff8e86;
+  --err-bg: #3a1614;
+  --err-solid: #c93a31;
+  --idle: #aab1be;
+  --idle-bg: #20242d;
+  --idle-solid: #6b7383;
+  --dots: #232833;
+  --scrim: rgba(0, 0, 0, 0.6);
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 24px rgba(0, 0, 0, 0.4);
+  --dlg-shadow: 0 24px 64px rgba(0, 0, 0, 0.6), 0 2px 6px rgba(0, 0, 0, 0.4);
+  --sheet-shadow: 0 -8px 32px rgba(0, 0, 0, 0.55);
+  color-scheme: dark;
+}
+
+/* Base type: Inter for the UI, JetBrains Mono for numbers, keys and logs. */
+.ui {
+  font-family: Inter, system-ui, sans-serif;
+  font-size: 13.5px;
+  line-height: 20px;
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+}
+
+.mono {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+}
+
+/* Status tones: a status class sets --s-fg (text), --s-bg (soft fill), --s-solid (dot,
+   border); badges, dots, notices and graph nodes read them. Only states use these colours. */
+.s-run {
+  --s-fg: var(--run);
+  --s-bg: var(--run-bg);
+  --s-solid: var(--run-solid);
+}
+.s-input {
+  --s-fg: var(--input);
+  --s-bg: var(--input-bg);
+  --s-solid: var(--input-solid);
+}
+.s-ready {
+  --s-fg: var(--ready);
+  --s-bg: var(--ready-bg);
+  --s-solid: var(--ready-solid);
+}
+.s-done {
+  --s-fg: var(--done);
+  --s-bg: var(--done-bg);
+  --s-solid: var(--done-solid);
+}
+.s-err {
+  --s-fg: var(--err);
+  --s-bg: var(--err-bg);
+  --s-solid: var(--err-solid);
+}
+.s-idle {
+  --s-fg: var(--idle);
+  --s-bg: var(--idle-bg);
+  --s-solid: var(--idle-solid);
+}
+.s-quiet {
+  --s-fg: var(--text-2);
+  --s-bg: var(--surface-3);
+  --s-solid: var(--idle-solid);
+}
+
+/* Buttons: secondary by default; .btn-primary (one per view), .btn-ghost, .btn-danger,
+   .btn-danger-solid (a confirmed stop); sizes .btn-sm (28), default (36), .btn-lg (44, touch);
+   .btn-icon squares it (needs an aria-label). */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 36px;
+  padding: 0 14px;
+  box-sizing: border-box;
+  border-radius: 8px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--text);
+  font:
+    500 13px/1 Inter,
+    system-ui,
+    sans-serif;
+  cursor: pointer;
+  white-space: nowrap;
+  text-decoration: none;
+  transition:
+    background 0.12s,
+    border-color 0.12s,
+    color 0.12s,
+    transform 0.06s;
+}
+.btn:hover {
+  background: var(--surface-2);
+}
+.btn:active {
+  transform: translateY(1px);
+  background: var(--surface-3);
+}
+.btn:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+.btn-primary {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: var(--on-primary);
+}
+.btn-primary:hover {
+  background: var(--primary-hover);
+  border-color: var(--primary-hover);
+}
+.btn-ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--text-2);
+}
+.btn-ghost:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+.btn-danger {
+  color: var(--err);
+}
+.btn-danger:hover {
+  background: var(--err-bg);
+  border-color: var(--err-solid);
+}
+.btn-danger-solid {
+  background: var(--err-solid);
+  border-color: var(--err-solid);
+  color: #ffffff;
+}
+.btn-sm {
+  height: 28px;
+  padding: 0 10px;
+  font-size: 12.5px;
+  border-radius: 6px;
+}
+.btn-lg {
+  height: 44px;
+  padding: 0 18px;
+  font-size: 14px;
+  border-radius: 10px;
+}
+.btn-icon {
+  width: 36px;
+  padding: 0;
+}
+.btn-sm.btn-icon {
+  width: 28px;
+}
+.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  transform: none;
+}
+/* Pending: the button keeps its size, says what it does ("Starting…") and spins after 400 ms. */
+.spin {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  animation: spin 0.8s linear infinite;
+  box-sizing: border-box;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Status: a badge (word + dot), a dot alone (always next to its word), a pulse for running. */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 999px;
+  font:
+    600 11.5px/1 Inter,
+    system-ui,
+    sans-serif;
+  white-space: nowrap;
+  background: var(--s-bg);
+  color: var(--s-fg);
+  box-sizing: border-box;
+}
+.badge.outline {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--s-solid);
+}
+.sdot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--s-solid);
+  flex: none;
+}
+.pulse {
+  animation: pulse 1.6s ease-out infinite;
+}
+@keyframes pulse {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--s-solid) 60%, transparent);
+  }
+  100% {
+    box-shadow: 0 0 0 6px transparent;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pulse,
+  .spin {
+    animation: none;
+  }
+}
+
+/* Fields: .input on input, select and textarea; .affix places a leading icon or trailing
+   chevron; .label and .help around it. */
+.input {
+  height: 36px;
+  box-sizing: border-box;
+  width: 100%;
+  padding: 0 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font:
+    400 13.5px/20px Inter,
+    system-ui,
+    sans-serif;
+  transition:
+    border-color 0.12s,
+    box-shadow 0.12s;
+}
+.input::placeholder {
+  color: var(--text-3);
+}
+.input:hover {
+  border-color: var(--text-3);
+}
+.input:focus {
+  outline: none;
+  border-color: var(--focus);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--focus) 24%, transparent);
+}
+.input.is-invalid {
+  border-color: var(--err-solid);
+}
+textarea.input {
+  height: auto;
+  padding: 8px 12px;
+  resize: vertical;
+}
+select.input {
+  appearance: none;
+  padding-right: 32px;
+  cursor: pointer;
+}
+.affix {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.affix .lead {
+  position: absolute;
+  left: 11px;
+  color: var(--text-3);
+  pointer-events: none;
+  display: flex;
+}
+.affix .trail {
+  position: absolute;
+  right: 10px;
+  color: var(--text-3);
+  pointer-events: none;
+  display: flex;
+}
+.affix .has-lead {
+  padding-left: 34px;
+}
+.label {
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--text-2);
+}
+.help {
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--text-3);
+}
+
+/* Choices: checkbox, switch (a checkbox with role="switch"), segmented control (aria-pressed,
+   or aria-current on links), option cards (radios). */
+.check {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.check input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--primary);
+}
+.switch {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-2);
+  cursor: pointer;
+}
+.switch input {
+  position: absolute;
+  opacity: 0;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+}
+.switch .track {
+  position: relative;
+  width: 30px;
+  height: 18px;
+  box-sizing: border-box;
+  border-radius: 999px;
+  background: var(--surface-3);
+  border: 1px solid var(--border-strong);
+  transition: background 0.12s;
+  flex: none;
+}
+.switch .track::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--text-3);
+  transition:
+    transform 0.12s,
+    background 0.12s;
+}
+.switch input:checked + .track {
+  background: var(--primary);
+  border-color: var(--primary);
+}
+.switch input:checked + .track::after {
+  transform: translateX(12px);
+  background: var(--on-primary);
+}
+.switch input:focus-visible + .track {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+.seg {
+  display: inline-flex;
+  padding: 3px;
+  gap: 2px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.seg button,
+.seg a {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-2);
+  font:
+    500 12.5px/1 Inter,
+    system-ui,
+    sans-serif;
+  cursor: pointer;
+  text-decoration: none;
+  transition:
+    background 0.12s,
+    color 0.12s;
+}
+.seg button:hover,
+.seg a:hover {
+  color: var(--text);
+}
+.seg [aria-pressed="true"],
+.seg [aria-current="page"] {
+  background: var(--surface);
+  color: var(--text);
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.12),
+    0 0 0 1px var(--border);
+}
+.opt {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  cursor: pointer;
+}
+.opt:has(input:checked) {
+  border-color: var(--text);
+  background: var(--surface-2);
+}
+
+/* Tabs (underlined), filter chips (aria-pressed), counts (.hot: waits on you). */
+.tabs {
+  display: flex;
+  gap: 2px;
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+}
+.tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 38px;
+  padding: 0 10px;
+  border: 0;
+  background: none;
+  color: var(--text-2);
+  font:
+    500 13px/1 Inter,
+    system-ui,
+    sans-serif;
+  cursor: pointer;
+  white-space: nowrap;
+  text-decoration: none;
+  box-shadow: inset 0 -2px 0 transparent;
+  transition:
+    color 0.12s,
+    box-shadow 0.12s;
+}
+.tab:hover {
+  color: var(--text);
+}
+.tab[aria-selected="true"],
+.tab[aria-current="page"] {
+  color: var(--text);
+  box-shadow: inset 0 -2px 0 var(--text);
+}
+.count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  box-sizing: border-box;
+  border-radius: 999px;
+  background: var(--surface-3);
+  color: var(--text-2);
+  font:
+    600 11px/1 Inter,
+    system-ui,
+    sans-serif;
+}
+.count.hot {
+  background: var(--input-bg);
+  color: var(--input);
+}
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 11px;
+  box-sizing: border-box;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-2);
+  font:
+    500 12.5px/1 Inter,
+    system-ui,
+    sans-serif;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.chip:hover {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+.chip[aria-pressed="true"] {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: var(--on-primary);
+}
+.chip .n {
+  font:
+    500 11.5px/1 "JetBrains Mono",
+    monospace;
+  opacity: 0.7;
+}
+
+/* Navigation: a sidebar item (aria-current="page"), its rail form (icon only, 40 px). */
+.nav {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 34px;
+  padding: 0 10px;
+  border-radius: 8px;
+  color: var(--text-2);
+  text-decoration: none;
+  font:
+    500 13px/1 Inter,
+    system-ui,
+    sans-serif;
+  transition:
+    background 0.12s,
+    color 0.12s;
+}
+.nav:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+.nav[aria-current="page"] {
+  background: var(--surface-3);
+  color: var(--text);
+}
+.nav.rail {
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border-radius: 10px;
+}
+
+/* Surfaces and feedback. */
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+.notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  font-size: 13px;
+  line-height: 18px;
+  background: var(--s-bg);
+  color: var(--s-fg);
+}
+.toast {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 8px 8px 14px;
+  border-radius: 12px;
+  background: var(--primary);
+  color: var(--on-primary);
+  box-shadow: var(--shadow);
+  font-size: 13px;
+}
+.kbd {
+  font:
+    500 11px/1 "JetBrains Mono",
+    monospace;
+  padding: 3px 5px;
+  border: 1px solid var(--border-strong);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  color: var(--text-2);
+}
+.skel {
+  background: var(--surface-3);
+  border-radius: 6px;
+  animation: fade 1.4s ease-in-out infinite;
+}
+@keyframes fade {
+  50% {
+    opacity: 0.5;
+  }
+}
+
+/* Dialog: head (title, context, close), body, footer (keyboard hint left, actions right). */
+.dialog {
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  box-shadow: var(--dlg-shadow);
+  overflow: hidden;
+}
+.dlg-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 18px 18px 12px 20px;
+}
+.dlg-body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 4px 20px 20px;
+}
+.dlg-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px 12px 20px;
+  border-top: 1px solid var(--border);
+  background: var(--bg);
+}
+
+/* Fold: a log section or a config block (details/summary), its chevron turning when open. */
+.fold > summary {
+  list-style: none;
+  display: grid;
+  grid-template-columns: 16px 16px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 16px;
+  cursor: pointer;
+}
+.fold > summary::-webkit-details-marker {
+  display: none;
+}
+.fold > summary:hover {
+  background: var(--surface-2);
+}
+.chev {
+  display: flex;
+  color: var(--text-3);
+  transition: transform 0.12s;
+}
+details[open] > summary .chev {
+  transform: rotate(90deg);
+}
+mark {
+  background: var(--input-bg);
+  color: inherit;
+  border-radius: 3px;
+  box-shadow: 0 0 0 1px var(--input-solid);
+}
+mark.cur {
+  background: var(--input-solid);
+  color: #14171f;
+}
+
+/* Board: the dotted canvas, a node (its border in its status colour when it needs looking
+   at), the drop target, a pending node. */
+.canvas {
+  position: relative;
+  overflow: auto;
+  background-color: var(--bg);
+  background-image: radial-gradient(var(--dots) 1px, transparent 1px);
+  background-size: 20px 20px;
+}
+.node {
+  position: absolute;
+  width: 208px;
+  height: 78px;
+  box-sizing: border-box;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--text);
+  text-decoration: none;
+  cursor: grab;
+  transition:
+    border-color 0.12s,
+    box-shadow 0.12s,
+    transform 0.12s;
+}
+.node:hover {
+  box-shadow: var(--shadow);
+  transform: translateY(-1px);
+}
+.node.s-run,
+.node.s-input,
+.node.s-ready,
+.node.s-err {
+  border-color: var(--s-solid);
+}
+.node.s-done {
+  opacity: 0.65;
+}
+.node.is-target {
+  outline: 2px dashed var(--focus);
+  outline-offset: 5px;
+}
+.node.pending {
+  border-style: dashed;
+  opacity: 0.75;
+  cursor: progress;
+}

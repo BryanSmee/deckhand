@@ -1,0 +1,379 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<title>Deckhand — Board</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com"><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet"><style>
+body{margin:0}
+.t-light{--bg:#F6F7F9;--surface:#FFFFFF;--surface-2:#F0F2F5;--surface-3:#E6E9EE;--border:#E1E4EA;--border-strong:#C5CBD5;--text:#14171F;--text-2:#475061;--text-3:#5F6878;--primary:#14171F;--on-primary:#FFFFFF;--primary-hover:#2E3440;--focus:#2563EB;--run:#1D4ED8;--run-bg:#E7EEFD;--run-solid:#3B6FF0;--input:#9A4A06;--input-bg:#FDF0DC;--input-solid:#E8890C;--ready:#6A2DD0;--ready-bg:#F0EAFD;--ready-solid:#8B5CF6;--done:#146C34;--done-bg:#E3F3E8;--done-solid:#22A355;--err:#B42318;--err-bg:#FDEBEA;--err-solid:#C8322A;--idle:#4B5463;--idle-bg:#EDEFF3;--idle-solid:#98A1B0;--dots:#D5DAE2;--shadow:0 1px 2px rgba(20,23,31,.06),0 6px 16px rgba(20,23,31,.08);color-scheme:light}
+.t-dark{--bg:#0D0F14;--surface:#151820;--surface-2:#1C2029;--surface-3:#252A35;--border:#262B36;--border-strong:#3A4150;--text:#E9ECF2;--text-2:#B3BAC7;--text-3:#8C95A5;--primary:#E9ECF2;--on-primary:#0D0F14;--primary-hover:#FFFFFF;--focus:#6E9BFF;--run:#8FB1FF;--run-bg:#16213D;--run-solid:#5B86F5;--input:#F4B35E;--input-bg:#33240E;--input-solid:#E8930F;--ready:#C3A6FF;--ready-bg:#271C44;--ready-solid:#9670F5;--done:#6CCF8B;--done-bg:#11281A;--done-solid:#2DA55A;--err:#FF8E86;--err-bg:#3A1614;--err-solid:#C93A31;--idle:#AAB1BE;--idle-bg:#20242D;--idle-solid:#6B7383;--dots:#232833;--shadow:0 1px 2px rgba(0,0,0,.4),0 8px 24px rgba(0,0,0,.4);color-scheme:dark}
+.ui{font-family:Inter,system-ui,sans-serif;font-size:13.5px;line-height:20px;color:var(--text);-webkit-font-smoothing:antialiased}
+.mono{font-family:"JetBrains Mono",ui-monospace,monospace}
+.s-run{--s-fg:var(--run);--s-bg:var(--run-bg);--s-solid:var(--run-solid)}
+.s-input{--s-fg:var(--input);--s-bg:var(--input-bg);--s-solid:var(--input-solid)}
+.s-ready{--s-fg:var(--ready);--s-bg:var(--ready-bg);--s-solid:var(--ready-solid)}
+.s-done{--s-fg:var(--done);--s-bg:var(--done-bg);--s-solid:var(--done-solid)}
+.s-err{--s-fg:var(--err);--s-bg:var(--err-bg);--s-solid:var(--err-solid)}
+.s-idle{--s-fg:var(--idle);--s-bg:var(--idle-bg);--s-solid:var(--idle-solid)}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:36px;padding:0 14px;box-sizing:border-box;border-radius:8px;border:1px solid var(--border-strong);background:var(--surface);color:var(--text);font:500 13px/1 Inter,system-ui,sans-serif;cursor:pointer;white-space:nowrap;text-decoration:none;transition:background .12s,border-color .12s,color .12s,transform .06s}
+.btn:hover{background:var(--surface-2)}
+.btn:active{transform:translateY(1px);background:var(--surface-3)}
+.btn:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+.btn-primary{background:var(--primary);border-color:var(--primary);color:var(--on-primary)}
+.btn-primary:hover{background:var(--primary-hover);border-color:var(--primary-hover)}
+.btn-ghost{background:transparent;border-color:transparent;color:var(--text-2)}
+.btn-ghost:hover{background:var(--surface-2);color:var(--text)}
+.btn-sm{height:28px;padding:0 10px;font-size:12.5px;border-radius:6px}
+.btn-icon{width:36px;padding:0}
+.btn-sm.btn-icon{width:28px}
+.badge{display:inline-flex;align-items:center;gap:6px;height:22px;padding:0 8px;border-radius:999px;font:600 11.5px/1 Inter,system-ui,sans-serif;white-space:nowrap;background:var(--s-bg);color:var(--s-fg);box-sizing:border-box}
+.sdot{width:8px;height:8px;border-radius:50%;background:var(--s-solid);flex:none}
+.pulse{animation:pulse 1.6s ease-out infinite}
+@keyframes pulse{0%{box-shadow:0 0 0 0 color-mix(in srgb,var(--s-solid) 60%,transparent)}100%{box-shadow:0 0 0 6px transparent}}
+.spin{width:12px;height:12px;border-radius:50%;border:2px solid currentColor;border-right-color:transparent;animation:spin .8s linear infinite;box-sizing:border-box;flex:none}
+@keyframes spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){.pulse,.spin{animation:none}}
+.input{height:32px;box-sizing:border-box;width:100%;padding:0 12px;border:1px solid var(--border-strong);border-radius:8px;background:var(--surface);color:var(--text);font:400 13px/20px Inter,system-ui,sans-serif;transition:border-color .12s,box-shadow .12s}
+.input::placeholder{color:var(--text-3)}
+.input:focus{outline:none;border-color:var(--focus);box-shadow:0 0 0 3px color-mix(in srgb,var(--focus) 24%,transparent)}
+select.input{appearance:none;-webkit-appearance:none;padding-right:28px;cursor:pointer}
+.affix{position:relative;display:flex;align-items:center}
+.affix .lead{position:absolute;left:10px;color:var(--text-3);pointer-events:none;display:flex}
+.affix .trail{position:absolute;right:8px;color:var(--text-3);pointer-events:none;display:flex}
+.affix .has-lead{padding-left:32px}
+.switch{position:relative;display:inline-flex;align-items:center;gap:8px;font-size:12.5px;font-weight:500;color:var(--text-2);cursor:pointer}
+.switch input{position:absolute;opacity:0;width:1px;height:1px;margin:0}
+.switch .track{position:relative;width:30px;height:18px;box-sizing:border-box;border-radius:999px;background:var(--surface-3);border:1px solid var(--border-strong);flex:none}
+.switch .track::after{content:"";position:absolute;top:2px;left:2px;width:12px;height:12px;border-radius:50%;background:var(--text-3);transition:transform .12s}
+.switch input:checked + .track{background:var(--primary);border-color:var(--primary)}
+.switch input:checked + .track::after{transform:translateX(12px);background:var(--on-primary)}
+.seg{display:inline-flex;padding:3px;gap:2px;background:var(--surface-2);border:1px solid var(--border);border-radius:10px}
+.seg button,.seg a{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 12px;border:0;border-radius:7px;background:transparent;color:var(--text-2);font:500 12.5px/1 Inter,system-ui,sans-serif;cursor:pointer;text-decoration:none;transition:background .12s,color .12s}
+.seg button:hover,.seg a:hover{color:var(--text)}
+.seg [aria-pressed="true"],.seg [aria-current="page"]{background:var(--surface);color:var(--text);box-shadow:0 1px 2px rgba(0,0,0,.12),0 0 0 1px var(--border)}
+.tabs{display:flex;gap:2px;border-bottom:1px solid var(--border);overflow-x:auto}
+.tab{display:inline-flex;align-items:center;gap:6px;height:40px;padding:0 9px;border:0;background:none;color:var(--text-2);font:500 13px/1 Inter,system-ui,sans-serif;cursor:pointer;white-space:nowrap;box-shadow:inset 0 -2px 0 transparent;transition:color .12s,box-shadow .12s}
+.tab:hover{color:var(--text)}
+.tab[aria-selected="true"]{color:var(--text);box-shadow:inset 0 -2px 0 var(--text)}
+.count{display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:18px;padding:0 5px;box-sizing:border-box;border-radius:999px;background:var(--surface-3);color:var(--text-2);font:600 11px/1 Inter,system-ui,sans-serif}
+.count.hot{background:var(--input-bg);color:var(--input)}
+.nav{display:flex;align-items:center;justify-content:center;width:40px;height:40px;border-radius:10px;color:var(--text-2);text-decoration:none;position:relative;transition:background .12s,color .12s}
+.nav:hover{background:var(--surface-2);color:var(--text)}
+.nav[aria-current="page"]{background:var(--surface-3);color:var(--text)}
+.nav .pip{position:absolute;top:6px;right:6px;width:8px;height:8px;border-radius:50%;background:var(--input-solid);box-shadow:0 0 0 2px var(--surface)}
+.h{margin:0;font-size:11.5px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--text-3)}
+.item{display:grid;grid-template-columns:16px minmax(0,1fr);column-gap:8px;row-gap:8px;padding:10px 10px 10px 6px;border:1px solid var(--border);border-radius:10px;background:var(--surface);transition:border-color .12s,background .12s;cursor:grab}
+.item:hover{border-color:var(--border-strong)}
+.item.ghosted{opacity:.45;border-style:dashed;cursor:grabbing}
+.grip{color:var(--text-3);display:flex;padding-top:2px}
+.clamp2{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.canvas{position:relative;overflow:auto;background-color:var(--bg);background-image:radial-gradient(var(--dots) 1px,transparent 1px);background-size:20px 20px}
+.node{position:absolute;width:208px;height:78px;box-sizing:border-box;padding:10px 12px;border-radius:12px;background:var(--surface);border:1px solid var(--border-strong);display:flex;flex-direction:column;gap:6px;color:var(--text);text-decoration:none;cursor:grab;transition:border-color .12s,box-shadow .12s,transform .12s}
+.node:hover{box-shadow:var(--shadow);transform:translateY(-1px)}
+.node:focus-visible{outline:2px solid var(--focus);outline-offset:3px}
+.node.s-run,.node.s-input,.node.s-ready,.node.s-err{border-color:var(--s-solid)}
+.node.s-run{box-shadow:0 0 0 3px color-mix(in srgb,var(--run-solid) 18%,transparent)}
+.node.s-done{opacity:.65}
+.node.is-target{outline:2px dashed var(--focus);outline-offset:5px}
+.node.pending{border-style:dashed;border-color:var(--border-strong);opacity:.75;cursor:progress}
+.node-top{display:flex;align-items:center;gap:7px;font-size:11.5px;line-height:14px}
+.node-state{margin-left:auto;font-weight:600;color:var(--s-fg)}
+.node-title{font-size:12.5px;line-height:17px;font-weight:500}
+.seg-h{position:absolute;height:0;border-top:1.5px solid var(--text-3)}
+.seg-v{position:absolute;width:0;border-left:1.5px solid var(--text-3)}
+.head{position:absolute;width:0;height:0;border-top:5px solid transparent;border-bottom:5px solid transparent;border-left:7px solid var(--text-3)}
+.lane{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
+.pillnode{display:inline-flex;align-items:center;gap:7px;height:30px;padding:0 10px;border-radius:8px;border:1px solid var(--border-strong);background:var(--surface);font-size:12.5px;color:var(--text);text-decoration:none;max-width:260px}
+.hidden{display:none}
+a{color:var(--focus)}a:hover{color:var(--text)}
+</style></head>
+<body>
+
+
+<div class="ui t-dark" style="display: flex; flex-wrap: wrap; align-items: stretch; min-height: 100vh; background: var(--bg)">
+
+  <aside aria-label="Deckhand" style="flex: 1 1 64px; max-width: 64px; display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 14px 0; box-sizing: border-box; background: var(--surface); border-right: 1px solid var(--border)">
+    <span style="display: flex; align-items: center; justify-content: center; width: 32px; height: 32px; border-radius: 9px; background: var(--primary); color: var(--on-primary); margin-bottom: 6px" title="Deckhand"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="5" r="2"></circle><path d="M12 7v14M5 13H3a9 9 0 0 0 18 0h-2M8 10h8"></path></svg></span>
+    <button type="button" class="btn btn-icon" aria-label="New request" title="New request (N)"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg></button>
+    <span style="width: 28px; height: 1px; background: var(--border); margin: 4px 0"></span>
+    <a class="nav" href="overview.html" aria-label="All repositories" title="All repositories"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5"></rect><rect x="14" y="3" width="7" height="7" rx="1.5"></rect><rect x="3" y="14" width="7" height="7" rx="1.5"></rect><rect x="14" y="14" width="7" height="7" rx="1.5"></rect></svg><span class="pip"></span></a>
+    <a class="nav mono" href="#" aria-current="page" aria-label="acme/app" title="acme/app" style="font-size: 12px; font-weight: 600">app<span class="pip"></span></a>
+    <a class="nav mono" href="#" aria-label="acme/api" title="acme/api" style="font-size: 12px; font-weight: 600">api<span class="pip"></span></a>
+    <a class="nav mono" href="#" aria-label="acme/notes" title="acme/notes" style="font-size: 12px; font-weight: 600">notes</a>
+    <span style="flex: 1"></span>
+    <a class="nav" href="#" aria-label="Settings" title="Settings"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1"></path><circle cx="15" cy="6" r="2"></circle><circle cx="9" cy="12" r="2"></circle><circle cx="17" cy="18" r="2"></circle></svg></a>
+    <div role="img" aria-label="2 of 4 run slots in use" title="2 of 4 running · 1 queued" style="display: flex; flex-direction: column; gap: 3px; padding: 6px 0">
+      <span style="width: 22px; height: 4px; border-radius: 2px; background: var(--run-solid)"></span>
+      <span style="width: 22px; height: 4px; border-radius: 2px; background: var(--run-solid)"></span>
+      <span style="width: 22px; height: 4px; border-radius: 2px; background: var(--surface-3)"></span>
+      <span style="width: 22px; height: 4px; border-radius: 2px; background: var(--surface-3)"></span>
+    </div>
+    <button type="button" class="btn btn-ghost btn-icon" aria-label="Expand the sidebar" title="Expand the sidebar"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"></rect><path d="M9 4v16"></path></svg></button>
+  </aside>
+
+  <div style="flex: 999 1 560px; min-width: 0; display: flex; flex-direction: column; height: 100vh">
+    <header style="display: flex; flex-wrap: wrap; align-items: center; gap: 12px 16px; padding: 14px 24px; border-bottom: 1px solid var(--border); background: var(--surface)">
+      <h1 style="margin: 0; font-size: 18px; line-height: 26px; font-weight: 600; letter-spacing: -0.01em">acme/app</h1>
+      <nav class="seg" aria-label="View">
+        <a href="tasks.html"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6h11M9 12h11M9 18h11"></path><path d="M4 6h.01M4 12h.01M4 18h.01"></path></svg>Tasks</a>
+        <a href="#" aria-current="page"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="6" height="6" rx="1.5"></rect><rect x="15" y="3" width="6" height="6" rx="1.5"></rect><rect x="15" y="15" width="6" height="6" rx="1.5"></rect><path d="M9 6h6M18 9v6"></path></svg>Board</a>
+      </nav>
+      <span style="margin-left: auto; display: flex; align-items: center; gap: 10px; font-size: 12.5px; color: var(--text-3)">
+        <label style="display: flex; align-items: center; gap: 8px">Start in
+          <span class="affix" style="width: 120px">
+            <select class="input"><option>work</option><option>review</option><option>brainstorm</option></select>
+            <span class="trail"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg></span>
+          </span>
+        </label>
+      </span>
+    </header>
+
+    <div style="flex: 1; min-height: 0; display: flex; flex-wrap: wrap">
+      <section aria-label="Work queue" style="flex: 1 1 300px; max-width: 360px; min-width: 0; height: 100%; display: flex; flex-direction: column; background: var(--surface); border-right: 1px solid var(--border)">
+        <div class="tabs" role="tablist" aria-label="Work queue" style="padding: 0 10px">
+          
+            <button type="button" class="tab" role="tab" aria-selected="true">Backlog <span class="count ">12</span></button>
+          
+            <button type="button" class="tab" role="tab" aria-selected="false">Brainstorm <span class="count ">1</span></button>
+          
+            <button type="button" class="tab" role="tab" aria-selected="false">Waiting <span class="count ">3</span></button>
+          
+            <button type="button" class="tab" role="tab" aria-selected="false">Answers <span class="count hot">1</span></button>
+          
+        </div>
+
+        
+          <div style="padding: 12px 12px 8px">
+            <label class="affix">
+              <span class="lead"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="M20 20l-3.5-3.5"></path></svg></span>
+              <input class="input has-lead" placeholder="Filter 12 open issues" aria-label="Filter the backlog">
+            </label>
+          </div>
+          <ul style="list-style: none; margin: 0; padding: 0 12px 12px; display: flex; flex-direction: column; gap: 8px; overflow: auto; flex: 1">
+            
+              <li class="item ghosted" draggable="true">
+                <span class="grip" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="6" r="1.5"></circle><circle cx="15" cy="6" r="1.5"></circle><circle cx="9" cy="12" r="1.5"></circle><circle cx="15" cy="12" r="1.5"></circle><circle cx="9" cy="18" r="1.5"></circle><circle cx="15" cy="18" r="1.5"></circle></svg></span>
+                <div style="display: flex; flex-direction: column; gap: 4px; min-width: 0">
+                  <a href="#" class="clamp2" style="font-size: 13px; line-height: 18px; font-weight: 500; color: var(--text); text-decoration: none"><span class="mono" style="color: var(--text-3); font-weight: 500">#31</span> Rate-limit the dashboard API</a>
+                  <span style="font-size: 12px; color: var(--text-3)">Being dragged</span>
+                </div>
+                <span></span>
+                <div style="display: flex; align-items: center; gap: 6px">
+                  <button type="button" class="btn btn-sm" aria-label="Start #31"><svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7 5l12 7-12 7z"></path></svg>Start</button>
+                  <button type="button" class="btn btn-sm btn-ghost">After…</button>
+                  <button type="button" class="btn btn-sm btn-ghost">Brainstorm</button>
+                </div>
+              </li>
+            
+              <li class="item " draggable="true">
+                <span class="grip" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="6" r="1.5"></circle><circle cx="15" cy="6" r="1.5"></circle><circle cx="9" cy="12" r="1.5"></circle><circle cx="15" cy="12" r="1.5"></circle><circle cx="9" cy="18" r="1.5"></circle><circle cx="15" cy="18" r="1.5"></circle></svg></span>
+                <div style="display: flex; flex-direction: column; gap: 4px; min-width: 0">
+                  <a href="#" class="clamp2" style="font-size: 13px; line-height: 18px; font-weight: 500; color: var(--text); text-decoration: none"><span class="mono" style="color: var(--text-3); font-weight: 500">#29</span> Per-repo setup cache between runs</a>
+                  <span style="font-size: 12px; color: var(--text-3)">2 sub-issues · start lays them out</span>
+                </div>
+                <span></span>
+                <div style="display: flex; align-items: center; gap: 6px">
+                  <button type="button" class="btn btn-sm" aria-label="Start #29"><svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7 5l12 7-12 7z"></path></svg>Start</button>
+                  <button type="button" class="btn btn-sm btn-ghost">After…</button>
+                  <button type="button" class="btn btn-sm btn-ghost">Brainstorm</button>
+                </div>
+              </li>
+            
+              <li class="item " draggable="true">
+                <span class="grip" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="6" r="1.5"></circle><circle cx="15" cy="6" r="1.5"></circle><circle cx="9" cy="12" r="1.5"></circle><circle cx="15" cy="12" r="1.5"></circle><circle cx="9" cy="18" r="1.5"></circle><circle cx="15" cy="18" r="1.5"></circle></svg></span>
+                <div style="display: flex; flex-direction: column; gap: 4px; min-width: 0">
+                  <a href="#" class="clamp2" style="font-size: 13px; line-height: 18px; font-weight: 500; color: var(--text); text-decoration: none"><span class="mono" style="color: var(--text-3); font-weight: 500">#35</span> Search inside a run log</a>
+                  <span style="font-size: 12px; color: var(--text-3)">opened 2d ago</span>
+                </div>
+                <span></span>
+                <div style="display: flex; align-items: center; gap: 6px">
+                  <button type="button" class="btn btn-sm" aria-label="Start #35"><svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7 5l12 7-12 7z"></path></svg>Start</button>
+                  <button type="button" class="btn btn-sm btn-ghost">After…</button>
+                  <button type="button" class="btn btn-sm btn-ghost">Brainstorm</button>
+                </div>
+              </li>
+            
+              <li class="item " draggable="true">
+                <span class="grip" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="6" r="1.5"></circle><circle cx="15" cy="6" r="1.5"></circle><circle cx="9" cy="12" r="1.5"></circle><circle cx="15" cy="12" r="1.5"></circle><circle cx="9" cy="18" r="1.5"></circle><circle cx="15" cy="18" r="1.5"></circle></svg></span>
+                <div style="display: flex; flex-direction: column; gap: 4px; min-width: 0">
+                  <a href="#" class="clamp2" style="font-size: 13px; line-height: 18px; font-weight: 500; color: var(--text); text-decoration: none"><span class="mono" style="color: var(--text-3); font-weight: 500">#36</span> Export a run log as plain text</a>
+                  <span style="font-size: 12px; color: var(--text-3)">opened 3d ago</span>
+                </div>
+                <span></span>
+                <div style="display: flex; align-items: center; gap: 6px">
+                  <button type="button" class="btn btn-sm" aria-label="Start #36"><svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7 5l12 7-12 7z"></path></svg>Start</button>
+                  <button type="button" class="btn btn-sm btn-ghost">After…</button>
+                  <button type="button" class="btn btn-sm btn-ghost">Brainstorm</button>
+                </div>
+              </li>
+            
+              <li class="item " draggable="true">
+                <span class="grip" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="6" r="1.5"></circle><circle cx="15" cy="6" r="1.5"></circle><circle cx="9" cy="12" r="1.5"></circle><circle cx="15" cy="12" r="1.5"></circle><circle cx="9" cy="18" r="1.5"></circle><circle cx="15" cy="18" r="1.5"></circle></svg></span>
+                <div style="display: flex; flex-direction: column; gap: 4px; min-width: 0">
+                  <a href="#" class="clamp2" style="font-size: 13px; line-height: 18px; font-weight: 500; color: var(--text); text-decoration: none"><span class="mono" style="color: var(--text-3); font-weight: 500">#37</span> Keyboard shortcuts for the board</a>
+                  <span style="font-size: 12px; color: var(--text-3)">opened 1w ago</span>
+                </div>
+                <span></span>
+                <div style="display: flex; align-items: center; gap: 6px">
+                  <button type="button" class="btn btn-sm" aria-label="Start #37"><svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7 5l12 7-12 7z"></path></svg>Start</button>
+                  <button type="button" class="btn btn-sm btn-ghost">After…</button>
+                  <button type="button" class="btn btn-sm btn-ghost">Brainstorm</button>
+                </div>
+              </li>
+            
+              <li class="item " draggable="true">
+                <span class="grip" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="6" r="1.5"></circle><circle cx="15" cy="6" r="1.5"></circle><circle cx="9" cy="12" r="1.5"></circle><circle cx="15" cy="12" r="1.5"></circle><circle cx="9" cy="18" r="1.5"></circle><circle cx="15" cy="18" r="1.5"></circle></svg></span>
+                <div style="display: flex; flex-direction: column; gap: 4px; min-width: 0">
+                  <a href="#" class="clamp2" style="font-size: 13px; line-height: 18px; font-weight: 500; color: var(--text); text-decoration: none"><span class="mono" style="color: var(--text-3); font-weight: 500">#38</span> Show preview hook URLs on the task page</a>
+                  <span style="font-size: 12px; color: var(--text-3)">opened 1w ago</span>
+                </div>
+                <span></span>
+                <div style="display: flex; align-items: center; gap: 6px">
+                  <button type="button" class="btn btn-sm" aria-label="Start #38"><svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7 5l12 7-12 7z"></path></svg>Start</button>
+                  <button type="button" class="btn btn-sm btn-ghost">After…</button>
+                  <button type="button" class="btn btn-sm btn-ghost">Brainstorm</button>
+                </div>
+              </li>
+            
+          </ul>
+          <p style="margin: 0; padding: 10px 14px; border-top: 1px solid var(--border); font-size: 12px; line-height: 17px; color: var(--text-3)">Drag onto the board to start · onto a card to queue after it · onto the Brainstorm tab to brainstorm.</p>
+        
+
+        
+
+        
+
+        
+      </section>
+
+      <main style="flex: 999 1 420px; min-width: 0; height: 100%; display: flex; flex-direction: column">
+        <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; padding: 10px 16px; border-bottom: 1px solid var(--border); background: var(--surface)">
+          <div class="seg" role="group" aria-label="Board view">
+            <button type="button" aria-pressed="true">Graph</button>
+            <button type="button" aria-pressed="false">Lanes</button>
+          </div>
+          <label class="switch"><input type="checkbox" role="switch"><span class="track" aria-hidden="true"></span>Show closed</label>
+          <span style="margin-left: auto; display: flex; align-items: center; gap: 4px">
+            <button type="button" class="btn btn-sm btn-ghost btn-icon" aria-label="Zoom out"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M5 12h14"></path></svg></button>
+            <span class="mono" style="width: 44px; text-align: center; font-size: 12px; color: var(--text-2)">100%</span>
+            <button type="button" class="btn btn-sm btn-ghost btn-icon" aria-label="Zoom in"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg></button>
+            <button type="button" class="btn btn-sm btn-ghost">Fit</button>
+          </span>
+        </div>
+
+        
+          <div class="canvas" aria-label="What waits for what" style="flex: 1; min-height: 0">
+            <div style="position: relative; width: 1000px; height: 580px; margin: 28px 24px">
+              
+                <span class="seg-h" style="left: 208px; top: 39px; width: 40px; height: 0"></span>
+              
+                <span class="head" style="left: 248px; top: 34px; width: 0; height: 0"></span>
+              
+                <span class="seg-h" style="left: 464px; top: 39px; width: 40px; height: 0"></span>
+              
+                <span class="head" style="left: 504px; top: 34px; width: 0; height: 0"></span>
+              
+                <span class="seg-h" style="left: 720px; top: 39px; width: 40px; height: 0"></span>
+              
+                <span class="head" style="left: 760px; top: 34px; width: 0; height: 0"></span>
+              
+                <span class="seg-h" style="left: 208px; top: 155px; width: 40px; height: 0"></span>
+              
+                <span class="head" style="left: 248px; top: 150px; width: 0; height: 0"></span>
+              
+                <span class="seg-h" style="left: 208px; top: 387px; width: 40px; height: 0"></span>
+              
+                <span class="head" style="left: 248px; top: 382px; width: 0; height: 0"></span>
+              
+                <span class="seg-h" style="left: 208px; top: 155px; width: 20px; height: 0"></span>
+              
+                <span class="seg-v" style="left: 228px; top: 155px; width: 0; height: 116px"></span>
+              
+                <span class="seg-h" style="left: 228px; top: 271px; width: 20px; height: 0"></span>
+              
+                <span class="head" style="left: 248px; top: 266px; width: 0; height: 0"></span>
+              
+              
+                <a href="tasks.html" class="node s-done " style="left: 0px; top: 0px" aria-label="#18 Sandbox image cache across runs: Done">
+                  <span class="node-top"><span class="sdot "></span><span class="mono" style="color: var(--text-2)">#18</span><span class="node-state">Done</span></span>
+                  <span class="node-title clamp2">Sandbox image cache across runs</span>
+                </a>
+              
+                <a href="tasks.html" class="node s-run " style="left: 256px; top: 0px" aria-label="#22 Dashboard on a frontend framework, built at image build time: Running">
+                  <span class="node-top"><span class="sdot pulse"></span><span class="mono" style="color: var(--text-2)">#22</span><span class="node-state">Running</span></span>
+                  <span class="node-title clamp2">Dashboard on a frontend framework, built at image build time</span>
+                </a>
+              
+                <a href="tasks.html" class="node s-idle " style="left: 512px; top: 0px" aria-label="#23 Per-repo budgets for runs: Queued">
+                  <span class="node-top"><span class="sdot "></span><span class="mono" style="color: var(--text-2)">#23</span><span class="node-state">Queued</span></span>
+                  <span class="node-title clamp2">Per-repo budgets for runs</span>
+                </a>
+              
+                <a href="tasks.html" class="node s-idle " style="left: 768px; top: 0px" aria-label="#24 Per-repo budgets in the dashboard: Waiting">
+                  <span class="node-top"><span class="sdot "></span><span class="mono" style="color: var(--text-2)">#24</span><span class="node-state">Waiting</span></span>
+                  <span class="node-title clamp2">Per-repo budgets in the dashboard</span>
+                </a>
+              
+                <a href="tasks.html" class="node s-ready is-target" style="left: 0px; top: 116px" aria-label="#19 Retry failed webhook deliveries with backoff: Ready">
+                  <span class="node-top"><span class="sdot "></span><span class="mono" style="color: var(--text-2)">#19</span><span class="node-state">Ready</span></span>
+                  <span class="node-title clamp2">Retry failed webhook deliveries with backoff</span>
+                </a>
+              
+                <a href="tasks.html" class="node s-idle " style="left: 256px; top: 116px" aria-label="#25 Webhook delivery log on the task page: Waiting">
+                  <span class="node-top"><span class="sdot "></span><span class="mono" style="color: var(--text-2)">#25</span><span class="node-state">Waiting</span></span>
+                  <span class="node-title clamp2">Webhook delivery log on the task page</span>
+                </a>
+              
+                <a href="tasks.html" class="node s-idle " style="left: 256px; top: 232px" aria-label="#26 Alert when a delivery fails three times: Waiting">
+                  <span class="node-top"><span class="sdot "></span><span class="mono" style="color: var(--text-2)">#26</span><span class="node-state">Waiting</span></span>
+                  <span class="node-title clamp2">Alert when a delivery fails three times</span>
+                </a>
+              
+                <a href="tasks.html" class="node s-err " style="left: 0px; top: 348px" aria-label="#16 Bugs: Error">
+                  <span class="node-top"><span class="sdot "></span><span class="mono" style="color: var(--text-2)">#16</span><span class="node-state">Error</span></span>
+                  <span class="node-title clamp2">Bugs</span>
+                </a>
+              
+                <a href="tasks.html" class="node s-idle " style="left: 256px; top: 348px" aria-label="#27 Inbox: group bug reports by repo: Waiting">
+                  <span class="node-top"><span class="sdot "></span><span class="mono" style="color: var(--text-2)">#27</span><span class="node-state">Waiting</span></span>
+                  <span class="node-title clamp2">Inbox: group bug reports by repo</span>
+                </a>
+              
+                <a href="tasks.html" class="node s-input " style="left: 0px; top: 464px" aria-label="#21 Per-repo budgets: what counts as a run?: Answer">
+                  <span class="node-top"><span class="sdot "></span><span class="mono" style="color: var(--text-2)">#21</span><span class="node-state">Answer</span></span>
+                  <span class="node-title clamp2">Per-repo budgets: what counts as a run?</span>
+                </a>
+              
+                <a href="tasks.html" class="node s-idle pending" style="left: 256px; top: 464px" aria-label="#28 Podman engine: rootless by default: Starting…">
+                  <span class="node-top"><span class="sdot "></span><span class="mono" style="color: var(--text-2)">#28</span><span class="node-state">Starting…</span></span>
+                  <span class="node-title clamp2">Podman engine: rootless by default</span>
+                </a>
+              
+              <span style="position: absolute; left: 0; top: 82px; display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 9px; border-radius: 6px; background: var(--primary); color: var(--on-primary); font-size: 12px; font-weight: 600; white-space: nowrap">Queue #31 after #19</span>
+              <div class="node" style="left: 148px; top: 150px; transform: rotate(-2deg); border-color: var(--focus); box-shadow: var(--shadow); cursor: grabbing; pointer-events: none" aria-hidden="true">
+                <span class="node-top"><span class="mono" style="color: var(--text-2)">#31</span><span style="margin-left: auto; font-weight: 600; color: var(--text-3)">Backlog</span></span>
+                <span class="node-title clamp2">Rate-limit the dashboard API</span>
+              </div>
+            </div>
+            <div style="position: sticky; left: 16px; bottom: 16px; display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; max-width: 640px; margin: 0 16px 16px; padding: 8px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); box-shadow: var(--shadow); font-size: 12px; color: var(--text-2)">
+              <span class="s-run" style="display: inline-flex; align-items: center; gap: 6px"><span class="sdot"></span>Running</span>
+              <span class="s-input" style="display: inline-flex; align-items: center; gap: 6px"><span class="sdot"></span>Needs you</span>
+              <span class="s-ready" style="display: inline-flex; align-items: center; gap: 6px"><span class="sdot"></span>Ready for review</span>
+              <span class="s-err" style="display: inline-flex; align-items: center; gap: 6px"><span class="sdot"></span>Error</span>
+              <span class="s-idle" style="display: inline-flex; align-items: center; gap: 6px"><span class="sdot"></span>Waiting</span>
+              <span class="s-done" style="display: inline-flex; align-items: center; gap: 6px"><span class="sdot"></span>Done</span>
+              <span style="display: inline-flex; align-items: center; gap: 6px"><span style="width: 18px; border-top: 1.5px solid var(--text-3)"></span>waits for</span>
+            </div>
+          </div>
+        
+
+        
+      </main>
+    </div>
+  </div>
+</div>
+
+
+
+
+</body></html>
