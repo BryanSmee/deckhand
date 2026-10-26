@@ -4,9 +4,10 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
+import { createComments } from "../listener/comments.mjs";
 import { createRuns } from "../listener/runs.mjs";
 import { openLog } from "../listener/runlog.mjs";
-import { tempDir, testConfig } from "./helpers.mjs";
+import { recordingFetch, tempDir, testConfig } from "./helpers.mjs";
 
 const result = (text) => JSON.stringify({ type: "result", result: text, duration_ms: 60000 });
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -39,12 +40,13 @@ function fakeRunner() {
   return runner;
 }
 
-function setup(t, { mode = "idea", graceMs = 60, tokens = [], config = {} } = {}) {
+function setup(t, { mode = "idea", graceMs = 60, tokens = [], config = {}, answer } = {}) {
   const dir = tempDir(t);
   const runner = fakeRunner();
   const answers = [];
   const logs = [];
   const done = [];
+  const settled = [];
   const ctx = {
     config: { ...testConfig(), ...config },
     log: (line) => logs.push(line),
@@ -63,10 +65,11 @@ function setup(t, { mode = "idea", graceMs = 60, tokens = [], config = {} } = {}
     saveLive: async () => {},
     // An inbox entry's run takes no more comments.
     deliver: () => false,
-    answer: async (_, text) => answers.push(text),
+    answer: answer ?? (async (_, text) => answers.push(text)),
+    publicUrl: () => "https://deck.example",
     label: async () => {},
     track: () => {},
-    settle: () => {},
+    settle: (item, status) => settled.push(status),
     startLater: () => {},
     schedule: () => done.push(true),
   };
@@ -108,7 +111,7 @@ function setup(t, { mode = "idea", graceMs = 60, tokens = [], config = {} } = {}
   task.live.record.logPath = logPath;
   ctx.tasks.set(key, task);
   const following = runs.follow(task);
-  return { ctx, runs, runner, task, answers, logs, done, following, logPath };
+  return { ctx, runs, runner, task, answers, logs, done, settled, following, logPath };
 }
 
 test("a run that answered, its inbox closed, and stays silent: stopped, its answer posted", async (t) => {
@@ -274,4 +277,52 @@ test("a run that passed RUN_LOG_MAX_MB with a comment unanswered: the next run g
   for (let i = 0; i < 20; i++) runner.err("x".repeat(99));
   await following;
   assert.deepEqual(task.pending, [comment]);
+});
+
+// The run's reply through comments.mjs, GitHub answering its POSTs with `statuses` in turn.
+function replyingWith(statuses) {
+  const left = [...statuses];
+  const { fetch, calls } = recordingFetch(() => new Response("{}", { status: left.shift() }));
+  const github = (repo, method, path, body) =>
+    fetch(`https://api.github.com${path}`, { method, body: JSON.stringify(body) });
+  const comments = createComments({ config: {}, github, log: () => {}, delays: [0, 0] });
+  const bodies = () => calls.map((c) => JSON.parse(c.body).body);
+  return { answer: comments.answer, bodies };
+}
+
+async function endWith(t, statuses, text) {
+  const github = replyingWith(statuses);
+  const run = setup(t, { graceMs: 30, answer: github.answer });
+  const live = run.task.live;
+  live.handled.push({ comment: { id: 7 } });
+  run.runner.out(result(text));
+  run.runner.running = false;
+  run.runner.exited();
+  await run.following;
+  await sleep(20);
+  return { ...run, live, bodies: github.bodies };
+}
+
+test("a reply refused as too long is posted shortened: then 🚀", async (t) => {
+  const { settled, bodies, live } = await endWith(t, [422, 201], "z".repeat(30000));
+  assert.equal(bodies().length, 2);
+  assert.match(
+    bodies()[1],
+    /\[on the dashboard\]\(https:\/\/deck\.example\/#\/org\/repo\?task=org%2Frepo%2312&run=run\)/,
+  );
+  assert.deepEqual(settled, ["ok"]);
+  assert.equal(live.replied, true);
+  assert.equal(live.record.status, "ok");
+});
+
+test("a reply GitHub keeps refusing: the run fails, 👎, and says why", async (t) => {
+  const { settled, bodies, live, logs, logPath } = await endWith(t, [500, 500, 500], "Done.");
+  assert.equal(bodies().length, 3);
+  assert.deepEqual(settled, ["error"]);
+  // A listener restarting meanwhile would post it again.
+  assert.equal(live.replied, false);
+  assert.equal(live.record.status, "error");
+  assert.equal(live.record.summary, "The reply couldn't be posted: 500");
+  assert.ok(logs.some((l) => /done \(error, its reply refused\): GitHub POST .*: 500/.test(l)));
+  assert.match(readFileSync(logPath, "utf8"), /The reply couldn't be posted: 500/);
 });

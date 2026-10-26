@@ -127,6 +127,14 @@ can't run ahead of the operator's release as GitHub's `main` can.
 
 ### Replies, reactions and labels
 
+A run's reply counts once GitHub took it (`comments.mjs` `reply()` and `answer()`, a
+discussion's included). A 5xx or a rate limit is tried again three times, over about two
+minutes; a reply refused with a 422 (too long, most likely) goes again cut to its first 20 000
+characters, with a link to the run on the dashboard for the rest. A reply still refused ends the
+run as `error`: its comments get 👎, and the dashboard's summary says "The reply couldn't be
+posted: <status>". A listener restarting before then posts it again (`live.replied` is still
+false).
+
 A run that stops to ask (its final message starts with `<!-- needs-input -->`, see
 `prompts/sandbox.md`) shows as `needs-input` on the dashboard and labels the issue or pull
 request `NEEDS_INPUT_LABEL` (default `needs-input`) until the next run starts.

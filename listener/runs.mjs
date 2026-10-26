@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { engineNote, recheckMounts, RunError, validateRun } from "./access.mjs";
 import { agentFor } from "./agents/index.mjs";
 import { entryLabel, nextFallback, resolveEntry } from "./agents/select.mjs";
+import { ReplyError } from "./comments.mjs";
 import { commentsText, taskKey } from "./events.mjs";
 import { nextStep, replyFooter } from "./footer.mjs";
 import {
@@ -490,7 +491,7 @@ export function createRuns(ctx) {
       const text = answer
         ? `${answer}\n\nStopped by @${by} after its answer.\n\n${footer}`
         : `Stopped by @${by}.\n\n${footer}`;
-      await ctx.answer(target(task, live.replyTo), hidden(live, text));
+      await post(task, text);
       live.replied = true;
       ctx.saveLive(task);
     }
@@ -517,7 +518,7 @@ export function createRuns(ctx) {
       const text = answer
         ? `${answer}\n\n${name} was stopped as failed after its answer: ${why}.\n\n${footer}`
         : `${name} was stopped as failed: ${why}.\n\n${footer}`;
-      await ctx.answer(target(task, live.replyTo), hidden(live, text));
+      await post(task, text);
       live.replied = true;
       ctx.saveLive(task);
     }
@@ -535,6 +536,20 @@ export function createRuns(ctx) {
   // The comment answered last decides where the reply goes (a discussion's thread).
   function target(task, replyTo) {
     return { ...task, replyTo, comment: task.live.handled.at(-1)?.comment };
+  }
+
+  // The run's reply. Throws a ReplyError when GitHub doesn't take it, retries included
+  // (comments.mjs): finish() then ends the run as failed, `live.replied` still false.
+  function post(task, text) {
+    const { live } = task;
+    return ctx.answer(target(task, live.replyTo), hidden(live, text), { full: runLink(task) });
+  }
+
+  // The run on the dashboard, where its whole answer is, should GitHub take only its start.
+  function runLink(task) {
+    const url = ctx.publicUrl?.();
+    const { key, id } = task.live;
+    return url ? `${url}/#/${task.repo}?task=${encodeURIComponent(key)}&run=${id}` : null;
   }
 
   // Once the sandbox exited (or couldn't start): the reply, reactions and label, then the next
@@ -575,8 +590,14 @@ export function createRuns(ctx) {
       record.summary = fallback ? fallback.summary : summaryOf(live.result);
       record.questions = questionsOf(live.result);
     } catch (error) {
-      log(`${key}: ${error.stack ?? error}`);
       record.status = "error";
+      if (error instanceof ReplyError) {
+        // Its comments get 👎 (cleanUp()), and the dashboard says why.
+        log(`${key}: done (error, its reply refused): ${error.message}`);
+        record.summary = `The reply couldn't be posted: ${error.status ?? "GitHub didn't answer"}`;
+        record.questions = null;
+        writeEvent(live.logFile, "note", { message: `${record.summary} (${error.message})` });
+      } else log(`${key}: ${error.stack ?? error}`);
       if (error instanceof RunError && !live.replied) {
         await ctx.answer(target(task, live.asked), error.message).catch((e) => log(`${key}: ${e}`));
       }
@@ -630,11 +651,11 @@ export function createRuns(ctx) {
         live.replyTo,
         hidden(live, result.text),
         footer,
-        { allowed },
+        { allowed, full: runLink(task) },
       );
       log(`${live.key}: review posted on #${live.replyTo} (${posted.event ?? "as a comment"})`);
       live.reviewed = { number: live.replyTo, posted, auto };
-    } else await ctx.answer(target(task, live.replyTo), hidden(live, text));
+    } else await post(task, text);
     live.replied = true;
     ctx.saveLive(task);
     // Light runs ask questions all along: no label for those.

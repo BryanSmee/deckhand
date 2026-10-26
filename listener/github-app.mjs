@@ -235,7 +235,7 @@ export function createGitHubApp({
     const { token: t } = await token(await installationOf(repo));
     const res = await call(method, path, t, body);
     if (!res.ok && !expected.includes(res.status)) {
-      log(`GitHub ${method} ${path}: ${res.status} ${await res.text()}`);
+      log(`GitHub ${method} ${path}: ${res.status} ${await res.clone().text()}`);
     }
     return res;
   }
