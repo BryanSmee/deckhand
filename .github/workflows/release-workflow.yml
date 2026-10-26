@@ -1,12 +1,3 @@
-# Goes in .github/workflows/release-workflow.yml (Deckhand's own App can't push workflows: move it
-# by hand). Publishes the listener, egress proxy, base sandbox and container engine images to
-# GHCR as ghcr.io/<owner>/deckhand-{listener,egress,sandbox,engine,engine-podman}:
-# - each tag (v1.2.3): tagged 1.2.3, 1.2 and latest, for amd64 and arm64 (a pre-release such
-#   as v1.3.0-rc.1: only its own tag);
-# - each push to main: tagged edge, amd64 only, showing edge-<short sha> as its version. It
-#   builds straight away, and a newer push cancels it: a burst of merges ends with one build of
-#   the last commit.
-# Operators pull them with compose: see "Updating" in docs/setup.md.
 name: Release
 
 on:
@@ -14,9 +5,6 @@ on:
     branches: [main]
     tags: ["v*"]
 
-# A newer push to main cancels the edge build still pending or running (GitHub keeps at most
-# one pending run per group); a release (its own ref, never a branch) is never cancelled. No
-# job sleeps to debounce: a sleeping job holds a runner, and its minutes are billed.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.ref_type == 'branch' }}
@@ -27,8 +15,6 @@ permissions:
 
 jobs:
   images:
-    # The operator's own runners: GitHub-hosted minutes ran out. They need Docker (buildx and
-    # QEMU run as containers, QEMU's privileged).
     runs-on: [self-hosted, Linux]
     strategy:
       matrix:
@@ -45,8 +31,6 @@ jobs:
             dockerfile: engine/podman/Dockerfile
     steps:
       - uses: actions/checkout@v4
-      # Only releases build arm64, through QEMU: edge skips most of the compute. A runner that
-      # isn't x64 needs it for edge's amd64 too.
       - if: github.ref_type == 'tag' || runner.arch != 'X64'
         uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
@@ -76,7 +60,6 @@ jobs:
           fi
       - uses: docker/build-push-action@v6
         with:
-          # The repository root: the images take ../prompts/ too.
           context: .
           file: ${{ matrix.dockerfile }}
           platforms: ${{ github.ref_type == 'tag' && 'linux/amd64,linux/arm64' || 'linux/amd64' }}
@@ -84,6 +67,5 @@ jobs:
           build-args: DECKHAND_VERSION=${{ steps.version.outputs.version }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          # Per image; edge builds warm the cache for the next release.
           cache-from: type=gha,scope=${{ matrix.image }}
           cache-to: type=gha,mode=max,scope=${{ matrix.image }}
