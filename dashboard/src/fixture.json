@@ -17,7 +17,11 @@
         "number": 25,
         "url": "https://github.example.com/acme/app/pull/25",
         "state": "draft",
-        "readyAt": null
+        "readyAt": null,
+        "additions": 86,
+        "deletions": 19,
+        "changedFiles": 4,
+        "commits": 3
       },
       "rerunnable": false,
       "runs": [
@@ -35,7 +39,9 @@
           "startedAt": 1791989580000,
           "finishedAt": null,
           "status": "running",
-          "summary": null
+          "summary": null,
+          "branch": "issue-22-dashboard-on-a-frontend-framework",
+          "lastPushAt": 1791989820000
         },
         {
           "id": "acme-app-22-1791987600000",
@@ -51,7 +57,9 @@
           "startedAt": 1791987600000,
           "finishedAt": 1791988320000,
           "status": "needs-input",
-          "summary": "The sandbox can't reach registry.npmjs.org: npm installs get a 403 from the egress proxy."
+          "summary": "The sandbox can't reach registry.npmjs.org: npm installs get a 403 from the egress proxy.",
+          "branch": "issue-22-dashboard-on-a-frontend-framework",
+          "lastPushAt": 1791988200000
         },
         {
           "id": "acme-app-22-1791984600000",

@@ -42,10 +42,11 @@ export function createBroker({
   random = () => randomBytes(32).toString("hex"),
   log = () => {},
 }) {
-  // hash(secret) → { repo, extra, push, branches, provider, note, apiStatus, apiError, tokens }:
-  // `provider`, where the listener sends its agent's API calls (anthropic.mjs; null: nowhere,
-  // no credential), `note`, a line in its log (provide()), `apiStatus`, the last status that
-  // provider answered, and `apiError`, why the last call the listener refused or the provider
+  // hash(secret) → { repo, extra, push, branches, provider, note, pushed, apiStatus, apiError,
+  // tokens }: `provider`, where the listener sends its agent's API calls (anthropic.mjs; null:
+  // nowhere, no credential), `note`, a line in its log (provide()), `pushed`, what the git
+  // gateway calls when GitHub took a push of the run's (watchPushes()), `apiStatus`, the last
+  // status that provider answered, and `apiError`, why the last call the listener refused or the provider
   // failed did (upstream.mjs): what an error reply adds.
   // `tokens`: the installation tokens it got, which its output must not publish (runs.mjs).
   const runs = new Map();
@@ -75,6 +76,12 @@ export function createBroker({
   function provide(secret, provider, note = null) {
     const run = runOf(secret);
     if (run) Object.assign(run, { provider, note });
+  }
+
+  // `pushed({ branch, at })`: called by the git gateway for each push of the run's GitHub took.
+  function watchPushes(secret, pushed) {
+    const run = runOf(secret);
+    if (run) run.pushed = pushed;
   }
 
   // The branches a run may push and whose pull requests it may mark ready: names, or
@@ -125,5 +132,15 @@ export function createBroker({
     }
   }
 
-  return { register, allow, provide, revoke, runOf, sentBy, handle, size: () => runs.size };
+  return {
+    register,
+    allow,
+    provide,
+    watchPushes,
+    revoke,
+    runOf,
+    sentBy,
+    handle,
+    size: () => runs.size,
+  };
 }

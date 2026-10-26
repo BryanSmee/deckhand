@@ -16,13 +16,16 @@
 // workflows, so one that writes or names a secret is refused. Other repos' pushes stream
 // through unread.
 //
+// A push GitHub took is the run's last (broker.mjs watchPushes()): when, and to which branch,
+// for the dashboard.
+//
 // Only the smart HTTP push service: fetches go straight to GitHub with the read token.
 // Served on the broker's port, which only the runs' networks reach.
 import { createReadStream } from "node:fs";
 import { open } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Readable } from "node:stream";
+import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { branchAllowed, NOT_ITS_SANDBOX } from "./broker.mjs";
 import { createMirrors } from "./git-mirror.mjs";
@@ -31,6 +34,9 @@ import { PUSH_PERMISSIONS, WORKFLOW_PUSH_PERMISSIONS } from "./github-app.mjs";
 // The ref updates come first in a push: anything bigger than this before them is not git. A
 // ref update is a hundred bytes or so; a push of hundreds of branches still fits.
 export const MAX_COMMANDS = 64 * 1024;
+// GitHub's answer to a push read for its report: a report is a line per ref, and the progress
+// lines around it are few.
+const MAX_REPORT = 64 * 1024;
 // How long a sandbox may take to send them, and to send the rest of a refused push.
 const HEAD_MS = 30_000;
 const DRAIN_MS = 60_000;
@@ -120,6 +126,53 @@ export function commandReader(limit = MAX_COMMANDS) {
 function pkt(data) {
   const body = Buffer.from(data);
   return Buffer.concat([Buffer.from((body.length + 4).toString(16).padStart(4, "0")), body]);
+}
+
+// The payloads of the pkt-lines in `buffer`, flushes left out, up to a line that is cut or
+// isn't one.
+function pktLines(buffer) {
+  const lines = [];
+  for (let at = 0; at + 4 <= buffer.length;) {
+    const hex = buffer.toString("latin1", at, at + 4);
+    if (!/^[0-9a-f]{4}$/i.test(hex)) break;
+    const length = parseInt(hex, 16);
+    if (length < 4) {
+      at += 4;
+      continue;
+    }
+    if (at + length > buffer.length) break;
+    lines.push(buffer.subarray(at + 4, at + length));
+    at += length;
+  }
+  return lines;
+}
+
+// The refs GitHub's answer to a push (`answer`, receive-pack's) says it updated, the client
+// asking with `caps`: its report's "ok <ref>" lines, from band 1 with side-band. Null without
+// report-status: the answer doesn't say.
+export function acceptedRefs(answer, caps) {
+  if (!caps.includes("report-status") && !caps.includes("report-status-v2")) return null;
+  let report = answer;
+  if (caps.includes("side-band-64k") || caps.includes("side-band")) {
+    const band = pktLines(answer).filter((line) => line[0] === 1);
+    report = Buffer.concat(band.map((line) => line.subarray(1)));
+  }
+  return pktLines(report)
+    .map((line) => /^ok (\S+)/.exec(line.toString("utf8"))?.[1])
+    .filter(Boolean);
+}
+
+// The branch a push GitHub answered with `answer` updated (the last one, deletions aside), or
+// null: none, or GitHub refused them.
+export function pushedBranch(updates, caps, answer) {
+  const accepted = acceptedRefs(answer, caps);
+  const update = updates.findLast(
+    (u) =>
+      u.ref.startsWith("refs/heads/") &&
+      !/^0+$/.test(u.new) &&
+      (accepted === null || accepted.includes(u.ref)),
+  );
+  return update ? update.ref.slice("refs/heads/".length) : null;
 }
 
 // What receive-pack answers when it rejects every ref, so git prints each as
@@ -224,6 +277,7 @@ export function createGitGateway({
   maxPush,
   fetch = globalThis.fetch,
   log = () => {},
+  now = Date.now,
   headMs = HEAD_MS,
   drainMs = DRAIN_MS,
 }) {
@@ -348,9 +402,9 @@ export function createGitGateway({
     res.end(report);
   }
 
-  // A push whose every ref update the run may make: { body, token, done }, `token` the
-  // gateway's own for it and `done` what to call once it is forwarded, or nothing once the
-  // push is refused.
+  // A push whose every ref update the run may make: { body, token, done, parsed }, `token` the
+  // gateway's own for it, `done` what to call once it is forwarded and `parsed` its ref updates
+  // (commands()), or nothing once the push is refused.
   async function checkPush(req, res, { repo, run, github }) {
     let parsed;
     try {
@@ -374,7 +428,7 @@ export function createGitGateway({
     }
     if (reasons.size) return refuse(req, res, repo, parsed, reasons);
     // Only now: a push of no branch of the run's (a fork's pull request has none) never gets it.
-    if (!workflowsGranted(repo)) return { body: parsed.body, token: null };
+    if (!workflowsGranted(repo)) return { body: parsed.body, token: null, parsed };
     let token;
     try {
       ({ token } = await github.repoToken(repo, WORKFLOW_PUSH_PERMISSIONS));
@@ -455,7 +509,7 @@ export function createGitGateway({
       await done();
       return refuse(req, res, repo, parsed, reasons);
     }
-    return { body: createReadStream(spooled.file), token, done };
+    return { body: createReadStream(spooled.file), token, done, parsed };
   }
 
   // The bases of the open pull requests from `ref`, a branch: GitHub runs their workflows from
@@ -498,7 +552,8 @@ export function createGitGateway({
   }
 
   // Sends the request on to GitHub with the gateway's own push token (`token`, or one with
-  // PUSH_PERMISSIONS), and its answer back.
+  // PUSH_PERMISSIONS), and its answer back. Resolves to the answer's first MAX_REPORT bytes
+  // when it was a success, null otherwise.
   async function forward(req, res, url, { repo, service, github }, body, token) {
     let upstream;
     try {
@@ -524,8 +579,34 @@ export function createGitGateway({
     const type = upstream.headers.get("content-type");
     if (type) headers["content-type"] = type;
     res.writeHead(upstream.status, headers);
-    if (!upstream.body) return res.end();
-    await pipeline(Readable.fromWeb(upstream.body), res);
+    if (!upstream.body) {
+      res.end();
+      return upstream.ok ? Buffer.alloc(0) : null;
+    }
+    const kept = [];
+    let size = 0;
+    const tap = new Transform({
+      transform(chunk, _, done) {
+        if (size < MAX_REPORT) {
+          kept.push(chunk);
+          size += chunk.length;
+        }
+        done(null, chunk);
+      },
+    });
+    await pipeline(Readable.fromWeb(upstream.body), tap, res);
+    return upstream.ok ? Buffer.concat(kept) : null;
+  }
+
+  // Tells the run its push went through (broker.mjs watchPushes()), when GitHub updated a branch.
+  function pushed(run, repo, parsed, answer) {
+    if (!answer) return;
+    try {
+      const branch = pushedBranch(parsed.updates, parsed.caps, answer);
+      if (branch) run.pushed?.({ branch, at: now() });
+    } catch (error) {
+      log(`Git gateway: ${repo}: recording a push: ${error.message ?? error}`);
+    }
   }
 
   async function handle(req, res) {
@@ -536,7 +617,8 @@ export function createGitGateway({
     const push = await checkPush(req, res, admitted);
     if (!push) return;
     try {
-      await forward(req, res, url, admitted, push.body, push.token);
+      const answer = await forward(req, res, url, admitted, push.body, push.token);
+      pushed(admitted.run, admitted.repo, push.parsed, answer);
     } finally {
       await push.done?.();
     }

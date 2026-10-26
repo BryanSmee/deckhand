@@ -1,10 +1,20 @@
 // Each task's pull request for the dashboard, by task key ("org/repo#12", "org/repo#pr-3"):
-// { number, url, state, readyAt, autoMerged? }. `pull_request` webhooks keep it current (events.mjs
-// pullRequest()), and the listener's own changes (pr-ready.mjs); tasks older than that are
-// looked up once per listener start, from the repo's recent pull requests. Kept in pulls.json,
-// so a restart neither forgets nor asks again. The open ones are asked about again at start and
-// from the dashboard's Sync (resync()): a lost delivery would leave one a draft forever.
-import { linkedIssue, parseKey, prState, headInRepo, sameRepo } from "./events.mjs";
+// { number, url, state, readyAt, autoMerged?, additions?, deletions?, changedFiles?, commits? },
+// its size and commit count as the last pull request object that had them said (events.mjs
+// pullSize()). `pull_request` webhooks keep it current (events.mjs pullRequest()), and the
+// listener's own changes (pr-ready.mjs); tasks older than that are looked up once per listener
+// start, from the repo's recent pull requests. Kept in pulls.json, so a restart neither forgets
+// nor asks again. The open ones are asked about again at start and from the dashboard's Sync
+// (resync()): a lost delivery would leave one a draft forever.
+import {
+  linkedIssue,
+  parseKey,
+  prState,
+  PULL_SIZE,
+  pullSize,
+  headInRepo,
+  sameRepo,
+} from "./events.mjs";
 import { respellMap, sameTask } from "./spelling.mjs";
 import { persistentMap } from "./store.mjs";
 
@@ -41,7 +51,10 @@ export function createPulls({ path, listPulls, getPull = async () => null, log =
     // Merged by the listener (reviews.mjs autoMerge()): the `closed` delivery that follows
     // doesn't know it.
     const autoMerged = pr.autoMerged || before?.autoMerged;
-    pulls.set(key, { ...pr, readyAt, ...(autoMerged && { autoMerged: true }) });
+    // A pull request object without its size (the listener's own changes may have none): the
+    // one known stays.
+    const size = before ? sizeOf(before) : {};
+    pulls.set(key, { ...size, ...pr, readyAt, ...(autoMerged && { autoMerged: true }) });
     pulls.save();
     return true;
   }
@@ -93,8 +106,8 @@ export function createPulls({ path, listPulls, getPull = async () => null, log =
   const openPulls = () => [...pulls].filter(([, pr]) => open(pr));
 
   // The open pull requests' states asked again from GitHub (one listing per repo, then those it
-  // doesn't have one by one), and the tasks without one looked up again at the next fill().
-  // Resolves to how many changed. One at a time: a second call shares it.
+  // doesn't have or whose size isn't known one by one), and the tasks without one looked up
+  // again at the next fill(). Resolves to how many changed state. One at a time: a second call shares it.
   function resync() {
     if (resyncing) return resyncing;
     listed.clear();
@@ -105,6 +118,7 @@ export function createPulls({ path, listPulls, getPull = async () => null, log =
         if (repo) byRepo.set(repo, [...(byRepo.get(repo) ?? []), [key, pr]]);
       }
       let changed = 0;
+      let dirty = false;
       for (const [repo, entries] of byRepo) {
         const list = await listPulls(repo).catch((error) => {
           log(`Pull requests of ${repo}: ${error.message ?? error}`);
@@ -112,22 +126,32 @@ export function createPulls({ path, listPulls, getPull = async () => null, log =
         });
         for (const [key, pr] of entries) {
           let found = list.find((p) => p.number === pr.number);
-          if (!found) {
+          // Not listed, or its size not known yet (recorded from a listing, or before sizes
+          // were): the pull request itself has it.
+          if (!found || !("additions" in pr)) {
             try {
               found = await getPull(repo, pr.number);
             } catch (error) {
               log(`Pull requests: ${repo}#${pr.number}: ${error.message ?? error}`);
             }
+            found ??= list.find((p) => p.number === pr.number);
           }
           const state = found && prState(found);
           // Recorded meanwhile by a delivery: that one is newer.
-          if (!state || pulls.get(key) !== pr || state === pr.state) continue;
-          pulls.set(key, { ...pr, state, url: found.html_url ?? pr.url });
+          if (!state || pulls.get(key) !== pr) continue;
+          // Only getPull() has its size: a listing's leaves the one known.
+          const size = pullSize(found);
+          const resized = Object.entries(size).some(([k, v]) => pr[k] !== v);
+          if (state === pr.state && !resized) continue;
+          pulls.set(key, { ...pr, ...size, state, url: found.html_url ?? pr.url });
+          dirty = true;
+          // A size alone isn't what the dashboard's Sync reports.
+          if (state === pr.state) continue;
           log(`${key}: pull request #${pr.number} ${state} (was ${pr.state})`);
           changed++;
         }
       }
-      if (changed) pulls.save();
+      if (dirty) pulls.save();
       return changed;
     })().finally(() => (resyncing = null));
     return resyncing;
@@ -162,6 +186,15 @@ function mergePulls(kept, moved) {
     readyAt: kept.readyAt ?? moved.readyAt ?? null,
     ...(autoMerged && { autoMerged: true }),
   };
+}
+
+// The size fields of a recorded pull request, those it has.
+function sizeOf(pr) {
+  return Object.fromEntries(
+    Object.keys(PULL_SIZE)
+      .filter((k) => k in pr)
+      .map((k) => [k, pr[k]]),
+  );
 }
 
 // A task's pull request in a listing, newest first: itself for "#pr-n"; for an issue, the

@@ -211,6 +211,12 @@ async function fakeGitHub(files = {}) {
       if (req.url.startsWith("/installation/repositories?")) {
         return res.end(JSON.stringify({ repositories: [] }));
       }
+      // A push the git gateway forwards: each ref updated, as receive-pack reports it.
+      if (req.url.endsWith("/git-receive-pack")) {
+        const pkt = (line) => `${(line.length + 4).toString(16).padStart(4, "0")}${line}`;
+        const refs = [...body.matchAll(/[0-9a-f]{40} [0-9a-f]{40} ([^\0\n]+)/g)].map((m) => m[1]);
+        return res.end(pkt("unpack ok\n") + refs.map((r) => pkt(`ok ${r}\n`)).join("") + "0000");
+      }
       res.end(JSON.stringify({ id: 1 }));
     });
   });
@@ -3251,6 +3257,10 @@ mounts:
         state: "open",
         draft,
         head: { ref: "issue-12-fix", repo: { full_name: "org/repo" } },
+        additions: 86,
+        deletions: 19,
+        changed_files: 4,
+        commits: draft ? 2 : 3,
       },
       sender: { login: "deckhand[bot]" },
     });
@@ -3264,6 +3274,11 @@ mounts:
     assert.equal(ready.pr.number, 13);
     assert.equal(ready.pr.state, "ready");
     assert.ok(ready.pr.readyAt > 0);
+    // Its size and commit count, as the last delivery had them.
+    assert.deepEqual(
+      [ready.pr.additions, ready.pr.deletions, ready.pr.changedFiles, ready.pr.commits],
+      [86, 19, 4, 3],
+    );
     assert.equal(ready.closed, null);
     // #12 closed as completed: the graph shows it implemented.
     await send(
@@ -3363,6 +3378,8 @@ mounts:
       "phase",
       "summary",
       "delivered",
+      "branch",
+      "lastPushAt",
     ],
   ];
 
@@ -3440,8 +3457,15 @@ mounts:
         );
       }
       assert.equal(forwarded(), round === "before" ? 0 : 1);
-      await pushProbe(brokerPort, secret, "refs/heads/issue-12-x");
+      await pushProbe(brokerPort, secret, `refs/heads/issue-12-${round}`);
       assert.equal(forwarded(), round === "before" ? 1 : 2);
+      // GitHub took it: the run's last push, on its saved record.
+      const record = () => {
+        const live = readdirSync(join(dir, "logs")).find((f) => f.endsWith(".live.json"));
+        return JSON.parse(readFileSync(join(dir, "logs", live), "utf8")).record;
+      };
+      await until(() => record().branch === `issue-12-${round}`, "the push");
+      assert.ok(record().lastPushAt > 0);
       if (round === "before") {
         await ctx.restart();
         await ctx.listener.until("picked up");
@@ -3449,6 +3473,13 @@ mounts:
     }
     writeFileSync(join(dir, "go"), "");
     await ctx.listener.until("done (ok)");
+    // Kept in its summary once it ended: the dashboard's after it.
+    const summary = await until(
+      () => readdirSync(join(dir, "logs")).find((f) => /-\d+\.json$/.test(f)),
+      "its summary",
+    );
+    const done = JSON.parse(readFileSync(join(dir, "logs", summary), "utf8"));
+    assert.equal(done.branch, "issue-12-after");
   });
 
   test("allow_workflows: pushes are checked against a mirror in the data dir, until the grant goes", async (t) => {

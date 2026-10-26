@@ -60,6 +60,10 @@ export interface Run {
   summary?: string | null;
   // How many comments reached it while it ran. Sent, not shown.
   delivered?: number;
+  // The branch of its last push GitHub took, and when (listener/git-gateway.mjs); null when
+  // it hasn't pushed, absent for runs from before they were recorded.
+  branch?: string | null;
+  lastPushAt?: number | null;
 }
 
 // draft, ready for review, merged, or closed without merging.
@@ -74,6 +78,12 @@ export interface PullRequest {
   readyAt: number | null;
   // Merged by Deckhand itself, with no human review (`review.merge`, listener/reviews.mjs).
   autoMerged?: boolean;
+  // Its size and commit count, as GitHub last sent them with it; absent until it did (a
+  // pull request found in a listing).
+  additions?: number;
+  deletions?: number;
+  changedFiles?: number;
+  commits?: number;
 }
 
 // What a repo's policies (Rego `deny_*` rules, listener/policies.mjs) decided about a task's

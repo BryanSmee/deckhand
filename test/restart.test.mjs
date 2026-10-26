@@ -55,6 +55,32 @@ test("a restored run's calls go to its provider, or its agent's own when none wa
   assert.match(readFileSync(join(dir, "r2.log"), "utf8"), /"event":"note".*GET \/openai\/files/);
 });
 
+test("a restored run's pushes go on its record, saved with it", async (t) => {
+  const dir = tempDir(t);
+  const broker = createBroker({ app: () => null });
+  const ctx = {
+    config: { dataDir: dir },
+    log: () => {},
+    tasks: new Map(),
+    logDir: dir,
+    runs: [],
+    runsById: new Map(),
+    runner: { closed: () => false },
+    broker,
+    running: 0,
+  };
+  const secret = saveRun(dir, "r1", 1, { agent: "claude" });
+  createRestart(ctx).restoreRuns();
+  // What the git gateway calls once GitHub took a push.
+  broker.runOf(secret).pushed({ branch: "issue-1-x", at: 1234 });
+  const task = [...ctx.tasks.values()][0];
+  assert.equal(task.live.record.branch, "issue-1-x");
+  assert.equal(task.live.record.lastPushAt, 1234);
+  await task.live.saving;
+  const saved = JSON.parse(readFileSync(join(dir, "r1.live.json"), "utf8"));
+  assert.deepEqual([saved.record.branch, saved.record.lastPushAt], ["issue-1-x", 1234]);
+});
+
 // A data dir whose runs, run going and queue have one repo under two spellings: `live` the
 // running one's, `newest` the last finished run's.
 function twoSpellings(t, { live, newest }) {

@@ -462,10 +462,12 @@ const PR_ACTIONS = [
   "converted_to_draft",
   "closed",
   "edited",
+  // A push to its branch: its size and commit count change.
+  "synchronize",
 ];
 
-// A `pull_request` delivery → { key, pr: { number, url, state, readyAt } } for the dashboard
-// (pulls.mjs), or null. Its task is the issue it closes, else the pull request itself.
+// A `pull_request` delivery → { key, pr: { number, url, state, readyAt, …size } } for the
+// dashboard (pulls.mjs), or null. Its task is the issue it closes, else the pull request itself.
 // `readyAt`: when it turned ready for review, which the dashboard notifies about; an edit
 // or a close keeps the one recorded before (pulls.mjs).
 export function pullRequest(config, event, p, now, skip = () => null) {
@@ -503,11 +505,31 @@ export function replayedPull(payload, current) {
 
 // A pull request as GitHub has it → { key, pr } for the dashboard (pulls.mjs record()): the
 // task of the issue it closes, else its own. `readyAt`: when it turned ready, if it just did.
+// Its size and commit count when GitHub sent them: a single pull request and webhooks have
+// them, listings don't.
 export function pullEntry(repo, pr, readyAt = null) {
   return {
     key: taskKey(repo, linkedIssue(pr, repo) ?? prId(pr.number)),
-    pr: { number: pr.number, url: pr.html_url, state: prState(pr), readyAt },
+    pr: { number: pr.number, url: pr.html_url, state: prState(pr), readyAt, ...pullSize(pr) },
   };
+}
+
+// A pull request's size fields, the dashboard's name → GitHub's.
+export const PULL_SIZE = {
+  additions: "additions",
+  deletions: "deletions",
+  changedFiles: "changed_files",
+  commits: "commits",
+};
+
+// { additions, deletions, changedFiles, commits } of a pull request as GitHub has it, those it
+// has.
+export function pullSize(pr) {
+  return Object.fromEntries(
+    Object.entries(PULL_SIZE)
+      .filter(([, field]) => Number.isInteger(pr?.[field]))
+      .map(([name, field]) => [name, pr[field]]),
+  );
 }
 
 // `pull`: the pull request, or its issue for an issue comment. A pull request that closes an
