@@ -99,6 +99,8 @@
   --radius-dialog: 16px;
   --fast: 0.12s;
   --slide: 0.18s;
+  /* A dragged card's tilt: a node moved in the graph, a work queue card's ghost over it. */
+  --drag-tilt: -2deg;
   /* Density (Preferences): a default control's height, and what a list's row loses top and
      bottom. Compact: controls 32, rows 8 px shorter. Small (28) and touch (44) stay. */
   --control: 36px;

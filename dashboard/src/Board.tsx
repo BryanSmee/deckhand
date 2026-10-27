@@ -20,9 +20,10 @@ import {
   droppedIssue,
   ISSUE_TYPE,
   LINK_TYPES,
+  type Look,
 } from "./dnd";
 import { sameRepo } from "./format";
-import { type DropLabel, GraphDrawing, nodeRef, PAD, targetsOf } from "./GraphDrawing";
+import { type DropLabel, GHOST_GRIP, GraphDrawing, nodeRef, PAD, targetsOf } from "./GraphDrawing";
 import { useAnswering, useKeptLayout, useNodeDrag } from "./graphHooks";
 import { dropTarget } from "./graphLayout";
 import { GraphLegend } from "./GraphLegend";
@@ -70,6 +71,8 @@ interface Hover {
   what: Dragged;
   // Null: a link from elsewhere, read only once dropped.
   number: number | null;
+  // A work queue card's state and title, for its ghost. Null: a link, or a node moved.
+  look: Look | null;
   x: number;
   y: number;
 }
@@ -132,6 +135,12 @@ export function Board({
     setNotice(null);
     setTab("backlog");
   }, [repo]);
+  // A card's drag ended without leaving the graph (Escape): its ghost goes with it.
+  useEffect(() => {
+    const ended = () => setHover(null);
+    document.addEventListener("dragend", ended);
+    return () => document.removeEventListener("dragend", ended);
+  }, []);
   const drawing = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLDivElement>(null);
   const root = useRef<HTMLDivElement>(null);
@@ -207,6 +216,12 @@ export function Board({
       text = `Answer ${ref}, then ${text[0].toLowerCase()}${text.slice(1).replace(` ${ref}`, "")}`;
     }
     if (box) return { text, x: box.x, y: box.y >= 30 ? box.y - 30 : box.y + shape.h + 6 };
+    // Over a card's ghost, or under it near the top: not on it.
+    if (h.look) {
+      const x = h.x - GHOST_GRIP.x;
+      const y = h.y - GHOST_GRIP.y;
+      return { text, x, y: y >= 30 ? y - 30 : y + shape.h + 6 };
+    }
     return { text, x: h.x + 14, y: h.y + 14 };
   };
 
@@ -240,7 +255,8 @@ export function Board({
         if (!where) return setHover(null);
         const card = carriedCard();
         const what = card?.type === BRAINSTORM_TYPE ? "brainstorm" : "new";
-        setHover({ ...where, what, number: card?.number ?? null });
+        const look = card && { status: card.status, title: card.title };
+        setHover({ ...where, what, number: card?.number ?? null, look });
       },
     },
   );
@@ -249,7 +265,7 @@ export function Board({
     onMove: (point, d) => {
       const where = point && at(point.x, point.y);
       if (!where || !d) return setHover(null);
-      setHover({ ...where, what: d.waits ? "waits" : "new", number: d.number });
+      setHover({ ...where, what: d.waits ? "waits" : "new", number: d.number, look: null });
     },
     onDrop: (d, point) => dropped(d.number, targetAt(point.x, point.y), d.waits ? "waits" : "new"),
   });
@@ -412,6 +428,11 @@ export function Board({
           github={github}
           target={target}
           label={hover ? labelOf(hover) : null}
+          ghost={
+            hover?.look && hover.number
+              ? { ...hover.look, number: hover.number, x: hover.x, y: hover.y }
+              : null
+          }
           movable={moves}
           drag={drag}
           onAsk={(task) => questions.ask(task, null)}

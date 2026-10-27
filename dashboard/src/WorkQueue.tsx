@@ -191,7 +191,7 @@ export function WorkQueue({
         title: i.title,
         href: i.url,
         meta: i.subIssues ? `${plural(i.subIssues, "sub-issue")} · start lays them out` : "",
-        drag: dragOf(ISSUE_TYPE, i.number, i.url),
+        drag: dragOf(ISSUE_TYPE, i.number, i.url, { status: "Backlog", title: i.title ?? "" }),
         actions: [
           {
             label: "Start",
@@ -234,7 +234,10 @@ export function WorkQueue({
         meta: [status, time].filter(Boolean).join(" · "),
         drag:
           !blocked && movable(c)
-            ? dragOf(BRAINSTORM_TYPE, c.number, issueUrl(c.number))
+            ? dragOf(BRAINSTORM_TYPE, c.number, issueUrl(c.number), {
+                status: status || "Brainstorm",
+                title: c.title ?? "",
+              })
             : undefined,
         actions: [
           {
@@ -298,7 +301,12 @@ export function WorkQueue({
         title: t.title,
         href: issueUrl(t.number!),
         meta: count ? `${plural(count, "open question")}` : "Open questions",
-        drag: blocked ? undefined : dragOf(ISSUE_TYPE, t.number!, issueUrl(t.number!)),
+        drag: blocked
+          ? undefined
+          : dragOf(ISSUE_TYPE, t.number!, issueUrl(t.number!), {
+              status: "Answer",
+              title: t.title ?? "",
+            }),
         actions: [
           {
             label: "Answer",

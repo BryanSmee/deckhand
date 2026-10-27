@@ -63,6 +63,11 @@ test("a card waiting for answers carries its issue; dropped, it opens the questi
   const { list, area } = await show();
   const card = cardOf(list, 138);
   expect(card.getAttribute("draggable")).toBe("true");
+  // Over the graph, it shows as a node: its number, "Answer" and its title.
+  fireEvent.dragStart(card, { dataTransfer: transfer() });
+  fireEvent.dragOver(area, { dataTransfer: transfer({ [ISSUE_TYPE]: "138" }) });
+  expect(area.querySelector('[class*="ghost"]')?.textContent).toMatch(/^#138Answer/);
+  fireEvent.dragEnd(card);
   const data = dragCard(card, area);
   expect(data.data).toEqual({
     [ISSUE_TYPE]: "138",
@@ -87,6 +92,18 @@ test("a pull request waiting for answers stays where it is", async () => {
   expect(screen.queryByRole("button", { name: /#153/ })).toBeNull();
   await new Promise((r) => setTimeout(r, 10));
   expect(api.posted).toEqual([]);
+});
+
+test("an issue's link dragged from another tab draws no ghost, and drops as before", async () => {
+  const { area } = await show();
+  const link = "https://github.example.com/acme/api/issues/138";
+  const dataTransfer = transfer({ "text/uri-list": link, "text/plain": link });
+  fireEvent.dragOver(area, { dataTransfer });
+  // Nothing known about it before the drop: no ghost, the browser's own image.
+  expect(area.querySelector('[class*="ghost"]')).toBeNull();
+  expect(screen.getByText("Start the issue")).toBeTruthy();
+  fireEvent.drop(area, { dataTransfer });
+  expect(screen.getByRole("dialog", { name: "3 open questions" })).toBeTruthy();
 });
 
 test("dropped text that isn't an issue's link says to drag its card", async () => {
