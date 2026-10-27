@@ -47,6 +47,11 @@ test("settings: the repositories, and one's config", () => {
   const config = { ...list, config: "org/app" };
   expect(formatRoute(config)).toBe("#/settings/repositories/org/app");
   expect(parseRoute("#/settings/repositories/org/app")).toEqual(config);
+  const policies = { ...config, configTab: "policies" as const };
+  expect(formatRoute(policies)).toBe("#/settings/repositories/org/app/policies");
+  expect(parseRoute("#/settings/repositories/org/app/policies")).toEqual(policies);
+  // A tab without a repository: the list.
+  expect(formatRoute({ ...list, configTab: "policies" })).toBe("#/settings/repositories");
 });
 
 // Each old address parses to the view it showed, under its new address.

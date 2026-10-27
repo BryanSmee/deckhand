@@ -240,10 +240,9 @@ test("a fine config: its banner, the facts at a glance, and the details folded",
   expect(within(settings).getAllByRole("listitem")).toHaveLength(4);
   fireEvent.click(within(runs).getByRole("button", { name: "Show the 2 more from the operator" }));
   expect(within(settings).getAllByRole("listitem")).toHaveLength(6);
-  // The repo asks for a mount: open. The file and the policies: folded.
+  // The repo asks for a mount: open. The file: folded.
   expect(fold(/Hosts, mounts and the operator's grant/).open).toBe(true);
   expect(fold(/\.deckhand\.yaml/).open).toBe(false);
-  expect(fold(/Policies/).open).toBe(false);
   // A link of the page opens its fold.
   const toc = screen.getByRole("navigation", { name: "On this page" });
   fireEvent.click(within(toc).getByRole("button", { name: ".deckhand.yaml" }));

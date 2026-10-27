@@ -1,0 +1,39 @@
+/* A file: line numbers, the bad lines marked and their messages under them. */
+.code {
+  margin: 0;
+  padding: 10px 0;
+  font: 400 12.5px/21px var(--mono);
+  overflow-x: auto;
+}
+
+.line {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr);
+  padding-right: 16px;
+  scroll-margin-top: 48px;
+}
+
+.n {
+  padding-right: 14px;
+  color: var(--text-3);
+  text-align: right;
+  user-select: none;
+}
+
+.src {
+  white-space: pre;
+}
+
+.bad {
+  background: var(--err-bg);
+  box-shadow: inset 3px 0 0 var(--err-solid);
+}
+
+.annotation {
+  display: block;
+  padding: 2px 16px 6px 58px;
+  background: var(--err-bg);
+  color: var(--err);
+  font: 12.5px/18px var(--font);
+  white-space: normal;
+}

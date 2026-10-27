@@ -169,20 +169,27 @@ beforeEach(() => {
   api.answer = () => Response.json({ error: "Its issues are disabled." }, { status: 409 });
 });
 
-// The repository open follows the address, as in App.tsx: a row's links set it.
+// The repository open, and its tab, follow the address, as in App.tsx: a row's links set them.
 function Page(props: { server?: ServerInfo; serverNow?: number; tasks?: Task[] }) {
-  const config = () => parseRoute(location.hash).config ?? null;
-  const [open, setOpen] = useState(config);
+  const [route, setRoute] = useState(() => parseRoute(location.hash));
   useEffect(() => {
-    const onChange = () => setOpen(config());
+    const onChange = () => setRoute(parseRoute(location.hash));
     addEventListener("hashchange", onChange);
     return () => removeEventListener("hashchange", onChange);
   }, []);
   const onOpen = (repo: string | null) => {
     history.replaceState(null, "", "#/settings/repositories");
-    setOpen(repo);
+    setRoute({ ...parseRoute(location.hash), config: repo });
   };
-  return <Repos list={useRepos()} open={open} onOpen={onOpen} {...props} />;
+  return (
+    <Repos
+      list={useRepos()}
+      open={route.config ?? null}
+      tab={route.configTab}
+      onOpen={onOpen}
+      {...props}
+    />
+  );
 }
 
 const list = () => screen.getByRole("list", { name: "Repositories" });
@@ -673,37 +680,32 @@ test("a config that parses but asks for what isn't granted: Config has errors, n
   expect(within(rows).queryByText("Configured")).toBeNull();
 });
 
-test("its policies: each file with its rules and source, and the check's errors", async () => {
+test("its policies: a tab of their own, its count and the header's badge saying they don't compile", async () => {
   const policed = repo("org/policed", { status: "configured" });
   api.routes["api/repos"] = () => ({ repos: [...REPOS, policed], app: APP, listedAt: Date.now() });
   render(<Page />);
   await openRepo("org/policed");
-  await screen.findByRole("heading", { name: "Policies" });
-  const alert = screen.getByRole("alert");
-  expect(alert.textContent).toContain("Every decision a policy is asked for refuses");
-  expect(alert.textContent).toContain("base.rego:4: rego_parse_error");
-  expect(screen.getByText(/deny_merged/).textContent).toContain("isn't a rule Deckhand evaluates");
-  const size = rowIn("Policy files", "size.rego");
-  expect(within(size).getByText("deny_merge")).toBeTruthy();
-  expect(within(size).getByText("from operator")).toBeTruthy();
-  const [replaced, base] = screen.getAllByText("base.rego").map((n) => n.closest("li")!);
-  expect(within(replaced).getByText(/replaced by the repo's/)).toBeTruthy();
-  expect(replaced.querySelector("s")).toBeTruthy();
-  expect(within(base).getByText("deny_merge, deny_review")).toBeTruthy();
-  expect(within(base).getByText(/replaces the operator's file/)).toBeTruthy();
-  expect(within(base).getByText("from repo")).toBeTruthy();
-  expect(within(base).getByRole("link").getAttribute("href")).toBe(
-    "https://github.com/org/policed/blob/main/.deckhand/policy/base.rego",
+  await screen.findByText(/1 policy doesn't compile/);
+  // The Config tab says nothing of them: no alert, no section.
+  expect(screen.queryByRole("alert")).toBeNull();
+  expect(screen.queryByRole("heading", { name: "Policies" })).toBeNull();
+  const tabs = screen.getByRole("navigation", { name: "Repository settings" });
+  expect(within(tabs).getByRole("link", { name: "Config" }).getAttribute("aria-current")).toBe(
+    "page",
   );
-  const lib = rowIn("Policy files", "lib.rego");
-  expect(within(lib).getByText("no deny_* rule")).toBeTruthy();
+  const policies = within(tabs).getByRole("link", { name: "Policies 1" });
+  expect(policies.getAttribute("href")).toBe("#/settings/repositories/org/policed/policies");
+  fireEvent.click(policies);
+  const alert = await screen.findByRole("alert");
+  expect(alert.textContent).toContain("base.rego:4 doesn't compile");
+  expect(policies.getAttribute("aria-current")).toBe("page");
+  expect(screen.getByRole("list", { name: "Policy files" })).toBeTruthy();
 });
 
 test("a repository without a config: the operator's defaults, said so", async () => {
   render(<Page />);
   await openRepo("org/app");
   await screen.findByText(/the operator's defaults/);
-  expect(screen.getByText(/Only the built-in gates decide/)).toBeTruthy();
   expect(document.body.textContent).toContain("No .deckhand.yaml on main");
   expect(screen.queryByRole("alert")).toBeNull();
   expect(document.querySelector("pre")).toBeNull();
