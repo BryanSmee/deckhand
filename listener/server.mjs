@@ -61,7 +61,7 @@ import { createRuns } from "./runs.mjs";
 import { createSetup } from "./setup.mjs";
 import { createStatus, serverInfo } from "./status.mjs";
 import { busyTask, createTasks } from "./tasks.mjs";
-import { createLanes } from "./lanes.mjs";
+import { createLanes, fetchParent } from "./lanes.mjs";
 import { createTitles } from "./titles.mjs";
 import { createWaits } from "./waits.mjs";
 import { createWorkApi } from "./work.mjs";
@@ -257,10 +257,13 @@ policies.checkOperator().then(({ errors, warnings }) => {
   for (const warning of warnings) console.error(`GRANTS_DIR/policy: ${warning}`);
 });
 
-// The names of the board's lanes: a plan's parent, or one a maintainer typed (lanes.mjs).
+// The names of the board's lanes: one a maintainer typed, or a parent's title (lanes.mjs).
 const lanes = createLanes({
   path: join(config.dataDir, "lanes.json"),
+  fetchParent: (repo, number) => fetchParent(github, repo, number),
   closed: (key) => titles.closed(key) !== null,
+  known: (key) => titles.get(key) !== null || titles.closed(key) !== null,
+  log,
 });
 
 Object.assign(ctx, {
@@ -529,6 +532,7 @@ const keyed = [
   ctx.reviews,
   ctx.decisions,
   titles,
+  lanes,
 ];
 const spelled = await ctx.unifySpellings({
   nameOf: discussionChecks.nameOf,

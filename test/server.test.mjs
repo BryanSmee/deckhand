@@ -100,6 +100,12 @@ async function fakeGitHub(files = {}) {
       if (req.method === "GET" && waitedFor && files[`issue:${waitedFor[1]}`]) {
         return res.end(files[`issue:${waitedFor[1]}`]);
       }
+      // An issue's parent, as JSON, when the test sets it; none otherwise.
+      const parent = /^\/repos\/org\/repo\/issues\/(\d+)\/parent$/.exec(req.url);
+      if (req.method === "GET" && parent) {
+        const found = files[`parent:${parent[1]}`];
+        return found ? res.end(found) : res.writeHead(404).end("{}");
+      }
       // An issue's sub-issues and blockers, as JSON lists, when the test sets them; none
       // otherwise.
       const tree =
@@ -2898,6 +2904,7 @@ mounts:
         "issue:10": JSON.stringify({ number: 10, title: "Epic", state: "open" }),
         "subs:10": JSON.stringify(subs),
         "blocked:11": JSON.stringify([{ number: 12, state: "open", repository_url }]),
+        "parent:10": JSON.stringify({ number: 3, title: "Roadmap", repository_url }),
       },
       (dir, github) => {
         writeFileSync(join(dir, "hold"), "");
@@ -2962,6 +2969,15 @@ mounts:
     assert.deepEqual(now["org/repo#10"], { name: "Epic", source: "parent" });
     assert.equal(now["org/repo#11"].name, "Budgets");
     assert.equal(now["org/repo#11"].source, "user");
+    // GitHub's parents are asked for the board's issues too; the plan's wins.
+    const read = () => JSON.parse(readFileSync(join(dir, "lanes.json"), "utf8"));
+    let kept = read();
+    for (let i = 0; i < 200 && !kept["org/repo#12"]?.parentAt; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      kept = read();
+    }
+    assert.deepEqual(kept["org/repo#10"].parent, { key: "org/repo#3", title: "Roadmap" });
+    assert.equal(kept["org/repo#12"].parent, undefined);
     writeFileSync(join(dir, "go"), "");
   });
 

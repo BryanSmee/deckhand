@@ -414,7 +414,7 @@ export function createWorkApi({
         laid.push(n);
       }
     } catch (error) {
-      if (laid.length) lanes.planned(repo, number, laid);
+      if (laid.length) named(repo, number, laid);
       // Checked, then GitHub failed halfway (an outage, a rate limit): what is done stays.
       log(`Work area: ${taskKey(repo, number)}: plan: ${error.message ?? error}`);
       const left = steps.filter((n) => !laid.includes(n));
@@ -425,9 +425,19 @@ export function createWorkApi({
       );
     }
     // Their lane is named after the parent.
-    lanes.planned(repo, number, laid);
+    named(repo, number, laid);
     const skipped = tree.done.length ? ` Done already: ${issueList(tree.done)}.` : "";
     return `#${number} laid out: ${planSummary(order, planned)}.${afterDone}${skipped}${away}`;
+  }
+
+  // The issues a plan laid out are the parent's lane. What is on GitHub stays whatever happens
+  // to lanes.json: a failed write is logged, not the plan's answer.
+  function named(repo, number, laid) {
+    try {
+      lanes.planned(repo, number, laid);
+    } catch (error) {
+      log(`Work area: ${taskKey(repo, number)}: the lane's name: ${error.message ?? error}`);
+    }
   }
 
   // What a plan does for issue `n` of the tree: the App's comment, then its wait or its start.

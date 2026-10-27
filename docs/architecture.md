@@ -218,11 +218,13 @@ form offers only those repos and inboxes.
 The board groups each chain of waiting issues (connected by `edges`) into a lane, and names it
 from `api/state`'s `lanes` (`lanes.mjs`, by the key of an issue in it): a name a maintainer
 typed for the lane (`user`, `POST /api/repos/<owner>/<repo>/lane { keys, name }`, kept on each
-of the lane's issues, "" takes it off), else the title of the parent a `plan` laid it out
-under (`parent`), else the repo's inbox issue it is (`inbox`); the latest typed name wins
-across a lane's issues. A lane nothing names is "#18 and 3 more" (the dashboard's
-`lanes.ts`). They are kept in `lanes.json`; a closed issue's entry goes 90 days after it was
-set.
+of the lane's issues, "" takes it off), else the title of its parent (`parent`): the one a
+`plan` laid it out under, else its parent issue on GitHub (`GET …/issues/<n>/parent`, asked
+for each open issue on the board at most once an hour, so sub-issues started one by one or
+laid out before count too), else the repo's inbox issue it is (`inbox`). The latest typed
+name wins across a lane's issues. A lane nothing names is "#18 and 3 more" (the dashboard's
+`lanes.ts`). They are kept in `lanes.json`; the entry of a closed issue, or of one the
+listener never heard of, goes 90 days after it was last set.
 
 The same form starts discussions, and a discussion task's page shows its thread
 (`discussions.mjs`): `POST /api/repos/<owner>/<repo>/discussions { title, body }` creates the
@@ -674,7 +676,7 @@ tests fake it.
 | `policies.mjs`                                                    | Rules as code: the operator's (`GRANTS_DIR/policy/`) and the repos' (`.deckhand/policy/`) Rego policies, merged by file name and evaluated by `opa` (no environment, no network, a timeout), fail closed.                                            |
 | `waits.mjs`                                                       | Comments waiting for other issues to be done (`/after`, `waits.json`).                                                                                                                                                                               |
 | `work.mjs`                                                        | The graph's work area: the backlog, starting or queueing issues, answers, reruns, inbox entries, lane names, analyses.                                                                                                                               |
-| `lanes.mjs`                                                       | The board's lanes' names: typed on the dashboard, or a plan's parent, or an inbox (`lanes.json`).                                                                                                                                                    |
+| `lanes.mjs`                                                       | The board's lanes' names: typed on the dashboard, a plan's or GitHub's parent, or an inbox (`lanes.json`).                                                                                                                                           |
 | `plans.mjs`                                                       | A parent issue dropped on the graph: its sub-issues' tree, all levels down, and what each waits for from their "blocked by" links.                                                                                                                   |
 | `discussions.mjs`                                                 | Discussions from the dashboard: started, their thread read, replies.                                                                                                                                                                                 |
 | `board.mjs`, `titles.mjs`, `pulls.mjs`, `repos.mjs`, `static.mjs` | The dashboard's tasks, titles and closed states, pull requests, repository list and files.                                                                                                                                                           |

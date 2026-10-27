@@ -162,8 +162,10 @@ export function createHttp(ctx, { dashboardDir }) {
     const { shown, queued } = shownTasks(user);
     const { edges, blockers } = waitEdges(shown, ctx.waits.list());
     const keys = [...shown.map((t) => t.key), ...blockers];
-    // Titles the listener doesn't have yet show on a later poll; a lane's parent's name it.
+    // Titles and parents the listener doesn't have yet show on a later poll; a lane's parent's
+    // title names it.
     if (ctx.app) {
+      ctx.lanes?.fill(keys);
       ctx.titles.fill([...keys, ...(ctx.lanes?.parentKeys(keys) ?? [])]);
       ctx.pulls.fill(shown.map((t) => t.key));
     }

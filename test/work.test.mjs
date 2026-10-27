@@ -737,7 +737,7 @@ test("plan: the tree starts in order, from its sub-issues and their blockers", a
   assert.equal(blockersOf(w, 11), undefined);
   assert.deepEqual(blockersOf(w, 10), [11, 13]);
   // Their lane is named after the parent.
-  for (const n of [10, 11, 12, 13]) assert.equal(w.lanes.get(`org/app#${n}`).parent, 10);
+  for (const n of [10, 11, 12, 13]) assert.equal(w.lanes.get(`org/app#${n}`).plan, 10);
 });
 
 test("plan: nested sub-issues, blockers outside the tree or in another repo, done ones", async () => {
@@ -876,7 +876,7 @@ test("plan: GitHub failing halfway says what is laid out and what isn't", async 
   assert.deepEqual(blockersOf(w, 11), [12]);
   assert.deepEqual(w.accepted, []);
   // What is laid out is the parent's lane; the rest isn't.
-  assert.equal(w.lanes.get("org/app#11").parent, 10);
+  assert.equal(w.lanes.get("org/app#11").plan, 10);
   assert.equal(w.lanes.get("org/app#12"), null);
 });
 
@@ -888,6 +888,17 @@ test("plan next to an issue done already: it starts, and the reply says so", asy
     w.accepted.map((i) => i.number),
     [12, 13],
   );
+});
+
+test("plan: lanes.json failing to save is logged, the plan's answer is GitHub's", async () => {
+  const w = setup({ issues: epic() });
+  w.lanes.planned = () => {
+    throw new Error("EACCES: lanes.json");
+  };
+  const res = await post(w, { action: "plan", number: 10 });
+  assert.equal(res.status, 200);
+  assert.match(res.body.message, /^#10 laid out/);
+  assert.ok(w.logs.includes("Work area: org/app#10: the lane's name: EACCES: lanes.json"));
 });
 
 const lane = (w, body, opts = {}) =>
