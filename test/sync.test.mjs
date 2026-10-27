@@ -15,7 +15,11 @@ function syncWith(fail, clock = () => 1000) {
   const sync = createSync({
     scan: part("scan", 2),
     resync: part("resync", 1),
-    check: async () => ({ started: await part("check", 3)(), pending: 1 }),
+    check: async () => ({
+      started: await part("check", 3)(),
+      pending: 1,
+      errors: fail.repos ?? [],
+    }),
     log: (line) => logged.push(line),
     now: clock,
   });
@@ -58,6 +62,18 @@ test("one part failing: its error, and the other part's count kept", async () =>
     conflicts: 3,
     error: "no token",
   });
+
+  // The conflict pass logs its repos' errors itself (conflicts.mjs): not twice.
+  const repoFailed = syncWith({ repos: ["org/repo: GitHub GET /repos/org/repo: 502"] });
+  assert.deepEqual(await repoFailed.sync.sync("alice"), {
+    at: 1000,
+    by: "alice",
+    redelivered: 2,
+    pulls: 1,
+    conflicts: 3,
+    error: "org/repo: GitHub GET /repos/org/repo: 502",
+  });
+  assert.deepEqual(repoFailed.logged, []);
 
   const checkFailed = syncWith({ check: "GitHub GET /repos/org/repo: 502" });
   assert.deepEqual(await checkFailed.sync.sync("alice"), {

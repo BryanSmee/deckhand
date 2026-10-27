@@ -244,7 +244,7 @@ export interface SyncResult {
   pulls: number;
   // Rebase runs started (conflicts.mjs check()); 0 at start, where the watcher does it.
   conflicts: number;
-  // Why it failed (its counts are then 0).
+  // Why it failed: the failing part's count is 0, the others are kept.
   error?: string;
 }
 

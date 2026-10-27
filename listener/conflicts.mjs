@@ -49,26 +49,49 @@ export function createConflicts({
   const json = (repo, url, expected) => getJson(github, repo, url, expected);
 
   // One pass over the repos that are due. Overlapping ticks share the pass under way. Resolves
-  // to how many rebase runs it started and how many pull requests GitHub hadn't computed yet.
+  // to how many rebase runs it started, how many pull requests GitHub hadn't computed yet, and
+  // the errors of the repos it couldn't check ("org/repo: …"), logged already.
   function tick() {
     return run(false);
   }
 
-  // The dashboard's Sync (sync.mjs): the same pass, now, with every repo due. A pass under way
-  // is shared rather than checking twice; the pending ones are left to the next tick, which
-  // checks their repo at once (checkRepo()).
+  // The dashboard's Sync (sync.mjs): the same pass, now, with every repo due. The pending ones
+  // are left to the next tick, which checks their repo at once (checkRepo()).
   function check() {
     return run(true);
   }
 
+  // The pass under way, `{ all, checked, promise }`: `checked`, the repos it took. A check()
+  // during a tick waits for it, then checks the repos it left (not due): none twice, none left.
   function run(all) {
-    if (!config.conflictCheckMinutes) return Promise.resolve({ started: 0, pending: 0 });
-    ticking ??= pass(all).finally(() => (ticking = null));
-    return ticking;
+    if (!config.conflictCheckMinutes) {
+      return Promise.resolve({ started: 0, pending: 0, errors: [] });
+    }
+    if (ticking && (ticking.all || !all)) return ticking.promise;
+    const under = ticking;
+    const checked = under?.checked ?? new Set();
+    const entry = { all, checked };
+    entry.promise = (
+      under
+        ? under.promise.then((first) => pass(all, checked).then((next) => merge(first, next)))
+        : pass(all, checked)
+    ).finally(() => {
+      if (ticking === entry) ticking = null;
+    });
+    ticking = entry;
+    return entry.promise;
   }
 
-  async function pass(all) {
-    const counts = { started: 0, pending: 0 };
+  const merge = (a, b) => ({
+    started: a.started + b.started,
+    pending: a.pending + b.pending,
+    errors: [...a.errors, ...b.errors],
+  });
+
+  // `checked`: the repos already checked by the pass this one follows, skipped; and the ones
+  // this one takes, added.
+  async function pass(all, checked) {
+    const counts = { started: 0, pending: 0, errors: [] };
     const byRepo = new Map();
     for (const [key, pr] of pulls.open()) {
       const target = parseKey(key);
@@ -76,7 +99,9 @@ export function createConflicts({
       // Fail closed, as for webhooks: the operator may have narrowed ALLOWED_REPOS since.
       if (!repoAllowed(config, target.repo)) continue;
       const repo = target.repo.toLowerCase();
+      if (checked.has(repo) && !byRepo.has(repo)) continue;
       if (!all && (due.get(repo) ?? 0) > now()) continue;
+      checked.add(repo);
       if (!byRepo.has(repo)) byRepo.set(repo, { repo: target.repo, tasks: [] });
       byRepo.get(repo).tasks.push({ key, pr });
     }
@@ -85,6 +110,7 @@ export function createConflicts({
         await checkRepo(id, repo, tasks, counts);
       } catch (error) {
         log(`Conflicts in ${repo}: ${error.message ?? error}`);
+        counts.errors.push(`${repo}: ${error.message ?? error}`);
       }
     }
     return counts;

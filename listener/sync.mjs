@@ -9,11 +9,12 @@
 const message = (error) => String(error?.message ?? error);
 
 // `scan()`: how many deliveries were asked again (null without an App); `resync()`: how many
-// pull requests changed; `check()`: { started } rebase runs. `now`: injected by the tests.
+// pull requests changed; `check()`: { started } rebase runs, and
+// `errors`, the repos it couldn't check. `now`: injected by the tests.
 export function createSync({
   scan,
   resync,
-  check = async () => ({ started: 0 }),
+  check = async () => ({ started: 0, errors: [] }),
   log = () => {},
   now = Date.now,
 }) {
@@ -38,7 +39,10 @@ export function createSync({
     let conflicts = 0;
     if (by !== null) {
       try {
-        conflicts = (await check()).started;
+        const checked = await check();
+        conflicts = checked.started;
+        // The repos it couldn't check (logged by conflicts.mjs): Sync didn't do all it says.
+        if (checked.errors?.length) errors.push(...checked.errors);
       } catch (error) {
         log(`Sync: ${message(error)}`);
         errors.push(message(error));

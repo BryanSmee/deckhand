@@ -359,9 +359,11 @@ its task's session through `tasks.accept()`. The `(head, base)` commits of each 
 kept in `conflicts.json`, so the same pair never starts a second run, even after a restart.
 
 The dashboard's Sync runs the same pass at once (`check()`), with every opted-in repo due
-whatever its interval, and resets their next check as a tick does. A pass under way is shared
-rather than run twice. It resolves to the rebase runs it started and the pull requests GitHub
-hadn't computed yet, which are left to the next tick (their repo is due at once) rather than
+whatever its interval, and resets their next check as a tick does. During a tick, it waits for
+it, then checks the repos the tick left (not due), so no repo is checked twice and none is
+left out; another check meanwhile shares that. It resolves to the rebase runs it started, the
+errors of the repos it couldn't check (Sync's `error`) and the pull requests GitHub hadn't
+computed yet, which are left to the next tick (their repo is due at once) rather than
 making Sync wait. The listener's own sync at start doesn't run it: the first tick after a
 restart checks every repo anyway, once the queue is restored.
 
