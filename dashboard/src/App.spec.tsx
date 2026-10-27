@@ -201,7 +201,7 @@ test("the log in its sections: the outcome first, a failed build step open", asy
   // Setup folds; the image's build, which failed, is open, and so is its failed step.
   expect(within(log).getByText("Setup").closest("details")!.open).toBe(false);
   expect(within(log).getByText("Image build").closest("details")!.open).toBe(true);
-  const failed = within(log).getByText("#7 [build 2/4] RUN npm ci").closest("details")!;
+  const failed = within(log).getByText("RUN npm ci").closest("details")!;
   expect(failed.open).toBe(true);
   expect(failed.textContent).toContain("added 412 packages");
   expect(failed.textContent).toContain("ERROR: exit code: 1");

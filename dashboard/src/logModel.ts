@@ -158,10 +158,12 @@ export function fields(item: Item): string[] {
   switch (item.kind) {
     case "tool":
       return [item.text, ...item.outputs.map((o) => o.text)];
-    case "step": {
-      const status = stepStatus(item.step);
-      return [stepName(item.step), ...item.step.output, ...(status ? [status] : [])];
-    }
+    case "step":
+      return [
+        item.step.name,
+        ...item.step.output,
+        ...(item.step.error ? [stepStatus(item.step)] : []),
+      ];
     case "cached":
       return [cachedLine(item.steps)];
     default:

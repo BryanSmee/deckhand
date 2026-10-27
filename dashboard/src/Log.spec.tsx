@@ -64,7 +64,7 @@ test("work open, the rest folded; cached steps on one line, each other step fold
   const image = section("Image build");
   expect(image.querySelector("summary")!.textContent).toMatch(/3 steps · 2 cached.*54s/);
   expect(within(image).getByText("#1–#2 FROM node … COPY . . · CACHED")).toBeTruthy();
-  expect(within(image).getByText("#3 [build 1/3] RUN npm ci").closest("details")!.open).toBe(false);
+  expect(within(image).getByText("RUN npm ci").closest("details")!.open).toBe(false);
   // The failed command open, the one that passed folded.
   const work = section("Work");
   expect(work.querySelector("summary")!.textContent).toMatch(
@@ -123,7 +123,9 @@ test("expand all and collapse all", () => {
   fireEvent.click(screen.getByRole("button", { name: "Expand all" }));
   expect(opened()).toHaveLength(4);
   expect(
-    [...screen.getByRole("log").querySelectorAll<HTMLDetailsElement>("details details")].every((d) => d.open),
+    [...screen.getByRole("log").querySelectorAll<HTMLDetailsElement>("details details")].every(
+      (d) => d.open,
+    ),
   ).toBe(true);
   fireEvent.click(screen.getByRole("button", { name: "Collapse all" }));
   expect(opened()).toEqual([]);

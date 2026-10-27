@@ -24,7 +24,6 @@ import {
   shortDuration,
   shown,
   type Step,
-  stepName,
   stepStatus,
 } from "./logModel";
 import type { Run } from "./types";
@@ -434,7 +433,13 @@ function SectionView({ section: s, filter, open, onToggle, hits, isOpen, toggle 
           ) : (
             <span class={styles.counts}>{counts(s)}</span>
           )}
-          {s.failures > 0 && <StatusBadge tone="err" label={failed(s)} class={styles.badge} />}
+          {s.failures > 0 && (
+            <StatusBadge
+              tone="err"
+              label={failed(s)}
+              class={`${styles.badge} ${hits !== null ? styles.searchBadge : ""}`}
+            />
+          )}
           {s.seconds !== null && <span class={styles.mono}>{shortDuration(s.seconds)}</span>}
         </>
       }
@@ -523,6 +528,7 @@ function ItemView({ item, isOpen, toggle }: ItemProps) {
     case "raw":
       return (
         <div class={`${styles.line} ${styles.muted}`} data-item={item.id}>
+          <span class={styles.tag} />
           <span class={styles.text}>
             <Hl text={item.text} field={f(0)} />
           </span>
@@ -592,31 +598,22 @@ function StepView({
   toggle,
 }: { id: string; step: Step } & Omit<ItemProps, "item">) {
   const f = (i: number) => `${id}:${i}`;
-  const status = stepStatus(s);
   const error = s.status === "error";
-  const meta = error
-    ? "failed"
-    : [
-        s.output.length ? plural(s.output.length, "line") : "",
-        s.seconds !== null ? `${s.seconds}s` : "",
-      ]
-        .filter(Boolean)
-        .join(" · ") || status.toLowerCase();
   if (!s.output.length && !error)
     return (
       <div class={styles.line} data-item={id}>
-        <span class={styles.tag}>build</span>
+        <span class={styles.tag}>#{s.step}</span>
         <span class={styles.text}>
-          <Hl text={stepName(s)} field={f(0)} />
-          {status && (
-            <span class={styles.muted}>
-              {" · "}
-              <Hl text={status} field={f(1)} />
-            </span>
-          )}
+          <Hl text={s.name} field={f(0)} />
+          {stepStatus(s) && <span class={styles.muted}> · {stepStatus(s)}</span>}
         </span>
       </div>
     );
+  const meta = error
+    ? "failed"
+    : [plural(s.output.length, "line"), s.seconds !== null ? `${s.seconds}s` : ""]
+        .filter(Boolean)
+        .join(" · ");
   const fallback = error || s.status === "running";
   return (
     <Sub
@@ -625,7 +622,7 @@ function StepView({
       open={isOpen(id, fallback)}
       onToggle={toggle(id, fallback)}
       tag={`#${s.step}`}
-      head={<Hl text={stepName(s)} field={f(0)} />}
+      head={<Hl text={s.name} field={f(0)} />}
       meta={meta}
     >
       <pre class={`${styles.out} ${error ? styles.error : ""}`}>
@@ -635,7 +632,7 @@ function StepView({
             {"\n"}
           </span>
         ))}
-        {status && <Hl text={status} field={f(s.output.length + 1)} />}
+        {error && <Hl text={stepStatus(s)} field={f(s.output.length + 1)} />}
       </pre>
     </Sub>
   );

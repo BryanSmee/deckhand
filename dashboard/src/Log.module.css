@@ -6,6 +6,11 @@
   gap: 12px;
 }
 
+/* "!==" as typed, not as a sign: after the `font` shorthands, which reset it. */
+.wrap :is(pre, .line, summary) {
+  font-variant-ligatures: none;
+}
+
 .toolbar {
   position: sticky;
   top: 0;
@@ -21,12 +26,16 @@
 
 .searchBox {
   position: relative;
-  flex: 0 1 340px;
-  min-width: 220px;
+  flex: 1 1 220px;
+  max-width: 340px;
 }
 
 .searchField input {
   padding-right: 112px;
+}
+
+.searchField input::-webkit-search-cancel-button {
+  display: none;
 }
 
 .trail {
@@ -91,7 +100,7 @@
   display: grid;
   grid-template-columns: 52px minmax(0, 1fr);
   gap: 12px;
-  padding: 2px 0;
+  padding: 2px 0 2px 37px;
   font: 12.5px/20px var(--mono);
 }
 
@@ -125,7 +134,7 @@
 
 .say {
   max-width: 760px;
-  margin: 6px 0 6px 64px;
+  margin: 6px 0 6px 101px;
   padding: 10px 14px;
   border-radius: 10px;
   background: var(--surface-2);
@@ -374,7 +383,9 @@ mark.current {
     padding-left: 12px;
     padding-right: 12px;
   }
-  .counts {
+  /* Weighs more than the badge's own display. */
+  .counts,
+  .log .searchBadge {
     display: none;
   }
   .say {
@@ -383,6 +394,7 @@ mark.current {
   .line {
     grid-template-columns: 44px minmax(0, 1fr);
     gap: 8px;
+    padding-left: 0;
   }
   .sub > summary {
     grid-template-columns: 12px 44px minmax(0, 1fr);
