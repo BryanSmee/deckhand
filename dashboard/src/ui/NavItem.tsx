@@ -1,6 +1,6 @@
 // A sidebar link: icon, label, then a count (hot when it waits on you). On the rail it is the
-// icon alone, named by its label (aria-label and tooltip). Without an href it is a button
-// (Notify me).
+// icon alone, named by its label (aria-label and tooltip), the count a dot on its corner: a
+// number there covers a short repository name. Without an href it is a button (Notify me).
 import type { ComponentChildren } from "preact";
 import { Count } from "./Count";
 import styles from "./NavItem.module.css";
@@ -34,7 +34,12 @@ export function NavItem(props: Props) {
       {!rail && <span class={styles.label}>{label}</span>}
       {!rail && extra}
       {counted && !rail && " "}
-      {counted && <Count class={styles.count} n={count} hot={hot} />}
+      {counted &&
+        (rail ? (
+          <span class={`${styles.pip} ${hot ? styles.hot : ""}`} aria-hidden="true" />
+        ) : (
+          <Count n={count} hot={hot} />
+        ))}
     </>
   );
   return href === undefined ? (

@@ -57,9 +57,18 @@ button.nav {
   border-radius: 10px;
 }
 
-/* On the rail, the count sits on the icon's corner. */
-.rail .count {
+/* On the rail, the count is a dot on the icon's corner. */
+.pip {
   position: absolute;
-  top: 1px;
-  right: 1px;
+  top: 6px;
+  right: 6px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--idle-solid);
+  box-shadow: 0 0 0 2px var(--surface);
+}
+
+.pip.hot {
+  background: var(--input-solid);
 }
