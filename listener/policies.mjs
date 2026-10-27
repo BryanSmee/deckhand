@@ -337,8 +337,9 @@ export function createPolicies({
     return (await decide(rule, repo, ref, input)).messages;
   }
 
-  // deny()'s work → { applied, messages }: `applied`, whether any policy was asked (none
-  // anywhere: false, and nothing for the task's page to show).
+  // deny()'s work → { applied, messages, input }: `applied`, whether any policy was asked (none
+  // anywhere: false, and nothing for the task's page to show); `input`, the document the rules
+  // saw, when it could be built (decisions.mjs keeps it, redacted).
   async function decide(rule, repo, ref, input) {
     let files;
     try {
@@ -351,21 +352,27 @@ export function createPolicies({
       };
     }
     if (!files.size) return { applied: false, messages: [] };
-    return { applied: true, messages: await denied(rule, repo, files, input) };
+    return { applied: true, ...(await evaluated(rule, repo, files, input)) };
   }
 
   // `rule` of `files` on the input `input()` builds, version added → its messages, logged.
   async function denied(rule, repo, files, input) {
+    return (await evaluated(rule, repo, files, input)).messages;
+  }
+
+  // denied()'s work → { messages, input }: `input`, the document evaluated, absent when it
+  // couldn't be built.
+  async function evaluated(rule, repo, files, input) {
     let doc;
     try {
       doc = { version: INPUT_VERSION, ...(await input()) };
     } catch (error) {
       log(`${repo}: the ${rule} input: ${error.message ?? error}`);
-      return failure(`its input can't be built (${error.message ?? error})`);
+      return { messages: failure(`its input can't be built (${error.message ?? error})`) };
     }
     const messages = await evaluate(rule, files, doc);
     if (messages.length) log(`${repo}: ${rule} denies: ${messages.join(" | ")}`);
-    return messages;
+    return { messages, input: doc };
   }
 
   // The config check of `files` (name → text): compile errors and rules nobody evaluates, as

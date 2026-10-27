@@ -1124,9 +1124,13 @@ add to them.
   appear in its onboarding pull request's config check and its config panel on the dashboard.
 - **A dry run decides nothing**: `/mode policy` on a pull request, only from an allowed user
   (like any comment that reaches Deckhand), evaluates the rules and replies with their results
-  and the input. Nothing is reviewed, fixed, merged or kept, and the input it posts is what
-  GitHub already shows that user about the pull request. Your policies' file names and compile
+  and the input. Nothing is reviewed, fixed or merged; the task's page keeps who asked, when,
+  the denial count and the reply's link, not the input. The input it posts is what GitHub
+  already shows that user about the pull request. Your policies' file names and compile
   errors (redacted) appear in the reply and the config panel, not their text.
+- **A decision's input is kept redacted**: the newest 3 decisions of a task keep the input
+  their rules saw in `decisions.json`, each string redacted like the messages, the whole cut to
+  8 KB, for the task's page on the dashboard.
 
 ## Research runs
 

@@ -789,8 +789,9 @@ deny_fix contains msg if {
 **`/mode policy`**, commented on a pull request by an allowed user, evaluates `deny_merge`,
 `deny_review` and `deny_fix` on the pull request as it is now, and replies with each rule's
 result (denies, with its messages, or allows) and the input, in a collapsed block. Nothing is
-reviewed, fixed or merged, and nothing is kept: it debugs a rule without waiting for a pull
-request to turn ready. The input is the merge's, read now, with `review: null` (no review
+reviewed, fixed or merged, and it is no decision: it debugs a rule without waiting for a pull
+request to turn ready. The task's page shows its last one: who asked, when, how many denials,
+and a link to the reply. The input is the merge's, read now, with `review: null` (no review
 ran); `deny_review` and `deny_fix` get it with their own `decision`, without `fixed` and
 `checks`. It works without a `review` block. On an issue, a reply says to comment it on the
 pull request.
@@ -800,7 +801,11 @@ operator's and the repository's, read from the default branch when the panel ope
 `deny_*` rules each defines, and the config check's errors. A task's page shows its pull
 request's last policy decisions (the rule, whether it denied, its messages, when), the last
 10 of them; a decision is kept only when a policy was asked, so a repository without
-policies shows none.
+policies shows none. Each lists the built-in gates that passed before the policies were asked
+(for a merge: the review's findings and verdict, the head commit, the pull request's state,
+no trusted file changed, the checks…), and the newest 3 keep the input the rules saw,
+redacted, cut to 8 KB (its changed files first, then the review's findings, then the checks;
+marked `truncated`).
 
 ## Open questions
 

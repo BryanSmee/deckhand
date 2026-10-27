@@ -87,6 +87,31 @@ export interface PolicyDecision {
   // The pull request it was about.
   pr: number;
   at: number;
+  // The built-in gates checked before the policies, in order ("Checks green"…); absent on
+  // decisions kept before they were (listener/decisions.mjs).
+  gates?: PolicyGate[];
+  // The input the rules saw, redacted (docs/repo-config.md#the-merge-input): only on the
+  // task's newest 3 decisions. Null when it was too big even cut.
+  input?: Record<string, unknown> | null;
+  // The input was cut to fit: its changed files first, then the review's findings, the checks.
+  truncated?: boolean;
+}
+
+export interface PolicyGate {
+  name: string;
+  passed: boolean;
+}
+
+// The task's last `/mode policy` dry run (listener/task-modes.mjs): never a decision.
+export interface PolicyDryRun {
+  dryRun: true;
+  // Who commented `/mode policy`; null when not known.
+  by: string | null;
+  at: number;
+  // How many messages its rules denied with.
+  denials: number;
+  // Its reply on the pull request; null when GitHub didn't say.
+  url: string | null;
 }
 
 export interface Task {
@@ -112,6 +137,8 @@ export interface Task {
   // Its pull request's last policy decisions, newest first (listener/decisions.mjs); absent
   // when no policy was ever asked.
   decisions?: PolicyDecision[];
+  // Its last policy dry run; absent when none.
+  dryRun?: PolicyDryRun;
   // Its last run failed or was lost, and may run again from its page (listener/board.mjs).
   rerunnable: boolean;
   runs: Run[]; // newest first

@@ -3072,6 +3072,9 @@ mounts:
         join(dir, "decisions.json"),
         JSON.stringify({ "org/repo#pr-3": [{ ...refused, messages: ["too big"] }] }),
       );
+      // And its last `/mode policy` dry run.
+      const dryRun = { dryRun: true, by: "someone", at: 950, denials: 1, url: "https://x/1" };
+      writeFileSync(join(dir, "dry-runs.json"), JSON.stringify({ "org/repo#pr-3": dryRun }));
       return { GITHUB_URL: github.url, DASHBOARD_DIR: dist };
     });
     const base = `http://127.0.0.1:${port}`;
@@ -3177,6 +3180,13 @@ mounts:
         messages: ["too big"],
       },
     ]);
+    assert.deepEqual(fetched.dryRun, {
+      dryRun: true,
+      by: "someone",
+      at: 950,
+      denials: 1,
+      url: "https://x/1",
+    });
     // Waiting for input: the questions of the run that stopped to ask, and of an issue's body.
     const tasks = async () => (await (await get("/api/state", session)).json()).tasks;
     const stopped = (await tasks()).find((x) => x.key === "org/repo#pr-4");
@@ -3323,7 +3333,7 @@ mounts:
       "rerunnable",
       "runs",
     ],
-    ["deadline", "waitingFor", "questions", "waitForAnswers", "decisions"],
+    ["deadline", "waitingFor", "questions", "waitForAnswers", "decisions", "dryRun"],
   ];
   const QUESTIONS_KEYS = [["source", "items", "raw"], ["runId"]];
   const RUN_KEYS = [

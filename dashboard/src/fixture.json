@@ -301,6 +301,146 @@
         "state": "ready",
         "readyAt": null
       },
+      "decisions": [
+        {
+          "decision": "merge",
+          "rule": "deny_merge",
+          "denied": true,
+          "messages": ["more than 400 changed lines: a human merges this one"],
+          "pr": 132,
+          "at": 1791989400000,
+          "gates": [
+            {
+              "name": "Severity ≤ low",
+              "passed": true
+            },
+            {
+              "name": "Review: nothing blocking",
+              "passed": true
+            },
+            {
+              "name": "At the reviewed commit",
+              "passed": true
+            },
+            {
+              "name": "Deckhand's own pull request",
+              "passed": true
+            },
+            {
+              "name": "Open, not a draft",
+              "passed": true
+            },
+            {
+              "name": "Nobody's input awaited",
+              "passed": true
+            },
+            {
+              "name": "No run going",
+              "passed": true
+            },
+            {
+              "name": "Repository visibility",
+              "passed": true
+            },
+            {
+              "name": "Merge method squash allowed",
+              "passed": true
+            },
+            {
+              "name": "No trusted file changed",
+              "passed": true
+            },
+            {
+              "name": "Cleanly mergeable",
+              "passed": true
+            },
+            {
+              "name": "Checks green",
+              "passed": true
+            }
+          ],
+          "input": {
+            "version": 1,
+            "decision": "merge",
+            "time": "2026-10-14T09:30:00.000Z",
+            "repo": {
+              "name": "acme/api",
+              "private": true,
+              "default_branch": "main"
+            },
+            "pr": {
+              "number": 132,
+              "author": "deckhand[bot]",
+              "title": "Rate limits per API key",
+              "labels": [],
+              "base": "main",
+              "head": "issue-131-rate-limits",
+              "head_sha": "3f2a9c1",
+              "draft": false,
+              "additions": 412,
+              "deletions": 19,
+              "changed_files": 2,
+              "files": [
+                {
+                  "path": "src/limits.ts",
+                  "previous_path": null,
+                  "status": "added",
+                  "additions": 380,
+                  "deletions": 0
+                },
+                {
+                  "path": "src/server.ts",
+                  "previous_path": null,
+                  "status": "modified",
+                  "additions": 32,
+                  "deletions": 19
+                }
+              ]
+            },
+            "issue": {
+              "number": 131,
+              "title": "Rate limits per API key",
+              "labels": []
+            },
+            "review": {
+              "verdict": "approve",
+              "rating": "good",
+              "allowed": "low",
+              "findings": []
+            },
+            "fixed": false,
+            "checks": [
+              {
+                "name": "CI",
+                "status": "completed",
+                "conclusion": "success"
+              }
+            ]
+          }
+        },
+        {
+          "decision": "review",
+          "rule": "deny_review",
+          "denied": false,
+          "messages": [],
+          "pr": 132,
+          "at": 1791988200000,
+          "gates": [
+            {
+              "name": "Ready for review",
+              "passed": true
+            },
+            {
+              "name": "Deckhand's own pull request",
+              "passed": true
+            },
+            {
+              "name": "Not reviewed at this commit",
+              "passed": true
+            }
+          ]
+        }
+      ],
       "rerunnable": false,
       "runs": [
         {
@@ -319,7 +459,14 @@
           "status": "ok",
           "summary": "Done: settings follow the system theme, with screenshots on the pull request."
         }
-      ]
+      ],
+      "dryRun": {
+        "dryRun": true,
+        "by": "octocat",
+        "at": 1791989700000,
+        "denials": 1,
+        "url": "https://github.example.com/acme/api/pull/132#issuecomment-1"
+      }
     },
     {
       "key": "acme/app#16",
