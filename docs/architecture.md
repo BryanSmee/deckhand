@@ -396,7 +396,10 @@ rating (capped by the most severe finding, `parseReview()`), `REQUEST_CHANGES` a
 "request changes" verdict on a critical, high or medium finding and `COMMENT` otherwise (never
 `APPROVE`), and a comment review with the raw text when the format can't be read. The review
 that decides an auto-merge may tolerate medium findings (`review.max_allowed_severity`,
-`reviews.tolerance()`): those post as `COMMENT`.
+`reviews.tolerance()`): those post as `COMMENT`. `runs.mjs` works that tolerance out at launch
+too, and `reviewPrompt()` fills `prompts/review.md`'s verdict rule with it (`<blocking>`,
+`<tolerated>`, from `reviews.mjs`'s `blockingSeverities()`); the tolerance at post time is
+the one that counts, should the settings change during the run.
 
 With `review.fix`, once the review's run is torn down (so it no longer makes the task busy),
 `runs.mjs` hands, without waiting for it, the posted review to `reviews.settle()`, whose `fix()`: a review that requests changes on the

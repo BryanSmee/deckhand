@@ -269,11 +269,23 @@ export function createRuns(ctx) {
     return note;
   }
 
+  // A review's tolerance (reviews' tolerance()): only the listener's own reviews (`auto`) may
+  // merge, not a "/mode review" comment's, and the one that decides the merge may tolerate
+  // medium findings (`review.max_allowed_severity`). → { auto, allowed }
+  async function reviewTolerance(task, items) {
+    const auto = items.some((item) => item.reason === "review");
+    const at = { repo: task.repo, number: task.live.replyTo, base: task.base, auto };
+    return { auto, allowed: (await ctx.reviews?.tolerance(at)) ?? "low" };
+  }
+
   // The prompt, the mounts checked again, and the sandbox started (sandbox-spec.mjs).
   async function launch(task, items, { settings, own, text }, parts, note) {
     const { live } = task;
     const { message, instructions, access, engine, prepared, ca } = parts;
     const agent = agentOf(task);
+    // A review is told what it may find without requesting changes.
+    const allowed =
+      live.mode === "review" ? (await reviewTolerance(task, items)).allowed : undefined;
     const prompt = promptFor(task, {
       mode: live.mode,
       text,
@@ -285,6 +297,7 @@ export function createRuns(ctx) {
       grant: access.grant,
       branches: live.branches,
       pull: live.replyTo,
+      allowed,
     });
     // A research run mounts nothing (researchAccess()).
     if (!OPEN.has(live.mode)) recheckMounts(agent, settings, access);
@@ -665,12 +678,9 @@ export function createRuns(ctx) {
     // Already redacted line by line; again, as a result saved by an older listener wasn't.
     // A review's result is one GitHub review, posted with the listener's token (reviews.mjs).
     if (mode === "review" && status !== "error") {
-      // Its fix run or auto-merge, if any, once this run is over (cleanUp()). Only the
-      // listener's own reviews may merge, not a "/mode review" comment's. The one that decides
-      // the merge may tolerate medium findings (`review.max_allowed_severity`).
-      const auto = live.handled.some((item) => item.reason === "review");
-      const at = { repo: task.repo, number: live.replyTo, base: task.base, auto };
-      const allowed = (await ctx.reviews?.tolerance(at)) ?? "low";
+      // Its fix run or auto-merge, if any, once this run is over (cleanUp()). The tolerance
+      // again, as the settings say now: the prompt was told the one at launch.
+      const { auto, allowed } = await reviewTolerance(task, live.handled);
       const posted = await postReview(
         ctx,
         task.repo,
