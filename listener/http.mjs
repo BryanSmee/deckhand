@@ -210,6 +210,8 @@ export function createHttp(ctx, { dashboardDir }) {
       githubUrl: config.githubUrl,
       // Which Deckhand runs and since when (status.mjs serverInfo()): the Repositories page.
       server: ctx.server,
+      // The last catch-up with GitHub, at start or from a Sync (sync.mjs); null before one.
+      lastSync: ctx.lastSync?.() ?? null,
       now: Date.now(),
     };
   }
@@ -459,7 +461,8 @@ export function createHttp(ctx, { dashboardDir }) {
         }
         synced = Date.now();
         log(`Sync: asked by ${user}`);
-        send(res, 200, await ctx.sync());
+        const done = await ctx.sync(user);
+        send(res, done.error ? 502 : 200, done);
       },
     },
     publicUrl: ctx.publicUrl,

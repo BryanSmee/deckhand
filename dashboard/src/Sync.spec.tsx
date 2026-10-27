@@ -17,7 +17,7 @@ beforeEach(() => {
 const show = () => render(<Dashboard state={makeState()} error={null} refresh={refresh} />);
 
 test("Sync asks the listener, says what it did, then reads the state again", async () => {
-  api.answer = () => ({ redelivered: 2, pulls: 1 });
+  api.answer = () => ({ at: 1, by: "octocat", redelivered: 2, pulls: 1 });
   show();
   const release = api.hold();
   fireEvent.click(screen.getByRole("button", { name: "Sync" }));
@@ -41,6 +41,28 @@ test("a refused sync says why, and reads nothing again", async () => {
     expect(screen.getByRole("status").textContent).toBe("Couldn't sync (Synced a moment ago.)"),
   );
   expect(refresh).not.toHaveBeenCalled();
+});
+
+test("a sync that failed says GitHub's error, and reads the state again: it has it", async () => {
+  api.answer = () =>
+    Response.json(
+      {
+        at: 1,
+        by: "octocat",
+        redelivered: 0,
+        pulls: 0,
+        error: "GitHub GET /app/hook/deliveries: 502",
+      },
+      { status: 502 },
+    );
+  show();
+  fireEvent.click(screen.getByRole("button", { name: "Sync" }));
+  await waitFor(() =>
+    expect(screen.getByRole("status").textContent).toBe(
+      "Couldn't sync (GitHub GET /app/hook/deliveries: 502)",
+    ),
+  );
+  await waitFor(() => expect(refresh).toHaveBeenCalledOnce());
 });
 
 test("nothing to catch up, or one of each", () => {

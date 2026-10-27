@@ -60,6 +60,7 @@ import { operatorSecrets } from "./secrets.mjs";
 import { createRuns } from "./runs.mjs";
 import { createSetup } from "./setup.mjs";
 import { createStatus, serverInfo } from "./status.mjs";
+import { createSync } from "./sync.mjs";
 import { busyTask, createTasks } from "./tasks.mjs";
 import { createLanes, fetchParent } from "./lanes.mjs";
 import { createTitles } from "./titles.mjs";
@@ -558,11 +559,11 @@ const redeliveries = createRedeliveries({
 });
 // A pull request delivery the listener asked for again is handled as it is now (http.mjs).
 ctx.redelivered = redeliveries.redelivered;
-// The dashboard's Sync: the same now, and the open pull requests' states asked again.
-ctx.sync = async () => {
-  const [redelivered, changed] = await Promise.all([redeliveries.scan(), pulls.resync()]);
-  return { redelivered: redelivered ?? 0, pulls: changed };
-};
+// At start and from the dashboard's Sync: the same now, and the open pull requests' states
+// asked again. The last one's result goes in api/state (sync.mjs).
+const syncs = createSync({ scan: redeliveries.scan, resync: pulls.resync, log });
+ctx.sync = syncs.sync;
+ctx.lastSync = syncs.last;
 
 log(`Deckhand ${ctx.server.version}`);
 log(
@@ -596,8 +597,9 @@ const history = createHistory(ctx);
 history.start();
 redeliveries.start();
 if (ctx.app) checkApp();
-// Pull requests that changed while the listener was down, or whose delivery was lost.
-if (ctx.app) pulls.resync().catch((error) => log(`Pull requests: ${error.message ?? error}`));
+// Pull requests that changed while the listener was down, or whose delivery was lost. After
+// redeliveries.start(): its first scan is shared, and counted in the last sync.
+if (ctx.app) ctx.sync(null);
 // Labels added or removed while the listener was down.
 if (ctx.app && config.needsInputLabel) {
   repoList

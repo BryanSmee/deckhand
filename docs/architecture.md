@@ -529,6 +529,13 @@ old as the failed attempt, maybe older than deliveries handled since. Its curren
 recorded, and an action the pull request no longer matches (ready since merged) becomes
 `edited`, so nothing turns ready, closes or starts a review from it.
 
+At start and from the dashboard's Sync, the scan goes with the open pull requests' states read
+again (`pulls.mjs` `resync()`), through `sync.mjs`. The last one's result is kept in memory and
+sent in `api/state` (`lastSync`): when it ended, who asked (`null` for the listener at start),
+how many deliveries were asked again and pull requests changed, and the error of a part that
+failed (the other part's count is kept). `POST /api/sync`
+answers the same record, `502` when it failed.
+
 A delivery whose handling throws (`dispatch()`) is logged with its event and action; the
 listener goes on with the next one. GitHub got its `202` already, so it isn't redelivered.
 
@@ -667,6 +674,7 @@ tests fake it.
 | `config.mjs`, `yaml.mjs`                                          | The operator's settings (environment and `config.yaml`), one `SETTINGS` table: each one's type, default and parser; the YAML subset both config files use.                                                                                           |
 | `http.mjs`, `deliveries.mjs`                                      | The public server: webhook deliveries, the dashboard and its API, `/status`, screenshots; the places for unverified bodies.                                                                                                                          |
 | `redeliveries.mjs`                                                | Deliveries GitHub couldn't hand over, found in the App's delivery list and redelivered once (`redeliveries.json`).                                                                                                                                   |
+| `sync.mjs`                                                        | The last catch-up with GitHub (redeliveries and pull requests), for `api/state`.                                                                                                                                                                     |
 | `broker-http.mjs`                                                 | The broker's server, on the runs' networks: egress answers, tokens, git, ready for review, the agents' API calls.                                                                                                                                    |
 | `status.mjs`                                                      | `/status`: running runs, reaction updates in flight (`track()`), preview hooks; whether the listener is idle.                                                                                                                                        |
 | `tasks.mjs`                                                       | One queue per issue: admission (`admit()`, `resume()`, open questions), the pause, delivery to a running session.                                                                                                                                    |

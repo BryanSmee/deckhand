@@ -3409,9 +3409,23 @@ mounts:
     const sync = (headers) =>
       fetch(`${base}/api/sync`, { method: "POST", headers: { cookie: session, ...headers } });
     assert.equal((await sync({ origin: "https://evil.example" })).status, 403);
+    // The listener's own, at start, is the last one until then.
+    const lastSync = async () => (await (await get("/api/state", session)).json()).lastSync;
+    let atStart = null;
+    for (let i = 0; i < 100 && !atStart; i++) {
+      atStart = await lastSync();
+      if (!atStart) await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    assert.ok(atStart, "the sync at start is recorded");
+    assert.equal(atStart.by, null);
+    assertShape(atStart, SYNC_KEYS, "SyncResult");
     const synced = await sync({ origin: "https://hooks.example.com" });
     assert.equal(synced.status, 200);
-    assert.deepEqual(await synced.json(), { redelivered: 0, pulls: 0 });
+    const body = await synced.json();
+    assert.deepEqual({ ...body, at: 0 }, { at: 0, by: "alice", redelivered: 0, pulls: 0 });
+    assert.ok(body.at >= atStart.at);
+    // Every browser sees it, not only the one that asked.
+    assert.deepEqual(await lastSync(), body);
     assert.equal((await sync({ origin: "https://hooks.example.com" })).status, 429);
   });
 
@@ -3428,11 +3442,13 @@ mounts:
       "maxParallel",
       "githubUrl",
       "server",
+      "lastSync",
       "now",
     ],
     ["previews", "inboxes", "lanes"],
   ];
   const SERVER_KEYS = [["version", "startedAt", "node", "source"], []];
+  const SYNC_KEYS = [["at", "by", "redelivered", "pulls"], ["error"]];
   const TASK_KEYS = [
     [
       "key",

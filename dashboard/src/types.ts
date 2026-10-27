@@ -232,11 +232,18 @@ export interface Preview {
   since: number;
 }
 
-// What the header's Sync did (POST api/sync, listener/server.mjs sync()): deliveries GitHub
-// couldn't hand over, asked for again, and pull requests whose state changed.
+// A catch-up with GitHub (listener/sync.mjs), the last one in State, the one it did from
+// POST api/sync: deliveries GitHub couldn't hand over, asked for again, and pull requests
+// whose state changed.
 export interface SyncResult {
+  // When it ended.
+  at: number;
+  // The user who pressed Sync, null for the listener at start.
+  by: string | null;
   redelivered: number;
   pulls: number;
+  // Why it failed (its counts are then 0).
+  error?: string;
 }
 
 // Which Deckhand runs and since when (listener/status.mjs serverInfo()).
@@ -271,6 +278,8 @@ export interface State {
   // GITHUB_URL, without a trailing slash: where links go.
   githubUrl: string;
   server: ServerInfo;
+  // The last catch-up with GitHub, null before the first one.
+  lastSync: SyncResult | null;
   // The server's clock: run times are compared with it.
   now: number;
 }
