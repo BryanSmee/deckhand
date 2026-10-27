@@ -179,6 +179,15 @@ Apps created by `/setup` before the dashboard had sign-in have no callback URL: 
 page on GitHub (Settings → Developer settings → GitHub Apps → your App → General), add
 `<public URL>/auth/callback` under **Callback URL** and save.
 
+The dashboard opens on the **Overview** (`#/`): how many runs are going (of the run slots, and
+the queue), how many tasks wait on you, how many pull requests are ready for review and how
+many runs failed, each a link to the tasks under that chip; then what waits on you across
+repositories, oldest first, each with its one action (Answer its questions, Reply to a
+brainstorm, Review the pull request, Rerun what failed); and a card per repository, with its
+config's status, its tasks by state, its backlog and lanes, and its board (or Onboard for a
+repository that isn't onboarded yet). Its **Tasks** view (`#/tasks`) lists every repository's
+tasks.
+
 The dashboard lists every issue, pull request and discussion Deckhand worked on, by title,
 with a tab per repository (the most recently active first; each counts its running tasks and
 those waiting for you) and chips by state: running (queued and `/after` waits too), needs input (a brainstorm waiting for your
@@ -219,7 +228,7 @@ Deckhand never worked on opens on GitHub. The toolbar zooms the graph and fits i
 screen. **Lanes** shows each chain as a row instead (top to bottom on a phone, where it is the
 default), named after its parent issue, its inbox, or the name you give it with its pencil
 button; others are "#18 and 3 more". Your browser keeps the choice. The board has no
-All-repositories view: All shows its tasks.
+All-repositories view: All has the Overview instead.
 
 By default the board leaves closed issues out: implemented and closed as not planned, with
 their arrows, so what still needs something stays on top. An issue whose only blocker is hidden

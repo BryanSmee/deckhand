@@ -519,3 +519,10 @@
     animation-name: none;
   }
 }
+
+/* All's header: why there is no board. */
+.hint {
+  margin-left: auto;
+  font-size: 12.5px;
+  color: var(--text-3);
+}

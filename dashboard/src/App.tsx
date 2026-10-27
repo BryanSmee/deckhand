@@ -1,6 +1,7 @@
-// The dashboard: the shell (Shell.tsx: the sidebar, or a phone's bars) around a page: a repo's
-// tasks (or every repo's) filtered by state, the open task and its log; a repo's board, its
-// work queue and what waits for what (Board.tsx); or Settings (Settings.tsx), whose Repositories
+// The dashboard: the shell (Shell.tsx: the sidebar, or a phone's bars) around a page: the
+// Overview of every repo (what waits on you, a card per repo: Overview.tsx); a repo's tasks
+// (or every repo's) filtered by state, the open task and its log; a repo's board, its work
+// queue and what waits for what (Board.tsx); or Settings (Settings.tsx), whose Repositories
 // tab is where onboarding starts and each one's config shows.
 // What is shown lives in the address (route.ts); the state chip, the board's view and "Show
 // closed", the repo last open and the sidebar's rail are kept on this device. On the board, the
@@ -13,8 +14,9 @@ import { Detail } from "./Detail";
 import { InboxDialog } from "./Inbox";
 import { type ChipId, CHIPS, inChip, isLive, matchesSearch, repoTabs, sameRepo } from "./format";
 import { useReadyNotifications } from "./notify";
+import { Overview } from "./Overview";
 import { needingYou } from "./Repos";
-import { formatRoute, parseRoute, type Route } from "./route";
+import { formatRoute, isOverview, parseRoute, type Route } from "./route";
 import { Settings } from "./Settings";
 import { PageHeader, type Request, Sidebar, TabBar, TopBar } from "./Shell";
 import { TaskList } from "./TaskList";
@@ -23,8 +25,18 @@ import styles from "./App.module.css";
 
 export function App() {
   const { state, error, refresh } = useAppState();
-  const repos = useRepos();
-  return <Dashboard state={state} error={error} repos={repos} refresh={refresh} />;
+  // The Overview's cards show each repo's backlog: only it asks for them.
+  const [overview, setOverview] = useState(() => isOverview(parseRoute(location.hash)));
+  const repos = useRepos(overview);
+  return (
+    <Dashboard
+      state={state}
+      error={error}
+      repos={repos}
+      refresh={refresh}
+      onOverview={setOverview}
+    />
+  );
 }
 
 const stored = (name: string) => {
@@ -42,10 +54,13 @@ const store = (name: string, value: string) => {
   }
 };
 
+// The repo last open on this device, else the Overview.
+const readStored = (): Route => ({ repo: stored("tab") || null, task: null, run: null });
+
 // No address yet: the repo last open on this device. An old address (route.ts) is rewritten
 // to its new one, in place.
 function readRoute(): Route {
-  if (location.hash.length <= 1) return { repo: stored("tab") || null, task: null, run: null };
+  if (location.hash.length <= 1) return readStored();
   const route = parseRoute(location.hash);
   const hash = formatRoute(route);
   if (hash !== location.hash) history.replaceState(null, "", hash);
@@ -90,9 +105,11 @@ interface Props {
   repos?: RepoList;
   // Reads api/state again: after a work area action.
   refresh?: () => Promise<void>;
+  // Whether the Overview is shown, each time that changes.
+  onOverview?: (shown: boolean) => void;
 }
 
-export function Dashboard({ state, error, repos, refresh }: Props) {
+export function Dashboard({ state, error, repos, refresh, onOverview }: Props) {
   const [route, go] = useRoute();
   const [chip, setChip] = useState<ChipId>(() => {
     const saved = stored("chip");
@@ -130,14 +147,16 @@ export function Dashboard({ state, error, repos, refresh }: Props) {
   const first = visible.find(isLive) ?? visible[0];
   const onSettings = route.page === "settings";
   const onBoard = route.page === "board";
+  const overview = isOverview(route);
+  useEffect(() => onOverview?.(overview), [overview]);
   // The address takes the sidebar's spelling, so links copied from it are the canonical ones.
   useEffect(() => {
     if (tabRepo !== route.repo) go({ ...route, repo: tabRepo }, true);
   }, [tabRepo, route.repo]);
   useEffect(() => {
-    if (wide && !route.page && !route.task && first)
+    if (wide && !overview && (!route.page || route.page === "tasks") && !route.task && first)
       go({ ...route, repo: tabRepo, task: first.key, run: null }, true);
-  }, [wide, route.page, route.task, first?.key]);
+  }, [wide, overview, route.page, route.task, first?.key]);
   // The repo shown is the one to come back to (Tasks and Board on a phone, an empty address).
   useEffect(() => {
     if (!onSettings) store("tab", route.repo ?? "");
@@ -196,7 +215,17 @@ export function Dashboard({ state, error, repos, refresh }: Props) {
             needs={needingYou(repos?.repos ?? null, tasks)}
           />
         )}
-        {onBoard && route.repo ? (
+        {overview ? (
+          <main class={styles.page}>
+            <Overview
+              state={state}
+              repos={repos}
+              github={github}
+              refresh={refresh}
+              onChip={selectChip}
+            />
+          </main>
+        ) : onBoard && route.repo ? (
           <div class={styles.page}>
             <Board
               state={state}

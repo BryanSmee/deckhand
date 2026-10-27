@@ -369,6 +369,7 @@ const tabs = () => within(screen.getByRole("navigation", { name: "Settings" }));
 
 test("Settings counts the repositories that need you and opens the page", async () => {
   // The fixture's server: started 3 days and 3 hours before its `now`.
+  history.replaceState(null, "", "#/tasks");
   render(<Dashboard state={makeState({}, [asking()])} error={null} repos={fixedList()} />);
   const link = screen.getByRole("link", { name: /Settings/ });
   expect(link.textContent).toBe("Settings 3");
