@@ -22,13 +22,8 @@ export const NAMED = {
   key: { variable: "ANTHROPIC_API_KEY", label: "API key" },
 };
 
-// The variable that holds the operator's credential, or null: the default one, or the one
-// `credential` names (NAMED).
-export function credentialName(env, credential = null) {
-  if (credential)
-    return Object.hasOwn(NAMED, credential) && env[NAMED[credential].variable]
-      ? NAMED[credential].variable
-      : null;
+// The variable that holds the operator's default credential, or null.
+export function credentialName(env) {
   return CREDENTIALS.find((name) => env[name]) ?? null;
 }
 
@@ -36,12 +31,11 @@ export function credentialName(env, credential = null) {
 export const PLAN_WINDOW_MS = 5 * 3600_000;
 
 // When a plan's limit resets, in ms, from its 429: the reset its rate limit headers give (in
-// seconds since the epoch), else its Retry-After (seconds from now). Null when neither says.
-export function resetOf(headers, now) {
+// seconds since the epoch), or null. Not Retry-After: a short rate limit Claude Code retries
+// past says nothing of the plan's limit.
+export function resetOf(headers) {
   const reset = Number(headers["anthropic-ratelimit-unified-reset"]);
-  if (reset > 0) return reset * 1000;
-  const after = Number(headers["retry-after"]);
-  return after > 0 ? now + after * 1000 : null;
+  return reset > 0 ? reset * 1000 : null;
 }
 
 // The run's secret, from whichever header Claude Code sent it in.
@@ -80,7 +74,6 @@ export function createAnthropicProxy({
   // Other providers (agents/claude.mjs), for runs the broker gives one: { openrouter: { name,
   // credential, upstream } }.
   providers = {},
-  clock = Date,
   log = () => {},
 }) {
   const own = { name, credential, upstream };
@@ -131,11 +124,11 @@ export function createAnthropicProxy({
         : { authorization: `Bearer ${credential}` };
     },
     // A plan's limit: when it resets, for the fallback that takes over until then
-    // (agents/select.mjs nextFallback()).
+    // (agents/select.mjs nextFallback()). Any other answer clears it: the run got past it, and
+    // a later failure is another one.
     answered: (run, status, _headers, answer) => {
-      if (status === 429 && settingsOf(run)?.name === NAMED.plan.variable) {
-        run.apiReset = resetOf(answer, clock.now());
-      }
+      if (settingsOf(run)?.name !== NAMED.plan.variable) return;
+      run.apiReset = status === 429 ? resetOf(answer) : null;
     },
     secrets: () =>
       [

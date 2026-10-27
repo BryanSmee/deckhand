@@ -38,11 +38,14 @@ export function resolved(config, name) {
 
 // What `/agent` may pick: the agents the operator configured (config.agents), on their default
 // provider and on each credential of it the operator set (`claude@anthropic:key`), and the
-// entries of FALLBACKS. A repo's config can't add any.
+// entries of FALLBACKS. A repo's config can't add any. Not a named credential when the default
+// is none of them (a gateway's token): it would go to the gateway, which only FALLBACKS may ask.
 function pickable(config) {
   const named = config.agents.flatMap((a) => {
     const own = entryName(a);
-    return (config.credentials?.[own]?.set ?? []).map((c) => `${own}:${c}`);
+    const credentials = config.credentials?.[own];
+    if (!credentials?.default) return [];
+    return credentials.set.map((c) => `${own}:${c}`);
   });
   return [...new Set([...config.agents.map((a) => entryName(a)), ...named, ...config.fallbacks])];
 }
@@ -91,17 +94,71 @@ export function entryFor(config, chosen, fallback, previous, pick, now = Date.no
   return settings;
 }
 
-// "Claude AI usage limit reached|1760000000": when a plan's limit resets, as Claude Code's
-// result says it, in ms.
-const RESETS = /limit reached\|(\d{10})\b/i;
+// When a plan's limit resets, in ms, as Claude Code's result says it, or null: "You've hit
+// your session limit · resets 1:10pm (UTC)" (the next 1:10 pm there), "… · resets Oct 30, 9am
+// (Europe/Paris)", or an older version's "Claude AI usage limit reached|1760000000". A time
+// without a zone is UTC's.
+const RESET_EPOCH = /limit reached\|(\d{10})\b/i;
+const RESET_AT =
+  /\bresets (?:([A-Z][a-z]{2}) (\d{1,2}),? (?:at )?)?(\d{1,2})(?::(\d{2}))?\s*([ap]m)\b(?:\s*\(([^)]+)\))?/i;
+const MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+const DAY_MS = 24 * 3600_000;
+
+// How far `zone`'s clock is ahead of UTC's at `at`, in ms; null for a zone Intl doesn't know.
+function zoneOffset(zone, at) {
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: zone,
+      hourCycle: "h23",
+      year: "numeric",
+      month: "numeric",
+      day: "numeric",
+      hour: "numeric",
+      minute: "numeric",
+      second: "numeric",
+    }).formatToParts(at);
+    const p = Object.fromEntries(parts.map(({ type, value }) => [type, Number(value)]));
+    const local = Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute, p.second);
+    return local - Math.floor(at / 1000) * 1000;
+  } catch {
+    return null;
+  }
+}
+
+export function resetFrom(text, now) {
+  const epoch = Number(RESET_EPOCH.exec(text ?? "")?.[1]);
+  if (epoch) return epoch * 1000;
+  const m = RESET_AT.exec(text ?? "");
+  if (!m) return null;
+  const [, monthName, day, hour, minute = "0", half, zone = "UTC"] = m;
+  const month = monthName ? MONTHS.indexOf(monthName.toLowerCase()) : -1;
+  const offset = zoneOffset(zone.trim(), now);
+  if (offset === null || (monthName && month < 0)) return null;
+  const here = new Date(now + offset);
+  const h = (Number(hour) % 12) + (half.toLowerCase() === "pm" ? 12 : 0);
+  const at = (year) =>
+    Date.UTC(
+      year,
+      monthName ? month : here.getUTCMonth(),
+      monthName ? Number(day) : here.getUTCDate(),
+      h,
+      Number(minute),
+    ) - offset;
+  let reset = at(here.getUTCFullYear());
+  // The next such time: tomorrow's for a time alone, next year's for a past date.
+  if (reset <= now) reset = monthName ? at(here.getUTCFullYear() + 1) : reset + DAY_MS;
+  return reset;
+}
 
 // Where a run whose provider failed goes next: the first entry of FALLBACKS it hasn't been
 // on yet (each at most once per run, across the runs of one fallback chain, each on the
 // credential it runs on: resolved()), or null when it failed for another reason or none is
 // left. `apiStatus`: the provider's last answer; `apiReset`: when the plan's limit it hit resets
-// (anthropic.mjs). A run that fails on a plan's credential sets `until`: later runs of the task
-// stay on the fallback until then (entryFor()), the reset its answer or result gave, else the
-// plan's window from `now`. An agent picked with `/agent` doesn't fall back: it was asked for.
+// (anthropic.mjs). A run that fails on a plan's credential and goes on on another credential of
+// the same agent and provider (`claude@anthropic:key`, the same session) sets `until`: later
+// runs of the task stay on it until then (entryFor()), the reset its answer or result gave
+// (resetFrom()), else the plan's window from `now`. Another agent or provider sticks as any
+// fallback does: going back would resume the session that failed, without what it did. An agent picked with `/agent` doesn't fall back: it was asked for.
 export function nextFallback(
   config,
   record,
@@ -117,9 +174,10 @@ export function nextFallback(
   const tried = [...own, from];
   const entry = config.fallbacks.find((e) => !tried.includes(resolved(config, e)));
   if (!entry) return null;
-  if (entryOf(from)?.credential !== "plan") return { entry, from, reason, tried };
-  const said = Number(RESETS.exec(result?.text ?? "")?.[1]) * 1000;
-  const until = apiReset ?? (said || now + PLAN_WINDOW_MS);
+  const [failed, next] = [entryOf(from), entryOf(entry)];
+  const sameSession = failed?.agent === next.agent && failed?.provider === next.provider;
+  if (failed?.credential !== "plan" || !sameSession) return { entry, from, reason, tried };
+  const until = apiReset ?? resetFrom(result?.text, now) ?? now + PLAN_WINDOW_MS;
   return { entry, from, reason, tried, until };
 }
 

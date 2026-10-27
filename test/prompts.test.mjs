@@ -22,6 +22,7 @@ import {
   entryLabel,
   nextFallback,
   pickProblem,
+  resetFrom,
   resolveEntry,
   resolved,
 } from "../listener/agents/select.mjs";
@@ -487,6 +488,52 @@ test("a plan's limit: the run goes on on the key, and later runs stay there unti
   assert.equal(other.until, undefined);
 });
 
+test("a plan's fallback to another agent or provider has no `until`: it sticks", () => {
+  const limit = { ok: false, text: "You've hit your session limit · resets 1:10pm (UTC)" };
+  const first = { agent: "claude", provider: "anthropic", credential: null, fallback: null };
+  for (const entry of ["codex@openai", "claude@openrouter"]) {
+    const config = { ...twoCredentials, fallbacks: [entry] };
+    const fell = nextFallback(config, first, limit, 429, { apiReset: 5, now: 1 });
+    assert.equal(fell.entry, entry);
+    assert.equal(fell.until, undefined, entry);
+    const [agent, provider] = entry.split("@");
+    const previous = { agent, provider, credential: null, fallback: fell };
+    const later = entryFor(config, "claude", undefined, previous, undefined, Date.now() + 1e12);
+    assert.deepEqual([later.agent, later.provider, later.fallback.sticky], [agent, provider, true]);
+  }
+});
+
+test("resetFrom: Claude Code's limit messages, current and older", () => {
+  // 2026-10-27 12:00 UTC.
+  const now = Date.UTC(2026, 9, 27, 12, 0);
+  const session = "You've hit your session limit · resets 1:10pm (UTC)";
+  assert.equal(resetFrom(session, now), Date.UTC(2026, 9, 27, 13, 10));
+  // Passed today: tomorrow's.
+  assert.equal(resetFrom("limit reached ∙ resets 9am", now), Date.UTC(2026, 9, 28, 9, 0));
+  // In its zone: 3 pm in Paris is 14:00 UTC in October (CET, after the change on the 25th).
+  assert.equal(
+    resetFrom("You've hit your limit · resets 3pm (Europe/Paris)", now),
+    Date.UTC(2026, 9, 27, 14, 0),
+  );
+  assert.equal(
+    resetFrom("You've hit your weekly limit · resets Nov 2, 9am (UTC)", now),
+    Date.UTC(2026, 10, 2, 9, 0),
+  );
+  assert.equal(resetFrom("Claude AI usage limit reached|1900000000", now), 1_900_000_000_000);
+  assert.equal(resetFrom("resets 3pm (Nowhere/Else)", now), null);
+  assert.equal(resetFrom("API Error: 529 overloaded_error", now), null);
+  assert.equal(resetFrom(undefined, now), null);
+  // As the reason and the reset of a plan's fallback to its key.
+  const fell = nextFallback(
+    twoCredentials,
+    { agent: "claude", provider: "anthropic", credential: null, fallback: null },
+    { ok: false, text: session },
+    null,
+    { now },
+  );
+  assert.deepEqual([fell.reason, fell.until], ["quota reached", Date.UTC(2026, 9, 27, 13, 10)]);
+});
+
 test("credentials: the default one counts as tried, /agent picks one, labels name it", () => {
   const config = {
     ...twoCredentials,
@@ -507,6 +554,18 @@ test("credentials: the default one counts as tried, /agent picks one, labels nam
     credentials: { "claude@anthropic": { set: ["plan"], default: "plan" } },
   };
   assert.match(pickProblem(unset, "claude@anthropic:key"), /`claude@anthropic:plan`/);
+  // A gateway's token as the default: named credentials would go to the gateway, so only
+  // FALLBACKS may name them.
+  const gateway = {
+    ...only,
+    credentials: { "claude@anthropic": { set: ["plan", "key"], default: null } },
+  };
+  assert.match(pickProblem(gateway, "claude@anthropic:plan"), /isn't one the operator configured/);
+  assert.match(pickProblem(gateway, "claude@anthropic:key"), /isn't one the operator configured/);
+  assert.equal(
+    pickProblem({ ...gateway, fallbacks: ["claude@anthropic:key"] }, "claude@anthropic:key"),
+    null,
+  );
   assert.deepEqual(entryFor(only, "claude", undefined, undefined, "claude@anthropic:key"), {
     agent: "claude",
     provider: "anthropic",

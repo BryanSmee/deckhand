@@ -64,11 +64,6 @@ test("the default credential: a gateway's token, then a plan's, already paid for
     credentialName({ CLAUDE_CODE_OAUTH_TOKEN: "t", ANTHROPIC_API_KEY: "k" }),
     "CLAUDE_CODE_OAUTH_TOKEN",
   );
-  // A named one: its variable, if set.
-  const both = { CLAUDE_CODE_OAUTH_TOKEN: "t", ANTHROPIC_API_KEY: "k" };
-  assert.equal(credentialName(both, "key"), "ANTHROPIC_API_KEY");
-  assert.equal(credentialName({ CLAUDE_CODE_OAUTH_TOKEN: "t" }, "key"), null);
-  assert.equal(credentialName(both, "other"), null);
   assert.equal(
     credentialName({
       CLAUDE_CODE_OAUTH_TOKEN: "t",
@@ -165,10 +160,12 @@ test("a gateway's token goes as a bearer, under the gateway's own path", async (
 // credential its entry names, in that credential's header, and never the other.
 async function serveBoth(t, limited = false) {
   const requests = [];
+  // `limit.on`: answer 429 with the plan's reset, else 200.
+  const limit = { on: limited };
   const { url: upstreamUrl } = await serve(t, (req, res) => {
     requests.push({ headers: req.headers });
     req.resume().on("end", () => {
-      if (!limited) return res.end("{}");
+      if (!limit.on) return res.end("{}");
       res.writeHead(429, { "anthropic-ratelimit-unified-reset": "1900000000" });
       res.end('{"type":"error","error":{"type":"rate_limit_error"}}');
     });
@@ -180,10 +177,9 @@ async function serveBoth(t, limited = false) {
     credential: "sk-ant-oat01-plan",
     named: { plan: "sk-ant-oat01-plan", key: "sk-ant-api03-key" },
     upstream: upstreamUrl,
-    clock: { now: () => 1_000 },
   });
   const { url } = await serve(t, (req, res) => proxy.handle(req, res));
-  return { url, broker, requests, proxy };
+  return { url, broker, requests, proxy, limit };
 }
 
 test("a plan and a key: the plan's run sends its bearer, the key's run its x-api-key", async (t) => {
@@ -214,7 +210,7 @@ test("a plan and a key: the plan's run sends its bearer, the key's run its x-api
 });
 
 test("a plan's 429: the run learns when its limit resets; a key's doesn't", async (t) => {
-  const { url, broker } = await serveBoth(t, true);
+  const { url, broker, limit } = await serveBoth(t, true);
   const plan = broker.register("org/repo");
   broker.provide(plan, "anthropic");
   const key = broker.register("org/repo");
@@ -225,9 +221,13 @@ test("a plan's 429: the run learns when its limit resets; a key's doesn't", asyn
   assert.equal(broker.runOf(plan).apiReset, 1_900_000_000_000);
   assert.equal(broker.runOf(key).apiStatus, 429);
   assert.equal(broker.runOf(key).apiReset, null);
-  // Without the header: Retry-After, else nothing.
-  assert.equal(resetOf({ "retry-after": "60" }, 1_000), 61_000);
-  assert.equal(resetOf({}, 1_000), null);
+  // An answer past it clears it: a later failure is another one.
+  limit.on = false;
+  await (await ask(url, { authorization: `Bearer ${plan}` })).text();
+  assert.equal(broker.runOf(plan).apiReset, null);
+  // Only the plan's own reset: not a short Retry-After.
+  assert.equal(resetOf({ "retry-after": "60" }), null);
+  assert.equal(resetOf({}), null);
 });
 
 test("a run naming a credential the operator didn't set gets none, and says which", async (t) => {

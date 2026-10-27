@@ -567,8 +567,8 @@ What runs an issue, first match wins:
 
 1. A comment's `/agent <entry>` line (`/agent codex`, `/agent claude@openrouter`; an agent
    alone is on its default provider, `/agent claude@anthropic:key` on that credential), among
-   the agents you have a credential for, the credentials you set, and the entries of
-   `FALLBACKS`. Anything else gets a reply naming what is configured, and nothing
+   the agents you have a credential for, the credentials you set (unless a gateway's token
+   is the default), and the entries of `FALLBACKS`. Anything else gets a reply naming what is configured, and nothing
    runs. A picked agent doesn't fall back: when its provider fails, the run ends with the
    error. The issue's later runs stay with it until another `/agent`; `/agent default` goes
    back to the next rule. When it changes the agent, the new one starts a session of its own,
@@ -602,7 +602,8 @@ sandbox_model: opus
 ```
 
 Leave `CLAUDE_CODE_OAUTH_TOKEN` and `ANTHROPIC_API_KEY` empty: `ANTHROPIC_AUTH_TOKEN` wins
-over them anyway, as in Claude Code (only `claude@anthropic:plan` or `:key` would use them). `SANDBOX_MODEL`, `BRAINSTORM_MODEL`, a repository's
+over them anyway, as in Claude Code. A `claude@anthropic:plan` or `:key` entry in `FALLBACKS`
+would send them to the gateway; `/agent` can't pick them while a gateway is the default. `SANDBOX_MODEL`, `BRAINSTORM_MODEL`, a repository's
 `model` and a comment's `/model` line take the gateway's names too (`/model openai/gpt-5`).
 
 Claude Code is built for Claude models: others, through a gateway, are uneven at its tool
@@ -851,10 +852,12 @@ When no entry is left, the run ends with the error.
 
 **Later runs** of the issue stay on the entry that took over, as long as it is in `FALLBACKS`:
 switching back would continue the session of the agent that failed, without what the other
-one did. After a fallback from a plan (`claude@anthropic` on the plan, or `:plan`), they stay
-on the entry that took over until the plan's limit resets, then go back to the plan: when its
-answer says (Anthropic's rate limit headers, or Claude Code's "usage limit reached" message),
-else 5 hours later, a plan's usage window.
+one did. A fallback from a plan to its API key (`claude@anthropic` on the plan, or `:plan`,
+then `claude@anthropic:key`) is the exception: the same session goes on either way, so later
+runs stay on the key only until the plan's limit resets, then go back to the plan. The reset
+is the one Anthropic's rate limit headers give, else Claude Code's message ("You've hit your
+session limit · resets 1:10pm (UTC)"), else 5 hours later, a plan's usage window. A fallback
+from the plan to another provider or agent sticks like any other.
 
 A model's own name (`/model claude-opus-5-5`) may mean nothing on another provider: use
 tiers (`best`) with fallbacks. A Claude model on a run that falls back to Codex runs Codex's

@@ -672,9 +672,12 @@ comment. The next run takes its entry from the marker (`entryFor()`):
 The run's record keeps `provider`, `credential` and `fallback`. The reply's footer names the
 agent, provider and credential and why it switched; the log's first line says it. Later runs of
 the task stick to the entry that took over (`previous.fallback`), as long as it is still in
-`FALLBACKS`. A fallback from a plan's credential carries `until`: the reset its 429's headers
-or Claude Code's "usage limit reached|<time>" gave, else 5 hours on. From then, later runs go
-back to the default entry, on the plan.
+`FALLBACKS`. A fallback from a plan's credential to another credential of the same agent and
+provider (the same session) carries `until`: the reset its 429's
+`anthropic-ratelimit-unified-reset` gave (`apiReset`), else Claude Code's "resets 1:10pm
+(UTC)" (`resetFrom()`), else 5 hours on. From then, later runs go back to the default entry,
+on the plan. A fallback to another agent or provider has none: going back would resume the
+session that failed.
 
 ### Picking an agent with `/agent`
 

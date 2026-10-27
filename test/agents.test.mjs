@@ -411,6 +411,14 @@ test("providerError: a provider's failure, from the result or the endpoint's las
     "rate limited (429)",
   );
   assert.equal(providerError(failed("Claude AI usage limit reached|1760547600")), "quota reached");
+  // Claude Code's current messages, without a status in them.
+  for (const text of [
+    "You've hit your session limit · resets 1:10pm (UTC)",
+    "You've hit your limit · resets 3pm (Europe/Paris)",
+    "You've hit your weekly limit · resets Nov 2, 9am (UTC)",
+  ]) {
+    assert.equal(providerError(failed(text)), "quota reached", text);
+  }
   assert.equal(providerError(failed("Invalid API key · Please run /login")), "invalid credentials");
   assert.equal(
     providerError(failed('API Error: 500 {"type":"error","error":{"type":"api_error"}}')),

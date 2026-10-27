@@ -71,7 +71,7 @@ export const ENTRIES = Object.values(AGENTS).flatMap((a) =>
 const PROVIDER_ERRORS = [
   [/overloaded/i, "overloaded"],
   [
-    /usage limit|limit reached|insufficient_quota|exceeded your current quota|credit balance|RESOURCE_EXHAUSTED/i,
+    /usage limit|limit reached|hit your (?:\w+ )?limit|session limit|weekly limit|insufficient_quota|exceeded your current quota|credit balance|RESOURCE_EXHAUSTED/i,
     "quota reached",
   ],
   [/rate[ _-]?limit|too many requests/i, "rate limited"],
