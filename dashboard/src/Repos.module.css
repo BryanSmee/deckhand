@@ -236,6 +236,7 @@
     flex: 1 1 100%;
   }
   .tools {
+    flex-wrap: wrap;
     flex-basis: 100%;
     margin-left: 0;
   }
