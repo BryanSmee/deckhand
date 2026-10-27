@@ -85,7 +85,9 @@ test("dismissed: who did it, and Undo; no Dismiss on a merged pull request's fai
   });
   show(BUGS, dismissed);
   expect(screen.queryByRole("button", { name: "Dismiss" })).toBeNull();
-  expect(screen.getByText(/Dismissed by @bob 2 min ago/)).toBeTruthy();
+  expect(screen.getByText(/Dismissed by/).textContent).toMatch(
+    /^Dismissed by @bob 2 min ago(?! ago)/,
+  );
   fireEvent.click(screen.getByRole("button", { name: "Undo" }));
   await waitFor(() =>
     expect(screen.getByRole("status").textContent).toBe("It waits on you again."),

@@ -355,7 +355,7 @@ export function Detail({
             {t.pr && <PrLink pr={t.pr} />}
             {t.dismissed && t.runs[0] && (
               <span class={styles.dismissed}>
-                Dismissed by @{t.dismissed.by} {ago(t.dismissed.at, now)} ago
+                Dismissed by @{t.dismissed.by} {ago(t.dismissed.at, now)}
                 <Button
                   variant="ghost"
                   size="small"
