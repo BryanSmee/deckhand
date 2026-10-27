@@ -154,6 +154,8 @@ export function createHttp(ctx, { dashboardDir }) {
       // Stored before the label was turned off: not listed.
       inputs: config.needsInputLabel ? mine(ctx.inputs.list()) : [],
       dismissals: ctx.dismissals?.list() ?? [],
+      pr: (key) => ctx.pulls.get(key),
+      decisions: (key) => ctx.decisions?.get(key) ?? [],
     }).slice(0, 200);
     return { shown, queued };
   }

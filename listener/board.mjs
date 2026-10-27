@@ -93,10 +93,20 @@ function questionsFor(t, last, input) {
 
 // `runs`: newest first; `queued`, `brainstorms`, `waits`: as http.mjs's state() has them;
 // `inputs`: the open issues labelled needs-input (inputs.mjs list()); `dismissals`: the
-// dismissed runs (dismissals.mjs list()).
+// dismissed runs (dismissals.mjs list()); `pr(key)`, `decisions(key)`: its pull request
+// (pulls.mjs) and policy decisions, newest first (decisions.mjs), for when it last changed.
 // A task waiting for input carries `questions`: { source, runId?, items, raw }, from the reply
 // of its last run when it stopped to ask, else from its issue's body (questions.mjs).
-export function board({ runs, queued, brainstorms, waits = [], inputs = [], dismissals = [] }) {
+export function board({
+  runs,
+  queued,
+  brainstorms,
+  waits = [],
+  inputs = [],
+  dismissals = [],
+  pr = () => null,
+  decisions = () => [],
+}) {
   const tasks = gather(runs, [queued, brainstorms, waits, inputs]);
   const byKey = (list) => new Map(list.map((x) => [one(x.key), x]));
   const waiting = byKey(queued);
@@ -108,10 +118,27 @@ export function board({ runs, queued, brainstorms, waits = [], inputs = [], dism
     const k = one(t.key);
     settle(t, waiting.get(k), talks.get(k), held.get(k), labelled.get(k));
     t.dismissed = dismissedOf(t, dismissed.get(k));
+    t.updatedAt = updatedAt(t, pr(t.key), decisions(t.key));
   }
   // Most recent activity first, the live ones on top.
   const live = (t) => ["building-image", "working", "stopping", "queued"].includes(t.state);
-  return [...tasks.values()].sort((a, b) => Number(live(b)) - Number(live(a)) || b.since - a.since);
+  return [...tasks.values()].sort(
+    (a, b) => Number(live(b)) - Number(live(a)) || b.updatedAt - a.updatedAt,
+  );
+}
+
+// When Deckhand last saw something happen to the task: its `since` (a run starting, a
+// brainstorm, a wait, the needs-input label), its last run ending or pushing, its pull request
+// turning ready, a policy decision.
+function updatedAt(t, pr, decisions) {
+  const last = t.runs[0];
+  return Math.max(
+    t.since,
+    last?.finishedAt ?? 0,
+    last?.lastPushAt ?? 0,
+    pr?.readyAt ?? 0,
+    decisions?.[0]?.at ?? 0,
+  );
 }
 
 // A task key whatever the case of its repo: a restart unifies the spellings (spelling.mjs),
@@ -151,6 +178,7 @@ function newTask(key, repo) {
     replyTo: null,
     state: null,
     since: 0,
+    updatedAt: 0,
     dismissed: null,
     runs: [],
   };

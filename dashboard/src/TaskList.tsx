@@ -17,6 +17,7 @@ import {
   taskTone,
   titleOf,
   when,
+  whenTitle,
 } from "./format";
 import { useShortcuts, useShortcutsOn, withKey } from "./keys";
 import type { Task } from "./types";
@@ -195,7 +196,9 @@ function Row({
       <span class={styles.title} title={t.title ?? undefined}>
         {titleOf(t)}
       </span>
-      <span class={styles.when}>{when(t, now)}</span>
+      <span class={styles.when} title={whenTitle(t, now) ?? undefined}>
+        {when(t, now)}
+      </span>
       <span class={styles.sub}>
         <span class={styles.number}>{numberOf(t)}</span>
         {parts.map((p, i) => (
