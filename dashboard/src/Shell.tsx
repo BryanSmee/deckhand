@@ -268,7 +268,8 @@ function User({ user }: { user: string }) {
 // New request and its menu. Arrows move through it, Escape closes it, and so does a click
 // elsewhere. On the rail the menu opens beside it, outside the sidebar: the sidebar scrolls,
 // so it would clip an absolute menu there. It is fixed instead, at the button, and closes when
-// the window resizes or something scrolls, rather than drift from it.
+// the window resizes or a scroll moves the button, rather than drift from it. Other scrolls
+// leave it open: a live run's log follows its end on every line.
 function NewRequest({
   onPick,
   form,
@@ -277,7 +278,7 @@ function NewRequest({
   form: "full" | "icon" | "bar";
 }) {
   const [open, setOpen] = useState(false);
-  const [at, setAt] = useState<{ top: number; left: number } | null>(null);
+  const [at, setAt] = useState({ top: 0, left: 0 });
   const box = useRef<HTMLDivElement>(null);
   const menu = useRef<HTMLDivElement>(null);
   const button = () => box.current?.querySelector<HTMLElement>("[aria-haspopup]");
@@ -302,25 +303,29 @@ function NewRequest({
       } else if (e.key === "Tab") setOpen(false);
     };
     const close = () => setOpen(false);
+    const moved = (e: Event) => {
+      const target = e.target as Node;
+      if (target === document || target.contains(box.current)) setOpen(false);
+    };
     document.addEventListener("pointerdown", away);
     document.addEventListener("keydown", keys);
     if (form === "icon") {
       window.addEventListener("resize", close);
-      document.addEventListener("scroll", close, true);
+      document.addEventListener("scroll", moved, true);
     }
     return () => {
       document.removeEventListener("pointerdown", away);
       document.removeEventListener("keydown", keys);
       window.removeEventListener("resize", close);
-      document.removeEventListener("scroll", close, true);
+      document.removeEventListener("scroll", moved, true);
     };
   }, [open, form]);
   const attrs = {
     "aria-haspopup": "menu" as const,
     "aria-expanded": open,
-    onClick: () => {
-      const r = button()?.getBoundingClientRect();
-      setAt(r ? { top: r.top, left: r.right + 8 } : null);
+    onClick: (e: MouseEvent) => {
+      const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+      setAt({ top: r.top, left: r.right + 8 });
       setOpen(!open);
     },
   };
@@ -346,7 +351,7 @@ function NewRequest({
           role="menu"
           aria-label="New request"
           ref={menu}
-          style={form === "icon" && at ? { top: `${at.top}px`, left: `${at.left}px` } : undefined}
+          style={form === "icon" ? { top: `${at.top}px`, left: `${at.left}px` } : undefined}
         >
           {REQUESTS.map((r) => (
             <button

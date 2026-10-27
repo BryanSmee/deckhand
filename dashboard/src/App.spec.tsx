@@ -455,10 +455,32 @@ test("on the rail, New request opens its menu beside the rail, out of its clip",
   fireEvent.keyDown(document, { key: "Escape" });
   await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   expect(document.activeElement).toBe(button);
-  // Something scrolling closes it, rather than leave it away from the button.
+  // A scroll that moves the button closes it, and so does a resize, rather than leave it away
+  // from the button. The main area's (a live log following its end) leaves it open.
   fireEvent.click(button);
+  fireEvent.scroll(screen.getByRole("main"));
+  expect(screen.getByRole("menu")).toBeTruthy();
   fireEvent.scroll(document.querySelector("aside")!);
   expect(screen.queryByRole("menu")).toBeNull();
+  fireEvent.click(button);
+  fireEvent.scroll(document);
+  expect(screen.queryByRole("menu")).toBeNull();
+  fireEvent.click(button);
+  fireEvent(window, new Event("resize"));
+  expect(screen.queryByRole("menu")).toBeNull();
+});
+
+test("on the board's rail, New request opens its menu beside the rail too", () => {
+  history.replaceState(null, "", "#/acme/app/board");
+  render(<Dashboard state={state} error={null} />);
+  expect(screen.getByRole("button", { name: "Expand the sidebar" })).toBeTruthy();
+  const button = screen.getByRole("button", { name: "New request" });
+  button.getBoundingClientRect = () => ({ top: 60, right: 48 }) as DOMRect;
+  fireEvent.click(button);
+  const menu = screen.getByRole("menu", { name: "New request" });
+  expect([menu.style.top, menu.style.left]).toEqual(["60px", "56px"]);
+  fireEvent.click(within(menu).getByRole("menuitem", { name: "Idea" }));
+  expect(screen.getByRole("dialog", { name: "New request" })).toBeTruthy();
 });
 
 test("New request's menu: arrows move through it, Escape closes it", () => {
