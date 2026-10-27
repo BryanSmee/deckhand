@@ -213,6 +213,7 @@ export function Log({ run, entries, now, touch, searching, onSearching }: Props)
       <Field
         label="Search this log"
         hideLabel
+        placeholder="Search this log"
         type="search"
         size={touch ? "touch" : "small"}
         lead={<Icon.Search size={touch ? 18 : 14} />}

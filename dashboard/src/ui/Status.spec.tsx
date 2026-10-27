@@ -64,7 +64,7 @@ test("a filter chip is a toggle with its count", () => {
   expect(onClick).toHaveBeenCalled();
 });
 
-test("a nav item marks the current page; on the rail its label names it", () => {
+test("a nav item marks the current page; on the rail its label names it, its count a dot", () => {
   render(
     <>
       <NavItem href="#/" label="Overview" current />
@@ -75,6 +75,8 @@ test("a nav item marks the current page; on the rail its label names it", () => 
   const settings = screen.getByRole("link", { name: "Settings (2)" });
   expect(settings.getAttribute("aria-current")).toBeNull();
   expect(settings.title).toBe("Settings");
+  // A number would cover a short repository name on the 40 px rail.
+  expect(settings.textContent).toBe("");
 });
 
 test("an error notice is an alert, the others a status", () => {
