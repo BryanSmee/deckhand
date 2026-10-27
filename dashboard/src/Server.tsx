@@ -295,7 +295,7 @@ function App({
               pending={syncing}
               pendingLabel="Syncing…"
               onClick={() => void sync()}
-              title="Ask GitHub again for the webhook deliveries it couldn't hand over, and for the open pull requests' states"
+              title="Ask GitHub again for the webhook deliveries it couldn't hand over, for the open pull requests' states, and whether they still merge"
             >
               Sync now
             </Button>

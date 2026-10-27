@@ -308,3 +308,79 @@ test("respell: of an attempt under each spelling, the later stays, so it isn't t
     "Org/Repo#30": { pr: 31, head: "x", base: "y" },
   });
 });
+
+test("check(): every repo due now, its runs and pending ones counted, the interval reset", async () => {
+  const w = setup({
+    open: [
+      ["org/repo#30", { number: 31, state: "draft" }],
+      ["org/repo#40", { number: 41, state: "draft" }],
+    ],
+    prs: {
+      31: pull(31, { mergeable: true, mergeable_state: "clean" }),
+      41: pull(41, { mergeable: true, mergeable_state: "clean" }),
+    },
+  });
+  const checks = () => w.calls.filter((u) => u.endsWith("/pulls/41")).length;
+  assert.deepEqual(await w.conflicts.tick(), { started: 0, pending: 0 });
+  // Not due for 10 minutes: a tick leaves it, Sync's check() doesn't.
+  w.prs[31] = pull(31);
+  w.prs[41] = pull(41, { mergeable: null, mergeable_state: "unknown" });
+  w.advance(MIN);
+  assert.deepEqual(await w.conflicts.tick(), { started: 0, pending: 0 });
+  assert.equal(checks(), 1);
+  assert.deepEqual(await w.conflicts.check(), { started: 1, pending: 1 });
+  assert.equal(w.accepted.length, 1);
+  assert.equal(w.accepted[0].reason, "conflict");
+  assert.equal(checks(), 2);
+  // The pending one is the next tick's, at once, not Sync's to wait for.
+  w.prs[41] = pull(41);
+  w.advance(MIN);
+  assert.deepEqual(await w.conflicts.tick(), { started: 1, pending: 0 });
+  assert.equal(w.accepted.length, 2);
+  // Then the repo's interval again, from that pass.
+  w.advance(MIN);
+  await w.conflicts.tick();
+  assert.equal(checks(), 3);
+});
+
+test("check(): a tried pair, a busy task or one waiting for input gets no run", async () => {
+  const tried = setup();
+  await tried.conflicts.tick();
+  assert.deepEqual(await tried.conflicts.check(), { started: 0, pending: 0 });
+  assert.equal(tried.accepted.length, 1);
+  const cases = {
+    busy: setup({ busy: () => true }),
+    labelled: setup({ prs: { 31: pull(31, { labels: [{ name: "needs-input" }] }) } }),
+    "issue labelled": setup({ issue: { labels: [{ name: "needs-input" }] } }),
+  };
+  for (const [what, w] of Object.entries(cases)) {
+    assert.deepEqual(await w.conflicts.check(), { started: 0, pending: 0 }, what);
+    assert.deepEqual(w.accepted, [], what);
+  }
+});
+
+test("check(): nothing without the opt-in, with config errors, outside ALLOWED_REPOS or turned off", async () => {
+  const narrowed = testConfig({ ALLOWED_REPOS: "org/other" });
+  const off = testConfig({ CONFLICT_CHECK_MINUTES: "0" });
+  const cases = {
+    "no opt-in": setup({ settings: parseRepoConfig("trigger: go", config) }),
+    errors: setup({ settings: parseRepoConfig("conflicts:\n  check_minutes: soon", config) }),
+    outside: setup({ c: narrowed, settings: optedIn(10, narrowed) }),
+    off: setup({ c: off, settings: optedIn() }),
+  };
+  for (const [what, w] of Object.entries(cases)) {
+    assert.deepEqual(await w.conflicts.check(), { started: 0, pending: 0 }, what);
+    assert.deepEqual(w.accepted, [], what);
+    assert.ok(!w.calls.some((u) => u.includes("/pulls/")), what);
+  }
+});
+
+test("check() during a tick shares the pass under way", async () => {
+  const w = setup();
+  const ticking = w.conflicts.tick();
+  const checking = w.conflicts.check();
+  assert.equal(checking, ticking);
+  assert.deepEqual(await checking, { started: 1, pending: 0 });
+  assert.equal(w.calls.filter((u) => u.endsWith("/pulls/31")).length, 1);
+  assert.equal(w.accepted.length, 1);
+});

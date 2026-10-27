@@ -48,14 +48,27 @@ export function createConflicts({
 
   const json = (repo, url, expected) => getJson(github, repo, url, expected);
 
-  // One pass over the repos that are due. Overlapping ticks share the pass under way.
+  // One pass over the repos that are due. Overlapping ticks share the pass under way. Resolves
+  // to how many rebase runs it started and how many pull requests GitHub hadn't computed yet.
   function tick() {
-    if (!config.conflictCheckMinutes) return Promise.resolve();
-    ticking ??= pass().finally(() => (ticking = null));
+    return run(false);
+  }
+
+  // The dashboard's Sync (sync.mjs): the same pass, now, with every repo due. A pass under way
+  // is shared rather than checking twice; the pending ones are left to the next tick, which
+  // checks their repo at once (checkRepo()).
+  function check() {
+    return run(true);
+  }
+
+  function run(all) {
+    if (!config.conflictCheckMinutes) return Promise.resolve({ started: 0, pending: 0 });
+    ticking ??= pass(all).finally(() => (ticking = null));
     return ticking;
   }
 
-  async function pass() {
+  async function pass(all) {
+    const counts = { started: 0, pending: 0 };
     const byRepo = new Map();
     for (const [key, pr] of pulls.open()) {
       const target = parseKey(key);
@@ -63,20 +76,21 @@ export function createConflicts({
       // Fail closed, as for webhooks: the operator may have narrowed ALLOWED_REPOS since.
       if (!repoAllowed(config, target.repo)) continue;
       const repo = target.repo.toLowerCase();
-      if ((due.get(repo) ?? 0) > now()) continue;
+      if (!all && (due.get(repo) ?? 0) > now()) continue;
       if (!byRepo.has(repo)) byRepo.set(repo, { repo: target.repo, tasks: [] });
       byRepo.get(repo).tasks.push({ key, pr });
     }
     for (const [id, { repo, tasks }] of byRepo) {
       try {
-        await checkRepo(id, repo, tasks);
+        await checkRepo(id, repo, tasks, counts);
       } catch (error) {
         log(`Conflicts in ${repo}: ${error.message ?? error}`);
       }
     }
+    return counts;
   }
 
-  async function checkRepo(id, repo, tasks) {
+  async function checkRepo(id, repo, tasks, counts) {
     // Without the opt-in (or with config errors), the config is read again at the floor.
     due.set(id, now() + config.conflictCheckMinutes * 60_000);
     const info = await json(repo, `/repos/${repo}`);
@@ -90,6 +104,7 @@ export function createConflicts({
     for (const { key, pr } of tasks) {
       const result = await checkPull(repo, key, pr.number, { base, settings });
       if (result === "pending") pending = true;
+      if (result) counts[result] += 1;
     }
     // GitHub computes mergeability on the first request: its answer is there next time.
     if (pending) due.set(id, 0);
@@ -163,6 +178,7 @@ export function createConflicts({
 
   return {
     tick,
+    check,
     start,
     stop,
     keys: () => [...attempts.keys()],

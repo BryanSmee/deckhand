@@ -358,6 +358,13 @@ if from a comment (`trigger: "work"`, no comment, no sender, `reason: "conflict"
 its task's session through `tasks.accept()`. The `(head, base)` commits of each attempt are
 kept in `conflicts.json`, so the same pair never starts a second run, even after a restart.
 
+The dashboard's Sync runs the same pass at once (`check()`), with every opted-in repo due
+whatever its interval, and resets their next check as a tick does. A pass under way is shared
+rather than run twice. It resolves to the rebase runs it started and the pull requests GitHub
+hadn't computed yet, which are left to the next tick (their repo is due at once) rather than
+making Sync wait. The listener's own sync at start doesn't run it: the first tick after a
+restart checks every repo anyway, once the queue is restored.
+
 ## Reviews
 
 A repo whose `.deckhand.yaml` has a `review` block gets the built-in `review` mode
@@ -534,10 +541,12 @@ recorded, and an action the pull request no longer matches (ready since merged) 
 `edited`, so nothing turns ready, closes or starts a review from it.
 
 At start and from the dashboard's Sync, the scan goes with the open pull requests' states read
-again (`pulls.mjs` `resync()`), through `sync.mjs`. The last one's result is kept in memory and
-sent in `api/state` (`lastSync`): when it ended, who asked (`null` for the listener at start),
-how many deliveries were asked again and pull requests changed, and the error of a part that
-failed (the other part's count is kept). `POST /api/sync`
+again (`pulls.mjs` `resync()`), through `sync.mjs`. The dashboard's then runs a conflict pass
+(`conflicts.mjs` `check()`, see Conflicts) after `resync()`, so a pull request merged or closed
+meanwhile isn't checked. The last one's result is kept in memory and sent in `api/state`
+(`lastSync`): when it ended, who asked (`null` for the listener at start), how many
+deliveries were asked again, pull requests changed and rebase runs started (`conflicts`, 0 at
+start), and the error of a part that failed (the other parts' counts are kept). `POST /api/sync`
 answers the same record, `502` when it failed.
 
 A delivery whose handling throws (`dispatch()`) is logged with its event and action; the
@@ -678,7 +687,7 @@ tests fake it.
 | `config.mjs`, `yaml.mjs`                                          | The operator's settings (environment and `config.yaml`), one `SETTINGS` table: each one's type, default and parser; the YAML subset both config files use.                                                                                           |
 | `http.mjs`, `deliveries.mjs`                                      | The public server: webhook deliveries, the dashboard and its API, `/status`, screenshots; the places for unverified bodies.                                                                                                                          |
 | `redeliveries.mjs`                                                | Deliveries GitHub couldn't hand over, found in the App's delivery list and redelivered once (`redeliveries.json`).                                                                                                                                   |
-| `sync.mjs`                                                        | The last catch-up with GitHub (redeliveries and pull requests), for `api/state`.                                                                                                                                                                     |
+| `sync.mjs`                                                        | The last catch-up with GitHub (redeliveries, pull requests, conflicts), for `api/state`.                                                                                                                                                             |
 | `broker-http.mjs`                                                 | The broker's server, on the runs' networks: egress answers, tokens, git, ready for review, the agents' API calls.                                                                                                                                    |
 | `status.mjs`                                                      | `/status`: running runs, reaction updates in flight (`track()`), preview hooks; whether the listener is idle.                                                                                                                                        |
 | `tasks.mjs`                                                       | One queue per issue: admission (`admit()`, `resume()`, open questions), the pause, delivery to a running session.                                                                                                                                    |

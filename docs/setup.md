@@ -214,8 +214,10 @@ reverse proxy or tunnel timing out, an outage on GitHub's side). The listener re
 one that failed, once, within GitHub's 3 days: a comment posted meanwhile still gets its run,
 whatever its age. The App needs no extra permission or event for that: an App can always read
 its own deliveries. **Sync** (in the top bar, after the running and queued counts) does it
-now, and asks GitHub about the open pull requests' states again: for when GitHub is unstable
-and you'd rather not wait.
+now, asks GitHub about the open pull requests' states again, and checks them for conflicts
+in the repos that opted in (`conflicts.check_minutes`, see repo-config.md), starting a rebase
+run for each one in conflict: for when GitHub is unstable, or you just merged into a base
+branch, and you'd rather not wait.
 
 **Board** (Tasks | Board in a repository's header, `#/<owner>/<repo>/board`; the old
 `#/graph` addresses lead there) draws the repository's tasks as a graph: an arrow goes from an

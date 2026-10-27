@@ -9,7 +9,7 @@ const state = makeState({ inboxes: { "acme/app": { ideas: 5, bugs: 6, discussion
 
 let api: ReturnType<typeof mockApi>;
 beforeEach(() => {
-  api = mockApi({ "POST api/sync": () => ({ at: 1, redelivered: 0, pulls: 0 }) });
+  api = mockApi({ "POST api/sync": () => ({ at: 1, redelivered: 0, pulls: 0, conflicts: 0 }) });
   history.replaceState(null, "", "#/");
 });
 
