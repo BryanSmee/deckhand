@@ -1,4 +1,4 @@
-// The top bar's Analyze dialog against a fake API: the repos, the preview as the selection
+// New request's Analyze runs against a fake API: the repos, the preview as the selection
 // changes, a started analysis and its run, a refusal.
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/preact";
 import { beforeEach, expect, test } from "vitest";
@@ -63,7 +63,7 @@ const openDialog = (state: State, hash = "#/") => {
   const view = render(<Dashboard state={state} error={null} />);
   fireEvent.click(screen.getByRole("button", { name: "New request" }));
   fireEvent.click(screen.getByRole("menuitem", { name: "Analyze runs" }));
-  return { view, dialog: screen.getByRole("dialog", { name: "Analyze runs" }) };
+  return { view, dialog: screen.getByRole("dialog", { name: "New request" }) };
 };
 
 const status = (dialog: HTMLElement) => within(dialog).getByRole("status").textContent;
@@ -81,18 +81,18 @@ test("Analyze offers the repos the user sees, the open tab's first, and their ru
   // The kinds the listener says the repo's runs have, all picked; every outcome too.
   await waitFor(() => expect(status(dialog)).toMatch(/^10 runs match/));
   const kinds = within(dialog).getByRole("group", { name: "Kinds" });
-  const boxes = within(kinds).getAllByRole("checkbox") as HTMLInputElement[];
-  expect(boxes.map((b) => [b.parentElement!.textContent, b.checked])).toEqual([
-    ["Bug", true],
-    ["audit", true],
-    ["Work", true],
+  const chips = within(kinds).getAllByRole("button");
+  expect(chips.map((b) => [b.textContent, b.getAttribute("aria-pressed")])).toEqual([
+    ["Bug", "true"],
+    ["audit", "true"],
+    ["Work", "true"],
   ]);
   const outcomes = within(dialog).getByRole("group", { name: "Outcomes" });
   expect(
     within(outcomes)
-      .getAllByRole("checkbox")
-      .every((b) => (b as HTMLInputElement).checked),
-  );
+      .getAllByRole("button")
+      .every((b) => b.getAttribute("aria-pressed") === "true"),
+  ).toBe(true);
   expect(previews.at(-1)).toBe(
     "acme/api?count=10&kinds=bug%2Caudit%2Cwork&outcomes=ok%2Cerror%2Cneeds-input%2Cinterrupted%2Ccancelled",
   );
@@ -108,24 +108,27 @@ test("the preview follows the selection; none matching, or a bad count, can't st
   await waitFor(() => expect(status(dialog)).toMatch(/^10 runs match/));
   const outcomes = within(dialog).getByRole("group", { name: "Outcomes" });
   for (const name of ["Success", "Needs input", "Interrupted", "Cancelled"]) {
-    fireEvent.click(within(outcomes).getByRole("checkbox", { name }));
+    fireEvent.click(within(outcomes).getByRole("button", { name }));
   }
   const kinds = within(dialog).getByRole("group", { name: "Kinds" });
-  fireEvent.click(within(kinds).getByRole("checkbox", { name: "audit" }));
+  fireEvent.click(within(kinds).getByRole("button", { name: "audit" }));
   // Work and Bug, errors only: 2 runs.
   await waitFor(() => expect(status(dialog)).toBe("2 runs match, about 2,000 tokens to read."));
   expect(previews.at(-1)).toBe("acme/app?count=10&kinds=bug%2Cwork&outcomes=error");
-  fireEvent.click(within(outcomes).getByRole("checkbox", { name: "Error" }));
+  fireEvent.click(within(outcomes).getByRole("button", { name: "Error" }));
   await waitFor(() => expect(status(dialog)).toMatch(/^No run matches/));
   const button = within(dialog).getByRole("button", { name: "Analyze" }) as HTMLButtonElement;
   expect(button.disabled).toBe(true);
-  fireEvent.click(within(outcomes).getByRole("checkbox", { name: "Error" }));
+  fireEvent.click(within(outcomes).getByRole("button", { name: "Error" }));
   fireEvent.input(within(dialog).getByRole("spinbutton", { name: /Runs to read/ }), {
     target: { value: "51" },
   });
-  await waitFor(() => expect(status(dialog)).toBe("Pick from 1 to 50 runs."));
+  // Said under the count, and the preview waits for a valid one.
+  await waitFor(() => expect(within(dialog).getByText("Pick from 1 to 50 runs.")).toBeTruthy());
+  expect(status(dialog)).toBe("");
   expect(
-    (within(dialog).getByRole("button", { name: /^Analyze/ }) as HTMLButtonElement).disabled,
+    (within(dialog).getByRole("button", { name: /^Analyze( \d+ runs?)?$/ }) as HTMLButtonElement)
+      .disabled,
   ).toBe(true);
 });
 
@@ -175,9 +178,11 @@ test("a refusal shows the listener's message", async () => {
 test("the count's limit is the listener's", async () => {
   max = 30;
   const { dialog } = openDialog(stateWith(), "#/acme/app");
-  await waitFor(() => expect(within(dialog).getByText("the most recent, 30 at most")).toBeTruthy());
+  await waitFor(() =>
+    expect(within(dialog).getByText("The most recent, 30 at most.")).toBeTruthy(),
+  );
   fireEvent.input(within(dialog).getByRole("spinbutton", { name: /Runs to read/ }), {
     target: { value: "40" },
   });
-  await waitFor(() => expect(status(dialog)).toBe("Pick from 1 to 30 runs."));
+  await waitFor(() => expect(within(dialog).getByText("Pick from 1 to 30 runs.")).toBeTruthy());
 });

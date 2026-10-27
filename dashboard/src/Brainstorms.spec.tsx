@@ -3,7 +3,7 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/preact";
 import { beforeEach, expect, test } from "vitest";
 import { Dashboard } from "./App";
-import { BACKLOG, makeState, makeTask, mockApi, transfer } from "./testUtils";
+import { BACKLOG, makeState, makeTask, mockApi, transfer, queueAfter } from "./testUtils";
 import type { Task } from "./types";
 
 const state = makeState();
@@ -158,10 +158,8 @@ test("After… on a card queues it after a node of the graph", async () => {
   const { cards } = await show([brainstorm(150, "brainstorm")]);
   const card = cardOf(cards(), "Brainstorm 150");
   fireEvent.click(within(card).getByRole("button", { name: "Queue #150 after…" }));
-  const select = within(card).getByRole("combobox", { name: "Queue #150 after" });
-  const after = Number((select as HTMLSelectElement).value);
-  fireEvent.click(within(card).getByRole("button", { name: "Queue" }));
-  await waitFor(() => expect(api.bodies()).toEqual([{ action: "queue", number: 150, after }]));
+  queueAfter(150, 138);
+  await waitFor(() => expect(api.bodies()).toEqual([{ action: "queue", number: 150, after: 138 }]));
 });
 
 test("a brainstorm dropped on the Backlog tab stops, and so does Stop", async () => {
@@ -216,7 +214,7 @@ test("an issue with open questions dropped on the Brainstorm tab asks them first
     within(list).getByRole("button", { name: "Answer #138 and start it" }).closest("li")!,
     column,
   );
-  expect(screen.getByRole("dialog", { name: "Answer #138's questions" })).toBeTruthy();
+  expect(screen.getByRole("dialog", { name: "3 open questions" })).toBeTruthy();
   expect(api.bodies()).toEqual([]);
 });
 

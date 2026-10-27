@@ -1,5 +1,5 @@
 // The open task: its kind, number and mode, its title, and its actions (GitHub, Stop while a
-// run goes on, which asks once more first); then its facts and its runs as tabs over the run
+// run goes on, which asks first: Stop.tsx); then its facts and its runs as tabs over the run
 // shown (the latest unless one was picked): its outcome (with Rerun when it failed) and its
 // log. Waiting for input: its open questions, as a form to answer them. A discussion: its
 // thread first, to read and reply to, with the last reply and Rerun, then its runs. A Policies
@@ -26,6 +26,7 @@ import { logSections, plainText } from "./logModel";
 import { Outcome } from "./Outcome";
 import { heldMerge, PolicyTab } from "./Policies";
 import { Questions } from "./Questions";
+import { StopDialog } from "./Stop";
 import { Thread } from "./Thread";
 import type { PullRequest, Run, Task } from "./types";
 import { Button, buttonClass, IconButton } from "./ui/Button";
@@ -77,7 +78,7 @@ export function Detail({
   const [showLog, setShowLog] = useState(false);
   // The task whose Policies tab is open.
   const [policiesOf, setPoliciesOf] = useState<string | null>(null);
-  // The task whose Stop was pressed once (it asks again), and the one whose stop is on its way.
+  // The task whose Stop asks, and the one whose stop is on its way.
   const [confirming, setConfirming] = useState<string | null>(null);
   const [stopping, setStopping] = useState<string | null>(null);
   // A phone searching the log: its search replaces the header.
@@ -129,7 +130,6 @@ export function Detail({
   const stoppable = STOPPABLE.includes(t.state) && t.number !== null && !discussion;
   const asking = confirming === t.key;
   const stop = async () => {
-    if (!asking) return setConfirming(t.key);
     setConfirming(null);
     setStopping(t.key);
     const said = await sendCancel(t.repo, t.number!, isPrTask(t));
@@ -256,23 +256,27 @@ export function Detail({
                   Rerun
                 </Button>
               )}
-              {stoppable && asking && (
-                <Button size={size} onClick={() => setConfirming(null)}>
-                  Keep running
-                </Button>
-              )}
               {stoppable && (
                 <Button
-                  variant={asking ? "danger-solid" : "danger"}
+                  variant="danger"
                   size={size}
                   icon={<Icon.Stop size={11} />}
                   pending={stopping === t.key}
                   pendingLabel="Stopping…"
                   title="Stops the run now: what it did since its last push is lost"
-                  onClick={stop}
+                  onClick={() => setConfirming(t.key)}
                 >
-                  {asking ? "Stop it now" : "Stop"}
+                  Stop
                 </Button>
+              )}
+              {stoppable && asking && (
+                <StopDialog
+                  task={t}
+                  run={t.runs[0] ?? null}
+                  now={now}
+                  onStop={stop}
+                  onClose={() => setConfirming(null)}
+                />
               )}
             </div>
           </div>

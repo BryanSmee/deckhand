@@ -68,7 +68,7 @@ test("a card waiting for answers carries its issue; dropped, it opens the questi
     [ISSUE_TYPE]: "138",
     "text/uri-list": "https://github.example.com/acme/api/issues/138",
   });
-  expect(screen.getByRole("dialog", { name: "Answer #138's questions" })).toBeTruthy();
+  expect(screen.getByRole("dialog", { name: "3 open questions" })).toBeTruthy();
   expect(api.posted).toEqual([]);
 });
 

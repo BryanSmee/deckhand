@@ -1,14 +1,13 @@
-// Feedback, from the dashboard's top bar: an idea or a bug report, sent as the App's
-// comment on the inbox issue, which starts the run a comment there would (listener/work.mjs
-// sendToInbox()), or a discussion, started as the App's in the repo's discussions category
-// (listener/discussions.mjs). Only the repos with an inbox, and the inboxes they have, are
-// offered; once sent, the comment's or discussion's link, then the run on its task when
-// api/state lists it.
-import { useState } from "preact/hooks";
+// New request's idea, bug report or discussion (NewRequest.tsx): an idea or a bug report is
+// sent as the App's comment on the repo's inbox issue, which starts the run a comment there
+// would (listener/work.mjs sendToInbox()): its title, a blank line, then its details. A
+// discussion is started as the App's in the repo's discussions category
+// (listener/discussions.mjs). Once sent, the comment's or discussion's link, then the run on its
+// task when api/state lists it.
+import { useLayoutEffect, useState } from "preact/hooks";
 import { sendToInbox, startDiscussion } from "./api";
-import { sameRepo, uniqueRepos } from "./format";
 import { useSubmit } from "./hooks";
-import { RepoDialog } from "./RepoDialog";
+import type { Action } from "./NewRequest";
 import { formatRoute } from "./route";
 import type {
   DiscussionResult,
@@ -18,136 +17,100 @@ import type {
   Inboxes,
   Task,
 } from "./types";
-import dialog from "./Dialog.module.css";
-import styles from "./Inbox.module.css";
+import { Field } from "./ui/Field";
+import styles from "./NewRequest.module.css";
 
 export const INBOX_DOCS =
   "https://github.com/BryanSmee/deckhand/blob/main/docs/repo-config.md#inboxes";
 
-const KINDS = [
-  { kind: "idea", key: "ideas", label: "Idea", hint: "Something to add or change" },
-  { kind: "bug", key: "bugs", label: "Bug", hint: "Something that goes wrong" },
-  { kind: "discussion", key: "discussions", label: "Discussion", hint: "A question to talk over" },
-] as const;
+export type InboxKind = "idea" | "bug" | "discussion";
 
-type Kind = (typeof KINDS)[number]["kind"];
+const WORDS: Record<InboxKind, { send: string; title: string; details: string; what: string }> = {
+  idea: {
+    send: "Send idea",
+    title: "What you'd like, in a line",
+    details: "What you'd like, and why. Markdown works.",
+    what: "the comment",
+  },
+  bug: {
+    send: "Send bug report",
+    title: "What goes wrong, in a line",
+    details: "What goes wrong, and how to see it. Markdown works.",
+    what: "the comment",
+  },
+  discussion: {
+    send: "Start discussion",
+    title: "The discussion's title",
+    details: "What you'd like to talk over. Markdown works.",
+    what: "the discussion",
+  },
+};
 
-const hasInbox = (i: Inboxes | undefined) => !!(i?.ideas || i?.bugs || i?.discussions);
-
-// The repos the form offers: those with an inbox, by name.
-export const inboxRepos = (inboxes: Record<string, Inboxes> | undefined) =>
-  uniqueRepos(Object.keys(inboxes ?? {}).filter((r) => hasInbox(inboxes![r]))).sort();
-
-interface DialogProps {
-  // api/state's: the repos whose config the listener has read.
-  inboxes: Record<string, Inboxes> | undefined;
-  tasks: Task[];
-  // The tab open: picked first when it has an inbox.
-  repo: string | null;
-  onClose: () => void;
-  submit?: (repo: string, entry: InboxEntry) => Promise<InboxResult>;
-  start?: (repo: string, discussion: DiscussionStart) => Promise<DiscussionResult>;
-  // Once sent: api/state read again, for the run.
-  onSent?: () => void;
-}
-
-export function InboxDialog({
-  inboxes,
-  tasks,
-  repo: tab,
-  onClose,
-  submit = sendToInbox,
-  start = startDiscussion,
-  onSent = () => {},
-}: DialogProps) {
-  const repos = inboxRepos(inboxes);
-  // The tab's repo, read and without an inbox: said, with the way to set one up.
-  const read = Object.keys(inboxes ?? {}).find((r) => sameRepo(r, tab));
-  const without = read && !hasInbox(inboxes![read]) ? tab : null;
-
-  return (
-    <RepoDialog
-      label="Send feedback"
-      title="Send an idea, a bug report or a discussion"
-      repos={repos}
-      tab={tab}
-      onClose={onClose}
-      notes={
-        (without || !repos.length) && (
-          <p class={dialog.note}>
-            {without
-              ? `${without} has no inbox for ideas, bug reports or discussions.`
-              : inboxes
-                ? "No repository has an inbox for ideas, bug reports or discussions."
-                : "Loading…"}{" "}
-            {inboxes && (
-              <a href={INBOX_DOCS} target="_blank" rel="noreferrer">
-                Set one up
-              </a>
-            )}
-          </p>
-        )
-      }
-    >
-      {(repo) => (
-        <Inbox
-          key={repo}
-          repo={repo}
-          inboxes={inboxes![repo]}
-          tasks={tasks}
-          submit={(entry) => submit(repo, entry)}
-          start={(discussion) => start(repo, discussion)}
-          onSent={onSent}
-        />
-      )}
-    </RepoDialog>
-  );
-}
+// The comment an idea or a bug report is: its title, then its details.
+export const entryText = (title: string, details: string) =>
+  [title.trim(), details.trim()].filter(Boolean).join("\n\n");
 
 interface Props {
+  // The form's id: the footer's button sends it.
+  id: string;
   repo: string;
+  kind: InboxKind;
   inboxes: Inboxes;
   tasks: Task[];
-  submit: (entry: InboxEntry) => Promise<InboxResult>;
-  start: (discussion: DiscussionStart) => Promise<DiscussionResult>;
-  onSent: () => void;
+  onAction: (action: Action) => void;
+  onSent?: () => void;
+  submit?: (repo: string, entry: InboxEntry) => Promise<InboxResult>;
+  start?: (repo: string, discussion: DiscussionStart) => Promise<DiscussionResult>;
 }
 
 interface Sent {
-  kind: Kind;
+  kind: InboxKind;
+  repo: string;
   url: string | null;
   task: string | null;
   // The inbox task's newest run when it was sent: a newer one is the entry's.
   before: string | null;
 }
 
-// One repo's form: Idea, Bug or Discussion (those it has), the text (and a discussion's
-// title), Send.
-function Inbox({ repo, inboxes, tasks, submit, start, onSent }: Props) {
-  const offered = KINDS.filter((k) => inboxes[k.key]);
-  const [picked, setPicked] = useState<Kind | null>(null);
+// The title and details stay through a change of kind or repo: only a send clears them.
+export function InboxForm({
+  id,
+  repo,
+  kind,
+  inboxes,
+  tasks,
+  onAction,
+  onSent = () => {},
+  submit = sendToInbox,
+  start = startDiscussion,
+}: Props) {
   const [title, setTitle] = useState("");
-  const [text, setText] = useState("");
+  const [details, setDetails] = useState("");
   const [sent, setSent] = useState<Sent | null>(null);
   const {
     sending,
     error,
     run: post,
-  } = useSubmit(
-    (entry: {
-      kind: Kind;
-      title: string;
-      text: string;
-    }): Promise<InboxResult | DiscussionResult> =>
-      entry.kind === "discussion"
-        ? start({ title: entry.title, body: entry.text })
-        : submit({ kind: entry.kind, text: entry.text }),
+  } = useSubmit((entry: { kind: InboxKind; repo: string; title: string; details: string }) =>
+    entry.kind === "discussion"
+      ? start(entry.repo, { title: entry.title.trim(), body: entry.details.trim() })
+      : submit(entry.repo, { kind: entry.kind, text: entryText(entry.title, entry.details) }),
   );
-  const kind = offered.some((k) => k.kind === picked) ? picked! : offered[0].kind;
   const taskOf = (key: string | null) => (key && tasks.find((t) => t.key === key)) || null;
-
   const discussion = kind === "discussion";
-  const ready = !!text.trim() && (!discussion || !!title.trim());
+  // A discussion needs both; an entry, a title or details.
+  const ready = discussion ? !!title.trim() && !!details.trim() : !!entryText(title, details);
+  const words = WORDS[kind];
+
+  // Before the paint: the footer's button says it with the form, not a frame later.
+  useLayoutEffect(() => {
+    onAction({
+      label: words.send,
+      pendingLabel: discussion ? "Starting…" : "Sending…",
+      disabled: !ready,
+      pending: sending,
+    });
+  }, [words.send, ready, sending]);
 
   const send = async (e: Event) => {
     e.preventDefault();
@@ -157,70 +120,59 @@ function Inbox({ repo, inboxes, tasks, submit, start, onSent }: Props) {
       ? null
       : (taskOf(`${repo}#${inboxes[kind === "idea" ? "ideas" : "bugs"]}`)?.runs[0]?.id ?? null);
     setSent(null);
-    const result = await post({ kind, title, text });
+    const result = await post({ kind, repo, title, details });
     if (result.error) return;
     setTitle("");
-    setText("");
-    setSent({ kind, url: result.url ?? null, task: result.task ?? null, before });
+    setDetails("");
+    setSent({ kind, repo, url: result.url ?? null, task: result.task ?? null, before });
     onSent();
   };
 
   const task = taskOf(sent?.task ?? null);
   const run = task?.runs[0] && task.runs[0].id !== sent?.before ? task.runs[0] : null;
-  const what = sent?.kind === "discussion" ? "the discussion" : "the comment";
+  const what = sent ? WORDS[sent.kind].what : "";
 
   return (
-    <form class={dialog.form} aria-label="Feedback" onSubmit={send}>
-      <fieldset class={dialog.fields} disabled={sending}>
-        <div class={styles.kinds} role="radiogroup" aria-label="Kind">
-          {offered.map((k) => (
-            <label key={k.kind} class={`${styles.kind} ${kind === k.kind ? styles.on : ""}`}>
-              <input
-                type="radio"
-                name="inbox-kind"
-                value={k.kind}
-                aria-label={k.label}
-                checked={kind === k.kind}
-                onChange={() => setPicked(k.kind)}
-              />
-              <span class={styles.label}>{k.label}</span>
-              <span class={styles.hint}>{k.hint}</span>
-            </label>
-          ))}
-        </div>
-        {discussion && (
-          <input
-            class={styles.line}
-            type="text"
-            aria-label="Title"
-            placeholder="Title"
-            maxLength={256}
-            value={title}
-            onInput={(e) => setTitle(e.currentTarget.value)}
-          />
-        )}
-        <textarea
-          class={styles.text}
-          rows={6}
-          aria-label={kind === "idea" ? "The idea" : kind === "bug" ? "The bug" : "The discussion"}
-          placeholder={`${
-            kind === "idea"
-              ? "What you'd like, as you would write it in an issue"
-              : kind === "bug"
-                ? "What goes wrong, and how to see it"
-                : "What you'd like to talk over: Deckhand answers in the discussion"
-          }.\n\nEnd a line with /effort high, /model or /agent to pick them for its run.`}
-          value={text}
-          onInput={(e) => setText(e.currentTarget.value)}
+    <form id={id} class={styles.form} aria-label={WORDS[kind].send} onSubmit={send}>
+      <fieldset class={styles.fields} disabled={sending}>
+        <Field
+          label="Title"
+          // Where focus starts: the kind and repo are picked already, most of the time.
+          autofocus
+          placeholder={words.title}
+          maxLength={256}
+          value={title}
+          onInput={(e) => setTitle(e.currentTarget.value)}
+        />
+        <Field
+          as="textarea"
+          label={
+            discussion ? (
+              "Details"
+            ) : (
+              <>
+                Details <span class={styles.optional}>· optional</span>
+              </>
+            )
+          }
+          rows={5}
+          placeholder={words.details}
+          help={
+            discussion
+              ? "Deckhand answers in the discussion."
+              : "The inbox run turns this into a ready-to-start issue, or asks you first. End a line with /effort high, /model or /agent to pick them for its run."
+          }
+          value={details}
+          onInput={(e) => setDetails(e.currentTarget.value)}
         />
       </fieldset>
       {error && (
-        <p class={`${dialog.said} ${dialog.failed}`} role="alert">
+        <p class={`${styles.said} ${styles.failed}`} role="alert">
           {error}
         </p>
       )}
       {sent && (
-        <p class={dialog.said} role="status">
+        <p class={styles.said} role="status">
           Sent:{" "}
           {sent.url ? (
             <a href={sent.url} target="_blank" rel="noreferrer">
@@ -234,7 +186,7 @@ function Inbox({ repo, inboxes, tasks, submit, start, onSent }: Props) {
               {" · "}
               <a
                 href={formatRoute({
-                  repo,
+                  repo: sent.repo,
                   task: task.key,
                   run: sent.kind === "discussion" ? null : (run?.id ?? null),
                 })}
@@ -249,11 +201,6 @@ function Inbox({ repo, inboxes, tasks, submit, start, onSent }: Props) {
           )}
         </p>
       )}
-      <div class={dialog.actions}>
-        <button type="submit" class={dialog.send} disabled={!ready || sending}>
-          {sending ? "Sending…" : discussion ? "Start" : "Send"}
-        </button>
-      </div>
     </form>
   );
 }

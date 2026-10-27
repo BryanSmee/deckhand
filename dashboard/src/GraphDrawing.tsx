@@ -35,6 +35,9 @@ export const targetsOf = (nodes: GraphNode[]): Target[] =>
       key: n.key,
       number: n.number!,
       label: `${nodeRef(n, false, 0)} ${shorten(n.title ?? "", 40)}`.trim(),
+      title: n.title ?? "",
+      tone: TONES[n.look],
+      status: n.status,
     }));
 
 // A node whose click answers its questions in place: a task waiting for answers, with them

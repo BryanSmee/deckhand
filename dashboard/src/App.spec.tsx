@@ -440,23 +440,30 @@ test("New request's menu: arrows move through it, Escape closes it", () => {
   fireEvent.click(button);
   expect(button.getAttribute("aria-expanded")).toBe("true");
   const items = screen.getAllByRole("menuitem");
-  expect(items.map((i) => i.textContent)).toEqual(["Idea or bug report", "Analyze runs"]);
+  expect(items.map((i) => i.textContent)).toEqual(["Idea", "Bug report", "Analyze runs"]);
   expect(document.activeElement).toBe(items[0]);
   fireEvent.keyDown(document, { key: "ArrowDown" });
   expect(document.activeElement).toBe(items[1]);
-  fireEvent.keyDown(document, { key: "ArrowDown" });
-  expect(document.activeElement).toBe(items[0]);
+  fireEvent.keyDown(document, { key: "ArrowUp" });
+  fireEvent.keyDown(document, { key: "ArrowUp" });
+  expect(document.activeElement).toBe(items[2]);
   fireEvent.keyDown(document, { key: "Escape" });
   expect(screen.queryByRole("menu")).toBeNull();
   expect(document.activeElement).toBe(button);
 });
 
 test("a dialog from New request gives focus back to New request once closed", async () => {
-  render(<Dashboard state={state} error={null} />);
+  const inboxes = { "acme/app": { ideas: 4, bugs: 5, discussions: null } };
+  render(<Dashboard state={{ ...state, inboxes }} error={null} />);
   const button = screen.getByRole("button", { name: "New request" });
   fireEvent.click(button);
-  fireEvent.click(screen.getByRole("menuitem", { name: "Idea or bug report" }));
-  expect(screen.getByRole("dialog", { name: "Send feedback" })).toBeTruthy();
+  fireEvent.click(screen.getByRole("menuitem", { name: "Bug report" }));
+  const dialog = screen.getByRole("dialog", { name: "New request" });
+  // On the kind picked, focus in its first field.
+  expect(
+    within(dialog).getByRole("button", { name: "Bug report" }).getAttribute("aria-pressed"),
+  ).toBe("true");
+  expect(document.activeElement).toBe(within(dialog).getByRole("textbox", { name: "Title" }));
   fireEvent.keyDown(document, { key: "Escape" });
   await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   expect(document.activeElement).toBe(button);

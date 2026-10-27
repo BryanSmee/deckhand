@@ -25,16 +25,16 @@ const show = (change: (t: Task) => Task = (t) => t) => {
   return screen.queryByRole("form", { name: "Open questions" }) as HTMLElement;
 };
 
-test("parsed questions: one option each, the pick ticked in advance, a note per question", async () => {
+test("parsed questions: one option card each, the pick in advance, a note per question", async () => {
   const form = show();
   const first = within(form).getByRole("group", { name: "1. Debounce" });
   expect(within(first).getByText(/How long should the search wait/)).toBeTruthy();
-  const [fast, slow] = within(first).getAllByRole("checkbox") as HTMLInputElement[];
-  // The agent's pick, marked and ticked: one tap accepts it.
+  const [fast, slow] = within(first).getAllByRole("radio") as HTMLInputElement[];
+  // The agent's pick, marked and picked: one tap accepts it.
   const pick = within(first).getByText("Recommended");
   expect(pick.closest("label")?.textContent).toMatch(/^300 ms/);
   expect([fast.checked, slow.checked]).toEqual([false, true]);
-  // One option per question: ticking another unticks it; unticked, none is.
+  // One option per question: picking another drops it; picked again, none is.
   fireEvent.click(fast);
   expect([fast.checked, slow.checked]).toEqual([true, false]);
   fireEvent.click(fast);
@@ -43,13 +43,14 @@ test("parsed questions: one option each, the pick ticked in advance, a note per 
   // A question without a title is named by its text; one without options is a text field.
   const second = within(form).getByRole("group", { name: /^2\. Should a search in flight/ });
   const free = within(form).getByRole("group", { name: "3. Empty state" });
-  expect(within(free).queryAllByRole("checkbox")).toHaveLength(0);
+  expect(within(free).queryAllByRole("radio")).toHaveLength(0);
 
   fireEvent.input(within(form).getByRole("textbox", { name: "Note on question 1" }), {
     target: { value: "Try 250 if it lags" },
   });
   // Partial answers can go: the form says which are left.
-  fireEvent.click(within(second).getByRole("checkbox", { name: /Yes, abort it/ }));
+  // The pick taken back.
+  fireEvent.click(within(second).getByRole("radio", { name: /Yes, abort it/ }));
   expect(within(form).getByText(/2 left blank: the run sees which/)).toBeTruthy();
   fireEvent.input(within(free).getByRole("textbox", { name: "Answer to question 3" }), {
     target: { value: "No results" },
@@ -61,8 +62,9 @@ test("parsed questions: one option each, the pick ticked in advance, a note per 
   const release = api.hold();
   fireEvent.click(send);
   // Disabled while sending.
-  await within(form).findByRole("button", { name: "Sending…" });
-  expect(within(first).getAllByRole("checkbox")[0].matches(":disabled")).toBe(true);
+  await waitFor(() => expect(send.getAttribute("aria-busy")).toBe("true"));
+  expect(send.textContent).toContain("Sending…");
+  expect(within(first).getAllByRole("radio")[0].matches(":disabled")).toBe(true);
   release();
   expect(await screen.findByRole("status")).toHaveProperty(
     "textContent",
@@ -88,7 +90,7 @@ test("parsed questions: one option each, the pick ticked in advance, a note per 
 test("questions not in the format: shown as written, one text box", async () => {
   const raw = "1. Should it be fast or cheap? I'd go cheap.\n2. Which colour?";
   const form = show((t) => ({ ...t, questions: { source: "issue", items: null, raw } }));
-  expect(within(form).queryAllByRole("checkbox")).toHaveLength(0);
+  expect(within(form).queryAllByRole("radio")).toHaveLength(0);
   expect(within(form).getByText(/Should it be fast or cheap\?/).textContent).toBe(raw);
   fireEvent.input(within(form).getByRole("textbox", { name: "Answers" }), {
     target: { value: "1. cheap 2. blue" },
