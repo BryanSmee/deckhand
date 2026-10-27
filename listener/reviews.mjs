@@ -1271,8 +1271,10 @@ export function createReviews({
 
   // A fix run is over (runs.mjs cleanUp(), `status` its outcome): one more review of what it
   // pushed, once per fix run (reviewedFixes), whose end starts the next fix run or stops the
-  // loop (settle()). A fix that failed or pushed nothing leaves the pull request to the
-  // maintainer: in auto-merge mode, a comment says why it isn't merged.
+  // loop (settle()). In auto-merge mode, or with more than one round: `fix: true` without
+  // `merge` reviews nothing after its one fix run, as before the rounds (issue #376). A fix that
+  // failed or pushed nothing leaves the pull request to the maintainer: in auto-merge mode, a
+  // comment says why it isn't merged.
   async function fixed({ repo, number, base, status }) {
     const key = taskKey(repo, prId(number));
     const { settings, errors } = await repoSettings(repo, base);
@@ -1280,8 +1282,9 @@ export function createReviews({
     const entry = reviewed.get(key) ?? {};
     const fixes = fixesOf(entry);
     if (!fixes || reviewedFixesOf(entry) >= fixes || entry.mergeAt || entry.waiting) return null;
-    remember(key, entry.head ?? null, { reviewedFixes: fixes });
     const mode = await mergeMode(repo, base);
+    if (!mode && roundsOf(settings) < 2) return null;
+    remember(key, entry.head ?? null, { reviewedFixes: fixes });
     const stop = async (why) => {
       if (!mode) {
         log(`${key}: no review after the fix run, ${why}`);
@@ -1322,7 +1325,14 @@ export function createReviews({
       const both = (a.at ?? 0) >= (b.at ?? 0) ? { ...b, ...a } : { ...a, ...b };
       const fixes = Math.max(fixesOf(a), fixesOf(b));
       const reviewedFixes = Math.max(reviewedFixesOf(a), reviewedFixesOf(b));
-      return { ...both, ...(fixes && { fixes }), ...(reviewedFixes && { reviewedFixes }) };
+      // The last fix run's time goes with the count.
+      const fixedAt = Math.max(a.fixedAt ?? 0, b.fixedAt ?? 0);
+      return {
+        ...both,
+        ...(fixes && { fixes }),
+        ...(fixedAt && { fixedAt }),
+        ...(reviewedFixes && { reviewedFixes }),
+      };
     };
     if (respellMap(reviewed, spelled, undefined, merge)) reviewed.save();
   }

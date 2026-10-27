@@ -355,6 +355,7 @@ test("createReviews: respelled, the later review kept with the other's fix run",
       "Org/repo#pr-5": { head: "sha-1", at: 3 },
       "org/repo#pr-6": { head: "sha-6", at: 4 },
       // The fix runs counted: the most either spelling has, whichever review came later.
+      // and the last fix run's time with it.
       "org/repo#pr-7": { head: "sha-7", at: 5, fixes: 3, fixedAt: 4, reviewedFixes: 2 },
       "Org/repo#pr-7": { head: "sha-8", at: 6, fixes: 2, fixedAt: 3, reviewedFixes: 2 },
     }),
@@ -365,7 +366,7 @@ test("createReviews: respelled, the later review kept with the other's fix run",
   assert.deepEqual(JSON.parse(readFileSync(path, "utf8")), {
     "Org/repo#pr-5": { head: "sha-1", at: 3, fixedAt: 2, fixes: 1 },
     "Org/repo#pr-6": { head: "sha-6", at: 4 },
-    "Org/repo#pr-7": { head: "sha-8", at: 6, fixes: 3, fixedAt: 3, reviewedFixes: 2 },
+    "Org/repo#pr-7": { head: "sha-8", at: 6, fixes: 3, fixedAt: 4, reviewedFixes: 2 },
   });
 });
 

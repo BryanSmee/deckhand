@@ -1014,7 +1014,8 @@ only). It widens nothing, so it needs no grant: a review is a light run with a r
 With `review.fix`, a review that requests changes on Deckhand's own pull request (opened by
 the App, on a branch of the repository, linked to its issue) starts a work run in that
 issue's session, and the listener reviews what it pushed: a loop of up to `review.fix` fix
-runs (`true`: one), capped by the operator's `MAX_FIX_ROUNDS` (5 by default). It is a normal
+runs (`true`: one, whose push is reviewed only with `review.merge`), capped by the operator's
+`MAX_FIX_ROUNDS` (5 by default). It is a normal
 work run, with the same token, push rules, secrets and mounts, so the key needs no grant. The
 loop is bounded: N fix runs and N reviews after them at most per pull request, each counted
 in `reviews.json` before it is queued, kept across restarts, so a redelivered webhook or a

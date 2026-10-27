@@ -488,12 +488,15 @@ review` gets the "unknown mode" reply. `review: true` (or a block without `on`, 
   (medium and low too), with the instruction to fix each one or say why not, rerun the checks
   and push; it pushes like any work run, and replies on the pull request. Not while the issue
   has a run going or queued (a maintainer's comment came first) or the pull request or its
-  issue has the needs-input label. Once it is over, the listener reviews the commit it pushed
-  (a review that starts by itself, so `deny_review` applies), with or without `merge`.
+  issue has the needs-input label. With `merge`, once it is over, the listener reviews the
+  commit it pushed (a review that starts by itself, so `deny_review` applies), which decides
+  the merge; without `merge`, `fix: true` stops there, as one fix run leaves nothing for
+  another review to start.
 - **`fix: <n>`**: the same, as a loop of up to `n` fix runs (1 to the operator's
   `MAX_FIX_ROUNDS`, 5 by default; `true` is 1). Round 1 is review, fix, review; each later
   round is fix, review, the fix run told which round it is and, from the second on, that the
-  earlier fix didn't clear the findings. The loop stops when:
+  earlier fix didn't clear the findings. Each fix run's push is reviewed, with or without
+  `merge`. The loop stops when:
   - **the threshold is met**: the last review has no finding above `max_allowed_severity`
     (`low`, the default: no critical, high or medium finding; `medium`: no critical or high
     one). That review is posted as a comment and starts no fix run;
@@ -506,7 +509,8 @@ review` gets the "unknown mode" reply. `review: true` (or a block without `on`, 
   - **something else takes over**: the issue has a run going or queued, or the needs-input
     label.
 
-  **Bounded**: `n` fix runs and `n` reviews after them at most per pull request, each counted
+  **Bounded**: `n` fix runs and `n` reviews after them at most per pull request (`fix: true`
+  without `merge`: one fix run, no review after it), each counted
   in `reviews.json` before it is queued, across restarts: the fix's push doesn't start a
   review by itself (only turning ready does, and the listener's review of it), and a later
   review (`/mode review`) starts no fix past the count. Other pull requests' reviews, and

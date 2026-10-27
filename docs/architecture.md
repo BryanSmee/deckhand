@@ -428,8 +428,9 @@ after `since`, when the pull request is refused. `waiting` stays saved until suc
 ends (an in-memory map keeps it to one at a time), so a listener stopped meanwhile asks again,
 and a GitHub call failing then waits for the next try. A merge is recorded
 on the task's pull request (`pulls.mjs`, `autoMerged`) for the dashboard. A fix run's end
-(an item with `reason: "review-fix"`, in `cleanUp()`) calls `reviews.fixed()`, with or
-without auto-merge: one more review of what it pushed, once per fix run (`reviewedFixes`;
+(an item with `reason: "review-fix"`, in `cleanUp()`) calls `reviews.fixed()`: in
+auto-merge mode or with more than one round (`fix: true` without `merge` stops at its fix run),
+one more review of what it pushed, once per fix run (`reviewedFixes`;
 `rereviewAt` in an old entry), whose end starts the next round or stops the loop
 (`settle()`), or, in auto-merge mode, a comment when it failed or pushed nothing. At start,
 `server.mjs` logs a warning for each repository granted `allow_auto_merge`.

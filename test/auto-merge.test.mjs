@@ -506,11 +506,11 @@ test("auto-merge: a fix run that failed or pushed nothing leaves it to the maint
   // Either way, decided: its later reviews merge nothing.
   assert.equal(await idle.settle(), null);
   assert.equal(idle.merges().length, 0);
-  // Not in auto-merge mode: no comment, and no review of a fix run that failed.
+  // Not in auto-merge mode: a fix run's end does nothing.
   const off = setup(t, { grant: false });
   await off.reviews.settle(off.run, off.posted(HIGH));
-  assert.equal(await off.reviews.fixed({ ...run, status: "error" }), null);
-  assert.equal(off.accepted.length + off.replies.length, 1);
+  assert.equal(await off.reviews.fixed({ ...run, status: "ok" }), null);
+  assert.equal(off.accepted.length, 1);
 });
 
 test("mergeRefusal: everything passes, the pull request and method come back", async () => {
@@ -1190,4 +1190,65 @@ test("fix loop: deny_merge sees the fix runs counted", async (t) => {
   assert.ok(await s.reviews.settle(s.run, s.posted(CLEAN, at("sha-3"))));
   const merge = policy.evals.find((e) => e.rule === "deny_merge");
   assert.deepEqual([merge.fixed, merge.fixes], [true, 2]);
+});
+
+test("fix loop: without review.merge, a fix that pushed nothing or a deny_review stops it", async (t) => {
+  const yaml = "review:\n  on: ready\n  fix: 3\n";
+  // Pushed nothing: the head the fix run started from.
+  const idle = setup(t, { yaml, pr: at("sha-1") });
+  await round(idle, HIGH, "sha-2");
+  assert.equal((await idle.reviews.settle(idle.run, idle.posted(HIGH, at("sha-2")))).round, 2);
+  assert.equal(await idle.reviews.fixed(done), null);
+  // deny_review of the review after fix 1.
+  const policy = policyEngine(t, {
+    ref: "trunk",
+    files: { "x.rego": "package deckhand" },
+    messages: (input, rule) => (rule === "deny_review" ? ["no second look"] : []),
+  });
+  const denied = setup(t, { yaml, pr: at("sha-1"), policies: policy.engine });
+  await denied.reviews.settle(denied.run, denied.posted(HIGH));
+  denied.over.pr = at("sha-2");
+  assert.equal(await denied.reviews.fixed(done), null);
+  for (const [s, fixes, reviews] of [
+    [idle, 2, 1],
+    [denied, 1, 0],
+  ]) {
+    assert.equal(s.accepted.filter((i) => i.reason === "review-fix").length, fixes);
+    assert.equal(s.accepted.filter((i) => i.reason === "review").length, reviews);
+    assert.equal(s.replies.length + s.merges().length, 0);
+  }
+});
+
+test("fix loop: deny_fix at round 2 stops it, said once, the round left", async (t) => {
+  const policy = policyEngine(t, {
+    ref: "trunk",
+    files: { "x.rego": "package deckhand" },
+    messages: (input, rule) =>
+      rule === "deny_fix" && input.round === 2 ? ["a human takes round 2"] : [],
+  });
+  const s = setup(t, {
+    yaml: "review:\n  on: ready\n  fix: 3\n",
+    pr: at("sha-1"),
+    policies: policy.engine,
+  });
+  await round(s, HIGH, "sha-2");
+  assert.equal(await s.reviews.settle(s.run, s.posted(HIGH, at("sha-2"))), null);
+  assert.equal(s.accepted.filter((i) => i.reason === "review-fix").length, 1);
+  assert.deepEqual(
+    s.replies.map((r) => r.text),
+    [
+      "**No fix run** (`review.fix`): the policies refuse it (`deny_fix`): `a human takes round 2`. The review's findings wait for a maintainer.",
+    ],
+  );
+  const fix = policy.evals.filter((e) => e.rule === "deny_fix").at(-1);
+  assert.deepEqual([fix.fixes, fix.round, fix.rounds], [1, 2, 3]);
+});
+
+test("fix loop: fix: true without review.merge reviews nothing after its fix run", async (t) => {
+  const s = setup(t, { yaml: FIX_ONLY, pr: at("sha-1") });
+  await s.reviews.settle(s.run, s.posted(HIGH));
+  s.over.pr = at("sha-2");
+  assert.equal(await s.reviews.fixed(done), null);
+  assert.equal(s.accepted.length, 1);
+  assert.equal(s.replies.length, 0);
 });

@@ -712,6 +712,9 @@ test("review.fix: true (one round) or a number of rounds up to MAX_FIX_ROUNDS, o
     ]);
     assert.equal(parsed.settings.review, null);
   }
+  // The threshold shows with the fix loop alone too.
+  const medium = parseRepoConfig("review:\n  fix: 3\n  max_allowed_severity: medium\n", config);
+  assert.match(reviewText(medium.settings.review), /medium findings allowed/);
   // The operator's cap.
   const two = testConfig({ MAX_FIX_ROUNDS: "2" });
   assert.equal(parseRepoConfig("review:\n  fix: 2\n", two).settings.review.fixRounds, 2);

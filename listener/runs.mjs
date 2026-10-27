@@ -733,8 +733,8 @@ export function createRuns(ctx) {
         ?.settle({ repo, number, base, settings, auto }, posted)
         .catch((error) => log(`${key}: after the review: ${error.stack ?? error}`));
     }
-    // A fix run that is over (not put back for a fallback): in auto-merge mode, the review of
-    // what it pushed (reviews.mjs fixed()).
+    // A fix run that is over (not put back for a fallback): the review of what it pushed, in
+    // auto-merge mode or with fix rounds left to run (reviews.mjs fixed()).
     const fixRun = live.handled.find(
       (item) => item.reason === "review-fix" && !task.pending.includes(item),
     );
