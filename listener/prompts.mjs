@@ -271,13 +271,20 @@ export function promptFor(
   return onboardingWork ? onboardingWorkPrompt(task) : initialPrompt(task, branches, grant);
 }
 
+// A session that goes on runs in a new container: its transcript still names files of earlier
+// runs (worktrees, screenshots, saved outputs under /tmp) that are gone, and the clone was reset
+// (entrypoint.sh reset_clone(): untracked files stashed on work runs, else removed; ignored ones
+// removed).
+const NEW_CONTAINER =
+  "This run is a new container: your session is kept, and so are /workspace's commits and branches, but its uncommitted files were stashed (`git stash list`) or removed, its ignored files removed, and /tmp and the rest of the container's own files are new (the repository's caches and mounts aside). Recreate what you need (worktrees, screenshots, servers, files) instead of reading paths from earlier runs.";
+
 // The run's first message, after its prompt: the comments. `started`: the session goes on.
 export function firstMessage({ mode, text, restored, started }) {
   const talk = mode === "brainstorm" || mode === "stop";
   const body = talk ? brainstormMessage(mode, text, restored) : text;
   // An empty follow-up (only "/model …", say) would open an interactive session instead.
   if (started) {
-    return `${body || "Continue."}\n\n(Don't post comments on GitHub yourself: your final message is posted as a reply.)`;
+    return `${body || "Continue."}\n\n(${NEW_CONTAINER} Don't post comments on GitHub yourself: your final message is posted as a reply.)`;
   }
   // A new inbox session reads its entries in the prompt (inboxPrompt()), an analysis its
   // selection (analyzePrompt()), a review what the comment asks (reviewPrompt()).
@@ -308,7 +315,7 @@ export function handoffMessage({ from, reason, result, body, branches = [] }) {
   const why = reason
     ? `${from} was working on this and stopped, as its provider failed: ${reason}.`
     : `${from} was working on this before; this comment asked for you instead (\`/agent\`).`;
-  return `${why} You take over, in a new session: sessions don't move between agents, so start from what it left. /workspace is the clone it worked in, with what it hadn't committed (\`git status\`, \`git log\`)${pushes}; GitHub has what it pushed and posted.${quoted ? `\n\nIts last message:\n\n${quoted}` : ""}${body ? `\n\nWhat it was asked:\n\n${body}` : ""}`;
+  return `${why} You take over, in a new session: sessions don't move between agents, so start from what it left. /workspace is the clone it worked in, with what it hadn't committed (\`git status\`, \`git log\`)${pushes}; GitHub has what it pushed and posted. The rest of its container (/tmp included) is gone.${quoted ? `\n\nIts last message:\n\n${quoted}` : ""}${body ? `\n\nWhat it was asked:\n\n${body}` : ""}`;
 }
 
 // The agent's first message, and when another agent takes over the issue's session
