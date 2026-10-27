@@ -151,6 +151,9 @@ Skip screenshots for changes with nothing visible (API, tests, tooling).
   request itself. The clone in /workspace is kept for the next runs: read a fork in a
   worktree under /tmp (`git fetch origin pull/<n>/head && git worktree add --detach
 /tmp/pr-<n> FETCH_HEAD`).
+- Only /workspace and your session carry over to the next runs: each run is a new container,
+  so `/tmp` and everything else are only for this one (worktrees, `.pid` files, screenshots,
+  `--body-file`s). A later run recreates what it needs instead of reading those paths.
 
 ## Network
 

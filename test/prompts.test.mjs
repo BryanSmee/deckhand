@@ -260,7 +260,16 @@ test("first message: brainstorms, follow-ups and new inbox sessions", () => {
   assert.equal(firstMessage({ mode: "work", text: "Do it", started: false }), "Do it");
   assert.match(
     firstMessage({ mode: "work", text: "", started: true }),
-    /^Continue\.\n\n\(Don't post comments on GitHub yourself/,
+    /^Continue\.\n\n\(This run is a new container: .* Don't post comments on GitHub yourself/,
+  );
+  // A session that goes on is in a new container: its old /tmp paths are gone.
+  assert.match(
+    firstMessage({ mode: "work", text: "Go on", started: true }),
+    /new container: \/workspace and your session are kept, but \/tmp and everything else/,
+  );
+  assert.doesNotMatch(
+    firstMessage({ mode: "work", text: "Do it", started: false }),
+    /new container/,
   );
   assert.equal(firstMessage({ mode: "idea", text: "An idea", started: false }), "");
   assert.match(
@@ -299,6 +308,7 @@ test("a fallback to another agent: the hand-off says who stopped, why, what it l
   );
   assert.match(text, /\/workspace is the clone it worked in, with what it hadn't committed/);
   assert.match(text, /its branch, and yours: `issue-12-…` or `feature\/x`/);
+  assert.match(text, /The rest of its container \(\/tmp included\) is gone\./);
   assert.match(text, /Its last message:\n\n> API Error: 529\n> Overloaded/);
   assert.match(text, /What it was asked:\n\nFix the login$/);
   // No result, no branch, no message (an inbox entry's are in its prompt): none of those.
@@ -597,6 +607,7 @@ test("credentials: the default one counts as tried, /agent picks one, labels nam
     { started: true },
   );
   assert.match(message, /through anthropic, API key: carry on/);
+  assert.match(message, /new container: \/workspace and your session are kept/);
 });
 
 test("the reply's footer: the provider when not the default or after a fallback, and why", () => {
