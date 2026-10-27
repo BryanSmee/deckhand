@@ -1,0 +1,148 @@
+/* Buttons: secondary by default; primary (one per view), ghost, danger, danger-solid (the
+   confirmed step of Stop); sizes small (28), default (36), touch (44); icon-only squares it. */
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 36px;
+  padding: 0 14px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1;
+  cursor: pointer;
+  white-space: nowrap;
+  text-decoration: none;
+  transition:
+    background var(--fast),
+    border-color var(--fast),
+    color var(--fast),
+    transform 0.06s;
+}
+
+.button:hover {
+  background: var(--surface-2);
+}
+
+/* Pressed: it nudges at once, before anything answers. */
+.button:active {
+  transform: translateY(1px);
+  background: var(--surface-3);
+}
+
+.button:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.primary {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: var(--on-primary);
+}
+
+.primary:hover,
+.primary:active {
+  background: var(--primary-hover);
+  border-color: var(--primary-hover);
+}
+
+.ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--text-2);
+}
+
+.ghost:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.danger {
+  color: var(--err);
+}
+
+.danger:hover {
+  background: var(--err-bg);
+  border-color: var(--err-solid);
+}
+
+.dangerSolid {
+  background: var(--err-solid);
+  border-color: var(--err-solid);
+  color: var(--on-err);
+}
+
+.dangerSolid:hover,
+.dangerSolid:active {
+  background: var(--err-solid-hover);
+  border-color: var(--err-solid-hover);
+}
+
+.small {
+  height: 28px;
+  padding: 0 10px;
+  font-size: 12.5px;
+  border-radius: var(--radius-sm);
+}
+
+.touch {
+  height: 44px;
+  padding: 0 18px;
+  font-size: 14px;
+  border-radius: 10px;
+}
+
+.icon {
+  width: 36px;
+  padding: 0;
+}
+
+.small.icon {
+  width: 28px;
+}
+
+.touch.icon {
+  width: 44px;
+}
+
+.button:disabled,
+.button[aria-disabled="true"] {
+  opacity: 0.45;
+  cursor: not-allowed;
+  transform: none;
+}
+
+/* Pending: still enabled-looking, but it waits. */
+.button[aria-busy="true"] {
+  opacity: 1;
+  cursor: progress;
+}
+
+/* Its label and its pending label in one cell: the button is as wide as the wider of the
+   two from the start, so it never jumps when it starts or stops waiting. */
+.stack {
+  display: inline-grid;
+}
+
+.layer {
+  grid-area: 1 / 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.hidden {
+  visibility: hidden;
+}
+
+/* Under a spinner: still there (its width, its name), just not seen. */
+.faded {
+  opacity: 0;
+}

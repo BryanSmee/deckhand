@@ -61,6 +61,19 @@ test("the tasks with their titles, tabs per repo, and the first live one open", 
   expect(screen.getByText(/2 running \(max 4\) · 1 queued/)).toBeTruthy();
 });
 
+test("a done task whose pull request is ready shows the ready tone, in the list and open", () => {
+  history.replaceState(null, "", `#/all?task=${encodeURIComponent("acme/api#131")}`);
+  render(<Dashboard state={state} error={null} />);
+  // Its row: the title's button (the heading has the title too).
+  const row = screen
+    .getAllByText("Dark mode for the settings page")
+    .map((el) => el.closest("button"))
+    .find(Boolean)!;
+  expect(within(row).getByText("Done").className).toContain("s-ready");
+  const head = screen.getByRole("heading", { level: 1, name: /Dark mode/ }).parentElement!;
+  expect(within(head).getByText("Done").className).toContain("s-ready");
+});
+
 test("links go to the listener's GitHub", () => {
   render(<Dashboard state={state} error={null} />);
   expect(screen.getByRole("link", { name: "acme/app" }).getAttribute("href")).toBe(

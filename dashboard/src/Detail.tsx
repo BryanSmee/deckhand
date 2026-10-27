@@ -14,6 +14,7 @@ import {
   numberOf,
   ownMode,
   runName,
+  taskTone,
   titleOf,
 } from "./format";
 import { Log } from "./Log";
@@ -107,7 +108,7 @@ export function Detail({ task: t, run: r, onRun, onBack, now, github, refresh }:
           <span class={styles.number}>{numberOf(t)}</span>
         </h1>
         <div class={styles.facts}>
-          <StateBadge state={t.state} />
+          <StateBadge state={t.state} tone={taskTone(t)} />
           <span>
             {kindName(t)}
             {own && ` · ${own} mode`}

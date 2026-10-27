@@ -17,6 +17,7 @@ import { SyncButton } from "./Sync";
 import { Tabs } from "./Tabs";
 import { TaskList } from "./TaskList";
 import type { State } from "./types";
+import { ThemeSwitch } from "./ui/ThemeSwitch";
 import styles from "./App.module.css";
 
 export function App() {
@@ -225,6 +226,7 @@ export function Dashboard({ state, error, repos, refresh }: Props) {
             Notify me
           </button>
         )}
+        <ThemeSwitch class={styles.theme} />
         {state && (
           <form class={styles.who} method="post" action="auth/logout">
             <span>@{state.user}</span>

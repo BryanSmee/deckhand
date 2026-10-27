@@ -99,14 +99,12 @@
 }
 
 .send {
-  composes: primary from "./controls.module.css";
-  padding: 0.3rem 1rem;
-  font-size: 0.82rem;
+  composes: button primary small from "./ui/Button.module.css";
 }
 
 /* Fainter than other disabled buttons: the form waits for its text. */
 .actions .send:disabled {
-  opacity: 0.5;
+  opacity: 0.35;
 }
 
 .said {

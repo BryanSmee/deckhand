@@ -13,7 +13,11 @@
 }
 
 .back {
-  composes: back from "./controls.module.css";
+  composes: button ghost small from "./ui/Button.module.css";
+}
+
+/* Weighs more than the button's own display, whichever comes first in the bundle. */
+button.back {
   display: none;
   margin: 0 0 0.5rem;
 }
@@ -154,9 +158,8 @@
 }
 
 .rerun {
-  composes: primary from "./controls.module.css";
+  composes: button primary small from "./ui/Button.module.css";
   margin-left: auto;
-  padding: 0.25rem 0.8rem;
 }
 
 /* Stop: quiet until pressed once, then the confirmation stands out. */
@@ -201,8 +204,8 @@
 }
 
 @media (max-width: 760px) {
-  .back {
-    display: inline;
+  button.back {
+    display: inline-flex;
     margin: 0 0.75rem 0 0;
   }
   .head {

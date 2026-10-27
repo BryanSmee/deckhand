@@ -109,7 +109,7 @@ pre.pre {
 }
 
 .result.needs-input {
-  border-left-color: var(--accent);
+  border-left-color: var(--input-solid);
 }
 
 .follow {
