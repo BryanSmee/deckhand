@@ -1,257 +1,171 @@
-.page {
-  height: 100%;
-  overflow: auto;
-  padding: 1rem;
-}
-
-.legend {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.4rem 1rem;
-  margin: 0 0 1.25rem;
-  padding: 0;
-  list-style: none;
-  color: var(--muted);
-  font-size: 0.78rem;
-}
-
-.legend li {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-  white-space: nowrap;
-}
-
-.swatch {
-  width: 1.4rem;
-  height: 0.9rem;
-  border: 1.5px solid var(--stroke);
-  border-radius: 4px;
-  background: var(--fill);
-}
-
-.arrowKey {
-  width: 1.4rem;
-  height: 0;
-  border-top: 1.5px solid var(--muted);
-  position: relative;
-}
-
-.arrowKey::after {
-  content: "";
-  position: absolute;
-  right: -1px;
-  top: -4.5px;
-  border: 4px solid transparent;
-  border-left: 6px solid var(--muted);
-  border-right: 0;
-}
-
+/* The board's graph (GraphDrawing.tsx): nodes as cards in their status tone, on the board's
+   dotted canvas (Board.module.css), the arrows under them, the legend floating over it. */
 .empty {
-  color: var(--muted);
+  margin: 24px;
+  color: var(--text-2);
 }
 
-.svg {
-  display: block;
+.show {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--focus);
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+/* The drawing's size at its zoom, which the canvas scrolls by; the drawing scaled in it. */
+.plane {
+  position: relative;
+  margin: 20px 24px 72px;
+}
+
+.drawing {
+  position: absolute;
+  top: 0;
+  left: 0;
+  transform-origin: 0 0;
+}
+
+.arrows {
+  position: absolute;
+  top: 0;
+  left: 0;
   overflow: visible;
-  font-size: 12px;
-}
-
-/* Each look: a fill, its border and its text, from the status tones (global.css). Needs
-   input is softly filled with a "?" badge, a brainstorm's turn an outline; ready for review is
-   its own tone. */
-.idle {
-  --fill: var(--idle-soft);
-  --stroke: var(--idle);
-  --text: var(--ink);
-}
-.input {
-  --fill: var(--input-bg);
-  --stroke: var(--input-solid);
-  --text: var(--ink);
-}
-.talk {
-  --fill: transparent;
-  --stroke: var(--input-solid);
-  --text: var(--ink);
-}
-.run {
-  --fill: var(--run-soft);
-  --stroke: var(--run);
-  --text: var(--ink);
-}
-.err {
-  --fill: var(--err-soft);
-  --stroke: var(--err);
-  --text: var(--ink);
-}
-/* As the list's "Ready for review" badge (PullRequest.module.css). */
-.ready {
-  --fill: var(--ready-bg);
-  --stroke: var(--ready-solid);
-  --text: var(--ready);
-}
-.done {
-  --fill: var(--ok-soft);
-  --stroke: var(--ok);
-  --text: var(--ink);
-}
-
-/* An action on its way: dashed, with a spinner, until the listener confirms it. */
-.pending {
-  --fill: var(--panel);
-  --stroke: var(--accent);
-  --text: var(--ink);
-}
-
-.node.pending > rect {
-  stroke-dasharray: 5 3;
-}
-
-.spinner {
-  fill: none;
-  stroke: var(--accent);
-  stroke-width: 2px;
-  stroke-dasharray: 22 10;
-  transform-box: fill-box;
-  transform-origin: center;
-  animation: spin 0.9s linear infinite;
-}
-
-@keyframes spin {
-  to {
-    transform: rotate(1turn);
-  }
-}
-
-/* A node, and the arrows into it, slide to a new place rather than jump there. */
-.node {
-  transition: transform 0.3s ease;
-}
-
-.node rect {
-  fill: var(--fill);
-  stroke: var(--stroke);
-  stroke-width: 1.5px;
-}
-
-.node.input rect,
-.node.talk rect {
-  stroke-width: 2px;
-}
-
-/* "?" and the open question count, where a pending node's spinner goes. */
-.node .badge rect {
-  fill: var(--input-solid);
-  stroke: none;
-}
-
-.node .badge text {
-  fill: var(--panel);
-  font-size: 11px;
-  font-weight: 700;
-}
-
-.node text {
-  fill: var(--text);
-}
-
-.node:hover > rect {
-  stroke-width: 2.5px;
-}
-
-.node:focus {
-  outline: none;
-}
-
-.node:focus-visible > rect {
-  stroke: var(--ink);
-  stroke-width: 2.5px;
-}
-
-.ref {
-  font-weight: 700;
-}
-
-.status {
-  font-size: 11px;
-  opacity: 0.75;
-}
-
-.title {
-  font-size: 12.5px;
+  pointer-events: none;
 }
 
 .arrow {
   transition: d 0.3s ease;
   fill: none;
-  stroke: var(--muted);
+  stroke: var(--text-3);
   stroke-width: 1.5px;
 }
 
 .head {
-  fill: var(--muted);
+  fill: var(--text-3);
 }
 
 /* What waits behind a failed issue: it stays put until that one is done. */
 .held {
-  stroke: var(--err);
+  stroke: var(--err-solid);
   stroke-dasharray: 4 3;
 }
 
 .heldHead {
-  fill: var(--err);
+  fill: var(--err-solid);
 }
 
-/* The work area: the backlog, the Brainstorm column and the graph side by side (one above the
-   other on a phone), each a drop zone. The All tab has no backlog. */
-.work {
-  display: grid;
-  grid-template-columns: minmax(15rem, 18rem) minmax(14rem, 16rem) minmax(0, 1fr);
-  gap: 1rem;
-  align-items: start;
-}
-
-.work > section {
-  position: sticky;
+/* A node: number, state and a two-line title, sliding to a new place rather than jumping. */
+.node {
+  position: absolute;
   top: 0;
-  max-height: calc(100vh - 9rem);
-  overflow: auto;
+  left: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-card);
+  background: var(--surface);
+  color: var(--text);
+  text-decoration: none;
+  transition:
+    transform 0.3s ease,
+    border-color var(--fast),
+    box-shadow var(--fast);
 }
 
-.area {
-  min-height: 14rem;
-  padding: 0.75rem;
-  border: 1.5px dashed var(--line);
-  border-radius: var(--radius);
-  overflow: auto;
+.node:hover {
+  box-shadow: var(--shadow);
 }
 
-.area.over {
-  border-color: var(--accent);
-  background: var(--accent-soft);
+.node:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 3px;
 }
 
-.hint {
-  margin: 0 0 1rem;
-  color: var(--muted);
-  font-size: 0.8rem;
+/* Those that need looking at: a border in their tone; a run's glows. */
+.loud {
+  border-color: var(--s-solid);
 }
 
-.overview {
-  grid-template-columns: minmax(14rem, 16rem) minmax(0, 1fr);
+.node.loud.s-run {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--run-solid) 18%, transparent);
 }
 
-@media (max-width: 760px) {
-  .work,
-  .overview {
-    grid-template-columns: minmax(0, 1fr);
-  }
+/* A brainstorm's turn: outlined, dashed. */
+.talk {
+  border-style: dashed;
+}
 
-  .work > section {
-    position: static;
-    max-height: 45vh;
-  }
+.done {
+  opacity: 0.65;
+}
+
+/* An action on its way: dashed, until the listener confirms it. */
+.pending {
+  border-style: dashed;
+  border-color: var(--border-strong);
+  opacity: 0.8;
+  cursor: progress;
+}
+
+.top {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  font-size: 11.5px;
+  line-height: 14px;
+}
+
+.ref {
+  flex: none;
+  color: var(--text-2);
+  font-family: var(--mono);
+  font-weight: 500;
+}
+
+.state {
+  min-width: 0;
+  margin-left: auto;
+  overflow: hidden;
+  color: var(--s-fg);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pending .state {
+  color: var(--text-2);
+}
+
+/* "?" and the open question count. */
+.badge {
+  flex: none;
+  min-width: 18px;
+  height: 16px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--input-bg);
+  color: var(--input);
+  font-size: 10.5px;
+  font-weight: 700;
+  line-height: 16px;
+  text-align: center;
+}
+
+.title {
+  display: -webkit-box;
+  overflow: hidden;
+  font-size: 12.5px;
+  font-weight: 500;
+  line-height: 17px;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow-wrap: anywhere;
 }
 
 /* A waiting issue, which can be dragged away or onto another one. */
@@ -260,122 +174,103 @@
   touch-action: none;
 }
 
+/* Being dragged: a ghost of the card, tilted, over the others. */
 .moving {
+  z-index: 2;
+  border-color: var(--focus);
+  box-shadow: var(--shadow);
   cursor: grabbing;
-  opacity: 0.85;
+  rotate: -2deg;
   transition: none;
+}
+
+/* The issue a drop would queue after. */
+.target {
+  outline: 2px dashed var(--focus);
+  outline-offset: 5px;
+}
+
+/* What letting go does: "Queue #31 after #19". */
+.dropLabel {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 3;
+  display: inline-flex;
+  align-items: center;
+  height: 24px;
+  padding: 0 9px;
+  border-radius: var(--radius-sm);
+  background: var(--primary);
+  color: var(--on-primary);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+/* The legend: a small card over the canvas's corner. */
+.legend {
+  position: absolute;
+  left: 16px;
+  bottom: 16px;
+  z-index: 4;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 14px;
+  max-width: calc(100% - 32px);
+  margin: 0;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  color: var(--text-2);
+  font-size: 12px;
+  line-height: 16px;
+  list-style: none;
+}
+
+.legend li {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.arrowKey {
+  position: relative;
+  width: 18px;
+  border-top: 1.5px solid var(--text-3);
+}
+
+.arrowKey::after {
+  content: "";
+  position: absolute;
+  right: -1px;
+  top: -5px;
+  border: 4px solid transparent;
+  border-left: 6px solid var(--text-3);
+  border-right: 0;
+}
+
+@media (max-width: 760px) {
+  .plane {
+    margin: 12px 16px 96px;
+  }
+  .legend {
+    left: 8px;
+    bottom: 8px;
+    gap: 4px 10px;
+    padding: 6px 10px;
+    font-size: 11px;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .node,
   .arrow {
     transition: none;
-  }
-
-  /* A still ring: "Sending…" says it all. */
-  .spinner {
-    animation: none;
-  }
-}
-
-/* The issue a drop would queue after. */
-.node.target > rect {
-  stroke: var(--accent);
-  stroke-width: 3px;
-  stroke-dasharray: 5 3;
-}
-
-/* "Show closed": with the legend, a little apart from it. */
-.toggle {
-  margin-left: auto;
-}
-
-.toggle label {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35rem;
-  cursor: pointer;
-}
-
-.toggle input {
-  margin: 0;
-}
-
-.show {
-  padding: 0;
-  border: 0;
-  background: none;
-  color: var(--accent);
-  font: inherit;
-  text-decoration: underline;
-  cursor: pointer;
-}
-
-/* An issue's open questions, before the drag that opened them starts or queues it. */
-.backdrop {
-  composes: backdrop from "./Dialog.module.css";
-  z-index: 20;
-  align-items: center;
-  padding: 1.5rem;
-}
-
-.dialog {
-  display: flex;
-  flex-direction: column;
-  width: min(44rem, 100%);
-  max-height: 100%;
-  overflow: hidden;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: var(--raised);
-  box-shadow: 0 12px 40px rgb(0 0 0 / 0.3);
-}
-
-.asks {
-  display: flex;
-  flex-direction: column;
-  gap: 0.15rem;
-  margin: 0;
-  padding: 1rem 1.5rem 0.75rem;
-  border-bottom: 1px solid var(--line);
-  background: var(--panel);
-  font-size: 0.85rem;
-  color: var(--muted);
-  overflow-wrap: anywhere;
-}
-
-.asks b {
-  color: var(--ink);
-  font-size: 1rem;
-}
-
-.details {
-  align-self: flex-start;
-  margin-top: 0.25rem;
-  color: var(--accent);
-  font-size: 0.8rem;
-}
-
-/* What the answers sent from a node's click said. */
-.said {
-  margin: 0 0 1rem;
-  padding: 0.4rem 0.6rem;
-  border-radius: 6px;
-  background: var(--ok-soft);
-  color: var(--ink);
-  font-size: 0.8rem;
-}
-
-@media (max-width: 760px) {
-  .backdrop {
-    align-items: stretch;
-    padding: 0;
-  }
-  .dialog {
-    border: 0;
-    border-radius: 0;
-  }
-  .asks {
-    padding: 0.75rem 1rem;
   }
 }

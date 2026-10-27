@@ -6,8 +6,8 @@
 // Sizes in SVG units (CSS pixels). A phone's columns are narrower: a short chain still fits
 // its width, a longer one scrolls sideways.
 export const SIZES = {
-  wide: { w: 232, h: 56, layerGap: 56, rowGap: 16 },
-  narrow: { w: 148, h: 56, layerGap: 28, rowGap: 12 },
+  wide: { w: 208, h: 78, layerGap: 48, rowGap: 38 },
+  narrow: { w: 148, h: 78, layerGap: 28, rowGap: 24 },
 };
 // Between two groups of linked issues, and before the column of the others.
 const GROUP_GAP = 32;
@@ -143,8 +143,10 @@ function settle(
       if (late) changed = placed.delete(k);
     }
   }
+  // Closer than the closest two of a fresh layout: a row apart, or two groups.
+  const near = Math.min(rowGap, GROUP_GAP);
   const clash = (a: Box, b: Box) =>
-    a.key !== b.key && Math.abs(a.x - b.x) < w + rowGap && Math.abs(a.y - b.y) < h + rowGap;
+    a.key !== b.key && Math.abs(a.x - b.x) < w + near && Math.abs(a.y - b.y) < h + near;
   const free = (b: Box) => ![...placed.values()].some((o) => clash(o, b));
   // Two on the same place (a phone's smaller nodes, say): the first one in the board's order
   // keeps it.

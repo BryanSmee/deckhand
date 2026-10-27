@@ -1,5 +1,5 @@
-// What the graph page's drags carry: a backlog card, a brainstorm card, or a GitHub link
-// dragged from anywhere (WorkArea.tsx, Brainstorms.tsx, Graph.tsx).
+// What the board's drags carry: a work queue card (the backlog's, a brainstorm's), or a GitHub
+// link dragged from anywhere (WorkQueue.tsx, Board.tsx).
 
 // A backlog card's payload: the issue's number (its link goes along, as text).
 export const ISSUE_TYPE = "application/x-deckhand-issue";
@@ -9,11 +9,22 @@ export const BRAINSTORM_TYPE = "application/x-deckhand-brainstorm";
 // A link dragged from a page, GitHub's included.
 export const LINK_TYPES = ["text/uri-list", "text/plain"];
 
+// The card being dragged, which a drag over can't read from the data: the board says what a
+// drop would do with it ("Queue #31 after #19"). Null: none of ours (a link, or nothing).
+let carried: { type: string; number: number } | null = null;
+export const carriedCard = () => carried;
+
 // A card's drag: `type` and its issue's number, and its link for anywhere else.
 export const dragOf = (type: string, number: number, url: string) => (e: DragEvent) => {
   e.dataTransfer?.setData(type, String(number));
   e.dataTransfer?.setData("text/uri-list", url);
   if (e.dataTransfer) e.dataTransfer.effectAllowed = "copyMove";
+  carried = { type, number };
+};
+
+// Its end, dropped or not.
+export const dragEnded = () => {
+  carried = null;
 };
 
 // The issue a drop carries: a card's (`types`, the first one there), or one of `repo`'s from

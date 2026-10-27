@@ -194,6 +194,7 @@ export const ChevronDown = stroke(2, <path d="M6 9l6 6 6-6" />);
 export const ChevronUp = stroke(2, <path d="M18 15l-6-6-6 6" />);
 export const Close = stroke(2, <path d="M6 6l12 12M18 6L6 18" />);
 export const Check = stroke(2, <path d="M5 12l5 5 9-10" />);
+export const Pencil = stroke(1.8, <path d="M4 20h4L19 9l-4-4L4 16zM13.5 6.5l4 4" />);
 export const Alert = stroke(
   2,
   <>

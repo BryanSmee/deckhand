@@ -35,3 +35,51 @@ export function fallbackName(keys: string[]): string {
   const first = `#${keys[0].slice(keys[0].lastIndexOf("#") + 1).replace(/^pr-/, "")}`;
   return keys.length > 1 ? `${first} and ${keys.length - 1} more` : first;
 }
+
+// The lanes of the board's `nodes`: each group of issues linked by `edges` ("/after"), in the
+// order of its first node, and in the order it runs: an issue after what it waits for (the
+// longest path; a cycle stays in the nodes' order). `alone`: the nodes no arrow touches.
+export function lanesOf<N extends { key: string }>(
+  nodes: N[],
+  edges: { from: string; to: string }[],
+): { lanes: N[][]; alone: N[] } {
+  const byKey = new Map(nodes.map((n) => [n.key, n]));
+  const links = edges.filter((e) => e.from !== e.to && byKey.has(e.from) && byKey.has(e.to));
+  const near = new Map(nodes.map((n) => [n.key, [] as string[]]));
+  for (const e of links) {
+    near.get(e.from)!.push(e.to);
+    near.get(e.to)!.push(e.from);
+  }
+  const seen = new Set<string>();
+  const lanes: N[][] = [];
+  const alone: N[] = [];
+  for (const n of nodes) {
+    if (seen.has(n.key)) continue;
+    if (!near.get(n.key)!.length) {
+      alone.push(n);
+      continue;
+    }
+    const group = new Set([n.key]);
+    for (const k of group) for (const m of near.get(k)!) group.add(m);
+    for (const k of group) seen.add(k);
+    // Each issue a step after the furthest of what it waits for: at most one pass per issue.
+    const step = new Map([...group].map((k) => [k, 0]));
+    for (let i = 0; i < group.size; i++) {
+      for (const e of links) {
+        if (
+          group.has(e.to) &&
+          step.get(e.to)! < step.get(e.from)! + 1 &&
+          step.get(e.from)! < group.size
+        )
+          step.set(e.to, step.get(e.from)! + 1);
+      }
+    }
+    const order = nodes.filter((m) => group.has(m.key));
+    lanes.push(
+      order.sort(
+        (a, b) => step.get(a.key)! - step.get(b.key)! || nodes.indexOf(a) - nodes.indexOf(b),
+      ),
+    );
+  }
+  return { lanes, alone };
+}

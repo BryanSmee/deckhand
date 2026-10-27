@@ -1,16 +1,22 @@
-// What the graph draws (Graph.tsx): its nodes (each one's ref, status, "?" badge and title)
-// and the arrows between them, or why there are none.
+// What the board's graph draws (Board.tsx): its nodes (each one's number, state, "?" badge and
+// two-line title, in its status tone) on a dotted canvas, the orthogonal arrows between them,
+// and while something is dragged, what letting it go does. Or why there is nothing to draw.
 import type { JSX, RefObject } from "preact";
 import type { Target } from "./Chooser";
 import { kindName, numberOf, plural, shortRepo, shorten } from "./format";
 import type { NodeDrag } from "./graphHooks";
 import type { Layout } from "./graphLayout";
-import type { GraphNode } from "./graphModel";
+import { type GraphNode, LOUD, TONES } from "./graphModel";
 import { formatRoute } from "./route";
 import type { Edge, Task } from "./types";
+import { StatusDot, toneClass } from "./ui/Status";
 import styles from "./Graph.module.css";
 
-// "#12", "PR #3", with the repo on the All tab when there is room: the number always shows.
+// Room around the drawing, for the focus ring and the arrows' ends.
+export const PAD = 8;
+
+// "#12", "PR #3", with the repo before it when asked and there is room: the number always
+// shows.
 export function nodeRef(
   n: Pick<GraphNode, "number" | "kind" | "repo">,
   showRepo: boolean,
@@ -36,33 +42,56 @@ export const targetsOf = (nodes: GraphNode[]): Target[] =>
 export const asks = (n: GraphNode): n is GraphNode & { task: Task } =>
   n.look === "input" && !!n.task?.questions;
 
-// The "?" badge's width: with the open question count, or alone (questions not in the format).
-const badgeWidth = (n: GraphNode) => (n.task?.questions?.items ? 28 : 16);
+// What a node's link opens: its task, else its issue on GitHub.
+export const nodeHref = (n: GraphNode, repo: string | null, github: string) =>
+  n.task ? formatRoute({ repo, task: n.key, run: null }) : `${github}/${n.repo}/issues/${n.number}`;
 
-// An arrow's head, and a held one's (what waits behind a failed issue).
-export function ArrowMarkers() {
+// Its name for screen readers: "#24 Its title: Waiting, waits for 2 issues".
+export function nodeLabel(n: GraphNode, waits: number): string {
+  const count = n.task?.questions?.items?.length;
   return (
-    <defs>
-      {[
-        ["arrow", styles.head],
-        ["arrow-held", `${styles.head} ${styles.heldHead}`],
-      ].map(([id, look]) => (
-        <marker
-          key={id}
-          id={id}
-          viewBox="0 0 8 8"
-          refX="8"
-          refY="4"
-          markerWidth="8"
-          markerHeight="8"
-          orient="auto"
-        >
-          <path d="M0 0L8 4L0 8z" class={look} />
-        </marker>
-      ))}
-    </defs>
+    `${nodeRef(n, false, 0)} ${n.title ?? ""}`.trim() +
+    `: ${n.status}` +
+    (count ? `, ${plural(count, "question")}` : "") +
+    (waits ? `, waits for ${plural(waits, "issue")}` : "")
   );
 }
+
+// A node's classes for its look: its tone, a border when it needs looking at, dimmed when
+// done, dashed while an action on it is on its way. The lanes' compact nodes share them.
+export function lookClasses(n: GraphNode, s: Record<string, string>): string {
+  return [
+    toneClass(TONES[n.look]),
+    LOUD.includes(n.look) && s.loud,
+    n.look === "done" && s.done,
+    n.look === "pending" && s.pending,
+    n.look === "talk" && s.talk,
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
+// The "?" badge: with the open question count, or alone (questions not in the format).
+export function QuestionBadge({ n, class: className }: { n: GraphNode; class: string }) {
+  if (!asks(n)) return null;
+  const count = n.task.questions?.items?.length;
+  return (
+    <span class={className} aria-hidden="true">
+      {count ? `?${count}` : "?"}
+    </span>
+  );
+}
+
+// What clicking a node does: open its questions in place (`onAsk`), else follow its link.
+// Ctrl/Cmd, Shift or a middle click always follow it, to its detail page.
+export const nodeClick =
+  (onAsk: (() => void) | undefined, justDragged: () => boolean = () => false) =>
+  (e: MouseEvent) => {
+    if (justDragged()) return e.preventDefault();
+    if (!onAsk || e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey) return;
+    e.preventDefault();
+    onAsk();
+  };
 
 interface Props {
   n: GraphNode;
@@ -71,10 +100,6 @@ interface Props {
   y: number;
   w: number;
   h: number;
-  // The characters a line of it holds.
-  chars: number;
-  // The All tab: the ref says the repo.
-  showRepo: boolean;
   href: string;
   // How many issues it waits for.
   waits: number;
@@ -93,8 +118,6 @@ export function GraphNodeView({
   y,
   w,
   h,
-  chars,
-  showRepo,
   href,
   waits,
   extra,
@@ -102,67 +125,63 @@ export function GraphNodeView({
   justDragged,
   handlers,
 }: Props) {
-  const badge = asks(n) ? badgeWidth(n) : 0;
-  // "Needs input, PR ready" where it fits, its first part where it doesn't.
-  const room = chars - Math.ceil(badge / 7);
-  const status = n.status.length + 5 > room ? n.status.split(",")[0] : n.status;
-  const ref = nodeRef(n, showRepo, room - status.length - 1);
-  const count = n.task?.questions?.items?.length;
-  const right = n.look === "pending" ? 30 : badge ? badge + 16 : 12;
-  // The bold ref takes about 7.5px a character, the status 6: on a phone's narrow node the
-  // status is left to its tooltip and label (the look says it) rather than drawn over it.
-  const fits = 12 + ref.length * 7.5 + 8 + status.length * 6 <= w - right;
   const title = n.title ?? `${kindName(n)} ${nodeRef(n, false, 0)}`;
-  const label =
-    `${ref} ${n.title ?? ""}`.trim() +
-    `: ${n.status}` +
-    (count ? `, ${plural(count, "question")}` : "") +
-    (waits ? `, waits for ${plural(waits, "issue")}` : "");
   return (
     <a
       href={href}
       role="listitem"
-      aria-label={label}
-      class={`${styles.node} ${styles[n.look]} ${extra}`}
+      aria-label={nodeLabel(n, waits)}
+      title={`${title} (${n.status})`}
+      class={`${styles.node} ${lookClasses(n, styles)} ${extra}`}
       // Placed with a transform, which slides (Graph.module.css) when the place changes.
-      style={{ transform: `translate(${x}px, ${y}px)` }}
+      style={{ transform: `translate(${x}px, ${y}px)`, width: `${w}px`, height: `${h}px` }}
       aria-haspopup={onAsk ? "dialog" : undefined}
-      onClick={(e) => {
-        if (justDragged()) return e.preventDefault();
-        // Ctrl/Cmd, Shift or a middle click follow the link to its detail page.
-        if (!onAsk || e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey) return;
-        e.preventDefault();
-        onAsk();
-      }}
+      onClick={nodeClick(onAsk, justDragged)}
       {...handlers}
       {...(n.task ? {} : { target: "_blank", rel: "noreferrer" })}
     >
-      <title>{`${title} (${n.status})`}</title>
-      <rect width={w} height={h} rx="8" />
-      <text x={12} y={21} class={styles.ref}>
-        {ref}
-      </text>
-      {n.look === "pending" && (
-        <circle class={styles.spinner} cx={w - 18} cy={17} r={5} aria-hidden="true" />
-      )}
-      {badge > 0 && (
-        <g class={styles.badge} aria-hidden="true">
-          <rect x={w - 10 - badge} y={9} width={badge} height={16} rx={8} />
-          <text x={w - 10 - badge / 2} y={21} text-anchor="middle">
-            {count ? `?${count}` : "?"}
-          </text>
-        </g>
-      )}
-      {fits && (
-        <text x={w - right} y={21} class={styles.status} text-anchor="end">
-          {status}
-        </text>
-      )}
-      <text x={12} y={41} class={styles.title}>
-        {shorten(title, chars)}
-      </text>
+      <span class={styles.top}>
+        <StatusDot tone={TONES[n.look]} pulse={n.look === "run"} />
+        <span class={styles.ref}>{nodeRef(n, false, 0)}</span>
+        <span class={styles.state}>{n.status}</span>
+        <QuestionBadge n={n} class={styles.badge} />
+      </span>
+      <span class={styles.title}>{title}</span>
     </a>
   );
+}
+
+// An arrow's head, and a held one's (what waits behind a failed issue).
+function ArrowMarkers() {
+  return (
+    <defs>
+      {[
+        ["arrow", styles.head],
+        ["arrow-held", `${styles.head} ${styles.heldHead}`],
+      ].map(([id, look]) => (
+        <marker
+          key={id}
+          id={id}
+          viewBox="0 0 8 10"
+          refX="7"
+          refY="5"
+          markerWidth="7"
+          markerHeight="10"
+          markerUnits="userSpaceOnUse"
+          orient="auto"
+        >
+          <path d="M0 0L8 5L0 10z" class={look} />
+        </marker>
+      ))}
+    </defs>
+  );
+}
+
+// What letting the drag go does, and where it says so: over its target, or at the pointer.
+export interface DropLabel {
+  text: string;
+  x: number;
+  y: number;
 }
 
 interface DrawingProps {
@@ -174,11 +193,14 @@ interface DrawingProps {
   hidden: number;
   onShowClosed: (show: boolean) => void;
   shape: Layout;
-  svg: RefObject<SVGSVGElement>;
-  repo: string | null;
+  // The drawing's own box: where a drop lands is read from it.
+  drawing: RefObject<HTMLDivElement>;
+  zoom: number;
+  repo: string;
   github: string;
-  // The node a drop would queue after.
+  // The node a drop would queue after, and what the drop does.
   target: string | null;
+  label: DropLabel | null;
   // Which nodes move, and the drag of one (graphHooks.ts useNodeDrag()).
   movable: (n: GraphNode) => boolean;
   drag: {
@@ -198,10 +220,12 @@ export function GraphDrawing({
   hidden,
   onShowClosed,
   shape,
-  svg,
+  drawing,
+  zoom,
   repo,
   github,
   target,
+  label,
   movable,
   drag,
   onAsk,
@@ -218,76 +242,87 @@ export function GraphDrawing({
     );
   }
   if (!nodes.length) {
-    return (
-      <p class={styles.empty}>No issues here yet.{repo ? " Drop one here to start it." : ""}</p>
-    );
+    return <p class={styles.empty}>No issues here yet. Drop one here to start it.</p>;
   }
   const byKey = new Map(nodes.map((n) => [n.key, n]));
-  const chars = Math.floor((shape.w - 24) / 7);
+  const width = shape.width + 2 * PAD;
+  const height = shape.height + 2 * PAD;
   // In an order that doesn't change as nodes come and go, so none is moved in the page (which
-  // would cut its slide short); the one pressed last goes last: SVG paints in order.
+  // would cut its slide short); the one pressed last goes last, on top.
   const boxes = [...shape.boxes].sort(
     (a, b) =>
       Number(a.key === drag.onTop) - Number(b.key === drag.onTop) ||
       (a.key < b.key ? -1 : a.key > b.key ? 1 : 0),
   );
   return (
-    <svg
-      ref={svg}
-      class={styles.svg}
-      width={shape.width + 8}
-      height={shape.height + 8}
-      viewBox={`-4 -4 ${shape.width + 8} ${shape.height + 8}`}
-      role="list"
-      aria-label={repo ? `Issues of ${repo}` : "Issues"}
-    >
-      <ArrowMarkers />
-      {shape.arrows.map((a) => {
-        // Behind a failed issue, the chain holds: its arrows say so.
-        const held = byKey.get(a.from)?.look === "err";
-        return (
-          <path
-            key={`${a.from} ${a.to}`}
-            d={a.d}
-            // As a style too, where browsers can slide it along with its nodes.
-            style={{ d: `path("${a.d}")` }}
-            class={`${styles.arrow} ${held ? styles.held : ""}`}
-            marker-end={held ? "url(#arrow-held)" : "url(#arrow)"}
-          />
-        );
-      })}
-      {boxes.map((b) => {
-        const n = byKey.get(b.key)!;
-        const moving = drag.moving?.key === n.key ? drag.moving : null;
-        return (
-          <GraphNodeView
-            key={n.key}
-            n={n}
-            x={b.x + (moving?.dx ?? 0)}
-            y={b.y + (moving?.dy ?? 0)}
-            w={shape.w}
-            h={shape.h}
-            chars={chars}
-            showRepo={!repo}
-            href={
-              n.task
-                ? formatRoute({ repo, task: n.key, run: null })
-                : `${github}/${n.repo}/issues/${n.number}`
-            }
-            waits={edges.filter((e) => e.to === n.key).length}
-            extra={[
-              movable(n) && styles.movable,
-              target === n.key && !moving && styles.target,
-              moving && styles.moving,
-            ]
-              .filter(Boolean)
-              .join(" ")}
-            onAsk={asks(n) ? () => onAsk(n.task) : undefined}
-            justDragged={drag.justDragged}
-            handlers={movable(n) ? drag.handlers(n) : {}}
-          />
-        );
-      })}
-    </svg>
+    // Sized as the drawing looks at this zoom, so the canvas scrolls by what shows.
+    <div class={styles.plane} style={{ width: `${width * zoom}px`, height: `${height * zoom}px` }}>
+      <div
+        ref={drawing}
+        class={styles.drawing}
+        style={{ width: `${width}px`, height: `${height}px`, transform: `scale(${zoom})` }}
+        role="list"
+        aria-label={`Issues of ${repo}`}
+      >
+        <svg
+          class={styles.arrows}
+          width={width}
+          height={height}
+          viewBox={`${-PAD} ${-PAD} ${width} ${height}`}
+          aria-hidden="true"
+        >
+          <ArrowMarkers />
+          {shape.arrows.map((a) => {
+            // Behind a failed issue, the chain holds: its arrows say so.
+            const held = byKey.get(a.from)?.look === "err";
+            return (
+              <path
+                key={`${a.from} ${a.to}`}
+                d={a.d}
+                // As a style too, where browsers can slide it along with its nodes.
+                style={{ d: `path("${a.d}")` }}
+                class={`${styles.arrow} ${held ? styles.held : ""}`}
+                marker-end={held ? "url(#arrow-held)" : "url(#arrow)"}
+              />
+            );
+          })}
+        </svg>
+        {boxes.map((b) => {
+          const n = byKey.get(b.key)!;
+          const moving = drag.moving?.key === n.key ? drag.moving : null;
+          return (
+            <GraphNodeView
+              key={n.key}
+              n={n}
+              x={PAD + b.x + (moving?.dx ?? 0) / zoom}
+              y={PAD + b.y + (moving?.dy ?? 0) / zoom}
+              w={shape.w}
+              h={shape.h}
+              href={nodeHref(n, repo, github)}
+              waits={edges.filter((e) => e.to === n.key).length}
+              extra={[
+                movable(n) && styles.movable,
+                target === n.key && !moving && styles.target,
+                moving && styles.moving,
+              ]
+                .filter(Boolean)
+                .join(" ")}
+              onAsk={asks(n) ? () => onAsk(n.task) : undefined}
+              justDragged={drag.justDragged}
+              handlers={movable(n) ? drag.handlers(n) : {}}
+            />
+          );
+        })}
+        {label && (
+          <span
+            class={styles.dropLabel}
+            style={{ transform: `translate(${PAD + label.x}px, ${PAD + label.y}px)` }}
+            aria-hidden="true"
+          >
+            {label.text}
+          </span>
+        )}
+      </div>
+    </div>
   );
 }

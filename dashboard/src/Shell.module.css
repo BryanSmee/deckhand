@@ -389,6 +389,14 @@
   color: var(--text);
 }
 
+/* A page's own controls, at the end of its header. */
+.controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-left: auto;
+}
+
 /* The phone's top bar. */
 .topbar {
   display: flex;

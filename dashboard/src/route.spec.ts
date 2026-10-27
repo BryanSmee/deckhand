@@ -16,13 +16,12 @@ test("tasks and runs in the address, both ways", () => {
   expect(formatRoute({ repo: null, task: null, run: "x" })).toBe("#/");
 });
 
-test("a repository's board, and every repository's", () => {
+test("a repository's board; All has none, its tasks instead", () => {
   const route = { repo: "org/app", ...none, page: "board" as const };
   expect(formatRoute(route)).toBe("#/org/app/board");
   expect(parseRoute("#/org/app/board")).toEqual(route);
-  const all = { ...route, repo: null };
-  expect(formatRoute(all)).toBe("#/board");
-  expect(parseRoute("#/board")).toEqual(all);
+  expect(formatRoute({ ...route, repo: null })).toBe("#/");
+  expect(parseRoute("#/board")).toEqual({ repo: null, ...none });
 });
 
 test("settings: the repositories, and one's config", () => {
@@ -44,8 +43,9 @@ test.each([
   ["#/repositories", "#/settings/repositories"],
   ["#/repositories/org/app", "#/settings/repositories/org/app"],
   ["#/graph/org/app", "#/org/app/board"],
-  // Every repository's graph, until the Overview replaces it.
-  ["#/graph", "#/board"],
+  // Every repository's graph, gone: every repository's tasks, until the Overview.
+  ["#/graph", "#/"],
+  ["#/board", "#/"],
   // From before the tabs.
   ["#task=org%2Frepo%2312&run=r1", "#/?task=org%2Frepo%2312&run=r1"],
   ["", "#/"],

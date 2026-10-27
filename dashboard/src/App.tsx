@@ -1,14 +1,15 @@
 // The dashboard: the shell (Shell.tsx: the sidebar, or a phone's bars) around a page: a repo's
-// tasks (or every repo's) filtered by state, the open task and its log; a repo's board, the
-// graph of what waits for what; or Settings, the repositories page, where onboarding starts
-// and each one's config shows.
-// What is shown lives in the address (route.ts); the state chip, the graph's "Show closed",
-// the repo last open and the sidebar's rail are kept on this device.
+// tasks (or every repo's) filtered by state, the open task and its log; a repo's board, its
+// work queue and what waits for what (Board.tsx); or Settings, the repositories page, where
+// onboarding starts and each one's config shows.
+// What is shown lives in the address (route.ts); the state chip, the board's view and "Show
+// closed", the repo last open and the sidebar's rail are kept on this device. On the board, the
+// sidebar is a rail unless expanded there.
 import { useEffect, useState } from "preact/hooks";
 import { AnalyzeDialog, analysisRepos } from "./Analyze";
 import { type RepoList, useAppState, useRepos } from "./api";
+import { Board, type BoardView } from "./Board";
 import { Detail } from "./Detail";
-import { Graph } from "./Graph";
 import { InboxDialog } from "./Inbox";
 import { type ChipId, CHIPS, inChip, isLive, matchesSearch, repoTabs, sameRepo } from "./format";
 import { useReadyNotifications } from "./notify";
@@ -101,6 +102,13 @@ export function Dashboard({ state, error, repos, refresh }: Props) {
   const [searchOpen, setSearchOpen] = useState(false);
   const [showClosed, setShowClosed] = useState(() => stored("graphClosed") === "1");
   const [rail, setRail] = useState(() => stored("sidebar") === "rail");
+  // The board's rail, expanded there for a while: not kept.
+  const [boardRail, setBoardRail] = useState(true);
+  // Graph or Lanes; a phone's lanes unless picked.
+  const [view, setView] = useState<BoardView | null>(() => {
+    const saved = stored("boardView");
+    return saved === "graph" || saved === "lanes" ? saved : null;
+  });
   // The last repo open here, which All doesn't clear: the phone's Tasks and Board go there.
   const [lastRepo, setLastRepo] = useState(() => stored("repo") || null);
   // New request's dialogs: an idea or a bug report for a repo's inbox (Feedback), or a run
@@ -147,8 +155,13 @@ export function Dashboard({ state, error, repos, refresh }: Props) {
     setChip(next);
   };
   const selectRail = (next: boolean) => {
+    if (onBoard) return setBoardRail(next);
     store("sidebar", next ? "rail" : "");
     setRail(next);
+  };
+  const selectView = (next: BoardView) => {
+    store("boardView", next);
+    setView(next);
   };
 
   const notify = useReadyNotifications(state);
@@ -164,23 +177,36 @@ export function Dashboard({ state, error, repos, refresh }: Props) {
   return (
     <div class={`${styles.app} ${task ? styles.reading : ""}`}>
       {wide ? (
-        <Sidebar {...shell} repos={repos} rail={rail} onRail={selectRail} notify={notify} />
+        <Sidebar
+          {...shell}
+          repos={repos}
+          rail={onBoard ? boardRail : rail}
+          onRail={selectRail}
+          notify={notify}
+        />
       ) : (
         <TopBar {...shell} onSearch={onTasks && !task ? toggleSearch : undefined} />
       )}
       <div class={styles.content}>
-        {wide && <PageHeader route={route} github={github} />}
-        {onBoard ? (
-          <main class={styles.page}>
-            <Graph
+        {wide && !(onBoard && route.repo) && <PageHeader route={route} github={github} />}
+        {onBoard && route.repo ? (
+          <div class={styles.page}>
+            <Board
               state={state}
               refresh={refresh}
               repo={route.repo}
               narrow={!wide}
               showClosed={showClosed}
               onShowClosed={selectShowClosed}
+              view={view ?? (wide ? "graph" : "lanes")}
+              onView={selectView}
+              header={(controls) => (
+                <PageHeader route={route} github={github}>
+                  {controls}
+                </PageHeader>
+              )}
             />
-          </main>
+          </div>
         ) : onSettings ? (
           <main class={styles.page}>
             {repos && (
