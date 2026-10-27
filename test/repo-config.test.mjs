@@ -8,6 +8,7 @@ import {
   customMode,
   defaultSettings,
   engineCacheVolume,
+  fileLines,
   effectiveConfig,
   legacySandboxName,
   loadRepoSettings,
@@ -693,4 +694,46 @@ test("review: a repo's own mode can't take the name, the error says what to do",
     "modes.Review: review is built in: remove it and turn it on with a top-level `review:` block, or rename it",
   ]);
   assert.deepEqual(settings.modes, {});
+});
+
+test("fileLines: each error and warning at the line of its key, mounts at their item", () => {
+  const text = [
+    "users: [alice]",
+    "modes:",
+    "  review: { agent: codex }",
+    "caches: [relative]",
+    "mounts:",
+    "  - path: /srv/a",
+    "  - /srv/b",
+  ].join("\n");
+  const { errors, warnings } = parseRepoConfig(text, testConfig({ users: ["alice"] }));
+  const { lineOf, mountLine, locate } = fileLines(text);
+  const located = errors.map(locate);
+  assert.deepEqual(
+    located.find((e) => e.key === "modes.review"),
+    {
+      key: "modes.review",
+      message: errors.find((e) => e.startsWith("modes.review: ")).slice("modes.review: ".length),
+      line: 3,
+    },
+  );
+  // A key the file only has a parent of: the parent's line.
+  assert.equal(located.find((e) => e.key.startsWith("caches")).line, 4);
+  assert.deepEqual(warnings.map(locate), []);
+  assert.equal(lineOf("users"), 1);
+  assert.equal(lineOf("model"), null);
+  assert.deepEqual([mountLine("/srv/a"), mountLine("/srv/b"), mountLine("/srv/c")], [6, 7, null]);
+  // A syntax error: its own line; what isn't about a key, none.
+  const broken = fileLines("users: [a\nmodel: x\n");
+  const [syntax] = parseRepoConfig("users: [a\n", testConfig()).errors;
+  assert.deepEqual(broken.locate(syntax), {
+    key: null,
+    message: "flow […] must fit on one line",
+    line: 1,
+  });
+  assert.deepEqual(broken.locate("users not in ALLOWED_USERS, ignored: carol"), {
+    key: null,
+    message: "users not in ALLOWED_USERS, ignored: carol",
+    line: null,
+  });
 });

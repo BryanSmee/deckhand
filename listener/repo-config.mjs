@@ -92,6 +92,42 @@ export function parseRepoConfig(text, config) {
   return { settings, errors, warnings };
 }
 
+// Where things are in the file's text, for the dashboard, each a line number or null when the
+// file doesn't say: lineOf(key), the line of a dotted key ("modes.review.agent") or of its
+// closest parent the file has; mountLine(path), that of the mount request for `path`;
+// locate(problem), one of parseRepoConfig()'s errors or warnings as { key, message, line }.
+export function fileLines(text) {
+  const where = new Map();
+  let raw = null;
+  try {
+    raw = parseYaml(text, where);
+  } catch {
+    // A syntax error: its own message has its line, the keys before it are noted.
+  }
+  const lineOf = (key) => {
+    for (let path = key; path; path = path.slice(0, Math.max(0, path.lastIndexOf(".")))) {
+      if (where.has(path)) return where.get(path);
+    }
+    return null;
+  };
+  const mountLine = (path) => {
+    const mounts = isMap(raw) && Array.isArray(raw.mounts) ? raw.mounts : [];
+    const i = mounts.findIndex((m) => (isMap(m) ? m.path : m) === path);
+    return i < 0 ? null : (where.get(`mounts.${i}`) ?? null);
+  };
+  const locate = (problem) => {
+    const syntax = /^\S+: line (\d+): (.*)$/s.exec(problem);
+    if (problem.startsWith(`${CONFIG_FILE}: `)) {
+      if (syntax) return { key: null, message: syntax[2], line: Number(syntax[1]) };
+      return { key: null, message: problem.slice(CONFIG_FILE.length + 2), line: null };
+    }
+    const keyed = /^([\w.-]+): (.*)$/s.exec(problem);
+    if (!keyed) return { key: null, message: problem, line: null };
+    return { key: keyed[1], message: keyed[2], line: lineOf(keyed[1]) };
+  };
+  return { lineOf, mountLine, locate };
+}
+
 // Non-empty text, else an error.
 function text(key, value, fail) {
   if (typeof value === "string" && value.trim()) return value.trim();

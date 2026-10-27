@@ -25,7 +25,13 @@ import {
   refusedByGrants,
 } from "./grants.mjs";
 import { appSettingsUrl } from "./github-app.mjs";
-import { CONFIG_FILE, defaultSettings, parseRepoConfig, readRepoFile } from "./repo-config.mjs";
+import {
+  CONFIG_FILE,
+  defaultSettings,
+  fileLines,
+  parseRepoConfig,
+  readRepoFile,
+} from "./repo-config.mjs";
 import { sameRepo } from "./events.mjs";
 import { effectiveView } from "./repo-view.mjs";
 import { paginate } from "./github.mjs";
@@ -420,6 +426,9 @@ export function createRepoApi({
     // What stops its merges: the grant, the repository's visibility (the parse's own warning
     // already says what its file lacks).
     const merging = grant ? autoMergeProblems(grant, settings, info.private === true) : [];
+    // What the file says, with the line each error, warning, setting and mount comes from.
+    const { lineOf, mountLine, locate } = fileLines(file?.text ?? "");
+    const effective = effectiveView(config, info.full_name, settings, grant, fs);
     send(res, 200, {
       repo: row,
       base,
@@ -428,10 +437,14 @@ export function createRepoApi({
         sha: file.sha,
         url: `${info.html_url}/blob/${base.split("/").map(encodeURIComponent).join("/")}/${CONFIG_FILE}`,
       },
-      errors: parsed?.errors ?? [],
-      warnings: [...warnings, ...merging.filter((w) => !warnings.includes(w))],
+      errors: (parsed?.errors ?? []).map(locate),
+      warnings: [...warnings, ...merging.filter((w) => !warnings.includes(w))].map(locate),
       grantsError,
-      effective: effectiveView(config, info.full_name, settings, grant, fs),
+      effective: {
+        ...effective,
+        settings: effective.settings.map((s) => ({ ...s, line: lineOf(s.key) })),
+        mounts: effective.mounts.map((m) => ({ ...m, line: mountLine(m.path) })),
+      },
       policies: await policyView(info.full_name, base),
       readAt: row.readAt,
     });
