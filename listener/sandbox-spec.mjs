@@ -83,7 +83,7 @@ export function sandboxEnv(
   const install = agent.install(config);
   const provider = live.record.provider ?? agent.defaultProvider;
   return {
-    ...agent.env(config, live.secret, provider),
+    ...agent.env(config, live.secret, provider, live.record.credential ?? null),
     DECKHAND_RUN_SECRET: live.secret,
     DECKHAND_BROKER_URL: config.brokerUrl,
     // Which of ../sandbox/agents/ runs, and its version.

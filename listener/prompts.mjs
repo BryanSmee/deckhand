@@ -2,7 +2,7 @@
 // the comments delivered to it mid-run. Pure, apart from reading ../prompts/ once at start.
 import { readFileSync } from "node:fs";
 import { entryName } from "./agents/index.mjs";
-import { entryLabel } from "./agents/select.mjs";
+import { entryLabel, providerLabel } from "./agents/select.mjs";
 import { mandatoryHosts } from "./egress.mjs";
 import { FRESH, INBOX, MODES } from "./modes.mjs";
 import { triggerWord } from "./onboarding.mjs";
@@ -317,11 +317,13 @@ export function handoffMessage({ from, reason, result, body, branches = [] }) {
 export function openingMessages(mode, text, chosen, { restored, started, previous }) {
   const { entry, switched, handedBy, takeOver } = chosen;
   const retry = switched && !takeOver;
-  const said = retry ? `${retryNote({ ...switched, provider: entry.provider })}\n\n${text}` : text;
+  const said = retry
+    ? `${retryNote({ ...switched, provider: providerLabel(entry) })}\n\n${text}`
+    : text;
   const message = firstMessage({ mode, text: said, restored, started });
   const handoff = takeOver && {
     from: handedBy
-      ? entryLabel(entryName(previous.agent, previous.provider))
+      ? entryLabel(entryName(previous.agent, previous.provider, previous.credential))
       : entryLabel(switched.from),
     reason: handedBy ? null : switched.reason,
     result: handedBy ? previous.summary : entry.result,

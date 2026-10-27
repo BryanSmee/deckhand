@@ -217,6 +217,8 @@ export function createRuns(ctx) {
     Object.assign(record, {
       agent: entry.agent,
       provider: entry.provider,
+      // The provider's credential its entry names (`claude@anthropic:key`); null: the default.
+      credential: entry.credential ?? null,
       fallback: entry.fallback,
       picked: entry.picked ?? null,
       model: chosen.model,
@@ -225,8 +227,11 @@ export function createRuns(ctx) {
       // Why it isn't the speed or model asked for (speedFor()), for the reply.
       speedNote: chosen.speedNote,
     });
-    ctx.broker.provide(task.live.secret, entry.provider, (message) =>
-      writeEvent(logFile, "note", { message }),
+    ctx.broker.provide(
+      task.live.secret,
+      entry.provider,
+      (message) => writeEvent(logFile, "note", { message }),
+      entry.credential ?? null,
     );
     ctx.watchPushes(task);
     const started =
@@ -245,7 +250,10 @@ export function createRuns(ctx) {
   function writeHeader(task, { text, foreign }) {
     const { key, mode, record, logFile } = task.live;
     const agent = agentOf(task);
-    const on = record.fallback || record.picked ? `@${record.provider}` : "";
+    const on =
+      record.fallback || record.picked || record.credential
+        ? `@${record.provider}${record.credential ? `:${record.credential}` : ""}`
+        : "";
     const fast = record.speed === "fast" ? "/fast" : "";
     log(
       `${key}: running ${task.name} (${mode}, ${record.mode}, ${agent.name}${on} ${record.model}/${record.effort}${fast}), log ${record.logPath}`,
@@ -592,10 +600,10 @@ export function createRuns(ctx) {
       if (live.unanswered.length) task.pending.unshift(...live.unanswered);
       removeEmptyShots(live);
       const status = outcome(live.result);
-      const apiStatus = ctx.broker.runOf(live.secret)?.apiStatus;
+      const { apiStatus, apiReset } = ctx.broker.runOf(live.secret) ?? {};
       const fallback =
         status === "error" && !live.replied
-          ? nextFallback(config, record, live.result, apiStatus)
+          ? nextFallback(config, record, live.result, apiStatus, { apiReset, now: Date.now() })
           : null;
       if (fallback) fallBack(task, fallback);
       // Once: a listener restarting from here on doesn't post it again.

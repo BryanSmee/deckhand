@@ -337,6 +337,9 @@ export function loadConfig(env, file = NO_FILE) {
     // Which variable holds the operator's Claude credential (anthropic.mjs): the value stays
     // in the environment, read by the listener's Anthropic endpoint only.
     claudeCredential: credentialName(env),
+    // The credentials entries can name (`claude@anthropic:key`) that the operator set, and the
+    // one runs take without a name (null: another, a gateway's token).
+    credentials: namedCredentials(env, credentialName(env)),
     anthropicUrl: s.ANTHROPIC_BASE_URL,
     modelAliases: aliasesFrom(s, "ANTHROPIC_DEFAULT", CLAUDE_TIERS),
     claudeFallbackModel: s.CLAUDE_FALLBACK_MODEL,
@@ -586,20 +589,42 @@ function configuredAgents(env, s) {
   );
 }
 
+// { "claude@anthropic": { set: ["plan", "key"], default: "plan" } }: for each agent's provider
+// with credentials an entry can name (agents/ `credentials`), those whose variable is set, and
+// the one the default variable (`claudeCredential`) is.
+function namedCredentials(env, claudeCredential) {
+  const found = {};
+  for (const agent of Object.values(AGENTS)) {
+    for (const [provider, { credentials }] of Object.entries(agent.providers)) {
+      if (!credentials) continue;
+      const named = Object.entries(credentials);
+      found[entryName(agent.name, provider)] = {
+        set: named.filter(([, c]) => env[c.variable]).map(([name]) => name),
+        default: named.find(([, c]) => c.variable === claudeCredential)?.[0] ?? null,
+      };
+    }
+  }
+  return found;
+}
+
 // FALLBACKS: where a run goes when its provider fails, in order ("claude@openrouter, codex"
-// → ["claude@openrouter", "codex@openai"]). Each needs its credential: a fallback that can't
-// run would only show when the first one fails.
+// → ["claude@openrouter", "codex@openai"]), "claude@anthropic:key" on a credential of the
+// provider's. Each needs its credential: a fallback that can't run would only show when the
+// first one fails.
 function fallbacks(text, { label, env }) {
   const names = [];
   for (const item of list(text)) {
     const entry = entryOf(item);
     if (!entry) {
       throw new ConfigError(
-        `${label}: expected agent@provider (${ENTRIES.join(", ")}), got ${item}`,
+        `${label}: expected agent@provider or agent@provider:credential (${ENTRIES.join(", ")}), got ${item}`,
       );
     }
-    const name = entryName(entry.agent, entry.provider);
-    const { secrets } = AGENTS[entry.agent].providers[entry.provider];
+    const name = entryName(entry.agent, entry.provider, entry.credential);
+    const { credentials } = AGENTS[entry.agent].providers[entry.provider];
+    const secrets = entry.credential
+      ? [credentials[entry.credential].variable]
+      : AGENTS[entry.agent].providers[entry.provider].secrets;
     if (!secrets.some((secret) => env[secret])) {
       throw new ConfigError(`${label}: ${name} needs ${secrets.join(" or ")} in the environment`);
     }

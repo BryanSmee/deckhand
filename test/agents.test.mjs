@@ -193,6 +193,12 @@ test("Claude Code's env: the run's secret in place of the credential, calls to t
     claude.env({ ...config, claudeCredential: null }, "s").ANTHROPIC_API_KEY,
     undefined,
   );
+  // On a credential the run's entry names: that one's variable, whatever the default.
+  const plan = { ...config, claudeCredential: "CLAUDE_CODE_OAUTH_TOKEN" };
+  const key = claude.env(plan, "s", "anthropic", "key");
+  assert.equal(key.ANTHROPIC_API_KEY, "s");
+  assert.equal(key.CLAUDE_CODE_OAUTH_TOKEN, undefined);
+  assert.equal(claude.env(config, "s", "anthropic", "plan").CLAUDE_CODE_OAUTH_TOKEN, "s");
   assert.deepEqual(claude.install(config), {
     volume: "deckhand-claude-code",
     mount: "/opt/claude-code",
@@ -368,7 +374,25 @@ test("entries: agent@provider, an agent alone on its default provider", () => {
   assert.deepEqual(entryOf("claude"), { agent: "claude", provider: "anthropic" });
   assert.deepEqual(entryOf("claude@openrouter"), { agent: "claude", provider: "openrouter" });
   assert.deepEqual(entryOf("codex"), { agent: "codex", provider: "openai" });
-  for (const bad of ["gemini", "codex@openrouter", "claude@anthropic@x", "", null]) {
+  // A credential of the provider's.
+  assert.deepEqual(entryOf("claude@anthropic:key"), {
+    agent: "claude",
+    provider: "anthropic",
+    credential: "key",
+  });
+  assert.equal(entryOf("claude:plan").credential, "plan");
+  assert.equal(entryName("claude", "anthropic", "key"), "claude@anthropic:key");
+  for (const bad of [
+    "gemini",
+    "codex@openrouter",
+    "claude@anthropic@x",
+    "claude@anthropic:token",
+    "claude@anthropic:key:x",
+    "claude@openrouter:key",
+    "codex@openai:key",
+    "",
+    null,
+  ]) {
     assert.equal(entryOf(bad), null, String(bad));
   }
   assert.equal(entryName("codex"), "codex@openai");

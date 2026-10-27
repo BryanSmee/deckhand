@@ -13,10 +13,18 @@ import {
   firstMessage,
   handoffMessage,
   liveMessage,
+  openingMessages,
   promptFor,
   retryNote,
 } from "../listener/prompts.mjs";
-import { entryFor, nextFallback, pickProblem } from "../listener/agents/select.mjs";
+import {
+  entryFor,
+  entryLabel,
+  nextFallback,
+  pickProblem,
+  resolveEntry,
+  resolved,
+} from "../listener/agents/select.mjs";
 import { replyFooter } from "../listener/footer.mjs";
 
 const settings = {
@@ -421,6 +429,115 @@ test("the next fallback: each entry once per chain, only for a provider's error"
   assert.equal(nextFallback(config, first, { ok: false, text: "The tests fail." }), null);
   assert.equal(nextFallback(config, first, { ok: true, text: "Done." }, 529), null);
   assert.equal(nextFallback({ fallbacks: [] }, first, failed), null);
+});
+
+// A plan and an API key both set, the plan the default (config.mjs).
+const twoCredentials = {
+  agents: ["claude"],
+  fallbacks: ["claude@anthropic:key", "claude@openrouter"],
+  credentials: { "claude@anthropic": { set: ["plan", "key"], default: "plan" } },
+};
+
+test("a plan's limit: the run goes on on the key, and later runs stay there until it resets", () => {
+  const config = twoCredentials;
+  const limit = { ok: false, text: "Claude AI usage limit reached|1900000000" };
+  const first = { agent: "claude", provider: "anthropic", credential: null, fallback: null };
+  const now = 1_000_000;
+  // The reset Claude Code's result gives, else the endpoint's, else the plan's window.
+  const fell = nextFallback(config, first, limit, null, { now });
+  assert.deepEqual(fell, {
+    entry: "claude@anthropic:key",
+    from: "claude@anthropic:plan",
+    reason: "quota reached",
+    tried: ["claude@anthropic:plan"],
+    until: 1_900_000_000_000,
+  });
+  const rate = { ok: false, text: "API Error: 429 rate_limit_error" };
+  assert.equal(nextFallback(config, first, rate, 429, { apiReset: 5, now }).until, 5);
+  assert.equal(nextFallback(config, first, rate, 429, { now }).until, now + 5 * 3600_000);
+  // The run on the key: same agent and provider, its session goes on, on the key.
+  const r = resolveEntry({
+    config,
+    settings: { agent: "claude", model: "opus", effort: "high" },
+    own: null,
+    light: false,
+    options: {},
+    marker: fell,
+  });
+  assert.deepEqual([r.entry.provider, r.entry.credential], ["anthropic", "key"]);
+  assert.equal(r.takeOver, false);
+  assert.ok(r.switched);
+  // The key failing too: OpenRouter next, the plan not again.
+  const onKey = { ...first, credential: "key", fallback: r.entry.fallback };
+  assert.equal(nextFallback(config, onKey, limit, null, { now }).entry, "claude@openrouter");
+  assert.equal(nextFallback(config, onKey, limit, null, { now }).until, undefined);
+  // Later runs: on the key until the reset, then back on the plan.
+  const previous = { agent: "claude", provider: "anthropic", credential: "key", fallback: fell };
+  const stays = entryFor(config, "claude", undefined, previous, undefined, fell.until - 1);
+  assert.equal(stays.credential, "key");
+  assert.equal(stays.fallback.until, fell.until);
+  const back = entryFor(config, "claude", undefined, previous, undefined, fell.until);
+  assert.deepEqual(back, { agent: "claude", provider: "anthropic", fallback: null });
+  // Another provider's fallback has no `until`: it sticks as before.
+  const other = nextFallback(
+    { ...config, fallbacks: ["claude@openrouter"] },
+    { ...first, credential: "key" },
+    limit,
+  );
+  assert.equal(other.until, undefined);
+});
+
+test("credentials: the default one counts as tried, /agent picks one, labels name it", () => {
+  const config = {
+    ...twoCredentials,
+    fallbacks: ["claude@anthropic:plan", "claude@anthropic:key"],
+  };
+  const failed = { ok: false, text: "API Error: 529 overloaded_error" };
+  const first = { agent: "claude", provider: "anthropic", credential: null, fallback: null };
+  // The plan is the default: not tried again under its own name.
+  assert.equal(nextFallback(config, first, failed).entry, "claude@anthropic:key");
+  assert.equal(resolved(config, "claude@anthropic"), "claude@anthropic:plan");
+  assert.equal(resolved({}, "claude@anthropic"), "claude@anthropic");
+  // `/agent claude@anthropic:key` picks the key; `/agent claude@anthropic` the default.
+  const only = { ...twoCredentials, fallbacks: [] };
+  assert.equal(pickProblem(only, "claude@anthropic:key"), null);
+  assert.equal(pickProblem(only, "claude@anthropic:plan"), null);
+  const unset = {
+    ...only,
+    credentials: { "claude@anthropic": { set: ["plan"], default: "plan" } },
+  };
+  assert.match(pickProblem(unset, "claude@anthropic:key"), /`claude@anthropic:plan`/);
+  assert.deepEqual(entryFor(only, "claude", undefined, undefined, "claude@anthropic:key"), {
+    agent: "claude",
+    provider: "anthropic",
+    credential: "key",
+    fallback: null,
+    picked: {},
+  });
+  assert.deepEqual(entryFor(only, "claude", undefined, undefined, "claude@anthropic"), {
+    agent: "claude",
+    provider: "anthropic",
+    fallback: null,
+    picked: {},
+  });
+  // Picked, it sticks to the issue on that credential.
+  const previous = { agent: "claude", provider: "anthropic", credential: "key", picked: {} };
+  assert.equal(entryFor(only, "claude", undefined, previous).credential, "key");
+  assert.equal(entryLabel("claude@anthropic:key"), "Claude (anthropic, API key)");
+  assert.equal(entryLabel("claude@anthropic:plan"), "Claude (anthropic, plan)");
+  assert.equal(entryLabel("claude@anthropic"), "Claude (anthropic)");
+  // The note of a run that goes on on the key.
+  const { message } = openingMessages(
+    "work",
+    "Fix it",
+    {
+      entry: { agent: "claude", provider: "anthropic", credential: "key" },
+      switched: { reason: "quota reached" },
+      takeOver: false,
+    },
+    { started: true },
+  );
+  assert.match(message, /through anthropic, API key: carry on/);
 });
 
 test("the reply's footer: the provider when not the default or after a fallback, and why", () => {

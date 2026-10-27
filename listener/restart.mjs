@@ -236,12 +236,13 @@ export function createRestart(ctx) {
     // State saved before runs had branches: none, rather than any.
     ctx.broker.allow(saved.secret, saved.branches ?? []);
     const { logFile } = task.live;
-    // Its agent's calls go on to the provider it started on (a fallback's), or its agent's own
-    // when the record has none: never another agent's credential.
+    // Its agent's calls go on to the provider and credential it started on (a fallback's), or its
+    // agent's own when the record has none: never another agent's credential.
     ctx.broker.provide(
       saved.secret,
       record.provider ?? agentFor(record.agent).defaultProvider,
       (message) => writeEvent(logFile, "note", { message }),
+      record.credential ?? null,
     );
     watchPushes(task);
     return task;

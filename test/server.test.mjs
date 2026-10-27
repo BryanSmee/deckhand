@@ -841,15 +841,46 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
     assert.match(body, /^All done\./);
     assert.match(
       body,
-      /🤖 Claude \(openrouter\) opus · medium effort · 1 min · fell back from Claude \(anthropic\): overloaded \(529\)/,
+      /🤖 Claude \(openrouter\) opus · medium effort · 1 min · fell back from Claude \(anthropic, plan\): overloaded \(529\)/,
     );
     // Its call went to OpenRouter with the operator's key, as a bearer.
     const call = await github.waitFor((r) => r.path === "/openrouter/v1/messages?beta=true");
     assert.equal(call.auth, "Bearer sk-or-v1-operator");
     assert.match(
       listener.output(),
-      /Claude \(anthropic\)'s provider failed: overloaded \(529\)\. Falling back to Claude \(openrouter\)/,
+      /Claude \(anthropic, plan\)'s provider failed: overloaded \(529\)\. Falling back to Claude \(openrouter\)/,
     );
+  });
+
+  test("a plan's limit: the run goes on on the API key, in its session, the key in x-api-key", async (t) => {
+    const { dir, github, send } = await listen(
+      t,
+      (dir) => (writeFileSync(join(dir, "failing"), "claude@anthropic\n"), {}),
+      (dir, github) => ({
+        CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat01-operator",
+        ANTHROPIC_API_KEY: "sk-ant-api03-operator",
+        ANTHROPIC_BASE_URL: github.url,
+        FALLBACKS: "claude@anthropic:key",
+      }),
+    );
+    await send(comment("alice", "Deckhand\nFix the login"));
+    await until(() => replies(github).length === 1, "the reply");
+    await settled(github, [99]);
+    // The plan first, then the key, in the same session.
+    assert.deepEqual(seen(dir), ["claude@anthropic default", "claude@anthropic:key default"]);
+    assert.match(messages(dir)[1], /through anthropic, API key: carry on/);
+    const body = JSON.parse(replies(github)[0].body).body;
+    assert.match(
+      body,
+      /🤖 Claude \(anthropic, API key\) opus · medium effort · 1 min · fell back from Claude \(anthropic, plan\): overloaded \(529\)/,
+    );
+    // Each run's calls with its own credential, in its own header.
+    const calls = github.requests.filter((r) => r.path === "/v1/messages?beta=true");
+    assert.equal(calls.length, 2);
+    assert.equal(calls[0].auth, "Bearer sk-ant-oat01-operator");
+    assert.equal(calls[0].headers["x-api-key"], undefined);
+    assert.equal(calls[1].headers["x-api-key"], "sk-ant-api03-operator");
+    assert.equal(calls[1].auth, undefined);
   });
 
   test("a provider error with another agent next: it starts afresh, handed over, and the issue sticks to it", async (t) => {
@@ -862,7 +893,7 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
     const handoff = messages(dir)[1];
     assert.match(
       handoff,
-      /^Claude \(anthropic\) was working on this and stopped, as its provider failed: overloaded \(529\)\. You take over, in a new session/,
+      /^Claude \(anthropic, plan\) was working on this and stopped, as its provider failed: overloaded \(529\)\. You take over, in a new session/,
     );
     assert.match(handoff, /its branch, and yours: `issue-12-…`/);
     assert.match(handoff, /Its last message:\n\n> API Error: 529 overloaded_error: Overloaded/);
@@ -870,7 +901,7 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
     const first = JSON.parse(replies(github)[0].body).body;
     assert.match(
       first,
-      /🤖 Codex \(openai\) gpt-6-astra · medium effort · 1 min · fell back from Claude \(anthropic\): overloaded \(529\)/,
+      /🤖 Codex \(openai\) gpt-6-astra · medium effort · 1 min · fell back from Claude \(anthropic, plan\): overloaded \(529\)/,
     );
 
     // The next comment stays with Codex, in its session: no hand-off, no switch in the footer.
@@ -3502,6 +3533,7 @@ mounts:
       "reason",
       "agent",
       "provider",
+      "credential",
       "fallback",
       "picked",
       "model",

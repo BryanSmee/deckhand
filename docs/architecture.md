@@ -637,12 +637,24 @@ run's agent (`displayName`).
 
 An agent calls a provider: Claude Code `anthropic` (the operator's `ANTHROPIC_BASE_URL`) or
 `openrouter`, Codex `openai`, the Antigravity CLI `google` (each agent's `providers` and `defaultProvider`; `env(config,
-secret, provider)` gives the variables for one). Sandboxes always call the listener: the broker
-keeps each run's provider (`broker.provide()`), and the listener's endpoint
-(`anthropic.mjs`) forwards to that provider's URL with its credential. The endpoints also keep
-the provider's last status on the run (`apiStatus`).
+secret, provider, credential)` gives the variables for one). Sandboxes always call the
+listener: the broker keeps each run's provider and credential (`broker.provide()`), and the
+listener's endpoint (`anthropic.mjs`) forwards to that provider's URL with its credential. The
+endpoints also keep the provider's last status on the run (`apiStatus`), and the Anthropic one
+when a plan's limit resets, from its 429 (`apiReset`).
 
-The operator's `FALLBACKS` lists `agent@provider` entries in order. When a run ends with an
+A provider can have credentials an entry names (its `credentials`): Claude Code's `anthropic`
+has `plan` (`CLAUDE_CODE_OAUTH_TOKEN`) and `key` (`ANTHROPIC_API_KEY`), written
+`claude@anthropic:key`. Without a name, a run takes the default credential (`credentialName()`):
+a gateway's token, then the plan, already paid for, then the key. The endpoint holds every
+credential set (`named`) and picks the run's, in its header (`Bearer` for the plan, `x-api-key`
+for the key); the sandbox gets the run's secret in that credential's variable, so Claude Code's
+auth mode matches. `config.credentials` lists the ones set and which is the default, for
+`/agent` and for `resolved()`, which names an entry's credential (`claude@anthropic` →
+`claude@anthropic:plan`), so the default isn't tried twice.
+
+The operator's `FALLBACKS` lists `agent@provider` (or `agent@provider:credential`) entries in
+order. When a run ends with an
 error result, `runs.mjs` asks `providerError()` (`agents/index.mjs`) whether the provider failed
 it: the result's text (`API Error: 529`, `unexpected status 429`, overloaded, rate limit, quota,
 invalid key) or the endpoint's last status (429, 529, 402, 401, 403, 5xx). If so, and an entry
@@ -651,14 +663,18 @@ comments go back in the queue, each carrying a `fallback` marker (the next entry
 failed, why, the entries tried, its last message), so it survives a restart like any queued
 comment. The next run takes its entry from the marker (`entryFor()`):
 
-- **The same agent on another provider** continues the session, told why (`retryNote()`).
+- **The same agent on another provider**, or on another credential of it, continues the
+  session, told why (`retryNote()`).
 - **Another agent** starts a new session (`TASK_SESSION=new`, which the entrypoint never
   continues an older one for), handed the task, the branches and the last message
   (`handoffMessage()`); the workspace volume is the issue's, with what the first agent left.
 
-The run's record keeps `provider` and `fallback`. The reply's footer names the agent and
-provider and why it switched; the log's first line says it. Later runs of the task stick to
-the entry that took over (`previous.fallback`), as long as it is still in `FALLBACKS`.
+The run's record keeps `provider`, `credential` and `fallback`. The reply's footer names the
+agent, provider and credential and why it switched; the log's first line says it. Later runs of
+the task stick to the entry that took over (`previous.fallback`), as long as it is still in
+`FALLBACKS`. A fallback from a plan's credential carries `until`: the reset its 429's headers
+or Claude Code's "usage limit reached|<time>" gave, else 5 hours on. From then, later runs go
+back to the default entry, on the plan.
 
 ### Picking an agent with `/agent`
 

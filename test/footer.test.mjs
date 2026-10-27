@@ -50,3 +50,20 @@ test("footer: a /speed sent mid-run applies to the next run", () => {
     "<sub>🤖 Claude opus · high effort · 4 min · `/speed fast` came mid-run: it applies to the next run</sub>",
   );
 });
+
+test("footer: the credential that answered, and the one it fell back from", () => {
+  const onKey = {
+    ...record,
+    credential: "key",
+    fallback: { from: "claude@anthropic:plan", reason: "quota reached", tried: [] },
+  };
+  assert.equal(
+    replyFooter(onKey, result, "", {}),
+    "<sub>🤖 Claude (anthropic, API key) opus · high effort · 4 min · fell back from Claude (anthropic, plan): quota reached</sub>",
+  );
+  // Picked with /agent: named without a fallback.
+  assert.equal(
+    replyFooter({ ...record, credential: "key", picked: {} }, result, "", {}),
+    "<sub>🤖 Claude (anthropic, API key) opus · high effort · 4 min</sub>",
+  );
+});

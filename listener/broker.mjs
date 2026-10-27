@@ -42,11 +42,13 @@ export function createBroker({
   random = () => randomBytes(32).toString("hex"),
   log = () => {},
 }) {
-  // hash(secret) → { repo, extra, push, branches, provider, note, pushed, apiStatus, apiError,
-  // tokens }: `provider`, where the listener sends its agent's API calls (anthropic.mjs; null:
-  // nowhere, no credential), `note`, a line in its log (provide()), `pushed`, what the git
+  // hash(secret) → { repo, extra, push, branches, provider, credential, note, pushed, apiStatus,
+  // apiReset, apiError, tokens }: `provider`, where the listener sends its agent's API calls
+  // (anthropic.mjs; null: nowhere, no credential), `credential`, the one of the provider's it
+  // names (`key` for `claude@anthropic:key`; null: the default one), `note`, a line in its log (provide()), `pushed`, what the git
   // gateway calls when GitHub took a push of the run's (watchPushes()), `apiStatus`, the last
-  // status that provider answered, and `apiError`, why the last call the listener refused or the provider
+  // status that provider answered, `apiReset`, when a plan's limit it hit resets (anthropic.mjs),
+  // and `apiError`, why the last call the listener refused or the provider
   // failed did (upstream.mjs): what an error reply adds.
   // `tokens`: the installation tokens it got, which its output must not publish (runs.mjs).
   const runs = new Map();
@@ -64,7 +66,9 @@ export function createBroker({
       push: push === true,
       branches: [],
       provider: null,
+      credential: null,
       apiStatus: null,
+      apiReset: null,
       apiError: null,
       tokens: new Set(),
     });
@@ -73,9 +77,10 @@ export function createBroker({
 
   // The provider of the run's agent (agents/), once its settings are read. `note(message)`:
   // a line in the run's log, for the API calls the listener refused it (upstream.mjs).
-  function provide(secret, provider, note = null) {
+  // `credential`: the provider's credential the run's entry names, if any (`claude@anthropic:key`).
+  function provide(secret, provider, note = null, credential = null) {
     const run = runOf(secret);
-    if (run) Object.assign(run, { provider, note });
+    if (run) Object.assign(run, { provider, credential, note });
   }
 
   // `pushed({ branch, at })`: called by the git gateway for each push of the run's GitHub took.

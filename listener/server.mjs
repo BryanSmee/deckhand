@@ -10,7 +10,7 @@ import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { createAnalysis } from "./analysis.mjs";
 import { createAuth, sessionKey } from "./auth.mjs";
-import { createAnthropicProxy } from "./anthropic.mjs";
+import { createAnthropicProxy, NAMED } from "./anthropic.mjs";
 import { antigravity } from "./agents/antigravity.mjs";
 import { createAntigravityLogin } from "./antigravity-login.mjs";
 import { createChatgptLogin } from "./chatgpt.mjs";
@@ -333,6 +333,12 @@ ctx.anthropic = createAnthropicProxy({
   broker: ctx.broker,
   name: config.claudeCredential,
   credential: config.claudeCredential && env[config.claudeCredential],
+  // For runs on a credential their entry names (`claude@anthropic:key`, FALLBACKS).
+  named: Object.fromEntries(
+    Object.entries(NAMED)
+      .filter(([, c]) => env[c.variable])
+      .map(([label, c]) => [label, env[c.variable]]),
+  ),
   upstream: config.anthropicUrl,
   // claude@openrouter, for runs that fall back to it (FALLBACKS).
   providers: {

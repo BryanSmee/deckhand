@@ -413,7 +413,7 @@ What every sandbox may reach and its limits aren't settings: they go in
 | ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `ALLOWED_USERS`                                                                                   | `allowed_users`                                                                                   | none: required                                                               | GitHub logins that can start runs                                                                                                                                                                                                      |
 | `ALLOWED_REPOS`                                                                                   | `allowed_repos`                                                                                   | all where the App is installed                                               | narrows the repos (`owner/repo`, or `owner/*` for every repo of an account, comma-separated in `.env`; see [Which repositories](#which-repositories))                                                                                  |
-| `CLAUDE_CODE_OAUTH_TOKEN` / `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN`                          | none: a secret, `.env` only                                                                       |                                                                              | Claude credential, added by the listener to the sandboxes' API calls (`ANTHROPIC_AUTH_TOKEN`: a gateway's)                                                                                                                             |
+| `CLAUDE_CODE_OAUTH_TOKEN` / `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN`                          | none: a secret, `.env` only                                                                       |                                                                              | Claude credential, added by the listener to the sandboxes' API calls (`ANTHROPIC_AUTH_TOKEN`: a gateway's). With several, runs take the gateway's, then the plan's, then the key ([Agents](#agents-and-providers))                     |
 | `ANTHROPIC_BASE_URL`                                                                              | `anthropic_base_url`                                                                              | `https://api.anthropic.com`                                                  | where the listener sends the sandboxes' API calls: a [gateway](#through-a-gateway), say                                                                                                                                                |
 | `ANTHROPIC_DEFAULT_OPUS_MODEL`, `ANTHROPIC_DEFAULT_SONNET_MODEL`, `ANTHROPIC_DEFAULT_HAIKU_MODEL` | `anthropic_default_opus_model`, `anthropic_default_sonnet_model`, `anthropic_default_haiku_model` | Claude Code's                                                                | the models `opus`, `sonnet` and `haiku` stand for in the sandboxes (a gateway's names)                                                                                                                                                 |
 | `SANDBOX_AGENT`, `BRAINSTORM_AGENT`                                                               | `sandbox_agent`, `brainstorm_agent`                                                               | `claude`, `SANDBOX_AGENT`                                                    | the agent of work runs, and of brainstorms, inbox entries and discussions: `claude`, `codex` (see [Codex](#codex)) or `antigravity` (see [Antigravity CLI](#antigravity-cli))                                                          |
@@ -425,7 +425,7 @@ What every sandbox may reach and its limits aren't settings: they go in
 | `AGY_AUTH_FILE`                                                                                   | none: `.env` only                                                                                 |                                                                              | or a Google AI plan's login: its token file, held and refreshed by the listener. Default: `/data/credentials/agy-auth.json` when it exists (see [The credentials folder](#the-credentials-folder)); a file elsewhere must be writable  |
 | `GEMINI_BASE_URL`                                                                                 | `gemini_base_url`                                                                                 | `https://generativelanguage.googleapis.com`                                  | where the listener sends the Antigravity CLI's API calls when using `GEMINI_API_KEY`                                                                                                                                                   |
 | `AGY_BEST_MODEL`, `AGY_BALANCED_MODEL`, `AGY_FAST_MODEL`                                          | `agy_best_model`, `agy_balanced_model`, `agy_fast_model`                                          | `gemini-4-argon-high`, `gemini-4-argon-medium`, `gemini-3.8-flash-medium`    | the models the tiers `best`, `balanced` and `fast` stand for with the Antigravity CLI                                                                                                                                                  |
-| `FALLBACKS`                                                                                       | `fallbacks`                                                                                       | none                                                                         | where a run goes when its provider fails, in order: `claude@anthropic`, `claude@openrouter`, `codex@openai`, `antigravity@google` (see [Fallbacks](#fallbacks))                                                                        |
+| `FALLBACKS`                                                                                       | `fallbacks`                                                                                       | none                                                                         | where a run goes when its provider fails, in order: `claude@anthropic` (or `:plan`, `:key`), `claude@openrouter`, `codex@openai`, `antigravity@google` (see [Fallbacks](#fallbacks))                                                   |
 | `OPENROUTER_API_KEY`                                                                              | none: a secret, `.env` only                                                                       |                                                                              | OpenRouter key of `claude@openrouter`, added by the listener to those runs' API calls                                                                                                                                                  |
 | `OPENROUTER_BASE_URL`                                                                             | `openrouter_base_url`                                                                             | `https://openrouter.ai/api`                                                  | where the listener sends the API calls of `claude@openrouter` runs                                                                                                                                                                     |
 | `OPENROUTER_OPUS_MODEL`, `OPENROUTER_SONNET_MODEL`, `OPENROUTER_HAIKU_MODEL`                      | `openrouter_opus_model`, `openrouter_sonnet_model`, `openrouter_haiku_model`                      | `ANTHROPIC_DEFAULT_*_MODEL`                                                  | what `opus`, `sonnet` and `haiku` stand for on `claude@openrouter` (OpenRouter's names)                                                                                                                                                |
@@ -551,16 +551,24 @@ run has, and the Antigravity CLI's own, which its runs have).
 
 | Entry                | Agent and provider                                           | Credential (`.env`)                                                                 | The listener calls                                                                                                                                                     |
 | -------------------- | ------------------------------------------------------------ | ----------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `claude@anthropic`   | Claude Code on Anthropic, or [a gateway](#through-a-gateway) | `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN` (a plan's) or `ANTHROPIC_AUTH_TOKEN` | `ANTHROPIC_BASE_URL` (`api.anthropic.com`)                                                                                                                             |
+| `claude@anthropic`   | Claude Code on Anthropic, or [a gateway](#through-a-gateway) | `CLAUDE_CODE_OAUTH_TOKEN` (a plan's), `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN` | `ANTHROPIC_BASE_URL` (`api.anthropic.com`)                                                                                                                             |
 | `claude@openrouter`  | Claude Code through OpenRouter, as a [fallback](#fallbacks)  | `OPENROUTER_API_KEY`                                                                | `OPENROUTER_BASE_URL` (`openrouter.ai`)                                                                                                                                |
 | `codex@openai`       | [Codex](#codex) on OpenAI                                    | `OPENAI_API_KEY`, or `CODEX_AUTH_FILE` (a ChatGPT plan's login)                     | `OPENAI_BASE_URL` (`api.openai.com`), or ChatGPT's Codex backend with a plan                                                                                           |
 | `antigravity@google` | [Antigravity CLI](#antigravity-cli) on Google                | `GEMINI_API_KEY`, or `AGY_AUTH_FILE` (a Google AI Pro/Ultra plan's login)           | `GEMINI_BASE_URL` (`generativelanguage.googleapis.com`), or `daily-cloudcode-pa.googleapis.com` and `www.googleapis.com` (handed over by the egress proxy) with a plan |
 
+With several Claude credentials set, runs take `ANTHROPIC_AUTH_TOKEN` (a gateway's) first,
+then a plan's `CLAUDE_CODE_OAUTH_TOKEN`, already paid for, then `ANTHROPIC_API_KEY`, billed
+per token. An entry can name the credential it runs on: `claude@anthropic:plan`
+(`CLAUDE_CODE_OAUTH_TOKEN`) or `claude@anthropic:key` (`ANTHROPIC_API_KEY`), for a
+[fallback](#fallbacks) from the plan to the key, or a comment's `/agent claude@anthropic:key`.
+`claude@anthropic` alone is the default credential.
+
 What runs an issue, first match wins:
 
 1. A comment's `/agent <entry>` line (`/agent codex`, `/agent claude@openrouter`; an agent
-   alone is on its default provider), among the agents you have a credential for and the
-   entries of `FALLBACKS`. Anything else gets a reply naming what is configured, and nothing
+   alone is on its default provider, `/agent claude@anthropic:key` on that credential), among
+   the agents you have a credential for, the credentials you set, and the entries of
+   `FALLBACKS`. Anything else gets a reply naming what is configured, and nothing
    runs. A picked agent doesn't fall back: when its provider fails, the run ends with the
    error. The issue's later runs stay with it until another `/agent`; `/agent default` goes
    back to the next rule. When it changes the agent, the new one starts a session of its own,
@@ -594,7 +602,7 @@ sandbox_model: opus
 ```
 
 Leave `CLAUDE_CODE_OAUTH_TOKEN` and `ANTHROPIC_API_KEY` empty: `ANTHROPIC_AUTH_TOKEN` wins
-over them anyway, as in Claude Code. `SANDBOX_MODEL`, `BRAINSTORM_MODEL`, a repository's
+over them anyway, as in Claude Code (only `claude@anthropic:plan` or `:key` would use them). `SANDBOX_MODEL`, `BRAINSTORM_MODEL`, a repository's
 `model` and a comment's `/model` line take the gateway's names too (`/model openai/gpt-5`).
 
 Claude Code is built for Claude models: others, through a gateway, are uneven at its tool
@@ -790,14 +798,16 @@ start, in its volume): a run stops when the proxy has none.
 
 When the model's API fails, a run can go on elsewhere instead of ending with "Claude stopped
 with an error". List where, in order, as `agent@provider` (`agent` alone is its default
-provider):
+provider), or `agent@provider:credential` for one of the provider's credentials:
 
-| Entry                | What                                                                           | Needs                                 |
-| -------------------- | ------------------------------------------------------------------------------ | ------------------------------------- |
-| `claude@anthropic`   | Claude Code on your `ANTHROPIC_BASE_URL` (Anthropic, unless a gateway)         | a Claude credential                   |
-| `claude@openrouter`  | Claude Code through OpenRouter, at `OPENROUTER_BASE_URL`                       | `OPENROUTER_API_KEY`                  |
-| `codex@openai`       | Codex on your `OPENAI_BASE_URL` (OpenAI), or on a ChatGPT plan                 | `OPENAI_API_KEY` or `CODEX_AUTH_FILE` |
-| `antigravity@google` | The Antigravity CLI on your `GEMINI_BASE_URL` (Google), or on a Google AI plan | `GEMINI_API_KEY` or `AGY_AUTH_FILE`   |
+| Entry                   | What                                                                           | Needs                                 |
+| ----------------------- | ------------------------------------------------------------------------------ | ------------------------------------- |
+| `claude@anthropic`      | Claude Code on your `ANTHROPIC_BASE_URL` (Anthropic, unless a gateway)         | a Claude credential                   |
+| `claude@anthropic:plan` | The same, on your Claude plan                                                  | `CLAUDE_CODE_OAUTH_TOKEN`             |
+| `claude@anthropic:key`  | The same, on your Anthropic API key                                            | `ANTHROPIC_API_KEY`                   |
+| `claude@openrouter`     | Claude Code through OpenRouter, at `OPENROUTER_BASE_URL`                       | `OPENROUTER_API_KEY`                  |
+| `codex@openai`          | Codex on your `OPENAI_BASE_URL` (OpenAI), or on a ChatGPT plan                 | `OPENAI_API_KEY` or `CODEX_AUTH_FILE` |
+| `antigravity@google`    | The Antigravity CLI on your `GEMINI_BASE_URL` (Google), or on a Google AI plan | `GEMINI_API_KEY` or `AGY_AUTH_FILE`   |
 
 In `.env`, the credentials, and in `config.yaml`:
 
@@ -809,7 +819,15 @@ openrouter_sonnet_model: anthropic/claude-sonnet-4.5
 openrouter_haiku_model: anthropic/claude-haiku-4.5
 ```
 
-An entry without its credential stops the listener at start. Without `FALLBACKS`, nothing
+A plan first, then its API key, then OpenRouter:
+
+```yaml
+# .env: CLAUDE_CODE_OAUTH_TOKEN and ANTHROPIC_API_KEY, both. Runs start on the plan.
+fallbacks: [claude@anthropic:key, claude@openrouter]
+```
+
+An entry without its credential (`claude@anthropic:key` without `ANTHROPIC_API_KEY`), or a
+credential Deckhand doesn't have, stops the listener at start. Without `FALLBACKS`, nothing
 changes: a run whose provider fails ends with an error, as before.
 
 **Which errors count:** only the provider's. The run's agent ended with an error that says
@@ -817,21 +835,26 @@ overloaded (529), rate limited (429), a usage limit or quota reached (402, a pla
 credit left), invalid or expired credentials (401, 403), or a server error (5xx), in its
 message or as the last answer the listener got from the provider. A failing test, a task the
 agent gave up on or any other error ends the run as before. A plan's usage limit
-counts: with a Claude plan first and an API key or OpenRouter after it, runs go on, paid per
-token, only on the entries you list.
+counts: with a Claude plan first and its API key (`claude@anthropic:key`) or OpenRouter after
+it, runs go on, paid per token, only on the entries you list.
 
 **What happens:** the run's comments are queued again for the first entry the run hasn't
-been on yet, each entry at most once (the run's own included, wherever it is in the list). The
-same agent on another provider continues its session. Another agent starts a new session,
+been on yet, each entry at most once (the run's own included, wherever it is in the list:
+`claude@anthropic` is the same as `claude@anthropic:plan` when the plan is the default). The
+same agent on another provider, or on another credential of it, continues its session. Another agent starts a new session,
 handed the task, the branch and the previous agent's last message; it works in the same clone,
 so it sees what was left uncommitted. The run's log on the dashboard says where it switched
 and why, and the reply's footer names the agent and provider that answered:
-`🤖 Codex (openai) gpt-6-astra · medium effort · 3 min · fell back from Claude (anthropic): overloaded (529)`.
+`🤖 Codex (openai) gpt-6-astra · medium effort · 3 min · fell back from Claude (anthropic): overloaded (529)`,
+`🤖 Claude (anthropic, API key) opus · high effort · 3 min · fell back from Claude (anthropic, plan): quota reached`.
 When no entry is left, the run ends with the error.
 
 **Later runs** of the issue stay on the entry that took over, as long as it is in `FALLBACKS`:
 switching back would continue the session of the agent that failed, without what the other
-one did.
+one did. After a fallback from a plan (`claude@anthropic` on the plan, or `:plan`), they stay
+on the entry that took over until the plan's limit resets, then go back to the plan: when its
+answer says (Anthropic's rate limit headers, or Claude Code's "usage limit reached" message),
+else 5 hours later, a plan's usage window.
 
 A model's own name (`/model claude-opus-5-5`) may mean nothing on another provider: use
 tiers (`best`) with fallbacks. A Claude model on a run that falls back to Codex runs Codex's

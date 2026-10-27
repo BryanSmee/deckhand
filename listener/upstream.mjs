@@ -73,8 +73,8 @@ export function baseOf(upstream) {
 }
 
 // `req` to `target` with `headers`, its answer back to `res`. `unreachable()` answers when the
-// provider can't be reached before anything was sent back. `answered(status)`: the provider's
-// status, 502 when it can't be reached (what a fallback reads, agents/ providerError()).
+// provider can't be reached before anything was sent back. `answered(status, headers)`: the
+// provider's status and headers, 502 (no headers) when it can't be reached (what a fallback reads, agents/ providerError()).
 // `idleMs`: how long the call may go without a byte either way before it is cut off, on
 // `clock`'s timers: a stalled provider doesn't hold a listener every run shares.
 export function forward(
@@ -102,7 +102,7 @@ export function forward(
       done();
     };
     const out = send(target, { method: req.method, headers }, (answer) => {
-      answered(answer.statusCode);
+      answered(answer.statusCode, answer.headers);
       res.writeHead(answer.statusCode, forwarded(answer.headers));
       // Server-sent events: each chunk goes on as it arrives.
       answer.on("data", idle);
@@ -124,7 +124,7 @@ export function forward(
     out.on("error", (error) => {
       log(`${what}: ${req.method} ${target.pathname}: ${error.message}`);
       if (!res.headersSent) {
-        answered(502);
+        answered(502, {});
         unreachable();
       } else res.destroy();
       resolve();
@@ -171,7 +171,8 @@ export function credentialFailure(what, error) {
 //                fallback reads) refuses the call. Its message only goes to the listener's log
 //                (a token file's content, say): the sandbox and the run's reply get a fixed one
 //   secrets      () → the credential's values, redacted from that log line
-//   answered     (run, status, headers): the provider's status, once it answers
+//   answered     (run, status, headers, answer): the provider's status, once it answers, with
+//                the request's headers and the answer's
 //   bound        whether a secret only works from its run's sandbox (broker.mjs sentBy()): only
 //                for calls that come straight from it, not through the egress proxy (google.mjs)
 export function createApiProxy({
@@ -260,10 +261,10 @@ export function createApiProxy({
       what,
       idleMs,
       clock,
-      answered: (status) => {
+      answered: (status, answer) => {
         run.apiStatus = status;
         if (status >= 400) run.apiError = `${what} answered ${status}`;
-        answered(run, status, headers);
+        answered(run, status, headers, answer);
       },
     });
   }
