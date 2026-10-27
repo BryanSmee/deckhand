@@ -3,28 +3,10 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/pre
 import { beforeEach, expect, test, vi } from "vitest";
 import type { RepoList } from "./api";
 import { Dashboard } from "./App";
-import { makeState, makeTask } from "./testUtils";
+import { FakeSource, makeState, makeTask } from "./testUtils";
 import type { Entry } from "./types";
 
 const state = makeState();
-
-class FakeSource {
-  static last: FakeSource | null = null;
-  listeners = new Map<string, ((e: { data: string }) => void)[]>();
-  closed = false;
-  constructor(public url: string) {
-    FakeSource.last = this;
-  }
-  addEventListener(type: string, fn: (e: { data: string }) => void) {
-    this.listeners.set(type, [...(this.listeners.get(type) ?? []), fn]);
-  }
-  close() {
-    this.closed = true;
-  }
-  emit(type: string, data: unknown) {
-    for (const fn of this.listeners.get(type) ?? []) fn({ data: JSON.stringify(data) });
-  }
-}
 
 const noRepos: RepoList = {
   repos: [],
@@ -201,8 +183,9 @@ test("the log streams in: tool calls with their output, then the result", async 
   expect(location.hash).toMatch(/run=acme-app-22-1791984600000/);
 });
 
-test("the log's phases and build steps: the current log shows the steps, not the phases", async () => {
+test("the log in its sections: the outcome first, a failed build step open", async () => {
   render(<Dashboard state={state} error={null} />);
+  expect(screen.getByRole("region", { name: "Outcome" }).textContent).toMatch(/Working/);
   const source = FakeSource.last!;
   const step = { kind: "step", step: 7, stage: "build 2/4", name: "RUN npm ci" } as const;
   source.emit("entries", [
@@ -215,10 +198,13 @@ test("the log's phases and build steps: the current log shows the steps, not the
   ] satisfies Entry[]);
   const log = await screen.findByTestId("log");
   await within(log).findByText("Image built");
-  expect(within(log).getByText("#7 [build 2/4] RUN npm ci")).toBeTruthy();
-  expect(within(log).getByText("#7 added 412 packages")).toBeTruthy();
-  expect(within(log).getByText("#7 [build 2/4] RUN npm ci · ERROR: exit code: 1")).toBeTruthy();
-  expect(log.textContent).not.toMatch(/image|setup/);
+  // Setup folds; the image's build, which failed, is open, and so is its failed step.
+  expect(within(log).getByText("Setup").closest("details")!.open).toBe(false);
+  expect(within(log).getByText("Image build").closest("details")!.open).toBe(true);
+  const failed = within(log).getByText("#7 [build 2/4] RUN npm ci").closest("details")!;
+  expect(failed.open).toBe(true);
+  expect(failed.textContent).toContain("added 412 packages");
+  expect(failed.textContent).toContain("ERROR: exit code: 1");
 });
 
 test("signed out of reach: the error instead of the counts", () => {

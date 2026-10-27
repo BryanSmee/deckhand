@@ -9,6 +9,8 @@ import styles from "./Fold.module.css";
 interface Props {
   title: ComponentChildren;
   tone?: Tone;
+  // Its dot pulses: what goes on now.
+  pulse?: boolean;
   meta?: ComponentChildren;
   open?: boolean;
   onToggle?: (open: boolean) => void;
@@ -16,7 +18,16 @@ interface Props {
   class?: string;
 }
 
-export function Fold({ title, tone, meta, open, onToggle, children, class: className }: Props) {
+export function Fold({
+  title,
+  tone,
+  pulse,
+  meta,
+  open,
+  onToggle,
+  children,
+  class: className,
+}: Props) {
   return (
     <details
       class={[styles.fold, className].filter(Boolean).join(" ")}
@@ -27,7 +38,7 @@ export function Fold({ title, tone, meta, open, onToggle, children, class: class
         <span class={styles.chevron}>
           <ChevronRight size={14} />
         </span>
-        {tone && <StatusDot tone={tone} />}
+        {tone && <StatusDot tone={tone} pulse={pulse} />}
         <span class={styles.title}>{title}</span>
         <span class={styles.meta}>{meta}</span>
       </summary>

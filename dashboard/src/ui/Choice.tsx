@@ -39,6 +39,8 @@ export interface Segment<T extends string> {
   icon?: ComponentChildren;
   // Only the icon shows; the label names it.
   iconOnly?: boolean;
+  // After the label: a count ("Errors 1").
+  extra?: ComponentChildren;
   // A view: a link, current when it is the value.
   href?: string;
 }
@@ -67,6 +69,7 @@ export function Segmented<T extends string>({
           <>
             {o.icon}
             {!o.iconOnly && o.label}
+            {o.extra}
           </>
         );
         const name = o.iconOnly ? o.label : undefined;

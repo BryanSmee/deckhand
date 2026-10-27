@@ -119,3 +119,22 @@ export function makePolicyFile(over: Partial<PolicyFile> & Pick<PolicyFile, "nam
     ...over,
   };
 }
+
+// A log stream (api.ts useRunLog()): the last one opened, which a spec makes speak.
+export class FakeSource {
+  static last: FakeSource | null = null;
+  listeners = new Map<string, ((e: { data: string }) => void)[]>();
+  closed = false;
+  constructor(public url: string) {
+    FakeSource.last = this;
+  }
+  addEventListener(type: string, fn: (e: { data: string }) => void) {
+    this.listeners.set(type, [...(this.listeners.get(type) ?? []), fn]);
+  }
+  close() {
+    this.closed = true;
+  }
+  emit(type: string, data: unknown) {
+    for (const fn of this.listeners.get(type) ?? []) fn({ data: JSON.stringify(data) });
+  }
+}

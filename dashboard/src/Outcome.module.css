@@ -1,0 +1,107 @@
+/* A run's outcome: a card above its log. */
+.outcome {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px 18px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface);
+}
+
+.top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.h {
+  margin: 0;
+  color: var(--text-3);
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.actions {
+  margin-left: auto;
+  display: flex;
+  gap: 8px;
+}
+
+.reply {
+  max-width: 880px;
+  margin: 0;
+  font-size: 14px;
+  line-height: 22px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.working {
+  color: var(--text-2);
+}
+
+.facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.fact {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text-2);
+  font-size: 12.5px;
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+
+a.fact:hover {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+.mono {
+  font-family: var(--mono);
+}
+
+.line {
+  color: var(--text-3);
+  font-size: 12.5px;
+}
+
+.phoneActions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.phoneActions > * {
+  width: 100%;
+}
+
+@media (max-width: 760px) {
+  .outcome {
+    gap: 10px;
+    padding: 14px;
+  }
+  .top {
+    gap: 6px;
+  }
+  .reply {
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    line-height: 21px;
+  }
+}
