@@ -17,6 +17,14 @@
     color var(--fast);
 }
 
+button.nav {
+  width: 100%;
+  border: 0;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+}
+
 .nav:hover {
   background: var(--surface-2);
   color: var(--text);

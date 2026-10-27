@@ -10,7 +10,7 @@ const state = makeState();
 const KEY = "acme/api#127";
 
 const show = (change: (t: Task) => Task) => {
-  history.replaceState(null, "", `#/all?task=${encodeURIComponent(KEY)}`);
+  history.replaceState(null, "", `#/?task=${encodeURIComponent(KEY)}`);
   const tasks = state.tasks.map((t) => (t.key === KEY ? change(t) : t));
   render(<Dashboard state={{ ...state, tasks }} error={null} refresh={async () => {}} />);
 };

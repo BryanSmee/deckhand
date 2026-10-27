@@ -1,23 +1,22 @@
-// The dashboard: repo tabs, the tab's tasks filtered by state, the open task and its log; the
-// graph of what waits for what; or the repositories page, where onboarding starts and each
-// one's config shows.
-// What is shown lives in the address (route.ts); the state chip and the graph's "Show closed"
-// are kept on this device.
+// The dashboard: the shell (Shell.tsx: the sidebar, or a phone's bars) around a page: a repo's
+// tasks (or every repo's) filtered by state, the open task and its log; a repo's board, the
+// graph of what waits for what; or Settings, the repositories page, where onboarding starts
+// and each one's config shows.
+// What is shown lives in the address (route.ts); the state chip, the graph's "Show closed",
+// the repo last open and the sidebar's rail are kept on this device.
 import { useEffect, useState } from "preact/hooks";
 import { AnalyzeDialog, analysisRepos } from "./Analyze";
 import { type RepoList, useAppState, useRepos } from "./api";
 import { Detail } from "./Detail";
 import { Graph } from "./Graph";
 import { InboxDialog } from "./Inbox";
-import { type ChipId, CHIPS, inChip, isLive, plural, repoTabs, sameRepo } from "./format";
+import { type ChipId, CHIPS, inChip, isLive, repoTabs, sameRepo } from "./format";
 import { useReadyNotifications } from "./notify";
-import { notOnboarded, Repos } from "./Repos";
+import { Repos } from "./Repos";
 import { formatRoute, parseRoute, type Route } from "./route";
-import { SyncButton } from "./Sync";
-import { Tabs } from "./Tabs";
+import { PageHeader, type Request, Sidebar, TabBar, TopBar } from "./Shell";
 import { TaskList } from "./TaskList";
 import type { State } from "./types";
-import { ThemeSwitch } from "./ui/ThemeSwitch";
 import styles from "./App.module.css";
 
 export function App() {
@@ -41,11 +40,14 @@ const store = (name: string, value: string) => {
   }
 };
 
-// No address yet: the tab last open on this device.
+// No address yet: the repo last open on this device. An old address (route.ts) is rewritten
+// to its new one, in place.
 function readRoute(): Route {
-  if (location.hash.length > 1) return parseRoute(location.hash);
-  const repo = stored("tab");
-  return { repo: repo || null, task: null, run: null };
+  if (location.hash.length <= 1) return { repo: stored("tab") || null, task: null, run: null };
+  const route = parseRoute(location.hash);
+  const hash = formatRoute(route);
+  if (hash !== location.hash) history.replaceState(null, "", hash);
+  return route;
 }
 
 function useRoute(): [Route, (next: Route, replace?: boolean) => void] {
@@ -95,14 +97,14 @@ export function Dashboard({ state, error, repos, refresh }: Props) {
     return CHIPS.some((c) => c.id === saved) ? (saved as ChipId) : "all";
   });
   const [showClosed, setShowClosed] = useState(() => stored("graphClosed") === "1");
-  // The Feedback dialog: an idea or a bug report for a repo's inbox.
-  const [inbox, setInbox] = useState(false);
-  // The Analyze dialog: a run that reviews a repo's recent runs.
-  const [analyze, setAnalyze] = useState(false);
+  const [rail, setRail] = useState(() => stored("sidebar") === "rail");
+  // New request's dialogs: an idea or a bug report for a repo's inbox (Feedback), or a run
+  // that reviews a repo's recent runs (Analyze).
+  const [request, setRequest] = useState<Request | null>(null);
   const wide = useWide();
   const tasks = state?.tasks ?? [];
   const now = state?.now ?? Date.now();
-  // The address's repo as its tab spells it: GitHub ignores case, a link may not match.
+  // The address's repo as the sidebar spells it: GitHub ignores case, a link may not match.
   const tabRepo =
     (route.repo && repoTabs(tasks).find((t) => sameRepo(t.repo, route.repo))?.repo) || route.repo;
   const inTab = route.repo ? tasks.filter((t) => sameRepo(t.repo, route.repo)) : tasks;
@@ -112,9 +114,9 @@ export function Dashboard({ state, error, repos, refresh }: Props) {
   // A wide screen has room for a task: the first live one, else the first one, once.
   const visible = inTab.filter((t) => inChip(chip, t));
   const first = visible.find(isLive) ?? visible[0];
-  const onRepos = route.page === "repositories";
-  const onGraph = route.page === "graph";
-  // The address takes the tab's spelling, so links copied from it are the canonical ones.
+  const onSettings = route.page === "settings";
+  const onBoard = route.page === "board";
+  // The address takes the sidebar's spelling, so links copied from it are the canonical ones.
   useEffect(() => {
     if (tabRepo !== route.repo) go({ ...route, repo: tabRepo }, true);
   }, [tabRepo, route.repo]);
@@ -122,11 +124,11 @@ export function Dashboard({ state, error, repos, refresh }: Props) {
     if (wide && !route.page && !route.task && first)
       go({ ...route, repo: tabRepo, task: first.key, run: null }, true);
   }, [wide, route.page, route.task, first?.key]);
+  // The repo shown is the one to come back to (Tasks and Board on a phone, an empty address).
+  useEffect(() => {
+    if (!onSettings) store("tab", route.repo ?? "");
+  }, [onSettings, route.repo]);
 
-  const selectTab = (repo: string | null) => {
-    store("tab", repo ?? "");
-    go({ repo, task: null, run: null });
-  };
   const selectShowClosed = (show: boolean) => {
     store("graphClosed", show ? "1" : "");
     setShowClosed(show);
@@ -135,132 +137,25 @@ export function Dashboard({ state, error, repos, refresh }: Props) {
     store("chip", next);
     setChip(next);
   };
+  const selectRail = (next: boolean) => {
+    store("sidebar", next ? "rail" : "");
+    setRail(next);
+  };
 
-  const hooks = state?.previews?.length ?? 0;
-  const status = error
-    ? `Can't reach the listener (${error})`
-    : state
-      ? `${state.running} running (max ${state.maxParallel}) · ${state.queued} queued` +
-        (hooks ? ` · ${plural(hooks, "preview hook")}` : "")
-      : "Loading…";
-  const waiting = notOnboarded(repos?.repos ?? null);
   const notify = useReadyNotifications(state);
-  // Home is the tasks, in the tab shown (the graph's repo), or from the repositories page the
-  // tab last open here.
-  const home = formatRoute({
-    repo: onRepos ? stored("tab") || null : route.repo,
-    task: null,
-    run: null,
-  });
+  const github = state?.githubUrl ?? "https://github.com";
+  const shell = { state, error, route, refresh, onRequest: setRequest };
 
   return (
     <div class={`${styles.app} ${task ? styles.reading : ""}`}>
-      <header class={styles.top}>
-        <h1 class={styles.brand}>
-          <a href={home} title="Home">
-            Deckhand
-          </a>
-        </h1>
-        <span class={`${styles.status} ${error ? styles.error : ""}`}>{status}</span>
-        {state && <SyncButton onSynced={refresh} />}
-        <nav class={styles.pages} aria-label="Pages">
-          <a
-            class={`${styles.link} ${styles.home}`}
-            href={home}
-            aria-current={!onGraph && !onRepos ? "page" : undefined}
-            title="The tasks"
-          >
-            Home
-          </a>
-          <a
-            class={styles.link}
-            href={formatRoute({ repo: route.repo, task: null, run: null, page: "graph" })}
-            aria-current={onGraph ? "page" : undefined}
-            title="What waits for what"
-          >
-            Graph
-          </a>
-          {repos && (
-            <a
-              class={styles.link}
-              href="#/repositories"
-              aria-current={onRepos ? "page" : undefined}
-              title={waiting ? `${waiting} not onboarded` : "Repositories"}
-            >
-              Repositories
-              {waiting > 0 && <span class={styles.waiting}>{waiting}</span>}
-            </a>
-          )}
-          {state && (
-            <button
-              type="button"
-              class={styles.link}
-              aria-haspopup="dialog"
-              aria-expanded={inbox}
-              title="Send an idea or a bug report to a repository"
-              onClick={() => setInbox(true)}
-            >
-              Feedback
-            </button>
-          )}
-          {state && (
-            <button
-              type="button"
-              class={styles.link}
-              aria-haspopup="dialog"
-              aria-expanded={analyze}
-              title="A run that reviews a repository's recent runs and suggests how to make them faster and more reliable"
-              onClick={() => setAnalyze(true)}
-            >
-              Analyze
-            </button>
-          )}
-        </nav>
-        {notify.permission === "default" && (
-          <button
-            type="button"
-            class={styles.notify}
-            title="A browser notification when a pull request is ready for review, while this page is open"
-            onClick={notify.ask}
-          >
-            Notify me
-          </button>
-        )}
-        <ThemeSwitch class={styles.theme} />
-        {state && (
-          <form class={styles.who} method="post" action="auth/logout">
-            <span>@{state.user}</span>
-            <button type="submit">Sign out</button>
-          </form>
-        )}
-      </header>
-      {inbox && state && (
-        <InboxDialog
-          inboxes={state.inboxes}
-          tasks={tasks}
-          repo={route.repo}
-          onClose={() => setInbox(false)}
-          onSent={() => void refresh?.()}
-        />
+      {wide ? (
+        <Sidebar {...shell} repos={repos} rail={rail} onRail={selectRail} notify={notify} />
+      ) : (
+        <TopBar {...shell} />
       )}
-      {analyze && state && (
-        <AnalyzeDialog
-          repos={analysisRepos(state.inboxes, tasks)}
-          tasks={tasks}
-          repo={route.repo}
-          onClose={() => setAnalyze(false)}
-          onSent={() => void refresh?.()}
-        />
-      )}
-      {onGraph ? (
-        <>
-          <div class={styles.tabs}>
-            <Tabs
-              tasks={tasks}
-              repo={route.repo}
-              onSelect={(repo) => go({ repo, task: null, run: null, page: "graph" })}
-            />
-          </div>
+      <div class={styles.content}>
+        {wide && <PageHeader route={route} github={github} />}
+        {onBoard ? (
           <main class={styles.page}>
             <Graph
               state={state}
@@ -271,25 +166,22 @@ export function Dashboard({ state, error, repos, refresh }: Props) {
               onShowClosed={selectShowClosed}
             />
           </main>
-        </>
-      ) : onRepos && repos ? (
-        <main class={styles.page}>
-          <Repos
-            list={repos}
-            onBack={() => go({ repo: stored("tab") || null, task: null, run: null })}
-            open={route.config ?? null}
-            server={state?.server}
-            serverNow={state?.now}
-            onOpen={(repo) =>
-              go({ repo: null, task: null, run: null, page: "repositories", config: repo })
-            }
-          />
-        </main>
-      ) : (
-        <>
-          <div class={styles.tabs}>
-            <Tabs tasks={tasks} repo={route.repo} onSelect={selectTab} />
-          </div>
+        ) : onSettings ? (
+          <main class={styles.page}>
+            {repos && (
+              <Repos
+                list={repos}
+                onBack={() => go({ repo: stored("tab") || null, task: null, run: null })}
+                open={route.config ?? null}
+                server={state?.server}
+                serverNow={state?.now}
+                onOpen={(repo) =>
+                  go({ repo: null, task: null, run: null, page: "settings", config: repo })
+                }
+              />
+            )}
+          </main>
+        ) : (
           <div class={styles.body}>
             <aside class={styles.side}>
               <TaskList
@@ -310,12 +202,31 @@ export function Dashboard({ state, error, repos, refresh }: Props) {
                 onRun={(id) => task && go({ ...route, task: task.key, run: id }, true)}
                 onBack={() => go({ ...route, task: null, run: null }, true)}
                 now={now}
-                github={state?.githubUrl ?? "https://github.com"}
+                github={github}
                 refresh={refresh}
               />
             </main>
           </div>
-        </>
+        )}
+      </div>
+      {!wide && !task && <TabBar state={state} route={route} lastRepo={stored("tab") || null} />}
+      {request === "inbox" && state && (
+        <InboxDialog
+          inboxes={state.inboxes}
+          tasks={tasks}
+          repo={route.repo}
+          onClose={() => setRequest(null)}
+          onSent={() => void refresh?.()}
+        />
+      )}
+      {request === "analyze" && state && (
+        <AnalyzeDialog
+          repos={analysisRepos(state.inboxes, tasks)}
+          tasks={tasks}
+          repo={route.repo}
+          onClose={() => setRequest(null)}
+          onSent={() => void refresh?.()}
+        />
       )}
     </div>
   );

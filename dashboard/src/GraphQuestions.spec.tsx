@@ -3,6 +3,7 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/preact";
 import { beforeEach, expect, test } from "vitest";
 import { Dashboard } from "./App";
+import { Graph } from "./Graph";
 import { BACKLOG, makeState, mockApi } from "./testUtils";
 import type { State } from "./types";
 
@@ -17,7 +18,7 @@ beforeEach(() => {
     "api/repos/acme/api/issues": () => BACKLOG,
     "POST api/repos/acme/api/answer": () => answer(),
   });
-  history.replaceState(null, "", "#/graph/acme/api");
+  history.replaceState(null, "", "#/acme/api/board");
 });
 
 const area = async (shown: State = state) => {
@@ -210,9 +211,10 @@ test("a click on a node waiting for answers opens them; they go, Sending… unti
   await waitFor(() => expect(node(/^#138 .*: Needs input/)).toBeTruthy());
 });
 
-test("on the All tab too; Escape and the backdrop close it without sending", async () => {
-  history.replaceState(null, "", "#/graph");
-  render(<Dashboard state={state} error={null} />);
+test("on every repo's graph too; Escape and the backdrop close it without sending", async () => {
+  render(
+    <Graph state={state} repo={null} narrow={false} showClosed={false} onShowClosed={() => {}} />,
+  );
   fireEvent.click(node(/#138 .*: Needs input/));
   expect(screen.getByRole("dialog", { name: "Answer #138's questions" })).toBeTruthy();
   fireEvent.keyDown(window, { key: "Escape" });

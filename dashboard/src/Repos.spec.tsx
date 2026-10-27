@@ -202,7 +202,7 @@ test("Start onboarding posts, and the row switches to its issue", async () => {
   expect(api.posted).toContainEqual({ url: "api/repos/org/app/onboard", body: undefined });
 });
 
-test("the header counts the repositories not onboarded and opens the page", async () => {
+test("Settings counts the repositories not onboarded and opens the page", async () => {
   const list = {
     repos: REPOS,
     app: null,
@@ -218,13 +218,19 @@ test("the header counts the repositories not onboarded and opens the page", asyn
   };
   // The fixture's server: started 3 days and 3 hours before its `now`.
   render(<Dashboard state={makeState()} error={null} repos={list} />);
-  const link = screen.getByRole("link", { name: /Repositories/ });
-  expect(link.textContent).toBe("Repositories2");
-  expect(screen.queryByRole("heading", { name: "Repositories" })).toBeNull();
-  history.replaceState(null, "", "#/repositories");
+  const link = screen.getByRole("link", { name: /Settings/ });
+  expect(link.textContent).toBe("Settings 2");
+  expect(link.getAttribute("href")).toBe("#/settings/repositories");
+  expect(link.getAttribute("aria-current")).toBeNull();
+  expect(
+    within(screen.getByRole("main")).queryByRole("heading", { name: "Repositories" }),
+  ).toBeNull();
+  history.replaceState(null, "", "#/settings/repositories");
   dispatchEvent(new HashChangeEvent("hashchange"));
-  await waitFor(() => screen.getByRole("heading", { name: "Repositories" }));
-  expect(screen.queryByRole("tablist")).toBeNull();
+  await waitFor(() =>
+    within(screen.getByRole("main")).getByRole("heading", { name: "Repositories" }),
+  );
+  expect(screen.getByRole("link", { name: /Settings/ }).getAttribute("aria-current")).toBe("page");
   // App passes the state's server and its clock: the uptime counts on the server's `now`.
   expect(screen.getByRole("link", { name: "edge-1713fa6" }).parentElement!.textContent).toBe(
     "Deckhand edge-1713fa6 · up 3 d 3 h · Node 26.1.0",

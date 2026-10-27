@@ -1,74 +1,16 @@
+/* The shell's sidebar (or a phone's top bar), the page beside it (or under it), and a phone's
+   tab bar at the bottom. */
 .app {
   height: 100%;
   display: flex;
-  flex-direction: column;
 }
 
-.top {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem 1rem;
-  padding: 0.7rem 1rem;
-  background: var(--panel);
-  border-bottom: 1px solid var(--line);
-}
-
-.brand {
-  margin: 0;
-  font-size: 1rem;
-  font-weight: 700;
-}
-
-.brand a {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  color: inherit;
-  text-decoration: none;
-}
-
-.brand a::before {
-  content: "";
-  width: 0.85rem;
-  height: 0.85rem;
-  border-radius: 3px;
-  background: var(--accent);
-}
-
-.status {
+.content {
   flex: 1;
   min-width: 0;
-  color: var(--muted);
-  font-size: 0.8rem;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.status.error {
-  color: var(--err);
-}
-
-.theme {
-  flex: none;
-}
-
-.who {
+  min-height: 0;
   display: flex;
-  gap: 0.5rem;
-  margin: 0;
-  color: var(--muted);
-  font-size: 0.8rem;
-  white-space: nowrap;
-}
-
-.who button {
-  padding: 0;
-  border: 0;
-  background: none;
-  color: var(--accent);
-  cursor: pointer;
-  text-decoration: underline;
+  flex-direction: column;
 }
 
 .body {
@@ -83,8 +25,8 @@
   min-height: 0;
   display: flex;
   flex-direction: column;
-  border-right: 1px solid var(--line);
-  background: var(--panel);
+  border-right: 1px solid var(--border);
+  background: var(--surface);
 }
 
 .main {
@@ -92,8 +34,16 @@
   min-height: 0;
 }
 
+.page {
+  flex: 1;
+  min-height: 0;
+}
+
 /* A phone shows the list, or the open task with a way back. */
 @media (max-width: 760px) {
+  .app {
+    flex-direction: column;
+  }
   .body {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -104,156 +54,4 @@
   .app:not(.reading) .main {
     display: none;
   }
-  .reading .tabs,
-  .reading .status {
-    display: none;
-  }
-  /* The status's line, with Sign out at its end: the brand's line has the page links. */
-  .status {
-    order: 3;
-    flex: 1 1 auto;
-  }
-  /* Sync beside the status, Sign out after it; what it did on a line of its own below. */
-  .top .sync {
-    display: contents;
-  }
-  .top .syncButton {
-    order: 3;
-  }
-  .top .synced,
-  .top .syncFailed {
-    order: 5;
-    flex-basis: 100%;
-    font-size: 0.8rem;
-    white-space: normal;
-  }
-  .theme {
-    order: 4;
-  }
-  .who {
-    order: 4;
-    margin-left: auto;
-  }
-  .top {
-    flex-wrap: wrap;
-  }
-  /* Phones don't show a tab's notifications (iOS only an installed app's, Android only a
-     service worker's): no button that does nothing. */
-  .notify {
-    display: none;
-  }
-  /* Room for the page links on the brand's line: the login is in GitHub's menu. */
-  .pages {
-    margin-left: auto;
-  }
-  /* Three page links beside the brand. */
-  .top .pages {
-    gap: 0.75rem;
-  }
-  /* No room for it next to the others: the brand is the way home. */
-  .link.home {
-    display: none;
-  }
-  .who span {
-    display: none;
-  }
-}
-
-.pages {
-  display: flex;
-  gap: 1rem;
-}
-
-.link {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-  color: var(--muted);
-  font-size: 0.8rem;
-  font-weight: 600;
-  text-decoration: none;
-  white-space: nowrap;
-}
-
-button.link {
-  padding: 0;
-  border: 0;
-  background: none;
-  font-family: inherit;
-  cursor: pointer;
-}
-
-.link:hover,
-.link[aria-current="page"] {
-  color: var(--ink);
-}
-
-.notify {
-  padding: 0;
-  border: 0;
-  background: none;
-  color: var(--muted);
-  font-size: 0.8rem;
-  font-weight: 600;
-  white-space: nowrap;
-  cursor: pointer;
-}
-
-.notify:hover {
-  color: var(--ink);
-}
-
-.sync {
-  display: flex;
-  align-items: baseline;
-  gap: 0.5rem;
-  min-width: 0;
-  font-size: 0.8rem;
-}
-
-.syncButton {
-  padding: 0;
-  border: 0;
-  background: none;
-  color: var(--muted);
-  font: inherit;
-  font-weight: 600;
-  white-space: nowrap;
-  cursor: pointer;
-}
-
-.syncButton:hover:not(:disabled) {
-  color: var(--ink);
-}
-
-.syncButton:disabled {
-  cursor: progress;
-}
-
-.synced,
-.syncFailed {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--muted);
-}
-
-.syncFailed {
-  color: var(--err);
-}
-
-.waiting {
-  min-width: 1.25rem;
-  padding: 0 0.35rem;
-  border-radius: 999px;
-  background: var(--input-bg);
-  color: var(--input);
-  font-size: 0.7rem;
-  line-height: 1.25rem;
-  text-align: center;
-}
-
-.page {
-  flex: 1;
-  min-height: 0;
 }

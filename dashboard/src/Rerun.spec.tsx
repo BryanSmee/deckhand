@@ -20,7 +20,7 @@ beforeEach(() => {
 // The page of task `key`, run `run` picked if given, with the task changed by `change`.
 const show = (key: string, change: (t: Task) => Task = (t) => t, run?: string) => {
   const query = `task=${encodeURIComponent(key)}${run ? `&run=${encodeURIComponent(run)}` : ""}`;
-  history.replaceState(null, "", `#/all?${query}`);
+  history.replaceState(null, "", `#/?${query}`);
   const tasks = state.tasks.map((t) => (t.key === key ? change(t) : t));
   render(<Dashboard state={{ ...state, tasks }} error={null} refresh={refresh} />);
   return screen.queryByRole("button", { name: "Rerun" });

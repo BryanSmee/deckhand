@@ -121,9 +121,11 @@ test("notifications are asked for from a button, and not shown without permissio
   );
   expect(FakeNotification.shown).toHaveLength(0);
 
-  fireEvent.click(screen.getByRole("button", { name: "Notify me" }));
+  fireEvent.click(screen.getByRole("button", { name: "Notify me when ready" }));
   expect(FakeNotification.requestPermission).toHaveBeenCalledOnce();
-  await vi.waitFor(() => expect(screen.queryByRole("button", { name: "Notify me" })).toBeNull());
+  await vi.waitFor(() =>
+    expect(screen.queryByRole("button", { name: "Notify me when ready" })).toBeNull(),
+  );
 });
 
 test("the detail shows what the policies last decided about its pull request", () => {

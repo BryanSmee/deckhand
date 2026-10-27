@@ -274,6 +274,34 @@ export function repoTabs(tasks: Task[]): { repo: string; label: string }[] {
   }));
 }
 
+// The sidebar's repositories, in repoTabs()'s order (a repo from the address without a task
+// yet too), each with its tasks running (its dot) and those waiting on you (its count): the
+// old tabs' counts. `all` counts every repo's. `moving`: one of its runs is going on (the dot
+// pulses), not only queued or waiting.
+export interface RepoCounts {
+  repo: string;
+  live: number;
+  input: number;
+  moving: boolean;
+}
+
+export function repoCounts(
+  tasks: Task[],
+  current: string | null,
+): { all: Omit<RepoCounts, "repo">; repos: RepoCounts[] } {
+  const repos = repoTabs(tasks).map((t) => t.repo);
+  if (current && !repos.some((r) => sameRepo(r, current))) repos.push(current);
+  const count = (mine: Task[]) => ({
+    live: mine.filter((t) => inChip("running", t)).length,
+    input: mine.filter((t) => inChip("input", t)).length,
+    moving: mine.some(isLive),
+  });
+  return {
+    all: count(tasks),
+    repos: repos.map((repo) => ({ repo, ...count(tasks.filter((t) => sameRepo(t.repo, repo))) })),
+  };
+}
+
 // A repository's status (api/repos), as its badge says it.
 export const REPO_LABELS: Record<RepoStatus, string> = {
   configured: "Configured",

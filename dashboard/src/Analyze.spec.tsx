@@ -58,10 +58,11 @@ const analysisTask = (runs: string[]): Task =>
 const stateWith = (tasks: Task[] = []): State =>
   makeState({ inboxes: { "acme/other": { ideas: null, bugs: null, discussions: null } } }, tasks);
 
-const openDialog = (state: State, hash = "#/all") => {
+const openDialog = (state: State, hash = "#/") => {
   history.replaceState(null, "", hash);
   const view = render(<Dashboard state={state} error={null} />);
-  fireEvent.click(screen.getByRole("button", { name: "Analyze" }));
+  fireEvent.click(screen.getByRole("button", { name: "New request" }));
+  fireEvent.click(screen.getByRole("menuitem", { name: "Analyze runs" }));
   return { view, dialog: screen.getByRole("dialog", { name: "Analyze runs" }) };
 };
 

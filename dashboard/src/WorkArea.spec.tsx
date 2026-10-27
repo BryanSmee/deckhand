@@ -2,6 +2,7 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/preact";
 import { beforeEach, expect, test, vi } from "vitest";
 import { Dashboard } from "./App";
+import { Graph } from "./Graph";
 import { BACKLOG as EMPTY, makeState, mockApi } from "./testUtils";
 import type { Backlog } from "./types";
 
@@ -41,14 +42,16 @@ const open = (hash: string) => {
   render(<Dashboard state={state} error={null} />);
 };
 
-test("the All tab has no work area: a repo's tab has", () => {
-  open("#/graph");
+test("every repo's graph has no work area: a repo's has", () => {
+  render(
+    <Graph state={state} repo={null} narrow={false} showClosed={false} onShowClosed={() => {}} />,
+  );
   expect(screen.queryByRole("region", { name: "Work area" })).toBeNull();
   expect(screen.getByText(/Open a repository's tab to start or queue/)).toBeTruthy();
 });
 
 test("the backlog lists the repo's open issues; Start sends the mode picked", async () => {
-  open("#/graph/acme/app");
+  open("#/acme/app/board");
   const area = screen.getByRole("region", { name: "Work area" });
   await within(area).findByText("Export the run log");
   fireEvent.change(within(area).getByRole("combobox", { name: /Start in/ }), {
@@ -66,7 +69,7 @@ test("the backlog lists the repo's open issues; Start sends the mode picked", as
 
 test("a parent issue's Start and Queue lay out its sub-issues with it", async () => {
   backlog = { ...BACKLOG, issues: [{ ...BACKLOG.issues[0], subIssues: 1 }] };
-  open("#/graph/acme/app");
+  open("#/acme/app/board");
   const area = screen.getByRole("region", { name: "Work area" });
   const item = (await within(area).findByText("Export the run log")).closest("li")!;
   expect(within(item).getByText("1 sub-issue")).toBeTruthy();
@@ -86,7 +89,7 @@ test("a parent issue's Start and Queue lay out its sub-issues with it", async ()
 });
 
 test("Queue after…: the graph's issues to pick from", async () => {
-  open("#/graph/acme/app");
+  open("#/acme/app/board");
   const area = screen.getByRole("region", { name: "Work area" });
   await within(area).findByText("Export the run log");
   const item = within(area).getByText("Export the run log").closest("li")!;
@@ -102,7 +105,7 @@ test("Queue after…: the graph's issues to pick from", async () => {
 });
 
 test("a waiting issue: Remove cancels its wait, Start now keeps its mode", async () => {
-  open("#/graph/acme/app");
+  open("#/acme/app/board");
   const waiting = screen.getByRole("list", { name: "Waiting issues" });
   expect(within(waiting).getByText("after #23 and #22")).toBeTruthy();
   fireEvent.click(within(waiting).getByRole("button", { name: "Remove #24's wait" }));
@@ -113,7 +116,7 @@ test("a waiting issue: Remove cancels its wait, Start now keeps its mode", async
 
 test("a config with errors: nothing to start", async () => {
   backlog = { ...BACKLOG, modes: [], errors: true };
-  open("#/graph/acme/app");
+  open("#/acme/app/board");
   expect(await screen.findByText(/has errors: nothing starts/)).toBeTruthy();
   expect(screen.getByRole("button", { name: "Start #31" })).toHaveProperty("disabled", true);
 });
@@ -122,7 +125,7 @@ test("a Start shows at once: a pending node, the issue out of the backlog; then 
   // The work POST's answer held until the test lets it go.
   const answer = api.hold();
   const refresh = vi.fn(async () => {});
-  history.replaceState(null, "", "#/graph/acme/app");
+  history.replaceState(null, "", "#/acme/app/board");
   render(<Dashboard state={state} error={null} refresh={refresh} />);
   const area = screen.getByRole("region", { name: "Work area" });
   await within(area).findByText("Export the run log");
@@ -142,7 +145,7 @@ test("a refused action: its pending node goes, the issue comes back, the error s
   // The work POST's answer held until the test lets it go.
   const answer = api.hold();
   const refresh = vi.fn(async () => {});
-  history.replaceState(null, "", "#/graph/acme/app");
+  history.replaceState(null, "", "#/acme/app/board");
   render(<Dashboard state={state} error={null} refresh={refresh} />);
   const area = screen.getByRole("region", { name: "Work area" });
   await within(area).findByText("Keyboard shortcuts");
@@ -191,15 +194,15 @@ const go = (hash: string) => {
 
 test("back on the Graph, or on a repo's tab, the last backlog shows at once and is read again", async () => {
   const { gate, reads } = slowBacklogs();
-  open("#/graph/acme/app");
+  open("#/acme/app/board");
   // The first time: nothing to show yet.
   expect(await screen.findByText("Loading…")).toBeTruthy();
   gate.release();
   await screen.findByText("Export the run log");
   // Another page, then back: shown before the listener answers.
-  go("#/repositories");
+  go("#/settings/repositories");
   await waitFor(() => expect(screen.queryByRole("region", { name: "Work area" })).toBeNull());
-  go("#/graph/acme/app");
+  go("#/acme/app/board");
   await waitFor(() => expect(reads).toEqual(["acme/app", "acme/app"]));
   const area = screen.getByRole("region", { name: "Work area" });
   expect(within(area).getByText("Export the run log")).toBeTruthy();
@@ -210,11 +213,11 @@ test("back on the Graph, or on a repo's tab, the last backlog shows at once and 
   await waitFor(() => expect(within(area).queryByText("Export the run log")).toBeNull());
   expect(within(area).getByText("Keyboard shortcuts")).toBeTruthy();
   // Another repo's tab is new: Loading…; back on acme/app, its backlog at once.
-  go("#/graph/acme/api");
+  go("#/acme/api/board");
   expect(await within(area).findByText("Loading…")).toBeTruthy();
   gate.release();
   await within(area).findByText("No open issue left to start.");
-  go("#/graph/acme/app");
+  go("#/acme/app/board");
   await waitFor(() => expect(reads.at(-1)).toBe("acme/app"));
   expect(within(area).getByText("Keyboard shortcuts")).toBeTruthy();
   expect(within(area).queryByText("Loading…")).toBeNull();
@@ -223,14 +226,14 @@ test("back on the Graph, or on a repo's tab, the last backlog shows at once and 
 test("an error with nothing seen yet says it can't read the issues", async () => {
   const { gate } = slowBacklogs();
   gate.fail = true;
-  open("#/graph/acme/app");
+  open("#/acme/app/board");
   await screen.findByText("Loading…");
   gate.release();
   expect(await screen.findByText("Can't read the issues (GitHub is down.).")).toBeTruthy();
 });
 
 test("a card's title, clamped to two lines, is whole in its title attribute", async () => {
-  open("#/graph/acme/app");
+  open("#/acme/app/board");
   const area = screen.getByRole("region", { name: "Work area" });
   const title = await within(area).findByText("Export the run log");
   expect(title.getAttribute("title")).toBe("Export the run log");
@@ -249,7 +252,7 @@ test("an old backlog (refreshing) is read again in a few seconds, not at the nex
     ];
     const reads = vi.fn(() => answers.shift() ?? answers.at(-1));
     api.routes["api/repos/acme/app/issues"] = reads;
-    open("#/graph/acme/app");
+    open("#/acme/app/board");
     const area = screen.getByRole("region", { name: "Work area" });
     await vi.advanceTimersByTimeAsync(0);
     expect(within(area).getByText("Export the run log")).toBeTruthy();

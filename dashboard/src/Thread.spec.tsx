@@ -45,7 +45,7 @@ beforeEach(() => {
 });
 
 const show = () => {
-  history.replaceState(null, "", `#/all?task=${encodeURIComponent(KEY)}`);
+  history.replaceState(null, "", `#/?task=${encodeURIComponent(KEY)}`);
   render(<Dashboard state={state} error={null} refresh={refresh} />);
 };
 

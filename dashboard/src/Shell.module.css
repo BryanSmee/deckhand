@@ -1,0 +1,490 @@
+/* The app shell: the sidebar (232 px) or its rail (64 px), the page header; on a phone, the
+   top bar and the tab bar (docs/design/reference/tasks.html, board.html, mobile-tasks.html). */
+.side {
+  flex: none;
+  width: 232px;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding: 16px 12px;
+  overflow-y: auto;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+}
+
+.rail {
+  width: 64px;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 0;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 4px;
+}
+
+.rail .brand {
+  padding: 0;
+  margin-bottom: 6px;
+}
+
+.logo {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius);
+  background: var(--primary);
+  color: var(--on-primary);
+}
+
+.rail .logo {
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
+}
+
+.name {
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--text);
+  text-decoration: none;
+}
+
+.collapse {
+  margin-left: auto;
+}
+
+.rule {
+  flex: none;
+  width: 28px;
+  height: 1px;
+  margin: 4px 0;
+  background: var(--border);
+}
+
+.repos {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.touch > a {
+  height: 44px;
+  font-size: 15px;
+}
+
+.rail .repos {
+  align-items: center;
+}
+
+.heading {
+  margin: 0;
+  padding: 0 10px 6px;
+  font-size: 11.5px;
+  font-weight: 600;
+  line-height: 16px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+
+/* The running dot, where the other items have their icon. */
+.dot {
+  display: flex;
+  margin: 0 4px;
+}
+
+/* A repository on the rail: its name without the owner, as much as fits. */
+.short {
+  max-width: 36px;
+  overflow: hidden;
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  text-overflow: clip;
+}
+
+.bottom {
+  margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.rail .bottom {
+  align-items: center;
+}
+
+/* New request: a full-width button, an icon on the rail and the top bar, and its menu. */
+.request {
+  position: relative;
+}
+
+.full {
+  display: flex;
+  flex-direction: column;
+}
+
+.requestButton {
+  justify-content: flex-start;
+}
+
+.menu {
+  position: absolute;
+  z-index: 40;
+  top: calc(100% + 4px);
+  left: 0;
+  min-width: 100%;
+  display: flex;
+  flex-direction: column;
+  padding: 4px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+  animation: drop var(--slide) ease-out;
+}
+
+.icon .menu {
+  top: 0;
+  left: calc(100% + 8px);
+}
+
+.bar .menu {
+  left: auto;
+  right: 0;
+}
+
+.menuItem {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 36px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+  text-align: left;
+  cursor: pointer;
+}
+
+.menuItem:hover,
+.menuItem:focus-visible {
+  background: var(--surface-2);
+}
+
+.menuItem:focus-visible {
+  outline-offset: -2px;
+}
+
+.bar .menuItem {
+  height: 44px;
+}
+
+@keyframes drop {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+}
+
+/* Run slots. */
+.slots {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  background: var(--bg);
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--text-3);
+}
+
+.failed {
+  color: var(--err);
+}
+
+.slotsHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: -4px 0;
+}
+
+.slotsTitle {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.slotsMeta:empty {
+  display: none;
+}
+
+.synced,
+.syncFailed {
+  margin-top: -4px;
+}
+
+.syncFailed {
+  color: var(--err);
+}
+
+.meter {
+  display: grid;
+  gap: 4px;
+}
+
+.meter > span {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--surface-3);
+}
+
+.meter > .used {
+  background: var(--run-solid);
+}
+
+.meterRail {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 6px 0;
+}
+
+.meterRail > span {
+  width: 22px;
+  height: 4px;
+  border-radius: 2px;
+}
+
+/* Many slots: one bar, filled as far as they are used. */
+.bar.meter {
+  display: block;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--surface-3);
+  overflow: hidden;
+}
+
+.bar.meter > span {
+  display: block;
+  height: 100%;
+  border-radius: 0;
+  background: var(--run-solid);
+}
+
+.bar.meterRail {
+  display: flex;
+  flex-direction: column-reverse;
+  width: 6px;
+  height: 40px;
+  padding: 0;
+}
+
+.bar.meterRail > span {
+  width: 100%;
+}
+
+.railError {
+  display: flex;
+  padding: 6px 0;
+  color: var(--err);
+}
+
+/* The user. */
+.user {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 4px;
+}
+
+.login {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The theme switch, compact: the login keeps the room. */
+.theme {
+  flex: none;
+  padding: 2px;
+}
+
+.user .theme > * {
+  height: 24px;
+  padding: 0 6px;
+}
+
+.logout {
+  display: flex;
+  margin: 0;
+}
+
+/* The page header. */
+.header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 16px;
+  padding: 14px 24px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+.title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.title h1 {
+  margin: 0;
+  overflow: hidden;
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 26px;
+  letter-spacing: -0.01em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.github {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-sm);
+  color: var(--text-2);
+  transition:
+    background var(--fast),
+    color var(--fast);
+}
+
+.github:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+/* The phone's top bar. */
+.topbar {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 6px 8px 8px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+.switcher {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  height: 44px;
+  margin-right: auto;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text);
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.switcher:active {
+  background: var(--surface-3);
+}
+
+.switcherLabel {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chevron {
+  flex: none;
+  color: var(--text-3);
+}
+
+/* The phone's tab bar. */
+.tabbar {
+  display: grid;
+  flex: none;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  padding: 4px 8px calc(4px + env(safe-area-inset-bottom));
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+}
+
+.tabbar a {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-height: 56px;
+  border-radius: 10px;
+  color: var(--text-3);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  text-decoration: none;
+}
+
+.tabbar a[aria-current="page"] {
+  color: var(--text);
+}
+
+.tabbar a:focus-visible {
+  outline-offset: -2px;
+}
+
+.pip {
+  position: absolute;
+  top: 6px;
+  left: calc(50% + 6px);
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--input-bg);
+  color: var(--input);
+  font-size: 10px;
+  line-height: 16px;
+  text-align: center;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .menu {
+    animation-name: none;
+  }
+}
