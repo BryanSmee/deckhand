@@ -23,7 +23,7 @@ const task = (number: number, kind: Task["kind"], taskState: Task["state"]) =>
 let api: ReturnType<typeof mockApi>;
 beforeEach(() => {
   api = mockApi({ "api/repos/acme/api/issues": () => BACKLOG });
-  history.replaceState(null, "", "#/graph/acme/api");
+  history.replaceState(null, "", "#/acme/api/board");
 });
 
 const show = async (tasks: Task[] = []) => {

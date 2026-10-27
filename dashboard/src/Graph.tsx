@@ -196,7 +196,7 @@ export function Graph({ state, refresh, repo, narrow, showClosed, onShowClosed }
         </div>
       ) : (
         <>
-          <p class={styles.hint}>Open a repository's tab to start or queue its issues here.</p>
+          <p class={styles.hint}>Open a repository's board to start or queue its issues here.</p>
           <div class={`${styles.work} ${styles.overview}`}>
             <Brainstorms repo={null} cards={brainstorms} github={github} now={now} />
             <div>{drawing}</div>

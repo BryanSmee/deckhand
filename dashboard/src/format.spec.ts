@@ -1,11 +1,13 @@
 import { describe, expect, test } from "vitest";
 import fixture from "./fixture.json";
+import { makeState } from "./testUtils";
 import {
   inChip,
   isPrTask,
   kindName,
   ownMode,
   plural,
+  repoCounts,
   repoTabs,
   sameRepo,
   runKindName,
@@ -186,4 +188,33 @@ describe("status tones", () => {
     expect(taskTone({ state: "error", pr: ready })).toBe("err");
     expect(taskTone({ state: "done", pr: null })).toBe("done");
   });
+});
+
+test("the sidebar's counts are the old tabs': running, and waiting on you", () => {
+  const { tasks } = makeState();
+  // The old tabs' rule, by hand: the Running chip's tasks, and the Needs input chip's.
+  const old = (mine: typeof tasks) => ({
+    live: mine.filter((t) => inChip("running", t)).length,
+    input: mine.filter((t) => inChip("input", t)).length,
+  });
+  const counts = repoCounts(tasks, null);
+  expect(counts.repos.map((c) => c.repo)).toEqual(repoTabs(tasks).map((t) => t.repo));
+  expect(counts.all).toMatchObject(old(tasks));
+  for (const c of counts.repos)
+    expect(c).toMatchObject(old(tasks.filter((t) => sameRepo(t.repo, c.repo))));
+  // The fixture's numbers, so a change to the rule shows here.
+  expect(counts.repos.map(({ repo, live, input, moving }) => [repo, live, input, moving])).toEqual([
+    ["acme/app", 3, 1, true],
+    ["acme/api", 1, 1, true],
+    ["acme/notes", 0, 1, false],
+  ]);
+  expect(counts.all).toEqual({ live: 4, input: 3, moving: true });
+});
+
+test("a repo from the address without a task still gets its line, counting nothing", () => {
+  const { tasks } = makeState();
+  const counts = repoCounts(tasks, "acme/new");
+  expect(counts.repos.at(-1)).toEqual({ repo: "acme/new", live: 0, input: 0, moving: false });
+  // Another spelling of a listed repo is that repo.
+  expect(repoCounts(tasks, "ACME/app").repos).toHaveLength(3);
 });

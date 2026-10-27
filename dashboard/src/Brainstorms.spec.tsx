@@ -33,7 +33,7 @@ beforeEach(() => {
   };
   api = mockApi({ "api/repos/acme/api/issues": () => ({ ...BACKLOG, issues: [issue] }) });
   release = api.hold();
-  history.replaceState(null, "", "#/graph/acme/api");
+  history.replaceState(null, "", "#/acme/api/board");
 });
 
 const show = async (tasks: Task[] = []) => {
@@ -202,7 +202,7 @@ test("a card's whole title is in its title attribute", async () => {
 });
 
 test("a card's time follows the listener's clock, not the browser's", () => {
-  history.replaceState(null, "", "#/graph");
+  history.replaceState(null, "", "#/acme/app/board");
   render(<Dashboard state={{ ...state, now: state.now - 3600000 }} error={null} />);
   const cards = screen.getByRole("list", { name: "Issues being brainstormed" });
   // acme/app#20 goes idle 6 minutes after the fixture's `now`: an hour more, an hour earlier.

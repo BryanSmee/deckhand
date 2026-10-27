@@ -1,11 +1,13 @@
 // A sidebar link: icon, label, then a count (hot when it waits on you). On the rail it is the
-// icon alone, named by its label (aria-label and tooltip).
+// icon alone, named by its label (aria-label and tooltip). Without an href it is a button
+// (Notify me).
 import type { ComponentChildren } from "preact";
 import { Count } from "./Count";
 import styles from "./NavItem.module.css";
 
 interface Props {
-  href: string;
+  href?: string;
+  onClick?: () => void;
   icon?: ComponentChildren;
   label: string;
   current?: boolean;
@@ -14,23 +16,34 @@ interface Props {
   rail?: boolean;
   // After the label (a running dot).
   extra?: ComponentChildren;
+  // Its tooltip, when the label doesn't say it all; the rail's is the label.
+  title?: string;
 }
 
-export function NavItem({ href, icon, label, current, count, hot, rail, extra }: Props) {
+export function NavItem(props: Props) {
+  const { href, onClick, icon, label, current, count, hot, rail, extra, title } = props;
   const counted = count !== undefined && count > 0;
-  return (
-    <a
-      class={`${styles.nav} ${rail ? styles.rail : ""}`}
-      href={href}
-      aria-current={current ? "page" : undefined}
-      aria-label={rail ? (counted ? `${label} (${count})` : label) : undefined}
-      title={rail ? label : undefined}
-    >
+  const attrs = {
+    class: `${styles.nav} ${rail ? styles.rail : ""}`,
+    "aria-label": rail ? (counted ? `${label} (${count})` : label) : undefined,
+    title: rail ? label : title,
+  };
+  const content = (
+    <>
       {icon && <span class={styles.icon}>{icon}</span>}
       {!rail && <span class={styles.label}>{label}</span>}
       {!rail && extra}
       {counted && !rail && " "}
       {counted && <Count class={styles.count} n={count} hot={hot} />}
+    </>
+  );
+  return href === undefined ? (
+    <button {...attrs} type="button" onClick={onClick}>
+      {content}
+    </button>
+  ) : (
+    <a {...attrs} href={href} aria-current={current ? "page" : undefined}>
+      {content}
     </a>
   );
 }

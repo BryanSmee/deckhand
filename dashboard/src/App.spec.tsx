@@ -26,6 +26,20 @@ class FakeSource {
   }
 }
 
+const noRepos: RepoList = {
+  repos: [],
+  app: null,
+  listedAt: null,
+  error: null,
+  starting: null,
+  failed: null,
+  onboard: async () => {},
+  refreshing: false,
+  refreshError: null,
+  refresh: async () => {},
+  update: () => {},
+};
+
 let wide = true;
 beforeEach(() => {
   wide = true;
@@ -43,13 +57,16 @@ const rows = () =>
     .getAllByRole("button")
     .map((b) => b.querySelector("span:nth-child(2)")!.textContent);
 
-test("the tasks with their titles, tabs per repo, and the first live one open", () => {
+const sidebarRepos = () =>
+  within(screen.getByRole("navigation", { name: "Repositories" })).getAllByRole("link");
+
+test("the tasks with their titles, the repos in the sidebar, and the first live one open", () => {
   render(<Dashboard state={state} error={null} />);
-  expect(screen.getAllByRole("tab").map((t) => t.firstChild!.textContent)).toEqual([
-    "All",
-    "app",
-    "api",
-    "notes",
+  expect(sidebarRepos().map((a) => a.textContent)).toEqual([
+    "All repositories 3",
+    "acme/app 1",
+    "acme/api 1",
+    "acme/notes 1",
   ]);
   expect(rows()).toHaveLength(11);
   expect(rows()).toContain("How do runs restart after an update?");
@@ -57,12 +74,14 @@ test("the tasks with their titles, tabs per repo, and the first live one open", 
   expect(rows()).toContain("Issue #127");
   expect(screen.getByRole("heading", { level: 1, name: /Dashboard on a frontend/ })).toBeTruthy();
   expect(screen.getByText(/npm installs get a 403/)).toBeTruthy();
-  expect(location.hash).toBe("#/all?task=acme%2Fapp%2322");
-  expect(screen.getByText(/2 running \(max 4\) · 1 queued/)).toBeTruthy();
+  expect(location.hash).toBe("#/?task=acme%2Fapp%2322");
+  expect(screen.getByText("2 of 4 running")).toBeTruthy();
+  expect(screen.getByRole("img", { name: "2 of 4 run slots in use" })).toBeTruthy();
+  expect(screen.getByText("1 queued")).toBeTruthy();
 });
 
 test("a done task whose pull request is ready shows the ready tone, in the list and open", () => {
-  history.replaceState(null, "", `#/all?task=${encodeURIComponent("acme/api#131")}`);
+  history.replaceState(null, "", `#/?task=${encodeURIComponent("acme/api#131")}`);
   render(<Dashboard state={state} error={null} />);
   // Its row: the title's button (the heading has the title too).
   const row = screen
@@ -84,9 +103,13 @@ test("links go to the listener's GitHub", () => {
   );
 });
 
-test("a repo's tab and the state chips filter the list", () => {
+test("a repo's link and the state chips filter the list", async () => {
   render(<Dashboard state={state} error={null} />);
-  fireEvent.click(screen.getByRole("tab", { name: /^api/ }));
+  const api = sidebarRepos().find((a) => a.textContent!.startsWith("acme/api"))!;
+  expect(api.getAttribute("href")).toBe("#/acme/api");
+  history.pushState(null, "", "#/acme/api");
+  dispatchEvent(new HashChangeEvent("hashchange"));
+  await waitFor(() => expect(api.getAttribute("aria-current")).toBe("page"));
   expect(location.hash).toMatch(/^#\/acme\/api/);
   expect(rows()).toEqual([
     "Offline sync for the reading list",
@@ -103,22 +126,22 @@ test("a repo's tab and the state chips filter the list", () => {
   expect(rows()).toEqual(["Dark mode for the settings page"]);
 });
 
-test("a repo's address in another case opens its tab, under GitHub's spelling", async () => {
+test("a repo's address in another case opens it, under GitHub's spelling", async () => {
   wide = false;
   const repo = "Storywake/storywake";
   const tasks = [makeTask({ repo, number: 1 }), makeTask({ repo, number: 2, since: 5 })];
   history.replaceState(null, "", "#/storywake/storywake");
   render(<Dashboard state={makeState({ tasks })} error={null} />);
-  const tabs = screen.getAllByRole("tab");
-  expect(tabs.map((t) => t.title)).toEqual(["Every repo", repo]);
-  expect(tabs[1].textContent).toMatch(/^storywake/);
-  expect(tabs[1].getAttribute("aria-selected")).toBe("true");
+  // The phone's top bar says which, under GitHub's spelling.
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: `${repo}: switch repository` })).toBeTruthy(),
+  );
   expect(rows().sort()).toEqual(["Issue 1", "Issue 2"]);
   await waitFor(() => expect(location.hash).toBe("#/Storywake/storywake"));
 });
 
 test("a task waiting for other issues links them", () => {
-  history.replaceState(null, "", "#/all?task=acme%2Fapp%2324");
+  history.replaceState(null, "", "#/?task=acme%2Fapp%2324");
   render(<Dashboard state={state} error={null} />);
   expect(
     screen.getByRole("heading", { level: 1, name: /Per-repo budgets in the dashboard/ }),
@@ -218,7 +241,7 @@ test("an issue waiting for answers without a run: listed under Needs input, no l
     rerunnable: false,
     runs: [],
   };
-  history.replaceState(null, "", "#/all?task=acme%2Fnotes%239");
+  history.replaceState(null, "", "#/?task=acme%2Fnotes%239");
   render(<Dashboard state={{ ...state, tasks: [...state.tasks, filed] }} error={null} />);
   fireEvent.click(screen.getByRole("button", { name: /^Needs input/ }));
   expect(rows()).toContain("Tags for notes");
@@ -229,9 +252,11 @@ test("an issue waiting for answers without a run: listed under Needs input, no l
 });
 
 test("the graph: a node per issue, arrows for /after, a node opens its task", () => {
-  history.replaceState(null, "", "#/graph/acme/app");
+  history.replaceState(null, "", "#/acme/app/board");
   render(<Dashboard state={state} error={null} />);
-  expect(screen.getByRole("link", { name: "Graph" }).getAttribute("aria-current")).toBe("page");
+  const views = within(screen.getByRole("group", { name: "View" }));
+  expect(views.getByRole("link", { name: "Board" }).getAttribute("aria-current")).toBe("page");
+  expect(views.getByRole("link", { name: "Tasks" }).getAttribute("href")).toBe("#/acme/app");
   const nodes = within(screen.getByRole("list", { name: "Issues of acme/app" })).getAllByRole(
     "listitem",
   );
@@ -254,15 +279,14 @@ test("the graph: a node per issue, arrows for /after, a node opens its task", ()
 
   const node = nodes.find((n) => n.getAttribute("aria-label")!.startsWith("#24"))!;
   expect(node.getAttribute("href")).toBe("#/acme/app?task=acme%2Fapp%2324");
-  // The tabs stay on the graph.
-  fireEvent.click(screen.getByRole("tab", { name: /^All/ }));
-  expect(location.hash).toBe("#/graph");
-  expect(screen.getByRole("list", { name: "Issues" })).toBeTruthy();
-  // The column lists every repo's brainstorms, without a button: nothing moves on All.
-  const all = screen.getByRole("region", { name: "Brainstorms" });
-  expect(within(all).getAllByRole("listitem").length).toBeGreaterThan(0);
-  expect(within(all).queryByRole("button")).toBeNull();
-  expect(within(all).getAllByRole("listitem")[0].getAttribute("draggable")).toBe("false");
+  // The sidebar's repos stay on the board, All's too.
+  expect(sidebarRepos().map((a) => a.getAttribute("href"))).toEqual([
+    "#/board",
+    "#/acme/app/board",
+    "#/acme/api/board",
+    "#/acme/notes/board",
+  ]);
+  expect(sidebarRepos()[1].getAttribute("aria-current")).toBe("page");
 });
 
 test("the graph hides closed issues until Show closed, which is kept", () => {
@@ -272,7 +296,7 @@ test("the graph hides closed issues until Show closed, which is kept", () => {
       t.key === "acme/app#23" ? { ...t, state: "done" as const, closed: "completed" as const } : t,
     ),
   };
-  history.replaceState(null, "", "#/graph/acme/app");
+  history.replaceState(null, "", "#/acme/app/board");
   const view = render(<Dashboard state={closed} error={null} />);
   const labels = () =>
     within(screen.getByRole("list", { name: "Issues of acme/app" }))
@@ -298,43 +322,153 @@ test("the graph with nothing open says so, and offers the closed ones", () => {
       .map((t) => ({ ...t, state: "done" as const, closed: "completed" as const })),
     edges: [],
   };
-  history.replaceState(null, "", "#/graph/acme/app");
+  history.replaceState(null, "", "#/acme/app/board");
   render(<Dashboard state={done} error={null} />);
   expect(screen.getByText(/Nothing open here/)).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "Show closed issues" }));
   expect(screen.getByRole("list", { name: "Issues of acme/app" })).toBeTruthy();
 });
 
-test("Home and the brand go back to the tasks, in the graph's repo", () => {
-  history.replaceState(null, "", "#/graph/acme/app");
+test("every repo's graph, under its old address and its new one", async () => {
+  history.replaceState(null, "", "#/graph");
   render(<Dashboard state={state} error={null} />);
-  const home = screen.getByRole("link", { name: "Home" });
-  expect(home.getAttribute("aria-current")).toBeNull();
-  expect(home.getAttribute("href")).toBe("#/acme/app");
-  expect(screen.getByRole("link", { name: "Deckhand" }).getAttribute("href")).toBe("#/acme/app");
+  expect(location.hash).toBe("#/board");
+  expect(screen.getByRole("list", { name: "Issues" })).toBeTruthy();
+  expect(screen.getByRole("heading", { level: 1, name: "All repositories" })).toBeTruthy();
+  const views = within(screen.getByRole("group", { name: "View" }));
+  expect(views.getByRole("link", { name: "Board" }).getAttribute("aria-current")).toBe("page");
+  expect(views.getByRole("link", { name: "Tasks" }).getAttribute("href")).toBe("#/");
+  expect(sidebarRepos()[0].getAttribute("aria-current")).toBe("page");
+  // The column lists every repo's brainstorms, without a button: nothing moves on All.
+  const all = screen.getByRole("region", { name: "Brainstorms" });
+  expect(within(all).getAllByRole("listitem").length).toBeGreaterThan(0);
+  expect(within(all).queryByRole("button")).toBeNull();
 });
 
-test("Home from the repositories page opens the tab last open, and is current there", async () => {
-  localStorage.setItem("deckhand.tab", "acme/api");
+test("the old addresses are rewritten to their new ones, showing the same", () => {
+  history.replaceState(null, "", "#/graph/acme/app");
+  const view = render(<Dashboard state={state} error={null} />);
+  expect(location.hash).toBe("#/acme/app/board");
+  expect(screen.getByRole("list", { name: "Issues of acme/app" })).toBeTruthy();
+  view.unmount();
   history.replaceState(null, "", "#/repositories");
-  const repos: RepoList = {
-    repos: [],
-    app: null,
-    listedAt: null,
-    error: null,
-    starting: null,
-    failed: null,
-    onboard: async () => {},
-    refreshing: false,
-    refreshError: null,
-    refresh: async () => {},
-    update: () => {},
-  };
-  render(<Dashboard state={state} error={null} repos={repos} />);
-  const home = screen.getByRole("link", { name: "Home" });
-  expect(home.getAttribute("href")).toBe("#/acme/api");
-  expect(home.getAttribute("aria-current")).toBeNull();
-  fireEvent.click(home);
-  await waitFor(() => screen.getByRole("tab", { name: /^api/, selected: true }));
-  expect(screen.getByRole("link", { name: "Home" }).getAttribute("aria-current")).toBe("page");
+  render(<Dashboard state={state} error={null} repos={noRepos} />);
+  expect(location.hash).toBe("#/settings/repositories");
+  expect(
+    within(screen.getByRole("main")).getByRole("heading", { name: "Repositories" }),
+  ).toBeTruthy();
+});
+
+test("the brand goes to All, and an empty address opens the repo last open", async () => {
+  localStorage.setItem("deckhand.tab", "acme/api");
+  history.replaceState(null, "", "#");
+  render(<Dashboard state={state} error={null} />);
+  expect(screen.getByRole("link", { name: "Deckhand" }).getAttribute("href")).toBe("#/");
+  await waitFor(() => expect(location.hash).toMatch(/^#\/acme\/api\?task=/));
+  expect(screen.getByRole("heading", { level: 1, name: "acme/api" })).toBeTruthy();
+  expect(screen.getByRole("link", { name: "acme/api on GitHub" }).getAttribute("href")).toBe(
+    "https://github.example.com/acme/api",
+  );
+});
+
+test("the sidebar collapses to a rail, kept on this device", () => {
+  const view = render(<Dashboard state={state} error={null} />);
+  fireEvent.click(screen.getByRole("button", { name: "Collapse the sidebar" }));
+  expect(localStorage.getItem("deckhand.sidebar")).toBe("rail");
+  // The rail names its links by their label and count.
+  const repos = sidebarRepos().map((a) => a.getAttribute("aria-label"));
+  expect(repos).toEqual(["All repositories (3)", "acme/app (1)", "acme/api (1)", "acme/notes (1)"]);
+  expect(screen.queryByText("@octocat")).toBeNull();
+  view.unmount();
+  render(<Dashboard state={state} error={null} />);
+  fireEvent.click(screen.getByRole("button", { name: "Expand the sidebar" }));
+  expect(localStorage.getItem("deckhand.sidebar")).toBe("");
+  expect(screen.getByRole("button", { name: "Collapse the sidebar" })).toBeTruthy();
+});
+
+test("New request's menu: arrows move through it, Escape closes it", () => {
+  render(<Dashboard state={state} error={null} />);
+  const button = screen.getByRole("button", { name: "New request" });
+  expect(button.getAttribute("aria-haspopup")).toBe("menu");
+  fireEvent.click(button);
+  expect(button.getAttribute("aria-expanded")).toBe("true");
+  const items = screen.getAllByRole("menuitem");
+  expect(items.map((i) => i.textContent)).toEqual(["Idea or bug report", "Analyze runs"]);
+  expect(document.activeElement).toBe(items[0]);
+  fireEvent.keyDown(document, { key: "ArrowDown" });
+  expect(document.activeElement).toBe(items[1]);
+  fireEvent.keyDown(document, { key: "ArrowDown" });
+  expect(document.activeElement).toBe(items[0]);
+  fireEvent.keyDown(document, { key: "Escape" });
+  expect(screen.queryByRole("menu")).toBeNull();
+  expect(document.activeElement).toBe(button);
+});
+
+test("a dialog from New request gives focus back to New request once closed", async () => {
+  render(<Dashboard state={state} error={null} />);
+  const button = screen.getByRole("button", { name: "New request" });
+  fireEvent.click(button);
+  fireEvent.click(screen.getByRole("menuitem", { name: "Idea or bug report" }));
+  expect(screen.getByRole("dialog", { name: "Send feedback" })).toBeTruthy();
+  fireEvent.keyDown(document, { key: "Escape" });
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  expect(document.activeElement).toBe(button);
+});
+
+test("on a phone, the listener's error shows under the top bar", () => {
+  wide = false;
+  render(<Dashboard state={state} error="502" />);
+  expect(screen.getByRole("alert").textContent).toBe("Can't reach the listener (502)");
+});
+
+test("on a phone, Tasks and Board go back to the repo last open, after Overview", async () => {
+  wide = false;
+  history.replaceState(null, "", "#/acme/api");
+  render(<Dashboard state={state} error={null} />);
+  history.pushState(null, "", "#/");
+  dispatchEvent(new HashChangeEvent("hashchange"));
+  const tabs = () => within(screen.getByRole("navigation", { name: "Pages" }));
+  await waitFor(() =>
+    expect(
+      tabs()
+        .getByRole("link", { name: /^Overview/ })
+        .getAttribute("aria-current"),
+    ).toBe("page"),
+  );
+  expect(tabs().getByRole("link", { name: "Tasks" }).getAttribute("href")).toBe("#/acme/api");
+  expect(tabs().getByRole("link", { name: "Board" }).getAttribute("href")).toBe("#/acme/api/board");
+});
+
+test("on a phone: the tab bar marks the page, and the switcher's sheet lists the repos", () => {
+  wide = false;
+  history.replaceState(null, "", "#/acme/api");
+  render(<Dashboard state={state} error={null} />);
+  expect(screen.queryByRole("complementary", { name: "Deckhand" })).toBeNull();
+  const tabs = within(screen.getByRole("navigation", { name: "Pages" })).getAllByRole("link");
+  expect(
+    tabs.map((t) => [t.textContent, t.getAttribute("href"), t.getAttribute("aria-current")]),
+  ).toEqual([
+    ["Overview3", "#/", null],
+    ["Tasks", "#/acme/api", "page"],
+    ["Board", "#/acme/api/board", null],
+    ["Settings", "#/settings/repositories", null],
+  ]);
+  expect(tabs[0].getAttribute("aria-label")).toBe("Overview (3 waiting on you)");
+
+  fireEvent.click(screen.getByRole("button", { name: "acme/api: switch repository" }));
+  const sheet = screen.getByRole("dialog", { name: "Repositories" });
+  const links = within(sheet).getAllByRole("link");
+  expect(links.map((a) => a.textContent)).toEqual([
+    "All repositories 3",
+    "acme/app 1",
+    "acme/api 1",
+    "acme/notes 1",
+  ]);
+  expect(links[2].getAttribute("aria-current")).toBe("page");
+  // The run slots, Sync and Sign out are there too.
+  expect(within(sheet).getByText("2 of 4 running")).toBeTruthy();
+  expect(within(sheet).getByRole("button", { name: "Sign out" })).toBeTruthy();
+  // Following a link closes it.
+  fireEvent.click(links[1]);
+  expect(screen.queryByRole("dialog")).toBeNull();
 });

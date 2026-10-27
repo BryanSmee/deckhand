@@ -15,7 +15,7 @@ beforeEach(() => {
   api = mockApi();
   api.answer = () => ({ message: "Answers sent: #138 continues." });
   refresh = vi.fn<() => Promise<void>>(async () => {});
-  history.replaceState(null, "", `#/all?task=${encodeURIComponent(ASKING)}`);
+  history.replaceState(null, "", `#/?task=${encodeURIComponent(ASKING)}`);
 });
 
 // The fixture, with the asking task changed by `change`.
@@ -119,7 +119,7 @@ test("a refusal is shown as the listener says it, and the answers stay to send a
 });
 
 test("a pull request's own task sends `pr`; a task not waiting for input has no form", async () => {
-  history.replaceState(null, "", `#/all?task=${encodeURIComponent("acme/api#pr-138")}`);
+  history.replaceState(null, "", `#/?task=${encodeURIComponent("acme/api#pr-138")}`);
   const form = show((t) => ({ ...t, key: "acme/api#pr-138", kind: "pr" }));
   fireEvent.input(within(form).getByRole("textbox", { name: "Answer to question 3" }), {
     target: { value: "No results" },
@@ -131,6 +131,6 @@ test("a pull request's own task sends `pr`; a task not waiting for input has no 
     ]),
   );
   document.body.replaceChildren();
-  history.replaceState(null, "", `#/all?task=${encodeURIComponent(ASKING)}`);
+  history.replaceState(null, "", `#/?task=${encodeURIComponent(ASKING)}`);
   expect(show((t) => ({ ...t, state: "done" }))).toBeNull();
 });

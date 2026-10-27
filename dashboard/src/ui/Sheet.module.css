@@ -1,0 +1,64 @@
+/* A bottom sheet: it slides up over a scrim, at most most of the screen, its body scrolling. */
+.scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  background: var(--scrim);
+  animation: appear var(--slide) ease-out;
+}
+
+.sheet {
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100dvh - 48px);
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  border-radius: var(--radius-dialog) var(--radius-dialog) 0 0;
+  box-shadow: var(--sheet-shadow);
+  animation: slide var(--slide) ease-out;
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 8px 4px 20px;
+}
+
+.title {
+  flex: 1;
+  margin: 0;
+  font-size: 15px;
+  line-height: 22px;
+  font-weight: 600;
+}
+
+.body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 4px 12px calc(16px + env(safe-area-inset-bottom));
+  overflow-y: auto;
+}
+
+@keyframes appear {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes slide {
+  from {
+    transform: translateY(24px);
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sheet {
+    animation-name: appear;
+  }
+}

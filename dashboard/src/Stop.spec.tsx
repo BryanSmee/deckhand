@@ -19,7 +19,7 @@ beforeEach(() => {
 
 // The page of task `key`, with the task changed by `change`; its Stop button, if any.
 const show = (key: string, change: (t: Task) => Task = (t) => t) => {
-  history.replaceState(null, "", `#/all?task=${encodeURIComponent(key)}`);
+  history.replaceState(null, "", `#/?task=${encodeURIComponent(key)}`);
   const tasks = state.tasks.map((t) => (t.key === key ? change(t) : t));
   render(<Dashboard state={{ ...state, tasks }} error={null} refresh={refresh} />);
   return screen.queryByRole("button", { name: "Stop" });
