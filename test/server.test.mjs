@@ -3427,7 +3427,16 @@ mounts:
     const synced = await sync({ origin: "https://hooks.example.com" });
     assert.equal(synced.status, 200);
     const body = await synced.json();
-    assert.deepEqual({ ...body, at: 0 }, { at: 0, by: "alice", redelivered: 0, pulls: 0 });
+    assert.deepEqual(
+      { ...body, at: 0 },
+      {
+        at: 0,
+        by: "alice",
+        redelivered: 0,
+        pulls: 0,
+        conflicts: 0,
+      },
+    );
     assert.ok(body.at >= atStart.at);
     // Every browser sees it, not only the one that asked.
     assert.deepEqual(await lastSync(), body);
@@ -3453,7 +3462,7 @@ mounts:
     ["previews", "inboxes", "lanes"],
   ];
   const SERVER_KEYS = [["version", "startedAt", "node", "source"], []];
-  const SYNC_KEYS = [["at", "by", "redelivered", "pulls"], ["error"]];
+  const SYNC_KEYS = [["at", "by", "redelivered", "pulls", "conflicts"], ["error"]];
   const SETUP_KEYS = [["engine", "proxy", "grants", "allowedUsers", "allowedRepos"], []];
   const TASK_KEYS = [
     [

@@ -233,8 +233,8 @@ export interface Preview {
 }
 
 // A catch-up with GitHub (listener/sync.mjs), the last one in State, the one it did from
-// POST api/sync: deliveries GitHub couldn't hand over, asked for again, and pull requests
-// whose state changed.
+// POST api/sync: deliveries GitHub couldn't hand over, asked for again, pull requests whose
+// state changed, and, from the dashboard only, the rebase runs its conflict pass started.
 export interface SyncResult {
   // When it ended.
   at: number;
@@ -242,7 +242,9 @@ export interface SyncResult {
   by: string | null;
   redelivered: number;
   pulls: number;
-  // Why it failed (its counts are then 0).
+  // Rebase runs started (conflicts.mjs check()); 0 at start, where the watcher does it.
+  conflicts: number;
+  // Why it failed: the failing part's count is 0, the others are kept.
   error?: string;
 }
 

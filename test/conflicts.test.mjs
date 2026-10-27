@@ -41,6 +41,7 @@ function setup({
   busy = () => false,
   c = config,
   path = tempPath(),
+  routes: more = {},
 } = {}) {
   let time = 1_800_000_000_000;
   const calls = [];
@@ -49,6 +50,7 @@ function setup({
     "/repos/org/repo": { default_branch: "main" },
     "/repos/org/repo/git/ref/heads/main": () => ({ object: { sha: w.baseSha } }),
     "/repos/org/repo/issues/30": () => w.issue,
+    ...more,
   };
   const w = {
     prs,
@@ -307,4 +309,136 @@ test("respell: of an attempt under each spelling, the later stays, so it isn't t
   assert.deepEqual(JSON.parse(readFileSync(path, "utf8")), {
     "Org/Repo#30": { pr: 31, head: "x", base: "y" },
   });
+});
+
+test("check(): every repo due now, its runs and pending ones counted, the interval reset", async () => {
+  const w = setup({
+    open: [
+      ["org/repo#30", { number: 31, state: "draft" }],
+      ["org/repo#40", { number: 41, state: "draft" }],
+    ],
+    prs: {
+      31: pull(31, { mergeable: true, mergeable_state: "clean" }),
+      41: pull(41, { mergeable: true, mergeable_state: "clean" }),
+    },
+  });
+  const checks = () => w.calls.filter((u) => u.endsWith("/pulls/41")).length;
+  assert.deepEqual(await w.conflicts.tick(), { started: 0, pending: 0, errors: [] });
+  // Not due for 10 minutes: a tick leaves it, Sync's check() doesn't.
+  w.prs[31] = pull(31);
+  w.prs[41] = pull(41, { mergeable: null, mergeable_state: "unknown" });
+  w.advance(MIN);
+  assert.deepEqual(await w.conflicts.tick(), { started: 0, pending: 0, errors: [] });
+  assert.equal(checks(), 1);
+  assert.deepEqual(await w.conflicts.check(), { started: 1, pending: 1, errors: [] });
+  assert.equal(w.accepted.length, 1);
+  assert.equal(w.accepted[0].reason, "conflict");
+  assert.equal(checks(), 2);
+  // The pending one is the next tick's, at once, not Sync's to wait for.
+  w.prs[41] = pull(41);
+  w.advance(MIN);
+  assert.deepEqual(await w.conflicts.tick(), { started: 1, pending: 0, errors: [] });
+  assert.equal(w.accepted.length, 2);
+  // Then the repo's interval again, from that pass.
+  w.advance(MIN);
+  await w.conflicts.tick();
+  assert.equal(checks(), 3);
+});
+
+test("check(): a tried pair, a busy task or one waiting for input gets no run", async () => {
+  const tried = setup();
+  await tried.conflicts.tick();
+  assert.deepEqual(await tried.conflicts.check(), { started: 0, pending: 0, errors: [] });
+  assert.equal(tried.accepted.length, 1);
+  const cases = {
+    busy: setup({ busy: () => true }),
+    labelled: setup({ prs: { 31: pull(31, { labels: [{ name: "needs-input" }] }) } }),
+    "issue labelled": setup({ issue: { labels: [{ name: "needs-input" }] } }),
+  };
+  for (const [what, w] of Object.entries(cases)) {
+    assert.deepEqual(await w.conflicts.check(), { started: 0, pending: 0, errors: [] }, what);
+    assert.deepEqual(w.accepted, [], what);
+  }
+});
+
+test("check(): nothing without the opt-in, with config errors, outside ALLOWED_REPOS or turned off", async () => {
+  const narrowed = testConfig({ ALLOWED_REPOS: "org/other" });
+  const off = testConfig({ CONFLICT_CHECK_MINUTES: "0" });
+  const cases = {
+    "no opt-in": setup({ settings: parseRepoConfig("trigger: go", config) }),
+    errors: setup({ settings: parseRepoConfig("conflicts:\n  check_minutes: soon", config) }),
+    outside: setup({ c: narrowed, settings: optedIn(10, narrowed) }),
+    off: setup({ c: off, settings: optedIn() }),
+  };
+  for (const [what, w] of Object.entries(cases)) {
+    assert.deepEqual(await w.conflicts.check(), { started: 0, pending: 0, errors: [] }, what);
+    assert.deepEqual(w.accepted, [], what);
+    assert.ok(!w.calls.some((u) => u.includes("/pulls/")), what);
+  }
+});
+
+test("check() during a tick shares it, then checks the repos it left", async () => {
+  const w = setup({
+    open: [
+      ["org/repo#30", { number: 31, state: "draft" }],
+      ["org/two#50", { number: 51, state: "draft" }],
+    ],
+    prs: { 31: pull(31), 51: pull(51, { mergeable: true, mergeable_state: "clean" }) },
+    routes: {
+      "/repos/org/two": { default_branch: "main" },
+      "/repos/org/two/issues/50": { labels: [] },
+    },
+  });
+  const checks = (n) => w.calls.filter((u) => u.endsWith(`/pulls/${n}`)).length;
+  await w.conflicts.tick();
+  // org/repo due again, org/two not yet (both at 10 minutes, org/two checked later).
+  w.prs[31] = pull(31, { head: { sha: "head-2", repo: { full_name: "org/repo" } } });
+  w.prs[51] = pull(51, { head: { sha: "head-2", repo: { full_name: "org/repo" } } });
+  w.advance(10 * MIN);
+  const ticking = w.conflicts.tick();
+  const checking = w.conflicts.check();
+  // Another check meanwhile shares the whole of it.
+  assert.equal(w.conflicts.check(), checking);
+  assert.equal(w.conflicts.tick(), checking);
+  assert.deepEqual(await ticking, { started: 1, pending: 0, errors: [] });
+  assert.deepEqual(await checking, { started: 1, pending: 0, errors: [] });
+  // Each repo checked once more: org/repo by the tick, org/two after it.
+  assert.equal(checks(31), 2);
+  assert.equal(checks(51), 2);
+  assert.equal(w.accepted.length, 2);
+});
+
+test("check() during a check shares it; after a tick that took every repo, checks none again", async () => {
+  const w = setup();
+  const checking = w.conflicts.check();
+  assert.equal(w.conflicts.check(), checking);
+  assert.equal(w.conflicts.tick(), checking);
+  assert.deepEqual(await checking, { started: 1, pending: 0, errors: [] });
+  // The first tick after a start: every repo due.
+  const fresh = setup();
+  const ticking = fresh.conflicts.tick();
+  const after = fresh.conflicts.check();
+  assert.deepEqual(await ticking, { started: 1, pending: 0, errors: [] });
+  assert.deepEqual(await after, { started: 1, pending: 0, errors: [] });
+  assert.equal(fresh.calls.filter((u) => u.endsWith("/pulls/31")).length, 1);
+});
+
+test("a repo that couldn't be checked: its error, logged and in the result", async () => {
+  const logged = [];
+  const w = setup({ routes: { "/repos/org/repo": null } });
+  w.conflicts = createConflicts({
+    path: tempPath(),
+    config,
+    pulls: { open: () => [["org/repo#30", { number: 31 }]] },
+    github: async () => new Response("{}", { status: 502 }),
+    repoSettings: async () => w.settings,
+    busy: () => false,
+    accept: async (item) => w.accepted.push(item),
+    log: (line) => logged.push(line),
+  });
+  const { started, pending, errors } = await w.conflicts.check();
+  assert.deepEqual([started, pending, w.accepted], [0, 0, []]);
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /^org\/repo: .*502/);
+  assert.deepEqual(logged, [`Conflicts in org/repo: ${errors[0].slice("org/repo: ".length)}`]);
 });

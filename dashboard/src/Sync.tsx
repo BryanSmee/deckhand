@@ -1,6 +1,7 @@
 // The sidebar's Sync (Shell.tsx): GitHub sometimes loses webhook deliveries (an outage, the
 // listener restarting). The listener asks for the failed ones again every few minutes on its
-// own; this asks now, and reads the open pull requests' states again, then the board.
+// own; this asks now, reads the open pull requests' states again and checks them for conflicts
+// in the repos that opted in, then reads the board.
 import { useEffect, useState } from "preact/hooks";
 import { postJson } from "./api";
 import { plural } from "./format";
@@ -12,11 +13,13 @@ const SHOWN_MS = 8000;
 export function syncMessage({
   redelivered,
   pulls,
-}: Pick<SyncResult, "redelivered" | "pulls">): string {
-  if (!redelivered && !pulls) return "Up to date with GitHub";
+  conflicts,
+}: Pick<SyncResult, "redelivered" | "pulls" | "conflicts">): string {
+  if (!redelivered && !pulls && !conflicts) return "Up to date with GitHub";
   const done = [
     redelivered && `${plural(redelivered, "missed delivery", "missed deliveries")} asked again`,
     pulls && `${plural(pulls, "pull request")} updated`,
+    conflicts && `${plural(conflicts, "rebase run")} started`,
   ].filter(Boolean);
   return `Synced: ${done.join(", ")}`;
 }

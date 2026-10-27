@@ -562,8 +562,14 @@ const redeliveries = createRedeliveries({
 // A pull request delivery the listener asked for again is handled as it is now (http.mjs).
 ctx.redelivered = redeliveries.redelivered;
 // At start and from the dashboard's Sync: the same now, and the open pull requests' states
-// asked again. The last one's result goes in api/state (sync.mjs).
-const syncs = createSync({ scan: redeliveries.scan, resync: pulls.resync, log });
+// asked again; from Sync, their conflicts checked now. The last one's result goes in api/state
+// (sync.mjs).
+const syncs = createSync({
+  scan: redeliveries.scan,
+  resync: pulls.resync,
+  check: ctx.conflicts.check,
+  log,
+});
 ctx.sync = syncs.sync;
 ctx.lastSync = syncs.last;
 

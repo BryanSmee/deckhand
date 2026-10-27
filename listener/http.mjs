@@ -451,7 +451,7 @@ export function createHttp(ctx, { dashboardDir }) {
   }
 
   // The dashboard's Sync: what GitHub couldn't deliver, asked for again, and the open pull
-  // requests' states (server.mjs sync()).
+  // requests' states, then their conflicts in the repos that opted in (sync.mjs).
   let synced = null;
   const syncApi = apiRoute({
     name: "Sync",

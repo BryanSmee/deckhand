@@ -121,7 +121,7 @@ test("what this Deckhand is and how it is set up", async () => {
   ).toEqual(APP.installations.map((i) => i.url));
   // The fixture's last sync, 12 minutes before its `now`.
   expect(value("Webhook deliveries").textContent).toContain(
-    "Last sync 12 min ago: 2 missed deliveries asked again, 1 pull request updated.",
+    "Last sync 12 min ago: 2 missed deliveries asked again, 1 pull request updated, 1 rebase run started.",
   );
   expect(value("Who can sign in").textContent).toBe("alice, bob · ALLOWED_USERS");
   expect(value("Allowed repositories").textContent).toBe(
@@ -184,7 +184,7 @@ function Live({ first, next }: { first: State; next: State }) {
 test("Sync now asks the listener and the last sync line follows, without a reload", async () => {
   const first = makeState();
   const next = makeState({
-    lastSync: { at: first.now, by: "octocat", redelivered: 0, pulls: 3 },
+    lastSync: { at: first.now, by: "octocat", redelivered: 0, pulls: 3, conflicts: 0 },
   });
   api.answer = () => next.lastSync;
   render(<Live first={first} next={next} />);
@@ -213,7 +213,14 @@ test("a refused Sync now says why", async () => {
 test("a Sync now that failed but was recorded: said once, on the line", async () => {
   const first = makeState();
   const next = makeState({
-    lastSync: { at: first.now, by: "octocat", redelivered: 0, pulls: 0, error: "GitHub said 502" },
+    lastSync: {
+      at: first.now,
+      by: "octocat",
+      redelivered: 0,
+      pulls: 0,
+      conflicts: 0,
+      error: "GitHub said 502",
+    },
   });
   api.answer = () => next.lastSync;
   render(<Live first={first} next={next} />);
@@ -239,12 +246,19 @@ test("before api/state's first answer: loading, neutral, no check", () => {
 test("the last sync line: none yet, up to date, failed", () => {
   const now = 10 * 60000;
   expect(lastSyncLine(null, now)).toBe("No sync yet.");
-  expect(lastSyncLine({ at: now - 120000, by: null, redelivered: 0, pulls: 0 }, now)).toBe(
-    "Last sync 2 min ago: up to date with GitHub.",
-  );
+  expect(
+    lastSyncLine({ at: now - 120000, by: null, redelivered: 0, pulls: 0, conflicts: 0 }, now),
+  ).toBe("Last sync 2 min ago: up to date with GitHub.");
   expect(
     lastSyncLine(
-      { at: now - 60000, by: "octocat", redelivered: 0, pulls: 0, error: "GitHub said 502" },
+      {
+        at: now - 60000,
+        by: "octocat",
+        redelivered: 0,
+        pulls: 0,
+        conflicts: 0,
+        error: "GitHub said 502",
+      },
       now,
     ),
   ).toBe("Last sync 1 min ago failed: GitHub said 502");

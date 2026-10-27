@@ -17,7 +17,7 @@ beforeEach(() => {
 const show = () => render(<Dashboard state={makeState()} error={null} refresh={refresh} />);
 
 test("Sync asks the listener, says what it did, then reads the state again", async () => {
-  api.answer = () => ({ at: 1, by: "octocat", redelivered: 2, pulls: 1 });
+  api.answer = () => ({ at: 1, by: "octocat", redelivered: 2, pulls: 1, conflicts: 0 });
   show();
   const release = api.hold();
   fireEvent.click(screen.getByRole("button", { name: "Sync with GitHub" }));
@@ -57,6 +57,7 @@ test("a sync that failed says GitHub's error, and reads the state again: it has 
         by: "octocat",
         redelivered: 0,
         pulls: 0,
+        conflicts: 0,
         error: "GitHub GET /app/hook/deliveries: 502",
       },
       { status: 502 },
@@ -72,9 +73,19 @@ test("a sync that failed says GitHub's error, and reads the state again: it has 
 });
 
 test("nothing to catch up, or one of each", () => {
-  expect(syncMessage({ redelivered: 0, pulls: 0 })).toBe("Up to date with GitHub");
-  expect(syncMessage({ redelivered: 1, pulls: 0 })).toBe("Synced: 1 missed delivery asked again");
-  expect(syncMessage({ redelivered: 0, pulls: 3 })).toBe("Synced: 3 pull requests updated");
+  expect(syncMessage({ redelivered: 0, pulls: 0, conflicts: 0 })).toBe("Up to date with GitHub");
+  expect(syncMessage({ redelivered: 1, pulls: 0, conflicts: 0 })).toBe(
+    "Synced: 1 missed delivery asked again",
+  );
+  expect(syncMessage({ redelivered: 0, pulls: 3, conflicts: 0 })).toBe(
+    "Synced: 3 pull requests updated",
+  );
+  expect(syncMessage({ redelivered: 0, pulls: 0, conflicts: 1 })).toBe(
+    "Synced: 1 rebase run started",
+  );
+  expect(syncMessage({ redelivered: 2, pulls: 1, conflicts: 2 })).toBe(
+    "Synced: 2 missed deliveries asked again, 1 pull request updated, 2 rebase runs started",
+  );
 });
 
 test("no Sync before the first state", () => {

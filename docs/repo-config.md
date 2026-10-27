@@ -679,6 +679,10 @@ It is off without the key, and each conflict found is a run, so a bill.
   `check_minutes` gets that one (with a warning in the run logs), and `0` turns conflict
   checks off for every repository. `check_minutes` must be a whole number above 0; any
   other key under `conflicts` is an error.
+- The dashboard's **Sync** checks now, whatever the interval: for when you just merged into
+  the base branch or see a pull request in conflict. It follows the same rules (the opt-in,
+  one try per pair, busy and needs-input tasks skipped) and says how many rebase runs it
+  started. A pull request GitHub is still computing is checked a minute later, as above.
 
 ## Policies
 
