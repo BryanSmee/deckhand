@@ -1,0 +1,66 @@
+/* Run slots in use: segments, or one bar filled as far as they are used. */
+.meter {
+  display: grid;
+  gap: 4px;
+}
+
+.meter > span {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--surface-3);
+}
+
+.meter > .used {
+  background: var(--run-solid);
+}
+
+.large > span {
+  height: 8px;
+  border-radius: 4px;
+}
+
+.rail {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 6px 0;
+}
+
+.rail > span {
+  width: 22px;
+  height: 4px;
+  border-radius: 2px;
+}
+
+/* Many slots: one bar. */
+.bar.meter {
+  display: block;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--surface-3);
+  overflow: hidden;
+}
+
+.bar.large {
+  height: 8px;
+  border-radius: 4px;
+}
+
+.bar.meter > span {
+  display: block;
+  height: 100%;
+  border-radius: 0;
+  background: var(--run-solid);
+}
+
+.bar.rail {
+  display: flex;
+  flex-direction: column-reverse;
+  width: 6px;
+  height: 40px;
+  padding: 0;
+}
+
+.bar.rail > span {
+  width: 100%;
+}

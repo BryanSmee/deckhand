@@ -1,9 +1,10 @@
 // Settings: its tabs (Repositories, Preferences, Server) and the one open. The tabs are links,
 // so each has its address (route.ts); on a wide screen they sit in the page header, on a
-// phone atop the page. Preferences and Server say they're coming until their pages land.
+// phone atop the page. Preferences says it's coming until its page lands.
 import type { RepoList } from "./api";
 import { needingYou, Repos } from "./Repos";
 import { formatRoute, type Route, type Section } from "./route";
+import { Server } from "./Server";
 import type { State } from "./types";
 import { Count } from "./ui/Count";
 import tabs from "./ui/Tabs.module.css";
@@ -52,20 +53,26 @@ export function SettingsTabs({
 interface Props {
   route: Route;
   state: State | null;
+  // Why api/state can't be read, if it can't.
+  error?: string | null;
   repos: RepoList;
   // A phone: the tabs are the page's own.
   narrow: boolean;
   onOpen: (repo: string | null) => void;
+  // Reads api/state again (Server's Sync now).
+  refresh?: () => Promise<void>;
 }
 
-export function Settings({ route, state, repos, narrow, onOpen }: Props) {
+export function Settings({ route, state, error, repos, narrow, onOpen, refresh }: Props) {
   const tasks = state?.tasks ?? [];
   return (
     <div class={styles.settings}>
       {narrow && (
         <SettingsTabs route={route} count={needingYou(repos.repos, tasks)} class={styles.tabs} />
       )}
-      {route.section ? (
+      {route.section === "server" ? (
+        <Server state={state} error={error} app={repos.app} refresh={refresh} />
+      ) : route.section ? (
         <p class={styles.coming}>
           The {TABS.find((t) => t.id === route.section)?.label} tab is coming soon.
         </p>

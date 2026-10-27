@@ -245,62 +245,6 @@
   color: var(--err);
 }
 
-.meter {
-  display: grid;
-  gap: 4px;
-}
-
-.meter > span {
-  height: 6px;
-  border-radius: 3px;
-  background: var(--surface-3);
-}
-
-.meter > .used {
-  background: var(--run-solid);
-}
-
-.meterRail {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  padding: 6px 0;
-}
-
-.meterRail > span {
-  width: 22px;
-  height: 4px;
-  border-radius: 2px;
-}
-
-/* Many slots: one bar, filled as far as they are used. */
-.bar.meter {
-  display: block;
-  height: 6px;
-  border-radius: 3px;
-  background: var(--surface-3);
-  overflow: hidden;
-}
-
-.bar.meter > span {
-  display: block;
-  height: 100%;
-  border-radius: 0;
-  background: var(--run-solid);
-}
-
-.bar.meterRail {
-  display: flex;
-  flex-direction: column-reverse;
-  width: 6px;
-  height: 40px;
-  padding: 0;
-}
-
-.bar.meterRail > span {
-  width: 100%;
-}
-
 .railError {
   display: flex;
   padding: 6px 0;
