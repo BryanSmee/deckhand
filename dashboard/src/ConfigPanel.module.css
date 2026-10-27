@@ -305,7 +305,10 @@
   flex-direction: column;
   gap: 2px;
   padding: 14px 16px;
-  box-shadow: -1px 0 0 var(--border);
+  /* Dividers on every side but the card's edges (the card clips them): rows wrap on a phone. */
+  box-shadow:
+    -1px 0 0 var(--border),
+    0 -1px 0 var(--border);
 }
 
 .facts dt {
@@ -669,9 +672,8 @@
     grid-row: 2;
   }
   .filter {
+    flex-wrap: wrap;
     margin-left: 0;
-    max-width: 100%;
-    overflow-x: auto;
   }
   .problems,
   .autoMerge,
