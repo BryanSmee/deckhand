@@ -248,8 +248,10 @@ export function Dashboard({ state, error, repos, refresh, onOverview }: Props) {
               <Settings
                 route={route}
                 state={state}
+                error={error}
                 repos={repos}
                 narrow={!wide}
+                refresh={refresh}
                 onOpen={(repo) =>
                   go({ repo: null, task: null, run: null, page: "settings", config: repo })
                 }

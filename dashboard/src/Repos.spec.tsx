@@ -390,7 +390,7 @@ test("Settings counts the repositories that need you and opens the page", async 
   );
 });
 
-test("Settings' tabs: in the header, current with the address, the others coming", async () => {
+test("Settings' tabs: in the header, current with the address", async () => {
   render(<Dashboard state={makeState({}, [asking()])} error={null} repos={fixedList()} />);
   history.replaceState(null, "", "#/settings/repositories");
   dispatchEvent(new HashChangeEvent("hashchange"));
@@ -405,7 +405,7 @@ test("Settings' tabs: in the header, current with the address, the others coming
   expect(server.getAttribute("aria-current")).toBeNull();
   history.replaceState(null, "", "#/settings/server");
   dispatchEvent(new HashChangeEvent("hashchange"));
-  await screen.findByText("The Server tab is coming soon.");
+  await screen.findByRole("heading", { name: "The listener is up" });
   expect(tabs().getByRole("link", { name: "Server" }).getAttribute("aria-current")).toBe("page");
   expect(
     tabs()

@@ -1,0 +1,318 @@
+/* Settings › Server (docs/design/reference/server.html): the status, Runs, Preview hooks and
+   GitHub App cards. */
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  max-width: 980px;
+  padding: 24px;
+}
+
+.page h2 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 22px;
+}
+
+.page section {
+  overflow: hidden;
+}
+
+.mono {
+  font-family: var(--mono);
+  font-size: 0.95em;
+}
+
+.meta a,
+.kv a {
+  color: var(--focus);
+}
+
+.meta a:hover,
+.kv a:hover {
+  color: var(--text);
+}
+
+/* The status: its icon, the version line, and who changes all this. */
+.status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 14px;
+  padding: 16px 18px;
+}
+
+.statusIcon {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: var(--s-bg);
+  color: var(--s-fg);
+}
+
+.statusText {
+  display: flex;
+  flex: 1 1 360px;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.meta {
+  color: var(--text-2);
+  font-size: 13px;
+}
+
+.note {
+  color: var(--text-3);
+  font-size: 12.5px;
+}
+
+/* A card's head: its title, then a note or links on the right. */
+.head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 12px;
+  padding: 14px 18px;
+}
+
+.aside {
+  margin-left: auto;
+  color: var(--text-3);
+  font-size: 12.5px;
+}
+
+.links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-left: auto;
+}
+
+/* Runs: a cell per fact, a line between them however they wrap. */
+.facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 1px;
+  border-top: 1px solid var(--border);
+  background: var(--border);
+}
+
+.fact {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  padding: 14px 18px;
+  background: var(--surface);
+}
+
+.label {
+  color: var(--text-3);
+  font-size: 12px;
+}
+
+.value {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.small {
+  color: var(--text-2);
+  font-size: 12.5px;
+}
+
+.ok {
+  color: var(--done);
+}
+
+.bad {
+  color: var(--err);
+}
+
+.meter {
+  display: grid;
+  gap: 4px;
+  max-width: 160px;
+  margin: 2px 0;
+}
+
+.meter > span {
+  height: 8px;
+  border-radius: 4px;
+  background: var(--surface-3);
+}
+
+.meter > .used {
+  background: var(--run-solid);
+}
+
+/* Many slots: one bar, filled as far as they are used. */
+.bar {
+  display: block;
+  height: 8px;
+  border-radius: 4px;
+  background: var(--surface-3);
+  overflow: hidden;
+}
+
+.bar > span {
+  display: block;
+  border-radius: 0;
+  background: var(--run-solid);
+}
+
+/* Preview hooks. */
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-size: 13px;
+}
+
+.table th,
+.table td {
+  padding: 10px 12px;
+  border-top: 1px solid var(--border);
+  text-align: left;
+  vertical-align: middle;
+}
+
+.table th {
+  padding-top: 6px;
+  padding-bottom: 6px;
+  color: var(--text-3);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.table th:first-child,
+.table td:first-child {
+  width: 34%;
+  padding-left: 18px;
+}
+
+.table th:nth-child(4),
+.table td:nth-child(4) {
+  width: 110px;
+}
+
+.table th:last-child,
+.table td:last-child {
+  width: 70px;
+  padding-right: 18px;
+  text-align: right;
+}
+
+.cut {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.since {
+  color: var(--text-3);
+}
+
+/* GitHub App: a term and its value per row. */
+.kv {
+  margin: 0;
+  font-size: 13px;
+}
+
+.kv > div {
+  display: grid;
+  grid-template-columns: 180px minmax(0, 1fr);
+  gap: 4px 12px;
+  padding: 10px 18px;
+  border-top: 1px solid var(--border);
+}
+
+.kv dt {
+  color: var(--text-3);
+}
+
+.kv dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.wrap {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 16px;
+}
+
+.env {
+  color: var(--text-3);
+}
+
+@media (max-width: 760px) {
+  .page {
+    padding: 16px;
+  }
+
+  /* The icon next to the title, the note under both. */
+  .statusText {
+    flex-basis: 0;
+  }
+
+  .note {
+    flex-basis: 100%;
+  }
+
+  .links {
+    margin-left: 0;
+  }
+
+  .kv > div {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  /* A preview hook per block: its container, then the rest. */
+  .table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+  }
+
+  .table tr {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 4px 12px;
+    padding: 10px 18px;
+    border-top: 1px solid var(--border);
+  }
+
+  .table td,
+  .table td:first-child,
+  .table td:nth-child(4),
+  .table td:last-child {
+    width: auto;
+    padding: 0;
+    border: 0;
+    text-align: left;
+  }
+
+  .table td:first-child {
+    grid-column: 1 / -1;
+  }
+
+  .table td:nth-child(4) {
+    grid-row: 3;
+  }
+
+  .table td:last-child {
+    grid-row: 3;
+    align-self: center;
+    text-align: right;
+  }
+}
