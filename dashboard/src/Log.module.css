@@ -116,6 +116,25 @@
   white-space: nowrap;
 }
 
+/* An MCP call's server, as an icon. */
+.toolIcon {
+  display: flex;
+  align-items: center;
+  height: 20px;
+}
+
+.toolIcon svg,
+.toolIcon mark {
+  display: block;
+}
+
+/* An MCP call's tool, before its arguments: reads as its label, like the tag. */
+.toolName {
+  margin-right: 1ch;
+  color: var(--text-3);
+  font-weight: 500;
+}
+
 .text {
   min-width: 0;
   white-space: pre-wrap;

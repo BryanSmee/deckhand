@@ -16,6 +16,7 @@ import { useShortcuts, withKey } from "./keys";
 import { copyText, downloadText } from "./logExport";
 import {
   cachedLine,
+  count,
   type Filter,
   isError,
   type Item,
@@ -30,6 +31,7 @@ import {
   shown,
   type Step,
   stepStatus,
+  toolLabel,
 } from "./logModel";
 import { getPref, usePref } from "./prefs";
 import type { Entry, Run } from "./types";
@@ -618,11 +620,16 @@ function ItemView({ item, isOpen, toggle }: ItemProps) {
       const error = item.outputs.some((o) => o.error);
       // Its parent's subscription redraws it when the preference changes.
       const opens = error && getPref("logErrors");
+      const mcp = toolLabel(item.name);
+      // logModel.ts fields(): an MCP call's name comes after its outputs.
+      const tag = <ToolTag name={item.name} field={f(item.outputs.length + 1)} />;
+      const short = mcp && <span class={styles.toolName}>{mcp.tool}</span>;
       if (!item.outputs.length)
         return (
           <div class={styles.line} data-item={item.id}>
-            <span class={styles.tag}>{item.name}</span>
+            {tag}
             <span class={styles.text}>
+              {short}
               <Hl text={item.text} field={f(0)} />
             </span>
           </div>
@@ -634,8 +641,13 @@ function ItemView({ item, isOpen, toggle }: ItemProps) {
           error={error}
           open={isOpen(item.id, opens)}
           onToggle={toggle(item.id, opens)}
-          tag={item.name}
-          head={<Hl text={item.text || " "} field={f(0)} />}
+          tag={tag}
+          head={
+            <>
+              {short}
+              <Hl text={item.text || " "} field={f(0)} />
+            </>
+          }
           meta={error ? "failed" : plural(lines, "line")}
         >
           {item.outputs.map((o, i) => (
@@ -681,7 +693,7 @@ function StepView({
       error={error}
       open={isOpen(id, fallback)}
       onToggle={toggle(id, fallback)}
-      tag={`#${s.step}`}
+      tag={<span class={styles.tag}>#{s.step}</span>}
       head={<Hl text={s.name} field={f(0)} />}
       meta={meta}
     >
@@ -695,6 +707,32 @@ function StepView({
         {error && <Hl text={stepStatus(s)} field={f(s.output.length + 1)} />}
       </pre>
     </Sub>
+  );
+}
+
+// MCP servers with an icon of their own; the others get a plug.
+const SERVER_ICONS: Record<string, typeof Icon.Plug> = { playwright: Icon.Browser };
+
+// A tool's name in the tag column: as it is (Bash, Read…), or an MCP call's server as an icon,
+// named by its full name, and marked when the search finds that name.
+function ToolTag({ name, field }: { name: string; field: string }) {
+  const { query, starts, current } = useContext(Hits);
+  const mcp = toolLabel(name);
+  if (!mcp) return <span class={styles.tag}>{name}</span>;
+  const Glyph = SERVER_ICONS[mcp.server] ?? Icon.Plug;
+  const start = starts.get(field);
+  const glyph = <Glyph size={15} />;
+  const cur = start !== undefined && current >= start && current < start + count(name, query);
+  return (
+    <span class={`${styles.tag} ${styles.toolIcon}`} role="img" aria-label={name} title={name}>
+      {query && start !== undefined ? (
+        <mark class={cur ? styles.current : undefined} data-current={cur ? "" : undefined}>
+          {glyph}
+        </mark>
+      ) : (
+        glyph
+      )}
+    </span>
   );
 }
 
@@ -713,7 +751,7 @@ function Sub({
   error: boolean;
   open: boolean;
   onToggle: (open: boolean) => void;
-  tag: string;
+  tag: ComponentChildren;
   head: ComponentChildren;
   meta: string;
   children: ComponentChildren;
@@ -729,7 +767,7 @@ function Sub({
         <span class={styles.chevron}>
           <Icon.ChevronRight size={12} />
         </span>
-        <span class={styles.tag}>{tag}</span>
+        {tag}
         <span class={styles.text}>{head}</span>
         <span class={error ? styles.failedMeta : styles.subMeta}>{meta}</span>
       </summary>
