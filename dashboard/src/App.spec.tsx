@@ -213,6 +213,7 @@ test("the log in its sections: the outcome first, a failed build step open", asy
 });
 
 test("an older run's outcome: no pull request, which is the latest run's", () => {
+  history.replaceState(null, "", "#/tasks");
   render(<Dashboard state={state} error={null} />);
   const outcome = () => screen.getByRole("region", { name: "Outcome" });
   expect(within(outcome()).getByRole("link", { name: "Open pull request #25" })).toBeTruthy();
