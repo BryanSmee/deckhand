@@ -228,6 +228,17 @@ test("the switches: Show closed is the board's, the shortcuts turn / off", () =>
   expect(localStorage.getItem("deckhand.graphClosed")).toBe("1");
   fireEvent.click(screen.getByRole("switch", { name: "Keyboard shortcuts" }));
   expect(localStorage.getItem("deckhand.shortcuts")).toBe("0");
+  // Each notification's: on and off, kept.
+  const failed = screen.getByRole("switch", { name: "A run failed" }) as HTMLInputElement;
+  fireEvent.click(failed);
+  expect(localStorage.getItem("deckhand.notify.failed")).toBe("1");
+  expect(failed.checked).toBe(true);
+  fireEvent.click(screen.getByRole("switch", { name: "A run needs your answers" }));
+  expect(localStorage.getItem("deckhand.notify.input")).toBe("0");
+  fireEvent.click(screen.getByRole("switch", { name: "A pull request is ready for review" }));
+  expect(localStorage.getItem("deckhand.notify.ready")).toBe("0");
+  fireEvent.click(screen.getByRole("switch", { name: "Wrap long log lines" }));
+  expect(localStorage.getItem("deckhand.log.wrap")).toBe("1");
   leave(page);
 
   render(<Dashboard state={state} error={null} repos={repos()} />);
@@ -313,4 +324,15 @@ test("a failed run notifies once turned on; each event can be turned off", () =>
   expect(FakeNotification.shown.map((n) => [n.title, n.options.body])).toEqual([
     ["Run failed: Per-repo budgets for runs", "acme/app · Interrupted"],
   ]);
+});
+
+test("storage refusing a choice: it still holds for this page", () => {
+  const set = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+    throw new DOMException("full", "QuotaExceededError");
+  });
+  setPref("density", "compact");
+  expect(classes()).toContain("d-compact");
+  set.mockRestore();
+  setPref("density", "comfortable");
+  expect(classes()).not.toContain("d-compact");
 });

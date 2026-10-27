@@ -69,6 +69,7 @@ function Toggle({ name, title, help }: { name: Flag; title: string; help: Compon
   const id = useId();
   return (
     <Switch
+      large
       class={`${styles.pref} ${styles.toggle}`}
       checked={on}
       onChange={set}
@@ -170,7 +171,7 @@ export function Preferences({ notify, user }: { notify: Notify; user?: string })
         <Toggle
           name="notifyReady"
           title="A pull request is ready for review"
-          help="The notification opens the pull request."
+          help="The notification opens its task."
         />
         <Toggle
           name="notifyInput"

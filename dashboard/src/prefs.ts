@@ -37,26 +37,27 @@ export const PREFS = {
   showClosed: flag("graphClosed", false),
   logFollow: flag("log.follow", true),
   logErrors: flag("log.errors", true),
-  // On: what the log did before there was a choice.
-  logWrap: flag("log.wrap", true),
+  logWrap: flag("log.wrap", false),
   shortcuts: flag("shortcuts", true),
 };
 
 export type Prefs = { [K in keyof typeof PREFS]: (typeof PREFS)[K]["default"] };
 export type PrefName = keyof Prefs;
 
-// Storage blocked (private mode): the choices made on this page, for its life.
+// The choices storage refused (private mode, a full quota): kept on this page, for its life.
 const unkept = new Map<string, string | null>();
 
 export function getPref<K extends PrefName>(name: K): Prefs[K] {
   const pref = PREFS[name] as Pref<Prefs[K]>;
   const key = `deckhand.${pref.key}`;
   let kept: string | null = null;
-  try {
-    kept = localStorage.getItem(key);
-  } catch {
-    kept = unkept.get(key) ?? null;
-  }
+  if (unkept.has(key)) kept = unkept.get(key)!;
+  else
+    try {
+      kept = localStorage.getItem(key);
+    } catch {
+      // Storage blocked: the default.
+    }
   if (kept === null) return pref.default;
   if (typeof pref.default === "boolean") return (kept === "1") as Prefs[K];
   return pref.values?.includes(kept as Prefs[K]) ? (kept as Prefs[K]) : pref.default;
@@ -80,6 +81,7 @@ export function setPref<K extends PrefName>(name: K, value: Prefs[K]) {
   try {
     if (kept === null) localStorage.removeItem(key);
     else localStorage.setItem(key, kept);
+    unkept.delete(key);
   } catch {
     unkept.set(key, kept);
   }

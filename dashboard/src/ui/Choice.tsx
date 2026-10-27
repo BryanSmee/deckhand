@@ -18,9 +18,16 @@ export function Checkbox({ label, onChange, class: className, ...rest }: Box) {
   );
 }
 
-export function Switch({ label, onChange, class: className, ...rest }: Box) {
+// `large`: 36×22, a settings row's (Preferences).
+export function Switch({
+  label,
+  onChange,
+  large,
+  class: className,
+  ...rest
+}: Box & { large?: boolean }) {
   return (
-    <label class={[styles.switch, className].filter(Boolean).join(" ")}>
+    <label class={[styles.switch, large && styles.large, className].filter(Boolean).join(" ")}>
       <input
         {...rest}
         type="checkbox"

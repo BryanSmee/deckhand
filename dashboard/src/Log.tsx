@@ -1,8 +1,8 @@
 // A run's log, folded into its sections (logModel.ts): setup, the image's build (its steps,
 // cached ones together, a failed one open), the work (messages as text, tool calls folded,
 // a failed one open) and the pushes. A section with an error opens by itself (unless
-// Preferences says not to); the others start folded, except the work. A toolbar searches it (the folds holding the matches open),
-// filters it, folds it all and copies or downloads it; a phone has an action bar instead,
+// Preferences says not to); the others start folded, except the work. A toolbar searches it
+// (the folds holding the matches open), filters it, folds it all and copies or downloads it; a phone has an action bar instead,
 // and its search replaces the page's header. A live run's log follows its end until the
 // reader scrolls up (from the start, unless Preferences says not to); Latest brings it back.
 // Long lines wrap, or scroll sideways (Preferences).

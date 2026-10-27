@@ -1,5 +1,5 @@
 /* Tokens (docs/design/dashboard-redesign.md, Foundations): light, then dark. public/theme.js
-   puts .t-light or .t-dark on the root before the first paint, from the Theme choice (ui/theme.ts);
+   puts .t-light or .t-dark on the root before the first paint, from the Theme choice (prefs.ts);
    a block of the page can set either to show the other theme (ui/Gallery.tsx). Components use
    these only, never a literal colour. tokens.spec.ts checks the text pairs' contrast. */
 :root,

@@ -167,7 +167,7 @@
   grid-template-columns: 14px 52px minmax(0, 1fr) auto;
   align-items: start;
   gap: 10px;
-  padding: calc(6px - var(--row-trim) / 2) 12px;
+  padding: calc(6px - var(--row-trim)) 12px;
   cursor: pointer;
   font: 12.5px/20px var(--mono);
 }

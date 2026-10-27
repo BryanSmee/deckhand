@@ -1,7 +1,7 @@
 // Pull requests ready for review are counted in the tab's title. While the page is open, a
-// browser notification for each event Preferences has on: a pull request turning ready (not
-// those already ready when it loaded, nor those the listener found without a webhook: no
-// readyAt), a run stopping for answers (questions, a brainstorm's turn), a run failing.
+// browser notification, which opens its task, for each event Preferences has on: a pull
+// request turning ready (not those already ready when it loaded, nor those the listener
+// found without a webhook: no readyAt), a run stopping for answers (questions, a brainstorm's turn), a run failing.
 // Answers and failures are what changed between two states the page got: a task already
 // waiting or failed when it loaded is old news.
 import { useEffect, useRef, useState } from "preact/hooks";
@@ -73,7 +73,7 @@ export function useNotifications(state: State | null) {
           show(
             `Ready for review: ${titleOf(t)}`,
             { body: `${t.repo} · pull request #${pr.number}`, tag: id },
-            () => window.open(pr.url, "_blank", "noreferrer"),
+            openTask(t),
           );
       }
       const event = eventOf(t);

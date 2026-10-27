@@ -275,14 +275,18 @@ test("Preferences: sections with errors folded, long lines unwrapped, changed at
   show();
   // Only the work, which isn't open for its error; its failed command folded too.
   expect(opened()).toEqual(["Work"]);
-  const calls = within(section("Work"))
-    .getAllByText("node --test")
-    .map((n) => n.closest("details")!.open);
-  expect(calls).toEqual([false, false]);
+  const calls = () =>
+    within(section("Work"))
+      .getAllByText("node --test")
+      .map((n) => n.closest("details")!.open);
+  expect(calls()).toEqual([false, false]);
+  act(() => setPref("logErrors", true));
+  expect(calls()).toEqual([true, false]);
+  // Long lines scroll sideways unless wrapped.
   const log = screen.getByRole("log").parentElement!;
-  expect(log.className).not.toMatch(/nowrap/);
-  act(() => setPref("logWrap", false));
   expect(log.className).toMatch(/nowrap/);
+  act(() => setPref("logWrap", true));
+  expect(log.className).not.toMatch(/nowrap/);
 });
 
 test("Preferences: a live run's log not followed from the start", () => {

@@ -203,8 +203,8 @@ open ones at each start, so one that changed while it was down shows its current
 **Ready for review** chip lists the pull requests waiting for you, and the tab's title counts
 them ("(2) Deckhand"). **Notify me when ready** (in the sidebar), or **Settings › Preferences**,
 asks your browser for notifications: while a dashboard tab is open, a pull request that turns
-ready for review raises one (which opens it), and so do a run that needs your answers and,
-once turned on there, a run that failed (which open their task). Preferences also keeps the
+ready for review raises one, and so do a run that needs your answers and, once turned on
+there, a run that failed; each opens its task when clicked. Preferences also keeps the
 theme, density, motion, start page, board and run log choices and the keyboard shortcuts, in
 this browser only.
 

@@ -94,14 +94,11 @@ test("one notification when a pull request turns ready, none for those ready bef
   rerender(<Dashboard state={{ ...ready, now: ready.now + 3000 }} error={null} />);
   expect(FakeNotification.shown).toHaveLength(1);
 
-  // Clicked: the pull request opens.
-  const open = vi.spyOn(window, "open").mockImplementation(() => null);
+  // Clicked: its task opens, in this tab.
+  const focus = vi.spyOn(window, "focus").mockImplementation(() => {});
   n.onclick!();
-  expect(open).toHaveBeenCalledWith(
-    "https://github.example.com/acme/app/pull/25",
-    "_blank",
-    "noreferrer",
-  );
+  expect(focus).toHaveBeenCalled();
+  expect(location.hash).toBe("#/acme/app?task=acme%2Fapp%2322");
   expect(n.close).toHaveBeenCalled();
 });
 
