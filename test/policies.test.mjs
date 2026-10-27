@@ -419,9 +419,11 @@ test("decide: whether a policy was asked, with deny()'s messages", async (t) => 
   });
   const opa = fakeOpa({ answer: () => evalResult([]) });
   const { policies } = setup(t, { opa, repoFiles: { "a.rego": DENY } });
+  // The input the rules saw, version included, for the task's page.
   assert.deepEqual(await policies.decide("deny_merge", "org/repo", "main", input), {
     applied: true,
     messages: [],
+    input: { version: 1, ...(await input()) },
   });
   // A folder GitHub can't list: applied, and refused (fail closed).
   const broken = setup(t, { status: 500 });

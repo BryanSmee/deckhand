@@ -151,10 +151,12 @@ export function createTaskModes(ctx) {
   }
 
   // `/mode policy`: the policies evaluated on the pull request now, as a reply (reviews.mjs
-  // dryRun()). No run, nothing reviewed, fixed or merged; on an issue, a reply says where.
+  // dryRun()), kept on the task's page: who asked, the denials, the reply's link. No run,
+  // nothing reviewed, fixed or merged; on an issue, a reply says where.
   async function policyDryRun(item) {
     const where = taskKey(item.repo, item.id);
     let text;
+    let denials = null;
     if (!onPull(item)) {
       log(`${where}: policy dry run refused: not a pull request`);
       text =
@@ -162,13 +164,25 @@ export function createTaskModes(ctx) {
     } else {
       try {
         log(`${where}: policy dry run on #${item.replyTo}`);
-        text = await ctx.reviews.dryRun({ repo: item.repo, base: item.base, number: item.replyTo });
+        const { repo, base, replyTo: number } = item;
+        ({ text, denials } = await ctx.reviews.dryRun({ repo, base, number }));
       } catch (error) {
         log(`${where}: policy dry run: ${error.stack ?? error}`);
         text = `The policy dry run failed: GitHub couldn't be read (${error.message ?? error}).`;
       }
     }
-    await ctx.reply(item.repo, item.replyTo, text).catch((error) => log(`${where}: ${error}`));
+    const res = await ctx.reply(item.repo, item.replyTo, text).catch((error) => {
+      log(`${where}: ${error}`);
+      return null;
+    });
+    if (denials === null) return null;
+    // The reply's link, if GitHub said it: the dry run is kept without one.
+    const url = (await res?.json?.().catch(() => null))?.html_url ?? null;
+    try {
+      ctx.decisions?.recordDryRun(where, { by: item.author ?? null, url, denials });
+    } catch (error) {
+      log(`${where}: keeping its dry run: ${error.message ?? error}`);
+    }
     return null;
   }
 

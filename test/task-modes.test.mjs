@@ -14,7 +14,7 @@ const config = testConfig();
 async function modeOf(
   fields,
   yaml = "",
-  { cfg = config, issueModes = new Map(), reviews = null } = {},
+  { cfg = config, issueModes = new Map(), reviews = null, decisions = null, posted } = {},
 ) {
   const replies = [];
   const ctx = {
@@ -24,8 +24,13 @@ async function modeOf(
     tasks: new Map(),
     issueModes,
     brainstorms: { get: () => null, end: () => {} },
-    reply: async (repo, number, text) => replies.push([repo, number, text]),
+    // `posted`: GitHub's response to a reply, when a test reads it.
+    reply: async (repo, number, text) => {
+      replies.push([repo, number, text]);
+      return posted;
+    },
     reviews,
+    decisions,
   };
   const { settings } = parseRepoConfig(yaml, config);
   const item = { repo: "org/repo", id: "12", number: 12, replyTo: 12, settings, ...fields };
@@ -115,7 +120,7 @@ test("/mode policy: a dry run replied on the pull request, no run; on an issue, 
   const reviews = {
     dryRun: async (what) => {
       asked.push(what);
-      return "**Policy dry run** on #30";
+      return { text: "**Policy dry run** on #30", denials: 0 };
     },
   };
   // Deckhand's own pull request #30, linked to issue #12, in a repo without a review block.
@@ -151,4 +156,29 @@ test("/mode policy: a dry run replied on the pull request, no run; on an issue, 
     failed.replies[0][2],
     /^The policy dry run failed: GitHub couldn't be read \(GitHub said 502\)/,
   );
+});
+
+test("/mode policy: the dry run kept on the task, who asked, its denials and reply; never on a refusal", async () => {
+  const kept = [];
+  const decisions = { recordDryRun: (key, entry) => kept.push([key, entry]) };
+  const reviews = { dryRun: async () => ({ text: "**Policy dry run** on #30", denials: 2 }) };
+  const url = "https://github.com/org/repo/pull/30#issuecomment-9";
+  const posted = Response.json({ html_url: url }, { status: 201 });
+  await modeOf(
+    { kind: "issue", replyTo: 30, base: "trunk", modeLine: "policy", author: "alice" },
+    "",
+    { reviews, decisions, posted },
+  );
+  assert.deepEqual(kept, [["org/repo#12", { by: "alice", url, denials: 2 }]]);
+  // GitHub's response unreadable: kept without a link.
+  await modeOf({ kind: "pr", id: "pr-12", modeLine: "policy" }, "", { reviews, decisions });
+  assert.deepEqual(kept[1], ["org/repo#pr-12", { by: null, url: null, denials: 2 }]);
+  // Refused on an issue, or failed: no dry run ran, nothing kept.
+  await modeOf({ kind: "issue", trigger: "work", modeLine: "policy" }, "", { reviews, decisions });
+  const failing = { dryRun: async () => Promise.reject(new Error("GitHub said 502")) };
+  await modeOf({ kind: "pr", id: "pr-12", modeLine: "policy" }, "", {
+    reviews: failing,
+    decisions,
+  });
+  assert.equal(kept.length, 2);
 });

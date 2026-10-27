@@ -407,8 +407,12 @@ ctx.conflicts = createConflicts({
 // Pull requests that turn ready in opted-in repos get a review run (`review.on`), a review
 // that requests changes one fix run (`review.fix`), and with the operator's
 // `allow_auto_merge`, a clean review the merge (`review.merge`).
-// Each task's last policy decisions, for its page (decisions.mjs).
-ctx.decisions = createDecisions({ path: join(config.dataDir, "decisions.json") });
+// Each task's last policy decisions and dry run, for its page (decisions.mjs).
+ctx.decisions = createDecisions({
+  path: join(config.dataDir, "decisions.json"),
+  dryRunPath: join(config.dataDir, "dry-runs.json"),
+  secrets: () => operatorSecrets(ctx),
+});
 ctx.reviews = createReviews({
   path: join(config.dataDir, "reviews.json"),
   config,

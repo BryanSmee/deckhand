@@ -556,16 +556,35 @@ test("decisions: each one a policy was asked for is kept for the task's page", a
   });
   const s = setup(t, { policies: policy.engine });
   await s.settle();
-  assert.deepEqual(s.decided, [
-    {
-      repo: "org/repo",
-      pr: 5,
-      decision: "merge",
-      rule: "deny_merge",
-      denied: true,
-      messages: ["a human merges this one"],
-    },
+  const { gates, input, ...decision } = s.decided[0];
+  assert.equal(s.decided.length, 1);
+  assert.deepEqual(decision, {
+    repo: "org/repo",
+    pr: 5,
+    decision: "merge",
+    rule: "deny_merge",
+    denied: true,
+    messages: ["a human merges this one"],
+  });
+  // A refused auto-merge lists the built-in gates that passed before the policies.
+  assert.deepEqual(gates, [
+    { name: "Severity ≤ low", passed: true },
+    { name: "Review: nothing blocking", passed: true },
+    { name: "At the reviewed commit", passed: true },
+    { name: "Deckhand's own pull request", passed: true },
+    { name: "Open, not a draft", passed: true },
+    { name: "Nobody's input awaited", passed: true },
+    { name: "No run going", passed: true },
+    { name: "Repository visibility", passed: true },
+    { name: "Merge method squash allowed", passed: true },
+    { name: "No trusted file changed", passed: true },
+    { name: "Cleanly mergeable", passed: true },
+    { name: "Checks green", passed: true },
   ]);
+  // And the input the rules saw, as evaluated.
+  const { rule, ...evaluated } = policy.evals[0];
+  assert.deepEqual([input.version, input.decision, input.pr.number], [1, "merge", 5]);
+  assert.deepEqual(input, evaluated);
   const allowing = policyEngine(t, { files: { "size.rego": "package deckhand" } });
   const merged = setup(t, { policies: allowing.engine });
   assert.ok(await merged.settle());
@@ -585,7 +604,8 @@ test("/mode policy: every rule on the pull request now, nothing reviewed, fixed 
     messages: (input, rule) => (rule === "deny_merge" ? ["a `human` merges this one"] : []),
   });
   const s = setup(t, { policies: policy.engine, pr: { additions: 12 } });
-  const text = await s.reviews.dryRun({ repo: "org/repo", base: "main", number: 5 });
+  const { text, denials } = await s.reviews.dryRun({ repo: "org/repo", base: "main", number: 5 });
+  assert.equal(denials, 1);
   assert.match(
     text,
     /^\*\*Policy dry run\*\* on #5 at sha-1: nothing was reviewed, fixed or merged\./,
@@ -614,7 +634,8 @@ test("/mode policy: every rule on the pull request now, nothing reviewed, fixed 
   // Without policies: said, no GitHub call for the pull request.
   const none = setup(t, { policies: policyEngine(t).engine });
   const said = await none.reviews.dryRun({ repo: "org/repo", base: "main", number: 5 });
-  assert.match(said, /No policy applies here/);
+  assert.match(said.text, /No policy applies here/);
+  assert.equal(said.denials, 0);
   assert.equal(none.calls.length, 0);
 });
 
@@ -682,6 +703,11 @@ test("deny_review: a matching rule skips the automatic review, said as a skip, n
   ]);
   assert.deepEqual(input.issue, { number: 12, title: "", labels: ["area: docs"] });
   assert.equal(input.review, null);
+  // Kept for the task's page with the gates that passed first.
+  assert.deepEqual(
+    s.decided[0].gates.map((g) => g.name),
+    ["Ready for review", "Deckhand's own pull request", "Not reviewed at this commit"],
+  );
   // Not remembered: without the label, the same head commit is reviewed.
   assert.ok(await s.reviews.consider("pull_request", ready()));
   assert.equal(s.accepted.length, 1);
@@ -753,6 +779,10 @@ test("deny_fix: a finding's path starts no fix run, a comment quotes why, nothin
     { severity: "high", path: "a.mjs", line: 1, text: "a hole." },
   ]);
   assert.equal(input.review.verdict, "request-changes");
+  assert.deepEqual(
+    [s.decided[0].rule, s.decided[0].gates.every((g) => g.passed), s.decided[0].gates.length],
+    ["deny_fix", true, 5],
+  );
   // Without auto-merge: the comment alone; the pull request's fix run isn't used up.
   const plain = setup(t, { yaml: FIX_ONLY, policies: policy.engine });
   assert.equal(await plain.reviews.fix(plain.run, plain.posted(HIGH)), null);
