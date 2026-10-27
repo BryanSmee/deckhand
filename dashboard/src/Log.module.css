@@ -71,6 +71,10 @@
   gap: 4px;
 }
 
+.tools .copyFailed {
+  color: var(--err);
+}
+
 .log {
   border: 1px solid var(--border);
   border-radius: var(--radius-card);

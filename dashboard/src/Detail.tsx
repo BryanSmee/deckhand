@@ -5,7 +5,7 @@
 // thread first, to read and reply to, with the last reply and Rerun, then its runs. A phone's
 // log search takes the header's place.
 import { useEffect, useState } from "preact/hooks";
-import { sendCancel, sendRerun } from "./api";
+import { sendCancel, sendRerun, useRunLog } from "./api";
 import {
   ago,
   duration,
@@ -19,12 +19,15 @@ import {
   titleOf,
 } from "./format";
 import { Log } from "./Log";
+import { copyText, downloadText } from "./logExport";
+import { logSections, plainText } from "./logModel";
 import { Outcome } from "./Outcome";
 import { PolicyDecisions } from "./PullRequest";
 import { Questions } from "./Questions";
 import { Thread } from "./Thread";
 import type { PullRequest, Run, Task } from "./types";
-import { Button, buttonClass } from "./ui/Button";
+import { Button, buttonClass, IconButton } from "./ui/Button";
+import { Sheet } from "./ui/Sheet";
 import * as Icon from "./ui/icons";
 import { StatusBadge, StatusDot } from "./ui/Status";
 import { Tabs } from "./ui/Tabs";
@@ -83,7 +86,14 @@ export function Detail({
   const [stopping, setStopping] = useState<string | null>(null);
   // A phone searching the log: its search replaces the header.
   const [searching, setSearching] = useState(false);
-  useEffect(() => setSearching(false), [t?.key]);
+  // A phone's More menu: GitHub, Copy and Download.
+  const [more, setMore] = useState(false);
+  // The log of the run shown: its outcome's More menu copies it too.
+  const { entries } = useRunLog(r?.id ?? null);
+  useEffect(() => {
+    setSearching(false);
+    setMore(false);
+  }, [t?.key]);
   if (!t) {
     return (
       <div class={styles.detail}>
@@ -102,6 +112,19 @@ export function Detail({
   const discussion = t.kind === "discussion" && t.number !== null;
   const thread = discussion && !showLog;
   const hidden = !!touch && searching && !thread && !!r;
+  // A phone's More menu, for a run's log.
+  const menu = !!touch && !thread && !!r;
+  const logText = () =>
+    r ? plainText(logSections(entries, r.finishedAt ?? now, r.status === "running")) : "";
+  const copyLog = async () => {
+    setMore(false);
+    const ok = await copyText(logText());
+    setSent({
+      key: t.key,
+      message: ok ? "Log copied." : "Couldn't copy the log: download it instead.",
+      error: !ok,
+    });
+  };
   // Discussions have no comment command to stop them by, nor the API's.
   const stoppable = STOPPABLE.includes(t.state) && t.number !== null && !discussion;
   const asking = confirming === t.key;
@@ -149,15 +172,26 @@ export function Detail({
     <div class={styles.detail}>
       {!hidden && (
         <header class={styles.head}>
-          <Button
-            variant="ghost"
-            size="touch"
-            class={styles.back}
-            icon={<Icon.ChevronLeft size={18} />}
-            onClick={onBack}
-          >
-            Back
-          </Button>
+          <div class={styles.phoneBar}>
+            <Button
+              variant="ghost"
+              size="touch"
+              icon={<Icon.ChevronLeft size={18} />}
+              onClick={onBack}
+            >
+              Back
+            </Button>
+            {menu && (
+              <IconButton
+                variant="ghost"
+                size="touch"
+                label="More: open on GitHub, copy, download"
+                icon={<Icon.More size={20} />}
+                aria-haspopup="dialog"
+                onClick={() => setMore(true)}
+              />
+            )}
+          </div>
           <div class={styles.top}>
             <div class={styles.heading}>
               <span class={styles.context}>
@@ -189,7 +223,7 @@ export function Detail({
               </h2>
             </div>
             <div class={styles.actions}>
-              {url && (
+              {url && !menu && (
                 <a
                   class={buttonClass("secondary", size)}
                   href={url}
@@ -286,6 +320,44 @@ export function Detail({
           )}
         </header>
       )}
+      {more && r && (
+        <Sheet title="Run log" onClose={() => setMore(false)}>
+          <div class={styles.menu}>
+            {url && (
+              <a
+                class={buttonClass("ghost", "touch", styles.menuItem)}
+                href={url}
+                target="_blank"
+                rel="noreferrer"
+              >
+                <Icon.External size={18} />
+                Open on GitHub
+              </a>
+            )}
+            <Button
+              variant="ghost"
+              size="touch"
+              class={styles.menuItem}
+              icon={<Icon.Copy size={18} />}
+              onClick={copyLog}
+            >
+              Copy the log
+            </Button>
+            <Button
+              variant="ghost"
+              size="touch"
+              class={styles.menuItem}
+              icon={<Icon.Download size={18} />}
+              onClick={() => {
+                setMore(false);
+                downloadText(`${r.id}.txt`, logText());
+              }}
+            >
+              Download as .txt
+            </Button>
+          </div>
+        </Sheet>
+      )}
       {sent?.key === t.key && !hidden && (
         <p class={sent.error ? styles.refused : styles.sent} role="status">
           {sent.message}
@@ -322,6 +394,7 @@ export function Detail({
           <Log
             key={r.id}
             run={r}
+            entries={entries}
             now={now}
             touch={touch}
             searching={searching}

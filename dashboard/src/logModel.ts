@@ -35,6 +35,7 @@ export interface LogSection {
   items: Item[];
   // Its time in all (s), each time the run was in it; null for a log without phases.
   seconds: number | null;
+  // Its commands and build steps that failed (isFailure()).
   failures: number;
   // The run is in it now.
   current: boolean;
@@ -50,11 +51,15 @@ export const PHASE_TITLES: Record<Phase, string> = {
 
 export type Filter = "all" | "messages" | "tools" | "errors";
 
-export const isError = (item: Item): boolean =>
+// A command or a build step that failed: what a section's badge counts.
+export const isFailure = (item: Item): boolean =>
   (item.kind === "tool" && item.outputs.some((o) => o.error)) ||
   (item.kind === "output" && item.error) ||
-  (item.kind === "step" && item.step.status === "error") ||
-  (item.kind === "result" && item.status === "error");
+  (item.kind === "step" && item.step.status === "error");
+
+// What the Errors filter and Next error go through: failures, and a run that ended in error.
+export const isError = (item: Item): boolean =>
+  isFailure(item) || (item.kind === "result" && item.status === "error");
 
 export function shown(item: Item, filter: Filter): boolean {
   if (filter === "messages") return item.kind === "say" || item.kind === "result";
@@ -147,7 +152,7 @@ export function logSections(entries: Entry[], end: number, live: boolean): LogSe
       phase,
       items,
       seconds,
-      failures: items.filter(isError).length,
+      failures: items.filter(isFailure).length,
       current: live && phase === lastPhase,
     };
   });
@@ -171,14 +176,14 @@ export function fields(item: Item): string[] {
   }
 }
 
+// `query`, any case, as typed: no character of it is special. Global: reset lastIndex, or use
+// it with matchAll() and replace().
+export const matcher = (query: string) =>
+  new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi");
+
 // How often `query` is in `text`, any case, without overlaps.
 export function count(text: string, query: string): number {
-  if (!query) return 0;
-  const hay = text.toLowerCase();
-  const needle = query.toLowerCase();
-  let n = 0;
-  for (let i = hay.indexOf(needle); i !== -1; i = hay.indexOf(needle, i + needle.length)) n++;
-  return n;
+  return query ? [...text.matchAll(matcher(query))].length : 0;
 }
 
 export interface Match {

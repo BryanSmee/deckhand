@@ -4,7 +4,7 @@ import type { Entry } from "./types";
 
 const step = { kind: "step", step: 8, stage: "b 1/1", name: "RUN make", seconds: null } as const;
 
-test("a log's sections, in order, with their failures", () => {
+test("a log's sections, in order", () => {
   const entries: Entry[] = [
     { kind: "meta", text: "Starting" },
     { kind: "phase", phase: "setup", at: 1 },
@@ -20,12 +20,12 @@ test("a log's sections, in order, with their failures", () => {
     { kind: "phase", phase: "work", at: 5 },
   ];
   const got = sections(entries);
-  expect(got.map((s) => [s.phase, s.at, s.entries.length, s.failures])).toEqual([
-    ["setup", 1, 2, 0],
-    ["image", 2, 2, 1],
-    ["work", 3, 3, 1],
-    ["push", 4, 0, 0],
-    ["work", 5, 0, 0],
+  expect(got.map((s) => [s.phase, s.at, s.entries.length])).toEqual([
+    ["setup", 1, 2],
+    ["image", 2, 2],
+    ["work", 3, 3],
+    ["push", 4, 0],
+    ["work", 5, 0],
   ]);
   // The run's first line goes with the first section.
   expect(got[0].entries[0]).toEqual({ kind: "meta", text: "Starting" });
@@ -36,6 +36,6 @@ test("a log from before phases is one work section; an empty one has none", () =
     { kind: "meta", text: "Starting" },
     { kind: "output", text: "bad", error: true },
   ];
-  expect(sections(entries)).toEqual([{ phase: "work", at: null, entries, failures: 1 }]);
+  expect(sections(entries)).toEqual([{ phase: "work", at: null, entries }]);
   expect(sections([])).toEqual([]);
 });

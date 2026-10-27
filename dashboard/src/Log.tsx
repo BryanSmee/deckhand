@@ -8,8 +8,8 @@
 import type { ComponentChildren } from "preact";
 import { createContext } from "preact";
 import { useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "preact/hooks";
-import { useRunLog } from "./api";
 import { plural } from "./format";
+import { copyText, downloadText } from "./logExport";
 import {
   cachedLine,
   type Filter,
@@ -17,6 +17,7 @@ import {
   type Item,
   type LogSection,
   logSections,
+  matcher,
   PHASE_TITLES,
   plainText,
   resultTitle,
@@ -26,7 +27,7 @@ import {
   type Step,
   stepStatus,
 } from "./logModel";
-import type { Run } from "./types";
+import type { Entry, Run } from "./types";
 import { Button, IconButton } from "./ui/Button";
 import { Segmented } from "./ui/Choice";
 import { Field } from "./ui/Field";
@@ -38,6 +39,8 @@ import styles from "./Log.module.css";
 
 interface Props {
   run: Run;
+  // Its log so far (api.ts useRunLog(), which the page reads: its More menu copies it too).
+  entries: Entry[];
   now: number;
   // A phone's: the action bar, and a search that takes the page's header.
   touch?: boolean;
@@ -62,12 +65,13 @@ const Hits = createContext<{ query: string; starts: Map<string, number>; current
 // Near enough to the end to keep following it.
 const NEAR_END = 40;
 
-export function Log({ run, now, touch, searching, onSearching }: Props) {
-  const { entries } = useRunLog(run.id);
+export function Log({ run, entries, now, touch, searching, onSearching }: Props) {
   const live = run.status === "running";
+  // A finished run's sections don't change with the clock.
+  const end = live ? now : (run.finishedAt ?? now);
   const list = useMemo(
-    () => logSections(entries, run.finishedAt ?? now, live),
-    [entries, run.finishedAt, now, live],
+    () => logSections(entries, end, live),
+    [entries, live ? end : run.finishedAt, live],
   );
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<Filter>("all");
@@ -78,7 +82,8 @@ export function Log({ run, now, touch, searching, onSearching }: Props) {
   // The error Next error went to: held open.
   const [focus, setFocus] = useState<string | null>(null);
   const [following, setFollowing] = useState(live);
-  const [copied, setCopied] = useState(false);
+  // How the last Copy went, for a moment.
+  const [copied, setCopied] = useState<"ok" | "failed" | null>(null);
   const root = useRef<HTMLDivElement>(null);
 
   const found = useMemo(() => search(list, query, filter), [list, query, filter]);
@@ -91,8 +96,16 @@ export function Log({ run, now, touch, searching, onSearching }: Props) {
   const focused = errors.find((e) => e.item === focus);
   // The folds of the current match and of the error gone to stay open.
   const held = new Set([match?.section, match?.item, focused?.section, focus]);
+  // What the reader did last wins, until the current match or the error gone to moves there.
   const isOpen = (id: string, fallback: boolean) =>
-    held.has(id) || (overrides[id] ?? (query && found.hits.get(id) ? true : (all ?? fallback)));
+    overrides[id] ?? (held.has(id) || (query && found.hits.get(id) ? true : (all ?? fallback)));
+  // The folds a match or an error moved to open, even those the reader closed.
+  const reopen = (...ids: string[]) =>
+    setOverrides((o) => {
+      const next = { ...o };
+      for (const id of ids) delete next[id];
+      return next;
+    });
   // Only what the reader did: the echo of an `open` set from here changes nothing.
   const toggle = (id: string, fallback: boolean) => (open: boolean) => {
     if (open !== isOpen(id, fallback)) setOverrides((o) => ({ ...o, [id]: open }));
@@ -103,7 +116,18 @@ export function Log({ run, now, touch, searching, onSearching }: Props) {
     setCurrent(0);
     setOverrides({});
   };
-  const step = (by: number) => total && setCurrent((at + by + total) % total);
+  const step = (by: number) => {
+    if (!total) return;
+    const next = (at + by + total) % total;
+    reopen(found.matches[next].section, found.matches[next].item);
+    setCurrent(next);
+  };
+  // Done, or Escape: the search ends, its filter too.
+  const endSearch = () => {
+    find("");
+    setFilter("all");
+    onSearching?.(false);
+  };
   const foldAll = (open: boolean) => {
     setOverrides({});
     setFocus(null);
@@ -112,7 +136,9 @@ export function Log({ run, now, touch, searching, onSearching }: Props) {
   const nextError = () => {
     if (!errors.length) return;
     const i = errors.findIndex((e) => e.item === focus);
-    setFocus(errors[(i + 1) % errors.length].item);
+    const next = errors[(i + 1) % errors.length];
+    reopen(next.section, next.item);
+    setFocus(next.item);
   };
 
   // The page's scroller: the log follows its end there.
@@ -152,18 +178,10 @@ export function Log({ run, now, touch, searching, onSearching }: Props) {
 
   const text = () => plainText(list);
   const copy = async () => {
-    await navigator.clipboard?.writeText(text());
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    setCopied((await copyText(text())) ? "ok" : "failed");
+    setTimeout(() => setCopied(null), 3000);
   };
-  const download = () => {
-    const url = URL.createObjectURL(new Blob([text()], { type: "text/plain" }));
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${run.id}.txt`;
-    a.click();
-    URL.revokeObjectURL(url);
-  };
+  const download = () => downloadText(`${run.id}.txt`, text());
 
   const visible = list.filter((s) => filter === "all" || s.items.some((i) => shown(i, filter)));
   const counter = query ? (total ? `${at + 1} / ${total}` : "0 / 0") : "";
@@ -180,7 +198,7 @@ export function Log({ run, now, touch, searching, onSearching }: Props) {
         onInput={(e) => find((e.currentTarget as HTMLInputElement).value)}
         onKeyDown={(e) => {
           if (e.key === "Enter") step(e.shiftKey ? -1 : 1);
-          if (e.key === "Escape" && touch) onSearching?.(false);
+          if (e.key === "Escape" && touch) endSearch();
         }}
         class={styles.searchField}
       />
@@ -230,15 +248,7 @@ export function Log({ run, now, touch, searching, onSearching }: Props) {
         <div class={styles.phoneSearch}>
           <div class={styles.phoneSearchRow}>
             {searchBox}
-            <Button
-              variant="ghost"
-              size="touch"
-              onClick={() => {
-                find("");
-                setFilter("all");
-                onSearching?.(false);
-              }}
-            >
+            <Button variant="ghost" size="touch" onClick={endSearch}>
               Done
             </Button>
           </div>
@@ -285,8 +295,23 @@ export function Log({ run, now, touch, searching, onSearching }: Props) {
               <IconButton
                 variant="ghost"
                 size="small"
-                label={copied ? "Copied" : "Copy the log"}
-                icon={copied ? <Icon.Check size={15} /> : <Icon.Copy size={15} />}
+                label={
+                  copied === "ok"
+                    ? "Copied"
+                    : copied === "failed"
+                      ? "Couldn't copy: download it instead"
+                      : "Copy the log"
+                }
+                class={copied === "failed" ? styles.copyFailed : undefined}
+                icon={
+                  copied === "ok" ? (
+                    <Icon.Check size={15} />
+                  ) : copied === "failed" ? (
+                    <Icon.Alert size={15} />
+                  ) : (
+                    <Icon.Copy size={15} />
+                  )
+                }
                 onClick={copy}
               />
               <IconButton
@@ -481,21 +506,21 @@ function Hl({ text, field }: { text: string; field: string }) {
   const { query, starts, current } = useContext(Hits);
   const start = starts.get(field);
   if (!query || start === undefined) return <>{text}</>;
+  // Found in the text as it is, as logModel.ts count() finds them: lowercasing may change
+  // lengths ("İ").
   const parts: ComponentChildren[] = [];
-  const hay = text.toLowerCase();
-  const needle = query.toLowerCase();
   let from = 0;
   let n = start;
-  for (let i = hay.indexOf(needle); i !== -1; i = hay.indexOf(needle, from)) {
-    parts.push(text.slice(from, i));
+  for (const m of text.matchAll(matcher(query))) {
+    parts.push(text.slice(from, m.index));
     const cur = n === current;
     parts.push(
       <mark key={n} class={cur ? styles.current : undefined} data-current={cur ? "" : undefined}>
-        {text.slice(i, i + needle.length)}
+        {m[0]}
       </mark>,
     );
     n++;
-    from = i + needle.length;
+    from = m.index + m[0].length;
   }
   parts.push(text.slice(from));
   return <>{parts}</>;

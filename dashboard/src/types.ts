@@ -314,7 +314,7 @@ export type Phase = "setup" | "image" | "work" | "push" | "wrap-up";
 export type StepStatus = "running" | "cached" | "done" | "error" | "cancelled";
 
 // What the log stream sends, in order. Failures: an `output` with `error`, a `step` with
-// status "error" (its `error` says why): phases.ts counts them per section.
+// status "error" (its `error` says why): logModel.ts counts them per section.
 export type Entry =
   | { kind: "text"; text: string }
   | { kind: "meta"; text: string }

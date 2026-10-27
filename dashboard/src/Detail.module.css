@@ -14,10 +14,20 @@
   padding: 20px 28px 0;
 }
 
-/* A phone's only: the task is a page of its own there. Weighs more than the button's own
-   display, whichever comes first in the bundle. */
-.head .back {
+/* A phone's only (Back, More): the task is a page of its own there. */
+.phoneBar {
   display: none;
+}
+
+/* The phone's More menu: a row per action. Weighs more than the button's own layout. */
+.menu {
+  display: flex;
+  flex-direction: column;
+}
+
+.menu .menuItem {
+  justify-content: flex-start;
+  width: 100%;
 }
 
 .top {
@@ -191,10 +201,11 @@
     gap: 12px;
     padding: 8px 16px 0;
   }
-  .head .back {
-    display: inline-flex;
-    align-self: flex-start;
-    margin-left: -12px;
+  .phoneBar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin: 0 -12px;
   }
   .heading {
     flex-basis: 100%;

@@ -2,6 +2,7 @@
 // folding it all, copying it, a phone's bars, and following a live run.
 import { act, fireEvent, render, screen, within } from "@testing-library/preact";
 import { beforeEach, expect, test, vi } from "vitest";
+import { useRunLog } from "./api";
 import { Log } from "./Log";
 import { FakeSource } from "./testUtils";
 import type { Entry, Run } from "./types";
@@ -46,8 +47,16 @@ beforeEach(() => {
   vi.stubGlobal("EventSource", FakeSource);
 });
 
-const show = (props: Partial<Parameters<typeof Log>[0]> = {}, log = entries) => {
-  const view = render(<Log run={run} now={240000} {...props} />);
+type Props = Omit<Parameters<typeof Log>[0], "entries">;
+
+// The log as the page shows it, streamed.
+function Streamed(props: Props) {
+  const { entries } = useRunLog(props.run.id);
+  return <Log {...props} entries={entries} />;
+}
+
+const show = (props: Partial<Props> = {}, log = entries) => {
+  const view = render(<Streamed run={run} now={240000} {...props} />);
   act(() => FakeSource.last!.emit("entries", log));
   return view;
 };
@@ -146,6 +155,26 @@ test("a fold the reader opens stays open through filters; a new search starts ov
   expect(section("Setup").open).toBe(true);
 });
 
+test("a fold the reader closed opens again when the next match is in it", () => {
+  show();
+  fireEvent.input(box(), { target: { value: "node --test" } });
+  expect(screen.getByText("1 / 2")).toBeTruthy();
+  const work = section("Work");
+  work.open = false;
+  fireEvent(work, new Event("toggle"));
+  expect(section("Work").open).toBe(false);
+  fireEvent.click(screen.getByRole("button", { name: "Next match" }));
+  expect(section("Work").open).toBe(true);
+  const current = document.querySelector("mark[data-current]")!;
+  expect(current.closest("details")!.open).toBe(true);
+});
+
+test("marks stay on their text when lowercasing changes its length", () => {
+  show({}, [{ kind: "text", text: "İİ retry" }]);
+  fireEvent.input(box(), { target: { value: "RETRY" } });
+  expect(document.querySelector("mark")!.textContent).toBe("retry");
+});
+
 test("an old log, without phases, is one work section", () => {
   show({}, [
     { kind: "meta", text: "Starting" },
@@ -164,8 +193,20 @@ test("copy: the log as text", async () => {
   await act(async () => {
     fireEvent.click(screen.getByRole("button", { name: "Copy the log" }));
   });
+  expect(await screen.findByRole("button", { name: "Copied" })).toBeTruthy();
   expect(writeText.mock.calls[0][0]).toMatch(/^== Setup ==\n› Cloned acme\/app\n/);
-  expect(screen.getByRole("button", { name: "Copied" })).toBeTruthy();
+});
+
+test("copy without a clipboard, and the fallback fails: it says so", async () => {
+  vi.stubGlobal("navigator", {});
+  document.execCommand = () => false;
+  show();
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Copy the log" }));
+  });
+  expect(
+    await screen.findByRole("button", { name: "Couldn't copy: download it instead" }),
+  ).toBeTruthy();
 });
 
 test("a phone: an action bar, then a search that takes the header, with its chips", () => {
@@ -181,7 +222,7 @@ test("a phone: an action bar, then a search that takes the header, with its chip
   fireEvent.click(within(bar).getByRole("button", { name: "Search" }));
   expect(onSearching).toHaveBeenCalledWith(true);
 
-  rerender(<Log run={run} now={240000} touch searching onSearching={onSearching} />);
+  rerender(<Streamed run={run} now={240000} touch searching onSearching={onSearching} />);
   fireEvent.input(box(), { target: { value: "retr" } });
   const matches = screen.getByRole("navigation", { name: "Matches" });
   expect(within(matches).getByRole("status").textContent).toBe("1 of 4 · in Image build");
@@ -191,6 +232,14 @@ test("a phone: an action bar, then a search that takes the header, with its chip
   expect(within(matches).getByRole("status").textContent).toBe("1 of 1 · in Work");
   fireEvent.click(screen.getByRole("button", { name: "Done" }));
   expect(onSearching).toHaveBeenLastCalledWith(false);
+
+  // Escape ends it like Done: no query, no filter left behind.
+  fireEvent.input(box(), { target: { value: "retr" } });
+  fireEvent.click(screen.getByRole("button", { name: "Errors 1" }));
+  fireEvent.keyDown(box(), { key: "Escape" });
+  rerender(<Streamed run={run} now={240000} touch onSearching={onSearching} />);
+  expect(document.querySelector("mark")).toBeNull();
+  expect(within(screen.getByRole("log")).getByText("Setup")).toBeTruthy();
 });
 
 test("a live run follows its end until the reader scrolls up; Latest brings it back", () => {
@@ -203,7 +252,7 @@ test("a live run follows its end until the reader scrolls up; Latest brings it b
     clientHeight: { get: () => 200 },
     scrollTop: { get: () => top, set: (v: number) => (top = v) },
   });
-  render(<Log run={{ ...run, status: "running", finishedAt: null }} now={240000} />, {
+  render(<Streamed run={{ ...run, status: "running", finishedAt: null }} now={240000} />, {
     container: page,
   });
   act(() => FakeSource.last!.emit("entries", entries));

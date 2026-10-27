@@ -119,6 +119,22 @@ test("as text: each section under its title", () => {
   expect(text).toContain("== Push and pull request ==\n[Bash] git push");
 });
 
+test("a run that ended in error: an error, not a failed command", () => {
+  const [work] = logSections(
+    [{ kind: "result", status: "error", minutes: 1, text: "API error" }],
+    0,
+    false,
+  );
+  expect(work.failures).toBe(0);
+  expect(search([work], "api", "errors").matches).toHaveLength(1);
+});
+
+test("search takes the query as typed: no character is special", () => {
+  const [work] = logSections([{ kind: "text", text: "a.b a+b (a)" }], 0, false);
+  expect(search([work], "a.b", "all").matches).toHaveLength(1);
+  expect(search([work], "(A)", "all").matches).toHaveLength(1);
+});
+
 test("durations", () => {
   expect([6, 134, 3725].map(shortDuration)).toEqual(["6s", "2m 14s", "1h 2m"]);
 });

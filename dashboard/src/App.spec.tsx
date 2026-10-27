@@ -207,6 +207,33 @@ test("the log in its sections: the outcome first, a failed build step open", asy
   expect(failed.textContent).toContain("ERROR: exit code: 1");
 });
 
+test("an older run's outcome: no pull request, which is the latest run's", () => {
+  render(<Dashboard state={state} error={null} />);
+  const outcome = () => screen.getByRole("region", { name: "Outcome" });
+  expect(within(outcome()).getByRole("link", { name: "Open pull request #25" })).toBeTruthy();
+  fireEvent.click(screen.getByRole("tab", { name: "Start 2 h ago" }));
+  expect(within(outcome()).queryByRole("link", { name: /pull request/ })).toBeNull();
+  expect(outcome().textContent).not.toMatch(/Draft|\+86/);
+});
+
+test("on a phone, More: GitHub, then the log copied", async () => {
+  wide = false;
+  const writeText = vi.fn(async (_text: string) => {});
+  vi.stubGlobal("navigator", { clipboard: { writeText } });
+  history.replaceState(null, "", "#/?task=acme%2Fapp%2322");
+  render(<Dashboard state={state} error={null} />);
+  FakeSource.last!.emit("entries", [{ kind: "text", text: "Hello" }] satisfies Entry[]);
+  // GitHub is in the menu, not beside the title.
+  expect(screen.queryByRole("link", { name: "GitHub" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "More: open on GitHub, copy, download" }));
+  const sheet = screen.getByRole("dialog", { name: "Run log" });
+  expect(within(sheet).getByRole("link", { name: "Open on GitHub" })).toBeTruthy();
+  fireEvent.click(within(sheet).getByRole("button", { name: "Copy the log" }));
+  expect(await screen.findByText("Log copied.")).toBeTruthy();
+  expect(writeText.mock.calls[0][0]).toBe("== Work ==\nHello\n");
+  expect(screen.queryByRole("dialog")).toBeNull();
+});
+
 test("signed out of reach: the error instead of the counts", () => {
   render(<Dashboard state={null} error="502" />);
   expect(screen.getByText("Can't reach the listener (502)")).toBeTruthy();

@@ -1,6 +1,6 @@
 // A run's outcome, above its log: how it ended and its pull request, its reply (three lines on
 // a phone), what to do next (Open pull request, Rerun), then its facts: the branch and its
-// commits, the change's size, how long, on which model, and where it replies. A run going on
+// commits, the change's size (the latest run's only: the pull request is the task's), how long, on which model, and where it replies. A run going on
 // says so instead.
 import { duration, plural, PR_NAMES, type Tone } from "./format";
 import type { PullRequest, Run, Task } from "./types";
@@ -34,7 +34,8 @@ function prBadge(pr: PullRequest): string {
 }
 
 export function Outcome({ task: t, run: r, now, github, touch, onRerun, rerunning }: Props) {
-  const pr = t.pr;
+  // The task's pull request is its latest run's work: an older run's says nothing of it.
+  const pr = r.id === t.runs[0]?.id ? t.pr : null;
   const live = r.status === "running";
   const size = touch ? "touch" : "small";
   const replyUrl = r.replyTo !== null ? `${github}/${t.repo}/issues/${r.replyTo}` : null;
