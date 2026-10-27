@@ -228,6 +228,7 @@ export function createRuns(ctx) {
     ctx.broker.provide(task.live.secret, entry.provider, (message) =>
       writeEvent(logFile, "note", { message }),
     );
+    ctx.watchPushes(task);
     const started =
       !fresh &&
       !chosen.takeOver &&

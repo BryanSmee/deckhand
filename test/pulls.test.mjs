@@ -56,10 +56,34 @@ test("pull_request states: ready, draft again, merged or closed", () => {
   assert.equal(map("closed", { state: "closed", merged: false }).pr.state, "closed");
 });
 
+test("pull_request deliveries: its size and commit count when GitHub sends them, a push's too", () => {
+  const size = { additions: 86, deletions: 19, changed_files: 4, commits: 3 };
+  const sized = { additions: 86, deletions: 19, changedFiles: 4, commits: 3 };
+  assert.deepEqual(map("opened", size).pr, {
+    number: 31,
+    url: "https://github.com/Org/Repo/pull/31",
+    state: "draft",
+    readyAt: null,
+    ...sized,
+  });
+  // A push to its branch changes them.
+  assert.deepEqual(map("synchronize", { ...size, commits: 4 }).pr, {
+    ...map("opened").pr,
+    ...sized,
+    commits: 4,
+  });
+  // Only numbers: a payload without them (or with junk) has none.
+  assert.deepEqual(Object.keys(map("opened", { additions: "86", commits: null }).pr), [
+    "number",
+    "url",
+    "state",
+    "readyAt",
+  ]);
+});
+
 test("pull_request deliveries outside the allowlist, the App or the actions are ignored", () => {
   assert.equal(map("opened", {}, { repo: "Org/Other" }), null);
   assert.equal(map("opened", {}, { installation: null }), null);
-  assert.equal(map("synchronize"), null);
   assert.equal(map("labeled"), null);
   assert.equal(pullRequest(config, "issue_comment", delivery("opened"), NOW), null);
 });
@@ -221,6 +245,53 @@ test("pulls: older tasks looked up once per repo, by branch, link or number", as
   assert.equal(asked.length, 2);
 });
 
+test("pulls: fill() asks once for the size of one found in a listing, merged or closed too", async (t) => {
+  const path = tempPath(t);
+  const listPulls = async () => [
+    {
+      number: 9,
+      html_url: "u9",
+      state: "closed",
+      merged_at: "2026-10-21",
+      head: { ref: "issue-4-x", repo: { full_name: "org/repo" } },
+    },
+  ];
+  const fetched = [];
+  const getPull = async (repo, number) => {
+    fetched.push(`${repo}#${number}`);
+    if (number === 3) return null; // gone
+    return {
+      number,
+      state: "closed",
+      merged_at: "2026-10-21",
+      additions: 86,
+      deletions: 19,
+      changed_files: 4,
+      commits: 3,
+    };
+  };
+  const pulls = createPulls({ path, listPulls, getPull });
+  // Recorded before sizes were, and gone from GitHub since.
+  pulls.record("org/repo#2", pr(3, "closed"));
+  await pulls.fill(["org/repo#4", "org/repo#2"]);
+  assert.deepEqual(pulls.get("org/repo#4"), {
+    number: 9,
+    url: "u9",
+    state: "merged",
+    readyAt: null,
+    additions: 86,
+    deletions: 19,
+    changedFiles: 4,
+    commits: 3,
+  });
+  assert.deepEqual(pulls.get("org/repo#2"), pr(3, "closed"));
+  assert.deepEqual(fetched.sort(), ["org/repo#3", "org/repo#9"]);
+  // Not asked again on the next poll, even for the one GitHub couldn't size; kept on disk.
+  assert.equal(await pulls.fill(["org/repo#4", "org/repo#2"]), null);
+  assert.equal(fetched.length, 2);
+  assert.equal(createPulls({ path, listPulls, getPull }).get("org/repo#4").commits, 3);
+});
+
 test("pulls: the open ones, for the conflict watcher", (t) => {
   const pulls = createPulls({ path: tempPath(t), listPulls: async () => [] });
   pulls.record("org/repo#30", pr(31, "draft"));
@@ -251,23 +322,76 @@ test("pulls: resync asks GitHub about the open ones again, so a lost delivery is
     return { number, html_url: `u${number}`, state: "closed", merged: false };
   };
   const pulls = createPulls({ path, listPulls, getPull });
-  pulls.record("org/repo#30", pr(31, "draft"));
-  pulls.record("org/repo#32", pr(33, "ready", NOW));
-  pulls.record("org/repo#34", pr(35, "draft"));
-  pulls.record("org/repo#36", pr(37, "merged"));
-  pulls.record("org/broken#1", pr(2, "draft"));
+  // Their size known: the listing is enough for those it has.
+  const sized = (p) => ({ ...p, additions: 1, deletions: 0, changedFiles: 1, commits: 1 });
+  pulls.record("org/repo#30", sized(pr(31, "draft")));
+  pulls.record("org/repo#32", sized(pr(33, "ready", NOW)));
+  pulls.record("org/repo#34", sized(pr(35, "draft")));
+  pulls.record("org/repo#36", sized(pr(37, "merged")));
+  pulls.record("org/broken#1", sized(pr(2, "draft")));
   assert.equal(await pulls.resync(), 4);
   assert.deepEqual(listed, ["org/repo", "org/broken"]);
   assert.deepEqual(fetched, ["org/repo#35", "org/broken#2"]);
-  assert.deepEqual(pulls.get("org/repo#30"), { ...pr(31, "ready"), url: "u31" });
+  assert.deepEqual(pulls.get("org/repo#30"), { ...sized(pr(31, "ready")), url: "u31" });
   // When it turned ready stays.
-  assert.deepEqual(pulls.get("org/repo#32"), { ...pr(33, "merged", NOW), url: "u33" });
+  assert.deepEqual(pulls.get("org/repo#32"), { ...sized(pr(33, "merged", NOW)), url: "u33" });
   assert.equal(pulls.get("org/repo#34").state, "closed");
   assert.equal(pulls.get("org/broken#1").state, "closed");
   // Kept, and nothing more to change.
   const next = createPulls({ path, listPulls, getPull });
   assert.equal(next.get("org/repo#30").state, "ready");
   assert.equal(await next.resync(), 0);
+});
+
+test("pulls: resync asks for an open one whose size isn't known yet, once; the count is of states", async (t) => {
+  const path = tempPath(t);
+  const fetched = [];
+  const listPulls = async () => [{ number: 31, html_url: "u31", state: "open", draft: true }];
+  const getPull = async (repo, number) => {
+    fetched.push(number);
+    return {
+      number,
+      html_url: `u${number}`,
+      state: "open",
+      draft: true,
+      additions: 86,
+      deletions: 19,
+      changed_files: 4,
+      commits: 3,
+    };
+  };
+  const pulls = createPulls({ path, listPulls, getPull });
+  // From a listing (fill()) or a listener from before sizes: none.
+  pulls.record("org/repo#30", pr(31, "draft"));
+  assert.equal(await pulls.resync(), 0);
+  assert.deepEqual(fetched, [31]);
+  const sized = { additions: 86, deletions: 19, changedFiles: 4, commits: 3 };
+  assert.deepEqual(pulls.get("org/repo#30"), { ...pr(31, "draft"), url: "u31", ...sized });
+  // Saved, and not asked again.
+  const next = createPulls({ path, listPulls, getPull });
+  assert.deepEqual(next.get("org/repo#30"), pulls.get("org/repo#30"));
+  await next.resync();
+  assert.deepEqual(fetched, [31]);
+  // GitHub can't say: the listing's state still counts.
+  const gone = createPulls({ path: tempPath(t), listPulls, getPull: async () => null });
+  gone.record("org/repo#30", pr(31, "ready"));
+  assert.equal(await gone.resync(), 1);
+  assert.equal(gone.get("org/repo#30").state, "draft");
+});
+
+test("pulls: a pull request recorded without its size keeps the one known", (t) => {
+  const pulls = createPulls({ path: tempPath(t), listPulls: async () => [] });
+  const sized = { additions: 86, deletions: 19, changedFiles: 4, commits: 3 };
+  pulls.record("org/repo#30", { ...pr(31, "draft"), ...sized });
+  // The listener's own change (pr-ready.mjs), its object without them.
+  pulls.record("org/repo#30", pr(31, "ready", NOW));
+  assert.deepEqual(pulls.get("org/repo#30"), { ...pr(31, "ready", NOW), ...sized });
+  // A newer size wins.
+  pulls.record("org/repo#30", { ...pr(31, "ready"), ...sized, commits: 5 });
+  assert.equal(pulls.get("org/repo#30").commits, 5);
+  // Another pull request on the task: not the old one's size.
+  pulls.record("org/repo#30", pr(40, "draft"));
+  assert.deepEqual(pulls.get("org/repo#30"), pr(40, "draft"));
 });
 
 test("pulls: resync lets fill() look up the tasks without one again", async (t) => {

@@ -18,9 +18,11 @@ import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { branchAllowed, createBroker } from "../listener/broker.mjs";
 import {
+  acceptedRefs,
   commandReader,
   createGitGateway,
   MAX_COMMANDS,
+  pushedBranch,
   refusal,
   rejection,
 } from "../listener/git-gateway.mjs";
@@ -147,6 +149,47 @@ test("a refused push gets a status report git can show, on the side band if aske
   assert.equal(rejection(refs, [], reasons), null);
 });
 
+test("GitHub's report says which refs a push updated, on the side band or not", () => {
+  const report =
+    pkt("unpack ok\n") + pkt("ok refs/heads/a\n") + pkt("ng refs/heads/b hook declined\n") + "0000";
+  assert.deepEqual(acceptedRefs(Buffer.from(report), ["report-status"]), ["refs/heads/a"]);
+  // Band 1 in two pieces, progress on band 2 between them.
+  const half = report.length >> 1;
+  const banded =
+    pkt(`\x01${report.slice(0, half)}`) +
+    pkt("\x02Resolving deltas: 100%\n") +
+    pkt(`\x01${report.slice(half)}`) +
+    "0000";
+  const caps = ["report-status-v2", "side-band-64k"];
+  assert.deepEqual(acceptedRefs(Buffer.from(banded), caps), ["refs/heads/a"]);
+  // Cut short: what came whole.
+  assert.deepEqual(acceptedRefs(Buffer.from(report.slice(0, -10)), ["report-status"]), [
+    "refs/heads/a",
+  ]);
+  assert.equal(acceptedRefs(Buffer.from(report), []), null);
+});
+
+test("a push's branch: the last one GitHub updated, never a deletion nor another ref", () => {
+  const updates = [
+    { ref: "refs/heads/issue-1-a", old: ZERO, new: A },
+    { ref: "refs/heads/issue-1-b", old: A, new: B },
+    { ref: "refs/heads/issue-1-gone", old: A, new: ZERO },
+    { ref: "refs/tags/v1", old: ZERO, new: A },
+  ];
+  const answer = (...refs) =>
+    Buffer.from(pkt("unpack ok\n") + refs.map((r) => pkt(`ok ${r}\n`)).join("") + "0000");
+  const all = answer(...updates.map((u) => u.ref));
+  assert.equal(pushedBranch(updates, ["report-status"], all), "issue-1-b");
+  assert.equal(
+    pushedBranch(updates, ["report-status"], answer("refs/heads/issue-1-a")),
+    "issue-1-a",
+  );
+  assert.equal(pushedBranch(updates, ["report-status"], answer()), null);
+  assert.equal(pushedBranch(updates.slice(2), ["report-status"], all), null);
+  // No report asked for: GitHub's 200 is all there is.
+  assert.equal(pushedBranch(updates, [], Buffer.alloc(0)), "issue-1-b");
+});
+
 // --- Through a real git client -------------------------------------------------------------
 
 // GitHub's side: `git http-backend` (CGI) over the repos in `root`, behind a fetch().
@@ -227,6 +270,7 @@ async function setup(
     // (extra) => the error minting a token with `extra` fails with, or nothing.
     mintError = () => null,
     maxPush,
+    now,
   } = {},
 ) {
   const dir = tempDir(t, "gateway-");
@@ -286,6 +330,7 @@ async function setup(
     maxPush,
     headMs,
     drainMs,
+    now,
   });
   // What the client sends with each push, as the gateway reads it.
   const sent = [];
@@ -380,6 +425,36 @@ test("a branch is pushed to GitHub with the gateway's token, not the sandbox's",
       "POST https://github.test/org/repo.git/git-receive-pack",
     ],
   );
+});
+
+test("a push GitHub takes is the run's last: its branch and when; one it refuses or a deletion isn't", async (t) => {
+  const pushes = [];
+  let clock = 1000;
+  const { work, remote, bare } = await setup(t, {
+    register: (b) => {
+      const secret = issueRun(b);
+      b.watchPushes(secret, (push) => pushes.push(push));
+      return secret;
+    },
+    now: () => clock,
+  });
+  assert.ok((await git(work, "push", remote(), "HEAD:refs/heads/issue-1-x")).ok);
+  assert.deepEqual(pushes, [{ branch: "issue-1-x", at: 1000 }]);
+  // GitHub refuses it (a workflow its token can't write, say).
+  const hook = join(bare, "hooks", "pre-receive");
+  writeFileSync(hook, "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+  execFileSync("git", ["commit", "-q", "--allow-empty", "-m", "two"], { cwd: work, env: gitEnv });
+  clock = 2000;
+  assert.equal((await git(work, "push", remote(), "HEAD:refs/heads/issue-1-x")).ok, false);
+  rmSync(hook);
+  // A deletion pushes no branch.
+  assert.ok((await git(work, "push", remote(), ":refs/heads/issue-1-x")).ok);
+  // Refused by the gateway itself: never forwarded.
+  assert.equal((await git(work, "push", remote(), "HEAD:refs/heads/main")).ok, false);
+  assert.equal(pushes.length, 1);
+  clock = 3000;
+  assert.ok((await git(work, "push", remote(), "HEAD:refs/heads/issue-1-y")).ok);
+  assert.deepEqual(pushes.at(-1), { branch: "issue-1-y", at: 3000 });
 });
 
 test("allow_workflows: the push's token writes workflows, read again on each push", async (t) => {

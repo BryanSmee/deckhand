@@ -172,6 +172,16 @@ export function createRestart(ctx) {
     return live.saving;
   }
 
+  // The pushes of the run's GitHub took (git-gateway.mjs), on its record: when it last pushed,
+  // and which branch, for the dashboard. Saved with it, so a restart keeps them.
+  function watchPushes(task) {
+    const { live } = task;
+    ctx.broker.watchPushes(live.secret, ({ branch, at }) => {
+      Object.assign(live.record, { branch, lastPushAt: at });
+      if (task.live === live) saveLive(task);
+    });
+  }
+
   // Runs a previous listener left behind, from their saved state: their tokens and egress work
   // again at once, and comments find them. reattach() then follows their sandboxes.
   function restoreRuns() {
@@ -233,6 +243,7 @@ export function createRestart(ctx) {
       record.provider ?? agentFor(record.agent).defaultProvider,
       (message) => writeEvent(logFile, "note", { message }),
     );
+    watchPushes(task);
     return task;
   }
 
@@ -305,6 +316,7 @@ export function createRestart(ctx) {
     loadQueue,
     livePath,
     saveLive,
+    watchPushes,
     restoreRuns,
     reattach,
     relink,
