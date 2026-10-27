@@ -25,7 +25,13 @@ import {
   refusedByGrants,
 } from "./grants.mjs";
 import { appSettingsUrl } from "./github-app.mjs";
-import { CONFIG_FILE, defaultSettings, parseRepoConfig, readRepoFile } from "./repo-config.mjs";
+import {
+  CONFIG_FILE,
+  defaultSettings,
+  fileLines,
+  parseRepoConfig,
+  readRepoFile,
+} from "./repo-config.mjs";
 import { sameRepo } from "./events.mjs";
 import { effectiveView } from "./repo-view.mjs";
 import { paginate } from "./github.mjs";
@@ -420,18 +426,29 @@ export function createRepoApi({
     // What stops its merges: the grant, the repository's visibility (the parse's own warning
     // already says what its file lacks).
     const merging = grant ? autoMergeProblems(grant, settings, info.private === true) : [];
+    // What the file says, with the line each error, warning, setting and mount comes from.
+    const { lineOf, mountLine, locate } = fileLines(file?.text ?? "");
+    const effective = effectiveView(config, info.full_name, settings, grant, fs);
+    const branch = base.split("/").map(encodeURIComponent).join("/");
     send(res, 200, {
       repo: row,
       base,
       file: file && {
         text: file.text,
         sha: file.sha,
-        url: `${info.html_url}/blob/${base.split("/").map(encodeURIComponent).join("/")}/${CONFIG_FILE}`,
+        url: `${info.html_url}/blob/${branch}/${CONFIG_FILE}`,
+        editUrl: `${info.html_url}/edit/${branch}/${CONFIG_FILE}`,
       },
-      errors: parsed?.errors ?? [],
-      warnings: [...warnings, ...merging.filter((w) => !warnings.includes(w))],
+      errors: (parsed?.errors ?? []).map((e) => locate(e, parsed.fixes)),
+      warnings: [...warnings, ...merging.filter((w) => !warnings.includes(w))].map((w) =>
+        locate(w),
+      ),
       grantsError,
-      effective: effectiveView(config, info.full_name, settings, grant, fs),
+      effective: {
+        ...effective,
+        settings: effective.settings.map((s) => ({ ...s, line: lineOf(s.key) })),
+        mounts: effective.mounts.map((m) => ({ ...m, line: mountLine(m.path) })),
+      },
       policies: await policyView(info.full_name, base),
       readAt: row.readAt,
     });

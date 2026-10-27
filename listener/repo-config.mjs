@@ -67,30 +67,89 @@ export function effectiveConfig(config, settings) {
   return { ...config, ...Object.fromEntries(own.map(({ field }) => [field, settings[field]])) };
 }
 
-// The file's text → { settings, errors, warnings }. Errors stop runs (the reply says why);
-// warnings (unknown keys, users the operator doesn't allow) only go to the run's log.
+// The file's text → { settings, errors, warnings, fixes }. Errors stop runs (the reply says
+// why); warnings (unknown keys, users the operator doesn't allow) only go to the run's log.
+// `fixes`: how to fix an error whose message doesn't say, by the error (the dashboard's).
 export function parseRepoConfig(text, config) {
   const settings = defaultSettings(config);
   const errors = [];
   const warnings = [];
+  const fixes = {};
   let raw;
   try {
     raw = parseYaml(text) ?? {};
   } catch (error) {
-    return { settings, errors: [`${CONFIG_FILE}: ${error.message}`], warnings };
+    return { settings, errors: [`${CONFIG_FILE}: ${error.message}`], warnings, fixes };
   }
   if (typeof raw !== "object" || Array.isArray(raw)) {
-    return { settings, errors: [`${CONFIG_FILE}: expected keys at the top level`], warnings };
+    return {
+      settings,
+      errors: [`${CONFIG_FILE}: expected keys at the top level`],
+      warnings,
+      fixes,
+    };
   }
-  const fail = (key, what) => errors.push(`${key}: ${what}`);
+  const fail = (key, what, fix = null) => {
+    errors.push(`${key}: ${what}`);
+    if (fix) fixes[`${key}: ${what}`] = fix;
+  };
   const warn = (what) => warnings.push(what);
   for (const [key, value] of Object.entries(raw)) {
     if (value === null) continue; // "key:" with nothing: the default
     if (!Object.hasOwn(KEYS, key)) warn(`${key}: unknown, ignored`);
     else KEYS[key].parse(value, { key, field: KEYS[key].field, settings, config, fail, warn });
   }
-  return { settings, errors, warnings };
+  return { settings, errors, warnings, fixes };
 }
+
+// Where things are in the file's text, for the dashboard, each a line number or null when the
+// file doesn't say: lineOf(key), the line of a dotted key ("modes.review.agent") or of its
+// closest parent the file has; mountLine(path), that of the mount request for `path`;
+// locate(problem, fixes), one of parseRepoConfig()'s errors or warnings as { key, message,
+// line, fix }: with `fixes` (its errors'), an error's fix, or one that fits any error; a
+// warning (no `fixes`) has none.
+export function fileLines(text) {
+  const where = new Map();
+  let raw = null;
+  try {
+    raw = parseYaml(text, where);
+  } catch {
+    // A syntax error: its own message has its line, the keys before it are noted.
+  }
+  const lineOf = (key) => {
+    for (let path = key; path; path = path.slice(0, Math.max(0, path.lastIndexOf(".")))) {
+      if (where.has(path)) return where.get(path);
+    }
+    return null;
+  };
+  const mountLine = (path) => {
+    const mounts = isMap(raw) && Array.isArray(raw.mounts) ? raw.mounts : [];
+    const i = mounts.findIndex((m) => (isMap(m) ? m.path : m) === path);
+    return i < 0 ? null : (where.get(`mounts.${i}`) ?? null);
+  };
+  // The file's keys, longest first: a problem starts with the one it is about ("my key: …").
+  const keys = [...where.keys()].sort((a, b) => b.length - a.length);
+  const locate = (problem, fixes = null) => {
+    const fix = (generic) => (fixes ? (fixes[problem] ?? generic) : null);
+    const syntax = /^\S+: line (\d+): (.*)$/s.exec(problem);
+    if (problem.startsWith(`${CONFIG_FILE}: `)) {
+      const fileFix = fix(SYNTAX_FIX);
+      if (syntax) return { key: null, message: syntax[2], line: Number(syntax[1]), fix: fileFix };
+      const message = problem.slice(CONFIG_FILE.length + 2);
+      return { key: null, message, line: null, fix: fileFix };
+    }
+    const key =
+      keys.find((k) => problem.startsWith(`${k}: `)) ?? /^([\w.-]+): /.exec(problem)?.[1] ?? null;
+    if (!key) return { key: null, message: problem, line: null, fix: fix(null) };
+    const message = problem.slice(key.length + 2);
+    return { key, message, line: lineOf(key), fix: fix(KEY_FIX) };
+  };
+  return { lineOf, mountLine, locate };
+}
+
+// What fixes an error the check has no better word for.
+const SYNTAX_FIX = "Fix the YAML: until then, none of the file is read.";
+const KEY_FIX = "Change the value as the message says, or remove the key to get the default.";
 
 // Non-empty text, else an error.
 function text(key, value, fail) {
@@ -115,12 +174,13 @@ function agentName(value, key, config, fail) {
   const name = typeof value === "string" ? value.trim().toLowerCase() : "";
   if (config.agents.includes(name)) return name;
   const known = Object.hasOwn(AGENTS, name);
-  fail(
-    key,
-    known
-      ? `the operator hasn't configured ${name} (configured: ${config.agents.join(", ")})`
-      : `expected one of ${config.agents.join(", ")}`,
-  );
+  if (known) {
+    fail(
+      key,
+      `the operator hasn't configured ${name} (configured: ${config.agents.join(", ")})`,
+      `Use an agent the operator runs (${config.agents.join(", ")}), or ask them to configure ${name}.`,
+    );
+  } else fail(key, `expected one of ${config.agents.join(", ")}`);
   return null;
 }
 
@@ -286,9 +346,9 @@ function parseReview(value, { key, settings, config, fail, warn }) {
   }
   if (!isMap(value)) return fail(key, `expected true, or ${REVIEW_KEYS.join(", ")}`);
   let ok = true;
-  const bad = (k, what) => {
+  const bad = (k, what, fix) => {
     ok = false;
-    fail(`review.${k}`, what);
+    fail(`review.${k}`, what, fix);
   };
   for (const [k, v] of Object.entries(value)) {
     if (v === null) continue;
@@ -314,7 +374,7 @@ function parseReview(value, { key, settings, config, fail, warn }) {
       if (ALLOWED_SEVERITIES.includes(v)) review.maxAllowedSeverity = v;
       else bad(k, `expected ${ALLOWED_SEVERITIES.join(" or ")}`);
     } else if (k === "agent") {
-      review.agent = agentName(v, `review.${k}`, config, (_, what) => bad(k, what));
+      review.agent = agentName(v, `review.${k}`, config, (_, what, fix) => bad(k, what, fix));
     } else if (k === "model") {
       if (typeof v === "string" && MODEL_NAME.test(v)) review.model = v;
       else
@@ -612,15 +672,26 @@ function parseMode(name, mode, settings, config, fail) {
       id === "work"
         ? "agent, model and effort"
         : "brainstorm_agent, brainstorm_model and brainstorm_effort";
-    return fail(where, `${id} is built in: set it with ${keys} instead`);
+    return fail(
+      where,
+      `${id} is built in: set it with ${keys} instead`,
+      `Remove ${where}, and set ${keys} at the top level.`,
+    );
   }
   if (id === "review") {
     return fail(
       where,
       "review is built in: remove it and turn it on with a top-level `review:` block, or rename it",
+      `Remove ${where} and add review: true (or a review: block) at the top level, or give the mode another name.`,
     );
   }
-  if (RESERVED_MODES.includes(id)) return fail(where, `${id} is reserved by Deckhand`);
+  if (RESERVED_MODES.includes(id)) {
+    return fail(
+      where,
+      `${id} is reserved by Deckhand`,
+      `Give the mode another name: ${RESERVED_MODES.join(", ")} are Deckhand's own.`,
+    );
+  }
   if (!/^[a-z][a-z0-9_-]{0,31}$/.test(id)) {
     return fail(where, "expected a name of letters, digits, - and _ (32 at most)");
   }
@@ -638,9 +709,9 @@ function parseMode(name, mode, settings, config, fail) {
     speed: null,
   };
   let ok = true;
-  const bad = (key, what) => {
+  const bad = (key, what, fix) => {
     ok = false;
-    fail(`${where}.${key}`, what);
+    fail(`${where}.${key}`, what, fix);
   };
   for (const [key, value] of Object.entries(mode)) {
     if (!MODE_KEYS.includes(key)) {
@@ -655,7 +726,9 @@ function parseMode(name, mode, settings, config, fail) {
       if (["issue", "fresh"].includes(value)) own.session = value;
       else bad(key, "expected issue or fresh");
     } else if (key === "agent") {
-      own.agent = agentName(value, `${where}.${key}`, config, (k, what) => bad(key, what));
+      own.agent = agentName(value, `${where}.${key}`, config, (k, what, fix) =>
+        bad(key, what, fix),
+      );
     } else if (key === "model") {
       if (typeof value === "string" && MODEL_NAME.test(value)) own.model = value;
       else
@@ -672,8 +745,20 @@ function parseMode(name, mode, settings, config, fail) {
       own.effort = String(value).toLowerCase();
     } else bad(key, `expected one of ${EFFORTS.join(", ")}`);
   }
-  if (!("instructions" in mode)) bad("instructions", "missing: a mode is its instructions");
-  if (before) return fail(where, "defined twice (names are not case-sensitive)");
+  if (!("instructions" in mode)) {
+    bad(
+      "instructions",
+      "missing: a mode is its instructions",
+      "Add instructions: the path of a file of the repository that says what the mode does.",
+    );
+  }
+  if (before) {
+    return fail(
+      where,
+      "defined twice (names are not case-sensitive)",
+      `Keep one of the modes named ${name} (in any case), or rename the other.`,
+    );
+  }
   if (ok) settings.modes[id] = own;
 }
 

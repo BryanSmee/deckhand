@@ -207,7 +207,8 @@ export function Dashboard({ state, error, repos, refresh, onOverview }: Props) {
         <TopBar {...shell} onSearch={onTasks && !task ? toggleSearch : undefined} />
       )}
       <div class={styles.content}>
-        {wide && !(onBoard && route.repo) && (
+        {/* A repository's config has its own header, its way back included. */}
+        {wide && !(onBoard && route.repo) && !(onSettings && route.config) && (
           <PageHeader
             route={route}
             github={github}

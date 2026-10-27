@@ -50,9 +50,10 @@ const CONFIG: RepoConfig = {
     text: "users: [alice]\neffort: loud\n",
     sha: "abcdef1234",
     url: "https://github.com/org/api/blob/main/.deckhand.yaml",
+    editUrl: "https://github.com/org/api/edit/main/.deckhand.yaml",
   },
-  errors: ["effort: expected one of low, medium, high"],
-  warnings: ["colour: unknown, ignored"],
+  errors: [{ key: "effort", message: "expected one of low, medium, high", line: 2, fix: null }],
+  warnings: [{ key: "colour", message: "unknown, ignored", line: null, fix: null }],
   grantsError: null,
   effective: {
     settings: [
@@ -61,8 +62,9 @@ const CONFIG: RepoConfig = {
         value: "alice",
         source: "repo",
         note: "narrowed from ALLOWED_USERS (alice, bob)",
+        line: 1,
       },
-      { key: "effort", value: "medium", source: "operator", note: null },
+      { key: "effort", value: "medium", source: "operator", note: null, line: 2 },
     ],
     hosts: [
       { host: "api.anthropic.com", source: "operator", note: "always" },
@@ -185,6 +187,18 @@ function Page(props: { server?: ServerInfo; serverNow?: number; tasks?: Task[] }
 
 const list = () => screen.getByRole("list", { name: "Repositories" });
 const row = (name: string) => within(list()).getByRole("link", { name }).closest("li")!;
+// A config panel's row: a setting, or the one named `name` in the list `list`.
+const rowIn = (list: string, name: string) =>
+  within(screen.getByRole("list", { name: list }))
+    .getByText(name)
+    .closest("li")!;
+const setting = (name: string) => rowIn("Settings", name);
+// The panel's title: the repository and its status.
+const title = () => screen.getByRole("heading", { level: 1 }).parentElement!;
+const back = () =>
+  within(screen.getByRole("navigation", { name: "Breadcrumb" })).getByRole("link", {
+    name: "Repositories",
+  });
 const openRepo = async (name: string) =>
   fireEvent.click(
     await within(await screen.findByRole("list", { name: "Repositories" })).findByRole("link", {
@@ -518,32 +532,29 @@ test("a repository's panel: errors first, then what runs get, then the file", as
   const alert = await screen.findByRole("alert");
   expect(alert.textContent).toContain("No run starts until these are fixed");
   expect(alert.textContent).toContain("effort: expected one of low, medium, high");
-  expect(screen.getByText("colour: unknown, ignored")).toBeTruthy();
-  const users = screen.getByText("users").closest("tr")!;
+  expect(screen.getByLabelText("Warnings").textContent).toContain("colour: unknown, ignored");
+  const users = setting("users");
   expect(within(users).getByText("from repo")).toBeTruthy();
   expect(within(users).getByText(/narrowed from ALLOWED_USERS/)).toBeTruthy();
-  expect(within(screen.getByText("effort").closest("tr")!).getByText("from operator")).toBeTruthy();
+  expect(within(setting("effort")).getByText("from operator")).toBeTruthy();
   // Each host names the grants file it comes from.
-  const pypi = screen.getByText("pypi.org", { selector: "th code" }).closest("tr")!;
+  const pypi = rowIn("Hosts", "pypi.org");
   expect(within(pypi).getByText("grants/org/api.yaml")).toBeTruthy();
   expect(within(pypi).getByText("from operator")).toBeTruthy();
   // What the operator grants, workflow pushes included.
-  const workflows = screen.getByText("allow_workflows", { selector: "th code" }).closest("tr")!;
-  expect(within(workflows).getByText("false")).toBeTruthy();
-  expect(screen.getByText(/users: \[alice\]/, { selector: "pre" })).toBeTruthy();
-  expect(screen.getByRole("link", { name: "on GitHub" }).getAttribute("href")).toBe(
-    "https://github.com/org/api/blob/main/.deckhand.yaml",
+  expect(within(rowIn("Switches", "allow_workflows")).getByText("off")).toBeTruthy();
+  expect(screen.getByText("users: [alice]")).toBeTruthy();
+  expect(screen.getByRole("link", { name: "Edit on GitHub" }).getAttribute("href")).toBe(
+    "https://github.com/org/api/edit/main/.deckhand.yaml",
   );
   expect(screen.getByText(/read 0s ago/)).toBeTruthy();
   // The row read along with it: invalid now.
-  expect(screen.getByRole("heading", { name: /org\/api/ }).textContent).toContain(
-    "Config has errors",
-  );
-  fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+  expect(title().textContent).toContain("Config has errors");
+  fireEvent.click(screen.getByRole("button", { name: "Read again" }));
   await waitFor(() =>
     expect(api.posted).toContainEqual({ url: "api/repos/org/api/refresh", body: undefined }),
   );
-  fireEvent.click(screen.getByRole("button", { name: "← Repositories" }));
+  fireEvent.click(back());
   expect(
     within(await screen.findByRole("list", { name: "Repositories" })).getAllByText(
       "Config has errors",
@@ -571,8 +582,7 @@ test("auto-merge: a red badge in the list, a red risk box and its grant in the p
   expect(within(box).getByRole("link").getAttribute("href")).toBe(
     "https://github.com/BryanSmee/deckhand/blob/main/docs/security.md#auto-merge",
   );
-  const grant = screen.getByText("allow_auto_merge", { selector: "th code" }).closest("tr")!;
-  expect(within(grant).getByText("public")).toBeTruthy();
+  expect(within(rowIn("Switches", "allow_auto_merge")).getByText("public")).toBeTruthy();
 });
 
 test("a repository's broken grant: the file to fix, and only this repository stopped", async () => {
@@ -608,9 +618,11 @@ test("a broken grant: what needs a grant is unknown, and only the grants error i
       },
       effective: {
         ...CONFIG.effective,
-        settings: [{ key: "docker", value: "a container engine", source: "unknown", note }],
+        settings: [
+          { key: "docker", value: "a container engine", source: "unknown", note, line: null },
+        ],
         hosts: [],
-        mounts: [{ path: "/srv/data", source: "unknown", readOnly: true, note }],
+        mounts: [{ path: "/srv/data", source: "unknown", readOnly: true, note, line: null }],
         grant: null,
       },
     };
@@ -621,10 +633,8 @@ test("a broken grant: what needs a grant is unknown, and only the grants error i
   expect(within(alert).getAllByRole("listitem")).toHaveLength(1);
   expect(alert.textContent).toContain("allow_repo_hosts: gone");
   expect(alert.textContent).not.toContain("docker");
-  const docker = screen.getByText("docker", { selector: "th code" }).closest("tr")!;
-  expect(within(docker).getByText("unknown")).toBeTruthy();
-  const mount = screen.getByText("/srv/data", { selector: "th code" }).closest("tr")!;
-  expect(within(mount).getByText("unknown")).toBeTruthy();
+  expect(within(setting("docker")).getByText("unknown")).toBeTruthy();
+  expect(within(rowIn("Host mounts", "/srv/data")).getByText("unknown")).toBeTruthy();
 });
 
 test("a config that parses but asks for what isn't granted: Config has errors, not Configured", async () => {
@@ -641,6 +651,7 @@ test("a config that parses but asks for what isn't granted: Config has errors, n
           value: ".deckhand/Dockerfile",
           source: "refused",
           note: "the operator's grants don't set allow_dockerfile: true for this repository",
+          line: null,
         },
       ],
       hosts: [],
@@ -652,11 +663,11 @@ test("a config that parses but asks for what isn't granted: Config has errors, n
   ).toHaveLength(1);
   await openRepo("org/api");
   const alert = await screen.findByRole("alert");
-  expect(alert.textContent).toContain("dockerfile: the operator's grants");
-  const heading = screen.getByRole("heading", { name: /org\/api/ }).textContent;
+  expect(alert.textContent).toContain("dockerfile: refused: the operator's grants");
+  const heading = title().textContent;
   expect(heading).toContain("Config has errors");
   expect(heading).not.toContain("Configured");
-  fireEvent.click(screen.getByRole("button", { name: "← Repositories" }));
+  fireEvent.click(back());
   const rows = await screen.findByRole("list", { name: "Repositories" });
   expect(within(rows).getAllByText("Config has errors")).toHaveLength(2);
   expect(within(rows).queryByText("Configured")).toBeNull();
@@ -672,10 +683,10 @@ test("its policies: each file with its rules and source, and the check's errors"
   expect(alert.textContent).toContain("Every decision a policy is asked for refuses");
   expect(alert.textContent).toContain("base.rego:4: rego_parse_error");
   expect(screen.getByText(/deny_merged/).textContent).toContain("isn't a rule Deckhand evaluates");
-  const size = screen.getByText("size.rego").closest("tr")!;
+  const size = rowIn("Policy files", "size.rego");
   expect(within(size).getByText("deny_merge")).toBeTruthy();
   expect(within(size).getByText("from operator")).toBeTruthy();
-  const [replaced, base] = screen.getAllByText("base.rego").map((n) => n.closest("tr")!);
+  const [replaced, base] = screen.getAllByText("base.rego").map((n) => n.closest("li")!);
   expect(within(replaced).getByText(/replaced by the repo's/)).toBeTruthy();
   expect(replaced.querySelector("s")).toBeTruthy();
   expect(within(base).getByText("deny_merge, deny_review")).toBeTruthy();
@@ -684,7 +695,7 @@ test("its policies: each file with its rules and source, and the check's errors"
   expect(within(base).getByRole("link").getAttribute("href")).toBe(
     "https://github.com/org/policed/blob/main/.deckhand/policy/base.rego",
   );
-  const lib = screen.getByText("lib.rego").closest("tr")!;
+  const lib = rowIn("Policy files", "lib.rego");
   expect(within(lib).getByText("no deny_* rule")).toBeTruthy();
 });
 
@@ -696,6 +707,7 @@ test("a repository without a config: the operator's defaults, said so", async ()
   expect(document.body.textContent).toContain("No .deckhand.yaml on main");
   expect(screen.queryByRole("alert")).toBeNull();
   expect(document.querySelector("pre")).toBeNull();
+  expect(screen.queryByRole("link", { name: "Edit on GitHub" })).toBeNull();
 });
 
 test("the footer says which Deckhand runs, linked to its code, and since when", async () => {
