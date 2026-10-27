@@ -112,7 +112,7 @@ export function Sidebar(props: SidebarProps) {
             onClick={notify.ask}
             icon={<Icon.Bell size={rail ? 17 : 16} />}
             label="Notify me when ready"
-            title="A browser notification when a pull request is ready for review, while this page is open"
+            title="Browser notifications while this page is open: a pull request ready for review, a run that needs your answers (Settings › Preferences picks which)"
             rail={rail}
           />
         )}

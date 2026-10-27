@@ -11,9 +11,3 @@
   padding: 0 8px;
   background: var(--surface);
 }
-
-.coming {
-  margin: 0;
-  padding: 24px;
-  color: var(--text-2);
-}

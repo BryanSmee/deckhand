@@ -3,17 +3,18 @@
 // (or every repo's) filtered by state, the open task and its log; a repo's board, its work
 // queue and what waits for what (Board.tsx); or Settings (Settings.tsx), whose Repositories
 // tab is where onboarding starts and each one's config shows.
-// What is shown lives in the address (route.ts); the state chip, the board's view and "Show
-// closed", the repo last open and the sidebar's rail are kept on this device. On the board, the
-// sidebar is a rail unless expanded there.
+// What is shown lives in the address (route.ts); the state chip, the board's view, the repo
+// last open and the sidebar's rail are kept on this device, like the choices of Settings ›
+// Preferences (prefs.ts). On the board, the sidebar is a rail unless expanded there.
 import { useEffect, useState } from "preact/hooks";
 import { type RepoList, useAppState, useRepos } from "./api";
 import { Board, type BoardView } from "./Board";
 import { Detail } from "./Detail";
 import { type ChipId, CHIPS, inChip, isLive, matchesSearch, repoTabs, sameRepo } from "./format";
 import { NewRequest } from "./NewRequest";
-import { useReadyNotifications } from "./notify";
+import { useNotifications } from "./notify";
 import { Overview } from "./Overview";
+import { getPref, usePref } from "./prefs";
 import { needingYou } from "./Repos";
 import { formatRoute, isOverview, parseRoute, type Route } from "./route";
 import { Settings } from "./Settings";
@@ -53,11 +54,15 @@ const store = (name: string, value: string) => {
   }
 };
 
-// The repo last open on this device, else the Overview.
-const readStored = (): Route => ({ repo: stored("tab") || null, task: null, run: null });
+// The repo last open on this device, else (or if Preferences › Open on says so) the Overview.
+const readStored = (): Route => ({
+  repo: (getPref("openOn") === "last" && stored("tab")) || null,
+  task: null,
+  run: null,
+});
 
-// No address yet: the repo last open on this device. An old address (route.ts) is rewritten
-// to its new one, in place.
+// No address yet: readStored(). An old address (route.ts) is rewritten to its new one, in
+// place.
 function readRoute(): Route {
   if (location.hash.length <= 1) return readStored();
   const route = parseRoute(location.hash);
@@ -117,15 +122,15 @@ export function Dashboard({ state, error, repos, refresh, onOverview }: Props) {
   // The list's search, and whether a phone shows its box (a wide screen always does).
   const [query, setQuery] = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
-  const [showClosed, setShowClosed] = useState(() => stored("graphClosed") === "1");
+  const [showClosed, setShowClosed] = usePref("showClosed");
   const [rail, setRail] = useState(() => stored("sidebar") === "rail");
   // The board's rail, expanded there for a while: not kept.
   const [boardRail, setBoardRail] = useState(true);
-  // Graph or Lanes; a phone's lanes unless picked.
-  const [view, setView] = useState<BoardView | null>(() => {
-    const saved = stored("boardView");
-    return saved === "graph" || saved === "lanes" ? saved : null;
-  });
+  // Graph or Lanes: a wide screen's graph unless picked; a phone's is a Preference (lanes).
+  const [view, setView] = useState<BoardView>(() =>
+    stored("boardView") === "lanes" ? "lanes" : "graph",
+  );
+  const [phoneView, setPhoneView] = usePref("phoneBoard");
   // The last repo open here, which All doesn't clear: the phone's Tasks and Board go there.
   const [lastRepo, setLastRepo] = useState(() => stored("repo") || null);
   // New request's dialog, and the kind it opened on: an idea or a bug report for a repo's
@@ -165,10 +170,6 @@ export function Dashboard({ state, error, repos, refresh, onOverview }: Props) {
     }
   }, [onSettings, route.repo]);
 
-  const selectShowClosed = (show: boolean) => {
-    store("graphClosed", show ? "1" : "");
-    setShowClosed(show);
-  };
   const selectChip = (next: ChipId) => {
     store("chip", next);
     setChip(next);
@@ -179,11 +180,12 @@ export function Dashboard({ state, error, repos, refresh, onOverview }: Props) {
     setRail(next);
   };
   const selectView = (next: BoardView) => {
+    if (!wide) return setPhoneView(next);
     store("boardView", next);
     setView(next);
   };
 
-  const notify = useReadyNotifications(state);
+  const notify = useNotifications(state);
   const github = state?.githubUrl ?? "https://github.com";
   const shell = { state, error, route, refresh, onRequest: setRequest };
   const onTasks = !overview && !onBoard && !onSettings;
@@ -233,8 +235,8 @@ export function Dashboard({ state, error, repos, refresh, onOverview }: Props) {
               repo={route.repo}
               narrow={!wide}
               showClosed={showClosed}
-              onShowClosed={selectShowClosed}
-              view={view ?? (wide ? "graph" : "lanes")}
+              onShowClosed={setShowClosed}
+              view={wide ? view : phoneView}
               onView={selectView}
               header={(controls) => (
                 <PageHeader route={route} github={github}>
@@ -253,6 +255,7 @@ export function Dashboard({ state, error, repos, refresh, onOverview }: Props) {
                 repos={repos}
                 narrow={!wide}
                 refresh={refresh}
+                notify={notify}
                 onOpen={(repo) =>
                   go({ repo: null, task: null, run: null, page: "settings", config: repo })
                 }

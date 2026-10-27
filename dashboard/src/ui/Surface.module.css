@@ -65,14 +65,13 @@
   }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .toast {
-    animation-name: appear;
-  }
+/* Reduced motion (Preferences › Motion, else the system's setting): fades only. */
+:global(.m-reduced) .toast {
+  animation-name: appear;
+}
 
-  .skeleton {
-    animation: none;
-  }
+:global(.m-reduced) .skeleton {
+  animation: none;
 }
 
 @keyframes appear {

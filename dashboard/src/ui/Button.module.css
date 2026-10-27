@@ -1,11 +1,11 @@
 /* Buttons: secondary by default; primary (one per view), ghost, danger, danger-solid (the
-   confirmed step of Stop); sizes small (28), default (36), touch (44); icon-only squares it. */
+   confirmed step of Stop); sizes small (28), default (36, 32 compact), touch (44); icon-only squares it. */
 .button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 6px;
-  height: 36px;
+  height: var(--control);
   padding: 0 14px;
   border-radius: var(--radius);
   border: 1px solid var(--border-strong);
@@ -99,7 +99,7 @@
 }
 
 .icon {
-  width: 36px;
+  width: var(--control);
   padding: 0;
 }
 

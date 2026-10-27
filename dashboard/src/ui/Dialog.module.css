@@ -150,8 +150,7 @@
   }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .dialog {
-    animation-name: appear;
-  }
+/* Reduced motion (Preferences › Motion, else the system's setting): fades only. */
+:global(.m-reduced) .dialog {
+  animation-name: appear;
 }
