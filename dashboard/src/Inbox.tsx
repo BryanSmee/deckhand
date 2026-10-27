@@ -59,6 +59,8 @@ interface Props {
   tasks: Task[];
   onAction: (action: Action) => void;
   onSent?: () => void;
+  // The title already typed.
+  title?: string;
   submit?: (repo: string, entry: InboxEntry) => Promise<InboxResult>;
   start?: (repo: string, discussion: DiscussionStart) => Promise<DiscussionResult>;
 }
@@ -81,10 +83,11 @@ export function InboxForm({
   tasks,
   onAction,
   onSent = () => {},
+  title: typed = "",
   submit = sendToInbox,
   start = startDiscussion,
 }: Props) {
-  const [title, setTitle] = useState("");
+  const [title, setTitle] = useState(typed);
   const [details, setDetails] = useState("");
   const [sent, setSent] = useState<Sent | null>(null);
   const {

@@ -6,7 +6,10 @@
 // too, once they are in: the drag opens its open questions first (QuestionsDialog.tsx), and so
 // does a click on its node. A brainstorm dropped on the graph starts work. While a drag goes
 // on, the graph says what letting go does ("Queue #31 after #19"); each action shows at once,
-// its node dashed ("Starting…"), before api/state is read again.
+// its node dashed ("Starting…"), before api/state is read again. Its shortcuts: the arrows move
+// between the cards (the work queue's, the graph's or the lanes'), Enter opens the one
+// selected, S, Q and B start it, queue it after another or brainstorm it (its card's buttons),
+// V switches the view, C shows the closed issues, + − 0 zoom and fit, Space and a drag pan.
 import type { ComponentChildren } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
 import { useWorkArea } from "./api";
@@ -25,6 +28,8 @@ import { dropTarget } from "./graphLayout";
 import { GraphLegend } from "./GraphLegend";
 import { brainstormsOf, graphOf, type GraphNode, isParent, movable, workLists } from "./graphModel";
 import { typesOf, useDropZone } from "./hooks";
+import { useHeldKey, useShortcuts, withKey } from "./keys";
+import { formatRoute } from "./route";
 import { Lanes } from "./Lanes";
 import { QuestionsDialog } from "./QuestionsDialog";
 import type { State, WorkAction } from "./types";
@@ -72,6 +77,37 @@ interface Hover {
 const ZOOM = { min: 0.4, max: 1.6, step: 0.1 };
 const clampZoom = (z: number) => Math.round(Math.min(ZOOM.max, Math.max(ZOOM.min, z)) * 100) / 100;
 
+// The arrows, in SHORTCUTS.move's order: left, up, right, down.
+const DIRECTIONS = [
+  [-1, 0],
+  [0, -1],
+  [1, 0],
+  [0, 1],
+];
+
+// The card nearest `from` in direction `index`: ahead of it on that axis, the least off it
+// counting double. Without a layout (nothing measured), the next or previous one in the page.
+export function nearestCard(cards: HTMLElement[], from: HTMLElement, index: number) {
+  const [dx, dy] = DIRECTIONS[index];
+  const at = cards.indexOf(from);
+  const boxes = cards.map((c) => c.getBoundingClientRect());
+  if (boxes.every((b) => !b.width && !b.height)) return cards[at + (dx + dy > 0 ? 1 : -1)] ?? null;
+  const centre = (b: DOMRect) => [b.left + b.width / 2, b.top + b.height / 2];
+  const [x, y] = centre(boxes[at]);
+  let best: HTMLElement | null = null;
+  let score = Infinity;
+  cards.forEach((c, i) => {
+    if (i === at) return;
+    const [cx, cy] = centre(boxes[i]);
+    const ahead = (cx - x) * dx + (cy - y) * dy;
+    const off = Math.abs((cx - x) * dy) + Math.abs((cy - y) * dx);
+    if (ahead <= 1 || ahead + 2 * off >= score) return;
+    best = c;
+    score = ahead + 2 * off;
+  });
+  return best;
+}
+
 export function Board({
   state,
   refresh,
@@ -98,6 +134,10 @@ export function Board({
   }, [repo]);
   const drawing = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLDivElement>(null);
+  const root = useRef<HTMLDivElement>(null);
+  // Space held over the graph: a drag pans it instead of moving a node.
+  const spaced = useHeldKey("space", view === "graph");
+  const [panning, setPanning] = useState(false);
 
   const tasks = (state?.tasks ?? []).filter((t) => sameRepo(t.repo, repo));
   const brainstorms = brainstormsOf(tasks, work.pending);
@@ -224,6 +264,86 @@ export function Board({
     setZoom(clampZoom(Math.min(1, Math.floor(room * 20) / 20)));
   };
 
+  // The card selected: the one focus is in.
+  const cards = () => [...(root.current?.querySelectorAll<HTMLElement>("[data-card]") ?? [])];
+  const selected = () =>
+    (document.activeElement as HTMLElement | null)?.closest<HTMLElement>("[data-card]") ?? null;
+  // A node is its link; a work queue card is selected itself (its link is GitHub's), so Enter
+  // reaches `open` rather than the link.
+  const select = (card: HTMLElement) => {
+    if (!card.matches("a[href]")) card.tabIndex = -1;
+    card.focus();
+    card.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+  };
+  // One of the card's buttons, else of the work queue's card for that issue (a graph node).
+  const press = (action: string) => {
+    const card = selected();
+    if (!card) return false;
+    const enabled = `[data-action="${action}"]:not(:disabled)`;
+    const number = card.dataset.number;
+    const button =
+      card.querySelector<HTMLElement>(enabled) ??
+      (number
+        ? root.current?.querySelector<HTMLElement>(
+            `[data-card][data-number="${number}"] ${enabled}`,
+          )
+        : null);
+    if (!button) return false;
+    button.click();
+  };
+  useShortcuts({
+    move: (i) => {
+      const all = cards();
+      const from = selected();
+      const next = from && all.includes(from) ? nearestCard(all, from, i) : all[0];
+      if (!next) return false;
+      select(next);
+    },
+    // A node opens by itself (Enter on a link is the link's). A work queue card: its task here,
+    // else its issue on GitHub.
+    open: () => {
+      const card = selected();
+      if (!card) return false;
+      const task = tasks.find((t) => String(t.number) === card.dataset.number);
+      if (task) return void (location.hash = formatRoute({ repo, task: task.key, run: null }));
+      const link = card.querySelector<HTMLElement>("a[href]");
+      if (!link) return false;
+      link.click();
+    },
+    start: () => press("start"),
+    queue: () => press("queue"),
+    brainstorm: () => press("brainstorm"),
+    view: () => onView(view === "graph" ? "lanes" : "graph"),
+    closed: () => onShowClosed(!showClosed),
+    zoom: (i) => {
+      if (view !== "graph") return false;
+      if (i === 2) return fit();
+      setZoom(clampZoom(zoom + (i === 0 ? ZOOM.step : -ZOOM.step)));
+    },
+  });
+  // Space and a drag: the canvas scrolls with the pointer.
+  const pan = (e: PointerEvent) => {
+    const el = canvas.current;
+    if (!spaced || !el || e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const start = { x: e.clientX, y: e.clientY, left: el.scrollLeft, top: el.scrollTop };
+    setPanning(true);
+    const move = (m: PointerEvent) => {
+      el.scrollLeft = start.left - (m.clientX - start.x);
+      el.scrollTop = start.top - (m.clientY - start.y);
+    };
+    const up = () => {
+      setPanning(false);
+      removeEventListener("pointermove", move);
+      removeEventListener("pointerup", up);
+      removeEventListener("pointercancel", up);
+    };
+    addEventListener("pointermove", move);
+    addEventListener("pointerup", up);
+    addEventListener("pointercancel", up);
+  };
+
   const said = notice
     ? { text: notice, failed: true }
     : work.result?.error
@@ -256,14 +376,17 @@ export function Board({
   const closed = (
     <Switch
       label="Show closed"
-      title="Issues closed as completed or not planned, and merged pull requests"
+      title={withKey(
+        "Issues closed as completed or not planned, and merged pull requests",
+        "closed",
+      )}
       checked={showClosed}
       onChange={onShowClosed}
     />
   );
   const views = [
-    { value: "graph" as const, label: "Graph" },
-    { value: "lanes" as const, label: "Lanes" },
+    { value: "graph" as const, label: "Graph", title: withKey("Graph", "view") },
+    { value: "lanes" as const, label: "Lanes", title: withKey("Lanes", "view") },
   ];
 
   const target = hover?.target ?? null;
@@ -271,8 +394,9 @@ export function Board({
     <div class={styles.stage}>
       <div
         ref={canvas}
-        class={`${styles.canvas} ${zone.over || drag.moving ? styles.over : ""}`}
+        class={`${styles.canvas} ${zone.over || drag.moving ? styles.over : ""} ${spaced ? styles.grab : ""} ${panning ? styles.panning : ""}`}
         aria-label="What waits for what"
+        onPointerDownCapture={pan}
         {...zone.handlers}
       >
         <GraphDrawing
@@ -323,7 +447,7 @@ export function Board({
   );
 
   return (
-    <div class={`${styles.board} ${narrow ? styles.phone : ""}`}>
+    <div class={`${styles.board} ${narrow ? styles.phone : ""}`} ref={root}>
       {!narrow && header?.(<span class={styles.startInBox}>Start in {startIn}</span>)}
       {asking?.task.questions && (
         <QuestionsDialog
@@ -389,6 +513,7 @@ export function Board({
                     variant="ghost"
                     size="small"
                     label="Zoom out"
+                    title={withKey("Zoom out", "zoom", 1)}
                     icon={<Icon.Minus size={14} />}
                     disabled={zoom <= ZOOM.min}
                     onClick={() => setZoom(clampZoom(zoom - ZOOM.step))}
@@ -407,11 +532,17 @@ export function Board({
                     variant="ghost"
                     size="small"
                     label="Zoom in"
+                    title={withKey("Zoom in", "zoom", 0)}
                     icon={<Icon.Plus size={14} />}
                     disabled={zoom >= ZOOM.max}
                     onClick={() => setZoom(clampZoom(zoom + ZOOM.step))}
                   />
-                  <Button variant="ghost" size="small" onClick={fit}>
+                  <Button
+                    variant="ghost"
+                    size="small"
+                    title={withKey("Fit", "zoom", 2)}
+                    onClick={fit}
+                  >
                     Fit
                   </Button>
                 </span>

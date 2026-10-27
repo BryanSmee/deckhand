@@ -50,6 +50,8 @@ export interface Segment<T extends string> {
   extra?: ComponentChildren;
   // A view: a link, current when it is the value.
   href?: string;
+  // Its tooltip (its shortcut); an icon's is its label.
+  title?: string;
 }
 
 interface SegmentedProps<T extends string> {
@@ -80,6 +82,7 @@ export function Segmented<T extends string>({
           </>
         );
         const name = o.iconOnly ? o.label : undefined;
+        const title = o.title ?? name;
         return o.href !== undefined ? (
           <a
             key={o.value}
@@ -87,7 +90,7 @@ export function Segmented<T extends string>({
             href={o.href}
             aria-current={o.value === value ? "page" : undefined}
             aria-label={name}
-            title={name}
+            title={title}
           >
             {content}
           </a>
@@ -98,7 +101,7 @@ export function Segmented<T extends string>({
             class={cls}
             aria-pressed={o.value === value}
             aria-label={name}
-            title={name}
+            title={title}
             onClick={() => onChange?.(o.value)}
           >
             {content}

@@ -59,6 +59,7 @@ export function Outcome({ task: t, run: r, now, github, touch, onRerun, rerunnin
           size={size}
           pending={rerunning}
           pendingLabel="Rerunning…"
+          shortcut="rerun"
           title="Runs it again with the same comments and mode"
           onClick={onRerun}
         >

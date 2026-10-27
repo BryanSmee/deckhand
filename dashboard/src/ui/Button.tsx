@@ -4,6 +4,7 @@
 // itself.
 import type { ComponentChildren, JSX } from "preact";
 import { useEffect, useState } from "preact/hooks";
+import { type ShortcutId, withKey } from "../keys";
 import { Spinner } from "./Spinner";
 import styles from "./Button.module.css";
 
@@ -42,6 +43,8 @@ export interface ButtonProps extends Native {
   // What it says then ("Starting…"); the button is sized for it from the start. Without
   // one it keeps its label, and the spinner takes the icon's place (or covers the label).
   pendingLabel?: string;
+  // Its shortcut, which its tooltip names ("Stop (Shift S)").
+  shortcut?: ShortcutId;
 }
 
 // True once `on` has held for `ms`.
@@ -66,6 +69,8 @@ export function Button({
   disabled,
   onClick,
   children,
+  shortcut,
+  title,
   ...rest
 }: ButtonProps) {
   const waiting = Boolean(pending);
@@ -76,6 +81,11 @@ export function Button({
   return (
     <button
       {...rest}
+      title={
+        shortcut
+          ? withKey((title as string) ?? (typeof children === "string" ? children : ""), shortcut)
+          : title
+      }
       type={type}
       class={buttonClass(variant, size, className as string | undefined)}
       disabled={disabled}
@@ -133,13 +143,13 @@ export interface IconButtonProps extends Omit<ButtonProps, "children" | "icon" |
   icon: ComponentChildren;
 }
 
-export function IconButton({ label, icon, class: className, ...rest }: IconButtonProps) {
+export function IconButton({ label, icon, class: className, title, ...rest }: IconButtonProps) {
   return (
     <Button
       {...rest}
       class={[styles.icon, className].filter(Boolean).join(" ")}
       aria-label={label}
-      title={label}
+      title={title ?? label}
       icon={icon}
     />
   );

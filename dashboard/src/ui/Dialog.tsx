@@ -7,6 +7,7 @@
 // the screen's width, from the bottom.
 import type { ComponentChildren } from "preact";
 import { useEffect, useId, useRef } from "preact/hooks";
+import { isMac } from "../keys";
 import { IconButton } from "./Button";
 import { Close } from "./icons";
 import { Kbd } from "./Kbd";
@@ -27,13 +28,13 @@ interface Props {
   hint?: ComponentChildren;
   keys?: ComponentChildren;
   wide?: boolean;
+  // Wider still: the shortcuts sheet's columns.
+  size?: "full";
   // An alertdialog, with its icon over the title.
   alert?: boolean;
   icon?: ComponentChildren;
   children?: ComponentChildren;
 }
-
-const isMac = () => /Mac|iPhone|iPad/.test(navigator.platform);
 
 export function Dialog({
   title,
@@ -44,6 +45,7 @@ export function Dialog({
   hint,
   keys,
   wide,
+  size,
   alert,
   icon,
   children,
@@ -96,7 +98,7 @@ export function Dialog({
     >
       <div
         ref={box}
-        class={`${styles.dialog} ${wide ? styles.wide : ""}`}
+        class={`${styles.dialog} ${wide ? styles.wide : ""} ${size ? styles[size] : ""}`}
         role={alert ? "alertdialog" : "dialog"}
         aria-modal="true"
         aria-labelledby={titleId}

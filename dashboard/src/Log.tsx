@@ -5,11 +5,14 @@
 // (the folds holding the matches open), filters it, folds it all and copies or downloads it; a phone has an action bar instead,
 // and its search replaces the page's header. A live run's log follows its end until the
 // reader scrolls up (from the start, unless Preferences says not to); Latest brings it back.
-// Long lines wrap, or scroll sideways (Preferences).
+// Long lines wrap, or scroll sideways (Preferences). Its shortcuts: F searches, Enter and Shift
+// Enter go through the matches, E and Shift E fold it all, X and Shift X go through the errors,
+// L follows it live, Ctrl Shift C copies it.
 import type { ComponentChildren } from "preact";
 import { createContext } from "preact";
 import { useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "preact/hooks";
 import { plural } from "./format";
+import { useShortcuts, withKey } from "./keys";
 import { copyText, downloadText } from "./logExport";
 import {
   cachedLine,
@@ -138,10 +141,12 @@ export function Log({ run, entries, now, touch, searching, onSearching }: Props)
     setFocus(null);
     setAll(open);
   };
-  const nextError = () => {
+  const nextError = (by = 1) => {
     if (!errors.length) return;
     const i = errors.findIndex((e) => e.item === focus);
-    const next = errors[(i + 1) % errors.length];
+    // None gone to yet: the first one forwards, the last one back.
+    const from = i < 0 ? (by > 0 ? -1 : 0) : i;
+    const next = errors[(from + by + errors.length) % errors.length];
     reopen(next.section, next.item);
     setFocus(next.item);
   };
@@ -188,6 +193,19 @@ export function Log({ run, entries, now, touch, searching, onSearching }: Props)
   };
   const download = () => downloadText(`${run.id}.txt`, text());
 
+  useShortcuts({
+    logSearch: () => {
+      if (touch) return onSearching?.(true);
+      root.current?.querySelector<HTMLInputElement>("input[type=search]")?.focus();
+    },
+    match: (i) => (query && total ? step(i === 0 ? 1 : -1) : false),
+    expand: () => foldAll(true),
+    collapse: () => foldAll(false),
+    error: (i) => (errors.length ? nextError(i === 0 ? 1 : -1) : false),
+    follow: latest,
+    copy: () => void copy(),
+  });
+
   const visible = list.filter((s) => filter === "all" || s.items.some((i) => shown(i, filter)));
   const counter = query ? (total ? `${at + 1} / ${total}` : "0 / 0") : "";
   const searchBox = (
@@ -228,6 +246,7 @@ export function Log({ run, entries, now, touch, searching, onSearching }: Props)
               size="small"
               class={styles.tiny}
               label="Previous match"
+              title={withKey("Previous match", "match", 1)}
               icon={<Icon.ChevronUp size={14} />}
               disabled={!total}
               onClick={() => step(-1)}
@@ -237,6 +256,7 @@ export function Log({ run, entries, now, touch, searching, onSearching }: Props)
               size="small"
               class={styles.tiny}
               label="Next match"
+              title={withKey("Next match", "match", 0)}
               icon={<Icon.ChevronDown size={14} />}
               disabled={!total}
               onClick={() => step(1)}
@@ -291,10 +311,15 @@ export function Log({ run, entries, now, touch, searching, onSearching }: Props)
               }))}
             />
             <span class={styles.tools}>
-              <Button variant="ghost" size="small" onClick={() => foldAll(true)}>
+              <Button variant="ghost" size="small" shortcut="expand" onClick={() => foldAll(true)}>
                 Expand all
               </Button>
-              <Button variant="ghost" size="small" onClick={() => foldAll(false)}>
+              <Button
+                variant="ghost"
+                size="small"
+                shortcut="collapse"
+                onClick={() => foldAll(false)}
+              >
                 Collapse all
               </Button>
               <IconButton
@@ -307,6 +332,7 @@ export function Log({ run, entries, now, touch, searching, onSearching }: Props)
                       ? "Couldn't copy: download it instead"
                       : "Copy the log"
                 }
+                title={copied ? undefined : withKey("Copy the log", "copy")}
                 class={copied === "failed" ? styles.copyFailed : undefined}
                 icon={
                   copied === "ok" ? (
@@ -367,6 +393,7 @@ export function Log({ run, entries, now, touch, searching, onSearching }: Props)
           class={styles.follow}
           size="small"
           icon={<Icon.ArrowDown size={14} />}
+          shortcut="follow"
           onClick={latest}
         >
           Latest
@@ -414,7 +441,7 @@ export function Log({ run, entries, now, touch, searching, onSearching }: Props)
               type="button"
               class={errors.length ? styles.hasErrors : ""}
               disabled={!errors.length}
-              onClick={nextError}
+              onClick={() => nextError()}
             >
               <Icon.Alert size={20} />
               Next error

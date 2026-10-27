@@ -52,12 +52,22 @@ interface Props {
   tasks: Task[];
   // The page's repo: picked first when it is offered.
   repo: string | null;
+  // An idea's or a bug report's title, already typed (Ctrl K's "New idea: “…”").
+  title?: string;
   onClose: () => void;
   // Once sent: api/state read again, for the run.
   onSent?: () => void;
 }
 
-export function NewRequest({ kind: first, inboxes, tasks, repo: tab, onClose, onSent }: Props) {
+export function NewRequest({
+  kind: first,
+  inboxes,
+  tasks,
+  repo: tab,
+  title,
+  onClose,
+  onSent,
+}: Props) {
   const [kind, setKind] = useState<RequestKind>(first);
   const [picked, setPicked] = useState<string | null>(null);
   const [action, setAction] = useState<Action | null>(null);
@@ -175,6 +185,7 @@ export function NewRequest({ kind: first, inboxes, tasks, repo: tab, onClose, on
             tasks={tasks}
             onAction={setAction}
             onSent={onSent}
+            title={title}
           />
         ))}
     </Dialog>

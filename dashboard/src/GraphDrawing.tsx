@@ -133,6 +133,8 @@ export function GraphNodeView({
     <a
       href={href}
       role="listitem"
+      data-card
+      data-number={n.number ?? undefined}
       aria-label={nodeLabel(n, waits)}
       title={`${title} (${n.status})`}
       class={`${styles.node} ${lookClasses(n, styles)} ${extra}`}

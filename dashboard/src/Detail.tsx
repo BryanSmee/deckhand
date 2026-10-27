@@ -4,8 +4,10 @@
 // log. Waiting for input: its open questions, as a form to answer them. A discussion: its
 // thread first, to read and reply to, with the last reply and Rerun, then its runs. A Policies
 // tab when its pull request's policies decided something (with a badge when one kept it from
-// merging by itself). A phone's log search takes the header's place.
-import { useEffect, useState } from "preact/hooks";
+// merging by itself). A phone's log search takes the header's place. Its shortcuts: O opens it
+// on GitHub, A goes to its questions, R reruns, Shift S stops (asking first), [ and ] go
+// through its tabs.
+import { useEffect, useRef, useState } from "preact/hooks";
 import { sendCancel, sendRerun, useRunLog } from "./api";
 import {
   ago,
@@ -20,6 +22,7 @@ import {
   taskTone,
   titleOf,
 } from "./format";
+import { type Handlers, useShortcuts, withKey } from "./keys";
 import { Log } from "./Log";
 import { copyText, downloadText } from "./logExport";
 import { logSections, plainText } from "./logModel";
@@ -91,6 +94,10 @@ export function Detail({
     setSearching(false);
     setMore(false);
   }, [t?.key]);
+  const root = useRef<HTMLDivElement>(null);
+  // Filled in below, once there is a task: the hook is called before the early return.
+  const keys: Handlers = {};
+  useShortcuts(keys, !!t);
   if (!t) {
     return (
       <div class={styles.detail}>
@@ -178,8 +185,30 @@ export function Detail({
     setShowLog(id !== THREAD);
     if (id !== THREAD) onRun(id === t.runs[0]?.id ? null : id);
   };
+  const selected = policies ? POLICIES : thread ? THREAD : (r?.id ?? "");
+  keys.github = () => (url ? void window.open(url, "_blank", "noreferrer") : false);
+  keys.answer = () => {
+    const field = root.current?.querySelector<HTMLElement>(
+      "form[aria-label='Open questions'] input, form[aria-label='Open questions'] textarea",
+    );
+    if (!field) return false;
+    field.focus();
+    field.scrollIntoView?.({ block: "nearest" });
+  };
+  keys.rerun = () => {
+    const last = t.rerunnable ? t.runs[0] : null;
+    if (!last || rerunning) return false;
+    void again(last);
+  };
+  keys.stop = () => (stoppable && stopping !== t.key ? setConfirming(t.key) : false);
+  keys.nextRun = (i) => {
+    const at = tabs.findIndex((x) => x.id === selected);
+    const next = tabs[at + (i === 0 ? 1 : -1)];
+    if (!next) return false;
+    pick(next.id);
+  };
   return (
-    <div class={styles.detail}>
+    <div class={styles.detail} ref={root}>
       {!hidden && (
         <header class={styles.head}>
           <div class={styles.phoneBar}>
@@ -236,6 +265,7 @@ export function Detail({
               {url && !menu && (
                 <a
                   class={buttonClass("secondary", size)}
+                  title={withKey("Open on GitHub", "github")}
                   href={url}
                   target="_blank"
                   rel="noreferrer"
@@ -251,6 +281,7 @@ export function Detail({
                   pending={rerunning === failed.id}
                   pendingLabel="Rerunning…"
                   title="Runs it again with the same comments and mode"
+                  shortcut="rerun"
                   onClick={() => again(failed)}
                 >
                   Rerun
@@ -264,6 +295,7 @@ export function Detail({
                   pending={stopping === t.key}
                   pendingLabel="Stopping…"
                   title="Stops the run now: what it did since its last push is lost"
+                  shortcut="stop"
                   onClick={() => setConfirming(t.key)}
                 >
                   Stop
@@ -326,7 +358,7 @@ export function Detail({
             <Tabs
               label={tabsLabel}
               tabs={tabs}
-              selected={policies ? POLICIES : thread ? THREAD : (r?.id ?? "")}
+              selected={selected}
               onSelect={pick}
               panel={PANEL}
               class={styles.tabs}

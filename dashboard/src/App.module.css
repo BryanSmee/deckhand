@@ -56,3 +56,31 @@
     display: none;
   }
 }
+
+/* What Sync did, when the sidebar can't say it (its rail, a phone): a note at the bottom. */
+.note {
+  position: fixed;
+  left: 16px;
+  right: 16px;
+  bottom: 24px;
+  z-index: 40;
+  width: fit-content;
+  margin: 0 auto;
+  padding: 8px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--dlg-shadow);
+  font-size: 13px;
+  color: var(--text-2);
+}
+
+.note.failed {
+  color: var(--err);
+}
+
+@media (max-width: 760px) {
+  .note {
+    bottom: calc(72px + env(safe-area-inset-bottom));
+  }
+}

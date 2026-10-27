@@ -8,11 +8,12 @@ import type { ComponentChildren } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
 import type { RepoList } from "./api";
 import { plural, type RepoCounts, repoCounts, sameRepo, shortRepo } from "./format";
+import { withKey } from "./keys";
 import type { Permission } from "./notify";
 import { needingYou } from "./Repos";
 import { SettingsTabs } from "./Settings";
 import { formatRoute, isOverview, type Route } from "./route";
-import { useSync } from "./Sync";
+import type { Syncer } from "./Sync";
 import type { State } from "./types";
 import { Button, IconButton } from "./ui/Button";
 import { type Segment, Segmented } from "./ui/Choice";
@@ -58,7 +59,7 @@ interface SidebarProps extends Common {
   onRail: (rail: boolean) => void;
   onRequest: (request: Request) => void;
   notify: { permission: Permission; ask: () => void };
-  refresh?: () => Promise<void>;
+  syncer: Syncer;
 }
 
 export function Sidebar(props: SidebarProps) {
@@ -71,6 +72,7 @@ export function Sidebar(props: SidebarProps) {
       size={rail ? "default" : "small"}
       class={rail ? "" : styles.collapse}
       label={rail ? "Expand the sidebar" : "Collapse the sidebar"}
+      title={withKey(rail ? "Expand the sidebar" : "Collapse the sidebar", "sidebar")}
       icon={<Icon.Sidebar />}
       onClick={() => onRail(!rail)}
     />
@@ -99,11 +101,12 @@ export function Sidebar(props: SidebarProps) {
             label="Settings"
             current={route.page === "settings"}
             count={waiting}
-            title={
+            title={withKey(
               waiting
                 ? `${plural(waiting, "repository", "repositories")} ${waiting === 1 ? "needs" : "need"} you`
-                : ""
-            }
+                : "Settings",
+              "settings",
+            )}
             rail={rail}
           />
         )}
@@ -176,10 +179,10 @@ function RepoLinks({
 function RunSlots({
   state,
   error,
-  refresh,
+  syncer,
   rail,
-}: Pick<SidebarProps, "state" | "error" | "refresh"> & { rail?: boolean }) {
-  const { syncing, said, sync } = useSync(refresh);
+}: Pick<SidebarProps, "state" | "error" | "syncer"> & { rail?: boolean }) {
+  const { syncing, said, sync } = syncer;
   if (error) {
     const text = `Can't reach the listener (${error})`;
     return rail ? (
@@ -295,7 +298,7 @@ function NewRequest({
   return (
     <div class={`${styles.request} ${styles[form]}`} ref={box}>
       {form === "full" ? (
-        <Button {...attrs} class={styles.requestButton} icon={<Icon.Plus />}>
+        <Button {...attrs} class={styles.requestButton} icon={<Icon.Plus />} shortcut="request">
           New request
         </Button>
       ) : (
@@ -304,6 +307,7 @@ function NewRequest({
           variant={form === "bar" ? "ghost" : "secondary"}
           size={form === "bar" ? "touch" : "default"}
           label="New request"
+          title={withKey("New request", "request")}
           icon={<Icon.Plus size={form === "bar" ? 20 : 16} />}
         />
       )}
@@ -352,8 +356,20 @@ export function PageHeader({
   // The board is one repository's: All has the Overview instead.
   const views: Segment<"overview" | "tasks" | "board">[] = repo
     ? [
-        { value: "tasks", label: "Tasks", icon: <Icon.Tasks size={14} />, href: tasksOf(repo) },
-        { value: "board", label: "Board", icon: <Icon.Board size={14} />, href: boardOf(repo) },
+        {
+          value: "tasks",
+          label: "Tasks",
+          icon: <Icon.Tasks size={14} />,
+          href: tasksOf(repo),
+          title: withKey("Tasks", "tasks"),
+        },
+        {
+          value: "board",
+          label: "Board",
+          icon: <Icon.Board size={14} />,
+          href: boardOf(repo),
+          title: withKey("Board", "board"),
+        },
       ]
     : [
         {
@@ -361,8 +377,15 @@ export function PageHeader({
           label: "Overview",
           icon: <Icon.Overview size={14} />,
           href: tasksOf(null),
+          title: withKey("Overview", "overview"),
         },
-        { value: "tasks", label: "Tasks", icon: <Icon.Tasks size={14} />, href: allTasks },
+        {
+          value: "tasks",
+          label: "Tasks",
+          icon: <Icon.Tasks size={14} />,
+          href: allTasks,
+          title: withKey("Tasks", "tasks"),
+        },
       ];
   const view = isOverview(route) ? "overview" : route.page === "board" ? "board" : "tasks";
   return (
@@ -394,7 +417,7 @@ export function PageHeader({
 
 interface TopBarProps extends Common {
   error: string | null;
-  refresh?: () => Promise<void>;
+  syncer: Syncer;
   onRequest: (request: Request) => void;
   // The Tasks page's: opens or closes the list's search box.
   onSearch?: () => void;

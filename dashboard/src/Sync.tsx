@@ -22,7 +22,10 @@ export function syncMessage({
 }
 
 // Its state: syncing, what it did (said for a few seconds), and the action. `recorded`: the
-// sync took place (failed or not), so the state's last sync has it now.
+// sync took place (failed or not), so the state's last sync has it now. The dashboard's one
+// (App.tsx): the sidebar's button and Ctrl K both run it.
+export type Syncer = ReturnType<typeof useSync>;
+
 export function useSync(onSynced?: () => Promise<void>) {
   const [syncing, setSyncing] = useState(false);
   const [said, setSaid] = useState<{ text: string; failed: boolean; recorded: boolean } | null>(
