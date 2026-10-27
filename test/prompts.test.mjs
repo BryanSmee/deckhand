@@ -663,3 +663,32 @@ test("prompts: a review reads the pull request, the repo's instructions after th
   // Its input is in the prompt: the first message is empty.
   assert.equal(firstMessage({ mode: "review", text: "Focus on the tests." }), "");
 });
+
+test("prompts: a review's verdict rule says what its tolerance lets through", () => {
+  const issue = { repo: "org/app", number: 12, kind: "issue", base: "main" };
+  // low, the default: medium requests changes, the text as it always was.
+  const low = promptFor(issue, { mode: "review", pull: 31, allowed: "low" });
+  assert.equal(low, promptFor(issue, { mode: "review", pull: 31 }));
+  assert.match(
+    low,
+    /`request-changes` when there is a\n {2}critical, high or medium finding \(the listener posts it so whatever you write\)\. The listener\n {2}requests changes on GitHub when there is a critical, high or medium finding, and otherwise\n {2}posts a comment: it never approves\.$/m,
+  );
+  assert.doesNotMatch(low, /<blocking>|<tolerated>|tolerates/);
+  // medium (the review that decides an auto-merge): only critical or high block; medium
+  // findings are still reported, still cap the rating, and the summary says they don't block.
+  const medium = promptFor(issue, { mode: "review", pull: 31, allowed: "medium" });
+  assert.match(medium, /`request-changes` when there is a\n {2}critical or high finding/);
+  assert.match(medium, /requests changes on GitHub when there is a critical or high finding/);
+  assert.doesNotMatch(medium, /critical, high or medium/);
+  assert.match(
+    medium,
+    /This review tolerates medium findings \(the repository's\n {2}`review\.max_allowed_severity`\): report them at their severity/,
+  );
+  assert.match(medium, /they still cap the\n {2}rating as above/);
+  assert.match(medium, /8 with a medium one/);
+  assert.match(
+    medium,
+    /With medium\n {2}findings and no critical or high one, the verdict is `comment`, and the summary\n {2}says the medium findings don't block it\./,
+  );
+  assert.doesNotMatch(medium, /<blocking>|<tolerated>/);
+});

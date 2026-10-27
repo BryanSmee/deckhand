@@ -88,6 +88,6 @@ Verdict: request-changes
   means every criterion met, every claim true and no finding above low. The listener caps the
   rating it posts by these numbers whatever you write.
 - `Verdict`: `approve`, `comment` or `request-changes`; `request-changes` when there is a
-  critical, high or medium finding (the listener posts it so whatever you write). The listener
-  requests changes on GitHub when there is a critical, high or medium finding, and otherwise
-  posts a comment: it never approves.
+  <blocking> finding (the listener posts it so whatever you write). The listener
+  requests changes on GitHub when there is a <blocking> finding, and otherwise
+  posts a comment: it never approves.<tolerated>

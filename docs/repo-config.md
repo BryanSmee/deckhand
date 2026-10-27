@@ -476,7 +476,8 @@ review` gets the "unknown mode" reply. `review: true` (or a block without `on`, 
   too, whatever the review wrote. It never approves: that stays the maintainer's. GitHub
   doesn't let the App request changes on its own pull requests: those get a comment review, the
   verdict in its text. A reply whose format the listener can't read is posted as a comment
-  review, as it is.
+  review, as it is. The review that decides an auto-merge may tolerate medium findings
+  (`max_allowed_severity`, under Auto-merge): its prompt says so before it starts.
 - **No loops**: without `fix`, the review starts no run. To act on it, comment with the trigger
   ("Deckhand, fix the high findings").
 - **`fix: true`**: a review that requests changes (a critical, high or medium finding) on
@@ -558,10 +559,11 @@ nothing blocking. It takes both sides:
    decision per pull request, kept in `reviews.json` across restarts.
 
 **`max_allowed_severity: medium`** lets the review that decides the merge (after the fix run,
-or the first one without `fix`) have medium findings: that review is posted as a comment
-rather than "request changes" (the review prompt asks for "request changes" on any medium
-finding, so that verdict reads "comment" too), and merges, the medium findings left as its
-comments for the maintainer. A first review with `fix: true` still requests changes on them,
+or the first one without `fix`) have medium findings: its prompt tells it so (medium findings
+still reported, and still capping the rating at 8, but its verdict "comment" and its summary
+saying they don't block), the review is posted as a comment rather than "request changes" (a
+"request changes" verdict on medium findings only reads "comment" too, should the review
+write one anyway), and merges, the medium findings left as its comments for the maintainer. A first review with `fix: true` still requests changes on them,
 for the fix run. Critical and high findings always block, and a "request changes" verdict
 with only low findings still does. `low`, the default: any medium finding blocks.
 

@@ -54,12 +54,17 @@ const HEADINGS = {
 // (`review.max_allowed_severity`, reviews' tolerance()).
 const BLOCKING = new Set(["critical", "high", "medium"]);
 
-// The findings of `review` more severe than `allowed`, among those that block at all.
-function above(review, allowed = "low") {
+// The severities that block with `allowed` the most severe finding that doesn't: those more
+// severe than it, among those that block at all. The review prompt says them (prompts.mjs).
+export function blockingSeverities(allowed = "low") {
   const limit = SEVERITIES.indexOf(allowed);
-  return review.findings.filter(
-    (f) => BLOCKING.has(f.severity) && SEVERITIES.indexOf(f.severity) < limit,
-  );
+  return SEVERITIES.filter((s) => BLOCKING.has(s) && SEVERITIES.indexOf(s) < limit);
+}
+
+// The findings of `review` that block with `allowed` (blockingSeverities()).
+function above(review, allowed = "low") {
+  const blocking = blockingSeverities(allowed);
+  return review.findings.filter((f) => blocking.includes(f.severity));
 }
 
 // The highest rating a review can give with a finding of each severity: a model's 8/10 next
@@ -76,9 +81,10 @@ const KEEP_MS = 90 * 24 * 3600_000;
 // verdict. The rating is capped by the most severe finding (RATING_CAPS), and a blocking finding
 // makes the verdict `request-changes`, whatever the message says. `allowed`: the most severe
 // finding that doesn't block (`review.max_allowed_severity`, for the review that decides an
-// auto-merge). The prompt asks for `request-changes` on any medium finding: with medium
-// allowed and found, that verdict says nothing more than the finding, so it reads `comment`.
-// Otherwise the model's `request-changes` stays, and blocks the merge.
+// auto-merge). The prompt is told the same tolerance (reviewPrompt()), but a model may still
+// write `request-changes` on tolerated findings only: that verdict says nothing more than the
+// findings, so it reads `comment`. Otherwise the model's `request-changes` stays, and blocks
+// the merge.
 export function parseReview(text, { allowed = "low" } = {}) {
   const lines = String(text ?? "").split(/\r?\n/);
   const rating = /^\W*rating\W*\s*(\d{1,2}(?:\.\d)?)\s*\/\s*10\b/im.exec(text ?? "");

@@ -6,6 +6,7 @@ import { entryLabel, providerLabel } from "./agents/select.mjs";
 import { mandatoryHosts } from "./egress.mjs";
 import { FRESH, INBOX, MODES } from "./modes.mjs";
 import { triggerWord } from "./onboarding.mjs";
+import { blockingSeverities } from "./reviews.mjs";
 
 const instructions = (name) => readFileSync(new URL(`../prompts/${name}`, import.meta.url), "utf8");
 // Each built-in mode's instructions, by mode (MODES' `prompt`).
@@ -66,17 +67,40 @@ and latest comments) is at \`$TASK_DIGEST\` (\`cat "$TASK_DIGEST"\`).
 ${modeInstructions.research}`;
 }
 
+// "critical, high or medium".
+const severityList = (list) =>
+  list.length > 1 ? `${list.slice(0, -1).join(", ")} or ${list.at(-1)}` : list.join("");
+
+// prompts/review.md's verdict rule with `allowed` the most severe finding that doesn't block
+// (reviews' tolerance()): the severities that block, from the list the parser blocks on, and
+// with medium allowed, what the review says of the findings it tolerates.
+function verdictRule(text, allowed) {
+  const blocking = blockingSeverities(allowed);
+  const tolerated = blockingSeverities().filter((s) => !blocking.includes(s));
+  const note = tolerated.length
+    ? `
+  This review tolerates ${severityList(tolerated)} findings (the repository's
+  \`review.max_allowed_severity\`): report them at their severity, and they still cap the
+  rating as above, but they don't block this pull request. With ${severityList(tolerated)}
+  findings and no ${severityList(blocking)} one, the verdict is \`comment\`, and the summary
+  says the ${severityList(tolerated)} findings don't block it.`
+    : "";
+  return text.replaceAll("<blocking>", severityList(blocking)).replace("<tolerated>", note);
+}
+
 // A review (reviews.mjs) of pull request `pull`: its task may be the issue the pull request
-// closes. Its thread is a file in the run's inbox (TASK_DIGEST, reviews.mjs reviewThread()). `instructions`: the repo's `review.instructions` file, if any; `text`: what the
-// "/mode review" comment adds.
-function reviewPrompt(task, pull, instructions, text) {
+// closes. Its thread is a file in the run's inbox (TASK_DIGEST, reviews.mjs reviewThread()).
+// `instructions`: the repo's `review.instructions` file, if any; `text`: what the
+// "/mode review" comment adds; `allowed`: the review's tolerance (verdictRule()).
+function reviewPrompt(task, pull, instructions, text, allowed = "low") {
   const own = instructions?.trim()
     ? `\n\nThe repository's review instructions:\n\n${instructions.trim()}`
     : "";
   const asked = text ? `\n\nThe maintainer asks:\n\n${text}` : "";
+  const rules = verdictRule(modeInstructions.review.replaceAll("<n>", String(pull)), allowed);
   return `Review pull request #${pull} of ${task.repo}.
 
-${modeInstructions.review.replaceAll("<n>", String(pull))}${own}${asked}`;
+${rules}${own}${asked}`;
 }
 
 function brainstormPrompt(task) {
@@ -256,16 +280,30 @@ ${instructions.trim()}`;
 // The run's prompt, by what it is. `own`: the repo's mode, with its `instructions` text;
 // `onboardingWork`: a work run on an onboarding issue; `grant`: what the operator grants the
 // repo (grantFor()); `branches`: what the run may push (preparation.mjs pushBranches());
-// `pull`: the issue or pull request the reply goes to, the one a review reads.
+// `pull`: the issue or pull request the reply goes to, the one a review reads; `allowed`: a
+// review's tolerance (reviews' tolerance()).
 export function promptFor(
   task,
-  { mode, text, settings, own, instructions, onboardingWork, config, grant, branches, pull },
+  {
+    mode,
+    text,
+    settings,
+    own,
+    instructions,
+    onboardingWork,
+    config,
+    grant,
+    branches,
+    pull,
+    allowed,
+  },
 ) {
   if (mode === "brainstorm" || mode === "stop") return brainstormPrompt(task);
   if (INBOX.has(mode)) return inboxPrompt(task, mode, text);
   if (mode === "analyze") return analyzePrompt(task, text);
   if (mode === "research") return researchPrompt(task);
-  if (mode === "review") return reviewPrompt(task, pull ?? task.number, instructions, text);
+  if (mode === "review")
+    return reviewPrompt(task, pull ?? task.number, instructions, text, allowed);
   if (mode === "onboarding") return onboardingPrompt(task, settings, config, grant);
   if (own) return modePrompt(task, own, instructions, branches, grant);
   return onboardingWork ? onboardingWorkPrompt(task) : initialPrompt(task, branches, grant);

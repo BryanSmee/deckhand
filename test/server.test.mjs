@@ -2217,6 +2217,9 @@ modes:
     assert.match(runEnv, /^SANDBOX_MODEL=sonnet$/m);
     assert.match(runEnv, /^SANDBOX_EFFORT=high$/m);
     assert.match(runEnv, /^TASK_PROMPT=Review pull request #13 of org\/repo\./m);
+    // No auto-merge to decide: medium findings request changes, as the prompt says.
+    assert.match(runEnv, /when there is a\s+critical, high or medium finding/);
+    assert.doesNotMatch(runEnv, /This review tolerates/);
     // Its thread from the listener (reviews.mjs reviewThread(), unit-tested there).
     const args = readFileSync(join(dir, "run-args"), "utf8");
     assert.match(args, /^TASK_DIGEST=\/deckhand\/digest\.md$/m);
@@ -2310,15 +2313,16 @@ modes:
       user: { login: "deckhand-x[bot]", type: "Bot" },
       head: { sha: "head-1", ref: "issue-12-fix", repo: { full_name: "org/repo" } },
     };
-    // CI still going when the review ends: the merge waits for it.
+    // CI still going when the review ends: the merge waits for it. No review.fix: this review
+    // decides the merge, and may have medium findings.
     const files = {
-      ".deckhand.yaml": "review:\n  on: ready\n  fix: true\n  merge: true\n",
+      ".deckhand.yaml": "review:\n  on: ready\n  merge: true\n  max_allowed_severity: medium\n",
       "pull:13": JSON.stringify(pr),
       runs: JSON.stringify({
         workflow_runs: [{ name: "CI", status: "in_progress", conclusion: null }],
       }),
     };
-    const { github, listener, send } = await listen(t, files, (dir) => {
+    const { dir, github, listener, send } = await listen(t, files, (dir) => {
       // The fake repository says nothing of its visibility: public, so `public`.
       writeGrant(dir, "allow_auto_merge: public\n");
       writeFileSync(join(dir, "result"), "Fine.\n\nRating: 9/10\nVerdict: approve\n");
@@ -2339,6 +2343,10 @@ modes:
     );
     await listener.until("org/repo#pr-13: waiting for its checks, 1 GitHub Actions run on head-1");
     assert.ok(!github.requests.some((r) => r.method === "PUT"));
+    // The prompt was told the tolerance worked out for the run (reviews' tolerance()).
+    const runEnv = readFileSync(join(dir, "run-env"), "utf8");
+    assert.match(runEnv, /when there is a\s+critical or high finding/);
+    assert.match(runEnv, /This review tolerates medium findings/);
     // The run completes: its delivery decides again.
     files.runs = JSON.stringify({
       workflow_runs: [{ name: "CI", status: "completed", conclusion: "success" }],
