@@ -449,22 +449,24 @@ export interface Grant {
   limits: { cpus: string; memory: string; pids: number };
 }
 
-// GET api/repos/<owner>/<repo>/config, read from GitHub at each request, and POST
-// api/repos/<owner>/<repo>/refresh (the same; 429 when refreshed a moment ago).
 // One of a .deckhand.yaml's errors or warnings (repo-config.mjs fileLines()): the key it is
 // about ("modes.review.agent"), and the line of that key, or of the syntax error; null when
-// the check doesn't know them.
+// the check doesn't know them. `fix`: how to fix an error (null for a warning).
 export interface ConfigProblem {
   key: string | null;
   message: string;
   line: number | null;
+  fix: string | null;
 }
 
+// GET api/repos/<owner>/<repo>/config, read from GitHub at each request, and POST
+// api/repos/<owner>/<repo>/refresh (the same; 429 when refreshed a moment ago).
 export interface RepoConfig {
   repo: Repo;
   base: string;
   // null: no .deckhand.yaml on its default branch, the operator's defaults apply.
-  file: { text: string; sha: string; url: string } | null;
+  // `url`: the file on GitHub; `editUrl`: GitHub's editor for it.
+  file: { text: string; sha: string; url: string; editUrl: string } | null;
   errors: ConfigProblem[];
   warnings: ConfigProblem[];
   // The operator's grants have errors: no run starts here (or anywhere, everyRepo). `file`:

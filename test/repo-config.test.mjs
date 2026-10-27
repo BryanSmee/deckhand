@@ -17,6 +17,7 @@ import {
   repoImage,
   repoPath,
   RESERVED,
+  RESERVED_MODES,
   sandboxName,
   startable,
   taskSandboxName,
@@ -705,35 +706,84 @@ test("fileLines: each error and warning at the line of its key, mounts at their 
     "mounts:",
     "  - path: /srv/a",
     "  - /srv/b",
+    "my key: 1",
   ].join("\n");
-  const { errors, warnings } = parseRepoConfig(text, testConfig({ users: ["alice"] }));
+  const { errors, warnings, fixes } = parseRepoConfig(text, config);
   const { lineOf, mountLine, locate } = fileLines(text);
-  const located = errors.map(locate);
+  const located = errors.map((e) => locate(e, fixes));
+  const review = located.find((e) => e.key === "modes.review");
+  assert.equal(review.line, 3);
+  assert.match(review.message, /^review is built in/);
+  assert.match(review.fix, /^Remove modes\.review and add review: true/);
+  // A key the file only has a parent of: the parent's line; a fix that fits any error.
+  const caches = located.find((e) => e.key.startsWith("caches"));
+  assert.equal(caches.line, 4);
+  assert.match(caches.fix, /remove the key to get the default/);
+  // A key with a space is found by the file's keys; a warning has no fix.
   assert.deepEqual(
-    located.find((e) => e.key === "modes.review"),
-    {
-      key: "modes.review",
-      message: errors.find((e) => e.startsWith("modes.review: ")).slice("modes.review: ".length),
-      line: 3,
-    },
+    warnings.map((w) => locate(w)),
+    [{ key: "my key", message: "unknown, ignored", line: 8, fix: null }],
   );
-  // A key the file only has a parent of: the parent's line.
-  assert.equal(located.find((e) => e.key.startsWith("caches")).line, 4);
-  assert.deepEqual(warnings.map(locate), []);
   assert.equal(lineOf("users"), 1);
   assert.equal(lineOf("model"), null);
   assert.deepEqual([mountLine("/srv/a"), mountLine("/srv/b"), mountLine("/srv/c")], [6, 7, null]);
   // A syntax error: its own line; what isn't about a key, none.
   const broken = fileLines("users: [a\nmodel: x\n");
   const [syntax] = parseRepoConfig("users: [a\n", testConfig()).errors;
-  assert.deepEqual(broken.locate(syntax), {
+  assert.deepEqual(broken.locate(syntax, {}), {
     key: null,
     message: "flow […] must fit on one line",
     line: 1,
+    fix: "Fix the YAML: until then, none of the file is read.",
   });
   assert.deepEqual(broken.locate("users not in ALLOWED_USERS, ignored: carol"), {
     key: null,
     message: "users not in ALLOWED_USERS, ignored: carol",
     line: null,
+    fix: null,
   });
+});
+
+test("the errors whose message doesn't say how to fix them come with a fix", () => {
+  const fixOf = (text, error) => {
+    const { errors, fixes } = parseRepoConfig(text, config);
+    const found = errors.find((e) => e.startsWith(error));
+    assert.ok(found, `${error} in ${errors}`);
+    return fixes[found];
+  };
+  assert.equal(
+    fixOf("agent: codex\n", "agent: the operator hasn't configured codex"),
+    "Use an agent the operator runs (claude), or ask them to configure codex.",
+  );
+  assert.match(
+    fixOf("modes:\n  docs: { instructions: a.md, agent: codex }\n", "modes.docs.agent:"),
+    /ask them to configure codex/,
+  );
+  assert.match(fixOf("review:\n  agent: codex\n", "review.agent:"), /configure codex/);
+  assert.equal(
+    fixOf("modes:\n  work: { instructions: a.md }\n", "modes.work:"),
+    "Remove modes.work, and set agent, model and effort at the top level.",
+  );
+  assert.match(
+    fixOf("modes:\n  review: { instructions: a.md }\n", "modes.review:"),
+    /another name/,
+  );
+  const reserved = RESERVED_MODES.find((m) => !["work", "brainstorm", "review"].includes(m));
+  assert.match(
+    fixOf(`modes:\n  ${reserved}: { instructions: a.md }\n`, `modes.${reserved}:`),
+    /^Give the mode another name/,
+  );
+  assert.match(
+    fixOf("modes:\n  docs: { light: true }\n", "modes.docs.instructions:"),
+    /^Add instructions/,
+  );
+  assert.match(
+    fixOf(
+      "modes:\n  docs: { instructions: a.md }\n  Docs: { instructions: b.md }\n",
+      "modes.Docs: defined twice",
+    ),
+    /^Keep one of the modes named Docs/,
+  );
+  // A message that says what is expected needs none of its own.
+  assert.equal(fixOf("effort: loud\n", "effort:"), undefined);
 });

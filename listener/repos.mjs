@@ -429,16 +429,20 @@ export function createRepoApi({
     // What the file says, with the line each error, warning, setting and mount comes from.
     const { lineOf, mountLine, locate } = fileLines(file?.text ?? "");
     const effective = effectiveView(config, info.full_name, settings, grant, fs);
+    const branch = base.split("/").map(encodeURIComponent).join("/");
     send(res, 200, {
       repo: row,
       base,
       file: file && {
         text: file.text,
         sha: file.sha,
-        url: `${info.html_url}/blob/${base.split("/").map(encodeURIComponent).join("/")}/${CONFIG_FILE}`,
+        url: `${info.html_url}/blob/${branch}/${CONFIG_FILE}`,
+        editUrl: `${info.html_url}/edit/${branch}/${CONFIG_FILE}`,
       },
-      errors: (parsed?.errors ?? []).map(locate),
-      warnings: [...warnings, ...merging.filter((w) => !warnings.includes(w))].map(locate),
+      errors: (parsed?.errors ?? []).map((e) => locate(e, parsed.fixes)),
+      warnings: [...warnings, ...merging.filter((w) => !warnings.includes(w))].map((w) =>
+        locate(w),
+      ),
       grantsError,
       effective: {
         ...effective,

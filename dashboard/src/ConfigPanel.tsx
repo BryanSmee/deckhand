@@ -60,6 +60,7 @@ function problemsOf(config: RepoConfig): Problem[] {
     key: e.key,
     message: e.message,
     text: e.message,
+    fix: e.fix,
     line: e.line,
   }));
   const grantsError = config.grantsError;
@@ -184,7 +185,7 @@ export function ConfigPanel({ repo, row, onRow, onBack, now }: Props) {
           {config?.file && (
             <a
               class={buttonClass("secondary", "small")}
-              href={config.file.url.replace("/blob/", "/edit/")}
+              href={config.file.editUrl}
               target="_blank"
               rel="noreferrer"
             >

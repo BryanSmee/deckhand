@@ -50,9 +50,10 @@ const CONFIG: RepoConfig = {
     text: "users: [alice]\neffort: loud\n",
     sha: "abcdef1234",
     url: "https://github.com/org/api/blob/main/.deckhand.yaml",
+    editUrl: "https://github.com/org/api/edit/main/.deckhand.yaml",
   },
-  errors: [{ key: "effort", message: "expected one of low, medium, high", line: 2 }],
-  warnings: [{ key: "colour", message: "unknown, ignored", line: null }],
+  errors: [{ key: "effort", message: "expected one of low, medium, high", line: 2, fix: null }],
+  warnings: [{ key: "colour", message: "unknown, ignored", line: null, fix: null }],
   grantsError: null,
   effective: {
     settings: [

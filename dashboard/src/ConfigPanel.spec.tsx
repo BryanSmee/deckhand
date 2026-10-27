@@ -58,16 +58,18 @@ const BROKEN: RepoConfig = {
     text: TEXT,
     sha: "c03e7a1f00",
     url: "https://github.com/acme/site/blob/main/.deckhand.yaml",
+    editUrl: "https://github.com/acme/site/edit/main/.deckhand.yaml",
   },
   errors: [
     {
       key: "modes.review",
       message: "review is built in: remove it and turn it on with a top-level review: block",
       line: 8,
+      fix: "Remove modes.review and add review: true at the top level.",
     },
-    { key: null, message: "something the check can't place", line: null },
+    { key: null, message: "something the check can't place", line: null, fix: null },
   ],
-  warnings: [{ key: "colour", message: "unknown, ignored", line: null }],
+  warnings: [{ key: "colour", message: "unknown, ignored", line: null, fix: null }],
   grantsError: null,
   effective: {
     settings: SETTINGS,
@@ -145,8 +147,11 @@ test("an invalid config: each error with its key, its fix and its line, when kno
   const items = within(alert).getAllByRole("listitem");
   expect(items).toHaveLength(3);
   expect(items[0].textContent).toBe(
-    "modes.review: review is built in: remove it and turn it on with a top-level review: blockline 8",
+    "modes.review: review is built in: remove it and turn it on with a top-level review: blockline 8" +
+      "Remove modes.review and add review: true at the top level.",
   );
+  // The listener's fix, under its message.
+  expect(within(items[0]).getByText(/^Remove modes\.review/).className).toMatch(/fix/);
   expect(items[1].textContent).toBe("something the check can't place");
   expect(items[2].textContent).toContain(
     "dockerfile: refused: the operator's grants don't set allow_dockerfile",
