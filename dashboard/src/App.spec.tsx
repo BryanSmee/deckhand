@@ -366,7 +366,7 @@ test("All's tasks: the sidebar's All stays on them, and a total opens them under
   render(<Dashboard state={state} error={null} />);
   // An empty address with no repo kept: the Overview.
   expect(location.hash).toBe("");
-  const tile = screen.getByRole("link", { name: /^Needs you: 2/ });
+  const tile = screen.getByRole("link", { name: /^Needs you: 3/ });
   expect(tile.getAttribute("href")).toBe("#/tasks");
   fireEvent.click(tile);
   expect(localStorage.getItem("deckhand.chip")).toBe("input");
@@ -483,6 +483,37 @@ test("on a phone, Tasks and Board go back to the repo last open, after Overview"
   );
   expect(tabs().getByRole("link", { name: "Tasks" }).getAttribute("href")).toBe("#/acme/api");
   expect(tabs().getByRole("link", { name: "Board" }).getAttribute("href")).toBe("#/acme/api/board");
+});
+
+test("on a phone with no repo open yet: the Overview has no search, Tasks are All's", async () => {
+  wide = false;
+  render(<Dashboard state={state} error={null} />);
+  expect(screen.getByRole("heading", { level: 2, name: "Waiting on you" })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: /Search/ })).toBeNull();
+  const tabs = () => within(screen.getByRole("navigation", { name: "Pages" }));
+  expect(tabs().getByRole("link", { name: "Tasks" }).getAttribute("href")).toBe("#/tasks");
+  // The board is one repo's: the most recently active.
+  expect(tabs().getByRole("link", { name: "Board" }).getAttribute("href")).toBe("#/acme/app/board");
+  history.pushState(null, "", "#/tasks");
+  dispatchEvent(new HashChangeEvent("hashchange"));
+  await waitFor(() =>
+    expect(tabs().getByRole("link", { name: "Tasks" }).getAttribute("aria-current")).toBe("page"),
+  );
+  expect(screen.getByRole("button", { name: "Search tasks" })).toBeTruthy();
+  // On All's tasks after a repo's: Tasks stay All's, the Board goes back to that repo's.
+  history.pushState(null, "", "#/acme/api");
+  dispatchEvent(new HashChangeEvent("hashchange"));
+  await waitFor(() =>
+    expect(tabs().getByRole("link", { name: "Tasks" }).getAttribute("href")).toBe("#/acme/api"),
+  );
+  history.pushState(null, "", "#/tasks");
+  dispatchEvent(new HashChangeEvent("hashchange"));
+  await waitFor(() =>
+    expect(tabs().getByRole("link", { name: "Board" }).getAttribute("href")).toBe(
+      "#/acme/api/board",
+    ),
+  );
+  expect(tabs().getByRole("link", { name: "Tasks" }).getAttribute("href")).toBe("#/tasks");
 });
 
 test("on a phone: the tab bar marks the page, and the switcher's sheet lists the repos", () => {

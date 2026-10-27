@@ -187,7 +187,7 @@ export function Dashboard({ state, error, repos, refresh, onOverview }: Props) {
   const notify = useReadyNotifications(state);
   const github = state?.githubUrl ?? "https://github.com";
   const shell = { state, error, route, refresh, onRequest: setRequest };
-  const onTasks = !onBoard && !onSettings;
+  const onTasks = !overview && !onBoard && !onSettings;
   // A phone's search button opens the box, and closes it emptied.
   const toggleSearch = () => {
     if (searchOpen) setQuery("");

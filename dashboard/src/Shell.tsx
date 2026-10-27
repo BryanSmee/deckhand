@@ -489,9 +489,12 @@ export function TopBar(props: TopBarProps) {
 }
 
 // The phone's tab bar. Tasks and Board are the repository shown, else the one last open
-// here, else the most recently active.
+// here. Else Tasks are All's (and stay All's on them), and Board the most recently active
+// repository's: the board is one repository's.
 export function TabBar({ state, route, lastRepo }: Common & { lastRepo: string | null }) {
   const counts = repoCounts(state?.tasks ?? [], route.repo);
+  const onAllTasks = route.page === "tasks" && !route.repo;
+  const tasksRepo = route.repo ?? (onAllTasks ? null : lastRepo);
   const repo = route.repo ?? lastRepo ?? counts.repos[0]?.repo ?? null;
   const tabs = [
     {
@@ -504,7 +507,7 @@ export function TabBar({ state, route, lastRepo }: Common & { lastRepo: string |
     {
       label: "Tasks",
       icon: <Icon.Tasks size={22} />,
-      href: repo ? tasksOf(repo) : allTasks,
+      href: tasksRepo ? tasksOf(tasksRepo) : allTasks,
       current: onTasks(route),
     },
     {

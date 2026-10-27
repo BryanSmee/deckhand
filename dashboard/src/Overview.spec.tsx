@@ -40,7 +40,7 @@ const list = (repos: Repo[], over: Partial<RepoList> = {}): RepoList => ({
 const needs = () =>
   within(screen.getByRole("region", { name: "Waiting on you" })).getAllByRole("listitem");
 
-test("the totals, each a link to All's tasks under its chip", () => {
+test("the totals count what their chip lists, each a link to All's tasks under it", () => {
   const onChip = vi.fn();
   render(<Overview state={state} github={github} onChip={onChip} />);
   const tiles = ["Running", "Needs you", "Ready for review", "Failed"].map((name) =>
@@ -48,8 +48,8 @@ test("the totals, each a link to All's tasks under its chip", () => {
   );
   expect(tiles.map((t) => t.getAttribute("aria-label"))).toEqual([
     "Running: 2, of 4 slots · 1 queued",
-    "Needs you: 2, 1 question · 1 brainstorm turn",
-    "Ready for review: 1, pull request #132",
+    "Needs you: 3, 1 question · 1 brainstorm turn · 1 idle brainstorm",
+    "Ready for review: 2, pull requests #141 and #132",
     "Failed: 2, 1 can be rerun",
   ]);
   expect(tiles.every((t) => t.getAttribute("href") === "#/tasks")).toBe(true);
@@ -69,7 +69,8 @@ test("waiting on you: oldest first, each with its state, repo, age and action", 
     ]),
   ).toEqual([
     // (Rerun has its pending label too, hidden.)
-    ["#127 Issue #127", "Interrupted", expect.stringMatching(/^Rerun/)],
+    // No title: the number once.
+    ["Issue #127", "Interrupted", expect.stringMatching(/^Rerun/)],
     ["#16 Bugs", "Error", "Open"],
     ["#131 Dark mode for the settings page", "Ready for review", "Review PR"],
     ["#138 Search results flicker when typing fast", "Needs input", "Answer"],

@@ -1,5 +1,6 @@
 // What the Overview counts (docs/design/dashboard-redesign.md › Pages › Overview): what waits
 // on you across repositories, the totals, and each repository's tasks by tone and its lanes.
+import { chains } from "./graphLayout";
 import { graphOf } from "./graphModel";
 import { isReady, plural, sameRepo, type Tone, taskTone } from "./format";
 import type { Blocker, Edge, Task } from "./types";
@@ -82,20 +83,14 @@ export function repoParts(tasks: Task[], now: number): Part[] {
 }
 
 // A repository's lanes: the chains of issues waiting for one another on its board (its graph
-// as the board draws it, closed ones left out), each one connected set of arrows.
+// as the board draws it, closed ones left out), its layout's chains.
 export function laneCount(repo: string, tasks: Task[], edges: Edge[], blockers: Blocker[]) {
   const mine = tasks.filter((t) => sameRepo(t.repo, repo));
   const graph = graphOf(mine, edges, blockers);
-  const parent = new Map<string, string>();
-  const find = (k: string): string => {
-    const p = parent.get(k) ?? k;
-    if (p === k) return k;
-    const root = find(p);
-    parent.set(k, root);
-    return root;
-  };
-  for (const e of graph.edges) parent.set(find(e.from), find(e.to));
-  return new Set(graph.edges.map((e) => find(e.from))).size;
+  return chains(
+    graph.nodes.map((n) => n.key),
+    graph.edges,
+  ).length;
 }
 
 // "Backlog 12 · 4 lanes", "Backlog 100+", "2 lanes"; null: nothing known yet.

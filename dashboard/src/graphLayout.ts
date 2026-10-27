@@ -44,16 +44,7 @@ export function layout(
   const sizes = narrow ? SIZES.narrow : SIZES.wide;
   const { w, h, layerGap, rowGap } = sizes;
   const order = new Map(keys.map((k, i) => [k, i]));
-  const preds = new Map<string, string[]>(keys.map((k) => [k, []]));
-  const succs = new Map<string, string[]>(keys.map((k) => [k, []]));
-  const seen = new Set<string>();
-  for (const { from, to } of edges) {
-    if (!order.has(from) || !order.has(to) || from === to || seen.has(`${from} ${to}`)) continue;
-    seen.add(`${from} ${to}`);
-    preds.get(to)!.push(from);
-    succs.get(from)!.push(to);
-  }
-  const linked = keys.filter((k) => preds.get(k)!.length || succs.get(k)!.length);
+  const { preds, succs, linked, seen } = linksOf(keys, edges);
 
   let boxes: Box[] = [];
   // Each linked issue's column, which settle() keeps the arrows' direction by.
@@ -194,6 +185,29 @@ function settle(
     placed.set(k, b);
   }
   return { boxes: keys.map((k) => placed.get(k)!), gridTop };
+}
+
+// Each issue's arrows in and out, among `keys` (an arrow to itself or twice counts once), and
+// the issues with at least one; `seen`: each arrow once, "from to".
+function linksOf(keys: string[], edges: { from: string; to: string }[]) {
+  const preds = new Map<string, string[]>(keys.map((k) => [k, []]));
+  const succs = new Map<string, string[]>(keys.map((k) => [k, []]));
+  const seen = new Set<string>();
+  for (const { from, to } of edges) {
+    if (!preds.has(from) || !preds.has(to) || from === to || seen.has(`${from} ${to}`)) continue;
+    seen.add(`${from} ${to}`);
+    preds.get(to)!.push(from);
+    succs.get(from)!.push(to);
+  }
+  const linked = keys.filter((k) => preds.get(k)!.length || succs.get(k)!.length);
+  return { preds, succs, linked, seen };
+}
+
+// The board's chains (its lanes): the groups of issues linked to each other, as layout()
+// places them. The Overview's cards count them.
+export function chains(keys: string[], edges: { from: string; to: string }[]): string[][] {
+  const { preds, succs, linked } = linksOf(keys, edges);
+  return components(linked, preds, succs);
 }
 
 // The groups of issues linked to each other, in the board's order of their first issue.

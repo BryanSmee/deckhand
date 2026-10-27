@@ -74,6 +74,8 @@ test("lanes: each chain of waiting issues, closed ones left out", () => {
     kind: "after" as const,
   });
   expect(laneCount("acme/app", tasks, [edge(1, 2), edge(3, 4), edge(4, 5)], [])).toBe(2);
+  // As the board draws them: an arrow to itself, or twice, is no other lane.
+  expect(laneCount("acme/app", tasks, [edge(1, 2), edge(1, 2), edge(3, 3)], [])).toBe(1);
   // One closed in the middle: the chain is cut, as on the board.
   const closed = tasks.map((t) =>
     t.number === 4 ? { ...t, state: "done" as const, closed: "completed" as const } : t,

@@ -9,6 +9,7 @@ import { type RepoList, sendRerun } from "./api";
 import {
   type ChipId,
   githubUrl,
+  inChip,
   issueList,
   numberOf,
   plural,
@@ -68,7 +69,7 @@ export function Overview({ state, repos, github, onChip, refresh }: Props) {
   const rows = waitingOnYou(state.tasks);
   return (
     <div class={styles.page}>
-      <Totals state={state} rows={rows} onChip={onChip} />
+      <Totals state={state} onChip={onChip} />
       <WaitingOnYou rows={rows} now={state.now} github={github} refresh={refresh} />
       <RepoCards state={state} repos={repos} />
     </div>
@@ -102,22 +103,15 @@ function Tile(props: {
   );
 }
 
-function Totals({
-  state,
-  rows,
-  onChip,
-}: {
-  state: State;
-  rows: Waiting[];
-  onChip: (chip: ChipId) => void;
-}) {
-  const of = (...needs: Need[]) => rows.filter((r) => needs.includes(r.need));
-  const asking = of("input").length;
-  const turns = of("turn").length;
-  const ready = of("ready");
+// Each total counts what its chip lists, and says what is in it.
+function Totals({ state, onChip }: { state: State; onChip: (chip: ChipId) => void }) {
+  const of = (chip: ChipId) => state.tasks.filter((t) => inChip(chip, t));
+  const asking = of("input");
+  const count = (state: Task["state"]) => asking.filter((t) => t.state === state).length;
+  const ready = of("review");
   const failed = of("error");
-  const rerunnable = failed.filter((r) => r.task.rerunnable).length;
-  const numbers = ready.flatMap((r) => (r.task.pr ? [r.task.pr.number] : []));
+  const rerunnable = failed.filter((t) => t.rerunnable).length;
+  const numbers = ready.flatMap((t) => (t.pr ? [t.pr.number] : []));
   return (
     <div class={styles.tiles}>
       <Tile
@@ -132,16 +126,16 @@ function Totals({
       <Tile
         tone="input"
         label="Needs you"
-        count={asking + turns}
+        count={asking.length}
         meta={
-          asking + turns
-            ? [
-                asking ? plural(asking, "question") : "",
-                turns ? plural(turns, "brainstorm turn") : "",
-              ]
-                .filter(Boolean)
-                .join(" · ")
-            : "nothing asks"
+          [
+            [count("needs-input"), "question"],
+            [count("brainstorm"), "brainstorm turn"],
+            [count("idle-brainstorm"), "idle brainstorm"],
+          ]
+            .filter(([n]) => n)
+            .map(([n, what]) => plural(n as number, what as string))
+            .join(" · ") || "nothing asks"
         }
         chip="input"
         onChip={onChip}
@@ -282,7 +276,10 @@ function WaitingOnYou({
                   label={BADGES[row.need].label || undefined}
                 />
                 <a class={styles.needTitle} href={taskHref(t)}>
-                  {t.number !== null && <span class={styles.number}>{numberOf(t)}</span>}{" "}
+                  {/* Without a title, titleOf() says the number already. */}
+                  {t.title && t.number !== null && (
+                    <span class={styles.number}>{numberOf(t)} </span>
+                  )}
                   {titleOf(t)}
                 </a>
                 <span class={styles.needRepo}>{t.repo}</span>
