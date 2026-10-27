@@ -80,7 +80,7 @@
   grid-template-columns: 16px minmax(0, 1fr);
   column-gap: 8px;
   row-gap: 8px;
-  padding: 10px 10px 10px 6px;
+  padding: calc(10px - var(--row-trim)) 10px calc(10px - var(--row-trim)) 6px;
   border: 1px solid var(--border);
   border-radius: 10px;
   background: var(--surface);

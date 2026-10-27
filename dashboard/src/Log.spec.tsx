@@ -4,6 +4,7 @@ import { act, fireEvent, render, screen, within } from "@testing-library/preact"
 import { beforeEach, expect, test, vi } from "vitest";
 import { useRunLog } from "./api";
 import { Log } from "./Log";
+import { setPref } from "./prefs";
 import { FakeSource } from "./testUtils";
 import type { Entry, Run } from "./types";
 
@@ -267,4 +268,40 @@ test("a live run follows its end until the reader scrolls up; Latest brings it b
   fireEvent.click(screen.getByRole("button", { name: "Latest" }));
   expect(top).toBe(1000);
   expect(screen.getByText("Working… following the log live")).toBeTruthy();
+});
+
+test("Preferences: sections with errors folded, long lines unwrapped, changed at once", () => {
+  localStorage.setItem("deckhand.log.errors", "0");
+  show();
+  // Only the work, which isn't open for its error; its failed command folded too.
+  expect(opened()).toEqual(["Work"]);
+  const calls = within(section("Work"))
+    .getAllByText("node --test")
+    .map((n) => n.closest("details")!.open);
+  expect(calls).toEqual([false, false]);
+  const log = screen.getByRole("log").parentElement!;
+  expect(log.className).not.toMatch(/nowrap/);
+  act(() => setPref("logWrap", false));
+  expect(log.className).toMatch(/nowrap/);
+});
+
+test("Preferences: a live run's log not followed from the start", () => {
+  setPref("logFollow", false);
+  const page = document.createElement("div");
+  page.style.overflowY = "auto";
+  document.body.append(page);
+  let top = 0;
+  Object.defineProperties(page, {
+    scrollHeight: { get: () => 1000 },
+    clientHeight: { get: () => 200 },
+    scrollTop: { get: () => top, set: (v: number) => (top = v) },
+  });
+  render(<Streamed run={{ ...run, status: "running", finishedAt: null }} now={240000} />, {
+    container: page,
+  });
+  act(() => FakeSource.last!.emit("entries", entries));
+  expect(top).toBe(0);
+  expect(screen.getByText("Working…")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Latest" }));
+  expect(top).toBe(1000);
 });

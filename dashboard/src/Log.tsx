@@ -1,10 +1,11 @@
 // A run's log, folded into its sections (logModel.ts): setup, the image's build (its steps,
 // cached ones together, a failed one open), the work (messages as text, tool calls folded,
-// a failed one open) and the pushes. A section with an error opens by itself; the others
-// start folded, except the work. A toolbar searches it (the folds holding the matches open),
+// a failed one open) and the pushes. A section with an error opens by itself (unless
+// Preferences says not to); the others start folded, except the work. A toolbar searches it (the folds holding the matches open),
 // filters it, folds it all and copies or downloads it; a phone has an action bar instead,
 // and its search replaces the page's header. A live run's log follows its end until the
-// reader scrolls up; Latest brings it back.
+// reader scrolls up (from the start, unless Preferences says not to); Latest brings it back.
+// Long lines wrap, or scroll sideways (Preferences).
 import type { ComponentChildren } from "preact";
 import { createContext } from "preact";
 import { useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "preact/hooks";
@@ -27,6 +28,7 @@ import {
   type Step,
   stepStatus,
 } from "./logModel";
+import { getPref, usePref } from "./prefs";
 import type { Entry, Run } from "./types";
 import { Button, IconButton } from "./ui/Button";
 import { Segmented } from "./ui/Choice";
@@ -81,7 +83,10 @@ export function Log({ run, entries, now, touch, searching, onSearching }: Props)
   const [all, setAll] = useState<boolean | null>(null);
   // The error Next error went to: held open.
   const [focus, setFocus] = useState<string | null>(null);
-  const [following, setFollowing] = useState(live);
+  const [follow] = usePref("logFollow");
+  const [openErrors] = usePref("logErrors");
+  const [wrap] = usePref("logWrap");
+  const [following, setFollowing] = useState(live && follow);
   // How the last Copy went, for a moment.
   const [copied, setCopied] = useState<"ok" | "failed" | null>(null);
   const root = useRef<HTMLDivElement>(null);
@@ -243,7 +248,7 @@ export function Log({ run, entries, now, touch, searching, onSearching }: Props)
   );
 
   return (
-    <div class={styles.wrap} ref={root}>
+    <div class={`${styles.wrap} ${wrap ? "" : styles.nowrap}`} ref={root}>
       {touch && searching ? (
         <div class={styles.phoneSearch}>
           <div class={styles.phoneSearchRow}>
@@ -338,8 +343,8 @@ export function Log({ run, entries, now, touch, searching, onSearching }: Props)
               key={s.phase}
               section={s}
               filter={filter}
-              open={isOpen(s.phase, s.failures > 0 || s.phase === "work")}
-              onToggle={toggle(s.phase, s.failures > 0 || s.phase === "work")}
+              open={isOpen(s.phase, (openErrors && s.failures > 0) || s.phase === "work")}
+              onToggle={toggle(s.phase, (openErrors && s.failures > 0) || s.phase === "work")}
               hits={query ? (found.hits.get(s.phase) ?? 0) : null}
               isOpen={isOpen}
               toggle={toggle}
@@ -583,6 +588,8 @@ function ItemView({ item, isOpen, toggle }: ItemProps) {
       );
     case "tool": {
       const error = item.outputs.some((o) => o.error);
+      // Its parent's subscription redraws it when the preference changes.
+      const opens = error && getPref("logErrors");
       if (!item.outputs.length)
         return (
           <div class={styles.line} data-item={item.id}>
@@ -597,8 +604,8 @@ function ItemView({ item, isOpen, toggle }: ItemProps) {
         <Sub
           id={item.id}
           error={error}
-          open={isOpen(item.id, error)}
-          onToggle={toggle(item.id, error)}
+          open={isOpen(item.id, opens)}
+          onToggle={toggle(item.id, opens)}
           tag={item.name}
           head={<Hl text={item.text || " "} field={f(0)} />}
           meta={error ? "failed" : plural(lines, "line")}
@@ -639,7 +646,7 @@ function StepView({
     : [plural(s.output.length, "line"), s.seconds !== null ? `${s.seconds}s` : ""]
         .filter(Boolean)
         .join(" · ");
-  const fallback = error || s.status === "running";
+  const fallback = (error && getPref("logErrors")) || s.status === "running";
   return (
     <Sub
       id={id}

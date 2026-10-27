@@ -201,9 +201,12 @@ makes itself (a run's `gh pr ready`); for tasks from before, the listener looks 
 repository's 100 most recently updated pull requests once per start, and asks again about the
 open ones at each start, so one that changed while it was down shows its current state. The
 **Ready for review** chip lists the pull requests waiting for you, and the tab's title counts
-them ("(2) Deckhand"). **Notify me** (top right) asks your browser for notifications: while a
-dashboard tab is open, a pull request that turns ready for review raises one, which opens it
-when clicked.
+them ("(2) Deckhand"). **Notify me when ready** (in the sidebar), or **Settings › Preferences**,
+asks your browser for notifications: while a dashboard tab is open, a pull request that turns
+ready for review raises one (which opens it), and so do a run that needs your answers and,
+once turned on there, a run that failed (which open their task). Preferences also keeps the
+theme, density, motion, start page, board and run log choices and the keyboard shortcuts, in
+this browser only.
 
 GitHub doesn't retry a webhook it couldn't deliver (the listener down or restarting, a
 reverse proxy or tunnel timing out, an outage on GitHub's side). The listener reads the App's

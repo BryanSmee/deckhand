@@ -1,7 +1,7 @@
-// System, Light or Dark: the theme switch of the sidebar and of Preferences.
+// System, Light or Dark: the sidebar's theme switch, the same choice as Preferences › Theme.
 import { Segmented, type Segment } from "./Choice";
 import { Moon, Sun, System } from "./icons";
-import { type Theme, useTheme } from "./theme";
+import { type Theme, usePref } from "../prefs";
 
 const OPTIONS: Segment<Theme>[] = [
   { value: "system", label: "System theme", icon: <System size={14} />, iconOnly: true },
@@ -10,7 +10,7 @@ const OPTIONS: Segment<Theme>[] = [
 ];
 
 export function ThemeSwitch({ class: className }: { class?: string }) {
-  const [theme, setTheme] = useTheme();
+  const [theme, setTheme] = usePref("theme");
   return (
     <Segmented
       class={className}

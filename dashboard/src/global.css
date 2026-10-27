@@ -99,6 +99,15 @@
   --radius-dialog: 16px;
   --fast: 0.12s;
   --slide: 0.18s;
+  /* Density (Preferences): a default control's height, and what a list's row loses top and
+     bottom. Compact: controls 32, rows 8 px shorter. Small (28) and touch (44) stay. */
+  --control: 36px;
+  --row-trim: 0px;
+}
+
+:root.d-compact {
+  --control: 32px;
+  --row-trim: 4px;
 }
 
 /* The old dashboard's names, for the views not redrawn yet: each is one of the tokens above,

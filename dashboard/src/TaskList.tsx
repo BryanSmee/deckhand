@@ -18,6 +18,7 @@ import {
   titleOf,
   when,
 } from "./format";
+import { usePref } from "./prefs";
 import type { Task } from "./types";
 import { Field } from "./ui/Field";
 import { FilterChip } from "./ui/FilterChip";
@@ -64,6 +65,7 @@ export function TaskList({
   touch,
 }: Props) {
   const box = useRef<HTMLDivElement>(null);
+  const [shortcuts] = usePref("shortcuts");
   const input = () => box.current?.querySelector("input");
   // The chips count what the search finds: a chip's count is the rows it shows.
   const found = tasks.filter((t) => matchesSearch(t, query));
@@ -71,17 +73,19 @@ export function TaskList({
   // Named as their tabs are.
   const labels = new Map(repoTabs(tasks).map((r) => [r.repo.toLowerCase(), r.label]));
 
-  // "/" goes to the search box, opening it first on a phone.
+  // "/" goes to the search box, opening it first on a phone; unless Preferences turned the
+  // shortcuts off.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "/" || e.ctrlKey || e.metaKey || e.altKey || typing(e.target)) return;
+      if (!shortcuts || e.key !== "/" || e.ctrlKey || e.metaKey || e.altKey) return;
+      if (typing(e.target)) return;
       e.preventDefault();
       onSearching(true);
       input()?.focus();
     };
     addEventListener("keydown", onKey);
     return () => removeEventListener("keydown", onKey);
-  }, [onSearching]);
+  }, [onSearching, shortcuts]);
   // Opened on a phone: straight into it.
   useEffect(() => {
     if (touch && searching) input()?.focus();
@@ -104,7 +108,7 @@ export function TaskList({
               type="search"
               placeholder="Search tasks"
               lead={<Search size={15} />}
-              hint={touch || query ? undefined : "/"}
+              hint={touch || query || !shortcuts ? undefined : "/"}
               size={touch ? "touch" : "default"}
               value={query}
               onInput={(e) => onQuery(e.currentTarget.value)}

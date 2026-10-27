@@ -167,7 +167,7 @@
   grid-template-columns: 14px 52px minmax(0, 1fr) auto;
   align-items: start;
   gap: 10px;
-  padding: 6px 12px;
+  padding: calc(6px - var(--row-trim) / 2) 12px;
   cursor: pointer;
   font: 12.5px/20px var(--mono);
 }
@@ -218,6 +218,14 @@ pre.out {
   font: 12px/19px var(--mono);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+/* Long lines unwrapped (Preferences): each scrolls sideways. Messages still wrap. */
+.nowrap .line .text,
+.nowrap pre.out {
+  white-space: pre;
+  overflow-wrap: normal;
+  overflow-x: auto;
 }
 
 /* An output with no call before it: a box of its own. */

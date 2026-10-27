@@ -432,7 +432,7 @@ test("Settings' tabs on a phone: atop the page", async () => {
   expect(within(nav).getByRole("link", { name: "Preferences" }).getAttribute("aria-current")).toBe(
     "page",
   );
-  expect(screen.getByText("The Preferences tab is coming soon.")).toBeTruthy();
+  expect(screen.getByRole("heading", { name: "Appearance" })).toBeTruthy();
 });
 
 test("an onboarding run that failed or stopped: said so, its task linked, and it needs you", async () => {

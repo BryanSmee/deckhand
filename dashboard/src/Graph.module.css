@@ -265,9 +265,8 @@
   }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .node,
-  .arrow {
-    transition: none;
-  }
+/* Reduced motion (Preferences › Motion, else the system's setting): fades only. */
+:global(.m-reduced) .node,
+:global(.m-reduced) .arrow {
+  transition: none;
 }

@@ -1,7 +1,9 @@
 // Settings: its tabs (Repositories, Preferences, Server) and the one open. The tabs are links,
 // so each has its address (route.ts); on a wide screen they sit in the page header, on a
-// phone atop the page. Preferences says it's coming until its page lands.
+// phone atop the page.
 import type { RepoList } from "./api";
+import type { Notify } from "./notify";
+import { Preferences } from "./Preferences";
 import { needingYou, Repos } from "./Repos";
 import { formatRoute, type Route, type Section } from "./route";
 import { Server } from "./Server";
@@ -58,12 +60,13 @@ interface Props {
   repos: RepoList;
   // A phone: the tabs are the page's own.
   narrow: boolean;
+  notify: Notify;
   onOpen: (repo: string | null) => void;
   // Reads api/state again (Server's Sync now).
   refresh?: () => Promise<void>;
 }
 
-export function Settings({ route, state, error, repos, narrow, onOpen, refresh }: Props) {
+export function Settings({ route, state, error, repos, narrow, notify, onOpen, refresh }: Props) {
   const tasks = state?.tasks ?? [];
   return (
     <div class={styles.settings}>
@@ -72,10 +75,8 @@ export function Settings({ route, state, error, repos, narrow, onOpen, refresh }
       )}
       {route.section === "server" ? (
         <Server state={state} error={error} app={repos.app} refresh={refresh} />
-      ) : route.section ? (
-        <p class={styles.coming}>
-          The {TABS.find((t) => t.id === route.section)?.label} tab is coming soon.
-        </p>
+      ) : route.section === "preferences" ? (
+        <Preferences notify={notify} user={state?.user} />
       ) : (
         <Repos
           list={repos}

@@ -173,8 +173,11 @@ reads ⌘.
   "plan" laid it out under, else GitHub's), or its inbox's (ideas, bugs), else "#18 and 3
   more". `api/state`'s
   `lanes` and `lanes.ts` `laneName()`; `api.ts` `sendLaneName()` renames.
-- **Density and Motion** in Preferences need a compact version of the tokens; drafted, decided
-  in the Preferences issue.
+- **Density and Motion** in Preferences, decided in #316: Compact is `.d-compact` on the root,
+  which sets `--control` (a default control's height) to 32 instead of 36 and `--row-trim`
+  (what a list row loses top and bottom) to 4 px, so rows are 8 px shorter; small and touch
+  sizes stay. Reduced motion is `.m-reduced` on the root (the choice, else
+  `prefers-reduced-motion`), which components read instead of the media query.
 
 ## Implementation plan
 

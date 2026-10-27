@@ -458,10 +458,9 @@
   text-align: center;
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .menu {
-    animation-name: none;
-  }
+/* Reduced motion (Preferences › Motion, else the system's setting): fades only. */
+:global(.m-reduced) .menu {
+  animation-name: none;
 }
 
 /* All's header: why there is no board. */
