@@ -1,0 +1,34 @@
+name: Clean up packages
+
+# Every push to main publishes an edge image per package, and the registry's storage fills up.
+# Run by hand to delete all but the newest versions of each image.
+on:
+  workflow_dispatch:
+    inputs:
+      keep:
+        description: "Versions to keep per image (an image is several versions: index, manifests, attestations)"
+        default: "10"
+
+permissions:
+  packages: write
+
+jobs:
+  cleanup:
+    runs-on: [self-hosted, Linux]
+    strategy:
+      fail-fast: false
+      matrix:
+        image:
+          - deckhand-listener
+          - deckhand-egress
+          - deckhand-sandbox
+          - deckhand-engine
+          - deckhand-engine-podman
+    steps:
+      # Not delete-only-untagged-versions: a multi-platform image's manifests are untagged
+      # versions too, and deleting them breaks the tag that points at them.
+      - uses: actions/delete-package-versions@v5
+        with:
+          package-name: ${{ matrix.image }}
+          package-type: container
+          min-versions-to-keep: ${{ inputs.keep }}
