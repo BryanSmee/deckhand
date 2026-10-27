@@ -1,4 +1,2 @@
 dashboard/dist
 dashboard/package-lock.json
-# The redesign's static reference pages: rendered, deleted once the redesign ships.
-docs/design/reference/*.html

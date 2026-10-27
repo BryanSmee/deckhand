@@ -1,5 +1,5 @@
-// Every component in both themes, like docs/design/reference/components.html: a page to look
-// at while building one (`npm run dev`, then #/gallery). Never in the build (main.tsx).
+// Every component in both themes (docs/design/dashboard-redesign.md › Components): a page to
+// look at while building one (`npm run dev`, then #/gallery). Never in the build (main.tsx).
 import { Fragment } from "preact";
 import { useState } from "preact/hooks";
 import type { Tone } from "../format";

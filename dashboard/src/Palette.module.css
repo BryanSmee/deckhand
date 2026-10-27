@@ -1,5 +1,5 @@
-/* Ctrl K, "Jump to" (docs/design/reference/palette.html): a search box, the results by group,
-   the keys under them. On a phone, a sheet from the top. */
+/* Ctrl K, "Jump to" (docs/design/dashboard-redesign.md › Pages › Keyboard): a search box, the
+   results by group, the keys under them. On a phone, a sheet from the top. */
 .scrim {
   position: fixed;
   inset: 0;

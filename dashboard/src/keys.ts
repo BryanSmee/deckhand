@@ -1,8 +1,8 @@
-// The keyboard shortcuts (docs/design/dashboard-redesign.md › Keyboard): one table, which the
-// `?` sheet lists and the buttons' tooltips name, and one listener that calls what the pages
-// bind (useShortcuts()). A key is a chord ("shift+t", "mod+k": Ctrl, ⌘ on a Mac) or a sequence
-// of them ("g o"). They never fire while typing in a field, while a dialog or a menu is open, or
-// once switched off (Preferences, kept in this browser).
+// The keyboard shortcuts (docs/design/dashboard-redesign.md › Layout › Keyboard): one table, which
+// the `?` sheet lists and the buttons' tooltips name, and one listener that calls what the pages
+// bind (useShortcuts()). A key is a chord ("shift+t", "mod+k": Ctrl, ⌘ on a Mac) or a sequence of
+// them ("g o"). They never fire while typing in a field, while a dialog or a menu is open, or once
+// switched off (Preferences, kept in this browser).
 import { useEffect, useRef, useState } from "preact/hooks";
 import { getPref, setPref, usePref } from "./prefs";
 
