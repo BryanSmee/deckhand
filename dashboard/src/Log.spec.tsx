@@ -309,3 +309,29 @@ test("Preferences: a live run's log not followed from the start", () => {
   fireEvent.click(screen.getByRole("button", { name: "Latest" }));
   expect(top).toBe(1000);
 });
+
+test("an MCP call: its server as an icon named by the full name, its short tool name first", () => {
+  show({}, [
+    { kind: "phase", phase: "work", at: 0 },
+    { kind: "tool", name: "mcp__playwright__browser_navigate", text: '{"url":"http://a"}' },
+    { kind: "tool", name: "mcp__db__query", text: "{}" },
+    { kind: "output", text: "3 rows", error: false },
+    { kind: "tool", name: "Bash", text: "ls" },
+  ]);
+  const icon = screen.getByLabelText("mcp__playwright__browser_navigate");
+  expect(icon.getAttribute("title")).toBe("mcp__playwright__browser_navigate");
+  expect(icon.textContent).toBe("");
+  expect(icon.querySelector("svg")).toBeTruthy();
+  expect(icon.nextElementSibling!.textContent).toBe('navigate{"url":"http://a"}');
+  expect(within(icon.nextElementSibling as HTMLElement).getByText("navigate")).toBeTruthy();
+  // Another server, folded with its output: a plug, a different icon, and its tool as it is.
+  const other = screen.getByTitle("mcp__db__query");
+  expect(other.closest("summary")!.textContent).toContain("query{}");
+  expect(other.innerHTML).not.toBe(icon.innerHTML);
+  // The agent's own tools as before: their name as text.
+  expect(screen.getByText("Bash").getAttribute("role")).toBeNull();
+  // Searching the full name marks the icon, as the current match.
+  fireEvent.input(box(), { target: { value: "playwright" } });
+  expect(screen.getByText("1 / 1")).toBeTruthy();
+  expect(icon.querySelector("mark[data-current]")).toBeTruthy();
+});

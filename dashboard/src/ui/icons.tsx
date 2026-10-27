@@ -190,6 +190,16 @@ export const Anchor = stroke(
     <path d="M12 7v14M5 13H3a9 9 0 0 0 18 0h-2M8 10h8" />
   </>,
 );
+// A browser window with its top bar: an MCP server that drives one (Playwright).
+export const Browser = stroke(
+  1.8,
+  <>
+    <rect x="3" y="4" width="18" height="16" rx="2" />
+    <path d="M3 9h18M6.5 6.5h.01M9.5 6.5h.01" />
+  </>,
+);
+// Any other MCP server.
+export const Plug = stroke(1.8, <path d="M9 3v5M15 3v5M6 8h12v3a6 6 0 0 1-12 0zM12 17v4" />);
 export const ChevronRight = stroke(2, <path d="M9 6l6 6-6 6" />);
 export const ChevronLeft = stroke(2, <path d="M15 6l-6 6 6 6" />);
 export const ChevronDown = stroke(2, <path d="M6 9l6 6 6-6" />);

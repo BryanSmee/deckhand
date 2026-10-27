@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { logSections, plainText, search, shortDuration } from "./logModel";
+import { fields, logSections, plainText, search, shortDuration, toolLabel } from "./logModel";
 import type { Entry } from "./types";
 
 const step = (n: number, status: string, extra: object = {}) =>
@@ -137,4 +137,41 @@ test("search takes the query as typed: no character is special", () => {
 
 test("durations", () => {
   expect([6, 134, 3725].map(shortDuration)).toEqual(["6s", "2m 14s", "1h 2m"]);
+});
+
+test("toolLabel: an MCP call's server and tool, Playwright's without browser_", () => {
+  expect(toolLabel("mcp__playwright__browser_navigate")).toEqual({
+    server: "playwright",
+    tool: "navigate",
+  });
+  expect(toolLabel("mcp__playwright__browser_take_screenshot")?.tool).toBe("take_screenshot");
+  expect(toolLabel("mcp__probe__browser_open")).toEqual({ server: "probe", tool: "browser_open" });
+  // The server ends at the first `__`: the rest is the tool's.
+  expect(toolLabel("mcp__db__run__query")).toEqual({ server: "db", tool: "run__query" });
+  for (const name of ["Bash", "Read", "mcp__", "mcp__x", "mcp__x__", "my_mcp__a__b"])
+    expect(toolLabel(name)).toBeNull();
+});
+
+test("search reads an MCP call's full name, after its outputs; not a Bash call's", () => {
+  const [work] = logSections(
+    [
+      { kind: "tool", name: "mcp__playwright__browser_navigate", text: '{"url":"http://a"}' },
+      { kind: "output", text: "ok", error: false },
+      { kind: "tool", name: "Bash", text: "ls" },
+    ],
+    0,
+    false,
+  );
+  expect(fields(work.items[0])).toEqual([
+    '{"url":"http://a"}',
+    "ok",
+    "mcp__playwright__browser_navigate",
+  ]);
+  expect(fields(work.items[1])).toEqual(["ls"]);
+  expect(search([work], "playwright", "all").starts).toEqual(
+    new Map([[`${work.items[0].id}:2`, 0]]),
+  );
+  expect(search([work], "navigate", "all").matches).toHaveLength(1);
+  expect(search([work], "bash", "all").matches).toEqual([]);
+  expect(plainText([work])).toContain('[mcp__playwright__browser_navigate] {"url":"http://a"}');
 });

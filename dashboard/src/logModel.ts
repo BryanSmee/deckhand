@@ -68,6 +68,16 @@ export function shown(item: Item, filter: Filter): boolean {
   return true;
 }
 
+// An MCP tool's name, `mcp__<server>__<tool>` whichever agent ran it, as its server and its
+// tool; Playwright's without the `browser_` all of them start with. Null for the others
+// (Bash, Read…).
+export function toolLabel(name: string): { server: string; tool: string } | null {
+  const m = /^mcp__(.+?)__(.+)$/.exec(name);
+  if (!m) return null;
+  const [, server, tool] = m;
+  return { server, tool: server === "playwright" ? tool.replace(/^browser_/, "") : tool };
+}
+
 // "#8 [build 2/4] RUN npm ci"
 export const stepName = (s: Pick<Step, "step" | "stage" | "name">) =>
   `#${s.step} ${s.stage ? `[${s.stage}] ` : ""}${s.name}`;
@@ -158,11 +168,16 @@ export function logSections(entries: Entry[], end: number, live: boolean): LogSe
   });
 }
 
-// The texts an item shows, which search reads, in the order it shows them.
+// The texts an item shows, which search reads, in the order it shows them; an MCP call's full
+// name last, as its icon only shows it on hover.
 export function fields(item: Item): string[] {
   switch (item.kind) {
     case "tool":
-      return [item.text, ...item.outputs.map((o) => o.text)];
+      return [
+        item.text,
+        ...item.outputs.map((o) => o.text),
+        ...(toolLabel(item.name) ? [item.name] : []),
+      ];
     case "step":
       return [
         item.step.name,
