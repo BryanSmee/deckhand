@@ -1,6 +1,6 @@
-/* Settings › Preferences (docs/design/dashboard-redesign.md › Pages): a card per group, a row
-   per preference, its name and help on the left, its control on the right (under them when
-   the row is narrow). */
+/* Settings › Preferences (docs/design/dashboard-redesign.md › Pages › Settings › Preferences): a
+   card per group, a row per preference, its name and help on the left, its control on the right
+   (under them when the row is narrow). */
 .page {
   display: flex;
   flex-direction: column;

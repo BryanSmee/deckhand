@@ -1,7 +1,8 @@
-// Settings › Server (docs/design/dashboard-redesign.md › Pages): what this Deckhand is and how it is
-// set up, read-only. The listener's status and version (api/state's `server`), its run slots
-// and preview hooks (api/state), the engine, proxy, grants and access (api/server, read when
-// the page opens), and the GitHub App (api/repos's `app`) with the last sync and Sync now.
+// Settings › Server (docs/design/dashboard-redesign.md › Pages › Settings › Server): what this
+// Deckhand is and how it is set up, read-only. The listener's status and version (api/state's
+// `server`), its run slots and preview hooks (api/state), the engine, proxy, grants and access
+// (api/server, read when the page opens), and the GitHub App (api/repos's `app`) with the last sync
+// and Sync now.
 import { Fragment } from "preact";
 import { usePolled } from "./api";
 import { ago, dayTime, plural, uptime, versionUrl } from "./format";

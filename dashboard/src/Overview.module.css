@@ -1,6 +1,6 @@
 /* The Overview: the totals, what waits on you, a card per repository
-   (docs/design/dashboard-redesign.md › Pages › Overview). On a phone, two totals a row and each waiting row
-   on two lines. */
+   (docs/design/dashboard-redesign.md › Pages › Overview). On a phone, two totals a row and each
+   waiting row on two lines. */
 .page {
   height: 100%;
   overflow-y: auto;

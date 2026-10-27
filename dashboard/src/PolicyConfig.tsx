@@ -1,8 +1,8 @@
-// A repository's Policies tab (docs/design/dashboard-redesign.md › Pages): the config check's
-// errors first, as they refuse every decision a policy is asked for; one line on how policies
-// work; a card per decision with its rules; the policy files, operator's and repo's, merged by
-// name; each file's source, folded, its errors under their lines; and how to try them on a
-// pull request. Read with the config (api/repos/<repo>/config).
+// A repository's Policies tab (docs/design/dashboard-redesign.md › Pages › Settings › A
+// repository's policies): the config check's errors first, as they refuse every decision a policy
+// is asked for; one line on how policies work; a card per decision with its rules; the policy
+// files, operator's and repo's, merged by name; each file's source, folded, its errors under their
+// lines; and how to try them on a pull request. Read with the config (api/repos/<repo>/config).
 import type { ComponentChildren } from "preact";
 import { useEffect, useState } from "preact/hooks";
 import { plural, type Tone } from "./format";

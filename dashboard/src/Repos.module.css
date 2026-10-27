@@ -1,5 +1,5 @@
-/* Settings › Repositories (docs/design/dashboard-redesign.md › Pages): the onboarding card, the list
-   with its toolbar, the footer. */
+/* Settings › Repositories (docs/design/dashboard-redesign.md › Pages › Settings › Repositories):
+   the onboarding card, the list with its toolbar, the footer. */
 .page {
   display: flex;
   flex-direction: column;
