@@ -175,7 +175,8 @@ function RepoLinks({
 }
 
 // "2 of 4 running", a slot per run (a bar when there are many), the queue and preview hooks,
-// and Sync. On the rail, the slots alone.
+// and Sync. On the rail, the slots and Sync as an icon: what it did is in its title, and in the
+// dashboard's note (App.tsx) for screen readers.
 function RunSlots({
   state,
   error,
@@ -203,20 +204,34 @@ function RunSlots({
   const meter = (
     <Meter running={running} max={max} rail={rail} title={[summary, ...rest].join(" · ")} />
   );
-  if (rail) return meter;
+  const syncButton = (
+    <IconButton
+      variant="ghost"
+      size={rail ? "default" : "small"}
+      class={rail && said?.failed ? styles.railFailed : undefined}
+      label="Sync with GitHub"
+      icon={<Icon.Sync size={rail ? 17 : 15} />}
+      pending={syncing}
+      onClick={() => void sync()}
+      title={
+        rail && said
+          ? said.text
+          : "Ask GitHub again for the webhook deliveries it couldn't hand over, and for the open pull requests' states"
+      }
+    />
+  );
+  if (rail)
+    return (
+      <>
+        {meter}
+        {syncButton}
+      </>
+    );
   return (
     <div class={styles.slots}>
       <div class={styles.slotsHead}>
         <span class={styles.slotsTitle}>{summary}</span>
-        <IconButton
-          variant="ghost"
-          size="small"
-          label="Sync with GitHub"
-          icon={<Icon.Sync size={15} />}
-          pending={syncing}
-          onClick={() => void sync()}
-          title="Ask GitHub again for the webhook deliveries it couldn't hand over, and for the open pull requests' states"
-        />
+        {syncButton}
       </div>
       {meter}
       <span class={styles.slotsMeta}>{rest.join(" · ")}</span>
