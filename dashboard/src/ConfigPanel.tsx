@@ -1,24 +1,27 @@
 // One repository's config (docs/design/reference/repo-config.html, repo-config-ok.html): where
-// it was read, Read again and Edit on GitHub; then what stops or worries its runs (each error
-// with its key, its fix and a link to its line, the warnings, the auto-merge risk), or, when all
-// is fine, a green banner and the facts at a glance, with the details folded but for what the
-// repo sets. Then what its runs get, each value tagged with its source and filtered by it, the
-// hosts, mounts, the operator's grant, the policies and the raw .deckhand.yaml, its bad lines
-// marked. Read from GitHub when it opens and on Read again; changing it is a commit on the
-// default branch.
+// it was read, Read again and Edit on GitHub, its tabs (Config, Policies: PolicyConfig.tsx);
+// then what stops or worries its runs (each error with its key, its fix and a link to its
+// line, the warnings, the auto-merge risk), or, when all is fine, a green banner and the facts
+// at a glance, with the details folded but for what the repo sets. Then what its runs get,
+// each value tagged with its source and filtered by it, the hosts, mounts, the operator's grant
+// and the raw .deckhand.yaml, its bad lines marked. Read from GitHub when it opens and on Read
+// again; changing it is a commit on the default branch.
 import type { ComponentChildren } from "preact";
-import { Fragment } from "preact";
 import { useEffect, useState } from "preact/hooks";
 import { useRepoConfig } from "./api";
 import { ago, plural, type Tone } from "./format";
 import { copyText } from "./logExport";
+import { PolicyConfig, policyTrouble } from "./PolicyConfig";
 import { RepoBadge } from "./RepoBadge";
-import { formatRoute } from "./route";
-import type { Grant, MountRow, Policies, Repo, RepoConfig, SettingRow, Source } from "./types";
+import { type ConfigTab, formatRoute } from "./route";
+import type { Grant, MountRow, Repo, RepoConfig, SettingRow, Source } from "./types";
 import { Button, buttonClass } from "./ui/Button";
 import { Segmented } from "./ui/Choice";
+import { Code, linesOf } from "./ui/Code";
+import { Count } from "./ui/Count";
 import { Alert, Check, ChevronRight, External, Sync, Warning } from "./ui/icons";
-import { toneClass } from "./ui/Status";
+import { StatusBadge, toneClass } from "./ui/Status";
+import tabs from "./ui/Tabs.module.css";
 import styles from "./ConfigPanel.module.css";
 
 // A source's tag and its tone: unknown asks for a look (a grant to fix), unlike an unknown
@@ -107,7 +110,7 @@ function problemsOf(config: RepoConfig): Problem[] {
 
 // The page's parts, for its links and folds. A fine config folds hosts, mounts and the grant
 // into one ("access").
-type Part = "problems" | "runs" | "hosts" | "mounts" | "grant" | "access" | "policies" | "yaml";
+type Part = "problems" | "runs" | "hosts" | "mounts" | "grant" | "access" | "yaml";
 const anchor = (part: Part) => `config-${part}`;
 const lineAnchor = (n: number) => `config-line-${n}`;
 
@@ -118,6 +121,8 @@ function scrollTo(id: string) {
 
 interface Props {
   repo: string;
+  // Its tab, when not Config.
+  tab?: ConfigTab;
   // Its row in the list, if listed yet: the status until the config is read.
   row: Repo | null;
   onRow: (row: Repo) => void;
@@ -125,14 +130,21 @@ interface Props {
   now: number;
 }
 
-export function ConfigPanel({ repo, row, onRow, onBack, now }: Props) {
+// Its tabs: links, so each has its address (route.ts).
+const TABS: { id: ConfigTab | undefined; label: string }[] = [
+  { id: undefined, label: "Config" },
+  { id: "policies", label: "Policies" },
+];
+
+export function ConfigPanel({ repo, tab, row, onRow, onBack, now }: Props) {
   const { config, error, loading, refresh } = useRepoConfig(repo, onRow);
   const status = (config?.repo ?? row)?.status;
   // The folds opened or closed by hand, over each one's default.
   const [opened, setOpened] = useState<Partial<Record<Part, boolean>>>({});
   useEffect(() => setOpened({}), [repo]);
   const toggle = (part: Part) => (open: boolean) => setOpened((o) => ({ ...o, [part]: open }));
-  const repositories = formatRoute({ repo: null, task: null, run: null, page: "settings" });
+  const repositories = formatRoute(ROUTE);
+  const trouble = config ? policyTrouble(config.policies) : null;
   return (
     <div class={styles.panel}>
       <header class={styles.head}>
@@ -153,6 +165,7 @@ export function ConfigPanel({ repo, row, onRow, onBack, now }: Props) {
           <div class={styles.titleRow}>
             <h1>{repo}</h1>
             {status && <RepoBadge status={status} />}
+            {trouble && <StatusBadge tone="err" label={trouble} />}
           </div>
           {config && (
             <span class={styles.read}>
@@ -194,6 +207,24 @@ export function ConfigPanel({ repo, row, onRow, onBack, now }: Props) {
             </a>
           )}
         </span>
+        <nav class={`${tabs.tabs} ${styles.tabs}`} aria-label="Repository settings">
+          {TABS.map((t) => (
+            <a
+              key={t.label}
+              class={tabs.tab}
+              href={formatRoute({ ...ROUTE, config: repo, ...(t.id ? { configTab: t.id } : {}) })}
+              aria-current={t.id === tab ? "page" : undefined}
+            >
+              {t.label}
+              {t.id === "policies" && !!config?.policies.errors.length && (
+                <>
+                  {" "}
+                  <Count n={config.policies.errors.length} class={styles.errCount} />
+                </>
+              )}
+            </a>
+          ))}
+        </nav>
       </header>
       {error && (
         <p class={styles.failed} role="alert">
@@ -201,10 +232,17 @@ export function ConfigPanel({ repo, row, onRow, onBack, now }: Props) {
         </p>
       )}
       {!config && loading && <p class={styles.loading}>Reading it from GitHub…</p>}
-      {config && <Body config={config} opened={opened} toggle={toggle} setOpened={setOpened} />}
+      {config &&
+        (tab === "policies" ? (
+          <PolicyConfig config={config} />
+        ) : (
+          <Body config={config} opened={opened} toggle={toggle} setOpened={setOpened} />
+        ))}
     </div>
   );
 }
+
+const ROUTE = { repo: null, task: null, run: null, page: "settings" } as const;
 
 interface BodyProps {
   config: RepoConfig;
@@ -216,14 +254,14 @@ interface BodyProps {
 function Body({ config, opened, toggle, setOpened }: BodyProps) {
   const problems = problemsOf(config);
   const { settings, hosts, mounts, grant } = config.effective;
-  const policyErrors = config.policies?.errors.length ?? 0;
-  // Nothing to say but that its runs start: the details fold.
-  const fine = !!config.file && !problems.length && !config.warnings.length && !policyErrors;
+  // Nothing to say but that its runs start: the details fold. The policies' errors don't stop
+  // runs: they have their own tab.
+  const fine = !!config.file && !problems.length && !config.warnings.length;
   const fromRepo = settings.filter((s) => s.source !== "operator");
   const repoMounts = mounts.length > 0;
   // A fold's state: by hand, else open for what the repo sets (or always, with problems).
   const defaults: Partial<Record<Part, boolean>> = fine
-    ? { runs: fromRepo.length > 0, access: repoMounts, policies: false, yaml: false }
+    ? { runs: fromRepo.length > 0, access: repoMounts, yaml: false }
     : { yaml: true };
   const isOpen = (part: Part) => opened[part] ?? defaults[part] ?? true;
   // A link to a part (or a line) opens its fold, then shows it.
@@ -237,7 +275,6 @@ function Body({ config, opened, toggle, setOpened }: BodyProps) {
   for (const p of problems) {
     if (p.line !== null) marks.set(p.line, [...(marks.get(p.line) ?? []), p.text]);
   }
-  const policies = config.policies;
   const parts: [Part, string, number?][] = [
     ...(problems.length
       ? [["problems", "Problems", problems.length] as [Part, string, number]]
@@ -246,7 +283,6 @@ function Body({ config, opened, toggle, setOpened }: BodyProps) {
     ["hosts", "Hosts"],
     ...(repoMounts ? [["mounts", "Host mounts"] as [Part, string]] : []),
     ["grant", "The operator's grant"],
-    ...(policies ? [["policies", "Policies"] as [Part, string]] : []),
     ...(config.file ? [["yaml", ".deckhand.yaml"] as [Part, string]] : []),
   ];
   const access = (
@@ -345,26 +381,6 @@ function Body({ config, opened, toggle, setOpened }: BodyProps) {
         ) : (
           access
         )}
-
-        {policies &&
-          (fine ? (
-            <Fold
-              part="policies"
-              title="Policies"
-              meta={policies.files.length ? plural(policies.files.length, "file") : "none"}
-              open={isOpen("policies")}
-              onToggle={toggle("policies")}
-            >
-              <div class={styles.foldBody}>
-                <PolicySection policies={policies} />
-              </div>
-            </Fold>
-          ) : (
-            <section id={anchor("policies")} class={styles.section}>
-              <h2>Policies</h2>
-              <PolicySection policies={policies} />
-            </section>
-          ))}
 
         {config.file && (
           <Yaml
@@ -711,7 +727,7 @@ function Yaml({
 }) {
   // Whether the last Copy worked (null: none yet).
   const [copied, setCopied] = useState<boolean | null>(null);
-  const lines = text.replace(/\n$/, "").split("\n");
+  const lines = linesOf(text);
   const bad = [...marks.values()].flat().length;
   return (
     <Fold
@@ -734,99 +750,8 @@ function Yaml({
         </Button>
       }
     >
-      <pre class={styles.code}>
-        {lines.map((line, i) => {
-          const n = i + 1;
-          const notes = marks.get(n);
-          return (
-            <Fragment key={n}>
-              <span id={lineAnchor(n)} class={`${styles.line} ${notes ? styles.bad : ""}`}>
-                <span class={styles.n}>{n}</span>
-                <span class={styles.src}>{line || " "}</span>
-              </span>
-              {notes?.map((note, k) => (
-                <span key={k} class={styles.annotation}>
-                  {note}
-                </span>
-              ))}
-            </Fragment>
-          );
-        })}
-      </pre>
+      <Code lines={lines} marks={marks} lineId={lineAnchor} />
     </Fold>
-  );
-}
-
-// The policy files that apply, their `deny_*` rules, and the config check's errors: those
-// don't stop runs, they refuse every decision a policy is asked for (fail closed).
-function PolicySection({ policies }: { policies: Policies }) {
-  const { files, errors, warnings } = policies;
-  return (
-    <>
-      {errors.length > 0 && (
-        <div class={styles.problems} role="alert">
-          <h2>
-            <Alert size={18} />
-            Every decision a policy is asked for refuses until these are fixed
-          </h2>
-          <ul>
-            {errors.map((e) => (
-              <li key={e.text}>
-                <span class={styles.problem}>{e.text}</span>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-      {warnings.length > 0 && (
-        <div class={styles.warnings}>
-          <Warning size={16} />
-          <ul>
-            {warnings.map((w) => (
-              <li key={w}>
-                <b>Policy warning</b> · {w}
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-      {files.length === 0 ? (
-        <p class={styles.muted}>
-          None: no <code>.deckhand/policy/*.rego</code> on the default branch, and none in the
-          operator's grants folder. Only the built-in gates decide.
-        </p>
-      ) : (
-        <ul class={`${styles.card} ${styles.rows}`} aria-label="Policy files">
-          {files.map((f) => (
-            <Row
-              key={`${f.source}/${f.name}`}
-              name={
-                f.url ? (
-                  <a href={f.url} target="_blank" rel="noreferrer">
-                    {f.name}
-                  </a>
-                ) : f.active ? (
-                  f.name
-                ) : (
-                  <s>{f.name}</s>
-                )
-              }
-              value={f.rules.length ? f.rules.join(", ") : "no deny_* rule"}
-              note={
-                f.source === "operator"
-                  ? f.active
-                    ? "policy/ in the operator's grants folder"
-                    : "policy/ in the operator's grants folder, replaced by the repo's"
-                  : f.replaces
-                    ? ".deckhand/policy/, replaces the operator's file of this name"
-                    : ".deckhand/policy/"
-              }
-              source={f.source}
-            />
-          ))}
-        </ul>
-      )}
-    </>
   );
 }
 

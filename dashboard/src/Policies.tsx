@@ -91,7 +91,10 @@ export function PolicyTab({ task: t, now }: { task: Task; now: number }) {
             <span class={styles.text}>
               The policy files that apply to {t.repo}, and their errors.
             </span>
-            <a class={styles.link} href={formatRoute({ ...ROUTE, config: t.repo })}>
+            <a
+              class={styles.link}
+              href={formatRoute({ ...ROUTE, config: t.repo, configTab: "policies" })}
+            >
               {t.repo}'s policies →
             </a>
           </Card>

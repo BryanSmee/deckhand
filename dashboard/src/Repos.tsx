@@ -12,7 +12,7 @@ import { ConfigPanel } from "./ConfigPanel";
 import { ago, isLive, plural, uptime, versionUrl } from "./format";
 import { useNow } from "./hooks";
 import { RepoBadge } from "./RepoBadge";
-import { formatRoute } from "./route";
+import { type ConfigTab, formatRoute } from "./route";
 import type { AppLinks, Repo, RepoStatus, ServerInfo, Task } from "./types";
 import { Button, buttonClass } from "./ui/Button";
 import { Segmented } from "./ui/Choice";
@@ -67,6 +67,8 @@ interface Props {
   list: RepoList;
   // The repository whose config is open (null: the list).
   open?: string | null;
+  // Its tab, when not Config.
+  tab?: ConfigTab;
   onOpen?: (repo: string | null) => void;
   // api/state's tasks: an onboarding issue's questions.
   tasks?: Task[];
@@ -103,6 +105,7 @@ function Version({ server, now }: { server: ServerInfo; now: number }) {
 export function Repos({
   list,
   open = null,
+  tab,
   onOpen = () => {},
   tasks = [],
   server = null,
@@ -119,6 +122,7 @@ export function Repos({
       <section aria-label={`${open} configuration`}>
         <ConfigPanel
           repo={open}
+          tab={tab}
           row={repos?.find((r) => r.repo === open) ?? null}
           onRow={list.update}
           onBack={() => onOpen(null)}

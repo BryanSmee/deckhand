@@ -59,6 +59,18 @@
   gap: 8px;
 }
 
+/* Its tabs, at the header's foot: the header's border is theirs. */
+.tabs {
+  flex-basis: 100%;
+  margin: -4px 0 -14px -10px;
+  border-bottom: 0;
+}
+
+.errCount {
+  background: var(--err-bg);
+  color: var(--err);
+}
+
 .failed {
   margin: 16px 24px 0;
   color: var(--err);
@@ -534,46 +546,6 @@
   color: var(--text-3);
 }
 
-/* The file: line numbers, the bad lines marked and their messages under them. */
-.code {
-  margin: 0;
-  padding: 10px 0;
-  font: 400 12.5px/21px var(--mono);
-  overflow-x: auto;
-}
-
-.line {
-  display: grid;
-  grid-template-columns: 44px minmax(0, 1fr);
-  padding-right: 16px;
-  scroll-margin-top: 48px;
-}
-
-.n {
-  padding-right: 14px;
-  color: var(--text-3);
-  text-align: right;
-  user-select: none;
-}
-
-.src {
-  white-space: pre;
-}
-
-.bad {
-  background: var(--err-bg);
-  box-shadow: inset 3px 0 0 var(--err-solid);
-}
-
-.annotation {
-  display: block;
-  padding: 2px 16px 6px 58px;
-  background: var(--err-bg);
-  color: var(--err);
-  font: 12.5px/18px var(--font);
-  white-space: normal;
-}
-
 /* On a wide screen: the page's links and how to change it, beside it. */
 .side {
   display: flex;
@@ -654,6 +626,9 @@
 @media (max-width: 760px) {
   .head {
     padding: 12px 16px;
+  }
+  .tabs {
+    margin-bottom: -12px;
   }
   .layout {
     gap: 16px;

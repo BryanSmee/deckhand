@@ -797,9 +797,11 @@ ran); `deny_review` and `deny_fix` get it with their own `decision`, without `fi
 `checks`. It works without a `review` block. On an issue, a reply says to comment it on the
 pull request.
 
-**The dashboard**: the repository's config panel lists the policy files that apply (the
-operator's and the repository's, read from the default branch when the panel opens), the
-`deny_*` rules each defines, and the config check's errors. A task's page shows its pull
+**The dashboard**: the repository's settings have a Policies tab, next to its config: the
+config check's errors first (each linked to its line), what each decision gets (its rules and
+their files, or refused while the check fails), the policy files that apply (the operator's
+and the repository's, read from the default branch when the page opens: which one replaces
+which, the `deny_*` rules each defines, whether it compiles), and each file's source. A task's page shows its pull
 request's last policy decisions (the rule, whether it denied, its messages, when), the last
 10 of them; a decision is kept only when a policy was asked, so a repository without
 policies shows none. Each lists the built-in gates that passed before the policies were asked

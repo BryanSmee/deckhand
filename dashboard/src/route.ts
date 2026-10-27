@@ -7,6 +7,7 @@
 //   #/org/repo/board                     a repo's board: its work queue, and what waits for what
 //   #/settings/repositories              the repositories the App is installed on
 //   #/settings/repositories/org/repo     with one's config open
+//   #/settings/repositories/org/repo/policies   its Policies tab
 //   #/settings/preferences, #/settings/server   Settings' other tabs
 // Older addresses still parse, and the dashboard rewrites them to these (App.tsx useRoute()):
 // #/all, #/?task=… (All's tasks), #/repositories[/org/repo], #/graph/org/repo (the board),
@@ -17,6 +18,8 @@
 export type Page = "tasks" | "board" | "settings";
 // Settings' tabs besides Repositories (its first, and the one with no `section`).
 export type Section = "preferences" | "server";
+// A repository's settings' tabs besides Config (its first, and the one with no `configTab`).
+export type ConfigTab = "policies";
 
 export interface Route {
   repo: string | null; // null: All
@@ -24,6 +27,7 @@ export interface Route {
   run: string | null; // null: the latest, followed as new runs start
   page?: Page; // instead of the tasks
   config?: string | null; // settings: the repository whose config is open
+  configTab?: ConfigTab; // its tab, when not Config
   section?: Section; // settings: another tab than Repositories
 }
 
@@ -43,8 +47,18 @@ export function parseRoute(hash: string): Route {
   }
   const [path, query = ""] = h.slice(1).split("?", 2);
   // Settings: Repositories (#/settings alone too), Preferences or Server.
-  const repos = /^(?:settings\/repositories|repositories)(?:\/([\w.-]+\/[\w.-]+))?$/.exec(path);
-  if (repos) return { ...tasks(null), page: "settings", ...(repos[1] ? { config: repos[1] } : {}) };
+  const repos =
+    /^(?:settings\/repositories|repositories)(?:\/([\w.-]+\/[\w.-]+)(?:\/(policies))?)?$/.exec(
+      path,
+    );
+  if (repos) {
+    return {
+      ...tasks(null),
+      page: "settings",
+      ...(repos[1] ? { config: repos[1] } : {}),
+      ...(repos[2] ? { configTab: repos[2] as ConfigTab } : {}),
+    };
+  }
   const section = /^settings\/(preferences|server)$/.exec(path);
   if (section) return { ...tasks(null), page: "settings", section: section[1] as Section };
   if (/^settings(?:\/[\w-]+)?$/.test(path)) return { ...tasks(null), page: "settings" };
@@ -64,9 +78,12 @@ export function parseRoute(hash: string): Route {
   return path === "tasks" || task ? { repo: null, ...opened, page: "tasks" } : overview;
 }
 
-export function formatRoute({ repo, task, run, page, config, section }: Route): string {
+export function formatRoute({ repo, task, run, page, config, configTab, section }: Route): string {
   if (page === "settings" && section) return `#/settings/${section}`;
-  if (page === "settings") return `#/settings/repositories${config ? `/${config}` : ""}`;
+  if (page === "settings") {
+    const tab = config && configTab ? `/${configTab}` : "";
+    return `#/settings/repositories${config ? `/${config}` : ""}${tab}`;
+  }
   if (page === "board" && repo) return `#/${repo}/board`;
   if (!repo && page !== "tasks" && !task) return "#/";
   const params = new URLSearchParams();

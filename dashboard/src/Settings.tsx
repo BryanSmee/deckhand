@@ -82,6 +82,7 @@ export function Settings({ route, state, error, repos, narrow, notify, onOpen, r
         <Repos
           list={repos}
           open={route.config ?? null}
+          tab={route.configTab}
           onOpen={onOpen}
           tasks={tasks}
           server={state?.server}

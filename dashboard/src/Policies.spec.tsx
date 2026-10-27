@@ -127,7 +127,7 @@ test("the side cards: the last dry run, and the repository's policies", () => {
   expect(screen.getByText(/Last one: by @octocat .* · 2 denials/)).toBeTruthy();
   expect(screen.getByRole("link", { name: "its reply ↗" }).getAttribute("href")).toBe(dryRun.url);
   expect(screen.getByRole("link", { name: "acme/app's policies →" }).getAttribute("href")).toBe(
-    "#/settings/repositories/acme/app",
+    "#/settings/repositories/acme/app/policies",
   );
   expect(screen.getByText("The last 10 decisions are kept per task, for 90 days.")).toBeTruthy();
 });
