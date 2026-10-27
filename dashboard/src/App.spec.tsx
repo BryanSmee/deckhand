@@ -165,6 +165,26 @@ test("the log streams in: tool calls with their output, then the result", async 
   expect(location.hash).toMatch(/run=acme-app-22-1791984600000/);
 });
 
+test("the log's phases and build steps: the current log shows the steps, not the phases", async () => {
+  render(<Dashboard state={state} error={null} />);
+  const source = FakeSource.last!;
+  const step = { kind: "step", step: 7, stage: "build 2/4", name: "RUN npm ci" } as const;
+  source.emit("entries", [
+    { kind: "phase", phase: "image", at: 1000 },
+    { ...step, status: "running", seconds: null, error: null },
+    { kind: "raw", step: 7, text: "added 412 packages" },
+    { ...step, status: "error", seconds: null, error: "exit code: 1" },
+    { kind: "phase", phase: "setup", at: 2000 },
+    { kind: "meta", text: "Image built" },
+  ] satisfies Entry[]);
+  const log = await screen.findByTestId("log");
+  await within(log).findByText("Image built");
+  expect(within(log).getByText("#7 [build 2/4] RUN npm ci")).toBeTruthy();
+  expect(within(log).getByText("#7 added 412 packages")).toBeTruthy();
+  expect(within(log).getByText("#7 [build 2/4] RUN npm ci · ERROR: exit code: 1")).toBeTruthy();
+  expect(log.textContent).not.toMatch(/image|setup/);
+});
+
 test("signed out of reach: the error instead of the counts", () => {
   render(<Dashboard state={null} error="502" />);
   expect(screen.getByText("Can't reach the listener (502)")).toBeTruthy();

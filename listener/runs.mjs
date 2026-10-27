@@ -25,11 +25,12 @@ import { CONFIG_FILE } from "./repo-config.mjs";
 import { postReview } from "./reviews.mjs";
 import {
   addRun,
-  lastResult,
+  enterPhase,
   minutes,
   newRecord,
   openLog,
   outcome,
+  phaseOf,
   questionsOf,
   saveSummary,
   summaryOf,
@@ -152,6 +153,7 @@ export function createRuns(ctx) {
       branches: [],
       shots: null,
       lines: { out: 0, err: 0 }, // of its output read so far, so a restart skips them
+      logPhase: null, // the part of the run its log is in (runlog.mjs PHASES, enterPhase())
       result: null, // its last result, with the duration of all
       later: {}, // "/model", "/effort", "/speed"… that came too late for this run
       unanswered: [], // delivered since the agent's last result
@@ -176,6 +178,7 @@ export function createRuns(ctx) {
       await ctx.label(task.repo, task.number, false);
     }
     const note = writeHeader(task, run);
+    enterPhase(task.live, "setup");
     validateRun(agentOf(task), task, run, note);
     const parts = await prepareRun(task, items, run, note);
     if (ctx.stopping) return false;
@@ -343,12 +346,17 @@ export function createRuns(ctx) {
     const live = task.live;
     if (ctx.stopping) return; // left for the next listener
     const line = hidden(live, raw);
+    const events = agentOf(task).normalize(line);
+    // Before the line that starts it, if that line is kept (keep()); saved, so a listener that
+    // restarts doesn't write it again.
+    const phase = fits(live, line) ? phaseOf(live.logPhase, events) : null;
+    if (phase && enterPhase(live, phase)) ctx.saveLive(task);
     const kept = keep(task, line);
     live.lines.out++;
     if (!kept) return;
     // Still at work after its answer (a background task's turn): its stop waits.
     if (live.answered) linger(task);
-    const event = lastResult([line], agentOf(task));
+    const event = events.findLast((e) => e.type === "result");
     if (!event) return;
     // One result per turn: a comment answered after the first adds a turn.
     live.result = { ...event, durationMs: (live.result?.durationMs ?? 0) + event.durationMs };
@@ -359,6 +367,7 @@ export function createRuns(ctx) {
     // Nothing more for it: it should exit now, with this as its answer.
     if (!live.open && !live.cancelled && !live.finishing) {
       live.answered = true;
+      enterPhase(live, "wrap-up"); // saved below
       linger(task);
     }
     ctx.saveLive(task);
@@ -370,13 +379,18 @@ export function createRuns(ctx) {
   function keep(task, line) {
     const live = task.live;
     if (live.overflow) return false;
-    const max = config.runLogMax;
-    if (max && live.logFile.size + Buffer.byteLength(line) + 1 > max) {
-      overflow(task, max);
+    if (!fits(live, line)) {
+      overflow(task, config.runLogMax);
       return false;
     }
     live.logFile.write(line + "\n");
     return true;
+  }
+
+  // Whether `line` still goes in the run's log, under RUN_LOG_MAX_MB.
+  function fits(live, line) {
+    const max = config.runLogMax;
+    return !live.overflow && !(max && live.logFile.size + Buffer.byteLength(line) + 1 > max);
   }
 
   // Its sandbox is stopped, and finish() ends the run as failed: output without end (a

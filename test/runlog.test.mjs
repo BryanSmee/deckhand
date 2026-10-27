@@ -5,13 +5,16 @@ import { join } from "node:path";
 import { test } from "node:test";
 import {
   clip,
+  enterPhase,
   format,
   lastResult,
   loadRuns,
   minutes,
   openLog,
   outcome,
+  phaseOf,
   publicRun,
+  reader,
   saveSummary,
   stream,
   summaryOf,
@@ -502,4 +505,214 @@ test("format: a line that isn't JSON is clipped, an agent's event cut at MAX_LIN
   const [entry] = format(cut);
   assert.equal(entry.kind, "raw");
   assert.equal(entry.text, `${cut.slice(0, 4000)}… (1024 KB in all)`);
+});
+
+const fixture = (name) => readFileSync(new URL(`fixtures/${name}`, import.meta.url), "utf8");
+const phase = (name, at) => line({ type: "listener", event: "phase", phase: name, at });
+
+test("enterPhase: a phase line in the log at each change only", () => {
+  const written = [];
+  const live = { logPhase: null, logFile: { write: (text) => written.push(JSON.parse(text)) } };
+  assert.equal(enterPhase(live, "setup"), true);
+  assert.equal(enterPhase(live, "setup"), false);
+  assert.equal(enterPhase(live, "image"), true);
+  assert.throws(() => enterPhase(live, "building"), /no such phase: building/);
+  assert.deepEqual(
+    written.map(({ type, event, phase }) => [type, event, phase]),
+    [
+      ["listener", "phase", "setup"],
+      ["listener", "phase", "image"],
+    ],
+  );
+  assert.equal(typeof written[0].at, "number");
+  assert.equal(live.logPhase, "image");
+});
+
+test("phaseOf: the agent's first event works, pushes and pull request commands push", () => {
+  const tool = (detail) => ({ type: "tool", name: "Bash", detail });
+  assert.equal(phaseOf("setup", []), null);
+  assert.equal(phaseOf("setup", [{ type: "started" }]), "work");
+  // A run picked up from a listener that didn't keep phases.
+  assert.equal(phaseOf(undefined, [{ type: "text", text: "Hi" }]), "work");
+  assert.equal(phaseOf("work", [{ type: "text", text: "Hi" }]), null);
+  assert.equal(phaseOf("work", [tool("node --test")]), null);
+  assert.equal(
+    phaseOf("work", [tool("git add -A && git commit -m x && git push -u origin b")]),
+    "push",
+  );
+  assert.equal(phaseOf("work", [tool("gh pr edit 3 --body-file b.md")]), "push");
+  assert.equal(phaseOf("setup", [tool("gh pr ready")]), "push");
+  // Its output, its messages and its pull request commands stay in the push.
+  assert.equal(phaseOf("push", [{ type: "toolOutput", text: "ok" }]), null);
+  assert.equal(phaseOf("push", [{ type: "text", text: "Pushed." }]), null);
+  assert.equal(phaseOf("push", [tool("gh pr ready")]), null);
+  assert.equal(phaseOf("push", [tool("git status")]), "work");
+  // The last tool call of a line decides.
+  assert.equal(phaseOf("work", [tool("git push"), tool("ls")]), null);
+  // After the final answer, nothing moves it.
+  assert.equal(phaseOf("wrap-up", [tool("git push")]), null);
+  assert.equal(phaseOf("work", [tool("cd /workspace && git -C sub push origin b")]), "push");
+  assert.equal(phaseOf("work", [tool("npm test\ngh pr create --draft")]), "push");
+  assert.equal(phaseOf("work", [{ type: "tool", name: "command", detail: "git push" }]), "push");
+  // Not a push: words that only look like one, a command that only quotes it, other tools.
+  assert.equal(phaseOf("work", [tool("grep -n 'git pushes' notes.md")]), null);
+  assert.equal(phaseOf("work", [tool('grep -rn "git push" listener/')]), null);
+  assert.equal(phaseOf("work", [tool("echo gh pr ready")]), null);
+  assert.equal(phaseOf("work", [{ type: "tool", name: "Grep", detail: "git push" }]), null);
+  const agent = { type: "tool", name: "Agent", detail: "Run git push when done" };
+  assert.equal(phaseOf("work", [agent]), null);
+  assert.equal(phaseOf("push", [agent]), "work");
+});
+
+test("reader: a log's phases in order, with when they started", () => {
+  const read = reader();
+  const lines = [
+    line({ type: "listener", kind: "issue", message: "Go" }),
+    phase("setup", 1000),
+    "Cloning into '/workspace'...",
+    phase("work", 2000),
+    line({ type: "result", result: "Done.", duration_ms: 60000 }),
+    phase("wrap-up", 3000),
+  ];
+  const entries = lines.flatMap(read);
+  assert.deepEqual(
+    entries.filter((e) => e.kind === "phase"),
+    [
+      { kind: "phase", phase: "setup", at: 1000 },
+      { kind: "phase", phase: "work", at: 2000 },
+      { kind: "phase", phase: "wrap-up", at: 3000 },
+    ],
+  );
+  assert.deepEqual(entries[2], { kind: "raw", text: "Cloning into '/workspace'..." });
+});
+
+test("reader: a log from before phases reads as format() did", () => {
+  const lines = fixture("claude-run.log").split("\n");
+  const before = JSON.parse(fixture("claude-run.entries.json"));
+  assert.deepEqual(lines.flatMap(reader()), before);
+  assert.ok(!before.some((e) => e.kind === "phase"));
+});
+
+// A recorded `docker build --progress plain` (images.mjs): steps from the builder's own,
+// cached ones, one that ran with its output, one that failed, then BuildKit's error summary.
+test("reader: an image build's output comes as its steps", () => {
+  const read = reader();
+  const lines = [
+    phase("image", 1000),
+    ...fixture("docker-build-failed.txt").split("\n"),
+    phase("setup", 2000),
+  ];
+  const entries = lines.flatMap(read);
+  const steps = new Map();
+  for (const e of entries.filter((e) => e.kind === "step")) steps.set(e.step, e);
+  assert.deepEqual([...steps.keys()], [1, 2, 3, 4, 5, 6, 7, 8]);
+  assert.deepEqual(steps.get(1), {
+    kind: "step",
+    step: 1,
+    stage: "internal",
+    name: "load build definition from Dockerfile",
+    status: "done",
+    seconds: 0,
+    error: null,
+  });
+  assert.deepEqual(
+    [5, 6].map((n) => [steps.get(n).stage, steps.get(n).name, steps.get(n).status]),
+    [
+      ["base 2/2", "RUN echo cached step", "cached"],
+      ["stage-1 1/4", "WORKDIR /app", "cached"],
+    ],
+  );
+  assert.deepEqual(steps.get(7), {
+    kind: "step",
+    step: 7,
+    stage: "stage-1 2/4",
+    name: 'RUN for i in 1 2 3; do echo "line $i"; sleep 1; done',
+    status: "done",
+    seconds: 3.4,
+    error: null,
+  });
+  assert.deepEqual(steps.get(8), {
+    kind: "step",
+    step: 8,
+    stage: "stage-1 3/4",
+    name: 'RUN echo "about to fail" && exit 3',
+    status: "error",
+    seconds: null,
+    error:
+      'process "/bin/sh -c echo \\"about to fail\\" && exit 3" did not complete successfully: exit code: 3',
+  });
+  // Each step starts running, then says how it ended.
+  assert.deepEqual(
+    entries.filter((e) => e.step === 7 && e.kind === "step").map((e) => e.status),
+    ["running", "done"],
+  );
+  // Their output, without BuildKit's prefix, under their number.
+  const output = (n) => entries.filter((e) => e.kind === "raw" && e.step === n).map((e) => e.text);
+  assert.deepEqual(output(7), ["line 1", "line 2", "line 3"]);
+  assert.deepEqual(output(8), ["about to fail"]);
+  assert.deepEqual(output(1), ["transferring dockerfile: 221B done"]);
+  // Which builder, the error's summary and the empty lines: not a step's.
+  assert.deepEqual(entries[1], {
+    kind: "raw",
+    text: '#0 building with "default" instance using docker driver',
+  });
+  const rest = entries.filter((e) => e.kind === "raw" && e.step === undefined);
+  assert.ok(rest.some((e) => e.text === "Dockerfile:7"));
+  assert.match(rest.at(-1).text, /^ERROR: failed to build: failed to solve/);
+  assert.deepEqual(entries.at(-1), { kind: "phase", phase: "setup", at: 2000 });
+});
+
+test("reader: only the image phase's lines are build steps; a step named again adds nothing", () => {
+  const read = reader();
+  assert.deepEqual(read("#3 [internal] load .dockerignore"), [
+    { kind: "raw", text: "#3 [internal] load .dockerignore" },
+  ]);
+  read(phase("image", 1));
+  assert.equal(read("#3 [internal] load .dockerignore")[0].kind, "step");
+  assert.deepEqual(read("#3 [internal] load .dockerignore"), []);
+  assert.deepEqual(read("#3 CANCELED")[0].status, "cancelled");
+  read(phase("setup", 2));
+  assert.deepEqual(read("#4 DONE 1.0s"), [{ kind: "raw", text: "#4 DONE 1.0s" }]);
+  // A second build (a run that falls back, say) numbers its steps afresh.
+  read(phase("image", 3));
+  assert.equal(read("#3 [b 1/1] RUN true")[0].name, "RUN true");
+  // A step's name is its whole command: clipped like any raw line.
+  const long = read(`#5 [b 1/1] RUN ${"x".repeat(5000)}`)[0].name;
+  assert.match(long, /^RUN x+… \(5 KB in all\)$/);
+  assert.ok(long.length < 4100);
+});
+
+test("stream: a log's entries with their phases and build steps", { timeout: 5000 }, async (t) => {
+  const logPath = join(tempDir(t, "deckhand-stream-"), "run.log");
+  writeFileSync(
+    logPath,
+    [
+      phase("image", 1),
+      "#1 [a 1/1] RUN make",
+      "#1 0.1 ok",
+      "#1 DONE 0.5s",
+      phase("work", 2),
+      "",
+    ].join("\n"),
+  );
+  const req = new EventEmitter();
+  let ended;
+  const done = new Promise((resolve) => (ended = resolve));
+  const written = [];
+  const res = { writeHead() {}, write: (s) => written.push(s), end: ended };
+  stream(req, res, { status: "ok", logPath, agent: "claude" }, () => true, 20);
+  await done;
+  const entries = written
+    .filter((w) => w.startsWith("event: entries"))
+    .flatMap((w) => JSON.parse(w.split("data: ")[1]));
+  assert.deepEqual(
+    entries.map((e) => [e.kind, e.phase ?? e.status ?? e.text]),
+    [
+      ["phase", "image"],
+      ["step", "running"],
+      ["raw", "ok"],
+      ["step", "done"],
+      ["phase", "work"],
+    ],
+  );
 });

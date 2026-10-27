@@ -385,3 +385,46 @@ test("an error whose reply GitHub refuses: logged", async (t) => {
   assert.ok(logs.some((l) => /org\/repo#12: ReplyError: GitHub POST .*comments: 404/.test(l)));
   assert.deepEqual(settled, ["error"]);
 });
+
+test("the agent's output moves its log through work, push and wrap-up", async (t) => {
+  const { runner, following, logPath, task } = setup(t);
+  task.live.logPhase = "setup";
+  const bash = (command) =>
+    JSON.stringify({
+      type: "assistant",
+      message: { content: [{ type: "tool_use", name: "Bash", input: { command } }] },
+    });
+  runner.err("Setup: npm ci");
+  runner.out(JSON.stringify({ type: "system", subtype: "init", model: "opus" }));
+  runner.out(bash("node --test"));
+  runner.out(bash("git push -u origin issue-12-x"));
+  runner.out(bash("gh pr ready"));
+  runner.out(bash("git status"));
+  runner.out(result("Done."));
+  runner.out(bash("git push"));
+  await following;
+  const lines = readFileSync(logPath, "utf8").trim().split("\n");
+  const at = (phase) => lines.findIndex((l) => l.includes(`"phase":"${phase}"`));
+  const phases = lines.filter((l) => l.includes('"event":"phase"')).map((l) => JSON.parse(l));
+  assert.deepEqual(
+    phases.map((p) => p.phase),
+    ["work", "push", "work", "wrap-up"],
+  );
+  assert.ok(phases.every((p) => typeof p.at === "number"));
+  // Each before the line that starts it; the wrap-up after the answer, for good.
+  assert.match(lines[at("work") - 1], /Setup: npm ci/);
+  assert.match(lines[at("work") + 1], /"init"/);
+  assert.match(lines[at("push") + 1], /git push -u/);
+  assert.match(lines[at("wrap-up") - 1], /"result"/);
+  assert.match(lines[at("wrap-up") + 1], /git push"/);
+  assert.equal(task.live, null);
+});
+
+test("an agent's line past RUN_LOG_MAX_MB starts no phase: the line isn't kept", async (t) => {
+  const { runner, following, logPath, task } = setup(t, { config: { runLogMax: 400 } });
+  task.live.logPhase = "setup";
+  runner.err("x".repeat(100));
+  runner.out(JSON.stringify({ type: "system", subtype: "init", model: "x".repeat(400) }));
+  await following;
+  assert.doesNotMatch(readFileSync(logPath, "utf8"), /"event":"phase"/);
+});

@@ -65,6 +65,46 @@ export function writeEvent(file, event, fields = {}) {
   file.write(JSON.stringify({ type: "listener", event, ...at, ...fields }) + "\n");
 }
 
+// The parts of a run, each its own section in the dashboard's log: getting the sandbox ready
+// (agent install, clone, the repo's setup), building the repo's image (between two of setup's
+// parts: before the sandbox starts), the agent's work, its pushes and pull request changes,
+// and what comes after its answer. The listener writes a `phase` line at each change
+// (enterPhase()), so a phase may come back (setup after the image, work after a push). Logs
+// from before phases have none: all of them is work.
+const PHASES = new Set(["setup", "image", "work", "push", "wrap-up"]);
+
+// Moves a live run (runs.mjs) to `phase`: a `phase` line in its log, only when it changes.
+export function enterPhase(live, phase) {
+  if (!PHASES.has(phase)) throw new Error(`no such phase: ${phase}`);
+  if (live.logPhase === phase) return false;
+  live.logPhase = phase;
+  writeEvent(live.logFile, "phase", { phase });
+  return true;
+}
+
+// The agents' shell tools (Claude Code's Bash, Codex's and Antigravity's command): only their
+// commands push. Other tools' details (a Grep pattern, a subagent's prompt) may name a push.
+const SHELLS = new Set(["Bash", "command"]);
+
+// A push or a pull request change, as a command of its own: at the start, or after `;`, `&&`,
+// `||`, `|`, `(` or a new line, not quoted in another one (`grep "git push"`).
+const PUSHING =
+  /(?:^|[;&|(\n])\s*(?:git(?:\s+-[Cc]\s+\S+)*\s+push|gh\s+pr\s+(?:create|edit|ready|merge))\b/;
+
+// The phase a line of the agent's events (its normalize()) moves a live run to, before the
+// line is written, or null for none: its first event starts its work, a push or pull request
+// command pushes, any other tool call goes back to work. Its final answer wraps up
+// (runs.mjs), for good: what it writes after that is still the wrap-up's.
+export function phaseOf(current, events) {
+  if (current === "wrap-up" || !events.length) return null;
+  let phase = current === "work" || current === "push" ? current : "work";
+  for (const e of events) {
+    if (e.type !== "tool") continue;
+    phase = SHELLS.has(e.name) && PUSHING.test(e.detail ?? "") ? "push" : "work";
+  }
+  return phase !== current ? phase : null;
+}
+
 // A duration in minutes, to a tenth: what the dashboard, replies and digests show.
 export const minutes = (ms) => Math.round(ms / 6000) / 10;
 
@@ -301,6 +341,7 @@ const REASONS = {
 
 // The listener's own lines: a run's first line (what it is), notes and delivered comments.
 function listenerEntries(e, agent) {
+  if (e.event === "phase") return [{ kind: "phase", phase: e.phase, at: e.at }];
   if (e.event === "note") return [{ kind: "meta", text: e.message }];
   if (e.event === "cancelled") {
     const time = new Date(e.at).toISOString().slice(11, 19);
@@ -377,6 +418,69 @@ export function format(line, agent = agentFor()) {
   return agent.normalize(line).flatMap((event) => agentEntry(event, agent) ?? []);
 }
 
+// BuildKit's plain progress (`docker build --progress plain`, images.mjs): `#<n> <text>`, the
+// step's name on its first line ("[stage 2/5] RUN npm ci", or "exporting to image"), then
+// its output (after the seconds since it started) and how it ended. #0 says which builder.
+const BUILD_LINE = /^#([1-9]\d*) (.*)$/;
+const STAGE = /^\[([^\]]+)\] (.*)$/;
+const TIMED = /^\d+\.\d+ (.*)$/;
+const ENDED = /^(?:(CACHED)|DONE (\d+(?:\.\d+)?)s|ERROR:? ?(.*)|(CANCELED))$/;
+
+// One line of an image build → its step's entries: a `step` entry when the step starts or
+// its status changes (the latest one for a number says it), a `raw` one with its number for
+// its output. Null for lines of no step (the error summary at the end): format()'s.
+function buildEntries(line, steps) {
+  const m = BUILD_LINE.exec(line.trimEnd());
+  if (!m) return null;
+  const n = Number(m[1]);
+  const text = m[2];
+  const known = steps.get(n);
+  if (!known) {
+    const named = STAGE.exec(text);
+    const step = {
+      kind: "step",
+      step: n,
+      stage: named?.[1] ?? null,
+      // The whole command, heredocs included: BuildKit prints it on one line.
+      name: clipRaw(named?.[2] ?? text),
+      status: "running",
+      seconds: null,
+      error: null,
+    };
+    steps.set(n, { header: text, step });
+    return [step];
+  }
+  // Its name again, when BuildKit comes back to it between other steps' lines.
+  if (text === known.header) return [];
+  const ended = ENDED.exec(text);
+  if (!ended) return [{ kind: "raw", step: n, text: clipRaw(TIMED.exec(text)?.[1] ?? text) }];
+  const [, cached, seconds, error, cancelled] = ended;
+  known.step = {
+    ...known.step,
+    status: cached ? "cached" : seconds ? "done" : cancelled ? "cancelled" : "error",
+    seconds: seconds ? Number(seconds) : null,
+    error: error === undefined ? null : clipRaw(error || "failed"),
+  };
+  return [known.step];
+}
+
+// format() for a stream of a log's lines, in order: it follows the phase they are in, and
+// the image build's lines come as its steps (buildEntries()).
+export function reader(agent = agentFor()) {
+  let phase = null;
+  let steps = new Map();
+  return (line) => {
+    const entries = format(line, agent);
+    for (const e of entries) {
+      if (e.kind !== "phase") continue;
+      phase = e.phase;
+      if (phase === "image") steps = new Map();
+    }
+    if (phase !== "image" || entries.length !== 1 || entries[0].kind !== "raw") return entries;
+    return buildEntries(line, steps) ?? entries;
+  };
+}
+
 // Server-sent events: the log so far, then new lines as they are written, until the run ends,
 // or until `allowed()` turns false (a sign-out, a repo's `users` narrowed): checked each second
 // (`every`, in ms: shorter in the tests). A run that hasn't written a line yet has no file
@@ -388,19 +492,19 @@ export function stream(req, res, run, allowed = () => true, every = 1000, onErro
     "cache-control": "no-cache",
     "x-accel-buffering": "no",
   });
-  const agent = agentFor(run.agent);
+  const read = reader(agentFor(run.agent));
   let offset = 0;
   let rest = "";
   const send = (event, data) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
   const pump = () => {
     try {
-      read();
+      next();
     } catch (error) {
       onError(error);
       stop();
     }
   };
-  const read = () => {
+  const next = () => {
     if (!allowed()) return stop();
     const size = existsSync(run.logPath) ? statSync(run.logPath).size : 0;
     if (size > offset) {
@@ -411,11 +515,11 @@ export function stream(req, res, run, allowed = () => true, every = 1000, onErro
       offset = size;
       const lines = (rest + buffer.toString("utf8")).split("\n");
       rest = lines.pop();
-      const entries = lines.flatMap((l) => format(l, agent));
+      const entries = lines.flatMap(read);
       if (entries.length) send("entries", entries);
     }
     if (run.status !== "running") {
-      if (rest) send("entries", format(rest, agent));
+      if (rest) send("entries", read(rest));
       send("end", publicRun(run));
       return stop();
     }
