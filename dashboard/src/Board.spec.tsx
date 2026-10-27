@@ -128,10 +128,21 @@ test("a drag over the graph says what letting go does, and the card being dragge
   // jsdom's drags have no place: in the open.
   fireEvent.dragOver(area, { dataTransfer });
   expect(screen.getByText("Start #31")).toBeTruthy();
+  // The browser's image of the row is hidden: the graph draws the card as a node instead.
+  expect((dataTransfer.image as HTMLImageElement | null)?.src).toMatch(/^data:image\/gif/);
+  const ghost = () => area.querySelector<HTMLElement>('[class*="ghost"]');
+  expect(ghost()?.textContent).toBe("#31BacklogRate-limit the API");
+  expect(ghost()?.className).toMatch(/moving/);
+  expect(ghost()?.getAttribute("aria-hidden")).toBe("true");
   fireEvent.dragLeave(area, { dataTransfer });
   expect(screen.queryByText("Start #31")).toBeNull();
+  expect(ghost()).toBeNull();
+  // Escape ends the drag where it is: the ghost goes too.
+  fireEvent.dragOver(area, { dataTransfer });
+  expect(ghost()).not.toBeNull();
   fireEvent.dragEnd(card, { dataTransfer });
   expect(card.className).not.toMatch(/ghosted/);
+  expect(ghost()).toBeNull();
 
   // A waiting node dragged by the pointer: onto the node at the drawing's corner (jsdom puts the
   // drawing at 0, 0), then in the open.

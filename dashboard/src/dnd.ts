@@ -9,17 +9,36 @@ export const BRAINSTORM_TYPE = "application/x-deckhand-brainstorm";
 // A link dragged from a page, GitHub's included.
 export const LINK_TYPES = ["text/uri-list", "text/plain"];
 
+// What a card's ghost on the graph shows besides its number (GraphDrawing.tsx): its state
+// ("Backlog") and title.
+export interface Look {
+  status: string;
+  title: string;
+}
+
 // The card being dragged, which a drag over can't read from the data: the board says what a
-// drop would do with it ("Queue #31 after #19"). Null: none of ours (a link, or nothing).
-let carried: { type: string; number: number } | null = null;
+// drop would do with it ("Queue #31 after #19") and draws its ghost. Null: none of ours (a
+// link, or nothing).
+export type Carried = { type: string; number: number } & Look;
+let carried: Carried | null = null;
 export const carriedCard = () => carried;
 
+// A transparent pixel, for the browser's drag image: the board draws the card's ghost itself.
+// Made ahead, as an image not yet loaded doesn't show.
+const blank =
+  typeof Image === "undefined"
+    ? null
+    : Object.assign(new Image(), {
+        src: "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7",
+      });
+
 // A card's drag: `type` and its issue's number, and its link for anywhere else.
-export const dragOf = (type: string, number: number, url: string) => (e: DragEvent) => {
+export const dragOf = (type: string, number: number, url: string, look: Look) => (e: DragEvent) => {
   e.dataTransfer?.setData(type, String(number));
   e.dataTransfer?.setData("text/uri-list", url);
   if (e.dataTransfer) e.dataTransfer.effectAllowed = "copyMove";
-  carried = { type, number };
+  if (blank) e.dataTransfer?.setDragImage?.(blank, 0, 0);
+  carried = { type, number, ...look };
 };
 
 // Its end, dropped or not.

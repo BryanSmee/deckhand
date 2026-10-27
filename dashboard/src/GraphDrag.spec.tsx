@@ -63,6 +63,11 @@ test("a card waiting for answers carries its issue; dropped, it opens the questi
   const { list, area } = await show();
   const card = cardOf(list, 138);
   expect(card.getAttribute("draggable")).toBe("true");
+  // Over the graph, it shows as a node: its number, "Answer" and its title.
+  fireEvent.dragStart(card, { dataTransfer: transfer() });
+  fireEvent.dragOver(area, { dataTransfer: transfer({ [ISSUE_TYPE]: "138" }) });
+  expect(area.querySelector('[class*="ghost"]')?.textContent).toMatch(/^#138Answer/);
+  fireEvent.dragEnd(card);
   const data = dragCard(card, area);
   expect(data.data).toEqual({
     [ISSUE_TYPE]: "138",
@@ -93,6 +98,8 @@ test("dropped text that isn't an issue's link says to drag its card", async () =
   const { area } = await show();
   const dataTransfer = transfer({ "text/plain": "Graph: drag issues" });
   fireEvent.dragOver(area, { dataTransfer });
+  // Nothing known about it before the drop: no ghost, the browser's own image.
+  expect(area.querySelector('[class*="ghost"]')).toBeNull();
   fireEvent.drop(area, { dataTransfer });
   expect(screen.getByRole("alert").textContent).toMatch(/drag an issue's card/);
   expect(api.posted).toEqual([]);

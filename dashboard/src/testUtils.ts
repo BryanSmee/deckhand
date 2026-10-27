@@ -95,6 +95,11 @@ export function transfer(data: Record<string, string> = {}) {
     getData: (type: string) => data[type] ?? "",
     effectAllowed: "none",
     dropEffect: "none",
+    // The drag image set, if one was: a card's hides the browser's.
+    image: null as Element | null,
+    setDragImage(image: Element) {
+      this.image = image;
+    },
   };
 }
 

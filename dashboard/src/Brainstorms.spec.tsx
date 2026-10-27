@@ -146,7 +146,13 @@ test("a brainstorm dropped on the graph starts work, whatever Start in says", as
   fireEvent.change(screen.getByRole("combobox", { name: /Start in/ }), {
     target: { value: "brainstorm" },
   });
-  const data = drag(cardOf(cards(), "Brainstorm 150"), area);
+  // Over the graph, a node: its number, its state and its title.
+  const card = cardOf(cards(), "Brainstorm 150");
+  fireEvent.dragStart(card, { dataTransfer: transfer() });
+  fireEvent.dragOver(area, { dataTransfer: transfer({ "application/x-deckhand-brainstorm": "" }) });
+  expect(area.querySelector('[class*="ghost"]')?.textContent).toMatch(/^#150.+Brainstorm 150$/);
+  fireEvent.dragEnd(card);
+  const data = drag(card, area);
   expect(data.data["application/x-deckhand-brainstorm"]).toBe("150");
   await waitFor(() => expect(api.bodies()).toEqual([{ action: "start", number: 150 }]));
   // On its way to the graph: Starting… there, gone from the tab.

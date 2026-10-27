@@ -174,14 +174,23 @@
   touch-action: none;
 }
 
-/* Being dragged: a ghost of the card, tilted, over the others. */
+/* Being dragged: a ghost of the card, tilted, over the others. A work queue card's ghost
+   (.ghost) too, which lets drops through to the graph under it. */
 .moving {
   z-index: 2;
   border-color: var(--focus);
   box-shadow: var(--shadow);
   cursor: grabbing;
-  rotate: -2deg;
+  rotate: var(--drag-tilt);
   transition: none;
+}
+
+.ghost {
+  pointer-events: none;
+}
+
+.ghost .state {
+  color: var(--text-3);
 }
 
 /* The issue a drop would queue after. */

@@ -3,6 +3,7 @@
 // and while something is dragged, what letting it go does. Or why there is nothing to draw.
 import type { JSX, RefObject } from "preact";
 import type { Target } from "./Chooser";
+import type { Look } from "./dnd";
 import { kindName, numberOf, plural, shortRepo, shorten } from "./format";
 import type { NodeDrag } from "./graphHooks";
 import type { Layout } from "./graphLayout";
@@ -189,6 +190,17 @@ export interface DropLabel {
   y: number;
 }
 
+// A work queue card dragged over the graph, drawn as a node at the pointer (drawing units):
+// the browser's own drag image is hidden (dnd.ts).
+export interface Ghost extends Look {
+  number: number;
+  x: number;
+  y: number;
+}
+
+// Where the pointer holds the ghost, from its top left corner: by its number.
+export const GHOST_GRIP = { x: 24, y: 18 };
+
 interface DrawingProps {
   // api/state not read yet.
   loading: boolean;
@@ -206,6 +218,7 @@ interface DrawingProps {
   // The node a drop would queue after, and what the drop does.
   target: string | null;
   label: DropLabel | null;
+  ghost: Ghost | null;
   // Which nodes move, and the drag of one (graphHooks.ts useNodeDrag()).
   movable: (n: GraphNode) => boolean;
   drag: {
@@ -231,6 +244,7 @@ export function GraphDrawing({
   github,
   target,
   label,
+  ghost,
   movable,
   drag,
   onAsk,
@@ -318,6 +332,23 @@ export function GraphDrawing({
             />
           );
         })}
+        {ghost && (
+          <div
+            class={`${styles.node} ${styles.moving} ${styles.ghost}`}
+            style={{
+              transform: `translate(${PAD + ghost.x - GHOST_GRIP.x}px, ${PAD + ghost.y - GHOST_GRIP.y}px)`,
+              width: `${shape.w}px`,
+              height: `${shape.h}px`,
+            }}
+            aria-hidden="true"
+          >
+            <span class={styles.top}>
+              <span class={styles.ref}>#{ghost.number}</span>
+              <span class={styles.state}>{ghost.status}</span>
+            </span>
+            <span class={styles.title}>{ghost.title}</span>
+          </div>
+        )}
         {label && (
           <span
             class={styles.dropLabel}
