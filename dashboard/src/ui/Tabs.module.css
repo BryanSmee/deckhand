@@ -20,6 +20,7 @@
   font-size: 13px;
   font-weight: 500;
   line-height: 1;
+  text-decoration: none;
   cursor: pointer;
   white-space: nowrap;
   box-shadow: inset 0 -2px 0 transparent;
@@ -38,7 +39,8 @@
   border-radius: var(--radius-sm);
 }
 
-.tab[aria-selected="true"] {
+.tab[aria-selected="true"],
+.tab[aria-current="page"] {
   color: var(--text);
   box-shadow: inset 0 -2px 0 var(--text);
 }

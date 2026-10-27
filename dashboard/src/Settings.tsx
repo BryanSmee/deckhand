@@ -1,0 +1,84 @@
+// Settings: its tabs (Repositories, Preferences, Server) and the one open. The tabs are links,
+// so each has its address (route.ts); on a wide screen they sit in the page header, on a
+// phone atop the page. Preferences and Server say they're coming until their pages land.
+import type { RepoList } from "./api";
+import { needingYou, Repos } from "./Repos";
+import { formatRoute, type Route, type Section } from "./route";
+import type { State } from "./types";
+import { Count } from "./ui/Count";
+import tabs from "./ui/Tabs.module.css";
+import styles from "./Settings.module.css";
+
+const TABS: { id: Section | null; label: string }[] = [
+  { id: null, label: "Repositories" },
+  { id: "preferences", label: "Preferences" },
+  { id: "server", label: "Server" },
+];
+
+// Repositories' count: those that need you (Repos.tsx needsYou()).
+export function SettingsTabs({
+  route,
+  count,
+  class: extra,
+}: {
+  route: Route;
+  count: number;
+  class?: string;
+}) {
+  const current = route.section ?? null;
+  return (
+    <nav class={[tabs.tabs, extra].filter(Boolean).join(" ")} aria-label="Settings">
+      {TABS.map((t) => (
+        <a
+          key={t.label}
+          class={tabs.tab}
+          href={formatRoute({
+            repo: null,
+            task: null,
+            run: null,
+            page: "settings",
+            ...(t.id ? { section: t.id } : {}),
+          })}
+          aria-current={t.id === current ? "page" : undefined}
+        >
+          {t.label}
+          {!t.id && count > 0 && <Count n={count} hot />}
+        </a>
+      ))}
+    </nav>
+  );
+}
+
+interface Props {
+  route: Route;
+  state: State | null;
+  repos: RepoList;
+  // A phone: the tabs are the page's own.
+  narrow: boolean;
+  onOpen: (repo: string | null) => void;
+}
+
+export function Settings({ route, state, repos, narrow, onOpen }: Props) {
+  const tasks = state?.tasks ?? [];
+  return (
+    <div class={styles.settings}>
+      {narrow && (
+        <SettingsTabs route={route} count={needingYou(repos.repos, tasks)} class={styles.tabs} />
+      )}
+      {route.section ? (
+        <p class={styles.coming}>
+          The {TABS.find((t) => t.id === route.section)?.label} tab is coming soon.
+        </p>
+      ) : (
+        <Repos
+          list={repos}
+          open={route.config ?? null}
+          onOpen={onOpen}
+          tasks={tasks}
+          server={state?.server}
+          serverNow={state?.now}
+        />
+      )}
+    </div>
+  );
+}

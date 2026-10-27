@@ -352,6 +352,18 @@
   border-bottom: 1px solid var(--border);
 }
 
+/* Settings: its title, then its tabs on the header's bottom edge. */
+.tabbed {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+  padding-bottom: 0;
+}
+
+.headerTabs {
+  border-bottom: 0;
+}
+
 .title {
   display: flex;
   align-items: center;

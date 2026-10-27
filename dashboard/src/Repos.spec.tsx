@@ -1,13 +1,14 @@
-// The repositories page against a fake api/repos: statuses, the buttons, the row switching,
-// the refreshes and a repository's config panel.
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/preact";
-import { useState } from "preact/hooks";
-import { beforeEach, expect, test } from "vitest";
-import { useRepos } from "./api";
+// Settings › Repositories against a fake api/repos: the onboarding card, statuses and each
+// row's action, the filters, the row switching, the refreshes and a repository's config panel.
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/preact";
+import { useEffect, useState } from "preact/hooks";
+import { beforeEach, expect, test, vi } from "vitest";
+import { type RepoList, useRepos } from "./api";
 import { Dashboard } from "./App";
 import { Repos } from "./Repos";
-import { makePolicyFile, makeState, mockApi } from "./testUtils";
-import type { AppLinks, Repo, RepoConfig, ServerInfo } from "./types";
+import { parseRoute } from "./route";
+import { makePolicyFile, makeState, makeTask, mockApi } from "./testUtils";
+import type { AppLinks, Repo, RepoConfig, ServerInfo, Task } from "./types";
 
 const repo = (name: string, extra: Partial<Repo> = {}): Repo => ({
   repo: name,
@@ -166,60 +167,211 @@ beforeEach(() => {
   api.answer = () => Response.json({ error: "Its issues are disabled." }, { status: 409 });
 });
 
-function Page(props: { server?: ServerInfo; serverNow?: number }) {
-  const [open, setOpen] = useState<string | null>(null);
-  return <Repos list={useRepos()} onBack={() => {}} open={open} onOpen={setOpen} {...props} />;
+// The repository open follows the address, as in App.tsx: a row's links set it.
+function Page(props: { server?: ServerInfo; serverNow?: number; tasks?: Task[] }) {
+  const config = () => parseRoute(location.hash).config ?? null;
+  const [open, setOpen] = useState(config);
+  useEffect(() => {
+    const onChange = () => setOpen(config());
+    addEventListener("hashchange", onChange);
+    return () => removeEventListener("hashchange", onChange);
+  }, []);
+  const onOpen = (repo: string | null) => {
+    history.replaceState(null, "", "#/settings/repositories");
+    setOpen(repo);
+  };
+  return <Repos list={useRepos()} open={open} onOpen={onOpen} {...props} />;
 }
 
-const row = (name: string) => screen.getByRole("button", { name }).closest("li")!;
-
-test("each repository with its status; the ones to onboard first", async () => {
-  render(<Page />);
-  await screen.findByRole("button", { name: "org/app" });
-  expect(
-    screen.getAllByRole("listitem").map((li) => li.querySelector("button")!.textContent),
-  ).toEqual(["org/bad", "org/app", "org/wiki", "org/docs", "org/api"]);
-  expect(within(row("org/api")).getByText("Configured")).toBeTruthy();
-  expect(within(row("org/api")).queryByRole("button", { name: /onboarding/ })).toBeNull();
-  expect(within(row("org/bad")).getByText("Invalid config")).toBeTruthy();
-  expect(within(row("org/bad")).getByText(/No run starts/)).toBeTruthy();
-  expect(within(row("org/docs")).getByRole("link", { name: "Issue #7" }).getAttribute("href")).toBe(
-    "https://github.com/org/docs/issues/7",
+const list = () => screen.getByRole("list", { name: "Repositories" });
+const row = (name: string) => within(list()).getByRole("link", { name }).closest("li")!;
+const openRepo = async (name: string) =>
+  fireEvent.click(
+    await within(await screen.findByRole("list", { name: "Repositories" })).findByRole("link", {
+      name,
+    }),
   );
-  // Issues off: no button, the reason instead.
-  expect(within(row("org/wiki")).queryByRole("button", { name: /onboarding/ })).toBeNull();
-  expect(within(row("org/wiki")).getByText(/Issues are disabled/)).toBeTruthy();
-  expect(screen.getByText(/2 without a .deckhand.yaml/)).toBeTruthy();
+
+test("each repository with its status, detail and one action; the ones to onboard first", async () => {
+  render(<Page />);
+  await screen.findByRole("list", { name: "Repositories" });
+  expect(
+    within(list())
+      .getAllByRole("listitem")
+      .map((li) => li.querySelector("a")!.textContent),
+  ).toEqual(["org/bad", "org/app", "org/wiki", "org/docs", "org/api"]);
+  // Each name opens its config.
+  expect(within(row("org/app")).getByRole("link", { name: "org/app" }).getAttribute("href")).toBe(
+    "#/settings/repositories/org/app",
+  );
+  const api = within(row("org/api"));
+  expect(api.getByText("Configured")).toBeTruthy();
+  expect(api.getByText("Read 2 min ago")).toBeTruthy();
+  expect(api.getByRole("link", { name: "Config" }).getAttribute("href")).toBe(
+    "#/settings/repositories/org/api",
+  );
+  expect(api.queryByRole("button")).toBeNull();
+  const bad = within(row("org/bad"));
+  expect(bad.getByText("Config has errors")).toBeTruthy();
+  expect(bad.getByText(/no run starts until they are fixed/)).toBeTruthy();
+  expect(bad.getByRole("link", { name: "Open config" }).getAttribute("href")).toBe(
+    "#/settings/repositories/org/bad",
+  );
+  const docs = within(row("org/docs"));
+  expect(docs.getByText(/^Issue #7 · /)).toBeTruthy();
+  const issue = docs.getByRole("link", { name: "#7" });
+  expect(issue.getAttribute("href")).toBe("https://github.com/org/docs/issues/7");
+  expect(issue.getAttribute("target")).toBe("_blank");
+  // No questions known: nothing to answer.
+  expect(docs.queryByRole("link", { name: "Answer" })).toBeNull();
+  expect(within(row("org/app")).getByRole("button", { name: "Start onboarding" })).toBeTruthy();
+  // Issues off: no button, the reason and where to turn them on instead.
+  const wiki = within(row("org/wiki"));
+  expect(wiki.queryByRole("button")).toBeNull();
+  expect(wiki.getByText(/issues are disabled on GitHub/)).toBeTruthy();
+  expect(wiki.getByRole("link", { name: "Enable issues" }).getAttribute("href")).toBe(
+    "https://github.com/org/wiki/settings",
+  );
+});
+
+test("the onboarding card: three steps, and the first repository that can be onboarded", async () => {
+  render(<Page />);
+  const card = within(
+    (await screen.findByRole("heading", { name: "2 repositories aren't onboarded" })).closest(
+      "section",
+    )!,
+  );
+  expect(card.getAllByRole("listitem").map((li) => li.querySelector("b")!.textContent)).toEqual([
+    "Start onboarding",
+    "Answer its questions",
+    "Merge its pull request",
+  ]);
+  // org/wiki can't be: its issues are off.
+  fireEvent.click(card.getByRole("button", { name: "Onboard org/app" }));
+  // Pending at once, in the card and in the row.
+  expect(card.getByRole("button", { name: /Onboard org\/app/ }).getAttribute("aria-busy")).toBe(
+    "true",
+  );
+  expect(
+    within(row("org/app"))
+      .getByRole("button", { name: /Start onboarding/ })
+      .getAttribute("aria-busy"),
+  ).toBe("true");
+  await within(row("org/app")).findByRole("link", { name: "#12" });
+  expect(api.posted).toContainEqual({ url: "api/repos/org/app/onboard", body: undefined });
+  // Only org/wiki left, which can't be: the card says so, with no button.
+  expect(screen.getByRole("heading", { name: "1 repository isn't onboarded" })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: /^Onboard / })).toBeNull();
+});
+
+test("no repository to onboard: no card", async () => {
+  api.routes["api/repos"] = () => ({
+    repos: [repo("org/api", { status: "configured" })],
+    app: APP,
+    listedAt: Date.now(),
+  });
+  render(<Page />);
+  await screen.findByRole("list", { name: "Repositories" });
+  expect(screen.queryByRole("heading", { name: /onboarded/ })).toBeNull();
+});
+
+test("an onboarding run's questions: Answer opens its task, and the repository needs you", async () => {
+  const task = makeTask({
+    key: "org/docs#7",
+    repo: "org/docs",
+    number: 7,
+    state: "needs-input",
+    questions: {
+      source: "run",
+      items: [
+        { title: "Setup", text: "Which setup?", options: [] },
+        { title: "Tests", text: "Which tests?", options: [] },
+      ],
+      raw: "",
+    },
+  });
+  render(<Page tasks={[task]} />);
+  await screen.findByRole("list", { name: "Repositories" });
+  const docs = within(row("org/docs"));
+  expect(docs.getByText("Issue #7 · 2 questions are waiting for your answers")).toBeTruthy();
+  expect(docs.getByRole("link", { name: "Answer" }).getAttribute("href")).toBe(
+    "#/org/docs?task=org%2Fdocs%237",
+  );
+  // Needs you: the config with errors, the one to onboard, and this one.
+  const needs = screen.getByRole("button", { name: /Needs you/ });
+  expect(needs.textContent).toBe("Needs you3");
+  fireEvent.click(needs);
+  expect(
+    within(list())
+      .getAllByRole("listitem")
+      .map((li) => li.querySelector("a")!.textContent),
+  ).toEqual(["org/bad", "org/app", "org/docs"]);
+});
+
+test("the filters: by name, and All / Needs you / Configured", async () => {
+  render(<Page />);
+  await screen.findByRole("list", { name: "Repositories" });
+  const names = () =>
+    within(list())
+      .getAllByRole("listitem")
+      .map((li) => li.querySelector("a")!.textContent);
+  expect(screen.getByRole("button", { name: /^All/ }).getAttribute("aria-pressed")).toBe("true");
+  fireEvent.click(screen.getByRole("button", { name: /Configured/ }));
+  expect(names()).toEqual(["org/api"]);
+  fireEvent.click(screen.getByRole("button", { name: /^All/ }));
+  fireEvent.input(screen.getByRole("textbox", { name: "Filter repositories" }), {
+    target: { value: "W" },
+  });
+  expect(names()).toEqual(["org/wiki"]);
+  fireEvent.input(screen.getByRole("textbox", { name: "Filter repositories" }), {
+    target: { value: "nothing" },
+  });
+  expect(screen.queryByRole("list", { name: "Repositories" })).toBeNull();
+  expect(screen.getByText("No repository here matches the filter.")).toBeTruthy();
 });
 
 test("Start onboarding posts, and the row switches to its issue", async () => {
   render(<Page />);
-  await screen.findByRole("button", { name: "org/app" });
+  await screen.findByRole("list", { name: "Repositories" });
   fireEvent.click(within(row("org/app")).getByRole("button", { name: "Start onboarding" }));
-  const issue = await within(row("org/app")).findByRole("link", { name: "Issue #12" });
+  const issue = await within(row("org/app")).findByRole("link", { name: "#12" });
   expect(issue.getAttribute("href")).toBe("https://github.com/org/app/issues/12");
   expect(within(row("org/app")).getByText("Onboarding")).toBeTruthy();
   expect(api.posted).toContainEqual({ url: "api/repos/org/app/onboard", body: undefined });
 });
 
-test("Settings counts the repositories not onboarded and opens the page", async () => {
-  const list = {
-    repos: REPOS,
-    app: null,
-    error: null,
-    starting: null,
-    failed: null,
-    onboard: async () => {},
-    listedAt: null,
-    refreshing: false,
-    refreshError: null,
-    refresh: async () => {},
-    update: () => {},
-  };
+const fixedList = (): RepoList => ({
+  repos: REPOS,
+  app: null,
+  error: null,
+  starting: null,
+  failed: null,
+  onboard: async () => {},
+  listedAt: null,
+  refreshing: false,
+  refreshError: null,
+  refresh: async () => {},
+  update: () => {},
+});
+
+// org/docs's onboarding run asks: with org/bad's errors and org/app to onboard, 3 need you.
+// org/wiki doesn't (its issues are off), though it isn't onboarded either.
+const asking = () =>
+  makeTask({
+    key: "org/docs#7",
+    repo: "org/docs",
+    number: 7,
+    state: "needs-input",
+    questions: { source: "run", items: null, raw: "Which tests?" },
+  });
+
+const tabs = () => within(screen.getByRole("navigation", { name: "Settings" }));
+
+test("Settings counts the repositories that need you and opens the page", async () => {
   // The fixture's server: started 3 days and 3 hours before its `now`.
-  render(<Dashboard state={makeState()} error={null} repos={list} />);
+  render(<Dashboard state={makeState({}, [asking()])} error={null} repos={fixedList()} />);
   const link = screen.getByRole("link", { name: /Settings/ });
-  expect(link.textContent).toBe("Settings 2");
+  expect(link.textContent).toBe("Settings 3");
   expect(link.getAttribute("href")).toBe("#/settings/repositories");
   expect(link.getAttribute("aria-current")).toBeNull();
   expect(
@@ -237,39 +389,108 @@ test("Settings counts the repositories not onboarded and opens the page", async 
   );
 });
 
-test("Manage App: links to the App's installations and settings on GitHub, in a new tab", async () => {
-  render(<Page />);
-  const manage = await screen.findByRole("button", { name: /Manage App/ });
-  expect(manage.getAttribute("aria-expanded")).toBe("false");
-  expect(screen.queryByRole("link", { name: /App settings/ })).toBeNull();
-  fireEvent.click(manage);
-  expect(manage.getAttribute("aria-expanded")).toBe("true");
-  // Two installations: GitHub's install page, which lists them both.
-  const repos = screen.getByRole("link", { name: /Add or remove repositories/ });
-  expect(repos.getAttribute("href")).toBe(APP.installUrl);
-  const settings = screen.getByRole("link", { name: /App settings/ });
-  expect(settings.getAttribute("href")).toBe(APP.settingsUrl);
-  for (const link of [repos, settings]) {
-    expect(link.getAttribute("target")).toBe("_blank");
-    expect(link.getAttribute("rel")).toBe("noreferrer");
-  }
-  // Escape closes it, and so does a click beside it.
-  fireEvent.keyDown(window, { key: "Escape" });
-  await waitFor(() => expect(screen.queryByRole("link", { name: /App settings/ })).toBeNull());
-  fireEvent.click(manage);
-  screen.getByRole("link", { name: /App settings/ });
-  fireEvent.pointerDown(screen.getByRole("heading", { name: "Repositories" }));
-  await waitFor(() => expect(screen.queryByRole("link", { name: /App settings/ })).toBeNull());
+test("Settings' tabs: in the header, current with the address, the others coming", async () => {
+  render(<Dashboard state={makeState({}, [asking()])} error={null} repos={fixedList()} />);
+  history.replaceState(null, "", "#/settings/repositories");
+  dispatchEvent(new HashChangeEvent("hashchange"));
+  await screen.findByRole("navigation", { name: "Settings" });
+  // A wide screen: the page header has them, not the page.
+  expect(screen.getByRole("navigation", { name: "Settings" }).closest("header")).toBeTruthy();
+  const repos = tabs().getByRole("link", { name: /Repositories/ });
+  expect(repos.textContent).toBe("Repositories3");
+  expect(repos.getAttribute("aria-current")).toBe("page");
+  const server = tabs().getByRole("link", { name: "Server" });
+  expect(server.getAttribute("href")).toBe("#/settings/server");
+  expect(server.getAttribute("aria-current")).toBeNull();
+  history.replaceState(null, "", "#/settings/server");
+  dispatchEvent(new HashChangeEvent("hashchange"));
+  await screen.findByText("The Server tab is coming soon.");
+  expect(tabs().getByRole("link", { name: "Server" }).getAttribute("aria-current")).toBe("page");
+  expect(
+    tabs()
+      .getByRole("link", { name: /Repositories/ })
+      .getAttribute("aria-current"),
+  ).toBeNull();
+  expect(screen.queryByRole("list", { name: "Repositories" })).toBeNull();
+  history.replaceState(null, "", "#/settings/repositories");
+  dispatchEvent(new HashChangeEvent("hashchange"));
+  await screen.findByRole("list", { name: "Repositories" });
+  expect(screen.queryByText(/coming soon/)).toBeNull();
 });
 
-test("Manage App with a single installation: its own page", async () => {
+test("Settings' tabs on a phone: atop the page", async () => {
+  vi.stubGlobal("matchMedia", () => ({
+    matches: false,
+    addEventListener() {},
+    removeEventListener() {},
+  }));
+  history.replaceState(null, "", "#/settings/preferences");
+  render(<Dashboard state={makeState()} error={null} repos={fixedList()} />);
+  const nav = await screen.findByRole("navigation", { name: "Settings" });
+  expect(nav.closest("main")).toBeTruthy();
+  expect(within(nav).getByRole("link", { name: "Preferences" }).getAttribute("aria-current")).toBe(
+    "page",
+  );
+  expect(screen.getByText("The Preferences tab is coming soon.")).toBeTruthy();
+});
+
+test("an onboarding run that failed or stopped: said so, its task linked, and it needs you", async () => {
+  const failed = makeTask({ key: "org/docs#7", repo: "org/docs", number: 7, state: "error" });
+  render(<Page tasks={[failed]} />);
+  await screen.findByRole("list", { name: "Repositories" });
+  const docs = within(row("org/docs"));
+  expect(docs.getByText("Issue #7 · Its run failed: open it to run it again")).toBeTruthy();
+  expect(docs.getByRole("link", { name: "Open run" }).getAttribute("href")).toBe(
+    "#/org/docs?task=org%2Fdocs%237",
+  );
+  expect(screen.getByRole("button", { name: /Needs you/ }).textContent).toBe("Needs you3");
+  cleanup();
+  render(<Page tasks={[{ ...failed, state: "cancelled" }]} />);
+  await screen.findByRole("list", { name: "Repositories" });
+  expect(within(row("org/docs")).getByText(/Its run was stopped/)).toBeTruthy();
+  cleanup();
+  // At work: nothing to do but wait.
+  render(<Page tasks={[{ ...failed, state: "working" }]} />);
+  await screen.findByRole("list", { name: "Repositories" });
+  expect(within(row("org/docs")).getByText(/Its run reads the code/)).toBeTruthy();
+  expect(within(row("org/docs")).queryByRole("link", { name: "Open run" })).toBeNull();
+  expect(screen.getByRole("button", { name: /Needs you/ }).textContent).toBe("Needs you2");
+});
+
+test("onboarding from the card fails: the card says why, even with the row filtered out", async () => {
+  delete api.routes["POST api/repos/org/app/onboard"];
+  render(<Page />);
+  await screen.findByRole("list", { name: "Repositories" });
+  fireEvent.click(screen.getByRole("button", { name: /Configured/ }));
+  const card = (await screen.findByRole("heading", { name: /aren't onboarded/ })).closest(
+    "section",
+  )!;
+  fireEvent.click(within(card).getByRole("button", { name: "Onboard org/app" }));
+  const alert = await within(card).findByRole("alert");
+  expect(alert.textContent).toBe("Couldn't onboard org/app: Its issues are disabled.");
+  // Once, by the button that was clicked.
+  fireEvent.click(screen.getByRole("button", { name: /^All/ }));
+  expect(screen.getAllByRole("alert")).toHaveLength(1);
+  // From the row: the row says it, not the card.
+  fireEvent.click(within(row("org/app")).getByRole("button", { name: "Start onboarding" }));
+  await waitFor(() => expect(within(row("org/app")).getByRole("alert")).toBeTruthy());
+  expect(within(card).queryByRole("alert")).toBeNull();
+});
+
+test("Manage the App: GitHub's install page, or the single installation's own", async () => {
+  render(<Page />);
+  // Two installations: GitHub's install page, which lists them both.
+  const manage = await screen.findByRole("link", { name: "Manage the App" });
+  expect(manage.getAttribute("href")).toBe(APP.installUrl);
+  expect(manage.getAttribute("target")).toBe("_blank");
+  expect(manage.getAttribute("rel")).toBe("noreferrer");
+  cleanup();
   const one = { ...APP, installations: [APP.installations[1]] };
   api = mockApi({ "api/repos": () => ({ repos: REPOS, app: one, listedAt: Date.now() }) });
   render(<Page />);
-  fireEvent.click(await screen.findByRole("button", { name: /Manage App/ }));
-  const link = screen.getByRole("link", { name: /Add or remove repositories/ });
-  expect(link.getAttribute("href")).toBe("https://github.com/settings/installations/2");
-  expect(link.textContent).toContain("The installation on other");
+  expect((await screen.findByRole("link", { name: "Manage the App" })).getAttribute("href")).toBe(
+    "https://github.com/settings/installations/2",
+  );
 });
 
 test("no repository yet: a link that installs the App", async () => {
@@ -285,14 +506,14 @@ test("Refresh lists the repositories again, and says when they were", async () =
   render(<Page />);
   await screen.findByText("Listed 3 min ago");
   fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
-  await screen.findByRole("button", { name: "org/new" });
+  await within(list()).findByRole("link", { name: "org/new" });
   expect(screen.getByText("Listed 0s ago")).toBeTruthy();
   expect(api.posted).toContainEqual({ url: "api/repos/refresh", body: undefined });
 });
 
 test("a repository's panel: errors first, then what runs get, then the file", async () => {
   render(<Page />);
-  fireEvent.click(await screen.findByRole("button", { name: "org/api" }));
+  await openRepo("org/api");
   const alert = await screen.findByRole("alert");
   expect(alert.textContent).toContain("No run starts until these are fixed");
   expect(alert.textContent).toContain("effort: expected one of low, medium, high");
@@ -314,24 +535,30 @@ test("a repository's panel: errors first, then what runs get, then the file", as
   );
   expect(screen.getByText(/read 0s ago/)).toBeTruthy();
   // The row read along with it: invalid now.
-  expect(screen.getByRole("heading", { name: /org\/api/ }).textContent).toContain("Invalid config");
+  expect(screen.getByRole("heading", { name: /org\/api/ }).textContent).toContain(
+    "Config has errors",
+  );
   fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
   await waitFor(() =>
     expect(api.posted).toContainEqual({ url: "api/repos/org/api/refresh", body: undefined }),
   );
   fireEvent.click(screen.getByRole("button", { name: "← Repositories" }));
-  expect(within(await screen.findByRole("list")).getAllByText("Invalid config")).toHaveLength(2);
+  expect(
+    within(await screen.findByRole("list", { name: "Repositories" })).getAllByText(
+      "Config has errors",
+    ),
+  ).toHaveLength(2);
 });
 
 test("auto-merge: a red badge in the list, a red risk box and its grant in the panel", async () => {
   const auto = repo("org/auto", { status: "configured", autoMerge: true });
   api.routes["api/repos"] = () => ({ repos: [...REPOS, auto], app: APP, listedAt: Date.now() });
   render(<Page />);
-  await screen.findByRole("button", { name: "org/auto" });
-  const badge = within(row("org/auto")).getByText("Auto-merge: no human review");
+  await screen.findByRole("list", { name: "Repositories" });
+  const badge = within(row("org/auto")).getByText("Auto-merge, no human review");
   expect(badge.title).toMatch(/nobody reads them before they reach the default branch/);
-  expect(within(row("org/api")).queryByText("Auto-merge: no human review")).toBeNull();
-  fireEvent.click(screen.getByRole("button", { name: "org/auto" }));
+  expect(within(row("org/api")).queryByText("Auto-merge, no human review")).toBeNull();
+  await openRepo("org/auto");
   const box = await screen.findByRole("note");
   expect(box.textContent).toContain("Auto-merge: no human review");
   expect(box.textContent).toContain(
@@ -359,7 +586,7 @@ test("a repository's broken grant: the file to fix, and only this repository sto
     effective: { ...CONFIG.effective, hosts: [], grant: null },
   });
   render(<Page />);
-  fireEvent.click(await screen.findByRole("button", { name: "org/api" }));
+  await openRepo("org/api");
   const alert = await screen.findByRole("alert");
   expect(alert.textContent).toContain(
     'org/api.yaml in the operator\'s grants folder has errors, so no run starts in this repository: hosts: "bad host"',
@@ -388,7 +615,7 @@ test("a broken grant: what needs a grant is unknown, and only the grants error i
     };
   };
   render(<Page />);
-  fireEvent.click(await screen.findByRole("button", { name: "org/api" }));
+  await openRepo("org/api");
   const alert = await screen.findByRole("alert");
   expect(within(alert).getAllByRole("listitem")).toHaveLength(1);
   expect(alert.textContent).toContain("allow_repo_hosts: gone");
@@ -399,7 +626,7 @@ test("a broken grant: what needs a grant is unknown, and only the grants error i
   expect(within(mount).getByText("unknown")).toBeTruthy();
 });
 
-test("a config that parses but asks for what isn't granted: Invalid config, not Configured", async () => {
+test("a config that parses but asks for what isn't granted: Config has errors, not Configured", async () => {
   api.routes["api/repos/org/api/config"] = () => ({
     ...CONFIG,
     // The server's verdict: no run starts.
@@ -419,24 +646,26 @@ test("a config that parses but asks for what isn't granted: Invalid config, not 
     },
   });
   render(<Page />);
-  expect(within(await screen.findByRole("list")).getAllByText("Configured")).toHaveLength(1);
-  fireEvent.click(screen.getByRole("button", { name: "org/api" }));
+  expect(
+    within(await screen.findByRole("list", { name: "Repositories" })).getAllByText("Configured"),
+  ).toHaveLength(1);
+  await openRepo("org/api");
   const alert = await screen.findByRole("alert");
   expect(alert.textContent).toContain("dockerfile: the operator's grants");
   const heading = screen.getByRole("heading", { name: /org\/api/ }).textContent;
-  expect(heading).toContain("Invalid config");
+  expect(heading).toContain("Config has errors");
   expect(heading).not.toContain("Configured");
   fireEvent.click(screen.getByRole("button", { name: "← Repositories" }));
-  const list = await screen.findByRole("list");
-  expect(within(list).getAllByText("Invalid config")).toHaveLength(2);
-  expect(within(list).queryByText("Configured")).toBeNull();
+  const rows = await screen.findByRole("list", { name: "Repositories" });
+  expect(within(rows).getAllByText("Config has errors")).toHaveLength(2);
+  expect(within(rows).queryByText("Configured")).toBeNull();
 });
 
 test("its policies: each file with its rules and source, and the check's errors", async () => {
   const policed = repo("org/policed", { status: "configured" });
   api.routes["api/repos"] = () => ({ repos: [...REPOS, policed], app: APP, listedAt: Date.now() });
   render(<Page />);
-  fireEvent.click(await screen.findByRole("button", { name: "org/policed" }));
+  await openRepo("org/policed");
   await screen.findByRole("heading", { name: "Policies" });
   const alert = screen.getByRole("alert");
   expect(alert.textContent).toContain("Every decision a policy is asked for refuses");
@@ -460,7 +689,7 @@ test("its policies: each file with its rules and source, and the check's errors"
 
 test("a repository without a config: the operator's defaults, said so", async () => {
   render(<Page />);
-  fireEvent.click(await screen.findByRole("button", { name: "org/app" }));
+  await openRepo("org/app");
   await screen.findByText(/the operator's defaults/);
   expect(screen.getByText(/Only the built-in gates decide/)).toBeTruthy();
   expect(document.body.textContent).toContain("No .deckhand.yaml on main");
@@ -468,7 +697,7 @@ test("a repository without a config: the operator's defaults, said so", async ()
   expect(document.querySelector("pre")).toBeNull();
 });
 
-test("the toolbar says which Deckhand runs, linked to its code, and since when", async () => {
+test("the footer says which Deckhand runs, linked to its code, and since when", async () => {
   const startedAt = Date.UTC(2026, 9, 18, 8);
   // The server's clock, 3 days, 4 hours and 5 minutes later: not the browser's.
   const serverNow = startedAt + ((3 * 24 + 4) * 60 + 5) * 60000;
@@ -479,8 +708,8 @@ test("the toolbar says which Deckhand runs, linked to its code, and since when",
     source: "https://github.com/acme/deckhand",
   };
   const { rerender } = render(<Page server={server} serverNow={serverNow} />);
-  await screen.findByRole("button", { name: "org/app" });
-  const version = screen.getByText(/^Deckhand/);
+  await screen.findByRole("list", { name: "Repositories" });
+  const version = screen.getByText(/^Deckhand/, { selector: "p" });
   expect(version.textContent).toBe("Deckhand edge-1713fa6 · up 3 d 4 h · Node 26.1.0");
   const commit = within(version).getByRole("link", { name: "edge-1713fa6" });
   expect(commit.getAttribute("href")).toBe("https://github.com/acme/deckhand/commit/1713fa6");
@@ -489,14 +718,14 @@ test("the toolbar says which Deckhand runs, linked to its code, and since when",
   rerender(<Page server={{ ...server, version: "1.2.3" }} serverNow={startedAt + 7 * 60000} />);
   const release = screen.getByRole("link", { name: "1.2.3" });
   expect(release.getAttribute("href")).toBe("https://github.com/acme/deckhand/releases/tag/v1.2.3");
-  expect(screen.getByText(/^Deckhand/).textContent).toContain("up 7 min");
+  expect(screen.getByText(/^Deckhand/, { selector: "p" }).textContent).toContain("up 7 min");
   // Built from source, or without the repository it came from: plain text.
   for (const plain of [
     { ...server, version: "dev" },
     { ...server, source: "" },
   ]) {
     rerender(<Page server={plain} serverNow={serverNow} />);
-    expect(within(screen.getByText(/^Deckhand/)).queryByRole("link")).toBeNull();
-    expect(screen.getByText(/^Deckhand/).textContent).toContain(plain.version);
+    expect(within(screen.getByText(/^Deckhand/, { selector: "p" })).queryByRole("link")).toBeNull();
+    expect(screen.getByText(/^Deckhand/, { selector: "p" }).textContent).toContain(plain.version);
   }
 });

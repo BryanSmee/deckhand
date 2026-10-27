@@ -351,7 +351,7 @@ export function repoCounts(
 // A repository's status (api/repos), as its badge says it.
 export const REPO_LABELS: Record<RepoStatus, string> = {
   configured: "Configured",
-  invalid: "Invalid config",
+  invalid: "Config has errors",
   onboarding: "Onboarding",
   "not-onboarded": "Not onboarded",
   unknown: "Unknown",
