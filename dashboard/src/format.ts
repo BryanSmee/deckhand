@@ -220,6 +220,18 @@ export function ago(ms: number, now: number): string {
   return new Date(ms).toLocaleDateString();
 }
 
+// When something happened, by the clock: "today 14:31", "yesterday 18:40", "Oct 14, 09:30";
+// without `words`, "14:31" today and the date on any other day.
+export function dayTime(at: number, now: number, words = true): string {
+  const d = new Date(at);
+  const time = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const day = new Date(now);
+  if (d.toDateString() === day.toDateString()) return words ? `today ${time}` : time;
+  day.setDate(day.getDate() - 1);
+  if (words && d.toDateString() === day.toDateString()) return `yesterday ${time}`;
+  return `${d.toLocaleDateString([], { month: "short", day: "numeric" })}, ${time}`;
+}
+
 // "3 d 4 h", "4 h 12 min", "12 min": how long the listener has been up, by the server's clock.
 export function uptime(startedAt: number, now: number): string {
   const min = Math.max(0, Math.floor((now - startedAt) / 60000));
