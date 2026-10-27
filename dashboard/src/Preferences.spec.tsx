@@ -241,6 +241,7 @@ test("the switches: Show closed is the board's, the shortcuts turn / off", () =>
   expect(localStorage.getItem("deckhand.log.wrap")).toBe("1");
   leave(page);
 
+  history.replaceState(null, "", "#/acme/app");
   render(<Dashboard state={state} error={null} repos={repos()} />);
   const search = screen.getByRole("searchbox", { name: "Search tasks" });
   fireEvent.keyDown(window, { key: "/" });
