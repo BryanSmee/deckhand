@@ -13,7 +13,15 @@
 
 .tabs {
   flex: none;
-  padding: 0 10px;
+  gap: 0;
+  padding: 0 4px;
+}
+
+/* Four tabs and their counts in 360 px. */
+.tabs [role="tab"] {
+  gap: 5px;
+  padding: 0 6px;
+  font-size: 12.5px;
 }
 
 /* A tab, or the panel, something it takes is dragged over. */
@@ -31,6 +39,10 @@
   transition:
     background var(--fast),
     box-shadow var(--fast);
+}
+
+.panel[hidden] {
+  display: none;
 }
 
 .notice {
@@ -235,7 +247,6 @@ a.name:hover {
 }
 
 .menuButton {
-  justify-content: flex-start;
   width: 100%;
 }
 
