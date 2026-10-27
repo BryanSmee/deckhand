@@ -304,7 +304,6 @@ function WaitingOnYou({
           <Questions
             task={answering}
             questions={answering.questions}
-            onCancel={() => setAnswering(null)}
             onSent={(message) => {
               setAnswering(null);
               setSaid({ text: message });
