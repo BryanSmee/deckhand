@@ -3,6 +3,7 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/preact";
 import { beforeEach, expect, test, vi } from "vitest";
 import { Dashboard } from "./App";
+import questionsCss from "./Questions.module.css?raw";
 import { makeState, mockApi } from "./testUtils";
 import type { Task } from "./types";
 
@@ -135,4 +136,22 @@ test("a pull request's own task sends `pr`; a task not waiting for input has no 
   document.body.replaceChildren();
   history.replaceState(null, "", `#/?task=${encodeURIComponent(ASKING)}`);
   expect(show((t) => ({ ...t, state: "done" }))).toBeNull();
+});
+
+// jsdom does no layout, so the rule itself: on the task's page, the run's outcome and log go on
+// the page's scroll below the form, and a form that shrinks is squeezed to its Send answers
+// (#361). A long list scrolls inside it instead, capped by the viewport.
+test("the form on the task's page keeps its height next to a run", () => {
+  const rule = (selector: string) => {
+    const css = `\n${questionsCss}`;
+    const start = css.indexOf(`\n${selector} {`);
+    expect(start).toBeGreaterThanOrEqual(0);
+    return css.slice(start, css.indexOf("}", start));
+  };
+  const form = rule(".form");
+  expect(form).toMatch(/\bflex: none;/);
+  expect(form).toMatch(/max-height: [^;]*\b\d+vh\b/);
+  expect(form).toMatch(/overflow-y: auto;/);
+  // Without a run, the form still fills the page.
+  expect(rule(".form:last-child")).toMatch(/\bflex: 1;/);
 });
