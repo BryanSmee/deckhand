@@ -724,7 +724,7 @@ export function createWorkApi({
       if (!dismissals.undo(task?.key ?? run.key, runId)) {
         refuse(409, `That run of ${name} isn't dismissed.`);
       }
-      return `${name} is back in Waiting on you.`;
+      return `${name}'s dismissal is undone.`;
     }
     if (task?.runs[0]?.id !== runId) refuse(409, `Only the latest run of ${name} is dismissed.`);
     if (!FAILED.includes(run.status) || task.state !== run.status) {

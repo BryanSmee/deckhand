@@ -825,6 +825,14 @@ the run's issue or pull request, and only for the task's latest run when it ende
 `interrupted` or `cancelled`: it queues the comments that run had already been allowed to act on, as the
 signed-in user's, and posts the App's comment saying who asked.
 
+Its Dismiss (`POST /api/repos/<owner>/<repo>/dismiss { runId }`) passes the repository's half
+of these checks (same origin, the user in `ALLOWED_USERS` and the repo's `users`, a config
+without errors), not the issue's: a closed or busy item may be dismissed, since nothing runs.
+It takes only the task's latest run, when it ended in `error`, `interrupted` or `cancelled`. It
+is the listener's own state (`dismissed.json`: the run, who dismissed it and when), which only
+the dashboard reads; nothing is posted on GitHub. Its Undo (`{ runId, undo: true }`) is open to
+any of the repo's users, whoever dismissed it, as the dismissal is.
+
 An inbox entry sent from the dashboard (`POST /api/repos/<owner>/<repo>/inbox`) passes the
 repository's half of these checks (same origin, the user in `ALLOWED_USERS` and the repo's
 `users`, a config without errors), and only for an inbox the repo's config names. Its text is

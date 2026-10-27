@@ -162,7 +162,7 @@ export function Detail({
   const dismiss = async (run: Run, undo = false) => {
     setDismissing(run.id);
     const said = await sendDismiss(t.repo, run.id, undo);
-    const done = undo ? "It waits on you again." : "Dismissed: it no longer waits on you.";
+    const done = undo ? "Dismissal undone." : "Dismissed: it no longer waits on you.";
     setSent({ key: t.key, message: said.error ?? done, error: !!said.error });
     if (!said.error) await refresh?.();
     setDismissing(null);
@@ -361,7 +361,7 @@ export function Detail({
                   size="small"
                   pending={dismissing === t.runs[0].id}
                   pendingLabel="Undoing…"
-                  title="It waits on you again"
+                  title="Takes the dismissal back: a failure that still asks waits on you again"
                   onClick={() => dismiss(t.runs[0], true)}
                 >
                   Undo

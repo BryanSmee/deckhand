@@ -89,9 +89,7 @@ test("dismissed: who did it, and Undo; no Dismiss on a merged pull request's fai
     /^Dismissed by @bob 2 min ago(?! ago)/,
   );
   fireEvent.click(screen.getByRole("button", { name: "Undo" }));
-  await waitFor(() =>
-    expect(screen.getByRole("status").textContent).toBe("It waits on you again."),
-  );
+  await waitFor(() => expect(screen.getByRole("status").textContent).toBe("Dismissal undone."));
   expect(api.posted).toEqual([
     { url: "api/repos/acme/app/dismiss", body: { runId: t0(BUGS), undo: true } },
   ]);

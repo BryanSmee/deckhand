@@ -1586,7 +1586,7 @@ test("dismiss: the task's last run, failed, interrupted or cancelled; Undo takes
     assert.deepEqual([w.comments, w.accepted], [[], []]);
     const undone = await dismiss(w, { runId: "run-5", undo: true }, { user: "bob" });
     assert.equal(undone.status, 200);
-    assert.equal(undone.body.message, "#5 is back in Waiting on you.");
+    assert.equal(undone.body.message, "#5's dismissal is undone.");
     assert.deepEqual(w.dismissals.list(), []);
     // Twice: nothing to undo.
     assert.equal((await dismiss(w, { runId: "run-5", undo: true })).status, 409);
