@@ -21,10 +21,13 @@ export function syncMessage({
   return `Synced: ${done.join(", ")}`;
 }
 
-// Its state: syncing, what it did (said for a few seconds), and the action.
+// Its state: syncing, what it did (said for a few seconds), and the action. `recorded`: the
+// sync took place (failed or not), so the state's last sync has it now.
 export function useSync(onSynced?: () => Promise<void>) {
   const [syncing, setSyncing] = useState(false);
-  const [said, setSaid] = useState<{ text: string; failed: boolean } | null>(null);
+  const [said, setSaid] = useState<{ text: string; failed: boolean; recorded: boolean } | null>(
+    null,
+  );
   useEffect(() => {
     if (!said) return;
     const timer = setTimeout(() => setSaid(null), SHOWN_MS);
@@ -35,11 +38,12 @@ export function useSync(onSynced?: () => Promise<void>) {
     setSyncing(true);
     setSaid(null);
     const body = await postJson<SyncResult>("api/sync");
-    if (body.error) setSaid({ text: `Couldn't sync (${body.error})`, failed: true });
-    else setSaid({ text: syncMessage(body), failed: false });
     // Done, or failed and recorded as the last sync (its `at`): the state has it now. Refused
     // (synced a moment ago, signed out): nothing changed.
-    if (typeof body.at === "number") await onSynced?.();
+    const recorded = typeof body.at === "number";
+    if (body.error) setSaid({ text: `Couldn't sync (${body.error})`, failed: true, recorded });
+    else setSaid({ text: syncMessage(body), failed: false, recorded });
+    if (recorded) await onSynced?.();
     setSyncing(false);
   };
   return { syncing, said, sync };

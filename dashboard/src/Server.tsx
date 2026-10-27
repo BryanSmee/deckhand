@@ -9,6 +9,7 @@ import { useSync, syncMessage } from "./Sync";
 import type { AppLinks, Preview, ServerSetup, State, SyncResult } from "./types";
 import { Button, buttonClass } from "./ui/Button";
 import * as Icon from "./ui/icons";
+import { Meter } from "./ui/Meter";
 import { StatusBadge } from "./ui/Status";
 import { Card } from "./ui/Surface";
 import styles from "./Server.module.css";
@@ -46,18 +47,16 @@ const External = () => <Icon.External size={13} />;
 const repoName = (url: string) => url.replace(/^[a-z]+:\/\/[^/]+\//i, "").replace(/\/$/, "");
 
 // "The listener is up", with its version, uptime, Node and source; or that it can't be read.
+// Before api/state's first answer, neutral: it isn't known to be up yet.
 function Status({ state, error }: { state: State | null; error: string | null }) {
   const down = Boolean(error);
   const server = state?.server;
   const url = server && versionUrl(server);
+  const tone = down ? "s-err" : server ? "s-done" : "s-idle";
   return (
-    <Card
-      as="section"
-      class={`${styles.status} ${down ? "s-err" : "s-done"}`}
-      aria-labelledby="server-status"
-    >
+    <Card as="section" class={`${styles.status} ${tone}`} aria-labelledby="server-status">
       <span class={styles.statusIcon} aria-hidden="true">
-        {down ? <Icon.Alert size={18} /> : <Icon.Check size={18} />}
+        {down ? <Icon.Alert size={18} /> : server && <Icon.Check size={18} />}
       </span>
       <div class={styles.statusText}>
         <h2 id="server-status">
@@ -100,31 +99,6 @@ const ENGINES: Record<NonNullable<ServerSetup["engine"]>, string> = {
   auto: "Sysbox, else Podman",
 };
 
-// More slots than this read as a bar.
-const MAX_SEGMENTS = 12;
-
-function Meter({ running, max }: { running: number; max: number }) {
-  const label = `${running} of ${max} slots in use`;
-  if (max > MAX_SEGMENTS)
-    return (
-      <span class={`${styles.meter} ${styles.bar}`} role="img" aria-label={label}>
-        <span style={{ width: `${Math.min(100, (running / max) * 100)}%` }} />
-      </span>
-    );
-  return (
-    <span
-      class={styles.meter}
-      style={{ gridTemplateColumns: `repeat(${max}, minmax(0, 1fr))` }}
-      role="img"
-      aria-label={label}
-    >
-      {Array.from({ length: max }, (_, i) => (
-        <span key={i} class={i < running ? styles.used : ""} />
-      ))}
-    </span>
-  );
-}
-
 // The slots, the container engine, the egress proxy and the grants folder.
 function Runs({
   state,
@@ -147,7 +121,9 @@ function Runs({
       <div class={styles.facts}>
         <div class={styles.fact}>
           <span class={styles.label}>Slots</span>
-          {state && <Meter running={state.running} max={state.maxParallel} />}
+          {state && (
+            <Meter running={state.running} max={state.maxParallel} large class={styles.meter} />
+          )}
           <span class={styles.value}>
             {state ? `${state.running} running · ${state.queued} queued` : "…"}
           </span>
@@ -323,7 +299,8 @@ function App({
             >
               Sync now
             </Button>
-            {said?.failed && (
+            {/* A recorded sync's failure is on the line already: only a refusal is said. */}
+            {said?.failed && !said.recorded && (
               <span role="status" class={styles.bad}>
                 {said.text}
               </span>

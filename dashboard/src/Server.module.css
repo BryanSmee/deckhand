@@ -136,35 +136,8 @@
 }
 
 .meter {
-  display: grid;
-  gap: 4px;
   max-width: 160px;
   margin: 2px 0;
-}
-
-.meter > span {
-  height: 8px;
-  border-radius: 4px;
-  background: var(--surface-3);
-}
-
-.meter > .used {
-  background: var(--run-solid);
-}
-
-/* Many slots: one bar, filled as far as they are used. */
-.bar {
-  display: block;
-  height: 8px;
-  border-radius: 4px;
-  background: var(--surface-3);
-  overflow: hidden;
-}
-
-.bar > span {
-  display: block;
-  border-radius: 0;
-  background: var(--run-solid);
 }
 
 /* Preview hooks. */

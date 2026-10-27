@@ -92,7 +92,7 @@ test("what this Deckhand is and how it is set up", async () => {
 
   const runs = card("Runs");
   expect(runs.getByText("MAX_PARALLEL 4")).toBeTruthy();
-  expect(runs.getByRole("img", { name: "2 of 4 slots in use" })).toBeTruthy();
+  expect(runs.getByRole("img", { name: "2 of 4 run slots in use" })).toBeTruthy();
   expect(runs.getByText("2 running · 1 queued")).toBeTruthy();
   expect(runs.getByText("On · 14 hosts granted")).toBeTruthy();
   expect(runs.getByText("Read, no errors")).toBeTruthy();
@@ -208,6 +208,32 @@ test("a refused Sync now says why", async () => {
       "Couldn't sync (Synced a moment ago.)",
     ),
   );
+});
+
+test("a Sync now that failed but was recorded: said once, on the line", async () => {
+  const first = makeState();
+  const next = makeState({
+    lastSync: { at: first.now, by: "octocat", redelivered: 0, pulls: 0, error: "GitHub said 502" },
+  });
+  api.answer = () => next.lastSync;
+  render(<Live first={first} next={next} />);
+  fireEvent.click(within(value("Webhook deliveries")).getByRole("button", { name: "Sync now" }));
+  await waitFor(() =>
+    expect(value("Webhook deliveries").textContent).toContain(
+      "Last sync 0s ago failed: GitHub said 502",
+    ),
+  );
+  expect(within(value("Webhook deliveries")).queryByRole("status")).toBeNull();
+  expect(value("Webhook deliveries").textContent).not.toContain("Couldn't sync");
+});
+
+test("before api/state's first answer: loading, neutral, no check", () => {
+  render(<Dashboard state={null} error={null} repos={list()} />);
+  const heading = screen.getByRole("heading", { name: "Loading…" });
+  const section = heading.closest("section")!;
+  expect(section.classList.contains("s-idle")).toBe(true);
+  expect(section.classList.contains("s-done")).toBe(false);
+  expect(section.querySelector("svg")).toBeNull();
 });
 
 test("the last sync line: none yet, up to date, failed", () => {

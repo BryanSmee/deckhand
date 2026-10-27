@@ -19,6 +19,7 @@ import { type Segment, Segmented } from "./ui/Choice";
 import * as Icon from "./ui/icons";
 import { NavItem } from "./ui/NavItem";
 import { Sheet } from "./ui/Sheet";
+import { Meter } from "./ui/Meter";
 import { StatusDot } from "./ui/Status";
 import { ThemeSwitch } from "./ui/ThemeSwitch";
 import styles from "./Shell.module.css";
@@ -222,43 +223,6 @@ function RunSlots({
         </span>
       )}
     </div>
-  );
-}
-
-// More slots than this read as a bar.
-const MAX_SEGMENTS = 12;
-
-function Meter({
-  running,
-  max,
-  rail,
-  title,
-}: {
-  running: number;
-  max: number;
-  rail?: boolean;
-  title: string;
-}) {
-  const label = `${running} of ${max} run slots in use`;
-  const cls = `${styles.meter} ${rail ? styles.meterRail : ""}`;
-  if (max > MAX_SEGMENTS)
-    return (
-      <span class={`${cls} ${styles.bar}`} role="img" aria-label={label} title={title}>
-        <span style={{ [rail ? "height" : "width"]: `${Math.min(100, (running / max) * 100)}%` }} />
-      </span>
-    );
-  return (
-    <span
-      class={cls}
-      style={rail ? undefined : { gridTemplateColumns: `repeat(${max}, minmax(0, 1fr))` }}
-      role="img"
-      aria-label={label}
-      title={title}
-    >
-      {Array.from({ length: max }, (_, i) => (
-        <span key={i} class={i < running ? styles.used : ""} />
-      ))}
-    </span>
   );
 }
 
