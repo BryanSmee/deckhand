@@ -265,7 +265,7 @@ test("first message: brainstorms, follow-ups and new inbox sessions", () => {
   // A session that goes on is in a new container: its old /tmp paths are gone.
   assert.match(
     firstMessage({ mode: "work", text: "Go on", started: true }),
-    /new container: \/workspace and your session are kept, but \/tmp and everything else/,
+    /new container: your session is kept, and so are \/workspace's commits and branches, but its uncommitted files were stashed .* its ignored files removed, and \/tmp and the rest/,
   );
   assert.doesNotMatch(
     firstMessage({ mode: "work", text: "Do it", started: false }),
@@ -607,7 +607,7 @@ test("credentials: the default one counts as tried, /agent picks one, labels nam
     { started: true },
   );
   assert.match(message, /through anthropic, API key: carry on/);
-  assert.match(message, /new container: \/workspace and your session are kept/);
+  assert.match(message, /new container: your session is kept/);
 });
 
 test("the reply's footer: the provider when not the default or after a fallback, and why", () => {

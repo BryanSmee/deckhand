@@ -272,9 +272,11 @@ export function promptFor(
 }
 
 // A session that goes on runs in a new container: its transcript still names files of earlier
-// runs (worktrees, screenshots, saved outputs under /tmp) that are gone.
+// runs (worktrees, screenshots, saved outputs under /tmp) that are gone, and the clone was reset
+// (entrypoint.sh reset_clone(): untracked files stashed on work runs, else removed; ignored ones
+// removed).
 const NEW_CONTAINER =
-  "This run is a new container: /workspace and your session are kept, but /tmp and everything else outside them are not, so recreate what you need (worktrees, screenshots, servers, files) instead of reading paths from earlier runs.";
+  "This run is a new container: your session is kept, and so are /workspace's commits and branches, but its uncommitted files were stashed (`git stash list`) or removed, its ignored files removed, and /tmp and the rest of the container's own files are new (the repository's caches and mounts aside). Recreate what you need (worktrees, screenshots, servers, files) instead of reading paths from earlier runs.";
 
 // The run's first message, after its prompt: the comments. `started`: the session goes on.
 export function firstMessage({ mode, text, restored, started }) {
