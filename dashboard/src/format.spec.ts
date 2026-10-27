@@ -2,6 +2,7 @@ import { describe, expect, test } from "vitest";
 import fixture from "./fixture.json";
 import { makeState } from "./testUtils";
 import {
+  dayTime,
   inChip,
   isPrTask,
   kindName,
@@ -217,4 +218,14 @@ test("a repo from the address without a task still gets its line, counting nothi
   expect(counts.repos.at(-1)).toEqual({ repo: "acme/new", live: 0, input: 0, moving: false });
   // Another spelling of a listed repo is that repo.
   expect(repoCounts(tasks, "ACME/app").repos).toHaveLength(3);
+});
+
+test("dayTime: today, yesterday, then the date", () => {
+  const now = new Date(2026, 9, 14, 15, 0).getTime();
+  const at = (d: number, h: number, m: number) => new Date(2026, 9, d, h, m).getTime();
+  const time = (t: number) =>
+    new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  expect(dayTime(at(14, 14, 31), now)).toBe(`today ${time(at(14, 14, 31))}`);
+  expect(dayTime(at(13, 18, 40), now)).toBe(`yesterday ${time(at(13, 18, 40))}`);
+  expect(dayTime(at(12, 9, 30), now)).toMatch(/^Oct 12, /);
 });

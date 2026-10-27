@@ -2,12 +2,14 @@
 // run goes on, which asks once more first); then its facts and its runs as tabs over the run
 // shown (the latest unless one was picked): its outcome (with Rerun when it failed) and its
 // log. Waiting for input: its open questions, as a form to answer them. A discussion: its
-// thread first, to read and reply to, with the last reply and Rerun, then its runs. A phone's
-// log search takes the header's place.
+// thread first, to read and reply to, with the last reply and Rerun, then its runs. A Policies
+// tab when its pull request's policies decided something (with a badge when one kept it from
+// merging by itself). A phone's log search takes the header's place.
 import { useEffect, useState } from "preact/hooks";
 import { sendCancel, sendRerun, useRunLog } from "./api";
 import {
   ago,
+  dayTime,
   duration,
   githubUrl,
   isPrTask,
@@ -22,7 +24,7 @@ import { Log } from "./Log";
 import { copyText, downloadText } from "./logExport";
 import { logSections, plainText } from "./logModel";
 import { Outcome } from "./Outcome";
-import { PolicyDecisions } from "./PullRequest";
+import { heldMerge, PolicyTab } from "./Policies";
 import { Questions } from "./Questions";
 import { Thread } from "./Thread";
 import type { PullRequest, Run, Task } from "./types";
@@ -51,18 +53,10 @@ interface Props {
 
 // The states a run is going on in, which Stop ends.
 const STOPPABLE: Task["state"][] = ["building-image", "working", "stopping"];
-// A discussion's tab before its runs'.
+// A discussion's tab before its runs', and the Policies tab after them.
 const THREAD = "thread";
+const POLICIES = "policies";
 const PANEL = "task-view";
-
-// "14:02", or "Oct 14, 14:02" on another day.
-function startTime(at: number, now: number): string {
-  const d = new Date(at);
-  const time = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-  return d.toDateString() === new Date(now).toDateString()
-    ? time
-    : `${d.toLocaleDateString([], { month: "short", day: "numeric" })}, ${time}`;
-}
 
 export function Detail({
   task: t,
@@ -81,6 +75,8 @@ export function Detail({
   const [rerunning, setRerunning] = useState<string | null>(null);
   // A discussion's page shows its thread, or a run's log.
   const [showLog, setShowLog] = useState(false);
+  // The task whose Policies tab is open.
+  const [policiesOf, setPoliciesOf] = useState<string | null>(null);
   // The task whose Stop was pressed once (it asks again), and the one whose stop is on its way.
   const [confirming, setConfirming] = useState<string | null>(null);
   const [stopping, setStopping] = useState<string | null>(null);
@@ -110,10 +106,14 @@ export function Detail({
   // The latest run only, and only when it is the one shown.
   const failed = t.rerunnable && r && r.id === t.runs[0]?.id ? r : null;
   const discussion = t.kind === "discussion" && t.number !== null;
-  const thread = discussion && !showLog;
-  const hidden = !!touch && searching && !thread && !!r;
+  const decided = !!t.decisions?.length;
+  const policies = decided && policiesOf === t.key;
+  const thread = discussion && !showLog && !policies;
+  const held = heldMerge(t);
+  const logShown = !thread && !policies && !!r;
+  const hidden = !!touch && searching && logShown;
   // A phone's More menu, for a run's log.
-  const menu = !!touch && !thread && !!r;
+  const menu = !!touch && logShown;
   const logText = () =>
     r ? plainText(logSections(entries, r.finishedAt ?? now, r.status === "running")) : "";
   const copyLog = async () => {
@@ -163,8 +163,18 @@ export function Detail({
         </span>
       ),
     })),
+    ...(decided ? [{ id: POLICIES, label: "Policies", count: t.decisions!.length }] : []),
   ];
+  const tabsLabel = discussion
+    ? decided
+      ? "Thread, runs and policies"
+      : "Thread and runs"
+    : decided
+      ? "Runs and policies"
+      : "Runs";
   const pick = (id: string) => {
+    setPoliciesOf(id === POLICIES ? t.key : null);
+    if (id === POLICIES) return;
     setShowLog(id !== THREAD);
     if (id !== THREAD) onRun(id === t.runs[0]?.id ? null : id);
   };
@@ -268,9 +278,10 @@ export function Detail({
           </div>
           <div class={styles.facts}>
             <StatusBadge state={t.state} tone={taskTone(t)} />
+            {held && <StatusBadge tone="input" label="Not merged automatically" />}
             {r && (
               <span>
-                Started {startTime(r.startedAt, now)} ·{" "}
+                Started {dayTime(r.startedAt, now, false)} ·{" "}
                 <span class={styles.mono}>{duration(r, now)}</span>
               </span>
             )}
@@ -307,12 +318,11 @@ export function Detail({
               <p>{reply.summary}</p>
             </section>
           )}
-          <PolicyDecisions decisions={t.decisions} now={now} />
           {tabs.length > 0 && (
             <Tabs
-              label={discussion ? "Thread and runs" : "Runs"}
+              label={tabsLabel}
               tabs={tabs}
-              selected={thread ? THREAD : (r?.id ?? "")}
+              selected={policies ? POLICIES : thread ? THREAD : (r?.id ?? "")}
               onSelect={pick}
               panel={PANEL}
               class={styles.tabs}
@@ -374,7 +384,11 @@ export function Detail({
           }}
         />
       )}
-      {thread ? (
+      {policies ? (
+        <div id={PANEL} role="tabpanel" class={styles.panel}>
+          <PolicyTab task={t} now={now} />
+        </div>
+      ) : thread ? (
         <div id={PANEL} role="tabpanel" class={styles.panel}>
           <Thread key={t.key} task={t} now={now} refresh={refresh} />
         </div>
