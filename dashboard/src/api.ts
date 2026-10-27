@@ -207,8 +207,14 @@ export interface RepoList {
   update: (row: Repo) => void;
 }
 
-export function useRepos(): RepoList {
-  const list = usePolled<Repos>("api/repos", REPOS_POLL_MS);
+// `backlog`: with each configured repo's backlog count (the Overview's). The list shown stays
+// while the other one is read.
+export function useRepos(backlog = false): RepoList {
+  const last = useRef<Repos | null>(null);
+  const list = usePolled<Repos>(backlog ? "api/repos?backlog=1" : "api/repos", REPOS_POLL_MS, {
+    cached: () => last.current,
+  });
+  last.current = list.data ?? last.current;
   const [starting, setStarting] = useState<string | null>(null);
   const [failed, setFailed] = useState<RepoList["failed"]>(null);
   const [refreshing, setRefreshing] = useState(false);

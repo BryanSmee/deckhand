@@ -23,6 +23,8 @@ class FakeNotification {
 }
 
 beforeEach(() => {
+  // All's tasks: their rows and the open one.
+  history.replaceState(null, "", "#/tasks");
   FakeNotification.permission = "granted";
   FakeNotification.shown = [];
   vi.stubGlobal("Notification", FakeNotification);

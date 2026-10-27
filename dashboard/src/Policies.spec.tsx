@@ -1,7 +1,7 @@
 // A task's Policies tab: shown only with decisions, newest first, policy errors told apart from
 // denials, and the "Not merged automatically" badge while a denied auto-merge keeps it open.
 import { fireEvent, render, screen, within } from "@testing-library/preact";
-import { expect, test } from "vitest";
+import { beforeEach, expect, test } from "vitest";
 import { Dashboard } from "./App";
 import { makeState } from "./testUtils";
 import type { PolicyDecision, State, Task } from "./types";
@@ -49,6 +49,9 @@ const decisions = (): HTMLElement[] => [
   ...(screen.getByRole("region", { name: "Policy decisions, newest first" })
     .children as HTMLCollectionOf<HTMLElement>),
 ];
+
+// All's tasks: their rows and the open one.
+beforeEach(() => history.replaceState(null, "", "#/tasks"));
 
 test("no decision: no Policies tab, no badge", () => {
   render(<Dashboard state={state} error={null} />);

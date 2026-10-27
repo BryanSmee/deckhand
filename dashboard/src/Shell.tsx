@@ -1,8 +1,9 @@
 // The app shell (docs/design/dashboard-redesign.md › Layout › App shell). On a wide screen, the
 // sidebar (Deckhand, New request, the repositories, Settings, the run slots and the user), or
-// its 64 px rail, and a page header (the repository, its GitHub link, Tasks | Board). On a
-// phone, a top bar (the repository switcher, New request) and a tab bar (Overview, Tasks,
-// Board, Settings). Links keep the view: a repository's link from its board opens the other's.
+// its 64 px rail, and a page header (the repository, its GitHub link, Tasks | Board; Overview |
+// Tasks on All). On a phone, a top bar (the repository switcher, New request) and a tab bar
+// (Overview, Tasks, Board, Settings). Links keep the view: a repository's link from its board
+// opens the other's, and All's from a board opens the Overview (the board is one repo's).
 import type { ComponentChildren } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
 import type { RepoList } from "./api";
@@ -10,7 +11,7 @@ import { plural, type RepoCounts, repoCounts, sameRepo, shortRepo } from "./form
 import type { Permission } from "./notify";
 import { needingYou } from "./Repos";
 import { SettingsTabs } from "./Settings";
-import { formatRoute, type Route } from "./route";
+import { formatRoute, isOverview, type Route } from "./route";
 import { useSync } from "./Sync";
 import type { State } from "./types";
 import { Button, IconButton } from "./ui/Button";
@@ -34,12 +35,15 @@ const REQUESTS: { id: Request; label: string; icon: ComponentChildren }[] = [
 const tasksOf = (repo: string | null) => formatRoute({ repo, task: null, run: null });
 const boardOf = (repo: string | null) =>
   formatRoute({ repo, task: null, run: null, page: "board" });
-const onAll = (route: Route) => !route.page && !route.repo;
+const allTasks = formatRoute({ repo: null, task: null, run: null, page: "tasks" });
+const onTasks = (route: Route) => route.page === "tasks" || (!route.page && !!route.repo);
 
-// A repository's link: its board from a board, else its tasks. All has no board (the
-// Overview replaces it): its tasks.
-const repoHref = (route: Route, repo: string | null) =>
-  route.page === "board" && repo ? boardOf(repo) : tasksOf(repo);
+// A repository's link: its board from a board, else its tasks. All's: its tasks from All's
+// tasks, else the Overview.
+const repoHref = (route: Route, repo: string | null) => {
+  if (!repo) return route.page === "tasks" && !route.repo ? allTasks : tasksOf(null);
+  return route.page === "board" ? boardOf(repo) : tasksOf(repo);
+};
 
 interface Common {
   state: State | null;
@@ -381,17 +385,22 @@ export function PageHeader({
 }) {
   const settings = route.page === "settings";
   const repo = settings ? null : route.repo;
-  const views: Segment<"tasks" | "board">[] = [
-    { value: "tasks", label: "Tasks", icon: <Icon.Tasks size={14} />, href: tasksOf(repo) },
-  ];
-  // All has Tasks only, until the Overview takes its place.
-  if (repo)
-    views.push({
-      value: "board",
-      label: "Board",
-      icon: <Icon.Board size={14} />,
-      href: boardOf(repo),
-    });
+  // The board is one repository's: All has the Overview instead.
+  const views: Segment<"overview" | "tasks" | "board">[] = repo
+    ? [
+        { value: "tasks", label: "Tasks", icon: <Icon.Tasks size={14} />, href: tasksOf(repo) },
+        { value: "board", label: "Board", icon: <Icon.Board size={14} />, href: boardOf(repo) },
+      ]
+    : [
+        {
+          value: "overview",
+          label: "Overview",
+          icon: <Icon.Overview size={14} />,
+          href: tasksOf(null),
+        },
+        { value: "tasks", label: "Tasks", icon: <Icon.Tasks size={14} />, href: allTasks },
+      ];
+  const view = isOverview(route) ? "overview" : route.page === "board" ? "board" : "tasks";
   return (
     <header class={`${styles.header} ${settings ? styles.tabbed : ""}`}>
       <div class={styles.title}>
@@ -410,12 +419,9 @@ export function PageHeader({
         )}
       </div>
       {settings && <SettingsTabs route={route} count={needs} class={styles.headerTabs} />}
-      {!settings && (
-        <Segmented
-          label="View"
-          options={views}
-          value={route.page === "board" ? "board" : "tasks"}
-        />
+      {!settings && <Segmented label="View" options={views} value={view} />}
+      {!settings && !repo && (
+        <span class={styles.hint}>The board is per repository: open one to plan its work.</span>
       )}
       {children && <div class={styles.controls}>{children}</div>}
     </header>
@@ -483,28 +489,31 @@ export function TopBar(props: TopBarProps) {
 }
 
 // The phone's tab bar. Tasks and Board are the repository shown, else the one last open
-// here, else the most recently active.
+// here. Else Tasks are All's (and stay All's on them), and Board the most recently active
+// repository's: the board is one repository's.
 export function TabBar({ state, route, lastRepo }: Common & { lastRepo: string | null }) {
   const counts = repoCounts(state?.tasks ?? [], route.repo);
+  const onAllTasks = route.page === "tasks" && !route.repo;
+  const tasksRepo = route.repo ?? (onAllTasks ? null : lastRepo);
   const repo = route.repo ?? lastRepo ?? counts.repos[0]?.repo ?? null;
   const tabs = [
     {
       label: "Overview",
       icon: <Icon.Overview size={22} />,
       href: tasksOf(null),
-      current: onAll(route),
+      current: isOverview(route),
       count: counts.all.input,
     },
     {
       label: "Tasks",
       icon: <Icon.Tasks size={22} />,
-      href: tasksOf(repo),
-      current: !route.page && !!route.repo,
+      href: tasksRepo ? tasksOf(tasksRepo) : allTasks,
+      current: onTasks(route),
     },
     {
       label: "Board",
       icon: <Icon.Board size={22} />,
-      href: boardOf(repo),
+      href: repo ? boardOf(repo) : tasksOf(null),
       current: route.page === "board",
     },
     {

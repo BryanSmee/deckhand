@@ -123,7 +123,7 @@ copies. States drawn for each: default, hover, pressed, focus, disabled, pending
 - **Phone**: the sidebar is replaced by a top bar (repository switcher) and a bottom tab bar
   (Overview, Tasks, Board, Settings). Detail pages (a run log) hide the tab bar and show their
   own actions there.
-- **Routes**: `#/` Overview, `#/<owner>/<repo>` Tasks, `…/board`, `…/<task>/<run>`,
+- **Routes**: `#/` Overview, `#/tasks` every repository's tasks, `#/<owner>/<repo>` Tasks, `…/board`, `…/<task>/<run>`,
   `#/settings/repositories[/<owner>/<repo>]`, `#/settings/preferences`, `#/settings/server`.
   Old addresses (`#/repositories`, the graph page) redirect.
 
