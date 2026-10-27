@@ -28,6 +28,10 @@
 //                                         the task's last run, failed, interrupted or
 //                                         cancelled, again:
 //                                         its mode and comments (board.mjs rerunnable())
+//   POST /api/repos/<owner>/<repo>/dismiss { runId, undo? }
+//                                         the task's last run, failed, interrupted or
+//                                         cancelled, stops asking for attention until
+//                                         another run (dismissals.mjs); `undo`: it asks again
 //   POST /api/repos/<owner>/<repo>/inbox  { kind: "idea" | "bug", text }
 //                                         an entry for the repo's inbox: the App's comment on
 //                                         its inbox issue, and the run a comment there starts
@@ -51,6 +55,8 @@ import {
 import { MAX_TEXT, answersComment, parseAnswers } from "./answers.mjs";
 import { labelFailed } from "./comments.mjs";
 import { repoAllowed } from "./config.mjs";
+import { FAILED } from "./board.mjs";
+import { createDismissals } from "./dismissals.mjs";
 import { fromDashboard } from "./discussions.mjs";
 import { inboxItem, issueItem, parseKey, prId, sameRepo, taskKey, unmarked } from "./events.mjs";
 import { getJson } from "./github.mjs";
@@ -110,6 +116,7 @@ export function checkAction(body) {
 // `cancel(key, user)`: stops the task's run or drops its queued comments (runs.mjs cancel()):
 // "running", "queued" or null. `analysis`: run digests (analysis.mjs createAnalysis()).
 // `lanes`: the lanes' names (lanes.mjs), which a plan and the dashboard's renaming set.
+// `dismissals`: the failed runs dismissed from the dashboard (dismissals.mjs).
 export function createWorkApi({
   config,
   github,
@@ -127,6 +134,7 @@ export function createWorkApi({
   cancel = () => null,
   analysis = createAnalysis({ runs: () => [] }),
   lanes = createLanes(),
+  dismissals = createDismissals(),
   publicUrl = () => null,
   // The key of the dashboard's "from" lines (discussions.mjs fromKey()), or null.
   fromKey = () => null,
@@ -702,6 +710,30 @@ export function createWorkApi({
     return `Rerun of #${number} queued.`;
   }
 
+  // The task's last run, failed, lost or cancelled, no longer asks for attention: its task
+  // leaves Waiting on you and the Error chip until another run (board.mjs). Checked as
+  // rerun() is, but nothing is posted or started: the repo's users only, any kind of task.
+  // `undo`: it asks again.
+  async function dismiss(repo, user, runId, undo) {
+    const run = runOf(runId);
+    if (!sameRepo(run?.repo, repo)) refuse(404, `No run ${runId} in ${repo}.`);
+    await checkedRepo(repo, user);
+    const task = taskOf(run.key);
+    const name = `#${parseKey(run.key)?.number ?? run.key}`;
+    if (undo) {
+      if (!dismissals.undo(task?.key ?? run.key, runId)) {
+        refuse(409, `That run of ${name} isn't dismissed.`);
+      }
+      return `${name}'s dismissal is undone.`;
+    }
+    if (task?.runs[0]?.id !== runId) refuse(409, `Only the latest run of ${name} is dismissed.`);
+    if (!FAILED.includes(run.status) || task.state !== run.status) {
+      refuse(409, `${name}'s last run didn't fail or stop: there is nothing to dismiss.`);
+    }
+    dismissals.dismiss(task.key, runId, user);
+    return `${name} dismissed.`;
+  }
+
   // An idea or a bug report for the repo's inbox, as a comment there would be: the App's
   // comment on the inbox issue (an entry, not a reply: no marker), then the run it starts,
   // queued here since bot comments never reach admit(). The run reads the entry as the user's.
@@ -773,6 +805,14 @@ export function createWorkApi({
     send(res, 200, { message: await rerun(repo, user, runId) });
   }
 
+  async function dismissal(req, res, user, repo) {
+    const { runId, undo } = (await readJsonBody(req, MAX_BODY)) ?? {};
+    if (typeof runId !== "string" || !/^[\w.-]+$/.test(runId))
+      refuse(400, "`runId` is a run's id.");
+    log(`Work area: ${user} ${undo ? "undoes the dismissal of" : "dismisses"} ${repo} ${runId}`);
+    send(res, 200, { message: await dismiss(repo, user, runId, undo === true) });
+  }
+
   async function inbox(req, res, user, repo) {
     const { kind, text: sent } = (await readJsonBody(req, MAX_ANSWER_BODY)) ?? {};
     if (!Object.hasOwn(INBOXES, kind)) refuse(400, "`kind` is idea or bug.");
@@ -814,18 +854,18 @@ export function createWorkApi({
     );
   }
 
-  // Handles /api/repos/<owner>/<repo>/issues, /work, /answer, /rerun, /inbox, /lane and /analyze;
-  // false for any other path.
+  // Handles /api/repos/<owner>/<repo>/issues, /work, /answer, /rerun, /dismiss, /inbox, /lane
+  // and /analyze; false for any other path.
   const handle = apiRoute({
     name: "Work area",
     route: (pathname) => {
       const one =
-        /^\/api\/repos\/([\w.-]+)\/([\w.-]+)\/(issues|work|answer|rerun|inbox|lane|analyze)$/.exec(
+        /^\/api\/repos\/([\w.-]+)\/([\w.-]+)\/(issues|work|answer|rerun|dismiss|inbox|lane|analyze)$/.exec(
           pathname,
         );
       return one && { repo: `${one[1]}/${one[2]}`, what: one[3] };
     },
-    posts: { work, answer: answers, rerun: reruns, inbox, lane, analyze },
+    posts: { work, answer: answers, rerun: reruns, dismiss: dismissal, inbox, lane, analyze },
     gets: {
       issues: (req, res, user, repo) => backlog(res, repo, user),
       analyze: previewAnalysis,

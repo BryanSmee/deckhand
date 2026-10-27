@@ -3192,6 +3192,59 @@ mounts:
     await listener.until("done (ok)");
   });
 
+  test("Dismiss: a failed run stops asking, in dismissed.json and on the dashboard", async (t) => {
+    const { dir, port } = await listen(t, {}, (dir, github) => {
+      mkdirSync(join(dir, "logs"));
+      writeFileSync(
+        join(dir, "logs", "org-repo-5-1000.log"),
+        [
+          {
+            type: "listener",
+            key: "org/repo#5",
+            repo: "org/repo",
+            taskMode: "work",
+            startedAt: 1000,
+          },
+          { type: "result", is_error: true, result: "It failed.", duration_ms: 6000 },
+        ]
+          .map((l) => JSON.stringify(l))
+          .join("\n") + "\n",
+      );
+      return { GITHUB_URL: github.url };
+    });
+    const base = `http://127.0.0.1:${port}`;
+    const get = (path, cookie) =>
+      fetch(base + path, { redirect: "manual", headers: cookie ? { cookie } : {} });
+    const login = await get("/auth/login");
+    const to = new URL(login.headers.get("location"));
+    const state = login.headers.getSetCookie()[0].split(";")[0];
+    const back = await get(`/auth/callback?code=c&state=${to.searchParams.get("state")}`, state);
+    const session = back.headers
+      .getSetCookie()
+      .find((c) => c.startsWith("deckhand_session="))
+      .split(";")[0];
+    const task = async () =>
+      (await (await get("/api/state", session)).json()).tasks.find((x) => x.key === "org/repo#5");
+    assert.equal((await task()).state, "error");
+    assert.equal((await task()).dismissed, null);
+    const res = await fetch(`${base}/api/repos/org/repo/dismiss`, {
+      method: "POST",
+      headers: {
+        cookie: session,
+        origin: "https://hooks.example.com",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ runId: "org-repo-5-1000" }),
+    });
+    assert.equal(res.status, 200, await res.clone().text());
+    assert.equal((await res.json()).message, "#5 dismissed.");
+    const { dismissed, state: ended } = await task();
+    assert.equal(ended, "error");
+    assert.equal(dismissed.by, "alice");
+    const kept = JSON.parse(readFileSync(join(dir, "dismissed.json"), "utf8"));
+    assert.equal(kept["org/repo#5"].runId, "org-repo-5-1000");
+  });
+
   test("the dashboard and its logs are for allowed users signed in with GitHub", async (t) => {
     // GitHub's sign-in pages are the fake GitHub too. A built dashboard, and an older log with
     // no title.
@@ -3531,6 +3584,7 @@ mounts:
       "closed",
       "pr",
       "rerunnable",
+      "dismissed",
       "runs",
     ],
     ["deadline", "waitingFor", "questions", "waitForAnswers", "decisions", "dryRun"],

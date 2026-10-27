@@ -107,6 +107,12 @@
   color: var(--text);
 }
 
+.dismissed {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .pr {
   display: inline-flex;
   align-items: center;

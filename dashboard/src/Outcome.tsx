@@ -1,5 +1,5 @@
 // A run's outcome, above its log: how it ended and its pull request, its reply (three lines on
-// a phone), what to do next (Open pull request, Rerun), then its facts: the branch and its
+// a phone), what to do next (Open pull request, Rerun, Dismiss), then its facts: the branch and its
 // commits, the change's size (the latest run's only: the pull request is the task's), how long, on which model, and where it replies. A run going on
 // says so instead.
 import { AUTH_NAMES, duration, plural, PR_NAMES, type Tone } from "./format";
@@ -18,6 +18,9 @@ interface Props {
   // The run may run again (its task's last, failed or lost).
   onRerun?: () => void;
   rerunning?: boolean;
+  // Its failure may stop asking for attention (its task's last, failed, lost or stopped).
+  onDismiss?: () => void;
+  dismissing?: boolean;
 }
 
 const PR_TONES: Record<PullRequest["state"], Tone> = {
@@ -41,7 +44,8 @@ export function AuthBadge({ auth }: { auth?: Auth | null }) {
   return <StatusBadge tone="idle" outline label={label} title={`Ran on ${variable}`} />;
 }
 
-export function Outcome({ task: t, run: r, now, github, touch, onRerun, rerunning }: Props) {
+export function Outcome(props: Props) {
+  const { task: t, run: r, now, github, touch, onRerun, rerunning, onDismiss, dismissing } = props;
   // The task's pull request is its latest run's work: an older run's says nothing of it.
   const pr = r.id === t.runs[0]?.id ? t.pr : null;
   const live = r.status === "running";
@@ -72,6 +76,17 @@ export function Outcome({ task: t, run: r, now, github, touch, onRerun, rerunnin
           onClick={onRerun}
         >
           Rerun
+        </Button>
+      )}
+      {onDismiss && (
+        <Button
+          size={size}
+          pending={dismissing}
+          pendingLabel="Dismissing…"
+          title="It stops waiting on you until another run"
+          onClick={onDismiss}
+        >
+          Dismiss
         </Button>
       )}
     </>
@@ -136,7 +151,7 @@ export function Outcome({ task: t, run: r, now, github, touch, onRerun, rerunnin
           )}
         </div>
       )}
-      {touch && (pr || onRerun) && <div class={styles.phoneActions}>{actions}</div>}
+      {touch && (pr || onRerun || onDismiss) && <div class={styles.phoneActions}>{actions}</div>}
     </section>
   );
 }

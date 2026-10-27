@@ -1,7 +1,8 @@
 import { describe, expect, test } from "vitest";
 import fixture from "./fixture.json";
-import { makeState } from "./testUtils";
+import { makeState, makeTask } from "./testUtils";
 import {
+  canDismiss,
   dayTime,
   inChip,
   isPrTask,
@@ -21,7 +22,7 @@ import {
   versionUrl,
   when,
 } from "./format";
-import type { Run, State, Task } from "./types";
+import type { PrState, Run, State, Task } from "./types";
 
 const state = fixture as State;
 const task = (key: string) => state.tasks.find((t) => t.key === key)!;
@@ -63,8 +64,40 @@ test("state chips group states: a waiting brainstorm needs input", () => {
     state.tasks.filter((t) => inChip(chip, t)).map((t) => t.state);
   expect(states("running").sort()).toEqual(["building-image", "queued", "waiting", "working"]);
   expect(states("input").sort()).toEqual(["brainstorm", "idle-brainstorm", "needs-input"]);
-  expect(states("error").sort()).toEqual(["error", "interrupted"]);
+  // #127, interrupted, has its pull request merged since: only All lists it.
+  expect(states("error").sort()).toEqual(["error"]);
   expect(states("all")).toHaveLength(state.tasks.length);
+});
+
+test("the Error chip leaves out failures that no longer ask: dismissed, closed or merged", () => {
+  const failed = makeTask({ state: "interrupted" });
+  const pr = (state: PrState) => ({ number: 2, url: "", state, readyAt: null });
+  expect(inChip("error", failed)).toBe(true);
+  expect(inChip("error", { ...failed, pr: pr("draft") })).toBe(true);
+  for (const settled of [
+    { ...failed, dismissed: { by: "alice", at: 1 } },
+    { ...failed, closed: "completed" as const },
+    { ...failed, closed: "not_planned" as const },
+    { ...failed, pr: pr("merged") },
+    { ...failed, pr: pr("closed") },
+  ]) {
+    expect(inChip("error", settled)).toBe(false);
+    expect(inChip("all", settled)).toBe(true);
+  }
+});
+
+test("Dismiss: a last run failed, lost or stopped, that still asks", () => {
+  const run = (status: Run["status"]) => [{ ...task("acme/app#16").runs[0], status }];
+  for (const state of ["error", "interrupted", "cancelled"] as const) {
+    expect(canDismiss(makeTask({ state, runs: run(state) })), state).toBe(true);
+  }
+  // Done, a run going, the needs-input label since, dismissed already, closed.
+  expect(canDismiss(makeTask({ state: "done", runs: run("ok") }))).toBe(false);
+  expect(canDismiss(makeTask({ state: "working", runs: run("running") }))).toBe(false);
+  expect(canDismiss(makeTask({ state: "needs-input", runs: run("error") }))).toBe(false);
+  const failed = makeTask({ state: "error", runs: run("error") });
+  expect(canDismiss({ ...failed, dismissed: { by: "alice", at: 1 } })).toBe(false);
+  expect(canDismiss({ ...failed, closed: "completed" })).toBe(false);
 });
 
 test("titles: GitHub's, else the kind and number", () => {

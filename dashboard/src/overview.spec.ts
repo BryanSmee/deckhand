@@ -35,6 +35,24 @@ test("waiting on you: questions, a brainstorm's turn, failures and ready pull re
   expect(waitingOnYou([failed])[0].need).toBe("error");
 });
 
+test("a failure that no longer asks isn't waiting on you, nor failed on its card", () => {
+  const dismissed = { by: "alice", at: 1 };
+  const tasks = [
+    makeTask({ number: 1, state: "error", dismissed }),
+    makeTask({ number: 2, state: "interrupted", closed: "completed" }),
+    makeTask({ number: 3, state: "error", pr: { ...pr("draft"), state: "merged" } }),
+    makeTask({ number: 4, state: "error", pr: { ...pr("draft"), state: "closed" } }),
+    // Dismissed, its pull request still ready: the review waits.
+    makeTask({ number: 5, state: "error", dismissed, pr: pr("ready", 7) }),
+    makeTask({ number: 6, state: "error" }),
+  ];
+  expect(waitingOnYou(tasks).map((r) => [r.task.number, r.need])).toEqual([
+    [6, "error"],
+    [5, "ready"],
+  ]);
+  expect(repoParts(tasks, 0).map((p) => p.words)).toEqual(["1 failed"]);
+});
+
 test("a repository's tasks by tone, ended ones for a week", () => {
   const now = 10 * WEEK_MS;
   const tasks = [

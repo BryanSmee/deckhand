@@ -62,7 +62,8 @@ test("the chips: All, Running, Needs you, Ready, Done, Error, each with its coun
     ["Needs you", 3],
     ["Ready", 2],
     ["Done", 2],
-    ["Error", 2],
+    // #16; not #127, interrupted, whose pull request is merged since.
+    ["Error", 1],
   ]);
 });
 

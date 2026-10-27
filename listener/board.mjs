@@ -15,7 +15,8 @@
 //   done, error, interrupted, cancelled   how the last run ended (interrupted: the listener
 //                   restarted; cancelled: someone stopped it, `/cancel` or the dashboard)
 // A task whose last run is error, interrupted or cancelled is `rerunnable` when it may run
-// again.
+// again, and `dismissed` ({ by, at }) while that run is the one someone dismissed from the
+// dashboard (dismissals.mjs): it keeps its state, but no longer asks for attention.
 import { parseKey } from "./events.mjs";
 import { LIGHT } from "./modes.mjs";
 import { taskId } from "./spelling.mjs";
@@ -54,6 +55,9 @@ function runState(r) {
   return r.status; // needs-input, error, interrupted, cancelled
 }
 
+// How a run can end that may want attention: what Rerun and Dismiss take.
+export const FAILED = ["error", "interrupted", "cancelled"];
+
 // Whether the task's last run may run again from the dashboard (work.mjs rerun()): it failed,
 // was lost or cancelled, nothing came after it, and it was work on an issue or pull request (in work or
 // one of the repo's own modes) whose comments its log kept.
@@ -61,13 +65,21 @@ export function rerunnable(t) {
   const last = t.runs[0];
   return (
     !!last &&
-    ["error", "interrupted", "cancelled"].includes(last.status) &&
+    FAILED.includes(last.status) &&
     t.state === last.status &&
     ["issue", "pr"].includes(t.kind) &&
     !!last.taskMode &&
     !LIGHT.has(last.taskMode) &&
     Array.isArray(last.items)
   );
+}
+
+// { by, at } while the task's last run is the dismissed one `d` and the task still ended as it
+// did; else null: a new run, or the needs-input label, makes it ask again.
+function dismissedOf(t, d) {
+  const last = t.runs[0];
+  if (!d || !last || last.id !== d.runId || !FAILED.includes(last.status)) return null;
+  return t.state === last.status ? { by: d.by, at: d.at } : null;
 }
 
 function questionsFor(t, last, input) {
@@ -80,19 +92,22 @@ function questionsFor(t, last, input) {
 }
 
 // `runs`: newest first; `queued`, `brainstorms`, `waits`: as http.mjs's state() has them;
-// `inputs`: the open issues labelled needs-input (inputs.mjs list()).
+// `inputs`: the open issues labelled needs-input (inputs.mjs list()); `dismissals`: the
+// dismissed runs (dismissals.mjs list()).
 // A task waiting for input carries `questions`: { source, runId?, items, raw }, from the reply
 // of its last run when it stopped to ask, else from its issue's body (questions.mjs).
-export function board({ runs, queued, brainstorms, waits = [], inputs = [] }) {
+export function board({ runs, queued, brainstorms, waits = [], inputs = [], dismissals = [] }) {
   const tasks = gather(runs, [queued, brainstorms, waits, inputs]);
   const byKey = (list) => new Map(list.map((x) => [one(x.key), x]));
   const waiting = byKey(queued);
   const talks = byKey(brainstorms);
   const held = byKey(waits);
   const labelled = byKey(inputs);
+  const dismissed = byKey(dismissals);
   for (const t of tasks.values()) {
     const k = one(t.key);
     settle(t, waiting.get(k), talks.get(k), held.get(k), labelled.get(k));
+    t.dismissed = dismissedOf(t, dismissed.get(k));
   }
   // Most recent activity first, the live ones on top.
   const live = (t) => ["building-image", "working", "stopping", "queued"].includes(t.state);
@@ -136,6 +151,7 @@ function newTask(key, repo) {
     replyTo: null,
     state: null,
     since: 0,
+    dismissed: null,
     runs: [],
   };
 }

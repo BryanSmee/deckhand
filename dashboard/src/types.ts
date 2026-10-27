@@ -168,6 +168,9 @@ export interface Task {
   dryRun?: PolicyDryRun;
   // Its last run failed or was lost, and may run again from its page (listener/board.mjs).
   rerunnable: boolean;
+  // Someone dismissed its last run's failure: it no longer waits on you, until another run
+  // (listener/dismissals.mjs, board.mjs).
+  dismissed: { by: string; at: number } | null;
   runs: Run[]; // newest first
   // What a task waiting for input asks (listener/questions.mjs, board.mjs).
   questions?: Questions;

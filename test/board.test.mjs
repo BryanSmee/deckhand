@@ -346,3 +346,45 @@ test("a task's runs under two spellings of its repo are one task, the newest run
     ],
   );
 });
+
+test("dismissed: while the dismissed run is the task's last and the task ended as it did", () => {
+  const d = (key, runId) => ({ key, runId, by: "alice", at: 7 });
+  const tasks = board({
+    runs: [
+      run("acme/api#1", 30, { status: "error" }),
+      run("acme/api#2", 30, { status: "error" }),
+      run("acme/api#2", 20, { status: "interrupted" }),
+      run("acme/api#3", 30, { status: "cancelled" }),
+      run("acme/api#4", 30, { status: "ok" }),
+      run("acme/api#5", 30, { status: "error" }),
+      run("acme/api#6", 30, { status: "running" }),
+      run("acme/api#6", 20, { status: "error" }),
+    ],
+    queued: [],
+    brainstorms: [],
+    inputs: [{ key: "acme/api#5", since: 40, questions: null }],
+    dismissals: [
+      // The last run, failed: dismissed, whatever the key's case.
+      d("Acme/API#1", "acme/api#1-30"),
+      // An older run: a new failure since asks again.
+      d("acme/api#2", "acme/api#2-20"),
+      d("acme/api#3", "acme/api#3-30"),
+      d("acme/api#4", "acme/api#4-30"),
+      // The needs-input label came since: it asks.
+      d("acme/api#5", "acme/api#5-30"),
+      // A new run going.
+      d("acme/api#6", "acme/api#6-20"),
+    ],
+  });
+  const dismissed = Object.fromEntries(tasks.map((t) => [t.key, t.dismissed]));
+  assert.deepEqual(dismissed, {
+    "acme/api#1": { by: "alice", at: 7 },
+    "acme/api#2": null,
+    "acme/api#3": { by: "alice", at: 7 },
+    "acme/api#4": null,
+    "acme/api#5": null,
+    "acme/api#6": null,
+  });
+  // It keeps its state.
+  assert.equal(tasks.find((t) => t.key === "acme/api#1").state, "error");
+});

@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { ReplyError } from "../listener/comments.mjs";
 import { createWaits } from "../listener/waits.mjs";
+import { createDismissals } from "../listener/dismissals.mjs";
 import { createLanes } from "../listener/lanes.mjs";
 import { MAX_TREE, leadsTo } from "../listener/plans.mjs";
 import { COUNT_MS, ISSUES_MS, checkAction, createWorkApi, staleFor } from "../listener/work.mjs";
@@ -136,6 +137,7 @@ function setup({
     resume: async () => true,
   });
   w.lanes = createLanes({ now: () => w.clock });
+  w.dismissals = createDismissals({ now: () => w.clock });
   w.api = createWorkApi({
     config,
     github,
@@ -178,6 +180,7 @@ function setup({
     // Each run's digest is its id: the endpoint's checks are what is tested here.
     analysis: createAnalysis({ runs: () => history, partOf: (r) => `part of ${r.id}` }),
     lanes: w.lanes,
+    dismissals: w.dismissals,
     publicUrl: () => ORIGIN,
     now: () => w.clock,
     log: (line) => w.logs.push(line),
@@ -1565,6 +1568,59 @@ test("rerun refused: users, a broken config, closed, busy, not the latest, not f
     { runId: "run-pr-8" },
     409,
   );
+});
+
+const dismiss = (w, body, opts = {}) =>
+  call(w.api, "POST", "/api/repos/org/app/dismiss", { body, ...opts });
+
+test("dismiss: the task's last run, failed, interrupted or cancelled; Undo takes it back", async () => {
+  for (const status of ["error", "interrupted", "cancelled"]) {
+    // Closed or busy doesn't matter: nothing runs, nothing is posted.
+    const w = setup({ issues: { 5: { state: "closed" } }, ...failed("org/app#5", { status }) });
+    const res = await dismiss(w, { runId: "run-5" });
+    assert.equal(res.status, 200, JSON.stringify(res.body));
+    assert.equal(res.body.message, "#5 dismissed.");
+    assert.deepEqual(w.dismissals.list(), [
+      { key: "org/app#5", runId: "run-5", by: "alice", at: 1000 },
+    ]);
+    assert.deepEqual([w.comments, w.accepted], [[], []]);
+    const undone = await dismiss(w, { runId: "run-5", undo: true }, { user: "bob" });
+    assert.equal(undone.status, 200);
+    assert.equal(undone.body.message, "#5's dismissal is undone.");
+    assert.deepEqual(w.dismissals.list(), []);
+    // Twice: nothing to undo.
+    assert.equal((await dismiss(w, { runId: "run-5", undo: true })).status, 409);
+  }
+});
+
+test("dismiss refused: users, a broken config, not the latest, not failed, unknown", async () => {
+  const refused = async (opts, body, expected, user = "alice") => {
+    const w = setup({ issues: { 5: open("Five") }, ...failed("org/app#5"), ...opts });
+    const res = await dismiss(w, body, { user });
+    assert.equal(res.status, expected, JSON.stringify(res.body));
+    assert.deepEqual(w.dismissals.list(), []);
+    return res.body.error;
+  };
+  assert.match(await refused({}, { runId: "run-5" }, 403, "carol"), /not in ALLOWED_USERS/);
+  await refused({ settings: { users: ["bob"] } }, { runId: "run-5" }, 403);
+  await refused({ errors: ["bad"] }, { runId: "run-5" }, 409);
+  await refused({}, { runId: "run-6" }, 404);
+  await refused(failed("org/app#5", { repo: "org/other" }), { runId: "run-5" }, 404);
+  await refused({}, { runId: "../x" }, 400);
+  await refused({}, "nope", 400);
+  const older = failed("org/app#5");
+  older.tasks["org/app#5"].runs.unshift({ id: "run-5b", status: "error" });
+  assert.match(await refused(older, { runId: "run-5" }, 409), /Only the latest run of #5/);
+  for (const status of ["ok", "needs-input", "running"]) {
+    assert.match(
+      await refused(failed("org/app#5", { status }), { runId: "run-5" }, 409),
+      /didn't fail or stop/,
+    );
+  }
+  // Failed, but the needs-input label came since: it asks already.
+  const labelled = failed("org/app#5");
+  labelled.tasks["org/app#5"].state = "needs-input";
+  await refused(labelled, { runId: "run-5" }, 409);
 });
 
 const sendInbox = (w, body, opts = {}) =>
