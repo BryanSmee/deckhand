@@ -292,10 +292,11 @@ export interface ServerSetup {
   grants: { ok: boolean; file: string | null; message: string | null };
   // ALLOWED_USERS, lowercase.
   allowedUsers: string[];
-  // The Claude credentials set that a fallback or `/agent` can name ("plan", "key"), and the
-  // one runs use unless they name one ("gateway" too); null: none set. Names only, never values.
-  // A listener from before it sends none.
-  claude?: { set: Auth[]; default: Auth | null };
+  // The Claude credentials set that a fallback or `/agent` can name ("plan", "key"), the one
+  // runs use unless they name one ("gateway" too; null: none set), and those FALLBACKS names
+  // (`claude@anthropic:key` → "key"), in its order. Names only, never values. A listener from
+  // before it sends none (before `fallbacks`: no fallbacks).
+  claude?: { set: Auth[]; default: Auth | null; fallbacks?: Auth[] };
   // ALLOWED_REPOS ("owner/repo" or "owner/*"), lowercase; empty: every repo the App is on.
   allowedRepos: string[];
 }

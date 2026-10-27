@@ -68,7 +68,7 @@ test("serverSetup: the engine, the hosts granted in all, who may sign in on whic
     proxy: { on: true, hosts: 4 },
     grants: { ok: true, file: null, message: null },
     // No Claude credential set.
-    claude: { set: [], default: null },
+    claude: { set: [], default: null, fallbacks: [] },
     allowedUsers: ["alice", "bob"],
     allowedRepos: ["acme/*", "bryansmee/deckhand"],
   });
@@ -91,8 +91,8 @@ test("serverSetup: nothing but what the Server page shows, whatever the settings
   ]);
   assert.deepEqual(Object.keys(setup.proxy), ["on", "hosts"]);
   assert.deepEqual(Object.keys(setup.grants), ["ok", "file", "message"]);
-  // The Claude credentials by name: the plan first, the key as its fallback.
-  assert.deepEqual(setup.claude, { set: ["plan", "key"], default: "plan" });
+  // The Claude credentials by name: the plan first, the key set too, no fallback to it.
+  assert.deepEqual(setup.claude, { set: ["plan", "key"], default: "plan", fallbacks: [] });
   // No engine, no grants folder, no repo allowlist: none, nothing granted, every repo.
   assert.deepEqual([setup.engine, setup.proxy.hosts, setup.allowedRepos], [null, 0, []]);
   for (const value of Object.values(secrets)) assert.ok(!JSON.stringify(setup).includes(value));
@@ -100,12 +100,20 @@ test("serverSetup: nothing but what the Server page shows, whatever the settings
 
 test("serverSetup: which Claude credential runs use first", (t) => {
   const claude = (env) => setupWith(t, {}, env).setup.claude;
-  assert.deepEqual(claude({ ANTHROPIC_API_KEY: "k" }), { set: ["key"], default: "key" });
-  // A gateway's token comes first; it isn't one an entry can name.
-  assert.deepEqual(claude({ ANTHROPIC_AUTH_TOKEN: "t", ANTHROPIC_API_KEY: "k" }), {
+  assert.deepEqual(claude({ ANTHROPIC_API_KEY: "k" }), {
     set: ["key"],
-    default: "gateway",
+    default: "key",
+    fallbacks: [],
   });
+  // A gateway's token comes first; it isn't one an entry can name, but FALLBACKS can still
+  // name the key. Other agents' and providers' entries aren't Claude's credentials.
+  const env = {
+    ANTHROPIC_AUTH_TOKEN: "t",
+    ANTHROPIC_API_KEY: "k",
+    OPENAI_API_KEY: "o",
+    FALLBACKS: "codex@openai, claude@anthropic:key",
+  };
+  assert.deepEqual(claude(env), { set: ["key"], default: "gateway", fallbacks: ["key"] });
 });
 
 test("serverSetup: a repo's file with errors is named, not quoted, and grants no host", (t) => {

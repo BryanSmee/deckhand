@@ -13,7 +13,7 @@ const SETUP: ServerSetup = {
   engine: "sysbox",
   proxy: { on: true, hosts: 14 },
   grants: { ok: true, file: null, message: null },
-  claude: { set: ["plan", "key"], default: "plan" },
+  claude: { set: ["plan", "key"], default: "plan", fallbacks: ["key"] },
   allowedUsers: ["alice", "bob"],
   allowedRepos: ["acme/*", "bryansmee/deckhand"],
 };
@@ -141,9 +141,15 @@ test("the Claude credential runs use: the key alone, a gateway, none, or a liste
     else expect(card("Runs").queryByText("Claude")).toBeNull();
     unmount();
   };
-  await shows({ set: ["key"], default: "key" }, "API key");
-  // Behind a gateway's token, the key isn't used.
-  await shows({ set: ["key"], default: "gateway" }, "Gateway");
+  await shows({ set: ["key"], default: "key", fallbacks: [] }, "API key");
+  // A key FALLBACKS doesn't name: only `/agent` takes it.
+  await shows({ set: ["plan", "key"], default: "plan", fallbacks: [] }, "Plan · API key also set");
+  // Behind a gateway's token, FALLBACKS can still name the key.
+  await shows(
+    { set: ["key"], default: "gateway", fallbacks: ["key"] },
+    "Gateway first, then API key as fallback",
+  );
+  await shows({ set: ["key"], default: "gateway", fallbacks: [] }, "Gateway · API key also set");
   await shows({ set: [], default: null }, "No credential set");
   await shows(undefined, null);
 });

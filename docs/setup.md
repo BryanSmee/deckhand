@@ -567,7 +567,8 @@ per token. An entry can name the credential it runs on: `claude@anthropic:plan`
 model, in the run's outcome (and on a discussion's page): "Plan" (`CLAUDE_CODE_OAUTH_TOKEN`),
 "API key" (`ANTHROPIC_API_KEY`) or "Gateway" (`ANTHROPIC_AUTH_TOKEN`), whether the run named
 it or took the default. Settings › Server says which Claude credentials are set and which one
-runs use first ("Plan first, then API key as fallback"). The reply's footer names the
+runs use first: "Plan first, then API key as fallback" when `FALLBACKS` names
+`claude@anthropic:key`, "Plan · API key also set" when only `/agent` can pick it. The reply's footer names the
 credential only when the entry names one, or after a fallback.
 
 What runs an issue, first match wins:

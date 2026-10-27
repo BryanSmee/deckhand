@@ -1,6 +1,7 @@
 // What the listener is busy with, for /status (http.mjs): running runs, reaction updates still
 // on their way to GitHub, preview hooks; `idle` when none is. Reactions are tracked here
 // (track()) as runs end and queued comments are dropped.
+import { entryOf } from "./agents/index.mjs";
 import { AUTHS } from "./anthropic.mjs";
 import { parseKey } from "./events.mjs";
 import { GrantsError, grantErrors, loadGrants } from "./grants.mjs";
@@ -47,12 +48,17 @@ export function serverSetup(config, load = () => loadGrants(config)) {
 }
 
 // The Claude credentials an entry can name that are set (config.credentials: "plan", "key"),
-// and the one runs take unless they name one (AUTHS: "gateway" too), or null. Their names
-// only, never their values.
+// the one runs take unless they name one (AUTHS: "gateway" too, or null), and those FALLBACKS
+// names (`claude@anthropic:key` → "key"), in its order. Their names only, never their values.
 function claudeSetup(config) {
+  const fallbacks = (config.fallbacks ?? [])
+    .map(entryOf)
+    .filter((e) => e?.agent === "claude" && e.provider === "anthropic" && e.credential)
+    .map((e) => e.credential);
   return {
     set: config.credentials?.["claude@anthropic"]?.set ?? [],
     default: AUTHS[config.claudeCredential] ?? null,
+    fallbacks,
   };
 }
 

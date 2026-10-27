@@ -26,8 +26,7 @@ export const NAMED = {
 // gateway's token, a plan's, or an API key, billed per token.
 export const AUTHS = {
   ANTHROPIC_AUTH_TOKEN: "gateway",
-  CLAUDE_CODE_OAUTH_TOKEN: "plan",
-  ANTHROPIC_API_KEY: "key",
+  ...Object.fromEntries(Object.entries(NAMED).map(([name, { variable }]) => [variable, name])),
 };
 
 // The variable that holds the operator's default credential, or null.
