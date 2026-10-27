@@ -2,6 +2,7 @@
 import type {
   Kind,
   PrState,
+  PullRequest,
   RepoStatus,
   Run,
   RunStatus,
@@ -43,7 +44,7 @@ export const PR_NAMES: Record<PrState, string> = {
 
 // The state chips: each groups states. A task waiting for other issues ("/after") is on its
 // way to a run, like a queued one. A brainstorm waiting for its next comment waits for
-// the maintainer, like a run that stopped to ask. "Ready for review" is the pull request's
+// the maintainer, like a run that stopped to ask. "Ready" (for review) is the pull request's
 // state, whatever the task's: what waits for the maintainer's review. A run someone stopped
 // is over, not failed.
 export const CHIPS = [
@@ -53,8 +54,8 @@ export const CHIPS = [
     name: "Running",
     states: ["building-image", "working", "stopping", "queued", "waiting"],
   },
-  { id: "input", name: "Needs input", states: ["needs-input", "brainstorm", "idle-brainstorm"] },
-  { id: "review", name: "Ready for review", states: null },
+  { id: "input", name: "Needs you", states: ["needs-input", "brainstorm", "idle-brainstorm"] },
+  { id: "review", name: "Ready", states: null },
   { id: "done", name: "Done", states: ["done", "cancelled"] },
   { id: "error", name: "Error", states: ["error", "interrupted"] },
 ] as const satisfies readonly { id: string; name: string; states: readonly TaskState[] | null }[];
@@ -68,6 +69,17 @@ export function inChip(chip: ChipId, t: Task): boolean {
 }
 
 export const isReady = (t: Task) => t.pr?.state === "ready";
+
+// The search box's: every word of the query in the task's title, number, pull request or
+// repo. "#22" finds #22 (and #220), "app budgets" the budget tasks of the app repos.
+export function matchesSearch(t: Task, query: string): boolean {
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+  if (!words.length) return true;
+  const number = t.number === null ? "" : `#${t.number}`;
+  const pr = t.pr ? `#${t.pr.number}` : "";
+  const text = [titleOf(t), t.repo, number, pr].join(" ").toLowerCase();
+  return words.every((w) => text.includes(w));
+}
 
 // What a state looks like: one of the six status tones (global.css .s-*), which only ever
 // mean a state. A stopped run is over, not failed: idle, like a queued one.
@@ -154,6 +166,28 @@ export const shortRepo = (repo: string) => repo.slice(repo.indexOf("/") + 1);
 
 // "1 run", "3 runs"; `many` when adding an s won't do ("replies").
 export const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+
+// The mode a task runs in, where its kind doesn't say it already: an issue's or a pull
+// request's ("work", "review"), else the repo's own mode only.
+export function modeOf(t: Pick<Task, "kind" | "mode">): string | null {
+  return t.kind === "issue" || t.kind === "pr" ? t.mode : ownMode(t.mode);
+}
+
+// A pull request in a row's line: "Draft #34", "PR #33" (ready), "merged #30"; and what
+// that means, as its tooltip.
+export function prName(pr: PullRequest): string {
+  const auto = pr.state === "merged" && pr.autoMerged;
+  const word = auto
+    ? "merged by Deckhand"
+    : { draft: "Draft", ready: "PR", merged: "merged", closed: "closed" }[pr.state];
+  return `${word} #${pr.number}`;
+}
+
+export function prTitle(pr: PullRequest): string {
+  return pr.state === "merged" && pr.autoMerged
+    ? `Pull request #${pr.number}, merged by Deckhand with no human review`
+    : `Pull request #${pr.number}: ${PR_NAMES[pr.state].toLowerCase()}`;
+}
 
 // The repo's own mode, if any: "audit".
 export function ownMode(mode: string | null | undefined): string | null {

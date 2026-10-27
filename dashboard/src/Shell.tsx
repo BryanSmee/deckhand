@@ -405,13 +405,15 @@ interface TopBarProps extends Common {
   error: string | null;
   refresh?: () => Promise<void>;
   onRequest: (request: Request) => void;
+  // The Tasks page's: opens or closes the list's search box.
+  onSearch?: () => void;
 }
 
 // The phone's top bar: the repository switcher, whose sheet lists the sidebar's repositories,
-// then the run slots and the user; and New request. Under it, the listener's error, if any:
-// the sidebar's run slots say it on a wide screen.
+// then the run slots and the user; Search on the Tasks page, and New request. Under it, the
+// listener's error, if any: the sidebar's run slots say it on a wide screen.
 export function TopBar(props: TopBarProps) {
-  const { state, route, error, onRequest } = props;
+  const { state, route, error, onRequest, onSearch } = props;
   const [sheet, setSheet] = useState(false);
   const counts = repoCounts(state?.tasks ?? [], route.repo);
   const settings = route.page === "settings";
@@ -432,6 +434,15 @@ export function TopBar(props: TopBarProps) {
           <span class={styles.switcherLabel}>{label}</span>
           <Icon.ChevronDown class={styles.chevron} />
         </button>
+        {onSearch && (
+          <IconButton
+            variant="ghost"
+            size="touch"
+            label="Search tasks"
+            icon={<Icon.Search size={20} />}
+            onClick={onSearch}
+          />
+        )}
         {state && <NewRequest onPick={onRequest} form="bar" />}
         {sheet && (
           <Sheet title="Repositories" onClose={() => setSheet(false)}>

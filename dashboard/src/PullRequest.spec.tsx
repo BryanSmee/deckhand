@@ -1,5 +1,5 @@
-// Each task's pull request: its badge in the list, its link in the detail, the "Ready for
-// review" chip, and a notification when one turns ready (Notification mocked).
+// Each task's pull request: its state in the list, its link in the detail, the Ready chip,
+// and a notification when one turns ready (Notification mocked).
 import { fireEvent, render, screen, within } from "@testing-library/preact";
 import { beforeEach, expect, test, vi } from "vitest";
 import { Dashboard } from "./App";
@@ -39,29 +39,28 @@ const withPr = (s: State, pr: Partial<NonNullable<Task["pr"]>>, now = s.now + 30
 test("rows show their pull request's state; the detail links to it", () => {
   render(<Dashboard state={state} error={null} />);
   const row = screen.getByText("Dark mode for the settings page").closest("button")!;
-  expect(within(row).getByText("Ready for review").title).toBe("Pull request #132");
-  expect(screen.getAllByText("Merged")).toHaveLength(1);
+  expect(within(row).getByText("PR #132").title).toBe("Pull request #132: ready for review");
+  expect(screen.getAllByText("merged #128")).toHaveLength(1);
 
   // #22 is open: its draft pull request, where it replies.
-  const link = screen.getByRole("link", { name: "Pull request #25" });
+  const link = screen.getByRole("link", { name: "Draft #25" });
   expect(link.getAttribute("href")).toBe("https://github.example.com/acme/app/pull/25");
-  expect(within(link.parentElement!).getByText("Draft")).toBeTruthy();
   expect(screen.queryByRole("link", { name: /Replies on/ })).toBeNull();
 });
 
 test("a pull request Deckhand merged by itself says so on its row and in the detail", () => {
   const merged = withPr(state, { state: "merged", autoMerged: true });
   render(<Dashboard state={merged} error={null} />);
-  const badges = screen.getAllByText("Merged by Deckhand");
-  expect(badges.length).toBeGreaterThanOrEqual(1);
-  expect(badges[0].title).toBe("Pull request #25, merged by Deckhand with no human review");
-  // A maintainer's merge stays "Merged".
-  expect(screen.getAllByText("Merged")).toHaveLength(1);
+  const title = "Pull request #25, merged by Deckhand with no human review";
+  expect(screen.getByText("merged by Deckhand #25").title).toBe(title);
+  expect(screen.getByRole("link", { name: "Merged by Deckhand #25" }).title).toBe(title);
+  // A maintainer's merge stays "merged".
+  expect(screen.getAllByText("merged #128")).toHaveLength(1);
 });
 
-test("the Ready for review chip lists the pull requests waiting for a review", () => {
+test("the Ready chip lists the pull requests waiting for a review", () => {
   render(<Dashboard state={state} error={null} />);
-  fireEvent.click(screen.getByRole("button", { name: /^Ready for review/ }));
+  fireEvent.click(screen.getByRole("button", { name: /^Ready/ }));
   const titles = within(screen.getByRole("list"))
     .getAllByRole("button")
     .map((b) => b.querySelector("span:nth-child(2)")!.textContent);
