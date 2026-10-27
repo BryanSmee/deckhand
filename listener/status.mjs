@@ -2,6 +2,7 @@
 // on their way to GitHub, preview hooks; `idle` when none is. Reactions are tracked here
 // (track()) as runs end and queued comments are dropped.
 import { parseKey } from "./events.mjs";
+import { GrantsError, grantErrors, loadGrants } from "./grants.mjs";
 
 // Which Deckhand runs and since when, for api/state and /status. DECKHAND_VERSION: the release
 // (a git tag), edge-<short sha> for a push to main, "dev" from source. DECKHAND_SOURCE: the
@@ -13,6 +14,68 @@ export function serverInfo(env, now = Date.now) {
     startedAt: now(),
     node: process.version,
     source: (env.DECKHAND_SOURCE || "").replace(/\/+$/, ""),
+  };
+}
+
+// How this Deckhand is set up, for the dashboard's Settings › Server (GET api/server): the
+// container engine of runs granted allow_docker (SANDBOX_ENGINE as set, "auto" unresolved),
+// the egress proxy and how many hosts the grants folder grants in all, whether that folder
+// reads without errors, and who may sign in on which repos. Nothing secret: every signed-in
+// user gets it, so the grants' errors are named by file only. `load`: the
+// grants folder (loadGrants(), read at each call so an edit shows without a restart).
+export function serverSetup(config, load = () => loadGrants(config)) {
+  let grants = null;
+  let errors;
+  try {
+    grants = load();
+    errors = grantErrors(grants);
+  } catch (error) {
+    errors = [error];
+  }
+  // The runs' only way out (config.mjs egressProxy): there is no setting to turn it off.
+  const proxy = { on: true, hosts: grants ? grantedHosts(grants).size : null };
+  return {
+    engine: config.engine,
+    proxy,
+    grants: grantsHealth(errors),
+    allowedUsers: config.users,
+    allowedRepos: config.repos,
+  };
+}
+
+// Every host default.yaml and the repos' files grant, once each; a file with errors grants
+// none (no run of its repo starts).
+function grantedHosts(grants) {
+  const hosts = new Set(grants.defaults?.hosts ?? []);
+  for (const { load } of grants.repos.values()) {
+    try {
+      for (const host of load().hosts) hosts.add(host);
+    } catch {
+      // Counted in grantsHealth().
+    }
+  }
+  return hosts;
+}
+
+// The grants folder's errors → { ok, file, message }: `file` the one to edit (relative to the
+// folder), null when there are several or none is named. Their messages stay out: they quote
+// the files' values (mount roots on the host, YAML lines), and every signed-in user gets this,
+// whichever repos they see. A repo's config panel shows its own (repos.mjs grantsErrorView()),
+// the listener's logs all of them.
+function grantsHealth(errors) {
+  if (!errors.length) return { ok: true, file: null, message: null };
+  // "": the folder itself (grants.mjs walkGrants()), not a file to name.
+  const named = [...new Set(errors.map((e) => (e instanceof GrantsError && e.file) || null))];
+  const files = named.filter(Boolean);
+  const unnamed = named.length > files.length;
+  const what = [
+    ...(files.length ? [`${files.join(", ")} ${files.length === 1 ? "has" : "have"} errors`] : []),
+    ...(unnamed ? ["the grants folder has errors"] : []),
+  ];
+  return {
+    ok: false,
+    file: files.length === 1 && !unnamed ? files[0] : null,
+    message: `${what.join("; ")} (a repository's config panel says what)`,
   };
 }
 

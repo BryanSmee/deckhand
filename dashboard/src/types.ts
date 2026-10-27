@@ -257,6 +257,26 @@ export interface ServerInfo {
   source: string;
 }
 
+// How this Deckhand is set up, for Settings › Server: GET api/server (listener/status.mjs
+// serverSetup()), read when the page opens. Any signed-in user gets it; nothing in it is secret.
+export interface ServerSetup {
+  // SANDBOX_ENGINE: the container engine of runs granted allow_docker. "auto": Sysbox where
+  // the host's Docker has it, else Podman. null: none.
+  engine: "sysbox" | "podman" | "auto" | null;
+  // The egress proxy, always on: the runs' only way out. `hosts`: how many the grants folder
+  // grants in all (default.yaml and every repo's file, each host once); null when the folder
+  // or its default.yaml has errors.
+  proxy: { on: boolean; hosts: number | null };
+  // The grants folder: read without errors, or the file to fix (relative to the folder; null
+  // when several have errors, or the folder itself) and which have errors. Never the errors
+  // themselves: they quote the files' values (mount roots); a repo's config panel has them.
+  grants: { ok: boolean; file: string | null; message: string | null };
+  // ALLOWED_USERS, lowercase.
+  allowedUsers: string[];
+  // ALLOWED_REPOS ("owner/repo" or "owner/*"), lowercase; empty: every repo the App is on.
+  allowedRepos: string[];
+}
+
 export interface State {
   user: string;
   tasks: Task[];

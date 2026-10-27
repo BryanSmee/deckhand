@@ -317,7 +317,11 @@ changes, and its output as `raw` entries with the step's number; the lines of no
   `GET /status` says what is going on, to them and to calls from inside the container.
   Both say which Deckhand runs and since when (`server` in `api/state`, `version` and
   `startedAt` in `/status`, from `status.mjs` `serverInfo()`): the Repositories page shows
-  it, the version linked to its commit or release under `DECKHAND_SOURCE`.
+  it, the version linked to its commit or release under `DECKHAND_SOURCE`. `GET api/server`
+  says how it is set up (`status.mjs` `serverSetup()`), for Settings › Server: the container
+  engine, the egress proxy and how many hosts the grants folder grants, whether that folder
+  reads without errors (the files to fix, never their errors, which quote mount roots: a repo's config panel shows its own), `ALLOWED_USERS` and `ALLOWED_REPOS`. It scans the grants folder, so
+  the page reads it when it opens rather than at each poll.
 - **Screenshots**: `GET /shots/<token>/<file>` serves the screenshots runs save for their
   pull requests: GitHub cannot take image uploads through its API, so they need a public URL.
 - **Per-repo config**: each repo may bring a `.deckhand.yaml` on its default branch: its own

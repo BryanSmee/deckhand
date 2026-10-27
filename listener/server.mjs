@@ -59,7 +59,7 @@ import { createDockerRunner } from "./runner/docker.mjs";
 import { operatorSecrets } from "./secrets.mjs";
 import { createRuns } from "./runs.mjs";
 import { createSetup } from "./setup.mjs";
-import { createStatus, serverInfo } from "./status.mjs";
+import { createStatus, serverInfo, serverSetup } from "./status.mjs";
 import { createSync } from "./sync.mjs";
 import { busyTask, createTasks } from "./tasks.mjs";
 import { createLanes, fetchParent } from "./lanes.mjs";
@@ -115,6 +115,8 @@ function skip(reason) {
 const ctx = {
   // The version the images were built from, its repository and when this listener started.
   server: serverInfo(env),
+  // How it is set up (engine, egress proxy, grants, who may sign in): GET api/server.
+  serverSetup: () => serverSetup(config),
   config,
   log,
   skip,
