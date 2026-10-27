@@ -402,7 +402,14 @@ re-reads the repo's settings and grant, records `mergeAt` (one decision per pull
 checks `mergeBlockers()` and the gates (`mergeRefusal()`: the pull request, its labels, its
 head, the repository's visibility and merge methods, its changed files against
 `trustedFile()`, `mergeable_state`, its Actions runs, last the policies' `deny_merge`), then merges with the listener's token at
-the reviewed head (`PUT /pulls/{n}/merge` with `sha`) or comments why not. A merge is recorded
+the reviewed head (`PUT /pulls/{n}/merge` with `sha`) or comments why not. When only Actions
+runs still going stand in the way (`mergeRefusal()`'s `pending`), `decide()` clears `mergeAt`
+and keeps `waiting` ({ sha, since, review, … }) in `reviews.json` instead: `checksDone()`, on a
+`workflow_run` `completed` delivery for that sha (`http.mjs`), and `tick()`, every 5 minutes,
+decide again (`recheck()`, one at a time per pull request), until `review.merge_wait` minutes
+after `since`, when the pull request is refused. `waiting` stays saved until such a decision
+ends (an in-memory map keeps it to one at a time), so a listener stopped meanwhile asks again,
+and a GitHub call failing then waits for the next try. A merge is recorded
 on the task's pull request (`pulls.mjs`, `autoMerged`) for the dashboard. A fix run's end
 (an item with `reason: "review-fix"`, in `cleanUp()`) calls `reviews.fixed()`: one more review
 of what it pushed (`rereviewAt`), or a comment when it failed or pushed nothing. At start,

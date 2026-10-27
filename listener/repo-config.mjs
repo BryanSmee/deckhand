@@ -39,6 +39,7 @@ const REVIEW_KEYS = [
   "merge",
   "merge_method",
   "max_allowed_severity",
+  "merge_wait",
 ];
 // When a review starts by itself (reviews.mjs): `ready`, a pull request marked ready for review
 // or opened as ready; `manual`, only with a "/mode review" line.
@@ -48,6 +49,10 @@ export const MERGE_METHODS = ["squash", "merge", "rebase"];
 // `review.max_allowed_severity`'s values: the most severe finding the review that decides an
 // auto-merge (reviews.mjs) may have and still merge. Critical and high always block.
 export const ALLOWED_SEVERITIES = ["low", "medium"];
+// `review.merge_wait`: how many minutes an auto-merge waits for the GitHub Actions runs still
+// going on the reviewed commit (reviews.mjs), at most a day; 0 refuses at once.
+const MERGE_WAIT_MINUTES = 60;
+const MAX_MERGE_WAIT_MINUTES = 24 * 60;
 
 // The listener's own modes (modes.mjs): a repo's `modes:` can't take these names.
 export { customMode, RESERVED_MODES };
@@ -339,6 +344,7 @@ function parseReview(value, { key, settings, config, fail, warn }) {
     merge: false,
     mergeMethod: "squash",
     maxAllowedSeverity: "low",
+    mergeWait: MERGE_WAIT_MINUTES,
   };
   if (value === true) {
     settings.review = review;
@@ -373,6 +379,9 @@ function parseReview(value, { key, settings, config, fail, warn }) {
       // Critical and high always block a merge: no value lets them through.
       if (ALLOWED_SEVERITIES.includes(v)) review.maxAllowedSeverity = v;
       else bad(k, `expected ${ALLOWED_SEVERITIES.join(" or ")}`);
+    } else if (k === "merge_wait") {
+      if (Number.isInteger(v) && v >= 0 && v <= MAX_MERGE_WAIT_MINUTES) review.mergeWait = v;
+      else bad(k, `expected a whole number of minutes from 0 to ${MAX_MERGE_WAIT_MINUTES}`);
     } else if (k === "agent") {
       review.agent = agentName(v, `review.${k}`, config, (_, what, fix) => bad(k, what, fix));
     } else if (k === "model") {

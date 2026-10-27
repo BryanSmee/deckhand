@@ -93,6 +93,7 @@ function setup(
   { yaml = MERGE, grant = true, granted = {}, path, busy = () => false, policies, ...over } = {},
 ) {
   let time = 1_800_000_000_000;
+  const advance = (ms) => (time += ms);
   const accepted = [];
   const replies = [];
   const merged = [];
@@ -135,6 +136,8 @@ function setup(
     posted,
     run,
     read,
+    over,
+    advance,
   };
 }
 
@@ -286,10 +289,18 @@ test("auto-merge: each gate refuses with a comment", async (t) => {
     [{ issueLabels: [{ name: "needs-input" }] }, /waits for the maintainer's input/],
     [{ busy: (key) => key === "org/repo#12" }, /#12 has a run going or queued/],
     [{ pr: { mergeable_state: "dirty" } }, /`mergeable_state: dirty`/],
-    [{ pr: { mergeable_state: "unstable" } }, /`mergeable_state: unstable`/],
+    [{ pr: { mergeable_state: "behind" } }, /`mergeable_state: behind`/],
+    [{ pr: { mergeable_state: "blocked" } }, /`mergeable_state: blocked`/],
     [
-      { runs: [{ name: "CI", status: "in_progress", conclusion: null }] },
-      /1 GitHub Actions run on sha-1 hasn't finished/,
+      { pr: { mergeable_state: "unstable" } },
+      /a check or commit status on sha-1 that isn't a GitHub Actions run is pending or failing/,
+    ],
+    [
+      {
+        yaml: `${MERGE}  merge_wait: 0\n`,
+        runs: [{ name: "CI", status: "in_progress", conclusion: null }],
+      },
+      /: 1 GitHub Actions run on sha-1 hasn't finished\. It waits/,
     ],
     [
       { runs: [{ name: "CI", status: "completed", conclusion: "failure" }] },
@@ -855,4 +866,154 @@ test("auto-merge: GitHub failing during the gates or after the fix run is said, 
   // Decided: a later review merges nothing.
   assert.equal(await fix.settle(), null);
   assert.equal(fix.merges().length, 0);
+});
+
+// GitHub Actions' delivery of a run that completed on `sha`.
+function completed(sha = "sha-1", repo = "org/repo") {
+  return {
+    action: "completed",
+    installation: { id: 1 },
+    repository: { full_name: repo, default_branch: "trunk" },
+    workflow_run: { head_sha: sha, status: "completed", conclusion: "success" },
+  };
+}
+
+const GOING = { name: "CI", status: "in_progress", conclusion: null };
+const PASSED = { name: "CI", status: "completed", conclusion: "success" };
+
+// Issue #328: `unstable` while CI ran on the head commit was refused at once.
+test("auto-merge: unstable with an Actions run going waits, then merges once it passed", async (t) => {
+  const s = setup(t, { pr: { mergeable_state: "unstable" }, runs: [GOING] });
+  assert.equal(await s.settle(), null);
+  assert.deepEqual([s.replies, s.merges()], [[], []]);
+  // A redelivered end of the review decides nothing while it waits.
+  assert.equal(await s.settle(), null);
+  // Another commit's run, another repo's: still waiting.
+  await s.reviews.checksDone("workflow_run", completed("sha-9"));
+  await s.reviews.checksDone("workflow_run", completed("sha-1", "org/other"));
+  // Not completed yet: nothing asked.
+  const before = s.calls.length;
+  await s.reviews.checksDone("workflow_run", { ...completed(), action: "in_progress" });
+  assert.equal(s.calls.length, before);
+  assert.equal(s.merges().length, 0);
+  s.over.pr = { mergeable_state: "clean" };
+  s.over.runs = [PASSED];
+  await s.reviews.checksDone("workflow_run", completed());
+  assert.deepEqual(
+    s.merges().map((c) => c.body),
+    [{ sha: "sha-1", merge_method: "squash" }],
+  );
+  assert.equal(s.replies.length, 1);
+  assert.match(s.replies[0].text, /^🤖 \*\*Merged by Deckhand\*\*/);
+  // Decided: neither a later run nor a tick merges twice.
+  await s.reviews.checksDone("workflow_run", completed());
+  await s.reviews.tick();
+  assert.equal(await s.settle(), null);
+  assert.equal(s.merges().length, 1);
+});
+
+test("auto-merge: two runs completing at once merge once", async (t) => {
+  const s = setup(t, { runs: [GOING, GOING] });
+  await s.settle();
+  s.over.runs = [PASSED, PASSED];
+  await Promise.all([
+    s.reviews.checksDone("workflow_run", completed()),
+    s.reviews.checksDone("workflow_run", completed()),
+  ]);
+  assert.equal(s.merges().length, 1);
+  assert.equal(s.replies.length, 1);
+});
+
+test("auto-merge: a pull request waiting for its checks survives a restart", async (t) => {
+  const path = join(tempDir(t), "reviews.json");
+  const first = setup(t, { path, runs: [GOING] });
+  await first.settle();
+  assert.equal(first.replies.length, 0);
+  const next = setup(t, { path });
+  await next.reviews.checksDone("workflow_run", completed());
+  assert.equal(next.merges().length, 1);
+  assert.match(next.replies[0].text, /Merged by Deckhand/);
+});
+
+test("auto-merge: while waiting, a failed run, a push or a close ends it", async (t) => {
+  const failed = setup(t, { runs: [GOING] });
+  await failed.settle();
+  failed.over.runs = [{ name: "Tests", status: "completed", conclusion: "failure" }];
+  await failed.reviews.checksDone("workflow_run", completed());
+  assert.equal(failed.merges().length, 0);
+  assert.match(failed.replies[0].text, /GitHub Actions runs on sha-1 failed: Tests \(failure\)/);
+  // One run failed while another goes on: refused at once, without waiting.
+  const early = setup(t, {
+    runs: [GOING, { name: "Lint", status: "completed", conclusion: "failure" }],
+  });
+  await early.settle();
+  assert.match(early.replies[0].text, /failed: Lint \(failure\)/);
+  // A push after the review: the reviewed commit's run completing refuses it.
+  const pushed = setup(t, { runs: [GOING] });
+  await pushed.settle();
+  pushed.over.pr = { head: { sha: "sha-2", repo: { full_name: "org/repo" } } };
+  await pushed.reviews.checksDone("workflow_run", completed());
+  assert.equal(pushed.merges().length, 0);
+  assert.match(pushed.replies[0].text, /pushed after the review \(reviewed sha-1, now sha-2\)/);
+  // Closed or merged by the maintainer meanwhile: nothing to say.
+  const closed = setup(t, { runs: [GOING] });
+  await closed.settle();
+  closed.over.pr = { state: "closed", merged: true };
+  await closed.reviews.checksDone("workflow_run", completed());
+  assert.deepEqual([closed.replies, closed.merges()], [[], []]);
+  await closed.reviews.tick();
+  assert.equal(closed.replies.length, 0);
+});
+
+test("auto-merge: checks still going after review.merge_wait are refused once", async (t) => {
+  const s = setup(t, { yaml: `${MERGE}  merge_wait: 30\n`, runs: [GOING] });
+  await s.settle();
+  // Before the deadline, a tick finds it still waiting.
+  s.advance(29 * 60_000);
+  await s.reviews.tick();
+  assert.equal(s.replies.length, 0);
+  s.advance(2 * 60_000);
+  await s.reviews.tick();
+  assert.equal(s.replies.length, 1);
+  assert.match(
+    s.replies[0].text,
+    /its checks didn't finish in time \(30 minutes, `review\.merge_wait`\): 1 GitHub Actions run on sha-1 hasn't finished/,
+  );
+  await s.reviews.tick();
+  await s.reviews.checksDone("workflow_run", completed());
+  assert.equal(s.replies.length, 1);
+  assert.equal(s.merges().length, 0);
+});
+
+test("auto-merge: a tick merges what a lost workflow_run delivery would have", async (t) => {
+  const s = setup(t, { pr: { mergeable_state: "blocked" }, runs: [GOING] });
+  await s.settle();
+  s.over.pr = { mergeable_state: "clean" };
+  s.over.runs = [PASSED];
+  await s.reviews.tick();
+  assert.equal(s.merges().length, 1);
+});
+
+test("auto-merge: GitHub failing while it waits keeps it waiting, until review.merge_wait", async (t) => {
+  const path = join(tempDir(t), "reviews.json");
+  const s = setup(t, { path, runs: [GOING] });
+  await s.settle();
+  s.over.pullStatus = 502;
+  await s.reviews.checksDone("workflow_run", completed());
+  await s.reviews.tick();
+  assert.deepEqual([s.replies, s.merges()], [[], []]);
+  // Still saved as waiting: a listener stopped during a decision asks again after it.
+  const next = setup(t, { path });
+  await next.reviews.tick();
+  assert.equal(next.merges().length, 1);
+  // Past the deadline, the failure is the refusal, once.
+  const late = setup(t, { runs: [GOING] });
+  await late.settle();
+  late.over.pullStatus = 502;
+  late.advance(61 * 60_000);
+  await late.reviews.tick();
+  assert.equal(late.replies.length, 1);
+  assert.match(late.replies[0].text, /GitHub couldn't be read/);
+  await late.reviews.tick();
+  assert.equal(late.replies.length, 1);
 });

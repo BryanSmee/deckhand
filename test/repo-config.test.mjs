@@ -630,11 +630,11 @@ review:
     "review.instructions: expected a path in the repository (relative, no ..)",
     "review.effort: expected one of low, medium, high, xhigh, max",
     "review.agent: the operator hasn't configured codex (configured: claude)",
-    "review.hosts: unknown key (expected on, instructions, agent, model, effort, fix, merge, merge_method, max_allowed_severity)",
+    "review.hosts: unknown key (expected on, instructions, agent, model, effort, fix, merge, merge_method, max_allowed_severity, merge_wait)",
   ]);
   assert.equal(bad.settings.review, null);
   assert.deepEqual(parseRepoConfig("review: [on]\n", config).errors, [
-    "review: expected true, or on, instructions, agent, model, effort, fix, merge, merge_method, max_allowed_severity",
+    "review: expected true, or on, instructions, agent, model, effort, fix, merge, merge_method, max_allowed_severity, merge_wait",
   ]);
 });
 
@@ -669,6 +669,20 @@ test("review.max_allowed_severity: low by default, or medium, nothing more sever
   for (const bad of ["high", "critical", "true"]) {
     assert.deepEqual(parseRepoConfig(`review:\n  max_allowed_severity: ${bad}\n`, config).errors, [
       "review.max_allowed_severity: expected low or medium",
+    ]);
+  }
+});
+
+test("review.merge_wait: 60 minutes by default, 0 to a day", () => {
+  assert.equal(parseRepoConfig("review: true\n", config).settings.review.mergeWait, 60);
+  for (const ok of [0, 15, 1440]) {
+    const parsed = parseRepoConfig(`review:\n  merge_wait: ${ok}\n`, config);
+    assert.deepEqual(parsed.errors, []);
+    assert.equal(parsed.settings.review.mergeWait, ok);
+  }
+  for (const bad of ["-1", "1441", "1.5", '"1h"']) {
+    assert.deepEqual(parseRepoConfig(`review:\n  merge_wait: ${bad}\n`, config).errors, [
+      "review.merge_wait: expected a whole number of minutes from 0 to 1440",
     ]);
   }
 });

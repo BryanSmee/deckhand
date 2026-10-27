@@ -437,6 +437,8 @@ export function createHttp(ctx, { dashboardDir }) {
     }
     // A pull request that turned ready, in a repo whose `review.on` asks for a review.
     if (event === "pull_request") admitted(ctx.reviews.consider(event, payload, skip));
+    // A GitHub Actions run that completed on a commit an auto-merge waits on.
+    if (event === "workflow_run") admitted(ctx.reviews.checksDone(event, payload));
     const preview = previewEvent(config, event, payload, skip);
     if (preview) {
       previewHook(ctx, preview, payload).catch((error) => log(error.stack ?? error));

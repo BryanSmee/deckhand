@@ -16,10 +16,21 @@
 // never a sandbox, merges Deckhand's pull request after a review with nothing blocking, at the
 // reviewed head commit, once its gates pass (mergeRefusal()). After a fix run, one more review
 // (rereviewAt), and then the merge or a comment saying why not (mergeAt): at most one fix run
-// and one review after it, kept across restarts.
+// and one review after it, kept across restarts. GitHub Actions runs still going on the
+// reviewed commit defer that decision (`waiting`) rather than refuse it, until they complete
+// or `review.merge_wait` runs out.
 import { waitsForInput } from "./comments.mjs";
 import { repoAllowed } from "./config.mjs";
-import { linkedIssue, linkTo, MARKER, prId, headInRepo, taskKey } from "./events.mjs";
+import {
+  headInRepo,
+  linkedIssue,
+  linkTo,
+  MARKER,
+  parseKey,
+  prId,
+  sameRepo,
+  taskKey,
+} from "./events.mjs";
 import { autoMergeProblems, previewProblem } from "./grants.mjs";
 import { getJson, paginate } from "./github.mjs";
 import { INPUT_VERSION, RULES } from "./policies.mjs";
@@ -355,10 +366,19 @@ const ALLOWS = {
 // Actions conclusions that don't stop a merge.
 const PASSED = new Set(["success", "skipped", "neutral"]);
 
+// The `mergeable_state`s that checks still going can explain: `unstable` (a check or status
+// pending or failing), `blocked` (branch protection waiting for required checks), `unknown`
+// (still computed after MERGEABLE_TRIES). Any other one but `clean` refuses at once.
+const AWAITABLE = new Set(["clean", "unstable", "blocked", "unknown"]);
+
 // GitHub computes `mergeable_state` after the first ask: asked again this often, this many
 // times, while it says "unknown".
 const MERGEABLE_TRIES = 4;
 const MERGEABLE_WAIT_MS = 3000;
+
+// How often the pull requests waiting for their checks are decided again (tick()), for a lost
+// `workflow_run` delivery and `review.merge_wait`'s deadline.
+const WAIT_TICK_MS = 5 * 60_000;
 
 // Why pull request `number` must not be merged now, or null with what the merge needs: { pr,
 // method }. Each gate is asked of GitHub now, not from the webhook or the config alone: the
@@ -367,6 +387,8 @@ const MERGEABLE_WAIT_MS = 3000;
 // private (or granted `public`), the merge method allowed, no file Deckhand trusts changed,
 // `mergeable_state` clean, its GitHub Actions runs finished and none failed; last, the
 // operator's and the repo's policies (`deny_merge`, policies.mjs), which only add refusals.
+// `pending`: only Actions runs still going stand in the way, so the caller may wait for them;
+// `closed`: the pull request was closed or merged meanwhile.
 // `busy(task)`: a run going or queued on the issue; `policies`: createPolicies(), none without;
 // `review`, `fixed`: the review deciding the merge and whether a fix run came before it, for
 // the policies' input; `gates`: what the caller checked before ([{ name, passed }]), kept with
@@ -386,7 +408,7 @@ export async function mergeRefusal(
       why: "it isn't Deckhand's own pull request, on a branch of the repository and linked to its issue",
     };
   }
-  if (pr.state !== "open" || pr.merged) return { why: "it isn't open" };
+  if (pr.state !== "open" || pr.merged) return { why: "it isn't open", closed: true };
   if (pr.draft) return { why: "it is a draft" };
   if (await waitsForInput(github, config, repo, pr, issue)) {
     return { why: `it or #${issue} waits for the maintainer's input (${config.needsInputLabel})` };
@@ -436,11 +458,12 @@ export async function mergeRefusal(
     pr = await getJson(github, repo, `/repos/${repo}/pulls/${number}`);
   }
   if (pr.head?.sha !== sha) return { why: "a commit was pushed after the review" };
-  if (pr.mergeable_state !== "clean") {
-    return {
-      why: `GitHub doesn't call it cleanly mergeable (\`mergeable_state: ${pr.mergeable_state ?? "unknown"}\`)`,
-    };
-  }
+  const state = pr.mergeable_state ?? "unknown";
+  const notClean = {
+    why: `GitHub doesn't call it cleanly mergeable (\`mergeable_state: ${state}\`)`,
+  };
+  // A conflict or a branch behind its base: no check finishing changes that.
+  if (!AWAITABLE.has(state)) return notClean;
   const res = await github(
     repo,
     "GET",
@@ -450,17 +473,27 @@ export async function mergeRefusal(
   );
   if (!res.ok) return { why: `its GitHub Actions runs can't be read (${res.status})` };
   const runs = (await res.json()).workflow_runs ?? [];
-  const going = runs.filter((r) => r.status !== "completed");
-  if (going.length) {
-    return {
-      why: `${going.length} GitHub Actions run${going.length > 1 ? "s" : ""} on ${short(sha)} ha${going.length > 1 ? "ve" : "s"}n't finished`,
-    };
-  }
-  const failed = runs.filter((r) => !PASSED.has(r.conclusion));
+  // A failed run refuses at once, even while others go on.
+  const failed = runs.filter((r) => r.status === "completed" && !PASSED.has(r.conclusion));
   if (failed.length) {
     const names = failed.slice(0, 5).map((r) => `${r.name ?? "a run"} (${r.conclusion})`);
     return { why: `GitHub Actions runs on ${short(sha)} failed: ${names.join(", ")}` };
   }
+  // Not yet rather than no: the caller waits for them (autoMerge()).
+  const going = runs.filter((r) => r.status !== "completed");
+  if (going.length) {
+    return {
+      why: `${going.length} GitHub Actions run${going.length > 1 ? "s" : ""} on ${short(sha)} ha${going.length > 1 ? "ve" : "s"}n't finished`,
+      pending: true,
+    };
+  }
+  // Every Actions run passed: what GitHub still counts is a check or status the App can't read.
+  if (state === "unstable") {
+    return {
+      why: `a check or commit status on ${short(sha)} that isn't a GitHub Actions run is pending or failing (\`mergeable_state: unstable\`, every Actions run on it passed)`,
+    };
+  }
+  if (state !== "clean") return notClean;
   if (policies) {
     const input = async () => {
       const found = await getJson(github, repo, `/repos/${repo}/issues/${issue}`, [404, 410]);
@@ -696,8 +729,9 @@ export function createReviews({
   now = Date.now,
   sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
 }) {
-  // "org/repo#pr-5" → { head, at, fixedAt, rereviewAt, mergeAt } of its last automatic review,
-  // its fix run, the review after it and its auto-merge (merged or refused).
+  // "org/repo#pr-5" → { head, at, fixedAt, rereviewAt, mergeAt, waiting } of its last automatic
+  // review, its fix run, the review after it and its auto-merge (merged or refused), or the
+  // auto-merge waiting for its checks (decide()).
   const reviewed = persistentMap(path);
 
   // A `pull_request` delivery: a review run, if the repo's `review.on` asks for one and this
@@ -945,7 +979,7 @@ export function createReviews({
     if (!mode) return null;
     const { settings, grant } = mode;
     const entry = reviewed.get(key) ?? {};
-    if (entry.mergeAt) {
+    if (entry.mergeAt || entry.waiting) {
       log(`${key}: its auto-merge was decided already`);
       return null;
     }
@@ -976,8 +1010,35 @@ export function createReviews({
     if (entry.head && sha !== entry.head) {
       return refuse(key, repo, number, "a commit was pushed while the review ran");
     }
+    // What the task's page needs of the pull request to file the policies' decision (asking()).
+    const about = {
+      number,
+      body: pr?.body ?? null,
+      head: { repo: { full_name: pr?.head?.repo?.full_name ?? null } },
+    };
+    const waiting = { sha, since: now(), base, review, fixed, allowed, pr: about };
+    return oneAtATime(key, () => decide(key, repo, number, mode, waiting));
+  }
+
+  // The gates and the merge, or the refusal, for the pull request `key` as `waiting` has it
+  // ({ sha, since, base, review, fixed, allowed, pr }). Only Actions runs still going
+  // (mergeRefusal()'s `pending`): kept waiting in reviews.json instead, mergeAt cleared,
+  // decided again when a run completes (checksDone()) or by tick(), until `review.merge_wait`
+  // minutes after `since`. `again`: a decision after waiting (recheck()), with `waiting` still
+  // saved until it decides, so a listener stopped meanwhile asks again: a pull request closed
+  // or merged since is dropped quietly, and GitHub failing to answer waits for the next try.
+  async function decide(key, repo, number, { settings, grant }, waiting, again = false) {
+    const { sha, review, fixed, allowed } = waiting;
+    const minutes = settings.review.mergeWait ?? 0;
+    const inTime = () => now() - waiting.since < minutes * 60_000;
+    const decided = () => remember(key, sha, { mergeAt: now(), waiting: undefined });
+    const final = (why) => {
+      decided();
+      return refuse(key, repo, number, why);
+    };
     let gate;
     let res;
+    let merging = false;
     try {
       // What autoMerge() checked already: the first of the merge decision's gates.
       const gates = [
@@ -986,10 +1047,32 @@ export function createReviews({
         passed("At the reviewed commit"),
       ];
       gate = await mergeRefusal(
-        { github, config, busy, sleep, policies: asking(pr ?? { number }), now },
+        { github, config, busy, sleep, policies: asking(waiting.pr ?? { number }), now },
         { repo, number, sha, settings, grant, review, fixed, gates },
       );
-      if (gate.why) return refuse(key, repo, number, gate.why);
+      if (gate.pending) {
+        if (inTime()) {
+          remember(key, sha, { mergeAt: undefined, waiting });
+          log(`${key}: waiting for its checks, ${gate.why}`);
+          return null;
+        }
+        const why = minutes
+          ? `its checks didn't finish in time (${minutes} minutes, \`review.merge_wait\`): ${gate.why}`
+          : gate.why;
+        return final(why);
+      }
+      if (gate.why) {
+        // Closed or merged by someone while it waited: nothing to say.
+        if (gate.closed && again) {
+          decided();
+          log(`${key}: not merged, ${gate.why}`);
+          return null;
+        }
+        return final(gate.why);
+      }
+      // Before the merge: whatever happens next, never a second one.
+      decided();
+      merging = true;
       res = await github(
         repo,
         "PUT",
@@ -998,9 +1081,14 @@ export function createReviews({
         [405, 409, 422],
       );
     } catch (error) {
-      // Decided already (mergeAt): said, rather than left with only a log line.
       log(`${key}: auto-merge: ${error.stack ?? error}`);
-      return refuse(key, repo, number, `GitHub couldn't be read (${error.message ?? error})`);
+      // The gates unread while it waits: the next run or tick() asks again.
+      if (again && !merging && inTime()) {
+        remember(key, sha, { mergeAt: undefined, waiting });
+        return null;
+      }
+      // Decided: said, rather than left with only a log line.
+      return final(`GitHub couldn't be read (${error.message ?? error})`);
     }
     if (!res.ok) {
       const said = await res.json().catch(() => ({}));
@@ -1014,6 +1102,83 @@ export function createReviews({
     return { sha, method: gate.method };
   }
 
+  // One decision at a time per pull request: a run completing during one asks for another
+  // after it (`again`), which finds the pull request still waiting or decided.
+  const checking = new Map();
+  async function oneAtATime(key, work) {
+    checking.set(key, { again: false });
+    try {
+      let done = await work();
+      while (checking.get(key).again) {
+        checking.get(key).again = false;
+        done = (await recheck(key, { queued: true })) ?? done;
+      }
+      return done;
+    } finally {
+      checking.delete(key);
+    }
+  }
+
+  // The pull request `key` waiting for its checks, decided again now (none waiting: null).
+  // `checking` keeps it to one decision at a time; `waiting` stays saved until it decides.
+  async function recheck(key, { queued = false } = {}) {
+    if (!queued && checking.has(key)) {
+      checking.get(key).again = true;
+      return null;
+    }
+    const entry = reviewed.get(key);
+    const waiting = entry?.waiting;
+    const at = parseKey(key);
+    if (!waiting || entry.mergeAt || !at) return null;
+    const work = async () => {
+      // Unread settings throw: still waiting, for the next run or tick().
+      const mode = await mergeMode(at.repo, waiting.base);
+      // Turned off meanwhile: the maintainer's, as before a first decision.
+      if (!mode) {
+        remember(key, entry.head ?? null, { mergeAt: now(), waiting: undefined });
+        log(`${key}: auto-merge is off now, no longer waiting`);
+        return null;
+      }
+      return decide(key, at.repo, at.number, mode, waiting, true);
+    };
+    return queued ? work() : oneAtATime(key, work);
+  }
+
+  // A `workflow_run` delivery: when one completed on the commit a pull request waits on, its
+  // merge is decided again.
+  async function checksDone(event, p) {
+    if (event !== "workflow_run" || p.action !== "completed") return;
+    const repo = p.repository?.full_name;
+    const sha = p.workflow_run?.head_sha;
+    if (!p.installation?.id || !repo || !sha || !repoAllowed(config, repo)) return;
+    const keys = [...reviewed]
+      .filter(([k, v]) => v.waiting?.sha === sha && sameRepo(parseKey(k)?.repo, repo))
+      .map(([k]) => k);
+    for (const key of keys) {
+      await recheck(key).catch((error) => log(`${key}: auto-merge: ${error.stack ?? error}`));
+    }
+  }
+
+  // Every pull request still waiting, decided again: past `review.merge_wait`, refused; and
+  // what a lost `workflow_run` delivery would have decided.
+  async function tick() {
+    const keys = [...reviewed].filter(([, v]) => v.waiting && !v.mergeAt).map(([k]) => k);
+    for (const key of keys) {
+      await recheck(key).catch((error) => log(`${key}: auto-merge: ${error.stack ?? error}`));
+    }
+  }
+
+  let timer = null;
+  function start() {
+    if (timer) return;
+    timer = setInterval(() => tick(), WAIT_TICK_MS);
+    timer.unref?.();
+  }
+  function stop() {
+    clearInterval(timer);
+    timer = null;
+  }
+
   // A fix run is over (runs.mjs cleanUp(), `status` its outcome): in auto-merge mode, one more
   // review of what it pushed, once per pull request (rereviewAt), whose end decides the merge
   // (settle()). A fix that failed or pushed nothing leaves the pull request to the maintainer.
@@ -1022,7 +1187,7 @@ export function createReviews({
     const mode = await mergeMode(repo, base);
     if (!mode) return null;
     const entry = reviewed.get(key) ?? {};
-    if (!entry.fixedAt || entry.rereviewAt || entry.mergeAt) return null;
+    if (!entry.fixedAt || entry.rereviewAt || entry.mergeAt || entry.waiting) return null;
     remember(key, entry.head ?? null, { rereviewAt: now() });
     const stop = (why) => {
       remember(key, entry.head ?? null, { mergeAt: now() });
@@ -1139,6 +1304,10 @@ export function createReviews({
     settle,
     fixed,
     tolerance,
+    checksDone,
+    tick,
+    start,
+    stop,
     keys: () => [...reviewed.keys()],
     respell,
   };
