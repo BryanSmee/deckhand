@@ -24,6 +24,7 @@
         "commits": 3
       },
       "rerunnable": false,
+      "dismissed": null,
       "runs": [
         {
           "id": "acme-app-22-1791989580000",
@@ -98,6 +99,7 @@
         "readyAt": null
       },
       "rerunnable": false,
+      "dismissed": null,
       "runs": [
         {
           "id": "acme-api-pr-141-1791989880000",
@@ -132,6 +134,7 @@
       "closed": null,
       "pr": null,
       "rerunnable": false,
+      "dismissed": null,
       "runs": []
     },
     {
@@ -149,6 +152,7 @@
       "closed": null,
       "pr": null,
       "rerunnable": false,
+      "dismissed": null,
       "runs": []
     },
     {
@@ -165,6 +169,7 @@
       "closed": null,
       "pr": null,
       "rerunnable": false,
+      "dismissed": null,
       "questions": {
         "source": "run",
         "runId": "acme-api-138-1791979200000",
@@ -239,6 +244,7 @@
       "closed": null,
       "pr": null,
       "rerunnable": false,
+      "dismissed": null,
       "runs": [
         {
           "id": "acme-app-20-1791989760000",
@@ -272,6 +278,7 @@
       "closed": null,
       "pr": null,
       "rerunnable": false,
+      "dismissed": null,
       "runs": [
         {
           "id": "acme-notes-discussion-8-1791896400000",
@@ -450,6 +457,7 @@
         }
       ],
       "rerunnable": false,
+      "dismissed": null,
       "runs": [
         {
           "id": "acme-api-131-1791972000000",
@@ -490,6 +498,7 @@
       "closed": null,
       "pr": null,
       "rerunnable": false,
+      "dismissed": null,
       "runs": [
         {
           "id": "acme-app-16-1791961200000",
@@ -528,6 +537,7 @@
         "readyAt": null
       },
       "rerunnable": true,
+      "dismissed": null,
       "runs": [
         {
           "id": "acme-api-127-1791882000000",
@@ -562,6 +572,7 @@
       "closed": null,
       "pr": null,
       "rerunnable": false,
+      "dismissed": null,
       "runs": [
         {
           "id": "acme-notes-4-1791985800000",

@@ -73,6 +73,7 @@ export const makeTask = (partial: Partial<Task> = {}): Task => {
     closed: null,
     pr: null,
     rerunnable: false,
+    dismissed: null,
     runs: [],
     ...partial,
   };

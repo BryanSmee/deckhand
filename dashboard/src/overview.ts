@@ -2,7 +2,7 @@
 // on you across repositories, the totals, and each repository's tasks by tone and its lanes.
 import { graphOf } from "./graphModel";
 import { lanesOf } from "./lanes";
-import { isReady, plural, sameRepo, type Tone, taskTone } from "./format";
+import { isReady, isSettled, plural, sameRepo, type Tone, taskTone } from "./format";
 import type { Blocker, Edge, Task } from "./types";
 
 // Why a task waits on you, and the one action its row offers.
@@ -15,8 +15,8 @@ export interface Waiting {
   at: number;
 }
 
-// The tasks waiting on you, oldest first: open questions, a brainstorm's turn, a failed run,
-// a pull request ready for review (once nothing runs on it). One row per task: what asks
+// The tasks waiting on you, oldest first: open questions, a brainstorm's turn, a failed run
+// (unless isSettled()), a pull request ready for review (once nothing runs on it). One row per task: what asks
 // first, then what failed.
 export function waitingOnYou(tasks: Task[]): Waiting[] {
   const rows: Waiting[] = [];
@@ -33,8 +33,9 @@ function needOf(t: Task): Need | null {
   if (t.state === "needs-input") return "input";
   if (t.state === "brainstorm") return "turn";
   const tone = taskTone(t);
-  if (tone === "err") return "error";
-  if (tone === "ready" && isReady(t)) return "ready";
+  // A failure dismissed with its pull request still ready waits for the review alone.
+  if (tone === "err" && !isSettled(t)) return "error";
+  if ((tone === "ready" || tone === "err") && isReady(t)) return "ready";
   return null;
 }
 
@@ -60,6 +61,8 @@ export function repoParts(tasks: Task[], now: number): Part[] {
   for (const t of tasks) {
     if (ENDED.includes(t.state) && !isReady(t) && now - t.since > WEEK_MS) continue;
     const tone = taskTone(t);
+    // A failure that no longer asks (isSettled()) isn't "failed" here either.
+    if (tone === "err" && isSettled(t)) continue;
     add(tone === "idle" ? (["queued", "waiting"].includes(t.state) ? "queued" : "idle") : tone);
   }
   const words: Record<string, (n: number) => string> = {

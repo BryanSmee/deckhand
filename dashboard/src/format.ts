@@ -72,11 +72,25 @@ export type ChipId = (typeof CHIPS)[number]["id"];
 
 export function inChip(chip: ChipId, t: Task): boolean {
   if (chip === "review") return isReady(t);
+  if (chip === "error" && isSettled(t)) return false;
   const states: readonly TaskState[] | null = CHIPS.find((c) => c.id === chip)?.states ?? null;
   return !states || states.includes(t.state);
 }
 
 export const isReady = (t: Task) => t.pr?.state === "ready";
+
+// A failure that no longer asks for attention, though the task keeps its state: someone
+// dismissed it, or its issue is closed or its pull request merged or closed, so it can't run
+// again (listener/http.mjs `rerunnable`). Only All lists it then.
+export const isSettled = (t: Pick<Task, "dismissed" | "closed" | "pr">) =>
+  !!t.dismissed || !!t.closed || t.pr?.state === "merged" || t.pr?.state === "closed";
+
+// Its last run failed, was lost or stopped, and it still asks: Dismiss is offered (the
+// listener's checks: listener/work.mjs dismiss()).
+export const canDismiss = (t: Task) =>
+  ["error", "interrupted", "cancelled"].includes(t.state) &&
+  t.runs[0]?.status === t.state &&
+  !isSettled(t);
 
 // The search box's: every word of the query in the task's title, number, pull request or
 // repo. "#22" finds #22 (and #220), "app budgets" the budget tasks of the app repos.

@@ -5,7 +5,7 @@
 // Open board, or Onboard for one that isn't onboarded.
 import type { ComponentChildren } from "preact";
 import { useState } from "preact/hooks";
-import { type RepoList, sendRerun } from "./api";
+import { type RepoList, sendDismiss, sendRerun } from "./api";
 import {
   type ChipId,
   githubUrl,
@@ -190,9 +190,11 @@ function WaitingOnYou({
   github: string;
   refresh?: () => Promise<void>;
 }) {
-  // The task whose questions are open, the rerun on its way, and what the listener said last.
+  // The task whose questions are open, the rerun or dismissal on its way, and what the
+  // listener said last.
   const [answering, setAnswering] = useState<Task | null>(null);
   const [rerunning, setRerunning] = useState<string | null>(null);
+  const [dismissing, setDismissing] = useState<string | null>(null);
   const [said, setSaid] = useState<{ text: string; error?: boolean } | null>(null);
   const rerun = async (t: Task) => {
     setRerunning(t.key);
@@ -206,14 +208,48 @@ function WaitingOnYou({
     if (!answer.error) await refresh?.();
     setRerunning(null);
   };
+  const dismiss = async (t: Task) => {
+    setDismissing(t.key);
+    setSaid(null);
+    const answer = await sendDismiss(t.repo, t.runs[0].id);
+    const name = `${numberOf(t) || titleOf(t)} (${t.repo})`;
+    setSaid({
+      text: answer.error ?? `${name} dismissed: its task page can undo it.`,
+      error: !!answer.error,
+    });
+    if (!answer.error) await refresh?.();
+    setDismissing(null);
+  };
+
+  // A failed run's row: its action, then Dismiss, which stops it asking.
+  const actions = (row: Waiting): ComponentChildren => {
+    const t = row.task;
+    if (row.need !== "error" || !t.runs[0]) return action(row, styles.action);
+    return (
+      <span class={styles.actions}>
+        {action(row)}
+        <Button
+          size="small"
+          variant="ghost"
+          pending={dismissing === t.key}
+          pendingLabel="Dismissing…"
+          title="It stops waiting on you until another run; its task page can undo it"
+          onClick={() => void dismiss(t)}
+        >
+          Dismiss
+        </Button>
+      </span>
+    );
+  };
 
   // The task page's own action: its questions' form, a brainstorm's thread (on GitHub, or the
-  // dashboard's for a discussion), the pull request, Rerun; else the task page.
-  const action = ({ task: t, need }: Waiting): ComponentChildren => {
+  // dashboard's for a discussion), the pull request, Rerun; else the task page. `place`: its
+  // class in the row, when it has the row's action column to itself.
+  const action = ({ task: t, need }: Waiting, place?: string): ComponentChildren => {
     const label = BADGES[need].action;
     const link = (href: string, text: string, outside = true) => (
       <a
-        class={buttonClass("secondary", "small", styles.action)}
+        class={buttonClass("secondary", "small", place)}
         href={href}
         {...(outside ? { target: "_blank", rel: "noreferrer" } : {})}
       >
@@ -225,7 +261,7 @@ function WaitingOnYou({
     if (need === "input") {
       if (t.questions)
         return (
-          <Button size="small" class={styles.action} onClick={() => setAnswering(t)}>
+          <Button size="small" class={place} onClick={() => setAnswering(t)}>
             {label}
           </Button>
         );
@@ -238,7 +274,7 @@ function WaitingOnYou({
       return (
         <Button
           size="small"
-          class={styles.action}
+          class={place}
           pending={rerunning === t.key}
           pendingLabel="Rerunning…"
           title="Runs it again with the same comments and mode"
@@ -286,7 +322,7 @@ function WaitingOnYou({
                 <span class={styles.age} title={new Date(row.at).toLocaleString()}>
                   {age(row.at, now)}
                 </span>
-                {action(row)}
+                {actions(row)}
               </li>
             );
           })}

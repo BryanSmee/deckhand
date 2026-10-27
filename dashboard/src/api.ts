@@ -389,6 +389,11 @@ export const sendAnswers = (repo: string, answers: Answers) =>
 export const sendRerun = (repo: string, runId: string) =>
   postJson<WorkResult>(`api/repos/${repo}/rerun`, { runId });
 
+// A task's last run, failed or stopped, no longer asks for attention until another run
+// (api/repos/<repo>/dismiss); `undo`: it asks again. What the listener says, or why it refused.
+export const sendDismiss = (repo: string, runId: string, undo = false) =>
+  postJson<WorkResult>(`api/repos/${repo}/dismiss`, undo ? { runId, undo } : { runId });
+
 // Stops the task's run (api/repos/<repo>/work, `cancel`): what the listener says, or why it
 // refused. `pr`: a pull request's task.
 export function sendCancel(repo: string, number: number, pr: boolean): Promise<WorkResult> {

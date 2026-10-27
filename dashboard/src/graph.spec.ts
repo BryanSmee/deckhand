@@ -18,6 +18,7 @@ const task = (n: number, extra: Partial<Task> = {}): Task => ({
   closed: null,
   pr: null,
   rerunnable: false,
+  dismissed: null,
   runs: [],
   ...extra,
 });

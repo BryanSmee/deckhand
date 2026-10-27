@@ -119,7 +119,7 @@
 
 .need {
   display: grid;
-  grid-template-columns: 136px minmax(0, 1fr) 110px 64px 112px;
+  grid-template-columns: 136px minmax(0, 1fr) 110px 64px 184px;
   grid-template-areas: "badge title repo age action";
   align-items: center;
   gap: 16px;
@@ -176,6 +176,14 @@
 .action {
   grid-area: action;
   justify-self: end;
+}
+
+/* A failed run's: Rerun (or Open) and Dismiss. */
+.actions {
+  grid-area: action;
+  justify-self: end;
+  display: flex;
+  gap: 6px;
 }
 
 /* The repositories. */
@@ -287,7 +295,8 @@
     -webkit-line-clamp: 2;
     -webkit-box-orient: vertical;
   }
-  .action {
+  .action,
+  .actions > * {
     min-height: 36px;
   }
   .cards {

@@ -1,16 +1,17 @@
 // The open task: its kind, number and mode, its title, and its actions (GitHub, Stop while a
 // run goes on, which asks first: Stop.tsx); then its facts and its runs as tabs over the run
-// shown (the latest unless one was picked): its outcome (with Rerun when it failed) and its
-// log. Waiting for input: its open questions, as a form to answer them. A discussion: its
+// shown (the latest unless one was picked): its outcome (with Rerun and Dismiss when it
+// failed, and who dismissed it, with Undo) and its log. Waiting for input: its open questions, as a form to answer them. A discussion: its
 // thread first, to read and reply to, with the last reply and Rerun, then its runs. A Policies
 // tab when its pull request's policies decided something (with a badge when one kept it from
 // merging by itself). A phone's log search takes the header's place. Its shortcuts: O opens it
 // on GitHub, A goes to its questions, R reruns, Shift S stops (asking first), [ and ] go
 // through its tabs.
 import { useEffect, useRef, useState } from "preact/hooks";
-import { sendCancel, sendRerun, useRunLog } from "./api";
+import { sendCancel, sendDismiss, sendRerun, useRunLog } from "./api";
 import {
   ago,
+  canDismiss,
   dayTime,
   duration,
   githubUrl,
@@ -75,8 +76,9 @@ export function Detail({
 }: Props) {
   // What the listener said of the answers sent or the rerun asked last, on that task's page.
   const [sent, setSent] = useState<{ key: string; message: string; error?: boolean } | null>(null);
-  // The run whose rerun is on its way.
+  // The run whose rerun is on its way, and the one whose dismissal (or its undo) is.
   const [rerunning, setRerunning] = useState<string | null>(null);
+  const [dismissing, setDismissing] = useState<string | null>(null);
   // A discussion's page shows its thread, or a run's log.
   const [showLog, setShowLog] = useState(false);
   // The task whose Policies tab is open.
@@ -113,6 +115,7 @@ export function Detail({
   const asked = t.state === "needs-input" ? t.questions : undefined;
   // The latest run only, and only when it is the one shown.
   const failed = t.rerunnable && r && r.id === t.runs[0]?.id ? r : null;
+  const dismissable = canDismiss(t) ? t.runs[0] : null;
   const discussion = t.kind === "discussion" && t.number !== null;
   const decided = !!t.decisions?.length;
   const policies = decided && policiesOf === t.key;
@@ -154,6 +157,15 @@ export function Detail({
     setSent({ key: t.key, message: said.error ?? "Rerun queued.", error: !!said.error });
     if (!said.error) await refresh?.();
     setRerunning(null);
+  };
+  // Dismiss, or its Undo: the task's last run stops asking, or asks again.
+  const dismiss = async (run: Run, undo = false) => {
+    setDismissing(run.id);
+    const said = await sendDismiss(t.repo, run.id, undo);
+    const done = undo ? "It waits on you again." : "Dismissed: it no longer waits on you.";
+    setSent({ key: t.key, message: said.error ?? done, error: !!said.error });
+    if (!said.error) await refresh?.();
+    setDismissing(null);
   };
   const tabs = [
     ...(discussion ? [{ id: THREAD, label: "Thread" }] : []),
@@ -287,6 +299,17 @@ export function Detail({
                   Rerun
                 </Button>
               )}
+              {dismissable && thread && (
+                <Button
+                  size={size}
+                  pending={dismissing === dismissable.id}
+                  pendingLabel="Dismissing…"
+                  title="It stops waiting on you until another run"
+                  onClick={() => dismiss(dismissable)}
+                >
+                  Dismiss
+                </Button>
+              )}
               {stoppable && (
                 <Button
                   variant="danger"
@@ -330,6 +353,21 @@ export function Detail({
             )}
             {thread && <AuthBadge auth={r?.auth} />}
             {t.pr && <PrLink pr={t.pr} />}
+            {t.dismissed && t.runs[0] && (
+              <span class={styles.dismissed}>
+                Dismissed by @{t.dismissed.by} {ago(t.dismissed.at, now)} ago
+                <Button
+                  variant="ghost"
+                  size="small"
+                  pending={dismissing === t.runs[0].id}
+                  pendingLabel="Undoing…"
+                  title="It waits on you again"
+                  onClick={() => dismiss(t.runs[0], true)}
+                >
+                  Undo
+                </Button>
+              </span>
+            )}
             {!!t.waitingFor?.length && (
               <span>
                 Next run after{" "}
@@ -440,6 +478,10 @@ export function Detail({
               touch={touch}
               onRerun={failed ? () => again(failed) : undefined}
               rerunning={!!failed && rerunning === failed.id}
+              onDismiss={
+                dismissable && r.id === dismissable.id ? () => dismiss(dismissable) : undefined
+              }
+              dismissing={!!dismissable && dismissing === dismissable.id}
             />
           )}
           <Log

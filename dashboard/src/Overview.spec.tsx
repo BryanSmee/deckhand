@@ -5,9 +5,18 @@ import { expect, test, vi } from "vitest";
 import type { RepoList } from "./api";
 import { Overview } from "./Overview";
 import { makeState, mockApi } from "./testUtils";
-import type { Repo } from "./types";
+import type { Repo, Task } from "./types";
 
-const state = makeState();
+// The fixture's, but #127's pull request is still a draft: its interrupted run waits on you (the
+// fixture's merged one stops it asking, as the last tests show).
+const fixture = makeState();
+const OPEN = "acme/api#127";
+const state = {
+  ...fixture,
+  tasks: fixture.tasks.map((t) =>
+    t.key === OPEN ? { ...t, pr: { ...t.pr!, state: "draft" as const } } : t,
+  ),
+};
 const github = "https://github.example.com";
 
 const row = (repo: string, over: Partial<Repo> = {}): Repo => ({
@@ -65,16 +74,21 @@ test("waiting on you: oldest first, each with its state, repo, age and action", 
       li.querySelectorAll("span")[0].textContent,
       within(li)
         .getAllByRole(/button|link/)
-        .at(-1)!.textContent,
+        .slice(1)
+        .map((b) => b.textContent),
     ]),
   ).toEqual([
-    // (Rerun has its pending label too, hidden.)
+    // (Rerun and Dismiss have their pending labels too, hidden.)
     // No title: the number once.
-    ["Issue #127", "Interrupted", expect.stringMatching(/^Rerun/)],
-    ["#16 Bugs", "Error", "Open"],
-    ["#131 Dark mode for the settings page", "Ready for review", "Review PR"],
-    ["#138 Search results flicker when typing fast", "Needs input", "Answer"],
-    ["#20 Egress proxy: allow wildcard ports", "Your turn", "Reply"],
+    [
+      "Issue #127",
+      "Interrupted",
+      [expect.stringMatching(/^Rerun/), expect.stringMatching(/^Dismiss/)],
+    ],
+    ["#16 Bugs", "Error", ["Open", expect.stringMatching(/^Dismiss/)]],
+    ["#131 Dark mode for the settings page", "Ready for review", ["Review PR"]],
+    ["#138 Search results flicker when typing fast", "Needs input", ["Answer"]],
+    ["#20 Egress proxy: allow wildcard ports", "Your turn", ["Reply"]],
   ]);
   const [interrupted, failed, ready, , turn] = needs();
   expect(within(interrupted).getByText("acme/api")).toBeTruthy();
@@ -119,6 +133,35 @@ test("Rerun queues the task's last run again, and says so", async () => {
   ]);
   release();
   await screen.findByText("Rerun of #127 (acme/api) queued.");
+});
+
+test("Dismiss: the row leaves once the listener says so, and the message says where to undo", async () => {
+  const api = mockApi({});
+  api.answer = () => ({ message: "#16 dismissed." });
+  const refresh = vi.fn(async () => {});
+  render(<Overview state={state} github={github} onChip={() => {}} refresh={refresh} />);
+  fireEvent.click(within(needs()[1]).getByRole("button", { name: /Dismiss/ }));
+  await screen.findByText("#16 (acme/app) dismissed: its task page can undo it.");
+  expect(api.posted).toEqual([
+    {
+      url: "api/repos/acme/app/dismiss",
+      body: { runId: state.tasks.find((t) => t.key === "acme/app#16")!.runs[0].id },
+    },
+  ]);
+  expect(refresh).toHaveBeenCalled();
+});
+
+test("a failure on a merged pull request or closed issue, or dismissed, waits on no one", () => {
+  const failed = (t: Task): Task =>
+    t.key === "acme/app#16" ? { ...t, dismissed: { by: "alice", at: 1 } } : t;
+  // The fixture's #127: its pull request merged since it was interrupted.
+  const settled = { ...fixture, tasks: fixture.tasks.map(failed) };
+  render(<Overview state={settled} github={github} onChip={() => {}} />);
+  expect(needs().map((li) => li.querySelector("a")!.textContent)).not.toContain("Issue #127");
+  expect(needs().map((li) => li.querySelector("a")!.textContent)).not.toContain("#16 Bugs");
+  expect(screen.getByRole("link", { name: /^Failed:/ }).getAttribute("aria-label")).toBe(
+    "Failed: 0, nothing failed",
+  );
 });
 
 test("nothing waiting says so", () => {

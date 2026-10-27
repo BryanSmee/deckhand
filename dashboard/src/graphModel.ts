@@ -204,6 +204,7 @@ function withPending(tasks: Task[], edges: Edge[], pending: Pending[]) {
         closed: null,
         pr: null,
         rerunnable: false,
+        dismissed: null,
         runs: [],
       },
     ];

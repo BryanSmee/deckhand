@@ -64,3 +64,37 @@ test("no Rerun on an older run, even a failed one", () => {
   // The latest, picked in the list: it is there.
   expect(show(FAILED, older)).not.toBeNull();
 });
+
+const BUGS = "acme/app#16";
+
+test("Dismiss on a failed task's page: posted for its last run, then a fresh state", async () => {
+  api.answer = () => ({ message: "#16 dismissed." });
+  show(BUGS);
+  fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+  await waitFor(() =>
+    expect(screen.getByRole("status").textContent).toBe("Dismissed: it no longer waits on you."),
+  );
+  expect(api.posted).toEqual([{ url: "api/repos/acme/app/dismiss", body: { runId: t0(BUGS) } }]);
+  expect(refresh).toHaveBeenCalledOnce();
+});
+
+test("dismissed: who did it, and Undo; no Dismiss on a merged pull request's failure", async () => {
+  const dismissed = (t: Task): Task => ({
+    ...t,
+    dismissed: { by: "bob", at: state.now - 120_000 },
+  });
+  show(BUGS, dismissed);
+  expect(screen.queryByRole("button", { name: "Dismiss" })).toBeNull();
+  expect(screen.getByText(/Dismissed by @bob 2 min ago/)).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+  await waitFor(() =>
+    expect(screen.getByRole("status").textContent).toBe("It waits on you again."),
+  );
+  expect(api.posted).toEqual([
+    { url: "api/repos/acme/app/dismiss", body: { runId: t0(BUGS), undo: true } },
+  ]);
+  document.body.replaceChildren();
+  // #127's pull request is merged: it asks for nothing already.
+  show(FAILED);
+  expect(screen.queryByRole("button", { name: "Dismiss" })).toBeNull();
+});
