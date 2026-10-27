@@ -31,11 +31,12 @@ const REQUESTS: { id: Request; label: string; icon: ComponentChildren }[] = [
 ];
 
 const tasksOf = (repo: string | null) => formatRoute({ repo, task: null, run: null });
-const boardOf = (repo: string) => formatRoute({ repo, task: null, run: null, page: "board" });
+const boardOf = (repo: string | null) =>
+  formatRoute({ repo, task: null, run: null, page: "board" });
 const onAll = (route: Route) => !route.page && !route.repo;
 
 // A repository's link: its board from a board, else its tasks.
-const repoHref = (route: Route, repo: string) =>
+const repoHref = (route: Route, repo: string | null) =>
   route.page === "board" ? boardOf(repo) : tasksOf(repo);
 
 interface Common {
@@ -134,7 +135,7 @@ function RepoLinks({
     <nav class={`${styles.repos} ${touch ? styles.touch : ""}`} aria-label="Repositories">
       {!rail && !touch && <h2 class={styles.heading}>Repositories</h2>}
       <NavItem
-        href={tasksOf(null)}
+        href={repoHref(route, null)}
         icon={<Icon.Overview size={rail ? 17 : 16} />}
         label="All repositories"
         current={shown && !route.repo}
@@ -342,6 +343,8 @@ function NewRequest({
               class={styles.menuItem}
               tabIndex={-1}
               onClick={() => {
+                // Focus back on New request first: the dialog gives it back there once closed.
+                button()?.focus();
                 setOpen(false);
                 onPick(r.id);
               }}
@@ -363,14 +366,13 @@ export function PageHeader({ route, github }: { route: Route; github: string }) 
   const views: Segment<"tasks" | "board">[] = [
     { value: "tasks", label: "Tasks", icon: <Icon.Tasks size={14} />, href: tasksOf(repo) },
   ];
-  // The board is a repository's (the Overview takes All's place next to Tasks, later).
-  if (repo)
-    views.push({
-      value: "board",
-      label: "Board",
-      icon: <Icon.Board size={14} />,
-      href: boardOf(repo),
-    });
+  // All's board is every repository's graph, until the Overview takes its place.
+  views.push({
+    value: "board",
+    label: "Board",
+    icon: <Icon.Board size={14} />,
+    href: boardOf(repo),
+  });
   return (
     <header class={styles.header}>
       <div class={styles.title}>
@@ -406,37 +408,45 @@ interface TopBarProps extends Common {
 }
 
 // The phone's top bar: the repository switcher, whose sheet lists the sidebar's repositories,
-// then the run slots and the user; and New request.
+// then the run slots and the user; and New request. Under it, the listener's error, if any:
+// the sidebar's run slots say it on a wide screen.
 export function TopBar(props: TopBarProps) {
-  const { state, route, onRequest } = props;
+  const { state, route, error, onRequest } = props;
   const [sheet, setSheet] = useState(false);
   const counts = repoCounts(state?.tasks ?? [], route.repo);
   const settings = route.page === "settings";
   const current = settings ? null : counts.repos.find((c) => sameRepo(c.repo, route.repo));
   const label = settings ? "Settings" : (current?.repo ?? "All repositories");
   return (
-    <header class={styles.topbar}>
-      <button
-        type="button"
-        class={styles.switcher}
-        aria-haspopup="dialog"
-        aria-expanded={sheet}
-        aria-label={`${label}: switch repository`}
-        onClick={() => setSheet(true)}
-      >
-        {current && <StatusDot tone={current.live ? "run" : "idle"} pulse={current.moving} />}
-        <span class={styles.switcherLabel}>{label}</span>
-        <Icon.ChevronDown class={styles.chevron} />
-      </button>
-      {state && <NewRequest onPick={onRequest} form="bar" />}
-      {sheet && (
-        <Sheet title="Repositories" onClose={() => setSheet(false)}>
-          <RepoLinks counts={counts} route={route} touch />
-          <RunSlots {...props} />
-          {state && <User user={state.user} />}
-        </Sheet>
+    <>
+      <header class={styles.topbar}>
+        <button
+          type="button"
+          class={styles.switcher}
+          aria-haspopup="dialog"
+          aria-expanded={sheet}
+          aria-label={`${label}: switch repository`}
+          onClick={() => setSheet(true)}
+        >
+          {current && <StatusDot tone={current.live ? "run" : "idle"} pulse={current.moving} />}
+          <span class={styles.switcherLabel}>{label}</span>
+          <Icon.ChevronDown class={styles.chevron} />
+        </button>
+        {state && <NewRequest onPick={onRequest} form="bar" />}
+        {sheet && (
+          <Sheet title="Repositories" onClose={() => setSheet(false)}>
+            <RepoLinks counts={counts} route={route} touch />
+            <RunSlots {...props} />
+            {state && <User user={state.user} />}
+          </Sheet>
+        )}
+      </header>
+      {error && (
+        <p class={styles.banner} role="alert">
+          Can't reach the listener ({error})
+        </p>
       )}
-    </header>
+    </>
   );
 }
 
@@ -462,7 +472,7 @@ export function TabBar({ state, route, lastRepo }: Common & { lastRepo: string |
     {
       label: "Board",
       icon: <Icon.Board size={22} />,
-      href: repo ? boardOf(repo) : tasksOf(null),
+      href: boardOf(repo),
       current: route.page === "board",
     },
     {

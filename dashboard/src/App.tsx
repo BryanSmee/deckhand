@@ -98,6 +98,8 @@ export function Dashboard({ state, error, repos, refresh }: Props) {
   });
   const [showClosed, setShowClosed] = useState(() => stored("graphClosed") === "1");
   const [rail, setRail] = useState(() => stored("sidebar") === "rail");
+  // The last repo open here, which All doesn't clear: the phone's Tasks and Board go there.
+  const [lastRepo, setLastRepo] = useState(() => stored("repo") || null);
   // New request's dialogs: an idea or a bug report for a repo's inbox (Feedback), or a run
   // that reviews a repo's recent runs (Analyze).
   const [request, setRequest] = useState<Request | null>(null);
@@ -127,6 +129,10 @@ export function Dashboard({ state, error, repos, refresh }: Props) {
   // The repo shown is the one to come back to (Tasks and Board on a phone, an empty address).
   useEffect(() => {
     if (!onSettings) store("tab", route.repo ?? "");
+    if (route.repo) {
+      store("repo", route.repo);
+      setLastRepo(route.repo);
+    }
   }, [onSettings, route.repo]);
 
   const selectShowClosed = (show: boolean) => {
@@ -209,7 +215,7 @@ export function Dashboard({ state, error, repos, refresh }: Props) {
           </div>
         )}
       </div>
-      {!wide && !task && <TabBar state={state} route={route} lastRepo={stored("tab") || null} />}
+      {!wide && !task && <TabBar state={state} route={route} lastRepo={lastRepo} />}
       {request === "inbox" && state && (
         <InboxDialog
           inboxes={state.inboxes}

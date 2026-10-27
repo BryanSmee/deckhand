@@ -47,7 +47,7 @@ test("every repo's graph has no work area: a repo's has", () => {
     <Graph state={state} repo={null} narrow={false} showClosed={false} onShowClosed={() => {}} />,
   );
   expect(screen.queryByRole("region", { name: "Work area" })).toBeNull();
-  expect(screen.getByText(/Open a repository's tab to start or queue/)).toBeTruthy();
+  expect(screen.getByText(/Open a repository's board to start or queue/)).toBeTruthy();
 });
 
 test("the backlog lists the repo's open issues; Start sends the mode picked", async () => {

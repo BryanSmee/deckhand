@@ -279,9 +279,9 @@ test("the graph: a node per issue, arrows for /after, a node opens its task", ()
 
   const node = nodes.find((n) => n.getAttribute("aria-label")!.startsWith("#24"))!;
   expect(node.getAttribute("href")).toBe("#/acme/app?task=acme%2Fapp%2324");
-  // The sidebar's repos stay on the board; All has none: its tasks.
+  // The sidebar's repos stay on the board, All's too.
   expect(sidebarRepos().map((a) => a.getAttribute("href"))).toEqual([
-    "#/",
+    "#/board",
     "#/acme/app/board",
     "#/acme/api/board",
     "#/acme/notes/board",
@@ -327,6 +327,22 @@ test("the graph with nothing open says so, and offers the closed ones", () => {
   expect(screen.getByText(/Nothing open here/)).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "Show closed issues" }));
   expect(screen.getByRole("list", { name: "Issues of acme/app" })).toBeTruthy();
+});
+
+test("every repo's graph, under its old address and its new one", async () => {
+  history.replaceState(null, "", "#/graph");
+  render(<Dashboard state={state} error={null} />);
+  expect(location.hash).toBe("#/board");
+  expect(screen.getByRole("list", { name: "Issues" })).toBeTruthy();
+  expect(screen.getByRole("heading", { level: 1, name: "All repositories" })).toBeTruthy();
+  const views = within(screen.getByRole("group", { name: "View" }));
+  expect(views.getByRole("link", { name: "Board" }).getAttribute("aria-current")).toBe("page");
+  expect(views.getByRole("link", { name: "Tasks" }).getAttribute("href")).toBe("#/");
+  expect(sidebarRepos()[0].getAttribute("aria-current")).toBe("page");
+  // The column lists every repo's brainstorms, without a button: nothing moves on All.
+  const all = screen.getByRole("region", { name: "Brainstorms" });
+  expect(within(all).getAllByRole("listitem").length).toBeGreaterThan(0);
+  expect(within(all).queryByRole("button")).toBeNull();
 });
 
 test("the old addresses are rewritten to their new ones, showing the same", () => {
@@ -386,6 +402,41 @@ test("New request's menu: arrows move through it, Escape closes it", () => {
   fireEvent.keyDown(document, { key: "Escape" });
   expect(screen.queryByRole("menu")).toBeNull();
   expect(document.activeElement).toBe(button);
+});
+
+test("a dialog from New request gives focus back to New request once closed", async () => {
+  render(<Dashboard state={state} error={null} />);
+  const button = screen.getByRole("button", { name: "New request" });
+  fireEvent.click(button);
+  fireEvent.click(screen.getByRole("menuitem", { name: "Idea or bug report" }));
+  expect(screen.getByRole("dialog", { name: "Send feedback" })).toBeTruthy();
+  fireEvent.keyDown(document, { key: "Escape" });
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  expect(document.activeElement).toBe(button);
+});
+
+test("on a phone, the listener's error shows under the top bar", () => {
+  wide = false;
+  render(<Dashboard state={state} error="502" />);
+  expect(screen.getByRole("alert").textContent).toBe("Can't reach the listener (502)");
+});
+
+test("on a phone, Tasks and Board go back to the repo last open, after Overview", async () => {
+  wide = false;
+  history.replaceState(null, "", "#/acme/api");
+  render(<Dashboard state={state} error={null} />);
+  history.pushState(null, "", "#/");
+  dispatchEvent(new HashChangeEvent("hashchange"));
+  const tabs = () => within(screen.getByRole("navigation", { name: "Pages" }));
+  await waitFor(() =>
+    expect(
+      tabs()
+        .getByRole("link", { name: /^Overview/ })
+        .getAttribute("aria-current"),
+    ).toBe("page"),
+  );
+  expect(tabs().getByRole("link", { name: "Tasks" }).getAttribute("href")).toBe("#/acme/api");
+  expect(tabs().getByRole("link", { name: "Board" }).getAttribute("href")).toBe("#/acme/api/board");
 });
 
 test("on a phone: the tab bar marks the page, and the switcher's sheet lists the repos", () => {

@@ -16,10 +16,13 @@ test("tasks and runs in the address, both ways", () => {
   expect(formatRoute({ repo: null, task: null, run: "x" })).toBe("#/");
 });
 
-test("a repository's board", () => {
+test("a repository's board, and every repository's", () => {
   const route = { repo: "org/app", ...none, page: "board" as const };
   expect(formatRoute(route)).toBe("#/org/app/board");
   expect(parseRoute("#/org/app/board")).toEqual(route);
+  const all = { ...route, repo: null };
+  expect(formatRoute(all)).toBe("#/board");
+  expect(parseRoute("#/board")).toEqual(all);
 });
 
 test("settings: the repositories, and one's config", () => {
@@ -41,8 +44,8 @@ test.each([
   ["#/repositories", "#/settings/repositories"],
   ["#/repositories/org/app", "#/settings/repositories/org/app"],
   ["#/graph/org/app", "#/org/app/board"],
-  // The all-repositories graph is gone: All's tasks.
-  ["#/graph", "#/"],
+  // Every repository's graph, until the Overview replaces it.
+  ["#/graph", "#/board"],
   // From before the tabs.
   ["#task=org%2Frepo%2312&run=r1", "#/?task=org%2Frepo%2312&run=r1"],
   ["", "#/"],

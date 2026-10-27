@@ -434,6 +434,17 @@
   color: var(--text-3);
 }
 
+/* The listener's error, under the phone's top bar. */
+.banner {
+  flex: none;
+  margin: 0;
+  padding: 8px 16px;
+  background: var(--err-bg);
+  color: var(--err);
+  border-bottom: 1px solid var(--border);
+  font-size: 12.5px;
+}
+
 /* The phone's tab bar. */
 .tabbar {
   display: grid;
