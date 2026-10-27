@@ -184,6 +184,7 @@ export function useRunLog(runId: string | null): { entries: Entry[]; ended: bool
 }
 
 // The listener caches the list for minutes: polling it now and then costs GitHub nothing.
+// Not with ?backlog=1, whose counts read each repo every few minutes: only the Overview's.
 const REPOS_POLL_MS = 60000;
 
 export interface RepoList {

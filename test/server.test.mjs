@@ -2914,7 +2914,8 @@ mounts:
       .getSetCookie()
       .find((c) => c.startsWith("deckhand_session="))
       .split(";")[0];
-    const backlog = async () => (await (await get("/api/repos", session)).json()).repos[0].backlog;
+    const backlog = async () =>
+      (await (await get("/api/repos?backlog=1", session)).json()).repos[0].backlog;
     // The first list doesn't wait for GitHub: its read is on its way.
     assert.equal(await backlog(), null);
     await github.waitFor((r) => r.path.startsWith("/repos/org/repo/issues?state=open&"));
@@ -2923,7 +2924,7 @@ mounts:
       counted = await backlog();
       if (!counted) await new Promise((resolve) => setTimeout(resolve, 25));
     }
-    assert.equal(counted?.count, 2);
+    assert.deepEqual(counted, { count: 2, more: false, readAt: counted?.readAt });
     // Cached: the next lists read no issues.
     await backlog();
     const reads = github.requests.filter((r) =>

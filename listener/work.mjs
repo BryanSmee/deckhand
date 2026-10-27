@@ -145,6 +145,8 @@ export function createWorkApi({
     if (!Array.isArray(list)) throw new Error(`GitHub GET ${path}: no list`);
     if (!errors.length) await seedInputs(repo, list, settings.users);
     return {
+      // A full page: there may be more open issues than it has (counts()).
+      more: list.length === 100,
       issues: list
         .filter((i) => !i.pull_request)
         .map((i) => ({
@@ -286,11 +288,13 @@ export function createWorkApi({
     return issues.filter((i) => !hidden(i.number));
   }
 
-  // The repository list's backlog counts: "owner/repo" (lowercase) → { count, readAt } from
-  // each repo's last read, as GET .../issues would list it for `user`, or null before one (or
-  // when `user` isn't among the repo's users). Nothing waits for GitHub: a repo whose read is
-  // older than COUNT_MS, or that has none, is read in the background, at most once per
-  // COUNT_MS (a failing one too), and `issues` deliveries read it again (stale()).
+  // The repository list's backlog counts: "owner/repo" (lowercase) → { count, more, readAt }
+  // from each repo's last read, as GET .../issues would list it for `user`, or null before one
+  // (or when `user` isn't among the repo's users). `more`: the read was a full page of issues
+  // and pull requests, so there may be more than `count`. Nothing waits for GitHub: a repo
+  // whose read is older than COUNT_MS, or that has none, is read in the background, at most
+  // once per COUNT_MS (a failing one too), and `issues` deliveries read it again (stale()).
+  // Those reads label open questions as the board's do (seedInputs()).
   function counts(repos, user) {
     const out = {};
     for (const repo of repos) {
@@ -304,7 +308,11 @@ export function createWorkApi({
       }
       out[name] =
         known.last && sees(known.last.users, user)
-          ? { count: shown(known, name, live).length, readAt: known.last.at }
+          ? {
+              count: shown(known, name, live).length,
+              more: known.last.more,
+              readAt: known.last.at,
+            }
           : null;
     }
     return out;

@@ -495,7 +495,7 @@ test("counts: none before a first read, which starts in the background, then the
   const listed = () => w.calls.filter((c) => c.includes("/issues?")).length;
   assert.equal(listed(), 1);
   assert.deepEqual(w.api.counts(["Org/App"], "alice"), {
-    "org/app": { count: 1, readAt: 1000 },
+    "org/app": { count: 1, more: false, readAt: 1000 },
   });
   // The board's read is the same: no read of its own, and the count follows it.
   w.issues[4] = open("Four");
@@ -504,7 +504,7 @@ test("counts: none before a first read, which starts in the background, then the
   await settled();
   assert.equal(listed(), 2);
   assert.deepEqual(w.api.counts(["org/app"], "alice"), {
-    "org/app": { count: 2, readAt: 1000 + ISSUES_MS },
+    "org/app": { count: 2, more: false, readAt: 1000 + ISSUES_MS },
   });
   assert.equal(listed(), 2);
 });
@@ -549,7 +549,21 @@ test("counts: a failing read is tried again only after COUNT_MS", async () => {
   w.api.counts(["org/app"], "alice");
   await settled();
   assert.deepEqual(w.api.counts(["org/app"], "alice"), {
-    "org/app": { count: 1, readAt: 1000 + COUNT_MS },
+    "org/app": { count: 1, more: false, readAt: 1000 + COUNT_MS },
+  });
+});
+
+test("counts: a full page of issues and pull requests may not be the whole backlog", async () => {
+  const issues = {};
+  for (let n = 1; n <= 100; n++)
+    issues[n] = { ...open(`#${n}`), ...(n > 60 && { pull_request: {} }) };
+  const w = setup({ issues });
+  w.api.counts(["org/app"], "alice");
+  await settled();
+  assert.deepEqual(w.api.counts(["org/app"], "alice")["org/app"], {
+    count: 60,
+    more: true,
+    readAt: 1000,
   });
 });
 
