@@ -1,7 +1,7 @@
 // A modal dialog: its title and context line, a close button, the body, then a footer with
 // the keyboard hint on the left and the actions on the right, main action last. Focus moves
 // in, stays in (Tab wraps), and goes back where it was once closed; Escape or a click on the
-// scrim closes it, Ctrl (⌘) Enter sends it.
+// scrim (pressed and released there) closes it, Ctrl (⌘) Enter sends it.
 import type { ComponentChildren } from "preact";
 import { useEffect, useId, useRef } from "preact/hooks";
 import { IconButton } from "./Button";
@@ -32,6 +32,7 @@ const isMac = () => /Mac|iPhone|iPad/.test(navigator.platform);
 export function Dialog({ title, sub, onClose, onSubmit, actions, hint, wide, children }: Props) {
   const box = useRef<HTMLDivElement>(null);
   const body = useRef<HTMLDivElement>(null);
+  const pressed = useRef(false);
   const titleId = useId();
   const subId = useId();
   // The latest handlers, for the listener added once.
@@ -87,7 +88,16 @@ export function Dialog({ title, sub, onClose, onSubmit, actions, hint, wide, chi
     ) : null;
 
   return (
-    <div class={styles.scrim} onClick={(e) => e.target === e.currentTarget && onClose()}>
+    <div
+      class={styles.scrim}
+      // A click on the scrim closes it, not a drag that ends there (selecting a field's
+      // text, say): the press must have started on the scrim too.
+      onPointerDown={(e) => (pressed.current = e.target === e.currentTarget)}
+      onClick={(e) => {
+        if (pressed.current && e.target === e.currentTarget) onClose();
+        pressed.current = false;
+      }}
+    >
       <div
         ref={box}
         class={`${styles.dialog} ${wide ? styles.wide : ""}`}

@@ -1,5 +1,6 @@
 // The tokens (global.css): both themes define the same ones, and every text colour reads at
-// 4.5:1 at least (WCAG AA) on the surfaces it sits on.
+// 4.5:1 at least (WCAG AA) on the surfaces it sits on, the old names the unmigrated views
+// still use included.
 import { expect, test } from "vitest";
 import css from "./global.css?raw";
 
@@ -11,6 +12,33 @@ function theme(selector: string): Record<string, string> {
     [...block.matchAll(/--([\w-]+):\s*(#[0-9a-f]{6})\b/gi)].map((m) => [m[1], m[2]]),
   );
 }
+
+// The old names (`--ink: var(--text)`, `--accent-soft: color-mix(…)`) in a theme's colours.
+function withAliases(colours: Record<string, string>): Record<string, string> {
+  const start = css.indexOf(":root,\n.t-light,\n.t-dark {");
+  const block = css.slice(start, css.indexOf("}", start));
+  const all = { ...colours };
+  for (const [, name, value] of block.matchAll(/--([\w-]+):\s*([^;]+);/g)) {
+    const alias = /^var\(--([\w-]+)\)$/.exec(value);
+    const mixed = /^color-mix\(in srgb, var\(--([\w-]+)\) (\d+)%, var\(--([\w-]+)\)\)$/.exec(value);
+    if (alias) all[name] = all[alias[1]];
+    else if (mixed) all[name] = mix(all[mixed[1]], all[mixed[3]], Number(mixed[2]) / 100);
+    else throw new Error(`--${name}: ${value} isn't a token or a mix of two`);
+  }
+  return all;
+}
+
+// `a` at `share`, the rest `b`, in sRGB: color-mix()'s result.
+const mix = (a: string, b: string, share: number) =>
+  "#" +
+  [1, 3, 5]
+    .map((i) => {
+      const [x, y] = [a, b].map((c) => parseInt(c.slice(i, i + 2), 16));
+      return Math.round(x * share + y * (1 - share))
+        .toString(16)
+        .padStart(2, "0");
+    })
+    .join("");
 
 const luminance = (hex: string) => {
   const [r, g, b] = [1, 3, 5]
@@ -30,6 +58,9 @@ const PAIRS: [string, string][] = [
   ...["text", "text-2", "text-3"].flatMap((fg) => SURFACES.map((bg): [string, string] => [fg, bg])),
   ["on-primary", "primary"],
   ["on-primary", "primary-hover"],
+  // The confirmed Stop, and its hover.
+  ["on-err", "err-solid"],
+  ["on-err", "err-solid-hover"],
   // Links and the focus colour's text.
   ["focus", "bg"],
   ["focus", "surface"],
@@ -39,6 +70,18 @@ const PAIRS: [string, string][] = [
     [t, "surface"],
     [t, "bg"],
   ]),
+];
+
+// The unmigrated views' text pairs, by their old names.
+const OLD_PAIRS: [string, string][] = [
+  ...["ink", "muted", "accent"].flatMap((fg) =>
+    ["panel", "raised", "hover", "code", "accent-soft"].map((bg): [string, string] => [fg, bg]),
+  ),
+  ["run", "run-soft"],
+  ["ok", "ok-soft"],
+  ["err", "err-soft"],
+  ["warn", "warn-soft"],
+  ["idle", "idle-soft"],
 ];
 
 const light = theme(":root,\n.t-light");
@@ -53,7 +96,9 @@ test.each([
   ["light", light],
   ["dark", dark],
 ])("text reads at 4.5:1 or more in the %s theme", (_, colours) => {
-  const low = PAIRS.map(([fg, bg]) => ({ fg, bg, ratio: contrast(colours[fg], colours[bg]) }))
+  const all = withAliases(colours);
+  const low = [...PAIRS, ...OLD_PAIRS]
+    .map(([fg, bg]) => ({ fg, bg, ratio: contrast(all[fg], all[bg]) }))
     .filter((p) => !(p.ratio >= 4.5))
     .map((p) => `${p.fg} on ${p.bg}: ${p.ratio.toFixed(2)}`);
   expect(low).toEqual([]);

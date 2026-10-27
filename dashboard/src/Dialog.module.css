@@ -104,7 +104,7 @@
 
 /* Fainter than other disabled buttons: the form waits for its text. */
 .actions .send:disabled {
-  opacity: 0.5;
+  opacity: 0.35;
 }
 
 .said {

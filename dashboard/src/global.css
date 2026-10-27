@@ -32,6 +32,8 @@
   --err: #b42318;
   --err-bg: #fdebea;
   --err-solid: #c8322a;
+  --err-solid-hover: #a8271f;
+  --on-err: #ffffff;
   --idle: #4b5463;
   --idle-bg: #edeff3;
   --idle-solid: #98a1b0;
@@ -72,6 +74,8 @@
   --err: #ff8e86;
   --err-bg: #3a1614;
   --err-solid: #c93a31;
+  --err-solid-hover: #a83028;
+  --on-err: #ffffff;
   --idle: #aab1be;
   --idle-bg: #20242d;
   --idle-solid: #6b7383;
@@ -110,7 +114,8 @@
   --code: var(--surface-2);
   --hover: var(--surface-2);
   --accent: var(--focus);
-  --accent-soft: color-mix(in srgb, var(--focus) 12%, var(--surface));
+  /* 8%: --accent (links, a pressed toggle) still reads at 4.5:1 on it (tokens.spec.ts). */
+  --accent-soft: color-mix(in srgb, var(--focus) 8%, var(--surface));
   --run-soft: var(--run-bg);
   --ok: var(--done);
   --ok-soft: var(--done-bg);

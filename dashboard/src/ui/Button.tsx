@@ -1,6 +1,6 @@
 // The one button: secondary unless told otherwise, one primary per view. Pending shows at
-// once (its pending label, "Starting…"), a spinner only after 400 ms, the button as wide as
-// before. IconButton is the icon-only form: it must name
+// once (its pending label, "Starting…"), a spinner only after 400 ms; the button keeps its
+// width throughout, pending label or not. IconButton is the icon-only form: it must name
 // itself.
 import type { ComponentChildren, JSX } from "preact";
 import { useEffect, useState } from "preact/hooks";
@@ -40,7 +40,7 @@ export interface ButtonProps extends Native {
   // Its action is on its way.
   pending?: boolean;
   // What it says then ("Starting…"); the button is sized for it from the start. Without
-  // one it keeps its label, and the spinner takes the icon's place.
+  // one it keeps its label, and the spinner takes the icon's place (or covers the label).
   pendingLabel?: string;
 }
 
@@ -71,6 +71,8 @@ export function Button({
   const waiting = Boolean(pending);
   const late = useLate(waiting, SPINNER_DELAY);
   const busyLabel = pendingLabel ?? null;
+  // Without a pending label, the spinner shows in the label's place, never beside it.
+  const spinning = late && !busyLabel;
   return (
     <button
       {...rest}
@@ -87,9 +89,28 @@ export function Button({
     >
       <span class={styles.stack}>
         <span class={`${styles.layer} ${waiting && busyLabel ? styles.hidden : ""}`}>
-          {late && !busyLabel ? <Spinner label={null} /> : icon}
-          {children}
+          {icon !== undefined && (
+            // The spinner in the icon's own cell: the icon fades out under it.
+            <span class={styles.stack}>
+              <span class={`${styles.layer} ${spinning ? styles.faded : ""}`}>{icon}</span>
+              {spinning && (
+                <span class={styles.layer}>
+                  <Spinner label={null} />
+                </span>
+              )}
+            </span>
+          )}
+          {children !== undefined && children !== null && (
+            // No icon to take the place of: the spinner covers the label, which stays its
+            // width and its name (faded, not hidden).
+            <span class={spinning && icon === undefined ? styles.faded : ""}>{children}</span>
+          )}
         </span>
+        {spinning && icon === undefined && (
+          <span class={styles.layer}>
+            <Spinner label={null} />
+          </span>
+        )}
         {busyLabel !== null && (
           <span
             class={`${styles.layer} ${waiting ? "" : styles.hidden}`}
@@ -119,8 +140,7 @@ export function IconButton({ label, icon, class: className, ...rest }: IconButto
       class={[styles.icon, className].filter(Boolean).join(" ")}
       aria-label={label}
       title={label}
-    >
-      {icon}
-    </Button>
+      icon={icon}
+    />
   );
 }

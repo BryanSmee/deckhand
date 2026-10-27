@@ -75,10 +75,24 @@ test("a click on the scrim closes it, one inside doesn't", () => {
   render(<Page />);
   open();
   const dialog = screen.getByRole("dialog");
+  fireEvent.pointerDown(dialog);
   fireEvent.click(dialog);
   expect(screen.queryByRole("dialog")).not.toBeNull();
+  fireEvent.pointerDown(dialog.parentElement!);
   fireEvent.click(dialog.parentElement!);
   expect(screen.queryByRole("dialog")).toBeNull();
+});
+
+test("a drag from a field that ends on the scrim keeps it open", () => {
+  render(<Page />);
+  open();
+  const title = screen.getByLabelText("Title") as HTMLInputElement;
+  fireEvent.input(title, { target: { value: "Show each run's duration" } });
+  // Selecting the text, released past the dialog's edge: the click lands on the scrim.
+  fireEvent.pointerDown(title);
+  fireEvent.click(screen.getByRole("dialog").parentElement!);
+  expect(screen.queryByRole("dialog")).not.toBeNull();
+  expect(title.value).toBe("Show each run's duration");
 });
 
 test("Ctrl Enter or ⌘ Enter sends it; Enter alone doesn't", () => {

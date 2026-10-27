@@ -1,5 +1,15 @@
 // The tab's tasks, filtered by the state chips: title first, then number, repo and mode.
-import { CHIPS, type ChipId, inChip, numberOf, ownMode, repoTabs, titleOf, when } from "./format";
+import {
+  CHIPS,
+  type ChipId,
+  inChip,
+  numberOf,
+  ownMode,
+  repoTabs,
+  taskTone,
+  titleOf,
+  when,
+} from "./format";
 import { PrBadge } from "./PullRequest";
 import { StateDot, StateLabel } from "./State";
 import type { Task } from "./types";
@@ -84,7 +94,7 @@ function Row({
   return (
     <button type="button" class={styles.row} aria-current={current} onClick={() => onSelect(t.key)}>
       <span class={styles.dot}>
-        <StateDot state={t.state} />
+        <StateDot state={t.state} tone={taskTone(t)} />
       </span>
       <span class={styles.title} title={t.title ?? undefined}>
         {titleOf(t)}
@@ -113,7 +123,7 @@ function Row({
         {t.kind && !["issue", "pr"].includes(t.kind) && ` · ${t.kind}`}
       </span>
       <span class={styles.state}>
-        <StateLabel state={t.state} />
+        <StateLabel state={t.state} tone={taskTone(t)} />
       </span>
     </button>
   );

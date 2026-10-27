@@ -75,13 +75,13 @@
 .dangerSolid {
   background: var(--err-solid);
   border-color: var(--err-solid);
-  color: #ffffff;
+  color: var(--on-err);
 }
 
 .dangerSolid:hover,
 .dangerSolid:active {
-  background: var(--err);
-  border-color: var(--err);
+  background: var(--err-solid-hover);
+  border-color: var(--err-solid-hover);
 }
 
 .small {
@@ -140,4 +140,9 @@
 
 .hidden {
   visibility: hidden;
+}
+
+/* Under a spinner: still there (its width, its name), just not seen. */
+.faded {
+  opacity: 0;
 }

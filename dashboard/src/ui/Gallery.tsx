@@ -71,6 +71,21 @@ function Theme({ name, class: theme }: { name: string; class: string }) {
           <IconButton label="Sync with GitHub" icon={<Icon.Sync />} />
           <IconButton variant="ghost" label="More actions" icon={<Icon.More />} />
         </div>
+        <div class={styles.row}>
+          <span class={styles.help}>Pending, no label (click):</span>
+          <Button pending={pending} onClick={start}>
+            Send
+          </Button>
+          <Button pending={pending} icon={<Icon.Sync size={14} />} onClick={start}>
+            Sync
+          </Button>
+          <IconButton
+            label="Sync with GitHub"
+            icon={<Icon.Sync />}
+            pending={pending}
+            onClick={start}
+          />
+        </div>
         <div class={styles.states}>
           <span class={styles.help}>State</span>
           <span class={styles.help}>Default</span>

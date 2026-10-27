@@ -167,7 +167,7 @@
 
 /* Fainter than other disabled buttons: the box waits for its text. */
 .actions .send:disabled {
-  opacity: 0.5;
+  opacity: 0.35;
 }
 
 @media (max-width: 760px) {

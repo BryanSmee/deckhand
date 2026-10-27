@@ -34,6 +34,50 @@ test("pending says what it does at once, and spins only after 400 ms", () => {
   expect(spinners(button)).toHaveLength(0);
 });
 
+test("pending without a label spins in the icon's place, after 400 ms", () => {
+  const { rerender } = render(<Button icon={<svg data-icon />}>Sync</Button>);
+  const button = screen.getByRole("button", { name: "Sync" });
+  rerender(
+    <Button pending icon={<svg data-icon />}>
+      Sync
+    </Button>,
+  );
+  act(() => void vi.advanceTimersByTime(SPINNER_DELAY));
+  const [spinner] = spinners(button);
+  const icon = button.querySelector("[data-icon]")!;
+  // In the icon's cell, over it: the label beside them stays as it was.
+  expect(spinner.parentElement!.parentElement).toBe(icon.parentElement!.parentElement);
+  expect(icon.parentElement!.className).toContain("faded");
+  expect(screen.getByText("Sync").className).not.toContain("faded");
+});
+
+test("pending without a label or an icon covers the label, still its name", () => {
+  const { rerender } = render(<Button>Send</Button>);
+  const button = screen.getByRole("button", { name: "Send" });
+  rerender(<Button pending>Send</Button>);
+  act(() => void vi.advanceTimersByTime(SPINNER_DELAY));
+  const [spinner] = spinners(button);
+  const label = screen.getByText("Send");
+  // The spinner's layer and the label's share the one grid cell.
+  const stack = button.firstElementChild!;
+  expect(spinner.parentElement!.parentElement).toBe(stack);
+  expect(label.parentElement!.parentElement).toBe(stack);
+  expect(label.className).toContain("faded");
+  expect(button.textContent).toBe("Send");
+  expect(screen.getByRole("button", { name: "Send" })).toBe(button);
+});
+
+test("a pending icon button spins in its icon's place", () => {
+  const { rerender } = render(<IconButton label="Sync with GitHub" icon={<Sync />} />);
+  const button = screen.getByRole("button", { name: "Sync with GitHub" });
+  rerender(<IconButton label="Sync with GitHub" icon={<Sync />} pending />);
+  act(() => void vi.advanceTimersByTime(SPINNER_DELAY));
+  const [spinner] = spinners(button);
+  const icon = button.querySelector("svg")!;
+  expect(spinner.parentElement!.parentElement).toBe(icon.parentElement!.parentElement);
+  expect(icon.parentElement!.className).toContain("faded");
+});
+
 test("a pending button stays focusable but ignores clicks", () => {
   const onClick = vi.fn();
   render(
