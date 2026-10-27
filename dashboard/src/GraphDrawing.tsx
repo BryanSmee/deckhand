@@ -201,6 +201,26 @@ export interface Ghost extends Look {
 // Where the pointer holds the ghost, from its top left corner: by its number.
 export const GHOST_GRIP = { x: 24, y: 18 };
 
+function GhostView({ ghost, w, h }: { ghost: Ghost; w: number; h: number }) {
+  return (
+    <div
+      class={`${styles.node} ${styles.moving} ${styles.ghost}`}
+      style={{
+        transform: `translate(${PAD + ghost.x - GHOST_GRIP.x}px, ${PAD + ghost.y - GHOST_GRIP.y}px)`,
+        width: `${w}px`,
+        height: `${h}px`,
+      }}
+      aria-hidden="true"
+    >
+      <span class={styles.top}>
+        <span class={styles.ref}>#{ghost.number}</span>
+        <span class={styles.state}>{ghost.status}</span>
+      </span>
+      <span class={styles.title}>{ghost.title}</span>
+    </div>
+  );
+}
+
 interface DrawingProps {
   // api/state not read yet.
   loading: boolean;
@@ -249,19 +269,46 @@ export function GraphDrawing({
   drag,
   onAsk,
 }: DrawingProps) {
-  if (loading) return <p class={styles.empty}>Loading…</p>;
-  if (!nodes.length && hidden) {
+  const message = loading ? (
+    <p class={styles.empty}>Loading…</p>
+  ) : !nodes.length && hidden ? (
+    <p class={styles.empty}>
+      Nothing open here.{" "}
+      <button type="button" class={styles.show} onClick={() => onShowClosed(true)}>
+        Show closed issues
+      </button>
+    </p>
+  ) : !nodes.length ? (
+    <p class={styles.empty}>No issues here yet. Drop one here to start it.</p>
+  ) : null;
+  // A drag's ghost and what letting go does, over the drawing.
+  const dragged = (
+    <>
+      {ghost && <GhostView ghost={ghost} w={shape.w} h={shape.h} />}
+      {label && (
+        <span
+          class={styles.dropLabel}
+          style={{ transform: `translate(${PAD + label.x}px, ${PAD + label.y}px)` }}
+          aria-hidden="true"
+        >
+          {label.text}
+        </span>
+      )}
+    </>
+  );
+  // Nothing to draw: an empty drawing under the message all the same, where a card dragged
+  // there shows (the browser's own image is hidden).
+  if (message) {
     return (
-      <p class={styles.empty}>
-        Nothing open here.{" "}
-        <button type="button" class={styles.show} onClick={() => onShowClosed(true)}>
-          Show closed issues
-        </button>
-      </p>
+      <>
+        {message}
+        <div class={styles.plane}>
+          <div ref={drawing} class={styles.drawing} style={{ transform: `scale(${zoom})` }}>
+            {dragged}
+          </div>
+        </div>
+      </>
     );
-  }
-  if (!nodes.length) {
-    return <p class={styles.empty}>No issues here yet. Drop one here to start it.</p>;
   }
   const byKey = new Map(nodes.map((n) => [n.key, n]));
   const width = shape.width + 2 * PAD;
@@ -332,32 +379,7 @@ export function GraphDrawing({
             />
           );
         })}
-        {ghost && (
-          <div
-            class={`${styles.node} ${styles.moving} ${styles.ghost}`}
-            style={{
-              transform: `translate(${PAD + ghost.x - GHOST_GRIP.x}px, ${PAD + ghost.y - GHOST_GRIP.y}px)`,
-              width: `${shape.w}px`,
-              height: `${shape.h}px`,
-            }}
-            aria-hidden="true"
-          >
-            <span class={styles.top}>
-              <span class={styles.ref}>#{ghost.number}</span>
-              <span class={styles.state}>{ghost.status}</span>
-            </span>
-            <span class={styles.title}>{ghost.title}</span>
-          </div>
-        )}
-        {label && (
-          <span
-            class={styles.dropLabel}
-            style={{ transform: `translate(${PAD + label.x}px, ${PAD + label.y}px)` }}
-            aria-hidden="true"
-          >
-            {label.text}
-          </span>
-        )}
+        {dragged}
       </div>
     </div>
   );

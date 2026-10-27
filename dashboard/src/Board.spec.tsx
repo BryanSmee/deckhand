@@ -160,6 +160,23 @@ test("a drag over the graph says what letting go does, and the card being dragge
   expect(screen.queryByText("Remove #24's wait")).toBeNull();
 });
 
+test("a card dragged over an empty graph shows there too", async () => {
+  const empty = makeState({ tasks: state.tasks.filter((t) => t.repo !== "acme/app") });
+  render(<Dashboard state={empty} error={null} />);
+  const queue = screen.getByRole("region", { name: "Work queue" });
+  const card = (await within(queue).findByText("Rate-limit the API")).closest("li")!;
+  const area = screen.getByLabelText("What waits for what");
+  expect(within(area).getByText(/No issues here yet/)).toBeTruthy();
+  const dataTransfer = transfer();
+  fireEvent.dragStart(card, { dataTransfer });
+  fireEvent.dragOver(area, { dataTransfer });
+  expect(area.querySelector('[class*="ghost"]')?.textContent).toBe("#31BacklogRate-limit the API");
+  expect(screen.getByText("Start #31")).toBeTruthy();
+  fireEvent.drop(area, { dataTransfer });
+  expect(area.querySelector('[class*="ghost"]')).toBeNull();
+  await waitFor(() => expect(api.bodies()).toEqual([{ action: "start", number: 31 }]));
+});
+
 test("a phone: lanes by default, the queue a sheet with Start and a menu for the rest", async () => {
   phone = true;
   render(<Dashboard state={state} error={null} />);

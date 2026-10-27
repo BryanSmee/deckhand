@@ -94,12 +94,22 @@ test("a pull request waiting for answers stays where it is", async () => {
   expect(api.posted).toEqual([]);
 });
 
+test("an issue's link dragged from another tab draws no ghost, and drops as before", async () => {
+  const { area } = await show();
+  const link = "https://github.example.com/acme/api/issues/138";
+  const dataTransfer = transfer({ "text/uri-list": link, "text/plain": link });
+  fireEvent.dragOver(area, { dataTransfer });
+  // Nothing known about it before the drop: no ghost, the browser's own image.
+  expect(area.querySelector('[class*="ghost"]')).toBeNull();
+  expect(screen.getByText("Start the issue")).toBeTruthy();
+  fireEvent.drop(area, { dataTransfer });
+  expect(screen.getByRole("dialog", { name: "3 open questions" })).toBeTruthy();
+});
+
 test("dropped text that isn't an issue's link says to drag its card", async () => {
   const { area } = await show();
   const dataTransfer = transfer({ "text/plain": "Graph: drag issues" });
   fireEvent.dragOver(area, { dataTransfer });
-  // Nothing known about it before the drop: no ghost, the browser's own image.
-  expect(area.querySelector('[class*="ghost"]')).toBeNull();
   fireEvent.drop(area, { dataTransfer });
   expect(screen.getByRole("alert").textContent).toMatch(/drag an issue's card/);
   expect(api.posted).toEqual([]);
