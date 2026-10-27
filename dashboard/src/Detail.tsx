@@ -1,10 +1,11 @@
-// The open task: its kind, number and mode, its title, and its actions (GitHub, Rerun when
-// its last run failed, Stop while a run goes on, which asks once more first); then its facts,
-// the last reply, and its runs as tabs over the log of the run shown (the latest unless one
-// was picked). Waiting for input: its open questions, as a form to answer them. A discussion:
-// its thread first, to read and reply to, then its runs.
-import { useState } from "preact/hooks";
-import { sendCancel, sendRerun } from "./api";
+// The open task: its kind, number and mode, its title, and its actions (GitHub, Stop while a
+// run goes on, which asks once more first); then its facts and its runs as tabs over the run
+// shown (the latest unless one was picked): its outcome (with Rerun when it failed) and its
+// log. Waiting for input: its open questions, as a form to answer them. A discussion: its
+// thread first, to read and reply to, with the last reply and Rerun, then its runs. A phone's
+// log search takes the header's place.
+import { useEffect, useState } from "preact/hooks";
+import { sendCancel, sendRerun, useRunLog } from "./api";
 import {
   ago,
   duration,
@@ -18,11 +19,15 @@ import {
   titleOf,
 } from "./format";
 import { Log } from "./Log";
+import { copyText, downloadText } from "./logExport";
+import { logSections, plainText } from "./logModel";
+import { Outcome } from "./Outcome";
 import { PolicyDecisions } from "./PullRequest";
 import { Questions } from "./Questions";
 import { Thread } from "./Thread";
 import type { PullRequest, Run, Task } from "./types";
-import { Button, buttonClass } from "./ui/Button";
+import { Button, buttonClass, IconButton } from "./ui/Button";
+import { Sheet } from "./ui/Sheet";
 import * as Icon from "./ui/icons";
 import { StatusBadge, StatusDot } from "./ui/Status";
 import { Tabs } from "./ui/Tabs";
@@ -79,6 +84,16 @@ export function Detail({
   // The task whose Stop was pressed once (it asks again), and the one whose stop is on its way.
   const [confirming, setConfirming] = useState<string | null>(null);
   const [stopping, setStopping] = useState<string | null>(null);
+  // A phone searching the log: its search replaces the header.
+  const [searching, setSearching] = useState(false);
+  // A phone's More menu: GitHub, Copy and Download.
+  const [more, setMore] = useState(false);
+  // The log of the run shown: its outcome's More menu copies it too.
+  const { entries } = useRunLog(r?.id ?? null);
+  useEffect(() => {
+    setSearching(false);
+    setMore(false);
+  }, [t?.key]);
   if (!t) {
     return (
       <div class={styles.detail}>
@@ -96,6 +111,20 @@ export function Detail({
   const failed = t.rerunnable && r && r.id === t.runs[0]?.id ? r : null;
   const discussion = t.kind === "discussion" && t.number !== null;
   const thread = discussion && !showLog;
+  const hidden = !!touch && searching && !thread && !!r;
+  // A phone's More menu, for a run's log.
+  const menu = !!touch && !thread && !!r;
+  const logText = () =>
+    r ? plainText(logSections(entries, r.finishedAt ?? now, r.status === "running")) : "";
+  const copyLog = async () => {
+    setMore(false);
+    const ok = await copyText(logText());
+    setSent({
+      key: t.key,
+      message: ok ? "Log copied." : "Couldn't copy the log: download it instead.",
+      error: !ok,
+    });
+  };
   // Discussions have no comment command to stop them by, nor the API's.
   const stoppable = STOPPABLE.includes(t.state) && t.number !== null && !discussion;
   const asking = confirming === t.key;
@@ -141,144 +170,200 @@ export function Detail({
   };
   return (
     <div class={styles.detail}>
-      <header class={styles.head}>
-        <Button
-          variant="ghost"
-          size="touch"
-          class={styles.back}
-          icon={<Icon.ChevronLeft size={18} />}
-          onClick={onBack}
-        >
-          Back
-        </Button>
-        <div class={styles.top}>
-          <div class={styles.heading}>
-            <span class={styles.context}>
-              {showRepo && (
-                <>
-                  <a href={`${github}/${t.repo}`} target="_blank" rel="noreferrer">
-                    {t.repo}
-                  </a>
-                  {" · "}
-                </>
-              )}
-              {kindName(t)}
-              {t.number !== null && (
-                <>
-                  {" "}
-                  <span class={styles.mono}>#{t.number}</span>
-                </>
-              )}
-              {mode && ` · ${mode} mode`}
-            </span>
-            <h2 class={styles.title}>
-              {url ? (
-                <a href={url} target="_blank" rel="noreferrer">
-                  {titleOf(t)}
-                </a>
-              ) : (
-                titleOf(t)
-              )}
-            </h2>
+      {!hidden && (
+        <header class={styles.head}>
+          <div class={styles.phoneBar}>
+            <Button
+              variant="ghost"
+              size="touch"
+              icon={<Icon.ChevronLeft size={18} />}
+              onClick={onBack}
+            >
+              Back
+            </Button>
+            {menu && (
+              <IconButton
+                variant="ghost"
+                size="touch"
+                label="More: open on GitHub, copy, download"
+                icon={<Icon.More size={20} />}
+                aria-haspopup="dialog"
+                onClick={() => setMore(true)}
+              />
+            )}
           </div>
-          <div class={styles.actions}>
-            {url && (
-              <a class={buttonClass("secondary", size)} href={url} target="_blank" rel="noreferrer">
-                <Icon.External size={14} />
-                GitHub
+          <div class={styles.top}>
+            <div class={styles.heading}>
+              <span class={styles.context}>
+                {showRepo && (
+                  <>
+                    <a href={`${github}/${t.repo}`} target="_blank" rel="noreferrer">
+                      {t.repo}
+                    </a>
+                    {" · "}
+                  </>
+                )}
+                {kindName(t)}
+                {t.number !== null && (
+                  <>
+                    {" "}
+                    <span class={styles.mono}>#{t.number}</span>
+                  </>
+                )}
+                {mode && ` · ${mode} mode`}
+              </span>
+              <h2 class={styles.title}>
+                {url ? (
+                  <a href={url} target="_blank" rel="noreferrer">
+                    {titleOf(t)}
+                  </a>
+                ) : (
+                  titleOf(t)
+                )}
+              </h2>
+            </div>
+            <div class={styles.actions}>
+              {url && !menu && (
+                <a
+                  class={buttonClass("secondary", size)}
+                  href={url}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  <Icon.External size={14} />
+                  GitHub
+                </a>
+              )}
+              {failed && thread && (
+                <Button
+                  variant="primary"
+                  size={size}
+                  pending={rerunning === failed.id}
+                  pendingLabel="Rerunning…"
+                  title="Runs it again with the same comments and mode"
+                  onClick={() => again(failed)}
+                >
+                  Rerun
+                </Button>
+              )}
+              {stoppable && asking && (
+                <Button size={size} onClick={() => setConfirming(null)}>
+                  Keep running
+                </Button>
+              )}
+              {stoppable && (
+                <Button
+                  variant={asking ? "danger-solid" : "danger"}
+                  size={size}
+                  icon={<Icon.Stop size={11} />}
+                  pending={stopping === t.key}
+                  pendingLabel="Stopping…"
+                  title="Stops the run now: what it did since its last push is lost"
+                  onClick={stop}
+                >
+                  {asking ? "Stop it now" : "Stop"}
+                </Button>
+              )}
+            </div>
+          </div>
+          <div class={styles.facts}>
+            <StatusBadge state={t.state} tone={taskTone(t)} />
+            {r && (
+              <span>
+                Started {startTime(r.startedAt, now)} ·{" "}
+                <span class={styles.mono}>{duration(r, now)}</span>
+              </span>
+            )}
+            {r?.model && thread && (
+              <span>
+                {r.model}
+                {r.effort && ` · ${r.effort} effort`}
+                {r.speed === "fast" && " · fast"}
+              </span>
+            )}
+            {t.pr && <PrLink pr={t.pr} />}
+            {!!t.waitingFor?.length && (
+              <span>
+                Next run after{" "}
+                {t.waitingFor.map((n, i) => (
+                  <span key={n}>
+                    {i > 0 && (i === t.waitingFor!.length - 1 ? " and " : ", ")}
+                    <a href={`${github}/${t.repo}/issues/${n}`} target="_blank" rel="noreferrer">
+                      #{n}
+                    </a>
+                  </span>
+                ))}
+              </span>
+            )}
+            {url && t.replyTo !== t.number && t.replyTo !== t.pr?.number && (
+              <a href={url} target="_blank" rel="noreferrer">
+                Replies on #{t.replyTo}
               </a>
             )}
-            {failed && (
-              <Button
-                variant="primary"
-                size={size}
-                pending={rerunning === failed.id}
-                pendingLabel="Rerunning…"
-                title="Runs it again with the same comments and mode"
-                onClick={() => again(failed)}
-              >
-                Rerun
-              </Button>
-            )}
-            {stoppable && asking && (
-              <Button size={size} onClick={() => setConfirming(null)}>
-                Keep running
-              </Button>
-            )}
-            {stoppable && (
-              <Button
-                variant={asking ? "danger-solid" : "danger"}
-                size={size}
-                icon={<Icon.Stop size={11} />}
-                pending={stopping === t.key}
-                pendingLabel="Stopping…"
-                title="Stops the run now: what it did since its last push is lost"
-                onClick={stop}
-              >
-                {asking ? "Stop it now" : "Stop"}
-              </Button>
-            )}
           </div>
-        </div>
-        <div class={styles.facts}>
-          <StatusBadge state={t.state} tone={taskTone(t)} />
-          {r && (
-            <span>
-              Started {startTime(r.startedAt, now)} ·{" "}
-              <span class={styles.mono}>{duration(r, now)}</span>
-            </span>
+          {reply && (thread || reply.id !== r?.id) && (
+            <section class={styles.reply} aria-label="Last reply">
+              <h3>Last reply</h3>
+              <p>{reply.summary}</p>
+            </section>
           )}
-          {r?.model && (
-            <span>
-              {r.model}
-              {r.effort && ` · ${r.effort} effort`}
-              {r.speed === "fast" && " · fast"}
-            </span>
+          <PolicyDecisions decisions={t.decisions} now={now} />
+          {tabs.length > 0 && (
+            <Tabs
+              label={discussion ? "Thread and runs" : "Runs"}
+              tabs={tabs}
+              selected={thread ? THREAD : (r?.id ?? "")}
+              onSelect={pick}
+              panel={PANEL}
+              class={styles.tabs}
+            />
           )}
-          {t.pr && <PrLink pr={t.pr} />}
-          {!!t.waitingFor?.length && (
-            <span>
-              Next run after{" "}
-              {t.waitingFor.map((n, i) => (
-                <span key={n}>
-                  {i > 0 && (i === t.waitingFor!.length - 1 ? " and " : ", ")}
-                  <a href={`${github}/${t.repo}/issues/${n}`} target="_blank" rel="noreferrer">
-                    #{n}
-                  </a>
-                </span>
-              ))}
-            </span>
-          )}
-          {url && t.replyTo !== t.number && t.replyTo !== t.pr?.number && (
-            <a href={url} target="_blank" rel="noreferrer">
-              Replies on #{t.replyTo}
-            </a>
-          )}
-        </div>
-        {reply && (
-          <section class={styles.reply} aria-label="Last reply">
-            <h3>Last reply</h3>
-            <p>{reply.summary}</p>
-          </section>
-        )}
-        <PolicyDecisions decisions={t.decisions} now={now} />
-        {tabs.length > 0 && (
-          <Tabs
-            label={discussion ? "Thread and runs" : "Runs"}
-            tabs={tabs}
-            selected={thread ? THREAD : (r?.id ?? "")}
-            onSelect={pick}
-            panel={PANEL}
-            class={styles.tabs}
-          />
-        )}
-      </header>
-      {sent?.key === t.key && (
+        </header>
+      )}
+      {more && r && (
+        <Sheet title="Run log" onClose={() => setMore(false)}>
+          <div class={styles.menu}>
+            {url && (
+              <a
+                class={buttonClass("ghost", "touch", styles.menuItem)}
+                href={url}
+                target="_blank"
+                rel="noreferrer"
+              >
+                <Icon.External size={18} />
+                Open on GitHub
+              </a>
+            )}
+            <Button
+              variant="ghost"
+              size="touch"
+              class={styles.menuItem}
+              icon={<Icon.Copy size={18} />}
+              onClick={copyLog}
+            >
+              Copy the log
+            </Button>
+            <Button
+              variant="ghost"
+              size="touch"
+              class={styles.menuItem}
+              icon={<Icon.Download size={18} />}
+              onClick={() => {
+                setMore(false);
+                downloadText(`${r.id}.txt`, logText());
+              }}
+            >
+              Download as .txt
+            </Button>
+          </div>
+        </Sheet>
+      )}
+      {sent?.key === t.key && !hidden && (
         <p class={sent.error ? styles.refused : styles.sent} role="status">
           {sent.message}
         </p>
       )}
-      {asked && (
+      {asked && !hidden && (
         <Questions
           key={`${t.key} ${asked.raw}`}
           task={t}
@@ -294,8 +379,27 @@ export function Detail({
           <Thread key={t.key} task={t} now={now} refresh={refresh} />
         </div>
       ) : r ? (
-        <div id={PANEL} role="tabpanel" class={`${styles.panel} ${styles.log}`}>
-          <Log runId={r.id} />
+        <div id={PANEL} role="tabpanel" class={`${styles.panel} ${styles.runView}`}>
+          {!hidden && (
+            <Outcome
+              task={t}
+              run={r}
+              now={now}
+              github={github}
+              touch={touch}
+              onRerun={failed ? () => again(failed) : undefined}
+              rerunning={!!failed && rerunning === failed.id}
+            />
+          )}
+          <Log
+            key={r.id}
+            run={r}
+            entries={entries}
+            now={now}
+            touch={touch}
+            searching={searching}
+            onSearching={setSearching}
+          />
         </div>
       ) : asked ? null : t.state === "needs-input" ? (
         // Labelled for its open questions (an inbox run filed it, or someone wrote it so).

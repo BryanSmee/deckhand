@@ -3,28 +3,10 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/pre
 import { beforeEach, expect, test, vi } from "vitest";
 import type { RepoList } from "./api";
 import { Dashboard } from "./App";
-import { makeState, makeTask } from "./testUtils";
+import { FakeSource, makeState, makeTask } from "./testUtils";
 import type { Entry } from "./types";
 
 const state = makeState();
-
-class FakeSource {
-  static last: FakeSource | null = null;
-  listeners = new Map<string, ((e: { data: string }) => void)[]>();
-  closed = false;
-  constructor(public url: string) {
-    FakeSource.last = this;
-  }
-  addEventListener(type: string, fn: (e: { data: string }) => void) {
-    this.listeners.set(type, [...(this.listeners.get(type) ?? []), fn]);
-  }
-  close() {
-    this.closed = true;
-  }
-  emit(type: string, data: unknown) {
-    for (const fn of this.listeners.get(type) ?? []) fn({ data: JSON.stringify(data) });
-  }
-}
 
 const noRepos: RepoList = {
   repos: [],
@@ -201,8 +183,9 @@ test("the log streams in: tool calls with their output, then the result", async 
   expect(location.hash).toMatch(/run=acme-app-22-1791984600000/);
 });
 
-test("the log's phases and build steps: the current log shows the steps, not the phases", async () => {
+test("the log in its sections: the outcome first, a failed build step open", async () => {
   render(<Dashboard state={state} error={null} />);
+  expect(screen.getByRole("region", { name: "Outcome" }).textContent).toMatch(/Working/);
   const source = FakeSource.last!;
   const step = { kind: "step", step: 7, stage: "build 2/4", name: "RUN npm ci" } as const;
   source.emit("entries", [
@@ -215,10 +198,40 @@ test("the log's phases and build steps: the current log shows the steps, not the
   ] satisfies Entry[]);
   const log = await screen.findByTestId("log");
   await within(log).findByText("Image built");
-  expect(within(log).getByText("#7 [build 2/4] RUN npm ci")).toBeTruthy();
-  expect(within(log).getByText("#7 added 412 packages")).toBeTruthy();
-  expect(within(log).getByText("#7 [build 2/4] RUN npm ci · ERROR: exit code: 1")).toBeTruthy();
-  expect(log.textContent).not.toMatch(/image|setup/);
+  // Setup folds; the image's build, which failed, is open, and so is its failed step.
+  expect(within(log).getByText("Setup").closest("details")!.open).toBe(false);
+  expect(within(log).getByText("Image build").closest("details")!.open).toBe(true);
+  const failed = within(log).getByText("RUN npm ci").closest("details")!;
+  expect(failed.open).toBe(true);
+  expect(failed.textContent).toContain("added 412 packages");
+  expect(failed.textContent).toContain("ERROR: exit code: 1");
+});
+
+test("an older run's outcome: no pull request, which is the latest run's", () => {
+  render(<Dashboard state={state} error={null} />);
+  const outcome = () => screen.getByRole("region", { name: "Outcome" });
+  expect(within(outcome()).getByRole("link", { name: "Open pull request #25" })).toBeTruthy();
+  fireEvent.click(screen.getByRole("tab", { name: "Start 2 h ago" }));
+  expect(within(outcome()).queryByRole("link", { name: /pull request/ })).toBeNull();
+  expect(outcome().textContent).not.toMatch(/Draft|\+86/);
+});
+
+test("on a phone, More: GitHub, then the log copied", async () => {
+  wide = false;
+  const writeText = vi.fn(async (_text: string) => {});
+  vi.stubGlobal("navigator", { clipboard: { writeText } });
+  history.replaceState(null, "", "#/?task=acme%2Fapp%2322");
+  render(<Dashboard state={state} error={null} />);
+  FakeSource.last!.emit("entries", [{ kind: "text", text: "Hello" }] satisfies Entry[]);
+  // GitHub is in the menu, not beside the title.
+  expect(screen.queryByRole("link", { name: "GitHub" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "More: open on GitHub, copy, download" }));
+  const sheet = screen.getByRole("dialog", { name: "Run log" });
+  expect(within(sheet).getByRole("link", { name: "Open on GitHub" })).toBeTruthy();
+  fireEvent.click(within(sheet).getByRole("button", { name: "Copy the log" }));
+  expect(await screen.findByText("Log copied.")).toBeTruthy();
+  expect(writeText.mock.calls[0][0]).toBe("== Work ==\nHello\n");
+  expect(screen.queryByRole("dialog")).toBeNull();
 });
 
 test("signed out of reach: the error instead of the counts", () => {
