@@ -380,20 +380,34 @@ export interface RepoConfig {
 }
 
 // A policy file: `replaces`, a repo file with the name of an operator one, which it replaces.
-// `rules`: the `deny_*` rules it defines. `url`: the repo's file on GitHub.
+// That operator file is listed too, not `active`: no decision evaluates it. `rules`: the
+// `deny_*` rules it defines. `url`: the repo's file on GitHub. `text`: its source, redacted, cut
+// at 20 KB (`truncated`); sent by the config endpoint only, never in api/state.
 export interface PolicyFile {
   name: string;
   source: "operator" | "repo";
   replaces: boolean;
+  active: boolean;
   rules: string[];
   url: string | null;
+  text: string;
+  truncated: boolean;
+}
+
+// An error of the config check: `file` and `row` where opa placed it (both null when it
+// didn't: a timeout, a folder that can't be read). `text`: the whole error on one line.
+export interface PolicyError {
+  file: string | null;
+  row: number | null;
+  message: string;
+  text: string;
 }
 
 // `errors`: the config check's (compile errors, a folder that can't be read): every decision a
 // policy is asked for refuses until they are fixed. `warnings`: rules nobody evaluates.
 export interface Policies {
   files: PolicyFile[];
-  errors: string[];
+  errors: PolicyError[];
   warnings: string[];
 }
 

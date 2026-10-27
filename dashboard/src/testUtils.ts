@@ -3,7 +3,7 @@
 // named test-*.ts, which `node --test` would run.
 import { vi } from "vitest";
 import fixture from "./fixture.json";
-import type { Backlog, Run, State, Task } from "./types";
+import type { Backlog, PolicyFile, Run, State, Task } from "./types";
 
 // A request the dashboard made: its JSON body parsed (undefined for a GET or an empty POST).
 // `any`: each handler knows the body it gets.
@@ -105,3 +105,17 @@ export const BACKLOG: Backlog = {
   readAt: 0,
   refreshing: false,
 };
+
+// A policy file of a repo's config: an active repo file with no rule, unless `over` says.
+export function makePolicyFile(over: Partial<PolicyFile> & Pick<PolicyFile, "name">): PolicyFile {
+  return {
+    source: "repo",
+    replaces: false,
+    active: true,
+    rules: [],
+    url: null,
+    text: "package deckhand\n",
+    truncated: false,
+    ...over,
+  };
+}

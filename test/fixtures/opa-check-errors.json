@@ -1,0 +1,68 @@
+{
+  "errors": [
+    {
+      "message": "undefined function http.send",
+      "code": "rego_type_error",
+      "location": {
+        "file": "policy/net.rego",
+        "row": 3,
+        "col": 34
+      }
+    },
+    {
+      "message": "count: arity mismatch",
+      "code": "rego_type_error",
+      "location": {
+        "file": "policy/size.rego",
+        "row": 4,
+        "col": 2
+      },
+      "details": {
+        "have": [
+          {
+            "type": "any"
+          },
+          {
+            "type": "number"
+          },
+          null
+        ],
+        "want": {
+          "args": [
+            {
+              "of": [
+                {
+                  "type": "string"
+                },
+                {
+                  "dynamic": {
+                    "type": "any"
+                  },
+                  "type": "array"
+                },
+                {
+                  "dynamic": {
+                    "key": {
+                      "type": "any"
+                    },
+                    "value": {
+                      "type": "any"
+                    }
+                  },
+                  "type": "object"
+                },
+                {
+                  "of": {
+                    "type": "any"
+                  },
+                  "type": "set"
+                }
+              ],
+              "type": "any"
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

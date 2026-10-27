@@ -1066,7 +1066,11 @@ export function createReviews({
   // rule doesn't wait for a ready event.
   async function dryRun({ repo, base, number }) {
     if (!policies) return { text: dryRunText({ number, files: [] }), denials: 0 };
-    const { files, errors, policies: texts } = await policies.describe(repo, base);
+    const described = await policies.describe(repo, base);
+    // What deny() evaluates: an operator file a repo file replaces isn't.
+    const files = described.files.filter((f) => f.active);
+    const errors = described.errors.map((e) => e.text);
+    const texts = described.policies;
     if (!files.length) return { text: dryRunText({ number, files }), denials: 0 };
     const pr = await getJson(github, repo, `/repos/${repo}/pulls/${number}`);
     const info = await getJson(github, repo, `/repos/${repo}`);

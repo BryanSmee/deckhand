@@ -420,21 +420,23 @@ export function createRepoApi({
   }
 
   // The policies that apply on `repo`'s default branch `base`, read now, as the panel shows
-  // them: { files, errors, warnings } (policies.mjs describe()), without their text.
+  // them: { files, errors, warnings } (policies.mjs describe()), each file with its text. Only
+  // this endpoint sends it, never api/state.
   async function policyView(repo, base) {
     if (!policies) return { files: [], errors: [], warnings: [] };
     try {
       const { files, errors, warnings } = await policies.describe(repo, base);
       // Written for GitHub replies; the panel shows text.
-      const plain = (list) => list.map((text) => text.replaceAll("`", ""));
-      return { files, errors: plain(errors), warnings: plain(warnings) };
+      const plain = (text) => text.replaceAll("`", "");
+      return {
+        files,
+        errors: errors.map((e) => ({ ...e, message: plain(e.message), text: plain(e.text) })),
+        warnings: warnings.map(plain),
+      };
     } catch (error) {
       log(`Repositories: ${repo}'s policies: ${error.message ?? error}`);
-      return {
-        files: [],
-        errors: ["the policies can't be read (see the listener's logs)"],
-        warnings: [],
-      };
+      const text = "the policies can't be read (see the listener's logs)";
+      return { files: [], errors: [{ file: null, row: null, message: text, text }], warnings: [] };
     }
   }
 

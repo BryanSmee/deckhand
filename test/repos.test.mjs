@@ -498,17 +498,32 @@ test("a repo's broken grant makes that repo invalid only", async () => {
   assert.deepEqual(other.effective.grant.files, ["default.yaml"]);
 });
 
-test("a repo's config: the policies that apply, without their text; none without an engine", async () => {
+test("a repo's config: the policies that apply, with their text; none without an engine", async () => {
   const asked = [];
+  const file = {
+    name: "a.rego",
+    source: "repo",
+    replaces: false,
+    active: true,
+    rules: ["deny_merge"],
+    url: null,
+    text: "package deckhand\n",
+    truncated: false,
+  };
   const policies = {
     describe: async (repo, base) => {
       asked.push([repo, base]);
       return {
-        files: [
-          { name: "a.rego", source: "repo", replaces: false, rules: ["deny_merge"], url: null },
+        files: [file],
+        errors: [
+          {
+            file: "a.rego",
+            row: 1,
+            message: "unexpected `eof`",
+            text: "policy error: a.rego:1: unexpected `eof`",
+          },
         ],
-        errors: ["policy error: a.rego:1: unexpected eof"],
-        warnings: [],
+        warnings: ["a.rego: `deny_x` isn't a rule"],
         policies: new Map([["a.rego", "package deckhand"]]),
       };
     },
@@ -516,17 +531,26 @@ test("a repo's config: the policies that apply, without their text; none without
   const { api } = apiSetup({ first: [info("org/app")], configured: ["org/app"], policies });
   const { body } = await call(api, "GET", "/api/repos/org/app/config");
   assert.deepEqual(asked, [["org/app", "main"]]);
+  // Written for GitHub replies, without their backquotes.
   assert.deepEqual(body.policies, {
-    files: [{ name: "a.rego", source: "repo", replaces: false, rules: ["deny_merge"], url: null }],
-    errors: ["policy error: a.rego:1: unexpected eof"],
-    warnings: [],
+    files: [file],
+    errors: [
+      {
+        file: "a.rego",
+        row: 1,
+        message: "unexpected eof",
+        text: "policy error: a.rego:1: unexpected eof",
+      },
+    ],
+    warnings: ["a.rego: deny_x isn't a rule"],
   });
   // GitHub failing to list them: said, without its details.
   policies.describe = async () => {
     throw new Error("GET /repos/org/app/contents: 502");
   };
   const failed = (await call(api, "GET", "/api/repos/org/app/config")).body.policies;
-  assert.deepEqual(failed.errors, ["the policies can't be read (see the listener's logs)"]);
+  const text = "the policies can't be read (see the listener's logs)";
+  assert.deepEqual(failed.errors, [{ file: null, row: null, message: text, text }]);
   const none = apiSetup({ first: [info("org/app")], configured: ["org/app"] });
   const bare = (await call(none.api, "GET", "/api/repos/org/app/config")).body.policies;
   assert.deepEqual(bare, { files: [], errors: [], warnings: [] });

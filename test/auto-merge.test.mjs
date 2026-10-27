@@ -601,6 +601,8 @@ test("decisions: each one a policy was asked for is kept for the task's page", a
 test("/mode policy: every rule on the pull request now, nothing reviewed, fixed or merged", async (t) => {
   const policy = policyEngine(t, {
     files: { "size.rego": 'package deckhand\ndeny_merge contains "x" if true\n' },
+    // Replaced by the repo's: not one of the files the dry run evaluates.
+    operator: { "size.rego": 'package deckhand\ndeny_review contains "y" if true\n' },
     messages: (input, rule) => (rule === "deny_merge" ? ["a `human` merges this one"] : []),
   });
   const s = setup(t, { policies: policy.engine, pr: { additions: 12 } });
@@ -610,7 +612,7 @@ test("/mode policy: every rule on the pull request now, nothing reviewed, fixed 
     text,
     /^\*\*Policy dry run\*\* on #5 at sha-1: nothing was reviewed, fixed or merged\./,
   );
-  assert.match(text, /Policies: `size\.rego` \(repo\)\./);
+  assert.match(text, /Policies: `size\.rego` \(repo, replaces the operator's\)\./);
   assert.match(text, /- `deny_merge`: \*\*denies\*\*: `a 'human' merges this one`/);
   assert.match(text, /- `deny_review`: allows \(no file defines it\)/);
   assert.match(text, /- `deny_fix`: allows \(no file defines it\)/);
