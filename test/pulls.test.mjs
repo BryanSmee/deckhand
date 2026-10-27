@@ -245,6 +245,53 @@ test("pulls: older tasks looked up once per repo, by branch, link or number", as
   assert.equal(asked.length, 2);
 });
 
+test("pulls: fill() asks once for the size of one found in a listing, merged or closed too", async (t) => {
+  const path = tempPath(t);
+  const listPulls = async () => [
+    {
+      number: 9,
+      html_url: "u9",
+      state: "closed",
+      merged_at: "2026-10-21",
+      head: { ref: "issue-4-x", repo: { full_name: "org/repo" } },
+    },
+  ];
+  const fetched = [];
+  const getPull = async (repo, number) => {
+    fetched.push(`${repo}#${number}`);
+    if (number === 3) return null; // gone
+    return {
+      number,
+      state: "closed",
+      merged_at: "2026-10-21",
+      additions: 86,
+      deletions: 19,
+      changed_files: 4,
+      commits: 3,
+    };
+  };
+  const pulls = createPulls({ path, listPulls, getPull });
+  // Recorded before sizes were, and gone from GitHub since.
+  pulls.record("org/repo#2", pr(3, "closed"));
+  await pulls.fill(["org/repo#4", "org/repo#2"]);
+  assert.deepEqual(pulls.get("org/repo#4"), {
+    number: 9,
+    url: "u9",
+    state: "merged",
+    readyAt: null,
+    additions: 86,
+    deletions: 19,
+    changedFiles: 4,
+    commits: 3,
+  });
+  assert.deepEqual(pulls.get("org/repo#2"), pr(3, "closed"));
+  assert.deepEqual(fetched.sort(), ["org/repo#3", "org/repo#9"]);
+  // Not asked again on the next poll, even for the one GitHub couldn't size; kept on disk.
+  assert.equal(await pulls.fill(["org/repo#4", "org/repo#2"]), null);
+  assert.equal(fetched.length, 2);
+  assert.equal(createPulls({ path, listPulls, getPull }).get("org/repo#4").commits, 3);
+});
+
 test("pulls: the open ones, for the conflict watcher", (t) => {
   const pulls = createPulls({ path: tempPath(t), listPulls: async () => [] });
   pulls.record("org/repo#30", pr(31, "draft"));

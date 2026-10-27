@@ -151,7 +151,7 @@ export function newRecord(
     status: "running",
     // Its screenshots' folder, once it starts: they go with its log (history.mjs).
     shots: null,
-    // The branch of its last push GitHub took, and when (runs.mjs watchPushes()).
+    // The branch of its last push GitHub took, and when (restart.mjs watchPushes()).
     branch: null,
     lastPushAt: null,
     logPath: join(logDir, `${id}.log`),

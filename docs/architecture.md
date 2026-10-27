@@ -507,7 +507,8 @@ window still shows.
 A task's pull request also carries its size and commit count (`additions`, `deletions`,
 `changedFiles`, `commits`), as the last pull request object that had them said: deliveries
 (`synchronize` included, a push to its branch) and single lookups have them, listings don't,
-so `resync()` asks for an open one whose size isn't known yet once. A run records its last
+so `fill()` asks once for the size of a task's pull request that has none, whatever its state
+(a closed one's never changes), and `resync()` for an open one. A run records its last
 push GitHub took (`branch`, `lastPushAt` on its record): the git gateway reads GitHub's
 report for the refs it updated and tells the broker's entry for the run (`watchPushes()`,
 `restart.mjs`), whose record is saved with the run, so a restart keeps them.
