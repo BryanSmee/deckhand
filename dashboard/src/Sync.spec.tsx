@@ -81,3 +81,33 @@ test("no Sync before the first state", () => {
   render(<Dashboard state={null} error={null} refresh={refresh} />);
   expect(screen.queryByRole("button", { name: "Sync with GitHub" })).toBeNull();
 });
+
+test("on the rail (the board), Sync is an icon that says what it did in its title and a status", async () => {
+  history.replaceState(null, "", "#/acme/app/board");
+  api.answer = () => ({ at: 1, by: "octocat", redelivered: 0, pulls: 0 });
+  show();
+  expect(screen.getByRole("button", { name: "Expand the sidebar" })).toBeTruthy();
+  const button = screen.getByRole("button", { name: "Sync with GitHub" });
+  fireEvent.click(button);
+  await waitFor(() =>
+    expect(screen.getByRole("status").textContent).toBe("Up to date with GitHub"),
+  );
+  expect(api.posted).toEqual([{ url: "api/sync", body: undefined }]);
+  expect(refresh).toHaveBeenCalledOnce();
+  expect(screen.getByRole("button", { name: "Sync with GitHub" }).title).toBe(
+    "Up to date with GitHub",
+  );
+});
+
+test("on a collapsed sidebar, a refused sync says why", async () => {
+  localStorage.setItem("deckhand.sidebar", "rail");
+  api.answer = () => Response.json({ error: "Synced a moment ago." }, { status: 429 });
+  show();
+  fireEvent.click(screen.getByRole("button", { name: "Sync with GitHub" }));
+  await waitFor(() =>
+    expect(screen.getByRole("status").textContent).toBe("Couldn't sync (Synced a moment ago.)"),
+  );
+  expect(screen.getByRole("button", { name: "Sync with GitHub" }).title).toBe(
+    "Couldn't sync (Synced a moment ago.)",
+  );
+});

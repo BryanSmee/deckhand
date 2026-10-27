@@ -245,6 +245,11 @@
   color: var(--err);
 }
 
+/* The rail's Sync, when it failed: the error's tone, like the expanded form's line. */
+.rail .railFailed {
+  color: var(--err);
+}
+
 .railError {
   display: flex;
   padding: 6px 0;
