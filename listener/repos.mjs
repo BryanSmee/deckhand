@@ -3,7 +3,9 @@
 // so that no run starts (errors, or what the operator's grants refuse), being onboarded (an
 // issue in onboarding.json) or neither, and the button that starts onboarding.
 //
-//   GET  /api/repos                       the list
+//   GET  /api/repos                       the list; with ?backlog=1 (the Overview), each
+//                                         configured repo with its backlog count as last
+//                                         read (work.mjs counts())
 //   POST /api/repos/refresh               the list, read again from GitHub
 //   GET  /api/repos/<owner>/<repo>/config its config: raw, errors, what runs get (repo-view.mjs)
 //   POST /api/repos/<owner>/<repo>/refresh the same, from the dashboard's Refresh (rate limited)
@@ -308,10 +310,13 @@ function grantsErrorView(error, everyRepo) {
 // and `fs` (realpath, stat) are what a run reads too: the operator's grants folder and the
 // listener's filesystem. `app()`: the App for its links (appLinks()), or null before /setup.
 // `policies`: the policies' engine (policies.mjs), for the files that apply; none without.
+// `backlogs(repos, user)`: the configured repos' backlog counts as last read, by lowercase name
+// (work.mjs counts()), which never waits for GitHub.
 export function createRepoApi({
   config,
   list,
   policies = null,
+  backlogs = () => ({}),
   app = () => null,
   publicUrl = () => null,
   start,
@@ -322,9 +327,19 @@ export function createRepoApi({
 }) {
   const refreshed = new Map(); // "owner/repo" or "*" → when last refreshed
 
-  // The list's answer: its rows, when GitHub listed them, and the App's links.
-  async function listed() {
-    const repos = await list.list();
+  // The list's answer: its rows, when GitHub listed them, and the App's links. With
+  // `backlog`, a configured repo's row has its `backlog` for `user`: { count, more, readAt },
+  // or null before its first read. Only when asked: keeping the counts fresh reads each repo
+  // from GitHub, which the pages that poll the list without showing them shouldn't cost.
+  async function listed(user, backlog = false) {
+    const rows = await list.list();
+    const configured = rows.filter((r) => r.status === "configured").map((r) => r.repo);
+    const counts = backlog ? backlogs(configured, user) : {};
+    const repos = rows.map((r) =>
+      backlog && r.status === "configured"
+        ? { ...r, backlog: counts[r.repo.toLowerCase()] ?? null }
+        : r,
+    );
     const current = app();
     return {
       repos,
@@ -332,6 +347,9 @@ export function createRepoApi({
       app: current && appLinks(config.githubUrl, current, list.installations()),
     };
   }
+
+  const wantsBacklog = (req) =>
+    new URL(req.url, "http://localhost").searchParams.get("backlog") === "1";
 
   // The App isn't installed on it: a 404 (sent), else its row. ALLOWED_REPOS: apiRoute().
   async function known(res, repo) {
@@ -372,7 +390,7 @@ export function createRepoApi({
     if (!repo) {
       if (tooSoon("*")) return send(res, 429, { error: "Refreshed a moment ago." });
       list.refreshAll();
-      return send(res, 200, await listed());
+      return send(res, 200, await listed(user, wantsBacklog(req)));
     }
     if (!(await known(res, repo))) return;
     if (tooSoon(repo.toLowerCase())) return send(res, 429, { error: "Refreshed a moment ago." });
@@ -450,7 +468,7 @@ export function createRepoApi({
       return one && { repo: `${one[1]}/${one[2]}`, what: one[3] };
     },
     gets: {
-      list: async (req, res) => send(res, 200, await listed()),
+      list: async (req, res, user) => send(res, 200, await listed(user, wantsBacklog(req))),
       config: repoConfig,
     },
     posts: { onboard, refresh },

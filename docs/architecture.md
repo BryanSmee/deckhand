@@ -151,7 +151,8 @@ or not (`inputs.json`, kept by `issues` deliveries, whoever adds or removes the 
 lookup per repo when the listener starts); a closed issue leaves the list.
 
 The graph's backlog read (`work.mjs`, at most once per 30 seconds a repo, or after an
-`issues` delivery) catches what those
+`issues` delivery; every configured repo's, at most once per 5 minutes, while the Overview
+asks for the backlog counts) catches what those
 missed: an App without the `issues` event, or a label call that failed. An open issue of an
 allowed user or the App's bot, with no task on the dashboard, whose body has open questions
 but which isn't listed gets the label and the list, as an `issues opened` delivery would have
@@ -456,6 +457,12 @@ each action on the issue as the App's comment, which reactions follow like a tri
 comment's, and queues the work (`accept()`) or holds it (`waits.hold()`) itself: the App's
 own comments never reach `admit()`. The checks are `resume()`'s, see
 [security.md](security.md#the-dashboards-actions).
+
+The Overview's repository cards get each configured repo's backlog count from the same reads
+(`GET /api/repos?backlog=1`, `work.mjs counts()`): the last read's at once, read again in the
+background once it is 5 minutes old (`COUNT_MS`), so listing never waits for GitHub. `more`
+says the read was one full page (100 issues and pull requests), when the count may be short.
+The other pages poll the list without `backlog` and cost no read.
 
 ## Stopping a run
 

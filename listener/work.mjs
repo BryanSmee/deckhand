@@ -65,6 +65,9 @@ import { apiRoute, readJsonBody, refuse, send } from "./web.mjs";
 // How long a repo's open issues are served before they are read again (in the background):
 // the dashboard polls them.
 export const ISSUES_MS = 30_000;
+// How old a repo's backlog count on the repository list gets before it is read again (in the
+// background, counts()): the list is polled for every repo, the backlog only for the one open.
+export const COUNT_MS = 5 * 60000;
 const MAX_BODY = 4096;
 // The answers' text, and the JSON around it (escapes, indexes).
 const MAX_ANSWER_BODY = 4 * MAX_TEXT;
@@ -148,6 +151,8 @@ export function createWorkApi({
     if (!Array.isArray(list)) throw new Error(`GitHub GET ${path}: no list`);
     if (!errors.length) await seedInputs(repo, list, settings.users);
     return {
+      // A full page: there may be more open issues than it has (counts()).
+      more: list.length === 100,
       issues: list
         .filter((i) => !i.pull_request)
         .map((i) => ({
@@ -241,12 +246,7 @@ export function createWorkApi({
   // way, which the dashboard asks for again soon.
   async function backlog(res, repo, user) {
     const name = repo.toLowerCase();
-    let known = backlogs.get(name);
-    if (!known) {
-      known = { repo, last: null, read: null, again: false, seq: 0, version: 0 };
-      Object.assign(known, { live: new Set(), ended: new Map() });
-      backlogs.set(name, known);
-    }
+    const known = entry(repo);
     const live = ending(known, name);
     const { last } = known;
     const fresh = last && last.version === known.version && now() - last.at < ISSUES_MS;
@@ -255,25 +255,73 @@ export function createWorkApi({
       if (last) quietly(known, read);
     }
     if (!last) await known.read;
-    const { issues, modes, errors, users, at, seq } = known.last;
-    if (users && !users.includes(user.toLowerCase())) {
-      refuse(404, `${user} is not among ${repo}'s users.`);
-    }
-    // The tasks change between two reads: an issue started a moment ago leaves at once. One
-    // whose task is over (a run done, a brainstorm stopped) is back, once a read started after
-    // it ended says it is still open.
-    for (const [key, before] of known.ended) if (before < seq) known.ended.delete(key);
-    const hidden = (n) => {
-      const key = taskKey(name, n);
-      return live.has(key) || known.ended.has(key);
-    };
+    const { modes, errors, users, at } = known.last;
+    if (!sees(users, user)) refuse(404, `${user} is not among ${repo}'s users.`);
     send(res, 200, {
-      issues: issues.filter((i) => !hidden(i.number)),
+      issues: shown(known, name, live),
       modes,
       errors,
       readAt: at,
       refreshing: known.read !== null,
     });
+  }
+
+  // The repo's entry in `backlogs`, created without a read.
+  function entry(repo) {
+    const name = repo.toLowerCase();
+    let known = backlogs.get(name);
+    if (!known) {
+      known = { repo, last: null, read: null, again: false, seq: 0, version: 0 };
+      Object.assign(known, { live: new Set(), ended: new Map(), counted: -Infinity });
+      backlogs.set(name, known);
+    }
+    return known;
+  }
+
+  // Unknown while the repo's config has errors: anyone the operator allows.
+  const sees = (users, user) => !users || users.includes(user.toLowerCase());
+
+  // The last read's issues the backlog lists, `live`: ending()'s. The tasks change between two
+  // reads: an issue started a moment ago leaves at once. One whose task is over (a run done, a
+  // brainstorm stopped) is back, once a read started after it ended says it is still open.
+  function shown(known, name, live) {
+    const { issues, seq } = known.last;
+    for (const [key, before] of known.ended) if (before < seq) known.ended.delete(key);
+    const hidden = (n) => {
+      const key = taskKey(name, n);
+      return live.has(key) || known.ended.has(key);
+    };
+    return issues.filter((i) => !hidden(i.number));
+  }
+
+  // The repository list's backlog counts: "owner/repo" (lowercase) → { count, more, readAt }
+  // from each repo's last read, as GET .../issues would list it for `user`, or null before one
+  // (or when `user` isn't among the repo's users). `more`: the read was a full page of issues
+  // and pull requests, so there may be more than `count`. Nothing waits for GitHub: a repo
+  // whose read is older than COUNT_MS, or that has none, is read in the background, at most
+  // once per COUNT_MS (a failing one too), and `issues` deliveries read it again (stale()).
+  // Those reads label open questions as the board's do (seedInputs()).
+  function counts(repos, user) {
+    const out = {};
+    for (const repo of repos) {
+      const name = repo.toLowerCase();
+      const known = entry(repo);
+      const live = ending(known, name);
+      const old = !known.last || now() - known.last.at >= COUNT_MS;
+      if (old && !known.read && now() - known.counted >= COUNT_MS) {
+        known.counted = now();
+        quietly(known, refresh(known));
+      }
+      out[name] =
+        known.last && sees(known.last.users, user)
+          ? {
+              count: shown(known, name, live).length,
+              more: known.last.more,
+              readAt: known.last.at,
+            }
+          : null;
+    }
+    return out;
   }
 
   // The checks a comment passes, for the signed-in `user`: the repo's config without errors,
@@ -798,7 +846,7 @@ export function createWorkApi({
     if (known.last || known.read) readAgain(known);
   }
 
-  return { handle, stale };
+  return { handle, stale, counts };
 }
 
 // Which deliveries make a repo's backlog stale: an issue opened, closed, edited, moved or

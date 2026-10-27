@@ -318,6 +318,12 @@ export interface Repo {
   // Its `review.merge` merges Deckhand's pull requests with no human review: on in its config,
   // granted, and allowed for its visibility (listener/grants.mjs autoMergeProblems()).
   autoMerge: boolean;
+  // Only with api/repos?backlog=1: a configured repo's open issues with no live task, as its
+  // last backlog read had them (listener/work.mjs counts()), and when that read started; null
+  // before its first read, or when the signed-in user isn't among its users. Absent on the
+  // other rows. `more`: that read was one full page of 100 issues and pull requests, so there
+  // may be more than `count` ("100+").
+  backlog?: { count: number; more: boolean; readAt: number } | null;
 }
 
 // Where the App is managed on GitHub (repos.mjs appLinks()). installUrl: GitHub's page that

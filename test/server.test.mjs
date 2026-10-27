@@ -215,7 +215,11 @@ async function fakeGitHub(files = {}) {
       // startup log stands out.
       if (req.url.startsWith("/app/installations?")) return res.end(JSON.stringify([{ id: 7 }]));
       if (req.url.startsWith("/installation/repositories?")) {
-        return res.end(JSON.stringify({ repositories: [] }));
+        return res.end(files.installed ?? JSON.stringify({ repositories: [] }));
+      }
+      // The repo's open issues (the backlog), as JSON, when the test sets them.
+      if (req.url.startsWith("/repos/org/repo/issues?state=open&") && files.backlog) {
+        return res.end(files.backlog);
       }
       res.end(JSON.stringify({ id: 1 }));
     });
@@ -2896,6 +2900,51 @@ mounts:
       assert.equal(proxied.status, 401, header);
     }
     writeFileSync(join(dir, "go"), "");
+  });
+
+  test("api/repos: each configured repo's backlog count, read in the background, then cached", async (t) => {
+    const repo = { full_name: "org/repo", html_url: "https://github.com/org/repo" };
+    const { github, port } = await listen(
+      t,
+      {
+        ".deckhand.yaml": "trigger: deckhand\n",
+        installed: JSON.stringify({ repositories: [{ ...repo, default_branch: "trunk" }] }),
+        backlog: JSON.stringify([
+          { number: 1, title: "One", state: "open" },
+          { number: 2, title: "A pull request", state: "open", pull_request: {} },
+          { number: 3, title: "Three", state: "open" },
+        ]),
+      },
+      (dir, github) => ({ GITHUB_URL: github.url }),
+    );
+    const base = `http://127.0.0.1:${port}`;
+    const get = (path, cookie) =>
+      fetch(base + path, { redirect: "manual", headers: cookie ? { cookie } : {} });
+    const login = await get("/auth/login");
+    const to = new URL(login.headers.get("location"));
+    const state = login.headers.getSetCookie()[0].split(";")[0];
+    const back = await get(`/auth/callback?code=c&state=${to.searchParams.get("state")}`, state);
+    const session = back.headers
+      .getSetCookie()
+      .find((c) => c.startsWith("deckhand_session="))
+      .split(";")[0];
+    const backlog = async () =>
+      (await (await get("/api/repos?backlog=1", session)).json()).repos[0].backlog;
+    // The first list doesn't wait for GitHub: its read is on its way.
+    assert.equal(await backlog(), null);
+    await github.waitFor((r) => r.path.startsWith("/repos/org/repo/issues?state=open&"));
+    let counted = null;
+    for (let i = 0; i < 100 && !counted; i++) {
+      counted = await backlog();
+      if (!counted) await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    assert.deepEqual(counted, { count: 2, more: false, readAt: counted?.readAt });
+    // Cached: the next lists read no issues.
+    await backlog();
+    const reads = github.requests.filter((r) =>
+      r.path.startsWith("/repos/org/repo/issues?state=open&sort=created"),
+    );
+    assert.equal(reads.length, 1);
   });
 
   test("Work area plan: a parent's sub-issues start or wait from their links, the parent last", async (t) => {
