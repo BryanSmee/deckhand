@@ -37,12 +37,21 @@ export interface Run {
   reason?: string | null;
   // What ran it (listener/agents/): "claude", "codex" or "antigravity"; "claude" also for runs
   // from before agents had names.
-  // Sent, not shown (nor are provider, fallback, picked and phase).
+  // Sent, not shown (nor are provider, credential, fallback, picked and phase).
   agent?: string;
-  // Where its agent's API calls went (listener/agents/), and why when a fallback picked it:
-  // the entry that failed (`from`, "claude@anthropic"), and how ("overloaded (529)").
+  // Where its agent's API calls went (listener/agents/), on which of the provider's credentials
+  // when its entry names one ("key" for claude@anthropic:key), and why when a fallback picked
+  // it: the entry that failed (`from`, "claude@anthropic:plan"), how ("overloaded (529)"), and
+  // until when later runs stay on it (`until`, ms: a plan's limit resets).
   provider?: string | null;
-  fallback?: { from: string; reason: string; tried?: string[]; sticky?: boolean } | null;
+  credential?: string | null;
+  fallback?: {
+    from: string;
+    reason: string;
+    tried?: string[];
+    sticky?: boolean;
+    until?: number;
+  } | null;
   // Chosen with `/agent` (`sticky`: by a previous run's): such a run doesn't fall back.
   picked?: { sticky?: boolean } | null;
   model?: string | null;

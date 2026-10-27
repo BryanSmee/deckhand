@@ -164,8 +164,15 @@ case "$1" in
         echo "${hosts[i++]} $answer"
       done >> "$dir/egress"
       # Claude Code'"'"'s API call, through the listener, with the run'"'"'s secret.
+      # The run'"'"'s secret in ANTHROPIC_API_KEY (claude@anthropic:key): as an x-api-key, and an
+      # entry of its own. (The listener'"'"'s own variables are in this environment too.)
+      entry="$SANDBOX_AGENT@$SANDBOX_PROVIDER"
       bearer="${ANTHROPIC_AUTH_TOKEN:-$CLAUDE_CODE_OAUTH_TOKEN}"
-      if [ -n "$bearer" ]; then
+      if [ -n "${ANTHROPIC_API_KEY:-}" ] && [ "$ANTHROPIC_API_KEY" = "${DECKHAND_RUN_SECRET:-}" ]; then
+        entry="$entry:key"
+        curl -sS -X POST -H "x-api-key: $ANTHROPIC_API_KEY" \
+          -d "{}" "$ANTHROPIC_BASE_URL/v1/messages?beta=true" > "$dir/anthropic-answer"
+      elif [ -n "$bearer" ]; then
         curl -sS -X POST -H "Authorization: Bearer $bearer" \
           -d "{}" "$ANTHROPIC_BASE_URL/v1/messages?beta=true" > "$dir/anthropic-answer"
       fi
@@ -175,11 +182,11 @@ case "$1" in
         until [ -e "$dir/go" ]; do nap; done
       fi
       # Each run'"'"'s agent, provider and session, and its first message (fallbacks).
-      echo "$SANDBOX_AGENT@$SANDBOX_PROVIDER ${TASK_SESSION:-default}" >> "$dir/runs-seen"
+      echo "$entry ${TASK_SESSION:-default}" >> "$dir/runs-seen"
       { echo "$TASK_MESSAGE"; echo ----; } >> "$dir/messages"
       { echo "$TASK_PROMPT"; echo ----; } >> "$dir/prompts"
       # A provider the test says fails: Claude Code'"'"'s API error. Or a task that fails.
-      if grep -qx "$SANDBOX_AGENT@$SANDBOX_PROVIDER" "$dir/failing" 2> /dev/null; then
+      if grep -qx "$entry" "$dir/failing" 2> /dev/null; then
         echo "{\"type\":\"result\",\"is_error\":true,\"result\":\"API Error: 529 overloaded_error: Overloaded\",\"duration_ms\":1000}"
         exit 0
       fi

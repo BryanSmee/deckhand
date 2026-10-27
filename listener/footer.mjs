@@ -1,7 +1,7 @@
 // The line under each reply (runs.mjs): agent, model, effort, speed, duration, the next step and
 // options that came too late for the run. Pure.
 import { agentFor } from "./agents/index.mjs";
-import { entryLabel } from "./agents/select.mjs";
+import { entryLabel, providerLabel } from "./agents/select.mjs";
 import { BUILT_IN } from "./modes.mjs";
 import { triggerWord } from "./onboarding.mjs";
 import { minutes } from "./runlog.mjs";
@@ -32,7 +32,8 @@ const FAST = {
 
 // The line under each reply: agent, model, effort, speed, duration, the next step and options
 // that came too late for the run.
-// The provider shows when it isn't the agent's default, or after a fallback, with why; the
+// The provider shows when it isn't the agent's default, or after a fallback, with why, and the
+// credential when the run's entry names one (`claude@anthropic:key`); the
 // speed when it is fast, or when the run didn't get what it asked for (record.speedNote).
 export function replyFooter(record, result, hint, later) {
   const took = result ? minutes(result.durationMs) : null;
@@ -43,8 +44,8 @@ export function replyFooter(record, result, hint, later) {
   const agent = agentFor(record.agent);
   const { fallback } = record;
   const provider =
-    record.provider && (fallback || record.provider !== agent.defaultProvider)
-      ? ` (${record.provider})`
+    record.provider && (fallback || record.credential || record.provider !== agent.defaultProvider)
+      ? ` (${providerLabel({ ...record, agent: agent.name })})`
       : "";
   const switched =
     fallback && !fallback.sticky

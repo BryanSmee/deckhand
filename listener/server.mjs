@@ -10,7 +10,7 @@ import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { createAnalysis } from "./analysis.mjs";
 import { createAuth, sessionKey } from "./auth.mjs";
-import { createAnthropicProxy } from "./anthropic.mjs";
+import { createAnthropicProxy, NAMED } from "./anthropic.mjs";
 import { antigravity } from "./agents/antigravity.mjs";
 import { createAntigravityLogin } from "./antigravity-login.mjs";
 import { createChatgptLogin } from "./chatgpt.mjs";
@@ -333,6 +333,10 @@ ctx.anthropic = createAnthropicProxy({
   broker: ctx.broker,
   name: config.claudeCredential,
   credential: config.claudeCredential && env[config.claudeCredential],
+  // For runs on a credential their entry names (`claude@anthropic:key`, FALLBACKS).
+  named: Object.fromEntries(
+    config.credentials["claude@anthropic"].set.map((c) => [c, env[NAMED[c].variable]]),
+  ),
   upstream: config.anthropicUrl,
   // claude@openrouter, for runs that fall back to it (FALLBACKS).
   providers: {
@@ -577,7 +581,14 @@ log(`Deckhand ${ctx.server.version}`);
 log(
   `Agents: ${config.agent} for work, ${config.brainstormAgent} for light runs; repos may pick ${config.agents.join(", ")}${config.fallbacks.length ? `; on provider errors, falls back to ${config.fallbacks.join(", ")}` : ""}`,
 );
-for (const name of [config.claudeCredential, config.openaiCredential, config.agyCredential]) {
+// The plan's token is used when it is the default, or when an entry names it: `/agent` (unless
+// a gateway is the default, agents/select.mjs pickable()) or FALLBACKS.
+const claude = config.credentials["claude@anthropic"];
+const planUsed =
+  claude.set.includes("plan") &&
+  (claude.default !== null || config.fallbacks.includes("claude@anthropic:plan"));
+const claudeCredential = planUsed ? "CLAUDE_CODE_OAUTH_TOKEN" : config.claudeCredential;
+for (const name of [claudeCredential, config.openaiCredential, config.agyCredential]) {
   const plan = planWarning(name);
   if (plan) log(plan);
 }

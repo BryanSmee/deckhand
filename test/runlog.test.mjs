@@ -120,7 +120,7 @@ test("format: the listener's lines", () => {
   const fell = { mode: "start", kind: "issue", agent: "codex", provider: "openai", fallback };
   assert.equal(
     format(line({ type: "listener", ...fell }), agentFor("codex"))[0].text,
-    "Falling back to Codex (openai) from claude@anthropic, whose provider failed: overloaded (529). Starting",
+    "Falling back to Codex (openai) from Claude (anthropic), whose provider failed: overloaded (529). Starting",
   );
   const stuck = { ...fell, mode: "continue", fallback: { ...fallback, sticky: true } };
   assert.equal(start(stuck), "Continuing the session");

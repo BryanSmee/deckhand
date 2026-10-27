@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { request } from "node:http";
 import { test } from "node:test";
-import { createAnthropicProxy, credentialName } from "../listener/anthropic.mjs";
+import { createAnthropicProxy, credentialName, resetOf } from "../listener/anthropic.mjs";
 import { planWarning } from "../listener/upstream.mjs";
 import { createBroker } from "../listener/broker.mjs";
 import { AGENT_SECRETS } from "../listener/agents/index.mjs";
@@ -57,11 +57,12 @@ const ask = (url, headers) =>
     body: JSON.stringify({ model: "claude-opus-5-5", stream: true }),
   });
 
-test("the credential is the one Claude Code would use: an API key before an OAuth token", () => {
+test("the default credential: a gateway's token, then a plan's, already paid for, then an API key", () => {
   assert.equal(credentialName({ CLAUDE_CODE_OAUTH_TOKEN: "t" }), "CLAUDE_CODE_OAUTH_TOKEN");
+  assert.equal(credentialName({ ANTHROPIC_API_KEY: "k" }), "ANTHROPIC_API_KEY");
   assert.equal(
     credentialName({ CLAUDE_CODE_OAUTH_TOKEN: "t", ANTHROPIC_API_KEY: "k" }),
-    "ANTHROPIC_API_KEY",
+    "CLAUDE_CODE_OAUTH_TOKEN",
   );
   assert.equal(
     credentialName({
@@ -153,6 +154,99 @@ test("a gateway's token goes as a bearer, under the gateway's own path", async (
   assert.equal(sent.url, "/api/v1/messages?beta=true");
   assert.equal(sent.headers.authorization, "Bearer sk-or-v1-real");
   assert.equal(sent.headers["x-api-key"], undefined);
+});
+
+// A plan and an API key both set (FALLBACKS=claude@anthropic:key): each run gets the
+// credential its entry names, in that credential's header, and never the other.
+async function serveBoth(t, limited = false) {
+  const requests = [];
+  // `limit.on`: answer 429 with the plan's reset, else 200.
+  const limit = { on: limited };
+  const { url: upstreamUrl } = await serve(t, (req, res) => {
+    requests.push({ headers: req.headers });
+    req.resume().on("end", () => {
+      if (!limit.on) return res.end("{}");
+      res.writeHead(429, { "anthropic-ratelimit-unified-reset": "1900000000" });
+      res.end('{"type":"error","error":{"type":"rate_limit_error"}}');
+    });
+  });
+  const broker = createBroker({ app: () => null, sentFrom: sandboxAt() });
+  const proxy = createAnthropicProxy({
+    broker,
+    name: "CLAUDE_CODE_OAUTH_TOKEN",
+    credential: "sk-ant-oat01-plan",
+    named: { plan: "sk-ant-oat01-plan", key: "sk-ant-api03-key" },
+    upstream: upstreamUrl,
+  });
+  const { url } = await serve(t, (req, res) => proxy.handle(req, res));
+  return { url, broker, requests, proxy, limit };
+}
+
+test("a plan and a key: the plan's run sends its bearer, the key's run its x-api-key", async (t) => {
+  const { url, broker, requests } = await serveBoth(t);
+  const plan = broker.register("org/repo");
+  broker.provide(plan, "anthropic");
+  const key = broker.register("org/repo");
+  broker.provide(key, "anthropic", null, "key");
+  const named = broker.register("org/repo");
+  broker.provide(named, "anthropic", null, "plan");
+  for (const [secret, header] of [
+    [plan, "authorization"],
+    [key, "x-api-key"],
+    [named, "authorization"],
+  ]) {
+    const res = await ask(url, { [header]: header === "x-api-key" ? secret : `Bearer ${secret}` });
+    assert.equal(res.status, 200);
+    await res.text();
+  }
+  const [onPlan, onKey, onNamed] = requests.map((r) => r.headers);
+  assert.equal(onPlan.authorization, "Bearer sk-ant-oat01-plan");
+  assert.equal(onPlan["x-api-key"], undefined);
+  assert.equal(onKey["x-api-key"], "sk-ant-api03-key");
+  assert.equal(onKey.authorization, undefined);
+  assert.ok(!JSON.stringify(onKey).includes("oat01"));
+  assert.ok(!JSON.stringify(onPlan).includes("api03"));
+  assert.equal(onNamed.authorization, "Bearer sk-ant-oat01-plan");
+});
+
+test("a plan's 429: the run learns when its limit resets; a key's doesn't", async (t) => {
+  const { url, broker, limit } = await serveBoth(t, true);
+  const plan = broker.register("org/repo");
+  broker.provide(plan, "anthropic");
+  const key = broker.register("org/repo");
+  broker.provide(key, "anthropic", null, "key");
+  await (await ask(url, { authorization: `Bearer ${plan}` })).text();
+  await (await ask(url, { "x-api-key": key })).text();
+  assert.equal(broker.runOf(plan).apiStatus, 429);
+  assert.equal(broker.runOf(plan).apiReset, 1_900_000_000_000);
+  assert.equal(broker.runOf(key).apiStatus, 429);
+  assert.equal(broker.runOf(key).apiReset, null);
+  // An answer past it clears it: a later failure is another one.
+  limit.on = false;
+  await (await ask(url, { authorization: `Bearer ${plan}` })).text();
+  assert.equal(broker.runOf(plan).apiReset, null);
+  // Only the plan's own reset: not a short Retry-After.
+  assert.equal(resetOf({ "retry-after": "60" }), null);
+  assert.equal(resetOf({}), null);
+});
+
+test("a run naming a credential the operator didn't set gets none, and says which", async (t) => {
+  const upstream = await fakeAnthropic(t);
+  const broker = createBroker({ app: () => null, sentFrom: sandboxAt() });
+  const proxy = createAnthropicProxy({
+    broker,
+    name: "CLAUDE_CODE_OAUTH_TOKEN",
+    credential: "sk-ant-oat01-plan",
+    named: { plan: "sk-ant-oat01-plan" },
+    upstream: upstream.url,
+  });
+  const { url } = await serve(t, (req, res) => proxy.handle(req, res));
+  const secret = broker.register("org/repo");
+  broker.provide(secret, "anthropic", null, "key");
+  const res = await ask(url, { "x-api-key": secret });
+  assert.equal(res.status, 503);
+  assert.match((await res.json()).error.message, /no ANTHROPIC_API_KEY/);
+  assert.equal(upstream.requests.length, 0);
 });
 
 // A raw request line, since fetch() would normalise these paths before sending them.

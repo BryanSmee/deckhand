@@ -1,6 +1,6 @@
 // Claude Code, the agent behind the seam (index.mjs): what Deckhand needs to install it, run
 // it and read it. Its sandbox half is ../../sandbox/agents/claude.sh.
-import { CREDENTIALS } from "../anthropic.mjs";
+import { CREDENTIALS, NAMED } from "../anthropic.mjs";
 import { EFFORTS, installSpec, normalizer } from "./common.mjs";
 
 // Deckhand's model tiers (`/model best`) → Claude Code's aliases, which the operator can point
@@ -73,26 +73,31 @@ export const claude = {
     }),
   // Its environment on `provider`. No credential: Claude Code calls the listener
   // (anthropic.mjs) with the run's secret in its place, in the variable that gives the
-  // provider's header (a gateway's token as a bearer).
-  env: (config, secret, provider = "anthropic") => ({
-    ...(provider === "anthropic"
-      ? config.claudeCredential && { [config.claudeCredential]: secret }
-      : { ANTHROPIC_AUTH_TOKEN: secret }),
-    ANTHROPIC_BASE_URL: `${config.brokerUrl}/anthropic`,
-    ...config.modelAliases,
-    ...(provider === "openrouter" && config.openrouterAliases),
-    // Claude Code's own fallback when the model is overloaded, within the provider.
-    ...(config.claudeFallbackModel && {
-      SANDBOX_FALLBACK_MODEL: MODELS[config.claudeFallbackModel] ?? config.claudeFallbackModel,
-    }),
-  }),
+  // provider's header (a gateway's token as a bearer). On a credential the run's entry names
+  // (`claude@anthropic:key`), that credential's variable: Claude Code's auth mode matches it.
+  env: (config, secret, provider = "anthropic", credential = null) => {
+    const name = Object.hasOwn(NAMED, credential ?? "")
+      ? NAMED[credential].variable
+      : config.claudeCredential;
+    return {
+      ...(provider === "anthropic" ? name && { [name]: secret } : { ANTHROPIC_AUTH_TOKEN: secret }),
+      ANTHROPIC_BASE_URL: `${config.brokerUrl}/anthropic`,
+      ...config.modelAliases,
+      ...(provider === "openrouter" && config.openrouterAliases),
+      // Claude Code's own fallback when the model is overloaded, within the provider.
+      ...(config.claudeFallbackModel && {
+        SANDBOX_FALLBACK_MODEL: MODELS[config.claudeFallbackModel] ?? config.claudeFallbackModel,
+      }),
+    };
+  },
   // Variables whose values never reach a log or a reply (secrets.mjs): its default provider's.
   secrets: CREDENTIALS,
   // Where its API calls go (the listener forwards them, anthropic.mjs), each with the
   // credentials it takes. `anthropic` is the operator's ANTHROPIC_BASE_URL: Anthropic, unless
-  // it points at a gateway.
+  // it points at a gateway. `credentials`: those an entry can name (`claude@anthropic:key`),
+  // each with its variable and its label in replies.
   providers: {
-    anthropic: { secrets: CREDENTIALS },
+    anthropic: { secrets: CREDENTIALS, credentials: NAMED },
     openrouter: { secrets: ["OPENROUTER_API_KEY"] },
   },
   defaultProvider: "anthropic",

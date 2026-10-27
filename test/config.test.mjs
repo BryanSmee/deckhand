@@ -580,7 +580,7 @@ claude_fallback_model: sonnet
 test("FALLBACKS: an unknown entry, or one without its credential, stops the listener", () => {
   assert.throws(
     () => loadConfig({ ALLOWED_USERS: "a", FALLBACKS: "gemini" }),
-    /FALLBACKS: expected agent@provider \(claude@anthropic, claude@openrouter, codex@openai, antigravity@google\), got gemini/,
+    /FALLBACKS: expected agent@provider or agent@provider:credential \(claude@anthropic, claude@anthropic:plan, claude@anthropic:key, claude@openrouter, codex@openai, antigravity@google\), got gemini/,
   );
   assert.throws(
     () => loadConfig({ ALLOWED_USERS: "a", OPENAI_API_KEY: "k", FALLBACKS: "codex@openrouter" }),
@@ -600,6 +600,48 @@ test("FALLBACKS: an unknown entry, or one without its credential, stops the list
     /config\.yaml: fallbacks: codex@openai needs OPENAI_API_KEY/,
   );
   assert.throws(() => file("openrouter_api_key: sk-or-1"), /openrouter_api_key: a secret/);
+  // A credential of the provider's: its own variable, not another of the provider's.
+  const plan = { ALLOWED_USERS: "a", CLAUDE_CODE_OAUTH_TOKEN: "t" };
+  assert.throws(
+    () => loadConfig({ ...plan, FALLBACKS: "claude@anthropic:key" }),
+    /FALLBACKS: claude@anthropic:key needs ANTHROPIC_API_KEY in the environment/,
+  );
+  assert.throws(
+    () =>
+      loadConfig({
+        ALLOWED_USERS: "a",
+        ANTHROPIC_API_KEY: "k",
+        FALLBACKS: "claude@anthropic:plan",
+      }),
+    /FALLBACKS: claude@anthropic:plan needs CLAUDE_CODE_OAUTH_TOKEN in the environment/,
+  );
+  assert.throws(
+    () => loadConfig({ ...plan, FALLBACKS: "claude@anthropic:token" }),
+    /FALLBACKS: expected agent@provider or agent@provider:credential .*got claude@anthropic:token/,
+  );
+  assert.throws(
+    () => loadConfig({ ...plan, OPENAI_API_KEY: "k", FALLBACKS: "codex@openai:key" }),
+    /got codex@openai:key/,
+  );
+});
+
+test("FALLBACKS: a plan, then its API key; the plan runs first, config.yaml keeps the suffix", () => {
+  const env = { ALLOWED_USERS: "a", CLAUDE_CODE_OAUTH_TOKEN: "t", ANTHROPIC_API_KEY: "k" };
+  const config = loadConfig({ ...env, FALLBACKS: "claude@anthropic:key, claude@anthropic:key" });
+  assert.deepEqual(config.fallbacks, ["claude@anthropic:key"]);
+  assert.equal(config.claudeCredential, "CLAUDE_CODE_OAUTH_TOKEN");
+  assert.deepEqual(config.credentials["claude@anthropic"], {
+    set: ["plan", "key"],
+    default: "plan",
+  });
+  const yaml = loadConfig(
+    { ...env, OPENROUTER_API_KEY: "o" },
+    file("fallbacks: [claude@anthropic:key, claude@openrouter]"),
+  );
+  assert.deepEqual(yaml.fallbacks, ["claude@anthropic:key", "claude@openrouter"]);
+  // A gateway's token: the default is none an entry names.
+  const gateway = loadConfig({ ...env, ANTHROPIC_AUTH_TOKEN: "g" });
+  assert.equal(gateway.credentials["claude@anthropic"].default, null);
 });
 
 test("SANDBOX_FAST_MODE: off until the operator says allowed", () => {

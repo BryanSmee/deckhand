@@ -14,7 +14,8 @@ import {
   statSync,
 } from "node:fs";
 import { join } from "node:path";
-import { agentFor } from "./agents/index.mjs";
+import { agentFor, entryName } from "./agents/index.mjs";
+import { entryLabel } from "./agents/select.mjs";
 import { kindOf } from "./modes.mjs";
 import { NEEDS_INPUT, replyQuestions } from "./questions.mjs";
 import { readJson, writeJsonAtomic } from "./store.mjs";
@@ -169,6 +170,7 @@ export function newRecord(
     // provider, and why when it is a fallback's or `/agent`'s (entryFor()).
     agent,
     provider: null,
+    credential: null,
     fallback: null,
     picked: null,
     // Whether it is a light run: an issue's light runs and its work have their own sessions.
@@ -250,6 +252,8 @@ function runOf(logDir, file, max = READ_MAX, log = console.error) {
     // Its provider, and why when it is a fallback's (agents/select.mjs entryFor()): a later run of the
     // task sticks to it. None in logs from before fallbacks.
     provider: meta.provider ?? null,
+    // The provider's credential its entry named (`claude@anthropic:key`); null: the default.
+    credential: meta.credential ?? null,
     fallback: meta.fallback ?? null,
     // Whether `/agent` picked it (or a previous run's `/agent`: sticky): it doesn't fall back.
     picked: meta.picked ?? null,
@@ -368,7 +372,7 @@ function listenerEntries(e, agent) {
   // A fallback's run (runs.mjs): what it took over from, and why.
   const fell = e.fallback && !e.fallback.sticky;
   const from = fell
-    ? `Falling back to ${agent.displayName} (${e.provider}) from ${e.fallback.from}, whose provider failed: ${e.fallback.reason}. `
+    ? `Falling back to ${entryLabel(entryName(agent.name, e.provider, e.credential))} from ${entryLabel(e.fallback.from)}, whose provider failed: ${e.fallback.reason}. `
     : "";
   const picked = e.picked && !e.picked.sticky ? `${agent.displayName} picked with /agent. ` : "";
   return [{ kind: "meta", text: from + picked + what + (e.message ? `: ${e.message}` : "") }];

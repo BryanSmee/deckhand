@@ -35,22 +35,32 @@ export const AGENT_SECRETS = [
 ];
 
 // An agent on a provider, written `agent@provider` (FALLBACKS): "claude@openrouter" →
-// { agent: "claude", provider: "openrouter" }; "codex" is Codex on its default provider. Null
-// for an agent or provider Deckhand doesn't have.
+// { agent: "claude", provider: "openrouter" }; "codex" is Codex on its default provider. A
+// credential of the provider's can follow (its `credentials`): "claude@anthropic:key" →
+// { agent: "claude", provider: "anthropic", credential: "key" }; without one, the default
+// credential. Null for an agent, provider or credential Deckhand doesn't have.
 export function entryOf(name) {
-  const [agent, provider, ...rest] = String(name ?? "").split("@");
-  if (rest.length || !Object.hasOwn(AGENTS, agent)) return null;
+  const [head, credential, ...more] = String(name ?? "").split(":");
+  const [agent, provider, ...rest] = head.split("@");
+  if (rest.length || more.length || !Object.hasOwn(AGENTS, agent)) return null;
   const p = provider ?? AGENTS[agent].defaultProvider;
-  return Object.hasOwn(AGENTS[agent].providers, p) ? { agent, provider: p } : null;
+  if (!Object.hasOwn(AGENTS[agent].providers, p)) return null;
+  if (credential === undefined) return { agent, provider: p };
+  const named = AGENTS[agent].providers[p].credentials ?? {};
+  return Object.hasOwn(named, credential) ? { agent, provider: p, credential } : null;
 }
 
-export function entryName(agent, provider) {
-  return `${agent}@${provider ?? agentFor(agent).defaultProvider}`;
+export function entryName(agent, provider, credential = null) {
+  const name = `${agent}@${provider ?? agentFor(agent).defaultProvider}`;
+  return credential ? `${name}:${credential}` : name;
 }
 
-// Every agent@provider there is, for error messages.
+// Every agent@provider there is, and agent@provider:credential, for error messages.
 export const ENTRIES = Object.values(AGENTS).flatMap((a) =>
-  Object.keys(a.providers).map((p) => entryName(a.name, p)),
+  Object.entries(a.providers).flatMap(([p, { credentials = {} }]) => [
+    entryName(a.name, p),
+    ...Object.keys(credentials).map((c) => entryName(a.name, p, c)),
+  ]),
 );
 
 // What a provider's failure says, in an agent's error result (Claude Code's "API Error: 529
@@ -61,7 +71,7 @@ export const ENTRIES = Object.values(AGENTS).flatMap((a) =>
 const PROVIDER_ERRORS = [
   [/overloaded/i, "overloaded"],
   [
-    /usage limit|limit reached|insufficient_quota|exceeded your current quota|credit balance|RESOURCE_EXHAUSTED/i,
+    /usage limit|limit reached|hit your (?:\w+ )?limit|session limit|weekly limit|insufficient_quota|exceeded your current quota|credit balance|RESOURCE_EXHAUSTED/i,
     "quota reached",
   ],
   [/rate[ _-]?limit|too many requests/i, "rate limited"],
