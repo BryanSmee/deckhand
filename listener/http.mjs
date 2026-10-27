@@ -161,9 +161,12 @@ export function createHttp(ctx, { dashboardDir }) {
   function state(user) {
     const { shown, queued } = shownTasks(user);
     const { edges, blockers } = waitEdges(shown, ctx.waits.list());
-    // Titles the listener doesn't have yet show on a later poll.
+    const keys = [...shown.map((t) => t.key), ...blockers];
+    // Titles and parents the listener doesn't have yet show on a later poll; a lane's parent's
+    // title names it.
     if (ctx.app) {
-      ctx.titles.fill([...shown.map((t) => t.key), ...blockers]);
+      ctx.lanes?.fill(keys);
+      ctx.titles.fill([...keys, ...(ctx.lanes?.parentKeys(keys) ?? [])]);
       ctx.pulls.fill(shown.map((t) => t.key));
     }
     // `now`: the dashboard compares run start times with the server clock, not its own.
@@ -193,6 +196,9 @@ export function createHttp(ctx, { dashboardDir }) {
         title: ctx.titles.get(key),
         closed: ctx.titles.closed(key),
       })),
+      // The names the lanes of these issues can have (lanes.mjs), by key.
+      lanes:
+        ctx.lanes?.labels(keys, { title: ctx.titles.get, inboxes: ctx.inboxes?.() ?? [] }) ?? {},
       states: STATES,
       running: ctx.running,
       queued: queued.length,

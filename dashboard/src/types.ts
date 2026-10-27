@@ -192,6 +192,23 @@ export interface Blocker {
   closed: Closed;
 }
 
+// What names the lane an issue is part of (listener/lanes.mjs): a name a maintainer gave it
+// (`user`, `at` when), the title of the parent a plan laid it out under (`parent`), or the
+// repo's inbox it is (`inbox`). Picked per lane by lanes.ts laneName().
+export type LaneSource = "user" | "parent" | "inbox";
+export interface LaneLabel {
+  name: string;
+  source: LaneSource;
+  at?: number;
+}
+
+// POST api/repos/<owner>/<repo>/lane: the lane of these issues (task keys) is called `name`
+// from now on; "" takes its name off. One line, at most 60 characters.
+export interface LaneNaming {
+  keys: string[];
+  name: string;
+}
+
 // A preview hook waiting or running (listener/previews.mjs status()). Sent, not shown: the
 // top bar counts them.
 export interface Preview {
@@ -228,6 +245,9 @@ export interface State {
   tasks: Task[];
   edges: Edge[];
   blockers: Blocker[];
+  // The names the board's lanes can have, by the key of an issue in them; a listener from
+  // before them sends none.
+  lanes?: Record<string, LaneLabel>;
   // Sent, not shown: the chips group the states themselves (format.ts CHIPS).
   states: TaskState[];
   running: number;

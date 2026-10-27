@@ -31,6 +31,9 @@
 //   POST /api/repos/<owner>/<repo>/inbox  { kind: "idea" | "bug", text }
 //                                         an entry for the repo's inbox: the App's comment on
 //                                         its inbox issue, and the run a comment there starts
+//   POST /api/repos/<owner>/<repo>/lane   { keys: ["owner/repo#12", …], name }
+//                                         names the lane of these issues (lanes.mjs), "" takes
+//                                         its name off
 //   GET  /api/repos/<owner>/<repo>/analyze?count=&kinds=a,b&outcomes=c,d
 //                                         what an analysis of these runs would read: how many
 //                                         match, the digest's size and tokens, the kinds there
@@ -53,6 +56,7 @@ import { inboxItem, issueItem, parseKey, prId, sameRepo, taskKey, unmarked } fro
 import { getJson } from "./github.mjs";
 import { createInputSeeder } from "./inputs.mjs";
 import { createRepoCheck } from "./repo-check.mjs";
+import { MAX_NAME, createLanes, laneName } from "./lanes.mjs";
 import { leadsTo, planSummary, readTree, waitsOf } from "./plans.mjs";
 import { CONFIG_FILE, modeNames } from "./repo-config.mjs";
 import { issueList, waitsFor } from "./waits.mjs";
@@ -102,6 +106,7 @@ export function checkAction(body) {
 // `runOf(id)`: a run's record (runs.mjs, with the comments it ran on), or null.
 // `cancel(key, user)`: stops the task's run or drops its queued comments (runs.mjs cancel()):
 // "running", "queued" or null. `analysis`: run digests (analysis.mjs createAnalysis()).
+// `lanes`: the lanes' names (lanes.mjs), which a plan and the dashboard's renaming set.
 export function createWorkApi({
   config,
   github,
@@ -118,6 +123,7 @@ export function createWorkApi({
   runOf = () => null,
   cancel = () => null,
   analysis = createAnalysis({ runs: () => [] }),
+  lanes = createLanes(),
   publicUrl = () => null,
   // The key of the dashboard's "from" lines (discussions.mjs fromKey()), or null.
   fromKey = () => null,
@@ -408,6 +414,7 @@ export function createWorkApi({
         laid.push(n);
       }
     } catch (error) {
+      if (laid.length) named(repo, number, laid);
       // Checked, then GitHub failed halfway (an outage, a rate limit): what is done stays.
       log(`Work area: ${taskKey(repo, number)}: plan: ${error.message ?? error}`);
       const left = steps.filter((n) => !laid.includes(n));
@@ -417,8 +424,20 @@ export function createWorkApi({
         `GitHub failed on #${left[0]}: ${done}${issueList(left)} not. Start or queue those from the backlog.`,
       );
     }
+    // Their lane is named after the parent.
+    named(repo, number, laid);
     const skipped = tree.done.length ? ` Done already: ${issueList(tree.done)}.` : "";
     return `#${number} laid out: ${planSummary(order, planned)}.${afterDone}${skipped}${away}`;
+  }
+
+  // The issues a plan laid out are the parent's lane. What is on GitHub stays whatever happens
+  // to lanes.json: a failed write is logged, not the plan's answer.
+  function named(repo, number, laid) {
+    try {
+      lanes.planned(repo, number, laid);
+    } catch (error) {
+      log(`Work area: ${taskKey(repo, number)}: the lane's name: ${error.message ?? error}`);
+    }
   }
 
   // What a plan does for issue `n` of the tree: the App's comment, then its wait or its start.
@@ -717,6 +736,25 @@ export function createWorkApi({
     send(res, 200, await sendToInbox(repo, user, { kind, text }));
   }
 
+  // The lane of the issues `keys` (the dashboard's, connected by their waits) gets the name
+  // the user typed, as anyone allowed to start them could.
+  async function lane(req, res, user, repo) {
+    const { keys, name: typed } = (await readJsonBody(req, MAX_BODY)) ?? {};
+    const ours = (key) => {
+      const parsed = typeof key === "string" && parseKey(key);
+      return !!parsed && sameRepo(parsed.repo, repo) && ["issue", "pr"].includes(parsed.kind);
+    };
+    if (!Array.isArray(keys) || !keys.length || keys.length > 100 || !keys.every(ours)) {
+      refuse(400, `\`keys\` are the task keys of issues of ${repo}.`);
+    }
+    const name = laneName(typed);
+    if (name === null) refuse(400, `\`name\` is one line of at most ${MAX_NAME} characters.`);
+    await checkedRepo(repo, user);
+    lanes.name(keys, name);
+    log(`Work area: ${user} names the lane of ${keys.join(", ")} ${JSON.stringify(name)}`);
+    send(res, 200, { message: name ? `Lane named “${name}”.` : "Lane name taken off." });
+  }
+
   async function analyze(req, res, user, repo) {
     const body = await readJsonBody(req, MAX_BODY);
     const selection = checkSelection(body, (message) => refuse(400, message));
@@ -728,18 +766,18 @@ export function createWorkApi({
     );
   }
 
-  // Handles /api/repos/<owner>/<repo>/issues, /work, /answer, /rerun, /inbox and /analyze;
+  // Handles /api/repos/<owner>/<repo>/issues, /work, /answer, /rerun, /inbox, /lane and /analyze;
   // false for any other path.
   const handle = apiRoute({
     name: "Work area",
     route: (pathname) => {
       const one =
-        /^\/api\/repos\/([\w.-]+)\/([\w.-]+)\/(issues|work|answer|rerun|inbox|analyze)$/.exec(
+        /^\/api\/repos\/([\w.-]+)\/([\w.-]+)\/(issues|work|answer|rerun|inbox|lane|analyze)$/.exec(
           pathname,
         );
       return one && { repo: `${one[1]}/${one[2]}`, what: one[3] };
     },
-    posts: { work, answer: answers, rerun: reruns, inbox, analyze },
+    posts: { work, answer: answers, rerun: reruns, inbox, lane, analyze },
     gets: {
       issues: (req, res, user, repo) => backlog(res, repo, user),
       analyze: previewAnalysis,

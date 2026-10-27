@@ -19,6 +19,7 @@ import type {
   Entry,
   InboxEntry,
   InboxResult,
+  LaneNaming,
   Onboarded,
   Pending,
   Repo,
@@ -387,6 +388,11 @@ export function sendCancel(repo: string, number: number, pr: boolean): Promise<W
   const body: CancelAction = { action: "cancel", number, pr };
   return postJson<WorkResult>(`api/repos/${repo}/work`, body);
 }
+
+// Names the lane of issues `keys` (api/repos/<repo>/lane), "" takes its name off: what the
+// listener says, or why it refused.
+export const sendLaneName = (repo: string, naming: LaneNaming) =>
+  postJson<WorkResult>(`api/repos/${repo}/lane`, naming);
 
 // An idea or a bug report for the repo's inbox (api/repos/<repo>/inbox): the comment it
 // became and the inbox's task, or why it was refused.

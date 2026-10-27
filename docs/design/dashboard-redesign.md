@@ -168,9 +168,11 @@ reads ⌘.
 
 ## Open items
 
-- **Lane names** (Board, phone lanes, Ctrl K): obvious ones come from a parent issue's title
-  (its sub-issues) or the inbox (ideas, bugs); the rest fall back to "#18 and 3 more" until a
-  rule is decided. Tracked as its own issue, not blocking the board.
+- **Lane names** (Board, phone lanes, Ctrl K), decided in #306: a name the maintainer types
+  for the lane (a rename control on its header), else its parent issue's title (the one a
+  "plan" laid it out under, else GitHub's), or its inbox's (ideas, bugs), else "#18 and 3
+  more". `api/state`'s
+  `lanes` and `lanes.ts` `laneName()`; `api.ts` `sendLaneName()` renames.
 - **Density and Motion** in Preferences need a compact version of the tokens; drafted, decided
   in the Preferences issue.
 
