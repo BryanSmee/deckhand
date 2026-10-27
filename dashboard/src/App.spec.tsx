@@ -433,6 +433,56 @@ test("the sidebar collapses to a rail, kept on this device", () => {
   expect(screen.getByRole("button", { name: "Collapse the sidebar" })).toBeTruthy();
 });
 
+test("on the rail, New request opens its menu beside the rail, out of its clip", async () => {
+  const inboxes = { "acme/app": { ideas: 4, bugs: 5, discussions: null } };
+  render(<Dashboard state={{ ...state, inboxes }} error={null} />);
+  fireEvent.click(screen.getByRole("button", { name: "Collapse the sidebar" }));
+  const button = screen.getByRole("button", { name: "New request" });
+  button.getBoundingClientRect = () => ({ top: 60, right: 48 }) as DOMRect;
+  fireEvent.click(button);
+  // Fixed at the button: the scrolling rail would clip an absolute menu.
+  const menu = screen.getByRole("menu", { name: "New request" });
+  expect([menu.style.top, menu.style.left]).toEqual(["60px", "56px"]);
+  const items = within(menu).getAllByRole("menuitem");
+  expect(document.activeElement).toBe(items[0]);
+  fireEvent.keyDown(document, { key: "ArrowDown" });
+  expect(document.activeElement).toBe(items[1]);
+  fireEvent.click(items[1]);
+  const dialog = screen.getByRole("dialog", { name: "New request" });
+  expect(
+    within(dialog).getByRole("button", { name: "Bug report" }).getAttribute("aria-pressed"),
+  ).toBe("true");
+  fireEvent.keyDown(document, { key: "Escape" });
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  expect(document.activeElement).toBe(button);
+  // A scroll that moves the button closes it, and so does a resize, rather than leave it away
+  // from the button. The main area's (a live log following its end) leaves it open.
+  fireEvent.click(button);
+  fireEvent.scroll(screen.getByRole("main"));
+  expect(screen.getByRole("menu")).toBeTruthy();
+  fireEvent.scroll(document.querySelector("aside")!);
+  expect(screen.queryByRole("menu")).toBeNull();
+  fireEvent.click(button);
+  fireEvent.scroll(document);
+  expect(screen.queryByRole("menu")).toBeNull();
+  fireEvent.click(button);
+  fireEvent(window, new Event("resize"));
+  expect(screen.queryByRole("menu")).toBeNull();
+});
+
+test("on the board's rail, New request opens its menu beside the rail too", () => {
+  history.replaceState(null, "", "#/acme/app/board");
+  render(<Dashboard state={state} error={null} />);
+  expect(screen.getByRole("button", { name: "Expand the sidebar" })).toBeTruthy();
+  const button = screen.getByRole("button", { name: "New request" });
+  button.getBoundingClientRect = () => ({ top: 60, right: 48 }) as DOMRect;
+  fireEvent.click(button);
+  const menu = screen.getByRole("menu", { name: "New request" });
+  expect([menu.style.top, menu.style.left]).toEqual(["60px", "56px"]);
+  fireEvent.click(within(menu).getByRole("menuitem", { name: "Idea" }));
+  expect(screen.getByRole("dialog", { name: "New request" })).toBeTruthy();
+});
+
 test("New request's menu: arrows move through it, Escape closes it", () => {
   render(<Dashboard state={state} error={null} />);
   const button = screen.getByRole("button", { name: "New request" });
