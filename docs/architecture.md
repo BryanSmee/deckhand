@@ -276,9 +276,10 @@ A run's log (`logs/<run>.log`) holds the listener's own lines and the sandbox's 
 came. The listener also writes a `phase` line at each change of the run's part, with when it
 started (`runlog.mjs` `enterPhase()`, its state saved for a restart): `setup` as the run
 begins, `image` while the repo's image builds (then `setup` again: the sandbox starts after
-the build), `work` at the agent's first event, `push` at a tool call that runs `git push` or
-`gh pr create|edit|ready|merge` (and `work` again at the next other tool call), `wrap-up`
-after its final answer. Logs from before phases have none, and read as one Work section.
+the build), `work` at the agent's first event, `push` at a shell command that runs `git push` or
+`gh pr create|edit|ready|merge` as a command of its own (not one quoted in a `grep`), and
+`work` again at the next other tool call, `wrap-up` after its final answer. A phase whose line
+wouldn't fit under `RUN_LOG_MAX_MB` isn't written. Logs from before phases have none, and read as one Work section.
 
 The log stream (`stream()`) reads lines in order (`reader()`): in the image phase, BuildKit's
 plain progress (`#12 [build 5/9] RUN npm ci`, `#12 CACHED`, `#12 DONE 41.2s`,

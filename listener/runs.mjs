@@ -347,9 +347,10 @@ export function createRuns(ctx) {
     if (ctx.stopping) return; // left for the next listener
     const line = hidden(live, raw);
     const events = agentOf(task).normalize(line);
-    // Before the line that starts it, unless the line isn't kept anyway.
-    const phase = live.overflow ? null : phaseOf(live.logPhase, events);
-    if (phase) enterPhase(live, phase);
+    // Before the line that starts it, if that line is kept (keep()); saved, so a listener that
+    // restarts doesn't write it again.
+    const phase = fits(live, line) ? phaseOf(live.logPhase, events) : null;
+    if (phase && enterPhase(live, phase)) ctx.saveLive(task);
     const kept = keep(task, line);
     live.lines.out++;
     if (!kept) return;
@@ -366,7 +367,7 @@ export function createRuns(ctx) {
     // Nothing more for it: it should exit now, with this as its answer.
     if (!live.open && !live.cancelled && !live.finishing) {
       live.answered = true;
-      enterPhase(live, "wrap-up");
+      enterPhase(live, "wrap-up"); // saved below
       linger(task);
     }
     ctx.saveLive(task);
@@ -378,13 +379,18 @@ export function createRuns(ctx) {
   function keep(task, line) {
     const live = task.live;
     if (live.overflow) return false;
-    const max = config.runLogMax;
-    if (max && live.logFile.size + Buffer.byteLength(line) + 1 > max) {
-      overflow(task, max);
+    if (!fits(live, line)) {
+      overflow(task, config.runLogMax);
       return false;
     }
     live.logFile.write(line + "\n");
     return true;
+  }
+
+  // Whether `line` still goes in the run's log, under RUN_LOG_MAX_MB.
+  function fits(live, line) {
+    const max = config.runLogMax;
+    return !live.overflow && !(max && live.logFile.size + Buffer.byteLength(line) + 1 > max);
   }
 
   // Its sandbox is stopped, and finish() ends the run as failed: output without end (a

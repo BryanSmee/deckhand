@@ -1786,6 +1786,14 @@ mounts:
     const text = readFileSync(join(dir, "logs", log), "utf8");
     assert.equal(text.match(/"type":"result"/g).length, 2);
     assert.equal(text.match(/pull\/13/g).length, 1);
+    // Its phases: setup right after its first line, then each once, the restart in between.
+    const lines = text.trim().split("\n");
+    assert.match(lines[1], /"event":"phase","at":\d+,"phase":"setup"/);
+    const phases = lines.filter((l) => l.includes('"event":"phase"'));
+    assert.deepEqual(
+      phases.map((l) => JSON.parse(l).phase),
+      ["setup", "work", "wrap-up"],
+    );
     assert.match(JSON.parse(replies(github)[0].body).body, / · 1\.1 min/);
   });
 

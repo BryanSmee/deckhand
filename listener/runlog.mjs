@@ -71,19 +71,25 @@ export function writeEvent(file, event, fields = {}) {
 // and what comes after its answer. The listener writes a `phase` line at each change
 // (enterPhase()), so a phase may come back (setup after the image, work after a push). Logs
 // from before phases have none: all of them is work.
-export const PHASES = ["setup", "image", "work", "push", "wrap-up"];
+const PHASES = new Set(["setup", "image", "work", "push", "wrap-up"]);
 
 // Moves a live run (runs.mjs) to `phase`: a `phase` line in its log, only when it changes.
 export function enterPhase(live, phase) {
+  if (!PHASES.has(phase)) throw new Error(`no such phase: ${phase}`);
   if (live.logPhase === phase) return false;
   live.logPhase = phase;
   writeEvent(live.logFile, "phase", { phase });
   return true;
 }
 
-// The agent's tool calls that push or change its pull request: the push phase's, whatever
-// the agent names its shell tool.
-const PUSHING = /\bgit\s+push\b|\bgh\s+pr\s+(create|edit|ready|merge)\b/;
+// The agents' shell tools (Claude Code's Bash, Codex's and Antigravity's command): only their
+// commands push. Other tools' details (a Grep pattern, a subagent's prompt) may name a push.
+const SHELLS = new Set(["Bash", "command"]);
+
+// A push or a pull request change, as a command of its own: at the start, or after `;`, `&&`,
+// `||`, `|`, `(` or a new line, not quoted in another one (`grep "git push"`).
+const PUSHING =
+  /(?:^|[;&|(\n])\s*(?:git(?:\s+-[Cc]\s+\S+)*\s+push|gh\s+pr\s+(?:create|edit|ready|merge))\b/;
 
 // The phase a line of the agent's events (its normalize()) moves a live run to, before the
 // line is written, or null for none: its first event starts its work, a push or pull request
@@ -93,7 +99,8 @@ export function phaseOf(current, events) {
   if (current === "wrap-up" || !events.length) return null;
   let phase = current === "work" || current === "push" ? current : "work";
   for (const e of events) {
-    if (e.type === "tool") phase = PUSHING.test(e.detail ?? "") ? "push" : "work";
+    if (e.type !== "tool") continue;
+    phase = SHELLS.has(e.name) && PUSHING.test(e.detail ?? "") ? "push" : "work";
   }
   return phase !== current ? phase : null;
 }
@@ -434,7 +441,8 @@ function buildEntries(line, steps) {
       kind: "step",
       step: n,
       stage: named?.[1] ?? null,
-      name: named?.[2] ?? text,
+      // The whole command, heredocs included: BuildKit prints it on one line.
+      name: clipRaw(named?.[2] ?? text),
       status: "running",
       seconds: null,
       error: null,

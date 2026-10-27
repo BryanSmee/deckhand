@@ -180,7 +180,7 @@ test("the log's phases and build steps: the current log shows the steps, not the
   const log = await screen.findByTestId("log");
   await within(log).findByText("Image built");
   expect(within(log).getByText("#7 [build 2/4] RUN npm ci")).toBeTruthy();
-  expect(within(log).getByText("added 412 packages")).toBeTruthy();
+  expect(within(log).getByText("#7 added 412 packages")).toBeTruthy();
   expect(within(log).getByText("#7 [build 2/4] RUN npm ci · ERROR: exit code: 1")).toBeTruthy();
   expect(log.textContent).not.toMatch(/image|setup/);
 });

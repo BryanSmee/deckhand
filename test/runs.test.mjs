@@ -419,3 +419,12 @@ test("the agent's output moves its log through work, push and wrap-up", async (t
   assert.match(lines[at("wrap-up") + 1], /git push"/);
   assert.equal(task.live, null);
 });
+
+test("an agent's line past RUN_LOG_MAX_MB starts no phase: the line isn't kept", async (t) => {
+  const { runner, following, logPath, task } = setup(t, { config: { runLogMax: 400 } });
+  task.live.logPhase = "setup";
+  runner.err("x".repeat(100));
+  runner.out(JSON.stringify({ type: "system", subtype: "init", model: "x".repeat(400) }));
+  await following;
+  assert.doesNotMatch(readFileSync(logPath, "utf8"), /"event":"phase"/);
+});

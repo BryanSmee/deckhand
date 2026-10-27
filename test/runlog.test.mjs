@@ -516,6 +516,7 @@ test("enterPhase: a phase line in the log at each change only", () => {
   assert.equal(enterPhase(live, "setup"), true);
   assert.equal(enterPhase(live, "setup"), false);
   assert.equal(enterPhase(live, "image"), true);
+  assert.throws(() => enterPhase(live, "building"), /no such phase: building/);
   assert.deepEqual(
     written.map(({ type, event, phase }) => [type, event, phase]),
     [
@@ -550,8 +551,17 @@ test("phaseOf: the agent's first event works, pushes and pull request commands p
   assert.equal(phaseOf("work", [tool("git push"), tool("ls")]), null);
   // After the final answer, nothing moves it.
   assert.equal(phaseOf("wrap-up", [tool("git push")]), null);
-  // Not a push: words that only look like one.
+  assert.equal(phaseOf("work", [tool("cd /workspace && git -C sub push origin b")]), "push");
+  assert.equal(phaseOf("work", [tool("npm test\ngh pr create --draft")]), "push");
+  assert.equal(phaseOf("work", [{ type: "tool", name: "command", detail: "git push" }]), "push");
+  // Not a push: words that only look like one, a command that only quotes it, other tools.
   assert.equal(phaseOf("work", [tool("grep -n 'git pushes' notes.md")]), null);
+  assert.equal(phaseOf("work", [tool('grep -rn "git push" listener/')]), null);
+  assert.equal(phaseOf("work", [tool("echo gh pr ready")]), null);
+  assert.equal(phaseOf("work", [{ type: "tool", name: "Grep", detail: "git push" }]), null);
+  const agent = { type: "tool", name: "Agent", detail: "Run git push when done" };
+  assert.equal(phaseOf("work", [agent]), null);
+  assert.equal(phaseOf("push", [agent]), "work");
 });
 
 test("reader: a log's phases in order, with when they started", () => {
@@ -666,6 +676,10 @@ test("reader: only the image phase's lines are build steps; a step named again a
   // A second build (a run that falls back, say) numbers its steps afresh.
   read(phase("image", 3));
   assert.equal(read("#3 [b 1/1] RUN true")[0].name, "RUN true");
+  // A step's name is its whole command: clipped like any raw line.
+  const long = read(`#5 [b 1/1] RUN ${"x".repeat(5000)}`)[0].name;
+  assert.match(long, /^RUN x+… \(5 KB in all\)$/);
+  assert.ok(long.length < 4100);
 });
 
 test("stream: a log's entries with their phases and build steps", { timeout: 5000 }, async (t) => {

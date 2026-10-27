@@ -77,10 +77,13 @@ function BlockView({ block: b }: { block: Block }) {
     case "output":
       return (
         <div class={`${styles.entry} ${styles.raw}`}>
-          <pre class={styles.pre}>{b.text}</pre>
+          <pre class={styles.pre}>
+            {b.kind === "raw" && b.step !== undefined ? `#${b.step} ${b.text}` : b.text}
+          </pre>
         </div>
       );
-    // Until the log folds into its phases: a step as BuildKit wrote it, no phase marks.
+    // Until the log folds into its phases: a build step's start and how it ended, as BuildKit
+    // says them, its output under its number (parallel stages interleave), no phase marks.
     case "step":
       return (
         <div class={`${styles.entry} ${styles.raw}`}>

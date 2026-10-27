@@ -226,3 +226,30 @@ test("pulls.json under an old spelling loads under GitHub's: one entry, one task
     "org/other#3",
   ]);
 });
+
+test("a restored run keeps the phase its log is in, and saves it again", async (t) => {
+  const dir = tempDir(t);
+  const ctx = {
+    config: { dataDir: dir },
+    log: () => {},
+    tasks: new Map(),
+    logDir: dir,
+    runs: [],
+    runsById: new Map(),
+    runner: { closed: () => false },
+    broker: createBroker({ app: () => null }),
+    running: 0,
+  };
+  const path = join(dir, "r1.live.json");
+  saveRun(dir, "r1", 1, { agent: "claude" });
+  writeFileSync(
+    path,
+    JSON.stringify({ ...JSON.parse(readFileSync(path, "utf8")), logPhase: "push" }),
+  );
+  const restart = createRestart(ctx);
+  const [task] = restart.restoreRuns();
+  assert.equal(task.live.logPhase, "push");
+  task.live.logPhase = "work";
+  await restart.saveLive(task);
+  assert.equal(JSON.parse(readFileSync(path, "utf8")).logPhase, "work");
+});
