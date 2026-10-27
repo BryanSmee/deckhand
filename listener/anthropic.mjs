@@ -22,6 +22,14 @@ export const NAMED = {
   key: { variable: "ANTHROPIC_API_KEY", label: "API key" },
 };
 
+// How the dashboard tells a run's credential (a run record's `auth`), by its variable: a
+// gateway's token, a plan's, or an API key, billed per token.
+export const AUTHS = {
+  ANTHROPIC_AUTH_TOKEN: "gateway",
+  CLAUDE_CODE_OAUTH_TOKEN: "plan",
+  ANTHROPIC_API_KEY: "key",
+};
+
 // The variable that holds the operator's default credential, or null.
 export function credentialName(env) {
   return CREDENTIALS.find((name) => env[name]) ?? null;

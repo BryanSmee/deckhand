@@ -5,7 +5,7 @@ import { existsSync, readdirSync, rmdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { engineNote, recheckMounts, RunError, validateRun } from "./access.mjs";
 import { agentFor } from "./agents/index.mjs";
-import { entryLabel, nextFallback, resolveEntry } from "./agents/select.mjs";
+import { authOf, entryLabel, nextFallback, resolveEntry } from "./agents/select.mjs";
 import { ReplyError } from "./comments.mjs";
 import { commentsText, dashboardLink, taskKey } from "./events.mjs";
 import { nextStep, replyFooter } from "./footer.mjs";
@@ -219,6 +219,9 @@ export function createRuns(ctx) {
       provider: entry.provider,
       // The provider's credential its entry names (`claude@anthropic:key`); null: the default.
       credential: entry.credential ?? null,
+      // The credential it runs on, named or the default one (authOf()): "plan", "key",
+      // "gateway", or null off Anthropic.
+      auth: authOf(config, entry),
       fallback: entry.fallback,
       picked: entry.picked ?? null,
       model: chosen.model,

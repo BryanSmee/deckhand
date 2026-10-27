@@ -21,6 +21,8 @@ export type RunStatus = "running" | "ok" | "needs-input" | "error" | "interrupte
 
 export type Kind = "issue" | "pr" | "discussion" | "brainstorm" | "idea" | "bug" | "research";
 
+export type Auth = "plan" | "key" | "gateway";
+
 export interface Run {
   id: string;
   key: string;
@@ -37,7 +39,8 @@ export interface Run {
   reason?: string | null;
   // What ran it (listener/agents/): "claude", "codex" or "antigravity"; "claude" also for runs
   // from before agents had names.
-  // Sent, not shown (nor are provider, credential, fallback, picked and phase).
+  // Sent, not shown (nor are provider, credential, fallback, picked and phase: `auth` says
+  // which credential).
   agent?: string;
   // Where its agent's API calls went (listener/agents/), on which of the provider's credentials
   // when its entry names one ("key" for claude@anthropic:key), and why when a fallback picked
@@ -45,6 +48,11 @@ export interface Run {
   // until when later runs stay on it (`until`, ms: a plan's limit resets).
   provider?: string | null;
   credential?: string | null;
+  // Which of the operator's Claude credentials it ran on, named or the default one
+  // (listener/agents/select.mjs authOf()): the plan (CLAUDE_CODE_OAUTH_TOKEN), the API key
+  // (ANTHROPIC_API_KEY, billed per token) or a gateway's token (ANTHROPIC_AUTH_TOKEN). null off
+  // Anthropic and for runs from before it; shown by the model.
+  auth?: Auth | null;
   fallback?: {
     from: string;
     reason: string;
@@ -284,6 +292,10 @@ export interface ServerSetup {
   grants: { ok: boolean; file: string | null; message: string | null };
   // ALLOWED_USERS, lowercase.
   allowedUsers: string[];
+  // The Claude credentials set that a fallback or `/agent` can name ("plan", "key"), and the
+  // one runs use unless they name one ("gateway" too); null: none set. Names only, never values.
+  // A listener from before it sends none.
+  claude?: { set: Auth[]; default: Auth | null };
   // ALLOWED_REPOS ("owner/repo" or "owner/*"), lowercase; empty: every repo the App is on.
   allowedRepos: string[];
 }

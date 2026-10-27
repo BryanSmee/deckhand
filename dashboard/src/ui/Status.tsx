@@ -54,8 +54,9 @@ export function StatusBadge({
   label,
   outline,
   pulse,
+  title,
   class: className,
-}: Props & { outline?: boolean; pulse?: boolean }) {
+}: Props & { outline?: boolean; pulse?: boolean; title?: string }) {
   const t = tone ?? (state ? toneOf(state) : "idle");
   const outlined = outline ?? (state !== undefined && OUTLINED.includes(state));
   return (
@@ -63,6 +64,7 @@ export function StatusBadge({
       class={[styles.badge, toneClass(t), outlined ? styles.outline : "", className]
         .filter(Boolean)
         .join(" ")}
+      title={title}
     >
       <StatusDot state={state} tone={t} pulse={pulse} />
       {label ?? (state ? stateName(state) : "")}

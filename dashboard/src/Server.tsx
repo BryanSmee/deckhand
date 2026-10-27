@@ -5,7 +5,7 @@
 // and Sync now.
 import { Fragment } from "preact";
 import { usePolled } from "./api";
-import { ago, dayTime, plural, uptime, versionUrl } from "./format";
+import { ago, AUTH_NAMES, dayTime, plural, uptime, versionUrl } from "./format";
 import { useSync, syncMessage } from "./Sync";
 import type { AppLinks, Preview, ServerSetup, State, SyncResult } from "./types";
 import { Button, buttonClass } from "./ui/Button";
@@ -100,6 +100,18 @@ const ENGINES: Record<NonNullable<ServerSetup["engine"]>, string> = {
   auto: "Sysbox, else Podman",
 };
 
+// Which Claude credential runs use unless they name one, and the others set, which only a
+// fallback or `/agent` names (`claude@anthropic:key`): "Plan first, then API key as fallback".
+// Behind a gateway's token, the others aren't used.
+function claudeText({ set, default: first }: NonNullable<ServerSetup["claude"]>) {
+  if (!first) return "No credential set";
+  const others = first === "gateway" ? [] : set.filter((a) => a !== first);
+  const label = AUTH_NAMES[first].label;
+  if (!others.length) return label;
+  const rest = others.map((a) => AUTH_NAMES[a].label).join(", ");
+  return `${label} first, then ${rest} as fallback`;
+}
+
 // The slots, the container engine, the egress proxy and the grants folder.
 function Runs({
   state,
@@ -135,6 +147,17 @@ function Runs({
             {setup ? (setup.engine ? ENGINES[setup.engine] : "None") : unread}
           </span>
         </div>
+        {(!setup || setup.claude) && (
+          <div class={styles.fact}>
+            <span class={styles.label}>Claude</span>
+            <span class={styles.value}>{setup?.claude ? claudeText(setup.claude) : unread}</span>
+            {setup?.claude?.default && (
+              <span class={`${styles.small} ${styles.mono}`}>
+                {AUTH_NAMES[setup.claude.default].variable}
+              </span>
+            )}
+          </div>
+        )}
         <div class={styles.fact}>
           <span class={styles.label}>Egress proxy</span>
           <span class={styles.value}>

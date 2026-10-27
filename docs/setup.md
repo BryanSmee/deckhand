@@ -563,6 +563,13 @@ per token. An entry can name the credential it runs on: `claude@anthropic:plan`
 [fallback](#fallbacks) from the plan to the key, or a comment's `/agent claude@anthropic:key`.
 `claude@anthropic` alone is the default credential.
 
+**Which credential a run used:** the dashboard tags each Claude run on `anthropic` by its
+model, in the run's outcome (and on a discussion's page): "Plan" (`CLAUDE_CODE_OAUTH_TOKEN`),
+"API key" (`ANTHROPIC_API_KEY`) or "Gateway" (`ANTHROPIC_AUTH_TOKEN`), whether the run named
+it or took the default. Settings › Server says which Claude credentials are set and which one
+runs use first ("Plan first, then API key as fallback"). The reply's footer names the
+credential only when the entry names one, or after a fallback.
+
 What runs an issue, first match wins:
 
 1. A comment's `/agent <entry>` line (`/agent codex`, `/agent claude@openrouter`; an agent

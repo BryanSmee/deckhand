@@ -171,6 +171,7 @@ export function newRecord(
     agent,
     provider: null,
     credential: null,
+    auth: null,
     fallback: null,
     picked: null,
     // Whether it is a light run: an issue's light runs and its work have their own sessions.
@@ -254,6 +255,8 @@ function runOf(logDir, file, max = READ_MAX, log = console.error) {
     provider: meta.provider ?? null,
     // The provider's credential its entry named (`claude@anthropic:key`); null: the default.
     credential: meta.credential ?? null,
+    // The credential it ran on (agents/select.mjs authOf()); null in logs from before it.
+    auth: meta.auth ?? null,
     fallback: meta.fallback ?? null,
     // Whether `/agent` picked it (or a previous run's `/agent`: sticky): it doesn't fall back.
     picked: meta.picked ?? null,

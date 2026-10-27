@@ -658,7 +658,10 @@ credential set (`named`) and picks the run's, in its header (`Bearer` for the pl
 for the key); the sandbox gets the run's secret in that credential's variable, so Claude Code's
 auth mode matches. `config.credentials` lists the ones set and which is the default, for
 `/agent` and for `resolved()`, which names an entry's credential (`claude@anthropic` →
-`claude@anthropic:plan`), so the default isn't tried twice.
+`claude@anthropic:plan`), so the default isn't tried twice. A run's record keeps the entry's
+named credential (`credential`, null for the default: the footer and sticky fallbacks read
+it) and, for the dashboard, the one it actually runs on (`auth`: `plan`, `key` or `gateway`,
+from `authOf()`; null off Anthropic), written in its log's first line so it survives a restart.
 
 The operator's `FALLBACKS` lists `agent@provider` (or `agent@provider:credential`) entries in
 order. When a run ends with an

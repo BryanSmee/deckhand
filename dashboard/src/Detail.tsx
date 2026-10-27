@@ -26,7 +26,7 @@ import { type Handlers, useShortcuts, withKey } from "./keys";
 import { Log } from "./Log";
 import { copyText, downloadText } from "./logExport";
 import { logSections, plainText } from "./logModel";
-import { Outcome } from "./Outcome";
+import { AuthBadge, Outcome } from "./Outcome";
 import { heldMerge, PolicyTab } from "./Policies";
 import { Questions } from "./Questions";
 import { StopDialog } from "./Stop";
@@ -328,6 +328,7 @@ export function Detail({
                 {r.speed === "fast" && " · fast"}
               </span>
             )}
+            {thread && <AuthBadge auth={r?.auth} />}
             {t.pr && <PrLink pr={t.pr} />}
             {!!t.waitingFor?.length && (
               <span>

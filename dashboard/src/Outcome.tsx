@@ -2,8 +2,8 @@
 // a phone), what to do next (Open pull request, Rerun), then its facts: the branch and its
 // commits, the change's size (the latest run's only: the pull request is the task's), how long, on which model, and where it replies. A run going on
 // says so instead.
-import { duration, plural, PR_NAMES, type Tone } from "./format";
-import type { PullRequest, Run, Task } from "./types";
+import { AUTH_NAMES, duration, plural, PR_NAMES, type Tone } from "./format";
+import type { Auth, PullRequest, Run, Task } from "./types";
 import { Button, buttonClass } from "./ui/Button";
 import * as Icon from "./ui/icons";
 import { StatusBadge } from "./ui/Status";
@@ -31,6 +31,14 @@ function prBadge(pr: PullRequest): string {
   if (pr.state === "merged") return pr.autoMerged ? "Merged by Deckhand" : "Merged";
   if (pr.state === "draft") return "Draft pull request";
   return `Pull request ${PR_NAMES[pr.state].toLowerCase()}`;
+}
+
+// The Claude credential a run used (Run.auth), next to its model: the plan, already paid for,
+// the API key, billed per token, or a gateway's. Nothing for runs off Anthropic, or older ones.
+export function AuthBadge({ auth }: { auth?: Auth | null }) {
+  if (!auth) return null;
+  const { label, variable } = AUTH_NAMES[auth];
+  return <StatusBadge tone="idle" outline label={label} title={`Ran on ${variable}`} />;
 }
 
 export function Outcome({ task: t, run: r, now, github, touch, onRerun, rerunning }: Props) {
@@ -118,6 +126,7 @@ export function Outcome({ task: t, run: r, now, github, touch, onRerun, rerunnin
             {r.effort && ` · ${r.effort} effort`}
             {r.speed === "fast" && " · fast"}
           </span>
+          <AuthBadge auth={r.auth} />
           {replyUrl && (
             <a class={styles.fact} href={replyUrl} target="_blank" rel="noreferrer">
               Reply on #{r.replyTo}
