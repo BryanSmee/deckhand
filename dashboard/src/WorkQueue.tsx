@@ -111,8 +111,12 @@ export function WorkQueue({
   onNotice,
   now,
 }: Props) {
-  // The card whose "Queue after…" is open, and whose menu (a phone's).
-  const [choosing, setChoosing] = useState<string | null>(null);
+  // The card whose "Queue after…" is open (over the page: Chooser.tsx), and what queues it
+  // after the pick; the card whose menu is open (a phone's).
+  const [choosing, setChoosing] = useState<{
+    number: number;
+    queue: (after: number) => void;
+  } | null>(null);
   const [menu, setMenu] = useState<string | null>(null);
   // The card being dragged: dimmed in its list meanwhile.
   const [dragging, setDragging] = useState<string | null>(null);
@@ -317,19 +321,6 @@ export function WorkQueue({
     answers: { label: "Issues waiting for answers", empty: "No issue waits for your answers." },
   };
 
-  const chooser = (row: Row, action: RowAction) =>
-    choosing === row.key &&
-    action.after && (
-      <Chooser
-        number={row.number}
-        targets={targets}
-        disabled={busy}
-        size={touch ? "touch" : "small"}
-        onQueue={action.after}
-        onCancel={() => setChoosing(null)}
-      />
-    );
-
   const button = (row: Row, a: RowAction, first: boolean, inMenu = false) => {
     const queue = !!a.after;
     return (
@@ -340,9 +331,14 @@ export function WorkQueue({
         class={inMenu ? styles.menuButton : undefined}
         icon={a.icon}
         aria-label={a.aria}
-        aria-expanded={queue ? choosing === row.key : undefined}
+        aria-haspopup={queue ? "dialog" : undefined}
         disabled={a.disabled}
-        onClick={() => (queue ? setChoosing(choosing === row.key ? null : row.key) : a.run?.())}
+        onClick={() => {
+          if (!a.after) return a.run?.();
+          // A phone's menu goes: the dialog takes its place.
+          setMenu(null);
+          setChoosing({ number: row.number, queue: a.after });
+        }}
       >
         {a.label}
       </Button>
@@ -365,7 +361,6 @@ export function WorkQueue({
         {row.meta && <span class={styles.meta}>{row.meta}</span>}
       </div>
     );
-    const after = row.actions.find((a) => a.after);
     if (touch) {
       const [first, ...rest] = row.actions;
       const opened = menu === row.key;
@@ -386,10 +381,7 @@ export function WorkQueue({
           )}
           {opened && (
             <Sheet title={`#${row.number} ${name}`} onClose={() => setMenu(null)}>
-              <div class={styles.menu}>
-                {rest.map((a) => button(row, a, false, true))}
-                {after && chooser(row, after)}
-              </div>
+              <div class={styles.menu}>{rest.map((a) => button(row, a, false, true))}</div>
             </Sheet>
           )}
         </li>
@@ -415,7 +407,6 @@ export function WorkQueue({
         </span>
         {text}
         <div class={styles.buttons}>{row.actions.map((a, i) => button(row, a, i === 0))}</div>
-        {after && chooser(row, after)}
       </li>
     );
   };
@@ -524,6 +515,15 @@ export function WorkQueue({
         )}
       </div>
       {!touch && <p class={styles.hint}>{HINTS[tab]}</p>}
+      {choosing && (
+        <Chooser
+          number={choosing.number}
+          targets={targets}
+          disabled={busy}
+          onQueue={choosing.queue}
+          onClose={() => setChoosing(null)}
+        />
+      )}
     </section>
   );
 }

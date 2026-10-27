@@ -6,12 +6,11 @@
 // closed", the repo last open and the sidebar's rail are kept on this device. On the board, the
 // sidebar is a rail unless expanded there.
 import { useEffect, useState } from "preact/hooks";
-import { AnalyzeDialog, analysisRepos } from "./Analyze";
 import { type RepoList, useAppState, useRepos } from "./api";
 import { Board, type BoardView } from "./Board";
 import { Detail } from "./Detail";
-import { InboxDialog } from "./Inbox";
 import { type ChipId, CHIPS, inChip, isLive, matchesSearch, repoTabs, sameRepo } from "./format";
+import { NewRequest } from "./NewRequest";
 import { useReadyNotifications } from "./notify";
 import { needingYou } from "./Repos";
 import { formatRoute, parseRoute, type Route } from "./route";
@@ -112,8 +111,8 @@ export function Dashboard({ state, error, repos, refresh }: Props) {
   });
   // The last repo open here, which All doesn't clear: the phone's Tasks and Board go there.
   const [lastRepo, setLastRepo] = useState(() => stored("repo") || null);
-  // New request's dialogs: an idea or a bug report for a repo's inbox (Feedback), or a run
-  // that reviews a repo's recent runs (Analyze).
+  // New request's dialog, and the kind it opened on: an idea or a bug report for a repo's
+  // inbox, or a run that reviews a repo's recent runs.
   const [request, setRequest] = useState<Request | null>(null);
   const wide = useWide();
   const tasks = state?.tasks ?? [];
@@ -264,18 +263,10 @@ export function Dashboard({ state, error, repos, refresh }: Props) {
         )}
       </div>
       {!wide && !task && <TabBar state={state} route={route} lastRepo={lastRepo} />}
-      {request === "inbox" && state && (
-        <InboxDialog
+      {request && state && (
+        <NewRequest
+          kind={request}
           inboxes={state.inboxes}
-          tasks={tasks}
-          repo={route.repo}
-          onClose={() => setRequest(null)}
-          onSent={() => void refresh?.()}
-        />
-      )}
-      {request === "analyze" && state && (
-        <AnalyzeDialog
-          repos={analysisRepos(state.inboxes, tasks)}
           tasks={tasks}
           repo={route.repo}
           onClose={() => setRequest(null)}

@@ -28,7 +28,7 @@ export function createRepoSettings({ github, config, repoList }) {
   }
 
   // Each repo read so far, its inbox issues and discussions category ({ ideas, bugs,
-  // discussions }): the dashboard's Feedback form.
+  // discussions }): the dashboard's New request.
   function inboxes() {
     const names = new Map(
       [...[...reads.values()].map((r) => r.repo), ...repoList.known()].map((n) => [

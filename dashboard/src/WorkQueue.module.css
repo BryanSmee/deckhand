@@ -146,17 +146,12 @@ a.name:hover {
   line-height: 16px;
 }
 
-.buttons,
-.chooser {
+.buttons {
   grid-column: 2;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 6px;
-}
-
-.pick {
-  flex: 1 1 10rem;
 }
 
 .hint {
@@ -248,8 +243,4 @@ a.name:hover {
 
 .menuButton {
   width: 100%;
-}
-
-.menu .chooser {
-  grid-column: auto;
 }

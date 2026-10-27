@@ -22,12 +22,12 @@ import { StatusDot } from "./ui/Status";
 import { ThemeSwitch } from "./ui/ThemeSwitch";
 import styles from "./Shell.module.css";
 
-// What New request opens: the Feedback and Analyze dialogs, until the dialogs issue makes
-// them one.
-export type Request = "inbox" | "analyze";
+// What New request's menu opens: the dialog, on that kind (NewRequest.tsx).
+export type Request = "idea" | "bug" | "analyze";
 
 const REQUESTS: { id: Request; label: string; icon: ComponentChildren }[] = [
-  { id: "inbox", label: "Idea or bug report", icon: <Icon.Idea /> },
+  { id: "idea", label: "Idea", icon: <Icon.Idea /> },
+  { id: "bug", label: "Bug report", icon: <Icon.Bug /> },
   { id: "analyze", label: "Analyze runs", icon: <Icon.Chart /> },
 ];
 

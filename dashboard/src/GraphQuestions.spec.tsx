@@ -3,7 +3,7 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/preact";
 import { beforeEach, expect, test } from "vitest";
 import { Dashboard } from "./App";
-import { BACKLOG, makeState, mockApi } from "./testUtils";
+import { BACKLOG, makeState, mockApi, queueAfter } from "./testUtils";
 import type { State } from "./types";
 
 const state = makeState();
@@ -28,6 +28,14 @@ const area = async (shown: State = state) => {
   return within(work).getByRole("list", { name: "Issues waiting for answers" });
 };
 
+// The open questions' dialog, and what its context line says (the issue).
+const questions = (count: string) => {
+  const name = `${count} open question${count === "1" ? "" : "s"}`;
+  const dialog = screen.getByRole("dialog", { name });
+  const sub = document.getElementById(dialog.getAttribute("aria-describedby")!)!;
+  return { dialog, sub: sub.textContent };
+};
+
 // Every question of the fixture's #138 answered: its two picks are ticked in advance, the
 // free-text one is left.
 const answerAll = (dialog: HTMLElement) =>
@@ -38,9 +46,12 @@ const answerAll = (dialog: HTMLElement) =>
 test("Start on an issue waiting for answers opens its questions; it starts with them", async () => {
   const list = await area();
   fireEvent.click(within(list).getByRole("button", { name: "Answer #138 and start it" }));
-  const dialog = screen.getByRole("dialog", { name: "Answer #138's questions" });
-  expect(within(dialog).getByText("Answer them to start #138")).toBeTruthy();
-  const send = within(dialog).getByRole("button", { name: "Send answers and start" });
+  const { dialog, sub } = questions("3");
+  expect(sub).toMatch(/^#138 Search results flicker/);
+  expect(
+    (within(dialog).getByRole("checkbox", { name: "Then start it" }) as HTMLInputElement).checked,
+  ).toBe(true);
+  const send = within(dialog).getByRole("button", { name: "Send answers" });
   // Nothing went yet, and a partial answer can't go: the picks ticked in advance answer two.
   expect(api.posted).toEqual([]);
   expect((send as HTMLButtonElement).disabled).toBe(true);
@@ -69,18 +80,37 @@ test("Start on an issue waiting for answers opens its questions; it starts with 
   );
 });
 
+test('"Then start it" unticked: the answers go alone, partial ones too, and it doesn\'t start', async () => {
+  const list = await area();
+  fireEvent.click(within(list).getByRole("button", { name: "Answer #138 and start it" }));
+  const { dialog } = questions("3");
+  fireEvent.click(within(dialog).getByRole("checkbox", { name: "Then start it" }));
+  fireEvent.keyDown(document.activeElement!, { key: "Enter", ctrlKey: true });
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  expect(api.posted).toEqual([
+    {
+      url: "api/repos/acme/api/answer",
+      body: {
+        number: 138,
+        answers: [
+          { options: [1], text: "" },
+          { options: [0], text: "" },
+          { options: [], text: "" },
+        ],
+      },
+    },
+  ]);
+});
+
 test("Queue after… sends the queue along; a refusal stays in the form", async () => {
   answer = () => Response.json({ error: "#141 was closed without being done." }, { status: 422 });
   const list = await area();
   fireEvent.click(within(list).getByRole("button", { name: "Answer #138 then queue it after…" }));
-  fireEvent.change(within(list).getByRole("combobox", { name: "Queue #138 after" }), {
-    target: { value: "141" },
-  });
-  fireEvent.click(within(list).getByRole("button", { name: "Queue" }));
-  const dialog = screen.getByRole("dialog", { name: "Answer #138's questions" });
-  expect(within(dialog).getByText("Answer them to queue #138 after #141")).toBeTruthy();
+  queueAfter(138, 141);
+  const { dialog } = questions("3");
+  expect(within(dialog).getByRole("checkbox", { name: "Then queue it after #141" })).toBeTruthy();
   answerAll(dialog);
-  fireEvent.click(within(dialog).getByRole("button", { name: "Send answers and queue" }));
+  fireEvent.click(within(dialog).getByRole("button", { name: "Send answers" }));
   expect(await within(dialog).findByRole("alert")).toHaveProperty(
     "textContent",
     "#141 was closed without being done.",
@@ -127,8 +157,8 @@ test("An issue the backlog found open questions in, with no run, opens its form 
   fireEvent.click(within(work).getByRole("tab", { name: /^Answers/ }));
   const list = within(work).getByRole("list", { name: "Issues waiting for answers" });
   fireEvent.click(within(list).getByRole("button", { name: "Answer #144 and start it" }));
-  const dialog = screen.getByRole("dialog", { name: "Answer #144's questions" });
-  fireEvent.click(within(dialog).getByRole("button", { name: "Send answers and start" }));
+  const { dialog } = questions("1");
+  fireEvent.click(within(dialog).getByRole("button", { name: "Send answers" }));
   await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   expect(api.posted).toEqual([
     {
@@ -148,7 +178,7 @@ test("Cancel or Escape closes the questions: nothing is sent", async () => {
   fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
   expect(screen.queryByRole("dialog")).toBeNull();
   fireEvent.click(within(list).getByRole("button", { name: "Answer #138 and start it" }));
-  fireEvent.keyDown(window, { key: "Escape" });
+  fireEvent.keyDown(document.activeElement!, { key: "Escape" });
   await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   expect(api.posted).toEqual([]);
 });
@@ -185,8 +215,10 @@ test("a click on a node waiting for answers opens them; they go, Sending… unti
   const item = node(/^#138 .*: Needs input, 3 questions$/);
   expect(item.textContent).toContain("?3");
   fireEvent.click(item);
-  const dialog = screen.getByRole("dialog", { name: "Answer #138's questions" });
-  expect(within(dialog).getByText("#138 waits for your answers")).toBeTruthy();
+  const { dialog, sub } = questions("3");
+  expect(sub).toMatch(/^#138 Search results flicker/);
+  // Nothing to start or queue: no "Then…".
+  expect(within(dialog).queryByRole("checkbox")).toBeNull();
   // The detail page the node's link opens.
   const details = within(dialog).getByRole("link", { name: "Open details" });
   expect(details.getAttribute("href")).toBe(item.getAttribute("href"));
@@ -215,11 +247,13 @@ test("a click on a node waiting for answers opens them; they go, Sending… unti
 test("Escape and the backdrop close a node's questions without sending", async () => {
   render(<Dashboard state={state} error={null} />);
   fireEvent.click(node(/#138 .*: Needs input/));
-  expect(screen.getByRole("dialog", { name: "Answer #138's questions" })).toBeTruthy();
-  fireEvent.keyDown(window, { key: "Escape" });
+  expect(questions("3").dialog).toBeTruthy();
+  fireEvent.keyDown(document.activeElement!, { key: "Escape" });
   await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   fireEvent.click(node(/#138 .*: Needs input/));
+  // A press and its release on the scrim.
   const backdrop = screen.getByRole("dialog").parentElement!;
+  fireEvent.pointerDown(backdrop);
   fireEvent.click(backdrop);
   expect(screen.queryByRole("dialog")).toBeNull();
   expect(api.posted).toEqual([]);
@@ -265,7 +299,8 @@ test("a run that asked on a ready pull request: Needs input, answered where it a
   const item = node(/^PR #141 .*: Needs input, PR ready, 1 question$/);
   expect(item.textContent).toContain("?1");
   fireEvent.click(item);
-  const dialog = screen.getByRole("dialog", { name: "Answer PR #141's questions" });
+  const { dialog, sub } = questions("1");
+  expect(sub).toMatch(/^PR #141 /);
   fireEvent.input(within(dialog).getByRole("textbox", { name: "Answer to question 1" }), {
     target: { value: "Yes" },
   });

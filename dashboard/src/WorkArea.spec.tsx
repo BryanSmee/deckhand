@@ -2,7 +2,7 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/preact";
 import { beforeEach, expect, test, vi } from "vitest";
 import { Dashboard } from "./App";
-import { BACKLOG as EMPTY, makeState, mockApi } from "./testUtils";
+import { BACKLOG as EMPTY, makeState, mockApi, queueAfter } from "./testUtils";
 import type { Backlog } from "./types";
 
 const state = makeState();
@@ -74,29 +74,64 @@ test("a parent issue's Start and Queue lay out its sub-issues with it", async ()
   // Back in the backlog: the fake listener doesn't take it away.
   const again = (await within(area).findByText("Export the run log")).closest("li")!;
   fireEvent.click(within(again).getByRole("button", { name: "Queue #31 after…" }));
-  fireEvent.change(within(again).getByRole("combobox", { name: "Queue #31 after" }), {
-    target: { value: "24" },
-  });
-  fireEvent.click(within(again).getByRole("button", { name: "Queue" }));
+  queueAfter(31, 24);
   await waitFor(() =>
     expect(api.bodies().at(-1)).toEqual({ action: "plan", number: 31, after: 24 }),
   );
 });
 
-test("Queue after…: the graph's issues to pick from", async () => {
+test("Queue after…: the graph's issues to pick from, filtered; arrows pick, Enter queues", async () => {
   open("#/acme/app/board");
   const area = screen.getByRole("region", { name: "Work queue" });
   await within(area).findByText("Export the run log");
   const item = within(area).getByText("Export the run log").closest("li")!;
   fireEvent.click(within(item).getByRole("button", { name: "Queue #31 after…" }));
-  const select = within(item).getByRole("combobox", { name: "Queue #31 after" });
-  const options = within(select)
-    .getAllByRole("option")
-    .map((o) => o.textContent);
-  expect(options).toContain("#24 Per-repo budgets in the dashboard");
-  fireEvent.change(select, { target: { value: "24" } });
-  fireEvent.click(within(item).getByRole("button", { name: "Queue" }));
+  const dialog = screen.getByRole("dialog", { name: "Queue #31 after…" });
+  const filter = within(dialog).getByRole("combobox", { name: "Filter issues" });
+  // Focus in the filter, the first issue picked.
+  expect(document.activeElement).toBe(filter);
+  const listed = () =>
+    within(dialog)
+      .getAllByRole("option")
+      .map((o) => o.textContent);
+  const picked = () => within(dialog).getByRole("option", { selected: true }).textContent;
+  expect(listed()).toContain("#24Per-repo budgets in the dashboardWaiting");
+  fireEvent.input(filter, { target: { value: "budgets" } });
+  expect(listed().map((t) => t!.slice(0, 3))).toEqual(["#23", "#24"]);
+  expect(picked()).toMatch(/^#23/);
+  fireEvent.keyDown(filter, { key: "ArrowDown" });
+  expect(picked()).toMatch(/^#24/);
+  expect(filter.getAttribute("aria-activedescendant")).toBe(
+    within(dialog).getByRole("option", { selected: true }).id,
+  );
+  // Past the last, back to the first.
+  fireEvent.keyDown(filter, { key: "ArrowDown" });
+  expect(picked()).toMatch(/^#23/);
+  fireEvent.keyDown(filter, { key: "ArrowUp" });
+  expect(within(dialog).getByRole("button", { name: "Queue after #24" })).toBeTruthy();
+  fireEvent.keyDown(filter, { key: "Enter" });
   await waitFor(() => expect(api.bodies()).toEqual([{ action: "queue", number: 31, after: 24 }]));
+  // Queued: it closes (the issue leaves the backlog while it goes).
+  expect(screen.queryByRole("dialog")).toBeNull();
+});
+
+test("Queue after…: nothing matching, nothing to queue; Escape closes it, focus back", async () => {
+  open("#/acme/app/board");
+  const area = screen.getByRole("region", { name: "Work queue" });
+  await within(area).findByText("Export the run log");
+  const opener = within(area).getByRole("button", { name: "Queue #31 after…" });
+  opener.focus();
+  fireEvent.click(opener);
+  const dialog = screen.getByRole("dialog", { name: "Queue #31 after…" });
+  const filter = within(dialog).getByRole("combobox", { name: "Filter issues" });
+  fireEvent.input(filter, { target: { value: "nothing like it" } });
+  expect(within(dialog).getByText("No issue matches.")).toBeTruthy();
+  expect(within(dialog).getByRole("button", { name: "Queue" })).toHaveProperty("disabled", true);
+  fireEvent.keyDown(filter, { key: "Enter" });
+  fireEvent.keyDown(filter, { key: "Escape" });
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(document.activeElement).toBe(opener);
+  expect(api.bodies()).toEqual([]);
 });
 
 test("a waiting issue: Remove cancels its wait, Start now keeps its mode", async () => {
@@ -149,10 +184,7 @@ test("a refused action: its pending node goes, the issue comes back, the error s
   await within(area).findByText("Keyboard shortcuts");
   const item = within(area).getByText("Keyboard shortcuts").closest("li")!;
   fireEvent.click(within(item).getByRole("button", { name: "Queue #30 after…" }));
-  fireEvent.change(within(item).getByRole("combobox", { name: "Queue #30 after" }), {
-    target: { value: "24" },
-  });
-  fireEvent.click(within(item).getByRole("button", { name: "Queue" }));
+  queueAfter(30, 24);
   expect(within(area).queryByText("Keyboard shortcuts")).toBeNull();
   const graph = screen.getByRole("list", { name: "Issues of acme/app" });
   expect(

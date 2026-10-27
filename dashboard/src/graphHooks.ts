@@ -158,9 +158,10 @@ export function useAnswering(repo: string | null, refresh?: () => Promise<void>)
     close: () => setAsking(null),
     sending,
     said,
-    // Once sent: the form goes, and a click's answers say what the listener said.
-    sent: (message: string) => {
-      if (!asking?.action) setSaid(message);
+    // Once sent: the form goes, and answers sent alone (a click's, or with "Then…" unticked)
+    // say what the listener said; an action's says it in the work area.
+    sent: (message: string, withAction = !!asking?.action) => {
+      if (!withAction) setSaid(message);
       setAsking(null);
     },
     answer,

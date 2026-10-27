@@ -292,7 +292,7 @@ export interface State {
   maxParallel: number;
   previews?: Preview[];
   // Each repo's inbox issues and discussions category, for the repos whose config the
-  // listener has read: the Feedback form offers those it has (listener/work.mjs
+  // listener has read: New request offers those it has (listener/work.mjs
   // sendToInbox(), listener/discussions.mjs).
   inboxes?: Record<string, Inboxes>;
   // GITHUB_URL, without a trailing slash: where links go.

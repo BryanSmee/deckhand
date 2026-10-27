@@ -81,6 +81,62 @@
   color: var(--text-3);
 }
 
+.alert {
+  gap: 12px;
+  padding: 22px 22px 20px;
+}
+
+.icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  background: var(--err-bg);
+  color: var(--err);
+}
+
+.said {
+  margin: 0;
+  font-size: 13.5px;
+  line-height: 21px;
+  color: var(--text-2);
+}
+
+/* A phone: a sheet the screen's width, from the bottom. */
+@media (max-width: 760px) {
+  .scrim {
+    align-items: flex-end;
+    padding: 0;
+  }
+
+  .dialog,
+  .wide {
+    width: 100%;
+    max-height: calc(100dvh - 24px);
+    border-width: 1px 0 0;
+    border-radius: var(--radius-dialog) var(--radius-dialog) 0 0;
+  }
+
+  .foot {
+    padding-bottom: max(12px, env(safe-area-inset-bottom));
+  }
+
+  /* No keyboard to speak of: the actions take the row, the main one widest. */
+  .hint.keys {
+    display: none;
+  }
+
+  .hint:not(.keys) {
+    flex-basis: 100%;
+  }
+
+  .foot > :last-child {
+    flex: 1;
+  }
+}
+
 @keyframes appear {
   from {
     opacity: 0;

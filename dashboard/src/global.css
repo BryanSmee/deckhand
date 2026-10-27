@@ -199,3 +199,8 @@ textarea {
   outline: 2px solid var(--focus);
   outline-offset: 2px;
 }
+
+/* Issue numbers in running text ("Stop the run on #22?"). */
+.mono {
+  font-family: var(--mono);
+}

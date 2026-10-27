@@ -120,12 +120,12 @@ function Theme({ name, class: theme }: { name: string; class: string }) {
           <Button size="small">Small · 28</Button>
           <Button>Default · 36</Button>
           <Button size="touch">Touch · 44</Button>
-          <span class={styles.help}>Stop asks once:</span>
+          <span class={styles.help}>Stop's question:</span>
           <Button size="small" variant="ghost">
             Keep running
           </Button>
           <Button size="small" variant="danger-solid">
-            Stop it now
+            Stop the run
           </Button>
         </div>
       </section>

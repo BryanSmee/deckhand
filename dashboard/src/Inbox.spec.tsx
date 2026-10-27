@@ -1,5 +1,5 @@
-// The top bar's inbox dialog against a fake API: what it offers, a sent entry and its run, a
-// refusal, repos without an inbox.
+// New request's idea, bug report and discussion against a fake API: what it offers, a sent
+// entry and its run, a refusal, repos without an inbox.
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/preact";
 import { beforeEach, expect, test } from "vitest";
 import { Dashboard } from "./App";
@@ -56,33 +56,47 @@ const INBOXES = {
   "acme/notes": { ideas: null, bugs: null, discussions: null },
 };
 
-const openDialog = (state: State, hash = "#/") => {
+const openDialog = (state: State, hash = "#/", item = "Idea") => {
   history.replaceState(null, "", hash);
   const view = render(<Dashboard state={state} error={null} />);
   fireEvent.click(screen.getByRole("button", { name: "New request" }));
-  fireEvent.click(screen.getByRole("menuitem", { name: "Idea or bug report" }));
-  return { view, dialog: screen.getByRole("dialog", { name: "Send feedback" }) };
+  fireEvent.click(screen.getByRole("menuitem", { name: item }));
+  return { view, dialog: screen.getByRole("dialog", { name: "New request" }) };
 };
 
-test("New request's Feedback offers the repos with an inbox, the open tab's first", () => {
+// The kind picked in the dialog's segmented control.
+const kind = (dialog: HTMLElement, name: string) =>
+  fireEvent.click(within(dialog).getByRole("button", { name }));
+const field = (dialog: HTMLElement, name: string) =>
+  within(dialog).getByRole("textbox", { name }) as HTMLInputElement;
+const type = (dialog: HTMLElement, name: string, value: string) =>
+  fireEvent.input(field(dialog, name), { target: { value } });
+const send = (dialog: HTMLElement, name: string) =>
+  within(dialog).getByRole("button", { name }) as HTMLButtonElement;
+
+test("New request offers the repos with that kind of inbox, the open tab's first", () => {
   const { dialog } = openDialog(stateWith(INBOXES), "#/acme/api");
   const repo = within(dialog).getByRole("combobox", { name: "Repository" }) as HTMLSelectElement;
   expect([...repo.options].map((o) => o.value)).toEqual(["acme/api", "acme/app"]);
   expect(repo.value).toBe("acme/api");
-  // Only the inboxes it has.
-  expect(within(dialog).getByRole("radio", { name: "Idea" })).toBeTruthy();
-  expect(within(dialog).queryByRole("radio", { name: "Bug" })).toBeNull();
-  expect(within(dialog).queryByRole("radio", { name: "Discussion" })).toBeNull();
-  fireEvent.change(repo, { target: { value: "acme/app" } });
-  expect(within(dialog).getByRole("radio", { name: "Bug" })).toBeTruthy();
-  expect(within(dialog).getByRole("radio", { name: "Discussion" })).toBeTruthy();
+  // A discussion only where a repo has a category for them: acme/app.
+  const kinds = within(dialog).getByRole("group", { name: "Kind" });
+  expect(
+    within(kinds)
+      .getAllByRole("button")
+      .map((b) => b.textContent),
+  ).toEqual(["Idea", "Bug report", "Discussion", "Analyze runs"]);
+  kind(dialog, "Bug report");
+  const bugs = within(dialog).getByRole("combobox", { name: "Repository" }) as HTMLSelectElement;
+  expect([...bugs.options].map((o) => o.value)).toEqual(["acme/app"]);
+  expect(within(dialog).getByText("acme/api has no inbox for bug reports.")).toBeTruthy();
   fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
   expect(screen.queryByRole("dialog")).toBeNull();
 });
 
-test("a repo without an inbox, or none at all: the docs' link", () => {
+test("a repo without an inbox, or none at all: the docs' link, nothing to send", () => {
   const { dialog, view } = openDialog(stateWith(INBOXES), "#/acme/notes");
-  expect(within(dialog).getByText(/acme\/notes has no inbox/)).toBeTruthy();
+  expect(within(dialog).getByText(/acme\/notes has no inbox for ideas/)).toBeTruthy();
   expect(within(dialog).getByRole("link", { name: "Set one up" }).getAttribute("href")).toBe(
     INBOX_DOCS,
   );
@@ -90,22 +104,26 @@ test("a repo without an inbox, or none at all: the docs' link", () => {
   const none = openDialog(
     stateWith({ "acme/notes": { ideas: null, bugs: null, discussions: null } }),
   ).dialog;
-  expect(within(none).getByText(/No repository has an inbox/)).toBeTruthy();
-  expect(within(none).queryByRole("button", { name: "Send" })).toBeNull();
+  expect(within(none).getByText(/No repository has an inbox for ideas/)).toBeTruthy();
+  expect(within(none).queryByRole("button", { name: "Send idea" })).toBeNull();
+  // No discussion to offer either.
+  expect(within(none).queryByRole("button", { name: "Discussion" })).toBeNull();
 });
 
 test("Send posts the kind and text to the repo, then links the comment and the entry's run", async () => {
   const { dialog, view } = openDialog(stateWith(INBOXES, [inboxTask(["old"])]), "#/acme/app");
-  const send = within(dialog).getByRole("button", { name: "Send" }) as HTMLButtonElement;
-  expect(send.disabled).toBe(true);
-  fireEvent.click(within(dialog).getByRole("radio", { name: "Bug" }));
-  fireEvent.input(within(dialog).getByRole("textbox", { name: "The bug" }), {
-    target: { value: "The log stops" },
-  });
-  fireEvent.click(send);
+  expect(send(dialog, "Send idea").disabled).toBe(true);
+  kind(dialog, "Bug report");
+  // The title, a blank line, the details: the inbox comment as it was written before.
+  type(dialog, "Title", "The log stops");
+  type(dialog, "Details · optional", "After a minute.\n\nOn Firefox.");
+  fireEvent.click(send(dialog, "Send bug report"));
   await waitFor(() => expect(within(dialog).getByRole("status").textContent).toContain("Sent"));
   expect(api.posted).toEqual([
-    { url: "api/repos/acme/app/inbox", body: { kind: "bug", text: "The log stops" } },
+    {
+      url: "api/repos/acme/app/inbox",
+      body: { kind: "bug", text: "The log stops\n\nAfter a minute.\n\nOn Firefox." },
+    },
   ]);
   expect(within(dialog).getByRole("link", { name: "the comment" }).getAttribute("href")).toBe(
     "https://github.com/acme/app/issues/5#issuecomment-9",
@@ -117,34 +135,44 @@ test("Send posts the kind and text to the repo, then links the comment and the e
   expect(
     within(dialogNow).getByRole("link", { name: "its run (running)" }).getAttribute("href"),
   ).toBe("#/acme/app?task=acme%2Fapp%235&run=new");
-  expect((within(dialogNow).getByRole("textbox") as HTMLTextAreaElement).value).toBe("");
+  expect(field(dialogNow, "Title").value).toBe("");
+});
+
+test("an idea of a title alone, sent with Ctrl Enter; the text stays through a change of kind", async () => {
+  const { dialog } = openDialog(stateWith(INBOXES), "#/acme/app");
+  type(dialog, "Title", "Dark theme");
+  kind(dialog, "Bug report");
+  kind(dialog, "Idea");
+  expect(field(dialog, "Title").value).toBe("Dark theme");
+  fireEvent.keyDown(field(dialog, "Title"), { key: "Enter", ctrlKey: true });
+  await waitFor(() =>
+    expect(api.posted).toEqual([
+      { url: "api/repos/acme/app/inbox", body: { kind: "idea", text: "Dark theme" } },
+    ]),
+  );
 });
 
 test("a refusal shows the listener's message and keeps the text", async () => {
   const { dialog } = openDialog(stateWith(INBOXES));
-  fireEvent.input(within(dialog).getByRole("textbox"), { target: { value: "please refuse" } });
-  fireEvent.click(within(dialog).getByRole("button", { name: "Send" }));
+  type(dialog, "Title", "please refuse");
+  fireEvent.click(send(dialog, "Send idea"));
   await waitFor(() =>
     expect(within(dialog).getByRole("alert").textContent).toBe(
       "The text is over 20000 characters.",
     ),
   );
-  expect((within(dialog).getByRole("textbox") as HTMLTextAreaElement).value).toBe("please refuse");
+  expect(field(dialog, "Title").value).toBe("please refuse");
   expect(within(dialog).queryByRole("status")).toBeNull();
 });
 
 test("a discussion: a title and a text, started in the repo's category, then its thread", async () => {
   const { dialog, view } = openDialog(stateWith(INBOXES), "#/acme/app");
-  fireEvent.click(within(dialog).getByRole("radio", { name: "Discussion" }));
-  const start = within(dialog).getByRole("button", { name: "Start" }) as HTMLButtonElement;
-  fireEvent.input(within(dialog).getByRole("textbox", { name: "The discussion" }), {
-    target: { value: "Is the queue kept?" },
-  });
+  kind(dialog, "Discussion");
+  const start = send(dialog, "Start discussion");
+  type(dialog, "Details", "Is the queue kept?");
   // Not without a title.
   expect(start.disabled).toBe(true);
-  fireEvent.input(within(dialog).getByRole("textbox", { name: "Title" }), {
-    target: { value: "Restarts" },
-  });
+  type(dialog, "Title", "Restarts");
   fireEvent.click(start);
   await waitFor(() => expect(within(dialog).getByRole("status").textContent).toContain("Sent"));
   expect(api.posted).toEqual([
@@ -173,16 +201,10 @@ test("a discussion: a title and a text, started in the repo's category, then its
 
 test("a discussion refused: the listener's message, the title and text kept", async () => {
   const { dialog } = openDialog(stateWith(INBOXES), "#/acme/app");
-  fireEvent.click(within(dialog).getByRole("radio", { name: "Discussion" }));
-  fireEvent.input(within(dialog).getByRole("textbox", { name: "Title" }), {
-    target: { value: "please refuse" },
-  });
-  fireEvent.input(within(dialog).getByRole("textbox", { name: "The discussion" }), {
-    target: { value: "Hello" },
-  });
-  fireEvent.click(within(dialog).getByRole("button", { name: "Start" }));
+  kind(dialog, "Discussion");
+  type(dialog, "Title", "please refuse");
+  type(dialog, "Details", "Hello");
+  fireEvent.click(send(dialog, "Start discussion"));
   await waitFor(() => expect(within(dialog).getByRole("alert").textContent).toMatch(/create it/));
-  expect((within(dialog).getByRole("textbox", { name: "Title" }) as HTMLInputElement).value).toBe(
-    "please refuse",
-  );
+  expect(field(dialog, "Title").value).toBe("please refuse");
 });

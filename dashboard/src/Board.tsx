@@ -329,8 +329,10 @@ export function Board({
         <QuestionsDialog
           asking={{ ...asking, task: { ...asking.task, questions: asking.task.questions } }}
           repo={repo}
-          submit={(body) =>
-            asking.action ? work.act(asking.action, body) : questions.answer(asking.task, body)
+          submit={(body, then) =>
+            then && asking.action
+              ? work.act(asking.action, body)
+              : questions.answer(asking.task, body)
           }
           onSent={questions.sent}
           onClose={questions.close}

@@ -1,6 +1,7 @@
 // What the specs share: a fake listener behind `fetch`, the fixture's state and tasks built
 // from it, a DataTransfer and an empty backlog. Imported by specs only, so never bundled; not
 // named test-*.ts, which `node --test` would run.
+import { fireEvent, screen, within } from "@testing-library/preact";
 import { vi } from "vitest";
 import fixture from "./fixture.json";
 import type { Backlog, PolicyFile, Run, State, Task } from "./types";
@@ -137,4 +138,13 @@ export class FakeSource {
   emit(type: string, data: unknown) {
     for (const fn of this.listeners.get(type) ?? []) fn({ data: JSON.stringify(data) });
   }
+}
+
+// "Queue #<number> after…" open: filters the board's issues by `after`'s number, then queues.
+export function queueAfter(number: number, after: number) {
+  const dialog = screen.getByRole("dialog", { name: `Queue #${number} after…` });
+  fireEvent.input(within(dialog).getByRole("combobox", { name: "Filter issues" }), {
+    target: { value: String(after) },
+  });
+  fireEvent.click(within(dialog).getByRole("button", { name: `Queue after #${after}` }));
 }

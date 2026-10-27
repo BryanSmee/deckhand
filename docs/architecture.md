@@ -45,7 +45,7 @@ current tool call; the run's final message is still the one reply and covers it.
 Comments the run cannot take (a trigger that switches between work and brainstorm, a wrap-up,
 or one arriving once the agent's input is closed, or any for an agent that takes no messages
 mid-run) wait for a follow-up run.
-Inbox entries (the ideas and bugs inboxes, from GitHub or the dashboard's Feedback form) are
+Inbox entries (the ideas and bugs inboxes, from GitHub or the dashboard's New request) are
 the exception: each is a run of its own (`entryRun()` in `modes.mjs`), never batched with the
 next entry nor delivered to a running one, so each gets its own prompt and reply. A burst runs
 one entry after another under the inbox's task. A repo's `fresh` modes and discussions keep
@@ -208,9 +208,9 @@ fail, posts an App comment ("Rerun from the dashboard by @user") where the run r
 queues those comments again in the run's mode, with that comment for the reactions. The
 issue's session volume carries what the run had done.
 
-The dashboard's top bar (Feedback) sends ideas and bug reports to a repo's inbox:
+The dashboard's New request (Idea, Bug report) sends ideas and bug reports to a repo's inbox:
 `POST /api/repos/<owner>/<repo>/inbox { kind: "idea" | "bug", text }` (`work.mjs`
-`sendToInbox`) posts the text on the inbox issue as the App's comment ("From the dashboard by
+`sendToInbox`; the dialog's title, a blank line, then its details) posts the text on the inbox issue as the App's comment ("From the dashboard by
 @user", without the marker: it is an entry, not a reply), then queues the item a comment there
 would (`events.mjs` `inboxItem()`), with the signed-in user as its author. `api/state`'s
 `inboxes` says which inbox issues and discussions category each repo read so far has, so the
@@ -242,7 +242,7 @@ text, with a key derived from the App's webhook secret), those ending with the m
 Deckhand's answers, and any other App post (a run's) as the App's. The marker and tags are
 taken out of what a user writes (`events.mjs` `unmarked()`) before it is posted.
 
-**Analyze**, also in the top bar, starts a run that reads a selection of a repository's past
+**Analyze runs**, also in New request, starts a run that reads a selection of a repository's past
 runs and replies with what would make sessions faster or more reliable (`analysis.mjs`). The
 form picks the repository (those `api/state` shows the user), how many recent runs (10 by
 default, 50 at most), their kinds (`taskMode`: work, brainstorm, idea, bug, discussion, the

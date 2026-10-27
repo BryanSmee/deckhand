@@ -841,7 +841,7 @@ every 30 seconds for everyone. It starts nothing itself: it asks GitHub to redel
 App's deliveries that failed (signed by GitHub as any delivery, then checked as one) and reads
 the open pull requests' states again, for every repository, as the listener does at start.
 
-A run analysis (Analyze in the top bar, `POST /api/repos/<owner>/<repo>/analyze`) passes the
+A run analysis (New request's Analyze runs, `POST /api/repos/<owner>/<repo>/analyze`) passes the
 repository's half of these checks too; its preview (`GET`, the same path) all but the origin,
 as it changes nothing. It only ever reads runs of that repository: they are picked by the
 repo of each run's record, and its digest is built from those alone. Its run never gets the
