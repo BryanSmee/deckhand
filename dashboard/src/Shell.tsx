@@ -8,7 +8,8 @@ import { useEffect, useRef, useState } from "preact/hooks";
 import type { RepoList } from "./api";
 import { plural, type RepoCounts, repoCounts, sameRepo, shortRepo } from "./format";
 import type { Permission } from "./notify";
-import { notOnboarded } from "./Repos";
+import { needingYou } from "./Repos";
+import { SettingsTabs } from "./Settings";
 import { formatRoute, type Route } from "./route";
 import { useSync } from "./Sync";
 import type { State } from "./types";
@@ -58,7 +59,7 @@ interface SidebarProps extends Common {
 export function Sidebar(props: SidebarProps) {
   const { state, route, repos, rail, onRail, onRequest, notify } = props;
   const counts = repoCounts(state?.tasks ?? [], route.repo);
-  const waiting = notOnboarded(repos?.repos ?? null);
+  const waiting = needingYou(repos?.repos ?? null, state?.tasks ?? []);
   const toggle = (
     <IconButton
       variant="ghost"
@@ -93,7 +94,7 @@ export function Sidebar(props: SidebarProps) {
             label="Settings"
             current={route.page === "settings"}
             count={waiting}
-            title={waiting ? `${plural(waiting, "repository", "repositories")} not onboarded` : ""}
+            title={waiting ? `${plural(waiting, "repository", "repositories")} need you` : ""}
             rail={rail}
           />
         )}
@@ -361,14 +362,17 @@ function NewRequest({
 }
 
 // The page's title, its GitHub link, its views and the page's own controls (`children`: the
-// board's Start in).
+// board's Start in); Settings' tabs under its title. `needs`: the repositories that need you,
+// on the Repositories tab.
 export function PageHeader({
   route,
   github,
+  needs = 0,
   children,
 }: {
   route: Route;
   github: string;
+  needs?: number;
   children?: ComponentChildren;
 }) {
   const settings = route.page === "settings";
@@ -385,7 +389,7 @@ export function PageHeader({
       href: boardOf(repo),
     });
   return (
-    <header class={styles.header}>
+    <header class={`${styles.header} ${settings ? styles.tabbed : ""}`}>
       <div class={styles.title}>
         <h1>{settings ? "Settings" : (repo ?? "All repositories")}</h1>
         {repo && (
@@ -401,6 +405,7 @@ export function PageHeader({
           </a>
         )}
       </div>
+      {settings && <SettingsTabs route={route} count={needs} class={styles.headerTabs} />}
       {!settings && (
         <Segmented
           label="View"

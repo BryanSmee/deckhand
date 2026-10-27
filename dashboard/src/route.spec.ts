@@ -28,9 +28,13 @@ test("settings: the repositories, and one's config", () => {
   const list = { repo: null, ...none, page: "settings" as const };
   expect(formatRoute(list)).toBe("#/settings/repositories");
   expect(parseRoute("#/settings/repositories")).toEqual(list);
-  // Its only page yet: the others open it.
   expect(parseRoute("#/settings")).toEqual(list);
-  expect(parseRoute("#/settings/preferences")).toEqual(list);
+  expect(parseRoute("#/settings/elsewhere")).toEqual(list);
+  for (const section of ["preferences", "server"] as const) {
+    const tab = { ...list, section };
+    expect(formatRoute(tab)).toBe(`#/settings/${section}`);
+    expect(parseRoute(`#/settings/${section}`)).toEqual(tab);
+  }
   const config = { ...list, config: "org/app" };
   expect(formatRoute(config)).toBe("#/settings/repositories/org/app");
   expect(parseRoute("#/settings/repositories/org/app")).toEqual(config);

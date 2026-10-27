@@ -9,10 +9,17 @@ const TONES: Record<RepoStatus, Tone> = {
   configured: "done",
   invalid: "err",
   onboarding: "run",
-  "not-onboarded": "input",
+  "not-onboarded": "idle",
   unknown: "idle",
 };
 
 export function RepoBadge({ status, class: extra }: { status: RepoStatus; class?: string }) {
-  return <StatusBadge tone={TONES[status]} label={REPO_LABELS[status]} class={extra} />;
+  return (
+    <StatusBadge
+      tone={TONES[status]}
+      label={REPO_LABELS[status]}
+      pulse={status === "onboarding"}
+      class={extra}
+    />
+  );
 }

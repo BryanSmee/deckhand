@@ -1,0 +1,19 @@
+/* Settings: the page scrolls under the phone's tabs. */
+.settings {
+  height: 100%;
+  overflow-y: auto;
+}
+
+.tabs {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 0 8px;
+  background: var(--surface);
+}
+
+.coming {
+  margin: 0;
+  padding: 24px;
+  color: var(--text-2);
+}

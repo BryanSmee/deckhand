@@ -1,7 +1,7 @@
 // The dashboard: the shell (Shell.tsx: the sidebar, or a phone's bars) around a page: a repo's
 // tasks (or every repo's) filtered by state, the open task and its log; a repo's board, its
-// work queue and what waits for what (Board.tsx); or Settings, the repositories page, where
-// onboarding starts and each one's config shows.
+// work queue and what waits for what (Board.tsx); or Settings (Settings.tsx), whose Repositories
+// tab is where onboarding starts and each one's config shows.
 // What is shown lives in the address (route.ts); the state chip, the board's view and "Show
 // closed", the repo last open and the sidebar's rail are kept on this device. On the board, the
 // sidebar is a rail unless expanded there.
@@ -13,8 +13,9 @@ import { Detail } from "./Detail";
 import { InboxDialog } from "./Inbox";
 import { type ChipId, CHIPS, inChip, isLive, matchesSearch, repoTabs, sameRepo } from "./format";
 import { useReadyNotifications } from "./notify";
-import { Repos } from "./Repos";
+import { needingYou } from "./Repos";
 import { formatRoute, parseRoute, type Route } from "./route";
+import { Settings } from "./Settings";
 import { PageHeader, type Request, Sidebar, TabBar, TopBar } from "./Shell";
 import { TaskList } from "./TaskList";
 import type { State } from "./types";
@@ -188,7 +189,13 @@ export function Dashboard({ state, error, repos, refresh }: Props) {
         <TopBar {...shell} onSearch={onTasks && !task ? toggleSearch : undefined} />
       )}
       <div class={styles.content}>
-        {wide && !(onBoard && route.repo) && <PageHeader route={route} github={github} />}
+        {wide && !(onBoard && route.repo) && (
+          <PageHeader
+            route={route}
+            github={github}
+            needs={needingYou(repos?.repos ?? null, tasks)}
+          />
+        )}
         {onBoard && route.repo ? (
           <div class={styles.page}>
             <Board
@@ -210,12 +217,11 @@ export function Dashboard({ state, error, repos, refresh }: Props) {
         ) : onSettings ? (
           <main class={styles.page}>
             {repos && (
-              <Repos
-                list={repos}
-                onBack={() => go({ repo: stored("tab") || null, task: null, run: null })}
-                open={route.config ?? null}
-                server={state?.server}
-                serverNow={state?.now}
+              <Settings
+                route={route}
+                state={state}
+                repos={repos}
+                narrow={!wide}
                 onOpen={(repo) =>
                   go({ repo: null, task: null, run: null, page: "settings", config: repo })
                 }
