@@ -39,6 +39,8 @@ interface RowAction {
   run?: () => void;
   after?: (number: number) => void;
   icon?: ComponentChildren;
+  // Its key on the board, for the card selected ("Queue after…" is always Q).
+  shortcut?: "start" | "brainstorm";
   disabled: boolean;
 }
 
@@ -193,6 +195,7 @@ export function WorkQueue({
         actions: [
           {
             label: "Start",
+            shortcut: "start",
             aria: `Start #${i.number}`,
             icon: <Icon.Play size={11} />,
             run: () => act({ action: parent ? "plan" : "start", number: i.number, ...picked }),
@@ -209,6 +212,7 @@ export function WorkQueue({
             ? [
                 {
                   label: "Brainstorm",
+                  shortcut: "brainstorm" as const,
                   aria: `Brainstorm #${i.number}`,
                   run: () => act({ action: "start", number: i.number, mode: "brainstorm" }),
                   disabled: off,
@@ -235,6 +239,7 @@ export function WorkQueue({
         actions: [
           {
             label: "Start work",
+            shortcut: "start",
             aria: `Start work on #${c.number}`,
             icon: <Icon.Play size={11} />,
             run: () => act({ action: "start", number: c.number }),
@@ -264,6 +269,7 @@ export function WorkQueue({
       actions: [
         {
           label: "Start now",
+          shortcut: "start",
           aria: `Start #${t.number} now`,
           icon: <Icon.Play size={11} />,
           // Its wait's mode, as moving it keeps.
@@ -296,6 +302,7 @@ export function WorkQueue({
         actions: [
           {
             label: "Answer",
+            shortcut: "start",
             aria: `Answer #${t.number} and start it`,
             run: () => act({ action: "start", number: t.number!, ...picked }),
             disabled: off,
@@ -323,9 +330,12 @@ export function WorkQueue({
 
   const button = (row: Row, a: RowAction, first: boolean, inMenu = false) => {
     const queue = !!a.after;
+    const key = queue ? "queue" : a.shortcut;
     return (
       <Button
         key={a.label}
+        data-action={key}
+        shortcut={key}
         size={touch ? "touch" : "small"}
         variant={first || inMenu ? "secondary" : "ghost"}
         class={inMenu ? styles.menuButton : undefined}
@@ -365,7 +375,7 @@ export function WorkQueue({
       const [first, ...rest] = row.actions;
       const opened = menu === row.key;
       return (
-        <li key={row.key} class={styles.row}>
+        <li key={row.key} class={styles.row} data-card data-number={row.number}>
           {text}
           {button(row, first, true)}
           {rest.length > 0 && (
@@ -390,6 +400,8 @@ export function WorkQueue({
     return (
       <li
         key={row.key}
+        data-card
+        data-number={row.number}
         class={`${styles.item} ${row.drag ? styles.draggable : ""} ${dragging === row.key ? styles.ghosted : ""}`}
         draggable={!!row.drag}
         onDragStart={(e) => {

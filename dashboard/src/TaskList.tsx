@@ -18,7 +18,7 @@ import {
   titleOf,
   when,
 } from "./format";
-import { usePref } from "./prefs";
+import { useShortcuts, useShortcutsOn, withKey } from "./keys";
 import type { Task } from "./types";
 import { Field } from "./ui/Field";
 import { FilterChip } from "./ui/FilterChip";
@@ -44,11 +44,6 @@ interface Props {
   touch?: boolean;
 }
 
-// A key typed in a field is the field's, not a shortcut.
-const typing = (target: EventTarget | null) =>
-  target instanceof HTMLElement &&
-  (target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName));
-
 export function TaskList({
   tasks,
   chip,
@@ -65,7 +60,8 @@ export function TaskList({
   touch,
 }: Props) {
   const box = useRef<HTMLDivElement>(null);
-  const [shortcuts] = usePref("shortcuts");
+  const root = useRef<HTMLDivElement>(null);
+  const [shortcuts] = useShortcutsOn();
   const input = () => box.current?.querySelector("input");
   // The chips count what the search finds: a chip's count is the rows it shows.
   const found = tasks.filter((t) => matchesSearch(t, query));
@@ -73,19 +69,17 @@ export function TaskList({
   // Named as their tabs are.
   const labels = new Map(repoTabs(tasks).map((r) => [r.repo.toLowerCase(), r.label]));
 
-  // "/" goes to the search box, opening it first on a phone; unless Preferences turned the
-  // shortcuts off.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (!shortcuts || e.key !== "/" || e.ctrlKey || e.metaKey || e.altKey) return;
-      if (typing(e.target)) return;
-      e.preventDefault();
+  // "/" goes to the search box, opening it first on a phone.
+  useShortcuts({
+    search: () => {
       onSearching(true);
       input()?.focus();
-    };
-    addEventListener("keydown", onKey);
-    return () => removeEventListener("keydown", onKey);
-  }, [onSearching, shortcuts]);
+    },
+  });
+  // The task J and K moved to, in sight.
+  useEffect(() => {
+    root.current?.querySelector("[aria-current=true]")?.scrollIntoView?.({ block: "nearest" });
+  }, [selected]);
   // Opened on a phone: straight into it.
   useEffect(() => {
     if (touch && searching) input()?.focus();
@@ -98,7 +92,7 @@ export function TaskList({
     else (e.currentTarget as HTMLInputElement).blur();
   };
   return (
-    <div class={`${styles.list} ${touch ? styles.touch : ""}`}>
+    <div class={`${styles.list} ${touch ? styles.touch : ""}`} ref={root}>
       <div class={styles.filters}>
         {(searching || !!query) && (
           <div ref={box}>
@@ -117,9 +111,10 @@ export function TaskList({
           </div>
         )}
         <div class={styles.chips} role="group" aria-label="State">
-          {CHIPS.map((c) => (
+          {CHIPS.map((c, i) => (
             <FilterChip
               key={c.id}
+              title={withKey(`Filter: ${c.name}`, "filter", i)}
               class={styles.chip}
               pressed={c.id === chip}
               count={found.filter((t) => inChip(c.id, t)).length}

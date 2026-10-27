@@ -46,6 +46,8 @@ export function Lanes({ repo, nodes, edges, labels, github, narrow, onAsk, refre
       <a
         href={nodeHref(n, repo, github)}
         class={`${styles.node} ${lookClasses(n, styles)}`}
+        data-card
+        data-number={n.number ?? undefined}
         aria-label={nodeLabel(n, waits(n))}
         title={`${n.title ?? nodeRef(n, false, 0)} (${n.status})`}
         aria-haspopup={asks(n) ? "dialog" : undefined}
@@ -132,7 +134,11 @@ function Lane({ repo, lane, labels, narrow, refresh, children }: LaneProps) {
   };
 
   return (
-    <section class={styles.lane} aria-label={`Lane ${name}`}>
+    <section
+      class={styles.lane}
+      aria-label={`Lane ${name}`}
+      data-lane={lane.map((n) => n.key).join(" ")}
+    >
       {editing ? (
         <form class={styles.rename} onSubmit={save}>
           <Field

@@ -123,3 +123,13 @@
   height: 36px;
   font-size: 14px;
 }
+
+/* Space held: a drag pans the canvas. */
+.canvas.grab {
+  cursor: grab;
+}
+
+.canvas.panning {
+  cursor: grabbing;
+  user-select: none;
+}

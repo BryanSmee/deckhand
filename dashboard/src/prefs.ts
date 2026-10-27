@@ -44,6 +44,11 @@ export const PREFS = {
 export type Prefs = { [K in keyof typeof PREFS]: (typeof PREFS)[K]["default"] };
 export type PrefName = keyof Prefs;
 
+// The theme after `theme`, as Shift T goes: System, Light, Dark, then System again.
+export const THEMES: readonly Theme[] = ["system", "light", "dark"];
+export const nextTheme = (theme: Theme): Theme =>
+  THEMES[(THEMES.indexOf(theme) + 1) % THEMES.length];
+
 // The choices storage refused (private mode, a full quota): kept on this page, for its life.
 const unkept = new Map<string, string | null>();
 

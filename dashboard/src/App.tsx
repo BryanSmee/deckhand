@@ -5,20 +5,26 @@
 // tab is where onboarding starts and each one's config shows.
 // What is shown lives in the address (route.ts); the state chip, the board's view, the repo
 // last open and the sidebar's rail are kept on this device, like the choices of Settings ›
-// Preferences (prefs.ts). On the board, the sidebar is a rail unless expanded there.
+// Preferences (prefs.ts). On the board, the sidebar is a rail unless expanded there. The
+// shortcuts of every page and of the tasks' list are bound here (keys.ts), with the `?` sheet
+// (Shortcuts.tsx) and Ctrl K (Palette.tsx).
 import { useEffect, useState } from "preact/hooks";
 import { type RepoList, useAppState, useRepos } from "./api";
 import { Board, type BoardView } from "./Board";
 import { Detail } from "./Detail";
 import { type ChipId, CHIPS, inChip, isLive, matchesSearch, repoTabs, sameRepo } from "./format";
+import { useShortcuts, useShortcutsOn } from "./keys";
 import { NewRequest } from "./NewRequest";
 import { useNotifications } from "./notify";
 import { Overview } from "./Overview";
-import { getPref, usePref } from "./prefs";
+import { type Jumps, Palette } from "./Palette";
+import { getPref, nextTheme, setPref, usePref } from "./prefs";
 import { needingYou } from "./Repos";
 import { formatRoute, isOverview, parseRoute, type Route } from "./route";
 import { Settings } from "./Settings";
 import { PageHeader, type Request, Sidebar, TabBar, TopBar } from "./Shell";
+import { ShortcutsDialog } from "./Shortcuts";
+import { useSync } from "./Sync";
 import { TaskList } from "./TaskList";
 import type { State } from "./types";
 import styles from "./App.module.css";
@@ -134,8 +140,17 @@ export function Dashboard({ state, error, repos, refresh, onOverview }: Props) {
   // The last repo open here, which All doesn't clear: the phone's Tasks and Board go there.
   const [lastRepo, setLastRepo] = useState(() => stored("repo") || null);
   // New request's dialog, and the kind it opened on: an idea or a bug report for a repo's
-  // inbox, or a run that reviews a repo's recent runs.
-  const [request, setRequest] = useState<Request | null>(null);
+  // inbox, or a run that reviews a repo's recent runs; Ctrl K's may have its title typed.
+  const [request, setRequest] = useState<{ kind: Request; title?: string } | null>(null);
+  // The `?` sheet, Ctrl K, and the lane Ctrl K jumps to (its issues' keys), until in sight.
+  const [help, setHelp] = useState(false);
+  const [palette, setPalette] = useState(false);
+  const [lane, setLane] = useState<string[] | null>(null);
+  // The sidebar's Sync, which Ctrl K runs too: what it did shows in the sidebar when expanded,
+  // else in a note of its own (the rail, a phone).
+  const syncer = useSync(refresh);
+  // Read for its re-render: the tooltips (keys.ts withKey()) name keys only while they are on.
+  useShortcutsOn();
   const wide = useWide();
   const tasks = state?.tasks ?? [];
   const now = state?.now ?? Date.now();
@@ -187,8 +202,85 @@ export function Dashboard({ state, error, repos, refresh, onOverview }: Props) {
 
   const notify = useNotifications(state);
   const github = state?.githubUrl ?? "https://github.com";
-  const shell = { state, error, route, refresh, onRequest: setRequest };
+  const shell = {
+    state,
+    error,
+    route,
+    syncer,
+    onRequest: (kind: Request) => setRequest({ kind }),
+  };
+  const railed = onBoard ? boardRail : rail;
   const onTasks = !overview && !onBoard && !onSettings;
+  const shownRepo = onSettings ? null : route.repo;
+  const page = (next: Partial<Route>) => go({ repo: null, task: null, run: null, ...next });
+
+  // The lane Ctrl K picked, once the board shows it: the one with any of its issues (a pending
+  // action may have moved one since).
+  useEffect(() => {
+    if (!lane || !onBoard) return;
+    let tries = 0;
+    const timer = setInterval(() => {
+      const el = lane
+        .map((key) => document.querySelector<HTMLElement>(`[data-lane~="${CSS.escape(key)}"]`))
+        .find(Boolean);
+      if (el || ++tries > 20) {
+        clearInterval(timer);
+        setLane(null);
+        el?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+        el?.querySelector<HTMLElement>("[data-card]")?.focus();
+      }
+    }, 50);
+    return () => clearInterval(timer);
+  }, [lane, onBoard]);
+
+  const jumps: Jumps = {
+    task: (t) => go({ repo: t.repo, task: t.key, run: null }),
+    repo: (repo) => go({ repo, task: null, run: null }),
+    lane: (repo, keys) => {
+      selectView("lanes");
+      setLane(keys);
+      go({ repo, task: null, run: null, page: "board" });
+    },
+    request: (kind, title) => setRequest({ kind, title }),
+    sync: () => void syncer.sync(),
+    theme: (theme) => setPref("theme", theme),
+  };
+
+  useShortcuts({
+    help: () => setHelp(true),
+    palette: () => (state ? setPalette(true) : false),
+    request: () => (state ? setRequest({ kind: "idea" }) : false),
+    overview: () => page({}),
+    tasks: () => page(shownRepo ? { repo: shownRepo } : { page: "tasks" }),
+    board: () => {
+      const repo = shownRepo ?? lastRepo ?? repoTabs(tasks)[0]?.repo;
+      if (!repo) return false;
+      page({ repo, page: "board" });
+    },
+    settings: () => page({ page: "settings" }),
+    sidebar: () => (wide ? selectRail(!railed) : false),
+    theme: () => setPref("theme", nextTheme(getPref("theme"))),
+    // A phone's open task goes back to the list, an open config to the repositories.
+    back: () => {
+      if (task && !wide) return go({ ...route, task: null, run: null }, true);
+      if (onSettings && route.config) return page({ page: "settings" });
+      return false;
+    },
+  });
+  // The list's: the next or previous task shown, a state chip.
+  useShortcuts(
+    {
+      nextTask: (i) => {
+        if (!visible.length) return false;
+        const at = visible.findIndex((t) => t.key === task?.key);
+        const next =
+          at < 0 ? 0 : Math.min(visible.length - 1, Math.max(0, at + (i === 0 ? 1 : -1)));
+        go({ ...route, task: visible[next].key, run: null }, true);
+      },
+      filter: (i) => selectChip(CHIPS[i].id),
+    },
+    onTasks,
+  );
   // A phone's search button opens the box, and closes it emptied.
   const toggleSearch = () => {
     if (searchOpen) setQuery("");
@@ -198,13 +290,7 @@ export function Dashboard({ state, error, repos, refresh, onOverview }: Props) {
   return (
     <div class={`${styles.app} ${task ? styles.reading : ""}`}>
       {wide ? (
-        <Sidebar
-          {...shell}
-          repos={repos}
-          rail={onBoard ? boardRail : rail}
-          onRail={selectRail}
-          notify={notify}
-        />
+        <Sidebar {...shell} repos={repos} rail={railed} onRail={selectRail} notify={notify} />
       ) : (
         <TopBar {...shell} onSearch={onTasks && !task ? toggleSearch : undefined} />
       )}
@@ -300,12 +386,28 @@ export function Dashboard({ state, error, repos, refresh, onOverview }: Props) {
       {!wide && !task && <TabBar state={state} route={route} lastRepo={lastRepo} />}
       {request && state && (
         <NewRequest
-          kind={request}
+          kind={request.kind}
+          title={request.title}
           inboxes={state.inboxes}
           tasks={tasks}
           repo={route.repo}
           onClose={() => setRequest(null)}
           onSent={() => void refresh?.()}
+        />
+      )}
+      {syncer.said && !(wide && !railed) && (
+        <p role="status" class={`${styles.note} ${syncer.said.failed ? styles.failed : ""}`}>
+          {syncer.said.text}
+        </p>
+      )}
+      {help && <ShortcutsDialog onClose={() => setHelp(false)} />}
+      {palette && state && (
+        <Palette
+          state={state}
+          repos={repos?.repos?.map((r) => r.repo)}
+          showClosed={showClosed}
+          jumps={jumps}
+          onClose={() => setPalette(false)}
         />
       )}
     </div>

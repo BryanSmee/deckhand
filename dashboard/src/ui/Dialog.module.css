@@ -28,6 +28,10 @@
   width: min(100%, 640px);
 }
 
+.full {
+  width: min(100%, 1120px);
+}
+
 .head {
   display: flex;
   align-items: flex-start;
@@ -112,7 +116,8 @@
   }
 
   .dialog,
-  .wide {
+  .wide,
+  .full {
     width: 100%;
     max-height: calc(100dvh - 24px);
     border-width: 1px 0 0;

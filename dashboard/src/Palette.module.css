@@ -1,0 +1,188 @@
+/* Ctrl K, "Jump to" (docs/design/reference/palette.html): a search box, the results by group,
+   the keys under them. On a phone, a sheet from the top. */
+.scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding: 120px 16px 16px;
+  background: var(--scrim);
+  animation: appear var(--slide) ease-out;
+}
+
+.palette {
+  display: flex;
+  flex-direction: column;
+  width: min(100%, 640px);
+  max-height: calc(100dvh - 136px);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  box-shadow: var(--dlg-shadow);
+  overflow: hidden;
+}
+
+.search {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 56px;
+  padding: 0 18px;
+  border-bottom: 1px solid var(--border);
+  flex: none;
+}
+
+.lead {
+  flex: none;
+  color: var(--text-3);
+}
+
+.input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--text);
+  font: 400 16px/1 var(--font);
+}
+
+/* The box is the dialog's: its ring would only frame the search row. */
+.input:focus-visible {
+  outline: none;
+}
+
+.input::placeholder {
+  color: var(--text-3);
+}
+
+.list {
+  padding: 4px 8px 8px;
+  overflow: auto;
+}
+
+.group {
+  margin: 0;
+  padding: 10px 12px 4px;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+
+.option {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  min-height: 40px;
+  padding: 0 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 13.5px;
+}
+
+.option[aria-selected="true"] {
+  background: var(--surface-3);
+}
+
+.icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-3);
+}
+
+.text {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* Over the log's own marks (Log.module.css), which are global. */
+.text mark {
+  padding: 0;
+  border-radius: 0;
+  box-shadow: none;
+  background: transparent;
+  color: var(--text);
+  font-weight: 700;
+  text-decoration: underline;
+  text-decoration-color: var(--input-solid);
+  text-decoration-thickness: 2px;
+  text-underline-offset: 3px;
+}
+
+.ref,
+.repo {
+  color: var(--text-3);
+  font-size: 12.5px;
+}
+
+.ref {
+  font-family: var(--mono);
+}
+
+.state {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--s-fg);
+}
+
+.empty {
+  margin: 0;
+  padding: 16px 12px;
+  color: var(--text-3);
+}
+
+.foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 16px;
+  border-top: 1px solid var(--border);
+  background: var(--bg);
+  font-size: 12px;
+  color: var(--text-3);
+  flex: none;
+}
+
+.foot > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.foot > .tip {
+  margin-left: auto;
+}
+
+@media (max-width: 760px) {
+  .scrim {
+    padding: 8px;
+  }
+
+  .palette {
+    max-height: calc(100dvh - 16px);
+  }
+
+  /* No keyboard to speak of: the tip alone. */
+  .foot > span:not(.tip) {
+    display: none;
+  }
+
+  .foot > .tip {
+    margin-left: 0;
+  }
+}
+
+@keyframes appear {
+  from {
+    opacity: 0;
+  }
+}
