@@ -99,6 +99,8 @@ export function Outcome({ task: t, run: r, now, github, touch, onRerun, rerunnin
                 {part}
               </span>
             ))}
+          {r.auth && " "}
+          <AuthBadge auth={r.auth} />
         </span>
       ) : (
         <div class={styles.facts}>
