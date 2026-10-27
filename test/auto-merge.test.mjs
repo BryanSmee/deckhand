@@ -2,6 +2,7 @@
 // run, and that each pull request gets one decision; the policies of the reviews and fix runs
 // that lead to it (`deny_review`, `deny_fix`).
 import assert from "node:assert/strict";
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { parseRepoConfig } from "../listener/repo-config.mjs";
@@ -422,43 +423,53 @@ test("auto-merge: after the fix run, a medium finding requests changes and block
 
 test("auto-merge: review.max_allowed_severity medium, the deciding review posted as a comment", async (t) => {
   const yaml = `${MERGE}  max_allowed_severity: medium\n`;
+  const at = { repo: "org/repo", number: 5, base: "trunk", auto: true };
+  // With review.fix, every automatic review stops the loop at the threshold: medium findings
+  // alone start no fix run, and the first review decides the merge. Not "/mode review"'s.
+  const s = setup(t, { yaml });
+  assert.equal(await s.reviews.tolerance(at), "medium");
+  assert.equal(await s.reviews.tolerance({ ...at, auto: false }), "low");
+  const message = MEDIUM.replace("Verdict: comment", "Verdict: request-changes");
+  const first = s.posted(message, {}, "medium");
+  assert.deepEqual([first.event, first.review.verdict], ["COMMENT", "comment"]);
+  assert.deepEqual(await s.reviews.settle(s.run, first), { sha: "sha-1", method: "squash" });
+  assert.equal(s.accepted.length, 0);
+  assert.match(s.replies[0].text, /medium findings allowed by `review.max_allowed_severity`/);
+  // High still requests changes, for the fix run; the review after it tolerates medium too.
   const path = join(tempDir(t), "reviews.json");
   const pushed = { head: { sha: "sha-2", repo: { full_name: "org/repo" } } };
-  const s = setup(t, { yaml, path, pr: pushed });
-  const at = { repo: "org/repo", number: 5, base: "trunk", auto: true };
-  // The first review, with review.fix: medium still requests changes, for the fix run.
-  assert.equal(await s.reviews.tolerance(at), "low");
-  assert.equal(await s.reviews.tolerance({ ...at, auto: false }), "low");
-  const first = s.posted(MEDIUM);
-  assert.equal(first.event, "REQUEST_CHANGES");
-  assert.equal((await s.reviews.settle(s.run, first)).reason, "review-fix");
-  await s.reviews.fixed({ repo: "org/repo", number: 5, base: "trunk", status: "ok" });
-  // The review after it decides the merge: medium allowed, even with the prompt's verdict.
-  assert.equal(await s.reviews.tolerance(at), "medium");
-  const message = MEDIUM.replace("Verdict: comment", "Verdict: request-changes");
-  const second = s.posted(message, pushed, "medium");
-  assert.deepEqual([second.event, second.review.verdict], ["COMMENT", "comment"]);
-  assert.deepEqual(await s.reviews.settle(s.run, second), { sha: "sha-2", method: "squash" });
-  assert.match(s.replies[0].text, /medium findings allowed by `review.max_allowed_severity`/);
-  // High still blocks; without review.fix the first review decides; low + "request changes"
-  // still blocks.
-  const high = setup(t, {
-    yaml: "review:\n  on: ready\n  merge: true\n  max_allowed_severity: medium\n",
+  const fixing = setup(t, { yaml, path, pr: pushed });
+  const high = fixing.posted(`${HIGH}\n- **medium** b: x.`, {}, "medium");
+  assert.equal(high.event, "REQUEST_CHANGES");
+  assert.equal((await fixing.reviews.settle(fixing.run, high)).reason, "review-fix");
+  await fixing.reviews.fixed({ repo: "org/repo", number: 5, base: "trunk", status: "ok" });
+  assert.equal(await fixing.reviews.tolerance(at), "medium");
+  const second = fixing.posted(message, pushed, "medium");
+  assert.deepEqual(await fixing.reviews.settle(fixing.run, second), {
+    sha: "sha-2",
+    method: "squash",
   });
-  assert.equal(await high.reviews.tolerance(at), "medium");
-  const posted = high.posted(`${HIGH}\n- **medium** b: x.`, {}, "medium");
+  // Without review.fix the first review decides; low + "request changes" still blocks.
+  const plainYaml = "review:\n  on: ready\n  merge: true\n  max_allowed_severity: medium\n";
+  const noFix = setup(t, { yaml: plainYaml });
+  assert.equal(await noFix.reviews.tolerance(at), "medium");
+  const posted = noFix.posted(`${HIGH}\n- **medium** b: x.`, {}, "medium");
   assert.equal(posted.event, "REQUEST_CHANGES");
-  assert.equal(await high.reviews.settle(high.run, posted), null);
-  assert.match(high.replies[0].text, /the review still has high findings/);
-  const low = setup(t, {
-    yaml: "review:\n  on: ready\n  merge: true\n  max_allowed_severity: medium\n",
-  });
+  assert.equal(await noFix.reviews.settle(noFix.run, posted), null);
+  assert.match(noFix.replies[0].text, /the review still has high findings/);
+  const low = setup(t, { yaml: plainYaml });
   assert.equal(await low.reviews.settle(low.run, low.posted(LOW_CHANGES, {}, "medium")), null);
   assert.match(low.replies[0].text, /the review requests changes/);
-  const plain = setup(t, {
-    yaml: "review:\n  on: ready\n  merge: true\n  max_allowed_severity: medium\n",
-  });
+  const plain = setup(t, { yaml: plainYaml });
   assert.ok(await plain.reviews.settle(plain.run, plain.posted(MEDIUM, {}, "medium")));
+  // Without review.merge, the fix loop's threshold alone.
+  const fixOnly = setup(t, { yaml: `${FIX_ONLY}  max_allowed_severity: medium\n` });
+  assert.equal(await fixOnly.reviews.tolerance(at), "medium");
+  assert.equal(
+    await fixOnly.reviews.settle(fixOnly.run, fixOnly.posted(MEDIUM, {}, "medium")),
+    null,
+  );
+  assert.equal(fixOnly.accepted.length + fixOnly.replies.length, 0);
 });
 
 test("auto-merge: a second review that still blocks merges nothing, starts no fix", async (t) => {
@@ -535,7 +546,7 @@ test("auto-merge: deny_merge refuses with its reasons, after every built-in gate
     ["listener/x.mjs"],
   );
   assert.equal(input.review.verdict, "approve");
-  assert.equal(input.fixed, false);
+  assert.deepEqual([input.fixed, input.fixes], [false, 0]);
   assert.deepEqual(input.checks, [{ name: "CI", status: "completed", conclusion: "success" }]);
   // A built-in gate that refuses first: no policy asked.
   const draft = policyEngine(t, { files: { "size.rego": "package deckhand" } });
@@ -792,6 +803,7 @@ test("deny_fix: a finding's path starts no fix run, a comment quotes why, nothin
     { severity: "high", path: "a.mjs", line: 1, text: "a hole." },
   ]);
   assert.equal(input.review.verdict, "request-changes");
+  assert.deepEqual([input.fixed, input.fixes, input.round, input.rounds], [false, 0, 1, 1]);
   assert.deepEqual(
     [s.decided[0].rule, s.decided[0].gates.every((g) => g.passed), s.decided[0].gates.length],
     ["deny_fix", true, 5],
@@ -1016,4 +1028,227 @@ test("auto-merge: GitHub failing while it waits keeps it waiting, until review.m
   assert.match(late.replies[0].text, /GitHub couldn't be read/);
   await late.reviews.tick();
   assert.equal(late.replies.length, 1);
+});
+
+// The fix loop (`review.fix: <n>`): review, fix, review… until a review is within
+// `review.max_allowed_severity` or n fix runs have run.
+const at = (sha) => ({ head: { sha, repo: { full_name: "org/repo" } } });
+const done = { repo: "org/repo", number: 5, base: "trunk", status: "ok" };
+
+// One round of `s`: the fix run `review` starts pushes `sha`, and its review is queued.
+async function round(s, message, sha) {
+  const fix = await s.reviews.settle(s.run, s.posted(message, s.over.pr));
+  if (!fix) return null;
+  s.over.pr = at(sha);
+  const review = await s.reviews.fixed(done);
+  assert.equal(review.reason, "review");
+  return fix;
+}
+
+test("fix loop: without review.merge, fix and review again until the rounds run out", async (t) => {
+  const s = setup(t, { yaml: "review:\n  on: ready\n  fix: 3\n", pr: at("sha-1") });
+  const first = await round(s, HIGH, "sha-2");
+  assert.deepEqual([first.round, first.rounds], [1, 3]);
+  assert.match(first.text, /This is fix run 1 of 3\./);
+  const second = await round(s, HIGH, "sha-3");
+  assert.deepEqual([second.round, second.rounds], [2, 3]);
+  assert.match(second.text, /fix run 2 of 3: the review of what the previous fix run pushed/);
+  assert.ok(await round(s, HIGH, "sha-4"));
+  // The review after the third: no fourth fix run, a comment instead, once.
+  assert.equal(
+    await s.reviews.settle(s.run, s.posted(`${HIGH}\n- **medium** b: x.`, at("sha-4"))),
+    null,
+  );
+  assert.equal(s.accepted.filter((i) => i.reason === "review-fix").length, 3);
+  assert.equal(s.accepted.filter((i) => i.reason === "review").length, 3);
+  assert.deepEqual(
+    s.replies.map((r) => r.text),
+    [
+      "**No more fix runs** (`review.fix`): the review after 3 fix runs still has high, medium findings. They wait for a maintainer.",
+    ],
+  );
+  assert.equal(await s.reviews.settle(s.run, s.posted(HIGH, at("sha-4"))), null);
+  assert.equal(s.replies.length + s.merges().length, 1);
+});
+
+test("fix loop: a clean review stops it; in merge mode it merges", async (t) => {
+  const quiet = setup(t, { yaml: "review:\n  on: ready\n  fix: 3\n", pr: at("sha-1") });
+  await round(quiet, HIGH, "sha-2");
+  assert.equal(await quiet.reviews.settle(quiet.run, quiet.posted(CLEAN, at("sha-2"))), null);
+  assert.equal(quiet.accepted.length + quiet.replies.length, 2);
+  assert.equal(quiet.replies.length, 0);
+  const s = setup(t, { yaml: `${MERGE.replace("fix: true", "fix: 3")}`, pr: at("sha-1") });
+  await round(s, HIGH, "sha-2");
+  await round(s, HIGH, "sha-3");
+  const merged = await s.reviews.settle(s.run, s.posted(CLEAN, at("sha-3")));
+  assert.deepEqual(merged, { sha: "sha-3", method: "squash" });
+  assert.match(s.replies[0].text, /after 2 fix runs, each followed by a review/);
+});
+
+test("fix loop: in merge mode, rounds run out with findings above the threshold, nothing merges", async (t) => {
+  const s = setup(t, { yaml: MERGE.replace("fix: true", "fix: 2"), pr: at("sha-1") });
+  await round(s, HIGH, "sha-2");
+  await round(s, HIGH, "sha-3");
+  assert.equal(await s.reviews.settle(s.run, s.posted(HIGH, at("sha-3"))), null);
+  assert.equal(s.merges().length, 0);
+  assert.equal(s.accepted.filter((i) => i.reason === "review-fix").length, 2);
+  assert.match(
+    s.replies[0].text,
+    /^\*\*Not merged automatically\*\*.*the review after 2 fix runs still has high findings/,
+  );
+});
+
+test("fix loop: with medium allowed, a medium-only review in the loop starts no fix and merges", async (t) => {
+  const yaml = `${MERGE.replace("fix: true", "fix: 3")}  max_allowed_severity: medium\n`;
+  const s = setup(t, { yaml, pr: at("sha-1") });
+  await round(s, HIGH, "sha-2");
+  const second = s.posted(MEDIUM, at("sha-2"), "medium");
+  assert.equal(second.event, "COMMENT");
+  assert.deepEqual(await s.reviews.settle(s.run, second), { sha: "sha-2", method: "squash" });
+  assert.equal(s.accepted.filter((i) => i.reason === "review-fix").length, 1);
+});
+
+test("fix loop: a busy task, needs-input or a failed fix stops it", async (t) => {
+  const yaml = "review:\n  on: ready\n  fix: 3\n";
+  let busy = false;
+  const s = setup(t, { yaml, pr: at("sha-1"), busy: () => busy });
+  await round(s, HIGH, "sha-2");
+  busy = true;
+  assert.equal(await s.reviews.settle(s.run, s.posted(HIGH, at("sha-2"))), null);
+  const waits = setup(t, { yaml, pr: at("sha-1") });
+  await round(waits, HIGH, "sha-2");
+  const labelled = waits.posted(HIGH, { ...at("sha-2"), labels: [{ name: "needs-input" }] });
+  assert.equal(await waits.reviews.settle(waits.run, labelled), null);
+  const failed = setup(t, { yaml, pr: at("sha-1") });
+  await failed.reviews.settle(failed.run, failed.posted(HIGH));
+  failed.over.pr = at("sha-2");
+  assert.equal(await failed.reviews.fixed({ ...done, status: "error" }), null);
+  // None of them a further run, nor a "rounds ran out" comment.
+  for (const x of [s, waits, failed]) {
+    assert.equal(x.accepted.filter((i) => i.reason === "review-fix").length, 1);
+    assert.equal(x.replies.length, 0);
+  }
+  assert.equal(failed.accepted.length, 1);
+});
+
+test("fix loop: the count survives a restart; a fix run's end, redelivered, reviews once", async (t) => {
+  const path = join(tempDir(t), "reviews.json");
+  const yaml = "review:\n  on: ready\n  fix: 2\n";
+  const s = setup(t, { yaml, path, pr: at("sha-1") });
+  await round(s, HIGH, "sha-2");
+  assert.equal(await s.reviews.fixed(done), null);
+  const again = setup(t, { yaml, path, pr: at("sha-2") });
+  assert.equal(await again.reviews.fixed(done), null);
+  assert.equal((await again.reviews.settle(again.run, again.posted(HIGH, at("sha-2")))).round, 2);
+  // After round 2, restarted: no third one.
+  const third = setup(t, { yaml, path, pr: at("sha-3") });
+  assert.equal((await third.reviews.fixed(done)).reason, "review");
+  assert.equal(await third.reviews.fixed(done), null);
+  const last = setup(t, { yaml, path, pr: at("sha-3") });
+  assert.equal(await last.reviews.settle(last.run, last.posted(HIGH, at("sha-3"))), null);
+  assert.equal(last.accepted.length, 0);
+  assert.match(last.replies[0].text, /after 2 fix runs still has high findings/);
+});
+
+test("fix loop: entries from before the rounds are one round done", async (t) => {
+  const old = (entry) => {
+    const path = join(tempDir(t), "reviews.json");
+    writeFileSync(path, JSON.stringify({ "org/repo#pr-5": { head: "sha-1", at: 1, ...entry } }));
+    return path;
+  };
+  // fixedAt: one fix run; with `fix: 3`, the next is round 2.
+  const more = setup(t, {
+    yaml: "review:\n  on: ready\n  fix: 3\n",
+    path: old({ fixedAt: 2 }),
+    pr: at("sha-2"),
+  });
+  assert.equal((await more.reviews.settle(more.run, more.posted(HIGH, at("sha-2")))).round, 2);
+  // With `fix: true`, none.
+  const one = setup(t, { yaml: FIX_ONLY, path: old({ fixedAt: 2 }), pr: at("sha-2") });
+  assert.equal(await one.reviews.settle(one.run, one.posted(HIGH, at("sha-2"))), null);
+  assert.equal(one.accepted.length, 0);
+  // rereviewAt too: that round's review was queued, a fix run's end reviews nothing more.
+  const over = setup(t, { path: old({ fixedAt: 2, rereviewAt: 3 }), pr: at("sha-2") });
+  assert.equal(await over.reviews.fixed(done), null);
+  assert.equal(over.accepted.length, 0);
+});
+
+test("fix loop: deny_merge sees the fix runs counted", async (t) => {
+  const policy = policyEngine(t, { ref: "trunk", files: { "x.rego": "package deckhand" } });
+  const s = setup(t, {
+    yaml: MERGE.replace("fix: true", "fix: 3"),
+    pr: at("sha-1"),
+    info: { default_branch: "trunk" },
+    policies: policy.engine,
+  });
+  await round(s, HIGH, "sha-2");
+  const fixInput = policy.evals.find((e) => e.rule === "deny_fix");
+  assert.deepEqual([fixInput.fixes, fixInput.round, fixInput.rounds], [0, 1, 3]);
+  const reviewInput = policy.evals.find((e) => e.rule === "deny_review");
+  assert.deepEqual([reviewInput.fixed, reviewInput.fixes], [true, 1]);
+  await round(s, HIGH, "sha-3");
+  assert.ok(await s.reviews.settle(s.run, s.posted(CLEAN, at("sha-3"))));
+  const merge = policy.evals.find((e) => e.rule === "deny_merge");
+  assert.deepEqual([merge.fixed, merge.fixes], [true, 2]);
+});
+
+test("fix loop: without review.merge, a fix that pushed nothing or a deny_review stops it", async (t) => {
+  const yaml = "review:\n  on: ready\n  fix: 3\n";
+  // Pushed nothing: the head the fix run started from.
+  const idle = setup(t, { yaml, pr: at("sha-1") });
+  await round(idle, HIGH, "sha-2");
+  assert.equal((await idle.reviews.settle(idle.run, idle.posted(HIGH, at("sha-2")))).round, 2);
+  assert.equal(await idle.reviews.fixed(done), null);
+  // deny_review of the review after fix 1.
+  const policy = policyEngine(t, {
+    ref: "trunk",
+    files: { "x.rego": "package deckhand" },
+    messages: (input, rule) => (rule === "deny_review" ? ["no second look"] : []),
+  });
+  const denied = setup(t, { yaml, pr: at("sha-1"), policies: policy.engine });
+  await denied.reviews.settle(denied.run, denied.posted(HIGH));
+  denied.over.pr = at("sha-2");
+  assert.equal(await denied.reviews.fixed(done), null);
+  for (const [s, fixes, reviews] of [
+    [idle, 2, 1],
+    [denied, 1, 0],
+  ]) {
+    assert.equal(s.accepted.filter((i) => i.reason === "review-fix").length, fixes);
+    assert.equal(s.accepted.filter((i) => i.reason === "review").length, reviews);
+    assert.equal(s.replies.length + s.merges().length, 0);
+  }
+});
+
+test("fix loop: deny_fix at round 2 stops it, said once, the round left", async (t) => {
+  const policy = policyEngine(t, {
+    ref: "trunk",
+    files: { "x.rego": "package deckhand" },
+    messages: (input, rule) =>
+      rule === "deny_fix" && input.round === 2 ? ["a human takes round 2"] : [],
+  });
+  const s = setup(t, {
+    yaml: "review:\n  on: ready\n  fix: 3\n",
+    pr: at("sha-1"),
+    policies: policy.engine,
+  });
+  await round(s, HIGH, "sha-2");
+  assert.equal(await s.reviews.settle(s.run, s.posted(HIGH, at("sha-2"))), null);
+  assert.equal(s.accepted.filter((i) => i.reason === "review-fix").length, 1);
+  assert.deepEqual(
+    s.replies.map((r) => r.text),
+    [
+      "**No fix run** (`review.fix`): the policies refuse it (`deny_fix`): `a human takes round 2`. The review's findings wait for a maintainer.",
+    ],
+  );
+  const fix = policy.evals.filter((e) => e.rule === "deny_fix").at(-1);
+  assert.deepEqual([fix.fixes, fix.round, fix.rounds], [1, 2, 3]);
+});
+
+test("fix loop: fix: true without review.merge reviews nothing after its fix run", async (t) => {
+  const s = setup(t, { yaml: FIX_ONLY, pr: at("sha-1") });
+  await s.reviews.settle(s.run, s.posted(HIGH));
+  s.over.pr = at("sha-2");
+  assert.equal(await s.reviews.fixed(done), null);
+  assert.equal(s.accepted.length, 1);
+  assert.equal(s.replies.length, 0);
 });

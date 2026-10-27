@@ -46,8 +46,9 @@ const REVIEW_KEYS = [
 const REVIEW_ON = ["ready", "manual"];
 // How an auto-merge merges (`review.merge_method`), GitHub's merge_method values.
 export const MERGE_METHODS = ["squash", "merge", "rebase"];
-// `review.max_allowed_severity`'s values: the most severe finding the review that decides an
-// auto-merge (reviews.mjs) may have and still merge. Critical and high always block.
+// `review.max_allowed_severity`'s values: the most severe finding an automatic review in the
+// fix loop (`review.fix`) or deciding an auto-merge (reviews.mjs) may have without requesting
+// changes: it starts no fix run, and may merge. Critical and high always block.
 export const ALLOWED_SEVERITIES = ["low", "medium"];
 // `review.merge_wait`: how many minutes an auto-merge waits for the GitHub Actions runs still
 // going on the reviewed commit (reviews.mjs), at most a day; 0 refuses at once.
@@ -341,6 +342,7 @@ function parseReview(value, { key, settings, config, fail, warn }) {
     model: null,
     effort: null,
     fix: false,
+    fixRounds: 0,
     merge: false,
     mergeMethod: "squash",
     maxAllowedSeverity: "low",
@@ -366,9 +368,13 @@ function parseReview(value, { key, settings, config, fail, warn }) {
       review.instructions = repoPath(v);
       if (!review.instructions) bad(k, "expected a path in the repository (relative, no ..)");
     } else if (k === "fix") {
-      // A normal work run, with the same push rules: no grant either.
-      if (typeof v === "boolean") review.fix = v;
-      else bad(k, "expected true or false");
+      // Normal work runs, with the same push rules: no grant either. `true` is one round; a
+      // number, that many fix runs per pull request, up to the operator's MAX_FIX_ROUNDS.
+      const cap = config.maxFixRounds;
+      if (typeof v === "boolean") Object.assign(review, { fix: v, fixRounds: v ? 1 : 0 });
+      else if (Number.isInteger(v) && v >= 1 && v <= cap) {
+        Object.assign(review, { fix: true, fixRounds: v });
+      } else bad(k, `expected true, false or a whole number of fix runs from 1 to ${cap}`);
     } else if (k === "merge") {
       if (typeof v === "boolean") review.merge = v;
       else bad(k, "expected true or false");
@@ -400,13 +406,21 @@ function parseReview(value, { key, settings, config, fail, warn }) {
   if (ok) settings.review = review;
 }
 
-function reviewText(review) {
+export function reviewText(review) {
   if (!review) return "off";
   const when = review.on === "ready" ? "when a pull request is ready" : '"/mode review" only';
-  const fix = review.fix && "one fix run per pull request";
-  const medium = review.maxAllowedSeverity === "medium" ? ", medium findings allowed" : "";
-  const merge = review.merge && `auto-merge (${review.mergeMethod}${medium})`;
-  return [when, fix, merge, review.instructions].filter(Boolean).join(" · ");
+  const fix =
+    review.fix &&
+    (review.fixRounds > 1
+      ? `up to ${review.fixRounds} fix runs per pull request`
+      : "one fix run per pull request");
+  const merge = review.merge && `auto-merge (${review.mergeMethod})`;
+  // The fix loop's threshold and the merge's.
+  const medium =
+    (review.fix || review.merge) &&
+    review.maxAllowedSeverity === "medium" &&
+    "medium findings allowed";
+  return [when, fix, merge, medium, review.instructions].filter(Boolean).join(" · ");
 }
 
 // The operator's value of `field`, as the repo's default: a file can only narrow or replace it.

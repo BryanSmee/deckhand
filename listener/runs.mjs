@@ -115,10 +115,10 @@ export function createRuns(ctx) {
     const light = isLight(task, mode);
     const key = taskKey(task.repo, task.id);
     const id = `${task.name}-${Date.now()}`;
-    const reason = items.at(-1).reason ?? null;
+    const { reason = null, round = null, rounds = null } = items.at(-1);
     const record = newRecord(
       task,
-      { id, key, mode, light, replyTo, reason, items },
+      { id, key, mode, light, replyTo, reason, round, rounds, items },
       {
         title: ctx.titles.get(key),
         agent: light ? config.brainstormAgent : config.agent,
@@ -270,7 +270,7 @@ export function createRuns(ctx) {
   }
 
   // A review's tolerance (reviews' tolerance()): only the listener's own reviews (`auto`) may
-  // merge, not a "/mode review" comment's, and the one that decides the merge may tolerate
+  // merge, not a "/mode review" comment's, and one in a fix loop or deciding the merge may tolerate
   // medium findings (`review.max_allowed_severity`). → { auto, allowed }
   async function reviewTolerance(task, items) {
     const auto = items.some((item) => item.reason === "review");
@@ -733,8 +733,8 @@ export function createRuns(ctx) {
         ?.settle({ repo, number, base, settings, auto }, posted)
         .catch((error) => log(`${key}: after the review: ${error.stack ?? error}`));
     }
-    // A fix run that is over (not put back for a fallback): in auto-merge mode, the review of
-    // what it pushed (reviews.mjs fixed()).
+    // A fix run that is over (not put back for a fallback): the review of what it pushed, in
+    // auto-merge mode or with fix rounds left to run (reviews.mjs fixed()).
     const fixRun = live.handled.find(
       (item) => item.reason === "review-fix" && !task.pending.includes(item),
     );

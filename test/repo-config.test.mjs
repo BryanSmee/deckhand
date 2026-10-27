@@ -18,6 +18,7 @@ import {
   repoPath,
   RESERVED,
   RESERVED_MODES,
+  reviewText,
   sandboxName,
   startable,
   taskSandboxName,
@@ -687,17 +688,37 @@ test("review.merge_wait: 60 minutes by default, 0 to a day", () => {
   }
 });
 
-test("review.fix: a boolean, off by default", () => {
+test("review.fix: true (one round) or a number of rounds up to MAX_FIX_ROUNDS, off by default", () => {
   assert.equal(parseRepoConfig("review: true\n", config).settings.review.fix, false);
-  assert.equal(parseRepoConfig("review:\n  on: ready\n", config).settings.review.fix, false);
+  const off = parseRepoConfig("review:\n  on: ready\n", config).settings.review;
+  assert.deepEqual([off.fix, off.fixRounds], [false, 0]);
   const on = parseRepoConfig("review:\n  on: ready\n  fix: true\n", config);
   assert.deepEqual(on.errors, []);
-  assert.equal(on.settings.review.fix, true);
-  for (const bad of ['"yes"', "1", "[high]"]) {
+  assert.deepEqual([on.settings.review.fix, on.settings.review.fixRounds], [true, 1]);
+  for (const [n, text] of [
+    [1, "one fix run per pull request"],
+    [3, "up to 3 fix runs per pull request"],
+    [5, "up to 5 fix runs per pull request"],
+  ]) {
+    const parsed = parseRepoConfig(`review:\n  on: ready\n  fix: ${n}\n`, config);
+    assert.deepEqual(parsed.errors, []);
+    assert.deepEqual([parsed.settings.review.fix, parsed.settings.review.fixRounds], [true, n]);
+    assert.match(reviewText(parsed.settings.review), new RegExp(text));
+  }
+  for (const bad of ['"yes"', "0", "-1", "6", "2.5", '"3"', "[high]"]) {
     const parsed = parseRepoConfig(`review:\n  fix: ${bad}\n`, config);
-    assert.deepEqual(parsed.errors, ["review.fix: expected true or false"]);
+    assert.deepEqual(parsed.errors, [
+      "review.fix: expected true, false or a whole number of fix runs from 1 to 5",
+    ]);
     assert.equal(parsed.settings.review, null);
   }
+  // The threshold shows with the fix loop alone too.
+  const medium = parseRepoConfig("review:\n  fix: 3\n  max_allowed_severity: medium\n", config);
+  assert.match(reviewText(medium.settings.review), /medium findings allowed/);
+  // The operator's cap.
+  const two = testConfig({ MAX_FIX_ROUNDS: "2" });
+  assert.equal(parseRepoConfig("review:\n  fix: 2\n", two).settings.review.fixRounds, 2);
+  assert.match(parseRepoConfig("review:\n  fix: 3\n", two).errors[0], /from 1 to 2$/);
 });
 
 test("review: a repo's own mode can't take the name, the error says what to do", () => {

@@ -628,7 +628,7 @@ test("mergeInput: what deny_merge reads", () => {
       summary: "left out",
       findings: [{ severity: "medium", path: "src/a.mjs", line: 3, text: "a test" }],
     },
-    fixed: true,
+    fixes: 2,
     runs: [{ name: "CI", status: "completed", conclusion: "success", id: 1 }],
     now: () => Date.parse("2026-10-26T10:00:00Z"),
   });
@@ -660,6 +660,7 @@ test("mergeInput: what deny_merge reads", () => {
       findings: [{ severity: "medium", path: "src/a.mjs", line: 3, text: "a test" }],
     },
     fixed: true,
+    fixes: 2,
     checks: [{ name: "CI", status: "completed", conclusion: "success" }],
   });
 });
