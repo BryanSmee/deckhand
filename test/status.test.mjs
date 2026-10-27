@@ -67,26 +67,53 @@ test("serverSetup: the engine, the hosts granted in all, who may sign in on whic
     // pypi.org once; cached hosts are among those granted, not more.
     proxy: { on: true, hosts: 4 },
     grants: { ok: true, file: null, message: null },
+    // No Claude credential set.
+    claude: { set: [], default: null, fallbacks: [] },
     allowedUsers: ["alice", "bob"],
     allowedRepos: ["acme/*", "bryansmee/deckhand"],
   });
 });
 
 test("serverSetup: nothing but what the Server page shows, whatever the settings hold", (t) => {
-  const secrets = { ANTHROPIC_API_KEY: "sk-ant-3f9e1c", GITHUB_CLIENT_SECRET: "gh-cs-77ab42" };
+  const secrets = {
+    ANTHROPIC_API_KEY: "sk-ant-3f9e1c",
+    CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat01-5d2a",
+    GITHUB_CLIENT_SECRET: "gh-cs-77ab42",
+  };
   const { setup } = setupWith(t, {}, secrets);
   assert.deepEqual(Object.keys(setup), [
     "engine",
     "proxy",
     "grants",
+    "claude",
     "allowedUsers",
     "allowedRepos",
   ]);
   assert.deepEqual(Object.keys(setup.proxy), ["on", "hosts"]);
   assert.deepEqual(Object.keys(setup.grants), ["ok", "file", "message"]);
+  // The Claude credentials by name: the plan first, the key set too, no fallback to it.
+  assert.deepEqual(setup.claude, { set: ["plan", "key"], default: "plan", fallbacks: [] });
   // No engine, no grants folder, no repo allowlist: none, nothing granted, every repo.
   assert.deepEqual([setup.engine, setup.proxy.hosts, setup.allowedRepos], [null, 0, []]);
   for (const value of Object.values(secrets)) assert.ok(!JSON.stringify(setup).includes(value));
+});
+
+test("serverSetup: which Claude credential runs use first", (t) => {
+  const claude = (env) => setupWith(t, {}, env).setup.claude;
+  assert.deepEqual(claude({ ANTHROPIC_API_KEY: "k" }), {
+    set: ["key"],
+    default: "key",
+    fallbacks: [],
+  });
+  // A gateway's token comes first; it isn't one an entry can name, but FALLBACKS can still
+  // name the key. Other agents' and providers' entries aren't Claude's credentials.
+  const env = {
+    ANTHROPIC_AUTH_TOKEN: "t",
+    ANTHROPIC_API_KEY: "k",
+    OPENAI_API_KEY: "o",
+    FALLBACKS: "codex@openai, claude@anthropic:key",
+  };
+  assert.deepEqual(claude(env), { set: ["key"], default: "gateway", fallbacks: ["key"] });
 });
 
 test("serverSetup: a repo's file with errors is named, not quoted, and grants no host", (t) => {

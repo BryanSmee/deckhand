@@ -1,6 +1,6 @@
 // Which agent, provider, model, effort and speed a run gets: the settings', a fallback's, `/agent`'s,
 // or the one that stuck to the issue (docs/architecture.md, Agents). Pure.
-import { PLAN_WINDOW_MS } from "../anthropic.mjs";
+import { AUTHS, NAMED, PLAN_WINDOW_MS } from "../anthropic.mjs";
 import { agentFor, effortOf, entryName, entryOf, modelOf, providerError } from "./index.mjs";
 
 // The agent of a run: the repo's mode's, else that of light runs or work (the repo's, among
@@ -34,6 +34,16 @@ export function resolved(config, name) {
     config.credentials?.[entryName(entry.agent, entry.provider)]?.default ??
     null;
   return entryName(entry.agent, entry.provider, credential);
+}
+
+// Which of the operator's Claude credentials a run on `entry` uses, for the dashboard: "plan",
+// "key" or "gateway" (AUTHS), the one its entry names, else the default one
+// (config.claudeCredential, as the broker routes it: anthropic.mjs). null on another provider,
+// or with no Claude credential set.
+export function authOf(config, { provider, credential }) {
+  if (provider !== "anthropic") return null;
+  if (credential) return Object.hasOwn(NAMED, credential) ? credential : null;
+  return AUTHS[config.claudeCredential] ?? null;
 }
 
 // What `/agent` may pick: the agents the operator configured (config.agents), on their default

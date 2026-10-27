@@ -1,5 +1,6 @@
 // Names, groups and times the views share.
 import type {
+  Auth,
   Kind,
   PrState,
   PullRequest,
@@ -24,6 +25,13 @@ export const STATE_NAMES: Record<TaskState, string> = {
   error: "Error",
   interrupted: "Interrupted",
   cancelled: "Stopped",
+};
+
+// A run's Claude credential (Run.auth): its tag, and the variable it comes from.
+export const AUTH_NAMES: Record<Auth, { label: string; variable: string }> = {
+  plan: { label: "Plan", variable: "CLAUDE_CODE_OAUTH_TOKEN" },
+  key: { label: "API key", variable: "ANTHROPIC_API_KEY" },
+  gateway: { label: "Gateway", variable: "ANTHROPIC_AUTH_TOKEN" },
 };
 
 export const RUN_NAMES: Record<RunStatus, string> = {

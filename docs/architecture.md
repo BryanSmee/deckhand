@@ -320,7 +320,7 @@ changes, and its output as `raw` entries with the step's number; the lines of no
   it, the version linked to its commit or release under `DECKHAND_SOURCE`. `GET api/server`
   says how it is set up (`status.mjs` `serverSetup()`), for Settings › Server: the container
   engine, the egress proxy and how many hosts the grants folder grants, whether that folder
-  reads without errors (the files to fix, never their errors, which quote mount roots: a repo's config panel shows its own), `ALLOWED_USERS` and `ALLOWED_REPOS`. It scans the grants folder, so
+  reads without errors (the files to fix, never their errors, which quote mount roots: a repo's config panel shows its own), which Claude credentials are set, which one runs use first and which ones `FALLBACKS` names (variable names only), `ALLOWED_USERS` and `ALLOWED_REPOS`. It scans the grants folder, so
   the page reads it when it opens rather than at each poll.
 - **Screenshots**: `GET /shots/<token>/<file>` serves the screenshots runs save for their
   pull requests: GitHub cannot take image uploads through its API, so they need a public URL.
@@ -658,7 +658,10 @@ credential set (`named`) and picks the run's, in its header (`Bearer` for the pl
 for the key); the sandbox gets the run's secret in that credential's variable, so Claude Code's
 auth mode matches. `config.credentials` lists the ones set and which is the default, for
 `/agent` and for `resolved()`, which names an entry's credential (`claude@anthropic` →
-`claude@anthropic:plan`), so the default isn't tried twice.
+`claude@anthropic:plan`), so the default isn't tried twice. A run's record keeps the entry's
+named credential (`credential`, null for the default: the footer and sticky fallbacks read
+it) and, for the dashboard, the one it actually runs on (`auth`: `plan`, `key` or `gateway`,
+from `authOf()`; null off Anthropic), written in its log's first line so it survives a restart.
 
 The operator's `FALLBACKS` lists `agent@provider` (or `agent@provider:credential`) entries in
 order. When a run ends with an

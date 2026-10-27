@@ -5,9 +5,9 @@
 // and Sync now.
 import { Fragment } from "preact";
 import { usePolled } from "./api";
-import { ago, dayTime, plural, uptime, versionUrl } from "./format";
+import { ago, AUTH_NAMES, dayTime, plural, uptime, versionUrl } from "./format";
 import { useSync, syncMessage } from "./Sync";
-import type { AppLinks, Preview, ServerSetup, State, SyncResult } from "./types";
+import type { AppLinks, Auth, Preview, ServerSetup, State, SyncResult } from "./types";
 import { Button, buttonClass } from "./ui/Button";
 import * as Icon from "./ui/icons";
 import { Meter } from "./ui/Meter";
@@ -100,6 +100,21 @@ const ENGINES: Record<NonNullable<ServerSetup["engine"]>, string> = {
   auto: "Sysbox, else Podman",
 };
 
+// Which Claude credential runs use unless they name one, then those FALLBACKS names
+// (`claude@anthropic:key`), then the others set, which only `/agent` names: "Plan first, then
+// API key as fallback", "Plan · API key also set".
+function claudeText({ set, default: first, fallbacks = [] }: NonNullable<ServerSetup["claude"]>) {
+  if (!first) return "No credential set";
+  const names = (auths: Auth[]) => auths.map((a) => AUTH_NAMES[a].label).join(", ");
+  const after = fallbacks.filter((a) => a !== first);
+  const others = set.filter((a) => a !== first && !after.includes(a));
+  const label = AUTH_NAMES[first].label;
+  return [
+    after.length ? `${label} first, then ${names(after)} as fallback` : label,
+    ...(others.length ? [`${names(others)} also set`] : []),
+  ].join(" · ");
+}
+
 // The slots, the container engine, the egress proxy and the grants folder.
 function Runs({
   state,
@@ -135,6 +150,17 @@ function Runs({
             {setup ? (setup.engine ? ENGINES[setup.engine] : "None") : unread}
           </span>
         </div>
+        {(!setup || setup.claude) && (
+          <div class={styles.fact}>
+            <span class={styles.label}>Claude</span>
+            <span class={styles.value}>{setup?.claude ? claudeText(setup.claude) : unread}</span>
+            {setup?.claude?.default && (
+              <span class={`${styles.small} ${styles.mono}`}>
+                {AUTH_NAMES[setup.claude.default].variable}
+              </span>
+            )}
+          </div>
+        )}
         <div class={styles.fact}>
           <span class={styles.label}>Egress proxy</span>
           <span class={styles.value}>

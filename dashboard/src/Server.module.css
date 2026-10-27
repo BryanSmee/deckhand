@@ -125,6 +125,8 @@
 .small {
   color: var(--text-2);
   font-size: 12.5px;
+  /* A variable's name (CLAUDE_CODE_OAUTH_TOKEN) is longer than a phone's column. */
+  overflow-wrap: anywhere;
 }
 
 .ok {

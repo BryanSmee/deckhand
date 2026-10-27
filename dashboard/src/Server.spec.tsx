@@ -13,6 +13,7 @@ const SETUP: ServerSetup = {
   engine: "sysbox",
   proxy: { on: true, hosts: 14 },
   grants: { ok: true, file: null, message: null },
+  claude: { set: ["plan", "key"], default: "plan", fallbacks: ["key"] },
   allowedUsers: ["alice", "bob"],
   allowedRepos: ["acme/*", "bryansmee/deckhand"],
 };
@@ -96,6 +97,8 @@ test("what this Deckhand is and how it is set up", async () => {
   expect(runs.getByText("2 running · 1 queued")).toBeTruthy();
   expect(runs.getByText("On · 14 hosts granted")).toBeTruthy();
   expect(runs.getByText("Read, no errors")).toBeTruthy();
+  expect(runs.getByText("Plan first, then API key as fallback")).toBeTruthy();
+  expect(runs.getByText("CLAUDE_CODE_OAUTH_TOKEN")).toBeTruthy();
 
   const previews = card("Preview hooks");
   expect(previews.getByText("2 going on")).toBeTruthy();
@@ -127,6 +130,28 @@ test("what this Deckhand is and how it is set up", async () => {
   expect(value("Allowed repositories").textContent).toBe(
     "acme/*, bryansmee/deckhand · ALLOWED_REPOS",
   );
+});
+
+test("the Claude credential runs use: the key alone, a gateway, none, or a listener from before", async () => {
+  const shows = async (claude: ServerSetup["claude"], text: string | null) => {
+    api.routes["api/server"] = () => ({ ...SETUP, claude });
+    const { unmount } = render(<Dashboard state={makeState()} error={null} repos={list()} />);
+    await screen.findByText("Sysbox");
+    if (text) expect(card("Runs").getByText(text)).toBeTruthy();
+    else expect(card("Runs").queryByText("Claude")).toBeNull();
+    unmount();
+  };
+  await shows({ set: ["key"], default: "key", fallbacks: [] }, "API key");
+  // A key FALLBACKS doesn't name: only `/agent` takes it.
+  await shows({ set: ["plan", "key"], default: "plan", fallbacks: [] }, "Plan · API key also set");
+  // Behind a gateway's token, FALLBACKS can still name the key.
+  await shows(
+    { set: ["key"], default: "gateway", fallbacks: ["key"] },
+    "Gateway first, then API key as fallback",
+  );
+  await shows({ set: ["key"], default: "gateway", fallbacks: [] }, "Gateway · API key also set");
+  await shows({ set: [], default: null }, "No credential set");
+  await shows(undefined, null);
 });
 
 test("a grants folder with errors: the file to fix and the message", async () => {
@@ -170,7 +195,7 @@ test("api/server not read, the listener out of reach: both said", async () => {
   api.routes["api/server"] = () => Response.json({ error: "boom" }, { status: 500 });
   render(<Dashboard state={makeState()} error="502" repos={list()} />);
   await screen.findByRole("heading", { name: "Can't reach the listener" });
-  await waitFor(() => expect(card("Runs").getAllByText("Couldn't read (boom)")).toHaveLength(3));
+  await waitFor(() => expect(card("Runs").getAllByText("Couldn't read (boom)")).toHaveLength(4));
 });
 
 // The App with its own state: Sync now reads it again, as App.tsx's refresh does.

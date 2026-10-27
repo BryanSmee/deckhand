@@ -565,6 +565,13 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
       const log = readFileSync(join(dir, "logs", file), "utf8");
       assert.ok(!log.includes(secret) && !log.includes(credential));
     }
+    // Its log's first line says it ran on the plan, for the dashboard after a restart.
+    const logFile = readdirSync(join(dir, "logs")).find((f) => f.endsWith(".log"));
+    const header = JSON.parse(readFileSync(join(dir, "logs", logFile), "utf8").split("\n")[0]);
+    assert.deepEqual(
+      [header.provider, header.credential, header.auth],
+      ["anthropic", null, "plan"],
+    );
   });
 
   test("through a gateway: its token stays out too, and opus means the gateway's model", async (t) => {
@@ -3508,7 +3515,7 @@ mounts:
   ];
   const SERVER_KEYS = [["version", "startedAt", "node", "source"], []];
   const SYNC_KEYS = [["at", "by", "redelivered", "pulls", "conflicts"], ["error"]];
-  const SETUP_KEYS = [["engine", "proxy", "grants", "allowedUsers", "allowedRepos"], []];
+  const SETUP_KEYS = [["engine", "proxy", "grants", "allowedUsers", "allowedRepos"], ["claude"]];
   const TASK_KEYS = [
     [
       "key",
@@ -3548,6 +3555,7 @@ mounts:
       "agent",
       "provider",
       "credential",
+      "auth",
       "fallback",
       "picked",
       "model",

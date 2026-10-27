@@ -230,6 +230,8 @@ test("runs: rebuilt from their log files, newest first, without their path for t
       line({
         ...meta,
         startedAt: 1000,
+        provider: "anthropic",
+        auth: "plan",
         speed: "fast",
         speedNote: "fast mode runs on opus, not sonnet",
       }),
@@ -272,6 +274,8 @@ test("runs: rebuilt from their log files, newest first, without their path for t
     ["fast", "fast mode runs on opus, not sonnet"],
   );
   assert.deepEqual([runs[0].speed, runs[0].speedNote], [null, null]);
+  // The credential it ran on survives the restart; none known from before it.
+  assert.deepEqual([runs[1].auth, runs[0].auth], ["plan", null]);
   assert.equal("logPath" in publicRun(runs[1]), false);
 });
 

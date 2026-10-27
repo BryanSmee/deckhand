@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { resolveEntry, speedFor } from "../listener/agents/select.mjs";
+import { authOf, nextFallback, resolveEntry, speedFor } from "../listener/agents/select.mjs";
+import { testConfig } from "./helpers.mjs";
 
 const settings = {
   agent: "claude",
@@ -138,4 +139,33 @@ test("speedFor: a mode's speed: fast without a command, /speed normal overrides 
   const agent = { displayName: "X", speeds: ["normal"], defaultProvider: "x" };
   const r = speedFor({ config: allowed, settings, own: null, options: { speed: "fast" }, agent });
   assert.equal(r.speed, "normal");
+});
+
+test("authOf: the Claude credential a run uses, named or the operator's default", () => {
+  const on = (env, entry) => authOf(testConfig(env), { provider: "anthropic", ...entry });
+  assert.equal(on({ CLAUDE_CODE_OAUTH_TOKEN: "p" }), "plan");
+  assert.equal(on({ ANTHROPIC_API_KEY: "k" }), "key");
+  assert.equal(on({ ANTHROPIC_AUTH_TOKEN: "t", ANTHROPIC_API_KEY: "k" }), "gateway");
+  // The plan before the key, unless the entry names the key.
+  const both = { CLAUDE_CODE_OAUTH_TOKEN: "p", ANTHROPIC_API_KEY: "k" };
+  assert.equal(on(both), "plan");
+  assert.equal(on(both, { credential: "key" }), "key");
+  // None set, or another provider: nothing to say.
+  assert.equal(on({}), null);
+  assert.equal(authOf(testConfig(both), { provider: "openrouter", credential: null }), null);
+  assert.equal(authOf(testConfig(both), { provider: "openai", credential: null }), null);
+});
+
+test("authOf: a run that fell back from the plan to the key runs on the key", () => {
+  const config = testConfig({
+    CLAUDE_CODE_OAUTH_TOKEN: "p",
+    ANTHROPIC_API_KEY: "k",
+    FALLBACKS: "claude@anthropic:key",
+  });
+  const record = { agent: "claude", provider: "anthropic", credential: null, fallback: null };
+  const failed = { type: "result", is_error: true, text: "API Error: 529 overloaded" };
+  const marker = nextFallback(config, record, failed, 529, { now: 0 });
+  assert.equal(marker.entry, "claude@anthropic:key");
+  const { entry } = resolveEntry({ ...base, config, marker });
+  assert.equal(authOf(config, entry), "key");
 });
