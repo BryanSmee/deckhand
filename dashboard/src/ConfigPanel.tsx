@@ -228,7 +228,7 @@ function PolicySection({ policies }: { policies: Policies | undefined }) {
           <strong>Every decision a policy is asked for refuses until these are fixed</strong>
           <ul>
             {errors.map((e) => (
-              <li key={e}>{e}</li>
+              <li key={e.text}>{e.text}</li>
             ))}
           </ul>
         </div>
@@ -252,14 +252,18 @@ function PolicySection({ policies }: { policies: Policies | undefined }) {
         <table class={styles.table}>
           <tbody>
             {files.map((f) => (
-              <tr key={f.name}>
+              <tr key={`${f.source}/${f.name}`}>
                 <th scope="row">
                   {f.url ? (
                     <a href={f.url} target="_blank" rel="noreferrer">
                       <code>{f.name}</code>
                     </a>
-                  ) : (
+                  ) : f.active ? (
                     <code>{f.name}</code>
+                  ) : (
+                    <s>
+                      <code>{f.name}</code>
+                    </s>
                   )}
                 </th>
                 <td>
@@ -268,7 +272,9 @@ function PolicySection({ policies }: { policies: Policies | undefined }) {
                   </span>
                   <span class={styles.note}>
                     {f.source === "operator"
-                      ? "policy/ in the operator's grants folder"
+                      ? f.active
+                        ? "policy/ in the operator's grants folder"
+                        : "policy/ in the operator's grants folder, replaced by the repo's"
                       : f.replaces
                         ? ".deckhand/policy/, replaces the operator's file of this name"
                         : ".deckhand/policy/"}

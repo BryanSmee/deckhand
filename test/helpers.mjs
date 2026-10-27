@@ -83,11 +83,11 @@ export function recordingFetch(answer) {
 }
 
 // The policies' engine (policies.mjs) with a fake `opa` and org/repo's policy `files` (name →
-// text) on `ref`: each rule says `messages(input, rule)`, or fails as `failure` says. `evals`:
+// text) on `ref`, the operator's `operator` (likewise): each rule says `messages(input, rule)`, or fails as `failure` says. `evals`:
 // the inputs it was asked about, with their `rule`.
 export function policyEngine(
   t,
-  { files = null, messages = () => [], failure = null, ref = "main" } = {},
+  { files = null, operator = {}, messages = () => [], failure = null, ref = "main" } = {},
 ) {
   const evals = [];
   const engine = createPolicies({
@@ -111,7 +111,7 @@ export function policyEngine(
       const value = messages(JSON.parse(input), rule);
       return { code: 0, stdout: JSON.stringify({ result: [{ expressions: [{ value }] }] }) };
     },
-    readOperator: () => new Map(),
+    readOperator: () => new Map(Object.entries(operator)),
     tmp: tempDir(t),
   });
   return { engine, evals };

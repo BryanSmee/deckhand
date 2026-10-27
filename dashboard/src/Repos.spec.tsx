@@ -6,7 +6,7 @@ import { beforeEach, expect, test } from "vitest";
 import { useRepos } from "./api";
 import { Dashboard } from "./App";
 import { Repos } from "./Repos";
-import { makeState, mockApi } from "./testUtils";
+import { makePolicyFile, makeState, mockApi } from "./testUtils";
 import type { AppLinks, Repo, RepoConfig, ServerInfo } from "./types";
 
 const repo = (name: string, extra: Partial<Repo> = {}): Repo => ({
@@ -133,23 +133,25 @@ beforeEach(() => {
       readAt: Date.now(),
       policies: {
         files: [
-          {
-            name: "size.rego",
-            source: "operator",
-            replaces: false,
-            rules: ["deny_merge"],
-            url: null,
-          },
-          {
+          makePolicyFile({ name: "size.rego", source: "operator", rules: ["deny_merge"] }),
+          makePolicyFile({ name: "base.rego", source: "operator", active: false }),
+          makePolicyFile({
             name: "base.rego",
             source: "repo",
             replaces: true,
             rules: ["deny_merge", "deny_review"],
             url: "https://github.com/org/policed/blob/main/.deckhand/policy/base.rego",
-          },
-          { name: "lib.rego", source: "repo", replaces: false, rules: [], url: null },
+          }),
+          makePolicyFile({ name: "lib.rego", source: "repo" }),
         ],
-        errors: ["policy error: base.rego:4: rego_parse_error: unexpected eof token"],
+        errors: [
+          {
+            file: "base.rego",
+            row: 4,
+            message: "rego_parse_error: unexpected eof token",
+            text: "policy error: base.rego:4: rego_parse_error: unexpected eof token",
+          },
+        ],
         warnings: ["lib.rego: deny_merged isn't a rule Deckhand evaluates"],
       },
     }),
@@ -437,7 +439,9 @@ test("its policies: each file with its rules and source, and the check's errors"
   const size = screen.getByText("size.rego").closest("tr")!;
   expect(within(size).getByText("deny_merge")).toBeTruthy();
   expect(within(size).getByText("from operator")).toBeTruthy();
-  const base = screen.getByText("base.rego").closest("tr")!;
+  const [replaced, base] = screen.getAllByText("base.rego").map((n) => n.closest("tr")!);
+  expect(within(replaced).getByText(/replaced by the repo's/)).toBeTruthy();
+  expect(replaced.querySelector("s")).toBeTruthy();
   expect(within(base).getByText("deny_merge, deny_review")).toBeTruthy();
   expect(within(base).getByText(/replaces the operator's file/)).toBeTruthy();
   expect(within(base).getByText("from repo")).toBeTruthy();

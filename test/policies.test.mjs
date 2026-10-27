@@ -7,6 +7,7 @@ import {
   createPolicies,
   deniesOf,
   MAX_MESSAGE_LENGTH,
+  MAX_TEXT,
   opaRunner,
   operatorPolicies,
   restrictedCapabilities,
@@ -32,6 +33,12 @@ const CAPABILITIES = {
 };
 
 const DENY = 'package deckhand\n\ndeny_merge contains "too big" if input.pr.additions > 400\n';
+
+// The files fixtures/opa-check-errors.json was recorded on.
+const NET =
+  "package deckhand\n\ndeny_review contains x if { x := http.send({}) }\ndeny_fix contains y if { y := undefined_thing }\n";
+const SIZE =
+  'package deckhand\n\ndeny_merge contains msg if {\n\tcount(input.pr.title, 2) > 1\n\tmsg := "x"\n}\n';
 
 // A fake GitHub with `files` (name → text) in the repo's .deckhand/policy/, none when null.
 function fakeGitHub(files = null, { status = null } = {}) {
@@ -79,9 +86,10 @@ function fakeOpa({
     calls.push({ args, input, cwd });
     if (args[0] === "capabilities") return { code: 0, stdout: JSON.stringify(CAPABILITIES) };
     const caps = JSON.parse(readFileSync(join(cwd, "capabilities.json"), "utf8"));
-    calls.at(-1).capabilities = caps;
-    if (args[0] === "eval") return answer(staged(cwd), JSON.parse(input));
-    return checked(staged(cwd));
+    const files = staged(cwd);
+    Object.assign(calls.at(-1), { capabilities: caps, files });
+    if (args[0] === "eval") return answer(files, JSON.parse(input));
+    return checked(files);
   };
   return { run, calls, evals: () => calls.filter((c) => c.args[0] === "eval") };
 }
@@ -456,23 +464,122 @@ test("describe: each file with its source and rules, the check of them all", asy
     },
   });
   const described = await policies.describe("org/repo", "main");
+  const file = (name, source, replaces, active, rules, text) => ({
+    name,
+    source,
+    replaces,
+    active,
+    url: null,
+    rules,
+    text,
+    truncated: false,
+  });
   assert.deepEqual(described.files, [
-    { name: "b.rego", source: "operator", replaces: false, url: null, rules: ["deny_review"] },
-    { name: "a.rego", source: "repo", replaces: true, url: null, rules: [] },
+    // The operator's a.rego, listed, but the repo's replaces it.
+    file("a.rego", "operator", false, false, ["deny_merge"], DENY),
+    file(
+      "b.rego",
+      "operator",
+      false,
+      true,
+      ["deny_review"],
+      'package deckhand\ndeny_review contains "x" if true\n',
+    ),
+    file("a.rego", "repo", true, true, [], "# drops it\npackage deckhand\n"),
+    file(
+      "bad.rego",
+      "repo",
+      false,
+      true,
+      ["deny_merge", "deny_merged"],
+      `${DENY}deny_merged contains "y" if true\n`,
+    ),
+  ]);
+  assert.deepEqual(described.errors, [
     {
-      name: "bad.rego",
-      source: "repo",
-      replaces: false,
-      url: null,
-      rules: ["deny_merge", "deny_merged"],
+      file: "bad.rego",
+      row: 3,
+      message: "unexpected eof",
+      text: "policy error: bad.rego:3: unexpected eof",
     },
   ]);
-  assert.deepEqual(described.errors, ["policy error: bad.rego:3: unexpected eof"]);
   assert.equal(described.warnings.length, 1);
   assert.match(described.warnings[0], /^bad.rego: `deny_merged` isn't a rule/);
-  // What deny() would evaluate: the repo's a.rego over the operator's.
+  // What deny() would evaluate, and the check compiled: the repo's a.rego, not the operator's.
   assert.equal(described.policies.get("a.rego"), "# drops it\npackage deckhand\n");
   assert.equal(described.policies.size, 3);
+  const check = opa.calls.find((c) => c.args[0] === "check");
+  assert.equal(check.files["a.rego"], "# drops it\npackage deckhand\n");
+});
+
+test("describe: each error of opa check at its file and row (a recorded output)", async (t) => {
+  const recorded = readFileSync(new URL("fixtures/opa-check-errors.json", import.meta.url), "utf8");
+  const policies = createPolicies({
+    config: {},
+    github: fakeGitHub({ "net.rego": NET, "size.rego": SIZE }).github,
+    run: opaRunner(FAKE),
+    readOperator: () => new Map(),
+    tmp: tempDir(t),
+  });
+  const described = await policies.describe("org/repo", "main");
+  assert.deepEqual(described.errors, [
+    {
+      file: "net.rego",
+      row: 3,
+      message: "undefined function http.send",
+      text: "policy error: net.rego:3: undefined function http.send",
+    },
+    {
+      file: "size.rego",
+      row: 4,
+      message: "count: arity mismatch",
+      text: "policy error: size.rego:4: count: arity mismatch",
+    },
+  ]);
+  assert.equal(JSON.parse(recorded).errors.length, 2);
+  // check() says the same, one line each.
+  assert.deepEqual(await policies.check(described.policies), {
+    errors: described.errors.map((e) => e.text),
+    warnings: [],
+  });
+});
+
+test("describe: errors without a place, file and row null", async (t) => {
+  const slow = setup(t, {
+    opa: fakeOpa({ checked: () => ({ code: -1, stdout: "", timedOut: true }) }),
+    repoFiles: { "a.rego": DENY },
+  });
+  const text = "the policies' check took too long";
+  assert.deepEqual((await slow.policies.describe("org/repo", "main")).errors, [
+    { file: null, row: null, message: text, text },
+  ]);
+  const plain = setup(t, {
+    opa: fakeOpa({ checked: () => ({ code: 2, stdout: "", stderr: "opa: no such flag\nusage" }) }),
+    repoFiles: { "a.rego": DENY },
+  });
+  assert.deepEqual((await plain.policies.describe("org/repo", "main")).errors, [
+    {
+      file: null,
+      row: null,
+      message: "opa: no such flag",
+      text: "policy error: opa: no such flag",
+    },
+  ]);
+});
+
+test("describe: each file's text, redacted and cut at MAX_TEXT", async (t) => {
+  const secret = "s3cr3t-value-0123456789abcdef";
+  const long = `${DENY}# ${"x".repeat(MAX_TEXT)}\n`;
+  const { policies } = setup(t, {
+    operator: { "op.rego": `${DENY}# ${secret}\n` },
+    repoFiles: { "long.rego": long },
+    secrets: [secret],
+  });
+  const [op, own] = (await policies.describe("org/repo", "main")).files;
+  assert.equal(op.text, `${DENY}# [redacted]\n`);
+  assert.equal(op.truncated, false);
+  assert.equal(own.text, long.slice(0, MAX_TEXT));
+  assert.equal(own.truncated, true);
 });
 
 test("describe: no policy anywhere, no opa call; an operator folder that can't be read, said", async (t) => {
@@ -490,8 +597,10 @@ test("describe: no policy anywhere, no opa call; an operator folder that can't b
     },
     tmp: tempDir(t),
   });
+  const text =
+    "the operator's policies can't be read: policy/x.rego leads outside the grants folder";
   assert.deepEqual((await broken.describe("org/repo", "main")).errors, [
-    "the operator's policies can't be read: policy/x.rego leads outside the grants folder",
+    { file: null, row: null, message: text, text },
   ]);
 });
 

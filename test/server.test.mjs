@@ -3066,6 +3066,13 @@ mounts:
         join(dir, "logs", "org-repo-pr-4-500.log"),
         `${JSON.stringify({ ...meta, key: "org/repo#pr-4", startedAt: 500 })}\n${JSON.stringify(asked)}\n`,
       );
+      // An operator policy: its text goes to the config endpoint only (repos.test.mjs), never
+      // to api/state.
+      mkdirSync(join(dir, "grants", "policy"), { recursive: true });
+      writeFileSync(
+        join(dir, "grants", "policy", "op.rego"),
+        "package deckhand\n# op-policy-text\n",
+      );
       // What the policies decided about #pr-3 (decisions.mjs).
       const refused = { decision: "merge", rule: "deny_merge", denied: true, pr: 3, at: 900 };
       writeFileSync(
@@ -3139,6 +3146,7 @@ mounts:
     assert.equal((await get("/assets/nope.js", session)).status, 404);
     const board = await (await get("/api/state", session)).json();
     assert.equal(board.user, "alice");
+    assert.ok(!JSON.stringify(board).includes("op-policy-text"));
     assert.equal(board.githubUrl, github.url);
     // The shape dashboard/src/types.ts expects: change both together.
     assertShape(board, STATE_KEYS, "State");

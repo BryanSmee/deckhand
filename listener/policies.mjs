@@ -155,8 +155,12 @@ export function deniesOf(text) {
   return [...new Set([...text.matchAll(/^(deny_\w*)\b/gm)].map((m) => m[1]))];
 }
 
+// How many of `opa`'s errors are kept: its own default for `check` (--max-errors).
+const MAX_ERRORS = 10;
+
 // `opa`'s errors (its JSON output, on stdout for `eval` and stderr for `check`) → { text, one
-// line with each file's own name, cancelled: whether `eval` stopped at its --timeout }.
+// line with each file's own name, list: each error's { file, row, message }, file and row null
+// when opa gives none, cancelled: whether `eval` stopped at its --timeout }.
 function opaErrors(stdout, stderr) {
   for (const out of [stdout, stderr]) {
     let errors;
@@ -166,19 +170,24 @@ function opaErrors(stdout, stderr) {
       continue;
     }
     if (Array.isArray(errors) && errors.length) {
-      const text = errors
-        .slice(0, 3)
-        .map((e) => {
-          const file = e.location?.file?.replace(/^.*\//, "");
-          const at = file ? `${file}:${e.location.row ?? "?"}: ` : "";
-          return `${at}${e.message ?? e.code ?? "error"}`;
-        })
-        .join("; ");
-      return { text, cancelled: errors.some((e) => e.code === "eval_cancel_error") };
+      const list = errors.slice(0, MAX_ERRORS).map((e) => ({
+        file: e.location?.file?.replace(/^.*\//, "") || null,
+        row: Number.isInteger(e.location?.row) ? e.location.row : null,
+        message: String(e.message ?? e.code ?? "error"),
+      }));
+      const text = list.slice(0, 3).map(located).join("; ");
+      return { text, list, cancelled: errors.some((e) => e.code === "eval_cancel_error") };
     }
   }
-  return { text: (stderr || stdout || "opa failed").trim().split("\n")[0], cancelled: false };
+  const text = (stderr || stdout || "opa failed").trim().split("\n")[0];
+  return { text, list: [{ file: null, row: null, message: text }], cancelled: false };
 }
+
+// An error of opaErrors()'s list as one line: `file:row: message`.
+const located = ({ file, row, message }) => `${file ? `${file}:${row ?? "?"}: ` : ""}${message}`;
+
+// How much of a policy file's text the dashboard gets: its source view, not a download.
+export const MAX_TEXT = 20 * 1024;
 
 // How long a repo's listing of POLICY_DIR is kept: a push to its default branch forgets it
 // sooner (forget()), so this only bounds a push whose webhook never came.
@@ -378,6 +387,13 @@ export function createPolicies({
   // The config check of `files` (name → text): compile errors and rules nobody evaluates, as
   // { errors, warnings }. No files: nothing to say, and no `opa` call.
   async function check(files) {
+    const { errors, warnings } = await compile(files);
+    return { errors: errors.map((e) => e.text), warnings };
+  }
+
+  // check()'s work, each error as { file, row, message, text }: file and row null when opa
+  // doesn't give them (a timeout, a folder it can't stage), `text` what check() says of it.
+  async function compile(files) {
     const errors = [];
     const warnings = [];
     if (!files.size) return { errors, warnings };
@@ -390,14 +406,20 @@ export function createPolicies({
         }
       }
     }
+    const unplaced = (text, message = text) => ({ file: null, row: null, message, text });
     try {
       const res = await staged(files, (cwd) =>
         run(["check", "--format=json", "--capabilities=capabilities.json", OPERATOR_DIR], { cwd }),
       );
-      if (res.timedOut) errors.push(`the policies' check took too long`);
-      else if (res.code !== 0) errors.push(...failure(opaErrors(res.stdout, res.stderr).text));
+      if (res.timedOut) errors.push(unplaced(`the policies' check took too long`));
+      else if (res.code !== 0) {
+        for (const e of opaErrors(res.stdout, res.stderr).list) {
+          errors.push({ ...e, message: line(e.message), text: failure(located(e))[0] });
+        }
+      }
     } catch (error) {
-      errors.push(...failure(error.message ?? error));
+      const what = error.message ?? String(error);
+      errors.push(unplaced(failure(what)[0], line(what)));
     }
     return { errors, warnings };
   }
@@ -426,35 +448,50 @@ export function createPolicies({
   }
 
   // What applies on `repo` (its policies on `ref`, its default branch, read now), for the
-  // dashboard's config panel and `/mode policy`: { files: [{ name, source, replaces, rules, url
-  // }], errors, warnings }, the operator's files first, each repo file `replaces` an operator
-  // one of its name. `errors`: the check of the merged files (check()), and why the operator's
-  // can't be read (every decision refuses then). `policies`: name → text, what deny() would
-  // evaluate. No policy anywhere: no `opa` call.
+  // dashboard's config panel and `/mode policy`: { files: [{ name, source, replaces, active,
+  // rules, url, text, truncated }], errors, warnings }, the operator's files first. A repo file
+  // `replaces` an operator one of its name, listed too, not `active`: deny() doesn't evaluate
+  // it. `text`: the file's, redacted and cut at MAX_TEXT (`truncated`). `errors`: compile()'s
+  // of the active files, and why the operator's can't be read (every decision refuses then).
+  // `policies`: name → text, what deny() would evaluate. No policy anywhere: no `opa` call.
   async function describe(repo, ref) {
     let operator = new Map();
     const errors = [];
     try {
       operator = readOperator();
     } catch (error) {
-      errors.push(`the operator's policies can't be read: ${error.message ?? error}`);
+      const text = `the operator's policies can't be read: ${error.message ?? error}`;
+      errors.push({ file: null, row: null, message: text, text });
     }
     const own = await repoFiles(repo, ref, false);
     const names = new Set(own.map((f) => f.name));
     const files = [
-      ...[...operator]
-        .filter(([name]) => !names.has(name))
-        .map(([name, text]) => ({ name, source: "operator", replaces: false, text, url: null })),
-      ...own.map((f) => ({ ...f, source: "repo", replaces: operator.has(f.name) })),
-    ].map(({ text, ...f }) => ({ ...f, rules: deniesOf(text), text }));
-    const policies = new Map(files.map((f) => [f.name, f.text]));
-    const checked = await check(policies);
+      ...[...operator].map(([name, text]) => ({
+        name,
+        source: "operator",
+        replaces: false,
+        active: !names.has(name),
+        text,
+        url: null,
+      })),
+      ...own.map((f) => ({ ...f, source: "repo", replaces: operator.has(f.name), active: true })),
+    ];
+    const policies = new Map(files.filter((f) => f.active).map((f) => [f.name, f.text]));
+    const checked = await compile(policies);
     return {
-      files: files.map(({ text: _, ...f }) => f),
+      files: files.map(({ text, ...f }) => ({ ...f, rules: deniesOf(text), ...shown(text) })),
       errors: [...errors, ...checked.errors],
       warnings: checked.warnings,
       policies,
     };
+  }
+
+  // A file's text as the dashboard shows it: without the operator's secrets, cut at MAX_TEXT
+  // (after the redaction, so a cut never leaves part of a secret).
+  function shown(text) {
+    const clean = redact(text, secrets());
+    if (clean.length <= MAX_TEXT) return { text: clean, truncated: false };
+    return { text: clean.slice(0, MAX_TEXT), truncated: true };
   }
 
   // `repo`'s default branch moved (a push, a merge: repos.mjs refreshFor()): its policies are
