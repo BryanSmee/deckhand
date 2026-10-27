@@ -130,6 +130,15 @@ test("conflict watcher floor: 5 minutes by default, 0 turns it off, junk refused
   }
 });
 
+test("MAX_FIX_ROUNDS: 5 by default, a whole number above 0", () => {
+  const base = { ALLOWED_USERS: "alice" };
+  assert.equal(loadConfig(base).maxFixRounds, 5);
+  assert.equal(loadConfig({ ...base, MAX_FIX_ROUNDS: "2" }).maxFixRounds, 2);
+  for (const bad of ["0", "-1", "2.5", "many"]) {
+    assert.throws(() => loadConfig({ ...base, MAX_FIX_ROUNDS: bad }), ConfigError);
+  }
+});
+
 const file = (text) => parseConfigFile(text, "/etc/deckhand/config.yaml");
 
 test("SANDBOX_SUBNETS: an IPv4 range cut into /28 blocks by default, checked, off when empty", () => {

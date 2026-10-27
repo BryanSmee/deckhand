@@ -341,6 +341,7 @@ function parseReview(value, { key, settings, config, fail, warn }) {
     model: null,
     effort: null,
     fix: false,
+    fixRounds: 0,
     merge: false,
     mergeMethod: "squash",
     maxAllowedSeverity: "low",
@@ -366,9 +367,13 @@ function parseReview(value, { key, settings, config, fail, warn }) {
       review.instructions = repoPath(v);
       if (!review.instructions) bad(k, "expected a path in the repository (relative, no ..)");
     } else if (k === "fix") {
-      // A normal work run, with the same push rules: no grant either.
-      if (typeof v === "boolean") review.fix = v;
-      else bad(k, "expected true or false");
+      // Normal work runs, with the same push rules: no grant either. `true` is one round; a
+      // number, that many fix runs per pull request, up to the operator's MAX_FIX_ROUNDS.
+      const cap = config.maxFixRounds ?? 5;
+      if (typeof v === "boolean") Object.assign(review, { fix: v, fixRounds: v ? 1 : 0 });
+      else if (Number.isInteger(v) && v >= 1 && v <= cap) {
+        Object.assign(review, { fix: true, fixRounds: v });
+      } else bad(k, `expected true, false or a whole number of fix runs from 1 to ${cap}`);
     } else if (k === "merge") {
       if (typeof v === "boolean") review.merge = v;
       else bad(k, "expected true or false");
@@ -400,10 +405,14 @@ function parseReview(value, { key, settings, config, fail, warn }) {
   if (ok) settings.review = review;
 }
 
-function reviewText(review) {
+export function reviewText(review) {
   if (!review) return "off";
   const when = review.on === "ready" ? "when a pull request is ready" : '"/mode review" only';
-  const fix = review.fix && "one fix run per pull request";
+  const fix =
+    review.fix &&
+    (review.fixRounds > 1
+      ? `up to ${review.fixRounds} fix runs per pull request`
+      : "one fix run per pull request");
   const medium = review.maxAllowedSeverity === "medium" ? ", medium findings allowed" : "";
   const merge = review.merge && `auto-merge (${review.mergeMethod}${medium})`;
   return [when, fix, merge, review.instructions].filter(Boolean).join(" · ");

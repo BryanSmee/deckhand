@@ -154,7 +154,7 @@ export function saveSummary(record, log = console.error) {
 // operator's for its kind, `logDir` where its log goes.
 export function newRecord(
   task,
-  { id, key, mode, light, replyTo, reason, items },
+  { id, key, mode, light, replyTo, reason, round = null, rounds = null, items },
   { title, agent, logDir },
 ) {
   return {
@@ -178,6 +178,9 @@ export function newRecord(
     light,
     // Why the listener started it itself ("conflict": conflicts.mjs); null for comments.
     reason,
+    // A review fix run's round, of how many the repo's `review.fix` allows (reviews.mjs).
+    round,
+    rounds,
     // What it was asked to act on, kept in its log's first line: a run that fails can run
     // again with it, after a restart too (the dashboard's Rerun, work.mjs).
     items: items.map(({ id, kind, number, trigger, modeLine, text }) => ({
@@ -269,6 +272,8 @@ function runOf(logDir, file, max = READ_MAX, log = console.error) {
     mode: meta.mode ?? null,
     taskMode: meta.taskMode ?? null,
     reason: meta.reason ?? null,
+    round: meta.round ?? null,
+    rounds: meta.rounds ?? null,
     // Logs from before runs kept them have none: those runs can't run again.
     items: meta.items ?? null,
     model: meta.model ?? null,

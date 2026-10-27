@@ -169,6 +169,9 @@ export const SETTINGS = {
   // The shortest interval at which a repo's `conflicts.check_minutes` may look at its open
   // pull requests (conflicts.mjs); each conflict found is a run. 0: the watcher is off.
   CONFLICT_CHECK_MINUTES: { default: 5, parse: whole("a whole number of minutes (0: off)") },
+  // The most fix runs a repo's `review.fix` may ask for per pull request (reviews.mjs): each
+  // round is a work run and a review run.
+  MAX_FIX_ROUNDS: { default: 5, parse: aboveZero("a whole number of fix runs above 0") },
   // How often every "/after" wait asks GitHub again (waits.mjs), for what no delivery said.
   // It catches missed deliveries, so it can't be turned off.
   WAITS_CHECK_MINUTES: { default: 5, parse: aboveZero("a whole number of minutes above 0") },
@@ -376,6 +379,7 @@ export function loadConfig(env, file = NO_FILE) {
     fastMode: s.SANDBOX_FAST_MODE,
     needsInputLabel: s.NEEDS_INPUT_LABEL,
     conflictCheckMinutes: s.CONFLICT_CHECK_MINUTES,
+    maxFixRounds: s.MAX_FIX_ROUNDS,
     waitsCheckMinutes: s.WAITS_CHECK_MINUTES,
     logRetentionDays: s.LOG_RETENTION_DAYS,
     runLogMax: s.RUN_LOG_MAX_MB * 1024 * 1024,

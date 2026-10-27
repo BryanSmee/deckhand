@@ -394,8 +394,8 @@ final message follows `prompts/review.md`'s format; `runs.mjs` hands it to `post
 which posts one GitHub review with the listener's token: findings grouped by severity, the
 rating (capped by the most severe finding, `parseReview()`), `REQUEST_CHANGES` and a
 "request changes" verdict on a critical, high or medium finding and `COMMENT` otherwise (never
-`APPROVE`), and a comment review with the raw text when the format can't be read. The review
-that decides an auto-merge may tolerate medium findings (`review.max_allowed_severity`,
+`APPROVE`), and a comment review with the raw text when the format can't be read. An automatic
+review in a fix loop (`review.fix`), or deciding an auto-merge, may tolerate medium findings (`review.max_allowed_severity`,
 `reviews.tolerance()`): those post as `COMMENT`. `runs.mjs` works that tolerance out at launch
 too, and `reviewPrompt()` fills `prompts/review.md`'s verdict rule with it (`<blocking>`,
 `<tolerated>`, from `reviews.mjs`'s `blockingSeverities()`); the tolerance at post time is
@@ -403,11 +403,14 @@ the one that counts, should the settings change during the run.
 
 With `review.fix`, once the review's run is torn down (so it no longer makes the task busy),
 `runs.mjs` hands, without waiting for it, the posted review to `reviews.settle()`, whose `fix()`: a review that requests changes on the
-App's own pull request, linked to its issue, queues one work item on the issue's task
-(`trigger: "work"`, `sender: null`, `reason: "review-fix"`), its text the findings fenced off
-as untrusted claims (`fixMessage()`), as
-`conflicts.mjs` does for a rebase. `fixedAt` in `reviews.json`, written before the item is
-queued, makes it once per pull request.
+App's own pull request, linked to its issue, queues a work item on the issue's task
+(`trigger: "work"`, `sender: null`, `reason: "review-fix"`, its `round` of `rounds`), its text
+the findings fenced off as untrusted claims (`fixMessage()`), as
+`conflicts.mjs` does for a rebase. `fixes` in `reviews.json`, counted before the item is
+queued, bounds it to `review.fix`'s rounds (`fixedAt` alone, in an entry from before them, is
+one). A review with nothing above `max_allowed_severity` (`tolerance()`) starts none, and
+without auto-merge a review that still requests changes once the rounds ran out comments so
+(`roundsOut()`).
 
 With `review.merge` and the operator's `allow_auto_merge` (`grants.mjs`
 `autoMergeProblems()`), `settle()` goes on, for a review that started by itself (an item with
@@ -425,8 +428,10 @@ after `since`, when the pull request is refused. `waiting` stays saved until suc
 ends (an in-memory map keeps it to one at a time), so a listener stopped meanwhile asks again,
 and a GitHub call failing then waits for the next try. A merge is recorded
 on the task's pull request (`pulls.mjs`, `autoMerged`) for the dashboard. A fix run's end
-(an item with `reason: "review-fix"`, in `cleanUp()`) calls `reviews.fixed()`: one more review
-of what it pushed (`rereviewAt`), or a comment when it failed or pushed nothing. At start,
+(an item with `reason: "review-fix"`, in `cleanUp()`) calls `reviews.fixed()`, with or
+without auto-merge: one more review of what it pushed, once per fix run (`reviewedFixes`;
+`rereviewAt` in an old entry), whose end starts the next round or stops the loop
+(`settle()`), or, in auto-merge mode, a comment when it failed or pushed nothing. At start,
 `server.mjs` logs a warning for each repository granted `allow_auto_merge`.
 
 ## Waiting for other issues

@@ -307,7 +307,8 @@ export function runName(r: Run): string {
   const what = { start: "Start", continue: "Continue", restore: "Restore", "wrap-up": "Wrap-up" }[
     r.mode ?? ""
   ];
-  const why = { conflict: "Conflict", "review-fix": "Review fix" }[r.reason ?? ""] ?? null;
+  const fix = r.round && (r.rounds ?? 1) > 1 ? `Review fix ${r.round}/${r.rounds}` : "Review fix";
+  const why = { conflict: "Conflict", "review-fix": fix }[r.reason ?? ""] ?? null;
   return [why, own, what ?? "Run"].filter(Boolean).join(" · ");
 }
 

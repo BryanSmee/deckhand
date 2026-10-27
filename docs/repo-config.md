@@ -100,7 +100,8 @@ review:
   instructions: .deckhand/review.md # optional, added to the built-in review prompt
   model: best # default: brainstorm_model, brainstorm_effort
   effort: high
-  fix: true # one work run that addresses a review requesting changes, once per pull request
+  fix: true # a work run that addresses a review requesting changes, then a review of its push;
+  #           # a number (1 to the operator's MAX_FIX_ROUNDS, 5 by default) for that many rounds
   # merge: true # UNSAFE, no human review: Deckhand merges its own pull request after a clean
   #             # review; needs the operator's allow_auto_merge (see Auto-merge below)
   # merge_method: squash # squash (default) | merge | rebase
@@ -148,10 +149,10 @@ wait_for_answers: true
 | `review.on`                             | none: off; `manual` with the block      | `ready`: a pull request that turns ready gets a review; `manual`: `/mode review` only                                        |
 | `review.instructions`                   | none                                    | Markdown file of the repo, added to the built-in review prompt                                                               |
 | `review.agent`, `.model`, `.effort`     | `brainstorm_agent`, `_model`, `_effort` | the reviews' agent, model and effort (see Reviews)                                                                           |
-| `review.fix`                            | `false`                                 | a review that requests changes starts one work run that addresses it (see Reviews)                                           |
+| `review.fix`                            | `false`                                 | a review that requests changes starts a work run that addresses it; `true` or a number of rounds (see Reviews)               |
 | `review.merge`                          | `false`                                 | **unsafe**: Deckhand merges its own pull request after a clean review; needs `allow_auto_merge` (see Auto-merge)             |
 | `review.merge_method`                   | `squash`                                | how an auto-merge merges: `squash`, `merge` or `rebase`, one the repository allows                                           |
-| `review.max_allowed_severity`           | `low`                                   | the most severe finding the review that decides an auto-merge may have: `low` or `medium` (see Auto-merge)                   |
+| `review.max_allowed_severity`           | `low`                                   | the most severe finding a review in the fix loop or deciding an auto-merge may have: `low` or `medium` (see Auto-merge)      |
 | `review.merge_wait`                     | `60`                                    | minutes an auto-merge waits for the GitHub Actions runs still going on the reviewed commit, `0` to `1440` (see Auto-merge)   |
 | `inbox.ideas`, `inbox.bugs`             | none                                    | issue numbers whose comments are ideas or bug reports to file (see Inboxes)                                                  |
 | `inbox.discussions`                     | none                                    | GitHub Discussions category whose discussions Claude answers (see Inboxes)                                                   |
@@ -476,21 +477,43 @@ review` gets the "unknown mode" reply. `review: true` (or a block without `on`, 
   too, whatever the review wrote. It never approves: that stays the maintainer's. GitHub
   doesn't let the App request changes on its own pull requests: those get a comment review, the
   verdict in its text. A reply whose format the listener can't read is posted as a comment
-  review, as it is. The review that decides an auto-merge may tolerate medium findings
-  (`max_allowed_severity`, under Auto-merge): its prompt says so before it starts.
+  review, as it is. An automatic review in the fix loop, or the one that decides an
+  auto-merge, may tolerate medium findings (`max_allowed_severity`, under Auto-merge): its
+  prompt says so before it starts.
 - **No loops**: without `fix`, the review starts no run. To act on it, comment with the trigger
   ("Deckhand, fix the high findings").
-- **`fix: true`**: a review that requests changes (a critical, high or medium finding) on
-  Deckhand's own pull request, linked to the issue it worked on, starts **one** work run in
-  that issue's session. Its message is the review's findings, all of them (medium and low too),
-  with the instruction to fix each one or say why not, rerun the checks and push; it pushes
-  like any work run, and replies on the pull request. Not while the issue has a run going or
-  queued (a maintainer's comment came first) or the pull request or its issue has the
-  needs-input label. **Once per pull request**, kept in `reviews.json` across restarts, and
-  written before the run is queued: the fix's push doesn't start a review (only turning ready
-  does), and a later review (`/mode review`) starts no second fix. Other pull requests'
-  reviews, and reviews that only comment, start nothing. To act again, comment with the
-  trigger. A [policy](#policies) can refuse it (`deny_fix`): a comment says why.
+- **`fix: true`**: a review that requests changes (a critical, high or medium finding, above
+  `max_allowed_severity`) on Deckhand's own pull request, linked to the issue it worked on,
+  starts a work run in that issue's session. Its message is the review's findings, all of them
+  (medium and low too), with the instruction to fix each one or say why not, rerun the checks
+  and push; it pushes like any work run, and replies on the pull request. Not while the issue
+  has a run going or queued (a maintainer's comment came first) or the pull request or its
+  issue has the needs-input label. Once it is over, the listener reviews the commit it pushed
+  (a review that starts by itself, so `deny_review` applies), with or without `merge`.
+- **`fix: <n>`**: the same, as a loop of up to `n` fix runs (1 to the operator's
+  `MAX_FIX_ROUNDS`, 5 by default; `true` is 1). Round 1 is review, fix, review; each later
+  round is fix, review, the fix run told which round it is and, from the second on, that the
+  earlier fix didn't clear the findings. The loop stops when:
+  - **the threshold is met**: the last review has no finding above `max_allowed_severity`
+    (`low`, the default: no critical, high or medium finding; `medium`: no critical or high
+    one). That review is posted as a comment and starts no fix run;
+  - **the rounds run out**: after `n` fix runs, the last review still has findings above it. A
+    "No more fix runs" comment names their severities and the number of fix runs (with
+    `merge`, the "Not merged automatically" comment says it instead);
+  - **a fix ends badly**: it failed or pushed nothing (its push isn't reviewed), or a
+    [policy](#policies) refused the fix (`deny_fix`, a comment says why) or the review after
+    it (`deny_review`);
+  - **something else takes over**: the issue has a run going or queued, or the needs-input
+    label.
+
+  **Bounded**: `n` fix runs and `n` reviews after them at most per pull request, each counted
+  in `reviews.json` before it is queued, across restarts: the fix's push doesn't start a
+  review by itself (only turning ready does, and the listener's review of it), and a later
+  review (`/mode review`) starts no fix past the count. Other pull requests' reviews, and
+  reviews that only comment, start nothing. To act again, comment with the trigger. A
+  `/mode review` a maintainer asks for isn't part of the loop: it tolerates nothing, and may
+  start a fix run while rounds are left.
+
 - **Security risk of `fix`**: the review's findings, a model's output, become the message of a
   run that can push. A comment written to steer the reviewer (a prompt injection) could turn
   into a finding the fix run carries out. Deckhand narrows it: the review reads only the
@@ -510,7 +533,8 @@ review` gets the "unknown mode" reply. `review: true` (or a block without `on`, 
   conventions, scope), then the file `review.instructions` names, from the default branch.
 - **Cost**: each review is a run with the reviews' model, paid by the operator. `on: ready`
   reviews every pull request that turns ready: keep `manual` where that is too many. A fix is
-  a work run, at the repo's work model.
+  a work run, at the repo's work model: each round of `fix` is one work run plus one review
+  run, so `fix: 3` can cost up to four reviews and three work runs per pull request.
 
 `on`, `instructions`, `agent`, `model`, `effort`, `fix`, `merge`, `merge_method`,
 `max_allowed_severity` and `merge_wait` are its only keys: any other, or a bad value, is an
@@ -546,26 +570,28 @@ nothing blocking. It takes both sides:
 1. The pull request turns ready, and the review runs as usual.
 2. Nothing blocking (no critical, high or medium finding; medium allowed with
    `max_allowed_severity`, below): the merge, after the gates below.
-3. Blocking findings, with `fix: true`: the fix run starts as usual. Once it is over, the
-   listener starts **one** more review, of the commit it pushed, which decides the merge
-   (without `fix`, the first review decides it). It merges only with nothing blocking, as in
-   step 2.
+3. Blocking findings, with `fix`: the fix loop runs as usual (see Reviews). The review that
+   ends it decides the merge (without `fix`, the first review decides it): it merges only
+   with nothing blocking, as in step 2.
 4. **A review that requests changes never merges**: posted on GitHub as "request changes", or
    whose verdict says "request changes" (the review may ask for it with only low findings), it
    leaves the pull request to the maintainer with a "Not merged automatically" comment.
 5. Anything else leaves the pull request to the maintainer, with a comment saying why: a review
    that still blocks, a fix run that failed or pushed nothing, a gate that refuses, a GitHub
-   call that fails, a merge GitHub refuses. **No loop**: at most one fix run and one review after it, and one merge
-   decision per pull request, kept in `reviews.json` across restarts.
+   call that fails, a merge GitHub refuses. **Bounded**: at most `fix`'s number of fix runs
+   and a review after each, and one merge decision per pull request, kept in `reviews.json`
+   across restarts.
 
-**`max_allowed_severity: medium`** lets the review that decides the merge (after the fix run,
-or the first one without `fix`) have medium findings: its prompt tells it so (medium findings
-still reported, and still capping the rating at 8, but its verdict "comment" and its summary
-saying they don't block), the review is posted as a comment rather than "request changes" (a
+**`max_allowed_severity: medium`** lets every automatic review in the fix loop, and the one
+that decides the merge, have medium findings: its prompt tells it so (medium findings still
+reported, and still capping the rating at 8, but its verdict "comment" and its summary saying
+they don't block), the review is posted as a comment rather than "request changes" (a
 "request changes" verdict on medium findings only reads "comment" too, should the review
-write one anyway), and merges, the medium findings left as its comments for the maintainer. A first review with `fix: true` still requests changes on them,
-for the fix run. Critical and high findings always block, and a "request changes" verdict
-with only low findings still does. `low`, the default: any medium finding blocks.
+write one anyway), starts no fix run, and merges, the medium findings left as its comments
+for the maintainer. So with `fix` too, a review with only medium (and low) findings spends no
+fix run on them: the loop stops there. Without `merge`, it is the fix loop's threshold alone.
+Critical and high findings always block, and a "request changes" verdict with only low
+findings still does. `low`, the default: any medium finding blocks.
 
 **The gates**, asked of GitHub right before the merge; each refusal is a comment:
 
@@ -748,11 +774,11 @@ folder is listed once, then again only after a push to its default branch (or 10
 **The rules**: one set of strings per decision, each string a reason shown to the
 maintainer. Three decisions:
 
-| Rule          | When                                                                                                                                                                                     | A message does                                                                                                                                                                                                                  |
-| ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `deny_merge`  | An [auto-merge](#auto-merge), after every other gate passed, right before the merge. Only with `review.merge` and its grant.                                                             | Refuses the merge: the "Not merged automatically" comment quotes the messages (5 at most, 200 characters each).                                                                                                                 |
-| `deny_review` | A review that starts by itself ([`review.on: ready`](#reviews)), after its own checks, and the review after a fix run in auto-merge mode. Never a `/mode review` a maintainer asked for. | Skips the review: the listener's log says why, nothing is posted. After a fix run, the merge waits for a maintainer, the "Not merged automatically" comment quoting the messages.                                               |
-| `deny_fix`    | A [`review.fix`](#reviews) run, after its own checks, right before it is queued.                                                                                                         | Starts no fix run: a "No fix run" comment on the pull request quotes the messages. With `review.merge`, nothing is merged: the refusal quotes them too. The pull request's one fix run isn't used: a later review may start it. |
+| Rule          | When                                                                                                                                                                     | A message does                                                                                                                                                                                                           |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `deny_merge`  | An [auto-merge](#auto-merge), after every other gate passed, right before the merge. Only with `review.merge` and its grant.                                             | Refuses the merge: the "Not merged automatically" comment quotes the messages (5 at most, 200 characters each).                                                                                                          |
+| `deny_review` | A review that starts by itself ([`review.on: ready`](#reviews)), after its own checks, and the review after each fix run. Never a `/mode review` a maintainer asked for. | Skips the review: the listener's log says why, nothing is posted. After a fix run, the fix loop stops; in auto-merge mode the merge waits for a maintainer, the "Not merged automatically" comment quoting the messages. |
+| `deny_fix`    | A [`review.fix`](#reviews) run, after its own checks, right before it is queued.                                                                                         | Starts no fix run: a "No fix run" comment on the pull request quotes the messages. With `review.merge`, nothing is merged: the refusal quotes them too. The round isn't used: a later review may start it.               |
 
 Another `deny_*` rule is reported by the config check, as probably misspelled.
 
@@ -782,20 +808,24 @@ issue, its Actions runs) and the review that decides it (`deny_review` and `deny
 | `issue`             | The issue the pull request closes: `number`, `title`, `labels` (names).                                                                                |
 | `review`            | The review that decides the merge: `verdict` (`approve`, `comment`), `rating` (out of 10), `allowed` (`max_allowed_severity`).                         |
 | `review.findings[]` | `severity` (`critical`, `high`, `medium`, `low`), `path` and `line` (`null` when the finding names none), `text`.                                      |
-| `fixed`             | Whether a fix run came before this review.                                                                                                             |
+| `fixed`             | Whether a fix run came before this review (kept for rules from before `fixes`).                                                                        |
+| `fixes`             | How many fix runs came before this review (`review.fix`'s rounds), `0` without any.                                                                    |
 | `checks[]`          | The head commit's GitHub Actions runs: `name`, `status`, `conclusion`.                                                                                 |
 
 ### The review and fix input
 
 `input` of `deny_review` and `deny_fix`: the [merge input](#the-merge-input)'s `version`,
 `time`, `repo`, `pr` (with `pr.files[]`), `issue` and `review`, read from GitHub when the
-decision is made (only when a policy applies), without `fixed` and `checks`:
+decision is made (only when a policy applies), with `fixed` and `fixes` (the fix runs so
+far), without `checks`:
 
 | Field      | `deny_review`                                                                 | `deny_fix`                                                                              |
 | ---------- | ----------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
 | `decision` | `"review"`.                                                                   | `"fix"`.                                                                                |
 | `issue`    | The issue the pull request closes, or `null` when its description names none. | The issue Deckhand worked on.                                                           |
 | `review`   | `null`: the review hasn't run.                                                | The review that requests changes: `verdict`, `rating`, `allowed`, and its `findings[]`. |
+| `round`    | none.                                                                         | The fix run this would be: `fixes + 1`.                                                 |
+| `rounds`   | none.                                                                         | How many fix runs `review.fix` allows (`true`: `1`).                                    |
 
 ```rego
 deny_review contains "work in progress" if "wip" in input.pr.labels
@@ -817,8 +847,8 @@ result (denies, with its messages, or allows) and the input, in a collapsed bloc
 reviewed, fixed or merged, and it is no decision: it debugs a rule without waiting for a pull
 request to turn ready. The task's page shows its last one: who asked, when, how many denials,
 and a link to the reply. The input is the merge's, read now, with `review: null` (no review
-ran); `deny_review` and `deny_fix` get it with their own `decision`, without `fixed` and
-`checks`. It works without a `review` block. On an issue, a reply says to comment it on the
+ran); `deny_review` and `deny_fix` get it with their own `decision`, without `checks`,
+`deny_fix` with the `round` and `rounds` the next fix run would have. It works without a `review` block. On an issue, a reply says to comment it on the
 pull request.
 
 **The dashboard**: the repository's settings have a Policies tab, next to its config: the

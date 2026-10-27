@@ -128,6 +128,8 @@ services:
       NEEDS_INPUT_LABEL:
       # Shortest interval at which repos that opt in are checked for conflicts (0: off).
       CONFLICT_CHECK_MINUTES: ${CONFLICT_CHECK_MINUTES:-}
+      # The most fix runs a repo's `review.fix` may ask for per pull request (5).
+      MAX_FIX_ROUNDS: ${MAX_FIX_ROUNDS:-}
       # How often comments waiting for other issues ("/after #77") ask GitHub again.
       WAITS_CHECK_MINUTES: ${WAITS_CHECK_MINUTES:-}
       # Megabytes a run's log may hold: past it, the run is stopped as failed.

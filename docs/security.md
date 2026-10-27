@@ -1005,17 +1005,23 @@ only). It widens nothing, so it needs no grant: a review is a light run with a r
 - **No loops**: each pull request's head commit is reviewed by itself once (`reviews.json`),
   and the App's review is a bot's `pull_request_review`, which starts nothing. Acting on a
   review is the maintainer's call, with a trigger comment, unless the repo sets `review.fix`
-  (below).
+  (below), whose loop is bounded.
 - `/mode review` comes from an allowed user's comment, like any mode, on the pull request
   itself.
 
 ### Review fix runs
 
 With `review.fix`, a review that requests changes on Deckhand's own pull request (opened by
-the App, on a branch of the repository, linked to its issue) starts one work run in that
-issue's session, once per pull request (`fixedAt` in `reviews.json`, written before the run
-is queued). It is a normal work run, with the same token, push rules, secrets and mounts, so
-the key needs no grant; its push starts no review, and a later review starts no second fix.
+the App, on a branch of the repository, linked to its issue) starts a work run in that
+issue's session, and the listener reviews what it pushed: a loop of up to `review.fix` fix
+runs (`true`: one), capped by the operator's `MAX_FIX_ROUNDS` (5 by default). It is a normal
+work run, with the same token, push rules, secrets and mounts, so the key needs no grant. The
+loop is bounded: N fix runs and N reviews after them at most per pull request, each counted
+in `reviews.json` before it is queued, kept across restarts, so a redelivered webhook or a
+restart starts no extra one. It stops at a review with nothing above
+`review.max_allowed_severity`, when the rounds run out, at a fix that failed or pushed
+nothing, a policy's refusal (`deny_fix`, `deny_review`), a run going or queued on the issue,
+or the needs-input label. Each round costs a work run and a review run.
 
 **The risk**: this is the one path where a model's output, not a person's comment, becomes the
 message of a run that can push. The review's findings are written by a run that read the diff
@@ -1094,8 +1100,8 @@ branch, the last check of everything above. With it on:
   for its checks (`review.merge_wait`) is decided again when a `workflow_run` delivery says
   one completed, but that delivery only says when to ask: the gates are all read again, and a
   push meanwhile still refuses it.
-- **No loop**: one fix run and one review after it at most, one merge decision per pull
-  request (`reviews.json`). Every refusal is a comment on the pull request, every merge too,
+- **No loop**: `review.fix`'s fix runs and one review after each at most (bounded by the
+  operator's `MAX_FIX_ROUNDS`), one merge decision per pull request (`reviews.json`). Every refusal is a comment on the pull request, every merge too,
   and the dashboard marks each auto-merged task "Merged by Deckhand", so they can be found and
   read afterwards.
 

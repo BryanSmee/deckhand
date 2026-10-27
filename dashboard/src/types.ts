@@ -37,6 +37,9 @@ export interface Run {
   // Why the listener started it itself ("conflict": a pull request to rebase, "review": one
   // that turned ready, "review-fix": one whose review requested changes); null for comments.
   reason?: string | null;
+  // A review fix run's round, of how many the repo's `review.fix` allows; null otherwise.
+  round?: number | null;
+  rounds?: number | null;
   // What ran it (listener/agents/): "claude", "codex" or "antigravity"; "claude" also for runs
   // from before agents had names.
   // Sent, not shown (nor are provider, credential, fallback, picked and phase: `auth` says
