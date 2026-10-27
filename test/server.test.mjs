@@ -3294,7 +3294,12 @@ mounts:
     assert.equal((await sync({ origin: "https://evil.example" })).status, 403);
     // The listener's own, at start, is the last one until then.
     const lastSync = async () => (await (await get("/api/state", session)).json()).lastSync;
-    const atStart = await lastSync();
+    let atStart = null;
+    for (let i = 0; i < 100 && !atStart; i++) {
+      atStart = await lastSync();
+      if (!atStart) await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    assert.ok(atStart, "the sync at start is recorded");
     assert.equal(atStart.by, null);
     assertShape(atStart, SYNC_KEYS, "SyncResult");
     const synced = await sync({ origin: "https://hooks.example.com" });

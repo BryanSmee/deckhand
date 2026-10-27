@@ -36,10 +36,10 @@ export function SyncButton({ onSynced }: { onSynced?: () => Promise<void> }) {
     setSaid(null);
     const body = await postJson<SyncResult>("api/sync");
     if (body.error) setSaid({ text: `Couldn't sync (${body.error})`, failed: true });
-    else {
-      setSaid({ text: syncMessage(body), failed: false });
-      await onSynced?.();
-    }
+    else setSaid({ text: syncMessage(body), failed: false });
+    // Done, or failed and recorded as the last sync (its `at`): the state has it now. Refused
+    // (synced a moment ago, signed out): nothing changed.
+    if (typeof body.at === "number") await onSynced?.();
     setSyncing(false);
   };
 

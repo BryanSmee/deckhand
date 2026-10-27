@@ -497,7 +497,8 @@ recorded, and an action the pull request no longer matches (ready since merged) 
 At start and from the dashboard's Sync, the scan goes with the open pull requests' states read
 again (`pulls.mjs` `resync()`), through `sync.mjs`. The last one's result is kept in memory and
 sent in `api/state` (`lastSync`): when it ended, who asked (`null` for the listener at start),
-how many deliveries were asked again and pull requests changed, or its error. `POST /api/sync`
+how many deliveries were asked again and pull requests changed, and the error of a part that
+failed (the other part's count is kept). `POST /api/sync`
 answers the same record, `502` when it failed.
 
 A delivery whose handling throws (`dispatch()`) is logged with its event and action; the
