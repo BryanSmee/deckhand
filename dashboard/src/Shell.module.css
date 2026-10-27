@@ -154,9 +154,12 @@
   animation: drop var(--slide) ease-out;
 }
 
+/* Fixed, at the button (Shell.tsx sets top and left): out of the scrolling rail's clip. */
 .icon .menu {
+  position: fixed;
   top: 0;
-  left: calc(100% + 8px);
+  left: 72px;
+  min-width: 180px;
 }
 
 .bar .menu {

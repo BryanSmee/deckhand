@@ -266,7 +266,9 @@ function User({ user }: { user: string }) {
 }
 
 // New request and its menu. Arrows move through it, Escape closes it, and so does a click
-// elsewhere.
+// elsewhere. On the rail the menu opens beside it, outside the sidebar: the sidebar scrolls,
+// so it would clip an absolute menu there. It is fixed instead, at the button, and closes when
+// the window resizes or something scrolls, rather than drift from it.
 function NewRequest({
   onPick,
   form,
@@ -275,6 +277,7 @@ function NewRequest({
   form: "full" | "icon" | "bar";
 }) {
   const [open, setOpen] = useState(false);
+  const [at, setAt] = useState<{ top: number; left: number } | null>(null);
   const box = useRef<HTMLDivElement>(null);
   const menu = useRef<HTMLDivElement>(null);
   const button = () => box.current?.querySelector<HTMLElement>("[aria-haspopup]");
@@ -298,17 +301,28 @@ function NewRequest({
         all[(at + step + all.length) % all.length]?.focus();
       } else if (e.key === "Tab") setOpen(false);
     };
+    const close = () => setOpen(false);
     document.addEventListener("pointerdown", away);
     document.addEventListener("keydown", keys);
+    if (form === "icon") {
+      window.addEventListener("resize", close);
+      document.addEventListener("scroll", close, true);
+    }
     return () => {
       document.removeEventListener("pointerdown", away);
       document.removeEventListener("keydown", keys);
+      window.removeEventListener("resize", close);
+      document.removeEventListener("scroll", close, true);
     };
-  }, [open]);
+  }, [open, form]);
   const attrs = {
     "aria-haspopup": "menu" as const,
     "aria-expanded": open,
-    onClick: () => setOpen(!open),
+    onClick: () => {
+      const r = button()?.getBoundingClientRect();
+      setAt(r ? { top: r.top, left: r.right + 8 } : null);
+      setOpen(!open);
+    },
   };
   return (
     <div class={`${styles.request} ${styles[form]}`} ref={box}>
@@ -327,7 +341,13 @@ function NewRequest({
         />
       )}
       {open && (
-        <div class={styles.menu} role="menu" aria-label="New request" ref={menu}>
+        <div
+          class={styles.menu}
+          role="menu"
+          aria-label="New request"
+          ref={menu}
+          style={form === "icon" && at ? { top: `${at.top}px`, left: `${at.left}px` } : undefined}
+        >
           {REQUESTS.map((r) => (
             <button
               key={r.id}
