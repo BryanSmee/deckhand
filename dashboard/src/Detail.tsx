@@ -1,8 +1,8 @@
-// The open task: its repo and title, the last reply's first line, its runs, and the log of
-// the run shown (the latest unless one was picked). Waiting for input: its open questions, as
-// a form to answer them. Its last run failed: a button to run it again. A run going on: a
-// button to stop it, which asks once more first. A discussion: its thread, to read and reply
-// to, or the run's log.
+// The open task: its kind, number and mode, its title, and its actions (GitHub, Rerun when
+// its last run failed, Stop while a run goes on, which asks once more first); then its facts,
+// the last reply, and its runs as tabs over the log of the run shown (the latest unless one
+// was picked). Waiting for input: its open questions, as a form to answer them. A discussion:
+// its thread first, to read and reply to, then its runs.
 import { useState } from "preact/hooks";
 import { sendCancel, sendRerun } from "./api";
 import {
@@ -11,18 +11,21 @@ import {
   githubUrl,
   isPrTask,
   kindName,
-  numberOf,
-  ownMode,
+  modeOf,
+  PR_NAMES,
   runName,
   taskTone,
   titleOf,
 } from "./format";
 import { Log } from "./Log";
-import { PolicyDecisions, PrLink } from "./PullRequest";
+import { PolicyDecisions } from "./PullRequest";
 import { Questions } from "./Questions";
-import { StateBadge, StateDot } from "./State";
 import { Thread } from "./Thread";
-import type { Run, Task } from "./types";
+import type { PullRequest, Run, Task } from "./types";
+import { Button, buttonClass } from "./ui/Button";
+import * as Icon from "./ui/icons";
+import { StatusBadge, StatusDot } from "./ui/Status";
+import { Tabs } from "./ui/Tabs";
 import styles from "./Detail.module.css";
 
 interface Props {
@@ -33,19 +36,45 @@ interface Props {
   now: number;
   // api/state's githubUrl.
   github: string;
+  // All repositories: the header names the task's repo.
+  showRepo?: boolean;
+  // A phone's: 44 px targets.
+  touch?: boolean;
   // Reads api/state again (answers sent, a rerun queued, a run stopped).
   refresh?: () => Promise<void>;
 }
 
 // The states a run is going on in, which Stop ends.
 const STOPPABLE: Task["state"][] = ["building-image", "working", "stopping"];
+// A discussion's tab before its runs'.
+const THREAD = "thread";
+const PANEL = "task-view";
 
-export function Detail({ task: t, run: r, onRun, onBack, now, github, refresh }: Props) {
+// "14:02", or "Oct 14, 14:02" on another day.
+function startTime(at: number, now: number): string {
+  const d = new Date(at);
+  const time = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  return d.toDateString() === new Date(now).toDateString()
+    ? time
+    : `${d.toLocaleDateString([], { month: "short", day: "numeric" })}, ${time}`;
+}
+
+export function Detail({
+  task: t,
+  run: r,
+  onRun,
+  onBack,
+  now,
+  github,
+  showRepo,
+  touch,
+  refresh,
+}: Props) {
   // What the listener said of the answers sent or the rerun asked last, on that task's page.
   const [sent, setSent] = useState<{ key: string; message: string; error?: boolean } | null>(null);
   // The run whose rerun is on its way.
   const [rerunning, setRerunning] = useState<string | null>(null);
-  // A discussion's page shows its thread, or the run's log.
+  // A discussion's page shows its thread, or a run's log.
   const [showLog, setShowLog] = useState(false);
   // The task whose Stop was pressed once (it asks again), and the one whose stop is on its way.
   const [confirming, setConfirming] = useState<string | null>(null);
@@ -58,7 +87,8 @@ export function Detail({ task: t, run: r, onRun, onBack, now, github, refresh }:
     );
   }
   const url = githubUrl(t, github);
-  const own = ownMode(t.mode);
+  const mode = modeOf(t);
+  const size = touch ? "touch" : "small";
   // The last reply: from the latest run that has one.
   const reply = t.runs.find((x) => x.summary);
   const asked = t.state === "needs-input" ? t.questions : undefined;
@@ -68,8 +98,9 @@ export function Detail({ task: t, run: r, onRun, onBack, now, github, refresh }:
   const thread = discussion && !showLog;
   // Discussions have no comment command to stop them by, nor the API's.
   const stoppable = STOPPABLE.includes(t.state) && t.number !== null && !discussion;
+  const asking = confirming === t.key;
   const stop = async () => {
-    if (confirming !== t.key) return setConfirming(t.key);
+    if (!asking) return setConfirming(t.key);
     setConfirming(null);
     setStopping(t.key);
     const said = await sendCancel(t.repo, t.number!, isPrTask(t));
@@ -88,35 +119,119 @@ export function Detail({ task: t, run: r, onRun, onBack, now, github, refresh }:
     if (!said.error) await refresh?.();
     setRerunning(null);
   };
+  const tabs = [
+    ...(discussion ? [{ id: THREAD, label: "Thread" }] : []),
+    ...t.runs.map((x, i) => ({
+      id: x.id,
+      label: (
+        <span class={styles.run} title={i === 0 ? "Latest: follows the next runs" : x.id}>
+          <StatusDot state={x.status} />
+          {runName(x)}
+          {x.speed === "fast" && " · fast"}{" "}
+          <span class={styles.ago}>
+            {x.status === "running" ? duration(x, now) : ago(x.startedAt, now)}
+          </span>
+        </span>
+      ),
+    })),
+  ];
+  const pick = (id: string) => {
+    setShowLog(id !== THREAD);
+    if (id !== THREAD) onRun(id === t.runs[0]?.id ? null : id);
+  };
   return (
     <div class={styles.detail}>
       <header class={styles.head}>
-        <button type="button" class={styles.back} onClick={onBack}>
-          ← Back
-        </button>
-        <a class={styles.repo} href={`${github}/${t.repo}`} target="_blank" rel="noreferrer">
-          {t.repo}
-        </a>
-        <h1 class={styles.title}>
-          {url ? (
-            <a href={url} target="_blank" rel="noreferrer">
-              {titleOf(t)}
-            </a>
-          ) : (
-            titleOf(t)
-          )}{" "}
-          <span class={styles.number}>{numberOf(t)}</span>
-        </h1>
+        <Button
+          variant="ghost"
+          size="touch"
+          class={styles.back}
+          icon={<Icon.ChevronLeft size={18} />}
+          onClick={onBack}
+        >
+          Back
+        </Button>
+        <div class={styles.top}>
+          <div class={styles.heading}>
+            <span class={styles.context}>
+              {showRepo && (
+                <>
+                  <a href={`${github}/${t.repo}`} target="_blank" rel="noreferrer">
+                    {t.repo}
+                  </a>
+                  {" · "}
+                </>
+              )}
+              {kindName(t)}
+              {t.number !== null && (
+                <>
+                  {" "}
+                  <span class={styles.mono}>#{t.number}</span>
+                </>
+              )}
+              {mode && ` · ${mode} mode`}
+            </span>
+            <h2 class={styles.title}>
+              {url ? (
+                <a href={url} target="_blank" rel="noreferrer">
+                  {titleOf(t)}
+                </a>
+              ) : (
+                titleOf(t)
+              )}
+            </h2>
+          </div>
+          <div class={styles.actions}>
+            {url && (
+              <a class={buttonClass("secondary", size)} href={url} target="_blank" rel="noreferrer">
+                <Icon.External size={14} />
+                GitHub
+              </a>
+            )}
+            {failed && (
+              <Button
+                variant="primary"
+                size={size}
+                pending={rerunning === failed.id}
+                pendingLabel="Rerunning…"
+                title="Runs it again with the same comments and mode"
+                onClick={() => again(failed)}
+              >
+                Rerun
+              </Button>
+            )}
+            {stoppable && asking && (
+              <Button size={size} onClick={() => setConfirming(null)}>
+                Keep running
+              </Button>
+            )}
+            {stoppable && (
+              <Button
+                variant={asking ? "danger-solid" : "danger"}
+                size={size}
+                icon={<Icon.Stop size={11} />}
+                pending={stopping === t.key}
+                pendingLabel="Stopping…"
+                title="Stops the run now: what it did since its last push is lost"
+                onClick={stop}
+              >
+                {asking ? "Stop it now" : "Stop"}
+              </Button>
+            )}
+          </div>
+        </div>
         <div class={styles.facts}>
-          <StateBadge state={t.state} tone={taskTone(t)} />
-          <span>
-            {kindName(t)}
-            {own && ` · ${own} mode`}
-          </span>
+          <StatusBadge state={t.state} tone={taskTone(t)} />
           {r && (
             <span>
-              {new Date(r.startedAt).toLocaleString()} · {duration(r, now)}
-              {r.model && ` · ${r.model}, ${r.effort} effort`}
+              Started {startTime(r.startedAt, now)} ·{" "}
+              <span class={styles.mono}>{duration(r, now)}</span>
+            </span>
+          )}
+          {r?.model && (
+            <span>
+              {r.model}
+              {r.effort && ` · ${r.effort} effort`}
               {r.speed === "fast" && " · fast"}
             </span>
           )}
@@ -139,76 +254,25 @@ export function Detail({ task: t, run: r, onRun, onBack, now, github, refresh }:
               Replies on #{t.replyTo}
             </a>
           )}
-          {failed && (
-            <button
-              type="button"
-              class={styles.rerun}
-              disabled={rerunning === failed.id}
-              title="Runs it again with the same comments and mode"
-              onClick={() => again(failed)}
-            >
-              {rerunning === failed.id ? "Rerunning…" : "Rerun"}
-            </button>
-          )}
-          {stoppable && (
-            <span class={styles.stopping}>
-              {confirming === t.key && (
-                <button type="button" class={styles.keep} onClick={() => setConfirming(null)}>
-                  Keep running
-                </button>
-              )}
-              <button
-                type="button"
-                class={confirming === t.key ? `${styles.stop} ${styles.confirm}` : styles.stop}
-                disabled={stopping === t.key}
-                title="Stops the run now: what it did since its last push is lost"
-                onClick={stop}
-              >
-                {stopping === t.key ? "Stopping…" : confirming === t.key ? "Stop it now" : "Stop"}
-              </button>
-            </span>
-          )}
         </div>
         {reply && (
-          <p class={styles.summary}>
-            <b>Last reply</b>
-            {reply.summary}
-          </p>
+          <section class={styles.reply} aria-label="Last reply">
+            <h3>Last reply</h3>
+            <p>{reply.summary}</p>
+          </section>
         )}
         <PolicyDecisions decisions={t.decisions} now={now} />
+        {tabs.length > 0 && (
+          <Tabs
+            label={discussion ? "Thread and runs" : "Runs"}
+            tabs={tabs}
+            selected={thread ? THREAD : (r?.id ?? "")}
+            onSelect={pick}
+            panel={PANEL}
+            class={styles.tabs}
+          />
+        )}
       </header>
-      {t.runs.length > 1 && (
-        <nav class={styles.runs} aria-label="Runs">
-          {t.runs.map((x, i) => (
-            <button
-              key={x.id}
-              type="button"
-              class={styles.run}
-              aria-current={x.id === r?.id}
-              title={i === 0 ? "Latest: follows the next runs" : x.id}
-              onClick={() => {
-                setShowLog(true);
-                onRun(i === 0 ? null : x.id);
-              }}
-            >
-              <StateDot state={x.status} />
-              {runName(x)}
-              {x.speed === "fast" && " · fast"} ·{" "}
-              {x.status === "running" ? duration(x, now) : ago(x.startedAt, now)}
-            </button>
-          ))}
-        </nav>
-      )}
-      {discussion && (
-        <nav class={styles.views} aria-label="Show">
-          <button type="button" aria-pressed={thread} onClick={() => setShowLog(false)}>
-            Thread
-          </button>
-          <button type="button" aria-pressed={!thread} onClick={() => setShowLog(true)}>
-            Log
-          </button>
-        </nav>
-      )}
       {sent?.key === t.key && (
         <p class={sent.error ? styles.refused : styles.sent} role="status">
           {sent.message}
@@ -226,9 +290,13 @@ export function Detail({ task: t, run: r, onRun, onBack, now, github, refresh }:
         />
       )}
       {thread ? (
-        <Thread key={t.key} task={t} now={now} refresh={refresh} />
+        <div id={PANEL} role="tabpanel" class={styles.panel}>
+          <Thread key={t.key} task={t} now={now} refresh={refresh} />
+        </div>
       ) : r ? (
-        <Log runId={r.id} />
+        <div id={PANEL} role="tabpanel" class={`${styles.panel} ${styles.log}`}>
+          <Log runId={r.id} />
+        </div>
       ) : asked ? null : t.state === "needs-input" ? (
         // Labelled for its open questions (an inbox run filed it, or someone wrote it so).
         <p class={styles.placeholder}>Waiting for answers to its open questions on GitHub</p>
@@ -236,5 +304,26 @@ export function Detail({ task: t, run: r, onRun, onBack, now, github, refresh }:
         <p class={styles.placeholder}>Waiting for the first run of {titleOf(t)} to start…</p>
       )}
     </div>
+  );
+}
+
+// The task's pull request: "Draft #34", "Ready for review #33", "Merged by Deckhand #30" (no
+// human reviewed it: `review.merge`).
+function PrLink({ pr }: { pr: PullRequest }) {
+  const auto = pr.state === "merged" && pr.autoMerged;
+  return (
+    <a
+      class={styles.pr}
+      href={pr.url}
+      target="_blank"
+      rel="noreferrer"
+      title={
+        auto ? `Pull request #${pr.number}, merged by Deckhand with no human review` : undefined
+      }
+    >
+      <Icon.Branch size={14} />
+      {auto ? "Merged by Deckhand" : PR_NAMES[pr.state]}{" "}
+      <span class={styles.mono}>#{pr.number}</span>
+    </a>
   );
 }

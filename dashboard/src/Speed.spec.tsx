@@ -23,9 +23,9 @@ test("a fast run says fast by its model and in the list of runs; a normal one do
       { ...t.runs[0], id: "acme-api-127-1", speed: "normal" },
     ],
   }));
-  expect(screen.getByText(/, high effort/).textContent).toMatch(/high effort · fast$/);
-  const runs = screen.getAllByRole("button", { name: /·/ }).map((b) => b.textContent);
-  expect(runs.filter((text) => / · fast · /.test(text ?? ""))).toHaveLength(1);
+  expect(screen.getByText(/ · high effort/).textContent).toMatch(/high effort · fast$/);
+  const runs = screen.getAllByRole("tab").map((b) => b.textContent);
+  expect(runs.filter((text) => / · fast /.test(text ?? ""))).toHaveLength(1);
 });
 
 test("a run from before speeds, or a normal one: no fast", () => {

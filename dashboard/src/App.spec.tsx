@@ -72,7 +72,7 @@ test("the tasks with their titles, the repos in the sidebar, and the first live 
   expect(rows()).toContain("How do runs restart after an update?");
   // No title known yet: the kind and number.
   expect(rows()).toContain("Issue #127");
-  expect(screen.getByRole("heading", { level: 1, name: /Dashboard on a frontend/ })).toBeTruthy();
+  expect(screen.getByRole("heading", { level: 2, name: /Dashboard on a frontend/ })).toBeTruthy();
   expect(screen.getByText(/npm installs get a 403/)).toBeTruthy();
   expect(location.hash).toBe("#/?task=acme%2Fapp%2322");
   expect(screen.getByText("2 of 4 running")).toBeTruthy();
@@ -89,7 +89,7 @@ test("a done task whose pull request is ready shows the ready tone, in the list 
     .map((el) => el.closest("button"))
     .find(Boolean)!;
   expect(within(row).getByText("Done").className).toContain("s-ready");
-  const head = screen.getByRole("heading", { level: 1, name: /Dark mode/ }).parentElement!;
+  const head = screen.getByRole("heading", { level: 2, name: /Dark mode/ }).closest("header")!;
   expect(within(head).getByText("Done").className).toContain("s-ready");
 });
 
@@ -117,7 +117,7 @@ test("a repo's link and the state chips filter the list", async () => {
     "Dark mode for the settings page",
     "Issue #127",
   ]);
-  fireEvent.click(screen.getByRole("button", { name: /^Needs input/ }));
+  fireEvent.click(screen.getByRole("button", { name: /^Needs you/ }));
   expect(rows()).toEqual(["Search results flicker when typing fast"]);
   // Kept on this device.
   expect(localStorage.getItem("deckhand.chip")).toBe("input");
@@ -144,7 +144,7 @@ test("a task waiting for other issues links them", () => {
   history.replaceState(null, "", "#/?task=acme%2Fapp%2324");
   render(<Dashboard state={state} error={null} />);
   expect(
-    screen.getByRole("heading", { level: 1, name: /Per-repo budgets in the dashboard/ }),
+    screen.getByRole("heading", { level: 2, name: /Per-repo budgets in the dashboard/ }),
   ).toBeTruthy();
   expect(screen.getByText("after #23 and #22")).toBeTruthy();
   expect(screen.getByRole("link", { name: "#22" }).getAttribute("href")).toBe(
@@ -155,20 +155,20 @@ test("a task waiting for other issues links them", () => {
 test("old links open their task and run", () => {
   history.replaceState(null, "", "#task=acme%2Fnotes%23discussion-8");
   render(<Dashboard state={state} error={null} />);
-  expect(screen.getByRole("heading", { level: 1, name: /How do runs restart/ })).toBeTruthy();
-  // A discussion shows its thread first; its run's log is a click away.
-  fireEvent.click(screen.getByRole("button", { name: "Log" }));
+  expect(screen.getByRole("heading", { level: 2, name: /How do runs restart/ })).toBeTruthy();
+  // A discussion shows its thread first; its run's log is a tab away.
+  fireEvent.click(screen.getAllByRole("tab")[1]);
   expect(FakeSource.last!.url).toBe("api/runs/acme-notes-discussion-8-1791896400000/stream");
 });
 
 test("on a phone: the list, then the task with a way back", () => {
   wide = false;
   const { container } = render(<Dashboard state={state} error={null} />);
-  expect(screen.queryByRole("heading", { level: 1, name: /Dashboard on/ })).toBeNull();
+  expect(screen.queryByRole("heading", { level: 2, name: /Dashboard on/ })).toBeNull();
   fireEvent.click(screen.getByText("Bugs"));
-  expect(screen.getByRole("heading", { level: 1, name: /Bugs/ })).toBeTruthy();
+  expect(screen.getByRole("heading", { level: 2, name: /Bugs/ })).toBeTruthy();
   expect(container.firstElementChild!.className).toMatch(/reading/);
-  fireEvent.click(screen.getByRole("button", { name: "← Back" }));
+  fireEvent.click(screen.getByRole("button", { name: "Back" }));
   expect(container.firstElementChild!.className).not.toMatch(/reading/);
 });
 
@@ -195,7 +195,7 @@ test("the log streams in: tool calls with their output, then the result", async 
   expect(source.closed).toBe(true);
 
   // Another run of the task: a new stream, the old one closed.
-  fireEvent.click(screen.getByRole("button", { name: /Start · 2 h ago/ }));
+  fireEvent.click(screen.getByRole("tab", { name: "Start 2 h ago" }));
   expect(FakeSource.last).not.toBe(source);
   expect(FakeSource.last!.url).toMatch(/acme-app-22-1791984600000/);
   expect(location.hash).toMatch(/run=acme-app-22-1791984600000/);
@@ -226,7 +226,7 @@ test("signed out of reach: the error instead of the counts", () => {
   expect(screen.getByText("Can't reach the listener (502)")).toBeTruthy();
 });
 
-test("an issue waiting for answers without a run: listed under Needs input, no log", () => {
+test("an issue waiting for answers without a run: listed under Needs you, no log", () => {
   const filed = {
     ...state.tasks.find((t) => t.key === "acme/notes#4")!,
     key: "acme/notes#9",
@@ -243,9 +243,9 @@ test("an issue waiting for answers without a run: listed under Needs input, no l
   };
   history.replaceState(null, "", "#/?task=acme%2Fnotes%239");
   render(<Dashboard state={{ ...state, tasks: [...state.tasks, filed] }} error={null} />);
-  fireEvent.click(screen.getByRole("button", { name: /^Needs input/ }));
+  fireEvent.click(screen.getByRole("button", { name: /^Needs you/ }));
   expect(rows()).toContain("Tags for notes");
-  expect(screen.getByRole("heading", { level: 1, name: /Tags for notes/ })).toBeTruthy();
+  expect(screen.getByRole("heading", { level: 2, name: /Tags for notes/ })).toBeTruthy();
   expect(screen.getByText(/Waiting for answers to its open questions/)).toBeTruthy();
   const row = screen.getByRole("button", { name: /Tags for notes/ });
   expect(row.textContent).toContain("2 h ago");

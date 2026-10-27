@@ -60,10 +60,10 @@ test("the thread: the opening post, Deckhand's answer, the replies, older commen
   ]);
   expect(posts[1].textContent).toContain("A digest issue each Monday");
   expect(within(view).getByText(/2 earlier comments/)).toBeTruthy();
-  // The run's log, a click away.
-  fireEvent.click(screen.getByRole("button", { name: "Log" }));
+  // The run's log, a tab away.
+  fireEvent.click(screen.getAllByRole("tab")[1]);
   expect(screen.queryByRole("region", { name: "Discussion" })).toBeNull();
-  fireEvent.click(screen.getByRole("button", { name: "Thread" }));
+  fireEvent.click(screen.getByRole("tab", { name: "Thread" }));
   await screen.findByRole("region", { name: "Discussion" });
 });
 

@@ -4,45 +4,69 @@
   min-width: 0;
   min-height: 0;
   height: 100%;
+  overflow-y: auto;
 }
 
 .head {
-  padding: 1rem 1.5rem 0.9rem;
-  border-bottom: 1px solid var(--line);
-  background: var(--panel);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 20px 28px 0;
 }
 
-.back {
-  composes: button ghost small from "./ui/Button.module.css";
-}
-
-/* Weighs more than the button's own display, whichever comes first in the bundle. */
-button.back {
+/* A phone's only: the task is a page of its own there. Weighs more than the button's own
+   display, whichever comes first in the bundle. */
+.head .back {
   display: none;
-  margin: 0 0 0.5rem;
 }
 
-.repo {
-  color: var(--muted);
-  font-size: 0.8rem;
+.top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 12px 20px;
+}
+
+.heading {
+  flex: 1 1 360px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.context {
+  color: var(--text-3);
+  font-size: 12.5px;
+  line-height: 16px;
+}
+
+.context a {
+  color: inherit;
   font-weight: 600;
   text-decoration: none;
 }
 
-.repo:hover {
-  color: var(--ink);
+.context a:hover {
+  color: var(--text);
   text-decoration: underline;
 }
 
+.mono {
+  font-family: var(--mono);
+}
+
 .title {
-  margin: 0.15rem 0 0.5rem;
-  font-size: 1.25rem;
-  line-height: 1.3;
+  margin: 0;
+  font-size: 20px;
+  line-height: 28px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
   overflow-wrap: anywhere;
 }
 
 .title a {
-  color: inherit;
+  color: var(--text);
   text-decoration: none;
 }
 
@@ -50,183 +74,143 @@ button.back {
   text-decoration: underline;
 }
 
-.number {
-  color: var(--muted);
-  font-weight: 400;
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .facts {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 0.35rem 0.9rem;
-  color: var(--muted);
-  font-size: 0.8rem;
+  gap: 8px 16px;
+  color: var(--text-2);
+  font-size: 12.5px;
 }
 
-.summary {
-  margin: 0.75rem 0 0;
-  padding: 0.5rem 0.75rem;
-  border-radius: 6px;
-  background: var(--raised);
-  border: 1px solid var(--line);
-  font-size: 0.85rem;
-  overflow-wrap: anywhere;
+.facts a {
+  color: var(--text-2);
 }
 
-.summary b {
-  color: var(--muted);
-  font-weight: 600;
-  margin-right: 0.4rem;
+.facts a:hover {
+  color: var(--text);
 }
 
-.runs {
+.pr {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* The last reply, as a card. */
+.reply {
   display: flex;
-  gap: 0.4rem;
-  overflow-x: auto;
-  padding: 0.6rem 1.5rem;
-  border-bottom: 1px solid var(--line);
-  scrollbar-width: thin;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  background: var(--surface);
+}
+
+.reply h3 {
+  margin: 0;
+  color: var(--text-3);
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.reply p {
+  margin: 0;
+  font-size: 13.5px;
+  line-height: 21px;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.tabs {
+  flex: none;
 }
 
 .run {
-  flex: none;
   display: inline-flex;
   align-items: center;
-  gap: 0.4rem;
-  padding: 0.2rem 0.65rem;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  background: var(--panel);
-  font-size: 0.75rem;
-  white-space: nowrap;
-  cursor: pointer;
+  gap: 7px;
 }
 
-.run[aria-current="true"] {
-  border-color: var(--accent);
-  box-shadow: inset 0 0 0 1px var(--accent);
+.ago {
+  color: var(--text-3);
+  font-family: var(--mono);
+  font-size: 12px;
 }
 
-/* A discussion's Thread or Log. */
-.views {
-  display: flex;
-  gap: 0;
-  padding: 0.6rem 1.5rem 0;
-}
-
-.views button {
-  padding: 0.25rem 0.9rem;
-  border: 1px solid var(--line);
-  background: var(--panel);
-  color: var(--muted);
-  font: inherit;
-  font-size: 0.78rem;
-  cursor: pointer;
-}
-
-.views button:first-child {
-  border-radius: 6px 0 0 6px;
-}
-
-.views button:last-child {
-  border-left: 0;
-  border-radius: 0 6px 6px 0;
-}
-
-.views button[aria-pressed="true"] {
-  background: var(--accent-soft);
-  color: var(--accent);
-  font-weight: 600;
+.sent,
+.refused {
+  margin: 12px 28px 0;
+  padding: 8px 12px;
+  border-radius: var(--radius);
+  font-size: 13px;
 }
 
 .sent {
-  margin: 0;
-  padding: 0.5rem 1.5rem;
-  border-bottom: 1px solid var(--line);
-  background: var(--ok-soft);
-  font-size: 0.85rem;
+  background: var(--done-bg);
+  color: var(--done);
 }
 
 .refused {
-  margin: 0;
-  padding: 0.5rem 1.5rem;
-  border-bottom: 1px solid var(--line);
-  background: var(--err-soft);
+  background: var(--err-bg);
   color: var(--err);
-  font-size: 0.85rem;
 }
 
-.rerun {
-  composes: button primary small from "./ui/Button.module.css";
-  margin-left: auto;
+.panel {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
-/* Stop: quiet until pressed once, then the confirmation stands out. */
-.stopping {
-  display: inline-flex;
-  gap: 0.4rem;
-  margin-left: auto;
-}
-
-.keep,
-.stop {
-  padding: 0.25rem 0.8rem;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  background: var(--panel);
-  color: var(--ink);
-  font: inherit;
-  cursor: pointer;
-}
-
-.stop {
-  border-color: var(--err);
-  color: var(--err);
-  font-weight: 600;
-}
-
-.stop.confirm {
-  background: var(--err);
-  color: var(--panel);
-}
-
-.stop:disabled {
-  opacity: 0.6;
-  cursor: default;
+/* The log in a card: today's Log.tsx, until the run log's page. */
+.log {
+  min-height: 20rem;
+  margin: 12px 28px 24px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  background: var(--surface);
+  overflow: hidden;
 }
 
 .placeholder {
   margin: auto;
   padding: 2rem;
-  color: var(--muted);
+  color: var(--text-3);
   text-align: center;
 }
 
 @media (max-width: 760px) {
-  button.back {
-    display: inline-flex;
-    margin: 0 0.75rem 0 0;
-  }
   .head {
-    padding: 0.75rem 1rem;
+    gap: 12px;
+    padding: 8px 16px 0;
+  }
+  .head .back {
+    display: inline-flex;
+    align-self: flex-start;
+    margin-left: -12px;
+  }
+  .heading {
+    flex-basis: 100%;
   }
   .title {
-    font-size: 1.05rem;
-    margin-bottom: 0.4rem;
-  }
-  .summary {
-    margin-top: 0.5rem;
-    padding: 0.35rem 0.6rem;
-  }
-  .runs {
-    padding: 0.5rem 1rem;
-  }
-  .views {
-    padding: 0.5rem 1rem 0;
+    font-size: 18px;
+    line-height: 26px;
   }
   .sent,
   .refused {
-    padding: 0.5rem 1rem;
+    margin: 12px 16px 0;
+  }
+  .log {
+    margin: 12px 16px 16px;
   }
 }

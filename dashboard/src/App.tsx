@@ -10,7 +10,7 @@ import { type RepoList, useAppState, useRepos } from "./api";
 import { Detail } from "./Detail";
 import { Graph } from "./Graph";
 import { InboxDialog } from "./Inbox";
-import { type ChipId, CHIPS, inChip, isLive, repoTabs, sameRepo } from "./format";
+import { type ChipId, CHIPS, inChip, isLive, matchesSearch, repoTabs, sameRepo } from "./format";
 import { useReadyNotifications } from "./notify";
 import { Repos } from "./Repos";
 import { formatRoute, parseRoute, type Route } from "./route";
@@ -96,6 +96,9 @@ export function Dashboard({ state, error, repos, refresh }: Props) {
     const saved = stored("chip");
     return CHIPS.some((c) => c.id === saved) ? (saved as ChipId) : "all";
   });
+  // The list's search, and whether a phone shows its box (a wide screen always does).
+  const [query, setQuery] = useState("");
+  const [searchOpen, setSearchOpen] = useState(false);
   const [showClosed, setShowClosed] = useState(() => stored("graphClosed") === "1");
   const [rail, setRail] = useState(() => stored("sidebar") === "rail");
   // The last repo open here, which All doesn't clear: the phone's Tasks and Board go there.
@@ -114,7 +117,7 @@ export function Dashboard({ state, error, repos, refresh }: Props) {
   const task = (route.task && tasks.find((t) => t.key === route.task)) || null;
   const run = (task && route.run && task.runs.find((r) => r.id === route.run)) || task?.runs[0];
   // A wide screen has room for a task: the first live one, else the first one, once.
-  const visible = inTab.filter((t) => inChip(chip, t));
+  const visible = inTab.filter((t) => inChip(chip, t) && matchesSearch(t, query));
   const first = visible.find(isLive) ?? visible[0];
   const onSettings = route.page === "settings";
   const onBoard = route.page === "board";
@@ -151,13 +154,19 @@ export function Dashboard({ state, error, repos, refresh }: Props) {
   const notify = useReadyNotifications(state);
   const github = state?.githubUrl ?? "https://github.com";
   const shell = { state, error, route, refresh, onRequest: setRequest };
+  const onTasks = !onBoard && !onSettings;
+  // A phone's search button opens the box, and closes it emptied.
+  const toggleSearch = () => {
+    if (searchOpen) setQuery("");
+    setSearchOpen(!searchOpen);
+  };
 
   return (
     <div class={`${styles.app} ${task ? styles.reading : ""}`}>
       {wide ? (
         <Sidebar {...shell} repos={repos} rail={rail} onRail={selectRail} notify={notify} />
       ) : (
-        <TopBar {...shell} />
+        <TopBar {...shell} onSearch={onTasks && !task ? toggleSearch : undefined} />
       )}
       <div class={styles.content}>
         {wide && <PageHeader route={route} github={github} />}
@@ -194,11 +203,16 @@ export function Dashboard({ state, error, repos, refresh }: Props) {
                 tasks={inTab}
                 chip={chip}
                 onChip={selectChip}
+                query={query}
+                onQuery={setQuery}
+                searching={wide || searchOpen}
+                onSearching={setSearchOpen}
                 selected={task?.key ?? null}
                 onSelect={(key) => go({ ...route, task: key, run: null }, true)}
                 showRepo={!route.repo}
                 now={now}
                 loading={!state}
+                touch={!wide}
               />
             </aside>
             <main class={styles.main}>
@@ -209,6 +223,8 @@ export function Dashboard({ state, error, repos, refresh }: Props) {
                 onBack={() => go({ ...route, task: null, run: null }, true)}
                 now={now}
                 github={github}
+                showRepo={!route.repo}
+                touch={!wide}
                 refresh={refresh}
               />
             </main>

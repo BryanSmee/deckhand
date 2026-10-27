@@ -1,5 +1,4 @@
-/* GitHub's own colours for a pull request's state, so they read at a glance; "Ready for
-   review" is filled, because it waits for the maintainer. */
+/* A verdict as a badge, in its colour. */
 .badge {
   display: inline-block;
   padding: 0 0.45rem;
@@ -13,43 +12,17 @@
   white-space: nowrap;
 }
 
-.draft {
-  --tone: var(--idle);
-}
-.ready {
-  --tone: var(--ready-solid);
-  background: var(--ready-bg);
-  color: var(--ready);
-}
-.merged {
-  --tone: var(--merged);
-}
-.closed {
-  --tone: var(--err);
-}
-/* Merged with no human review: dashed, so it reads apart from a maintainer's merge. */
-.auto {
-  border-style: dashed;
-}
-
-.link {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-}
-
 /* The task's policy decisions, under its last reply. */
 .decisions {
-  margin: 0.75rem 0 0;
-  padding: 0.5rem 0.75rem;
-  border-radius: 6px;
-  background: var(--raised);
-  border: 1px solid var(--line);
-  font-size: 0.85rem;
+  padding: 12px 14px;
+  border-radius: var(--radius-card);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  font-size: 13px;
   overflow-wrap: anywhere;
 }
 .decisions > b {
-  color: var(--muted);
+  color: var(--text-3);
   font-weight: 600;
 }
 .decisions ul {
@@ -74,5 +47,5 @@
   --tone: var(--ok);
 }
 .when {
-  color: var(--muted);
+  color: var(--text-3);
 }

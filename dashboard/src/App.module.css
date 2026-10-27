@@ -17,7 +17,7 @@
   flex: 1;
   min-height: 0;
   display: grid;
-  grid-template-columns: minmax(20rem, 28rem) 1fr;
+  grid-template-columns: minmax(20rem, 25rem) 1fr;
 }
 
 .side {
@@ -32,6 +32,7 @@
 .main {
   min-width: 0;
   min-height: 0;
+  background: var(--bg);
 }
 
 .page {
