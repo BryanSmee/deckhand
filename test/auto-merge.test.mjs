@@ -993,3 +993,27 @@ test("auto-merge: a tick merges what a lost workflow_run delivery would have", a
   await s.reviews.tick();
   assert.equal(s.merges().length, 1);
 });
+
+test("auto-merge: GitHub failing while it waits keeps it waiting, until review.merge_wait", async (t) => {
+  const path = join(tempDir(t), "reviews.json");
+  const s = setup(t, { path, runs: [GOING] });
+  await s.settle();
+  s.over.pullStatus = 502;
+  await s.reviews.checksDone("workflow_run", completed());
+  await s.reviews.tick();
+  assert.deepEqual([s.replies, s.merges()], [[], []]);
+  // Still saved as waiting: a listener stopped during a decision asks again after it.
+  const next = setup(t, { path });
+  await next.reviews.tick();
+  assert.equal(next.merges().length, 1);
+  // Past the deadline, the failure is the refusal, once.
+  const late = setup(t, { runs: [GOING] });
+  await late.settle();
+  late.over.pullStatus = 502;
+  late.advance(61 * 60_000);
+  await late.reviews.tick();
+  assert.equal(late.replies.length, 1);
+  assert.match(late.replies[0].text, /GitHub couldn't be read/);
+  await late.reviews.tick();
+  assert.equal(late.replies.length, 1);
+});

@@ -2258,7 +2258,7 @@ modes:
     assert.equal(github.requests.filter((r) => r.path.endsWith("/pulls/13/reviews")).length, 1);
   });
 
-  test("review.merge: a clean review of Deckhand's pull request merges it, with the listener's token", async (t) => {
+  test("review.merge: a clean review of Deckhand's pull request merges it once its checks pass, with the listener's token", async (t) => {
     const pr = {
       number: 13,
       title: "Fix the thing",
@@ -2272,22 +2272,20 @@ modes:
       user: { login: "deckhand-x[bot]", type: "Bot" },
       head: { sha: "head-1", ref: "issue-12-fix", repo: { full_name: "org/repo" } },
     };
-    const { github, listener, send } = await listen(
-      t,
-      {
-        ".deckhand.yaml": "review:\n  on: ready\n  fix: true\n  merge: true\n",
-        "pull:13": JSON.stringify(pr),
-        runs: JSON.stringify({
-          workflow_runs: [{ name: "CI", status: "completed", conclusion: "success" }],
-        }),
-      },
-      (dir) => {
-        // The fake repository says nothing of its visibility: public, so `public`.
-        writeGrant(dir, "allow_auto_merge: public\n");
-        writeFileSync(join(dir, "result"), "Fine.\n\nRating: 9/10\nVerdict: approve\n");
-        return {};
-      },
-    );
+    // CI still going when the review ends: the merge waits for it.
+    const files = {
+      ".deckhand.yaml": "review:\n  on: ready\n  fix: true\n  merge: true\n",
+      "pull:13": JSON.stringify(pr),
+      runs: JSON.stringify({
+        workflow_runs: [{ name: "CI", status: "in_progress", conclusion: null }],
+      }),
+    };
+    const { github, listener, send } = await listen(t, files, (dir) => {
+      // The fake repository says nothing of its visibility: public, so `public`.
+      writeGrant(dir, "allow_auto_merge: public\n");
+      writeFileSync(join(dir, "result"), "Fine.\n\nRating: 9/10\nVerdict: approve\n");
+      return {};
+    });
     await listener.until(
       /WARNING: auto-merge is granted to org\/repo, public repositories included/,
     );
@@ -2300,6 +2298,22 @@ modes:
         sender: { login: "deckhand-x[bot]", type: "Bot" },
       },
       "pull_request",
+    );
+    await listener.until("org/repo#pr-13: waiting for its checks, 1 GitHub Actions run on head-1");
+    assert.ok(!github.requests.some((r) => r.method === "PUT"));
+    // The run completes: its delivery decides again.
+    files.runs = JSON.stringify({
+      workflow_runs: [{ name: "CI", status: "completed", conclusion: "success" }],
+    });
+    await send(
+      {
+        action: "completed",
+        installation: { id: 7 },
+        repository: { full_name: "org/repo", default_branch: "trunk" },
+        workflow_run: { id: 99, head_sha: "head-1", status: "completed", conclusion: "success" },
+        sender: { login: "github-actions[bot]", type: "Bot" },
+      },
+      "workflow_run",
     );
     const merge = await github.waitFor(
       (r) => r.method === "PUT" && r.path === "/repos/org/repo/pulls/13/merge",

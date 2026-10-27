@@ -407,7 +407,9 @@ runs still going stand in the way (`mergeRefusal()`'s `pending`), `decide()` cle
 and keeps `waiting` ({ sha, since, review, … }) in `reviews.json` instead: `checksDone()`, on a
 `workflow_run` `completed` delivery for that sha (`http.mjs`), and `tick()`, every 5 minutes,
 decide again (`recheck()`, one at a time per pull request), until `review.merge_wait` minutes
-after `since`, when the pull request is refused. A merge is recorded
+after `since`, when the pull request is refused. `waiting` stays saved until such a decision
+ends (an in-memory map keeps it to one at a time), so a listener stopped meanwhile asks again,
+and a GitHub call failing then waits for the next try. A merge is recorded
 on the task's pull request (`pulls.mjs`, `autoMerged`) for the dashboard. A fix run's end
 (an item with `reason: "review-fix"`, in `cleanUp()`) calls `reviews.fixed()`: one more review
 of what it pushed (`rereviewAt`), or a comment when it failed or pushed nothing. At start,
