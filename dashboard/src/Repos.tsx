@@ -116,7 +116,7 @@ export function Repos({
   const [from, setFrom] = useState<"card" | "row">("row");
   if (open) {
     return (
-      <section class={styles.config} aria-label={`${open} configuration`}>
+      <section aria-label={`${open} configuration`}>
         <ConfigPanel
           repo={open}
           row={repos?.find((r) => r.repo === open) ?? null}

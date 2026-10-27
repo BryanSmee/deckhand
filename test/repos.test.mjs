@@ -632,11 +632,18 @@ test("GET config: raw text, errors, warnings and what runs get; its row updated"
   assert.equal(body.file.text, "users: [bob, carol]\nhosts: [pypi.org]\nmax_parallel: 5\n");
   assert.equal(body.file.sha, "s");
   assert.equal(body.file.url, "https://github.com/org/app/blob/main/.deckhand.yaml");
+  assert.equal(body.file.editUrl, "https://github.com/org/app/edit/main/.deckhand.yaml");
   assert.equal(body.base, "main");
   assert.deepEqual(body.errors, []);
+  // Each with the line of its key, when it has one.
   assert.deepEqual(body.warnings, [
-    "users not in ALLOWED_USERS, ignored: carol",
-    "hosts: ignored, the operator lists the hosts in grants/<owner>/<repo>.yaml",
+    { key: null, message: "users not in ALLOWED_USERS, ignored: carol", line: null, fix: null },
+    {
+      key: "hosts",
+      message: "ignored, the operator lists the hosts in grants/<owner>/<repo>.yaml",
+      line: 2,
+      fix: null,
+    },
   ]);
   assert.equal(body.grantsError, null);
   // A repo's own hosts are only a warning: its runs start.
@@ -650,10 +657,12 @@ test("GET config: raw text, errors, warnings and what runs get; its row updated"
     value: "bob",
     source: "repo",
     note: "narrowed from ALLOWED_USERS (alice, bob)",
+    line: 1,
   });
   // The operator's MAX_PARALLEL (2) stays the ceiling.
   const parallel = body.effective.settings.find((r) => r.key === "max_parallel");
-  assert.deepEqual([parallel.value, parallel.source], ["2", "operator"]);
+  assert.deepEqual([parallel.value, parallel.source, parallel.line], ["2", "operator", 3]);
+  assert.equal(body.effective.settings.find((r) => r.key === "model").line, null);
   // Not reachable: only the grants folder lists hosts, each with its file.
   assert.equal(
     body.effective.hosts.find((h) => h.host === "pypi.org"),
@@ -716,7 +725,9 @@ test("auto-merge: the row's badge and the config's warnings follow the grant, vi
     "org/pubok": true,
   });
   const warnings = async (repo) =>
-    (await call(api, "GET", `/api/repos/${repo}/config`)).body.warnings;
+    (await call(api, "GET", `/api/repos/${repo}/config`)).body.warnings.map(
+      (w) => `${w.key ? `${w.key}: ` : ""}${w.message}`,
+    );
   for (const repo of ["org/priv", "org/pubok", "org/ack"])
     assert.deepEqual(await warnings(repo), [], repo);
   assert.match((await warnings("org/none"))[0], /don't set `allow_auto_merge: true`/);
@@ -736,10 +747,16 @@ test("GET config: an invalid file shows its errors, and its row turns invalid", 
   const { api } = apiSetup({ first: [info("org/app")], files });
   assert.equal((await call(api, "GET", "/api/repos")).body.repos[0].status, "configured");
   // The file changed and no webhook said so: reading it for the panel updates the row.
-  files["org/app"] = "effort: loud\n";
+  files["org/app"] = "# app\n\neffort: loud\nmodes:\n  stop: { instructions: a.md }\n";
   const res = await call(api, "GET", "/api/repos/org/app/config");
   assert.equal(res.body.repo.status, "invalid");
-  assert.match(res.body.errors[0], /^effort: expected one of/);
+  assert.equal(res.body.errors[0].key, "effort");
+  assert.match(res.body.errors[0].message, /^expected one of/);
+  assert.equal(res.body.errors[0].line, 3);
+  // Each error with its fix: the parse's own, else one that fits any error.
+  assert.match(res.body.errors[0].fix, /remove the key to get the default/);
+  assert.deepEqual([res.body.errors[1].key, res.body.errors[1].line], ["modes.stop", 5]);
+  assert.match(res.body.errors[1].fix, /^Give the mode another name/);
   assert.equal((await call(api, "GET", "/api/repos")).body.repos[0].status, "invalid");
 });
 

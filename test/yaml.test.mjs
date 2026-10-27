@@ -101,3 +101,36 @@ test("what it doesn't understand is an error with its line", () => {
     );
   }
 });
+
+test("where: the line of each key and list item, by its dotted path", () => {
+  const where = new Map();
+  parseYaml(
+    [
+      "# a comment",
+      "users: [alice, bob]",
+      "setup: |",
+      "  npm ci",
+      "mounts:",
+      "- path: /fixtures",
+      "  read_only: false",
+      "- /cache",
+      "modes:",
+      "  review: { agent: codex }",
+    ].join("\n"),
+    where,
+  );
+  assert.deepEqual(Object.fromEntries(where), {
+    users: 2,
+    "users.0": 2,
+    "users.1": 2,
+    setup: 3,
+    mounts: 5,
+    "mounts.0": 6,
+    "mounts.0.path": 6,
+    "mounts.0.read_only": 7,
+    "mounts.1": 8,
+    modes: 9,
+    "modes.review": 10,
+    "modes.review.agent": 10,
+  });
+});

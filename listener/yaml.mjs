@@ -14,14 +14,16 @@ export function isMap(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-export function parseYaml(text) {
+// `where`: a Map to fill with the line of each key and list item, by its dotted path
+// ("modes.review.agent", "mounts.0"), so a config's errors can point at their line.
+export function parseYaml(text, where = null) {
   const lines = String(text)
     .replace(/^﻿/, "")
     .split(/\r?\n/)
     .map((raw, i) => ({ raw, n: i + 1 }));
   // The reader's position, shared by the steps below: they consume lines as they go.
-  const doc = { lines, i: 0, started: false };
-  const result = block(doc, 0);
+  const doc = { lines, i: 0, started: false, where };
+  const result = block(doc, 0, "");
   const left = peek(doc);
   if (left) throw new YamlError("unexpected indentation", left.n);
   return result;
@@ -61,13 +63,20 @@ function peek(doc) {
 
 const isItem = (line) => line.text === "-" || line.text.startsWith("- ");
 
-function block(doc, indent) {
-  const line = peek(doc);
-  if (!line || line.indent < indent) return null;
-  return isItem(line) ? sequence(doc, line.indent) : mapping(doc, line.indent);
+// `path`'s child `key`, noted at line `n` when the caller asked where keys are.
+function child(doc, path, key, n) {
+  const at = path ? `${path}.${key}` : String(key);
+  if (doc.where && !doc.where.has(at)) doc.where.set(at, n);
+  return at;
 }
 
-function mapping(doc, indent) {
+function block(doc, indent, path) {
+  const line = peek(doc);
+  if (!line || line.indent < indent) return null;
+  return isItem(line) ? sequence(doc, line.indent, path) : mapping(doc, line.indent, path);
+}
+
+function mapping(doc, indent, path) {
   const result = {};
   for (let line = peek(doc); line && line.indent >= indent; line = peek(doc)) {
     if (line.indent > indent) throw new YamlError("unexpected indentation", line.n);
@@ -75,24 +84,25 @@ function mapping(doc, indent) {
     const { key, rest } = splitKey(line.text, line.n);
     if (Object.hasOwn(result, key)) throw new YamlError(`duplicate key "${key}"`, line.n);
     doc.i++;
-    result[key] = value(doc, rest, indent, line.n, true);
+    result[key] = value(doc, rest, indent, line.n, true, child(doc, path, key, line.n));
   }
   return result;
 }
 
-function sequence(doc, indent) {
+function sequence(doc, indent, path) {
   const result = [];
   for (let line = peek(doc); line && line.indent === indent && isItem(line); line = peek(doc)) {
     const rest = line.text.slice(1).trimStart();
+    const item = child(doc, path, result.length, line.n);
     if (rest && !rest.startsWith("#") && keyAt(rest) >= 0) {
       // "- name: x" starts a mapping whose keys line up with "name".
       line.indent += line.text.length - rest.length;
       line.text = rest;
-      result.push(mapping(doc, line.indent));
+      result.push(mapping(doc, line.indent, item));
       continue;
     }
     doc.i++;
-    result.push(value(doc, rest, indent, line.n, false));
+    result.push(value(doc, rest, indent, line.n, false, item));
   }
   const line = peek(doc);
   if (line && line.indent > indent) throw new YamlError("unexpected indentation", line.n);
@@ -100,21 +110,18 @@ function sequence(doc, indent) {
 }
 
 // What follows "key:" or "- ": a scalar, a flow collection, a block scalar, or a nested block.
-function value(doc, rest, indent, n, inMapping) {
+function value(doc, rest, indent, n, inMapping, path) {
   const text = stripComment(rest, n).trim();
   if (!text) {
-    const child = peek(doc);
+    const next = peek(doc);
     // A mapping's list may sit at the key's own indentation.
-    if (
-      child &&
-      (child.indent > indent || (inMapping && child.indent === indent && isItem(child)))
-    ) {
-      return block(doc, child.indent);
+    if (next && (next.indent > indent || (inMapping && next.indent === indent && isItem(next)))) {
+      return block(doc, next.indent, path);
     }
     return null;
   }
   if (/^[|>]/.test(text)) return blockScalar(doc, text, indent, n);
-  if (text.startsWith("[") || text.startsWith("{")) return flow(text, n);
+  if (text.startsWith("[") || text.startsWith("{")) return flow(doc, text, n, path);
   return scalar(text, n);
 }
 
@@ -246,7 +253,7 @@ function scalar(text, n) {
 }
 
 // "[a, 'b, c']" or "{ key: value }" on one line; no nesting.
-function flow(text, n) {
+function flow(doc, text, n, path) {
   const open = text[0];
   const close = open === "[" ? "]" : "}";
   if (!text.endsWith(close)) throw new YamlError(`flow ${open}…${close} must fit on one line`, n);
@@ -273,11 +280,15 @@ function flow(text, n) {
   // "[]", or a trailing comma: "[a, b,]".
   if (parts.at(-1) === "") parts.pop();
   if (parts.some((p) => !p)) throw new YamlError("empty item in a flow collection", n);
-  if (open === "[") return parts.map((p) => scalar(p, n));
+  if (open === "[") {
+    parts.forEach((p, k) => child(doc, path, k, n));
+    return parts.map((p) => scalar(p, n));
+  }
   const result = {};
   for (const part of parts) {
     const { key, rest } = splitKey(part, n);
     if (Object.hasOwn(result, key)) throw new YamlError(`duplicate key "${key}"`, n);
+    child(doc, path, key, n);
     result[key] = rest.trim() ? scalar(rest.trim(), n) : null;
   }
   return result;

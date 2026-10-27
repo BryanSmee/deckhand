@@ -1,6 +1,7 @@
 // Settings: its tabs (Repositories, Preferences, Server) and the one open. The tabs are links,
 // so each has its address (route.ts); on a wide screen they sit in the page header, on a
-// phone atop the page.
+// phone atop the page; a repository's config hides them for its own header. Preferences says
+// it's coming until its page lands.
 import type { RepoList } from "./api";
 import type { Notify } from "./notify";
 import { Preferences } from "./Preferences";
@@ -70,7 +71,7 @@ export function Settings({ route, state, error, repos, narrow, notify, onOpen, r
   const tasks = state?.tasks ?? [];
   return (
     <div class={styles.settings}>
-      {narrow && (
+      {narrow && !route.config && (
         <SettingsTabs route={route} count={needingYou(repos.repos, tasks)} class={styles.tabs} />
       )}
       {route.section === "server" ? (
