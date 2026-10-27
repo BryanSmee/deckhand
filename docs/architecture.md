@@ -208,6 +208,17 @@ fail, posts an App comment ("Rerun from the dashboard by @user") where the run r
 queues those comments again in the run's mode, with that comment for the reactions. The
 issue's session volume carries what the run had done.
 
+A failed or interrupted task stops asking for attention (Waiting on you, the Failed tile, the
+Error chip, its repository card's "failed" count) once its issue is closed or its pull request
+merged or closed: what can't run again shouldn't ask to. It keeps its state, runs and page.
+For an open one, **Dismiss** (on its Waiting on you row and its page; the last run `error`,
+`interrupted` or `cancelled`) does the same: `POST /api/repos/<owner>/<repo>/dismiss { runId }`
+(`work.mjs` `dismiss`, the repo's users, the task's latest run only) keeps `task key → { runId,
+by, at }` in `dismissed.json` (`dismissals.mjs`), and `board.mjs` marks the task `dismissed: {
+by, at }` while that run is still its last and it still ended so. Any new run shows it again;
+the stale entry is dropped on the next start. `{ runId, undo: true }` takes it back. Nothing is
+posted on GitHub: it only matters to the dashboard.
+
 The dashboard's New request (Idea, Bug report) sends ideas and bug reports to a repo's inbox:
 `POST /api/repos/<owner>/<repo>/inbox { kind: "idea" | "bug", text }` (`work.mjs`
 `sendToInbox`; the dialog's title, a blank line, then its details) posts the text on the inbox issue as the App's comment ("From the dashboard by
@@ -760,7 +771,8 @@ tests fake it.
 | `reviews.mjs`                                                     | Pull request reviews: the ready pull requests that get one (`reviews.json`), the GitHub review posted from the run's final message, its fix run and auto-merge.                                                                                      |
 | `policies.mjs`                                                    | Rules as code: the operator's (`GRANTS_DIR/policy/`) and the repos' (`.deckhand/policy/`) Rego policies, merged by file name and evaluated by `opa` (no environment, no network, a timeout), fail closed.                                            |
 | `waits.mjs`                                                       | Comments waiting for other issues to be done (`/after`, `waits.json`).                                                                                                                                                                               |
-| `work.mjs`                                                        | The graph's work area: the backlog, starting or queueing issues, answers, reruns, inbox entries, lane names, analyses.                                                                                                                               |
+| `work.mjs`                                                        | The graph's work area: the backlog, starting or queueing issues, answers, reruns, dismissals, inbox entries, lane names, analyses.                                                                                                                   |
+| `dismissals.mjs`                                                  | Failed runs dismissed from the dashboard, while each is its task's last (`dismissed.json`).                                                                                                                                                          |
 | `lanes.mjs`                                                       | The board's lanes' names: typed on the dashboard, a plan's or GitHub's parent, or an inbox (`lanes.json`).                                                                                                                                           |
 | `plans.mjs`                                                       | A parent issue dropped on the graph: its sub-issues' tree, all levels down, and what each waits for from their "blocked by" links.                                                                                                                   |
 | `discussions.mjs`                                                 | Discussions from the dashboard: started, their thread read, replies.                                                                                                                                                                                 |

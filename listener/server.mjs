@@ -55,6 +55,7 @@ import { createRestart } from "./restart.mjs";
 import { createReviews } from "./reviews.mjs";
 import { loadRuns } from "./runlog.mjs";
 import { createDiscussionApi, fromKey } from "./discussions.mjs";
+import { createDismissals } from "./dismissals.mjs";
 import { createDockerRunner } from "./runner/docker.mjs";
 import { operatorSecrets } from "./secrets.mjs";
 import { createRuns } from "./runs.mjs";
@@ -223,6 +224,9 @@ const inputs = createInputs({
   listLabelled: (repo) => listLabelled(github, repo, config.needsInputLabel),
 });
 
+// Failed runs dismissed from the dashboard, while each is its task's last (dismissals.mjs).
+const dismissals = createDismissals({ path: join(config.dataDir, "dismissed.json") });
+
 // --- Per-repo settings, images and preview hooks -------------------------------------------
 
 const repoFile = (repo, path, ref) => readRepoFile(github, repo, path, ref);
@@ -283,6 +287,7 @@ Object.assign(ctx, {
   lanes,
   pulls,
   inputs,
+  dismissals,
   onboarded,
   repoList,
   // Replies, reactions and the needs-input label.
@@ -509,6 +514,7 @@ ctx.workApi = createWorkApi({
   cancel: (key, user) => ctx.cancel(key, user),
   analysis: ctx.analysis,
   lanes,
+  dismissals,
   publicUrl,
   fromKey: dashboardKey,
   log,
@@ -542,12 +548,15 @@ const keyed = [
   ctx.decisions,
   titles,
   lanes,
+  dismissals,
 ];
 const spelled = await ctx.unifySpellings({
   nameOf: discussionChecks.nameOf,
   keys: keyed.flatMap((state) => state.keys()),
 });
 for (const state of keyed) state.respell(spelled);
+// A run since a dismissal shows its task again: its entry is stale.
+dismissals.prune(ctx.runs);
 
 const http = createHttp(ctx, {
   dashboardDir: env.DASHBOARD_DIR || new URL("../dashboard/dist", import.meta.url).pathname,
