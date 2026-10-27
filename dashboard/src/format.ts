@@ -282,6 +282,20 @@ export function duration(r: Run, now: number): string {
 
 // What a row says besides its state: how long, until when, or how long ago.
 export function when(t: Task, now: number): string {
+  return ownWhen(t, now) ?? (t.updatedAt ? ago(t.updatedAt, now) : "");
+}
+
+// The full time behind when()'s "… ago", and its last run's start; null when it says another.
+export function whenTitle(t: Task, now: number): string | null {
+  if (ownWhen(t, now) !== null || !t.updatedAt) return null;
+  const updated = `Updated ${dayTime(t.updatedAt, now)}`;
+  const last = t.runs[0];
+  return last ? `${updated} · last run started ${dayTime(last.startedAt, now)}` : updated;
+}
+
+// A live, queued, waiting or brainstorm row's own text; null for the others, which say when
+// they were last updated.
+function ownWhen(t: Task, now: number): string | null {
   const last = t.runs[0];
   if (isLive(t) && last) return duration(last, now);
   if (t.state === "queued") return t.replyTo ? `reply on #${t.replyTo}` : "";
@@ -290,9 +304,7 @@ export function when(t: Task, now: number): string {
     return `idle in ${Math.max(0, Math.ceil((t.deadline - now) / 60000))} min`;
   }
   if (t.state === "idle-brainstorm" && t.deadline) return `since ${ago(t.deadline, now)}`;
-  // An issue waiting for input without a run: since it was labelled.
-  if (last) return ago(last.startedAt, now);
-  return t.since ? ago(t.since, now) : "";
+  return null;
 }
 
 // "#77", "#77 and #80", "#77, #80 and #81".

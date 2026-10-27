@@ -388,3 +388,35 @@ test("dismissed: while the dismissed run is the task's last and the task ended a
   // It keeps its state.
   assert.equal(tasks.find((t) => t.key === "acme/api#1").state, "error");
 });
+
+test("a task's update time is the latest Deckhand saw, and orders the list", () => {
+  const tasks = board({
+    runs: [
+      run("acme/api#1", 300, { status: "running" }),
+      run("acme/api#2", 200),
+      run("acme/api#3", 100, { finishedAt: 900 }),
+      run("acme/api#4", 50, { finishedAt: 60, lastPushAt: 400 }),
+      run("acme/api#5", 40, { finishedAt: 45 }),
+      run("acme/api#6", 30, { finishedAt: 35 }),
+    ],
+    queued: [],
+    brainstorms: [],
+    pr: (key) => (key === "acme/api#5" ? { readyAt: 700 } : null),
+    decisions: (key) => (key === "acme/api#6" ? [{ at: 800 }, { at: 20 }] : []),
+  });
+  const updated = Object.fromEntries(tasks.map((t) => [t.key, t.updatedAt]));
+  assert.deepEqual(updated, {
+    "acme/api#1": 300,
+    "acme/api#2": 200,
+    "acme/api#3": 900,
+    "acme/api#4": 400,
+    "acme/api#5": 700,
+    "acme/api#6": 800,
+  });
+  // The live one on top, the rest newest update first; `since` stays the run start.
+  assert.deepEqual(
+    tasks.map((t) => t.key),
+    ["acme/api#1", "acme/api#3", "acme/api#6", "acme/api#5", "acme/api#4", "acme/api#2"],
+  );
+  assert.equal(tasks.find((t) => t.key === "acme/api#3").since, 100);
+});

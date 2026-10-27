@@ -21,6 +21,7 @@ import {
   uptime,
   versionUrl,
   when,
+  whenTitle,
 } from "./format";
 import type { PrState, Run, State, Task } from "./types";
 
@@ -116,6 +117,24 @@ test("what a row says besides its state", () => {
   expect(when(task("acme/app#24"), now)).toBe("after #23 and #22");
   expect(when(task("acme/app#20"), now)).toBe("idle in 6 min");
   expect(when(task("acme/api#138"), now)).toBe("3 h ago");
+  // Its run started 5 h ago and ended 10 min ago: when it was last updated.
+  expect(when(task("acme/api#131"), now)).toBe("10 min ago");
+});
+
+test("the time a row shows in full: its update and its last run's start", () => {
+  const now = state.now;
+  const t = task("acme/api#131");
+  expect(whenTitle(t, now)).toBe(
+    `Updated ${dayTime(t.updatedAt, now)} · last run started ${dayTime(t.runs[0].startedAt, now)}`,
+  );
+  // Labelled without a run.
+  const asking = makeTask({ state: "needs-input", since: now - 60000, updatedAt: now - 60000 });
+  expect(when(asking, now)).toBe("1 min ago");
+  expect(whenTitle(asking, now)).toBe(`Updated ${dayTime(now - 60000, now)}`);
+  // The rows that say something else have none.
+  for (const key of ["acme/app#22", "acme/app#23", "acme/app#24", "acme/app#20", "acme/notes#4"]) {
+    expect(whenTitle(task(key), now)).toBeNull();
+  }
 });
 
 test("own modes: the repo's, never one of the listener's", () => {

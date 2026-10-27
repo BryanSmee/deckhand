@@ -15,6 +15,7 @@ const task = (n: number, extra: Partial<Task> = {}): Task => ({
   replyTo: n,
   state: "done",
   since: 0,
+  updatedAt: 0,
   closed: null,
   pr: null,
   rerunnable: false,

@@ -70,6 +70,7 @@ export const makeTask = (partial: Partial<Task> = {}): Task => {
     replyTo: number,
     state: "working",
     since: 0,
+    updatedAt: 0,
     closed: null,
     pr: null,
     rerunnable: false,

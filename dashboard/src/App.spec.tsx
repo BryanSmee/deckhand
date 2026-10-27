@@ -256,6 +256,7 @@ test("an issue waiting for answers without a run: listed under Needs you, no log
     mode: null,
     state: "needs-input" as const,
     since: state.now - 2 * 3600000,
+    updatedAt: state.now - 2 * 3600000,
     pr: null,
     rerunnable: false,
     runs: [],

@@ -3589,6 +3589,7 @@ mounts:
       "replyTo",
       "state",
       "since",
+      "updatedAt",
       "closed",
       "pr",
       "rerunnable",

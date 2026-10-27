@@ -156,6 +156,9 @@ export interface Task {
   replyTo: number | null;
   state: TaskState;
   since: number;
+  // When Deckhand last saw something happen to it: a run starting, ending or pushing, its pull
+  // request turning ready, a policy decision, a wait, the needs-input label (listener/board.mjs).
+  updatedAt: number;
   // A brainstorm's: when it goes idle, or went.
   deadline?: number;
   // The issues or pull requests its next run waits for ("/after #77", listener/waits.mjs).

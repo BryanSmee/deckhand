@@ -201,6 +201,7 @@ function withPending(tasks: Task[], edges: Edge[], pending: Pending[]) {
         replyTo: p.number,
         state: p.action === "start" ? "queued" : "waiting",
         since: 0,
+        updatedAt: 0,
         closed: null,
         pr: null,
         rerunnable: false,
