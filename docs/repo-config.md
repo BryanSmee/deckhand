@@ -105,6 +105,7 @@ review:
   #             # review; needs the operator's allow_auto_merge (see Auto-merge below)
   # merge_method: squash # squash (default) | merge | rebase
   # max_allowed_severity: low # low (default) | medium: the most severe finding a merge allows
+  # merge_wait: 60 # minutes a merge waits for the GitHub Actions runs still going (0 to 1440)
 
 # Where ideas, bug reports and questions go (see Inboxes below).
 inbox:
@@ -151,6 +152,7 @@ wait_for_answers: true
 | `review.merge`                          | `false`                                 | **unsafe**: Deckhand merges its own pull request after a clean review; needs `allow_auto_merge` (see Auto-merge)             |
 | `review.merge_method`                   | `squash`                                | how an auto-merge merges: `squash`, `merge` or `rebase`, one the repository allows                                           |
 | `review.max_allowed_severity`           | `low`                                   | the most severe finding the review that decides an auto-merge may have: `low` or `medium` (see Auto-merge)                   |
+| `review.merge_wait`                     | `60`                                    | minutes an auto-merge waits for the GitHub Actions runs still going on the reviewed commit, `0` to `1440` (see Auto-merge)   |
 | `inbox.ideas`, `inbox.bugs`             | none                                    | issue numbers whose comments are ideas or bug reports to file (see Inboxes)                                                  |
 | `inbox.discussions`                     | none                                    | GitHub Discussions category whose discussions Claude answers (see Inboxes)                                                   |
 | `preview.command`                       | none                                    | preview hook command (`preview: ./x.sh` works too); needs the operator's `allow_preview`                                     |
@@ -509,8 +511,9 @@ review` gets the "unknown mode" reply. `review: true` (or a block without `on`, 
   reviews every pull request that turns ready: keep `manual` where that is too many. A fix is
   a work run, at the repo's work model.
 
-`on`, `instructions`, `agent`, `model`, `effort`, `fix`, `merge`, `merge_method` and
-`max_allowed_severity` are its only keys: any other, or a bad value, is an error.
+`on`, `instructions`, `agent`, `model`, `effort`, `fix`, `merge`, `merge_method`,
+`max_allowed_severity` and `merge_wait` are its only keys: any other, or a bad value, is an
+error.
 
 #### Auto-merge
 
@@ -577,9 +580,24 @@ with only low findings still does. `low`, the default: any medium finding blocks
   request with more than it lists is refused;
 - a granted preview hook only with the acknowledgement above;
 - `mergeable_state` is `clean`, and its GitHub Actions runs on the head commit are finished
-  with none failed (read with the App's `actions: read`; no new permission);
+  with none failed (read with the App's `actions: read`; no new permission). A failed run
+  refuses at once, naming it; `dirty` (a conflict) or `behind` too. `unstable` with every
+  Actions run passed means a check or commit status that isn't an Actions run (an external
+  CI, a bot's status) is pending or failing: the App can't read those, so that refuses too,
+  saying so;
 - last, the operator's and the repository's [policies](#policies) (`deny_merge`): any message
   refuses the merge, and the comment quotes it.
+
+**Checks still running.** The review's push (or the fix run's) starts CI at the same time as
+the review, so CI longer than the review is still going when it ends. When Actions runs still
+going are all that stands in the way (`mergeable_state` `clean`, `unstable`, `blocked` or
+still `unknown`), nothing is posted: the pull request waits, in `reviews.json` (across
+restarts), and the gates are asked again each time an Actions run completes on the reviewed
+commit (the App's `workflow_run` deliveries), and every 5 minutes for a lost delivery. They
+merge it once every run passed and it is `clean`, or refuse it as above. After `merge_wait`
+minutes (60 by default) with runs still going, it is refused once: "its checks didn't finish
+in time". `merge_wait: 0` refuses at once, as before. A push after the review still refuses
+it, and it is still one decision per pull request.
 
 The merge is `PUT /pulls/{n}/merge` with the reviewed commit as `sha`, so a push after the
 review makes GitHub refuse it. A comment then says Deckhand merged it, and why; the dashboard

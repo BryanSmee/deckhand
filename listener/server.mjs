@@ -600,6 +600,7 @@ ctx.reattach(restored).catch((error) => log(`Re-attaching: ${error.stack ?? erro
 const relinking = setInterval(ctx.relink, RELINK_MS);
 ctx.conflicts.start();
 ctx.waits.start();
+ctx.reviews.start();
 // After restoreRuns() and loadQueue(): what they bring back is kept.
 const history = createHistory(ctx);
 history.start();
@@ -624,6 +625,7 @@ process.on("SIGTERM", () => {
   ctx.stopping = true;
   ctx.conflicts.stop();
   ctx.waits.stop();
+  ctx.reviews.stop();
   history.stop();
   redeliveries.stop();
   clearInterval(relinking);

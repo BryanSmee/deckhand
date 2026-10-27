@@ -1082,7 +1082,10 @@ branch, the last check of everything above. With it on:
   deployment, every repository's secrets and the Claude credential. Don't set it.
 - **What was reviewed is what is merged**: the merge names the reviewed commit, so a push
   after the review fails it; the repository's visibility, `mergeable_state` and its GitHub
-  Actions runs are read from GitHub at the merge, not taken from a webhook.
+  Actions runs are read from GitHub at the merge, not taken from a webhook. A merge waiting
+  for its checks (`review.merge_wait`) is decided again when a `workflow_run` delivery says
+  one completed, but that delivery only says when to ask: the gates are all read again, and a
+  push meanwhile still refuses it.
 - **No loop**: one fix run and one review after it at most, one merge decision per pull
   request (`reviews.json`). Every refusal is a comment on the pull request, every merge too,
   and the dashboard marks each auto-merged task "Merged by Deckhand", so they can be found and
