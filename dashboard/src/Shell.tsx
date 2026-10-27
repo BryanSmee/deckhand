@@ -94,7 +94,11 @@ export function Sidebar(props: SidebarProps) {
             label="Settings"
             current={route.page === "settings"}
             count={waiting}
-            title={waiting ? `${plural(waiting, "repository", "repositories")} need you` : ""}
+            title={
+              waiting
+                ? `${plural(waiting, "repository", "repositories")} ${waiting === 1 ? "needs" : "need"} you`
+                : ""
+            }
             rail={rail}
           />
         )}

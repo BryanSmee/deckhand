@@ -9,7 +9,7 @@ import type { ComponentChildren } from "preact";
 import { useState } from "preact/hooks";
 import type { RepoList } from "./api";
 import { ConfigPanel } from "./ConfigPanel";
-import { ago, plural, uptime, versionUrl } from "./format";
+import { ago, isLive, plural, uptime, versionUrl } from "./format";
 import { useNow } from "./hooks";
 import { RepoBadge } from "./RepoBadge";
 import { formatRoute } from "./route";
@@ -24,27 +24,36 @@ import styles from "./Repos.module.css";
 // The ones that need the maintainer first, then by name (the listener sorts by name).
 const ORDER: RepoStatus[] = ["invalid", "not-onboarded", "onboarding", "unknown", "configured"];
 
-export function notOnboarded(repos: Repo[] | null): number {
-  return repos?.filter((r) => r.status === "not-onboarded").length ?? 0;
-}
-
 // The onboarding issue's task, when the dashboard has it.
 const onboardingTask = (r: Repo, tasks: Task[]) =>
   (r.issue && tasks.find((t) => t.repo === r.repo && t.number === r.issue!.number)) || null;
 
-const asks = (task: Task | null) => task?.state === "needs-input" && Boolean(task.questions);
+// An onboarding run asks: answer it. Its pull request: merge it. Ended any other way (failed,
+// stopped, or done with no pull request): see why, and run it again from its page.
+const asks = (task: Task | null) => task?.state === "needs-input";
+const stalled = (task: Task | null) =>
+  task !== null &&
+  (["error", "interrupted", "cancelled"].includes(task.state) ||
+    (task.state === "done" && !task.pr));
 
-// What a maintainer has to do: fix a config, start onboarding (when it can be), or answer an
-// onboarding run's questions.
+// What a maintainer has to do: fix a config, start onboarding (when it can be), or answer or
+// rerun an onboarding run.
 export function needsYou(r: Repo, tasks: Task[]): boolean {
   if (r.status === "invalid") return true;
   if (r.status === "not-onboarded") return r.issues;
-  return r.status === "onboarding" && asks(onboardingTask(r, tasks));
+  const task = r.status === "onboarding" ? onboardingTask(r, tasks) : null;
+  return asks(task) || stalled(task);
 }
 
 export function needingYou(repos: Repo[] | null, tasks: Task[]): number {
   return repos?.filter((r) => needsYou(r, tasks)).length ?? 0;
 }
+
+const STALLED: Partial<Record<Task["state"], string>> = {
+  error: "Its run failed: open it to run it again",
+  interrupted: "Its run was interrupted: open it to run it again",
+  cancelled: "Its run was stopped: open it to run it again",
+};
 
 // Adding or removing repositories: with a single installation, that installation's page;
 // else GitHub's install page, which lists every account with Configure where it is installed.
@@ -99,10 +108,12 @@ export function Repos({
   server = null,
   serverNow,
 }: Props) {
-  const { repos, app, listedAt, error, starting, onboard } = list;
+  const { repos, app, listedAt, error, starting, failed, onboard } = list;
   const now = useNow();
   const [filter, setFilter] = useState("");
   const [show, setShow] = useState<Show>("all");
+  // Where onboarding was started: its failure shows there, by the button that was clicked.
+  const [from, setFrom] = useState<"card" | "row">("row");
   if (open) {
     return (
       <section class={styles.config} aria-label={`${open} configuration`}>
@@ -146,10 +157,18 @@ export function Repos({
                 pending={starting === first.repo}
                 pendingLabel="Starting…"
                 disabled={starting !== null && starting !== first.repo}
-                onClick={() => onboard(first.repo)}
+                onClick={() => {
+                  setFrom("card");
+                  void onboard(first.repo);
+                }}
               >
                 Onboard {first.repo}
               </Button>
+            )}
+            {from === "card" && failed && (
+              <p class={styles.failed} role="alert">
+                Couldn't onboard {failed.repo}: {failed.error}
+              </p>
             )}
           </div>
           <ol class={styles.steps} aria-label="Onboarding steps">
@@ -265,7 +284,15 @@ export function Repos({
         {shown.length > 0 && (
           <ul class={styles.rows} aria-label="Repositories">
             {shown.map((r) => (
-              <Row key={r.repo} r={r} list={list} task={onboardingTask(r, tasks)} now={now} />
+              <Row
+                key={r.repo}
+                r={r}
+                list={list}
+                task={onboardingTask(r, tasks)}
+                now={now}
+                onStart={() => setFrom("row")}
+                failure={from === "row"}
+              />
             ))}
           </ul>
         )}
@@ -275,7 +302,17 @@ export function Repos({
   );
 }
 
-function Row({ r, list, task, now }: { r: Repo; list: RepoList; task: Task | null; now: number }) {
+interface RowProps {
+  r: Repo;
+  list: RepoList;
+  task: Task | null;
+  now: number;
+  onStart: () => void;
+  // Its onboarding's failure shows here: it was started from this row.
+  failure: boolean;
+}
+
+function Row({ r, list, task, now, onStart, failure }: RowProps) {
   const { starting, failed, onboard } = list;
   const small = (variant: "primary" | "secondary" | "ghost" = "secondary") =>
     buttonClass(variant, "small");
@@ -294,9 +331,15 @@ function Row({ r, list, task, now }: { r: Repo; list: RepoList; task: Task | nul
           ? n
             ? `${plural(n, "question")} ${n === 1 ? "is" : "are"} waiting for your answers`
             : "Its questions are waiting for your answers"
-          : task?.pr
-            ? "Its pull request is open: merge it to finish"
-            : "Its run reads the code and proposes a config";
+          : task && stalled(task)
+            ? (STALLED[task.state] ?? "Its run ended with no pull request: open it to run it again")
+            : task?.pr
+              ? "Its pull request is open: merge it to finish"
+              : task && isLive(task)
+                ? "Its run reads the code and proposes a config"
+                : task
+                  ? "Its run waits for a free slot"
+                  : "Its run reports on the issue";
         return [
           r.issue ? `Issue #${r.issue.number} · ${state}` : state,
           <>
@@ -312,9 +355,9 @@ function Row({ r, list, task, now }: { r: Repo; list: RepoList; task: Task | nul
                 <External size={12} />
               </a>
             )}
-            {task && asks(task) && (
+            {task && (asks(task) || stalled(task)) && (
               <a class={small()} href={formatRoute({ repo: task.repo, task: task.key, run: null })}>
-                Answer
+                {asks(task) ? "Answer" : "Open run"}
               </a>
             )}
           </>,
@@ -330,7 +373,10 @@ function Row({ r, list, task, now }: { r: Repo; list: RepoList; task: Task | nul
                 pending={starting === r.repo}
                 pendingLabel="Starting…"
                 disabled={starting !== null && starting !== r.repo}
-                onClick={() => onboard(r.repo)}
+                onClick={() => {
+                  onStart();
+                  void onboard(r.repo);
+                }}
               >
                 Start onboarding
               </Button>,
@@ -385,7 +431,7 @@ function Row({ r, list, task, now }: { r: Repo; list: RepoList; task: Task | nul
       </span>
       <span class={styles.detail}>{detail}</span>
       <span class={styles.action}>{action}</span>
-      {failed?.repo === r.repo && (
+      {failure && failed?.repo === r.repo && (
         <p class={styles.failed} role="alert">
           {failed.error}
         </p>

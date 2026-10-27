@@ -2,8 +2,8 @@
 // row's action, the filters, the row switching, the refreshes and a repository's config panel.
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/preact";
 import { useEffect, useState } from "preact/hooks";
-import { beforeEach, expect, test } from "vitest";
-import { useRepos } from "./api";
+import { beforeEach, expect, test, vi } from "vitest";
+import { type RepoList, useRepos } from "./api";
 import { Dashboard } from "./App";
 import { Repos } from "./Repos";
 import { parseRoute } from "./route";
@@ -340,24 +340,38 @@ test("Start onboarding posts, and the row switches to its issue", async () => {
   expect(api.posted).toContainEqual({ url: "api/repos/org/app/onboard", body: undefined });
 });
 
-test("Settings counts the repositories not onboarded and opens the page", async () => {
-  const list = {
-    repos: REPOS,
-    app: null,
-    error: null,
-    starting: null,
-    failed: null,
-    onboard: async () => {},
-    listedAt: null,
-    refreshing: false,
-    refreshError: null,
-    refresh: async () => {},
-    update: () => {},
-  };
+const fixedList = (): RepoList => ({
+  repos: REPOS,
+  app: null,
+  error: null,
+  starting: null,
+  failed: null,
+  onboard: async () => {},
+  listedAt: null,
+  refreshing: false,
+  refreshError: null,
+  refresh: async () => {},
+  update: () => {},
+});
+
+// org/docs's onboarding run asks: with org/bad's errors and org/app to onboard, 3 need you.
+// org/wiki doesn't (its issues are off), though it isn't onboarded either.
+const asking = () =>
+  makeTask({
+    key: "org/docs#7",
+    repo: "org/docs",
+    number: 7,
+    state: "needs-input",
+    questions: { source: "run", items: null, raw: "Which tests?" },
+  });
+
+const tabs = () => within(screen.getByRole("navigation", { name: "Settings" }));
+
+test("Settings counts the repositories that need you and opens the page", async () => {
   // The fixture's server: started 3 days and 3 hours before its `now`.
-  render(<Dashboard state={makeState()} error={null} repos={list} />);
+  render(<Dashboard state={makeState({}, [asking()])} error={null} repos={fixedList()} />);
   const link = screen.getByRole("link", { name: /Settings/ });
-  expect(link.textContent).toBe("Settings 2");
+  expect(link.textContent).toBe("Settings 3");
   expect(link.getAttribute("href")).toBe("#/settings/repositories");
   expect(link.getAttribute("aria-current")).toBeNull();
   expect(
@@ -373,6 +387,94 @@ test("Settings counts the repositories not onboarded and opens the page", async 
   expect(screen.getByRole("link", { name: "edge-1713fa6" }).parentElement!.textContent).toBe(
     "Deckhand edge-1713fa6 · up 3 d 3 h · Node 26.1.0",
   );
+});
+
+test("Settings' tabs: in the header, current with the address, the others coming", async () => {
+  render(<Dashboard state={makeState({}, [asking()])} error={null} repos={fixedList()} />);
+  history.replaceState(null, "", "#/settings/repositories");
+  dispatchEvent(new HashChangeEvent("hashchange"));
+  await screen.findByRole("navigation", { name: "Settings" });
+  // A wide screen: the page header has them, not the page.
+  expect(screen.getByRole("navigation", { name: "Settings" }).closest("header")).toBeTruthy();
+  const repos = tabs().getByRole("link", { name: /Repositories/ });
+  expect(repos.textContent).toBe("Repositories3");
+  expect(repos.getAttribute("aria-current")).toBe("page");
+  const server = tabs().getByRole("link", { name: "Server" });
+  expect(server.getAttribute("href")).toBe("#/settings/server");
+  expect(server.getAttribute("aria-current")).toBeNull();
+  history.replaceState(null, "", "#/settings/server");
+  dispatchEvent(new HashChangeEvent("hashchange"));
+  await screen.findByText("The Server tab is coming soon.");
+  expect(tabs().getByRole("link", { name: "Server" }).getAttribute("aria-current")).toBe("page");
+  expect(
+    tabs()
+      .getByRole("link", { name: /Repositories/ })
+      .getAttribute("aria-current"),
+  ).toBeNull();
+  expect(screen.queryByRole("list", { name: "Repositories" })).toBeNull();
+  history.replaceState(null, "", "#/settings/repositories");
+  dispatchEvent(new HashChangeEvent("hashchange"));
+  await screen.findByRole("list", { name: "Repositories" });
+  expect(screen.queryByText(/coming soon/)).toBeNull();
+});
+
+test("Settings' tabs on a phone: atop the page", async () => {
+  vi.stubGlobal("matchMedia", () => ({
+    matches: false,
+    addEventListener() {},
+    removeEventListener() {},
+  }));
+  history.replaceState(null, "", "#/settings/preferences");
+  render(<Dashboard state={makeState()} error={null} repos={fixedList()} />);
+  const nav = await screen.findByRole("navigation", { name: "Settings" });
+  expect(nav.closest("main")).toBeTruthy();
+  expect(within(nav).getByRole("link", { name: "Preferences" }).getAttribute("aria-current")).toBe(
+    "page",
+  );
+  expect(screen.getByText("The Preferences tab is coming soon.")).toBeTruthy();
+});
+
+test("an onboarding run that failed or stopped: said so, its task linked, and it needs you", async () => {
+  const failed = makeTask({ key: "org/docs#7", repo: "org/docs", number: 7, state: "error" });
+  render(<Page tasks={[failed]} />);
+  await screen.findByRole("list", { name: "Repositories" });
+  const docs = within(row("org/docs"));
+  expect(docs.getByText("Issue #7 · Its run failed: open it to run it again")).toBeTruthy();
+  expect(docs.getByRole("link", { name: "Open run" }).getAttribute("href")).toBe(
+    "#/org/docs?task=org%2Fdocs%237",
+  );
+  expect(screen.getByRole("button", { name: /Needs you/ }).textContent).toBe("Needs you3");
+  cleanup();
+  render(<Page tasks={[{ ...failed, state: "cancelled" }]} />);
+  await screen.findByRole("list", { name: "Repositories" });
+  expect(within(row("org/docs")).getByText(/Its run was stopped/)).toBeTruthy();
+  cleanup();
+  // At work: nothing to do but wait.
+  render(<Page tasks={[{ ...failed, state: "working" }]} />);
+  await screen.findByRole("list", { name: "Repositories" });
+  expect(within(row("org/docs")).getByText(/Its run reads the code/)).toBeTruthy();
+  expect(within(row("org/docs")).queryByRole("link", { name: "Open run" })).toBeNull();
+  expect(screen.getByRole("button", { name: /Needs you/ }).textContent).toBe("Needs you2");
+});
+
+test("onboarding from the card fails: the card says why, even with the row filtered out", async () => {
+  delete api.routes["POST api/repos/org/app/onboard"];
+  render(<Page />);
+  await screen.findByRole("list", { name: "Repositories" });
+  fireEvent.click(screen.getByRole("button", { name: /Configured/ }));
+  const card = (await screen.findByRole("heading", { name: /aren't onboarded/ })).closest(
+    "section",
+  )!;
+  fireEvent.click(within(card).getByRole("button", { name: "Onboard org/app" }));
+  const alert = await within(card).findByRole("alert");
+  expect(alert.textContent).toBe("Couldn't onboard org/app: Its issues are disabled.");
+  // Once, by the button that was clicked.
+  fireEvent.click(screen.getByRole("button", { name: /^All/ }));
+  expect(screen.getAllByRole("alert")).toHaveLength(1);
+  // From the row: the row says it, not the card.
+  fireEvent.click(within(row("org/app")).getByRole("button", { name: "Start onboarding" }));
+  await waitFor(() => expect(within(row("org/app")).getByRole("alert")).toBeTruthy());
+  expect(within(card).queryByRole("alert")).toBeNull();
 });
 
 test("Manage the App: GitHub's install page, or the single installation's own", async () => {
