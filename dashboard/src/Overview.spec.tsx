@@ -158,7 +158,7 @@ test("a card per repository: its status, tasks by state, backlog and lanes, and 
     "#/acme/app",
   );
   expect(within(api).getByText("Backlog 7")).toBeTruthy();
-  expect(within(notes).getByText("Invalid config")).toBeTruthy();
+  expect(within(notes).getByText("Config has errors")).toBeTruthy();
   expect(within(notes).getByRole("link", { name: "See config" }).getAttribute("href")).toBe(
     "#/settings/repositories/acme/notes",
   );
