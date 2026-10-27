@@ -1,6 +1,6 @@
 // Tabs (the work queue's, a task's runs): a tablist whose arrows, Home and End move between
 // the tabs, and pick them, as the ARIA pattern has it. Only the picked tab is in the Tab order.
-import type { ComponentChildren } from "preact";
+import type { ComponentChildren, JSX } from "preact";
 import { useRef } from "preact/hooks";
 import { Count } from "./Count";
 import styles from "./Tabs.module.css";
@@ -11,6 +11,8 @@ export interface Tab<T extends string> {
   count?: number;
   // The count waits on you.
   hot?: boolean;
+  // More on its button: a drop zone's handlers (the work queue's tabs take drops), a class.
+  attrs?: Omit<JSX.HTMLAttributes<HTMLButtonElement>, "class"> & { class?: string };
 }
 
 interface Props<T extends string> {
@@ -58,10 +60,11 @@ export function Tabs<T extends string>({
     >
       {tabs.map((t) => (
         <button
+          {...t.attrs}
           key={t.id}
           type="button"
           role="tab"
-          class={styles.tab}
+          class={[styles.tab, t.attrs?.class].filter(Boolean).join(" ")}
           aria-selected={t.id === selected}
           aria-controls={panel}
           tabIndex={t.id === selected ? 0 : -1}

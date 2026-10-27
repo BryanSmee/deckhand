@@ -35,9 +35,10 @@ const boardOf = (repo: string | null) =>
   formatRoute({ repo, task: null, run: null, page: "board" });
 const onAll = (route: Route) => !route.page && !route.repo;
 
-// A repository's link: its board from a board, else its tasks.
+// A repository's link: its board from a board, else its tasks. All has no board (the
+// Overview replaces it): its tasks.
 const repoHref = (route: Route, repo: string | null) =>
-  route.page === "board" ? boardOf(repo) : tasksOf(repo);
+  route.page === "board" && repo ? boardOf(repo) : tasksOf(repo);
 
 interface Common {
   state: State | null;
@@ -359,20 +360,30 @@ function NewRequest({
   );
 }
 
-// The page's title, its GitHub link and its views.
-export function PageHeader({ route, github }: { route: Route; github: string }) {
+// The page's title, its GitHub link, its views and the page's own controls (`children`: the
+// board's Start in).
+export function PageHeader({
+  route,
+  github,
+  children,
+}: {
+  route: Route;
+  github: string;
+  children?: ComponentChildren;
+}) {
   const settings = route.page === "settings";
   const repo = settings ? null : route.repo;
   const views: Segment<"tasks" | "board">[] = [
     { value: "tasks", label: "Tasks", icon: <Icon.Tasks size={14} />, href: tasksOf(repo) },
   ];
-  // All's board is every repository's graph, until the Overview takes its place.
-  views.push({
-    value: "board",
-    label: "Board",
-    icon: <Icon.Board size={14} />,
-    href: boardOf(repo),
-  });
+  // All has Tasks only, until the Overview takes its place.
+  if (repo)
+    views.push({
+      value: "board",
+      label: "Board",
+      icon: <Icon.Board size={14} />,
+      href: boardOf(repo),
+    });
   return (
     <header class={styles.header}>
       <div class={styles.title}>
@@ -397,6 +408,7 @@ export function PageHeader({ route, github }: { route: Route; github: string }) 
           value={route.page === "board" ? "board" : "tasks"}
         />
       )}
+      {children && <div class={styles.controls}>{children}</div>}
     </header>
   );
 }

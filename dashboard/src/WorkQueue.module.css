@@ -1,0 +1,255 @@
+/* The work queue: tabs, then the open tab's cards and a one-line hint. A panel of 360 px
+   beside the graph; on a phone, a bottom sheet with 44 px rows. */
+.queue {
+  flex: 1 1 300px;
+  max-width: 360px;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+}
+
+.tabs {
+  flex: none;
+  gap: 0;
+  padding: 0 4px;
+}
+
+/* Four tabs and their counts in 360 px. */
+.tabs [role="tab"] {
+  gap: 5px;
+  padding: 0 6px;
+  font-size: 12.5px;
+}
+
+/* A tab, or the panel, something it takes is dragged over. */
+.over {
+  background: color-mix(in srgb, var(--focus) 10%, var(--surface));
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--focus) 45%, transparent);
+}
+
+.panel {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: auto;
+  transition:
+    background var(--fast),
+    box-shadow var(--fast);
+}
+
+.panel[hidden] {
+  display: none;
+}
+
+.notice {
+  margin: 12px 12px 0;
+}
+
+.filter {
+  padding: 12px 12px 0;
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 12px;
+  list-style: none;
+}
+
+.empty {
+  margin: 0;
+  padding: 4px 2px;
+  color: var(--text-3);
+  font-size: 12.5px;
+}
+
+.list > .empty,
+.rows > .empty {
+  list-style: none;
+}
+
+/* A card: its grip, its number and title (two lines at most), what it is, its buttons. */
+.item {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  column-gap: 8px;
+  row-gap: 8px;
+  padding: 10px 10px 10px 6px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  transition:
+    border-color var(--fast),
+    opacity var(--fast);
+}
+
+.item:hover {
+  border-color: var(--border-strong);
+}
+
+.draggable {
+  cursor: grab;
+}
+
+/* The card being dragged: its ghost is what moves. */
+.ghosted {
+  opacity: 0.45;
+  border-style: dashed;
+  cursor: grabbing;
+}
+
+.grip {
+  display: flex;
+  padding-top: 2px;
+  color: var(--text-3);
+}
+
+.text {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.name {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 18px;
+  text-decoration: none;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow-wrap: anywhere;
+}
+
+a.name:hover {
+  text-decoration: underline;
+}
+
+.ref {
+  color: var(--text-3);
+  font-family: var(--mono);
+  font-weight: 500;
+}
+
+.meta {
+  color: var(--text-3);
+  font-size: 12px;
+  line-height: 16px;
+}
+
+.buttons,
+.chooser {
+  grid-column: 2;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.pick {
+  flex: 1 1 10rem;
+}
+
+.hint {
+  flex: none;
+  margin: 0;
+  padding: 10px 14px;
+  border-top: 1px solid var(--border);
+  color: var(--text-3);
+  font-size: 12px;
+  line-height: 17px;
+}
+
+/* A phone: a sheet over the bottom of the board, its handle opening and closing it. */
+.sheet {
+  flex: none;
+  max-width: none;
+  max-height: 46dvh;
+  border-right: 0;
+  border-top: 1px solid var(--border-strong);
+  border-radius: 18px 18px 0 0;
+  box-shadow: var(--sheet-shadow);
+}
+
+.sheet.closed {
+  max-height: none;
+}
+
+.sheet .tabs {
+  padding: 0 10px;
+}
+
+.sheet .tabs [role="tab"] {
+  height: 44px;
+  font-size: 14px;
+}
+
+.handle {
+  display: flex;
+  justify-content: center;
+  padding: 10px 0 4px;
+  border: 0;
+  border-radius: 18px 18px 0 0;
+  background: none;
+  cursor: pointer;
+}
+
+.handle span {
+  width: 40px;
+  height: 5px;
+  border-radius: 3px;
+  background: var(--border-strong);
+}
+
+.rows {
+  margin: 0;
+  padding: 4px 16px;
+  list-style: none;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 64px;
+  border-bottom: 1px solid var(--border);
+}
+
+.row .text {
+  flex: 1;
+  gap: 2px;
+}
+
+.row .name {
+  font-size: 14.5px;
+  line-height: 20px;
+  -webkit-line-clamp: 1;
+}
+
+.row .meta {
+  font-size: 12.5px;
+}
+
+/* A card's menu on a phone: its other buttons, full width. */
+.menu {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.menuButton {
+  width: 100%;
+}
+
+.menu .chooser {
+  grid-column: auto;
+}

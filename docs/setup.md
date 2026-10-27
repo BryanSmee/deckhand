@@ -205,35 +205,44 @@ its own deliveries. **Sync** (in the top bar, after the running and queued count
 now, and asks GitHub about the open pull requests' states again: for when GitHub is unstable
 and you'd rather not wait.
 
-**Graph** (top right, `#/graph`, or `#/graph/<owner>/<repo>` for one tab) draws the same
-tasks as a graph: an arrow goes from an issue to each one waiting for it (`/after`), drawn left
-to right (top to bottom on a phone), and the issues a task waits for show even when Deckhand
-never worked on them. Issues with no arrow stand in a grid below. A node is gray while it
-waits or nothing runs, outlined in orange when it needs your input, blue while it runs, red
-after an error (dashed red arrows: what waits for it keeps waiting), filled orange when its
-pull request is ready for review, and green once implemented: the issue closed as completed,
-or its pull request merged. Whether an issue is closed comes with the `issues` and
-`pull_request` webhooks; the rest is asked of GitHub with its title, kept in `closed.json`,
-and what was open is asked again once per start. A node opens its task; one Deckhand never
-worked on opens on GitHub.
+**Board** (Tasks | Board in a repository's header, `#/<owner>/<repo>/board`; the old
+`#/graph` addresses lead there) draws the repository's tasks as a graph: an arrow goes from an
+issue to each one waiting for it (`/after`), left to right, and the issues a task waits for
+show even when Deckhand never worked on them. Issues with no arrow stand in a column below.
+Each node says its number, its state and its title, in its state's colour (the legend floats on
+the canvas): a border when it needs looking at (running, needs you, ready for review, error;
+dashed red arrows: what waits for an error keeps waiting), dimmed once done (implemented: the
+issue closed as completed, or its pull request merged). Whether an issue is closed comes with
+the `issues` and `pull_request` webhooks; the rest is asked of GitHub with its title, kept in
+`closed.json`, and what was open is asked again once per start. A node opens its task; one
+Deckhand never worked on opens on GitHub. The toolbar zooms the graph and fits it to the
+screen. **Lanes** shows each chain as a row instead (top to bottom on a phone, where it is the
+default), named after its parent issue, its inbox, or the name you give it with its pencil
+button; others are "#18 and 3 more". Your browser keeps the choice. The board has no
+All-repositories view: All shows its tasks.
 
-By default the graph leaves closed issues out: implemented (closed as completed, or merged)
-and closed as not planned, with their arrows, so what still needs something stays on top. An
-issue whose only blocker is hidden stands in the grid. A closed issue stays while an issue that
-waited for it is running. **Show closed**, by the legend, brings them back; your browser keeps
-the choice. Runs on the ideas and bugs inboxes and discussions are never drawn: they have no
-pull request and no `/after`. On a repository's tab, only the issues drawn can be queued after.
+By default the board leaves closed issues out: implemented and closed as not planned, with
+their arrows, so what still needs something stays on top. An issue whose only blocker is hidden
+stands in the column. A closed issue stays while an issue that waited for it is running. **Show
+closed** brings them back; your browser keeps the choice. Runs on the ideas and bugs inboxes and
+discussions are never drawn: they have no pull request and no `/after`. Only the issues drawn
+can be queued after.
 
-On a repository's tab the graph is also a work area, with two columns beside it (above it on
-a phone). The **backlog** lists the open issues with nothing live (running, queued, waiting,
-brainstorming or needing input): drop one on the graph to start it (in the mode picked in
-**Start in**), next to a node to queue it after that one. The **Brainstorm** column lists the
-issues being brainstormed, with their state; they leave the graph unless an arrow touches
-them. Drop a backlog issue on the column to brainstorm it, a brainstorm on the graph to start
-work on it (the brainstorm ends), or back on the backlog to stop it: the wrap-up a `/stop`
-comment runs, its summary posted and the issue updated. Once it is over, the issue is back in
-the backlog. Each card has buttons that do the same, for phones and keyboards. Each action is
-written on the issue as the App's comment. On the All tab, the column only lists them.
+Beside the graph, the **work queue** (a sheet at the bottom on a phone) has four tabs.
+**Backlog** lists the open issues with nothing live (running, queued, waiting, brainstorming or
+needing input): drop one on the graph to start it (in the mode picked in **Start in**, in the
+page's header), on a node to queue it after that one; one with sub-issues brings them along.
+**Brainstorm** lists the issues being brainstormed, with their state; they leave the graph
+unless an arrow touches them. Drop a backlog issue on the Brainstorm tab to brainstorm it, a
+brainstorm on the graph to start work on it (the brainstorm ends), or on the Backlog tab to stop
+it: the wrap-up a `/stop` comment runs, its summary posted and the issue updated. Once it is
+over, the issue is back in the backlog. **Waiting** lists the issues waiting for others: drag
+one's node away to end its wait, onto another node to wait for that one. **Answers** lists those
+waiting for your answers: starting or queueing one asks its open questions first. Each card has
+a button for each drag (on a phone, its first one and a menu for the rest), for phones and
+keyboards. While you drag, the graph outlines the node a drop would queue after and says what
+letting go does ("Queue #31 after #19"); each action shows at once as a dashed node
+("Starting…"). Each action is written on the issue as the App's comment.
 
 Each task shows its listener's state:
 

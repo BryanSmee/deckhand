@@ -1,6 +1,6 @@
-// The graph page's state besides its model: its layout kept from one drawing to the next, a
+// The board's state besides its model: its layout kept from one drawing to the next, a
 // node dragged by the pointer, and the open questions a node's click or a drag opens
-// (Graph.tsx).
+// (Board.tsx).
 import type { JSX } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
 import { sendAnswers } from "./api";
@@ -51,8 +51,8 @@ export interface NodeDrag {
 }
 
 interface NodeDragEvents {
-  // Each move once it is a drag, and the end of it (null).
-  onMove: (at: { x: number; y: number } | null) => void;
+  // Each move once it is a drag, with the drag, and the end of it (null).
+  onMove: (at: { x: number; y: number } | null, drag?: NodeDrag) => void;
   // Let go after it moved.
   onDrop: (drag: NodeDrag, at: { x: number; y: number }) => void;
 }
@@ -88,8 +88,9 @@ export function useNodeDrag({ onMove, onDrop }: NodeDragEvents) {
       const dx = e.clientX - drag.x;
       const dy = e.clientY - drag.y;
       const moved = drag.moved || Math.hypot(dx, dy) > DRAG_PX;
-      setDrag({ ...drag, dx, dy, moved });
-      if (moved) onMove({ x: e.clientX, y: e.clientY });
+      const next = { ...drag, dx, dy, moved };
+      setDrag(next);
+      if (moved) onMove({ x: e.clientX, y: e.clientY }, next);
     },
     onPointerUp: (e) => {
       if (!drag || drag.pointer !== e.pointerId) return;

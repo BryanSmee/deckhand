@@ -1,9 +1,8 @@
-// The graph's work area and an issue waiting for answers: starting or queueing it opens its
+// The board's work queue and an issue waiting for answers: starting or queueing it opens its
 // open questions first, and every one needs an answer before it goes (fetch mocked).
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/preact";
 import { beforeEach, expect, test } from "vitest";
 import { Dashboard } from "./App";
-import { Graph } from "./Graph";
 import { BACKLOG, makeState, mockApi } from "./testUtils";
 import type { State } from "./types";
 
@@ -23,8 +22,9 @@ beforeEach(() => {
 
 const area = async (shown: State = state) => {
   render(<Dashboard state={shown} error={null} />);
-  const work = screen.getByRole("region", { name: "Work area" });
+  const work = screen.getByRole("region", { name: "Work queue" });
   await within(work).findByText("No open issue left to start.");
+  fireEvent.click(within(work).getByRole("tab", { name: /^Answers/ }));
   return within(work).getByRole("list", { name: "Issues waiting for answers" });
 };
 
@@ -37,7 +37,7 @@ const answerAll = (dialog: HTMLElement) =>
 
 test("Start on an issue waiting for answers opens its questions; it starts with them", async () => {
   const list = await area();
-  fireEvent.click(within(list).getByRole("button", { name: "Start #138" }));
+  fireEvent.click(within(list).getByRole("button", { name: "Answer #138 and start it" }));
   const dialog = screen.getByRole("dialog", { name: "Answer #138's questions" });
   expect(within(dialog).getByText("Answer them to start #138")).toBeTruthy();
   const send = within(dialog).getByRole("button", { name: "Send answers and start" });
@@ -72,7 +72,7 @@ test("Start on an issue waiting for answers opens its questions; it starts with 
 test("Queue after… sends the queue along; a refusal stays in the form", async () => {
   answer = () => Response.json({ error: "#141 was closed without being done." }, { status: 422 });
   const list = await area();
-  fireEvent.click(within(list).getByRole("button", { name: "After…" }));
+  fireEvent.click(within(list).getByRole("button", { name: "Answer #138 then queue it after…" }));
   fireEvent.change(within(list).getByRole("combobox", { name: "Queue #138 after" }), {
     target: { value: "141" },
   });
@@ -122,10 +122,11 @@ test("An issue the backlog found open questions in, with no run, opens its form 
   } as unknown as State["tasks"][number];
   answer = () => Response.json({ message: "Answers sent: #144 started." });
   render(<Dashboard state={{ ...state, tasks: [...state.tasks, seeded] }} error={null} />);
-  const work = screen.getByRole("region", { name: "Work area" });
+  const work = screen.getByRole("region", { name: "Work queue" });
   await within(work).findByText("No open issue left to start.");
+  fireEvent.click(within(work).getByRole("tab", { name: /^Answers/ }));
   const list = within(work).getByRole("list", { name: "Issues waiting for answers" });
-  fireEvent.click(within(list).getByRole("button", { name: "Start #144" }));
+  fireEvent.click(within(list).getByRole("button", { name: "Answer #144 and start it" }));
   const dialog = screen.getByRole("dialog", { name: "Answer #144's questions" });
   fireEvent.click(within(dialog).getByRole("button", { name: "Send answers and start" }));
   await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
@@ -143,10 +144,10 @@ test("An issue the backlog found open questions in, with no run, opens its form 
 
 test("Cancel or Escape closes the questions: nothing is sent", async () => {
   const list = await area();
-  fireEvent.click(within(list).getByRole("button", { name: "Start #138" }));
+  fireEvent.click(within(list).getByRole("button", { name: "Answer #138 and start it" }));
   fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
   expect(screen.queryByRole("dialog")).toBeNull();
-  fireEvent.click(within(list).getByRole("button", { name: "Start #138" }));
+  fireEvent.click(within(list).getByRole("button", { name: "Answer #138 and start it" }));
   fireEvent.keyDown(window, { key: "Escape" });
   await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   expect(api.posted).toEqual([]);
@@ -158,7 +159,7 @@ test("a repo that doesn't wait for answers: Start goes without the questions", a
     tasks: state.tasks.map((t) => (t.key === "acme/api#138" ? { ...t, waitForAnswers: false } : t)),
   };
   const list = await area(off);
-  fireEvent.click(within(list).getByRole("button", { name: "Start #138" }));
+  fireEvent.click(within(list).getByRole("button", { name: "Answer #138 and start it" }));
   expect(screen.queryByRole("dialog")).toBeNull();
   await waitFor(() =>
     expect(api.posted).toEqual([
@@ -211,10 +212,8 @@ test("a click on a node waiting for answers opens them; they go, Sending… unti
   await waitFor(() => expect(node(/^#138 .*: Needs input/)).toBeTruthy());
 });
 
-test("on every repo's graph too; Escape and the backdrop close it without sending", async () => {
-  render(
-    <Graph state={state} repo={null} narrow={false} showClosed={false} onShowClosed={() => {}} />,
-  );
+test("Escape and the backdrop close a node's questions without sending", async () => {
+  render(<Dashboard state={state} error={null} />);
   fireEvent.click(node(/#138 .*: Needs input/));
   expect(screen.getByRole("dialog", { name: "Answer #138's questions" })).toBeTruthy();
   fireEvent.keyDown(window, { key: "Escape" });

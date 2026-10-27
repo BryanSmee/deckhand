@@ -30,7 +30,7 @@ const at = (l: ReturnType<typeof layout>, n: number) =>
   l.boxes.find((b) => b.key === `org/app#${n}`)!;
 const wide = { narrow: false };
 const phone = { narrow: true };
-const { w, h, layerGap } = SIZES.wide;
+const { w, h, layerGap, rowGap } = SIZES.wide;
 
 test("a chain: each issue a column to the right of the one it waits for", () => {
   const keys = [3, 2, 1].map((n) => `org/app#${n}`);
@@ -60,7 +60,7 @@ test("a chain: each issue a column to the right of the one it waits for", () => 
   expect(small.arrows[0].d).toBe(
     `M${n.w} ${n.h / 2}H${n.w + n.layerGap / 2}V${n.h / 2}H${n.w + n.layerGap}`,
   );
-  // A two-step chain still fits a 390 px phone: the work area leaves its drawing 324 px.
+  // A two-step chain still fits a 390 px phone, inside the canvas's margins.
   expect(layout(keys.slice(1), [after(1, 2)], phone).width).toBeLessThanOrEqual(324);
 });
 
@@ -102,11 +102,11 @@ test("no relations at all: one column, top to bottom in the board's order", () =
   const l = layout(keys, [], wide);
   expect(l.gridTop).toBe(0);
   expect(l.arrows).toEqual([]);
-  expect(l.boxes).toEqual(keys.map((key, i) => ({ key, x: 0, y: i * (h + 16) })));
+  expect(l.boxes).toEqual(keys.map((key, i) => ({ key, x: 0, y: i * (h + rowGap) })));
   // The same on a phone.
   const small = layout(keys, [], phone);
   expect(small.boxes.map((b) => b.x)).toEqual([0, 0, 0, 0, 0]);
-  expect(small.boxes.map((b) => b.y)).toEqual(keys.map((_, i) => i * (h + 12)));
+  expect(small.boxes.map((b) => b.y)).toEqual(keys.map((_, i) => i * (h + SIZES.narrow.rowGap)));
   // Below the linked issues when there are some.
   const mixed = layout(keys, [after(1, 2)], wide);
   expect(mixed.gridTop).toBeGreaterThan(h);
@@ -246,7 +246,7 @@ test("inbox runs and discussions are never nodes", () => {
   }
 });
 
-test("pending actions: drawn as done already, their nodes Sending…", () => {
+test("pending actions: drawn as done already, their nodes saying what goes on", () => {
   const tasks = [
     task(1, { state: "working" }),
     task(2, { state: "waiting", waitingFor: [1] }),
@@ -261,13 +261,13 @@ test("pending actions: drawn as done already, their nodes Sending…", () => {
   const queued = graphOf(tasks, edges, [], {
     pending: [sent({ action: "queue", number: 9, after: 2 })],
   });
-  expect(look(queued).at(-1)).toEqual([9, "pending", "Sending…", null]);
+  expect(look(queued).at(-1)).toEqual([9, "pending", "Queueing…", null]);
   expect(queued.nodes.at(-1)!.title).toBe("From the backlog");
   expect(queued.edges).toContainEqual(after(2, 9));
 
   // Started: a lone node.
   const started = graphOf(tasks, edges, [], { pending: [sent({ action: "start", number: 9 })] });
-  expect(look(started).at(-1)).toEqual([9, "pending", "Sending…", null]);
+  expect(look(started).at(-1)).toEqual([9, "pending", "Starting…", null]);
   expect(started.edges).toEqual(edges);
 
   // A wait moved: its arrow from the new blocker only; the node keeps its task.
@@ -275,7 +275,7 @@ test("pending actions: drawn as done already, their nodes Sending…", () => {
     pending: [sent({ action: "queue", number: 3, after: 2 })],
   });
   expect(moved.edges).toEqual([after(1, 2), after(2, 3)]);
-  expect(look(moved)[2]).toEqual([3, "pending", "Sending…", "org/app#3"]);
+  expect(look(moved)[2]).toEqual([3, "pending", "Queueing…", "org/app#3"]);
 
   // Dequeued: a wait with no run before leaves; one that ran stays, without its arrows.
   const dequeued = graphOf(tasks, edges, [], { pending: [sent({ action: "dequeue", number: 3 })] });
@@ -283,7 +283,7 @@ test("pending actions: drawn as done already, their nodes Sending…", () => {
   expect(dequeued.edges).toEqual([after(1, 2)]);
   const ran = [...tasks.slice(0, 2), task(3, { ...tasks[2], runs: [{} as Task["runs"][0]] })];
   const kept = graphOf(ran, edges, [], { pending: [sent({ action: "dequeue", number: 3 })] });
-  expect(look(kept)[2]).toEqual([3, "pending", "Sending…", "org/app#3"]);
+  expect(look(kept)[2]).toEqual([3, "pending", "Removing its wait…", "org/app#3"]);
   expect(kept.edges).toEqual([after(1, 2)]);
 });
 
@@ -311,7 +311,7 @@ test("the last drawing's places are kept: a new issue moves no other", () => {
   // Started: the next free row of the column; one leaving leaves its row empty.
   const started = layout([...keys, "org/app#7"], edges, wide, before);
   expect(at(started, 7).x).toBe(0);
-  expect(at(started, 7).y).toBe(at(before, 5).y + h + 16);
+  expect(at(started, 7).y).toBe(at(before, 5).y + h + rowGap);
   const filled = layout(
     ["org/app#7", "org/app#1", "org/app#2", "org/app#3", "org/app#4"],
     edges,
@@ -410,9 +410,9 @@ test("brainstorms pending: a start in brainstorm mode or a stop stays in the col
   ];
   const cards = brainstormsOf(tasks, pending);
   expect(cards.map((c) => [c.number, c.sending, c.task?.key ?? null, c.title])).toEqual([
-    [9, true, null, "From the backlog"],
-    [1, true, "org/app#1", "Issue 1"],
+    [9, "Starting…", null, "From the backlog"],
+    [1, "Stopping…", "org/app#1", "Issue 1"],
   ]);
   const g = graphOf(tasks, [], [], { pending });
-  expect(g.nodes.map((n) => [n.number, n.status])).toEqual([[2, "Sending…"]]);
+  expect(g.nodes.map((n) => [n.number, n.status])).toEqual([[2, "Starting…"]]);
 });

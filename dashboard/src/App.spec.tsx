@@ -268,20 +268,21 @@ test("the graph: a node per issue, arrows for /after, a node opens its task", ()
     state.tasks.filter((t) => t.repo === "acme/app" && t.kind !== "bug" && t.kind !== "brainstorm")
       .length,
   );
+  fireEvent.click(screen.getByRole("tab", { name: /^Brainstorm/ }));
   const column = screen.getByRole("list", { name: "Issues being brainstormed" });
   expect(
     within(column)
       .getAllByRole("listitem")
       .map((c) => c.textContent),
-  ).toEqual([expect.stringMatching(/^#20.*Brainstorm/)]);
+  ).toEqual([expect.stringMatching(/^#20 .*Brainstorm · idle in/)]);
   expect(document.querySelectorAll("path[marker-end]")).toHaveLength(2);
   expect(screen.getByRole("list", { name: "Legend" }).textContent).toMatch(/Ready for review/);
 
   const node = nodes.find((n) => n.getAttribute("aria-label")!.startsWith("#24"))!;
   expect(node.getAttribute("href")).toBe("#/acme/app?task=acme%2Fapp%2324");
-  // The sidebar's repos stay on the board, All's too.
+  // The sidebar's repos stay on the board; All has none, its tasks instead.
   expect(sidebarRepos().map((a) => a.getAttribute("href"))).toEqual([
-    "#/board",
+    "#/",
     "#/acme/app/board",
     "#/acme/api/board",
     "#/acme/notes/board",
@@ -306,12 +307,12 @@ test("the graph hides closed issues until Show closed, which is kept", () => {
   expect(labels()).toContain("#24 Per-repo budgets in the dashboard: Waiting, waits for 1 issue");
   expect(document.querySelectorAll("path[marker-end]")).toHaveLength(1);
 
-  fireEvent.click(screen.getByRole("checkbox", { name: "Show closed" }));
+  fireEvent.click(screen.getByRole("switch", { name: "Show closed" }));
   expect(labels().some((l) => l!.startsWith("#23"))).toBe(true);
   expect(document.querySelectorAll("path[marker-end]")).toHaveLength(2);
   view.unmount();
   render(<Dashboard state={closed} error={null} />);
-  expect(screen.getByRole("checkbox", { name: "Show closed" })).toHaveProperty("checked", true);
+  expect(screen.getByRole("switch", { name: "Show closed" })).toHaveProperty("checked", true);
 });
 
 test("the graph with nothing open says so, and offers the closed ones", () => {
@@ -329,20 +330,29 @@ test("the graph with nothing open says so, and offers the closed ones", () => {
   expect(screen.getByRole("list", { name: "Issues of acme/app" })).toBeTruthy();
 });
 
-test("every repo's graph, under its old address and its new one", async () => {
-  history.replaceState(null, "", "#/graph");
+test("every repo's graph is gone: its old addresses open every repo's tasks", () => {
+  for (const hash of ["#/graph", "#/board"]) {
+    history.replaceState(null, "", hash);
+    const view = render(<Dashboard state={state} error={null} />);
+    expect(location.hash).toMatch(/^#\/(\?|$)/);
+    expect(screen.getByRole("heading", { level: 1, name: "All repositories" })).toBeTruthy();
+    // Tasks only, until the Overview.
+    const views = within(screen.getByRole("group", { name: "View" }));
+    expect(views.getAllByRole("link").map((a) => a.textContent)).toEqual(["Tasks"]);
+    expect(screen.queryByRole("region", { name: "Work queue" })).toBeNull();
+    view.unmount();
+  }
+});
+
+test("on the board the sidebar is a rail, expanded there without changing the kept choice", () => {
+  history.replaceState(null, "", "#/acme/app/board");
   render(<Dashboard state={state} error={null} />);
-  expect(location.hash).toBe("#/board");
-  expect(screen.getByRole("list", { name: "Issues" })).toBeTruthy();
-  expect(screen.getByRole("heading", { level: 1, name: "All repositories" })).toBeTruthy();
-  const views = within(screen.getByRole("group", { name: "View" }));
-  expect(views.getByRole("link", { name: "Board" }).getAttribute("aria-current")).toBe("page");
-  expect(views.getByRole("link", { name: "Tasks" }).getAttribute("href")).toBe("#/");
-  expect(sidebarRepos()[0].getAttribute("aria-current")).toBe("page");
-  // The column lists every repo's brainstorms, without a button: nothing moves on All.
-  const all = screen.getByRole("region", { name: "Brainstorms" });
-  expect(within(all).getAllByRole("listitem").length).toBeGreaterThan(0);
-  expect(within(all).queryByRole("button")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Expand the sidebar" }));
+  expect(screen.getByRole("button", { name: "Collapse the sidebar" })).toBeTruthy();
+  expect(localStorage.getItem("deckhand.sidebar")).toBeNull();
+  // Start in is in the page header.
+  const header = screen.getByRole("heading", { level: 1, name: "acme/app" }).closest("header")!;
+  expect(within(header).getByRole("combobox", { name: "Start in" })).toBeTruthy();
 });
 
 test("the old addresses are rewritten to their new ones, showing the same", () => {

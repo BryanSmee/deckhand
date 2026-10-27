@@ -1,5 +1,5 @@
 // An issue's open questions over the graph: before the drag that opened them starts or queues
-// it, or on their own from a click on its node (Graph.tsx).
+// it, or on their own from a click on its node (Board.tsx).
 import type { Asking } from "./graphHooks";
 import { nodeRef } from "./GraphDrawing";
 import { useDismiss } from "./hooks";
@@ -7,7 +7,7 @@ import { Questions } from "./Questions";
 import { Backdrop } from "./RepoDialog";
 import { formatRoute } from "./route";
 import type { Answers, Questions as Asked, WorkResult } from "./types";
-import styles from "./Graph.module.css";
+import styles from "./QuestionsDialog.module.css";
 
 interface Props {
   asking: Asking & { task: { questions: Asked } };

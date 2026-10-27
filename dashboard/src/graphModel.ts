@@ -1,23 +1,47 @@
 // The graph page's model: what each issue looks like, and where it goes: the graph, or the
-// Brainstorm column beside it (brainstormsOf()). Where each node is drawn: graphLayout.ts.
-import { inChip, STATE_NAMES } from "./format";
+// work queue's Brainstorm tab (brainstormsOf()). Where each node is drawn: graphLayout.ts.
+import { inChip, STATE_NAMES, type Tone } from "./format";
 import type { Backlog, Blocker, Edge, Pending, PrState, Task } from "./types";
 
 // What a node looks like: the graph's own families, not the list's (format.ts toneOf()).
-// Purple, GitHub's colour for merged, stays out: merged is implemented, green. "pending": an
-// action on it is on its way to the listener; not in the legend, it lasts a few seconds.
-// "input": questions wait for answers; "talk": a brainstorm waits for its next comment.
+// Merged is implemented, done. "pending": an action on it is on its way to the listener; not in
+// the legend, it lasts a few seconds. "input": questions wait for answers; "talk": a brainstorm
+// waits for its next comment.
 export type Look = "idle" | "input" | "talk" | "run" | "err" | "ready" | "done" | "pending";
 
-export const LOOKS: { look: Look; name: string; means: string }[] = [
-  { look: "idle", name: "Waiting", means: "for a blocker, queued, or nothing started" },
-  { look: "input", name: "Needs input", means: "questions wait for your answers: click to answer" },
-  { look: "talk", name: "Brainstorm", means: "waits for your next comment" },
-  { look: "run", name: "Running", means: "being worked on" },
-  { look: "err", name: "Error", means: "failed: what waits for it keeps waiting" },
-  { look: "ready", name: "Ready for review", means: "its pull request" },
-  { look: "done", name: "Implemented", means: "closed as completed, or merged" },
+// Each look's status tone (global.css .s-*): a brainstorm's turn is "Needs you" too, outlined.
+export const TONES: Record<Look, Tone> = {
+  idle: "idle",
+  input: "input",
+  talk: "input",
+  run: "run",
+  err: "err",
+  ready: "ready",
+  done: "done",
+  pending: "idle",
+};
+
+// Those whose node has a border in its tone: they need looking at.
+export const LOUD: Look[] = ["run", "input", "talk", "ready", "err"];
+
+// The legend: a tone each, in the reference's order.
+export const LOOKS: { tone: Tone; name: string; means: string }[] = [
+  { tone: "run", name: "Running", means: "being worked on" },
+  { tone: "input", name: "Needs you", means: "questions to answer, or a brainstorm's turn" },
+  { tone: "ready", name: "Ready for review", means: "its pull request" },
+  { tone: "err", name: "Error", means: "failed: what waits for it keeps waiting" },
+  { tone: "idle", name: "Waiting", means: "for a blocker, queued, or nothing started" },
+  { tone: "done", name: "Done", means: "closed as completed, or merged" },
 ];
+
+// What a node or card says while an action on it is on its way.
+export function pendingName(p: Pick<Pending, "action">): string {
+  if (p.action === "start") return "Starting…";
+  if (p.action === "queue") return "Queueing…";
+  if (p.action === "plan") return "Laying out…";
+  if (p.action === "dequeue") return "Removing its wait…";
+  return "Stopping…";
+}
 
 // An issue in the graph: a task on the board, or an issue one of them waits for.
 export interface GraphNode {
@@ -73,7 +97,7 @@ function statusOf(
 // issues an inbox files show once someone works on them.
 const NOT_WORK: Task["kind"][] = ["idea", "bug", "discussion"];
 
-// A brainstorm, from a reply on its way to its wrap-up: in the Brainstorm column, not on the
+// A brainstorm, from a reply on its way to its wrap-up: in the Brainstorm tab, not on the
 // graph. Its kind says it until "/stop", its mode after (board.mjs).
 const BRAINSTORMING: Task["state"][] = [
   "queued",
@@ -90,15 +114,15 @@ const brainstorming = (t: Task) =>
 const brainstormed = (t: Task) =>
   t.mode === "brainstorm" && ["done", "error", "interrupted", "cancelled"].includes(t.state);
 
-// A card of the Brainstorm column. `task`: null for one just started from the backlog.
+// A card of the Brainstorm tab. `task`: null for one just started from the backlog.
 export interface BrainstormCard {
   key: string;
   repo: string;
   number: number;
   title: string | null;
   task: Task | null;
-  // An action on it is on its way: Sending….
-  sending: boolean;
+  // An action on it is on its way: what it says meanwhile ("Starting…"); null: none.
+  sending: string | null;
 }
 
 // Where issue `key` goes once the last action sent on it is done: a brainstorm started or
@@ -109,10 +133,13 @@ function columnOnceSent(key: string, pending: Pending[]): boolean | undefined {
   return p.action === "stop" || (p.action === "start" && p.mode === "brainstorm");
 }
 
-// The Brainstorm column's cards, in the board's order (most recent first): `tasks`' brainstorms
+// The Brainstorm tab's cards, in the board's order (most recent first): `tasks`' brainstorms
 // as they will be once `pending` is done. One started from the backlog shows at once.
 export function brainstormsOf(tasks: Task[], pending: Pending[] = []): BrainstormCard[] {
-  const sent = (key: string) => pending.some((p) => `${p.repo}#${p.number}` === key);
+  const sent = (key: string) => {
+    const p = pending.filter((p) => `${p.repo}#${p.number}` === key).at(-1);
+    return p ? pendingName(p) : null;
+  };
   const cards: BrainstormCard[] = tasks
     .filter((t) => t.number !== null && (columnOnceSent(t.key, pending) ?? brainstorming(t)))
     .map((t) => ({
@@ -135,7 +162,7 @@ export function brainstormsOf(tasks: Task[], pending: Pending[] = []): Brainstor
       number: p.number,
       title: p.title,
       task: null,
-      sending: true,
+      sending: pendingName(p),
     });
   }
   return cards;
@@ -145,12 +172,12 @@ export function brainstormsOf(tasks: Task[], pending: Pending[] = []): Brainstor
 // from what it waits for, a started one none, a parent laid out with its sub-issues ("plan")
 // waits, its arrows the listener's to tell, a dequeued one leaves (unless it ran before:
 // then it stays, without its arrows). A stopped brainstorm doesn't move. The keys it touches
-// come back too.
+// come back too, with the last action on each.
 function withPending(tasks: Task[], edges: Edge[], pending: Pending[]) {
-  const touched = new Set<string>();
+  const touched = new Map<string, Pending>();
   for (const p of pending) {
     const key = `${p.repo}#${p.number}`;
-    touched.add(key);
+    touched.set(key, p);
     if (p.action === "stop") continue;
     edges = edges.filter((e) => e.to !== key);
     const task = tasks.find((t) => t.key === key);
@@ -191,11 +218,11 @@ function isClosed(n: GraphNode): boolean {
 }
 
 // The nodes of `tasks` (one tab's, or all) and the issues they wait for, with the arrows
-// between them. Brainstorms are the column's (brainstormsOf()), and those over the backlog's,
+// between them. Brainstorms are the Brainstorm tab's (brainstormsOf()), and those over the backlog's,
 // unless an arrow touches them: what waits for one, or what it waits for, stays in sight.
 // Closed ones are left out unless `showClosed`, or an issue waiting for one still runs; `hidden` counts them. A hidden node takes its arrows with it. `pending`: the
-// actions on their way, drawn as done already, their nodes "Sending…"; `sending`: the keys of
-// tasks whose answers are on their way, "Sending…" too.
+// actions on their way, drawn as done already, their nodes saying it ("Starting…"); `sending`:
+// the keys of tasks whose answers are on their way, "Sending…".
 export function graphOf(
   tasks: Task[],
   edges: Edge[],
@@ -218,7 +245,8 @@ export function graphOf(
   for (const t of tasks) {
     if (NOT_WORK.includes(t.kind)) continue;
     if (elsewhere(t) && !linked(t.key)) continue;
-    const sending = expected.touched.has(t.key) || answered.includes(t.key);
+    const action = expected.touched.get(t.key);
+    const sending = !!action || answered.includes(t.key);
     const look = sending ? "pending" : lookOf(t);
     nodes.set(t.key, {
       key: t.key,
@@ -227,7 +255,7 @@ export function graphOf(
       kind: t.kind,
       title: t.title,
       look,
-      status: sending ? "Sending…" : statusOf(look, t),
+      status: action ? pendingName(action) : sending ? "Sending…" : statusOf(look, t),
       closed: t.closed,
       // Not on the board yet: nothing to open.
       task: real.has(t) ? t : null,
@@ -280,9 +308,9 @@ export const movable = (n: GraphNode, repo: string | null, blocked: boolean) =>
   !!n.task &&
   (n.task.state === "waiting" ? n.kind === "issue" : waitsForAnswers(n.task));
 
-// The work area's lists besides the backlog: the issues waiting for others, less those a
+// The work queue's lists besides the backlog: the issues waiting for others, less those a
 // Start or Remove on its way takes out of their wait; those waiting for answers, less those an
-// action on its way takes (brainstorms are the column's).
+// action on its way takes (brainstorms are the Brainstorm tab's).
 export function workLists(tasks: Task[], pending: Pending[]) {
   const leaving = new Set(pending.filter((p) => p.action !== "queue").map((p) => p.number));
   const sent = new Set(pending.map((p) => p.number));

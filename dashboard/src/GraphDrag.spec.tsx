@@ -1,5 +1,5 @@
-// Dragging issues waiting for answers onto the graph: the work area's cards, and the graph's
-// own nodes (fetch mocked). Brainstorms are the column's: Brainstorms.spec.tsx.
+// Dragging issues waiting for answers onto the graph: the work queue's cards, and the graph's
+// own nodes (fetch mocked). Brainstorms are the Brainstorm tab's: Brainstorms.spec.tsx.
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/preact";
 import { beforeEach, expect, test } from "vitest";
 import { Dashboard } from "./App";
@@ -28,8 +28,9 @@ beforeEach(() => {
 
 const show = async (tasks: Task[] = []) => {
   render(<Dashboard state={{ ...state, tasks: [...state.tasks, ...tasks] }} error={null} />);
-  const work = screen.getByRole("region", { name: "Work area" });
+  const work = screen.getByRole("region", { name: "Work queue" });
   await within(work).findByText("No open issue left to start.");
+  fireEvent.click(within(work).getByRole("tab", { name: /^Answers/ }));
   return {
     list: within(work).getByRole("list", { name: "Issues waiting for answers" }),
     // The drop area: the drawing's parent.
@@ -55,7 +56,7 @@ const dragNode = (node: HTMLElement) => {
 
 const cardOf = (list: HTMLElement, number: number) =>
   within(list)
-    .getByRole("button", { name: `Start #${number}` })
+    .getByRole("button", { name: `Answer #${number} and start it` })
     .closest("li")!;
 
 test("a card waiting for answers carries its issue; dropped, it opens the questions", async () => {
@@ -83,7 +84,7 @@ test("a pull request waiting for answers stays where it is", async () => {
   await show([task(153, "pr", "needs-input")]);
   dragNode(screen.getByRole("listitem", { name: /^PR #153 / }));
   expect(screen.queryByRole("list", { name: "Issues waiting for answers" })).toBeTruthy();
-  expect(screen.queryByRole("button", { name: "Start #153" })).toBeNull();
+  expect(screen.queryByRole("button", { name: /#153/ })).toBeNull();
   await new Promise((r) => setTimeout(r, 10));
   expect(api.posted).toEqual([]);
 });
@@ -93,7 +94,7 @@ test("dropped text that isn't an issue's link says to drag its card", async () =
   const dataTransfer = transfer({ "text/plain": "Graph: drag issues" });
   fireEvent.dragOver(area, { dataTransfer });
   fireEvent.drop(area, { dataTransfer });
-  expect(screen.getByRole("status").textContent).toMatch(/drag an issue's card/);
+  expect(screen.getByRole("alert").textContent).toMatch(/drag an issue's card/);
   expect(api.posted).toEqual([]);
 });
 
@@ -103,10 +104,10 @@ test("a parent issue's card shows its sub-issues; dropped on the graph, it lays 
     "api/repos/acme/api/issues": () => ({ ...BACKLOG, issues: [{ ...epic, subIssues: 3 }] }),
   });
   render(<Dashboard state={state} error={null} />);
-  const work = screen.getByRole("region", { name: "Work area" });
+  const work = screen.getByRole("region", { name: "Work queue" });
   const card = (await within(work).findByText("Epic")).closest("li")!;
-  expect(within(card).getByText("3 sub-issues")).toBeTruthy();
-  fireEvent.change(within(work).getByRole("combobox", { name: /Start in/ }), {
+  expect(within(card).getByText(/^3 sub-issues/)).toBeTruthy();
+  fireEvent.change(screen.getByRole("combobox", { name: /Start in/ }), {
     target: { value: "review" },
   });
   dragCard(card, screen.getByRole("list", { name: "Issues of acme/api" }).parentElement!);

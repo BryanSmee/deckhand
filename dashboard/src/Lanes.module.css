@@ -1,0 +1,222 @@
+/* The board's lanes: a card per chain, its name and its compact nodes in a row (wrapping); on a
+   phone, each lane top to bottom with a rail through its dots. */
+.lanes {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 20px 24px;
+}
+
+.empty {
+  margin: 24px;
+  color: var(--text-2);
+}
+
+.lane {
+  padding: 12px 14px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  background: var(--surface);
+}
+
+.head,
+.rename {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  margin-bottom: 8px;
+}
+
+.rename > :first-child {
+  flex: 1 1 14rem;
+  max-width: 24rem;
+}
+
+.title {
+  margin: 0;
+  overflow: hidden;
+  color: var(--text-3);
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  line-height: 16px;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.steps {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.step {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.arrow {
+  flex: none;
+  color: var(--text-3);
+}
+
+/* A compact node: its dot, number, title and state. */
+.node {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  max-width: 300px;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 12.5px;
+  text-decoration: none;
+  transition:
+    border-color var(--fast),
+    box-shadow var(--fast);
+}
+
+.node:hover {
+  box-shadow: var(--shadow);
+}
+
+.loud {
+  border-color: var(--s-solid);
+}
+
+.talk,
+.pending {
+  border-style: dashed;
+}
+
+.pending {
+  border-color: var(--border-strong);
+  opacity: 0.8;
+}
+
+.done {
+  opacity: 0.65;
+}
+
+.rail {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.name {
+  min-width: 0;
+  overflow: hidden;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ref {
+  color: var(--text-3);
+  font-family: var(--mono);
+}
+
+.state {
+  flex: none;
+  color: var(--s-fg);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+.pending .state {
+  color: var(--text-2);
+}
+
+.badge {
+  flex: none;
+  min-width: 18px;
+  height: 16px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--input-bg);
+  color: var(--input);
+  font-size: 10.5px;
+  font-weight: 700;
+  line-height: 16px;
+  text-align: center;
+}
+
+/* A phone: each lane a vertical list of 48 px steps, a rail joining their dots. */
+.narrow {
+  padding: 8px 16px 16px;
+}
+
+.narrow .lane {
+  padding: 8px 14px;
+  border-radius: 14px;
+}
+
+.narrow .head {
+  margin: 0;
+}
+
+.narrow .title {
+  font-size: 12px;
+}
+
+.narrow .steps {
+  display: block;
+}
+
+.narrow .node {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) auto auto;
+  column-gap: 12px;
+  width: 100%;
+  max-width: none;
+  height: auto;
+  min-height: 48px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  font-size: 14.5px;
+}
+
+.narrow .node:hover {
+  box-shadow: none;
+}
+
+.narrow .rail {
+  align-self: stretch;
+}
+
+.narrow .rail::after {
+  content: "";
+  position: absolute;
+  top: calc(50% + 8px);
+  bottom: calc(-50% + 8px);
+  left: 50%;
+  border-left: 1.5px solid var(--border-strong);
+}
+
+.narrow .last .rail::after {
+  display: none;
+}
+
+.narrow .ref {
+  font-size: 13px;
+}
+
+.narrow .state {
+  font-size: 12.5px;
+}
