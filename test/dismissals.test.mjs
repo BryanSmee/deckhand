@@ -23,7 +23,9 @@ test("dismissals survive a restart; prune() drops those whose run is no longer t
     { id: "run-2", key: "org/app#2" },
   ]);
   assert.deepEqual(
-    createDismissals({ path }).list().map((d) => d.key),
+    createDismissals({ path })
+      .list()
+      .map((d) => d.key),
     ["org/app#1"],
   );
 });
