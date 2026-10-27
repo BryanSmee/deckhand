@@ -64,9 +64,11 @@ test("the tasks with their titles, tabs per repo, and the first live one open", 
 test("a done task whose pull request is ready shows the ready tone, in the list and open", () => {
   history.replaceState(null, "", `#/all?task=${encodeURIComponent("acme/api#131")}`);
   render(<Dashboard state={state} error={null} />);
-  const row = within(screen.getByRole("list"))
-    .getByText("Dark mode for the settings page")
-    .closest("button")!;
+  // Its row: the title's button (the heading has the title too).
+  const row = screen
+    .getAllByText("Dark mode for the settings page")
+    .map((el) => el.closest("button"))
+    .find(Boolean)!;
   expect(within(row).getByText("Done").className).toContain("s-ready");
   const head = screen.getByRole("heading", { level: 1, name: /Dark mode/ }).parentElement!;
   expect(within(head).getByText("Done").className).toContain("s-ready");
