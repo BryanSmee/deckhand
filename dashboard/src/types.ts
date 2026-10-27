@@ -268,7 +268,8 @@ export interface ServerSetup {
   // or its default.yaml has errors.
   proxy: { on: boolean; hosts: number | null };
   // The grants folder: read without errors, or the file to fix (relative to the folder; null
-  // when several have errors) and what is wrong.
+  // when several have errors, or the folder itself) and which have errors. Never the errors
+  // themselves: they quote the files' values (mount roots); a repo's config panel has them.
   grants: { ok: boolean; file: string | null; message: string | null };
   // ALLOWED_USERS, lowercase.
   allowedUsers: string[];

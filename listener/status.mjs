@@ -21,7 +21,7 @@ export function serverInfo(env, now = Date.now) {
 // container engine of runs granted allow_docker (SANDBOX_ENGINE as set, "auto" unresolved),
 // the egress proxy and how many hosts the grants folder grants in all, whether that folder
 // reads without errors, and who may sign in on which repos. Nothing secret: every signed-in
-// user gets it, and the grants folder's own path is left out of its errors. `load`: the
+// user gets it, so the grants' errors are named by file only. `load`: the
 // grants folder (loadGrants(), read at each call so an edit shows without a restart).
 export function serverSetup(config, load = () => loadGrants(config)) {
   let grants = null;
@@ -37,7 +37,7 @@ export function serverSetup(config, load = () => loadGrants(config)) {
   return {
     engine: config.engine,
     proxy,
-    grants: grantsHealth(config, errors),
+    grants: grantsHealth(errors),
     allowedUsers: config.users,
     allowedRepos: config.repos,
   };
@@ -58,15 +58,25 @@ function grantedHosts(grants) {
 }
 
 // The grants folder's errors → { ok, file, message }: `file` the one to edit (relative to the
-// folder), null when there are several or none is named.
-function grantsHealth(config, errors) {
+// folder), null when there are several or none is named. Their messages stay out: they quote
+// the files' values (mount roots on the host, YAML lines), and every signed-in user gets this,
+// whichever repos they see. A repo's config panel shows its own (repos.mjs grantsErrorView()),
+// the listener's logs all of them.
+function grantsHealth(errors) {
   if (!errors.length) return { ok: true, file: null, message: null };
-  const files = new Set(errors.map((e) => e.file ?? null));
-  const message = errors
-    .map((e) => (e instanceof GrantsError ? e.message : "grants: can't be read"))
-    .join("; ")
-    .replaceAll(` ${config.grantsDir}`, "");
-  return { ok: false, file: files.size === 1 ? [...files][0] : null, message };
+  // "": the folder itself (grants.mjs walkGrants()), not a file to name.
+  const named = [...new Set(errors.map((e) => (e instanceof GrantsError && e.file) || null))];
+  const files = named.filter(Boolean);
+  const unnamed = named.length > files.length;
+  const what = [
+    ...(files.length ? [`${files.join(", ")} ${files.length === 1 ? "has" : "have"} errors`] : []),
+    ...(unnamed ? ["the grants folder has errors"] : []),
+  ];
+  return {
+    ok: false,
+    file: files.length === 1 && !unnamed ? files[0] : null,
+    message: `${what.join("; ")} (a repository's config panel says what)`,
+  };
 }
 
 // `ctx` (server.mjs): the listener's state and services, read at call time.
