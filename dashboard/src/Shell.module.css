@@ -1,5 +1,5 @@
 /* The app shell: the sidebar (232 px) or its rail (64 px), the page header; on a phone, the
-   top bar and the tab bar (docs/design/reference/tasks.html, board.html, mobile-tasks.html). */
+   top bar and the tab bar (docs/design/dashboard-redesign.md › Layout › App shell). */
 .side {
   flex: none;
   width: 232px;

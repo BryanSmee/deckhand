@@ -1,4 +1,4 @@
-// One repository's config (docs/design/reference/repo-config.html, repo-config-ok.html): where
+// One repository's config (docs/design/dashboard-redesign.md › Pages): where
 // it was read, Read again and Edit on GitHub, its tabs (Config, Policies: PolicyConfig.tsx);
 // then what stops or worries its runs (each error with its key, its fix and a link to its
 // line, the warnings, the auto-merge risk), or, when all is fine, a green banner and the facts

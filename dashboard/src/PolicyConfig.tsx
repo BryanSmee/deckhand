@@ -1,4 +1,4 @@
-// A repository's Policies tab (docs/design/reference/policy-config.html): the config check's
+// A repository's Policies tab (docs/design/dashboard-redesign.md › Pages): the config check's
 // errors first, as they refuse every decision a policy is asked for; one line on how policies
 // work; a card per decision with its rules; the policy files, operator's and repo's, merged by
 // name; each file's source, folded, its errors under their lines; and how to try them on a

@@ -1,4 +1,4 @@
-/* The `?` sheet: a column per group, a row per shortcut (docs/design/reference/shortcuts.html). */
+/* The `?` sheet: a column per group, a row per shortcut (docs/design/dashboard-redesign.md › Layout › Keyboard). */
 .groups {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));

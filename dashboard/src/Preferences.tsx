@@ -1,4 +1,4 @@
-// Settings › Preferences (docs/design/reference/preferences.html): the choices kept in this
+// Settings › Preferences (docs/design/dashboard-redesign.md › Pages): the choices kept in this
 // browser (prefs.ts), in four groups. Each changes the page at once, here and wherever it
 // applies; the browser's notification permission is the browser's, asked from here too.
 import type { ComponentChildren } from "preact";

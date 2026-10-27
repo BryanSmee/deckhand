@@ -1,4 +1,4 @@
-/* Settings › Preferences (docs/design/reference/preferences.html): a card per group, a row
+/* Settings › Preferences (docs/design/dashboard-redesign.md › Pages): a card per group, a row
    per preference, its name and help on the left, its control on the right (under them when
    the row is narrow). */
 .page {
