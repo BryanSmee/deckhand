@@ -59,10 +59,13 @@ export async function clientAddress(ctx, req) {
   return addressOf(req);
 }
 
-// The broker's record of the running task whose sandbox (or engine) has address `ip`, or null.
+// The broker's record of the running task whose sandbox has address `ip`, or null: what a call
+// without a secret is bound to (github-gateway.mjs). Never its engine's: the builds and
+// containers there don't get the run's secret, and mustn't get its GitHub token without it.
 export async function runFrom(ctx, ip) {
   for (const task of ctx.tasks.values()) {
     if (task.live?.secret && (await hasAddress(ctx, task, ip))) {
+      if (task.live.engineIp?.includes(ip)) return null;
       return ctx.broker.runOf(task.live.secret) ?? null;
     }
   }

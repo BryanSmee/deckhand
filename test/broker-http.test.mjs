@@ -57,10 +57,11 @@ test("runAt: a finished run (finish() cleared its hosts and addresses) is nobody
   assert.equal(live.ip, null, "not looked up again");
 });
 
-test("runFrom: the record of the running task whose sandbox or engine has the address", async () => {
+test("runFrom: the record of the running task whose sandbox has the address, never its engine", async () => {
   const { ctx, tasks, runOf } = twoRuns();
   assert.equal(await runFrom(ctx, "10.1.0.2"), runOf("org/a#1"));
-  assert.equal(await runFrom(ctx, "10.1.0.3"), runOf("org/a#1"));
+  // The engine's builds and containers have no secret: nobody's run, so no token.
+  assert.equal(await runFrom(ctx, "10.1.0.3"), null);
   assert.equal(await runFrom(ctx, "10.2.0.2"), runOf("org/b#2"));
   assert.equal(await runFrom(ctx, "10.3.0.2"), null);
   // Finished: nobody's.

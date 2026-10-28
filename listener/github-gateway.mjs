@@ -18,7 +18,7 @@
 //   (modes.mjs permissionsFor()), and the answer streams back (upstream.mjs forward()).
 //
 // Served on the broker's port, which only the runs' networks reach.
-import { NOT_ITS_SANDBOX } from "./broker.mjs";
+import { addressOf, NOT_ITS_SANDBOX } from "./broker.mjs";
 import { NO_TOKEN } from "./github-app.mjs";
 import { redact } from "./redact.mjs";
 import { baseOf, forward, forwarded, IDLE_MS, MAX_IN_FLIGHT } from "./upstream.mjs";
@@ -29,17 +29,23 @@ export const MAX_WRITE = 16 * 1024 * 1024;
 // The redacted writes and refused calls a run's log notes, each once and only so many.
 export const MAX_NOTED = 20;
 
+// A repository in a REST path: by name, or by id, as GitHub's own pagination links name it.
+const REPO = String.raw`(?:repos\/[^/]+\/[^/]+|repositories\/\d+)`;
 // Where a review may not read (paths under the API's base, without its query): the thread's
-// comments, reviews and review comments, the timeline that holds them, and commit comments.
+// comments, reviews and review comments, the timeline that holds them, commit comments, and the
+// event feeds, whose comment and review events carry their bodies (a repository's, a network's,
+// a user's, an organization's, the public one).
 const THREAD_READS = [
-  /^repos\/[^/]+\/[^/]+\/(?:issues|pulls)\/comments(?:\/|$)/i,
-  /^repos\/[^/]+\/[^/]+\/issues\/[^/]+\/(?:comments|timeline)(?:\/|$)/i,
-  /^repos\/[^/]+\/[^/]+\/pulls\/[^/]+\/(?:comments|reviews)(?:\/|$)/i,
-  /^repos\/[^/]+\/[^/]+\/(?:commits\/[^/]+\/)?comments(?:\/|$)/i,
-];
-// The same in GraphQL, read as text until #406 parses it: the fields and types that hold them.
+  String.raw`^${REPO}\/(?:issues|pulls)\/comments(?:\/|$)`,
+  String.raw`^${REPO}\/issues\/[^/]+\/(?:comments|timeline)(?:\/|$)`,
+  String.raw`^${REPO}\/pulls\/[^/]+\/(?:comments|reviews)(?:\/|$)`,
+  String.raw`^${REPO}\/(?:commits\/[^/]+\/)?comments(?:\/|$)`,
+  String.raw`^(?:(?:${REPO}|networks\/[^/]+\/[^/]+|users\/[^/]+|orgs\/[^/]+)\/)?(?:received_)?events(?:\/|$)`,
+].map((re) => new RegExp(re, "i"));
+// The same in GraphQL, read as text until #406 parses it: the fields, types and interfaces that
+// hold them (`Comment`, which every comment and review implements), and their edit history.
 const THREAD_FIELDS =
-  /\b(?:comments|reviews|latestReviews|latestOpinionatedReviews|reviewThreads|timeline|timelineItems|IssueComment|CommitComment|DiscussionComment|PullRequestReview|PullRequestReviewComment|PullRequestReviewThread)\b/;
+  /\b(?:comments|reviews|latestReviews|latestOpinionatedReviews|reviewThreads|timeline|timelineItems|\w*TimelineItems?|userContentEdits|Comment|UpdatableComment|UserContentEdit|IssueComment|CommitComment|DiscussionComment|PullRequestReview|PullRequestReviewComment|PullRequestReviewThread)\b/;
 // What git fetches with on the web host; a review reads nothing else there (web pages show the
 // comments).
 const GIT_READ = /^[^/]+\/[^/]+?(?:\.git)?\/(?:info\/refs|git-upload-pack)$/;
@@ -59,35 +65,29 @@ export function secretOf(header) {
   return "";
 }
 
-// `body` without `secrets` (redact()): each string of its JSON when it is JSON, so an escaped
-// character can't split a secret, else as text. Null when nothing was redacted.
+// `body` without `secrets` (redact()), everything else in it as it was sent: each string of its
+// JSON decoded, so an escaped character can't split a secret, and replaced in place; then the
+// rest as text (a number, or a body that isn't JSON). A body that isn't UTF-8 is redacted as
+// bytes (latin1 keeps each one). Null when nothing was redacted.
 export function redactBody(body, secrets) {
   const text = body.toString("utf8");
-  let changed = false;
-  const clean = (value) => {
-    const out = redact(value, secrets);
-    if (out !== value) changed = true;
-    return out;
-  };
-  let parsed;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    const out = clean(text);
-    return changed ? Buffer.from(out) : null;
+  if (!Buffer.from(text, "utf8").equals(body)) {
+    const bytes = body.toString("latin1");
+    const out = redact(bytes, secrets);
+    return out === bytes ? null : Buffer.from(out, "latin1");
   }
-  const walk = (value) =>
-    typeof value === "string"
-      ? clean(value)
-      : Array.isArray(value)
-        ? value.map(walk)
-        : value && typeof value === "object"
-          ? Object.fromEntries(Object.entries(value).map(([k, v]) => [clean(k), walk(v)]))
-          : value;
-  const out = walk(parsed);
-  // Neither strings nor keys held one, but the raw text does (a number, say): as text.
-  if (!changed && redact(text, secrets) !== text) return Buffer.from(clean(text));
-  return changed ? Buffer.from(JSON.stringify(out)) : null;
+  let out = text;
+  try {
+    JSON.parse(text);
+    // In valid JSON, a quote outside a string starts one: the literals are exactly these.
+    out = text.replace(/"(?:[^"\\]|\\.)*"/g, (literal) => {
+      const value = JSON.parse(literal);
+      const clean = redact(value, secrets);
+      return clean === value ? literal : JSON.stringify(clean);
+    });
+  } catch {}
+  out = redact(out, secrets);
+  return out === text ? null : Buffer.from(out);
 }
 
 // Whether a GraphQL call's body (as text) reads a thread's comments or reviews.
@@ -136,7 +136,7 @@ export function createGithubGateway({
   web, // its GITHUB_URL
   // req → the address of the sandbox that sent it: the one the egress proxy names when it
   // relayed the call (broker-http.mjs clientAddress()).
-  clientOf = async (req) => (req.socket?.remoteAddress ?? "").replace(/^::ffff:/, ""),
+  clientOf = async (req) => addressOf(req),
   // address → the live run whose sandbox (or engine) has it, or null: a call without a secret.
   runFrom = async () => null,
   // run → the secrets its writes must not carry, besides its tokens: its own secret and the
@@ -240,6 +240,15 @@ export function createGithubGateway({
         }
         body = redacted(run, req, body, call);
       }
+      // Its URL is the sandbox's to choose too, but isn't rewritten: a path names what is
+      // written to, so one holding a secret is refused (and noted) rather than redacted.
+      if (write && urlHolds(run, req, where.target)) {
+        note(
+          run,
+          `Deckhand refused the run's GitHub write ${clip(run, call)}: its URL holds a secret`,
+        );
+        return fail(res, 403, "this write's URL holds a secret");
+      }
       await proxied(req, res, run, github, where, body);
     } finally {
       inFlight.set(run, inFlight.get(run) - 1);
@@ -283,8 +292,24 @@ export function createGithubGateway({
   }
 
   // The path is the sandbox's to choose: without the run's secrets, as any of its output.
+  // Percent-decoded first: an encoded secret is one too.
   function clip(run, call) {
-    return redact(call, [...secrets(run), ...run.tokens]).slice(0, 200);
+    let text = call;
+    try {
+      text = decodeURIComponent(call);
+    } catch {}
+    return redact(text, [...secrets(run), ...run.tokens]).slice(0, 200);
+  }
+
+  // Whether `target` holds one of the run's secrets, as sent or percent-decoded.
+  function urlHolds(run, req, target) {
+    const values = [...secrets(run), secretOf(req.headers.authorization), ...run.tokens];
+    const raw = target.pathname + target.search;
+    let decoded = raw;
+    try {
+      decoded = decodeURIComponent(raw.replaceAll("+", " "));
+    } catch {}
+    return redact(raw, values) !== raw || redact(decoded, values) !== decoded;
   }
 
   // The write's body without the run's secrets; noted when it had one. It still goes on.

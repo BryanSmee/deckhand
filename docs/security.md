@@ -269,7 +269,8 @@ to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to the
 - **Its run**: the secret the call carries in place of a token (`token <secret>` from `gh`,
   `Bearer`, or Basic with it as the password from git), checked as above. A call that
   carries none (git's first request, a download with `curl`) is the run's whose sandbox has
-  its address. The proxy names that address in an `X-Deckhand-Client` header, replacing any
+  its address; never its engine's, whose builds and containers don't get the secret (from
+  there, such a call gets `401`). The proxy names that address in an `X-Deckhand-Client` header, replacing any
   the client sent, and the listener believes it only from the proxy's own addresses: a
   sandbox that sets it itself is judged by its own address. An unknown or finished run's
   secret, or any other credential, gets `401`; another sandbox's address `403`; a research
@@ -280,19 +281,24 @@ to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to the
   `HEAD`) and a fetch's pack request goes through the same redaction as the run's reply and
   log: the run's secret, the operator's credentials (`listener/secrets.mjs`
   `operatorSecrets()`), the tokens used for the run and anything shaped like a GitHub token,
-  in each string of its JSON (so an escaped character can't split one), or as text when it
-  isn't JSON. GraphQL is redacted that way too, its query and variables, inline literals
+  in each string of its JSON (so an escaped character can't split one), replaced in place so
+  the rest of the body goes on as it was sent, then as text (a body that isn't JSON; one
+  that isn't UTF-8, byte for byte). GraphQL is redacted that way too, its query and variables, inline literals
   included, until #406 parses it. A redacted write still goes through, with `[redacted]` in
   place of the secret, and the run's log says so (each call once, 20 at most). A comment,
   an issue edit or a `gh api` write can't publish what the sandbox holds, a mount's content
   that looks like the operator's key say, any more than its reply can. A write over 16 MiB is
-  refused.
+  refused, and so is a write whose URL (its path or query, as sent or percent-decoded) holds
+  one of those secrets: a path names what is written, so it isn't rewritten.
 - **A review can't read its thread** other than from `TASK_DIGEST` ([Reviews](#reviews)):
   for a review run, the gateway refuses issue and pull request comments, reviews and review
-  comments, the timeline and commit comments over REST (whatever the case or the encoding of
-  the path), any GraphQL call that names `comments`, `reviews`, `latestReviews`,
-  `reviewThreads`, `timelineItems` or a comment's or review's type (read as text until #406
-  parses GraphQL, then per field), and anything on the web host but git's fetches (its pages
+  comments, the timeline and commit comments over REST, under `repos/<owner>/<repo>` or
+  `repositories/<id>` (whatever the case or the encoding of the path), the event feeds
+  (a repository's, a network's, a user's, an organization's, the public one: their comment and
+  review events carry the bodies), any GraphQL call that names `comments`, `reviews`,
+  `latestReviews`, `reviewThreads`, `timelineItems`, the `Comment` interface, a comment's or
+  review's type or their edit history (read as text until #406 parses GraphQL, then per
+  field), and anything on the web host but git's fetches (its pages
   show the comments). Other runs read them.
 - **On to GitHub** with the run's token (`token …` for the API, Basic with
   `x-access-token` for git, as GitHub expects an App's), the sandbox's `Authorization` and

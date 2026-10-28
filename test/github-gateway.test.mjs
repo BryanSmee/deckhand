@@ -237,6 +237,25 @@ test("a write holding a secret reaches GitHub redacted, and the run's log says s
   assert.equal(gw.calls[3].body.toString(), "text [redacted]");
 });
 
+test("a write whose URL holds a secret is refused, and noted; a read's isn't", async (t) => {
+  const gw = await gateway(t);
+  const { secret, notes } = gw.register();
+  const encoded = [...OPERATOR].map((c) => `%${c.charCodeAt(0).toString(16)}`).join("");
+  for (const path of [
+    `/api/v3/repos/org/repo/issues/1/comments?body=${secret}`,
+    `/api/v3/repos/org/repo/labels/${encoded}`,
+  ]) {
+    const res = await gw.call(path, { secret, method: "POST", body: "{}" });
+    assert.equal(res.status, 403, path);
+    assert.match((await res.json()).message, /URL holds a secret/);
+  }
+  assert.deepEqual(gw.calls, []);
+  assert.match(notes[0], /refused the run's GitHub write POST .*: its URL holds a secret/);
+  assert.ok(!notes.join("").includes(secret));
+  assert.ok(!notes.join("").includes(encoded) && !notes.join("").includes(OPERATOR));
+  assert.equal((await gw.call(`/api/v3/search/issues?q=${secret}`, { secret })).status, 200);
+});
+
 test("a fetch's pack request streams through unread, binary as it is", async (t) => {
   const gw = await gateway(t);
   const { secret, notes } = gw.register();
@@ -277,6 +296,18 @@ test("a review can't read its thread's comments and reviews; other runs can", as
     // Spelled another way.
     ["/api/v3/repos/org/repo/issues/12/%63omments", "GET"],
     ["/api/v3/repos/org//repo/issues/12/comments", "GET"],
+    // By the repository's id, as GitHub's pagination links name it.
+    ["/api/v3/repositories/42/issues/12/comments", "GET"],
+    ["/api/v3/repositories/42/pulls/12/reviews", "GET"],
+    ["/api/v3/repositories/42/issues/comments", "GET"],
+    // The event feeds, whose comment and review events carry their bodies.
+    ["/api/v3/repos/org/repo/events", "GET"],
+    ["/api/v3/repositories/42/events", "GET"],
+    ["/api/v3/networks/org/repo/events", "GET"],
+    ["/api/v3/users/mallory/events/public", "GET"],
+    ["/api/v3/users/mallory/received_events", "GET"],
+    ["/api/v3/orgs/org/events", "GET"],
+    ["/api/v3/events", "GET"],
     // The web host's pages show them too.
     ["/org/repo/pull/12", "GET"],
   ];
@@ -297,6 +328,9 @@ test("a review can't read its thread's comments and reviews; other runs can", as
         '{ repository(owner: "org", name: "repo") { pullRequest(number: 12) { latestReviews(first: 5) { nodes { body } } } } }',
     }),
     JSON.stringify({ query: '{ node(id: "IC_1") { ... on IssueComment { body } } }' }),
+    // The interface every comment and review implements, and their edit history.
+    JSON.stringify({ query: '{ node(id: "IC_1") { ... on Comment { body } } }' }),
+    JSON.stringify({ query: '{ node(id: "UCE_1") { ... on UserContentEdit { diff } } }' }),
     // Escaped in its JSON.
     '{"query": "{ node(id: \\"x\\") { ... on Issue\\u0043omment { body } } }"}',
   ]) {
@@ -309,6 +343,8 @@ test("a review can't read its thread's comments and reviews; other runs can", as
   for (const path of [
     "/api/v3/repos/org/repo/pulls/12",
     "/api/v3/repos/org/repo/issues/12",
+    // A repository named like a feed is no feed.
+    "/api/v3/repos/org/events/pulls/12",
     "/org/repo.git/info/refs?service=git-upload-pack",
   ]) {
     assert.equal((await gw.call(path, { secret: review.secret })).status, 200, path);
@@ -352,7 +388,23 @@ test("secretOf, redactBody and readsThread", () => {
   assert.equal(redactBody(Buffer.from('{"a": 1}'), [secret]), null);
   assert.equal(
     String(redactBody(Buffer.from(`{"a": ["${secret}"]}`), [secret])),
-    '{"a":["[redacted]"]}',
+    '{"a": ["[redacted]"]}',
+  );
+  // The rest of the body as it was sent: a number past 2^53, its spacing, other strings.
+  const big = `{"n": 12345678901234567890, "x": 1.50, "s": "\\u00e9", "b": "${secret}"}`;
+  assert.equal(
+    String(redactBody(Buffer.from(big), [secret])),
+    '{"n": 12345678901234567890, "x": 1.50, "s": "\\u00e9", "b": "[redacted]"}',
+  );
+  // Not UTF-8: redacted as bytes, the others kept.
+  const binary = Buffer.concat([
+    Buffer.from([0xff, 0x00]),
+    Buffer.from(secret),
+    Buffer.from([0xfe]),
+  ]);
+  assert.deepEqual(
+    redactBody(binary, [secret]),
+    Buffer.concat([Buffer.from([0xff, 0x00]), Buffer.from("[redacted]"), Buffer.from([0xfe])]),
   );
   assert.equal(String(redactBody(Buffer.from(`a=${secret}`), [secret])), "a=[redacted]");
   assert.equal(readsThread('{"query": "{ viewer { login } }"}'), false);
