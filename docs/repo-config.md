@@ -876,15 +876,22 @@ marked `truncated`).
 
 An issue whose body has an `## Open questions` section that asks something is labelled
 `NEEDS_INPUT_LABEL` (default `needs-input`), and an allowed user's comment takes the label
-off: they answered. With `wait_for_answers: true` (the default), work doesn't start on an
-issue while it carries the label:
+off: they answered. Ticking the boxes in the section answers too: once every question has an
+option ticked (`- [x]`), the label comes off as for a comment, and unticking them puts it
+back. A free-text question (no options) still needs a comment. Only an allowed user's ticks
+answer: those of the App's bot (a run ticking its own picks) or of someone not allowed leave
+the label on. A run that stopped to ask goes on the same way when an allowed user ticks an
+option of every question in its reply (the boxes it came ticked with are the agent's). With
+`wait_for_answers: true` (the default), work doesn't start on an issue while it carries the
+label, unless an allowed user ticked an option of every question:
 
 - A comment that is only the trigger line (with `/mode`, `/model`, `/effort`, `/speed`, `/agent` or `/after`
   lines at most) starts nothing: the App replies that the issue has open questions, points
   to the dashboard's form, and the label stays. A trigger comment with text is the answer:
   the label comes off and the run starts.
 - A comment waiting for other issues (`/after`) whose last one is done keeps waiting until
-  the questions are answered (the label is removed), then starts by itself.
+  the questions are answered (the label is removed, or every box ticked), then starts by
+  itself.
 - The dashboard's Start and Queue open the questions first: the issue starts with the
   answers.
 

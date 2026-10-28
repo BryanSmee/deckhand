@@ -608,6 +608,7 @@ Something.
 
 From the ideas inbox: https://github.com/org/app/issues/16#issuecomment-1`;
 const BOT = { login: "deckhand[bot]", type: "Bot" };
+const TICKED = "## Open questions\n\n1. Which?\n   - [ ] A\n   - [x] B";
 const asked = (body, extra = {}) => ({ ...open("Asks"), user: BOT, labels: [], body, ...extra });
 
 test("GET issues: open questions without the label are listed and labelled, then a start is refused", async () => {
@@ -637,10 +638,18 @@ test("GET issues: an issue already labelled is listed without a label call or ti
   assert.equal(w.calls.filter((c) => c.includes("/events?")).length, 0);
 });
 
-test("GET issues: no seeding once the label was taken off, nor for the board, other authors or no questions", async () => {
+test("GET issues: no seeding once the label was taken off, nor for the board, other authors, no questions or every box ticked", async () => {
   const w = setup({
     issues: {
       1: asked(BODY_144),
+      7: asked(TICKED, { user: { login: "alice", type: "User" } }),
+      // The App's own ticks (an inbox run's) answer nothing: seeded.
+      8: asked(TICKED),
+      // Ticked, but still labelled (the bot's ticks, say): listed, no label call.
+      9: asked(TICKED, {
+        user: { login: "alice", type: "User" },
+        labels: [{ name: "needs-input" }],
+      }),
       2: asked(BODY_144),
       3: asked(BODY_144, { user: { login: "mallory", type: "User" } }),
       4: asked("## Open questions\n\nNone"),
@@ -652,11 +661,17 @@ test("GET issues: no seeding once the label was taken off, nor for the board, ot
   });
   await call(w.api, "GET", "/api/repos/org/app/issues");
   // A section not in the format: listed, with the text box (no items).
-  assert.deepEqual([...w.listed.keys()].sort(), ["org/app#5", "org/app#6"]);
+  assert.deepEqual([...w.listed.keys()].sort(), [
+    "org/app#5",
+    "org/app#6",
+    "org/app#8",
+    "org/app#9",
+  ]);
   assert.equal(w.listed.get("org/app#5").items, null);
   assert.deepEqual(w.labels, [
     [5, true],
     [6, true],
+    [8, true],
   ]);
   // The removed label is remembered: its timeline isn't read again.
   w.clock += ISSUES_MS;
@@ -1893,4 +1908,108 @@ test("a repo spelled otherwise: inbox, answers, reruns and analyses use GitHub's
   const analysis = await analyze(w, { count: 2, kinds: ["work"], outcomes: ["error"] });
   assert.equal(analysis.body.task, "Org/app#901");
   assert.equal(w.accepted.at(-1).repo, "Org/app");
+});
+
+test("ticked in a run's reply: the answers continue its session, once, for its latest questions", async () => {
+  const items = [QUESTIONS[0], { ...QUESTIONS[0], text: "Another?" }];
+  // The questions with option `picks[i]` of each ticked, as an edit leaves them.
+  const tick = (qs, picks) =>
+    qs.map((q, i) => ({
+      ...q,
+      options: q.options.map((o, j) => ({ ...o, checked: !!o.checked || j === picks[i] })),
+    }));
+  const edited = tick(items, [1, 0]);
+  const w = setup({
+    issues: { 5: open("Five"), 9: { ...open("Its PR"), pull_request: {} }, 6: open("Six") },
+    tasks: {
+      "org/app#5": asking(5, "run", items),
+      // An issue's run that asked on its pull request #9.
+      "org/app#6": asking(6, "run", items, { key: "org/app#6", replyTo: 9 }),
+    },
+    board: ["org/app#5", "org/app#6"],
+  });
+  const said = await w.api.ticked("org/app", "alice", {
+    number: 5,
+    pr: false,
+    items: edited,
+  });
+  assert.equal(said, "Answers sent: #5 continues.");
+  assert.equal(
+    w.comments[0][1],
+    [
+      "Answers from @alice, ticked in the run's questions:",
+      "",
+      "1. **Phones**",
+      "   - [x] Top to bottom",
+      "2. **Phones**",
+      "   - [x] Left to right",
+    ].join("\n"),
+  );
+  const [item] = w.accepted;
+  assert.deepEqual(
+    [item.id, item.trigger, item.author, item.text],
+    ["5", null, "alice", w.comments[0][1]],
+  );
+  // On the pull request the issue's run replied on.
+  await w.api.ticked("org/app", "alice", { number: 9, pr: true, items: edited });
+  assert.deepEqual([w.accepted[1].id, w.accepted[1].replyTo, w.comments[1][0]], ["6", 9, 9]);
+  // Other questions than the task's (an older reply), or a task no longer waiting: nothing.
+  const older = [edited[0], { ...edited[1], text: "Before?" }];
+  w.tasks["org/app#6"] = asking(6, "run", items);
+  assert.match(
+    await w.api.ticked("org/app", "alice", { number: 6, pr: false, items: older }),
+    /not the questions waiting for answers/,
+  );
+  // The same questions with other options (asked again, reordered): their indexes differ.
+  const reordered = edited.map((q) => ({ ...q, options: [...q.options].reverse() }));
+  assert.match(
+    await w.api.ticked("org/app", "alice", {
+      number: 6,
+      pr: false,
+      items: reordered,
+    }),
+    /not the questions waiting for answers/,
+  );
+  w.tasks["org/app#6"] = asking(6, "issue", items);
+  assert.match(
+    await w.api.ticked("org/app", "alice", { number: 6, pr: false, items: edited }),
+    /not the questions waiting for answers/,
+  );
+  assert.equal(w.accepted.length, 2);
+  // Someone not among the repo's users: refused, as from the dashboard.
+  w.tasks["org/app#6"] = asking(6, "run", items);
+  await assert.rejects(
+    w.api.ticked("org/app", "mallory", { number: 6, pr: false, items: edited }),
+    /mallory|allowed|user/i,
+  );
+});
+
+test("ticked in a run's reply: the boxes it came with are the agent's, only a person's answer", async () => {
+  // The run's reply came with its pick ticked in question 1 (`checked`, parsed from its text).
+  const own = [
+    { ...QUESTIONS[0], options: QUESTIONS[0].options.map((o, j) => ({ ...o, checked: j === 0 })) },
+    { ...QUESTIONS[0], text: "Another?" },
+  ];
+  const w = setup({ issues: { 5: open("Five") }, tasks: { "org/app#5": asking(5, "run", own) } });
+  const check = (q, j) => ({
+    ...q,
+    options: q.options.map((o, k) => ({ ...o, checked: !!o.checked || k === j })),
+  });
+  // alice ticks question 2 only: question 1's tick is still the agent's.
+  const second = [own[0], check(own[1], 1)];
+  assert.match(
+    await w.api.ticked("org/app", "alice", { number: 5, pr: false, items: second }),
+    /not a new box in every question/,
+  );
+  assert.deepEqual([w.comments, w.accepted], [[], []]);
+  // Then the other option of question 1 too: that one is hers.
+  const both = [check(own[0], 1), second[1]];
+  assert.equal(
+    await w.api.ticked("org/app", "alice", { number: 5, pr: false, items: both }),
+    "Answers sent: #5 continues.",
+  );
+  assert.match(
+    w.comments[0][1],
+    /1\. \*\*Phones\*\*\n {3}- \[x\] Top to bottom\n2\. \*\*Phones\*\*\n {3}- \[x\] Top to bottom/,
+  );
 });

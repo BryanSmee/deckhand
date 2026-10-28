@@ -63,10 +63,10 @@ const nameOf = (q) => (q.title ? `**${oneLine(q.title)}**` : oneLine(q.text ?? "
 const item = (s) => `   - ${s.replace(/\n/g, "\n     ")}`;
 
 // The App's comment for `user`'s answers to `items`, and the numbers (1-based) of the questions
-// left without one: { comment, open }. Throws Refused when the answers don't fit the questions
-// (they changed since the form was drawn).
-export function answersComment(user, items, asked) {
-  const head = `Answers from @${user}, from the dashboard:`;
+// left without one: { comment, open }. `where`: how they came. Throws Refused when the answers
+// don't fit the questions (they changed since the form was drawn).
+export function answersComment(user, items, asked, where = "from the dashboard") {
+  const head = `Answers from @${user}, ${where}:`;
   if (asked.text !== null) return { comment: `${head}\n\n${asked.text}`, open: [] };
   if (!items) refuse(409, "These questions aren't in the format any more: answer in one text.");
   if (asked.answers.length !== items.length) {

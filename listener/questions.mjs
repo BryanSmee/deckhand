@@ -1,14 +1,16 @@
 // Issues waiting for the maintainer's answers: an `## Open questions` section in an issue's
-// body labels it NEEDS_INPUT_LABEL, and an allowed user's comment takes the label off (they
-// answered). Inbox runs file their issues with that section (prompts/idea.md, bug.md), and a
-// hand-written issue can have one too. The questions themselves are parsed for the dashboard
-// (parseQuestions()), from an issue's section or a run's reply that stopped to ask; their
-// format is in ../prompts/sandbox.md. Pure, so tested on its own (../test/questions.test.mjs),
-// apart from applyInput(), which acts on what a delivery changes.
+// body labels it NEEDS_INPUT_LABEL, and an allowed user's comment, or a box ticked in every
+// question, takes the label off (they answered). Inbox runs file their issues with that section
+// (prompts/idea.md, bug.md), and a hand-written issue can have one too. The questions
+// themselves are parsed for the dashboard (parseQuestions()), from an issue's section or a
+// run's reply that stopped to ask; their format is in ../prompts/sandbox.md. Pure, so tested on
+// its own (../test/questions.test.mjs), apart from applyInput(), which acts on what a delivery
+// changes.
 import { hasLabel, labelFailed } from "./comments.mjs";
 import { repoAllowed } from "./config.mjs";
 import { MARKER, saysMore, taskKey } from "./events.mjs";
 import { CONFIG_FILE, effectiveConfig } from "./repo-config.mjs";
+import { Refused } from "./web.mjs";
 
 // Starts the final message of a run that stopped to ask the maintainer (../prompts/sandbox.md).
 export const NEEDS_INPUT = "<!-- needs-input -->";
@@ -56,16 +58,17 @@ function asks(text) {
 
 // At most one space before it: deeper, it is nested under a question.
 const ITEM = /^ ?\d{1,9}[.)]\s+(.*)$/;
-const OPTION = /^\s+[-*+]\s+\[[ xX]\]\s+(.*)$/;
+const OPTION = /^\s+[-*+]\s+\[([ xX])\]\s+(.*)$/;
 // A bullet or numbered line under a question that isn't an option: another format.
 const LIST = /^\s*(?:[-*+]|\d{1,9}[.)])(?:\s|$)/;
 const TITLE = /^\*\*([^*]+?)(?::\*\*|\*\*:)\s*(.*)$/;
 const RECOMMENDED = /\s*\(recommended\)\s*$/i;
 
 // An "Open questions" section (or a run's questions) → { items, raw }, null when it asks
-// nothing ("None"). `items`: [{ title, text, options: [{ label, recommended }] }] when every
-// question follows the format, null otherwise: all or nothing, as half a form would be worse
-// than the text. A paragraph before the list (an intro) or after it (the inbox link) is not a
+// nothing ("None"). `items`: [{ title, text, options: [{ label, recommended, checked }] }]
+// when every question follows the format, null otherwise: all or nothing, as half a form would
+// be worse than the text. `checked`: the option's box is ticked ("[x]"), the maintainer's
+// answer. A paragraph before the list (an intro) or after it (the inbox link) is not a
 // question.
 export function parseQuestions(markdown) {
   const raw = (markdown ?? "").trim();
@@ -90,9 +93,13 @@ export function parseQuestions(markdown) {
     } else if (item && !over) {
       const option = OPTION.exec(line);
       if (option) {
-        const label = option[1].replace(RECOMMENDED, "").trim();
+        const label = option[2].replace(RECOMMENDED, "").trim();
         if (!label) return other;
-        item.options.push({ label, recommended: RECOMMENDED.test(option[1]) });
+        item.options.push({
+          label,
+          recommended: RECOMMENDED.test(option[2]),
+          checked: option[1] !== " ",
+        });
       } else if (item.options.length || LIST.test(line)) {
         // Explanation lines come before the options; other lists are another format.
         if (/^\s/.test(line) || !blank) return other;
@@ -109,6 +116,19 @@ export function parseQuestions(markdown) {
   const picks = (q) => q.options.filter((o) => o.recommended).length;
   if (!items.length || items.some((q) => picks(q) > 1)) return other;
   return { items, raw };
+}
+
+// Whether parsed questions (parseQuestions()) are all answered by their ticked boxes: every
+// one has options, and one of them ticked. A free-text question needs a comment.
+export function allTicked(questions) {
+  const items = questions?.items;
+  return !!items?.length && items.every((q) => q.options.some((o) => o.checked));
+}
+
+// Whether an issue's body still waits for answers: its section asks something, and its boxes
+// don't answer it all (allTicked()).
+export function stillAsks(body) {
+  return hasOpenQuestions(body) && !allTicked(parseQuestions(questionsSection(body)));
 }
 
 function question(line) {
@@ -151,6 +171,9 @@ export function replyQuestions(text) {
 // `questions`: parseQuestions() of the body, when the issue is or stays listed. `comment`: the
 // body of an issue's comment that would take the label off, which only an answer does when the
 // repo's `wait_for_answers` is on (http.mjs). `answered`: the label came off an open issue.
+// `reply`: a run's reply its ticked boxes may answer (tickedReply()). `ignoredTicks`: the
+// section is fully ticked by ticks that answer nothing, the bot's say (editedInput()); `ticked`:
+// the label comes off for its ticks.
 export function inputEvent(config, event, p, bot) {
   const name = config.needsInputLabel;
   if (!name || (event !== "issues" && event !== "issue_comment")) return null;
@@ -181,7 +204,8 @@ export function inputEvent(config, event, p, bot) {
     // What the dashboard shows of an issue it lists: its questions as the body has them now.
     questions: () => parseQuestions(questionsSection(issue.body)),
   };
-  if (event === "issue_comment") return commentInput(ctx);
+  if (event === "issue_comment")
+    return p.action === "edited" ? tickedReply(ctx) : commentInput(ctx);
   return ISSUE_ACTIONS[p.action]?.(ctx) ?? null;
 }
 
@@ -196,26 +220,57 @@ function commentInput({ p, issue, change, person, labelled }) {
   return { ...change, label: false, by: c.user.login, track: false, comment: c.body ?? "" };
 }
 
+// An allowed user ticking the boxes of a run's reply that stopped to ask (the App's comment,
+// starting with NEEDS_INPUT): an edit of the ticks that leaves one in every question may answer
+// them, as a reply would (work.mjs ticked() continues the run's session). `reply`: { pr, items },
+// the reply's questions as the edit has them.
+function tickedReply({ p, issue, change, person, who }) {
+  const c = p.comment;
+  if (who(c?.user) !== null || !person(p.sender) || !p.changes?.body) return null;
+  const now = replyQuestions(c.body);
+  const ticks = (q) => JSON.stringify(q?.items?.map((i) => i.options.map((o) => o.checked)));
+  // Which boxes are a person's, and so the answers, is work.mjs ticked()'s: it knows the run's.
+  if (!allTicked(now) || ticks(now) === ticks(replyQuestions(p.changes.body.from))) return null;
+  const pr = !!issue.pull_request;
+  const reply = { pr, items: now.items };
+  return { ...change, ...(pr && { title: null }), by: p.sender.login, reply };
+}
+
 // A new issue: listed when labelled already, labelled when it opens with questions.
 function openedInput({ issue, change, labelled, who, questions }) {
   const by = who(issue.user);
   if (by === undefined) return null;
   if (labelled) return { ...change, track: true, questions: questions() };
-  if (!hasOpenQuestions(issue.body)) return null;
+  // Ticks at open are the author's: the bot's (an inbox run's) answer nothing.
+  if (!(by === null ? hasOpenQuestions(issue.body) : stillAsks(issue.body))) return null;
   return { ...change, label: true, by, track: true, questions: questions() };
 }
 
 // The author's issue, edited by them, another allowed user or the bot. Only a change to the
 // section moves the label: a typo fixed elsewhere doesn't undo removing it by hand, nor take
-// off a run's.
+// off a run's. Ticking a box of every question answers them (stillAsks()), as a comment would;
+// unticking them asks again. Only a person's ticks answer: the bot's change nothing.
 function editedInput({ p, issue, change, labelled, who, questions }) {
   const by = who(p.sender);
-  if (who(issue.user) === undefined || by === undefined || !p.changes?.body) return null;
+  if (!p.changes?.body) return null;
   if (questionsSection(p.changes.body.from) === questionsSection(issue.body)) return null;
-  const now = hasOpenQuestions(issue.body);
-  // Still waiting: only what the dashboard shows changes.
-  if (now === labelled) return now ? { ...change, questions: questions() } : null;
-  return { ...change, label: now, by, track: now, ...(now && { questions: questions() }) };
+  const ticked = allTicked(parseQuestions(questionsSection(issue.body)));
+  const listed = issue.state !== "closed";
+  // Ticks the listener doesn't take for answers: the bot's (a run ticking its own picks), or
+  // anyone's on an issue or by a sender it doesn't act for. The label stays as it is, and a
+  // labelled issue's entry keeps `ignoredTicks` (inputs.mjs), so wait_for_answers doesn't take
+  // them for answers either (tasks.mjs unanswered()); an allowed user's edit clears it.
+  if (who(issue.user) === undefined || by === undefined || (by === null && ticked)) {
+    if (!labelled || !ticked) return null;
+    return { ...change, track: listed, questions: questions(), ignoredTicks: true };
+  }
+  const now = stillAsks(issue.body);
+  const asking = { track: listed, questions: questions(), ignoredTicks: false };
+  // Still waiting: listed (labelled, it should be already), with its questions as they are now.
+  if (now === labelled) return now ? { ...change, ...asking } : null;
+  if (now) return { ...change, label: true, by, ...asking };
+  // `ticked`: its ticks took the label off, so a refusal keeps them as ignored (applyInput()).
+  return { ...change, label: false, by, track: false, answered: listed, ticked };
 }
 
 // Whoever adds or removes it, by hand or not: the dashboard follows the issue's labels.
@@ -257,12 +312,26 @@ export async function applyInput(ctx, change) {
   const { config, log, skip } = ctx;
   const { repo, key, number, title, base, label, by, track, questions: asked } = change;
   if (title) ctx.titles.set(key, title);
+  // A run's reply answered by its ticks: it goes on as the dashboard's answers would, checks
+  // included (work.mjs ticked()).
+  if (change.reply) {
+    const { pr, items } = change.reply;
+    // Refused (closed, not among the repo's users…): said in the log only, as for a comment.
+    const said = await ctx.workApi
+      .ticked(repo, by, { number, pr, items })
+      .catch((error) =>
+        error instanceof Refused ? `ticks: ${error.message}` : Promise.reject(error),
+      );
+    return log(`${key}: ${said}`);
+  }
   if (label !== undefined && by) {
     // The repo's own users narrow the operator's.
     const { settings, errors } = await ctx.repoSettings(repo, base);
     if (errors.length) return skip(`${key}: ${CONFIG_FILE} of ${repo} has errors`);
     const seen = effectiveConfig(config, settings);
     if (!seen.users.includes(by.toLowerCase())) {
+      // Their ticks answer nothing: wait_for_answers ignores them too (tasks.mjs).
+      if (change.ticked) ctx.inputs.update(key, undefined, true);
       return skip(`${key}: ${by} not among ${repo}'s users`);
     }
     // A trigger line alone answers nothing: the issue still waits (tasks.mjs holdBack()).
@@ -279,8 +348,9 @@ export async function applyInput(ctx, change) {
     if (labelFailed(res)) return log(`${key}: label: ${res.status}`);
     log(`${key}: ${label ? "open questions, labelled" : "answered, label removed"}`);
   }
-  if (track !== undefined) ctx.inputs.set(key, track, asked);
-  else if (asked !== undefined) ctx.inputs.update(key, asked);
+  const { ignoredTicks } = change;
+  if (track !== undefined) ctx.inputs.set(key, track, asked, ignoredTicks);
+  else if (asked !== undefined) ctx.inputs.update(key, asked, ignoredTicks);
   // Answered: a comment that waited for the answers starts (waits.mjs).
   if (change.answered) await ctx.waits.answered(repo, number);
 }

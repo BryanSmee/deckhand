@@ -74,9 +74,13 @@ Questions for the maintainer, wherever you ask them (a run that stops to ask, an
   combining two of them makes sense, add that combination as an option of its own.
 - End your pick with `(recommended)`, on one option at most: the dashboard ticks it in
   advance. No options: a free-text question. Every question also gets a free-text answer.
+- Leave every box unticked (`- [ ]`). A ticked one (`- [x]`), in an issue's section or in
+  your reply, is the maintainer's answer: once every question has one, the issue no longer
+  waits for input, or your session goes on as with a reply.
 - Nothing else between the questions: put the rest before the list or after it.
-- Only questions still open: an answered one goes elsewhere (an issue's "Decisions"
-  section), as anything but "None" here marks the issue as waiting for input.
+- Only questions still open: an answered one (ticked, or answered in a comment) goes
+  elsewhere (an issue's "Decisions" section), as anything but "None" here marks the issue
+  as waiting for input until its boxes answer it.
 - No questions: write "None" alone, first in the section.
 
 ## Checking pages in a browser

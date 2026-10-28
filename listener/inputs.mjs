@@ -1,12 +1,13 @@
 // The open issues carrying the needs-input label, for the dashboard, by task key
-// ("org/repo#12") → { since, questions } (parseQuestions() of its body, or null). `issues`
-// webhooks keep it current (questions.mjs); labels added or removed, or bodies edited, while
-// the listener was down are caught by one lookup per repo when it starts (sync()). Kept in
-// inputs.json, so a restart doesn't forget them meanwhile.
+// ("org/repo#12") → { since, questions, ignoredTicks } (parseQuestions() of its body, or null;
+// `ignoredTicks`: its section is fully ticked by ticks that answer nothing, the bot's or those
+// of someone not allowed). `issues` webhooks keep it current (questions.mjs); labels added or
+// removed, or bodies edited, while the listener was down are caught by one lookup per repo when
+// it starts (sync()). Kept in inputs.json, so a restart doesn't forget them meanwhile.
 import { hasLabel } from "./comments.mjs";
 import { parseKey, sameRepo, taskKey } from "./events.mjs";
 import { paginate } from "./github.mjs";
-import { parseQuestions, questionsSection } from "./questions.mjs";
+import { allTicked, parseQuestions, questionsSection } from "./questions.mjs";
 import { respellMap } from "./spelling.mjs";
 import { persistentMap } from "./store.mjs";
 
@@ -16,9 +17,9 @@ export function createInputs({ path, listLabelled, now = Date.now, log = () => {
   const inputs = persistentMap(path);
   const save = inputs.save;
 
-  // Whether issue `key` waits for input now, and its questions when known (undefined: as
-  // they were).
-  function set(key, on, questions) {
+  // Whether issue `key` waits for input now, its questions and whether the bot ticked them
+  // when known (undefined: as they were).
+  function set(key, on, questions, ignoredTicks) {
     const was = inputs.get(key);
     if (!on) {
       if (inputs.delete(key)) save();
@@ -27,6 +28,7 @@ export function createInputs({ path, listLabelled, now = Date.now, log = () => {
     const next = {
       since: was?.since ?? now(),
       questions: questions === undefined ? (was?.questions ?? null) : questions,
+      ...((ignoredTicks ?? was?.ignoredTicks) && { ignoredTicks: true }),
     };
     if (was && JSON.stringify(was) === JSON.stringify(next)) return;
     inputs.set(key, next);
@@ -34,8 +36,8 @@ export function createInputs({ path, listLabelled, now = Date.now, log = () => {
   }
 
   // An edit to the questions of an issue already listed.
-  function update(key, questions) {
-    if (inputs.has(key)) set(key, true, questions);
+  function update(key, questions, ignoredTicks) {
+    if (inputs.has(key)) set(key, true, questions, ignoredTicks);
   }
 
   // Replaces what is known of each repo in `repos` with GitHub's list. A repo that can't be
@@ -70,7 +72,11 @@ export function createInputs({ path, listLabelled, now = Date.now, log = () => {
       // Bodies edited meanwhile: their questions as they are now.
       for (const [key, entry] of found) {
         const was = inputs.get(key);
-        const next = { since: was?.since ?? entry.since, questions: entry.questions };
+        const next = {
+          since: was?.since ?? entry.since,
+          questions: entry.questions,
+          ...(was?.ignoredTicks && { ignoredTicks: true }),
+        };
         if (was && JSON.stringify(was) === JSON.stringify(next)) continue;
         inputs.set(key, next);
         changed = true;
@@ -95,6 +101,8 @@ export function createInputs({ path, listLabelled, now = Date.now, log = () => {
     sync,
     list,
     has: (key) => inputs.has(key),
+    // Whether issue `key`'s ticks answer nothing (the bot's, someone not allowed).
+    ticksIgnored: (key) => !!inputs.get(key)?.ignoredTicks,
     keys: () => [...inputs.keys()],
     // One spelling per repo (spelling.mjs, at a restart).
     respell: (spelled) => respellMap(inputs, spelled) && save(),
@@ -132,8 +140,13 @@ export function createInputSeeder({ config, github, label, inputs, boardKeys, lo
       if (!author(issue.user)) continue;
       const questions = parseQuestions(questionsSection(issue.body));
       if (!questions) continue;
+      const labelled = hasLabel(issue.labels, name);
+      // Every box ticked in an allowed user's issue, unlabelled: answered already. Still
+      // labelled, the label says it waits (the bot's ticks answer nothing), and the App's own
+      // issues (an inbox run's) wait whatever their ticks.
+      if (!labelled && issue.user?.type !== "Bot" && allTicked(questions)) continue;
       try {
-        if (!hasLabel(issue.labels, name)) {
+        if (!labelled) {
           if (await wasUnlabelled(repo, issue.number, name)) {
             unlabelled.add(key);
             continue;

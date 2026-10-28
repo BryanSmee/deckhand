@@ -155,3 +155,29 @@ test("the form on the task's page keeps its height next to a run", () => {
   // Without a run, the form still fills the page.
   expect(rule(".form:last-child")).toMatch(/\bflex: 1;/);
 });
+
+// The fixture's questions with the first option of question 1 ticked, from `source`.
+const ticked = (source: "issue" | "run") => (t: Task) => {
+  const items = t.questions!.items!.map((q, i) =>
+    i === 0 ? { ...q, options: q.options.map((o, j) => ({ ...o, checked: j === 0 })) } : q,
+  );
+  return { ...t, questions: { ...t.questions!, source, items } };
+};
+
+test("a run's own ticks are the agent's: its recommended option is picked, not them", () => {
+  const form = show(ticked("run"));
+  const first = within(form).getByRole("group", { name: "1. Debounce" });
+  const [fast, slow] = within(first).getAllByRole("radio") as HTMLInputElement[];
+  expect([fast.checked, slow.checked]).toEqual([false, true]);
+});
+
+test("boxes ticked in the issue are picked in advance, in place of the recommended option", () => {
+  const form = show(ticked("issue"));
+  const first = within(form).getByRole("group", { name: "1. Debounce" });
+  const [fast, slow] = within(first).getAllByRole("radio") as HTMLInputElement[];
+  expect([fast.checked, slow.checked]).toEqual([true, false]);
+  // Only the first is ticked: the second still starts from its recommended option.
+  const second = within(form).getByRole("group", { name: /^2\. Should a search in flight/ });
+  const yes = within(second).getByRole("radio", { name: /Yes, abort it/ }) as HTMLInputElement;
+  expect(yes.checked).toBe(true);
+});
