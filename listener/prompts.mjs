@@ -165,7 +165,7 @@ end with a short summary (the pull request link, the files, the inbox issues cre
 // What the agent reads for a brainstorm run, besides the comments themselves.
 function brainstormMessage(mode, text, restored) {
   if (mode === "stop") {
-    return `The maintainer ends the brainstorm here${text ? `, adding:\n\n${text}\n\n` : ". "}Wrap up as in step 4 of your instructions: post the summary and update the issue's description with what was decided.`;
+    return `The maintainer ends the brainstorm here${text ? `, adding:\n\n${text}\n\n` : ". "}Wrap up as in step 4 of your instructions: create the follow-ups that were kept, post the summary and update the issue's description with what was decided.`;
   }
   return restored
     ? `${text}\n\n(The brainstorm resumes after a pause: check the issue for comments you haven't seen.)`
@@ -383,7 +383,7 @@ export function liveMessage(mode, text) {
   const reply =
     "Your final message is still posted as the single reply for this run: make it cover this comment too. (Don't post comments on GitHub yourself.)";
   if (mode === "brainstorm") {
-    return `New comment on the issue: ${text}\n\n(Still a brainstorm: no code, branch, commit, pull request or new issue. ${reply})`;
+    return `New comment on the issue: ${text}\n\n(Still a brainstorm: no code, branch, commit or pull request, and new issues only for kept follow-ups. ${reply})`;
   }
   if (FRESH.has(mode) && mode !== "analyze") {
     return `Another entry arrived on the inbox while you were working:\n\n${text}\n\nHandle it like the others, as its own entry. ${reply}`;
