@@ -59,8 +59,12 @@ function asks(text) {
 // At most one space before it: deeper, it is nested under a question.
 const ITEM = /^ ?\d{1,9}[.)]\s+(.*)$/;
 const OPTION = /^\s+[-*+]\s+\[([ xX])\]\s+(.*)$/;
-// A bullet or numbered line under a question that isn't an option: another format.
+// A bullet or numbered line under a question that isn't an option: another format, unless
+// it is a bullet explanation line (BULLET) that options follow. A box that isn't an option
+// (empty, mistyped: up to three characters in its brackets, not a link) is neither.
 const LIST = /^\s*(?:[-*+]|\d{1,9}[.)])(?:\s|$)/;
+const BULLET = /^\s+[-*+]\s+(\S.*)$/;
+const BOX = /^\[[^\]]{0,3}\](?!\()/;
 const TITLE = /^\*\*([^*]+?)(?::\*\*|\*\*:)\s*(.*)$/;
 const RECOMMENDED = /\s*\(recommended\)\s*$/i;
 
@@ -78,6 +82,9 @@ export function parseQuestions(markdown) {
   let item = null;
   let blank = false;
   let over = false;
+  // The question has a bullet explanation line: agents write one as the options' list
+  // starts right below. It is one only if options follow it, else the bullets are a list.
+  let loose = false;
   for (const line of raw.replace(/<!--[\s\S]*?-->/g, "").split(/\r?\n/)) {
     if (!line.trim()) {
       blank = true;
@@ -86,20 +93,25 @@ export function parseQuestions(markdown) {
     const start = ITEM.exec(line);
     if (start) {
       // A paragraph between two questions: not one list.
-      if (over) return other;
+      if (over || loose) return other;
       item = question(start[1]);
       if (!item) return other;
       items.push(item);
     } else if (item && !over) {
       const option = OPTION.exec(line);
+      const bullet = !item.options.length && BULLET.exec(line);
       if (option) {
         const label = option[2].replace(RECOMMENDED, "").trim();
         if (!label) return other;
+        loose = false;
         item.options.push({
           label,
           recommended: RECOMMENDED.test(option[2]),
           checked: option[1] !== " ",
         });
+      } else if (bullet && !BOX.test(bullet[1])) {
+        item.text += `\n${bullet[1].trim()}`;
+        loose = true;
       } else if (item.options.length || LIST.test(line)) {
         // Explanation lines come before the options; other lists are another format.
         if (/^\s/.test(line) || !blank) return other;
@@ -114,7 +126,7 @@ export function parseQuestions(markdown) {
   }
   // Single choice: one pick at most.
   const picks = (q) => q.options.filter((o) => o.recommended).length;
-  if (!items.length || items.some((q) => picks(q) > 1)) return other;
+  if (loose || !items.length || items.some((q) => picks(q) > 1)) return other;
   return { items, raw };
 }
 

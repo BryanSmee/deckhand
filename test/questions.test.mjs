@@ -96,6 +96,44 @@ test("parsed questions: titles, options, the recommended one, explanation lines"
   });
 });
 
+test("parsed questions: a bullet explanation line before the options", () => {
+  const section = [
+    "1. **Event availability**: what can `events_available` open?",
+    "   - The original tool keeps an available/locked/completed state per event.",
+    "   - [ ] Events locked by `events_locked` (recommended)",
+    "   - [ ] Those, and events marked `initially_locked: true`",
+    "2. Which colour?",
+    "   * The header is dark.",
+    "   Today it is grey.",
+    "",
+    "   - [x] Blue",
+  ].join("\n");
+  assert.deepEqual(parseQuestions(section).items, [
+    {
+      title: "Event availability",
+      text:
+        "what can `events_available` open?\n" +
+        "The original tool keeps an available/locked/completed state per event.",
+      options: [
+        { label: "Events locked by `events_locked`", recommended: true, checked: false },
+        {
+          label: "Those, and events marked `initially_locked: true`",
+          recommended: false,
+          checked: false,
+        },
+      ],
+    },
+    {
+      title: null,
+      text: "Which colour?\nThe header is dark.\nToday it is grey.",
+      options: [{ label: "Blue", recommended: false, checked: true }],
+    },
+  ]);
+  // A link starting the line is an explanation, not a box.
+  const link = "1. A?\n   - [ab](https://x) explains it.\n   - [ ] B";
+  assert.equal(parseQuestions(link).items[0].text, "A?\n[ab](https://x) explains it.");
+});
+
 test("parsed questions: None, an intro and the inbox link around the list", () => {
   assert.equal(parseQuestions("None."), null);
   assert.equal(parseQuestions(""), null);
@@ -115,11 +153,27 @@ test("parsed questions in another format: only the markdown", () => {
     "1. Colour?\n   - Blue\n   - Green",
     "1. Colour?\n   1. Blue\n   2. Green",
     "1. Colour?\n   - [ ] Blue\n   Or something else.",
+    // Bullets that no options follow, in the question or before the next one.
+    "1. Colour?\n   - Blue\n2. B?\n   - [ ] X",
+    "1. Colour?\n   - Blue\n\nFrom the ideas inbox: https://x/1",
     // A paragraph between two questions, two picks, an empty question or option.
     "1. A?\n\nSome context.\n\n2. B?",
     "1. A?\n   - [ ] X (recommended)\n   - [ ] Y (recommended)",
     "1. **Title**:\n2. B?",
     "1. A?\n   - [ ] (recommended)",
+    // A first option empty or mistyped is not an explanation line.
+    "1. A?\n   - [ ]\n   - [ ] B",
+    "1. A?\n   - [x]\n   - [ ] B",
+    "1. A?\n   - [ ]Blue\n   - [ ] B",
+    "1. A?\n   - [y] Blue\n   - [ ] B",
+    "1. A?\n   - [x ]\n   - [ ] B",
+    "1. A?\n   - [ x] Blue\n   - [ ] B",
+    "1. A?\n   - [ x ] Blue\n   - [  ] B",
+    // Extra spaces before the box, or an empty bullet.
+    "1. A?\n   -  [x]\n   - [ ] B",
+    "1. A?\n   -  [ ]Blue\n   - [ ] B",
+    "1. A?\n   -  [x ] Blue\n   - [ ] B",
+    "1. A?\n   - \n   - [ ] B",
   ]) {
     assert.deepEqual(parseQuestions(raw), { items: null, raw }, raw);
   }
