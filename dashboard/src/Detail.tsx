@@ -27,7 +27,7 @@ import { type Handlers, useShortcuts, withKey } from "./keys";
 import { Log } from "./Log";
 import { copyText, downloadText } from "./logExport";
 import { logSections, plainText } from "./logModel";
-import { AuthBadge, Outcome } from "./Outcome";
+import { AuthTag, Outcome } from "./Outcome";
 import { heldMerge, PolicyTab } from "./Policies";
 import { Questions } from "./Questions";
 import { StopDialog } from "./Stop";
@@ -349,9 +349,11 @@ export function Detail({
                 {r.model}
                 {r.effort && ` · ${r.effort} effort`}
                 {r.speed === "fast" && " · fast"}
+                {r.auth && " · "}
+                <AuthTag auth={r.auth} />
               </span>
             )}
-            {thread && <AuthBadge auth={r?.auth} />}
+            {!r?.model && thread && <AuthTag auth={r?.auth} />}
             {t.pr && <PrLink pr={t.pr} />}
             {t.dismissed && t.runs[0] && (
               <span class={styles.dismissed}>
