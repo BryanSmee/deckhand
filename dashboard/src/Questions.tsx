@@ -1,10 +1,10 @@
-// The open questions of a task waiting for input, as a form: per question its options as
-// cards (radios, one at most picked: the box ticked on GitHub, else the agent's pick, in
-// advance; a second click takes it back) and a note; questions not in the set format as
-// written, with one text box. Sending posts them as one App comment (listener/work.mjs `answer`). Before a start or a queue on the
-// board (`then`), every question needs an answer, and the issue starts or queues with them.
-// The fields are useAnswers()'s: the task's page shows them in a form of its own (Questions),
-// the board in a dialog (QuestionsDialog.tsx).
+// The open questions of a task waiting for input, as a form: per question its options as cards
+// (radios, one at most picked: the box ticked on GitHub, else the agent's pick, in advance; a
+// second click takes it back) and a note; questions not in the set format as written, with one
+// text box. Sending posts them as one App comment (listener/work.mjs `answer`). Before a start
+// or a queue on the board (`then`), every question needs an answer, and the issue starts or
+// queues with them. The fields are useAnswers()'s: the task's page shows them in a form of its
+// own (Questions), the board in a dialog (QuestionsDialog.tsx).
 import { useState } from "preact/hooks";
 import { sendAnswers } from "./api";
 import { isPrTask } from "./format";

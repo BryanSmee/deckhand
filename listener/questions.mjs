@@ -1,10 +1,11 @@
 // Issues waiting for the maintainer's answers: an `## Open questions` section in an issue's
 // body labels it NEEDS_INPUT_LABEL, and an allowed user's comment, or a box ticked in every
-// question, takes the label off (they answered). Inbox runs file their issues with that section (prompts/idea.md, bug.md), and a
-// hand-written issue can have one too. The questions themselves are parsed for the dashboard
-// (parseQuestions()), from an issue's section or a run's reply that stopped to ask; their
-// format is in ../prompts/sandbox.md. Pure, so tested on its own (../test/questions.test.mjs),
-// apart from applyInput(), which acts on what a delivery changes.
+// question, takes the label off (they answered). Inbox runs file their issues with that section
+// (prompts/idea.md, bug.md), and a hand-written issue can have one too. The questions
+// themselves are parsed for the dashboard (parseQuestions()), from an issue's section or a
+// run's reply that stopped to ask; their format is in ../prompts/sandbox.md. Pure, so tested on
+// its own (../test/questions.test.mjs), apart from applyInput(), which acts on what a delivery
+// changes.
 import { hasLabel, labelFailed } from "./comments.mjs";
 import { repoAllowed } from "./config.mjs";
 import { MARKER, saysMore, taskKey } from "./events.mjs";
@@ -241,7 +242,8 @@ function openedInput({ issue, change, labelled, who, questions }) {
   const by = who(issue.user);
   if (by === undefined) return null;
   if (labelled) return { ...change, track: true, questions: questions() };
-  if (!stillAsks(issue.body)) return null;
+  // Ticks at open are the author's: the bot's (an inbox run's) answer nothing.
+  if (!(by === null ? hasOpenQuestions(issue.body) : stillAsks(issue.body))) return null;
   return { ...change, label: true, by, track: true, questions: questions() };
 }
 

@@ -423,8 +423,11 @@ test("ticking every question's box answers them; unticking asks again", () => {
   // Unticked again: labelled again.
   const again = edit(ticked("x", "x"), ticked(" ", "x"), []);
   assert.deepEqual([again.label, again.track], [true, true]);
-  // Opened with every box ticked: nothing to wait for.
+  // Opened with every box ticked by an allowed user: nothing to wait for. By the App's bot (an
+  // inbox run that ticked its own picks): its ticks answer nothing.
   assert.equal(map("opened", { text: ticked("x", "x") }), null);
+  const bot = map("opened", { text: ticked("x", "x"), user: BOT, type: "Bot" });
+  assert.deepEqual([bot.label, bot.by, bot.track], [true, null, true]);
   // A closed issue releases nothing.
   const closed = issues("edited", {
     text: ticked("x", "x"),

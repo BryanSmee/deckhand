@@ -131,8 +131,9 @@ export function createInputSeeder({ config, github, label, inputs, boardKeys, lo
       // Fail closed, as questions.mjs: only an allowed user's issue, or the App's own.
       if (!author(issue.user)) continue;
       const questions = parseQuestions(questionsSection(issue.body));
-      // Every box ticked: answered already.
-      if (!questions || allTicked(questions)) continue;
+      // Every box ticked by an allowed user: answered already. The App's own ticks (an inbox
+      // run's) answer nothing.
+      if (!questions || (issue.user?.type !== "Bot" && allTicked(questions))) continue;
       try {
         if (!hasLabel(issue.labels, name)) {
           if (await wasUnlabelled(repo, issue.number, name)) {

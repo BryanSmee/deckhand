@@ -608,6 +608,7 @@ Something.
 
 From the ideas inbox: https://github.com/org/app/issues/16#issuecomment-1`;
 const BOT = { login: "deckhand[bot]", type: "Bot" };
+const TICKED = "## Open questions\n\n1. Which?\n   - [ ] A\n   - [x] B";
 const asked = (body, extra = {}) => ({ ...open("Asks"), user: BOT, labels: [], body, ...extra });
 
 test("GET issues: open questions without the label are listed and labelled, then a start is refused", async () => {
@@ -641,7 +642,9 @@ test("GET issues: no seeding once the label was taken off, nor for the board, ot
   const w = setup({
     issues: {
       1: asked(BODY_144),
-      7: asked("## Open questions\n\n1. Which?\n   - [ ] A\n   - [x] B"),
+      7: asked(TICKED, { user: { login: "alice", type: "User" } }),
+      // The App's own ticks (an inbox run's) answer nothing: seeded.
+      8: asked(TICKED),
       2: asked(BODY_144),
       3: asked(BODY_144, { user: { login: "mallory", type: "User" } }),
       4: asked("## Open questions\n\nNone"),
@@ -653,11 +656,12 @@ test("GET issues: no seeding once the label was taken off, nor for the board, ot
   });
   await call(w.api, "GET", "/api/repos/org/app/issues");
   // A section not in the format: listed, with the text box (no items).
-  assert.deepEqual([...w.listed.keys()].sort(), ["org/app#5", "org/app#6"]);
+  assert.deepEqual([...w.listed.keys()].sort(), ["org/app#5", "org/app#6", "org/app#8"]);
   assert.equal(w.listed.get("org/app#5").items, null);
   assert.deepEqual(w.labels, [
     [5, true],
     [6, true],
+    [8, true],
   ]);
   // The removed label is remembered: its timeline isn't read again.
   w.clock += ISSUES_MS;

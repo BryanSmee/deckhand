@@ -140,18 +140,20 @@ A run that stops to ask (its final message starts with `<!-- needs-input -->`, s
 request `NEEDS_INPUT_LABEL` (default `needs-input`) until the next run starts.
 
 An issue can wait for answers without a run stopping to ask: inbox runs file issues with an
-**Open questions** section, and people write some by hand. When an allowed user or the App's
-bot opens an issue whose `## Open questions` section asks something (its first paragraph isn't
+**Open questions** section, and people write some by hand. When an allowed user or the App's bot
+opens an issue whose `## Open questions` section asks something (its first paragraph isn't
 "None"), the listener labels it. So settled questions don't stay there: a brainstorm's wrap-up
 moves them, with their answers, to a **Decisions** section and leaves "None" alone when nothing
 is left (`prompts/brainstorm.md`). An edit to Open questions adds or removes the label as it now
-reads: ticked boxes are answers, so a section where every question has an option ticked
-(`- [x]`, `allTicked()`) and none is free text no longer asks, and the edit that ticks the last
-one takes the label off and releases what waited for the answers, as a comment would;
-unticking them labels it again (`stillAsks()`). An allowed user's comment on a labelled issue or pull request takes the label off: they
-answered. The dashboard lists the open issues carrying the label as `needs-input`, with a run
-or not (`inputs.json`, kept by `issues` deliveries, whoever adds or removes the label, and one
-lookup per repo when the listener starts); a closed issue leaves the list.
+reads: ticked boxes are answers, so a section where every question has an option ticked (`- [x]`,
+`allTicked()`) and none is free text no longer asks, and the edit that ticks the last one takes
+the label off and releases what waited for the answers, as a comment would; unticking them labels
+it again (`stillAsks()`). Ticks in an issue the App's bot opens (an inbox run's) answer nothing:
+it is labelled all the same, at open and by the backlog read below. An allowed user's comment on
+a labelled issue or pull request takes the label off: they answered. The dashboard lists the open
+issues carrying the label as `needs-input`, with a run or not (`inputs.json`, kept by `issues`
+deliveries, whoever adds or removes the label, and one lookup per repo when the listener starts);
+a closed issue leaves the list.
 
 The graph's backlog read (`work.mjs`, at most once per 30 seconds a repo, or after an
 `issues` delivery; every configured repo's, at most once per 5 minutes, while the Overview
@@ -164,17 +166,17 @@ run starting): that issue is left alone, and remembered until the listener resta
 start the listener also reads the App's settings (`GET /app`) and logs a warning naming any
 event of `APP_EVENTS` it isn't subscribed to.
 
-With the repo's `wait_for_answers` (on by default, `docs/repo-config.md`), the label holds
-work back. `tasks.mjs` `admit()` reads it from the comment's payload: a trigger comment with
-no text besides its command lines (`saysMore()`), asking for work or a non-light mode of the
-repo, on an issue labelled for its body's questions that its ticked boxes don't all answer
-(and whose last run didn't stop to ask), starts nothing; the App replies how to answer and swaps its 👀 for the needs-input reaction.
-`applyInput()` (`questions.mjs`) leaves the label on for that comment, and light runs don't take it
-off when they start. A comment that waited (`/after`) asks GitHub for the issue's labels
-before it starts (`resume()`): still labelled, its wait stays with no issues left and
-`answers: true`, shown as `needs-input`, until an `unlabeled` delivery or the periodic check
-starts it (`waits.mjs` `answered()`). The dashboard's `act()` refuses Start and Queue without
-the answers (`409`) only then, and `api/state` carries `waitForAnswers` with a task's
+With the repo's `wait_for_answers` (on by default, `docs/repo-config.md`), the label holds work
+back. `tasks.mjs` `admit()` reads it from the comment's payload: a trigger comment with no text
+besides its command lines (`saysMore()`), asking for work or a non-light mode of the repo, on an
+issue labelled for its body's questions that its ticked boxes don't all answer (and whose last
+run didn't stop to ask), starts nothing; the App replies how to answer and swaps its 👀 for the
+needs-input reaction. `applyInput()` (`questions.mjs`) leaves the label on for that comment, and
+light runs don't take it off when they start. A comment that waited (`/after`) asks GitHub for
+the issue's labels before it starts (`resume()`): still labelled, its wait stays with no issues
+left and `answers: true`, shown as `needs-input`, until an `unlabeled` delivery or the periodic
+check starts it (`waits.mjs` `answered()`). The dashboard's `act()` refuses Start and Queue
+without the answers (`409`) only then, and `api/state` carries `waitForAnswers` with a task's
 questions so the graph doesn't open the form when it is off.
 
 The questions themselves have one format, set once in `prompts/sandbox.md` (the other prompts
