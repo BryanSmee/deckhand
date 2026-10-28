@@ -116,7 +116,9 @@ export function createBrokerHttp(ctx) {
     const task = await taskAt(ip);
     const live = task?.live;
     // Its container engine's plain HTTP is cached too, but its HTTPS never decrypted: its
-    // builds and containers don't trust Deckhand's CA.
+    // builds and containers don't trust Deckhand's CA. So GitHub's hosts aren't relayed for it
+    // but tunnelled, anonymously (the gateway gives its address no token): an exception #404
+    // accepted, rather than break builds that fetch from GitHub.
     const engine = !!live?.engineIp?.includes(ip);
     // What its agent's calls need: hosts handed to the listener, hosts refused.
     const agent = agentFor(live?.record?.agent);

@@ -306,9 +306,15 @@ to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to the
   (`listener/upstream.mjs`): a call cut off after 10 minutes without a byte either way, 16
   calls in flight per run.
 - `*.githubusercontent.com` (raw files, release assets) stays a plain allowed host: it carries
-  no token. A run's [container engine](#container-engine) keeps reaching GitHub through a
-  tunnel, as its builds and containers don't trust the CA: it holds no token, so what it
-  gets is anonymous.
+  no token.
+- **The one exception, accepted (#404's decisions)**: a run's [container engine](#container-engine)
+  keeps reaching GitHub's hosts through a tunnel, as its builds and containers don't trust
+  the CA, so the proxy can't relay them: refusing them would break builds that fetch from
+  GitHub (a release asset, `go mod`, an `npm` dependency). The engine holds no token (neither
+  the secret nor, by its address, the gateway's: a call from it without a secret gets `401`),
+  so what it gets is anonymous. A sandbox can reach GitHub around the gateway that way, but
+  only anonymously, or with a credential it got elsewhere, which any other allowed host
+  would take too.
 
 ### The Claude credential
 

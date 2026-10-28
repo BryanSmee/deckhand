@@ -5,6 +5,7 @@ import { codex } from "../listener/agents/codex.mjs";
 import { agentFor } from "../listener/agents/index.mjs";
 import {
   egressPolicy,
+  githubHosts,
   hostProblem,
   mandatoryHosts,
   matchHost,
@@ -249,6 +250,34 @@ test("relay: an agent's relayed hosts, decrypted and handed to the listener, nev
     "www.googleapis.com",
     "antigravity-unleash.goog",
   ]);
+});
+
+test("GitHub's hosts: relayed for a sandbox, a tunnel for its engine (#404's exception)", () => {
+  const config = testConfig();
+  const relayed = githubHosts(config);
+  assert.deepEqual(relayed, ["github.com", "api.github.com"]);
+  const hosts = mandatoryHosts(config);
+  for (const host of relayed) {
+    const sandbox = egressPolicy(host, hosts, hosts, [host], hosts, { relayed });
+    assert.deepEqual(sandbox, {
+      allowed: true,
+      private: true,
+      cache: false,
+      decrypt: true,
+      relay: true,
+    });
+    const engine = egressPolicy(host, hosts, hosts, [], hosts, { decrypt: false, relayed });
+    assert.deepEqual(engine, {
+      allowed: true,
+      private: true,
+      cache: false,
+      decrypt: false,
+      relay: false,
+    });
+  }
+  // Raw files carry no token: never relayed.
+  const raw = egressPolicy("raw.githubusercontent.com", hosts, hosts, [], hosts, { relayed });
+  assert.equal(raw.relay, false);
 });
 
 test("host matching: names, subdomain wildcards, *", () => {
