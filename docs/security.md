@@ -476,8 +476,12 @@ you weren't triggered from): the listener doesn't see a sandbox's fetches, and a
 to refuse, in a run that isn't a fork's, fetches of a fork pull request's `refs/pull/<n>/head`
 and of a fork's refs or objects, and API or archive downloads of a fork's head, saying why: a
 comment from an allowed user on the fork's pull request starts a fork's run, which fetches it
-as today. Pull requests from the repository's own branches stay allowed. #409 tracks that
-enforcement until it lands.
+as today. Pull requests from the repository's own branches stay allowed. The refusal can't tell
+reading from running, so it covers reading too: the sandbox's instructions, which today tell
+the agent to read such a pull request's code in a worktree under `/tmp`
+(`git fetch origin pull/<n>/head`), change with it to ask for the work on the fork's pull
+request instead. #409 tracks that enforcement, and that change to `prompts/sandbox.md`, until
+they land.
 
 Not every way goes through hosts the GitHub gateway (#404) is to relay. Archives
 (`codeload.github.com`, where `github.com/<repo>/archive/…` and the API's `tarball` and
@@ -1504,8 +1508,8 @@ it again when you change `AGY_VERSION`.
   read-write mounts and engine. The agent is told not to install, build or run such a pull
   request's code (the sandbox's instructions), but nothing enforces it until the GitHub
   gateway (#404), and a public repository's raw files are to bypass it even then (see
-  [What a fork's code may reach](#what-a-forks-code-may-reach)); #409 tracks both. Ask for work on a fork's
-  pull request from that pull request.
+  [What a fork's code may reach](#what-a-forks-code-may-reach)); #409 tracks both. Ask for
+  work on a fork's pull request from that pull request.
 - **Image builds** (a repo's `dockerfile`, with `allow_dockerfile`) and the **Claude Code
   install** run with normal network access: they run on the host's Docker, outside the
   sandboxes' networks. Builds run the repo's Dockerfile from its default branch (or its pull
