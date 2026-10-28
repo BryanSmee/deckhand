@@ -1,5 +1,5 @@
 // The open questions of a task waiting for input, as a form: per question its options as cards
-// (radios, one at most picked: the box ticked on GitHub, else the agent's pick, in advance; a
+// (radios, one at most picked: the box ticked in the issue, else the agent's pick, in advance; a
 // second click takes it back) and a note; questions not in the set format as written, with one
 // text box. Sending posts them as one App comment (listener/work.mjs `answer`). Before a start
 // or a queue on the board (`then`), every question needs an answer, and the issue starts or
@@ -9,7 +9,7 @@ import { useState } from "preact/hooks";
 import { sendAnswers } from "./api";
 import { isPrTask } from "./format";
 import { useSubmit } from "./hooks";
-import type { Answers, Question, Questions as Asked, Task, WorkResult } from "./types";
+import type { Answers, Questions as Asked, Task, WorkResult } from "./types";
 import { Button } from "./ui/Button";
 import { OptionCard } from "./ui/Choice";
 import { Field } from "./ui/Field";
@@ -20,11 +20,12 @@ interface Answer {
   text: string;
 }
 
-// The option already ticked where it was asked picked in advance, else the recommended one:
-// only what is left needs filling in, and one tap accepts the agent's picks.
-const initial = (items: Question[] | null): Answer[] =>
+// The option already ticked in the issue picked in advance, else the recommended one: only
+// what is left needs filling in, and one tap accepts the agent's picks. A run's own ticks are
+// the agent's, not answers: its recommended option goes first.
+const initial = ({ items, source }: Asked): Answer[] =>
   (items ?? []).map((q) => {
-    const ticked = q.options.findIndex((o) => o.checked);
+    const ticked = source === "issue" ? q.options.findIndex((o) => o.checked) : -1;
     const pick = ticked < 0 ? q.options.findIndex((o) => o.recommended) : ticked;
     return { options: pick < 0 ? [] : [pick], text: "" };
   });
@@ -42,7 +43,7 @@ interface Options {
 
 export function useAnswers({ task: t, questions: q, submit, then, onSent }: Options) {
   const items = q.items;
-  const [answers, setAnswers] = useState<Answer[]>(() => initial(items));
+  const [answers, setAnswers] = useState<Answer[]>(() => initial(q));
   const [text, setText] = useState("");
   const { sending, error, run } = useSubmit(submit);
 
@@ -66,7 +67,7 @@ export function useAnswers({ task: t, questions: q, submit, then, onSent }: Opti
     const body: Answers = items ? { ...which, answers } : { ...which, text };
     const result = await run(body);
     if (result.error) return;
-    setAnswers(initial(items));
+    setAnswers(initial(q));
     setText("");
     onSent(result.message ?? "Answers sent.");
   };

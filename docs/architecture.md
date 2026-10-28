@@ -148,16 +148,20 @@ is left (`prompts/brainstorm.md`). An edit to Open questions adds or removes the
 reads: ticked boxes are answers, so a section where every question has an option ticked (`- [x]`,
 `allTicked()`) and none is free text no longer asks, and the edit that ticks the last one takes
 the label off and releases what waited for the answers, as a comment would; unticking them labels
-it again (`stillAsks()`). Only a person's ticks answer: the App's bot's (a run ticking its own
-picks) answer nothing. An issue it opens is labelled all the same, at open and by the backlog
-read below; its edits of a fully ticked section, in anyone's issue, leave the label as it is, and
-are remembered with the issue's entry in `inputs.json` (`botTicks`) until a person's edit; and on
-the bot's issues, or those whose ticks it added, `wait_for_answers` goes by the label, which only
-a person's edit takes off. The backlog read lists a fully ticked issue that still carries the
-label. An allowed user's comment on a labelled issue or pull request takes the label off: they
-answered. The dashboard lists the open issues carrying the label as `needs-input`, with a run or
-not (`inputs.json`, kept by `issues` deliveries, whoever adds or removes the label, and one
-lookup per repo when the listener starts); a closed issue leaves the list.
+it again (`stillAsks()`). Only an allowed user's ticks answer: the App's bot's (a run ticking its
+own picks) and those of someone the listener doesn't act for (not allowed, or narrowed out by the
+repo's `users`) answer nothing. An issue the bot opens is labelled all the same, at open and by
+the backlog read below. An edit that leaves a section fully ticked without taking the label off
+(the bot's, someone not allowed, a refusal in `applyInput()`) marks the issue's entry in
+`inputs.json` (`ignoredTicks`) until an allowed user's edit; on the bot's issues and marked ones,
+`wait_for_answers` goes by the label, which only an allowed user's edit takes off. Its limit: an
+edit made while the listener was down isn't marked, so its ticks count for `wait_for_answers`
+(the label still shows it waits). A closed issue's edit doesn't list it again. The backlog read
+lists a fully ticked issue that still carries the label. An allowed user's comment on a labelled
+issue or pull request takes the label off: they answered. The dashboard lists the open issues
+carrying the label as `needs-input`, with a run or not (`inputs.json`, kept by `issues`
+deliveries, whoever adds or removes the label, and one lookup per repo when the listener starts);
+a closed issue leaves the list.
 
 The graph's backlog read (`work.mjs`, at most once per 30 seconds a repo, or after an
 `issues` delivery; every configured repo's, at most once per 5 minutes, while the Overview
@@ -202,12 +206,16 @@ reply that continues its session, as an allowed user's would be. An issue's: App
 don't take the label off, so the listener does, once every question has an answer; nothing
 starts until a trigger comment or the work area says so.
 
-Boxes ticked in a run's reply answer it the same way: an `issue_comment` `edited` delivery,
-by an allowed user, of the App's comment that starts with `<!-- needs-input -->`, that ticks
-an option of every question (`questions.mjs` `tickedReply()`, none free text) goes through
-the same `answer` (`work.mjs` `ticked()`), its comment saying "ticked in the run's
-questions". Only for the questions of the task's latest run still waiting: ticking an older
-reply, or the boxes again once the run went on, starts nothing.
+Boxes ticked in a run's reply answer it the same way: an `issue_comment` `edited` delivery, by an
+allowed user, of the App's comment that starts with `<!-- needs-input -->`, that ticks an option
+of every question (`questions.mjs` `tickedReply()`, none free text) goes through the same
+`answer` (`work.mjs` `ticked()`), its comment saying "ticked in the run's questions". Only for
+the questions of the task's latest run still waiting (titles, texts and options alike): ticking
+an older reply, or the boxes again once the run went on, starts nothing. The boxes the run's
+reply came with are the agent's (the task's questions, parsed from the run's text, have them
+`checked`): each question needs a box ticked since, which is the answer sent, so agreeing with
+the agent's own tick takes the dashboard's form or a comment. The form picks ticks in advance
+only for an issue's questions.
 
 On the graph, an issue waiting for answers moves like a waiting one, but its questions come
 first: dragging it (or its Start and "After…" buttons) opens them, and the start or queue goes

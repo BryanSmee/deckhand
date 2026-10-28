@@ -338,7 +338,8 @@ function inputCtx(
     label: async (repo, number, on) => (calls.push(["label", number, on]), new Response(null)),
     inputs: {
       set: (key, track) => calls.push(["track", key, track]),
-      update: (key) => calls.push(["update", key]),
+      update: (key, questions, ignored) =>
+        calls.push(["update", key, ...(ignored === undefined ? [] : [ignored])]),
     },
     waits: { answered: async (repo, number) => calls.push(["answered", number]) },
   };
@@ -362,6 +363,16 @@ test("applyInput: the label and the list follow the change, by the repo's own us
   assert.deepEqual(
     narrow.calls.map(([what]) => what),
     ["skip"],
+  );
+  // Ticks by someone the repo's users narrow out: ignored for wait_for_answers too.
+  const ticks = inputCtx({ users: ["alice"], trigger: "deckhand", waitForAnswers: true });
+  await applyInput(ticks.ctx, { ...change, by: "bob", track: false, ticked: true });
+  assert.deepEqual(
+    ticks.calls.map(([what, , ignored]) => [what, ignored]),
+    [
+      ["update", true],
+      ["skip", undefined],
+    ],
   );
   // A trigger line alone answers nothing while the repo waits for answers.
   const trigger = inputCtx();
@@ -415,13 +426,13 @@ test("the bot's ticks answer nothing: its edits of a fully ticked section leave 
   assert.deepEqual([own.label, own.track, own.answered], [undefined, true, undefined]);
   assert.equal(own.questions.items[1].options[1].checked, true);
   // Kept with the entry, so wait_for_answers doesn't take them for answers either.
-  assert.equal(own.botTicks, true);
+  assert.equal(own.ignoredTicks, true);
   const person = map("edited", {
     text: ticked("x", " "),
     labels: ["needs-input"],
     changes: { body: { from: ticked("x", "x") } },
   });
-  assert.equal(person.botTicks, false);
+  assert.equal(person.ignoredTicks, false);
   // Rewording a section ticked at open: still labelled.
   const reworded = edit(ticked("x", "x"), ticked("x", "x").replace("B?", "Bee?"), ["needs-input"]);
   assert.equal(reworded.label, undefined);
@@ -443,9 +454,15 @@ test("ticking every question's box answers them; unticking asks again", () => {
   assert.equal(partly.questions.items[0].options[0].checked, true);
   const free = `${ticked("x", "x")}\n3. Anything else?`;
   assert.equal(edit(ticked("x", " "), free, ["needs-input"]).label, undefined);
-  // Someone not allowed ticking them: nothing.
+  // Its ticks took the label off: a refusal (not among the repo's users) keeps them ignored.
+  assert.equal(done.ticked, true);
+  // Someone not allowed ticking them: the label stays, and their ticks are ignored for
+  // wait_for_answers too.
   const mallory = { login: "mallory", type: "User" };
-  assert.equal(edit(ticked("x", " "), ticked("x", "x"), ["needs-input"], mallory), null);
+  const theirs = edit(ticked("x", " "), ticked("x", "x"), ["needs-input"], mallory);
+  assert.deepEqual([theirs.label, theirs.by, theirs.ignoredTicks], [undefined, undefined, true]);
+  assert.equal(edit(ticked("x", " "), ticked("x", "x"), [], mallory), null);
+  assert.equal(edit(ticked(" ", " "), ticked("x", " "), ["needs-input"], mallory), null);
   // Unticked again: labelled again.
   const again = edit(ticked("x", "x"), ticked(" ", "x"), []);
   assert.deepEqual([again.label, again.track], [true, true]);
@@ -462,6 +479,20 @@ test("ticking every question's box answers them; unticking asks again", () => {
   });
   closed.issue.state = "closed";
   assert.equal(inputEvent(config, "issues", closed, BOT).answered, false);
+  // A closed issue still labelled, its section edited: not listed again.
+  for (const [from, to, sender] of [
+    [ticked(" ", " "), ticked("x", " ")],
+    [ticked("x", " "), ticked("x", "x"), { login: "mallory", type: "User" }],
+  ]) {
+    const p = issues("edited", {
+      text: to,
+      labels: ["needs-input"],
+      changes: { body: { from } },
+      ...(sender && { sender }),
+    });
+    p.issue.state = "closed";
+    assert.equal(inputEvent(config, "issues", p, BOT).track, false);
+  }
 });
 
 // An `issue_comment edited` delivery: `sender` ticking boxes in a comment by `author`.
@@ -478,16 +509,20 @@ const reply = (a, b) =>
 
 test("ticking every question's box in a run's reply answers it, as a reply would", () => {
   const done = tick(reply("x", " "), reply("x", "x"));
-  assert.deepEqual(done.reply.answers, [
-    { options: [0], text: "" },
-    { options: [1], text: "" },
+  // The boxes as the edit left them: which are a person's is work.mjs ticked()'s.
+  const checks = done.reply.items.map((q) => q.options.map((o) => o.checked));
+  assert.deepEqual(checks, [
+    [true, false],
+    [false, true],
   ]);
   assert.equal(done.reply.pr, false);
   assert.equal(done.reply.items.length, 2);
   assert.equal(done.by, "alice");
   assert.equal(done.label, undefined);
   assert.equal(tick(reply("x", " "), reply("x", "x"), { pull: true }).reply.pr, true);
-  // Partly ticked, ticked already, someone not allowed, or a comment that isn't the App's.
+  // A reply that came fully ticked (the agent's own ticks): a person's tick still goes on.
+  assert.ok(tick(reply("x", "x"), reply("x", "x").replace("[ ] Z", "[x] Z")));
+  // Partly ticked, the ticks unchanged, someone not allowed, or a comment that isn't the App's.
   assert.equal(tick(reply(" ", " "), reply("x", " ")), null);
   assert.equal(tick(reply("x", "x"), reply("x", "x").replace("The code", "Code")), null);
   assert.equal(tick(reply("x", " "), reply("x", "x"), { sender: "mallory" }), null);
@@ -505,11 +540,7 @@ test("applyInput: a run's ticked reply goes on through the work area, refusals l
   const change = tick(reply("x", " "), reply("x", "x"));
   await applyInput(ctx, change);
   assert.deepEqual(asked, [
-    [
-      "org/repo",
-      "alice",
-      { number: 12, pr: false, items: change.reply.items, answers: change.reply.answers },
-    ],
+    ["org/repo", "alice", { number: 12, pr: false, items: change.reply.items }],
   ]);
   assert.deepEqual(calls.at(-1), ["log", "org/repo#12: Answers sent: #12 continues."]);
   ctx.workApi = {

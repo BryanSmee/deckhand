@@ -102,15 +102,15 @@ test("the bot's ticks: kept with the entry across a restart and the startup look
   const listed = [{ number: 1, body: "## Open questions\n\n1. A?", updated_at: "x" }];
   const inputs = createInputs({ path, listLabelled: async () => listed });
   inputs.set("org/repo#1", true, null, true);
-  assert.equal(inputs.botTicked("org/repo#1"), true);
+  assert.equal(inputs.ticksIgnored("org/repo#1"), true);
   // An edit that doesn't say: as it was.
   inputs.update("org/repo#1", null);
-  assert.equal(inputs.botTicked("org/repo#1"), true);
+  assert.equal(inputs.ticksIgnored("org/repo#1"), true);
   await inputs.sync(["org/repo"]);
   const again = createInputs({ path, listLabelled: async () => [] });
-  assert.equal(again.botTicked("org/repo#1"), true);
+  assert.equal(again.ticksIgnored("org/repo#1"), true);
   // A person's edit.
   again.update("org/repo#1", null, false);
-  assert.equal(again.botTicked("org/repo#1"), false);
-  assert.equal(again.botTicked("org/repo#9"), false);
+  assert.equal(again.ticksIgnored("org/repo#1"), false);
+  assert.equal(again.ticksIgnored("org/repo#9"), false);
 });

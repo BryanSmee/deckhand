@@ -1911,8 +1911,14 @@ test("a repo spelled otherwise: inbox, answers, reruns and analyses use GitHub's
 });
 
 test("ticked in a run's reply: the answers continue its session, once, for its latest questions", async () => {
-  const ticks = [{ options: [1] }, { options: [0] }].map((a) => ({ ...a, text: "" }));
   const items = [QUESTIONS[0], { ...QUESTIONS[0], text: "Another?" }];
+  // The questions with option `picks[i]` of each ticked, as an edit leaves them.
+  const tick = (qs, picks) =>
+    qs.map((q, i) => ({
+      ...q,
+      options: q.options.map((o, j) => ({ ...o, checked: !!o.checked || j === picks[i] })),
+    }));
+  const edited = tick(items, [1, 0]);
   const w = setup({
     issues: { 5: open("Five"), 9: { ...open("Its PR"), pull_request: {} }, 6: open("Six") },
     tasks: {
@@ -1925,8 +1931,7 @@ test("ticked in a run's reply: the answers continue its session, once, for its l
   const said = await w.api.ticked("org/app", "alice", {
     number: 5,
     pr: false,
-    items,
-    answers: ticks,
+    items: edited,
   });
   assert.equal(said, "Answers sent: #5 continues.");
   assert.equal(
@@ -1946,36 +1951,65 @@ test("ticked in a run's reply: the answers continue its session, once, for its l
     ["5", null, "alice", w.comments[0][1]],
   );
   // On the pull request the issue's run replied on.
-  await w.api.ticked("org/app", "alice", { number: 9, pr: true, items, answers: ticks });
+  await w.api.ticked("org/app", "alice", { number: 9, pr: true, items: edited });
   assert.deepEqual([w.accepted[1].id, w.accepted[1].replyTo, w.comments[1][0]], ["6", 9, 9]);
   // Other questions than the task's (an older reply), or a task no longer waiting: nothing.
-  const older = [items[0], { ...items[1], text: "Before?" }];
+  const older = [edited[0], { ...edited[1], text: "Before?" }];
   w.tasks["org/app#6"] = asking(6, "run", items);
   assert.match(
-    await w.api.ticked("org/app", "alice", { number: 6, pr: false, items: older, answers: ticks }),
+    await w.api.ticked("org/app", "alice", { number: 6, pr: false, items: older }),
     /not the questions waiting for answers/,
   );
   // The same questions with other options (asked again, reordered): their indexes differ.
-  const reordered = items.map((q) => ({ ...q, options: [...q.options].reverse() }));
+  const reordered = edited.map((q) => ({ ...q, options: [...q.options].reverse() }));
   assert.match(
     await w.api.ticked("org/app", "alice", {
       number: 6,
       pr: false,
       items: reordered,
-      answers: ticks,
     }),
     /not the questions waiting for answers/,
   );
   w.tasks["org/app#6"] = asking(6, "issue", items);
   assert.match(
-    await w.api.ticked("org/app", "alice", { number: 6, pr: false, items, answers: ticks }),
+    await w.api.ticked("org/app", "alice", { number: 6, pr: false, items: edited }),
     /not the questions waiting for answers/,
   );
   assert.equal(w.accepted.length, 2);
   // Someone not among the repo's users: refused, as from the dashboard.
   w.tasks["org/app#6"] = asking(6, "run", items);
   await assert.rejects(
-    w.api.ticked("org/app", "mallory", { number: 6, pr: false, items, answers: ticks }),
+    w.api.ticked("org/app", "mallory", { number: 6, pr: false, items: edited }),
     /mallory|allowed|user/i,
+  );
+});
+
+test("ticked in a run's reply: the boxes it came with are the agent's, only a person's answer", async () => {
+  // The run's reply came with its pick ticked in question 1 (`checked`, parsed from its text).
+  const own = [
+    { ...QUESTIONS[0], options: QUESTIONS[0].options.map((o, j) => ({ ...o, checked: j === 0 })) },
+    { ...QUESTIONS[0], text: "Another?" },
+  ];
+  const w = setup({ issues: { 5: open("Five") }, tasks: { "org/app#5": asking(5, "run", own) } });
+  const check = (q, j) => ({
+    ...q,
+    options: q.options.map((o, k) => ({ ...o, checked: !!o.checked || k === j })),
+  });
+  // alice ticks question 2 only: question 1's tick is still the agent's.
+  const second = [own[0], check(own[1], 1)];
+  assert.match(
+    await w.api.ticked("org/app", "alice", { number: 5, pr: false, items: second }),
+    /not a new box in every question/,
+  );
+  assert.deepEqual([w.comments, w.accepted], [[], []]);
+  // Then the other option of question 1 too: that one is hers.
+  const both = [check(own[0], 1), second[1]];
+  assert.equal(
+    await w.api.ticked("org/app", "alice", { number: 5, pr: false, items: both }),
+    "Answers sent: #5 continues.",
+  );
+  assert.match(
+    w.comments[0][1],
+    /1\. \*\*Phones\*\*\n {3}- \[x\] Top to bottom\n2\. \*\*Phones\*\*\n {3}- \[x\] Top to bottom/,
   );
 });

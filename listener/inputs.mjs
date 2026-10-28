@@ -1,9 +1,9 @@
 // The open issues carrying the needs-input label, for the dashboard, by task key
-// ("org/repo#12") → { since, questions, botTicks } (parseQuestions() of its body, or null;
-// `botTicks`: the App's bot's edit ticked its last boxes, which answer nothing). `issues`
-// webhooks keep it current (questions.mjs); labels added or removed, or bodies edited, while
-// the listener was down are caught by one lookup per repo when it starts (sync()). Kept in
-// inputs.json, so a restart doesn't forget them meanwhile.
+// ("org/repo#12") → { since, questions, ignoredTicks } (parseQuestions() of its body, or null;
+// `ignoredTicks`: its section is fully ticked by ticks that answer nothing, the bot's or those
+// of someone not allowed). `issues` webhooks keep it current (questions.mjs); labels added or
+// removed, or bodies edited, while the listener was down are caught by one lookup per repo when
+// it starts (sync()). Kept in inputs.json, so a restart doesn't forget them meanwhile.
 import { hasLabel } from "./comments.mjs";
 import { parseKey, sameRepo, taskKey } from "./events.mjs";
 import { paginate } from "./github.mjs";
@@ -19,7 +19,7 @@ export function createInputs({ path, listLabelled, now = Date.now, log = () => {
 
   // Whether issue `key` waits for input now, its questions and whether the bot ticked them
   // when known (undefined: as they were).
-  function set(key, on, questions, botTicks) {
+  function set(key, on, questions, ignoredTicks) {
     const was = inputs.get(key);
     if (!on) {
       if (inputs.delete(key)) save();
@@ -28,7 +28,7 @@ export function createInputs({ path, listLabelled, now = Date.now, log = () => {
     const next = {
       since: was?.since ?? now(),
       questions: questions === undefined ? (was?.questions ?? null) : questions,
-      ...((botTicks ?? was?.botTicks) && { botTicks: true }),
+      ...((ignoredTicks ?? was?.ignoredTicks) && { ignoredTicks: true }),
     };
     if (was && JSON.stringify(was) === JSON.stringify(next)) return;
     inputs.set(key, next);
@@ -36,8 +36,8 @@ export function createInputs({ path, listLabelled, now = Date.now, log = () => {
   }
 
   // An edit to the questions of an issue already listed.
-  function update(key, questions, botTicks) {
-    if (inputs.has(key)) set(key, true, questions, botTicks);
+  function update(key, questions, ignoredTicks) {
+    if (inputs.has(key)) set(key, true, questions, ignoredTicks);
   }
 
   // Replaces what is known of each repo in `repos` with GitHub's list. A repo that can't be
@@ -75,7 +75,7 @@ export function createInputs({ path, listLabelled, now = Date.now, log = () => {
         const next = {
           since: was?.since ?? entry.since,
           questions: entry.questions,
-          ...(was?.botTicks && { botTicks: true }),
+          ...(was?.ignoredTicks && { ignoredTicks: true }),
         };
         if (was && JSON.stringify(was) === JSON.stringify(next)) continue;
         inputs.set(key, next);
@@ -101,8 +101,8 @@ export function createInputs({ path, listLabelled, now = Date.now, log = () => {
     sync,
     list,
     has: (key) => inputs.has(key),
-    // Whether the bot's edit ticked issue `key`'s last boxes: its ticks don't answer.
-    botTicked: (key) => !!inputs.get(key)?.botTicks,
+    // Whether issue `key`'s ticks answer nothing (the bot's, someone not allowed).
+    ticksIgnored: (key) => !!inputs.get(key)?.ignoredTicks,
     keys: () => [...inputs.keys()],
     // One spelling per repo (spelling.mjs, at a restart).
     respell: (spelled) => respellMap(inputs, spelled) && save(),

@@ -649,12 +649,14 @@ export function createWorkApi({
     return `Answers sent: #${number} no longer needs input.`;
   }
 
-  // The boxes `user` ticked in a run's reply on issue or pull request `number` (questions.mjs
-  // tickedReply()): `items`, the reply's questions, answered by `answers`, one per question.
-  // They go on as the dashboard's answers would, when they are those of the task's latest run
-  // still waiting: ticking an older reply's boxes, or one already answered, starts nothing.
+  // The boxes ticked in a run's reply on issue or pull request `number`, `user`'s edit
+  // (questions.mjs tickedReply()): `items`, the reply's questions as the edit left them. They go
+  // on as the dashboard's answers would, when they are those of the task's latest run still
+  // waiting: ticking an older reply's boxes, or one already answered, starts nothing. Only a
+  // person's ticks answer: those the run's reply came with (the task's own `checked`, parsed
+  // from its text) are the agent's, so each question needs a box ticked since.
   // A pull request's run on an issue's task replied on the pull request (its `replyTo`).
-  async function ticked(repo, user, { number, pr, items, answers }) {
+  async function ticked(repo, user, { number, pr, items }) {
     const keys = [taskKey(repo, pr ? prId(number) : number), ...(pr ? boardKeys() : [])];
     const task = keys
       .map((key) => taskOf(key))
@@ -673,6 +675,13 @@ export function createWorkApi({
       );
     const same = !!asked && shape(asked) === shape(items);
     if (!task || !same) return `#${number}: ticked, but not the questions waiting for answers`;
+    const answers = items.map((q, i) => ({
+      options: [q.options.findIndex((o, j) => o.checked && !asked[i].options[j].checked)],
+      text: "",
+    }));
+    if (answers.some((a) => a.options[0] < 0)) {
+      return `#${number}: ticked, but not a new box in every question`;
+    }
     const target = parseKey(task.key);
     const which = { number: target.number, pr: target.kind === "pr" };
     const where = "ticked in the run's questions";

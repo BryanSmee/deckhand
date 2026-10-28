@@ -2026,40 +2026,45 @@ mounts:
     assert.equal(unlabelled(github), false);
   });
 
-  test("wait_for_answers: the bot ticking the last box of a person's issue answers nothing: a trigger is held back", async (t) => {
-    const { dir, github, send, listener } = await listen(t, {});
-    const issue = (box) => ({
-      number: 12,
-      title: "An idea",
-      state: "open",
-      body: tickedBody(box),
-      user: { login: "alice", type: "User" },
-      labels: [{ name: "needs-input" }],
+  for (const [who, sender] of [
+    ["the bot", { login: "deckhand-x[bot]", type: "Bot" }],
+    ["someone not allowed", { login: "mallory", type: "User" }],
+  ]) {
+    test(`wait_for_answers: ${who} ticking the last box of a person's issue answers nothing: a trigger is held back`, async (t) => {
+      const { dir, github, send, listener } = await listen(t, {});
+      const issue = (box) => ({
+        number: 12,
+        title: "An idea",
+        state: "open",
+        body: tickedBody(box),
+        user: { login: "alice", type: "User" },
+        labels: [{ name: "needs-input" }],
+      });
+      await send(
+        {
+          action: "edited",
+          installation: { id: 7 },
+          repository: { full_name: "org/repo", default_branch: "trunk" },
+          issue: issue("x"),
+          changes: { body: { from: tickedBody(" ") } },
+          sender,
+        },
+        "issues",
+      );
+      await until(() => existsSync(join(dir, "inputs.json")), "the entry");
+      await until(
+        () =>
+          JSON.parse(readFileSync(join(dir, "inputs.json"), "utf8"))["org/repo#12"]?.ignoredTicks,
+        "the bot's ticks kept",
+      );
+      const payload = onAsking(99, "Deckhand");
+      payload.issue = issue("x");
+      await send(payload);
+      await listener.until("org/repo#12: not started, its open questions aren't answered");
+      assert.equal(exists(join(dir, "run-args")), null);
+      assert.equal(unlabelled(github), false);
     });
-    const bot = { login: "deckhand-x[bot]", type: "Bot" };
-    await send(
-      {
-        action: "edited",
-        installation: { id: 7 },
-        repository: { full_name: "org/repo", default_branch: "trunk" },
-        issue: issue("x"),
-        changes: { body: { from: tickedBody(" ") } },
-        sender: bot,
-      },
-      "issues",
-    );
-    await until(() => existsSync(join(dir, "inputs.json")), "the entry");
-    await until(
-      () => JSON.parse(readFileSync(join(dir, "inputs.json"), "utf8"))["org/repo#12"]?.botTicks,
-      "the bot's ticks kept",
-    );
-    const payload = onAsking(99, "Deckhand");
-    payload.issue = issue("x");
-    await send(payload);
-    await listener.until("org/repo#12: not started, its open questions aren't answered");
-    assert.equal(exists(join(dir, "run-args")), null);
-    assert.equal(unlabelled(github), false);
-  });
+  }
 
   test("wait_for_answers: ticking every box of the issue takes the label off and starts what waited", async (t) => {
     const asking = (box) =>
