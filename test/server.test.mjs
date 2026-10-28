@@ -120,6 +120,11 @@ async function fakeGitHub(files = {}) {
       if (req.method === "GET" && pull && files[`pull:${pull[1]}`]) {
         return res.end(files[`pull:${pull[1]}`]);
       }
+      // A branch's latest commit, when the test sets it (the conflict watcher's base).
+      const ref = /^\/repos\/org\/repo\/git\/ref\/heads\/(.+)$/.exec(req.url);
+      if (req.method === "GET" && ref && files[`ref:${ref[1]}`]) {
+        return res.end(JSON.stringify({ object: { sha: files[`ref:${ref[1]}`] } }));
+      }
       // An issue's comments, as JSON, when the test sets them (a research run's thread).
       const thread = /^\/repos\/org\/repo\/issues\/(\d+)\/comments\?/.exec(req.url);
       if (req.method === "GET" && thread && files[`comments:${thread[1]}`]) {
@@ -2652,6 +2657,53 @@ modes:
     assert.match(readFileSync(join(dir, "run-env"), "utf8"), /^TASK_MESSAGE=On top of it\.$/m);
     assert.match(JSON.parse(replies(github)[1].body).body, /^#77 is done: starting\./);
     assert.deepEqual(JSON.parse(readFileSync(join(dir, "waits.json"), "utf8")), {});
+    await listener.until("done (ok)");
+  });
+
+  test("conflicts: a merge into the default branch checks the open task pull requests soon", async (t) => {
+    const conflicted = {
+      number: 13,
+      state: "open",
+      mergeable: false,
+      mergeable_state: "dirty",
+      labels: [],
+      head: { sha: "head-1", ref: "issue-12-fix", repo: { full_name: "org/repo" } },
+      base: { ref: "trunk", sha: "old" },
+    };
+    const files = {
+      ".deckhand.yaml": "conflicts:\n  check_minutes: 60\n",
+      "pull:13": JSON.stringify(conflicted),
+      "ref:trunk": "base-2",
+    };
+    const { dir, github, send, listener } = await listen(t, files, {
+      CONFLICT_MERGE_DELAY_MS: "0",
+    });
+    // Deckhand's pull request for #12, open.
+    await send(
+      {
+        action: "opened",
+        installation: { id: 7 },
+        repository: { full_name: "org/repo", default_branch: "trunk" },
+        pull_request: { ...conflicted, body: "Closes #12", draft: true },
+        sender: { login: "deckhand-x[bot]", type: "Bot" },
+      },
+      "pull_request",
+    );
+    await listener.until("org/repo#12: pull request #13 draft");
+    // Another one merged into trunk: #13 is asked at once and rebased. Not by the first tick,
+    // a minute after start, which would check the repo too: until() gives up after 10 s.
+    await send(mergedPull(), "pull_request");
+    await until(
+      () =>
+        github.requests.some((r) => r.method === "GET" && r.path === "/repos/org/repo/pulls/13"),
+      "the conflict check",
+    );
+    await listener.until("org/repo#12: pull request #13 conflicts with trunk");
+    await until(() => exists(join(dir, "run-env")), "the rebase run");
+    assert.match(
+      readFileSync(join(dir, "run-env"), "utf8"),
+      /^TASK_MESSAGE=This pull request conflicts with `trunk`/m,
+    );
     await listener.until("done (ok)");
   });
 

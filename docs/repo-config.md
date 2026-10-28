@@ -159,7 +159,7 @@ wait_for_answers: true
 | `preview.command`                       | none                                    | preview hook command (`preview: ./x.sh` works too); needs the operator's `allow_preview`                                     |
 | `preview.image`                         | the repo's image                        | image the hook runs in; it needs a Docker client                                                                             |
 | `preview.timeout_minutes`               | `30`                                    | the hook is stopped after that (120 at most)                                                                                 |
-| `conflicts.check_minutes`               | none: off                               | minutes between conflict checks; at least `CONFLICT_CHECK_MINUTES` (see Conflicts)                                           |
+| `conflicts.check_minutes`               | none: off                               | minutes between conflict checks, and one soon after a merge; at least `CONFLICT_CHECK_MINUTES` (see Conflicts)               |
 | `wait_for_answers`                      | `true`                                  | an issue's work runs wait until its open questions are answered (see Open questions)                                         |
 
 ## Network and mounts
@@ -729,8 +729,12 @@ It is off without the key, and each conflict found is a run, so a bill.
   `check_minutes` gets that one (with a warning in the run logs), and `0` turns conflict
   checks off for every repository. `check_minutes` must be a whole number above 0; any
   other key under `conflicts` is an error.
-- The dashboard's **Sync** checks now, whatever the interval: for when you just merged into
-  the base branch or see a pull request in conflict. It follows the same rules (the opt-in,
+- A merge into the default branch checks the repo's open pull requests about 30 seconds
+  later, whatever the interval: a pull request merged on GitHub, a push to the default branch
+  (when the App gets `push` events) or Deckhand's own auto-merge. Other base branches wait for
+  the interval.
+- The dashboard's **Sync** checks now, whatever the interval: for when you see a pull request
+  in conflict. It follows the same rules (the opt-in,
   one try per pair, busy and needs-input tasks skipped) and says how many rebase runs it
   started. A pull request GitHub is still computing is checked a minute later, as above.
 

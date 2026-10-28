@@ -24,7 +24,7 @@ import { createPrReady } from "./pr-ready.mjs";
 import { createBrainstorms, createIssueModes } from "./brainstorms.mjs";
 import { checkout } from "./checkout.mjs";
 import { createComments } from "./comments.mjs";
-import { createConflicts } from "./conflicts.mjs";
+import { createConflicts, intoDefaultBranch } from "./conflicts.mjs";
 import { ConfigError, loadConfig, readConfigFile, withCredentialFiles } from "./config.mjs";
 import { docker } from "./docker.mjs";
 import {
@@ -454,10 +454,14 @@ ctx.reviews = createReviews({
       return null;
     }
   },
-  // The dashboard's "merged by Deckhand", at once.
+  // The dashboard's "merged by Deckhand", at once; and, merged into the default branch, the
+  // repo's other pull requests asked soon whether they still merge: no delivery comes first.
   merged: (repo, pr) => {
     const { key, pr: entry } = pullEntry(repo, pr);
     pulls.record(key, { ...entry, autoMerged: true });
+    if (intoDefaultBranch(pr)) {
+      ctx.conflicts.soon(repo).catch((error) => log(`Conflicts: ${error.stack ?? error}`));
+    }
   },
   log,
 });

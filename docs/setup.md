@@ -67,9 +67,9 @@ What the App asks for:
 An App created before Deckhand answered discussions lacks the `discussion` events and the
 Discussions permission: add them in the App's settings (_Permissions & events_), then accept
 the new permissions on its installation. Everything else works without them. `push` only
-tells the dashboard's repository list that a default branch changed; an App without it
-(created before the list) sees a config pushed straight to the default branch within half an
-hour, and one merged through a pull request at once.
+tells the dashboard's repository list and the conflict watcher that a default branch changed;
+an App without it (created before the list) sees a config pushed straight to the default
+branch within half an hour, and one merged through a pull request at once.
 
 Workflows lets the git gateway push changes to `.github/workflows/`, for the repositories
 whose grants file sets `allow_workflows` only ([security model](security.md#github-actions-on-deckhands-branches)):
@@ -891,6 +891,7 @@ else set it in the service's `environment`, for example in a `compose.override.y
 | `INSTALL_NETWORK`                       | `install_network`          | `bridge`                                              | network of the agents' install containers (they need npm and GitHub's releases), and of the Antigravity CLI's login refresh       |
 | `DEBOUNCE_MS`                           | `debounce_ms`              | `15000`                                               | pause after a comment before its run starts, so that comments posted together go in one run                                       |
 | `BRAINSTORM_DEBOUNCE_MS`                | `brainstorm_debounce_ms`   | `3000`                                                | the same before a light run (brainstorms, onboarding, light modes)                                                                |
+| `CONFLICT_MERGE_DELAY_MS`               | `conflict_merge_delay_ms`  | `30000`                                               | pause after a repo's default branch moved before its pull requests' conflicts are checked, while GitHub computes them again       |
 | `DATA_DIR`                              | none                       | `/data`                                               | the listener's state: the App's credentials, logs, queue, runs (the `data` volume)                                                |
 | `DASHBOARD_DIR`                         | none                       | the image's `dashboard/dist`                          | the built dashboard the listener serves                                                                                           |
 | `SANDBOX_IMAGE`                         | none                       | `<NAME_PREFIX>-sandbox`                               | the base image runs start from; compose sets the release's                                                                        |
