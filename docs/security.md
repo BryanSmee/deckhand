@@ -456,6 +456,37 @@ the repository's later runs trust and execute:
 - **Host mounts**: read-only, as for a light run (the log's `Host mount` lines say so).
 - **Branch images**: never built from a fork's branch (`allow_branch_docker_images`).
 
+These protections follow what triggered the run, not the code it fetches. A work run started
+from an issue, or from one of the repository's own pull requests, isn't a fork's run, yet it
+can bring a fork's code in itself: `gh pr checkout <n>`, `git fetch origin
+refs/pull/<n>/head`, or a fork's archive or raw files. A prompt injection is enough ("check
+that #123 fixes it", #123 being a fork's, in the issue, a linked thread or a pull request's
+description). The fork's code then runs with everything a fork's run is denied:
+
+- the repository's **cache volumes**, which every later work run installs from (the clone's
+  reset at start, below, cleans the clone, not the caches);
+- **host mounts** granted read-write, and the **container engine** if granted;
+- the run's **token and push rights**: it can push the run's own branch, workflow changes
+  included with `allow_workflows`.
+
+Until the GitHub gateway (#404) relays GitHub's git and API traffic through the listener, the
+only guard is the sandbox's instructions (don't install, build or run a fork's pull request
+you weren't triggered from): the listener doesn't see a sandbox's fetches, and a GitHub App's
+`contents: read` can't be limited to the repository's own refs. The gateway is to refuse, in
+a run that isn't a fork's, fetches of a fork pull request's `refs/pull/<n>/head` and of a
+fork's refs or objects, and API or archive downloads of a fork's head, saying why: a comment
+from an allowed user on the fork's pull request starts a fork's run, which fetches it as
+today. Pull requests from the repository's own branches stay allowed.
+
+Not every way goes through hosts the gateway relays. Archives (`codeload.github.com`, where
+`github.com/<repo>/archive/…` and the API's `tarball` and `zipball` redirect) are refused by
+the egress proxy unless a grant adds that host. But `raw.githubusercontent.com`, a mandatory
+host the gateway leaves alone, serves any file of a public repository without a token,
+a fork's pull request's included (`/<owner>/<repo>/refs/pull/<n>/head/<path>`, or its commit,
+from the base repository or the fork): checked on a public repository's fork pull request. A
+private repository's raw files need a token, which a sandbox no longer has once the gateway
+lands. For a public repository, the gateway alone doesn't close it.
+
 Every run, a fork's or not, protects the issue's clone, kept for its next runs: setup and the
 agent would otherwise run a fork left checked out there (its `SANDBOX_SETUP` and project
 hooks, `.claude/settings.json`, before the model reads anything). Before either starts:
@@ -1469,8 +1500,10 @@ it again when you change `AGY_VERSION`.
 - **A fork's pull request only mentioned** (in an issue, or a comment from elsewhere: "check
   out #7 and fix it") isn't seen as a fork's run: the run gets the repository's caches,
   read-write mounts and engine. The agent is told not to install, build or run such a pull
-  request's code (the sandbox's instructions), but nothing enforces it. Ask for work on a
-  fork's pull request from that pull request.
+  request's code (the sandbox's instructions), but nothing enforces it until the GitHub
+  gateway (#404), and a public repository's raw files still bypass it then (see
+  [What a fork's code may reach](#what-a-forks-code-may-reach)). Ask for work on a fork's
+  pull request from that pull request.
 - **Image builds** (a repo's `dockerfile`, with `allow_dockerfile`) and the **Claude Code
   install** run with normal network access: they run on the host's Docker, outside the
   sandboxes' networks. Builds run the repo's Dockerfile from its default branch (or its pull
