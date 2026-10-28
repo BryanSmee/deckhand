@@ -171,7 +171,8 @@ export function replyQuestions(text) {
 // `questions`: parseQuestions() of the body, when the issue is or stays listed. `comment`: the
 // body of an issue's comment that would take the label off, which only an answer does when the
 // repo's `wait_for_answers` is on (http.mjs). `answered`: the label came off an open issue.
-// `reply`: a run's reply answered by its ticked boxes (tickedReply()).
+// `reply`: a run's reply answered by its ticked boxes (tickedReply()). `botTicks`: an edit's
+// section is fully ticked by the App's bot, whose ticks answer nothing (editedInput()).
 export function inputEvent(config, event, p, bot) {
   const name = config.needsInputLabel;
   if (!name || (event !== "issues" && event !== "issue_comment")) return null;
@@ -257,11 +258,15 @@ function editedInput({ p, issue, change, labelled, who, questions }) {
   if (questionsSection(p.changes.body.from) === questionsSection(issue.body)) return null;
   // The bot's ticks answer nothing (a run ticking its own picks): its edit of a fully ticked
   // section leaves the label as it is, on or off.
+  // `botTicks`: kept with the entry (inputs.mjs), so wait_for_answers doesn't take those ticks
+  // for answers either (tasks.mjs unanswered()); a person's edit clears it.
   const ticked = allTicked(parseQuestions(questionsSection(issue.body)));
   const now = by === null && ticked ? labelled : stillAsks(issue.body);
-  // Still waiting: only what the dashboard shows changes.
-  if (now === labelled) return now ? { ...change, questions: questions() } : null;
-  if (now) return { ...change, label: true, by, track: true, questions: questions() };
+  const botTicks = by === null && ticked;
+  // Still waiting: listed (labelled, it should be already), with its questions as they are now.
+  if (now === labelled)
+    return now ? { ...change, track: true, questions: questions(), botTicks } : null;
+  if (now) return { ...change, label: true, by, track: true, questions: questions(), botTicks };
   return { ...change, label: false, by, track: false, answered: issue.state !== "closed" };
 }
 
@@ -338,8 +343,9 @@ export async function applyInput(ctx, change) {
     if (labelFailed(res)) return log(`${key}: label: ${res.status}`);
     log(`${key}: ${label ? "open questions, labelled" : "answered, label removed"}`);
   }
-  if (track !== undefined) ctx.inputs.set(key, track, asked);
-  else if (asked !== undefined) ctx.inputs.update(key, asked);
+  const { botTicks } = change;
+  if (track !== undefined) ctx.inputs.set(key, track, asked, botTicks);
+  else if (asked !== undefined) ctx.inputs.update(key, asked, botTicks);
   // Answered: a comment that waited for the answers starts (waits.mjs).
   if (change.answered) await ctx.waits.answered(repo, number);
 }

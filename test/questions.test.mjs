@@ -254,11 +254,11 @@ test("editing the section moves the label; other edits don't", () => {
   assert.equal(edit(asks, none, ["needs-input"]).label, false);
   assert.equal(edit(asks, none, ["needs-input"]).track, false);
   assert.equal(edit(asks, "Rewritten without it", ["needs-input"]).label, false);
-  // Already as it should be: only the questions the dashboard shows change.
+  // Already as it should be: listed, with the questions as they are now.
   const still = edit(none, asks, ["needs-input"]);
   assert.deepEqual(
     [still.label, still.track, still.questions.raw],
-    [undefined, undefined, "1. Which one?"],
+    [undefined, true, "1. Which one?"],
   );
   assert.equal(edit(asks, none, []), null);
   // The section unchanged: a label removed by hand, or put by a run, stays as it is.
@@ -412,8 +412,16 @@ test("the bot's ticks answer nothing: its edits of a fully ticked section leave 
     map("edited", { text: to, labels, sender, changes: { body: { from } } });
   // The bot ticking the last box: the label stays, the dashboard shows the ticks.
   const own = edit(ticked("x", " "), ticked("x", "x"), ["needs-input"]);
-  assert.deepEqual([own.label, own.track, own.answered], [undefined, undefined, undefined]);
+  assert.deepEqual([own.label, own.track, own.answered], [undefined, true, undefined]);
   assert.equal(own.questions.items[1].options[1].checked, true);
+  // Kept with the entry, so wait_for_answers doesn't take them for answers either.
+  assert.equal(own.botTicks, true);
+  const person = map("edited", {
+    text: ticked("x", " "),
+    labels: ["needs-input"],
+    changes: { body: { from: ticked("x", "x") } },
+  });
+  assert.equal(person.botTicks, false);
   // Rewording a section ticked at open: still labelled.
   const reworded = edit(ticked("x", "x"), ticked("x", "x").replace("B?", "Bee?"), ["needs-input"]);
   assert.equal(reworded.label, undefined);

@@ -645,6 +645,11 @@ test("GET issues: no seeding once the label was taken off, nor for the board, ot
       7: asked(TICKED, { user: { login: "alice", type: "User" } }),
       // The App's own ticks (an inbox run's) answer nothing: seeded.
       8: asked(TICKED),
+      // Ticked, but still labelled (the bot's ticks, say): listed, no label call.
+      9: asked(TICKED, {
+        user: { login: "alice", type: "User" },
+        labels: [{ name: "needs-input" }],
+      }),
       2: asked(BODY_144),
       3: asked(BODY_144, { user: { login: "mallory", type: "User" } }),
       4: asked("## Open questions\n\nNone"),
@@ -656,7 +661,12 @@ test("GET issues: no seeding once the label was taken off, nor for the board, ot
   });
   await call(w.api, "GET", "/api/repos/org/app/issues");
   // A section not in the format: listed, with the text box (no items).
-  assert.deepEqual([...w.listed.keys()].sort(), ["org/app#5", "org/app#6", "org/app#8"]);
+  assert.deepEqual([...w.listed.keys()].sort(), [
+    "org/app#5",
+    "org/app#6",
+    "org/app#8",
+    "org/app#9",
+  ]);
   assert.equal(w.listed.get("org/app#5").items, null);
   assert.deepEqual(w.labels, [
     [5, true],

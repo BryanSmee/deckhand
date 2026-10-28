@@ -152,11 +152,11 @@ export function createTasks(ctx) {
     const own = customMode(item.settings, mode);
     if (mode !== "work" && (!own || own.light)) return false;
     if (!hasLabel(issue.labels, config.needsInputLabel)) return false;
-    // Ticks in the bot's issue (an inbox run's) are its own until a person's edit takes the
-    // label off (questions.mjs editedInput()).
-    const bot = issue.user?.type === "Bot";
-    if (!(bot ? hasOpenQuestions(issue.body) : stillAsks(issue.body))) return false;
+    // Ticks in the bot's issue (an inbox run's), or that the bot's edit added, are its own
+    // until a person's edit takes the label off (questions.mjs editedInput()).
     const key = taskKey(item.repo, item.id);
+    const bot = issue.user?.type === "Bot" || !!ctx.inputs?.botTicked?.(key);
+    if (!(bot ? hasOpenQuestions(issue.body) : stillAsks(issue.body))) return false;
     return ctx.runs.find((r) => r.key === key)?.status !== "needs-input";
   }
 

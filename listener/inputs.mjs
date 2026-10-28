@@ -1,5 +1,6 @@
 // The open issues carrying the needs-input label, for the dashboard, by task key
-// ("org/repo#12") → { since, questions } (parseQuestions() of its body, or null). `issues`
+// ("org/repo#12") → { since, questions, botTicks } (parseQuestions() of its body, or null;
+// `botTicks`: the App's bot's edit ticked its last boxes, which answer nothing). `issues`
 // webhooks keep it current (questions.mjs); labels added or removed, or bodies edited, while
 // the listener was down are caught by one lookup per repo when it starts (sync()). Kept in
 // inputs.json, so a restart doesn't forget them meanwhile.
@@ -16,9 +17,9 @@ export function createInputs({ path, listLabelled, now = Date.now, log = () => {
   const inputs = persistentMap(path);
   const save = inputs.save;
 
-  // Whether issue `key` waits for input now, and its questions when known (undefined: as
-  // they were).
-  function set(key, on, questions) {
+  // Whether issue `key` waits for input now, its questions and whether the bot ticked them
+  // when known (undefined: as they were).
+  function set(key, on, questions, botTicks) {
     const was = inputs.get(key);
     if (!on) {
       if (inputs.delete(key)) save();
@@ -27,6 +28,7 @@ export function createInputs({ path, listLabelled, now = Date.now, log = () => {
     const next = {
       since: was?.since ?? now(),
       questions: questions === undefined ? (was?.questions ?? null) : questions,
+      ...((botTicks ?? was?.botTicks) && { botTicks: true }),
     };
     if (was && JSON.stringify(was) === JSON.stringify(next)) return;
     inputs.set(key, next);
@@ -34,8 +36,8 @@ export function createInputs({ path, listLabelled, now = Date.now, log = () => {
   }
 
   // An edit to the questions of an issue already listed.
-  function update(key, questions) {
-    if (inputs.has(key)) set(key, true, questions);
+  function update(key, questions, botTicks) {
+    if (inputs.has(key)) set(key, true, questions, botTicks);
   }
 
   // Replaces what is known of each repo in `repos` with GitHub's list. A repo that can't be
@@ -70,7 +72,11 @@ export function createInputs({ path, listLabelled, now = Date.now, log = () => {
       // Bodies edited meanwhile: their questions as they are now.
       for (const [key, entry] of found) {
         const was = inputs.get(key);
-        const next = { since: was?.since ?? entry.since, questions: entry.questions };
+        const next = {
+          since: was?.since ?? entry.since,
+          questions: entry.questions,
+          ...(was?.botTicks && { botTicks: true }),
+        };
         if (was && JSON.stringify(was) === JSON.stringify(next)) continue;
         inputs.set(key, next);
         changed = true;
@@ -95,6 +101,8 @@ export function createInputs({ path, listLabelled, now = Date.now, log = () => {
     sync,
     list,
     has: (key) => inputs.has(key),
+    // Whether the bot's edit ticked issue `key`'s last boxes: its ticks don't answer.
+    botTicked: (key) => !!inputs.get(key)?.botTicks,
     keys: () => [...inputs.keys()],
     // One spelling per repo (spelling.mjs, at a restart).
     respell: (spelled) => respellMap(inputs, spelled) && save(),
@@ -131,11 +139,14 @@ export function createInputSeeder({ config, github, label, inputs, boardKeys, lo
       // Fail closed, as questions.mjs: only an allowed user's issue, or the App's own.
       if (!author(issue.user)) continue;
       const questions = parseQuestions(questionsSection(issue.body));
-      // Every box ticked by an allowed user: answered already. The App's own ticks (an inbox
-      // run's) answer nothing.
-      if (!questions || (issue.user?.type !== "Bot" && allTicked(questions))) continue;
+      if (!questions) continue;
+      const labelled = hasLabel(issue.labels, name);
+      // Every box ticked in an allowed user's issue, unlabelled: answered already. Still
+      // labelled, the label says it waits (the bot's ticks answer nothing), and the App's own
+      // issues (an inbox run's) wait whatever their ticks.
+      if (!labelled && issue.user?.type !== "Bot" && allTicked(questions)) continue;
       try {
-        if (!hasLabel(issue.labels, name)) {
+        if (!labelled) {
           if (await wasUnlabelled(repo, issue.number, name)) {
             unlabelled.add(key);
             continue;

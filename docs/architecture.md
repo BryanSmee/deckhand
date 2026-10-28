@@ -150,12 +150,14 @@ reads: ticked boxes are answers, so a section where every question has an option
 the label off and releases what waited for the answers, as a comment would; unticking them labels
 it again (`stillAsks()`). Only a person's ticks answer: the App's bot's (a run ticking its own
 picks) answer nothing. An issue it opens is labelled all the same, at open and by the backlog
-read below; its edits of a fully ticked section leave the label as it is; and on its issues,
-`wait_for_answers` goes by the label, which only a person's edit takes off. An allowed user's
-comment on a labelled issue or pull request takes the label off: they answered. The dashboard
-lists the open issues carrying the label as `needs-input`, with a run or not (`inputs.json`, kept
-by `issues` deliveries, whoever adds or removes the label, and one lookup per repo when the
-listener starts); a closed issue leaves the list.
+read below; its edits of a fully ticked section, in anyone's issue, leave the label as it is, and
+are remembered with the issue's entry in `inputs.json` (`botTicks`) until a person's edit; and on
+the bot's issues, or those whose ticks it added, `wait_for_answers` goes by the label, which only
+a person's edit takes off. The backlog read lists a fully ticked issue that still carries the
+label. An allowed user's comment on a labelled issue or pull request takes the label off: they
+answered. The dashboard lists the open issues carrying the label as `needs-input`, with a run or
+not (`inputs.json`, kept by `issues` deliveries, whoever adds or removes the label, and one
+lookup per repo when the listener starts); a closed issue leaves the list.
 
 The graph's backlog read (`work.mjs`, at most once per 30 seconds a repo, or after an
 `issues` delivery; every configured repo's, at most once per 5 minutes, while the Overview
