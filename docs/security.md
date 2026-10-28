@@ -521,11 +521,11 @@ description). The fork's code then runs with everything a fork's run is denied:
 - the run's **token and push rights**: it can push the run's own branch, workflow changes
   included with `allow_workflows`.
 
-Until the GitHub gateway (#404) relays GitHub's git and API traffic through the listener, the
-only guard is the sandbox's instructions (don't install, build or run a fork's pull request
-you weren't triggered from): the listener doesn't see a sandbox's fetches, and a GitHub App's
-`contents: read` can't be limited to the repository's own refs. The GitHub gateway (#404) is
-to refuse, in a run that isn't a fork's, fetches of a fork pull request's `refs/pull/<n>/head`
+The [GitHub gateway](#the-github-gateway) now relays GitHub's git and API traffic through the
+listener, but doesn't refuse a fork's code yet: the only guard is still the sandbox's
+instructions (don't install, build or run a fork's pull request you weren't triggered from),
+and a GitHub App's `contents: read` can't be limited to the repository's own refs. The
+gateway is to refuse, in a run that isn't a fork's, fetches of a fork pull request's `refs/pull/<n>/head`
 and of a fork's refs or objects, and API or archive downloads of a fork's head, saying why: a
 comment from an allowed user on the fork's pull request starts a fork's run, which fetches it
 as today. Pull requests from the repository's own branches stay allowed. The refusal can't tell
@@ -535,14 +535,14 @@ the agent to read such a pull request's code in a worktree under `/tmp`
 request instead. #409 tracks that enforcement, and that change to `prompts/sandbox.md`, until
 they land.
 
-Not every way goes through hosts the GitHub gateway (#404) is to relay. Archives
+Not every way goes through the hosts the GitHub gateway relays. Archives
 (`codeload.github.com`, where `github.com/<repo>/archive/…` and the API's `tarball` and
 `zipball` redirect) are refused by the egress proxy unless a grant adds that host. But
-`raw.githubusercontent.com`, a mandatory host the GitHub gateway is to leave alone, serves any
+`raw.githubusercontent.com`, a mandatory host the GitHub gateway leaves alone, serves any
 file of a public repository without a token, a fork's pull request's included
 (`/<owner>/<repo>/refs/pull/<n>/head/<path>`, or its commit, from the base repository or the
 fork): checked on a public repository's fork pull request. A private repository's raw files
-need a token, which a sandbox will no longer have once the GitHub gateway lands. For a public
+need a token, which a sandbox no longer has. For a public
 repository, the GitHub gateway alone won't close it: #409 tracks closing it too.
 
 Every run, a fork's or not, protects the issue's clone, kept for its next runs: setup and the
@@ -1573,8 +1573,8 @@ it again when you change `AGY_VERSION`.
 - **A fork's pull request only mentioned** (in an issue, or a comment from elsewhere: "check
   out #7 and fix it") isn't seen as a fork's run: the run gets the repository's caches,
   read-write mounts and engine. The agent is told not to install, build or run such a pull
-  request's code (the sandbox's instructions), but nothing enforces it until the GitHub
-  gateway (#404), and a public repository's raw files are to bypass it even then (see
+  request's code (the sandbox's instructions), but nothing enforces it yet: #409 is to make
+  the GitHub gateway refuse it, and a public repository's raw files bypass that gateway (see
   [What a fork's code may reach](#what-a-forks-code-may-reach)); #409 tracks both. Ask for
   work on a fork's pull request from that pull request.
 - **Image builds** (a repo's `dockerfile`, with `allow_dockerfile`) and the **Claude Code
