@@ -69,7 +69,7 @@ Questions for the maintainer, wherever you ask them (a run that stops to ask, an
 
 - One numbered item per question, each answerable in a line: an optional short `**Title**:`,
   then the question on the same line. Explanation lines, if any, go indented under it,
-  before the options.
+  before the options, as plain text (not bullets).
 - Options are an indented task list (`- [ ]`). The maintainer picks one per question: when
   combining two of them makes sense, add that combination as an option of its own.
 - End your pick with `(recommended)`, on one option at most: the dashboard ticks it in
