@@ -89,8 +89,9 @@ async function setup(
       req.end();
     });
 
-  // GET https://host/path through a tunnel, trusting `ca` → { status, headers, body, issuer }.
-  async function get(host, path, ca) {
+  // GET https://host/path through a tunnel, trusting `ca`, with `headers` →
+  // { status, headers, body, issuer }.
+  async function get(host, path, ca, headers = {}) {
     const raw = await tunnel(host, upstreamPort);
     const socket = tlsConnect({ socket: raw, servername: host, ca });
     await new Promise((resolve, reject) => {
@@ -100,7 +101,11 @@ async function setup(
     const issuer = socket.getPeerCertificate().issuer.CN;
     return new Promise((resolve, reject) => {
       const req = request(
-        { createConnection: () => socket, path, headers: { host, connection: "close" } },
+        {
+          createConnection: () => socket,
+          path,
+          headers: { ...headers, host, connection: "close" },
+        },
         (res) => {
           let body = "";
           res.setEncoding("utf8");
@@ -190,14 +195,16 @@ test("a relayed host: decrypted, cache on or off, each request to the listener i
   });
   for (const cacheOn of [true, false]) {
     relayed.length = 0;
-    const { get, seen, authority } = await setup(t, {
+    const { get, seen, authority, proxyPort } = await setup(t, {
       cacheOn,
       relayUrl: `${listener.url}/relay`,
     });
+    // The sandbox can't name another address than its own.
     const answer = await get(
       "relayed.test",
       "/v1internal:streamGenerateContent?alt=sse",
       authority.certificate(),
+      { "x-deckhand-client": "10.9.0.7" },
     );
     assert.equal(answer.status, 201);
     assert.equal(answer.body, "data: relayed\n\n");
@@ -207,7 +214,20 @@ test("a relayed host: decrypted, cache on or off, each request to the listener i
     assert.equal(relayed.length, 1);
     assert.equal(relayed[0].url, "/relay/relayed.test/v1internal:streamGenerateContent?alt=sse");
     assert.equal(relayed[0].headers.host, new URL(listener.url).host);
+    // With the address of the sandbox it came from, which the listener binds secrets to.
+    assert.equal(relayed[0].headers["x-deckhand-client"], "127.0.0.1");
     assert.equal(seen.length, 0);
+
+    // Its plain HTTP is refused: a relayed host has no address to go to.
+    const plain = await new Promise((resolve, reject) => {
+      const req = request(
+        { host: "127.0.0.1", port: proxyPort, path: "http://relayed.test/x" },
+        (res) => (res.resume(), resolve(res.statusCode)),
+      );
+      req.on("error", reject);
+      req.end();
+    });
+    assert.equal(plain, 403);
 
     // A path that climbs out of /relay/<host>/ never reaches the listener: its /egress would
     // answer the proxy's address.
@@ -315,11 +335,11 @@ function forged(dir, name) {
   }
 }
 
-test("the CA can't vouch for GitHub or the agents' providers, even with its key", async (t) => {
+test("the CA can't vouch for the agents' providers, even with its key, but does for GitHub", async (t) => {
   const dir = temp(t, "ca");
   const authority = createAuthority({ dir });
   await authority.ready();
-  for (const name of ["github.com", "api.github.com", "objects.githubusercontent.com"]) {
+  for (const name of ["anthropic.com", "api.anthropic.com", "api.openai.com", "chatgpt.com"]) {
     assert.match(forged(dir, name), /failed: .*excluded subtree violation/s, name);
     // And the proxy never asks for one: such a host is tunnelled.
     assert.equal(certifiable(name), false);
@@ -327,12 +347,18 @@ test("the CA can't vouch for GitHub or the agents' providers, even with its key"
   }
   assert.match(forged(dir, "registry.npmjs.org"), /: OK/);
   // Nor a name that only ends the same way.
-  assert.match(forged(dir, "notgithub.com"), /: OK/);
-  assert.equal(certifiable("notgithub.com"), true);
-  // Node's TLS (OpenSSL's checks) refuses it too.
+  assert.match(forged(dir, "notanthropic.com"), /: OK/);
+  assert.equal(certifiable("notanthropic.com"), true);
+  // GitHub's hosts: relayed to the listener's GitHub gateway, which holds the tokens.
+  for (const name of ["github.com", "api.github.com", "objects.githubusercontent.com"]) {
+    assert.match(forged(dir, name), /: OK/, name);
+    assert.equal(certifiable(name), true);
+  }
+  assert.match((await authority.certFor("api.github.com")).cert, /BEGIN CERTIFICATE/);
+  // Node's TLS (OpenSSL's checks) refuses a provider's too.
   const server = createHttpsServer({
-    key: readFileSync(join(dir, "github.com.key")),
-    cert: readFileSync(join(dir, "github.com.crt")),
+    key: readFileSync(join(dir, "api.anthropic.com.key")),
+    cert: readFileSync(join(dir, "api.anthropic.com.crt")),
   });
   const port = await listening(server);
   t.after(() => server.close());
@@ -340,7 +366,7 @@ test("the CA can't vouch for GitHub or the agents' providers, even with its key"
     const socket = tlsConnect({
       port,
       host: "127.0.0.1",
-      servername: "github.com",
+      servername: "api.anthropic.com",
       ca: authority.certificate(),
     });
     socket.once("secureConnect", () => resolve(null));
@@ -384,13 +410,19 @@ test("the CA lasts a year, and is made again near its end or when it predates na
   // Ten years without name constraints: Deckhand's CAs before them.
   const legacy = await replaced(3650, "");
   assert.equal(legacy.kept, false);
-  assert.match(legacy.logged.join("\n"), /without name constraints; making a new one/);
+  assert.match(legacy.logged.join("\n"), /without the name constraints of now; making a new one/);
   assert.equal(readFileSync(join(legacy.old, "ca.crt"), "utf8"), legacy.authority.certificate());
   // With them, twenty days from its end: a new one too.
-  const constraints = "nameConstraints = critical,excluded;DNS:github.com";
+  const constraints = "nameConstraints = critical,excluded;DNS:anthropic.com";
   assert.equal((await replaced(20, constraints)).kept, false);
   // Months from it: kept.
   assert.equal((await replaced(200, constraints)).kept, true);
+  // One that excludes GitHub, from before the GitHub gateway: made again, without that.
+  for (const name of ["github.com", "githubusercontent.com"]) {
+    const before = await replaced(200, `${constraints},excluded;DNS:${name}`);
+    assert.equal(before.kept, false, name);
+    assert.match(forged(before.old, "api.github.com"), /: OK/);
+  }
 });
 
 test("a CA made again while the proxy runs: the next run's certificate, and new host certificates", async (t) => {
@@ -398,7 +430,7 @@ test("a CA made again while the proxy runs: the next run's certificate, and new 
   // Forty days from its end: current today, not in a fortnight.
   writeFileSync(
     join(dir, "ca.cnf"),
-    "[req]\ndistinguished_name = dn\nprompt = no\n[dn]\n[ca]\nbasicConstraints = critical,CA:TRUE\nkeyUsage = critical,keyCertSign\nnameConstraints = critical,excluded;DNS:github.com\n",
+    "[req]\ndistinguished_name = dn\nprompt = no\n[dn]\n[ca]\nbasicConstraints = critical,CA:TRUE\nkeyUsage = critical,keyCertSign\nnameConstraints = critical,excluded;DNS:anthropic.com\n",
   );
   execFileSync(
     "openssl",

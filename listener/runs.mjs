@@ -133,8 +133,9 @@ export function createRuns(ctx) {
       light,
       record,
       logFile: openLog(record.logPath),
-      // The sandbox's only way to GitHub: tokens for this repo, while this run lasts.
-      secret: ctx.broker.register(task.repo, permissionsFor(mode, light), { push: !light }),
+      // What its sandbox holds instead of a GitHub token: the GitHub gateway swaps it for one
+      // limited to this repo, while this run lasts.
+      secret: ctx.broker.register(task.repo, permissionsFor(mode, light), { push: !light, mode }),
       asked: replyTo, // where errors go
       replyTo, // where the reply goes: the issue or pull request of the last comment it took
       open: false, // whether its inbox takes comments
@@ -360,8 +361,9 @@ export function createRuns(ctx) {
     return redact(line, secretValues(live));
   }
 
-  // Its GitHub tokens too (broker.mjs), while the broker holds the run: redact() also knows
-  // their shape, for those a restarted listener no longer lists.
+  // The GitHub tokens the gateway used for it too (broker.mjs), while the broker holds the run,
+  // though its sandbox never had them: redact() also knows their shape, for those a restarted
+  // listener no longer lists.
   function secretValues(live) {
     const tokens = ctx.broker.runOf(live.secret)?.tokens ?? [];
     return [live.secret, ...operatorSecrets(ctx), ...tokens];

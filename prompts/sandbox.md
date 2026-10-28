@@ -137,13 +137,15 @@ Skip screenshots for changes with nothing visible (API, tests, tooling).
 
 ## Git and GitHub
 
-- `git` and `gh` get a short-lived token for this repository from Deckhand on every call:
-  no `gh auth login`, no SSH. It covers this repository only.
+- `git` and `gh` reach GitHub through Deckhand, which adds a short-lived token for this
+  repository to each call (you never hold it): no `gh auth login`, no SSH. It covers this
+  repository only. Deckhand replaces any secret in what you write to GitHub yourself (a
+  comment, an issue edit, a `gh api` call) with `[redacted]`.
 - Commits and comments come from the GitHub App's bot; the git identity is already set.
 - Pushes go through Deckhand, which only lets this task's branch through (the issue's
   `issue-<n>-…`, or the pull request's own), never the base branch or another one, and
   `gh pr create`, `gh pr edit` (title and body) and `gh pr ready` only work on this task's
-  pull request. Your token only reads the code and pull requests: no tags, no merging or
+  pull request. That token only reads the code and pull requests: no tags, no merging or
   reviewing pull requests, no writing files through the API.
 - Rewriting history (rebase, `git push --force-with-lease`) is fine on the task's own branch,
   never on any other branch. Rebase it on the base branch before `gh pr ready`: Deckhand

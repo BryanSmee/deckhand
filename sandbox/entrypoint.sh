@@ -1,13 +1,13 @@
 #!/bin/bash
 # Loads the run's agent (SANDBOX_AGENT, claude by default, codex or antigravity: agents/<name>.sh, which
 # finds its CLI in its shared, read-only volume, installed by the listener), clones the
-# repository over HTTPS (tokens from the listener's broker, git-credential-deckhand), opens the task's branch
+# repository over HTTPS (through the listener's GitHub gateway, git-credential-deckhand), opens the task's branch
 # and draft pull request (draft-pr.sh, for TASK_ISSUE), runs the repo's setup command
 # (SANDBOX_SETUP), then runs the agent without permission prompts: the container is the
 # sandbox. With DOCKER_HOST (a run granted a container engine), the docker CLI goes through
 # the egress proxy and waits for the engine before the setup; every prompt ends with whether
 # the run has one. SANDBOX_LIGHT=1 (brainstorms, inbox entries, discussions) skips the branch and the
-# setup. SANDBOX_NO_CLONE=1 (research runs: the open internet, no GitHub token) skips the clone
+# setup. SANDBOX_NO_CLONE=1 (research runs: the open internet, nothing from GitHub) skips the clone
 # and git's credential helper too: the agent starts in an empty /workspace.
 #
 #   (no arguments)      the agent, interactive
@@ -28,9 +28,10 @@ deckhand_messages() {
   if [ -n "${TASK_INBOX:-}" ]; then deckhand-inbox "$TASK_INBOX"; else cat <&3; fi
 }
 
-# The egress proxy's CA (DECKHAND_CA, a file from the listener when the repository's grant has
-# cached_hosts, or the agent's calls are relayed to the listener): the proxy decrypts those
-# hosts' HTTPS to cache it, or to hand it to the listener. Trusted next to the
+# The egress proxy's CA (DECKHAND_CA, a file from the listener for every run that reaches
+# GitHub, whose calls the proxy relays to the listener's GitHub gateway, and when the
+# repository's grant has cached_hosts or the agent's calls are relayed to the listener): the
+# proxy decrypts those hosts' HTTPS to hand it to the listener, or to cache it. Trusted next to the
 # image's own roots, in a bundle of ours (`node` can't run update-ca-certificates), through
 # the variables each tool reads, and by Chromium, which reads its own store (~/.pki/nssdb).
 if [ -n "${DECKHAND_CA:-}" ] && [ -f "$DECKHAND_CA" ]; then
@@ -82,8 +83,8 @@ source "$agents/$SANDBOX_AGENT.sh"
 agent_check
 
 if [ -n "${SANDBOX_NO_CLONE:-}" ]; then
-  # No token to ask for (the broker refuses this run one): an empty helper list, so git asks
-  # nobody rather than fail on the broker.
+  # Nothing to clone (the GitHub gateway refuses this run): an empty helper list, so git asks
+  # nobody.
   git config --global credential.helper ""
 elif [ ! -d /workspace/.git ]; then
   # Blobless clone: full history for git log/blame, file contents fetched on demand. The
@@ -158,10 +159,10 @@ clean_git_dir() {
 
 # Every start, not just the clone's: the hook may change with the image.
 [ -n "${SANDBOX_NO_CLONE:-}" ] || cp /usr/local/share/git-hooks/pre-push /workspace/.git/hooks/pre-push
-# The broker's tokens only read: pushes go through the listener's git gateway, which refuses
-# the base branch whatever the hook above says (../listener/git-gateway.mjs). Not for light
-# runs, which the gateway refuses anyway: their push fails on the read-only token instead,
-# with GitHub's clear "permission denied".
+# The GitHub gateway's tokens only read, and it refuses pushes: they go through the listener's
+# git gateway, which refuses the base branch whatever the hook above says
+# (../listener/git-gateway.mjs). Not for light runs, which the git gateway refuses anyway: their
+# push fails at the GitHub gateway instead.
 if [ -n "${DECKHAND_BROKER_URL:-}" ] && [ -z "${SANDBOX_LIGHT:-}" ] && [ -z "${SANDBOX_NO_CLONE:-}" ]; then
   git config --global "url.$DECKHAND_BROKER_URL/git/.pushInsteadOf" "${REPO_URL%/*/*}/"
 fi

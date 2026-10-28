@@ -896,7 +896,7 @@ else set it in the service's `environment`, for example in a `compose.override.y
 | `DASHBOARD_DIR`                         | none                       | the image's `dashboard/dist`                          | the built dashboard the listener serves                                                                                           |
 | `SANDBOX_IMAGE`                         | none                       | `<NAME_PREFIX>-sandbox`                               | the base image runs start from; compose sets the release's                                                                        |
 | `ENGINE_IMAGE`, `ENGINE_PODMAN_IMAGE`   | none                       | `<NAME_PREFIX>-engine`, `<NAME_PREFIX>-engine-podman` | the [container engine](#container-engine)'s images, for Sysbox and for Podman; compose sets the release's                         |
-| `BROKER_PORT`                           | none                       | `8081`                                                | port of the token broker, git gateway and egress policy, on the runs' networks                                                    |
+| `BROKER_PORT`                           | none                       | `8081`                                                | port of the broker, GitHub and git gateways and egress policy, on the runs' networks                                              |
 | `BROKER_URL`                            | none                       | `http://listener:<BROKER_PORT>`                       | the broker, as sandboxes reach it; compose sets it                                                                                |
 | `EGRESS_PROXY`                          | none                       | `http://egress:3128`                                  | the egress proxy, as sandboxes reach it; compose sets it                                                                          |
 | `LISTENER_CONTAINER`                    | none                       | the container's host name (its id)                    | the listener's container, which joins each run's network                                                                          |
@@ -1044,17 +1044,22 @@ reaches those hosts as before, through a tunnel.
 
 ## How sandboxes reach GitHub
 
-No sandbox gets a long-lived token, an SSH key or the host's git configuration:
+No sandbox gets a GitHub token, an SSH key or the host's git configuration:
 
 - Each run gets a random secret, valid while the run lasts.
-- Its git credential helper and `gh` wrapper send that secret to the listener's token
-  broker (port 8081, on the runs' networks only, not published) on every
-  call, and get back an installation token limited to the run's repository. A work run's
-  writes issues, and reads contents, pull requests, actions and metadata: the listener opens
-  and edits its pull requests for it. Brainstorms and inbox runs get the same; discussion
-  runs also write discussions, and only those. Onboarding, run analyses, reviews and a
-  repository's own light modes only read. Installation tokens last an hour; the broker renews them before that, so a run can go on for hours.
-- Git fetches from GitHub over HTTPS with that token, and pushes through the listener's git
+- Its git credential helper and `gh` wrapper (`GH_TOKEN`) hand out that secret in place of a
+  token. The egress proxy relays every call to GitHub (`GITHUB_URL`'s and `GITHUB_API`'s
+  hosts) to the listener's GitHub gateway (port 8081, on the runs' networks only, not
+  published), which sends it on with an installation token limited to the run's repository,
+  which the sandbox never sees, and redacts secrets from what it writes (see
+  [The GitHub gateway](security.md#the-github-gateway)). A work run's token writes issues,
+  and reads contents, pull requests, actions and metadata: the listener opens and edits its
+  pull requests for it. Brainstorms and inbox runs get the same; discussion runs also write
+  discussions, and only those. Onboarding, run analyses, reviews and a repository's own
+  light modes only read. Installation tokens last an hour; the gateway renews them before
+  that, so a run can go on for hours. Every run but a research one trusts the egress
+  proxy's CA, which certifies GitHub's hosts for the relay.
+- Git fetches from GitHub over HTTPS through the GitHub gateway, and pushes through the listener's git
   gateway (same port, with the run's secret), which pushes the run's own branch only (its
   issue's `issue-<n>-*`, or its pull request's head), never the default one, with a token of
   its own (see [Security model](security.md#the-default-branch)): contents only, and

@@ -257,6 +257,9 @@ async function fakeGitHub(files = {}) {
   };
 }
 
+// What the tests' egress proxies serve as their CA's certificate.
+const TEST_CA = "-----BEGIN CERTIFICATE-----\nx\n-----END CERTIFICATE-----\n";
+
 // GitHub's tarball: one top folder holding the repo's files.
 function tarOf(files) {
   const dir = tempDir(null, "deckhand-repo-");
@@ -315,6 +318,11 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
     const dir = tempDir(null);
     fakeDocker(dir);
     const github = await fakeGitHub(typeof files === "function" ? files(dir) : files);
+    // The egress proxy's CA, which every run that reaches GitHub trusts (its calls are relayed).
+    const egress = createServer((req, res) =>
+      req.url === "/deckhand-ca.crt" ? res.end(TEST_CA) : res.writeHead(404).end(),
+    );
+    await new Promise((resolve) => egress.listen(0, "127.0.0.1", resolve));
     writeFileSync(
       join(dir, "app.json"),
       JSON.stringify({
@@ -340,7 +348,7 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
       DEBOUNCE_MS: "0",
       BRAINSTORM_DEBOUNCE_MS: "0",
       // The egress proxy asks from here: in the tests, the fake sandbox itself.
-      EGRESS_PROXY: "http://127.0.0.1:3128",
+      EGRESS_PROXY: `http://127.0.0.1:${egress.address().port}`,
       GRANTS_DIR: join(dir, "grants"),
       ...(typeof extra === "function" ? extra(dir, github) : extra),
     };
@@ -348,6 +356,7 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
     t.after(() => {
       listener.child.kill("SIGKILL");
       github.server.close();
+      egress.close();
       stopSandboxes(dir);
     });
     const [port, brokerPort] = await ports(listener);
@@ -787,7 +796,7 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
     );
   });
 
-  test("the Antigravity CLI with GEMINI_API_KEY: its key stays out, its calls go to GEMINI_BASE_URL without needing the proxy's CA", async (t) => {
+  test("the Antigravity CLI with GEMINI_API_KEY: its key stays out, its calls go to GEMINI_BASE_URL", async (t) => {
     const key = "AIza-operator-gemini-key";
     const { dir, github, send, listener } = await listen(t, {}, (_dir, github) => ({
       GEMINI_API_KEY: key,
@@ -803,7 +812,8 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
     assert.ok(!runEnv.includes(key));
     assert.match(runEnv, new RegExp(`^GEMINI_API_KEY=${secret}$`, "m"));
     assert.match(runEnv, /^GOOGLE_GEMINI_BASE_URL=http:\/\/127\.0\.0\.1:\d+\/google$/m);
-    assert.doesNotMatch(readFileSync(join(dir, "run-args"), "utf8"), /DECKHAND_CA/);
+    // The proxy's CA, which its GitHub calls need, if not its own.
+    assert.match(readFileSync(join(dir, "run-args"), "utf8"), /^DECKHAND_CA=/m);
 
     const call = await github.waitFor((r) =>
       r.path.startsWith("/gemini/v1beta/models/gemini-3.8-flash-medium:streamGenerateContent"),
@@ -970,7 +980,7 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
     assert.match(JSON.parse(replies(github)[2].body).body, /^Codex stopped with an error\./);
   });
 
-  test("a webhook from the App runs a sandbox that gets its repo's token from the broker", async (t) => {
+  test("a webhook from the App runs a sandbox whose GitHub calls get its repo's token at the gateway", async (t) => {
     const { dir, github, listener, port, brokerPort } = await listen(t);
     const payload = JSON.stringify(comment("alice"));
     const deliver = (signature) =>
@@ -995,9 +1005,14 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
     // The listener talks to GitHub as the installation, not with a personal token.
     assert.equal(reply.auth, "Bearer app-token");
 
-    // The sandbox got a token limited to its repo, through the broker, and nothing else.
-    assert.deepEqual(JSON.parse(readFileSync(join(dir, "broker-answer"), "utf8")).repo, "org/repo");
-    assert.equal(JSON.parse(readFileSync(join(dir, "broker-answer"), "utf8")).token, "repo-token");
+    // The sandbox's GitHub call went through the GitHub gateway, which sent it on with a token
+    // limited to its repo; the sandbox got GitHub's answer, never the token.
+    assert.equal(
+      JSON.parse(readFileSync(join(dir, "broker-answer"), "utf8")).default_branch,
+      "trunk",
+    );
+    const relayed = github.requests.find((r) => r.method === "GET" && r.path === "/repos/org/repo");
+    assert.equal(relayed.auth, "token repo-token");
     const mint = github.requests.find((r) => r.body.includes("repositories"));
     assert.deepEqual(JSON.parse(mint.body).repositories, ["repo"]);
     const args = readFileSync(join(dir, "run-args"), "utf8").split("\n");
@@ -1031,8 +1046,8 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
     );
     assert.match(runEnv, /^SCREENSHOT_DIR=\/screenshots$/m);
     // Out through the egress proxy only, the broker directly.
-    assert.match(runEnv, /^HTTPS_PROXY=http:\/\/127\.0\.0\.1:3128$/m);
-    assert.match(runEnv, /^https_proxy=http:\/\/127\.0\.0\.1:3128$/m);
+    assert.match(runEnv, /^HTTPS_PROXY=http:\/\/127\.0\.0\.1:\d+$/m);
+    assert.match(runEnv, /^https_proxy=http:\/\/127\.0\.0\.1:\d+$/m);
     assert.match(runEnv, /^NO_PROXY=localhost,127\.0\.0\.1,::1$/m);
     assert.match(runEnv, /^NODE_USE_ENV_PROXY=1$/m);
     // The default policy: Anthropic and GitHub, nothing else.
@@ -1047,10 +1062,12 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
     // Once the run is over, its secret gets nothing.
     await listener.until("done (ok)");
     const secret = readFileSync(join(dir, "run-secret"), "utf8").trim();
-    const after = await fetch(`http://127.0.0.1:${brokerPort}/token`, {
-      headers: { authorization: `Bearer ${secret}` },
+    const after = await fetch(`http://127.0.0.1:${brokerPort}/relay/127.0.0.1/repos/org/repo`, {
+      headers: { authorization: `token ${secret}` },
     });
     assert.equal(after.status, 401);
+    // Nor does /token, gone: no sandbox gets a GitHub token.
+    assert.equal((await fetch(`http://127.0.0.1:${brokerPort}/token`)).status, 404);
     // Its pushes went through the broker's port too (git-gateway.mjs): now refused, with the
     // challenge git needs to ask its credential helper.
     const push = await fetch(
@@ -1200,7 +1217,7 @@ caches:
     assert.match(JSON.parse(reply.body).body, /max_parallel: expected a whole number/);
   });
 
-  test("cached_hosts: with the proxy's CA, cached but never GitHub's or the agent's; none without it", async (t) => {
+  test("cached_hosts: with the proxy's CA, cached but never GitHub's or the agent's; no run without it", async (t) => {
     const pem = "-----BEGIN CERTIFICATE-----\nx\n-----END CERTIFICATE-----\n";
     let serving = true;
     const proxy = createServer((req, res) => {
@@ -1220,22 +1237,34 @@ caches:
     const run = async () => {
       const { dir, github, send } = await listen(t, {}, grants);
       assert.equal((await send(comment("alice"))).status, 202);
-      await github.waitFor(
+      const reply = await github.waitFor(
         (r) => r.method === "POST" && r.path === "/repos/org/repo/issues/12/comments",
       );
-      const cached = Object.entries(egressAnswers(dir)).filter(([, a]) => a.cache);
+      if (!serving) return JSON.parse(reply.body).body;
+      const egress = egressAnswers(dir);
+      const cached = Object.entries(egress).filter(([, a]) => a.cache);
       const args = readFileSync(join(dir, "run-args"), "utf8");
-      return { cached: cached.map(([host]) => host), args };
+      return { cached: cached.map(([host]) => host), args, egress };
     };
     const withCa = await run();
     assert.deepEqual(withCa.cached, ["registry.npmjs.org"]);
     assert.match(withCa.args, /^DECKHAND_CA=\/deckhand\/egress-ca\.crt$/m);
+    // GitHub's hosts are relayed to the listener's GitHub gateway instead, never a tunnel.
+    assert.deepEqual(withCa.egress["github.com"], {
+      allowed: true,
+      private: true,
+      cache: false,
+      decrypt: true,
+      relay: true,
+    });
+    assert.equal(withCa.egress["objects.githubusercontent.com"].relay, false);
 
-    // The proxy has no CA (its cache is off): nothing is cached, the sandbox trusts nothing more.
+    // The proxy has no CA (its cache is off): the run can't reach GitHub, and stops saying so.
     serving = false;
-    const without = await run();
-    assert.deepEqual(without.cached, []);
-    assert.doesNotMatch(without.args, /DECKHAND_CA/);
+    assert.match(
+      await run(),
+      /^Claude can't run here: the egress proxy has no CA, and its calls to GitHub go through it/,
+    );
   });
 
   test("hosts from default.yaml and the repo's grant, not the repo; granted mounts and limits", async (t) => {
@@ -1587,7 +1616,7 @@ mounts:
     await check();
   });
 
-  test("a run's secret sent from another address: no token, push or ready", async (t) => {
+  test("a run's secret sent from another address: no GitHub, push or ready", async (t) => {
     const ctx = await holding(t, undefined, (dir, github) => ({ GITHUB_URL: github.url }));
     // The sandbox no longer has the address the requests come from; a restarted listener
     // looks its addresses up again.
@@ -1595,8 +1624,8 @@ mounts:
     await ctx.restart();
     await ctx.listener.until("picked up deckhand-org-repo-12-0e9572aae2 again");
     const secret = readFileSync(join(ctx.dir, "run-secret"), "utf8").trim();
-    const token = await fetch(`http://127.0.0.1:${ctx.brokerPort}/token`, {
-      headers: { authorization: `Bearer ${secret}` },
+    const token = await fetch(`http://127.0.0.1:${ctx.brokerPort}/relay/127.0.0.1/repos/org/repo`, {
+      headers: { authorization: `token ${secret}` },
     });
     assert.equal(token.status, 403);
     for (const answer of [`${token.status} ${await token.text()}`, ...(await pushAndReady(ctx))]) {
@@ -1627,10 +1656,10 @@ mounts:
     assert.match(output, /Stopping: running sandboxes go on/);
     await ctx.listener.until("picked up deckhand-org-repo-12-0e9572aae2 again");
 
-    // Its token still works, through the new listener's broker.
+    // Its GitHub calls still go through, at the new listener's gateway.
     const secret = readFileSync(join(dir, "run-secret"), "utf8").trim();
-    const token = await fetch(`http://127.0.0.1:${brokerPort}/token`, {
-      headers: { authorization: `Bearer ${secret}` },
+    const token = await fetch(`http://127.0.0.1:${brokerPort}/relay/127.0.0.1/repos/org/repo`, {
+      headers: { authorization: `token ${secret}` },
     });
     assert.equal(token.status, 200);
 
@@ -2660,9 +2689,12 @@ modes:
     assert.match(args, /-research-workspace:\/workspace/);
     assert.doesNotMatch(args, /screenshots/);
     assert.match(args, /^TASK_DIGEST=\/deckhand\/digest\.md$/m);
-    // No token: the broker refused the sandbox's ask, and none was minted for it.
+    // Nothing from GitHub: the gateway refused the sandbox's call, and no token was minted.
     assert.equal(readFileSync(join(dir, "broker-answer"), "utf8"), "");
     assert.equal(github.requests.filter((r) => r.body.includes("repositories")).length, 0);
+    assert.ok(!github.requests.some((r) => r.path === "/repos/org/repo"));
+    // No CA either: GitHub's hosts are relayed to that gateway, which its TLS doesn't trust.
+    assert.doesNotMatch(args, /DECKHAND_CA/);
     // Any public host, the operator's named ones no longer private.
     const answers = egressAnswers(dir);
     assert.deepEqual(answers["evil.example"], {
@@ -2674,6 +2706,7 @@ modes:
     });
     assert.equal(answers["registry.npmjs.org"].private, false);
     assert.equal(answers["github.com"].private, true);
+    assert.equal(answers["github.com"].relay, true);
     // The thread, in the run's inbox folder.
     const [folder] = readdirSync(join(dir, "runs")).filter((f) =>
       exists(join(dir, "runs", f, "digest.md")),

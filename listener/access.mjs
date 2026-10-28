@@ -123,16 +123,18 @@ export function researchAccess(config, task, { agent, log }) {
 
 // The egress proxy's CA certificate, which the sandbox trusts so that the proxy may decrypt
 // the HTTPS of its cached hosts, and those hosts. Without the CA (the proxy doesn't answer),
-// none: their HTTPS would fail on a certificate the sandbox doesn't know. An agent whose calls
-// the proxy relays to the listener (its `relayed` hosts, agents/) can't do without it: the run
-// stops. `egressCa()`: the proxy's, or null.
-export async function egressCache(grant, egressCa, note, agent, config = {}) {
+// none: their HTTPS would fail on a certificate the sandbox doesn't know. A run that reaches
+// GitHub (`github`: every run but research), whose calls the proxy relays to the listener's
+// GitHub gateway, and an agent whose calls the proxy relays to the listener (its `relayed`
+// hosts, agents/) can't do without it: the run stops. `egressCa()`: the proxy's, or null.
+export async function egressCache(grant, egressCa, note, agent, config = {}, github = false) {
   const relays = !!agent?.relayed?.length && !Object.keys(agent.env(config, "s")).length;
-  if (!grant.cachedHosts.length && !relays) return { ca: null, cached: [] };
+  if (!grant.cachedHosts.length && !relays && !github) return { ca: null, cached: [] };
   const ca = await egressCa();
-  if (!ca && relays) {
+  if (!ca && (relays || github)) {
+    const what = github ? "GitHub" : "its provider";
     throw new RunError(
-      `${cantRun(agent)}: the egress proxy has no CA, and its calls to its provider go through it. Check the egress service's log.`,
+      `${cantRun(agent)}: the egress proxy has no CA, and its calls to ${what} go through it. Check the egress service's log.`,
     );
   }
   if (ca) return { ca, cached: grant.cachedHosts };

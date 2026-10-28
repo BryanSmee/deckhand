@@ -39,7 +39,7 @@ async function serveProxy(
   { credential = "sk-proj-real", path = "/v1", sentFrom = sandboxAt() } = {},
 ) {
   const upstream = await fakeOpenAi(t);
-  const broker = createBroker({ app: () => null, sentFrom });
+  const broker = createBroker({ sentFrom });
   const proxy = createOpenAiProxy({ broker, credential, upstream: `${upstream.url}${path}` });
   const { url } = await serve(t, (req, res) => proxy.handle(req, res));
   return { url, broker, upstream };
@@ -201,7 +201,7 @@ test("without OPENAI_API_KEY, a live run gets an error rather than an empty head
 });
 
 test("OpenAI out of reach: a 502 in OpenAI's error shape", async (t) => {
-  const broker = createBroker({ app: () => null, sentFrom: sandboxAt() });
+  const broker = createBroker({ sentFrom: sandboxAt() });
   const proxy = createOpenAiProxy({ broker, credential: "k", upstream: "http://127.0.0.1:1" });
   const { url } = await serve(t, (req, res) => proxy.handle(req, res));
   const res = await ask(url, { authorization: `Bearer ${codexRun(broker)}` });
@@ -212,7 +212,7 @@ test("OpenAI out of reach: a 502 in OpenAI's error shape", async (t) => {
 // With a ChatGPT plan's login (chatgpt.mjs) instead of a key.
 async function servePlan(t, login) {
   const upstream = await fakeOpenAi(t);
-  const broker = createBroker({ app: () => null, sentFrom: sandboxAt() });
+  const broker = createBroker({ sentFrom: sandboxAt() });
   const proxy = createOpenAiProxy({
     broker,
     credential: null,
@@ -260,7 +260,7 @@ test("a plan's login the backend refuses is marked, for a refresh before the nex
     res.writeHead(401, { "content-type": "application/json" });
     res.end('{"error":{"message":"token expired"}}');
   });
-  const broker = createBroker({ app: () => null, sentFrom: sandboxAt() });
+  const broker = createBroker({ sentFrom: sandboxAt() });
   const proxy = createOpenAiProxy({ broker, login, chatgptUrl: `${upstreamUrl}/codex` });
   const { url } = await serve(t, (req, res) => proxy.handle(req, res));
   const secret = codexRun(broker);

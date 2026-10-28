@@ -49,7 +49,7 @@ function fakeClock() {
 }
 
 async function proxyTo(t, upstream, options = {}) {
-  const broker = createBroker({ app: () => null, sentFrom: sandboxAt() });
+  const broker = createBroker({ sentFrom: sandboxAt() });
   const logs = [];
   const proxy = createApiProxy({
     broker,

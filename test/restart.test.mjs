@@ -30,7 +30,7 @@ function saveRun(dir, id, issue, record) {
 
 test("a restored run's calls go to its provider, or its agent's own when none was saved", (t) => {
   const dir = tempDir(t);
-  const broker = createBroker({ app: () => null });
+  const broker = createBroker({});
   const ctx = {
     config: { dataDir: dir },
     log: () => {},
@@ -57,7 +57,7 @@ test("a restored run's calls go to its provider, or its agent's own when none wa
 
 test("a restored run's pushes go on its record, saved with it", async (t) => {
   const dir = tempDir(t);
-  const broker = createBroker({ app: () => null });
+  const broker = createBroker({});
   const ctx = {
     config: { dataDir: dir },
     log: () => {},
@@ -128,7 +128,7 @@ function twoSpellings(t, { live, newest }) {
     runs: loadRuns(dir, { log: () => {} }),
     runsById: new Map(),
     runner: { closed: () => false },
-    broker: createBroker({ app: () => null }),
+    broker: createBroker({}),
     running: 0,
   };
 }
@@ -263,7 +263,7 @@ test("a restored run keeps the phase its log is in, and saves it again", async (
     runs: [],
     runsById: new Map(),
     runner: { closed: () => false },
-    broker: createBroker({ app: () => null }),
+    broker: createBroker({}),
     running: 0,
   };
   const path = join(dir, "r1.live.json");

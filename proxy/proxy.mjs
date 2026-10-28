@@ -14,9 +14,11 @@
 // The hosts the listener says may be cached go through a cache on disk (cached.mjs, cache.mjs):
 // their plain HTTP, and their HTTPS, which the proxy decrypts with a certificate from
 // Deckhand's CA (authority.mjs), that sandboxes trust, then sends on over TLS it verifies.
-// The hosts the listener says to relay (an agent's calls that carry the run's secret in place of
-// the operator's credential, ../listener/google.mjs) are decrypted the same way, whether the
-// cache is on or not, and each request goes to the listener (RELAY_URL) instead of the host.
+// The hosts the listener says to relay (GitHub's, whose calls carry the run's secret in place of
+// a token, ../listener/github-gateway.mjs, and an agent's, in place of the operator's
+// credential, ../listener/google.mjs) are decrypted the same way, whether the cache is on or
+// not, and each request goes to the listener (RELAY_URL) instead of the host, with the address
+// of the sandbox it came from (CLIENT_HEADER).
 // Everything else, and every CONNECT to another host, is forwarded as is: a raw tunnel.
 import { lookup as dnsLookup } from "node:dns/promises";
 import { createServer, request as httpRequest } from "node:http";
@@ -33,6 +35,11 @@ import { createCachedPath } from "./cached.mjs";
 
 // Where they were first: the tests import them from here.
 export { blockedAddress, v6Bytes } from "./addresses.mjs";
+
+// The header that names, on a relayed request, the sandbox it came from: the listener binds a
+// run's secret to its sandbox's address (../listener/broker-http.mjs, which believes it from
+// the proxy alone). Whatever the client sent in it is replaced.
+export const CLIENT_HEADER = "x-deckhand-client";
 
 // "host:443", "[::1]:443" → { host, port }; null when it isn't one.
 export function target(authority) {
@@ -174,7 +181,7 @@ export function createProxy({
     // Never a tunnel: the sandbox's calls would reach the host with the run's secret alone.
     if (decision.relay) {
       if (authority && relayUrl && certifiable(to.host)) {
-        return intercept(client, head, to, decision.address, true);
+        return intercept(client, head, to, decision.address, req.socket.remoteAddress, true);
       }
       log(`refused ${to.host}: no CA or RELAY_URL to relay it`);
       return refuse(
@@ -183,7 +190,7 @@ export function createProxy({
       );
     }
     if (decision.cache && decision.decrypt && cache?.enabled && authority && certifiable(to.host)) {
-      return intercept(client, head, to, decision.address);
+      return intercept(client, head, to, decision.address, req.socket.remoteAddress);
     }
     pipe(client, head, to, decision.address, false);
   }
@@ -210,8 +217,8 @@ export function createProxy({
   // requests go through the cache like plain HTTP (relay()), and on to the host over TLS
   // that is verified (send()), or to the listener when `relay`. A client that doesn't start
   // with TLS, or a host the CA can't make a certificate for, gets the raw tunnel; never a
-  // relayed host.
-  async function intercept(client, head, to, address, relay = false) {
+  // relayed host. `from`: the client's address, which a relayed request names.
+  async function intercept(client, head, to, address, from, relay = false) {
     let context;
     try {
       context = await contextFor(to.host);
@@ -237,7 +244,7 @@ export function createProxy({
       log(`TLS with the client for ${to.host}: ${error.code ?? error.message}`);
       tls.destroy();
     });
-    tls.deckhand = { to, address, relay };
+    tls.deckhand = { to, address, relay, from };
     inside.emit("connection", tls);
   }
 
@@ -254,12 +261,12 @@ export function createProxy({
 
   // Requests inside an intercepted tunnel: to its host, whatever their Host header says.
   const inside = createServer((req, res) => {
-    const { to, address, relay: toListener } = req.socket.deckhand;
+    const { to, address, relay: toListener, from } = req.socket.deckhand;
     if (!req.url.startsWith("/")) {
       res.writeHead(400, { "content-type": "text/plain" });
       return res.end("Deckhand's egress proxy: expected a path\n");
     }
-    if (toListener) return relayed(req, res, to.host);
+    if (toListener) return relayed(req, res, to.host, from);
     const name = isIP(to.host) === 6 ? `[${to.host}]` : to.host;
     const url = new URL(`https://${name}:${to.port}${req.url}`);
     relay(req, res, { address, url, host: to.host }, true);
@@ -299,14 +306,20 @@ export function createProxy({
       res.writeHead(error.cause === 502 ? 502 : 403, { "content-type": "text/plain" });
       return res.end(`${error instanceof Refused ? error.message : "refused"}\n`);
     }
+    // A relayed host has no address to go to: its calls are the listener's, over HTTPS only.
+    if (decision.relay) {
+      res.writeHead(403, { "content-type": "text/plain" });
+      return res.end(`Deckhand's egress proxy relays ${host} over HTTPS only\n`);
+    }
     relay(req, res, { address: decision.address, url, host }, decision.cache);
   }
 
   // A relayed host's request, to the listener as <relayUrl>/<host><path>: the listener checks
   // the run's secret and sends it on with the operator's credential (../listener/google.mjs).
   // Only under <relayUrl>/<host>/: the URL parser resolves "..", so a path that climbs out
-  // would reach the listener's other endpoints (/egress) from the proxy's address.
-  function relayed(req, res, host) {
+  // would reach the listener's other endpoints (/egress) from the proxy's address. `from`: the
+  // client's address.
+  function relayed(req, res, host, from) {
     const url = relayTarget(relayUrl, host, req.url);
     if (!url) {
       res.writeHead(400, { "content-type": "text/plain" });
@@ -316,6 +329,7 @@ export function createProxy({
     for (const name of Object.keys(headers)) {
       if (name.startsWith("proxy-")) delete headers[name];
     }
+    headers[CLIENT_HEADER] = String(from ?? "").replace(/^::ffff:/, "");
     const send = url.protocol === "https:" ? httpsRequest : httpRequest;
     const upstream = send(url, { method: req.method, headers }, (answer) => {
       res.writeHead(answer.statusCode, answer.headers);

@@ -268,7 +268,7 @@ async function fakeGoogle(t, status = 200) {
 
 async function relay(t, options = {}) {
   const google = await fakeGoogle(t, options.status);
-  const broker = createBroker({ app: () => null });
+  const broker = createBroker({});
   const refusedTokens = [];
   // `login: null`: the operator set none.
   const plan =
@@ -412,7 +412,7 @@ test("a login that can't be refreshed: its error stays in the listener's log, re
   const leak = new Error('can\'t be refreshed ({"token":{"access_token":"ya29.plan-access-tok');
   const logs = [];
   const google = await fakeGoogle(t);
-  const broker = createBroker({ app: () => null });
+  const broker = createBroker({});
   const endpoint = createGoogleRelay({
     broker,
     login: {

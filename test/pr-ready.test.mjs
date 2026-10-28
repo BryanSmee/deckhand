@@ -75,7 +75,7 @@ async function servePrReady(
     });
     return Response.json(graphql);
   };
-  const broker = createBroker({ app: () => github, sentFrom });
+  const broker = createBroker({ sentFrom });
   const prReady = createPrReady({
     broker,
     app: () => github,
