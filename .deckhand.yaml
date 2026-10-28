@@ -22,3 +22,4 @@ review:
   on: ready
   model: opus
   effort: high
+  fix: 3
