@@ -37,11 +37,16 @@ function prBadge(pr: PullRequest): string {
 }
 
 // The Claude credential a run used (Run.auth), next to its model: the plan, already paid for,
-// the API key, billed per token, or a gateway's. Nothing for runs off Anthropic, or older ones.
-export function AuthBadge({ auth }: { auth?: Auth | null }) {
+// the API key, billed per token, or a gateway's. Plain text, styled like the facts around it
+// (a chip in the desktop Outcome). Nothing for runs off Anthropic, or older ones.
+export function AuthTag({ auth, class: className }: { auth?: Auth | null; class?: string }) {
   if (!auth) return null;
   const { label, variable } = AUTH_NAMES[auth];
-  return <StatusBadge tone="idle" outline label={label} title={`Ran on ${variable}`} />;
+  return (
+    <span class={className} title={`Ran on ${variable}`}>
+      {label}
+    </span>
+  );
 }
 
 export function Outcome(props: Props) {
@@ -106,7 +111,12 @@ export function Outcome(props: Props) {
       )}
       {touch ? (
         <span class={styles.line}>
-          {[changed, commits, <span class={styles.mono}>{duration(r, now)}</span>]
+          {[
+            changed,
+            commits,
+            <span class={styles.mono}>{duration(r, now)}</span>,
+            r.auth && <AuthTag auth={r.auth} />,
+          ]
             .filter(Boolean)
             .map((part, i) => (
               <span key={i}>
@@ -114,8 +124,6 @@ export function Outcome(props: Props) {
                 {part}
               </span>
             ))}
-          {r.auth && " "}
-          <AuthBadge auth={r.auth} />
         </span>
       ) : (
         <div class={styles.facts}>
@@ -143,7 +151,7 @@ export function Outcome(props: Props) {
             {r.effort && ` · ${r.effort} effort`}
             {r.speed === "fast" && " · fast"}
           </span>
-          <AuthBadge auth={r.auth} />
+          <AuthTag auth={r.auth} class={styles.fact} />
           {replyUrl && (
             <a class={styles.fact} href={replyUrl} target="_blank" rel="noreferrer">
               Reply on #{r.replyTo}

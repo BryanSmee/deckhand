@@ -4,6 +4,7 @@
 import { render, screen, within } from "@testing-library/preact";
 import { expect, test } from "vitest";
 import { Dashboard } from "./App";
+import { Outcome } from "./Outcome";
 import { makeState, makeTask, mockApi } from "./testUtils";
 import type { Run, Task } from "./types";
 
@@ -38,6 +39,26 @@ test("a run on the plan says Plan by its model, naming the variable", () => {
   );
   const tag = outcome().getByText("Plan");
   expect(tag.getAttribute("title")).toBe("Ran on CLAUDE_CODE_OAUTH_TOKEN");
+  // One more fact chip like the duration's, not a status pill.
+  expect(tag.className).toMatch(/fact/);
+  expect(tag.className).not.toMatch(/badge|outline/);
+  expect(outcome().getByText(/opus/).className).toBe(tag.className);
+});
+
+test("on a phone, the tag is plain text in the facts line", () => {
+  const r = run({ provider: "anthropic", auth: "plan" });
+  render(
+    <Outcome
+      task={makeTask({ number: 5, state: "done", runs: [r] })}
+      run={r}
+      now={r.finishedAt!}
+      github="https://github.com"
+      touch
+    />,
+  );
+  const tag = outcome().getByText("Plan");
+  expect(tag.className).toBe("");
+  expect(tag.parentElement!.textContent).toBe(" · Plan");
 });
 
 test("a run on the API key, or through a gateway, says so", () => {
@@ -89,7 +110,8 @@ test("a discussion's page: the tag next to the model", async () => {
       ],
     }),
   );
-  expect((await screen.findByText("Gateway")).getAttribute("title")).toBe(
-    "Ran on ANTHROPIC_AUTH_TOKEN",
-  );
+  const tag = await screen.findByText("Gateway");
+  expect(tag.getAttribute("title")).toBe("Ran on ANTHROPIC_AUTH_TOKEN");
+  // Plain text after the model, like its effort.
+  expect(tag.parentElement!.textContent).toBe("opus · high effort · Gateway");
 });
