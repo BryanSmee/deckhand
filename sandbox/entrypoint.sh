@@ -285,7 +285,7 @@ Also take this into account: $TASK_MESSAGE"
     elif [ "$mode" = brainstorm ]; then
       prompt="New comment on the issue: $TASK_MESSAGE
 
-(Still a brainstorm: no code, branch, commit, pull request or new issue.)"
+(Still a brainstorm: no code, branch, commit or pull request, and new issues only for kept follow-ups.)"
     elif [ "$mode" = discussion ]; then
       prompt="New comment in the discussion: $TASK_MESSAGE
 

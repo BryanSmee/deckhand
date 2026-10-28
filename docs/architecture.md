@@ -71,8 +71,8 @@ stops the sandbox and ends the run as usual, with its last result as the reply.
 brainstorm instead: Claude discusses the issue (`prompts/brainstorm.md`) without writing
 code, and each later comment on the issue is the next message of that conversation. A
 brainstorm run starts light (`SANDBOX_LIGHT`) after a short pause (`BRAINSTORM_DEBOUNCE_MS`)
-and goes before queued work. `/stop` ends it: Claude posts a summary and updates the issue's
-description (settled questions in a Decisions section, Open questions keeping what is left),
+and goes before queued work. `/stop` ends it: Claude files the follow-up issues the maintainer kept (proposed
+under Follow-ups along the way), posts a summary and updates the issue's description (settled questions in a Decisions section, Open questions keeping what is left),
 then comments no longer reach it until a trigger line. After
 `BRAINSTORM_IDLE_MINUTES` (10) without a comment it shows as idle; a comment then restores it
 from the issue's session volume. `Deckhand` or `/mode work` afterwards implements in a session

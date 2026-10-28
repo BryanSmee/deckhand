@@ -434,8 +434,8 @@ otherwise a new task could take over the session and workspace of another reposi
 whose old name is the same.
 
 Light runs (brainstorms, onboarding, inbox entries, discussions, the repo's light modes) read
-and comment; work runs push. The git gateway and `gh pr ready`, `create` and `edit` refuse
-light runs, and no sandbox's token writes pull requests. They never share a writable volume: what a light run could
+and comment (brainstorms, inbox entries and discussions also create issues); work runs push.
+The git gateway and `gh pr ready`, `create` and `edit` refuse light runs, and no sandbox's token writes pull requests. They never share a writable volume: what a light run could
 leave in a clone or a session (git hooks, Claude's hooks and settings, code) would otherwise
 run in the issue's next work run, with its token. So light runs get their own `-light-` clone and
 session, no cache volumes (they run no setup), and granted host paths read-only. A work run

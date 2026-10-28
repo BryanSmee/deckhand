@@ -278,8 +278,35 @@ test("first message: brainstorms, follow-ups and new inbox sessions", () => {
   );
   assert.match(
     firstMessage({ mode: "stop", text: "", started: true }),
-    /^The maintainer ends the brainstorm here\. Wrap up/,
+    /^The maintainer ends the brainstorm here\. Wrap up .*create the follow-ups that were kept/,
   );
+});
+
+test("prompts: a brainstorm proposes follow-up issues and files the kept ones", () => {
+  const text = promptFor(issue, { mode: "brainstorm", text: "", settings, config, grant });
+  // Issues are allowed; code, branches, commits, pushes and pull requests stay forbidden.
+  assert.match(
+    text,
+    /Never write or edit\s+code, create a branch, commit, push or open a pull request\./,
+  );
+  assert.doesNotMatch(text, /create issues/);
+  // Proposed under Follow-ups while it runs, filed at the outcome or when asked.
+  assert.match(text, /\*\*Follow-ups\*\* heading[^]*File nothing yet/);
+  assert.match(text, /create the follow-ups that were kept \(step 5\)/);
+  assert.match(text, /right away when the maintainer asks/);
+  assert.match(text, /gh issue list --state all --search[^]*link an existing\s+issue rather than/);
+  assert.match(text, /`gh issue create --title … --body-file … --label idea`/);
+  assert.match(
+    text,
+    /\*\*Problem\*\*,\s+\*\*Proposal\*\*, \*\*Acceptance criteria\*\*[^]*\*\*Open questions\*\*[^]*a last line linking this issue/,
+  );
+  // A part of the issue becomes its sub-issue; separate work only links back.
+  assert.match(text, /issues\/<this issue>\/sub_issues -F sub_issue_id=<id>/);
+  assert.match(text, /Separate work stays a plain issue that links back/);
+  // The summary lists them; the description links them.
+  assert.match(text, /the issues you created or linked/);
+  assert.match(text, /Link the follow-ups\s+under Proposal or "Out of scope"/);
+  assert.match(liveMessage("brainstorm", "Hi"), /new issues only for kept follow-ups/);
 });
 
 test("live messages: what Claude reads for a comment delivered mid-run", () => {

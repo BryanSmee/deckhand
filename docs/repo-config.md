@@ -361,7 +361,8 @@ checks to run.
 
 ## Modes
 
-A run is in a mode: **work** (implement, the default), **brainstorm** (discuss, no code),
+A run is in a mode: **work** (implement, the default), **brainstorm** (discuss, no code;
+it files the follow-up issues the maintainer keeps, like inbox entries and discussions),
 **onboarding** (propose this file, see [Onboarding](#onboarding)), **research** (the open
 web, without the code, see [Research](#research)), **review** (a pull request's, when the
 `review` block turns it on, see [Reviews](#reviews)), **policy** (a dry run of the

@@ -14,6 +14,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { createBroker } from "../listener/broker.mjs";
 import { createPrReady } from "../listener/pr-ready.mjs";
+import { liveMessage } from "../listener/prompts.mjs";
 import { sandboxAt, serve, tempDir } from "./helpers.mjs";
 
 const bin = new URL("../sandbox/", import.meta.url).pathname;
@@ -117,6 +118,18 @@ test("an unknown agent stops the sandbox before anything runs", () => {
     assert.equal(result.status, 1, agent);
     assert.match(result.stderr, /^Unknown agent .* \(SANDBOX_AGENT\)/, agent);
   }
+});
+
+// A comment on a brainstorm that has a session gets the entrypoint's note, one delivered
+// mid-run liveMessage()'s: the same rules, kept alike (follow-up issues are allowed).
+test("the entrypoint's brainstorm note matches the mid-run one", () => {
+  const code = readFileSync(`${bin}entrypoint.sh`, "utf8");
+  const note = code.match(/\(Still a brainstorm: [^)]*\)/)?.[0];
+  assert.equal(
+    note,
+    "(Still a brainstorm: no code, branch, commit or pull request, and new issues only for kept follow-ups.)",
+  );
+  assert.ok(liveMessage("brainstorm", "Hi").includes(note.slice(0, -1)));
 });
 
 // Claude Code's commands live in its agent script only: the entrypoint is the same for every
