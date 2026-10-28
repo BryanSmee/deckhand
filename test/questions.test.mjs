@@ -129,6 +129,9 @@ test("parsed questions: a bullet explanation line before the options", () => {
       options: [{ label: "Blue", recommended: false, checked: true }],
     },
   ]);
+  // A link starting the line is an explanation, not a box.
+  const link = "1. A?\n   - [ab](https://x) explains it.\n   - [ ] B";
+  assert.equal(parseQuestions(link).items[0].text, "A?\n[ab](https://x) explains it.");
 });
 
 test("parsed questions: None, an intro and the inbox link around the list", () => {
@@ -163,6 +166,9 @@ test("parsed questions in another format: only the markdown", () => {
     "1. A?\n   - [x]\n   - [ ] B",
     "1. A?\n   - [ ]Blue\n   - [ ] B",
     "1. A?\n   - [y] Blue\n   - [ ] B",
+    "1. A?\n   - [x ]\n   - [ ] B",
+    "1. A?\n   - [ x] Blue\n   - [ ] B",
+    "1. A?\n   - [ x ] Blue\n   - [  ] B",
   ]) {
     assert.deepEqual(parseQuestions(raw), { items: null, raw }, raw);
   }
