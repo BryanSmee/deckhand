@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
-import { createConflicts, rebaseMessage } from "../listener/conflicts.mjs";
+import { createConflicts, intoDefaultBranch, rebaseMessage } from "../listener/conflicts.mjs";
 import { parseRepoConfig } from "../listener/repo-config.mjs";
 import { busyTask } from "../listener/tasks.mjs";
 import { tempDir, testConfig } from "./helpers.mjs";
@@ -568,4 +568,14 @@ test("soon() leaves alone repos outside ALLOWED_REPOS, without the opt-in, or wi
     assert.deepEqual(w.accepted, []);
     assert.ok(!w.calls.some((u) => u.includes("/pulls/")));
   }
+});
+
+test("an auto-merge checks conflicts only when it went into the default branch", () => {
+  const pr = (ref, repo) => ({ state: "closed", merged: true, base: { ref, repo } });
+  assert.equal(intoDefaultBranch(pr("main", { default_branch: "main" })), true);
+  assert.equal(intoDefaultBranch(pr("release", { default_branch: "main" })), false);
+  // Without the default branch, nothing says it was that one.
+  assert.equal(intoDefaultBranch(pr("main", {})), false);
+  assert.equal(intoDefaultBranch(pr("main", null)), false);
+  assert.equal(intoDefaultBranch({}), false);
 });

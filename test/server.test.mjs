@@ -2690,9 +2690,14 @@ modes:
       "pull_request",
     );
     await listener.until("org/repo#12: pull request #13 draft");
-    // Another one merged into trunk: #13 is asked at once, not in an hour, and rebased.
+    // Another one merged into trunk: #13 is asked at once and rebased. Not by the first tick,
+    // a minute after start, which would check the repo too: until() gives up after 10 s.
     await send(mergedPull(), "pull_request");
-    await github.waitFor((r) => r.method === "GET" && r.path === "/repos/org/repo/pulls/13");
+    await until(
+      () =>
+        github.requests.some((r) => r.method === "GET" && r.path === "/repos/org/repo/pulls/13"),
+      "the conflict check",
+    );
     await listener.until("org/repo#12: pull request #13 conflicts with trunk");
     await until(() => exists(join(dir, "run-env")), "the rebase run");
     assert.match(

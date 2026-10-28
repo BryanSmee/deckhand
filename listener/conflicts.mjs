@@ -21,6 +21,14 @@ const TICK_MS = 60_000;
 // Of one task's two attempts (respell()), the later; `moved` when neither knows when.
 const later = (kept, moved) => ((kept.at ?? 0) > (moved.at ?? 0) ? kept : moved);
 
+// A pull request GitHub returned (GET /repos/{repo}/pulls/{n}) that was merged into its repo's
+// default branch, so the other pull requests may conflict now. Fails closed: without the
+// default branch, nothing says it was that one.
+export function intoDefaultBranch(pr) {
+  const base = pr?.base?.repo?.default_branch;
+  return !!base && pr.base.ref === base;
+}
+
 // What the run is asked to do, as if a maintainer had commented it.
 export function rebaseMessage(base) {
   return `This pull request conflicts with \`${base}\`: rebase it on \`origin/${base}\`, resolve the conflicts, rerun the checks and push with \`--force-with-lease\`. If the conflicts can't be resolved safely, stop and ask.`;
