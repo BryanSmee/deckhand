@@ -45,8 +45,8 @@ export function createBroker({
   sentFrom = async () => false,
   random = () => randomBytes(32).toString("hex"),
 }) {
-  // hash(secret) → { repo, extra, push, mode, branches, provider, credential, note, pushed, apiStatus,
-  // apiReset, apiError, tokens }: `provider`, where the listener sends its agent's API calls
+  // hash(secret) → { repo, extra, push, mode, branches, provider, credential, note, pushed,
+  // apiStatus, apiReset, apiError, tokens }: `provider`, where the listener sends its agent's API calls
   // (anthropic.mjs; null: nowhere, no credential), `credential`, the one of the provider's it
   // names (`key` for `claude@anthropic:key`; null: the default one), `note`, a line in its log (provide()), `pushed`, what the git
   // gateway calls when GitHub took a push of the run's (watchPushes()), `apiStatus`, the last
