@@ -145,6 +145,7 @@ services:
       INSTALL_NETWORK: ${INSTALL_NETWORK:-}
       DEBOUNCE_MS: ${DEBOUNCE_MS:-}
       BRAINSTORM_DEBOUNCE_MS: ${BRAINSTORM_DEBOUNCE_MS:-}
+      CONFLICT_MERGE_DELAY_MS: ${CONFLICT_MERGE_DELAY_MS:-}
       GITHUB_URL: ${GITHUB_URL:-}
       GITHUB_API: ${GITHUB_API:-}
       # Wiring, environment only. Names of what the listener creates on the host's Docker,

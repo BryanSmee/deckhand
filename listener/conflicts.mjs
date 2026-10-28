@@ -2,7 +2,8 @@
 // (pulls.mjs) in the repos that opt in (`conflicts.check_minutes`, never more often than the
 // operator's CONFLICT_CHECK_MINUTES) are asked whether they still merge. One in conflict with
 // its base gets a work run in its task's session that rebases it. The `pull_request` webhook
-// doesn't fire when the base branch moves: hence polling.
+// doesn't fire when the base branch moves: hence polling, and a check soon after the
+// deliveries that say a default branch moved (a merge, a push) and Deckhand's own auto-merge.
 //
 // No loops: each attempt's (head, base) pair is kept in conflicts.json, and the same pair
 // never starts a second run, across restarts: a rebase that failed or stopped to ask waits
@@ -28,6 +29,7 @@ export function rebaseMessage(base) {
 // `github(repo, method, path, body, expected)`: the App's calls (server.mjs).
 // `repoSettings(repo, base)`: the repo's settings from its default branch.
 // `busy(key)`: the task has a run going or queued. `accept(item)`: queues a work item (tasks.mjs).
+// `sleep(ms)`: soon()'s wait.
 export function createConflicts({
   path,
   config,
@@ -38,6 +40,7 @@ export function createConflicts({
   accept,
   log = () => {},
   now = Date.now,
+  sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms).unref?.()),
 }) {
   // "org/repo#12" → { pr, head, base, at } of its last attempt.
   const attempts = persistentMap(path);
@@ -45,6 +48,8 @@ export function createConflicts({
   const due = new Map();
   let ticking = null;
   let timer = null;
+  // soon()'s wait under way, `{ repos, promise }`: the repos it makes due when it ends.
+  let waiting = null;
 
   const json = (repo, url, expected) => getJson(github, repo, url, expected);
 
@@ -59,6 +64,31 @@ export function createConflicts({
   // are left to the next tick, which checks their repo at once (checkRepo()).
   function check() {
     return run(true);
+  }
+
+  // A default branch that moved: the repo's open pull requests checked after a short wait,
+  // whatever its interval, rather than at its next check. GitHub recomputes `mergeable` in the
+  // background, so asking at once mostly gets "pending". Every call during the wait shares it
+  // and its pass; the repo's opt-in is still read in checkRepo(). Resolves to the pass's
+  // counts, or null when the watcher is off or the repo isn't allowed.
+  function soon(repo) {
+    if (!config.conflictCheckMinutes || !repo || !repoAllowed(config, repo)) {
+      return Promise.resolve(null);
+    }
+    if (!waiting) {
+      const entry = { repos: new Set() };
+      entry.promise = sleep(config.conflictMergeDelayMs).then(async () => {
+        waiting = null;
+        // A pass under way may have asked about them before the base moved, and sets their
+        // next check when it ends: this one comes after it.
+        while (ticking) await ticking.promise.catch(() => {});
+        for (const id of entry.repos) due.set(id, 0);
+        return tick();
+      });
+      waiting = entry;
+    }
+    waiting.repos.add(repo.toLowerCase());
+    return waiting.promise;
   }
 
   // The pass under way, `{ all, checked, promise }`: `checked`, the repos it took. A check()
@@ -205,6 +235,7 @@ export function createConflicts({
   return {
     tick,
     check,
+    soon,
     start,
     stop,
     keys: () => [...attempts.keys()],

@@ -42,6 +42,7 @@ function setup({
   c = config,
   path = tempPath(),
   routes: more = {},
+  sleep,
 } = {}) {
   let time = 1_800_000_000_000;
   const calls = [];
@@ -69,7 +70,7 @@ function setup({
       calls.push(url);
       const pr = /\/pulls\/(\d+)$/.exec(url);
       const route = pr ? w.prs[pr[1]] : routes[url];
-      const body = typeof route === "function" ? route() : route;
+      const body = typeof route === "function" ? await route() : route;
       return body
         ? new Response(JSON.stringify(body), { status: 200 })
         : new Response("{}", { status: 404 });
@@ -78,6 +79,7 @@ function setup({
     busy,
     accept: async (item) => accepted.push(item),
     now: () => time,
+    ...(sleep ? { sleep } : {}),
   });
   return w;
 }
@@ -441,4 +443,129 @@ test("a repo that couldn't be checked: its error, logged and in the result", asy
   assert.equal(errors.length, 1);
   assert.match(errors[0], /^org\/repo: .*502/);
   assert.deepEqual(logged, [`Conflicts in org/repo: ${errors[0].slice("org/repo: ".length)}`]);
+});
+
+// soon()'s wait, ended by the test: `waits` has each one's ms, `end()` ends them.
+function manualSleep() {
+  const waits = [];
+  const ends = [];
+  const sleep = (ms) => {
+    waits.push(ms);
+    return new Promise((resolve) => ends.push(resolve));
+  };
+  return { sleep, waits, end: () => ends.splice(0).forEach((resolve) => resolve()) };
+}
+
+test("a default branch that moved checks the repo after a short wait, whatever its interval", async () => {
+  const s = manualSleep();
+  const w = setup({
+    sleep: s.sleep,
+    prs: { 31: pull(31, { mergeable: true, mergeable_state: "clean" }) },
+  });
+  const checks = () => w.calls.filter((u) => u.endsWith("/pulls/31")).length;
+  await w.conflicts.tick();
+  assert.equal(checks(), 1);
+  // Merged into the base: in conflict now, nine minutes before the repo's next check.
+  w.prs[31] = pull(31);
+  w.advance(MIN);
+  const soon = w.conflicts.soon("Org/Repo");
+  // Nothing until the wait ends, not even a tick meanwhile.
+  assert.deepEqual(s.waits, [30_000]);
+  await w.conflicts.tick();
+  assert.equal(checks(), 1);
+  s.end();
+  assert.deepEqual(await soon, { started: 1, pending: 0, errors: [] });
+  assert.equal(w.accepted.length, 1);
+  assert.equal(w.accepted[0].reason, "conflict");
+  // Its interval starts again from that check.
+  w.advance(9 * MIN);
+  await w.conflicts.tick();
+  assert.equal(checks(), 2);
+});
+
+test("several triggers for one merge share one wait, one pass and one rebase run", async () => {
+  const s = manualSleep();
+  const w = setup({ sleep: s.sleep });
+  await w.conflicts.tick();
+  assert.equal(w.accepted.length, 1);
+  w.baseSha = "base-2";
+  w.advance(MIN);
+  const all = [
+    w.conflicts.soon("org/repo"),
+    w.conflicts.soon("org/repo"),
+    w.conflicts.soon("ORG/REPO"),
+  ];
+  assert.equal(s.waits.length, 1);
+  s.end();
+  const results = await Promise.all(all);
+  assert.ok(results.every((r) => r === results[0]));
+  assert.equal(w.accepted.length, 2);
+  assert.equal(w.calls.filter((u) => u.endsWith("/pulls/31")).length, 2);
+  // Another trigger for the same base commit: checked again, no second run for the pair.
+  const again = w.conflicts.soon("org/repo");
+  s.end();
+  await again;
+  assert.equal(w.accepted.length, 2);
+});
+
+test("a pass under way when the wait ends is followed by one that checks the repo", async () => {
+  const s = manualSleep();
+  let release;
+  const held = new Promise((resolve) => (release = resolve));
+  const w = setup({
+    sleep: s.sleep,
+    routes: { "/repos/org/repo": async () => (await held, { default_branch: "main" }) },
+  });
+  const tick = w.conflicts.tick();
+  w.advance(MIN);
+  const soon = w.conflicts.soon("org/repo");
+  s.end();
+  await new Promise((resolve) => setImmediate(resolve));
+  release();
+  await tick;
+  await soon;
+  assert.equal(w.calls.filter((u) => u === "/repos/org/repo").length, 2);
+});
+
+test("after a merge, mergeable: null is asked again at the next tick", async () => {
+  const s = manualSleep();
+  const w = setup({
+    sleep: s.sleep,
+    prs: { 31: pull(31, { mergeable: true, mergeable_state: "clean" }) },
+  });
+  await w.conflicts.tick();
+  w.prs[31] = pull(31, { mergeable: null, mergeable_state: "unknown" });
+  const soon = w.conflicts.soon("org/repo");
+  s.end();
+  assert.equal((await soon).pending, 1);
+  w.prs[31] = pull(31);
+  w.advance(MIN);
+  await w.conflicts.tick();
+  assert.equal(w.accepted.length, 1);
+});
+
+test("soon() leaves alone repos outside ALLOWED_REPOS, without the opt-in, or with the watcher off", async () => {
+  const narrowed = testConfig({ ALLOWED_REPOS: "org/other" });
+  const off = testConfig({ CONFLICT_CHECK_MINUTES: "0" });
+  for (const [what, c, settings] of [
+    ["outside", narrowed, optedIn(10, narrowed)],
+    ["off", off, optedIn()],
+  ]) {
+    const s = manualSleep();
+    const w = setup({ c, settings, sleep: s.sleep });
+    assert.equal(await w.conflicts.soon("org/repo"), null, what);
+    assert.deepEqual([s.waits, w.calls], [[], []], what);
+  }
+  for (const settings of [
+    parseRepoConfig("trigger: go", config),
+    parseRepoConfig("conflicts:\n  check_minutes: soon", config),
+  ]) {
+    const s = manualSleep();
+    const w = setup({ settings, sleep: s.sleep });
+    const soon = w.conflicts.soon("org/repo");
+    s.end();
+    await soon;
+    assert.deepEqual(w.accepted, []);
+    assert.ok(!w.calls.some((u) => u.includes("/pulls/")));
+  }
 });

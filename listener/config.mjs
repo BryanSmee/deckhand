@@ -193,6 +193,9 @@ export const SETTINGS = {
   DEBOUNCE_MS: { default: 15000, parse: whole("a whole number of milliseconds") },
   // A brainstorm comment comes alone, and someone is waiting for the answer.
   BRAINSTORM_DEBOUNCE_MS: { default: 3000, parse: whole("a whole number of milliseconds") },
+  // After a default branch moved, the wait before its conflicts are checked (conflicts.mjs
+  // soon()): GitHub computes the pull requests' mergeability again meanwhile.
+  CONFLICT_MERGE_DELAY_MS: { default: 30000, parse: whole("a whole number of milliseconds") },
   GITHUB_URL: { default: "https://github.com", parse: noSlash },
   GITHUB_API: { default: "https://api.github.com", parse: noSlash },
 };
@@ -379,6 +382,7 @@ export function loadConfig(env, file = NO_FILE) {
     fastMode: s.SANDBOX_FAST_MODE,
     needsInputLabel: s.NEEDS_INPUT_LABEL,
     conflictCheckMinutes: s.CONFLICT_CHECK_MINUTES,
+    conflictMergeDelayMs: s.CONFLICT_MERGE_DELAY_MS,
     maxFixRounds: s.MAX_FIX_ROUNDS,
     waitsCheckMinutes: s.WAITS_CHECK_MINUTES,
     logRetentionDays: s.LOG_RETENTION_DAYS,

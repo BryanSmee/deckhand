@@ -454,10 +454,15 @@ ctx.reviews = createReviews({
       return null;
     }
   },
-  // The dashboard's "merged by Deckhand", at once.
+  // The dashboard's "merged by Deckhand", at once; and, merged into the default branch, the
+  // repo's other pull requests asked soon whether they still merge: no delivery comes first.
   merged: (repo, pr) => {
     const { key, pr: entry } = pullEntry(repo, pr);
     pulls.record(key, { ...entry, autoMerged: true });
+    const base = pr.base?.repo?.default_branch;
+    if (!base || pr.base.ref === base) {
+      ctx.conflicts.soon(repo).catch((error) => log(`Conflicts: ${error.stack ?? error}`));
+    }
   },
   log,
 });

@@ -360,7 +360,14 @@ changes, and its output as `raw` entries with the step's number; the lines of no
 
 ## Conflicts
 
-The `pull_request` webhook doesn't fire when a base branch moves, so `conflicts.mjs` polls.
+The `pull_request` webhook doesn't fire when a base branch moves, so `conflicts.mjs` polls,
+and checks a repo soon (`soon()`) when its default branch moved: a pull request merged into it
+or a push to it (`repos.mjs` `refreshFor()`, the deliveries that also refresh the repository
+list), or Deckhand's own auto-merge, which no delivery precedes. After
+`CONFLICT_MERGE_DELAY_MS` (30 s), while GitHub computes `mergeable` again, the repo is due
+whatever its interval and a pass runs, after the one under way if any; every trigger during
+the wait shares it. The opt-in, `ALLOWED_REPOS` and the `(head, base)` pairs apply as for a
+tick, and polling stays the fallback for bases that move without a delivery.
 Every minute it takes the open pull requests `pulls.mjs` knows as tasks', in the repos whose
 `.deckhand.yaml` sets `conflicts.check_minutes` (never more often than
 `CONFLICT_CHECK_MINUTES`; `0` stops it), and asks GitHub whether each still merges. One in
