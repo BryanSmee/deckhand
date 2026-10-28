@@ -63,7 +63,8 @@ const OPTION = /^\s+[-*+]\s+\[([ xX])\]\s+(.*)$/;
 // it is a bullet explanation line (BULLET) that options follow. A box that isn't an option
 // (empty, mistyped: up to three characters in its brackets, not a link) is neither.
 const LIST = /^\s*(?:[-*+]|\d{1,9}[.)])(?:\s|$)/;
-const BULLET = /^\s+[-*+]\s+(?!\[[^\]]{0,3}\](?!\())(.*)$/;
+const BULLET = /^\s+[-*+]\s+(\S.*)$/;
+const BOX = /^\[[^\]]{0,3}\](?!\()/;
 const TITLE = /^\*\*([^*]+?)(?::\*\*|\*\*:)\s*(.*)$/;
 const RECOMMENDED = /\s*\(recommended\)\s*$/i;
 
@@ -98,6 +99,7 @@ export function parseQuestions(markdown) {
       items.push(item);
     } else if (item && !over) {
       const option = OPTION.exec(line);
+      const bullet = !item.options.length && BULLET.exec(line);
       if (option) {
         const label = option[2].replace(RECOMMENDED, "").trim();
         if (!label) return other;
@@ -107,8 +109,8 @@ export function parseQuestions(markdown) {
           recommended: RECOMMENDED.test(option[2]),
           checked: option[1] !== " ",
         });
-      } else if (!item.options.length && BULLET.test(line)) {
-        item.text += `\n${BULLET.exec(line)[1].trim()}`;
+      } else if (bullet && !BOX.test(bullet[1])) {
+        item.text += `\n${bullet[1].trim()}`;
         loose = true;
       } else if (item.options.length || LIST.test(line)) {
         // Explanation lines come before the options; other lists are another format.

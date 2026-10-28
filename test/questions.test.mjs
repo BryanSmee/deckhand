@@ -169,6 +169,11 @@ test("parsed questions in another format: only the markdown", () => {
     "1. A?\n   - [x ]\n   - [ ] B",
     "1. A?\n   - [ x] Blue\n   - [ ] B",
     "1. A?\n   - [ x ] Blue\n   - [  ] B",
+    // Extra spaces before the box, or an empty bullet.
+    "1. A?\n   -  [x]\n   - [ ] B",
+    "1. A?\n   -  [ ]Blue\n   - [ ] B",
+    "1. A?\n   -  [x ] Blue\n   - [ ] B",
+    "1. A?\n   - \n   - [ ] B",
   ]) {
     assert.deepEqual(parseQuestions(raw), { items: null, raw }, raw);
   }
