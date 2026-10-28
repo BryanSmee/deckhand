@@ -666,7 +666,12 @@ export function createWorkApi({
           (t.replyTo ?? t.number) === number,
       );
     const asked = task?.questions.items;
-    const same = asked?.length === items.length && asked.every((q, i) => q.text === items[i].text);
+    // The same questions, options included: the answers are indexes into the task's.
+    const shape = (qs) =>
+      JSON.stringify(
+        qs.map((q) => ({ title: q.title, text: q.text, options: q.options.map((o) => o.label) })),
+      );
+    const same = !!asked && shape(asked) === shape(items);
     if (!task || !same) return `#${number}: ticked, but not the questions waiting for answers`;
     const target = parseKey(task.key);
     const which = { number: target.number, pr: target.kind === "pr" };

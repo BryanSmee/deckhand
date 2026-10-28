@@ -2013,6 +2013,19 @@ mounts:
     await until(() => unlabelled(github), "the label off");
   });
 
+  test("wait_for_answers: the bot's own ticks in its issue answer nothing: a trigger is held back", async (t) => {
+    const { dir, github, send, listener } = await listen(t, {});
+    const payload = onAsking(99, "Deckhand");
+    payload.issue.body = tickedBody("x");
+    payload.issue.user = { login: "deckhand-x[bot]", type: "Bot" };
+    await send(payload);
+    await until(() => replies(github).length === 1, "the reply");
+    assert.match(JSON.parse(replies(github)[0].body).body, /^#12 has open questions/);
+    await listener.until("org/repo#12: not started, its open questions aren't answered");
+    assert.equal(exists(join(dir, "run-args")), null);
+    assert.equal(unlabelled(github), false);
+  });
+
   test("wait_for_answers: ticking every box of the issue takes the label off and starts what waited", async (t) => {
     const asking = (box) =>
       JSON.stringify({

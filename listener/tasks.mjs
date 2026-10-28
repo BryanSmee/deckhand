@@ -17,7 +17,7 @@ import {
 import { getJson } from "./github.mjs";
 import { customMode, entryRun, isLight } from "./modes.mjs";
 import { liveMessage } from "./prompts.mjs";
-import { stillAsks } from "./questions.mjs";
+import { hasOpenQuestions, stillAsks } from "./questions.mjs";
 import {
   CONFIG_FILE,
   effectiveConfig,
@@ -152,7 +152,10 @@ export function createTasks(ctx) {
     const own = customMode(item.settings, mode);
     if (mode !== "work" && (!own || own.light)) return false;
     if (!hasLabel(issue.labels, config.needsInputLabel)) return false;
-    if (!stillAsks(issue.body)) return false;
+    // Ticks in the bot's issue (an inbox run's) are its own until a person's edit takes the
+    // label off (questions.mjs editedInput()).
+    const bot = issue.user?.type === "Bot";
+    if (!(bot ? hasOpenQuestions(issue.body) : stillAsks(issue.body))) return false;
     const key = taskKey(item.repo, item.id);
     return ctx.runs.find((r) => r.key === key)?.status !== "needs-input";
   }

@@ -1945,6 +1945,17 @@ test("ticked in a run's reply: the answers continue its session, once, for its l
     await w.api.ticked("org/app", "alice", { number: 6, pr: false, items: older, answers: ticks }),
     /not the questions waiting for answers/,
   );
+  // The same questions with other options (asked again, reordered): their indexes differ.
+  const reordered = items.map((q) => ({ ...q, options: [...q.options].reverse() }));
+  assert.match(
+    await w.api.ticked("org/app", "alice", {
+      number: 6,
+      pr: false,
+      items: reordered,
+      answers: ticks,
+    }),
+    /not the questions waiting for answers/,
+  );
   w.tasks["org/app#6"] = asking(6, "issue", items);
   assert.match(
     await w.api.ticked("org/app", "alice", { number: 6, pr: false, items, answers: ticks }),

@@ -250,12 +250,15 @@ function openedInput({ issue, change, labelled, who, questions }) {
 // The author's issue, edited by them, another allowed user or the bot. Only a change to the
 // section moves the label: a typo fixed elsewhere doesn't undo removing it by hand, nor take
 // off a run's. Ticking a box of every question answers them (stillAsks()), as a comment would;
-// unticking them asks again.
+// unticking them asks again. Only a person's ticks answer: the bot's change nothing.
 function editedInput({ p, issue, change, labelled, who, questions }) {
   const by = who(p.sender);
   if (who(issue.user) === undefined || by === undefined || !p.changes?.body) return null;
   if (questionsSection(p.changes.body.from) === questionsSection(issue.body)) return null;
-  const now = stillAsks(issue.body);
+  // The bot's ticks answer nothing (a run ticking its own picks): its edit of a fully ticked
+  // section leaves the label as it is, on or off.
+  const ticked = allTicked(parseQuestions(questionsSection(issue.body)));
+  const now = by === null && ticked ? labelled : stillAsks(issue.body);
   // Still waiting: only what the dashboard shows changes.
   if (now === labelled) return now ? { ...change, questions: questions() } : null;
   if (now) return { ...change, label: true, by, track: true, questions: questions() };

@@ -406,6 +406,24 @@ test("allTicked: a box in every question, none of them free text", () => {
   assert.equal(stillAsks(none), false);
 });
 
+test("the bot's ticks answer nothing: its edits of a fully ticked section leave the label", () => {
+  const sender = { login: BOT, type: "Bot" };
+  const edit = (from, to, labels) =>
+    map("edited", { text: to, labels, sender, changes: { body: { from } } });
+  // The bot ticking the last box: the label stays, the dashboard shows the ticks.
+  const own = edit(ticked("x", " "), ticked("x", "x"), ["needs-input"]);
+  assert.deepEqual([own.label, own.track, own.answered], [undefined, undefined, undefined]);
+  assert.equal(own.questions.items[1].options[1].checked, true);
+  // Rewording a section ticked at open: still labelled.
+  const reworded = edit(ticked("x", "x"), ticked("x", "x").replace("B?", "Bee?"), ["needs-input"]);
+  assert.equal(reworded.label, undefined);
+  // Ticked by a person, unlabelled: the bot's later edit doesn't label it again.
+  assert.equal(edit(ticked("x", "x"), ticked("x", "x").replace("B?", "Bee?"), []), null);
+  // "None", or unticking: as for anyone.
+  assert.equal(edit(ticked("x", "x"), none, ["needs-input"]).label, false);
+  assert.equal(edit(ticked("x", "x"), ticked(" ", "x"), []).label, true);
+});
+
 test("ticking every question's box answers them; unticking asks again", () => {
   const edit = (from, to, labels, sender = { login: "bob", type: "User" }) =>
     map("edited", { text: to, labels, sender, changes: { body: { from } } });
