@@ -2001,6 +2001,112 @@ mounts:
     await listener.until("done (ok)");
   });
 
+  const tickedBody = (box) =>
+    `## Open questions\n\n1. Which one?\n   - [${box}] This one\n   - [ ] That one`;
+
+  test("wait_for_answers: a trigger on an issue whose boxes are all ticked starts work", async (t) => {
+    const { dir, github, send } = await listen(t, {});
+    const payload = onAsking(99, "Deckhand");
+    payload.issue.body = tickedBody("x");
+    await send(payload);
+    await until(() => exists(join(dir, "run-args")), "the run");
+    await until(() => unlabelled(github), "the label off");
+  });
+
+  test("wait_for_answers: ticking every box of the issue takes the label off and starts what waited", async (t) => {
+    const asking = (box) =>
+      JSON.stringify({
+        number: 12,
+        state: "open",
+        body: tickedBody(box),
+        labels: [{ name: "needs-input" }],
+      });
+    const files = { "issue:77": JSON.stringify({ state: "open" }), "issue:12": asking(" ") };
+    const { dir, github, send, listener } = await listen(t, files);
+    await send(onAsking(99, "Deckhand /after #77"));
+    await until(() => replies(github).length === 1, "the waiting reply");
+    files["issue:77"] = JSON.stringify({ state: "closed", state_reason: "completed" });
+    await send(
+      {
+        action: "closed",
+        installation: { id: 7 },
+        repository: { full_name: "org/repo", default_branch: "trunk" },
+        issue: { number: 77, state: "closed", state_reason: "completed" },
+        sender: { login: "bob" },
+      },
+      "issues",
+    );
+    await until(() => replies(github).length === 2, "the reply that it waits");
+    // bob ticks the box in the issue: GitHub has it ticked, the label still on.
+    files["issue:12"] = asking("x");
+    const edited = {
+      action: "edited",
+      installation: { id: 7 },
+      repository: { full_name: "org/repo", default_branch: "trunk" },
+      issue: {
+        number: 12,
+        title: "An idea",
+        state: "open",
+        body: tickedBody("x"),
+        user: { login: "alice", type: "User" },
+        labels: [{ name: "needs-input" }],
+      },
+      changes: { body: { from: tickedBody(" ") } },
+      sender: { login: "bob", type: "User" },
+    };
+    await send(edited, "issues");
+    await until(() => unlabelled(github), "the label off");
+    await listener.until("org/repo#12: answered, label removed");
+    await until(() => exists(join(dir, "run-args")), "the run");
+    await until(() => replies(github).length >= 3, "the starting reply");
+    assert.match(
+      JSON.parse(replies(github)[2].body).body,
+      /^The open questions are answered: starting\./,
+    );
+    await listener.until("done (ok)");
+  });
+
+  test("ticking every box of a run's reply that stopped to ask continues its session", async (t) => {
+    const asked = (box) =>
+      `<!-- needs-input -->\n## Needs your input\n\n1. **Name**: which one?\n   - [${box}] A (recommended)\n   - [ ] B`;
+    const issue = JSON.stringify({ number: 12, title: "An idea", state: "open" });
+    const { dir, github, send, listener } = await listen(t, { "issue:12": issue }, (dir) => {
+      writeFileSync(join(dir, "result"), asked(" "));
+      return {};
+    });
+    await send(followUp(99, "Deckhand"));
+    await until(() => replies(github).length === 1, "the run's questions");
+    await listener.until("done (needs-input)");
+    rmSync(join(dir, "result"));
+    const posted = JSON.parse(replies(github)[0].body).body;
+    // alice ticks A in the App's comment: GitHub's edit, by her, of the bot's comment.
+    const edited = (sender) => ({
+      action: "edited",
+      installation: { id: 7 },
+      repository: { full_name: "org/repo", default_branch: "trunk" },
+      issue: { number: 12, title: "An idea", state: "open", labels: [{ name: "needs-input" }] },
+      comment: {
+        id: 500,
+        body: posted.replace("[ ] A", "[x] A"),
+        user: { login: "deckhand-x[bot]", type: "Bot" },
+      },
+      changes: { body: { from: posted } },
+      sender: { login: sender, type: "User" },
+    });
+    await send(edited("mallory"));
+    await send(edited("alice"));
+    await listener.until("org/repo#12: Answers sent: #12 continues.");
+    await listener.until("done (ok)");
+    const answers = JSON.parse(replies(github)[1].body).body;
+    assert.match(
+      answers,
+      /^Answers from @alice, ticked in the run's questions:\n\n1\. \*\*Name\*\*\n {3}- \[x\] A/,
+    );
+    assert.match(readFileSync(join(dir, "run-env"), "utf8"), /^TASK_MESSAGE=Answers from @alice/m);
+    // mallory's edit started nothing: one answer, one run going on.
+    await until(() => replies(github).length === 3, "the run's reply");
+  });
+
   test("a comment on the ideas inbox is a light run with the idea prompt, answered there", async (t) => {
     const { dir, github, send } = await listen(t, {
       ".deckhand.yaml": "inbox: { ideas: 12 }\nsetup: npm ci\n",
@@ -3477,8 +3583,8 @@ mounts:
           title: "Name",
           text: "which one?",
           options: [
-            { label: "A", recommended: true },
-            { label: "B", recommended: false },
+            { label: "A", recommended: true, checked: false },
+            { label: "B", recommended: false, checked: false },
           ],
         },
       ],

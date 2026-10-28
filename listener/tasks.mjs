@@ -17,7 +17,7 @@ import {
 import { getJson } from "./github.mjs";
 import { customMode, entryRun, isLight } from "./modes.mjs";
 import { liveMessage } from "./prompts.mjs";
-import { hasOpenQuestions } from "./questions.mjs";
+import { stillAsks } from "./questions.mjs";
 import {
   CONFIG_FILE,
   effectiveConfig,
@@ -142,8 +142,9 @@ export function createTasks(ctx) {
 
   // Whether the repo's `wait_for_answers` holds `item` back: work, or a mode of the repo's that
   // isn't light, on an issue (`issue`: as GitHub has it) that carries NEEDS_INPUT_LABEL for its
-  // own open questions. Brainstorms and light modes still run: they can help answer. A run
-  // that stopped to ask isn't held either: any comment continues it.
+  // own open questions, not all answered by their ticked boxes. Brainstorms and light modes
+  // still run: they can help answer. A run that stopped to ask isn't held either: any comment
+  // continues it.
   function unanswered(item, issue) {
     if (!item.settings?.waitForAnswers || !config.needsInputLabel || !issue) return false;
     if (item.kind !== "issue" || item.replyTo !== item.number) return false;
@@ -151,7 +152,7 @@ export function createTasks(ctx) {
     const own = customMode(item.settings, mode);
     if (mode !== "work" && (!own || own.light)) return false;
     if (!hasLabel(issue.labels, config.needsInputLabel)) return false;
-    if (!hasOpenQuestions(issue.body)) return false;
+    if (!stillAsks(issue.body)) return false;
     const key = taskKey(item.repo, item.id);
     return ctx.runs.find((r) => r.key === key)?.status !== "needs-input";
   }

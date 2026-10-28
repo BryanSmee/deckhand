@@ -6,7 +6,7 @@
 import { hasLabel } from "./comments.mjs";
 import { parseKey, sameRepo, taskKey } from "./events.mjs";
 import { paginate } from "./github.mjs";
-import { parseQuestions, questionsSection } from "./questions.mjs";
+import { allTicked, parseQuestions, questionsSection } from "./questions.mjs";
 import { respellMap } from "./spelling.mjs";
 import { persistentMap } from "./store.mjs";
 
@@ -131,7 +131,8 @@ export function createInputSeeder({ config, github, label, inputs, boardKeys, lo
       // Fail closed, as questions.mjs: only an allowed user's issue, or the App's own.
       if (!author(issue.user)) continue;
       const questions = parseQuestions(questionsSection(issue.body));
-      if (!questions) continue;
+      // Every box ticked: answered already.
+      if (!questions || allTicked(questions)) continue;
       try {
         if (!hasLabel(issue.labels, name)) {
           if (await wasUnlabelled(repo, issue.number, name)) {

@@ -23,7 +23,7 @@ your instructions (WIP commits, draft pull requests) don't apply here.
    - **Acceptance criteria**: a checklist (`- [ ]`), with a test that would have caught it;
    - **Open questions**: what only the maintainer can decide, in the open questions format
      of your instructions, or "None" alone; nothing you settled yourself (that goes in the
-     Proposal);
+     Proposal). Leave every box unticked: a ticked one (`- [x]`) is the maintainer's answer;
    - a last line linking the inbox comment it comes from.
 4. Several separate bugs in one entry: one issue each. One bug with several parts to fix:
    a parent issue and sub-issues (`gh api repos/{owner}/{repo}/issues/<parent>/sub_issues

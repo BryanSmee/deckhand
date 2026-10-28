@@ -1,7 +1,7 @@
 // The open questions of a task waiting for input, as a form: per question its options as
-// cards (radios, one at most picked: the agent's pick in advance, a second click takes it
-// back) and a note; questions not in the set format as written, with one text box. Sending
-// posts them as one App comment (listener/work.mjs `answer`). Before a start or a queue on the
+// cards (radios, one at most picked: the box ticked on GitHub, else the agent's pick, in
+// advance; a second click takes it back) and a note; questions not in the set format as
+// written, with one text box. Sending posts them as one App comment (listener/work.mjs `answer`). Before a start or a queue on the
 // board (`then`), every question needs an answer, and the issue starts or queues with them.
 // The fields are useAnswers()'s: the task's page shows them in a form of its own (Questions),
 // the board in a dialog (QuestionsDialog.tsx).
@@ -20,10 +20,12 @@ interface Answer {
   text: string;
 }
 
-// The recommended option picked in advance: one tap accepts the agent's picks.
+// The option already ticked where it was asked picked in advance, else the recommended one:
+// only what is left needs filling in, and one tap accepts the agent's picks.
 const initial = (items: Question[] | null): Answer[] =>
   (items ?? []).map((q) => {
-    const pick = q.options.findIndex((o) => o.recommended);
+    const ticked = q.options.findIndex((o) => o.checked);
+    const pick = ticked < 0 ? q.options.findIndex((o) => o.recommended) : ticked;
     return { options: pick < 0 ? [] : [pick], text: "" };
   });
 

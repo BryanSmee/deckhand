@@ -186,10 +186,12 @@ export interface Task {
 }
 
 // An option of a question; one at most is `recommended` (the agent's pick). One option per
-// question, plus a free-text answer.
+// question, plus a free-text answer. `checked`: its box is ticked where it was asked ("[x]"),
+// the maintainer's answer; absent from questions a listener kept before it said so.
 export interface QuestionOption {
   label: string;
   recommended: boolean;
+  checked?: boolean;
 }
 
 // No options: a free-text question.

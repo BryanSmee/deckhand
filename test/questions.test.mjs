@@ -2,13 +2,16 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import {
+  allTicked,
   applyInput,
   hasOpenQuestions,
   inputEvent,
   parseQuestions,
   questionsSection,
   replyQuestions,
+  stillAsks,
 } from "../listener/questions.mjs";
+import { Refused } from "../listener/web.mjs";
 import { testConfig } from "./helpers.mjs";
 
 // Real issue bodies: #77, #79, #130 and #134 (filed by an inbox run, questions pending), #67
@@ -74,8 +77,8 @@ test("parsed questions: titles, options, the recommended one, explanation lines"
         title: "Phones",
         text: "chains left to right with sideways scrolling, or top to bottom on phones only?",
         options: [
-          { label: "Left to right, scrolling sideways", recommended: true },
-          { label: "Top to bottom on phones only", recommended: false },
+          { label: "Left to right, scrolling sideways", recommended: true, checked: false },
+          { label: "Top to bottom on phones only", recommended: false, checked: false },
         ],
       },
       free("what should the header link say?", "Link text"),
@@ -83,8 +86,8 @@ test("parsed questions: titles, options, the recommended one, explanation lines"
         title: null,
         text: "Which colour?\nThe header is dark in both themes.\nToday it is grey.",
         options: [
-          { label: "Blue", recommended: false },
-          { label: "Green", recommended: true },
+          { label: "Blue", recommended: false, checked: true },
+          { label: "Green", recommended: true, checked: false },
         ],
       },
       free("newest first?", "Order"),
@@ -158,8 +161,8 @@ test("a run's questions: after its needs-input heading, up to the next heading",
         title: "Schema",
         text: "drop the old column?",
         options: [
-          { label: "Yes, migrate the rows first", recommended: true },
-          { label: "No, keep both", recommended: false },
+          { label: "Yes, migrate the rows first", recommended: true, checked: false },
+          { label: "No, keep both", recommended: false, checked: false },
         ],
       },
     ],
@@ -371,4 +374,120 @@ test("applyInput: the label and the list follow the change, by the repo's own us
   const off = inputCtx();
   await applyInput(off.ctx, { ...change, label: undefined, track: false, answered: true });
   assert.deepEqual(off.calls.at(-1), ["answered", 3]);
+});
+
+const ticked = (a, b) =>
+  `## Open questions\n\n1. **A**: which?\n   - [${a}] X (recommended)\n   - [ ] Y\n2. B?\n   - [ ] Z\n   - [${b}] W`;
+
+test("parsed questions: each option ticked or not, [x] and [X] alike", () => {
+  const options = (text) =>
+    parseQuestions(questionsSection(text)).items.map((q) => q.options.map((o) => o.checked));
+  assert.deepEqual(options(ticked("x", "X")), [
+    [true, false],
+    [false, true],
+  ]);
+  assert.deepEqual(options(ticked(" ", " ")), [
+    [false, false],
+    [false, false],
+  ]);
+});
+
+test("allTicked: a box in every question, none of them free text", () => {
+  const all = (text) => allTicked(parseQuestions(questionsSection(text)));
+  assert.equal(all(ticked("x", "x")), true);
+  assert.equal(all(ticked("x", " ")), false);
+  assert.equal(all(ticked(" ", " ")), false);
+  // A free-text question needs a comment, ticks or not.
+  assert.equal(all(`${ticked("x", "x")}\n3. Anything else?`), false);
+  assert.equal(all(none), false);
+  assert.equal(allTicked(null), false);
+  assert.equal(stillAsks(ticked("x", "x")), false);
+  assert.equal(stillAsks(ticked("x", " ")), true);
+  assert.equal(stillAsks(none), false);
+});
+
+test("ticking every question's box answers them; unticking asks again", () => {
+  const edit = (from, to, labels, sender = { login: "bob", type: "User" }) =>
+    map("edited", { text: to, labels, sender, changes: { body: { from } } });
+  const done = edit(ticked("x", " "), ticked("x", "x"), ["needs-input"]);
+  assert.deepEqual([done.label, done.track, done.answered, done.by], [false, false, true, "bob"]);
+  // Partly ticked, or a free-text question left: the label stays, the form shows the ticks.
+  const partly = edit(ticked(" ", " "), ticked("x", " "), ["needs-input"]);
+  assert.equal(partly.label, undefined);
+  assert.equal(partly.questions.items[0].options[0].checked, true);
+  const free = `${ticked("x", "x")}\n3. Anything else?`;
+  assert.equal(edit(ticked("x", " "), free, ["needs-input"]).label, undefined);
+  // Someone not allowed ticking them: nothing.
+  const mallory = { login: "mallory", type: "User" };
+  assert.equal(edit(ticked("x", " "), ticked("x", "x"), ["needs-input"], mallory), null);
+  // Unticked again: labelled again.
+  const again = edit(ticked("x", "x"), ticked(" ", "x"), []);
+  assert.deepEqual([again.label, again.track], [true, true]);
+  // Opened with every box ticked: nothing to wait for.
+  assert.equal(map("opened", { text: ticked("x", "x") }), null);
+  // A closed issue releases nothing.
+  const closed = issues("edited", {
+    text: ticked("x", "x"),
+    labels: ["needs-input"],
+    changes: { body: { from: ticked(" ", "x") } },
+  });
+  closed.issue.state = "closed";
+  assert.equal(inputEvent(config, "issues", closed, BOT).answered, false);
+});
+
+// An `issue_comment edited` delivery: `sender` ticking boxes in a comment by `author`.
+function tick(from, to, { author = BOT, sender = "alice", pull = false } = {}) {
+  const p = issues("edited", { sender: { login: sender, type: "User" } });
+  const bot = author.endsWith("]");
+  p.comment = { id: 9, body: to, user: { login: author, type: bot ? "Bot" : "User" } };
+  p.changes = { body: { from } };
+  if (pull) p.issue.pull_request = { url: "x" };
+  return inputEvent(config, "issue_comment", p, BOT);
+}
+const reply = (a, b) =>
+  `<!-- needs-input -->\n## Needs your input\n\n### Open questions\n\n${ticked(a, b).replace("## Open questions\n\n", "")}\n\n### Checked\n\nThe code.\n\n<sub>🤖 Claude</sub>\n<!-- deckhand -->`;
+
+test("ticking every question's box in a run's reply answers it, as a reply would", () => {
+  const done = tick(reply("x", " "), reply("x", "x"));
+  assert.deepEqual(done.reply.answers, [
+    { options: [0], text: "" },
+    { options: [1], text: "" },
+  ]);
+  assert.equal(done.reply.pr, false);
+  assert.equal(done.reply.items.length, 2);
+  assert.equal(done.by, "alice");
+  assert.equal(done.label, undefined);
+  assert.equal(tick(reply("x", " "), reply("x", "x"), { pull: true }).reply.pr, true);
+  // Partly ticked, ticked already, someone not allowed, or a comment that isn't the App's.
+  assert.equal(tick(reply(" ", " "), reply("x", " ")), null);
+  assert.equal(tick(reply("x", "x"), reply("x", "x").replace("The code", "Code")), null);
+  assert.equal(tick(reply("x", " "), reply("x", "x"), { sender: "mallory" }), null);
+  assert.equal(tick(reply("x", " "), reply("x", "x"), { author: "bob" }), null);
+  assert.equal(tick(reply("x", " "), reply("x", "x"), { author: "other[bot]" }), null);
+  // Not a reply that stopped to ask.
+  const plain = (s) => s.replace("<!-- needs-input -->", "");
+  assert.equal(tick(plain(reply("x", " ")), plain(reply("x", "x"))), null);
+});
+
+test("applyInput: a run's ticked reply goes on through the work area, refusals logged", async () => {
+  const { ctx, calls } = inputCtx();
+  const asked = [];
+  ctx.workApi = { ticked: async (...args) => (asked.push(args), "Answers sent: #12 continues.") };
+  const change = tick(reply("x", " "), reply("x", "x"));
+  await applyInput(ctx, change);
+  assert.deepEqual(asked, [
+    [
+      "org/repo",
+      "alice",
+      { number: 12, pr: false, items: change.reply.items, answers: change.reply.answers },
+    ],
+  ]);
+  assert.deepEqual(calls.at(-1), ["log", "org/repo#12: Answers sent: #12 continues."]);
+  ctx.workApi = {
+    ticked: async () => {
+      throw new Refused(409, "#12 is closed.");
+    },
+  };
+  await applyInput(ctx, change);
+  assert.deepEqual(calls.at(-1), ["log", "org/repo#12: ticks: #12 is closed."]);
 });

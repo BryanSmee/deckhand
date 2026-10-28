@@ -18,7 +18,7 @@ here.
    - **Acceptance criteria**: a checklist (`- [ ]`) someone can verify;
    - **Open questions**: what only the maintainer can decide, in the open questions format
      of your instructions, or "None" alone; nothing you settled yourself (that goes in the
-     Proposal);
+     Proposal). Leave every box unticked: a ticked one (`- [x]`) is the maintainer's answer;
    - a last line linking the inbox comment it comes from.
 4. Too big for one pull request? Create a parent issue and one sub-issue per part, each
    with its own acceptance criteria, then attach them:

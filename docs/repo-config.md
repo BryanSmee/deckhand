@@ -876,7 +876,11 @@ marked `truncated`).
 
 An issue whose body has an `## Open questions` section that asks something is labelled
 `NEEDS_INPUT_LABEL` (default `needs-input`), and an allowed user's comment takes the label
-off: they answered. With `wait_for_answers: true` (the default), work doesn't start on an
+off: they answered. Ticking the boxes in the section answers too: once every question has an
+option ticked (`- [x]`), the label comes off as for a comment, and unticking them puts it
+back. A free-text question (no options) still needs a comment. A run that stopped to ask
+goes on the same way when an allowed user ticks an option of every question in its reply.
+With `wait_for_answers: true` (the default), work doesn't start on an
 issue while it carries the label:
 
 - A comment that is only the trigger line (with `/mode`, `/model`, `/effort`, `/speed`, `/agent` or `/after`
@@ -884,7 +888,8 @@ issue while it carries the label:
   to the dashboard's form, and the label stays. A trigger comment with text is the answer:
   the label comes off and the run starts.
 - A comment waiting for other issues (`/after`) whose last one is done keeps waiting until
-  the questions are answered (the label is removed), then starts by itself.
+  the questions are answered (the label is removed, or every box ticked), then starts by
+  itself.
 - The dashboard's Start and Queue open the questions first: the issue starts with the
   answers.
 

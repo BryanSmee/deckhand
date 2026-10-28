@@ -145,7 +145,10 @@ bot opens an issue whose `## Open questions` section asks something (its first p
 "None"), the listener labels it. So settled questions don't stay there: a brainstorm's wrap-up
 moves them, with their answers, to a **Decisions** section and leaves "None" alone when nothing
 is left (`prompts/brainstorm.md`). An edit to Open questions adds or removes the label as it now
-reads. An allowed user's comment on a labelled issue or pull request takes the label off: they
+reads: ticked boxes are answers, so a section where every question has an option ticked
+(`- [x]`, `allTicked()`) and none is free text no longer asks, and the edit that ticks the last
+one takes the label off and releases what waited for the answers, as a comment would;
+unticking them labels it again (`stillAsks()`). An allowed user's comment on a labelled issue or pull request takes the label off: they
 answered. The dashboard lists the open issues carrying the label as `needs-input`, with a run
 or not (`inputs.json`, kept by `issues` deliveries, whoever adds or removes the label, and one
 lookup per repo when the listener starts); a closed issue leaves the list.
@@ -164,8 +167,8 @@ event of `APP_EVENTS` it isn't subscribed to.
 With the repo's `wait_for_answers` (on by default, `docs/repo-config.md`), the label holds
 work back. `tasks.mjs` `admit()` reads it from the comment's payload: a trigger comment with
 no text besides its command lines (`saysMore()`), asking for work or a non-light mode of the
-repo, on an issue labelled for its body's questions (and whose last run didn't stop to ask),
-starts nothing; the App replies how to answer and swaps its 👀 for the needs-input reaction.
+repo, on an issue labelled for its body's questions that its ticked boxes don't all answer
+(and whose last run didn't stop to ask), starts nothing; the App replies how to answer and swaps its 👀 for the needs-input reaction.
 `applyInput()` (`questions.mjs`) leaves the label on for that comment, and light runs don't take it
 off when they start. A comment that waited (`/after`) asks GitHub for the issue's labels
 before it starts (`resume()`): still labelled, its wait stays with no issues left and
@@ -183,8 +186,8 @@ them in `api/state` (`questions`): from the reply of its last run when that run 
 (kept in `inputs.json` with the entry, from the `issues` deliveries and the startup lookup).
 
 The dashboard answers them too (`work.mjs` `answer`, `answers.mjs`): a task waiting for input
-shows its questions as a form (one option per question, the recommended one ticked in
-advance, and a note), or as written
+shows its questions as a form (one option per question, the one ticked on GitHub picked in
+advance, else the recommended one, and a note), or as written
 with one text box when they aren't in the set format. Sending checks what the work area does
 (signed in, same origin, the user allowed by the operator and the repo) and posts one App
 comment, "Answers from @user, from the dashboard:", that lists every answer under its
@@ -192,6 +195,13 @@ question and which ones are still open. A run's questions: that comment is queue
 reply that continues its session, as an allowed user's would be. An issue's: App comments
 don't take the label off, so the listener does, once every question has an answer; nothing
 starts until a trigger comment or the work area says so.
+
+Boxes ticked in a run's reply answer it the same way: an `issue_comment` `edited` delivery,
+by an allowed user, of the App's comment that starts with `<!-- needs-input -->`, that ticks
+an option of every question (`questions.mjs` `tickedReply()`, none free text) goes through
+the same `answer` (`work.mjs` `ticked()`), its comment saying "ticked in the run's
+questions". Only for the questions of the task's latest run still waiting: ticking an older
+reply, or the boxes again once the run went on, starts nothing.
 
 On the graph, an issue waiting for answers moves like a waiting one, but its questions come
 first: dragging it (or its Start and "After…" buttons) opens them, and the start or queue goes

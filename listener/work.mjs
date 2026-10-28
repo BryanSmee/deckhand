@@ -607,7 +607,7 @@ export function createWorkApi({
   // comment. A run's questions: the comment is the reply that continues its session, as an
   // allowed user's would be. An issue's (its body's section): App comments don't take the
   // label off (questions.mjs), so this does, once every question has an answer.
-  async function answer(repo, user, asked) {
+  async function answer(repo, user, asked, where = "from the dashboard") {
     const { number, pr } = asked;
     const key = taskKey(repo, pr ? prId(number) : number);
     const task = taskOf(key);
@@ -615,7 +615,7 @@ export function createWorkApi({
     if (asked.then) return answerThen(repo, user, task, asked);
     const { settings, base, issue } = await checked(repo, user, number, pr);
     const questions = task.questions ?? null;
-    const { comment: text, open } = answersComment(user, questions?.items ?? null, asked);
+    const { comment: text, open } = answersComment(user, questions?.items ?? null, asked, where);
     // Where the run asked: a pull request's run on an issue's task replies on the pull request.
     const replyTo = task.replyTo ?? number;
     const posted = await comment(repo, replyTo, text);
@@ -647,6 +647,31 @@ export function createWorkApi({
     if (labelFailed(res)) throw new Error(`GitHub label of #${number}: ${res.status}`);
     inputs.set(key, false);
     return `Answers sent: #${number} no longer needs input.`;
+  }
+
+  // The boxes `user` ticked in a run's reply on issue or pull request `number` (questions.mjs
+  // tickedReply()): `items`, the reply's questions, answered by `answers`, one per question.
+  // They go on as the dashboard's answers would, when they are those of the task's latest run
+  // still waiting: ticking an older reply's boxes, or one already answered, starts nothing.
+  // A pull request's run on an issue's task replied on the pull request (its `replyTo`).
+  async function ticked(repo, user, { number, pr, items, answers }) {
+    const keys = [taskKey(repo, pr ? prId(number) : number), ...(pr ? boardKeys() : [])];
+    const task = keys
+      .map((key) => taskOf(key))
+      .find(
+        (t) =>
+          t?.state === "needs-input" &&
+          t.questions?.source === "run" &&
+          sameRepo(parseKey(t.key)?.repo, repo) &&
+          (t.replyTo ?? t.number) === number,
+      );
+    const asked = task?.questions.items;
+    const same = asked?.length === items.length && asked.every((q, i) => q.text === items[i].text);
+    if (!task || !same) return `#${number}: ticked, but not the questions waiting for answers`;
+    const target = parseKey(task.key);
+    const which = { number: target.number, pr: target.kind === "pr" };
+    const where = "ticked in the run's questions";
+    return answer(repo, user, { ...which, answers, text: null, then: null }, where);
   }
 
   // Answers sent from the form a drag on the graph opened, and that drag's action (`then`):
@@ -886,7 +911,7 @@ export function createWorkApi({
     if (known.last || known.read) readAgain(known);
   }
 
-  return { handle, stale, counts };
+  return { handle, stale, counts, ticked };
 }
 
 // Which deliveries make a repo's backlog stale: an issue opened, closed, edited, moved or

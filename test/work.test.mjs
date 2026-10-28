@@ -637,10 +637,11 @@ test("GET issues: an issue already labelled is listed without a label call or ti
   assert.equal(w.calls.filter((c) => c.includes("/events?")).length, 0);
 });
 
-test("GET issues: no seeding once the label was taken off, nor for the board, other authors or no questions", async () => {
+test("GET issues: no seeding once the label was taken off, nor for the board, other authors, no questions or every box ticked", async () => {
   const w = setup({
     issues: {
       1: asked(BODY_144),
+      7: asked("## Open questions\n\n1. Which?\n   - [ ] A\n   - [x] B"),
       2: asked(BODY_144),
       3: asked(BODY_144, { user: { login: "mallory", type: "User" } }),
       4: asked("## Open questions\n\nNone"),
@@ -1893,4 +1894,63 @@ test("a repo spelled otherwise: inbox, answers, reruns and analyses use GitHub's
   const analysis = await analyze(w, { count: 2, kinds: ["work"], outcomes: ["error"] });
   assert.equal(analysis.body.task, "Org/app#901");
   assert.equal(w.accepted.at(-1).repo, "Org/app");
+});
+
+test("ticked in a run's reply: the answers continue its session, once, for its latest questions", async () => {
+  const ticks = [{ options: [1] }, { options: [0] }].map((a) => ({ ...a, text: "" }));
+  const items = [QUESTIONS[0], { ...QUESTIONS[0], text: "Another?" }];
+  const w = setup({
+    issues: { 5: open("Five"), 9: { ...open("Its PR"), pull_request: {} }, 6: open("Six") },
+    tasks: {
+      "org/app#5": asking(5, "run", items),
+      // An issue's run that asked on its pull request #9.
+      "org/app#6": asking(6, "run", items, { key: "org/app#6", replyTo: 9 }),
+    },
+    board: ["org/app#5", "org/app#6"],
+  });
+  const said = await w.api.ticked("org/app", "alice", {
+    number: 5,
+    pr: false,
+    items,
+    answers: ticks,
+  });
+  assert.equal(said, "Answers sent: #5 continues.");
+  assert.equal(
+    w.comments[0][1],
+    [
+      "Answers from @alice, ticked in the run's questions:",
+      "",
+      "1. **Phones**",
+      "   - [x] Top to bottom",
+      "2. **Phones**",
+      "   - [x] Left to right",
+    ].join("\n"),
+  );
+  const [item] = w.accepted;
+  assert.deepEqual(
+    [item.id, item.trigger, item.author, item.text],
+    ["5", null, "alice", w.comments[0][1]],
+  );
+  // On the pull request the issue's run replied on.
+  await w.api.ticked("org/app", "alice", { number: 9, pr: true, items, answers: ticks });
+  assert.deepEqual([w.accepted[1].id, w.accepted[1].replyTo, w.comments[1][0]], ["6", 9, 9]);
+  // Other questions than the task's (an older reply), or a task no longer waiting: nothing.
+  const older = [items[0], { ...items[1], text: "Before?" }];
+  w.tasks["org/app#6"] = asking(6, "run", items);
+  assert.match(
+    await w.api.ticked("org/app", "alice", { number: 6, pr: false, items: older, answers: ticks }),
+    /not the questions waiting for answers/,
+  );
+  w.tasks["org/app#6"] = asking(6, "issue", items);
+  assert.match(
+    await w.api.ticked("org/app", "alice", { number: 6, pr: false, items, answers: ticks }),
+    /not the questions waiting for answers/,
+  );
+  assert.equal(w.accepted.length, 2);
+  // Someone not among the repo's users: refused, as from the dashboard.
+  w.tasks["org/app#6"] = asking(6, "run", items);
+  await assert.rejects(
+    w.api.ticked("org/app", "mallory", { number: 6, pr: false, items, answers: ticks }),
+    /mallory|allowed|user/i,
+  );
 });
