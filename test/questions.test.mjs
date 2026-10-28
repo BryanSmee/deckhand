@@ -158,6 +158,11 @@ test("parsed questions in another format: only the markdown", () => {
     "1. A?\n   - [ ] X (recommended)\n   - [ ] Y (recommended)",
     "1. **Title**:\n2. B?",
     "1. A?\n   - [ ] (recommended)",
+    // A first option empty or mistyped is not an explanation line.
+    "1. A?\n   - [ ]\n   - [ ] B",
+    "1. A?\n   - [x]\n   - [ ] B",
+    "1. A?\n   - [ ]Blue\n   - [ ] B",
+    "1. A?\n   - [y] Blue\n   - [ ] B",
   ]) {
     assert.deepEqual(parseQuestions(raw), { items: null, raw }, raw);
   }

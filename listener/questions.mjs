@@ -60,9 +60,10 @@ function asks(text) {
 const ITEM = /^ ?\d{1,9}[.)]\s+(.*)$/;
 const OPTION = /^\s+[-*+]\s+\[([ xX])\]\s+(.*)$/;
 // A bullet or numbered line under a question that isn't an option: another format, unless
-// it is a bullet explanation line (BULLET) that options follow.
+// it is a bullet explanation line (BULLET) that options follow. A box that isn't an option
+// (empty, mistyped) is neither.
 const LIST = /^\s*(?:[-*+]|\d{1,9}[.)])(?:\s|$)/;
-const BULLET = /^\s+[-*+]\s+(.*)$/;
+const BULLET = /^\s+[-*+]\s+(?!\[[^\]]?\])(.*)$/;
 const TITLE = /^\*\*([^*]+?)(?::\*\*|\*\*:)\s*(.*)$/;
 const RECOMMENDED = /\s*\(recommended\)\s*$/i;
 
