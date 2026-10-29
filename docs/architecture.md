@@ -351,6 +351,13 @@ the build), `work` at the agent's first event, `push` at a shell command that ru
 `work` again at the next other tool call, `wrap-up` after its final answer. A phase whose line
 wouldn't fit under `RUN_LOG_MAX_MB` isn't written. Logs from before phases have none, and read as one Work section.
 
+The run's record keeps its phase too, for the dashboard's task state (`board.mjs`
+`runState()`): `scheduled` from the moment the run leaves the queue (`setup`: its settings,
+sandbox, clone and the repo's `setup`), `building-image` while the image builds (a step of
+its scheduling, then `scheduled` again), `working` from the agent's first event on. The
+record is saved with the live run, so a restart during setup still shows it `scheduled`;
+a record saved before records kept their phase takes its log's.
+
 The dashboard times slow steps from `at` lines (`{"type":"listener","event":"at","at":…}`).
 The runner follows the sandbox with `docker logs --follow --timestamps` (`runner.follow()`
 hands each line Docker's time, without the stamp, after a restart too; Docker also stamps

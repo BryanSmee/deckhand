@@ -558,6 +558,16 @@ test("enterPhase: a phase line in the log at each change only", () => {
   assert.equal(live.logPhase, "image");
 });
 
+test("enterPhase keeps the run's record in the same phase, for the dashboard's state", () => {
+  const live = { logPhase: null, record: { phase: "setup" }, logFile: { write: () => {} } };
+  enterPhase(live, "image");
+  assert.equal(live.record.phase, "image");
+  enterPhase(live, "setup");
+  assert.equal(live.record.phase, "setup");
+  enterPhase(live, "work");
+  assert.equal(live.record.phase, "work");
+});
+
 test("phaseOf: the agent's first event works, pushes and pull request commands push", () => {
   const tool = (detail) => ({ type: "tool", name: "Bash", detail });
   assert.equal(phaseOf("setup", []), null);

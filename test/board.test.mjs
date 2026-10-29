@@ -18,8 +18,8 @@ const run = (key, startedAt, extra = {}) => ({
 test("each issue's state reflects the listener's", () => {
   const tasks = board({
     runs: [
-      run("acme/api#1", 90, { status: "running", phase: "building image" }),
-      run("acme/api#2", 80, { status: "running" }),
+      run("acme/api#1", 90, { status: "running", phase: "image" }),
+      run("acme/api#2", 80, { status: "running", phase: "work" }),
       run("acme/web#3", 70, { status: "running", kind: "brainstorm", mode: "wrap-up" }),
       run("acme/web#4", 60, { status: "needs-input" }),
       run("solo/tool#5", 50, { kind: "brainstorm" }),
@@ -64,6 +64,34 @@ test("each issue's state reflects the listener's", () => {
     [60, 5],
   );
   assert.equal(tasks.find((t) => t.key === "solo/tool#5").kind, "brainstorm");
+});
+
+test("a running run is scheduled until its agent starts: its setup phase", () => {
+  const stateOf = (extra) =>
+    board({
+      runs: [run("acme/api#1", 10, { status: "running", ...extra })],
+      queued: [],
+      brainstorms: [],
+    })[0].state;
+  assert.equal(stateOf({ phase: "setup" }), "scheduled");
+  // The image's build is a step of it, and has its own state.
+  assert.equal(stateOf({ phase: "image" }), "building-image");
+  for (const phase of ["work", "push", "wrap-up"]) assert.equal(stateOf({ phase }), "working");
+  assert.equal(stateOf({ phase: "setup", mode: "wrap-up" }), "scheduled");
+  assert.equal(stateOf({ phase: "work", mode: "wrap-up" }), "stopping");
+  // Records from before phases were kept on them: "building image", or none for the rest.
+  assert.equal(stateOf({ phase: "building image" }), "building-image");
+  assert.equal(stateOf({}), "working");
+  // A scheduled task is live: it sorts with the running ones.
+  const tasks = board({
+    runs: [run("acme/api#1", 10, { status: "running", phase: "setup" }), run("acme/api#2", 20)],
+    queued: [],
+    brainstorms: [],
+  });
+  assert.deepEqual(
+    tasks.map((t) => t.key),
+    ["acme/api#1", "acme/api#2"],
+  );
 });
 
 test("a running run wins over comments queued for the next one", () => {

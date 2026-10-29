@@ -319,6 +319,42 @@ test("a restored run keeps the phase its log is in, and saves it again", async (
   assert.equal(JSON.parse(readFileSync(path, "utf8")).logPhase, "work");
 });
 
+test("a restored run's record takes its log's phase: scheduled through a restart", (t) => {
+  const dir = tempDir(t);
+  const ctx = {
+    config: { dataDir: dir },
+    log: () => {},
+    tasks: new Map(),
+    logDir: dir,
+    runs: [],
+    runsById: new Map(),
+    runner: { closed: () => false },
+    broker: createBroker({}),
+    running: 0,
+  };
+  const live = (id, issue, record, logPhase) => {
+    saveRun(dir, id, issue, record);
+    const path = join(dir, `${id}.live.json`);
+    writeFileSync(path, JSON.stringify({ ...JSON.parse(readFileSync(path, "utf8")), logPhase }));
+  };
+  live("r1", 1, { agent: "claude", phase: "setup" }, "setup");
+  // Saved before enterPhase() wrote its first line.
+  live("r2", 2, { agent: "claude", phase: "setup" }, null);
+  // Saved by a listener whose records only knew "building image".
+  live("r3", 3, { agent: "claude", phase: null }, "setup");
+  live("r4", 4, { agent: "claude", phase: "building image" }, "image");
+  live("r5", 5, { agent: "claude", phase: null }, "work");
+  createRestart(ctx).restoreRuns();
+  const states = board({ runs: ctx.runs, queued: [], brainstorms: [] });
+  assert.deepEqual(Object.fromEntries(states.map((t) => [t.number, t.state])), {
+    1: "scheduled",
+    2: "scheduled",
+    3: "scheduled",
+    4: "building-image",
+    5: "working",
+  });
+});
+
 test("queued comments keep when they were queued through a restart: the run order of the unplaced", async (t) => {
   const dir = tempDir(t);
   const context = () => {

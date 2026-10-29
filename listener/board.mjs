@@ -2,8 +2,10 @@
 // with its current state, grouped by project (the repo's owner) and repo.
 //
 // States, from what the listener holds right now:
-//   building-image  a run waits for its repo's image to build
-//   working         a run is in progress
+//   scheduled       a run was taken from the queue, and its agent hasn't started yet (its
+//                   settings, sandbox, clone and the repo's setup: the run's setup phase)
+//   building-image  a run waits for its repo's image to build (a step of its scheduling)
+//   working         a run's agent is at work
 //   stopping        a brainstorm is wrapping up ("/stop")
 //   queued          comments wait for a run (a free slot, or the running one to finish);
 //                   `position`: its place in the run order while it waits for a slot
@@ -23,6 +25,7 @@ import { LIGHT } from "./modes.mjs";
 import { taskId } from "./spelling.mjs";
 
 export const STATES = [
+  "scheduled",
   "building-image",
   "working",
   "stopping",
@@ -56,7 +59,10 @@ const RUNS_PER_TASK = 20;
 
 function runState(r) {
   if (r.status === "running") {
-    if (r.phase === "building image") return "building-image";
+    // Its log's phase (runlog.mjs enterPhase()). "building image": a record saved by a
+    // listener from before phases were kept on records; no phase, one from before that: work.
+    if (r.phase === "image" || r.phase === "building image") return "building-image";
+    if (r.phase === "setup") return "scheduled";
     return r.mode === "wrap-up" ? "stopping" : "working";
   }
   if (r.status === "ok") return "done";
@@ -129,7 +135,8 @@ export function board({
     t.updatedAt = updatedAt(t, pr(t.key), decisions(t.key));
   }
   // Most recent activity first, the live ones on top.
-  const live = (t) => ["building-image", "working", "stopping", "queued"].includes(t.state);
+  const live = (t) =>
+    ["scheduled", "building-image", "working", "stopping", "queued"].includes(t.state);
   return [...tasks.values()].sort(
     (a, b) => Number(live(b)) - Number(live(a)) || b.updatedAt - a.updatedAt,
   );
