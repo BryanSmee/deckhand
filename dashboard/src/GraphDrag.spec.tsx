@@ -1,5 +1,6 @@
 // Dragging issues waiting for answers onto the graph: the work queue's cards, and the graph's
-// own nodes (fetch mocked). Brainstorms are the Brainstorm tab's: Brainstorms.spec.tsx.
+// own nodes; and the nodes of stopped or failed issues, which move like their backlog cards
+// (fetch mocked). Brainstorms are the Brainstorm tab's: Brainstorms.spec.tsx.
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/preact";
 import { beforeEach, expect, test } from "vitest";
 import { Dashboard } from "./App";
@@ -133,6 +134,28 @@ test("a parent issue's card shows its sub-issues; dropped on the graph, it lays 
   );
 });
 
+// Issue #160 on the graph as `taskState` has it, its backlog read listing it (`listed`: with
+// that many sub-issues, null not at all): the node, once the backlog is read.
+const showStopped = async (taskState: Task["state"], listed: number | null = 0) => {
+  const issue = {
+    number: 160,
+    title: "Stopped",
+    url: "https://github.example.com/acme/api/issues/160",
+  };
+  const issues = listed === null ? [] : [{ ...issue, subIssues: listed || undefined }];
+  api = mockApi({ "api/repos/acme/api/issues": () => ({ ...BACKLOG, issues }) });
+  render(
+    <Dashboard
+      state={{ ...state, tasks: [...state.tasks, task(160, "issue", taskState)] }}
+      error={null}
+    />,
+  );
+  const work = screen.getByRole("region", { name: "Work queue" });
+  if (listed === null) await within(work).findByText("No open issue left to start.");
+  else await within(work).findByRole("button", { name: "Start #160" });
+  return screen.getByRole("listitem", { name: /^#160 / });
+};
+
 // A node pressed and moved onto the node at the drawing's corner (jsdom puts the drawing at 0,
 // 0), what letting go there says, then let go.
 const dragOnto = (node: HTMLElement) => {
@@ -146,8 +169,7 @@ const dragOnto = (node: HTMLElement) => {
 test.each(["cancelled", "error", "interrupted"] as const)(
   "a %s issue's node dragged onto another node is queued after it",
   async (ended) => {
-    await show([task(160, "issue", ended)]);
-    const node = screen.getByRole("listitem", { name: /^#160 / });
+    const node = await showStopped(ended);
     expect(node.className).toMatch(/movable/);
     const label = dragOnto(node);
     const after = Number(label!.match(/^Queue #160 after (?:PR )?#(\d+)$/)![1]);
@@ -162,11 +184,10 @@ test.each(["cancelled", "error", "interrupted"] as const)(
 );
 
 test("a stopped issue's node let go in the open starts in the mode picked", async () => {
-  await show([task(160, "issue", "cancelled")]);
+  const node = await showStopped("cancelled");
   fireEvent.change(screen.getByRole("combobox", { name: /Start in/ }), {
     target: { value: "review" },
   });
-  const node = screen.getByRole("listitem", { name: /^#160 / });
   fireEvent.pointerDown(node, { button: 0, pointerId: 1, clientX: 5000, clientY: 5000 });
   fireEvent.pointerMove(node, { pointerId: 1, clientX: 5100, clientY: 5100 });
   expect(screen.getByText("Start #160 in review")).toBeTruthy();
@@ -179,26 +200,20 @@ test("a stopped issue's node let go in the open starts in the mode picked", asyn
 });
 
 test("a stopped parent issue's node is laid out with its sub-issues", async () => {
-  const epic = {
-    number: 160,
-    title: "Epic",
-    url: "https://github.example.com/acme/api/issues/160",
-  };
-  api = mockApi({
-    "api/repos/acme/api/issues": () => ({ ...BACKLOG, issues: [{ ...epic, subIssues: 2 }] }),
-  });
-  render(
-    <Dashboard
-      state={{ ...state, tasks: [...state.tasks, task(160, "issue", "cancelled")] }}
-      error={null}
-    />,
-  );
-  const work = screen.getByRole("region", { name: "Work queue" });
-  await within(work).findByText(/^2 sub-issues/);
-  dragNode(screen.getByRole("listitem", { name: /^#160 / }));
+  dragNode(await showStopped("cancelled", 2));
   await waitFor(() =>
     expect(api.posted.map((p) => p.body)).toEqual([{ action: "plan", number: 160 }]),
   );
+});
+
+// Right after a stop, the listener leaves the issue out of the backlog until a read after it:
+// whether it has sub-issues to lay out isn't known yet.
+test("a stopped issue's node the backlog doesn't list yet stays where it is", async () => {
+  const node = await showStopped("cancelled", null);
+  expect(node.className).not.toMatch(/movable/);
+  dragNode(node);
+  await new Promise((r) => setTimeout(r, 10));
+  expect(api.posted).toEqual([]);
 });
 
 test("a done issue's node and a stopped pull request's stay where they are", async () => {
@@ -213,20 +228,7 @@ test("a done issue's node and a stopped pull request's stay where they are", asy
 });
 
 test("S on a selected stopped node starts it, as its backlog card's Start", async () => {
-  const issue = {
-    number: 160,
-    title: "Stopped",
-    url: "https://github.example.com/acme/api/issues/160",
-  };
-  api = mockApi({ "api/repos/acme/api/issues": () => ({ ...BACKLOG, issues: [issue] }) });
-  render(
-    <Dashboard
-      state={{ ...state, tasks: [...state.tasks, task(160, "issue", "cancelled")] }}
-      error={null}
-    />,
-  );
-  await screen.findByRole("button", { name: "Start #160" });
-  const node = screen.getByRole("listitem", { name: /^#160 / });
+  const node = await showStopped("cancelled");
   node.focus();
   fireEvent.keyDown(node, { key: "s" });
   await waitFor(() =>

@@ -3,15 +3,16 @@
 // (Lanes.tsx); on a phone, the lanes with the queue as a bottom sheet. An issue dropped on the
 // graph starts, dropped on a node it waits for that one; a waiting node dragged away stops
 // waiting, onto another node waits for that one instead. A stopped or failed issue's node moves
-// like its backlog card. An issue waiting for answers moves too, once they are in: the drag
-// opens its open questions first (QuestionsDialog.tsx), and so does a click on its node. A brainstorm dropped on the graph starts work. A queued node dragged
-// onto another queued node's left or right edge moves before or after it in the run order
-// (the Queued tab does it too). While a drag goes
-// on, the graph says what letting go does ("Queue #31 after #19"); each action shows at once,
-// its node dashed ("Starting…"), before api/state is read again. Its shortcuts: the arrows move
-// between the cards (the work queue's, the graph's or the lanes'), Enter opens the one
-// selected, S, Q and B start it, queue it after another or brainstorm it (its card's buttons),
-// V switches the view, C shows the closed issues, + − 0 zoom and fit, Space and a drag pan.
+// like its backlog card, once the backlog lists it. An issue waiting for answers moves too, once
+// they are in: the drag opens its open questions first (QuestionsDialog.tsx), and so does a
+// click on its node. A brainstorm dropped on the graph starts work. A queued node dragged onto
+// another queued node's left or right edge moves before or after it in the run order (the
+// Queued tab does it too). While a drag goes on, the graph says what letting go does ("Queue
+// #31 after #19"); each action shows at once, its node dashed ("Starting…"), before api/state
+// is read again. Its shortcuts: the arrows move between the cards (the work queue's, the
+// graph's or the lanes'), Enter opens the one selected, S, Q and B start it, queue it after
+// another or brainstorm it (its card's buttons), V switches the view, C shows the closed
+// issues, + − 0 zoom and fit, Space and a drag pan.
 import type { ComponentChildren } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
 import { useRunOrder, useWorkArea } from "./api";
@@ -73,10 +74,9 @@ interface Props {
 }
 
 // What is dragged onto the graph: a card from the backlog or a stopped issue's node (or one
-// waiting for answers), a
-// brainstorm (Start in doesn't apply: it starts work), a waiting node (let go in the open, it
-// stops waiting), a queued node (onto a queued node's left or right edge, it moves in the run
-// order).
+// waiting for answers), a brainstorm (Start in doesn't apply: it starts work), a waiting node
+// (let go in the open, it stops waiting), a queued node (onto a queued node's left or right
+// edge, it moves in the run order).
 type Dragged = "new" | "brainstorm" | "waits" | "queued";
 
 // A drag over the graph: the node it would queue after, what is dragged, where (drawing units).
@@ -187,7 +187,8 @@ export function Board({
   const modes = work.backlog?.modes ?? [];
   const picked = mode === "work" || !modes.includes(mode) ? {} : { mode };
   const blocked = !!work.backlog?.errors;
-  const moves = (n: GraphNode) => movable(n, repo, blocked);
+  const listed = new Set(work.backlog?.issues.map((i) => i.number));
+  const moves = (n: GraphNode) => movable(n, repo, blocked, listed);
   const targets = targetsOf(nodes);
   const { waiting, answering } = workLists(tasks, work.pending);
 

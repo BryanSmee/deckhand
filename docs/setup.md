@@ -248,9 +248,9 @@ Beside the graph, the **work queue** (a sheet at the bottom on a phone) has five
 **Backlog** lists the open issues with nothing live (running, queued, waiting, brainstorming or
 needing input): drop one on the graph to start it (in the mode picked in **Start in**, in the
 page's header), on a node to queue it after that one; one with sub-issues brings them along.
-An issue whose last run was stopped, failed or interrupted is back in the backlog and keeps its
-node on the graph: drag the node as you would its card (in the open to start it, onto another
-node to queue it after that one). A `done` issue's node and a pull request's stay where they
+An issue whose last run was stopped, failed or interrupted keeps its node on the graph; once it
+is back in the backlog (at its next read), drag the node as you would its card (in the open to
+start it, onto another node to queue it after that one). A `done` issue's node and a pull request's stay where they
 are.
 **Brainstorm** lists the issues being brainstormed, with their state; they leave the graph
 unless an arrow touches them. Drop a backlog issue on the Brainstorm tab to brainstorm it, a

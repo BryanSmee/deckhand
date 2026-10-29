@@ -599,12 +599,13 @@ issues with nothing live (running, queued, waiting, brainstorming, needs input) 
 one dropped on the graph starts (in the mode picked), dropped next to an issue it waits for
 that one; a waiting issue dragged away stops waiting, onto another issue waits for that one
 instead. A backlog issue whose last run was cancelled, failed or interrupted keeps its node on
-the graph, and the node moves like its backlog card (`movable()` in `graphModel.ts`): the same
-`start`, `queue` or `plan`, no route of its own. Between the backlog and the graph, a Brainstorm column lists the repo's brainstorms
-(active, idle, wrapping up), which leave the graph unless an arrow touches them: a backlog
-issue dropped there starts a brainstorm, a brainstorm dropped on the graph starts work (and
-ends the brainstorm), dropped back on the backlog it stops (`stop`, what a `/stop` comment
-does: the wrap-up run). Each has a button too.
+the graph, and once the backlog lists it, the node moves like its card there (`movable()` in
+`graphModel.ts`): the same `start`, `queue` or `plan`, no route of its own. Between the backlog
+and the graph, a Brainstorm column lists the repo's brainstorms (active, idle, wrapping up),
+which leave the graph unless an arrow touches them: a backlog issue dropped there starts a
+brainstorm, a brainstorm dropped on the graph starts work (and ends the brainstorm), dropped
+back on the backlog it stops (`stop`, what a `/stop` comment does: the wrap-up run). Each has a
+button too.
 
 A backlog issue with open sub-issues (its card says how many, from the issue list's
 `sub_issues_summary`) brings its whole tree along (`plan`, `plans.mjs`): the listener reads its
