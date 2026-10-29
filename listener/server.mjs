@@ -374,7 +374,7 @@ const forkChecks = createForkChecks({
 // mutation held to the same checks, its node IDs looked up with the listener's token.
 const graphqlChecks = createGraphqlChecks({
   validator: createValidator().check,
-  files: (run) => !forkChecks.restricted(run),
+  files: forkChecks.checkGraphql,
   nodes: (repo, ids) => lookupNodes(github, repo, ids),
   checkWrite: writeChecks.checkWrite,
   log,

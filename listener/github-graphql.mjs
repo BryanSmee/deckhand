@@ -17,7 +17,6 @@
 //   variables and operation name, never the call's own bytes: GitHub runs what was checked.
 import { readFileSync } from "node:fs";
 import { Worker } from "node:worker_threads";
-import { FORK_RUN, readsFiles } from "./github-forks.mjs";
 import { CONTENTS_WRITE, permissionsOf, PULL_WRITE, pullOf } from "./github-pulls.mjs";
 import {
   buildSchema,
@@ -634,13 +633,13 @@ export function writeOf({ name, spec, input }, nodes, repo) {
 // `nodes(repo, ids)`: GitHub's answer to NODES for those IDs, with the listener's token (a
 // missing one: null); `checkWrite(run, write)`: github-writes.mjs's, null when it may go on.
 // `validator`: createValidator()'s check, or (the tests') validationError() on this thread.
-// `files(run)`: whether the run may read a file's content at a ref it names (`... on Blob`,
-// `codeowners(refName:)`: github-forks.mjs readsFiles()), which may be a fork's (a work run that
-// isn't a fork's may not).
+// `files(run, doc, op, variables)`: null when the run's operation may read the files it does,
+// else { status, message } (github-forks.mjs checkGraphql(): a work run that isn't a fork's
+// reads no fork's file).
 export function createGraphqlChecks({
   nodes,
   checkWrite,
-  files = () => true,
+  files = async () => null,
   schema = githubSchema,
   validator = async (query) => {
     const error = validationError(query, schema());
@@ -661,14 +660,9 @@ export function createGraphqlChecks({
     const parsed = operationOf(schema(), call);
     if (parsed.refused) return parsed;
     const { doc, op, variables, operationName } = parsed;
-    if (!files(run) && readsFiles(doc)) {
-      return {
-        refused: refusal(
-          403,
-          `reading a file's content over GraphQL (Blob, codeowners at a ref) may read a fork's: read the repository's files from its clone; ${FORK_RUN}`,
-        ),
-      };
-    }
+    // Its variables' values, defaults applied (graphql-js keeps them under `coerced`).
+    const unread = await files(run, doc, op, parsed.coerced?.coerced ?? {});
+    if (unread) return { refused: refusal(unread.status, unread.message) };
     const forwarded = Buffer.from(
       JSON.stringify({
         query: print(doc),

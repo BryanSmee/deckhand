@@ -20,8 +20,8 @@
 //   name its blobs, and nothing says where one comes from. So such a run's clone is whole
 //   (sandbox-spec.mjs SANDBOX_FULL_CLONE), and never fetches a blob on its own. git LFS's
 //   objects (its batch API, `info/lfs/`), named by their sha256, likewise;
-// - reading a file's content over GraphQL (`... on Blob`, `codeowners(refName:)`):
-//   github-graphql.mjs, with files().
+// - reading a file's content over GraphQL (`... on Blob`; a fork's CODEOWNERS, templates,
+//   guidelines, or any repository's at a ref): checkGraphql(), for github-graphql.mjs.
 //
 // What GitHub answers for the lookups is kept a while: whether a pull request or repository is
 // a fork's doesn't change, and a commit stays on a branch it was found on.
@@ -43,6 +43,11 @@ export const MAX_LOOKUPS = 20;
 
 // A SHA-1 or SHA-256 object id, as git reads it: any case.
 const OID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i;
+// The path segments a ref spelled like a commit id may span, as a branch's name (`2024/q4`).
+const MAX_SEGMENTS = 20;
+// How long a commit found nowhere in the repository stays refused without asking GitHub again:
+// briefly, as a run may push it meanwhile.
+export const REFUSED_MS = 60_000;
 // What may be a commit's id, abbreviated as git allows (4 digits and up).
 const HEX = /^[0-9a-f]{4,64}$/i;
 // The parameters GitHub reads a ref or commit from, on any of its calls that takes one (`ref`
@@ -134,8 +139,8 @@ function readableRef(text) {
 
 // What a ref, branch or commit names, as a path or parameter spells it (with what follows it in
 // a path, a revision's suffix): { pull } for a pull request's refs (`refs/pull/<n>/head`,
-// `pull/<n>/merge`), { sha, names } for what may be a commit (the branch or tag names it may be
-// instead, as spelled), { owner, name, ref } for a ref named with its repository's owner (compare's
+// `pull/<n>/merge`), { sha, first, names } for what may be a commit (its first segment's hex
+// digits as spelled, and the branch or tag names it may be instead), { owner, name, ref } for a ref named with its repository's owner (compare's
 // `owner:ref`, `owner:repo:ref`), { invalid } for what git wouldn't take for a ref's name
 // (readableRef()), else {}: a branch or tag, the repository's own.
 export function refKind(spec) {
@@ -146,10 +151,15 @@ export function refKind(spec) {
   if (other) return { owner: other[1], name: other[2] ?? null, ref: other[3] };
   const pull = /^(?:refs\/)?pull\/(\d+)(?:[/~^@.]|$)/i.exec(text);
   if (pull) return { pull: Number(pull[1]) };
-  const segment = text.split("/")[0];
-  const first = segment.split(/[~^@.]/)[0];
-  // `names`: the branch or tag it may be instead (`2024.1`, a tag, starts like a commit id).
-  return HEX.test(first) ? { sha: first.toLowerCase(), names: [...new Set([segment, first])] } : {};
+  const segments = text.split("/");
+  const first = segments[0].split(/[~^@.]/)[0];
+  if (!HEX.test(first)) return {};
+  // `names`: the branch or tag it may be instead, which starts like a commit id (`2024.1`, a
+  // tag; `2024/q4`, a branch): each prefix of its path, a parameter's whole value the longest.
+  const prefixes = segments
+    .slice(0, MAX_SEGMENTS)
+    .map((_, i) => segments.slice(0, i + 1).join("/"));
+  return { sha: first.toLowerCase(), first, names: [...new Set([...prefixes, first])] };
 }
 
 // The repository a call names, and what in it may be a fork's: { repo } (owner/name) or { id },
@@ -218,27 +228,56 @@ export function callTargets(kind, path, query = new URLSearchParams(), accept = 
   return { repo, id, refs, pulls, blob, lfs, page };
 }
 
-// Whether `doc` (a parsed GraphQL document) reads a file's content at a ref it names: a
-// fragment on `Blob`, the only type that holds a file, or `codeowners(refName:)`, whose errors
-// quote CODEOWNERS' lines at that ref (without it, the default branch's: the repository's own).
-export function readsFiles(doc) {
+// A repository's fields that answer with one of its files: CODEOWNERS (its errors quote its
+// lines), its issue and pull request templates, its contributing guidelines, its contact and
+// funding links (.github/ISSUE_TEMPLATE/config.yml, FUNDING.yml).
+const REPOSITORY_FILES = new Set([
+  "codeowners",
+  "contactLinks",
+  "contributingGuidelines",
+  "fundingLinks",
+  "issueTemplates",
+  "pullRequestTemplates",
+]);
+
+// What operation `op` of `doc` (a parsed GraphQL document, `variables` its coerced variables)
+// reads of a repository's files → [{ blob } | { field, repo, ref }]: a fragment on `Blob` (the
+// only type that holds a file: an expression such as `refs/pull/7/head:a.js` names any), and
+// each REPOSITORY_FILES field, with the repository it is asked of (owner/name) when it is a
+// field of `repository(owner:, name:)` itself, else null (asked through `node`, `search`, a
+// pull request's `headRepository`…: any repository), and whether it names a ref (`refName`).
+export function fileReads(doc, op, variables = {}) {
+  const fragments = new Map(
+    doc.definitions.filter((d) => d.kind === "FragmentDefinition").map((d) => [d.name.value, d]),
+  );
+  const value = (node) => (node?.kind === "Variable" ? variables?.[node.name.value] : node?.value);
+  const reads = [];
   const seen = new Set();
-  const walk = (node) => {
-    if (!node || typeof node !== "object" || seen.has(node)) return false;
-    seen.add(node);
-    if (node.typeCondition?.name?.value === "Blob") return true;
-    if (
-      node.kind === "Field" &&
-      node.name?.value === "codeowners" &&
-      node.arguments?.some((a) => a.name.value === "refName")
-    ) {
-      return true;
+  function walk(set, repo) {
+    for (const selection of set?.selections ?? []) {
+      if (selection.kind === "Field") {
+        const name = selection.name.value;
+        const args = new Map((selection.arguments ?? []).map((a) => [a.name.value, a.value]));
+        if (REPOSITORY_FILES.has(name)) reads.push({ field: name, repo, ref: args.has("refName") });
+        const [owner, repoName] = [value(args.get("owner")), value(args.get("name"))];
+        const named =
+          name === "repository" && typeof owner === "string" && typeof repoName === "string";
+        walk(selection.selectionSet, named ? `${owner}/${repoName}` : null);
+      } else if (selection.kind === "InlineFragment") {
+        if (selection.typeCondition?.name.value === "Blob") reads.push({ blob: true });
+        walk(selection.selectionSet, repo);
+      } else if (selection.kind === "FragmentSpread") {
+        const def = fragments.get(selection.name.value);
+        const key = `${selection.name.value}\0${repo}`;
+        if (!def || seen.has(key)) continue;
+        seen.add(key);
+        if (def.typeCondition.name.value === "Blob") reads.push({ blob: true });
+        walk(def.selectionSet, repo);
+      }
     }
-    return Object.values(node).some((value) =>
-      Array.isArray(value) ? value.some(walk) : walk(value),
-    );
-  };
-  return walk(doc);
+  }
+  walk(op.selectionSet, null);
+  return reads;
 }
 
 // A Map that keeps `max` entries, each `ms` at most.
@@ -272,6 +311,8 @@ export function createForkChecks({
   const repos = kept(LOOKUP_MS, MAX_KEPT, now);
   const pulls = kept(LOOKUP_MS, MAX_KEPT, now);
   const commits = kept(LOOKUP_MS, MAX_KEPT, now);
+  const refusedCommits = kept(REFUSED_MS, MAX_KEPT, now);
+  const named = kept(LOOKUP_MS, MAX_KEPT, now);
   // run → repository → oid → what GitHub advertised it as, to the run's git: OWN_REF (a ref of
   // the repository's own: a branch, a tag) or the numbers of the pull requests whose refs it is.
   const advertised = new WeakMap();
@@ -327,6 +368,8 @@ export function createForkChecks({
     if (as) return advertisedRefusal(run, repo, as);
     const key = `${repo}@${sha}`;
     if (commits.get(key)) return null;
+    const known = refusedCommits.get(key);
+    if (known) return known;
     const info = await repoOf(run, { repo });
     const base = info?.default_branch;
     if (base) {
@@ -349,7 +392,9 @@ export function createForkChecks({
       commits.set(key, true);
       return null;
     }
-    return `${sha.slice(0, 12)} isn't a commit on ${repo}'s default branch nor a branch's head, so it may be a fork's (a blob or tree isn't fetched on its own here: the clone is whole); fetch a branch of ${repo} instead, or: ${FORK_RUN}`;
+    const why = `${sha.slice(0, 12)} isn't a commit on ${repo}'s default branch nor a branch's head, so it may be a fork's (a blob or tree isn't fetched on its own here: the clone is whole); fetch a branch of ${repo} instead, or: ${FORK_RUN}`;
+    refusedCommits.set(key, why);
+    return why;
   }
 
   // An advertised commit: fine when a ref of the repository's own named it (a branch, a tag), or
@@ -381,26 +426,32 @@ export function createForkChecks({
     if (kind.pull !== undefined) return pullRefusal(run, repo, kind.pull);
     if (kind.sha !== undefined) {
       // Abbreviated: a branch or tag of the repository named so is what GitHub reads.
-      for (const name of kind.sha.length < 40 ? kind.names : []) {
-        if (await namedRef(run, repo, name)) return null;
-      }
+      if (kind.sha.length < 40 && (await namedRef(run, repo, kind))) return null;
       return commitRefusal(run, repo, kind.sha);
     }
     return null;
   }
 
-  // Whether `name` is a branch or a tag of `repo` (cached).
-  async function namedRef(run, repo, name) {
-    const key = `${repo}@ref:${name}`;
-    let found = commits.get(key);
+  // Whether one of `names` (refKind()'s) is a branch or a tag of `repo`: those whose names
+  // start with its `first` digits, one call for each kind, kept a while either way.
+  async function namedRef(run, repo, { first, names }) {
+    const key = `${repo}@refs:${first}`;
+    let found = named.get(key);
     if (found === undefined) {
-      const ref = encodeURIComponent(name);
-      found =
-        !!(await get(run.repo, `/repos/${repo}/git/ref/heads/${ref}`, [404, 409, 410, 422])) ||
-        !!(await get(run.repo, `/repos/${repo}/git/ref/tags/${ref}`, [404, 409, 410, 422]));
-      commits.set(key, found);
+      found = [];
+      for (const kind of ["heads", "tags"]) {
+        const refs = await get(
+          run.repo,
+          `/repos/${repo}/git/matching-refs/${kind}/${encodeURIComponent(first)}?per_page=100`,
+          [404, 409, 410, 422],
+        );
+        for (const { ref } of Array.isArray(refs) ? refs : []) {
+          found.push(String(ref).replace(/^refs\/(?:heads|tags)\//, ""));
+        }
+      }
+      named.set(key, found);
     }
-    return found;
+    return names.some((name) => found.includes(name));
   }
 
   // Fails closed: what can't be looked up is refused, as a 502.
@@ -502,5 +553,24 @@ export function createForkChecks({
     }
   }
 
-  return { restricted, checkCall, fetchScope, checkFetch, remember };
+  // A restricted run's GraphQL operation (fileReads()) → null when it may go on, else { status,
+  // message }: no blob; a repository's files only asked of `repository(owner:, name:)` naming
+  // one outside its network, itself or its source, never at a ref.
+  async function checkGraphql(run, doc, op, variables) {
+    if (!restricted(run)) return null;
+    const read = (what) => ({
+      status: 403,
+      message: `reading ${what} over GraphQL may read a fork's: read the repository's files from its clone, or ask them of repository(owner:, name:) naming ${run.repo}; ${FORK_RUN}`,
+    });
+    for (const { blob, field, repo, ref } of fileReads(doc, op, variables)) {
+      if (blob) return read("a file's content (Blob)");
+      if (ref) return read(`${field} at a ref`);
+      if (!repo) return read(`${field} of a repository it doesn't name`);
+      const refused = await checked(run, repo, async () => (await scope(run, { repo }))?.refused);
+      if (refused) return refused;
+    }
+    return null;
+  }
+
+  return { restricted, checkCall, fetchScope, checkFetch, remember, checkGraphql };
 }

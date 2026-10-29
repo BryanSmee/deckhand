@@ -661,7 +661,10 @@ comment from an allowed user on the fork's pull request starts a fork's run, whi
   comparison with another owner's branch (`main...someone:branch`) is refused too; with the
   repository's own owner (`main...org:<ref>`, `org:repo:<ref>`), what follows is checked as
   any ref. An id is a possible commit from 4 hex digits (git's shortest abbreviation): a
-  branch or tag of the repository named so (`cafe`, `2024.1`) is looked up first, and passes.
+  branch or tag of the repository named so is looked up first, and passes: a parameter's
+  whole value, or each prefix of a path (`cafe`, the tag `2024.1`, the branch `2024/q4`), one
+  `git/matching-refs` call for each kind. A commit found nowhere stays refused for a minute
+  without asking GitHub again.
   A ref spelled as git wouldn't name one (whitespace or a control character, `//`, `..`, `@{`,
   a backslash, a leading `-`, `/` or `:`) is refused, rather than taken for a branch: the check doesn't rest on
   how GitHub reads it. A tree and a commit's metadata (`git/trees`, `git/commits`) hold no
@@ -686,12 +689,17 @@ comment from an allowed user on the fork's pull request starts a fork's run, whi
   wrote a fork knows, as a blob's id, so the batch API is refused to such a run. It reads an
   LFS file by its branch from `media.githubusercontent.com` (checked as below). The sandbox
   image has no `git-lfs`, so a clone only ever had its pointer files.
-- **A file's content over GraphQL** is refused to such a run whatever it names: a fragment on
-  `Blob`, the only type that holds a file (an expression such as `refs/pull/7/head:a.js` can
-  name a fork's), and `codeowners(refName:)`, whose errors quote CODEOWNERS' lines at that ref
-  (without `refName`, the default branch's: allowed). The other fields that take a ref
-  (`object`, `ref`) answer with a commit's or a tree's metadata, which REST doesn't check
-  either.
+- **A file's content over GraphQL** (`listener/github-forks.mjs` `checkGraphql()`): a fragment
+  on `Blob`, the only type that holds a whole file, is refused to such a run whatever it names
+  (an expression such as `refs/pull/7/head:a.js` can name a fork's). A repository's fields
+  that answer with one of its files (`codeowners`, whose errors quote CODEOWNERS' lines,
+  `contributingGuidelines`, `issueTemplates`, `pullRequestTemplates`, `contactLinks`,
+  `fundingLinks`) go through only as fields of `repository(owner:, name:)` itself (variables
+  resolved) naming a repository outside its network, itself or its source, without a ref
+  (`codeowners(refName:)` is refused): on a fork's repository they are its author's files.
+  Reached any other way (`node`, `search`, a pull request's `headRepository`), they're
+  refused. The other fields that take a ref (`object`, `ref`) answer with a commit's or a
+  tree's metadata, which REST doesn't check either.
 - **GitHub's file hosts**: `raw.githubusercontent.com` serves any file of a public repository
   without a token, a fork's pull request's included (`/<owner>/<repo>/refs/pull/<n>/head/<path>`,
   or a fork's commit through the repository), `media.githubusercontent.com` its LFS files by
