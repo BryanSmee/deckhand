@@ -1,5 +1,6 @@
 // A run's REST writes (github-writes.mjs): classified, their target's kind resolved from GitHub,
-// held to their mode's ceiling (modes.mjs) and the policies' `deny_github`.
+// held to their mode's ceiling (modes.mjs) and the policies' `deny_github`. GraphQL's are
+// github-graphql.test.mjs's.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
@@ -7,12 +8,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { createBroker } from "../listener/broker.mjs";
 import { createGithubGateway } from "../listener/github-gateway.mjs";
-import {
-  aboveCeiling,
-  classify,
-  createsIssueMutation,
-  createWriteChecks,
-} from "../listener/github-writes.mjs";
+import { aboveCeiling, classify, createWriteChecks } from "../listener/github-writes.mjs";
 import { ceilingOf, MODES } from "../listener/modes.mjs";
 import { createPolicies, opaRunner } from "../listener/policies.mjs";
 import { policyEngine, sandboxAt, serve, tempDir } from "./helpers.mjs";
@@ -372,7 +368,7 @@ test("light runs: brainstorms, inbox entries, discussions and the modes that rea
 });
 
 // GitHub's answers to creates: `gh issue create`'s GraphQL call (its URL is the web page's),
-// and a REST one.
+// whose createIssue answers under `createIssue` (github-graphql.mjs `creates`), and a REST one.
 const GRAPHQL_CREATE = {
   method: "POST",
   path: "graphql",
@@ -381,6 +377,7 @@ const GRAPHQL_CREATE = {
       "mutation IssueCreate($input: CreateIssueInput!) { createIssue(input: $input) { issue { id url } } }",
   }),
   graphql: true,
+  creates: ["createIssue"],
   at: START,
 };
 const created = (number, repo = "Org/Repo") =>
@@ -397,34 +394,6 @@ const restIssue = (number, repo = "Org/Repo") =>
     url: `https://api.github.com/repos/${repo}/issues/${number}`,
     repository_url: `https://api.github.com/repos/${repo}`,
   });
-
-test("createsIssueMutation: one mutation calling createIssue, nothing aliased so", () => {
-  const body = (query) => json({ query });
-  for (const query of [
-    "mutation IssueCreate($input: CreateIssueInput!) { createIssue(input: $input) { issue { id url } } }",
-    "mutation { createIssue(input: {}) { ...F } } fragment F on CreateIssuePayload { issue { url } }",
-    // An alias in a string or a comment is no alias.
-    'mutation { createIssue(input: {title: "createIssue: x {"}) { issue { url } } } # createIssue: y',
-  ]) {
-    assert.equal(createsIssueMutation(body(query)), true, query);
-  }
-  for (const query of [
-    // The review's: a read answering under that name.
-    'query { createIssue: repository(owner: "o", name: "r") { issue(number: 50) { url } } }',
-    '{ createIssue: repository(owner: "o", name: "r") { issue(number: 50) { url } } }',
-    // Another mutation answering so, and another operation beside the mutation.
-    'mutation { createIssue: updateIssue(input: {id: "I_1"}) { issue { url } } }',
-    "mutation { createIssue(input: {}) { issue { url } } } query Q { viewer { login } }",
-    "mutation { createIssue(input: {}) { issue { url } } } { viewer { login } }",
-    // No createIssue call; braces that don't close; not a query at all.
-    "mutation { updateIssue(input: {}) { issue { url } } }",
-    "mutation { createIssue(input: {}) { issue { url } }",
-  ]) {
-    assert.equal(createsIssueMutation(body(query)), false, query);
-  }
-  assert.equal(createsIssueMutation(Buffer.from("not json")), false);
-  assert.equal(createsIssueMutation(json({ query: 5 })), false);
-});
 
 test("the issues a run created: GitHub's answers to its own creates, REST and GraphQL", () => {
   const { answered } = createWriteChecks({ lookup: fakeLookup(GITHUB).lookup });
@@ -446,6 +415,19 @@ test("the issues a run created: GitHub's answers to its own creates, REST and Gr
     json({ data: { updateIssue: { issue: { url: "https://github.com/org/repo/issues/44" } } } }),
   );
   answered(work, GRAPHQL_CREATE, 200, Buffer.from("not json"));
+  // A call creating none (its answer names one all the same), and one creating two, aliased.
+  answered(work, { ...GRAPHQL_CREATE, creates: [] }, 200, created(46));
+  answered(
+    work,
+    { ...GRAPHQL_CREATE, creates: ["a", "b"] },
+    200,
+    json({
+      data: {
+        a: { issue: { url: "https://github.com/org/repo/issues/47" } },
+        b: { issue: { url: "https://github.com/org/repo/issues/48" } },
+      },
+    }),
+  );
   answered(
     work,
     { ...write("POST", "repos/org/repo/issues/1/comments", {}), at: START },
@@ -455,8 +437,10 @@ test("the issues a run created: GitHub's answers to its own creates, REST and Gr
   assert.deepEqual(work.created, [
     { number: 30, at: START },
     { number: 35, at: START },
+    { number: 47, at: START },
+    { number: 48, at: START },
   ]);
-  assert.equal(saved, 2);
+  assert.equal(saved, 3);
 });
 
 test("a sub-issue link: its child is one the run created or already under its issue, never moved", async () => {
@@ -505,8 +489,9 @@ test("a sub-issue link: its child is one the run created or already under its is
     /other_issue #31/,
   );
   // Nor does a read that aliases a field `createIssue`, naming an issue filed meanwhile by
-  // someone or by the bot; and an issue the bot didn't write is never one the run created.
-  const read = (query) => ({ ...GRAPHQL_CREATE, body: json({ query }) });
+  // someone or by the bot (github-graphql.mjs names no createIssue field of it); and an issue
+  // the bot didn't write is never one the run created.
+  const read = (query) => ({ ...GRAPHQL_CREATE, creates: [], body: json({ query }) });
   for (const n of [50, 34]) {
     const before = work.created.length;
     answered(

@@ -1,2 +1,5 @@
 dashboard/dist
 dashboard/package-lock.json
+listener/vendor/package-lock.json
+listener/vendor/graphql.mjs
+listener/vendor/github.graphql

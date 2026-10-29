@@ -100,6 +100,10 @@ async function fakeGitHub(files = {}) {
       if (req.method === "GET" && waitedFor && files[`issue:${waitedFor[1]}`]) {
         return res.end(files[`issue:${waitedFor[1]}`]);
       }
+      // GraphQL's node look-ups (github-graphql.mjs), as JSON, when the test sets them.
+      if (req.method === "POST" && req.url === "/graphql" && body.includes("nodes(ids:")) {
+        if (files.nodes) return res.end(files.nodes);
+      }
       // An issue's parent, as JSON, when the test sets it; none otherwise.
       const parent = /^\/repos\/org\/repo\/issues\/(\d+)\/parent$/.exec(req.url);
       if (req.method === "GET" && parent) {
@@ -1654,6 +1658,61 @@ mounts:
     await check();
   });
 
+  test("a brainstorm's GraphQL: checked from its nodes, printed again, the only call whose token writes", async (t) => {
+    const issue = (number) => ({
+      __typename: "Issue",
+      number,
+      databaseId: number,
+      repository: { nameWithOwner: "org/repo" },
+    });
+    const files = {
+      "issue:12": JSON.stringify({ number: 12, user: { login: "alice" }, labels: [] }),
+      "issue:3": JSON.stringify({ number: 3, user: { login: "bob" }, labels: [] }),
+      nodes: JSON.stringify({ data: { nodes: [issue(12), issue(3)] } }),
+    };
+    const ctx = await listen(t, files, (dir) => (writeFileSync(join(dir, "hold"), ""), {}));
+    await ctx.send(comment("alice", "Deckhand\n/mode brainstorm\nWhat about dark mode?"));
+    await until(() => exists(join(ctx.dir, "egress"))?.trim().split("\n").length === 9, "the run");
+    const secret = readFileSync(join(ctx.dir, "run-secret"), "utf8").trim();
+    const graphql = (query) =>
+      fetch(`http://127.0.0.1:${ctx.brokerPort}/relay/127.0.0.1/graphql`, {
+        method: "POST",
+        headers: { authorization: `token ${secret}` },
+        body: JSON.stringify({ query }),
+      });
+    const mints = () => ctx.github.requests.filter((r) => r.body.includes("repositories"));
+    // Its own issue's description goes on, the other one's refuses the call.
+    const both = (second) =>
+      `mutation { a: updateIssue(input: {id: "I_12", body: "Hi"}) { clientMutationId } b: updateIssue(input: {id: "${second}", body: "Hi"}) { clientMutationId } }`;
+    const refused = await graphql(both("I_3"));
+    assert.equal(refused.status, 403);
+    assert.match((await refused.json()).message, /^Deckhand: b: .*can't edit on other_issue #3/);
+    const relayed = () =>
+      ctx.github.requests.filter((r) => r.path === "/graphql" && r.auth === "token repo-token");
+    assert.deepEqual(relayed(), []);
+    files.nodes = JSON.stringify({ data: { nodes: [issue(12)] } });
+    const ok = await graphql(both("I_12"));
+    assert.equal(ok.status, 200);
+    // What GitHub got: the document as the gateway printed it, with a token that writes.
+    const sent = relayed();
+    assert.equal(sent.length, 1);
+    assert.match(JSON.parse(sent[0].body).query, /^mutation \{\n {2}a: updateIssue\(input: \{/);
+    assert.equal(JSON.parse(mints().at(-1).body).permissions.issues, "write");
+    // Its nodes looked up with the listener's token, not the run's.
+    const lookup = ctx.github.requests.find((r) => r.body.includes("nodes(ids:"));
+    assert.equal(lookup.auth, "Bearer app-token");
+    // A query: its token only reads, as every other call of the run's.
+    assert.equal((await graphql("{ viewer { login } }")).status, 200);
+    const levels = mints().map((m) => JSON.parse(m.body).permissions.issues);
+    assert.deepEqual([...new Set(levels)].sort(), ["read", "write"]);
+    assert.equal(levels.filter((l) => l === "write").length, 1);
+    // A mutation Deckhand doesn't know: refused before anything is looked up.
+    const deleted = await graphql(
+      'mutation { deleteIssue(input: {issueId: "I_3"}) { clientMutationId } }',
+    );
+    assert.equal(deleted.status, 403);
+  });
+
   test("a run's secret sent from another address: no GitHub, push or ready", async (t) => {
     const ctx = await holding(t, undefined, (dir, github) => ({ GITHUB_URL: github.url }));
     // The sandbox no longer has the address the requests come from; a restarted listener
@@ -2385,8 +2444,10 @@ mounts:
       github.requests.some((r) => r.path.endsWith("/issues/8/comments")),
       false,
     );
+    // Its sandbox's reads: discussions too, read-only, as everything but a write it checked
+    // (github-gateway.mjs).
     const mint = github.requests.find((r) => r.body.includes("repositories"));
-    assert.equal(JSON.parse(mint.body).permissions.discussions, "write");
+    assert.equal(JSON.parse(mint.body).permissions.discussions, "read");
     const runEnv = readFileSync(join(dir, "run-env"), "utf8");
     assert.match(runEnv, /^TASK_MODE=discussion$/m);
     assert.match(runEnv, /^SANDBOX_LIGHT=1$/m);
@@ -2677,9 +2738,10 @@ modes:
     assert.match(work, /^SANDBOX_MODEL=opus$/m);
     assert.match(work, /^TASK_ISSUE=12$/m);
     const mints = github.requests.filter((r) => r.body.includes("repositories"));
-    // A work run writes issues; it pushes through the git gateway and has the listener change
-    // its pull requests: its token only reads both.
-    assert.equal(JSON.parse(mints.at(-1).body).permissions.issues, "write");
+    // A work run's reads get a token that only reads, its checked writes one that writes issues
+    // (github-gateway.mjs); it pushes through the git gateway and has the listener change its
+    // pull requests: its token only reads both.
+    assert.equal(JSON.parse(mints.at(-1).body).permissions.issues, "read");
     assert.equal(JSON.parse(mints.at(-1).body).permissions.pull_requests, "read");
     assert.equal(JSON.parse(mints.at(-1).body).permissions.contents, "read");
     assert.deepEqual(JSON.parse(readFileSync(join(dir, "modes.json"), "utf8")), {});
@@ -3153,7 +3215,8 @@ mounts:
     const work = readFileSync(join(dir, "run-env"), "utf8");
     assert.match(work, /^TASK_ISSUE=30$/m);
     assert.match(work, /^TASK_PROMPT=The maintainer confirmed the onboarding proposal/m);
-    assert.equal(JSON.parse(mints().at(-1).body).permissions.issues, "write");
+    // Its reads' token: a checked write's alone may write (github-gateway.mjs).
+    assert.equal(JSON.parse(mints().at(-1).body).permissions.issues, "read");
     assert.equal(JSON.parse(mints().at(-1).body).permissions.pull_requests, "read");
     const done = JSON.parse(onIssue30(github)[2].body).body;
     assert.match(done, /^All done\./);

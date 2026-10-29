@@ -69,8 +69,9 @@ const DECISIONS: {
   {
     rule: "deny_github",
     name: "GitHub writes",
-    denies: "A denial refuses a run's REST write to GitHub; gh prints the messages to the agent.",
-    refused: (until) => `Every run's REST write to GitHub is refused ${until}.`,
+    denies:
+      "A denial refuses a run's write to GitHub (REST or GraphQL); gh prints the messages to the agent.",
+    refused: (until) => `Every run's write to GitHub is refused ${until}.`,
   },
 ];
 
@@ -239,8 +240,8 @@ function Banner({
         </b>
         <span>
           Policies fail closed, and the files are checked together. Until {one ? "it's" : "they're"}{" "}
-          fixed, auto-merges, automatic reviews, fix runs and runs' REST writes to GitHub here are
-          all refused with “policy error”. Runs started by a comment still start.
+          fixed, auto-merges, automatic reviews, fix runs and runs' writes to GitHub here are all
+          refused with “policy error”. Runs started by a comment still start.
         </span>
         {one && first.file ? (
           lineLink(first, `Line ${first.row} ↓`)

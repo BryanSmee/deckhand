@@ -12,17 +12,20 @@
 // - a review's reads of its thread (comments, reviews, review comments) are refused: it reads
 //   only what allowed users wrote, from TASK_DIGEST (reviews.mjs);
 // - every REST write is checked (github-writes.mjs): classified, its target's kind resolved from
-//   GitHub, then held to its mode's ceiling and the policies' `deny_github`; GraphQL's writes go
-//   on as the token allows until #406 classifies them;
+//   GitHub, then held to its mode's ceiling and the policies' `deny_github`; every GraphQL call
+//   is parsed and validated, and each of its mutations checked the same way (github-graphql.mjs),
+//   and what goes on is the document as parsed, printed again;
 // - every write's body is redacted (the run's secret, the operator's credentials, the tokens
 //   used for it, anything shaped like a GitHub token) before GitHub gets it, and the run's log
 //   says so: what a run posts itself would otherwise skip the redaction of its reply and log;
-// - the call goes on with a token minted for the run's repo, with its mode's permissions
-//   (modes.mjs permissionsFor()), and the answer streams back (upstream.mjs forward()).
+// - the call goes on with a token minted for the run's repo: a write that passed its checks gets
+//   its mode's permissions (modes.mjs permissionsFor()), anything else the same that only read
+//   (github-app.mjs readsOf()), so nothing unchecked can write; the answer streams back
+//   (upstream.mjs forward()).
 //
 // Served on the broker's port, which only the runs' networks reach.
 import { addressOf, NOT_ITS_SANDBOX } from "./broker.mjs";
-import { NO_TOKEN } from "./github-app.mjs";
+import { NO_TOKEN, readsOf } from "./github-app.mjs";
 import { redact } from "./redact.mjs";
 import { baseOf, forward, forwarded, IDLE_MS, MAX_IN_FLIGHT } from "./upstream.mjs";
 import { sendJson } from "./web.mjs";
@@ -100,16 +103,6 @@ export function redactBody(body, secrets) {
   return out === text ? null : Buffer.from(out);
 }
 
-// Whether a GraphQL call's body (as text) may create an issue: names `createIssue`, as sent or
-// in its decoded JSON (an escaped character can't hide it).
-export function createsIssue(text) {
-  let query = "";
-  try {
-    query = JSON.stringify(JSON.parse(text));
-  } catch {}
-  return /createissue/i.test(text) || /createissue/i.test(query);
-}
-
 // Whether a GraphQL call's body (as text) reads a thread's comments or reviews.
 export function readsThread(text) {
   let query = "";
@@ -166,9 +159,13 @@ export function createGithubGateway({
   // (run, { method, path, body }) → null when a REST write may go on, else { status, message }
   // (github-writes.mjs createWriteChecks()). None: every REST write is refused.
   checkWrite = async () => ({ status: 403, message: "no write is checked here" }),
-  // (run, { method, path, body, graphql, at }, status, answer) → GitHub's answer to a write that
-  // went on and may create an issue (a REST write, a GraphQL `createIssue`), its bytes up to
-  // MAX_ANSWER, `at` when it was sent (github-writes.mjs answered(): the issues a run created).
+  // (run, body) → a GraphQL call's { body, write, creates } as it goes on, or { refused }
+  // (github-graphql.mjs createGraphqlChecks()). None: every GraphQL call is refused.
+  checkGraphql = async () => ({ refused: { status: 403, message: "no GraphQL is checked here" } }),
+  // (run, { method, path, body, graphql, creates, at }, status, answer) → GitHub's answer to a
+  // write that went on and may create an issue (a REST write, a GraphQL `createIssue`), its
+  // bytes up to MAX_ANSWER, `at` when it was sent (github-writes.mjs answered(): the issues a
+  // run created).
   wroteWrite = () => {},
   log = () => {},
   maxInFlight = MAX_IN_FLIGHT,
@@ -298,28 +295,54 @@ export function createGithubGateway({
         );
         return fail(res, 403, "this write's URL holds a secret");
       }
-      // A write whose answer may say which issue it created: read as it goes on.
+      // A write whose answer may say which issue it created: read as it goes on. `writing`:
+      // whether it passed a write's checks, so its token may write.
       let watched = null;
-      if (write && where.api && isGraphql(where.path) && createsIssue(body.toString("utf8"))) {
-        watched = { method: req.method, path: where.path, body, graphql: true };
-      }
-      if (write && where.api && !isGraphql(where.path)) {
-        watched = { method: req.method, path: where.path, body, graphql: false };
-        // GitHub may read parameters from a query too, which the check never sees: no write it
-        // classifies needs one.
-        const refused = where.target.search
-          ? { status: 400, message: "a write with a query string: send its fields in the body" }
-          : await checkWrite(run, { method: req.method, path: where.path, body });
-        if (refused) {
-          note(
-            run,
-            `Deckhand refused the run's GitHub write ${clip(run, call)}: ${refused.message}`,
-          );
-          log(`GitHub gateway: refused ${clip(run, call)} for ${run.repo}: ${refused.message}`);
-          return fail(res, refused.status, refused.message);
+      let writing = false;
+      const graphqlCall = where.api && isGraphql(where.path);
+      let refused = null;
+      // GitHub may read parameters from a query too, which the checks never see: no write they
+      // classify needs one. GraphQL is a POST: a GET's query would go on unparsed.
+      if (graphqlCall && req.method !== "POST") {
+        refused = { status: 405, message: "GraphQL is a POST of its JSON" };
+      } else if ((write && where.api) || graphqlCall) {
+        if (where.target.search) {
+          refused = {
+            status: 400,
+            message: "a write with a query string: send its fields in the body",
+          };
         }
       }
-      await proxied(req, res, run, github, where, body, watched);
+      if (!refused && graphqlCall) {
+        const checked = await checkGraphql(run, body);
+        if (checked.refused) refused = checked.refused;
+        else {
+          body = checked.body;
+          writing = checked.write;
+          if (checked.creates.length) {
+            watched = {
+              method: req.method,
+              path: where.path,
+              body,
+              graphql: true,
+              creates: checked.creates,
+            };
+          }
+        }
+      } else if (!refused && write && where.api) {
+        watched = { method: req.method, path: where.path, body, graphql: false };
+        refused = await checkWrite(run, { method: req.method, path: where.path, body });
+        writing = !refused;
+      }
+      if (refused) {
+        note(
+          run,
+          `Deckhand refused the run's GitHub ${write ? "write" : "call"} ${clip(run, call)}: ${refused.message}`,
+        );
+        log(`GitHub gateway: refused ${clip(run, call)} for ${run.repo}: ${refused.message}`);
+        return fail(res, refused.status, refused.message);
+      }
+      await proxied(req, res, run, github, where, body, watched, writing);
     } finally {
       inFlight.set(run, inFlight.get(run) - 1);
     }
@@ -392,11 +415,12 @@ export function createGithubGateway({
     return clean;
   }
 
-  // `watched`: a write whose answer goes to wroteWrite().
-  async function proxied(req, res, run, github, { target, api }, body, watched = null) {
+  // `watched`: a write whose answer goes to wroteWrite(); `writing`: one that passed its checks,
+  // whose token may write.
+  async function proxied(req, res, run, github, { target, api }, body, watched, writing) {
     let token;
     try {
-      ({ token } = await github.repoToken(run.repo, run.extra));
+      ({ token } = await github.repoToken(run.repo, writing ? run.extra : readsOf(run.extra)));
     } catch (error) {
       log(`GitHub gateway: token for ${run.repo}: ${error.message ?? error}`);
       return fail(res, 502, "GitHub refused the token");
