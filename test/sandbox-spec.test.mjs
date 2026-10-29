@@ -102,8 +102,16 @@ test("sandboxSpec: a light run's mounts are read-only, and its volumes its own",
 test("sandboxSpec: a work run with a comment from a fork's pull request mounts read-only", () => {
   const spec = sandboxSpec(runOf({ fork: true }), "p", "m", { ...parts, caches: [] });
   assert.equal(spec.volumes.find((v) => v.kind === "mount").readOnly, true);
-  assert.ok(spec.volumes.some((v) => v.name === "deckhand-org-app-12-workspace"));
   assert.ok(!spec.volumes.some((v) => v.kind === "cache"));
+  // A clone of its own: what it checks out stays out of the issue's other work runs.
+  const names = spec.volumes.map((v) => `${v.name}:${v.path}`);
+  assert.ok(names.includes("deckhand-org-app-12-fork-workspace:/workspace"), String(names));
+  assert.ok(!names.includes("deckhand-org-app-12-workspace:/workspace"));
+  // The agent's session is the issue's, as before.
+  assert.ok(
+    names.some((n) => n.startsWith("deckhand-org-app-12-claude:")),
+    String(names),
+  );
   // Blobless, as before: its own pull request's head is no fork's to it (github-forks.mjs).
   assert.equal(spec.env.SANDBOX_FULL_CLONE, "");
 });
@@ -120,7 +128,8 @@ const BEFORE = {
   work: "--user 1000:1000 --cap-drop ALL --security-opt no-new-privileges --cpus 2 --memory 4g --memory-swap 4g --pids-limit 512 --mount type=volume,src=deckhand-shots,dst=/screenshots,volume-subpath=ffffffffffffffffffffffff -v deckhand-claude-code:/opt/claude-code:ro -v deckhand-org-app-12-workspace:/workspace -v deckhand-org-app-12-claude:/home/node/.claude",
   light:
     "--user 1000:1000 --cap-drop ALL --security-opt no-new-privileges --cpus 2 --memory 4g --memory-swap 4g --pids-limit 512 --mount type=volume,src=deckhand-shots,dst=/screenshots,volume-subpath=ffffffffffffffffffffffff -v deckhand-claude-code:/opt/claude-code:ro -v deckhand-org-app-12-light-workspace:/workspace -v deckhand-org-app-12-light-claude:/home/node/.claude",
-  fork: "--user 1000:1000 --cap-drop ALL --security-opt no-new-privileges --cpus 2 --memory 4g --memory-swap 4g --pids-limit 512 --mount type=volume,src=deckhand-shots,dst=/screenshots,volume-subpath=ffffffffffffffffffffffff -v deckhand-claude-code:/opt/claude-code:ro -v deckhand-org-app-12-workspace:/workspace -v deckhand-org-app-12-claude:/home/node/.claude --mount type=bind,src=/srv/data,dst=/data,readonly --mount type=bind,src=/srv/ref,dst=/ref,readonly",
+  // A fork's run's clone is its own (#409).
+  fork: "--user 1000:1000 --cap-drop ALL --security-opt no-new-privileges --cpus 2 --memory 4g --memory-swap 4g --pids-limit 512 --mount type=volume,src=deckhand-shots,dst=/screenshots,volume-subpath=ffffffffffffffffffffffff -v deckhand-claude-code:/opt/claude-code:ro -v deckhand-org-app-12-fork-workspace:/workspace -v deckhand-org-app-12-claude:/home/node/.claude --mount type=bind,src=/srv/data,dst=/data,readonly --mount type=bind,src=/srv/ref,dst=/ref,readonly",
   caches:
     "--user 1000:1000 --cap-drop ALL --security-opt no-new-privileges --cpus 2 --memory 4g --memory-swap 4g --pids-limit 512 --mount type=volume,src=deckhand-shots,dst=/screenshots,volume-subpath=ffffffffffffffffffffffff -v deckhand-claude-code:/opt/claude-code:ro -v deckhand-org-app-12-workspace:/workspace -v deckhand-org-app-12-claude:/home/node/.claude -v deckhand-cache-a:/home/node/.npm -v deckhand-cache-b:/home/node/.cache/pip",
   mounts:

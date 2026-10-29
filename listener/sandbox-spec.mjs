@@ -40,7 +40,13 @@ export function sandboxSpec(
     { kind: "agent", name: install.volume, path: install.mount, readOnly: true },
     // The issue's clone and agent session, kept between its runs: those of its light runs
     // apart from those of its work (sessionName()).
-    { kind: "session", name: `${session}-workspace`, path: "/workspace" },
+    // A fork's run gets a clone of its own: what it checked out (the fork's commits, branches, a
+    // stash) stays out of the issue's other work runs, which may not fetch it (github-forks.mjs).
+    {
+      kind: "session",
+      name: `${session}${live.fork ? "-fork" : ""}-workspace`,
+      path: "/workspace",
+    },
     { kind: "session", name: `${session}-${agent.session.volume}`, path: agent.session.path },
     // The repo's caches (its config's `caches`), one volume per path, kept across its runs.
     ...caches.map(({ name, path }) => ({ kind: "cache", name, path })),

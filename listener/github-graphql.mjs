@@ -633,9 +633,9 @@ export function writeOf({ name, spec, input }, nodes, repo) {
 // `nodes(repo, ids)`: GitHub's answer to NODES for those IDs, with the listener's token (a
 // missing one: null); `checkWrite(run, write)`: github-writes.mjs's, null when it may go on.
 // `validator`: createValidator()'s check, or (the tests') validationError() on this thread.
-// `files(run, doc, op, variables)`: null when the run's operation may read the files it does,
-// else { status, message } (github-forks.mjs checkGraphql(): a work run that isn't a fork's
-// reads no fork's file).
+// `files(run, { schema, doc, op, variables })`: null when the run's operation may read what it
+// does, else { status, message } (github-forks.mjs checkGraphql(): a work run that isn't a
+// fork's reads nothing of a fork's).
 export function createGraphqlChecks({
   nodes,
   checkWrite,
@@ -661,7 +661,12 @@ export function createGraphqlChecks({
     if (parsed.refused) return parsed;
     const { doc, op, variables, operationName } = parsed;
     // Its variables' values, defaults applied (graphql-js keeps them under `coerced`).
-    const unread = await files(run, doc, op, parsed.coerced?.coerced ?? {});
+    const unread = await files(run, {
+      schema: schema(),
+      doc,
+      op,
+      variables: parsed.coerced?.coerced ?? {},
+    });
     if (unread) return { refused: refusal(unread.status, unread.message) };
     const forwarded = Buffer.from(
       JSON.stringify({

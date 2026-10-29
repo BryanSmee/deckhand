@@ -20,8 +20,9 @@
 //   name its blobs, and nothing says where one comes from. So such a run's clone is whole
 //   (sandbox-spec.mjs SANDBOX_FULL_CLONE), and never fetches a blob on its own. git LFS's
 //   objects (its batch API, `info/lfs/`), named by their sha256, likewise;
-// - reading a file's content over GraphQL (`... on Blob`; a fork's CODEOWNERS, templates,
-//   guidelines, or any repository's at a ref): checkGraphql(), for github-graphql.mjs.
+// - over GraphQL (checkGraphql(), for github-graphql.mjs): a file's content (`... on Blob`),
+//   CODEOWNERS at a ref, a fork's repository named by `repository(owner:, name:)` whatever is
+//   read of it, and of a repository reached otherwise anything but its metadata.
 //
 // What GitHub answers for the lookups is kept a while: whether a pull request or repository is
 // a fork's doesn't change, and a commit stays on a branch it was found on.
@@ -128,24 +129,25 @@ export function advertisedRefs(buffer) {
   return reader.refs();
 }
 
-// Whether `text` (a ref, with what follows it in a path) is spelled as git names refs: nothing
-// git's ref names refuse (git check-ref-format) at its start or anywhere, where GitHub might
-// read past it otherwise; a branch name that isn't one isn't taken for the repository's own.
-// A file's path after it may hold spaces: its first segment, the ref's start, may not.
-function readableRef(text) {
-  if (!text || /^[\s/:-]/.test(text) || /[\x00-\x1f\x7f\\]|\/\/|@\{|\.\./.test(text)) return false;
-  return !/[\s?*[]/.test(text.split("/")[0]);
+// Whether `text` is spelled as git names refs (git check-ref-format), so that GitHub can't read
+// past what the checks read: a branch name that isn't one isn't taken for the repository's own.
+// `path`: it is a ref followed by a file's path (raw files, `blob/`, `tree/`), whose own name
+// may hold `..`, `@{` or spaces: only its first segment, where the ref starts, is held to them.
+function readableRef(text, path = false) {
+  if (!text || /^[\s/:-]/.test(text) || /[\x00-\x1f\x7f\\]|\/\//.test(text)) return false;
+  const first = text.split("/")[0];
+  return !/\.\.|@\{/.test(path ? first : text) && !/[\s?*[]/.test(first);
 }
 
 // What a ref, branch or commit names, as a path or parameter spells it (with what follows it in
-// a path, a revision's suffix): { pull } for a pull request's refs (`refs/pull/<n>/head`,
+// a path, a revision's suffix; `path`: a file's path follows, readableRef()): { pull } for a pull request's refs (`refs/pull/<n>/head`,
 // `pull/<n>/merge`), { sha, first, names } for what may be a commit (its first segment's hex
 // digits as spelled, and the branch or tag names it may be instead), { owner, name, ref } for a ref named with its repository's owner (compare's
 // `owner:ref`, `owner:repo:ref`), { invalid } for what git wouldn't take for a ref's name
 // (readableRef()), else {}: a branch or tag, the repository's own.
-export function refKind(spec) {
+export function refKind(spec, { path = false } = {}) {
   const text = String(spec ?? "");
-  if (!readableRef(text)) return { invalid: true };
+  if (!readableRef(text, path)) return { invalid: true };
   // compare's `owner:ref` or `owner:repo:ref`: the ref after it is read as any other.
   const other = /^([^/:]+):(?:([^/:]+):)?(.*)$/.exec(text);
   if (other) return { owner: other[1], name: other[2] ?? null, ref: other[3] };
@@ -163,9 +165,10 @@ export function refKind(spec) {
 }
 
 // The repository a call names, and what in it may be a fork's: { repo } (owner/name) or { id },
-// and { refs, pulls, blob, lfs, page } (refKind()'s specs, pull request numbers, whether it
-// reads a blob by its id, git LFS's objects, or a web page these checks don't read); null for a
-// call that names none. `kind`: "api" (REST, its path under the API's
+// and { refs, paths, pulls, actions, blob, lfs, page } (refKind()'s specs: whole refs, and
+// refs followed by a file's path; pull request numbers; the workflow runs, jobs or artifacts
+// whose output it downloads; whether it reads a blob by its id, git LFS's objects, or a web page
+// these checks don't read); null for a call that names none. `kind`: "api" (REST, its path under the API's
 // base), "web" (the web host's path, and patch-diff.githubusercontent.com's) or "raw"
 // (raw.githubusercontent.com's, and media.githubusercontent.com's); `query`, its
 // URLSearchParams; `accept`, its header. Trees and a commit's metadata (`git/trees`,
@@ -187,14 +190,19 @@ export function callTargets(kind, path, query = new URLSearchParams(), accept = 
     rest = named[3] ?? "";
   }
   const refs = [];
+  const paths = [];
   const pulls = [];
+  const actions = [];
   let blob = false;
   let lfs = false;
   let page = false;
-  // Any call's ref parameters, every value of each (GitHub may read the last).
-  for (const name of REF_PARAMS) {
+  // Any call's ref parameters, every value of each (GitHub may read the last), whatever their
+  // case or brackets (`ref[]`, read as `ref` too).
+  for (const [key, value] of query) {
+    const name = key.toLowerCase().replace(/\[.*$/, "");
+    if (!REF_PARAMS.includes(name)) continue;
     if (kind === "api" && /^pulls\/?$/i.test(rest) && name !== "ref" && name !== "sha") continue;
-    refs.push(...query.getAll(name));
+    refs.push(value);
   }
   const strip = (ref) => ref.replace(/\.(?:tar\.gz|tgz|zip|diff|patch)$/i, "");
   const sides = (spec) =>
@@ -203,7 +211,7 @@ export function callTargets(kind, path, query = new URLSearchParams(), accept = 
       .filter(Boolean);
   let m;
   if (kind === "raw") {
-    if (rest) refs.push(rest);
+    if (rest) paths.push(rest);
   } else if (kind === "api") {
     if ((m = /^(?:tarball|zipball)\/(.+)$/i.exec(rest))) refs.push(m[1]);
     else if (/^git\/blobs(?:\/|$)/i.test(rest)) blob = true;
@@ -213,10 +221,20 @@ export function callTargets(kind, path, query = new URLSearchParams(), accept = 
     else if ((m = /^pulls\/(\d+)$/i.exec(rest)) && /diff|patch/i.test(accept)) {
       pulls.push(Number(m[1]));
     }
-  } else if (
-    (m = /^(?:archive|tarball|zipball|raw|blob|tree|blame|commit|commits)\/(.+)$/i.exec(rest))
-  ) {
+    // What a workflow run made, which a fork's pull request's workflow writes: its artifacts
+    // (the fork's tree zipped, if it chose) and its logs.
+    else if ((m = /^actions\/artifacts\/(\d+)\/.+$/i.exec(rest))) {
+      actions.push({ artifact: Number(m[1]) });
+    } else if ((m = /^actions\/runs\/(\d+)\/(?:attempts\/\d+\/)?logs$/i.exec(rest))) {
+      actions.push({ run: Number(m[1]) });
+    } else if ((m = /^actions\/jobs\/(\d+)\/logs$/i.exec(rest)))
+      actions.push({ job: Number(m[1]) });
+  } else if ((m = /^(?:archive|tarball|zipball|commit|commits)\/(.+)$/i.exec(rest))) {
     refs.push(strip(m[1]));
+  } else if ((m = /^(?:raw|blob|tree|blame)\/(.+)$/i.exec(rest))) paths.push(m[1]);
+  // A workflow run's artifacts and jobs' logs, on its pages.
+  else if ((m = /^actions\/runs\/(\d+)\/(?:artifacts|job)(?:\/|$)/i.exec(rest))) {
+    actions.push({ run: Number(m[1]) });
   } else if ((m = /^pull\/(\d+)(?:[./]|$)/i.exec(rest))) pulls.push(Number(m[1]));
   // git LFS's batch API (`<repo>.git/info/lfs/…`): its objects are named by their sha256, which
   // whoever wrote a fork knows, as a blob's id.
@@ -225,58 +243,92 @@ export function callTargets(kind, path, query = new URLSearchParams(), accept = 
   // Any other page: refused unless it is one of those that show no file (fail closed: GitHub's
   // pages are many, `blob_excerpt/<id>` serves a blob's lines by its id).
   else if (kind === "web" && !WEB_PAGES.test(rest)) page = true;
-  return { repo, id, refs, pulls, blob, lfs, page };
+  return { repo, id, refs, paths, pulls, actions, blob, lfs, page };
 }
 
-// A repository's fields that answer with one of its files: CODEOWNERS (its errors quote its
-// lines), its issue and pull request templates, its contributing guidelines, its contact and
-// funding links (.github/ISSUE_TEMPLATE/config.yml, FUNDING.yml).
-const REPOSITORY_FILES = new Set([
-  "codeowners",
-  "contactLinks",
-  "contributingGuidelines",
-  "fundingLinks",
-  "issueTemplates",
-  "pullRequestTemplates",
+// What a repository reached through anything but `repository(owner:, name:)` (a pull request's
+// `headRepository`, `node`, `search`, `forks`, `parent`…) may be asked: it may be a fork, and
+// can't be checked before GitHub answers. Its metadata only: the RepositoryInfo interface's
+// fields, ids, settings and the viewer's. Not, say, its CODE_OF_CONDUCT, CODEOWNERS, templates,
+// contributing guidelines, contact or funding links (its files), `object`, `ref`, `refs`,
+// `releases`, `submodules` or `dependencyGraphManifests` (its tree): an allowlist, as the
+// schema's fields are many and grow (checked against vendor/github.graphql's Repository).
+const UNNAMED_REPOSITORY = new Set([
+  "__typename",
+  // RepositoryInfo.
+  ...["archivedAt", "createdAt", "description", "descriptionHTML", "forkCount"],
+  ...["hasDiscussionsEnabled", "hasIssuesEnabled", "hasProjectsEnabled"],
+  ...["hasPullRequestsEnabled", "hasSponsorshipsEnabled", "hasWikiEnabled", "homepageUrl"],
+  ...["isArchived", "isFork", "isInOrganization", "isLocked", "isMirror", "isPrivate"],
+  ...["isTemplate", "issueCreationPolicy", "licenseInfo", "lockReason", "mirrorUrl", "name"],
+  ...["nameWithOwner", "openGraphImageUrl", "owner", "pullRequestCreationPolicy", "pushedAt"],
+  ...["resourcePath", "shortDescriptionHTML", "updatedAt", "url", "usesCustomOpenGraphImage"],
+  "visibility",
+  // Ids, settings, the viewer's.
+  ...["id", "databaseId", "fullDatabaseId", "isEmpty", "isDisabled", "sshUrl", "stargazerCount"],
+  ...["primaryLanguage", "repositoryTopics", "defaultBranchRef", "parent", "diskUsage"],
+  ...["isUserConfigurationRepository", "isSecurityPolicyEnabled", "securityPolicyUrl"],
+  ...["mergeCommitAllowed", "squashMergeAllowed", "rebaseMergeAllowed", "autoMergeAllowed"],
+  ...["allowUpdateBranch", "deleteBranchOnMerge", "webCommitSignoffRequired"],
+  ...["viewerPermission", "viewerCanAdminister", "viewerCanSubscribe", "viewerHasStarred"],
+  ...["viewerSubscription", "viewerDefaultMergeMethod"],
 ]);
+const REPOSITORY_TYPES = new Set(["Repository", "RepositoryInfo"]);
 
-// What operation `op` of `doc` (a parsed GraphQL document, `variables` its coerced variables)
-// reads of a repository's files → [{ blob } | { field, repo, ref }]: a fragment on `Blob` (the
-// only type that holds a file: an expression such as `refs/pull/7/head:a.js` names any), and
-// each REPOSITORY_FILES field, with the repository it is asked of (owner/name) when it is a
-// field of `repository(owner:, name:)` itself, else null (asked through `node`, `search`, a
-// pull request's `headRepository`…: any repository), and whether it names a ref (`refName`).
-export function fileReads(doc, op, variables = {}) {
+// What operation `op` of `doc` (a parsed GraphQL document validated against `schema`,
+// `variables` its coerced variables) reads that may be a fork's → [{ blob } | { repo } |
+// { field, ref } | { field, unnamed }]: a fragment on `Blob` (the only type that holds a whole
+// file: an expression such as `refs/pull/7/head:a.js` names any); each repository it names with
+// `repository(owner:, name:)` (owner/name, variables resolved), all of which it may read if it
+// isn't a fork's; `codeowners(refName:)`, CODEOWNERS' lines at any ref; and each field of a
+// repository reached otherwise that UNNAMED_REPOSITORY doesn't hold. Fields are followed with
+// their types, through fragments, as GraphQL resolves them.
+export function graphqlReads(schema, doc, op, variables = {}) {
   const fragments = new Map(
     doc.definitions.filter((d) => d.kind === "FragmentDefinition").map((d) => [d.name.value, d]),
   );
   const value = (node) => (node?.kind === "Variable" ? variables?.[node.name.value] : node?.value);
+  const named = (type) => {
+    let t = type;
+    while (t?.ofType) t = t.ofType;
+    return t;
+  };
   const reads = [];
   const seen = new Set();
-  function walk(set, repo) {
+  // `type`: the object's type as selected; `unnamed`: whether it is a repository reached through
+  // anything but `repository(owner:, name:)`.
+  function walk(set, type, unnamed) {
     for (const selection of set?.selections ?? []) {
       if (selection.kind === "Field") {
         const name = selection.name.value;
         const args = new Map((selection.arguments ?? []).map((a) => [a.name.value, a.value]));
-        if (REPOSITORY_FILES.has(name)) reads.push({ field: name, repo, ref: args.has("refName") });
+        if (unnamed && REPOSITORY_TYPES.has(type?.name) && !UNNAMED_REPOSITORY.has(name)) {
+          reads.push({ field: name, unnamed: true });
+        }
+        if (name === "codeowners" && args.has("refName")) reads.push({ field: name, ref: true });
+        const child = named(type?.getFields?.()[name]?.type);
         const [owner, repoName] = [value(args.get("owner")), value(args.get("name"))];
-        const named =
-          name === "repository" && typeof owner === "string" && typeof repoName === "string";
-        walk(selection.selectionSet, named ? `${owner}/${repoName}` : null);
-      } else if (selection.kind === "InlineFragment") {
-        if (selection.typeCondition?.name.value === "Blob") reads.push({ blob: true });
-        walk(selection.selectionSet, repo);
-      } else if (selection.kind === "FragmentSpread") {
-        const def = fragments.get(selection.name.value);
-        const key = `${selection.name.value}\0${repo}`;
-        if (!def || seen.has(key)) continue;
-        seen.add(key);
-        if (def.typeCondition.name.value === "Blob") reads.push({ blob: true });
-        walk(def.selectionSet, repo);
+        const root =
+          type === schema.getQueryType() &&
+          name === "repository" &&
+          typeof owner === "string" &&
+          typeof repoName === "string";
+        if (root) reads.push({ repo: `${owner}/${repoName}` });
+        walk(selection.selectionSet, child, !root);
+      } else {
+        const def =
+          selection.kind === "FragmentSpread" ? fragments.get(selection.name.value) : selection;
+        const key = selection.kind === "FragmentSpread" && `${selection.name.value}\0${unnamed}`;
+        if (!def || (key && seen.has(key))) continue;
+        if (key) seen.add(key);
+        const condition = def.typeCondition?.name.value;
+        if (condition === "Blob") reads.push({ blob: true });
+        walk(def.selectionSet, condition ? schema.getType(condition) : type, unnamed);
       }
     }
   }
-  walk(op.selectionSet, null);
+  const roots = { query: "getQueryType", mutation: "getMutationType" };
+  walk(op.selectionSet, schema[roots[op.operation]]?.call(schema), true);
   return reads;
 }
 
@@ -313,6 +365,7 @@ export function createForkChecks({
   const commits = kept(LOOKUP_MS, MAX_KEPT, now);
   const refusedCommits = kept(REFUSED_MS, MAX_KEPT, now);
   const named = kept(LOOKUP_MS, MAX_KEPT, now);
+  const workflows = kept(LOOKUP_MS, MAX_KEPT, now);
   // run → repository → oid → what GitHub advertised it as, to the run's git: OWN_REF (a ref of
   // the repository's own: a branch, a tag) or the numbers of the pull requests whose refs it is.
   const advertised = new WeakMap();
@@ -410,8 +463,8 @@ export function createForkChecks({
   }
 
   // Why `spec` (refKind()'s) of `repo` can't be read, or null.
-  async function refRefusal(run, repo, spec) {
-    const kind = refKind(spec);
+  async function refRefusal(run, repo, spec, path = false) {
+    const kind = refKind(spec, { path });
     if (kind.owner !== undefined) {
       const [owner, name] = repo.split("/");
       // The repository's own owner (and name): what follows is checked as any ref of it.
@@ -430,6 +483,33 @@ export function createForkChecks({
       return commitRefusal(run, repo, kind.sha);
     }
     return null;
+  }
+
+  // Why what a workflow run of `repo` made (`run`, `job` or `artifact`, by id) can't be
+  // downloaded, or null: its head is the repository's own. A fork's pull request runs the
+  // fork's workflow, which writes its logs and artifacts as it likes (cached).
+  async function workflowRefusal(run, repo, { run: runId, job, artifact }) {
+    const key = `${repo}/actions/${runId ?? ""}/${job ?? ""}/${artifact ?? ""}`;
+    let head = workflows.get(key);
+    if (head === undefined) {
+      const path = `/repos/${repo}/actions`;
+      let id = runId;
+      head = null;
+      if (artifact !== undefined) {
+        const found = await get(run.repo, `${path}/artifacts/${artifact}`, [404, 410]);
+        head = found?.workflow_run?.head_repository_id ?? null;
+        id = found?.workflow_run?.id;
+      } else if (job !== undefined) {
+        id = (await get(run.repo, `${path}/jobs/${job}`, [404, 410]))?.run_id;
+      }
+      if (head === null && id !== undefined) {
+        head = (await get(run.repo, `${path}/runs/${id}`, [404, 410]))?.head_repository?.id ?? null;
+      }
+      workflows.set(key, head);
+    }
+    const own = (await repoOf(run, { repo }))?.id;
+    if (head !== null && head === own) return null;
+    return `this workflow run's head isn't ${repo}'s own (a fork's pull request runs the fork's workflow): its artifacts and logs may carry the fork's code; ${FORK_RUN}`;
   }
 
   // Whether one of `names` (refKind()'s) is a branch or a tag of `repo`: those whose names
@@ -489,6 +569,14 @@ export function createForkChecks({
       }
       for (const spec of target.refs) {
         const why = await refRefusal(run, where.repo, spec);
+        if (why) return why;
+      }
+      for (const spec of target.paths) {
+        const why = await refRefusal(run, where.repo, spec, true);
+        if (why) return why;
+      }
+      for (const action of target.actions) {
+        const why = await workflowRefusal(run, where.repo, action);
         if (why) return why;
       }
       return null;
@@ -553,19 +641,21 @@ export function createForkChecks({
     }
   }
 
-  // A restricted run's GraphQL operation (fileReads()) → null when it may go on, else { status,
-  // message }: no blob; a repository's files only asked of `repository(owner:, name:)` naming
-  // one outside its network, itself or its source, never at a ref.
-  async function checkGraphql(run, doc, op, variables) {
+  // A restricted run's GraphQL operation (graphqlReads()) → null when it may go on, else
+  // { status, message }: no blob, no CODEOWNERS at a ref, no fork's repository it names, and
+  // of a repository reached otherwise, its metadata only.
+  async function checkGraphql(run, { schema, doc, op, variables }) {
     if (!restricted(run)) return null;
     const read = (what) => ({
       status: 403,
-      message: `reading ${what} over GraphQL may read a fork's: read the repository's files from its clone, or ask them of repository(owner:, name:) naming ${run.repo}; ${FORK_RUN}`,
+      message: `${what} over GraphQL may read a fork's: read the repository's files from its clone, or ask them of repository(owner:, name:) naming ${run.repo}; ${FORK_RUN}`,
     });
-    for (const { blob, field, repo, ref } of fileReads(doc, op, variables)) {
-      if (blob) return read("a file's content (Blob)");
-      if (ref) return read(`${field} at a ref`);
-      if (!repo) return read(`${field} of a repository it doesn't name`);
+    for (const { blob, repo, field, ref, unnamed } of graphqlReads(schema, doc, op, variables)) {
+      if (blob) return read("reading a file's content (Blob)");
+      if (ref) return read(`reading ${field} at a ref`);
+      if (unnamed) {
+        return read(`${field} of a repository not named by repository(owner:, name:)`);
+      }
       const refused = await checked(run, repo, async () => (await scope(run, { repo }))?.refused);
       if (refused) return refused;
     }

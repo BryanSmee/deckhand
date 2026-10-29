@@ -16,11 +16,11 @@ import {
   fetchBody,
   fetchRequest,
   MAX_LOOKUPS,
-  fileReads,
+  graphqlReads,
   refKind,
 } from "../listener/github-forks.mjs";
 import { createGithubGateway, FILES } from "../listener/github-gateway.mjs";
-import { createGraphqlChecks } from "../listener/github-graphql.mjs";
+import { createGraphqlChecks, githubSchema } from "../listener/github-graphql.mjs";
 import { pkt, pktLines } from "../listener/pkt-line.mjs";
 import { parse } from "../listener/vendor/graphql.mjs";
 import { sandboxAt, serve, tempDir } from "./helpers.mjs";
@@ -57,13 +57,22 @@ function fakeGithub(repos = REPOS) {
     if ((m = /\/compare\/([^.]+)\.\.\./.exec(path))) {
       return { status: m[1] === OWN ? "ahead" : "diverged" };
     }
-    // A branch named as a short commit id could be.
     // Branches and tags named as a short commit id could be, as matching-refs lists them.
     if ((m = /\/git\/matching-refs\/(heads|tags)\/([^?]+)/.exec(path))) {
       const refs = { heads: ["cafe", "2024/q4"], tags: ["2024.1"] }[m[1]];
       return refs
         .filter((r) => r.startsWith(decodeURIComponent(m[2])))
         .map((r) => ({ ref: `refs/${m[1]}/${r}` }));
+    }
+    // Workflow runs 10 (from a branch of the repository) and 11 (from the fork), their jobs
+    // and artifacts.
+    if ((m = /\/actions\/runs\/(\d+)$/.exec(path))) {
+      return { id: Number(m[1]), head_repository: { id: m[1] === "10" ? 1 : 2 } };
+    }
+    if ((m = /\/actions\/jobs\/(\d+)$/.exec(path))) return { run_id: m[1] === "20" ? 10 : 11 };
+    if ((m = /\/actions\/artifacts\/(\d+)$/.exec(path))) {
+      const own = m[1] === "30";
+      return { workflow_run: { id: own ? 10 : 11, head_repository_id: own ? 1 : 2 } };
     }
     if ((m = /\/commits\/([^/]+)\/branches-where-head$/.exec(path))) {
       return m[1] === HEAD ? [{ name: "feature" }] : [];
@@ -204,7 +213,9 @@ test("refKind and callTargets: what a call names that may be a fork's", () => {
     repo: "Org/Repo",
     id: null,
     refs: ["refs/pull/7/head"],
+    paths: [],
     pulls: [],
+    actions: [],
     blob: false,
     lfs: false,
     page: false,
@@ -243,48 +254,83 @@ test("refKind and callTargets: what a call names that may be a fork's", () => {
   ]);
   assert.deepEqual(callTargets("web", "o/r/pull/7.diff").pulls, [7]);
   assert.deepEqual(callTargets("web", "o/r.git/info/refs").repo, "o/r");
-  assert.deepEqual(callTargets("raw", "o/r/refs/pull/7/head/a.js").refs, ["refs/pull/7/head/a.js"]);
+  // A ref followed by a file's path: read as one.
+  assert.deepEqual(callTargets("raw", "o/r/refs/pull/7/head/a.js").paths, [
+    "refs/pull/7/head/a.js",
+  ]);
+  assert.deepEqual(callTargets("web", "o/r/blob/main/a..b.js").paths, ["main/a..b.js"]);
+  // A ref parameter whatever its case or brackets.
+  assert.deepEqual(callTargets("api", "repos/o/r/contents/a", q("REF=x&ref[]=y&sha[a]=z")).refs, [
+    "x",
+    "y",
+    "z",
+  ]);
+  // A workflow run's artifacts and logs, over the API and on its pages; its metadata isn't.
+  assert.deepEqual(callTargets("api", "repos/o/r/actions/artifacts/5/zip").actions, [
+    { artifact: 5 },
+  ]);
+  assert.deepEqual(callTargets("api", "repos/o/r/actions/runs/6/attempts/2/logs").actions, [
+    { run: 6 },
+  ]);
+  assert.deepEqual(callTargets("api", "repos/o/r/actions/jobs/7/logs").actions, [{ job: 7 }]);
+  assert.deepEqual(callTargets("web", "o/r/actions/runs/6/artifacts/5").actions, [{ run: 6 }]);
+  assert.deepEqual(callTargets("api", "repos/o/r/actions/runs/6").actions, []);
 });
 
-test("fileReads: a Blob, and a repository's files with the repository they're asked of", () => {
+test("graphqlReads: a Blob, the repositories named, CODEOWNERS at a ref, an unnamed repository's fields", () => {
+  const schema = githubSchema();
   const reads = (query, variables = {}) => {
     const doc = parse(query);
     const op = doc.definitions.find((d) => d.kind === "OperationDefinition");
-    return fileReads(doc, op, variables);
+    return graphqlReads(schema, doc, op, variables);
   };
   assert.deepEqual(
     reads(
       `{ repository(owner:"o",name:"r") { object(expression:"main:a") { ... on Blob { text } } } }`,
     ),
-    [{ blob: true }],
+    [{ repo: "o/r" }, { blob: true }],
   );
   assert.deepEqual(
     reads(
       `query { repository(owner:"o",name:"r") { object(expression:"x") { ...F } } } fragment F on Blob { text }`,
     ),
-    [{ blob: true }],
+    [{ repo: "o/r" }, { blob: true }],
   );
-  // Its own fields, with the repository named, a variable resolved; CODEOWNERS at a ref.
+  // A named repository, a variable resolved: whatever is read of it is that repository's.
   assert.deepEqual(
     reads(
-      `query($o: String!) { repository(owner:$o,name:"r") { contributingGuidelines { body } codeowners(refName:"x") { errors { source } } } }`,
+      `query($o: String!) { repository(owner:$o,name:"r") { codeOfConduct { body } codeowners(refName:"x") { errors { source } } } }`,
       { o: "evil" },
     ),
-    [
-      { field: "contributingGuidelines", repo: "evil/r", ref: false },
-      { field: "codeowners", repo: "evil/r", ref: true },
-    ],
+    [{ repo: "evil/r" }, { field: "codeowners", ref: true }],
   );
-  // Through anything else: no repository it names.
+  // Reached otherwise (a pull request's head, a node, a repository's forks): its metadata only.
   assert.deepEqual(
     reads(
-      `{ repository(owner:"o",name:"r") { pullRequest(number:7) { headRepository { pullRequestTemplates { body } } } } }`,
+      `{ repository(owner:"o",name:"r") { pullRequest(number:7) { headRepository { id name codeOfConduct { body } } } } }`,
     ),
-    [{ field: "pullRequestTemplates", repo: null, ref: false }],
+    [{ repo: "o/r" }, { field: "codeOfConduct", unnamed: true }],
+  );
+  assert.deepEqual(
+    reads(`{ node(id:"x") { ... on Repository { nameWithOwner pullRequestTemplates { body } } } }`),
+    [{ field: "pullRequestTemplates", unnamed: true }],
+  );
+  assert.deepEqual(
+    reads(
+      `{ repository(owner:"o",name:"r") { forks(first:1) { nodes { ...R } } } } fragment R on Repository { url object(expression:"HEAD") { id } }`,
+    ),
+    [{ repo: "o/r" }, { field: "object", unnamed: true }],
+  );
+  // A repository whose name isn't known: unnamed.
+  assert.deepEqual(
+    reads(
+      `query($n: String) { repository(owner:"o",name:$n) { contributingGuidelines { body } } }`,
+    ),
+    [{ field: "contributingGuidelines", unnamed: true }],
   );
   assert.deepEqual(
     reads(`{ repository(owner:"o",name:"r") { pullRequest(number:7) { title } } }`),
-    [],
+    [{ repo: "o/r" }],
   );
 });
 
@@ -321,6 +367,8 @@ test("a fork's pull request, its repository and its commits are refused; the rep
     ["api", "repos/org/repo/commits", "sha=refs/pull/7/head"],
     ["web", "org/repo/blob/main/a.js", "ref=refs/pull/7/head"],
     ["raw", "org/repo/main/a.js", "ref=refs/pull/7/head"],
+    // In brackets, as Rails reads `ref[]` as `ref`.
+    ["api", "repos/org/repo/contents/a.js", "ref[]=refs/pull/7/head"],
     ["api", "repos/org/repo/pulls/7/files"],
     ["api", "repos/org/repo/pulls/7", "", "application/vnd.github.diff"],
     ["web", "Org/Repo/archive/refs/pull/7/head.zip"],
@@ -393,12 +441,25 @@ test("a fork's pull request, its repository and its commits are refused; the rep
     /isn't a commit on org\/repo's default/,
   );
   // A ref spelled as git wouldn't name one: refused, not taken for a branch.
-  for (const ref of [` ${FORK}`, "refs//pull/7/head", "main\n"]) {
+  for (const ref of [` ${FORK}`, "refs//pull/7/head", "main\n", "main..x"]) {
     const query = new URLSearchParams({ ref }).toString();
     assert.match(
       (await check("api", "repos/org/repo/contents/a.js", query)).message,
       /isn't spelled as git names a ref/,
       JSON.stringify(ref),
+    );
+  }
+  // What a fork's pull request's workflow made: its artifacts and logs.
+  for (const [kind, path] of [
+    ["api", "repos/org/repo/actions/artifacts/31/zip"],
+    ["api", "repos/org/repo/actions/runs/11/logs"],
+    ["api", "repos/org/repo/actions/jobs/21/logs"],
+    ["web", "org/repo/actions/runs/11/artifacts/31"],
+  ]) {
+    assert.match(
+      (await check(kind, path)).message,
+      /this workflow run's head isn't org\/repo's own/,
+      path,
     );
   }
   // A page that isn't one of those that show no file: refused, fail closed. blob_excerpt serves
@@ -449,6 +510,15 @@ test("a fork's pull request, its repository and its commits are refused; the rep
     ["web", "org/repo/issues/7"],
     ["web", "org/repo/releases/download/v1/tool.tgz"],
     ["web", "org/repo/actions/runs/1"],
+    // A file whose own name holds "..", after the ref.
+    ["raw", "org/repo/main/a..b.js"],
+    ["web", "org/repo/blob/main/docs/a..b.md"],
+    // The repository's own workflow runs' artifacts and logs; a fork's run's metadata.
+    ["api", "repos/org/repo/actions/artifacts/30/zip"],
+    ["api", "repos/org/repo/actions/runs/10/logs"],
+    ["api", "repos/org/repo/actions/jobs/20/logs"],
+    ["api", "repos/org/repo/actions/runs/11"],
+    ["web", "org/repo/actions/runs/10/artifacts/30"],
     ["api", "user"],
   ]) {
     assert.equal(await check(kind, path, query, accept), null, path);
@@ -543,7 +613,7 @@ test("a fetch's wants: an own ref's advertised commit goes, a fork's pull reques
   assert.equal(await forks.fetchScope(run, "other/lib"), null);
 });
 
-test("over GraphQL, a work run that isn't a fork's reads no fork's file", async () => {
+test("over GraphQL, a work run that isn't a fork's reads nothing of a fork's", async () => {
   const forks = createForkChecks({ get: fakeGithub().get });
   const checks = createGraphqlChecks({
     nodes: async () => [],
@@ -562,11 +632,13 @@ test("over GraphQL, a work run that isn't a fork's reads no fork's file", async 
       `{ repository(owner:"org",name:"repo") { codeowners(refName:"refs/pull/7/head") { errors { source } } } }`,
       /codeowners at a ref/,
     ],
-    // A fork's files, written by its author: by name, a variable, or through its pull request.
+    // A fork's repository, named, whatever is read of it: its files are its author's.
     [
       `{ repository(owner:"evil",name:"repo") { contributingGuidelines { body } } }`,
       /evil\/repo is a fork of org\/repo's network/,
     ],
+    [`{ repository(owner:"evil",name:"repo") { codeOfConduct { body } } }`, /evil\/repo is a fork/],
+    [`{ repository(owner:"evil",name:"repo") { name } }`, /evil\/repo is a fork/],
     [
       `query($n: String!) { repository(owner:"evil",name:$n) { issueTemplates { body } } }`,
       /evil\/repo is a fork/,
@@ -574,11 +646,15 @@ test("over GraphQL, a work run that isn't a fork's reads no fork's file", async 
     ],
     [
       `{ repository(owner:"org",name:"repo") { pullRequest(number:7) { headRepository { pullRequestTemplates { body } } } } }`,
-      /pullRequestTemplates of a repository it doesn't name/,
+      /pullRequestTemplates of a repository not named by repository\(owner:, name:\)/,
+    ],
+    [
+      `{ repository(owner:"org",name:"repo") { pullRequest(number:7) { headRepository { codeOfConduct { body } } } } }`,
+      /codeOfConduct of a repository not named/,
     ],
     [
       `{ node(id:"R_x") { ... on Repository { codeowners { errors { source } } } } }`,
-      /doesn't name/,
+      /codeowners of a repository not named/,
     ],
   ]) {
     const refused = await check(workRun(), query, variables);
@@ -586,10 +662,12 @@ test("over GraphQL, a work run that isn't a fork's reads no fork's file", async 
     assert.match(refused.refused.message, why, query);
     assert.equal((await check(fork, query, variables)).refused, undefined, query);
   }
-  // Its own repository's templates (gh pr create, gh issue create), another repository's.
+  // Its own repository's templates (gh pr create, gh issue create), another repository's, a
+  // pull request's head repository's metadata (gh pr view, gh pr checkout).
   for (const query of [
     `query($o: String!, $n: String!) { repository(owner:$o,name:$n) { pullRequestTemplates { filename body } } }`,
     `{ repository(owner:"other",name:"lib") { contributingGuidelines { body } codeowners { errors { source } } } }`,
+    `{ repository(owner:"org",name:"repo") { pullRequest(number:7) { headRepository { id name nameWithOwner url isFork owner { login } } } } }`,
   ]) {
     assert.equal(
       (await check(workRun(), query, { o: "Org", n: "Repo" })).refused,
@@ -931,4 +1009,16 @@ test("a file host's calls don't count towards a run's calls in flight: they hold
   assert.equal((await gw.call("127.0.0.1", "/api/v3/repos/org/repo", secret)).status, 429);
   const file = await gw.call("localhost", "/org/repo/main/README.md", secret);
   assert.equal(file.status, 200);
+});
+
+test("a ref parameter behind a ';' is read as one: the gateway splits a query on it too", async (t) => {
+  const gw = await gateway(t);
+  const { secret } = gw.register(false);
+  const res = await gw.call(
+    "127.0.0.1",
+    "/api/v3/repos/org/repo/contents/a.js?x=1;ref=refs/pull/7/head",
+    secret,
+  );
+  assert.equal(res.status, 403);
+  assert.match((await res.json()).message, /pull request #7 is from a fork/);
 });

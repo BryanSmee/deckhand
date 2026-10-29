@@ -461,6 +461,10 @@ export function createGithubGateway({
     return run;
   }
 
+  // A call's query as the checks read it: split on `;` too, as some servers do (Rack before
+  // 3), so a parameter can't hide behind one.
+  const queryOf = (target) => new URLSearchParams(target.search.replace(/;/g, "&"));
+
   // A restricted run's call (github-forks.mjs restricted()) → { refused, git } when it would
   // bring a fork's code, { fetch } (the repository) for a git call whose fetch is checked and
   // whose advertisement is remembered, or null. GraphQL's are github-graphql.mjs's.
@@ -479,7 +483,7 @@ export function createGithubGateway({
       const refused = await forks.checkCall(run, {
         kind: file.kind,
         path: where.path.slice(file.prefix.length),
-        query: where.target.searchParams,
+        query: queryOf(where.target),
         accept: String(req.headers.accept ?? ""),
       });
       return refused && { refused, git: false };
@@ -493,7 +497,7 @@ export function createGithubGateway({
     const refused = await forks.checkCall(run, {
       kind: where.api ? "api" : "web",
       path: where.path,
-      query: where.target.searchParams,
+      query: queryOf(where.target),
       accept: String(req.headers.accept ?? ""),
     });
     return refused && { refused, git: false };

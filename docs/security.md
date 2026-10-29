@@ -634,72 +634,86 @@ So the [GitHub gateway](#the-github-gateway) refuses a work run that isn't a for
 bring a fork's code (`listener/github-forks.mjs`), reading it included: it can't tell reading
 from running. A fork's run, and a light run (no caches, read-only mounts, no engine, no push),
 fetch as before. The run's log notes each refusal, and the refusal says why, and that a
-comment from an allowed user on the fork's pull request starts a fork's run, which fetches it:
+comment from an allowed user on the fork's pull request starts a fork's run, which fetches it.
+
+**What it covers, and what it doesn't.** A fork's code is its _tree_: its files, commits and
+blobs, and what is made of them (archives, diffs and patches, its workflows' artifacts and
+logs). That is what tools fetch to build, test or run a pull request, and what the gateway
+refuses, through every way to GitHub a sandbox has (below). Text a fork's author writes
+elsewhere (the pull request's description and comments, its commit messages, branch names, its
+workflows' check-run summaries, a repository's description) isn't a tree: it is read as any
+comment is, data the sandbox's instructions tell the agent never to follow, and no check could
+refuse it (`gh pr view` shows the description). An injection that asks the agent to decode and
+run such text is no more a fork's code than a script pasted in a comment; the gateway doesn't
+see the difference, and doesn't claim to.
 
 - **A fork's repository**: any repository whose source is the run's repository's (a fork of
   it, or of one of its forks), by name or by id (`repositories/<id>`), whatever is read of it:
   git (`gh pr checkout` of a fork's pull request may fetch from there), the API, its pages,
-  its raw files. Git shows the reason as `remote: Deckhand: …`.
-- **A fork's pull request's head or merge**, in the run's repository (`refs/pull/<n>/…`, the
+  its files, GraphQL's `repository(owner:, name:)`. Git shows the reason as
+  `remote: Deckhand: …`.
+- **A fork's pull request's head or merge** in the run's repository (`refs/pull/<n>/…`, the
   pull request looked up on GitHub: its head isn't in the repository): in a fetch (a
   `want-ref`, or a `want` of the commit GitHub advertised under it, which git shows as
-  `remote error: Deckhand: …`), an archive (`tarball`, `zipball`, `archive/`), any call's
-  `ref`, `sha`, `head` or `base` parameter (every value of each, whatever the path: contents,
-  `readme`, `license`, `codeowners/errors` and whatever else takes one, rather than a list of
-  those that serve a file; a pull request list's `head` and `base` only filter it, and aren't
-  checked there), a commit, a comparison, raw and LFS files, and its diff and files (`gh pr diff`, `pulls/<n>/files`, `pull/<n>.diff` and
-  `patch-diff.githubusercontent.com`, where it redirects). Its metadata (`gh pr view`) isn't
-  refused.
+  `remote error: Deckhand: …`), an archive (`tarball`, `zipball`, `archive/`), a commit, a
+  comparison, a ref parameter (below), raw and LFS files, and its diff and files
+  (`gh pr diff`, `pulls/<n>/files`, `pull/<n>.diff` and `patch-diff.githubusercontent.com`,
+  where it redirects). Its metadata (`gh pr view`) isn't refused.
 - **A commit that isn't the repository's**: GitHub serves any commit of a repository's network
-  (its forks') through the repository itself. So a fetch's `want`s, and a commit a call names
-  (an archive's, a comparison's sides, a `ref` or `sha` parameter), must be the repository's: a ref of
-  its own pointed at it in what GitHub advertised to the run's git (a branch, a tag, a pull
-  request from one of its branches), its default branch has it (`compare`), or it is a
-  branch's head (`branches-where-head`). A branch or tag name is the repository's. Anything
-  else, a commit a branch dropped or one only a tag reaches, is refused rather than looked
-  for, and a fetch wanting over 20 objects no ref named is refused without asking GitHub. A
-  comparison with another owner's branch (`main...someone:branch`) is refused too; with the
-  repository's own owner (`main...org:<ref>`, `org:repo:<ref>`), what follows is checked as
-  any ref. An id is a possible commit from 4 hex digits (git's shortest abbreviation): a
-  branch or tag of the repository named so is looked up first, and passes: a parameter's
-  whole value, or each prefix of a path (`cafe`, the tag `2024.1`, the branch `2024/q4`), one
-  `git/matching-refs` call for each kind. A commit found nowhere stays refused for a minute
-  without asking GitHub again.
-  A ref spelled as git wouldn't name one (whitespace or a control character, `//`, `..`, `@{`,
-  a backslash, a leading `-`, `/` or `:`) is refused, rather than taken for a branch: the check doesn't rest on
-  how GitHub reads it. A tree and a commit's metadata (`git/trees`, `git/commits`) hold no
-  file's content: not checked.
-- **A page of the repository that may show a file**: on the web host, the checks read the
-  shapes above (archives, `raw/`, `blob/`, `tree/`, `blame/`, `commit/`, `compare/`, `pull/<n>`)
-  and let through git's own calls and the pages that show no file (its home, issues, pull
-  request lists, releases and their assets, tags, branches, labels, milestones, Actions,
-  discussions, the wiki, security, insights, settings). Every other page of the repository is
-  refused, fail closed: GitHub's pages are many, and `blob_excerpt/<id>` serves a blob's lines
-  by its id. Another repository's pages, outside its network, aren't checked.
+  (its forks') through the repository itself. So a fetch's `want`s, and a commit a call names,
+  must be the repository's: a ref of its own pointed at it in what GitHub advertised to the
+  run's git (a branch, a tag, a pull request from one of its branches), its default branch has
+  it (`compare`), or it is a branch's head (`branches-where-head`). Anything else, a commit a
+  branch dropped or one only a tag reaches, is refused rather than looked for (for a minute,
+  without asking GitHub again), and a fetch wanting over 20 objects no ref named is refused at
+  once. An id is a possible commit from 4 hex digits (git's shortest abbreviation): a branch
+  or tag of the repository named so is looked up first and passes (`cafe`, the tag `2024.1`,
+  the branch `2024/q4`: a parameter's whole value, or each prefix of a path, one
+  `git/matching-refs` call per kind). A tree and a commit's metadata (`git/trees`,
+  `git/commits`) hold no file: not checked.
+- **Ref parameters**: any REST, web or file host call's `ref`, `sha`, `head` and `base`
+  (every value of each, whatever the path, their case or brackets: `ref[]`; the query split on
+  `;` too), rather than a list of the calls that serve a file (`contents`, `readme`, `license`,
+  `codeowners/errors`…). A pull request list's `head` and `base` only filter it: not checked
+  there. A comparison's sides are refs too: another owner's (`main...someone:branch`) is
+  refused, and after the repository's own owner (`main...org:<ref>`, `org:repo:<ref>`), the ref
+  is checked as any. A ref spelled as git wouldn't name one (whitespace or a control
+  character, `//`, `..`, `@{`, a backslash, a leading `-`, `/` or `:`) is refused rather than
+  taken for a branch, so the check doesn't rest on how GitHub reads it; after a ref, a file's
+  own name may hold `..`, `@{` or spaces (`main/a..b.js`).
+- **A page of the repository**: on the web host, the checks read the shapes above (archives,
+  `raw/`, `blob/`, `tree/`, `blame/`, `commit/`, `compare/`, `pull/<n>`) and let through git's
+  own calls and the pages that show no file (its home, issues, pull request lists, releases
+  and their assets, tags, branches, labels, milestones, Actions, discussions, the wiki,
+  security, insights, settings). Every other page of the repository is refused, fail closed:
+  GitHub's pages are many, and `blob_excerpt/<id>` serves a blob's lines by its id.
 - **A blob by its id** (`git/blobs/<sha>`, or a fetch's `want` of one): whoever wrote a fork
-  can name its blobs (`git hash-object`), and nothing says where one comes from, so such a
-  run gets none, its repository's own included: it reads a file with `contents/<path>?ref=`
-  or from its clone. That clone is whole (`SANDBOX_FULL_CLONE`, set by
-  `listener/sandbox-spec.mjs`), where other runs' are blobless (`--filter=blob:none`), whose
-  checkouts ask for each blob they lack: a kept blobless clone (a fork's run's, or an older
-  Deckhand's) gets every blob it lacks at the start, at once (`git fetch --refetch`), before
-  any checkout.
+  can name its blobs (`git hash-object`), and nothing says where one comes from, so such a run
+  gets none, its repository's own included: it reads a file with `contents/<path>?ref=` or from
+  its clone. That clone is whole (`SANDBOX_FULL_CLONE`, set by `listener/sandbox-spec.mjs`),
+  where other runs' are blobless (`--filter=blob:none`), whose checkouts ask for each blob they
+  lack: a kept blobless clone (an older Deckhand's) gets every blob it lacks at the start, at
+  once (`git fetch --refetch`), before any checkout.
 - **git LFS's objects** (its batch API, `<repo>.git/info/lfs/…`, whose download links are on
-  `github-cloud.githubusercontent.com`, a plain host): named by their sha256, which whoever
-  wrote a fork knows, as a blob's id, so the batch API is refused to such a run. It reads an
-  LFS file by its branch from `media.githubusercontent.com` (checked as below). The sandbox
-  image has no `git-lfs`, so a clone only ever had its pointer files.
-- **A file's content over GraphQL** (`listener/github-forks.mjs` `checkGraphql()`): a fragment
-  on `Blob`, the only type that holds a whole file, is refused to such a run whatever it names
-  (an expression such as `refs/pull/7/head:a.js` can name a fork's). A repository's fields
-  that answer with one of its files (`codeowners`, whose errors quote CODEOWNERS' lines,
-  `contributingGuidelines`, `issueTemplates`, `pullRequestTemplates`, `contactLinks`,
-  `fundingLinks`) go through only as fields of `repository(owner:, name:)` itself (variables
-  resolved) naming a repository outside its network, itself or its source, without a ref
-  (`codeowners(refName:)` is refused): on a fork's repository they are its author's files.
-  Reached any other way (`node`, `search`, a pull request's `headRepository`), they're
-  refused. The other fields that take a ref (`object`, `ref`) answer with a commit's or a
-  tree's metadata, which REST doesn't check either.
+  `github-cloud.githubusercontent.com`): named by their sha256, which whoever wrote a fork
+  knows, as a blob's id, so the batch API is refused. An LFS file is read by its branch from
+  `media.githubusercontent.com` (checked as raw files are). The sandbox image has no `git-lfs`.
+- **A workflow run's artifacts and logs**, which a fork's pull request's workflow writes as it
+  likes (its tree zipped, say): their downloads (`actions/artifacts/<id>/…`,
+  `actions/runs/<id>/logs`, `actions/jobs/<id>/logs`, a run's artifact and job pages) are
+  refused unless the run's head repository is the repository itself (looked up on GitHub). A
+  run's metadata (`gh run view`) isn't refused.
+- **GraphQL** (`listener/github-forks.mjs` `checkGraphql()`, its fields followed with their
+  types through the pinned schema): a fragment on `Blob`, the only type that holds a whole
+  file, is refused whatever it names (an expression such as `refs/pull/7/head:a.js` can name a
+  fork's), and so is `codeowners(refName:)` (CODEOWNERS' lines at any ref). A repository named
+  by `repository(owner:, name:)` (variables resolved) is checked as above: a fork's is refused,
+  whatever is asked of it. A repository reached any other way (a pull request's
+  `headRepository`, `node`, `search`, `forks`, `parent`) may be a fork, which can't be checked
+  before GitHub answers: only its metadata may be asked of it (an allowlist: the
+  `RepositoryInfo` interface's fields, ids, settings, the viewer's), not its files
+  (`codeOfConduct`, `codeowners`, its templates and guidelines…) nor its tree (`object`,
+  `ref`, `releases`…), which are many and grow.
 - **GitHub's file hosts**: `raw.githubusercontent.com` serves any file of a public repository
   without a token, a fork's pull request's included (`/<owner>/<repo>/refs/pull/<n>/head/<path>`,
   or a fork's commit through the repository), `media.githubusercontent.com` its LFS files by
@@ -710,6 +724,11 @@ comment from an allowed user on the fork's pull request starts a fork's run, whi
   Archives come from `codeload.github.com`, where `github.com/<repo>/archive/…` and the API's
   `tarball` and `zipball` redirect: it isn't a mandatory host, and a grant that adds it
   reaches any public repository's archives, around these checks.
+- **The issue's kept clone**: a fork's run gets a clone of its own (a `-fork-workspace`
+  volume, `listener/sandbox-spec.mjs`), so what it checked out (the fork's commits, its
+  branch, a stash) never sits in the clone the issue's other work runs start from, where no
+  gateway call would be needed to read it. The agent's session stays the issue's (see
+  [Not covered](#not-covered)).
 
 A repository's own pull requests (their heads on its branches) are never refused. What a
 lookup can't answer (GitHub down, say) is refused, as a `502`: try again. When the run's
@@ -1738,10 +1757,11 @@ it again when you change `AGY_VERSION`.
   Dockerfile pulling from a host the run may reach can bring anything in, as its setup
   command can.
 - **A fork's code in a work run** can still write to the agent's session (`~/.claude`,
-  `~/.codex` or `~/.gemini`) of that run's issue, which its next work run starts with, and to
-  what `.git` keeps besides hooks (objects, refs, the stash, and the branches' `remote` and
-  `merge`): enough to make a branch of its own look like one of the repository's, which the
-  next work run then stays on, and runs its setup on. It can also push the run's own branch,
+  `~/.codex` or `~/.gemini`) of that run's issue, which its next work run starts with. What
+  `.git` keeps besides hooks (objects, refs, the stash, and the branches' `remote` and
+  `merge`), enough to make a branch of its own look like one of the repository's, stays in a
+  fork's run's own clone (`-fork-workspace`), which only the issue's later fork's runs start
+  from. It can also push the run's own branch,
   which a repository granted `allow_branch_docker_images` builds. It ran with the same token
   and hosts as the run it would reach, one an allowed user asked for: read what a fork's pull
   request does before asking for work on it (see [What a fork's code may reach](#what-a-forks-code-may-reach)).
@@ -1752,8 +1772,10 @@ it again when you change `AGY_VERSION`.
   gateway, though: the run's container engine reaches GitHub anonymously, around it (the
   exception in [The GitHub gateway](#the-github-gateway)), so a build there can fetch a
   public fork; a `codeload.github.com` grant serves any public repository's archives; and the
-  same code anywhere else (another repository, a gist, a package registry the run may reach)
-  is no fork's to any check. Ask for work on a fork's pull request from that pull request.
+  same code anywhere else (another repository, a gist, a package registry the run may reach),
+  or written as text (a pull request's description, a comment, a workflow's check-run
+  summary), is no fork's tree to any check. Ask for work on a fork's pull request from that
+  pull request.
 - **Image builds** (a repo's `dockerfile`, with `allow_dockerfile`) and the **Claude Code
   install** run with normal network access: they run on the host's Docker, outside the
   sandboxes' networks. Builds run the repo's Dockerfile from its default branch (or its pull
