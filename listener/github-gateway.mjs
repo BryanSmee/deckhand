@@ -17,8 +17,10 @@
 //   and what goes on is the document as parsed, printed again;
 // - a work run that isn't a fork's gets nothing that would bring a fork's code (github-forks.mjs):
 //   a fork's repository, a fork's pull request's head, a commit that isn't its repository's,
-//   in a fetch, an archive, the API, a page or a raw file (raw.githubusercontent.com, relayed
-//   here too, but anonymously: it never gets a token);
+//   in a fetch, an archive, the API, a page or a file of GitHub's file hosts (FILES:
+//   raw.githubusercontent.com, media.githubusercontent.com, patch-diff.githubusercontent.com),
+//   relayed here for such a run only (broker-http.mjs), and sent on anonymously: they never get
+//   a token, nor count towards its calls in flight, as when they were plain hosts;
 // - every write's body is redacted (the run's secret, the operator's credentials, the tokens
 //   used for it, anything shaped like a GitHub token) before GitHub gets it, and the run's log
 //   says so: what a run posts itself would otherwise skip the redaction of its reply and log;
@@ -303,9 +305,14 @@ export function createGithubGateway({
     if (review && !where.file && refusedToReview(where)) return refuseThread(run, res, call);
     const github = app();
     if (!github) return fail(res, 503, "the GitHub App is not set up");
+    // A file host's call holds no token, and was a plain host's before: not counted, so a setup
+    // that downloads many files at once isn't cut off part-way.
+    const counted = !where.file;
     const calls = inFlight.get(run) ?? 0;
-    if (calls >= maxInFlight) return fail(res, 429, `more than ${maxInFlight} calls at once`);
-    inFlight.set(run, calls + 1);
+    if (counted && calls >= maxInFlight) {
+      return fail(res, 429, `more than ${maxInFlight} calls at once`);
+    }
+    if (counted) inFlight.set(run, calls + 1);
     try {
       let body;
       // A fetch's: the repository whose refs GitHub's answer advertises (info/refs, ls-refs), for
@@ -431,7 +438,7 @@ export function createGithubGateway({
         inflated,
       });
     } finally {
-      inFlight.set(run, inFlight.get(run) - 1);
+      if (counted) inFlight.set(run, inFlight.get(run) - 1);
     }
   }
 

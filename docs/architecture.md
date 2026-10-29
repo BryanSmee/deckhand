@@ -391,8 +391,9 @@ line's `tool`, `output` and starting `step` entries (`at`, ms). `dashboard/src/t
   research and push calls and a review's reads of its thread; refuses a work run that isn't a
   fork's what would bring a fork's code (`github-forks.mjs`: a fork's repository, a fork's
   pull request's head, a commit that isn't the repository's, by git, the API, an archive, a
-  page or a file, GitHub's file hosts relayed too and sent on without a token; its clone is
-  whole, as a blob by its id is refused it);
+  page (any other of the repository's refused) or a file, GitHub's file hosts relayed too for
+  such a run and sent on without a token; its clone is whole, as a blob by its id is refused
+  it);
   redacts every write's body
   (`redact()`, the run's and operator's secrets) and notes it in the run's log; holds each
   REST write to its mode's ceiling and the policies' `deny_github` (`github-writes.mjs`, its

@@ -48,6 +48,14 @@ const HEX = /^[0-9a-f]{7,64}$/i;
 // whatever the path, rather than a list of the calls that would serve a file. A pull request
 // list's `head` and `base` only filter it, by branch: not checked there.
 const REF_PARAMS = ["ref", "sha", "head", "base"];
+// A repository's web pages that show no file's content: its home, git's own calls (checked as
+// fetches: github-gateway.mjs), issues, pull request lists, releases (their assets the
+// maintainers' uploads; their source archives are archive/ links, checked), tags, branches,
+// labels, milestones, Actions, discussions, the wiki, security, insights and settings.
+const WEB_PAGES = new RegExp(
+  String.raw`^(?:|info\/refs|git-upload-pack|(?:issues|pulls|releases|tags|branches|labels|milestones?|actions|discussions|wiki|security|pulse|graphs|network|activity|stargazers|watchers|forks|contributors|settings|projects)(?:\/.*)?)$`,
+  "i",
+);
 // Where a commit's metadata is read, not its patch: its statuses, checks, pull requests.
 const COMMIT_METADATA =
   /\/(?:status|statuses|check-runs|check-suites|pulls|comments|branches-where-head)$/i;
@@ -113,12 +121,23 @@ export function advertisedRefs(buffer) {
   return reader.refs();
 }
 
+// Whether `text` (a ref, with what follows it in a path) is spelled as git names refs: nothing
+// git's ref names refuse (git check-ref-format) at its start or anywhere, where GitHub might
+// read past it otherwise; a branch name that isn't one isn't taken for the repository's own.
+// A file's path after it may hold spaces: its first segment, the ref's start, may not.
+function readableRef(text) {
+  if (/^[\s/-]/.test(text) || /[\x00-\x1f\x7f\\]|\/\/|@\{|\.\./.test(text)) return false;
+  return !/[\s?*[]/.test(text.split("/")[0]);
+}
+
 // What a ref, branch or commit names, as a path or parameter spells it (with what follows it in
 // a path, a revision's suffix): { pull } for a pull request's refs (`refs/pull/<n>/head`,
 // `pull/<n>/merge`), { sha } for what may be a commit, { owner } for another repository's
-// (compare's `owner:branch`), else {}: a branch or tag, the repository's own.
+// (compare's `owner:branch`), { invalid } for what git wouldn't take for a ref's name
+// (readableRef()), else {}: a branch or tag, the repository's own.
 export function refKind(spec) {
-  const text = String(spec ?? "").replace(/^\/+/, "");
+  const text = String(spec ?? "");
+  if (!readableRef(text)) return { invalid: true };
   const other = /^([^/:]+):/.exec(text);
   if (other) return { owner: other[1] };
   const pull = /^(?:refs\/)?pull\/(\d+)(?:[/~^@.]|$)/i.exec(text);
@@ -128,8 +147,9 @@ export function refKind(spec) {
 }
 
 // The repository a call names, and what in it may be a fork's: { repo } (owner/name) or { id },
-// and { refs, pulls, blob, lfs } (refKind()'s specs, pull request numbers, whether it reads a
-// blob by its id, or git LFS's objects); null for a call that names none. `kind`: "api" (REST, its path under the API's
+// and { refs, pulls, blob, lfs, page } (refKind()'s specs, pull request numbers, whether it
+// reads a blob by its id, git LFS's objects, or a web page these checks don't read); null for a
+// call that names none. `kind`: "api" (REST, its path under the API's
 // base), "web" (the web host's path, and patch-diff.githubusercontent.com's) or "raw"
 // (raw.githubusercontent.com's, and media.githubusercontent.com's); `query`, its
 // URLSearchParams; `accept`, its header. Trees and a commit's metadata (`git/trees`,
@@ -154,6 +174,7 @@ export function callTargets(kind, path, query = new URLSearchParams(), accept = 
   const pulls = [];
   let blob = false;
   let lfs = false;
+  let page = false;
   // Any call's ref parameters, every value of each (GitHub may read the last).
   for (const name of REF_PARAMS) {
     if (kind === "api" && /^pulls\/?$/i.test(rest) && name !== "ref" && name !== "sha") continue;
@@ -185,7 +206,10 @@ export function callTargets(kind, path, query = new URLSearchParams(), accept = 
   // whoever wrote a fork knows, as a blob's id.
   else if (/^info\/lfs(?:\/|$)/i.test(rest)) lfs = true;
   else if ((m = /^compare\/(.+)$/i.exec(rest))) refs.push(...sides(m[1]));
-  return { repo, id, refs, pulls, blob, lfs };
+  // Any other page: refused unless it is one of those that show no file (fail closed: GitHub's
+  // pages are many, `blob_excerpt/<id>` serves a blob's lines by its id).
+  else if (kind === "web" && !WEB_PAGES.test(rest)) page = true;
+  return { repo, id, refs, pulls, blob, lfs, page };
 }
 
 // Whether `doc` (a parsed GraphQL document) reads a file's content: a fragment on `Blob`, the
@@ -220,6 +244,10 @@ function kept(ms, max, now) {
   };
 }
 
+// Whether `run`'s calls are checked: a work run (it has caches, mounts and maybe an engine, and
+// pushes) that isn't a fork's.
+export const restricted = (run) => run?.push === true && run.fork !== true;
+
 export function createForkChecks({
   // (repo, path, expected) → GitHub's JSON for a GET, with the App's token for `repo`, or null
   // for a status in `expected` (github.mjs getJson()).
@@ -234,10 +262,6 @@ export function createForkChecks({
   // the repository's own: a branch, a tag) or the numbers of the pull requests whose refs it is.
   const advertised = new WeakMap();
   const OWN_REF = "own";
-
-  // Whether `run`'s fetches are checked: a work run (it has caches, mounts and maybe an engine,
-  // and pushes) that isn't a fork's.
-  const restricted = (run) => run?.push === true && run.fork !== true;
 
   // A repository by name or id, as GitHub has it (cached), or null when it has none.
   async function repoOf(run, { repo, id }) {
@@ -333,6 +357,9 @@ export function createForkChecks({
       if (kind.owner.toLowerCase() === repo.split("/")[0]) return null;
       return `${kind.owner}'s ${spec.slice(kind.owner.length + 1)} is another repository's, maybe a fork's: ${FORK_RUN}`;
     }
+    if (kind.invalid) {
+      return `${JSON.stringify(String(spec).slice(0, 80))} isn't spelled as git names a ref (whitespace, a control character, "//", "..", "@{", a leading "-" or "/"): name a branch, a tag or a commit of ${repo}`;
+    }
     if (kind.pull !== undefined) return pullRefusal(run, repo, kind.pull);
     if (kind.sha !== undefined) return commitRefusal(run, repo, kind.sha);
     return null;
@@ -360,6 +387,9 @@ export function createForkChecks({
       if (where.refused) return where.refused;
       if (target.blob) {
         return `a blob read by its id may be a fork's (whoever wrote one can name its blobs): read the file with contents/<path>?ref=<branch>, or from the clone; ${FORK_RUN}`;
+      }
+      if (target.page) {
+        return `${where.repo}'s ${path.split("/").slice(2).join("/").slice(0, 80)} is a page Deckhand doesn't check, which may show a fork's code: read the repository through git, the API or its raw files; ${FORK_RUN}`;
       }
       if (target.lfs) {
         return `git LFS's objects are named by their sha256, which may be a fork's (whoever wrote one knows it): read an LFS file by its branch from media.githubusercontent.com/media/<owner>/<repo>/<branch>/<path>; ${FORK_RUN}`;

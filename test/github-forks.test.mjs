@@ -154,6 +154,22 @@ test("refKind and callTargets: what a call names that may be a fork's", () => {
   assert.deepEqual(refKind("feature/x/README.md"), {});
   assert.deepEqual(refKind("refs/heads/main/a"), {});
   assert.deepEqual(refKind("evil:main"), { owner: "evil" });
+  // What git wouldn't take for a ref's name isn't taken for a branch of the repository's own.
+  for (const odd of [
+    ` ${FORK}`,
+    `${FORK}\n`,
+    "refs//pull/7/head",
+    "/refs/pull/7/head",
+    "-main",
+    "main@{1}",
+    "a..b",
+    "ma in/x",
+    "main\\x",
+  ]) {
+    assert.deepEqual(refKind(odd), { invalid: true }, JSON.stringify(odd));
+  }
+  // A file's path past the ref may hold spaces.
+  assert.deepEqual(refKind("main/docs/read me.md"), {});
 
   const q = (s) => new URLSearchParams(s);
   assert.deepEqual(callTargets("api", "repos/Org/Repo/tarball/refs/pull/7/head"), {
@@ -163,6 +179,7 @@ test("refKind and callTargets: what a call names that may be a fork's", () => {
     pulls: [],
     blob: false,
     lfs: false,
+    page: false,
   });
   assert.deepEqual(callTargets("api", "repos/o/r/contents/a.js", q(`ref=${FORK}`)).refs, [FORK]);
   assert.deepEqual(callTargets("api", "repos/o/r/contents/a.js").refs, []);
@@ -295,6 +312,20 @@ test("a fork's pull request, its repository and its commits are refused; the rep
     (await check("api", "repos/org/repo/compare/main...evil:main")).message,
     /another repository's/,
   );
+  // A ref spelled as git wouldn't name one: refused, not taken for a branch.
+  for (const ref of [` ${FORK}`, "refs//pull/7/head", "main\n"]) {
+    const query = new URLSearchParams({ ref }).toString();
+    assert.match(
+      (await check("api", "repos/org/repo/contents/a.js", query)).message,
+      /isn't spelled as git names a ref/,
+      JSON.stringify(ref),
+    );
+  }
+  // A page that isn't one of those that show no file: refused, fail closed. blob_excerpt serves
+  // a blob's lines by its id.
+  for (const path of [`org/repo/blob_excerpt/${FORK}`, "org/repo/some-new-page/x"]) {
+    assert.match((await check("web", path)).message, /is a page Deckhand doesn't check/, path);
+  }
   // git LFS's batch API: its objects named by their sha256.
   for (const path of ["org/repo.git/info/lfs/objects/batch", "org/repo/info/lfs/locks"]) {
     assert.match((await check("web", path)).message, /git LFS's objects are named by their sha256/);
@@ -333,6 +364,11 @@ test("a fork's pull request, its repository and its commits are refused; the rep
     ["api", "repos/other/lib/tarball/main"],
     ["raw", "other/lib/main/install.sh"],
     ["web", "login/oauth"],
+    // Pages that show no file.
+    ["web", "org/repo"],
+    ["web", "org/repo/issues/7"],
+    ["web", "org/repo/releases/download/v1/tool.tgz"],
+    ["web", "org/repo/actions/runs/1"],
     ["api", "user"],
   ]) {
     assert.equal(await check(kind, path, query, accept), null, path);
@@ -446,7 +482,7 @@ test("over GraphQL, a work run that isn't a fork's can't read a file's content",
 });
 
 // The gateway in front of a fake GitHub that serves git's advertisements, and raw files.
-async function gateway(t) {
+async function gateway(t, { maxInFlight } = {}) {
   const calls = [];
   const upstream = (req, res) => {
     const chunks = [];
@@ -479,6 +515,7 @@ async function gateway(t) {
       { host: "patch-diff.test", url: at, kind: "web", prefix: "raw/" },
     ],
     forks,
+    maxInFlight,
   });
   const { url } = await serve(t, (req, res) => gw.handle(req, res));
   const register = (fork) => {
@@ -767,4 +804,13 @@ test("real git through the gateway: a whole clone goes, a fork's head and lone b
     git rev-list --objects --missing=print --all | grep -c '^?' || true`,
   );
   assert.equal(whole.out, "0");
+});
+
+test("a file host's calls don't count towards a run's calls in flight: they hold no token", async (t) => {
+  // None may be in flight: every counted call is refused, a file host's goes on.
+  const gw = await gateway(t, { maxInFlight: 0 });
+  const { secret } = gw.register(false);
+  assert.equal((await gw.call("127.0.0.1", "/api/v3/repos/org/repo", secret)).status, 429);
+  const file = await gw.call("localhost", "/org/repo/main/README.md", secret);
+  assert.equal(file.status, 200);
 });

@@ -393,9 +393,11 @@ to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to the
   reach](#what-a-forks-code-may-reach)).
 - GitHub's file hosts (`listener/egress.mjs` `GITHUB_FILES`: `raw.githubusercontent.com`,
   `media.githubusercontent.com` for LFS files, `patch-diff.githubusercontent.com` for diffs)
-  are relayed to the gateway too, for that check, and go on without a token, the sandbox's
-  `Authorization` and cookies dropped; GitHub's other `*.githubusercontent.com` hosts (release
-  assets, avatars) stay plain allowed hosts: none carries a token.
+  are relayed to the gateway too for such a run (`listener/broker-http.mjs`), for that check,
+  and go on without a token, the sandbox's `Authorization` and cookies dropped; they don't
+  count towards its calls in flight, as when they were plain hosts. For every other run, and
+  GitHub's other `*.githubusercontent.com` hosts (release assets, avatars), they stay plain
+  allowed hosts: none carries a token.
 - **Two exceptions, neither with a token**, which reach GitHub's hosts through a tunnel
   rather than the gateway, so what they get is anonymous (both accepted in pull request
   #411):
@@ -656,8 +658,18 @@ comment from an allowed user on the fork's pull request starts a fork's run, whi
   branch's head (`branches-where-head`). A branch or tag name is the repository's. Anything
   else, a commit a branch dropped or one only a tag reaches, is refused rather than looked
   for, and a fetch wanting over 20 objects no ref named is refused without asking GitHub. A
-  comparison with another owner's branch (`main...someone:branch`) is refused too. A tree and
-  a commit's metadata (`git/trees`, `git/commits`) hold no file's content: not checked.
+  comparison with another owner's branch (`main...someone:branch`) is refused too, and so is a
+  ref spelled as git wouldn't name one (whitespace or a control character, `//`, `..`, `@{`, a
+  backslash, a leading `-` or `/`), rather than taken for a branch: the check doesn't rest on
+  how GitHub reads it. A tree and a commit's metadata (`git/trees`, `git/commits`) hold no
+  file's content: not checked.
+- **A page of the repository that may show a file**: on the web host, the checks read the
+  shapes above (archives, `raw/`, `blob/`, `tree/`, `blame/`, `commit/`, `compare/`, `pull/<n>`)
+  and let through git's own calls and the pages that show no file (its home, issues, pull
+  request lists, releases and their assets, tags, branches, labels, milestones, Actions,
+  discussions, the wiki, security, insights, settings). Every other page of the repository is
+  refused, fail closed: GitHub's pages are many, and `blob_excerpt/<id>` serves a blob's lines
+  by its id. Another repository's pages, outside its network, aren't checked.
 - **A blob by its id** (`git/blobs/<sha>`, or a fetch's `want` of one): whoever wrote a fork
   can name its blobs (`git hash-object`), and nothing says where one comes from, so such a
   run gets none, its repository's own included: it reads a file with `contents/<path>?ref=`
@@ -679,8 +691,8 @@ comment from an allowed user on the fork's pull request starts a fork's run, whi
   or a fork's commit through the repository), `media.githubusercontent.com` its LFS files by
   ref the same way (`/media/…`), and `patch-diff.githubusercontent.com` its pull requests' diffs
   (`/raw/<owner>/<repo>/pull/<n>.diff`), which carry a new file whole. So the egress proxy
-  relays them to the gateway too, which checks them as above (a path in another shape is
-  refused) and sends them on without a token, as when they were plain hosts.
+  relays them to the gateway too, for a run it checks, which checks them as above (a path in
+  another shape is refused) and sends them on without a token, as when they were plain hosts.
   Archives come from `codeload.github.com`, where `github.com/<repo>/archive/…` and the API's
   `tarball` and `zipball` redirect: it isn't a mandatory host, and a grant that adds it
   reaches any public repository's archives, around these checks.
@@ -1587,9 +1599,10 @@ real server's certificate.
   sandbox, through the gateway, while the run lasts. A key that leaks lets its holder read
   and change the GitHub traffic of the sandboxes running then (what they read and write, as
   the proxy does), not act as them elsewhere. `githubusercontent.com` is certifiable too: only
-  GitHub's file hosts (`GITHUB_FILES`) are relayed (they carry no token), the others neither
-  relayed nor decrypted unless you cache them. The providers' names stay excluded: the
-  operator's credentials still go there, from the listener.
+  GitHub's file hosts (`GITHUB_FILES`) are relayed, for a work run that isn't a fork's (they
+  carry no token), the others neither relayed nor decrypted unless you cache them. The
+  providers' names stay excluded: the operator's credentials still go there, from the
+  listener.
 - **Trust in the sandbox**: for every run that reaches GitHub (all but research runs), and
   when its repository's grant has `cached_hosts` or its agent's calls are relayed (the
   Antigravity CLI's), the listener

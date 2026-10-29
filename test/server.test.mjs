@@ -2742,6 +2742,11 @@ modes:
       "registry.npmjs.org",
       "pypi.org",
     ]);
+    // A light run isn't checked for a fork's code (github-forks.mjs): GitHub's file hosts stay
+    // plain hosts for it, GitHub's own relayed as for any run.
+    const answers = egressAnswers(dir);
+    assert.equal(answers["raw.githubusercontent.com"].relay, false);
+    assert.equal(answers["github.com"].relay, true);
     // The run's record names the mode.
     const [log] = readdirSync(join(dir, "logs")).filter((f) => f.endsWith(".log"));
     const meta = JSON.parse(readFileSync(join(dir, "logs", log), "utf8").split("\n")[0]);
