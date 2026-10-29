@@ -273,8 +273,9 @@ Each task shows its listener's state:
 | ----------------- | ------------------------------------------------------------------------- |
 | `queued`          | comments wait for a run (a free slot, or the running one)                 |
 | `scheduled`       | a run left the queue; its sandbox is set up, its agent not started yet    |
+| `building image`  | a run waits for the repository's image to build (a step of scheduling)    |
 | `in review`       | between the runs of its pull request's review-and-fix loop (`review.fix`) |
-| `building image`  | a run waits for the repository's image to build                           |
+| `waiting`         | a comment waits for other issues to be done (`/after #12`)                |
 | `working`         | the run's agent is at work                                                |
 | `stopping`        | a brainstorm is wrapping up (`/stop`)                                     |
 | `needs input`     | the last run stopped to ask; the issue has the label                      |
