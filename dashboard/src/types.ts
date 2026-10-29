@@ -255,7 +255,7 @@ export interface LaneNaming {
 
 // POST api/repos/<owner>/<repo>/order: queued task `key` moves right before `before` or right
 // after `after` (another of the repo's queued tasks), first (`first`), or last (none of them)
-// in the run order. Right after another: Move down doesn't jump another repo's tasks.
+// in the run order. Move down sends `after`: right after the next of the repo's, not last.
 export interface OrderMove {
   key: string;
   before?: string | null;

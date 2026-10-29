@@ -7,6 +7,7 @@ import { createBroker } from "../listener/broker.mjs";
 import { board } from "../listener/board.mjs";
 import { createPulls } from "../listener/pulls.mjs";
 import { createRestart } from "../listener/restart.mjs";
+import { createTasks, newTask } from "../listener/tasks.mjs";
 import { ambiguous, respellMap, respelled, spellings } from "../listener/spelling.mjs";
 import { loadRuns } from "../listener/runlog.mjs";
 import { tempDir } from "./helpers.mjs";
@@ -316,4 +317,44 @@ test("a restored run keeps the phase its log is in, and saves it again", async (
   task.live.logPhase = "work";
   await restart.saveLive(task);
   assert.equal(JSON.parse(readFileSync(path, "utf8")).logPhase, "work");
+});
+
+test("queued comments keep when they were queued through a restart: the run order of the unplaced", async (t) => {
+  const dir = tempDir(t);
+  const context = () => {
+    const ctx = {
+      config: { dataDir: dir, users: ["alice"], repos: ["org/repo"] },
+      log: () => {},
+      tasks: new Map(),
+      logDir: dir,
+      runs: [],
+      runsById: new Map(),
+      running: 0,
+      track: () => {},
+      settle: async () => {},
+    };
+    // Nothing starts: the test reads the queue as loaded.
+    return Object.assign(ctx, createTasks(ctx), createRestart(ctx), { startLater: () => {} });
+  };
+  const before = context();
+  // #7's key comes first, its comment was queued last.
+  for (const [id, queuedAt] of [
+    ["7", 300],
+    ["8", 100],
+  ]) {
+    const task = newTask({ repo: "org/repo", id, kind: "issue", number: Number(id), base: "main" });
+    task.pending.push({ repo: "org/repo", id, mode: "work", author: "alice", queuedAt });
+    before.tasks.set(`org/repo#${id}`, task);
+  }
+  await before.saveQueue();
+  const after = context();
+  after.loadQueue();
+  assert.deepEqual(
+    after.tasks.get("org/repo#7").pending.map((i) => i.queuedAt),
+    [300],
+  );
+  assert.deepEqual(
+    after.queueOrder().map((task) => task.id),
+    ["8", "7"],
+  );
 });

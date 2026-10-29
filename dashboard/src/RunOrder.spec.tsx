@@ -9,11 +9,12 @@ import { BACKLOG, makeState, makeTask, mockApi, transfer } from "./testUtils";
 const queued = (number: number, position: number, extra = {}) =>
   makeTask({ number, title: `Queued ${number}`, state: "queued", position, ...extra });
 
-// #41 next, then another repo's task, then #42 and #43; #44 a brainstorm, which starts first
-// but is listed after them here to see it stays put.
+// #44 a brainstorm, which starts first; #41 next, then another repo's task (acme/api#9), then
+// #42 and #43.
 const LINE = [
   queued(44, 1, { startsFirst: true, kind: "brainstorm", mode: "brainstorm" }),
   queued(41, 2),
+  queued(9, 3, { repo: "acme/api", key: "acme/api#9", title: "Elsewhere" }),
   queued(42, 4),
   queued(43, 5, { kind: "pr", key: "acme/app#pr-43" }),
 ];
@@ -73,9 +74,12 @@ test("Run next, Move up and Move down send the move, which shows at once", async
   const release = api.hold();
   fireEvent.click(within(list).getByRole("button", { name: "Run #43 next" }));
   expect(api.bodies()).toEqual([{ key: "acme/app#pr-43", first: true }]);
-  // On its way: in its new place, the places dealt out again, every button off.
+  // On its way: in its new place, the line numbered again as the listener will (acme/api#9
+  // moves down one too), every button off.
   await waitFor(() => expect(cards(list)).toEqual(["#44", "#43", "#41", "#42"]));
   expect(within(list).getByText("Queued 43").closest("li")!.textContent).toMatch(/2nd in line/);
+  expect(within(list).getByText("Queued 41").closest("li")!.textContent).toMatch(/3rd in line/);
+  expect(within(list).getByText("Queued 42").closest("li")!.textContent).toMatch(/5th in line/);
   expect(
     within(list).getByRole<HTMLButtonElement>("button", { name: "Move #42 up" }).disabled,
   ).toBe(true);
@@ -155,30 +159,41 @@ test("Run next is on when another repo's work run is before the first of this on
   );
 });
 
-test("inLine: a move on its way, the repo's places dealt out again", () => {
-  const { line, tasks } = inLine(LINE, { key: "acme/app#41", before: null });
-  expect(line.map((t) => [t.number, t.position])).toEqual([
+test("inLine: a move on its way, the whole line numbered again as the listener moves it", () => {
+  const numbers = (moving: Parameters<typeof inLine>[1]) =>
+    inLine(LINE, moving).line.map((t) => [t.number, t.position]);
+  // Last: behind every repo's tasks.
+  expect(numbers({ key: "acme/app#41", before: null })).toEqual([
     [44, 1],
-    [42, 2],
+    [9, 2],
+    [42, 3],
     [43, 4],
     [41, 5],
   ]);
-  expect(tasks.find((t) => t.number === 41)?.position).toBe(5);
-  // Right after another: the places of the repo's tasks dealt out again.
-  expect(
-    inLine(LINE, { key: "acme/app#41", after: "acme/app#42" }).line.map((t) => [
-      t.number,
-      t.position,
-    ]),
-  ).toEqual([
+  expect(inLine(LINE, { key: "acme/app#41" }).tasks.find((t) => t.number === 41)?.position).toBe(5);
+  // Down one, right after #42: acme/api#9 comes up to 2nd, as order.mjs writes it.
+  expect(numbers({ key: "acme/app#41", after: "acme/app#42" })).toEqual([
     [44, 1],
-    [42, 2],
+    [9, 2],
+    [42, 3],
     [41, 4],
     [43, 5],
   ]);
-  // Run next goes after the brainstorms.
-  expect(inLine(LINE, { key: "acme/app#42", first: true }).line.map((t) => t.number)).toEqual([
-    44, 42, 41, 43,
+  // Up one, right before #42: past acme/api#9.
+  expect(numbers({ key: "acme/app#pr-43", before: "acme/app#42" })).toEqual([
+    [44, 1],
+    [41, 2],
+    [9, 3],
+    [43, 4],
+    [42, 5],
+  ]);
+  // Run next: ahead of every repo's work runs, after the brainstorms.
+  expect(numbers({ key: "acme/app#42", first: true })).toEqual([
+    [44, 1],
+    [42, 2],
+    [41, 3],
+    [9, 4],
+    [43, 5],
   ]);
 });
 
@@ -193,9 +208,14 @@ test("moveOnto: a queued node's left edge before it, its right edge after it, it
     after: "acme/app#pr-43",
   });
   expect(moveOnto(line, "acme/app#41", "acme/app#42", 0.5)).toBeNull();
-  // Where it is already: before the next of the repo's, after the one before it.
-  expect(moveOnto(line, "acme/app#41", "acme/app#42", 0.1)).toBeNull();
-  expect(moveOnto(line, "acme/app#42", "acme/app#41", 0.9)).toBeNull();
+  // Where it is already: right before the next, right after the one before it.
+  expect(moveOnto(line, "acme/app#42", "acme/app#pr-43", 0.1)).toBeNull();
+  expect(moveOnto(line, "acme/app#pr-43", "acme/app#42", 0.9)).toBeNull();
+  // Another repo's task between: a move all the same, which it jumps.
+  expect(moveOnto(line, "acme/app#41", "acme/app#42", 0.1)).toEqual({
+    key: "acme/app#41",
+    before: "acme/app#42",
+  });
   // Not onto a brainstorm, nor itself.
   expect(moveOnto(line, "acme/app#41", "acme/app#44", 0.1)).toBeNull();
   expect(moveOnto(line, "acme/app#41", "acme/app#41", 0.1)).toBeNull();
@@ -249,10 +269,15 @@ test("on the graph: a queued node onto another's right edge goes after it; its m
   // In the open: nothing either.
   drag({ x: 5000, y: 5000 });
   fireEvent.pointerUp(from, { pointerId: 1, clientX: 5000, clientY: 5000 });
-  // Its left edge: right before #42, where #41 is already.
-  drag(at(0.1));
+  // #42 onto PR #43's left edge: right before it, where #42 is already.
+  const second = node(42);
+  const s0 = boxOf(second);
+  const pr = boxOf(screen.getByRole("listitem", { name: /^PR #43 Queued 43:/ }));
+  const edge = { clientX: pr.x + pr.w * 0.1, clientY: pr.y + pr.h / 2 };
+  fireEvent.pointerDown(second, { button: 0, pointerId: 3, clientX: s0.x + 5, clientY: s0.y + 5 });
+  fireEvent.pointerMove(second, { pointerId: 3, ...edge });
   expect(screen.queryByText(/^Move #/)).toBeNull();
-  fireEvent.pointerUp(from, { pointerId: 1, clientX: at(0.1).x, clientY: at(0.1).y });
+  fireEvent.pointerUp(second, { pointerId: 3, ...edge });
   expect(api.bodies()).toEqual([]);
 
   // Its right edge: after it.

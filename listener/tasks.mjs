@@ -352,8 +352,10 @@ export function createTasks(ctx) {
   function schedule() {
     if (ctx.stopping) return;
     const queued = queueOrder();
-    // What started or was dropped meanwhile leaves the order.
-    ctx.order?.keep(queued.map((t) => taskKey(t.repo, t.id)));
+    // What was dropped meanwhile leaves the order (runs.mjs drops a run's as it starts). Not a
+    // task whose run() is still reading its settings: `running`, its comments not taken yet.
+    const waiting = [...tasks.values()].filter((t) => t.pending.length && !t.live);
+    ctx.order?.keep(waiting.map((t) => taskKey(t.repo, t.id)));
     const ready = queued.filter((t) => t.ready);
     const perRepo = new Map();
     for (const t of tasks.values()) {

@@ -165,16 +165,14 @@ export function Board({
   const spaced = useHeldKey("space", view === "graph");
   const [panning, setPanning] = useState(false);
 
-  // A move in the run order shows at once.
-  const { tasks, line } = inLine(
-    (state?.tasks ?? []).filter((t) => sameRepo(t.repo, repo)),
-    order.moving,
-  );
-  // Every repo's, as shown: what Run next can't pass is maybe another repo's.
-  const nextKey = nextInLine([
-    ...tasks,
-    ...(state?.tasks ?? []).filter((t) => !sameRepo(t.repo, repo)),
-  ]);
+  // A move in the run order shows at once, over every repo's line as the listener moves it
+  // (`everyLine`); this repo's tasks and queue are taken from it.
+  const shown = inLine(state?.tasks ?? [], order.moving);
+  const everyLine = shown.line;
+  const tasks = shown.tasks.filter((t) => sameRepo(t.repo, repo));
+  const line = everyLine.filter((t) => sameRepo(t.repo, repo));
+  // What Run next can't pass is maybe another repo's.
+  const nextKey = nextInLine(everyLine);
   const brainstorms = brainstormsOf(tasks, work.pending);
   const { nodes, edges, hidden } = graphOf(tasks, state?.edges ?? [], state?.blockers ?? [], {
     showClosed,
@@ -239,7 +237,8 @@ export function Board({
   const labelOf = (h: Hover): DropLabel | null => {
     const node = h.target ? byKey.get(h.target) : null;
     if (h.what === "queued") {
-      const move = node && h.key && !order.moving ? moveOnto(line, h.key, node.key, h.side) : null;
+      const move =
+        node && h.key && !order.moving ? moveOnto(everyLine, h.key, node.key, h.side) : null;
       const box = node && shape.boxes.find((b) => b.key === node.key);
       if (!move || !box) return null;
       const text = `Move #${h.number} ${move.after ? "after" : "before"} ${nodeRef(node, false, 0)} in line`;
@@ -318,7 +317,7 @@ export function Board({
       // where it is. Its middle doesn't queue it after: the listener refuses a queued task.
       if (order.moving) return;
       const where = at(point.x, point.y);
-      const move = where?.target ? moveOnto(line, d.key, where.target, where.side) : null;
+      const move = where?.target ? moveOnto(everyLine, d.key, where.target, where.side) : null;
       if (move) reorder(move);
     },
   });
@@ -545,6 +544,7 @@ export function Board({
             waiting={waiting}
             answering={answering}
             line={line}
+            everyLine={everyLine}
             onMove={reorder}
             moving={!!order.moving}
             nextKey={nextKey}
@@ -637,6 +637,7 @@ export function Board({
             waiting={waiting}
             answering={answering}
             line={line}
+            everyLine={everyLine}
             onMove={reorder}
             moving={!!order.moving}
             nextKey={nextKey}

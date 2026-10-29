@@ -14,7 +14,7 @@ import type { WorkAreaState } from "./api";
 import { Chooser, type Target } from "./Chooser";
 import { BRAINSTORM_TYPE, dragEnded, dragOf, droppedIssue, ISSUE_TYPE, LINK_TYPES } from "./dnd";
 import { issueList, plural, sameRepo, STATE_NAMES, when } from "./format";
-import { type BrainstormCard, ordinal, reorderable } from "./graphModel";
+import { alreadyThere, type BrainstormCard, ordinal, reorderable } from "./graphModel";
 import { typesOf, useDropZone } from "./hooks";
 import type { OrderMove, Task, WorkAction } from "./types";
 import { Button, IconButton } from "./ui/Button";
@@ -89,6 +89,8 @@ interface Props {
   // The repo's tasks waiting for a slot, in run order (graphModel.ts inLine()), and their move:
   // `moving` while one is on its way.
   line: Task[];
+  // Every repo's, as `line`: a drop where a card is already changes nothing.
+  everyLine: Task[];
   onMove: (move: OrderMove) => void;
   moving: boolean;
   // The task already next among every repo's work runs (graphModel.ts nextInLine()).
@@ -120,6 +122,7 @@ export function WorkQueue({
   waiting,
   answering,
   line,
+  everyLine,
   onMove,
   moving,
   nextKey,
@@ -209,7 +212,7 @@ export function WorkQueue({
     `${github}/${repo}/${t.kind === "pr" ? "pull" : t.kind === "discussion" ? "discussions" : "issues"}/${t.number}`;
 
   // The cards that move, and where a move puts one: up right before the one above, down right
-  // after the one below (never past another repo's tasks), Run next first.
+  // after the one below (another repo's tasks between them move past it), Run next first.
   const movers = line.filter(reorderable);
   const move = (m: OrderMove) => {
     onNotice(null);
@@ -255,9 +258,7 @@ export function WorkQueue({
   // A Queued card let go over `onto`: above it, right before it; below it, right after it.
   // Where it is already, nothing.
   const dropOnto = (key: string, onto: Task, above: boolean) => {
-    if (key === onto.key || !reorderable(onto)) return;
-    const now = movers.findIndex((t) => t.key === key);
-    if (movers[now + (above ? 1 : -1)] === onto) return;
+    if (key === onto.key || !reorderable(onto) || alreadyThere(everyLine, key, onto, above)) return;
     move(above ? { key, before: onto.key } : { key, after: onto.key });
   };
   const queuedRows: Row[] = line.map((t) => {

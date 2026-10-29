@@ -312,9 +312,11 @@ export function ordinal(n: number): string {
 // Whether a queued task moves in the run order: not a brainstorm, which starts first anyway.
 export const reorderable = (t: Task) => t.state === "queued" && !!t.position && !t.startsFirst;
 
-// `tasks` with the queued ones' places as they will be once `moving` is done (the Queued tab
-// and the graph's badges show a move at once), and those queued in run order. The places this
-// repo's tasks hold are dealt out again: another repo's in between keep theirs.
+// `tasks` (every repo's the user sees) with the queued ones' places as they will be once
+// `moving` is done (the Queued tab and the graph's badges show a move at once), and those
+// queued in run order. As listener/order.mjs move() does: the whole line with the task taken
+// out and put back, the brainstorms still first, numbered again; another repo's task between
+// moves too.
 export function inLine(tasks: Task[], moving: OrderMove | null): { tasks: Task[]; line: Task[] } {
   let line = tasks
     .filter((t) => t.state === "queued" && t.position)
@@ -325,18 +327,28 @@ export function inLine(tasks: Task[], moving: OrderMove | null): { tasks: Task[]
   line = line.filter((t) => t !== moved);
   const find = (key: string) => line.findIndex((t) => t.key === key);
   let at = -1;
-  if (moving.first) at = line.filter((t) => t.startsFirst).length;
+  if (moving.first) at = 0;
   else if (moving.before) at = find(moving.before);
   else if (moving.after) at = find(moving.after) < 0 ? -1 : find(moving.after) + 1;
   line.splice(at < 0 ? line.length : at, 0, moved);
+  // A stable sort: light runs start first whatever the order (listener/tasks.mjs queueOrder()).
+  line.sort((a, b) => Number(!!b.startsFirst) - Number(!!a.startsFirst));
   line = line.map((t, i) => (t.position === places[i] ? t : { ...t, position: places[i] }));
   const placed = new Map(line.map((t) => [t.key, t]));
   return { tasks: tasks.map((t) => placed.get(t.key) ?? t), line };
 }
 
+// Whether `key` is already right before (`before`) or right after `onto` among the work runs of
+// `line` (inLine()'s, every repo's): a move there would change nothing.
+export function alreadyThere(line: Task[], key: string, onto: Task, before: boolean): boolean {
+  const movers = line.filter(reorderable);
+  const at = movers.findIndex((t) => t.key === key);
+  return at >= 0 && movers[at + (before ? 1 : -1)]?.key === onto.key;
+}
+
 // Where a queued node dropped on another queued one moves it: on its left edge before it, on
-// its right edge after it (`line`: inLine()'s). `side`: where on the target it was let go, 0 its
-// left edge, 1 its right. Null: its middle, or where it is already.
+// its right edge after it (`line`: inLine()'s, every repo's). `side`: where on the target it was
+// let go, 0 its left edge, 1 its right. Null: its middle, or where it is already.
 export function moveOnto(
   line: Task[],
   key: string,
@@ -346,10 +358,7 @@ export function moveOnto(
   const onto = line.find((t) => t.key === target);
   if (key === target || !onto || !reorderable(onto) || (side > 0.3 && side < 0.7)) return null;
   const before = side <= 0.3;
-  // Where it is already: right before the one after it, right after the one before it.
-  const movers = line.filter(reorderable);
-  const at = movers.findIndex((t) => t.key === key);
-  if (at >= 0 && movers[at + (before ? 1 : -1)] === onto) return null;
+  if (alreadyThere(line, key, onto, before)) return null;
   return before ? { key, before: target } : { key, after: target };
 }
 

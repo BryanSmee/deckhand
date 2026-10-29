@@ -141,3 +141,24 @@ test("schedule: a task whose repo is at its max_parallel is skipped, not blockin
   // #2 is first, its repo then full: #1 waits, #3 starts; #4 is still in its pause.
   assert.deepEqual(s.started, ["#2", "#3"]);
 });
+
+test("schedule: a task whose run() is still reading its settings keeps its place", () => {
+  const s = scheduler({
+    max: 2,
+    queued: [
+      { id: 1, at: 1, ready: false },
+      { id: 2, at: 2 },
+    ],
+  });
+  s.order.move("org/app#2", { first: true }, ["org/app#1", "org/app#2"]);
+  // run() set it running and waits on the repo's settings: its comments aren't taken yet. Were
+  // the listener to stop now, it would go back to the queue, its place with it.
+  s.tasks.get("org/app#2").running = true;
+  s.schedule();
+  assert.deepEqual(s.order.keys(), ["org/app#2", "org/app#1"]);
+  // Once its run is live, a schedule() keeps no key of it (runs.mjs dropped it as it started).
+  s.tasks.get("org/app#2").live = {};
+  s.order.move("org/app#2", { first: true }, s.order.keys());
+  s.schedule();
+  assert.deepEqual(s.order.keys(), ["org/app#1"]);
+});

@@ -256,13 +256,15 @@ next. `POST /api/repos/<owner>/<repo>/order { key, before?: key, after?: key, fi
 (`work.mjs` `reorder`, the repo's users, a queued task of the repo that isn't light; `before` and
 `after` another of the repo's, none of them: last) writes the whole current order with the task
 moved, so moving one past tasks nobody placed keeps them where they were. Move down sends
-`after`: the task goes right after the next of its repo's, never past another repo's tasks. A
-key leaves the order when its run starts or its queued comments are dropped (`runs.mjs`);
-`schedule()` drops any other key no longer queued, and so does the start, after `loadQueue()`
-(`queue.json` is only written when the listener stops, so a crash loses the comments but not
-their keys). `api/state` gives each queued task its `position` (1 next to start, among the
-tasks of every repo the user sees: the places don't tell of the others) and `startsFirst` for a
-light one; the board's Queued tab and the graph's badges show it, and reorder from there.
+`after`: the task goes right after the next of its repo's (another repo's tasks between them
+come up before it), not to the end of the line. A key leaves the order when its run starts or
+its queued comments are dropped (`runs.mjs`); `schedule()` drops any other key of a task with no
+comments left or a run going, and so does the start, after `loadQueue()` (`queue.json` is only
+written when the listener stops, so a crash loses the comments but not their keys). `api/state`
+gives each queued task its `position` (1 next to start, among the tasks of every repo the user
+sees: the places don't tell of the others) and `startsFirst` for a light one; the board's Queued
+tab and the graph's badges show it, and reorder from there. A move shows at once: the dashboard
+moves the whole line as `order.mjs` does (`graphModel.ts` `inLine()`).
 
 The dashboard's New request (Idea, Bug report) sends ideas and bug reports to a repo's inbox:
 `POST /api/repos/<owner>/<repo>/inbox { kind: "idea" | "bug", text }` (`work.mjs`
