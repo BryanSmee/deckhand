@@ -624,6 +624,12 @@ networks, container engines and engine volumes of runs that are gone are removed
 dropped then; each run checks its comments' authors against the repository's `users` again
 when it begins, and so does the next listener for comments queued for a run still going.
 
+Running sandboxes outlive an update: they keep their image, and its scripts, until they end.
+So an endpoint that sandboxes call is never just removed: for a while it answers with what to
+do instead, which the old scripts print. The broker's old `/pr/` routes (gone in #407) answer
+410 with the `gh` command that works now (`broker-http.mjs`, until no sandbox from before
+#407 can still run).
+
 The dashboard's run list comes back from the runs' summaries (`logs/<run>.json`, written
 when a run ends): a log is read only for a run without one (from before summaries, or a
 listener that died mid-run), which then gets one: in full up to 64 MB, else its first line and

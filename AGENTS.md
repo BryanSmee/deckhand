@@ -94,6 +94,8 @@ docs/         setup, per-repo config reference, security model, architecture
 - **Nothing project-specific.** No PocketBerry, Linear, pnpm or Postgres in the listener, base
   image or generic prompts: a project brings those through its per-repo config, Dockerfile
   and extra instructions. Names, hosts and volume names come from settings.
+- **Sandboxes outlive a listener update**: an endpoint they call is never just removed. It
+  first answers, for a while, with what to run instead (`docs/architecture.md`, Restarts).
 - **GitHub only.** Issues, labels and sub-issues; branches `issue-<n>-<slug>`.
 - **Naming.** Never use "Claude" or "Anthropic" in the product, image or repo names; "runs
   Claude Code" in text is fine. Claude Code is never bundled in an image: it installs on
