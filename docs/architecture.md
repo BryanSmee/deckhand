@@ -356,7 +356,9 @@ The run's record keeps its phase too, for the dashboard's task state (`board.mjs
 sandbox, clone and the repo's `setup`), `building-image` while the image builds (a step of
 its scheduling, then `scheduled` again), `working` from the agent's first event on. The
 record is saved with the live run, so a restart during setup still shows it `scheduled`;
-a record saved before records kept their phase takes its log's.
+a record saved before records kept their phase takes its log's. The dashboard's states are all
+listed in `board.mjs` (`STATES`, and the comment above it) and in [setup](setup.md) (The
+dashboard); `in-review`, between the runs of a review loop, is in Reviews below.
 
 The dashboard times slow steps from `at` lines (`{"type":"listener","event":"at","at":…}`).
 The runner follows the sandbox with `docker logs --follow --timestamps` (`runner.follow()`
