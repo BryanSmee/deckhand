@@ -14,6 +14,11 @@ import { policyEngine, sandboxAt, serve, tempDir } from "./helpers.mjs";
 
 const json = (value) => Buffer.from(JSON.stringify(value));
 
+// When the tests' runs started, and GitHub's time `s` seconds from then.
+const START = Date.parse("2026-10-29T10:00:00Z");
+const at = (s) => new Date(START + s * 1000).toISOString();
+const BOT = () => "deckhand[bot]";
+
 test("classify: a write's actions, its target and what it changes", () => {
   const cases = [
     [
@@ -161,11 +166,16 @@ test("the ceilings: what each mode can ever write", () => {
 
 // A fake GitHub for the look-ups: issues by number (a `pull_request` field for a pull
 // request), pull requests' heads, issues' parents (a number: in the repo; else GitHub's
-// parent), issues' sub-issues.
-function fakeLookup({ issues = {}, pulls = {}, parents = {}, subs = {} } = {}) {
+// parent), issues' sub-issues, the repo's newest issues (`newest`: its pages).
+function fakeLookup({ issues = {}, pulls = {}, parents = {}, subs = {}, newest = [] } = {}) {
   const calls = [];
   const lookup = async (repo, path) => {
     calls.push(path);
+    const list =
+      /^\/repos\/org\/repo\/issues\?state=all&sort=created&direction=desc&per_page=100&page=(\d+)$/.exec(
+        path,
+      );
+    if (list) return newest[list[1] - 1] ?? [];
     const m =
       /^\/repos\/org\/repo\/(issues|pulls)\/(\d+)(\/parent|\/sub_issues\?per_page=100)?$/.exec(
         path,
@@ -190,7 +200,19 @@ const GITHUB = {
     2: { number: 2, user: { login: "bob" }, labels: [] },
     3: { number: 3, user: { login: "bob" }, labels: [] },
     4: { number: 4, user: { login: "bob" }, labels: [] },
-    30: { number: 30, user: { login: "deckhand[bot]" }, labels: [] },
+    // The bot's, created during the run (as `gh issue create` does, over GraphQL), and before.
+    30: { number: 30, id: 900, user: { login: "Deckhand[bot]" }, created_at: at(60), labels: [] },
+    31: { number: 31, id: 901, user: { login: "deckhand[bot]" }, created_at: at(-60), labels: [] },
+    34: { number: 34, id: 904, user: { login: "deckhand[bot]" }, created_at: at(120), labels: [] },
+    // Someone else's during the run, and the bot's pull request.
+    32: { number: 32, id: 902, user: { login: "alice" }, created_at: at(30), labels: [] },
+    33: {
+      number: 33,
+      id: 903,
+      pull_request: {},
+      user: { login: "deckhand[bot]" },
+      created_at: at(10),
+    },
     7: { number: 7, pull_request: {}, user: { login: "deckhand[bot]" }, labels: [] },
     8: { number: 8, pull_request: {}, user: { login: "bob" }, labels: [] },
   },
@@ -206,9 +228,18 @@ const GITHUB = {
   },
   subs: { 1: [{ id: 202, number: 2 }] },
 };
+// The repo's newest issues, two pages: the second ends before the run started.
+GITHUB.newest = [
+  [34, 30, 32, 33].map((n) => GITHUB.issues[n]),
+  [GITHUB.issues[31], { id: 1, number: 1, user: { login: "alice" }, created_at: at(-3600) }],
+];
 
-function run(mode, { push = mode === "work", issue = 1, branches = ["issue-1-*"] } = {}) {
-  return { repo: "org/repo", mode, push, issue, base: "main", branches: push ? branches : [] };
+function run(
+  mode,
+  { push = mode === "work", issue = 1, branches = ["issue-1-*"], since = START } = {},
+) {
+  const branch = push ? branches : [];
+  return { repo: "org/repo", mode, push, issue, base: "main", branches: branch, since };
 }
 
 const write = (method, path, body = {}) => ({ method, path, body: json(body) });
@@ -333,47 +364,53 @@ test("light runs: brainstorms, inbox entries, discussions and the modes that rea
 });
 
 test("a sub-issue link: its child is one the run created or already under its issue, never moved", async () => {
-  const { lookup } = fakeLookup(GITHUB);
-  const { check, answered } = createWriteChecks({ lookup });
+  const { lookup, calls } = fakeLookup(GITHUB);
+  const { check } = createWriteChecks({ lookup, bot: BOT });
   const work = run("work");
   const link = (parent, body) => write("POST", `repos/org/repo/issues/${parent}/sub_issues`, body);
-  // Any issue of the repo, by its id: refused, and moved from its parent all the more.
+  // Any issue of the repo, by its id: refused, and moved from its parent all the more, however
+  // replace_parent is spelled.
   assert.match(
     (await check(work, link(1, { sub_issue_id: 9 }))).message,
     /links only issues it created, or those already under its issue/,
   );
-  for (const replace_parent of [true, "true"]) {
+  for (const replace_parent of [true, "true", 1, "1", "True", "yes", null, "false", 0]) {
     const moved = await check(work, link(1, { sub_issue_id: 202, replace_parent }));
-    assert.match(moved.message, /can't move an issue from its parent \(replace_parent\)/);
+    assert.match(
+      moved?.message ?? "",
+      /can't move an issue from another parent \(replace_parent\)/,
+      JSON.stringify(replace_parent),
+    );
   }
+  assert.equal(await check(work, link(1, { sub_issue_id: 202, replace_parent: false })), null);
   // Already under its issue: unlinked, reordered.
   assert.equal(
     await check(work, write("DELETE", "repos/org/repo/issues/1/sub_issue", { sub_issue_id: 202 })),
     null,
   );
-  // One it created, as GitHub answered its create: linked, then written like a sub-issue.
-  const create = write("POST", "repos/org/repo/issues", { title: "x" });
-  const issue = (id, number, repo = "Org/Repo") =>
-    json({ id, number, repository_url: `https://api.github.com/repos/${repo}` });
-  answered(work, create, 201, issue(900, 30));
-  // Not created: refused by GitHub, another repo's, an answer that isn't an issue.
-  answered(work, create, 422, issue(901, 31));
-  answered(work, write("POST", "repos/org/repo/issues/1/comments", {}), 201, issue(902, 32));
-  answered(work, create, 201, issue(903, 33, "org/other"));
-  answered(work, create, 201, Buffer.from("not json"));
+  // Created the prompts' way (`gh issue create`, GraphQL: the checks never saw it), as GitHub
+  // says: the bot's, since the run started. Linked, then written like a sub-issue.
   assert.equal(await check(work, link(1, { sub_issue_id: 900 })), null);
   assert.equal(await check(work, write("PATCH", "repos/org/repo/issues/30", { body: "x" })), null);
+  // Not its own: the bot's before the run (on the second page), someone else's, a pull request.
   for (const id of [901, 902, 903]) {
-    assert.ok(await check(work, link(1, { sub_issue_id: id })), String(id));
+    assert.match((await check(work, link(1, { sub_issue_id: id }))).message, /links only/, `${id}`);
   }
-  // Another run's creations aren't this one's.
-  assert.ok(await check(run("work"), link(1, { sub_issue_id: 900 })));
+  assert.match(
+    (await check(work, write("PATCH", "repos/org/repo/issues/31", { body: "x" }))).message,
+    /other_issue #31/,
+  );
+  // The list goes back to the run's start, no further.
+  assert.ok(!calls.some((c) => c.endsWith("&page=3")));
+  // A run started later didn't create it; without the App's login, nothing is created.
+  assert.ok(await check(run("work", { since: START + 90_000 }), link(1, { sub_issue_id: 900 })));
+  const unknown = createWriteChecks({ lookup });
+  assert.ok(await unknown.check(work, link(1, { sub_issue_id: 900 })));
   // An inbox entry links under the parents it created only, the children it created too.
   const idea = run("idea");
-  answered(idea, create, 201, issue(900, 30));
-  answered(idea, create, 201, issue(904, 34));
   assert.equal(await check(idea, link(30, { sub_issue_id: 904 })), null);
   assert.match((await check(idea, link(3, { sub_issue_id: 904 }))).message, /other_issue #3/);
+  assert.match((await check(idea, link(31, { sub_issue_id: 904 }))).message, /other_issue #31/);
   assert.match((await check(idea, link(30, { sub_issue_id: 9 }))).message, /links only issues/);
 });
 

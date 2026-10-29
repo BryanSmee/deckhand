@@ -313,11 +313,14 @@ to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to the
   token, never taken from the request: the run's issue, its pull request (by its number, or
   its head on a branch of the repository the run may push: `broker.mjs` `allow()`), a
   sub-issue of its issue (its parent on GitHub, in the same repository), an issue the run
-  created (kept from GitHub's answers to its creates, while it lasts), another issue or pull
-  request. A sub-issue link's child, named by its id, must be one the run created or one
-  already under its issue, and moving an issue from another parent (`replace_parent`) is
-  refused: a link could otherwise take any issue under the run's, where its ceiling lets it
-  edit. Then:
+  created (the App's bot authored it since the run started, as GitHub says: `gh issue create`
+  is GraphQL, which the gateway doesn't read yet; another run of the App's filing an issue
+  meanwhile is the only other author it could have), another issue or pull request. A
+  sub-issue link's child, named by its id, must be one the run created (among the
+  repository's newest issues) or one already under its issue, and moving an issue from
+  another parent (`replace_parent` with any value but `false`) is refused: a link could
+  otherwise take any issue under the run's, where its ceiling lets it edit. A write with a
+  query string is refused unchecked: GitHub may read parameters there too. Then:
   - a write it can't classify, one outside the run's repository, and one above the **mode's
     ceiling** (`listener/modes.mjs` `ceilingOf()`, built in: [the table](repo-config.md#the-github-input))
     are refused before any policy runs. A work run writes its own issue, its pull requests and

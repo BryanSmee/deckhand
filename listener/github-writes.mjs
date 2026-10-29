@@ -7,14 +7,16 @@
 //
 // Kinds: `own_issue` (the run's issue), `own_pr` (the run's pull request, or one from a branch
 // it may push: broker.mjs allow()), `sub_issue` (an issue whose parent is the run's, in its
-// repo), `created_issue` (one this run created: GitHub's answers to its creates, answered()),
+// repo), `created_issue` (one this run created: by the App's bot, since the run started, as
+// GitHub says, however it was created: `gh issue create` is GraphQL),
 // `other_issue`, `pr`, `new_issue` (an issue it creates), `label` (a label of the repo it
 // creates), and `new_pr`, `comment`, `review` for writes no ceiling allows anyway.
 //
 // A sub-issue link names two issues: its target is the parent, in the path, and the child, by
 // its id in the body, must be one the run created or one already under the run's issue (a
-// REST issue can't be looked up by its id). Moving an issue from another parent
-// (`replace_parent`) is in no ceiling: a link would otherwise take any issue under the run's.
+// REST issue can't be looked up by its id: the repo's newest issues and the run's issue's
+// sub-issues carry theirs). Moving an issue from another parent (`replace_parent`, any value
+// but false) is in no ceiling: a link would otherwise take any issue under the run's.
 // Format of the policies' input: ../docs/repo-config.md#the-github-input.
 import { branchAllowed } from "./broker.mjs";
 import { ceilingOf } from "./modes.mjs";
@@ -56,12 +58,13 @@ function assigned(body) {
   return actions;
 }
 
-// A sub-issue link's child: the `sub_issue_id` of its body, and whether it would leave another
-// parent. Null without one: GitHub needs it.
+// A sub-issue link's child: the `sub_issue_id` of its body, and whether it may leave another
+// parent: `replace_parent` with any value but false, however GitHub would read it. Null
+// without one: GitHub needs it.
 function child(body) {
   const id = Number(body.sub_issue_id);
   if (!Number.isSafeInteger(id) || id <= 0) return null;
-  return { id, replace_parent: body.replace_parent === true || body.replace_parent === "true" };
+  return { id, replace_parent: "replace_parent" in body && body.replace_parent !== false };
 }
 
 // [method, path under the repo (case-insensitive), match → { actions, target, change }].
@@ -244,9 +247,23 @@ function anyKindHolds(ceiling, actions) {
   return Object.values(ceiling).some((allowed) => actions.every((a) => allowed.includes(a)));
 }
 
+// How many pages of the repo's newest issues a link's child is looked for in: they go back to
+// the run's start, so a busy repo's are all there.
+const MAX_PAGES = 5;
+
 // `lookup(repo, path)`: GitHub's JSON with the listener's token, null for a 404 (github.mjs
-// getJson()); `policies`: policies.mjs's, null without; `log`: the listener's.
-export function createWriteChecks({ lookup, policies = null, log = () => {} }) {
+// getJson()); `bot()`: the App's login (`slug[bot]`), null before /setup; `policies`:
+// policies.mjs's, null without; `log`: the listener's.
+export function createWriteChecks({ lookup, bot = () => null, policies = null, log = () => {} }) {
+  // Whether GitHub's issue is one `run` created: by the App's bot, since the run started.
+  // Another run of the App's that created one meanwhile is the only other author it could be.
+  function created(run, issue) {
+    const login = bot();
+    if (!login || !Number.isFinite(run.since)) return false;
+    if (String(issue?.user?.login ?? "").toLowerCase() !== login.toLowerCase()) return false;
+    return Date.parse(issue.created_at) >= run.since && !issue.pull_request;
+  }
+
   // The target's kind, number, labels and author, from GitHub. Null when it isn't there.
   async function resolve(run, repo, number) {
     const issue = await lookup(repo, `/repos/${repo}/issues/${number}`);
@@ -269,41 +286,35 @@ export function createWriteChecks({ lookup, policies = null, log = () => {} }) {
     // Sub-issues cross repositories: the run's #n is its repo's.
     const sub = run.issue != null && parent?.number === run.issue && inRepo(parent, repo);
     if (sub) return { ...target, kind: "sub_issue" };
-    const created = createdBy(run).numbers.has(number);
-    return { ...target, kind: created ? "created_issue" : "other_issue" };
+    return { ...target, kind: created(run, issue) ? "created_issue" : "other_issue" };
   }
 
   // A link's child → { id, number, kind }: `sub_issue` when it is already under the run's issue
-  // (its sub-issues list them with their ids), `created_issue` when the run created it, else
-  // `other_issue`.
+  // (its sub-issues list them with their ids), `created_issue` when the run created it (among
+  // the repo's newest issues, back to the run's start), else `other_issue`.
   async function resolveChild(run, repo, { id }) {
-    const made = createdBy(run).ids.get(id);
     if (run.issue != null) {
       const subs = await lookup(repo, `/repos/${repo}/issues/${run.issue}/sub_issues?per_page=100`);
       const found = Array.isArray(subs) ? subs.find((i) => i?.id === id) : null;
       if (found) return { id, number: found.number ?? null, kind: "sub_issue" };
     }
-    if (made !== undefined) return { id, number: made, kind: "created_issue" };
-    return { id, number: null, kind: "other_issue" };
-  }
-
-  // GitHub's answer to a write that went on (github-gateway.mjs wroteWrite()): an issue the run
-  // created is kept, by number and id, for the links it makes next.
-  function answered(run, { method, path, body }, status, answer) {
-    if (status !== 201) return;
-    const write = classify(method, path, body);
-    if (write?.target?.kind !== "new_issue" || write.repo !== run.repo) return;
-    let issue;
-    try {
-      issue = JSON.parse(answer.toString("utf8"));
-    } catch {
-      return;
+    if (bot() && Number.isFinite(run.since)) {
+      for (let page = 1; page <= MAX_PAGES; page++) {
+        const issues = await lookup(
+          repo,
+          `/repos/${repo}/issues?state=all&sort=created&direction=desc&per_page=100&page=${page}`,
+        );
+        if (!Array.isArray(issues) || !issues.length) break;
+        const found = issues.find((i) => i?.id === id);
+        if (found) {
+          const kind = created(run, found) ? "created_issue" : "other_issue";
+          return { id, number: found.number ?? null, kind };
+        }
+        // Older than the run: none further on is its own.
+        if (Date.parse(issues.at(-1)?.created_at) < run.since) break;
+      }
     }
-    if (!Number.isInteger(issue?.number) || !Number.isSafeInteger(issue?.id)) return;
-    if (issue.pull_request || !inRepo(issue, run.repo)) return;
-    const made = createdBy(run);
-    made.numbers.add(issue.number);
-    made.ids.set(issue.id, issue.number);
+    return { id, number: null, kind: "other_issue" };
   }
 
   // A run's write → null when it may go on, else { status, message }: GitHub's status and why,
@@ -324,7 +335,7 @@ export function createWriteChecks({ lookup, policies = null, log = () => {} }) {
       return refusal(403, `a ${mode} run can't ${what} here (its ceiling)`);
     }
     if (write.child?.replace_parent) {
-      return refusal(403, "a run can't move an issue from its parent (replace_parent)");
+      return refusal(403, "a run can't move an issue from another parent (replace_parent)");
     }
     let target = write.target;
     if (target.number !== undefined) {
@@ -381,7 +392,7 @@ export function createWriteChecks({ lookup, policies = null, log = () => {} }) {
     return refusal(403, `the policies refuse it (deny_github): ${messages.join("; ")}`);
   }
 
-  return { check, answered };
+  return { check };
 }
 
 // The children a link may name (resolveChild()).
@@ -391,12 +402,6 @@ const LINKABLE = new Set(["sub_issue", "created_issue"]);
 function inRepo(issue, repo) {
   const url = String(issue?.repository_url ?? "").toLowerCase();
   return url.endsWith(`/repos/${repo}`);
-}
-
-// The issues `run` created (broker.mjs's run, for its lifetime): numbers, and id → number.
-function createdBy(run) {
-  run.created ??= { numbers: new Set(), ids: new Map() };
-  return run.created;
 }
 
 const refusal = (status, message) => ({ status, message });

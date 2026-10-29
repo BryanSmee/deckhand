@@ -234,6 +234,7 @@ export function createRestart(ctx) {
       mode: saved.mode,
       issue: task.number,
       base: task.base,
+      since: saved.record.startedAt,
       secret: saved.secret,
     });
     // State saved before runs had branches: none, rather than any.

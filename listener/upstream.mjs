@@ -80,7 +80,6 @@ export function baseOf(upstream) {
 // `idleMs`: how long the call may go without a byte either way before it is cut off, on
 // `clock`'s timers: a stalled provider doesn't hold a listener every run shares. `body`: what
 // is sent in place of the request's own, already read (github-gateway.mjs's redacted writes).
-// `tap(chunk)`: each chunk of the answer too, as it goes on (github-gateway.mjs's writes).
 export function forward(
   req,
   res,
@@ -94,7 +93,6 @@ export function forward(
     idleMs = IDLE_MS,
     clock = globalThis,
     body,
-    tap,
   },
 ) {
   const send = target.protocol === "https:" ? httpsRequest : httpRequest;
@@ -112,7 +110,6 @@ export function forward(
       res.writeHead(answer.statusCode, forwarded(answer.headers));
       // Server-sent events: each chunk goes on as it arrives.
       answer.on("data", idle);
-      if (tap) answer.on("data", tap);
       answer.pipe(res);
       answer.on("end", resolve);
       answer.on("error", () => (res.destroy(), resolve()));

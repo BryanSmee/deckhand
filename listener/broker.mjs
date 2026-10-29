@@ -63,12 +63,13 @@ export function createBroker({
   // runs' pushes would run in the issue's next work run). Decided by the kind of run, not
   // its token: fail closed. `mode`: the run's (modes.mjs), for what the GitHub gateway refuses
   // a review and its writes' ceiling. `issue`: the number of its issue or pull request, and
-  // `base`, its repo's default branch, for what its writes may reach (github-writes.mjs).
+  // `base`, its repo's default branch, and `since`, when it started (ms), for what its writes
+  // may reach (github-writes.mjs: the issues it created are its App's since then).
   // `secret`: a run's own again, when a restarted listener picks it up.
   function register(
     repo,
     extra,
-    { push = false, mode = null, issue = null, base = null, secret = random() } = {},
+    { push = false, mode = null, issue = null, base = null, since = null, secret = random() } = {},
   ) {
     // No branch until allow() names them: a run that can push still pushes nothing else.
     runs.set(hash(secret), {
@@ -78,6 +79,7 @@ export function createBroker({
       mode,
       issue: Number.isInteger(issue) ? issue : null,
       base,
+      since: Number.isFinite(since) ? since : null,
       branches: [],
       provider: null,
       credential: null,

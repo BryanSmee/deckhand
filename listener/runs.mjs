@@ -140,6 +140,7 @@ export function createRuns(ctx) {
         mode,
         issue: task.number,
         base: task.base,
+        since: record.startedAt,
       }),
       asked: replyTo, // where errors go
       replyTo, // where the reply goes: the issue or pull request of the last comment it took

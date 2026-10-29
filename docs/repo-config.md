@@ -856,21 +856,24 @@ A run's sandbox holds no GitHub token: its calls go through the listener's GitHu
 tool sends it: `gh`, `gh api`, curl) is checked there, in this order:
 
 1. **Classified** from its method, path and body into actions on a target. A write it can't
-   classify, or one outside the run's repository, is refused.
+   classify, one outside the run's repository, and one with a query string (GitHub may read
+   parameters there too, which the check wouldn't see) are refused.
 2. **Its target's kind is read from GitHub**, never from the request: whether it is the run's
    issue, a pull request (its own when it is the run's, or from a branch the run may push),
    a sub-issue of the run's issue (its parent on GitHub, in the same repository), an issue the
-   run created (GitHub's answers to its creates).
+   run created (by the App's bot, since the run started, however it was created: `gh issue
+create` is GraphQL).
 3. **The mode's ceiling**, built into Deckhand: the most a run of that mode can ever write. A
    write above it is refused before any policy runs; no policy can allow more.
 4. **`deny_github`**, on the input below: the policies can only narrow the ceiling.
 
 A sub-issue link (`POST`, `DELETE` or reordering `…/issues/<parent>/sub_issues`) names two
 issues: the parent, its target, and the child, by its id: the child must be an issue the run
-created or one already under the run's issue, and moving an issue from another parent
-(`replace_parent`) is refused. A link can't take someone else's issue under the run's, where
-its ceiling would let it edit it. The issues a run created are kept while it lasts: after a
-listener restart, it links only those already under its issue.
+created (found among the repository's newest issues, back to the run's start) or one already
+under the run's issue, and moving an issue from another parent (`replace_parent` with any
+value but `false`) is refused. A link can't take someone else's issue under the run's, where
+its ceiling would let it edit it. Another run of the App's that files an issue while this one
+runs is the only other author an issue "created by the run" could have.
 
 GraphQL writes (`gh issue comment`, `gh issue create` and most of `gh`'s own commands) aren't
 checked yet: they go on as the run's token allows, until issue #406 classifies them.
