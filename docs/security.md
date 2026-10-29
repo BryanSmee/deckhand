@@ -331,7 +331,8 @@ to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to the
   otherwise take any issue under the run's, where its ceiling lets it edit. A "blocked by"
   link is a `link` on the blocked issue, and its blocker must be an issue the run created,
   one under its issue, or an open issue of its repository: never a pull request or another
-  repository's issue; it only orders work (`plans.mjs`), and writes nothing to the blocker. A
+  repository's issue. It orders work (`plans.mjs`), and leaves only a timeline event (and its
+  dependency counts) on the blocker, editing nothing else there. A
   write with a query string is refused unchecked: GitHub may read parameters there too. Then:
   - a write it can't classify, one outside the run's repository, and one above the **mode's
     ceiling** (`listener/modes.mjs` `ceilingOf()`, built in: [the table](repo-config.md#the-github-input))

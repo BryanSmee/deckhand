@@ -15,7 +15,7 @@ import {
   parseCall,
   restName,
 } from "../listener/github-graphql.mjs";
-import { createWriteChecks } from "../listener/github-writes.mjs";
+import { classify, createWriteChecks } from "../listener/github-writes.mjs";
 
 const json = (value) => Buffer.from(JSON.stringify(value));
 const call = (query, variables, operationName) => json({ query, variables, operationName });
@@ -602,6 +602,19 @@ test("a blocked-by link: its blocker resolved from its node, an issue of the run
   }
   assert.deepEqual(writes.at(-1).blocker, { id: 102, number: 2, repo: "org/repo" });
   assert.deepEqual(writes.at(-1).actions, ["link"]);
+  // One spelling for the policies: GraphQL's blocker field as REST names it, added or removed.
+  const rest = [
+    classify("POST", "repos/org/repo/issues/1/dependencies/blocked_by", json({ issue_id: 102 })),
+    classify("DELETE", "repos/org/repo/issues/1/dependencies/blocked_by/102", Buffer.alloc(0)),
+  ];
+  assert.deepEqual(
+    writes.slice(-4).map((w) => w.change.fields),
+    Array(4).fill(["issue_id"]),
+  );
+  assert.deepEqual(
+    rest.map((w) => w.change.fields),
+    [["issue_id"], ["issue_id"]],
+  );
   // A closed issue it didn't create, another repository's, a pull request: refused.
   assert.match(
     (await check(work, link("addBlockedBy", "I_2", "I_4"))).refused.message,
@@ -757,8 +770,18 @@ test("restName: GraphQL's input names as REST's body names them", () => {
       "title",
       "subIssueId",
       "stateReason",
+      "blockingIssueId",
     ].map(restName),
-    ["labels", "assignees", "milestone", "base", "title", "sub_issue_id", "state_reason"],
+    [
+      "labels",
+      "assignees",
+      "milestone",
+      "base",
+      "title",
+      "sub_issue_id",
+      "state_reason",
+      "issue_id",
+    ],
   );
 });
 

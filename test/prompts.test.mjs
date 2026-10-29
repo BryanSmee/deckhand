@@ -110,6 +110,9 @@ test("prompts: each kind of run gets its own", () => {
   assert.match(prompt(issue, "stop"), /^Brainstorm GitHub issue #12/);
   assert.match(prompt(issue, "idea"), /^New on the ideas inbox of org\/repo \(issue #12\)/);
   assert.match(prompt(issue, "idea"), /The entry:\n\nthe comments$/);
+  // Its parts that wait for others say so, so they start in order.
+  assert.match(prompt(issue, "idea"), /issues\/<n>\/dependencies\/blocked_by -F issue_id=<id>/);
+  assert.match(prompt(issue, "idea"), /Never block the parent by its own sub-issues/);
   assert.match(
     prompt(issue, "discussion"),
     /gh api graphql -F owner=org -F name=repo -F number=12/,

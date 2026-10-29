@@ -527,8 +527,10 @@ function idsOf(fields) {
 
 // An input field's name as a REST body would name it, so a policy on `change.fields` reads one
 // spelling for both: `labelIds` → `labels`, `assigneeIds` → `assignees`, `milestoneId` →
-// `milestone`, `baseRefName` → `base`, the others in snake case (`subIssueId` → `sub_issue_id`).
+// `milestone`, `baseRefName` → `base`, `blockingIssueId` → `issue_id`, the others in snake case
+// (`subIssueId` → `sub_issue_id`).
 const REST_NAMES = {
+  blockingIssueId: "issue_id",
   labelIds: "labels",
   assigneeIds: "assignees",
   milestoneId: "milestone",

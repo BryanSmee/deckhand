@@ -884,7 +884,8 @@ A "blocked by" link (`POST …/issues/<n>/dependencies/blocked_by` with the bloc
 the ceiling as any link's, and its blocker must be an issue the run created, one under the
 run's issue, or any open issue of the run's repository (not a pull request, nor another
 repository's issue, though GitHub allows those). A REST blocker, named by its id only, is
-looked for among the repository's 1,000 newest open issues past the run's own (GitHub can't
+looked for among the repository's 1,000 newest open issues and pull requests (GitHub lists
+them together) past the run's own (GitHub can't
 look an issue up by its id); GraphQL's, by its node ID, is looked up wherever it is. A call
 without its blocker is refused. The listener reads these links to order a plan
 ([architecture](architecture.md)): a sub-issue waits on the graph until its blockers close.

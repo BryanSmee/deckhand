@@ -162,7 +162,13 @@ const ROUTES = [
   [
     "DELETE",
     /^issues\/(\d+)\/dependencies\/blocked_by\/(\d+)$/i,
-    (m) => ({ actions: ["link"], target: { number: +m[1] }, blocker: blocker(m[2]) }),
+    // Its blocker is in the path: named as POST's body names it, for the policies.
+    (m) => ({
+      actions: ["link"],
+      target: { number: +m[1] },
+      blocker: blocker(m[2]),
+      change: { fields: ["issue_id"] },
+    }),
   ],
   [
     /^(?:POST|DELETE)$/,
@@ -295,7 +301,7 @@ function anyKindHolds(ceiling, actions) {
 
 // The issues a run created that a link's child is looked for among: a run files a few.
 const MAX_CREATED = 100;
-// The pages of the repo's open issues, newest first, that a "blocked by" link's blocker named
+// The pages of the repo's open issues (and pull requests, which GitHub lists with them), newest first, that a "blocked by" link's blocker named
 // by its id only (REST) is looked for among, past the run's own: GitHub can't look an issue up
 // by its id. GraphQL's names it by its node ID, looked up whatever the repo holds.
 const MAX_OPEN_PAGES = 10;
