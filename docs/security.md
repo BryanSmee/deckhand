@@ -328,8 +328,11 @@ to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to the
   or pull request. A sub-issue link's child, named by its id, must be one the run created or
   one already under its issue, and moving an issue from
   another parent (`replace_parent` with any value but `false`) is refused: a link could
-  otherwise take any issue under the run's, where its ceiling lets it edit. A write with a
-  query string is refused unchecked: GitHub may read parameters there too. Then:
+  otherwise take any issue under the run's, where its ceiling lets it edit. A "blocked by"
+  link is a `link` on the blocked issue, and its blocker must be an issue the run created,
+  one under its issue, or an open issue of its repository: never a pull request or another
+  repository's issue; it only orders work (`plans.mjs`), and writes nothing to the blocker. A
+  write with a query string is refused unchecked: GitHub may read parameters there too. Then:
   - a write it can't classify, one outside the run's repository, and one above the **mode's
     ceiling** (`listener/modes.mjs` `ceilingOf()`, built in: [the table](repo-config.md#the-github-input))
     are refused before any policy runs. A work run writes its own issue, its pull requests

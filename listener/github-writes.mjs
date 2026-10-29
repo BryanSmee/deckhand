@@ -20,6 +20,9 @@
 // REST issue can't be looked up by its id: the run's issue's sub-issues and the issues it
 // created carry theirs). Moving an issue from another parent (`replace_parent`, any value
 // but false) is in no ceiling: a link would otherwise take any issue under the run's.
+// A "blocked by" link (issue #437) is a `link` too: its target is the blocked issue, in the
+// path, and its blocker, by its id (the body's `issue_id`, or the path's when removed), one the
+// run created, one under its issue, or any open issue of its repository (resolveBlocker()).
 // Format of the policies' input: ../docs/repo-config.md#the-github-input.
 import { branchAllowed } from "./broker.mjs";
 import { createPullChecks, PULL_WRITE } from "./github-pulls.mjs";
@@ -69,6 +72,12 @@ function child(body) {
   const id = Number(body.sub_issue_id);
   if (!Number.isSafeInteger(id) || id <= 0) return null;
   return { id, replace_parent: "replace_parent" in body && body.replace_parent !== false };
+}
+
+// A "blocked by" link's blocker: its `issue_id`, a positive integer. Null without one.
+function blocker(value) {
+  const id = Number(value);
+  return Number.isSafeInteger(id) && id > 0 ? { id } : null;
 }
 
 // [method, path under the repo (case-insensitive), match → { actions, target, change, pull,
@@ -142,6 +151,20 @@ const ROUTES = [
     (m, body) => ({ actions: ["link"], target: { number: +m[1] }, child: child(body) }),
   ],
   [
+    "POST",
+    /^issues\/(\d+)\/dependencies\/blocked_by$/i,
+    (m, body) => ({
+      actions: ["link"],
+      target: { number: +m[1] },
+      blocker: blocker(body.issue_id),
+    }),
+  ],
+  [
+    "DELETE",
+    /^issues\/(\d+)\/dependencies\/blocked_by\/(\d+)$/i,
+    (m) => ({ actions: ["link"], target: { number: +m[1] }, blocker: blocker(m[2]) }),
+  ],
+  [
     /^(?:POST|DELETE)$/,
     /^issues\/(\d+)\/assignees$/i,
     (m) => ({ actions: ["assign"], target: { number: +m[1] } }),
@@ -212,8 +235,8 @@ const ROUTES = [
 ];
 
 // A write → { repo, actions, target: { number } | { kind }, child (a link's: { id,
-// replace_parent }), change: { fields, labels_added, labels_removed, labels_set (the labels
-// it sets replace the issue's) }, pull, permissions (ROUTES') }, `{ read: true }` for a POST that writes nothing (rendering markdown), or
+// replace_parent }), blocker (a "blocked by" link's: { id }), change: { fields, labels_added,
+// labels_removed, labels_set (the labels it sets replace the issue's) }, pull, permissions (ROUTES') }, `{ read: true }` for a POST that writes nothing (rendering markdown), or
 // null when it can't be classified. `path`: under the API's base, decoded, without its query
 // (github-gateway.mjs route()); `body`: the bytes sent.
 export function classify(method, path, body) {
@@ -238,13 +261,14 @@ export function classify(method, path, body) {
     const m = route.exec(rest);
     if (!m) continue;
     const write = build(m, json);
-    // A link without its child can't be checked.
-    if (write.child === null) return null;
+    // A link without its child or its blocker can't be checked.
+    if (write.child === null || write.blocker === null) return null;
     return {
       repo: `${owner}/${name}`.toLowerCase(),
       actions: write.actions,
       target: write.target,
       ...(write.child && { child: write.child }),
+      ...(write.blocker && { blocker: write.blocker }),
       ...(write.pull && { pull: write.pull, permissions: write.permissions }),
       change: {
         fields: Array.isArray(json) ? [] : Object.keys(json),
@@ -271,6 +295,11 @@ function anyKindHolds(ceiling, actions) {
 
 // The issues a run created that a link's child is looked for among: a run files a few.
 const MAX_CREATED = 100;
+// The pages of the repo's open issues, newest first, that a "blocked by" link's blocker named
+// by its id only (REST) is looked for among, past the run's own: GitHub can't look an issue up
+// by its id. GraphQL's names it by its node ID, looked up whatever the repo holds.
+const MAX_OPEN_PAGES = 10;
+const PAGE = 100;
 // How much earlier than the call that created it GitHub may say an issue was created: the
 // listener's and GitHub's clocks differ, and `created_at` is in seconds.
 const SKEW_MS = 2 * 60_000;
@@ -346,6 +375,44 @@ export function createWriteChecks({
       if (issue?.id === id && created(run, issue)) return { id, number, kind: "created_issue" };
     }
     return { id, number: null, kind: "other_issue" };
+  }
+
+  // A "blocked by" link's blocker → { id, number, kind }: as resolveChild() finds a child, and
+  // else, when it is an open issue of the repo (never a pull request), its kind as a target's
+  // (resolve()). `open` says whether it may block: an issue the run created or under its
+  // issue, whatever its state, or an open one. A GraphQL blocker comes with its number and
+  // repo, resolved from its node ID.
+  async function resolveBlocker(run, repo, { id, number, repo: at }, lookup) {
+    if (number === undefined) {
+      const found = await resolveChild(run, repo, { id }, lookup);
+      if (LINKABLE.has(found.kind)) return { ...found, open: true };
+      number = await openNumber(repo, id, lookup);
+      if (number === null) return { id, number: null, kind: "other_issue", open: false };
+    } else if (at !== repo) {
+      return { id, number, kind: "other_issue", open: false };
+    }
+    const target = await resolve(run, repo, number, lookup);
+    const kind = target?.kind ?? "other_issue";
+    if (LINKABLE.has(kind)) return { id, number, kind, open: true };
+    const issue = await lookup(repo, `/repos/${repo}/issues/${number}`);
+    const open = !issue?.pull_request && issue?.state === "open";
+    return { id, number, kind, open };
+  }
+
+  // The number of the repo's open issue whose id is `id`, among its newest (MAX_OPEN_PAGES),
+  // or null.
+  async function openNumber(repo, id, lookup) {
+    for (let page = 1; page <= MAX_OPEN_PAGES; page++) {
+      const list = await lookup(
+        repo,
+        `/repos/${repo}/issues?state=open&per_page=${PAGE}&page=${page}`,
+      );
+      if (!Array.isArray(list)) return null;
+      const found = list.find((i) => i?.id === id && !i.pull_request);
+      if (found) return found.number ?? null;
+      if (list.length < PAGE) return null;
+    }
+    return null;
   }
 
   // GitHub's answer to a run's write that went on (github-gateway.mjs wroteWrite()): the pull
@@ -463,6 +530,23 @@ export function createWriteChecks({
         );
       }
       change.sub_issue = sub;
+    }
+    if (write.blocker) {
+      let found;
+      try {
+        found = await resolveBlocker(run, write.repo, write.blocker, get);
+      } catch (error) {
+        log(`GitHub gateway: ${run.repo} blocker ${write.blocker.id}: ${error.message ?? error}`);
+        return refusal(502, "the blocking issue can't be looked up on GitHub");
+      }
+      if (!found.open) {
+        return refusal(
+          403,
+          "a run's blocking issue is one it created, one under its issue, or an open issue of its repository",
+        );
+      }
+      const { open: _, ...blocked_by } = found;
+      change.blocked_by = blocked_by;
     }
     const pulled = await pulls.check(run, write, target, get);
     if (pulled) return pulled;

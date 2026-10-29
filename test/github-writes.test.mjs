@@ -67,6 +67,18 @@ test("classify: a write's actions, its target and what it changes", () => {
     ["DELETE", "repos/org/repo/issues/12/labels", null, { labels_removed: ["*"] }],
     ["POST", "repos/org/repo/issues/12/sub_issues", { sub_issue_id: 9 }, { actions: ["link"] }],
     ["DELETE", "repos/org/repo/issues/12/sub_issue", { sub_issue_id: 9 }, { actions: ["link"] }],
+    [
+      "POST",
+      "repos/org/repo/issues/12/dependencies/blocked_by",
+      { issue_id: 9 },
+      { actions: ["link"], target: { number: 12 } },
+    ],
+    [
+      "DELETE",
+      "repos/org/repo/issues/12/dependencies/blocked_by/9",
+      null,
+      { actions: ["link"], target: { number: 12 } },
+    ],
     // Assignees and a milestone are their own actions, on a create too; labels set, a flag.
     [
       "POST",
@@ -109,6 +121,12 @@ test("classify: a write's actions, its target and what it changes", () => {
     classify("POST", "repos/org/repo/issues/12/sub_issues", json({ sub_issue_id: 9 })).child,
     { id: 9, replace_parent: false },
   );
+  for (const [method, path, body] of [
+    ["POST", "repos/org/repo/issues/12/dependencies/blocked_by", json({ issue_id: "9" })],
+    ["DELETE", "repos/org/repo/issues/12/dependencies/blocked_by/9", Buffer.alloc(0)],
+  ]) {
+    assert.deepEqual(classify(method, path, body).blocker, { id: 9 }, method);
+  }
   assert.equal(
     classify("PUT", "repos/org/repo/issues/12/labels", json(["a"])).change.labels_set,
     true,
@@ -128,6 +146,10 @@ test("classify: a write's actions, its target and what it changes", () => {
     // A link without its child.
     ["POST", "repos/org/repo/issues/1/sub_issues", "{}"],
     ["DELETE", "repos/org/repo/issues/1/sub_issue", '{"sub_issue_id": "x"}'],
+    // A blocked-by link without its blocker.
+    ["POST", "repos/org/repo/issues/1/dependencies/blocked_by", "{}"],
+    ["POST", "repos/org/repo/issues/1/dependencies/blocked_by", '{"issue_id": -3}'],
+    ["DELETE", "repos/org/repo/issues/1/dependencies/blocked_by/0", "{}"],
   ]) {
     assert.equal(classify(method, path, Buffer.from(body)), null, `${method} ${path}`);
   }
@@ -167,11 +189,13 @@ test("the ceilings: what each mode can ever write", () => {
 
 // A fake GitHub for the look-ups: issues by number (a `pull_request` field for a pull
 // request), pull requests' heads, issues' parents (a number: in the repo; else GitHub's
-// parent), issues' sub-issues.
-function fakeLookup({ issues = {}, pulls = {}, parents = {}, subs = {} } = {}) {
+// parent), issues' sub-issues, the repo's open issues (newest first, by pages of 100).
+function fakeLookup({ issues = {}, pulls = {}, parents = {}, subs = {}, open = [] } = {}) {
   const calls = [];
   const lookup = async (repo, path) => {
     calls.push(path);
+    const page = /^\/repos\/org\/repo\/issues\?state=open&per_page=100&page=(\d+)$/.exec(path);
+    if (page) return open.slice((page[1] - 1) * 100, page[1] * 100);
     const m =
       /^\/repos\/org\/repo\/(issues|pulls)\/(\d+)(\/parent|\/sub_issues\?per_page=100)?$/.exec(
         path,
@@ -194,7 +218,7 @@ const GITHUB = {
   issues: {
     1: { number: 1, user: { login: "alice" }, labels: [{ name: "idea" }] },
     2: { number: 2, user: { login: "bob" }, labels: [] },
-    3: { number: 3, user: { login: "bob" }, labels: [] },
+    3: { number: 3, id: 903, state: "open", user: { login: "bob" }, labels: [] },
     4: { number: 4, user: { login: "bob" }, labels: [] },
     // The bot's: created by the tests' runs, and long before.
     30: { number: 30, id: 900, user: { login: "deckhand[bot]" }, created_at: at(1), labels: [] },
@@ -212,6 +236,8 @@ const GITHUB = {
     50: { number: 50, id: 950, user: { login: "alice" }, created_at: at(4), labels: [] },
     7: { number: 7, pull_request: {}, user: { login: "deckhand[bot]" }, labels: [] },
     8: { number: 8, pull_request: {}, user: { login: "bob" }, labels: [] },
+    // Someone else's, closed.
+    60: { number: 60, id: 960, state: "closed", user: { login: "bob" }, labels: [] },
   },
   pulls: {
     7: { head: { ref: "issue-1-thing", repo: { full_name: "Org/Repo" } } },
@@ -224,6 +250,11 @@ const GITHUB = {
     4: { number: 1, repository_url: "https://api.github.com/repos/org/other" },
   },
   subs: { 1: [{ id: 202, number: 2 }] },
+  // Open: #3, and #8, a pull request, as GitHub's issues list them.
+  open: [
+    { number: 8, id: 908, pull_request: {} },
+    { number: 3, id: 903 },
+  ],
 };
 function run(mode, { push = mode === "work", issue = 1, branches = ["issue-1-*"] } = {}) {
   const branch = push ? branches : [];
@@ -524,6 +555,64 @@ test("a sub-issue link: its child is one the run created or already under its is
   assert.match((await check(idea, link(30, { sub_issue_id: 904 }))).message, /links only issues/);
 });
 
+test("a blocked-by link: its blocker one the run created, one under its issue, or an open issue of its repo", async () => {
+  const { lookup } = fakeLookup(GITHUB);
+  const { check, answered } = createWriteChecks({ lookup, bot: BOT });
+  const work = run("work");
+  const block = (n, id) =>
+    write("POST", `repos/org/repo/issues/${n}/dependencies/blocked_by`, { issue_id: id });
+  const unblock = (n, id) =>
+    write("DELETE", `repos/org/repo/issues/${n}/dependencies/blocked_by/${id}`);
+  // Its sub-issue blocked by an open issue of the repo, its own issue by its sub-issue.
+  for (const w of [block(2, 903), unblock(2, 903), block(1, 202), unblock(1, 202)]) {
+    assert.equal(await check(work, w), null, `${w.method} ${w.path}`);
+  }
+  // An issue it created, blocked by another it created.
+  answered(work, GRAPHQL_CREATE, 200, created(30));
+  answered(work, REST_CREATE, 201, restIssue(35));
+  assert.equal(await check(work, block(35, 900)), null);
+  // A closed issue it didn't create, a pull request, an id the repo's open issues don't have.
+  for (const id of [960, 908, 9]) {
+    assert.match(
+      (await check(work, block(2, id)))?.message ?? "",
+      /an open issue of its repository/,
+      String(id),
+    );
+  }
+  // The target goes through the ceiling: someone else's issue isn't a work run's to link.
+  assert.match((await check(work, block(3, 202))).message, /can't link on other_issue #3/);
+  // An inbox entry links the issues it created, and nothing else.
+  const idea = run("idea");
+  answered(idea, GRAPHQL_CREATE, 200, created(30));
+  answered(idea, GRAPHQL_CREATE, 200, created(35));
+  assert.equal(await check(idea, block(35, 900)), null);
+  assert.equal(await check(idea, block(35, 903)), null);
+  assert.match((await check(idea, block(3, 900))).message, /other_issue #3/);
+  assert.match((await check(idea, block(1, 900))).message, /own_issue #1/);
+  // Modes whose ceiling holds no link: refused before any look-up.
+  for (const mode of ["review", "analyze", "onboarding"]) {
+    assert.match((await check(run(mode), block(2, 903))).message, /its ceiling/, mode);
+  }
+});
+
+test("a blocked-by link's blocker by its id is looked for among the repo's newest open issues", async () => {
+  const filler = (from) =>
+    Array.from({ length: 100 }, (_, i) => ({ number: 1000 + from + i, id: 5000 + from + i }));
+  const open = [...filler(0), ...filler(100), { number: 3, id: 903 }];
+  const { lookup, calls } = fakeLookup({ ...GITHUB, open });
+  const { check } = createWriteChecks({ lookup });
+  const block = { issue_id: 903 };
+  const w = write("POST", "repos/org/repo/issues/2/dependencies/blocked_by", block);
+  assert.equal(await check(run("work"), w), null);
+  assert.equal(calls.filter((c) => c.includes("state=open")).length, 3);
+  // Past the pages it reads: not found, refused.
+  const many = Array.from({ length: 11 }, (_, p) => filler(p * 100)).flat();
+  const far = fakeLookup({ ...GITHUB, open: [...many, { number: 3, id: 903 }] });
+  const { check: farCheck } = createWriteChecks({ lookup: far.lookup });
+  assert.match((await farCheck(run("work"), w)).message, /an open issue of its repository/);
+  assert.equal(far.calls.filter((c) => c.includes("state=open")).length, 10);
+});
+
 test("deny_github: its input, and its reasons refusing the write", async (t) => {
   const { engine: policies, evals } = policyEngine(t, {
     operator: { "github.rego": "package deckhand\n" },
@@ -573,6 +662,12 @@ test("deny_github: its input, and its reasons refusing the write", async (t) => 
   // A link's child, with its kind.
   await check(work, write("POST", "repos/org/repo/issues/1/sub_issues", { sub_issue_id: 202 }));
   assert.deepEqual(evals.at(-1).change.sub_issue, { id: 202, number: 2, kind: "sub_issue" });
+  // A blocked-by link's blocker, with its kind.
+  await check(
+    work,
+    write("POST", "repos/org/repo/issues/2/dependencies/blocked_by", { issue_id: 903 }),
+  );
+  assert.deepEqual(evals.at(-1).change.blocked_by, { id: 903, number: 3, kind: "other_issue" });
   // Above the ceiling: refused before any policy runs.
   const asked = evals.length;
   await check(brainstorm, write("PATCH", "repos/org/repo/issues/3", { body: "x" }));
@@ -638,7 +733,7 @@ test(
       readOperator: () => new Map([["github.rego", template]]),
       tmp: tempDir(t),
     });
-    const ask = (mode, action, kind, labels_added = []) =>
+    const ask = (mode, action, kind, labels_added = [], more = {}) =>
       policies.deny("deny_github", "org/repo", "main", () => ({
         repo: "org/repo",
         mode,
@@ -646,7 +741,7 @@ test(
         action,
         actions: [action],
         target: { kind, number: kind.startsWith("new") ? null : 7, labels: [], author: "a" },
-        change: { fields: ["body"], labels_added, labels_removed: [] },
+        change: { fields: ["body"], labels_added, labels_removed: [], ...more },
       }));
     assert.deepEqual(await ask("brainstorm", "edit", "own_issue"), []);
     assert.deepEqual(await ask("stop", "create", "new_issue", ["idea"]), []);
@@ -656,6 +751,17 @@ test(
       "a brainstorm writes only its own issue, not #7",
     ]);
     assert.deepEqual(await ask("brainstorm", "edit", "sub_issue"), [
+      "a brainstorm writes only its own issue, not #7",
+    ]);
+    // But a brainstorm orders its follow-ups: blocked-by links on them, not sub-issue links.
+    const blocked_by = { id: 9, number: 9, kind: "other_issue" };
+    for (const kind of ["sub_issue", "created_issue"]) {
+      assert.deepEqual(await ask("brainstorm", "link", kind, [], { blocked_by }), [], kind);
+    }
+    assert.deepEqual(await ask("brainstorm", "link", "sub_issue"), [
+      "a brainstorm writes only its own issue, not #7",
+    ]);
+    assert.deepEqual(await ask("brainstorm", "link", "other_issue", [], { blocked_by }), [
       "a brainstorm writes only its own issue, not #7",
     ]);
     assert.deepEqual(await ask("idea", "create", "new_issue", ["idea", "ui"]), []);

@@ -45,7 +45,11 @@ comments comes back to you as the next message of this conversation.
    issue (it is being split) becomes its sub-issue:
    `gh api repos/{owner}/{repo}/issues/<this issue>/sub_issues -F sub_issue_id=<id>`, where
    `<id>` is the new issue's id (`gh api repos/{owner}/{repo}/issues/<n> --jq .id`), not
-   its number. Separate work stays a plain issue that links back.
+   its number. When one part needs another done first (or an existing open issue), say so:
+   `gh api repos/{owner}/{repo}/issues/<n>/dependencies/blocked_by -F issue_id=<id>`, `<n>`
+   being the part that waits and `<id>` the id of the one it waits for. The parts then start
+   in that order, not all at once. Never block this issue by its own sub-issues: it already
+   waits for them. Separate work stays a plain issue that links back.
 
 Replies are read on a phone: short, headings and lists, no preamble, no restating of the
 question.

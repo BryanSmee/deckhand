@@ -307,6 +307,9 @@ test("prompts: a brainstorm proposes follow-up issues and files the kept ones", 
   );
   // A part of the issue becomes its sub-issue; separate work only links back.
   assert.match(text, /issues\/<this issue>\/sub_issues -F sub_issue_id=<id>/);
+  // Parts that wait for others say so, so they start in order.
+  assert.match(text, /issues\/<n>\/dependencies\/blocked_by -F issue_id=<id>/);
+  assert.match(text, /Never block this issue by its own sub-issues/);
   assert.match(text, /Separate work stays a plain issue that links back/);
   // The summary lists them; the description links them.
   assert.match(text, /the issues you created or linked/);

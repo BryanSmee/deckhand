@@ -95,7 +95,7 @@ function updated(input) {
 // - actions(input): what it does, as github-writes.mjs names actions;
 // - labels: the input field of label IDs it adds (`added`) or removes (`removed`), or sets in
 //   place of the issue's (`set`);
-// - child: a link's sub-issue field;
+// - child: a link's sub-issue field; blocker: a "blocked by" link's blocking issue field;
 // - pull(input), permissions: a pull request's own write's head, base and draft, and what its
 //   token needs beyond its mode's (github-pulls.mjs, github-writes.mjs classify()'s).
 // The pull request ones are in a work run's ceiling, for its own pull requests only: opened,
@@ -176,6 +176,20 @@ export const MUTATIONS = {
     fields: ["subIssueId", "afterId", "beforeId"],
     actions: () => ["link"],
     child: "subIssueId",
+  },
+  addBlockedBy: {
+    target: "issueId",
+    types: ISSUE,
+    fields: ["blockingIssueId"],
+    actions: () => ["link"],
+    blocker: "blockingIssueId",
+  },
+  removeBlockedBy: {
+    target: "issueId",
+    types: ISSUE,
+    fields: ["blockingIssueId"],
+    actions: () => ["link"],
+    blocker: "blockingIssueId",
   },
   closeIssue: {
     target: "issueId",
@@ -489,6 +503,9 @@ export function mutationFields({ doc, op, coerced }, schema = githubSchema()) {
     if (spec.child && typeof set[spec.child] !== "string") {
       return { refused: refusal(403, `${name} names its sub-issue by its ${spec.child} only`) };
     }
+    if (spec.blocker && typeof set[spec.blocker] !== "string") {
+      return { refused: refusal(400, `${name} without its ${spec.blocker}`) };
+    }
     const entry = { name, key, spec, input: set, nodes: [field] };
     byKey.set(key, entry);
     out.push(entry);
@@ -496,12 +513,13 @@ export function mutationFields({ doc, op, coerced }, schema = githubSchema()) {
   return out;
 }
 
-// The node IDs a call's mutations name: their targets, sub-issues and labels.
+// The node IDs a call's mutations name: their targets, sub-issues, blockers and labels.
 function idsOf(fields) {
   const ids = new Set();
   for (const { spec, input } of fields) {
     ids.add(input[spec.target]);
     if (spec.child) ids.add(input[spec.child]);
+    if (spec.blocker) ids.add(input[spec.blocker]);
     for (const id of spec.labels ? (input[spec.labels.field] ?? []) : []) ids.add(id);
   }
   return [...ids];
@@ -612,20 +630,30 @@ export function writeOf({ name, spec, input }, nodes, repo) {
   }
   const write = { repo, actions, target, change };
   if (spec.pull) Object.assign(write, { pull: spec.pull(set), permissions: spec.permissions });
-  if (spec.child) {
-    const sub = nodes.get(input[spec.child]);
-    if (!sub || repoOf(sub).toLowerCase() !== repo) return { refused: elsewhere(spec.child) };
-    if (sub.__typename !== "Issue") {
-      return { refused: refusal(404, `${name}'s ${spec.child} isn't an issue`) };
+  // The other issue a link names, its sub-issue or its blocker: in the run's repo (GitHub
+  // allows cross-repository ones, a run doesn't), an issue.
+  const linked = (field) => {
+    const issue = nodes.get(input[field]);
+    if (!issue || repoOf(issue).toLowerCase() !== repo) return { refused: elsewhere(field) };
+    if (issue.__typename !== "Issue") {
+      return { refused: refusal(404, `${name}'s ${field} isn't an issue`) };
     }
+    return { id: issue.databaseId ?? null, number: issue.number, repo };
+  };
+  if (spec.child) {
+    const sub = linked(spec.child);
+    if (sub.refused) return sub;
     write.child = {
-      id: sub.databaseId ?? null,
-      number: sub.number,
-      repo: repoOf(sub).toLowerCase(),
+      ...sub,
       // Moving it from another parent: in no ceiling (github-writes.mjs). Any value but false,
       // null too, as REST's child() reads it: fail closed.
       replace_parent: "replaceParent" in input && input.replaceParent !== false,
     };
+  }
+  if (spec.blocker) {
+    const blocker = linked(spec.blocker);
+    if (blocker.refused) return blocker;
+    write.blocker = blocker;
   }
   return write;
 }

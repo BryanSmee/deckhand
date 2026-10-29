@@ -24,7 +24,11 @@ here.
    with its own acceptance criteria, then attach them:
    `gh api repos/{owner}/{repo}/issues/<parent>/sub_issues -F sub_issue_id=<id>`, where
    `<id>` is the sub-issue's id (`gh api repos/{owner}/{repo}/issues/<n> --jq .id`), not
-   its number.
+   its number. When a part needs another done first (or an existing open issue), say so:
+   `gh api repos/{owner}/{repo}/issues/<n>/dependencies/blocked_by -F issue_id=<id>`, `<n>`
+   being the part that waits and `<id>` the id of the one it waits for. The parts then start
+   in that order, not all at once. Never block the parent by its own sub-issues: it already
+   waits for them.
 5. Not something to build (a question, a remark, too vague to file)? Create nothing and
    answer it in your reply, with the questions that would make it fileable.
 
