@@ -34,7 +34,6 @@
 import { readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { join, posix } from "node:path";
 import { ConfigError, parseLimits } from "./config.mjs";
-import { hardening, limitArgs } from "./docker.mjs";
 import { hostProblem } from "./egress.mjs";
 import { PLAIN_PATH, RESERVED } from "./repo-config.mjs";
 import { isMap, parseYaml } from "./yaml.mjs";
@@ -604,16 +603,4 @@ export function resolveMounts(
     mounts.push({ source: real, target, readOnly: readOnly || root.readOnly });
   }
   return { mounts, refused, notes };
-}
-
-export function mountArgs(mounts) {
-  return mounts.flatMap(({ source, target, readOnly }) => [
-    "--mount",
-    `type=bind,src=${source},dst=${target}${readOnly ? ",readonly" : ""}`,
-  ]);
-}
-
-// No capabilities, no privilege gain through setuid binaries, and the repo's limits.
-export function hardeningArgs(limits) {
-  return [...hardening(), ...limitArgs(limits)];
 }

@@ -1,6 +1,8 @@
 // What a run starts from: the base image (../sandbox/Dockerfile, harness only) or the
 // repo's own image built FROM it; Claude Code, installed once per version into a shared
-// volume by a container of its own; and the repo's cache volumes.
+// volume by a container of its own; and the repo's cache volumes. What Docker does for them is
+// the runner's (runner/images.mjs, runner/jobs.mjs): this module decides which image, which
+// tag and which volumes.
 //
 // A repo image is built from the default branch (or, when the operator's grants set
 // allow_branch_docker_images for the repo, from a pull request's own branch, never a fork's)
@@ -10,10 +12,10 @@
 // pruned, keeping the default branch's newest and the most recent few.
 import { createHash } from "node:crypto";
 import { rmSync } from "node:fs";
-import { join } from "node:path";
 import { sameRepo } from "./events.mjs";
-import { checked, hardening, labelArgs, removeVolume, volumeExists } from "./docker.mjs";
+import { checked } from "./docker.mjs";
 import { cacheVolume, legacyRepoImage, repoImage } from "./repo-config.mjs";
+import { SANDBOX_USER } from "./sandbox-spec.mjs";
 
 // Tags kept per repo image: the default branch's and those of a few branches in flight.
 export const KEEP_TAGS = 3;
@@ -49,7 +51,8 @@ export function imageTag(config, repo, baseId, dockerfile, blob, branchRef = nul
 
 export function createImages({
   config,
-  docker, // docker.mjs
+  backend, // the runner's images and volumes (runner/images.mjs)
+  jobs, // its short containers (runner/jobs.mjs)
   readFile, // (repo, path, ref) → { sha, text } or null (repo-config.mjs readRepoFile)
   checkout, // (repo, ref) → a folder with the repo's files (checkout.mjs)
   log = () => {},
@@ -59,8 +62,8 @@ export function createImages({
   const volumes = new Map(); // cache volume → Promise
 
   async function baseId() {
-    const { code, out } = await docker(["image", "inspect", "--format", "{{.Id}}", config.image]);
-    if (code !== 0 || !out) {
+    const out = await backend.id(config.image);
+    if (!out) {
       throw new Error(`the base image ${config.image} is missing: run docker compose build`);
     }
     return out;
@@ -76,7 +79,7 @@ export function createImages({
     if (!file)
       throw new Error(`${dockerfile} (the config's dockerfile) is not in ${repo} at ${ref}`);
     const tag = imageTag(config, repo, id, dockerfile, file.sha, branch ? ref : null);
-    if ((await docker(["image", "inspect", "--format", "{{.Id}}", tag])).code === 0) return tag;
+    if ((await backend.id(tag)) !== null) return tag;
     if (!builds.has(tag)) {
       const build = buildImage(repo, ref, dockerfile, tag, output).finally(() =>
         builds.delete(tag),
@@ -92,24 +95,13 @@ export function createImages({
     log(`${repo}: building ${tag} from ${dockerfile} at ${ref}`);
     const dir = await checkout(repo, ref);
     try {
-      const built = await docker(
-        [
-          "build",
-          "--progress",
-          "plain",
-          // A Dockerfile names its base with `ARG DECKHAND_BASE` / `FROM $DECKHAND_BASE`, so
-          // the operator's image name isn't written in every repo.
-          "--build-arg",
-          `DECKHAND_BASE=${config.image}`,
-          ...labelArgs({ "deckhand.repo": repo.toLowerCase() }),
-          "-t",
-          tag,
-          "-f",
-          join(dir, dockerfile),
-          dir,
-        ],
-        { onData: output },
-      );
+      const built = await backend.build({
+        dir,
+        dockerfile,
+        tag,
+        labels: { "deckhand.repo": repo.toLowerCase() },
+        output,
+      });
       checked(built, `building ${dockerfile} of ${repo} failed`);
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -122,22 +114,19 @@ export function createImages({
   // The default branch's newest tag stays first: branch builds in a row don't push it out.
   async function prune(repo, keep) {
     const name = repoImage(config, repo);
-    const { code, out } = await docker(["image", "ls", "--format", "{{.Tag}}", name]);
-    if (code !== 0) return;
-    const tags = out.split("\n").filter((t) => t && t !== "<none>");
+    const tags = await backend.tags(name);
+    if (!tags) return;
     const main = tags.find((t) => !t.startsWith(BRANCH));
     const kept = new Set([keep.split(":")[1], ...(main ? [main] : [])]);
     for (const tag of tags) if (kept.size < KEEP_TAGS) kept.add(tag);
     for (const tag of tags) {
-      if (!kept.has(tag)) await docker(["image", "rm", `${name}:${tag}`]);
+      if (!kept.has(tag)) await backend.remove(`${name}:${tag}`);
     }
     // Tags of the name before it had a hash: no run picks them any more, whichever repo built
     // them.
     const legacy = legacyRepoImage(config, repo);
-    const old = await docker(["image", "ls", "--format", "{{.Tag}}", legacy]);
-    if (old.code !== 0) return;
-    for (const tag of old.out.split("\n").filter((t) => t && t !== "<none>")) {
-      await docker(["image", "rm", `${legacy}:${tag}`]);
+    for (const tag of (await backend.tags(legacy)) ?? []) {
+      await backend.remove(`${legacy}:${tag}`);
     }
   }
 
@@ -150,27 +139,21 @@ export function createImages({
     const { volume, mount, version, versionVar, command, env = {} } = agent.install(config);
     const key = `${agent.name}@${version}`;
     if (!installs.has(key)) {
-      const install = docker(
-        [
-          "run",
-          "--rm",
+      const install = jobs
+        .run({
+          image: config.image,
           // npm's registry, outside the runs' networks: no repo or agent input runs here.
-          "--network",
-          config.installNetwork,
-          ...["--user", "0", ...hardening("CHOWN")],
-          "-e",
-          `${versionVar}=${version}`,
-          ...Object.entries(env).flatMap(([name, value]) => ["-e", `${name}=${value}`]),
-          "-v",
-          `${volume}:${mount}`,
-          "--entrypoint",
-          command,
-          config.image,
-        ],
-        { onData: output },
-      ).then((result) => {
-        checked(result, `installing ${agent.displayName} ${version} failed`);
-      });
+          network: "install",
+          user: { uid: 0 },
+          caps: ["CHOWN"],
+          env: { [versionVar]: version, ...env },
+          volumes: [{ name: volume, path: mount }],
+          entrypoint: command,
+          output,
+        })
+        .then((result) => {
+          checked(result, `installing ${agent.displayName} ${version} failed`);
+        });
       // A failure is not kept: the next run tries again.
       install.catch(() => installs.get(key) === install && installs.delete(key));
       installs.set(key, install);
@@ -178,10 +161,10 @@ export function createImages({
     return installs.get(key);
   }
 
-  // `-v` arguments for the repo's caches. A new volume is handed to the sandbox's user
-  // (uid 1000): Docker creates a missing mount point as root.
+  // The repo's caches, [{ name, path }] (sandbox-spec.mjs). A new volume is handed to the
+  // sandbox's user (uid 1000): Docker creates a missing mount point as root.
   async function caches(repo, paths, image) {
-    const args = [];
+    const found = [];
     for (const path of paths) {
       const name = cacheVolume(config, repo, path);
       if (!volumes.has(name)) {
@@ -190,34 +173,26 @@ export function createImages({
         volumes.set(name, ready);
       }
       await volumes.get(name);
-      args.push("-v", `${name}:${path}`);
+      found.push({ name, path });
     }
-    return args;
+    return found;
   }
 
   async function cacheReady(repo, path, name, image) {
-    if (await volumeExists(docker, name)) return;
-    const labels = labelArgs({ "deckhand.repo": repo.toLowerCase(), "deckhand.cache": path });
-    checked(
-      await docker(["volume", "create", ...labels, name]),
-      `creating the cache volume ${name}`,
-    );
-    const owned = await docker([
-      "run",
-      "--rm",
-      "--network",
-      "none",
-      // Root for chown, and nothing else.
-      ...["--user", "0", ...hardening("CHOWN")],
-      "--entrypoint",
-      "chown",
-      "-v",
-      `${name}:${path}`,
+    if (await backend.volumeExists(name)) return;
+    const labels = { "deckhand.repo": repo.toLowerCase(), "deckhand.cache": path };
+    checked(await backend.createVolume(name, labels), `creating the cache volume ${name}`);
+    const owned = await jobs.run({
       image,
-      "1000:1000",
-      path,
-    ]);
-    if (owned.code !== 0) await removeVolume(docker, name); // so the next run prepares it again
+      network: "none",
+      // Root for chown, and nothing else.
+      user: { uid: 0 },
+      caps: ["CHOWN"],
+      volumes: [{ name, path }],
+      entrypoint: "chown",
+      args: [`${SANDBOX_USER.uid}:${SANDBOX_USER.gid}`, path],
+    });
+    if (owned.code !== 0) await backend.removeVolume(name); // so the next run prepares it again
     checked(owned, `preparing the cache volume ${name}`);
   }
 

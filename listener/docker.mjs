@@ -62,3 +62,21 @@ export async function volumeExists(docker, name) {
 export async function removeVolume(docker, name) {
   if (await volumeExists(docker, name)) await docker(["volume", "rm", name]);
 }
+
+// Host paths ({ source, target, readOnly }, grants.mjs resolveMounts()) as bind mounts.
+export function mountArgs(mounts) {
+  return mounts.flatMap(({ source, target, readOnly }) => [
+    "--mount",
+    `type=bind,src=${source},dst=${target}${readOnly ? ",readonly" : ""}`,
+  ]);
+}
+
+// No capabilities but `caps`, no privilege gain through setuid binaries, and the repo's limits.
+export function hardeningArgs(limits, caps = []) {
+  return [...hardening(...caps), ...limitArgs(limits)];
+}
+
+// { uid, gid } → "1000:1000"; without a gid, the uid alone ("0").
+export function userArg({ uid, gid }) {
+  return gid === undefined ? String(uid) : `${uid}:${gid}`;
+}

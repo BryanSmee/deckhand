@@ -15,7 +15,7 @@
 import { constants } from "node:fs";
 import { access, readFile, rename, stat, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
-import { hardening } from "./docker.mjs";
+import { SANDBOX_USER } from "./sandbox-spec.mjs";
 
 const EARLY_MS = 5 * 60_000;
 // What makes `agy` refresh: an expiry that has passed (not Go's zero time, which never expires).
@@ -56,7 +56,7 @@ function parseLogin(text, file) {
 export function createAntigravityLogin({
   file, // AGY_AUTH_FILE
   config, // image, agyVolume, agyVersion, agyLoginVolume, installNetwork
-  docker, // docker.mjs's
+  jobs, // the runner's short containers (runner/jobs.mjs)
   install = async () => {}, // the Antigravity CLI in its volume (images.installAgent())
   now = Date.now,
   log = () => {},
@@ -100,21 +100,18 @@ export function createAntigravityLogin({
   async function refresh(json) {
     await install();
     const forced = { ...json, token: { ...json.token, expiry: EXPIRED } };
-    const result = await docker(
-      [
-        "run",
-        "--rm",
-        "-i",
-        ...["--network", config.installNetwork],
-        ...["--user", "1000:1000", ...hardening()],
-        ...["-e", `AGY_VERSION=${config.agyVersion}`],
-        ...["-v", `${config.agyVolume}:/opt/antigravity:ro`],
-        ...["-v", `${config.agyLoginVolume}:/home/node/.gemini`],
-        ...["--entrypoint", "deckhand-antigravity-refresh"],
-        config.image,
+    const result = await jobs.run({
+      image: config.image,
+      network: "install",
+      user: SANDBOX_USER,
+      env: { AGY_VERSION: config.agyVersion },
+      volumes: [
+        { name: config.agyVolume, path: "/opt/antigravity", readOnly: true },
+        { name: config.agyLoginVolume, path: "/home/node/.gemini" },
       ],
-      { input: JSON.stringify(forced) },
-    );
+      entrypoint: "deckhand-antigravity-refresh",
+      input: JSON.stringify(forced),
+    });
     let next = null;
     try {
       next = parseLogin(result.out, file);

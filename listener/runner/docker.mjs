@@ -2,7 +2,8 @@
 // it does to a sandbox goes through this interface, so another backend (Kubernetes Jobs with
 // a volume per session, say) can replace Docker later:
 //
-//   start(spec)          starts a sandbox, detached: it outlives the listener
+//   start(spec)          starts a sandbox (sandbox-spec.mjs), detached: it outlives the
+//                        listener
 //   list()               this deployment's sandboxes, running or exited: [{ name, run, running }];
 //                        throws when Docker can't tell (rather than "none")
 //   state(name)          "running", "exited"… or null when there is no such sandbox
@@ -25,10 +26,19 @@
 //
 // This file composes its parts, which share `docker`: inbox.mjs (the messages' file),
 // networks.mjs (each run's own network), volumes.mjs (a run's container engine and its
-// storage) and gc.mjs (relink()).
+// storage) and gc.mjs (relink()). What else the listener has Docker do, images and short
+// containers of its own, is in images.mjs and jobs.mjs beside it (index.mjs).
 import { spawn as nodeSpawn } from "node:child_process";
 import { agentFor } from "../agents/index.mjs";
-import { checked, labelArgs, volumeExists } from "../docker.mjs";
+import {
+  checked,
+  hardening,
+  hardeningArgs,
+  labelArgs,
+  mountArgs,
+  userArg,
+  volumeExists,
+} from "../docker.mjs";
 import { engineEnv, engineName } from "./engine.mjs";
 import { createRelink } from "./gc.mjs";
 import { createInbox } from "./inbox.mjs";
@@ -86,6 +96,29 @@ export function unstamped(bytes) {
 // The most bytes a line of MAX_LINE takes with its stamps.
 const ROOM = MAX_LINE + (Math.ceil(MAX_LINE / PART) + 1) * STAMP_MAX;
 
+// A sandbox spec's user, hardening, limits and volumes (sandbox-spec.mjs) as `docker run`
+// options: a volume's folder (`subpath`) and a host path through --mount, the others -v.
+// Hardened whatever the spec leaves out.
+export function sandboxArgs({ user, limits, caps = [], volumes = [] }) {
+  return [
+    ...(user ? ["--user", userArg(user)] : []),
+    ...(limits ? hardeningArgs(limits, caps) : hardening(...caps)),
+    ...volumes.flatMap((v) => {
+      if (v.kind === "mount") {
+        return mountArgs([{ source: v.name, target: v.path, readOnly: v.readOnly }]);
+      }
+      if (v.subpath) {
+        const ro = v.readOnly ? ",readonly" : "";
+        return [
+          "--mount",
+          `type=volume,src=${v.name},dst=${v.path},volume-subpath=${v.subpath}${ro}`,
+        ];
+      }
+      return ["-v", `${v.name}:${v.path}${v.readOnly ? ":ro" : ""}`];
+    }),
+  ];
+}
+
 export function createDockerRunner({
   config,
   docker, // ../docker.mjs
@@ -100,24 +133,16 @@ export function createDockerRunner({
   // Runs whose network exists before their sandbox does: relink() leaves them alone.
   const starting = new Set();
 
-  // `spec`: { run, name, image, labels, env, args, engine, ca }. `env` values reach the
-  // container by name only (`-e NAME`), so they never show in `ps`; `args`: Docker's own
-  // options (hardening, limits, volumes); `engine`: { limits, cache } for a run granted a
+  // `spec`: sandboxSpec()'s. `env` values reach the container by name only (`-e NAME`), so
+  // they never show in `ps`; its user, limits, caps and volumes become Docker's own options
+  // (sandboxArgs()); `engine`: { limits, cache } for a run granted a
   // container engine, `cache` the base name of the repo's cache volume when it keeps one;
   // `ca`: the egress proxy's CA certificate (PEM), which the sandbox trusts, in its inbox
   // folder (DECKHAND_CA); `digest`: a run analysis's digest of past runs (analysis.mjs), there
   // too (TASK_DIGEST). → { engine: { backend, volume, cached } } when it has one.
-  async function start({
-    run,
-    name,
-    image,
-    labels = {},
-    env: values = {},
-    args = [],
-    engine,
-    ca,
-    digest,
-  }) {
+  async function start(spec) {
+    const { run, name, image, labels = {}, env: values = {}, engine, ca, digest } = spec;
+    const args = sandboxArgs(spec);
     // Unset values stay unset in the sandbox, as with `-e NAME` and no NAME.
     const env = Object.fromEntries(Object.entries(values).filter(([, v]) => v !== undefined));
     inbox.write(run, ca, digest);

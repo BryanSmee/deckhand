@@ -20,9 +20,7 @@ import {
   grantErrors,
   grantFor,
   grantsFrom,
-  hardeningArgs,
   loadGrants,
-  mountArgs,
   previewProblem,
   resolveMounts,
   ungranted,
@@ -533,35 +531,6 @@ test("mounts: writable by uid 1000 as owner (write bit or not), group 1000 or an
   assert.equal(refusedWith({ mode: 0o1777, uid: 0, gid: 0 }, { ...ROOT_DIR, uid: 1000 }), 1);
   assert.equal(refusedWith({ mode: 0o1777, uid: 1000, gid: 0 }), 1);
   assert.equal(refusedWith({ mode: 0o1555, uid: 1000, gid: 0 }), 1);
-});
-
-test("docker arguments: bind mounts, no capabilities, limits", () => {
-  assert.deepEqual(
-    mountArgs([
-      { source: "/nfs/a", target: "/nfs/a", readOnly: true },
-      { source: "/nfs/b", target: "/data/b", readOnly: false },
-    ]),
-    [
-      "--mount",
-      "type=bind,src=/nfs/a,dst=/nfs/a,readonly",
-      "--mount",
-      "type=bind,src=/nfs/b,dst=/data/b",
-    ],
-  );
-  assert.deepEqual(hardeningArgs({ cpus: "1.5", memory: "2g", pids: 512 }), [
-    "--cap-drop",
-    "ALL",
-    "--security-opt",
-    "no-new-privileges",
-    "--cpus",
-    "1.5",
-    "--memory",
-    "2g",
-    "--memory-swap",
-    "2g",
-    "--pids-limit",
-    "512",
-  ]);
 });
 
 test("allow_workflows: a repository's own file only", () => {

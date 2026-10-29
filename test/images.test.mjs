@@ -5,6 +5,8 @@ import { antigravity } from "../listener/agents/antigravity.mjs";
 import { claude } from "../listener/agents/claude.mjs";
 import { KEEP_TAGS, createImages, imageRef, imageTag } from "../listener/images.mjs";
 import { legacyRepoImage, repoImage } from "../listener/repo-config.mjs";
+import { createDockerImages } from "../listener/runner/images.mjs";
+import { createDockerJobs } from "../listener/runner/jobs.mjs";
 import { tempDir, testConfig } from "./helpers.mjs";
 
 const config = testConfig({ ALLOWED_USERS: "a", CLAUDE_CODE_VERSION: "9.9.9" });
@@ -48,12 +50,18 @@ function fakeDocker({
   return { docker, calls, tags: images, volumes };
 }
 
+// The Docker runner's backends, on the fake: what images.mjs asks them is what Docker gets.
+const onDocker = (docker) => ({
+  backend: createDockerImages({ config, docker }),
+  jobs: createDockerJobs({ config, docker }),
+});
+
 function setup(t, options, blob = "blob1") {
   const fake = fakeDocker(options);
   const checkouts = [];
   const images = createImages({
     config,
-    docker: fake.docker,
+    ...onDocker(fake.docker),
     readFile: async (repo, path, ref) =>
       path === "missing" ? null : { sha: `${blob}@${ref}`, text: "" },
     checkout: async (repo, ref) => {
@@ -124,7 +132,7 @@ test("a branch build never takes the default branch's tag", async (t) => {
   const checkouts = [];
   const images = createImages({
     config,
-    docker: fake.docker,
+    ...onDocker(fake.docker),
     // The same Dockerfile blob at both refs: only the build context may differ.
     readFile: async () => ({ sha: "same", text: "" }),
     checkout: async (repo, ref) => {
@@ -258,16 +266,16 @@ test("an agent installs once per version, in a container of its own", async (t) 
 
 test("cache volumes: created once per repo and path, owned by the sandbox's user", async (t) => {
   const { images, calls } = setup(t);
-  const args = await images.caches("org/a", ["/home/node/.npm"], "img:1");
-  assert.equal(args[0], "-v");
-  assert.match(args[1], /^deckhand-cache-org-a-home-node-npm-\w+:\/home\/node\/\.npm$/);
+  const [cache] = await images.caches("org/a", ["/home/node/.npm"], "img:1");
+  assert.equal(cache.path, "/home/node/.npm");
+  assert.match(cache.name, /^deckhand-cache-org-a-home-node-npm-\w+$/);
   await images.caches("org/a", ["/home/node/.npm"], "img:1");
   assert.equal(calls.filter((c) => c.startsWith("volume create")).length, 1);
   assert.match(
     calls.find((c) => c.includes("chown")),
-    /--user 0 --cap-drop ALL --cap-add CHOWN --security-opt no-new-privileges --entrypoint chown -v \S+:\/home\/node\/\.npm img:1 1000:1000/,
+    /--user 0 --cap-drop ALL --cap-add CHOWN --security-opt no-new-privileges -v \S+:\/home\/node\/\.npm --entrypoint chown img:1 1000:1000/,
   );
   // Another repo, same path: its own volume.
-  const other = await images.caches("org/b", ["/home/node/.npm"], "img:1");
-  assert.notEqual(other[1], args[1]);
+  const [other] = await images.caches("org/b", ["/home/node/.npm"], "img:1");
+  assert.notEqual(other.name, cache.name);
 });

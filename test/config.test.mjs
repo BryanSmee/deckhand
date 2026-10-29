@@ -387,6 +387,15 @@ test("server.example/config.yaml is a valid config.yaml", () => {
   assert.deepEqual(loadConfig({ ALLOWED_USERS: "alice" }, file).users, ["alice"]);
 });
 
+test("RUNNER: docker by default; any other runner stops the listener, saying why", () => {
+  assert.equal(loadConfig({ ALLOWED_USERS: "a" }).runner, "docker");
+  assert.equal(loadConfig({ ALLOWED_USERS: "a", RUNNER: " Docker " }).runner, "docker");
+  assert.throws(
+    () => loadConfig({ ALLOWED_USERS: "a", RUNNER: "kubernetes" }),
+    /RUNNER: expected docker \(the only runner so far\), got kubernetes/,
+  );
+});
+
 test("SANDBOX_ENGINE: none by default, sysbox, podman or auto; a typo is an error", () => {
   assert.equal(loadConfig({ ALLOWED_USERS: "a" }).engine, null);
   assert.equal(loadConfig({ ALLOWED_USERS: "a", SANDBOX_ENGINE: " Sysbox " }).engine, "sysbox");

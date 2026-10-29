@@ -143,6 +143,7 @@ services:
       # Advanced (docs/setup.md#advanced-settings).
       GRANTS_DIR: ${GRANTS_DIR:-}
       INSTALL_NETWORK: ${INSTALL_NETWORK:-}
+      RUNNER: ${RUNNER:-}
       DEBOUNCE_MS: ${DEBOUNCE_MS:-}
       BRAINSTORM_DEBOUNCE_MS: ${BRAINSTORM_DEBOUNCE_MS:-}
       CONFLICT_MERGE_DELAY_MS: ${CONFLICT_MERGE_DELAY_MS:-}

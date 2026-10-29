@@ -1139,7 +1139,7 @@ caches:
     assert.match(calls, /^volume create .*deckhand-cache-org-repo-home-node-npm-[0-9a-f]{10}$/m);
     assert.match(
       calls,
-      /--entrypoint chown -v deckhand-cache-org-repo-home-node-npm-\w+:\/home\/node\/\.npm deckhand-repo-org-repo-[0-9a-f]{10}:\w+ 1000:1000/,
+      /-v deckhand-cache-org-repo-home-node-npm-\w+:\/home\/node\/\.npm --entrypoint chown deckhand-repo-org-repo-[0-9a-f]{10}:\w+ 1000:1000/,
     );
 
     const args = readFileSync(join(dir, "run-args"), "utf8").split("\n");
