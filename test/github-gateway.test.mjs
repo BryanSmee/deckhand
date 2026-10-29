@@ -333,9 +333,28 @@ test("a review can't read its thread's comments and reviews; other runs can", as
     JSON.stringify({ query: '{ node(id: "UCE_1") { ... on UserContentEdit { diff } } }' }),
     // Escaped in its JSON.
     '{"query": "{ node(id: \\"x\\") { ... on Issue\\u0043omment { body } } }"}',
+    // Connections named after them: a repository's commit comments, a commenter's comments.
+    JSON.stringify({
+      query:
+        '{ repository(owner: "o", name: "r") { commitComments(last: 50) { nodes { body } } } }',
+    }),
+    JSON.stringify({
+      query:
+        '{ user(login: "mallory") { issueComments(last: 50) { nodes { body issue { number } } } } }',
+    }),
   ]) {
-    const res = await gw.call("/api/graphql", { secret: review.secret, method: "POST", body });
-    assert.equal(res.status, 403, body);
+    // At GraphQL's path, and spelled any other way: a review's every body is read.
+    for (const path of [
+      "/api/graphql",
+      "/api/%67raphql",
+      "/api/graphql/",
+      "/api/GraphQL",
+      "/api/v3/graphql",
+      "/api/v3/%67raphql",
+    ]) {
+      const res = await gw.call(path, { secret: review.secret, method: "POST", body });
+      assert.equal(res.status, 403, `${path} ${body}`);
+    }
   }
   assert.deepEqual(gw.calls, []);
   assert.match(review.notes[0], /refused the review's call GET .*issues\/12\/comments/);

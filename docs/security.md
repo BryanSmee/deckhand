@@ -264,7 +264,8 @@ the Antigravity CLI's: it decrypts their HTTPS with [Deckhand's CA](#https-and-d
 which every run that reaches GitHub trusts, and sends each request to the listener as
 `/relay/<host>/<path>` instead of the host. REST, GraphQL, clones and fetches all go there;
 tools keep talking to `api.github.com` and `github.com` unchanged. A sandbox has no other way
-to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to them is refused.
+to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to them is refused
+(but for the two exceptions without a token, below).
 
 - **Its run**: the secret the call carries in place of a token (`token <secret>` from `gh`,
   `Bearer`, or Basic with it as the password from git), checked as above. A call that
@@ -307,7 +308,10 @@ to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to the
   calls in flight per run.
 - `*.githubusercontent.com` (raw files, release assets) stays a plain allowed host: it carries
   no token.
-- **The one exception, accepted (#404's decisions)**: a run's [container engine](#container-engine)
+- **Two exceptions, without a token.** A research run (`NO_TOKEN`) isn't relayed: it gets no
+  CA and nothing from the gateway, and reads public GitHub (other projects' READMEs, issues,
+  releases) anonymously through a tunnel, as it did before the gateway.
+- **The engine, accepted (#404's decisions)**: a run's [container engine](#container-engine)
   keeps reaching GitHub's hosts through a tunnel, as its builds and containers don't trust
   the CA, so the proxy can't relay them: refusing them would break builds that fetch from
   GitHub (a release asset, `go mod`, an `npm` dependency). The engine holds no token (neither
@@ -1274,7 +1278,7 @@ holds to any host, so it holds almost nothing:
 | ------------------------------ | --------------------------------------------------------------------------------------- |
 | Hosts                          | any public one (`*`); private addresses only for the mandatory hosts, not the grant's   |
 | The repository's code          | none: no clone, `/workspace` starts empty                                               |
-| GitHub                         | nothing: the GitHub gateway, the git gateway and the pull request endpoints refuse it   |
+| GitHub                         | public pages and API, anonymously; the GitHub and git gateways and `/pr/` refuse it     |
 | Other runs' secrets            | useless: a secret only works from its own run's sandbox ([Tokens](#tokens))             |
 | Input                          | the issue's title, description and last 50 comments, written by the listener (redacted) |
 | Output                         | its final message, posted by the listener as the reply; no screenshots folder           |
@@ -1464,8 +1468,8 @@ real server's certificate.
   Chromium's store (`~/.pki/nssdb`, with `certutil`). A tool that reads none of them refuses
   cached hosts' certificates, and fails rather than going round the proxy. When the
   listener can't get the CA (the proxy doesn't answer), the run stops, saying so: it couldn't
-  reach GitHub. (A research run, which reaches nothing of GitHub's, then has no cached hosts,
-  and an Antigravity CLI one on a plan stops.)
+  reach GitHub. (A research run, whose GitHub isn't relayed, then has no cached hosts, and
+  an Antigravity CLI one on a plan stops.)
 - **Never cached**, whatever `cached_hosts` says: the mandatory hosts below, the agent's and
   GitHub's (decrypted only to be relayed to the listener). Their traffic carries the run's
   secret, which the cache would refuse anyway. Nor a run's [container engine](#container-engine): its builds and

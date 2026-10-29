@@ -94,8 +94,9 @@ line go on in the issue's current mode (`modes.json`).
 
 `/mode research` (repos granted `allow_research`) is a built-in light mode for the open web
 (`OPEN` in `modes.mjs`): any public host (`researchAccess()` in `access.mjs`), and nothing of
-the repo's. No clone (`SANDBOX_NO_CLONE`), nothing from GitHub (the broker's `NO_TOKEN`,
-which the GitHub gateway refuses), the base image, no setup, caches, mounts, engine, CA or
+the repo's. No clone (`SANDBOX_NO_CLONE`), no GitHub token (the broker's `NO_TOKEN`,
+which the GitHub gateway refuses: GitHub's hosts aren't relayed for it, and it reads public
+GitHub anonymously through a tunnel), the base image, no setup, caches, mounts, engine, CA or
 screenshots, and volumes of its own
 (`<name>-research-…`). Its input is the issue's thread, which `preparation.mjs`
 (`threadDigest()`) writes into the run's inbox like an analysis's digest; its output, its

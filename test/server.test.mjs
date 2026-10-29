@@ -2693,7 +2693,7 @@ modes:
     assert.equal(readFileSync(join(dir, "broker-answer"), "utf8"), "");
     assert.equal(github.requests.filter((r) => r.body.includes("repositories")).length, 0);
     assert.ok(!github.requests.some((r) => r.path === "/repos/org/repo"));
-    // No CA either: GitHub's hosts are relayed to that gateway, which its TLS doesn't trust.
+    // No CA either: GitHub's hosts aren't relayed for it (below).
     assert.doesNotMatch(args, /DECKHAND_CA/);
     // Any public host, the operator's named ones no longer private.
     const answers = egressAnswers(dir);
@@ -2706,7 +2706,10 @@ modes:
     });
     assert.equal(answers["registry.npmjs.org"].private, false);
     assert.equal(answers["github.com"].private, true);
-    assert.equal(answers["github.com"].relay, true);
+    // Public GitHub, anonymously, through a tunnel: it has no token for the gateway to add.
+    assert.equal(answers["github.com"].allowed, true);
+    assert.equal(answers["github.com"].relay, false);
+    assert.equal(answers["github.com"].decrypt, false);
     // The thread, in the run's inbox folder.
     const [folder] = readdirSync(join(dir, "runs")).filter((f) =>
       exists(join(dir, "runs", f, "digest.md")),

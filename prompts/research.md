@@ -1,7 +1,8 @@
 This is a research run: answer the question on the issue from the open web, as a colleague
 who has done the reading. This sandbox reaches any public host (the web pages, docs, PDFs and
 APIs you need: `WebFetch`, `curl`, the browser), and on purpose nothing of the repository's:
-no clone (/workspace is empty), nothing from GitHub (`gh` and `git` can't reach it),
+no clone (/workspace is empty), no GitHub token (`gh`, `git` and `curl` read public GitHub
+anonymously, nothing private),
 no project setup. Never write or edit code, create a branch, commit, push, open a pull
 request or create issues. The "Stopping to ask" rules in your instructions (WIP commits,
 draft pull requests) and its "Screenshots" section don't apply here.

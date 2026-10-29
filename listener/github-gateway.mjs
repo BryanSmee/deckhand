@@ -42,10 +42,12 @@ const THREAD_READS = [
   String.raw`^${REPO}\/(?:commits\/[^/]+\/)?comments(?:\/|$)`,
   String.raw`^(?:(?:${REPO}|networks\/[^/]+\/[^/]+|users\/[^/]+|orgs\/[^/]+)\/)?(?:received_)?events(?:\/|$)`,
 ].map((re) => new RegExp(re, "i"));
-// The same in GraphQL, read as text until #406 parses it: the fields, types and interfaces that
-// hold them (`Comment`, which every comment and review implements), and their edit history.
-const THREAD_FIELDS =
-  /\b(?:comments|reviews|latestReviews|latestOpinionatedReviews|reviewThreads|timeline|timelineItems|\w*TimelineItems?|userContentEdits|Comment|UpdatableComment|UserContentEdit|IssueComment|CommitComment|DiscussionComment|PullRequestReview|PullRequestReviewComment|PullRequestReviewThread)\b/;
+// The same in GraphQL, read as text until #406 parses it: any name that holds "comment",
+// "review", "timeline" or "contentedit", whatever its case: their fields (`comments`,
+// `issueComments`, `commitComments`, `latestReviews`, `timelineItems`, `userContentEdits`…),
+// types and interfaces (`Comment`, `IssueComment`, `PullRequestReview`…). It refuses more than
+// it must (`reviewDecision`): a review reads its pull request over REST.
+const THREAD_FIELDS = /comment|review|timeline|contentedit/i;
 // What git fetches with on the web host; a review reads nothing else there (web pages show the
 // comments).
 const GIT_READ = /^[^/]+\/[^/]+?(?:\.git)?\/(?:info\/refs|git-upload-pack)$/;
@@ -236,7 +238,9 @@ export function createGithubGateway({
       if (!streamed) {
         body = await readBody(req, maxWrite, idleMs, clock);
         if (body === null) return fail(res, 413, `a write over ${maxWrite} bytes`);
-        if (review && where.target.pathname === graphql.pathname && readsThread(String(body))) {
+        // Every body a review sends, whatever its path's spelling: its token only reads, so a
+        // POST of its is GraphQL, or a write GitHub refuses anyway.
+        if (review && readsThread(body.toString("latin1"))) {
           return refuseThread(run, res, call);
         }
         body = redacted(run, req, body, call);

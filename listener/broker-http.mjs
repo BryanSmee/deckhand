@@ -8,6 +8,7 @@ import { createServer } from "node:http";
 import { agentFor } from "./agents/index.mjs";
 import { addressOf } from "./broker.mjs";
 import { egressPolicy, githubHosts } from "./egress.mjs";
+import { NO_TOKEN } from "./github-app.mjs";
 import { taskKey } from "./events.mjs";
 import { sendJson } from "./web.mjs";
 
@@ -120,12 +121,16 @@ export function createBrokerHttp(ctx) {
     // but tunnelled, anonymously (the gateway gives its address no token): an exception #404
     // accepted, rather than break builds that fetch from GitHub.
     const engine = !!live?.engineIp?.includes(ip);
+    // GitHub's hosts go to the GitHub gateway, but for a research run (NO_TOKEN): it has no
+    // token there, nor the CA, and reads public GitHub anonymously through a tunnel instead,
+    // as an engine does.
+    const github = !!live && ctx.broker.runOf(live.secret)?.extra !== NO_TOKEN;
     // What its agent's calls need: hosts handed to the listener, hosts refused.
     const agent = agentFor(live?.record?.agent);
     const answer = task
       ? egressPolicy(host, live.hosts, live.trusted, live.cached, live.uncached ?? [], {
           decrypt: !engine,
-          relayed: [...githubHosts(config), ...(agent.relayed ?? [])],
+          relayed: [...(github ? githubHosts(config) : []), ...(agent.relayed ?? [])],
           blocked: agent.blocked,
         })
       : { allowed: false, private: false, cache: false, decrypt: false, relay: false };
