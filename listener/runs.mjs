@@ -75,6 +75,8 @@ export function createRuns(ctx) {
     }
     // An inbox entry goes alone: the next one starts its own run when this one ends.
     const items = task.pending.splice(0, entryRun(task.pending[0].mode) ? 1 : Infinity);
+    // Started: out of the run order (order.mjs), what comes after it goes by its queue time.
+    ctx.order?.drop(taskKey(task.repo, task.id));
     task.live = newLive(task, items);
     addRun(ctx, task.live.record);
     ctx.saveLive(task);
@@ -521,6 +523,7 @@ export function createRuns(ctx) {
     clearTimeout(task.timer);
     task.ready = false;
     for (const item of task.pending.splice(0)) ctx.track(ctx.settle(item, "cancelled"));
+    ctx.order?.drop(key);
     log(`${key}: queued comments dropped by ${by}`);
     return "queued";
   }

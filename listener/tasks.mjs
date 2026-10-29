@@ -26,7 +26,7 @@ import {
   taskSandboxName,
 } from "./repo-config.mjs";
 import { writeEvent } from "./runlog.mjs";
-import { sameTask } from "./spelling.mjs";
+import { sameTask, taskId } from "./spelling.mjs";
 import { createTaskModes } from "./task-modes.mjs";
 
 // Why a queued comment may no longer run, or null: its repo left ALLOWED_REPOS, or its author
@@ -254,6 +254,8 @@ export function createTasks(ctx) {
     if (item.settings) task.settings = item.settings;
     // A comment that waited (resume()) has its 👀 already.
     if (!item.eyes) ctx.received(item);
+    // When it was queued: the run order's, for a task nobody placed (queueOrder()).
+    item.queuedAt ??= Date.now();
     task.pending.push(item);
     if (task.running) {
       const live = deliverable(task) === task.pending.length;
@@ -331,12 +333,28 @@ export function createTasks(ctx) {
     }, debounce(task));
   }
 
+  // The tasks with comments waiting for a run of their own, in the order they start when
+  // slots free: brainstorms first (someone is waiting for the reply, work runs take minutes
+  // anyway), then those the maintainer placed (order.mjs), then the others by when their first
+  // comment was queued. Ready or still in their pause.
+  function queueOrder() {
+    const ranks = ctx.order?.ranks() ?? new Map();
+    const rank = (t) => ranks.get(taskId(taskKey(t.repo, t.id))) ?? Infinity;
+    const since = (t) => t.pending[0].queuedAt ?? 0;
+    return [...tasks.values()]
+      .filter((t) => !t.running && t.pending.length)
+      .sort(
+        (a, b) =>
+          Number(talking(b)) - Number(talking(a)) || rank(a) - rank(b) || since(a) - since(b),
+      );
+  }
+
   function schedule() {
     if (ctx.stopping) return;
-    // Brainstorms first: someone is waiting for the reply, work runs take minutes anyway.
-    const ready = [...tasks.values()]
-      .filter((t) => t.ready && !t.running && t.pending.length)
-      .sort((a, b) => Number(talking(b)) - Number(talking(a)));
+    const queued = queueOrder();
+    // What started or was dropped meanwhile leaves the order.
+    ctx.order?.keep(queued.map((t) => taskKey(t.repo, t.id)));
+    const ready = queued.filter((t) => t.ready);
     const perRepo = new Map();
     for (const t of tasks.values()) {
       if (t.running) perRepo.set(t.repo, (perRepo.get(t.repo) ?? 0) + 1);
@@ -353,5 +371,6 @@ export function createTasks(ctx) {
     deliverLater,
     startLater,
     schedule,
+    queueOrder,
   };
 }

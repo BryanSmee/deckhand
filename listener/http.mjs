@@ -21,7 +21,7 @@ import {
   workItem,
 } from "./events.mjs";
 import { fetchPull } from "./github.mjs";
-import { kindOf } from "./modes.mjs";
+import { isLight, kindOf } from "./modes.mjs";
 import { onboardingTargets } from "./onboarding.mjs";
 import { previewHook } from "./previews.mjs";
 import { applyInput, inputEvent } from "./questions.mjs";
@@ -134,6 +134,10 @@ export function createHttp(ctx, { dashboardDir }) {
   // only the repos they may see; all of them without one.
   function shownTasks(user = null) {
     const mine = (list) => (user ? list.filter((x) => sees(user, repoOf(x.key))) : list);
+    // Where each task waiting for a slot is in the run order (tasks.mjs queueOrder()), 1 first.
+    const places = new Map(
+      (ctx.queueOrder?.() ?? []).map((t, i) => [taskKey(t.repo, t.id), i + 1]),
+    );
     // A running task's comments are queued only when they wait for a follow-up run: the others
     // are on their way to the live session.
     const queued = [...tasks.values()]
@@ -145,6 +149,9 @@ export function createHttp(ctx, { dashboardDir }) {
         mode: t.pending.at(-1).mode,
         repo: t.repo,
         replyTo: t.pending.at(-1).replyTo,
+        position: places.get(taskKey(t.repo, t.id)) ?? null,
+        // A brainstorm, or one of the repo's light modes: before any work run, whatever the order.
+        ...(isLight(t, t.pending.at(-1).mode) && { startsFirst: true }),
       }));
     const shown = board({
       runs: mine(ctx.runs),

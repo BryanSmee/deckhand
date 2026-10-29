@@ -6,12 +6,20 @@ import { ReplyError } from "../listener/comments.mjs";
 import { createWaits } from "../listener/waits.mjs";
 import { createDismissals } from "../listener/dismissals.mjs";
 import { createLanes } from "../listener/lanes.mjs";
+import { createOrder } from "../listener/order.mjs";
 import { MAX_TREE, leadsTo } from "../listener/plans.mjs";
-import { COUNT_MS, ISSUES_MS, checkAction, createWorkApi, staleFor } from "../listener/work.mjs";
+import {
+  COUNT_MS,
+  ISSUES_MS,
+  checkAction,
+  createWorkApi,
+  ordinal,
+  staleFor,
+} from "../listener/work.mjs";
 import { createAnalysis } from "../listener/analysis.mjs";
 import { MAX_TEXT } from "../listener/answers.mjs";
 import { board as boardOf } from "../listener/board.mjs";
-import { MARKER, workItem } from "../listener/events.mjs";
+import { MARKER, parseKey, workItem } from "../listener/events.mjs";
 import { tempDir, testConfig } from "./helpers.mjs";
 
 const ORIGIN = "https://deckhand.example.com";
@@ -35,6 +43,7 @@ function setup({
   events = {},
   cancels = {},
   history = [],
+  queue = [],
 } = {}) {
   const config = testConfig({
     ALLOWED_USERS: "alice,bob",
@@ -138,6 +147,19 @@ function setup({
   });
   w.lanes = createLanes({ now: () => w.clock });
   w.dismissals = createDismissals({ now: () => w.clock });
+  w.order = createOrder();
+  // The tasks waiting for a slot (`queue`: keys, "brainstorm:" before a brainstorm's), as
+  // tasks.mjs queueOrder() sorts them.
+  w.queue = queue.map((k) => {
+    const [mode, key] = k.includes(":") ? k.split(":") : ["work", k];
+    const { repo, id } = parseKey(key);
+    return { repo, id, pending: [{ mode }] };
+  });
+  const queueOrder = () => {
+    const ranks = w.order.ranks();
+    const rank = (t) => ranks.get(`${t.repo}#${t.id}`.toLowerCase()) ?? Infinity;
+    return [...w.queue].sort((a, b) => rank(a) - rank(b));
+  };
   w.api = createWorkApi({
     config,
     github,
@@ -181,6 +203,8 @@ function setup({
     analysis: createAnalysis({ runs: () => history, partOf: (r) => `part of ${r.id}` }),
     lanes: w.lanes,
     dismissals: w.dismissals,
+    order: w.order,
+    queueOrder,
     publicUrl: () => ORIGIN,
     now: () => w.clock,
     log: (line) => w.logs.push(line),
@@ -1060,6 +1084,83 @@ test("lane refused: keys of another repo or a discussion, a long name, users, a 
   const broken = setup({ errors: ["bad"] });
   assert.equal((await lane(broken, { keys: ["org/app#1"], name: "A" })).status, 409);
   assert.equal(w.lanes.get("org/app#1"), null);
+});
+
+const reorder = (w, body, opts = {}) =>
+  call(w.api, "POST", "/api/repos/org/app/order", { body, ...opts });
+
+test("order: before another, first or last; the queued tasks nobody placed keep their places", async () => {
+  const w = setup({
+    queue: ["org/other#9", "org/app#1", "org/app#2", "org/app#pr-3", "org/app#discussion-4"],
+  });
+  const keys = () => w.order.keys();
+  assert.deepEqual(await reorder(w, { key: "org/app#pr-3", first: true }), {
+    status: 200,
+    body: { message: "#3 is 1st in line." },
+  });
+  assert.deepEqual(keys(), [
+    "org/app#pr-3",
+    "org/other#9",
+    "org/app#1",
+    "org/app#2",
+    "org/app#discussion-4",
+  ]);
+  // Spelled as GitHub has it, the task's own key goes in.
+  assert.deepEqual((await reorder(w, { key: "Org/App#1", before: "org/app#pr-3" })).body, {
+    message: "#1 is 1st in line.",
+  });
+  assert.equal(
+    (await reorder(w, { key: "org/app#1", before: null })).body.message,
+    "#1 is 5th in line.",
+  );
+  assert.deepEqual(keys(), [
+    "org/app#pr-3",
+    "org/other#9",
+    "org/app#2",
+    "org/app#discussion-4",
+    "org/app#1",
+  ]);
+  assert.ok(w.logs.some((l) => /alice moves org\/app#1 last in the run order/.test(l)));
+});
+
+test("order refused: not queued, a brainstorm, another repo's, users, a broken config", async () => {
+  const w = setup({ queue: ["org/app#1", "brainstorm:org/app#2", "org/other#3"] });
+  const refused = async (body, status, opts) => {
+    const res = await reorder(w, body, opts);
+    assert.equal(res.status, status, JSON.stringify(body));
+    return res.body.error;
+  };
+  assert.match(
+    await refused({ key: "org/app#5", first: true }, 409),
+    /#5 isn't waiting for a slot/,
+  );
+  assert.match(await refused({ key: "org/app#2", first: true }, 409), /brainstorm/);
+  assert.match(await refused({ key: "org/app#1", before: "org/app#6" }, 409), /#6 is no longer/);
+  assert.match(await refused({ key: "org/other#3", first: true }, 400), /org\/app's tasks/);
+  await refused({ key: "org/app#1", before: "org/other#3" }, 400);
+  await refused({ key: "org/app#1", first: "yes" }, 400);
+  await refused({ key: 12 }, 400);
+  await refused({ key: "org/app#1", first: true }, 403, { user: "mallory" });
+  await refused({ key: "org/app#1", first: true }, 403, { origin: "https://evil.example" });
+  const broken = setup({ errors: ["bad"], queue: ["org/app#1"] });
+  assert.equal((await reorder(broken, { key: "org/app#1", first: true })).status, 409);
+  assert.deepEqual(w.order.keys(), []);
+});
+
+test("ordinal: 1st, 2nd, 3rd, 4th, 11th to 13th, 21st, 112th", () => {
+  assert.deepEqual([1, 2, 3, 4, 11, 12, 13, 21, 22, 101, 112].map(ordinal), [
+    "1st",
+    "2nd",
+    "3rd",
+    "4th",
+    "11th",
+    "12th",
+    "13th",
+    "21st",
+    "22nd",
+    "101st",
+    "112th",
+  ]);
 });
 
 test("plan without open sub-issues: it starts, or queues", async () => {

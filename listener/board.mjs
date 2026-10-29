@@ -5,7 +5,8 @@
 //   building-image  a run waits for its repo's image to build
 //   working         a run is in progress
 //   stopping        a brainstorm is wrapping up ("/stop")
-//   queued          comments wait for a run (a free slot, or the running one to finish)
+//   queued          comments wait for a run (a free slot, or the running one to finish);
+//                   `position`: its place in the run order while it waits for a slot
 //   waiting         a comment waits for other issues to be done ("/after #12", waits.mjs)
 //                   (needs-input once they are, while its open questions aren't answered)
 //   brainstorm      a brainstorm waits for the maintainer's next comment
@@ -215,6 +216,12 @@ function settle(t, q, b, w, input) {
     t.kind = "brainstorm";
     t.mode = "brainstorm";
     t.deadline = b.deadline;
+  }
+  // Its place in the run order (tasks.mjs queueOrder()), 1 next to start, while it waits for
+  // a slot; `startsFirst`: a brainstorm or a light mode, which goes before any work run.
+  if (t.state === "queued" && q?.position) {
+    t.position = q.position;
+    if (q.startsFirst) t.startsFirst = true;
   }
   t.rerunnable = rerunnable(t);
 }

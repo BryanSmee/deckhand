@@ -75,6 +75,32 @@ test("a running run wins over comments queued for the next one", () => {
   assert.equal(task.state, "working");
 });
 
+test("a task waiting for a slot has its place in the run order; a brainstorm starts first", () => {
+  const q = (n, extra) => ({
+    key: `acme/api#${n}`,
+    kind: "issue",
+    repo: "acme/api",
+    replyTo: n,
+    ...extra,
+  });
+  const tasks = board({
+    runs: [run("acme/api#3", 10, { status: "running" })],
+    queued: [
+      q(1, { position: 2 }),
+      q(2, { position: 1, startsFirst: true }),
+      // Its follow-up waits for the run going: no place yet.
+      q(3, { position: null }),
+    ],
+    brainstorms: [],
+  });
+  const byKey = Object.fromEntries(tasks.map((t) => [t.key, t]));
+  assert.equal(byKey["acme/api#1"].position, 2);
+  assert.equal(byKey["acme/api#1"].startsFirst, undefined);
+  assert.equal(byKey["acme/api#2"].position, 1);
+  assert.equal(byKey["acme/api#2"].startsFirst, true);
+  assert.equal(byKey["acme/api#3"].position, undefined);
+});
+
 test("a comment waiting for other issues: its state and what it waits for", () => {
   const wait = (key, fields = {}) => ({
     key,

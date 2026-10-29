@@ -3614,6 +3614,51 @@ mounts:
     assert.equal(kept["org/repo#5"].runId, "org-repo-5-1000");
   });
 
+  test("Run order: a queued task moved first has position 1, in order.json", async (t) => {
+    const { dir, port, send, listener } = await listen(t, {}, (dir, github) => ({
+      DEBOUNCE_MS: "60000",
+      GITHUB_URL: github.url,
+    }));
+    for (const [number, id] of [
+      [5, 105],
+      [6, 106],
+    ]) {
+      const c = comment("alice");
+      await send({ ...c, issue: { number }, comment: { ...c.comment, id } });
+      await listener.until(`org/repo#${number}: queued (work`);
+    }
+    const base = `http://127.0.0.1:${port}`;
+    const get = (path, cookie) =>
+      fetch(base + path, { redirect: "manual", headers: cookie ? { cookie } : {} });
+    const login = await get("/auth/login");
+    const to = new URL(login.headers.get("location"));
+    const state = login.headers.getSetCookie()[0].split(";")[0];
+    const back = await get(`/auth/callback?code=c&state=${to.searchParams.get("state")}`, state);
+    const session = back.headers
+      .getSetCookie()
+      .find((c) => c.startsWith("deckhand_session="))
+      .split(";")[0];
+    const positions = async () =>
+      Object.fromEntries(
+        (await (await get("/api/state", session)).json()).tasks.map((x) => [x.key, x.position]),
+      );
+    assert.deepEqual(await positions(), { "org/repo#5": 1, "org/repo#6": 2 });
+    const res = await fetch(`${base}/api/repos/org/repo/order`, {
+      method: "POST",
+      headers: {
+        cookie: session,
+        origin: "https://hooks.example.com",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ key: "org/repo#6", first: true }),
+    });
+    assert.equal(res.status, 200, await res.clone().text());
+    assert.equal((await res.json()).message, "#6 is 1st in line.");
+    assert.deepEqual(await positions(), { "org/repo#6": 1, "org/repo#5": 2 });
+    const kept = JSON.parse(readFileSync(join(dir, "order.json"), "utf8"));
+    assert.deepEqual(Object.keys(kept), ["org/repo#6", "org/repo#5"]);
+  });
+
   test("the dashboard and its logs are for allowed users signed in with GitHub", async (t) => {
     // GitHub's sign-in pages are the fake GitHub too. A built dashboard, and an older log with
     // no title.
@@ -3957,7 +4002,16 @@ mounts:
       "dismissed",
       "runs",
     ],
-    ["deadline", "waitingFor", "questions", "waitForAnswers", "decisions", "dryRun"],
+    [
+      "deadline",
+      "waitingFor",
+      "questions",
+      "waitForAnswers",
+      "decisions",
+      "dryRun",
+      "position",
+      "startsFirst",
+    ],
   ];
   const QUESTIONS_KEYS = [["source", "items", "raw"], ["runId"]];
   const RUN_KEYS = [
