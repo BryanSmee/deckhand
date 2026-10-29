@@ -641,14 +641,16 @@ comment from an allowed user on the fork's pull request starts a fork's run, whi
 - **A fork's pull request's head or merge**, in the run's repository (`refs/pull/<n>/…`, the
   pull request looked up on GitHub: its head isn't in the repository): in a fetch (a
   `want-ref`, or a `want` of the commit GitHub advertised under it, which git shows as
-  `remote error: Deckhand: …`), an archive (`tarball`, `zipball`, `archive/`), contents and
-  `readme` (`?ref=`, each one when it is repeated), a commit, a comparison, raw and LFS
-  files, and its diff and files (`gh pr diff`, `pulls/<n>/files`, `pull/<n>.diff` and
+  `remote error: Deckhand: …`), an archive (`tarball`, `zipball`, `archive/`), any call's
+  `ref`, `sha`, `head` or `base` parameter (every value of each, whatever the path: contents,
+  `readme`, `license`, `codeowners/errors` and whatever else takes one, rather than a list of
+  those that serve a file; a pull request list's `head` and `base` only filter it, and aren't
+  checked there), a commit, a comparison, raw and LFS files, and its diff and files (`gh pr diff`, `pulls/<n>/files`, `pull/<n>.diff` and
   `patch-diff.githubusercontent.com`, where it redirects). Its metadata (`gh pr view`) isn't
   refused.
 - **A commit that isn't the repository's**: GitHub serves any commit of a repository's network
   (its forks') through the repository itself. So a fetch's `want`s, and a commit a call names
-  (an archive's, a comparison's sides, `?ref=`), must be the repository's: a ref of
+  (an archive's, a comparison's sides, a `ref` or `sha` parameter), must be the repository's: a ref of
   its own pointed at it in what GitHub advertised to the run's git (a branch, a tag, a pull
   request from one of its branches), its default branch has it (`compare`), or it is a
   branch's head (`branches-where-head`). A branch or tag name is the repository's. Anything
@@ -664,13 +666,18 @@ comment from an allowed user on the fork's pull request starts a fork's run, whi
   checkouts ask for each blob they lack: a kept blobless clone (a fork's run's, or an older
   Deckhand's) gets every blob it lacks at the start, at once (`git fetch --refetch`), before
   any checkout.
+- **git LFS's objects** (its batch API, `<repo>.git/info/lfs/…`, whose download links are on
+  `github-cloud.githubusercontent.com`, a plain host): named by their sha256, which whoever
+  wrote a fork knows, as a blob's id, so the batch API is refused to such a run. It reads an
+  LFS file by its branch from `media.githubusercontent.com` (checked as below). The sandbox
+  image has no `git-lfs`, so a clone only ever had its pointer files.
 - **A file's content over GraphQL** (a fragment on `Blob`, the only type that has it) is
   refused to such a run whatever it names: an expression such as `refs/pull/7/head:a.js` can
   name a fork's.
 - **GitHub's file hosts**: `raw.githubusercontent.com` serves any file of a public repository
   without a token, a fork's pull request's included (`/<owner>/<repo>/refs/pull/<n>/head/<path>`,
-  or a fork's commit through the repository), `media.githubusercontent.com` its LFS files the
-  same way (`/media/…`), and `patch-diff.githubusercontent.com` its pull requests' diffs
+  or a fork's commit through the repository), `media.githubusercontent.com` its LFS files by
+  ref the same way (`/media/…`), and `patch-diff.githubusercontent.com` its pull requests' diffs
   (`/raw/<owner>/<repo>/pull/<n>.diff`), which carry a new file whole. So the egress proxy
   relays them to the gateway too, which checks them as above (a path in another shape is
   refused) and sends them on without a token, as when they were plain hosts.

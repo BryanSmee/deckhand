@@ -31,8 +31,9 @@
 // Served on the broker's port, which only the runs' networks reach.
 import { addressOf, NOT_ITS_SANDBOX } from "./broker.mjs";
 import { NO_TOKEN, readsOf } from "./github-app.mjs";
-import { advertisementReader, fetchBody, fetchRequest, MAX_FETCH, pkt } from "./github-forks.mjs";
+import { advertisementReader, fetchBody, fetchRequest, MAX_FETCH } from "./github-forks.mjs";
 import { pullOf } from "./github-pulls.mjs";
+import { pkt } from "./pkt-line.mjs";
 import { classify } from "./github-writes.mjs";
 import { redact } from "./redact.mjs";
 import { baseOf, forward, forwarded, IDLE_MS, MAX_IN_FLIGHT } from "./upstream.mjs";

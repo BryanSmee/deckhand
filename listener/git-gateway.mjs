@@ -30,6 +30,7 @@ import { pipeline } from "node:stream/promises";
 import { branchAllowed, NOT_ITS_SANDBOX } from "./broker.mjs";
 import { createMirrors } from "./git-mirror.mjs";
 import { PUSH_PERMISSIONS, WORKFLOW_PUSH_PERMISSIONS } from "./github-app.mjs";
+import { pkt, pktLines } from "./pkt-line.mjs";
 
 // The ref updates come first in a push: anything bigger than this before them is not git. A
 // ref update is a hundred bytes or so; a push of hundreds of branches still fits.
@@ -121,30 +122,6 @@ export function commandReader(limit = MAX_COMMANDS) {
   }
 
   return { push };
-}
-
-function pkt(data) {
-  const body = Buffer.from(data);
-  return Buffer.concat([Buffer.from((body.length + 4).toString(16).padStart(4, "0")), body]);
-}
-
-// The payloads of the pkt-lines in `buffer`, flushes left out, up to a line that is cut or
-// isn't one.
-function pktLines(buffer) {
-  const lines = [];
-  for (let at = 0; at + 4 <= buffer.length;) {
-    const hex = buffer.toString("latin1", at, at + 4);
-    if (!/^[0-9a-f]{4}$/i.test(hex)) break;
-    const length = parseInt(hex, 16);
-    if (length < 4) {
-      at += 4;
-      continue;
-    }
-    if (at + length > buffer.length) break;
-    lines.push(buffer.subarray(at + 4, at + length));
-    at += length;
-  }
-  return lines;
 }
 
 // The refs GitHub's answer to a push (`answer`, receive-pack's) says it updated, the client

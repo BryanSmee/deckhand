@@ -9,21 +9,24 @@
 //   id: its git, its API, its pages and raw files, all of it;
 // - in its repository (and its parent, when the repository is itself a fork), a pull request's
 //   head or merge from a fork (`refs/pull/<n>/…`), and a commit that isn't the repository's:
-//   in a fetch's `want`s, an archive, contents, a commit or comparison (their patches), raw
-//   files and web pages, and a fork's pull request's diff and files. A commit is the
+//   in a fetch's `want`s, an archive, a commit or comparison (their patches), raw files and
+//   web pages, any call's `ref`, `sha`, `head` or `base` parameter (contents, readme, license,
+//   whatever takes one), and a fork's pull request's diff and files. A commit is the
 //   repository's when a ref of its own pointed at it in what GitHub advertised to the run's
 //   git, when its default branch has it, or when it is a branch's head; a branch or tag name
 //   always is. Anything else (a commit a branch dropped, one reachable only from a tag, a blob
 //   or tree wanted on its own) is refused rather than looked for;
 // - a blob read by its id (`git/blobs/<sha>`, or a fetch's `want`): whoever wrote a fork can
 //   name its blobs, and nothing says where one comes from. So such a run's clone is whole
-//   (sandbox-spec.mjs SANDBOX_FULL_CLONE), and never fetches a blob on its own;
+//   (sandbox-spec.mjs SANDBOX_FULL_CLONE), and never fetches a blob on its own. git LFS's
+//   objects (its batch API, `info/lfs/`), named by their sha256, likewise;
 // - reading a file's content over GraphQL (`... on Blob`): github-graphql.mjs, with blobs().
 //
 // What GitHub answers for the lookups is kept a while: whether a pull request or repository is
 // a fork's doesn't change, and a commit stays on a branch it was found on.
 import { gunzipSync } from "node:zlib";
 import { headInRepo } from "./events.mjs";
+import { pktLines, pktReader } from "./pkt-line.mjs";
 
 // How long a pull request's, repository's or commit's answer is kept, and how many of each.
 export const LOOKUP_MS = 10 * 60_000;
@@ -40,6 +43,11 @@ export const MAX_LOOKUPS = 20;
 // A SHA-1 or SHA-256 object id, as git reads it: any case.
 const OID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i;
 const HEX = /^[0-9a-f]{7,64}$/i;
+// The parameters GitHub reads a ref or commit from, on any of its calls that takes one (`ref`
+// on contents, readme, license, codeowners…; `sha`, `head`, `base`): all of them are checked,
+// whatever the path, rather than a list of the calls that would serve a file. A pull request
+// list's `head` and `base` only filter it, by branch: not checked there.
+const REF_PARAMS = ["ref", "sha", "head", "base"];
 // Where a commit's metadata is read, not its patch: its statuses, checks, pull requests.
 const COMMIT_METADATA =
   /\/(?:status|statuses|check-runs|check-suites|pulls|comments|branches-where-head)$/i;
@@ -48,38 +56,12 @@ const COMMIT_METADATA =
 export const FORK_RUN =
   "a fork's code only comes in a fork's run, which a comment on its pull request from an allowed user starts";
 
-// The payloads of the pkt-lines in `buffer`, "" for a flush or delimiter, up to a line that is
-// cut or isn't one.
-export function pktLines(buffer) {
-  const lines = [];
-  for (let at = 0; at + 4 <= buffer.length;) {
-    const hex = buffer.toString("latin1", at, at + 4);
-    if (!/^[0-9a-f]{4}$/i.test(hex)) break;
-    const length = parseInt(hex, 16);
-    if (length < 4) {
-      lines.push("");
-      at += 4;
-      continue;
-    }
-    if (at + length > buffer.length) break;
-    lines.push(buffer.toString("latin1", at + 4, at + length).replace(/\n$/, ""));
-    at += length;
-  }
-  return lines;
-}
-
-// One pkt-line.
-export function pkt(text) {
-  const body = Buffer.from(text);
-  return Buffer.concat([Buffer.from((body.length + 4).toString(16).padStart(4, "0")), body]);
-}
-
 // An upload-pack request (protocol v0's or v2's) → { command, wants, refs }: the command (v2's
 // `fetch` or `ls-refs`; null for v0, whose requests only fetch), the objects it asks for
 // (lowercased: git reads an id in any case) and the refs it asks for by name (v2's
 // `want-ref`). Throws on what isn't one, and on a `want` line it can't read: fail closed.
 export function fetchRequest(body) {
-  const lines = pktLines(body);
+  const lines = pktLines(body).map((line) => line.toString("latin1").replace(/\n$/, ""));
   if (!lines.length) throw new Error("not a git fetch");
   let command = null;
   const wants = [];
@@ -108,39 +90,20 @@ export function fetchBody(body, encoding = "identity") {
 
 // The refs an advertisement names (v0's info/refs, v2's ls-refs answer), read as it streams:
 // push(chunk) each chunk, refs() → [{ oid, ref }], a peeled tag's commit under its tag's name
-// too, MAX_REFS of them at most. Only a line being cut is held: a pkt-line is 64 KiB at most.
+// too, MAX_REFS of them at most (pkt-line.mjs pktReader(): only a line being cut is held).
 export function advertisementReader() {
-  let held = Buffer.alloc(0);
-  let done = false;
   const refs = [];
   const add = (oid, ref) => refs.length < MAX_REFS && refs.push({ oid: oid.toLowerCase(), ref });
-  function line(text) {
-    const match = /^([0-9a-f]+) (\S+)(.*)$/i.exec(text.split("\0")[0].replace(/\n$/, ""));
+  const reader = pktReader((payload) => {
+    const text = payload.toString("latin1").split("\0")[0].replace(/\n$/, "");
+    const match = /^([0-9a-f]+) (\S+)(.*)$/i.exec(text);
     if (!match || !OID.test(match[1]) || /^0+$/.test(match[1])) return;
     const ref = match[2].replace(/\^\{\}$/, "");
     add(match[1], ref);
     const peeled = /\bpeeled:([0-9a-f]+)/i.exec(match[3]);
     if (peeled && OID.test(peeled[1])) add(peeled[1], ref);
-  }
-  function push(chunk) {
-    if (done) return;
-    const buffer = held.length ? Buffer.concat([held, chunk]) : chunk;
-    let at = 0;
-    while (at + 4 <= buffer.length) {
-      const hex = buffer.toString("latin1", at, at + 4);
-      if (!/^[0-9a-f]{4}$/i.test(hex)) return void (done = true);
-      const length = parseInt(hex, 16);
-      if (length < 4) {
-        at += 4;
-        continue;
-      }
-      if (at + length > buffer.length) break;
-      line(buffer.toString("latin1", at + 4, at + length));
-      at += length;
-    }
-    held = Buffer.from(buffer.subarray(at));
-  }
-  return { push, refs: () => refs };
+  });
+  return { push: reader.push, refs: () => refs };
 }
 
 // advertisementReader()'s refs of a whole advertisement.
@@ -165,8 +128,8 @@ export function refKind(spec) {
 }
 
 // The repository a call names, and what in it may be a fork's: { repo } (owner/name) or { id },
-// and { refs, pulls, blob } (refKind()'s specs, pull request numbers, whether it reads a blob
-// by its id); null for a call that names none. `kind`: "api" (REST, its path under the API's
+// and { refs, pulls, blob, lfs } (refKind()'s specs, pull request numbers, whether it reads a
+// blob by its id, or git LFS's objects); null for a call that names none. `kind`: "api" (REST, its path under the API's
 // base), "web" (the web host's path, and patch-diff.githubusercontent.com's) or "raw"
 // (raw.githubusercontent.com's, and media.githubusercontent.com's); `query`, its
 // URLSearchParams; `accept`, its header. Trees and a commit's metadata (`git/trees`,
@@ -190,6 +153,12 @@ export function callTargets(kind, path, query = new URLSearchParams(), accept = 
   const refs = [];
   const pulls = [];
   let blob = false;
+  let lfs = false;
+  // Any call's ref parameters, every value of each (GitHub may read the last).
+  for (const name of REF_PARAMS) {
+    if (kind === "api" && /^pulls\/?$/i.test(rest) && name !== "ref" && name !== "sha") continue;
+    refs.push(...query.getAll(name));
+  }
   const strip = (ref) => ref.replace(/\.(?:tar\.gz|tgz|zip|diff|patch)$/i, "");
   const sides = (spec) =>
     strip(spec)
@@ -200,8 +169,6 @@ export function callTargets(kind, path, query = new URLSearchParams(), accept = 
     if (rest) refs.push(rest);
   } else if (kind === "api") {
     if ((m = /^(?:tarball|zipball)\/(.+)$/i.exec(rest))) refs.push(m[1]);
-    // Every `ref` it repeats: GitHub may read any of them.
-    else if (/^(?:contents|readme)(?:\/|$)/i.test(rest)) refs.push(...query.getAll("ref"));
     else if (/^git\/blobs(?:\/|$)/i.test(rest)) blob = true;
     else if ((m = /^commits\/(.+)$/i.exec(rest)) && !COMMIT_METADATA.test(rest)) refs.push(m[1]);
     else if ((m = /^compare\/(.+)$/i.exec(rest))) refs.push(...sides(m[1]));
@@ -214,8 +181,11 @@ export function callTargets(kind, path, query = new URLSearchParams(), accept = 
   ) {
     refs.push(strip(m[1]));
   } else if ((m = /^pull\/(\d+)(?:[./]|$)/i.exec(rest))) pulls.push(Number(m[1]));
+  // git LFS's batch API (`<repo>.git/info/lfs/…`): its objects are named by their sha256, which
+  // whoever wrote a fork knows, as a blob's id.
+  else if (/^info\/lfs(?:\/|$)/i.test(rest)) lfs = true;
   else if ((m = /^compare\/(.+)$/i.exec(rest))) refs.push(...sides(m[1]));
-  return { repo, id, refs, pulls, blob };
+  return { repo, id, refs, pulls, blob, lfs };
 }
 
 // Whether `doc` (a parsed GraphQL document) reads a file's content: a fragment on `Blob`, the
@@ -390,6 +360,9 @@ export function createForkChecks({
       if (where.refused) return where.refused;
       if (target.blob) {
         return `a blob read by its id may be a fork's (whoever wrote one can name its blobs): read the file with contents/<path>?ref=<branch>, or from the clone; ${FORK_RUN}`;
+      }
+      if (target.lfs) {
+        return `git LFS's objects are named by their sha256, which may be a fork's (whoever wrote one knows it): read an LFS file by its branch from media.githubusercontent.com/media/<owner>/<repo>/<branch>/<path>; ${FORK_RUN}`;
       }
       for (const n of target.pulls) {
         const why = await pullRefusal(run, where.repo, n);

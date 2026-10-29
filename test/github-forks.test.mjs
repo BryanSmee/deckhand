@@ -16,12 +16,12 @@ import {
   fetchBody,
   fetchRequest,
   MAX_LOOKUPS,
-  pkt,
   readsBlobs,
   refKind,
 } from "../listener/github-forks.mjs";
 import { createGithubGateway, FILES } from "../listener/github-gateway.mjs";
 import { createGraphqlChecks } from "../listener/github-graphql.mjs";
+import { pkt, pktLines } from "../listener/pkt-line.mjs";
 import { parse } from "../listener/vendor/graphql.mjs";
 import { sandboxAt, serve, tempDir } from "./helpers.mjs";
 
@@ -133,7 +133,14 @@ test("advertisedRefs reads v0's and v2's advertisements, a tag's peeled commit t
     { oid: TAG, ref: "refs/tags/v1" },
     { oid: PEELED, ref: "refs/tags/v1" },
   ]);
-  // Read as it streams: the same, whatever its chunks, only a cut line held.
+  // Read as it streams (pkt-line.mjs, the git gateway's parser too): the same, whatever its
+  // chunks, only a cut line held.
+  assert.deepEqual(
+    pktLines(Buffer.concat([pkt("a\n"), Buffer.from("0000"), pkt("b"), Buffer.from("00")])).map(
+      String,
+    ),
+    ["a\n", "b"],
+  );
   const reader = advertisementReader();
   for (let i = 0; i < v0.length; i += 7) reader.push(v0.subarray(i, i + 7));
   assert.deepEqual(reader.refs(), advertisedRefs(v0));
@@ -155,6 +162,7 @@ test("refKind and callTargets: what a call names that may be a fork's", () => {
     refs: ["refs/pull/7/head"],
     pulls: [],
     blob: false,
+    lfs: false,
   });
   assert.deepEqual(callTargets("api", "repos/o/r/contents/a.js", q(`ref=${FORK}`)).refs, [FORK]);
   assert.deepEqual(callTargets("api", "repos/o/r/contents/a.js").refs, []);
@@ -167,6 +175,13 @@ test("refKind and callTargets: what a call names that may be a fork's", () => {
   assert.equal(callTargets("api", `repos/o/r/git/blobs/${FORK}`).blob, true);
   assert.deepEqual(callTargets("api", `repos/o/r/git/trees/${FORK}`).refs, []);
   assert.deepEqual(callTargets("api", `repos/o/r/git/commits/${FORK}`).refs, []);
+  assert.deepEqual(callTargets("api", "repos/o/r/license", q("ref=a&sha=b&head=c&base=d")).refs, [
+    "a",
+    "b",
+    "c",
+    "d",
+  ]);
+  assert.equal(callTargets("web", "o/r.git/info/lfs/objects/batch").lfs, true);
   assert.deepEqual(callTargets("api", "repos/o/r/compare/main...evil:x").refs, ["main", "evil:x"]);
   assert.deepEqual(callTargets("api", `repos/o/r/commits/${FORK}`).refs, [FORK]);
   assert.deepEqual(callTargets("api", `repos/o/r/commits/${FORK}/check-runs`).refs, []);
@@ -233,6 +248,12 @@ test("a fork's pull request, its repository and its commits are refused; the rep
     ["api", "repos/org/repo/zipball/pull/7/merge"],
     ["api", "repos/org/repo/contents/package.json", "ref=refs/pull/7/head"],
     ["api", "repos/org/repo/contents/package.json", "ref=main&ref=refs/pull/7/head"],
+    // Any call's ref parameters, whatever its path: the license serves the file it names.
+    ["api", "repos/org/repo/license", "ref=refs/pull/7/head"],
+    ["api", "repos/org/repo/codeowners/errors", "ref=pull/7/head"],
+    ["api", "repos/org/repo/commits", "sha=refs/pull/7/head"],
+    ["web", "org/repo/blob/main/a.js", "ref=refs/pull/7/head"],
+    ["raw", "org/repo/main/a.js", "ref=refs/pull/7/head"],
     ["api", "repos/org/repo/pulls/7/files"],
     ["api", "repos/org/repo/pulls/7", "", "application/vnd.github.diff"],
     ["web", "Org/Repo/archive/refs/pull/7/head.zip"],
@@ -274,6 +295,10 @@ test("a fork's pull request, its repository and its commits are refused; the rep
     (await check("api", "repos/org/repo/compare/main...evil:main")).message,
     /another repository's/,
   );
+  // git LFS's batch API: its objects named by their sha256.
+  for (const path of ["org/repo.git/info/lfs/objects/batch", "org/repo/info/lfs/locks"]) {
+    assert.match((await check("web", path)).message, /git LFS's objects are named by their sha256/);
+  }
   // A blob by its id, even the repository's own: nothing says where one comes from.
   for (const sha of [OWN, FORK]) {
     assert.match(
@@ -297,6 +322,10 @@ test("a fork's pull request, its repository and its commits are refused; the rep
     // A tree lists names and ids, no file: the usual way to walk the repository.
     ["api", `repos/org/repo/git/trees/${"7".repeat(40)}`, "recursive=1"],
     ["api", "repos/org/repo/issues/7"],
+    ["api", "repos/org/repo/license", "ref=main"],
+    ["api", "repos/org/repo/commits", `sha=${OWN}`],
+    // A pull request list's head and base only filter it.
+    ["api", "repos/org/repo/pulls", "head=evil:main&base=main"],
     ["web", "org/repo/archive/refs/pull/8/head.zip"],
     ["raw", "org/repo/feature/x/README.md"],
     ["raw", "org/repo/refs/heads/main/README.md"],
@@ -574,6 +603,15 @@ test("a fork's pull request's diff and LFS files are refused on GitHub's other f
   // media.githubusercontent.com, LFS files by ref.
   const lfs = await gw.call("media.test", "/media/org/repo/refs/pull/7/head/model.bin", secret);
   assert.equal(lfs.status, 403);
+  // git LFS's batch API, on the web host: refused before GitHub hears of it.
+  const before = gw.calls.length;
+  const lfs2 = await gw.call("127.0.0.1", "/org/repo.git/info/lfs/objects/batch", secret, {
+    method: "POST",
+    body: JSON.stringify({ operation: "download", objects: [{ oid: "e".repeat(64), size: 1 }] }),
+  });
+  assert.equal(lfs2.status, 403);
+  assert.match(await lfs2.text(), /git LFS's objects are named by their sha256/);
+  assert.equal(gw.calls.length, before);
   // A path the checks don't read: refused, not let through.
   const odd = await gw.call("patch-diff.test", "/elsewhere/org/repo/pull/7.diff", secret);
   assert.equal(odd.status, 403);
