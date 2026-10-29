@@ -23,6 +23,23 @@ const ROUTES = [
   { prefix: "/relay/", service: "google", name: "Google", destroy: true },
 ];
 
+// Temporary: remove once no sandbox from before #407 can still be running. Those sandboxes'
+// gh sent `gh pr create|edit|ready` here (/pr/<owner>/<repo>/create, /pr/<owner>/<repo>/<n>/
+// ready|draft|edit); a sandbox outlives a listener update, so its old gh gets the command that
+// works now, which it prints, rather than a bare "not found". Nothing is read or checked: the
+// answer only explains.
+const OLD_PR = /^\/pr\/[^/?]+\/[^/?]+\/(?:create|([0-9]+)\/(ready|draft|edit))(?:\?|$)/;
+
+function oldPrAnswer(match) {
+  const [, number, action = "create"] = match;
+  const command = action === "draft" ? `ready ${number} --undo` : `${action} ${number ?? ""}`;
+  return {
+    message:
+      "this sandbox's gh predates its listener: run GH_TOKEN=$(deckhand-token) /usr/bin/gh pr " +
+      `${command.trim()} with the same flags instead, which goes through the GitHub gateway`,
+  };
+}
+
 // Whether the running task's sandbox (or its engine) has address `ip`. Addresses are looked up
 // once per run, the first time its sandbox connects, and forgotten once it exits (runs.mjs
 // finish()): Docker may give the address to another sandbox.
@@ -152,6 +169,11 @@ export function createBrokerHttp(ctx) {
     const route = routes.find((r) => req.url.startsWith(r.prefix));
     if (route) {
       return ctx[route.service].handle(req, res).catch(failed(res, route.name, route.destroy));
+    }
+    const old = OLD_PR.exec(req.url);
+    if (old) {
+      log(`Broker: ${req.url.split("?")[0]} from a sandbox older than the listener`);
+      return sendJson(res, oldPrAnswer(old), 410);
     }
     // No /token any more: sandboxes hold no GitHub token (github-gateway.mjs).
     sendJson(res, { error: "not found" }, 404);
