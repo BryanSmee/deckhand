@@ -272,7 +272,7 @@ to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to the
   carries none (git's first request, a download with `curl`) is the run's whose sandbox has
   its address; never its engine's, whose builds and containers don't get the secret (from
   there, such a call gets `401`). The proxy names that address in an `X-Deckhand-Client` header, replacing any
-  the client sent, and the listener believes it only from the proxy's own addresses: a
+  the client sent (and drops one from every request it doesn't relay), and the listener believes it only from the proxy's own addresses: a
   sandbox that sets it itself is judged by its own address. An unknown or finished run's
   secret, or any other credential, gets `401`; another sandbox's address `403`; a research
   run (`NO_TOKEN`) `403`, whatever it sends.
@@ -289,7 +289,8 @@ to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to the
   place of the secret, and the run's log says so (each call once, 20 at most). A comment,
   an issue edit or a `gh api` write can't publish what the sandbox holds, a mount's content
   that looks like the operator's key say, any more than its reply can. A write over 16 MiB is
-  refused, and so is a write whose URL (its path or query, as sent or percent-decoded) holds
+  refused, as is a compressed one (`Content-Encoding` other than `identity`, `415`: it couldn't
+  be read), and so is a write whose URL (its path or query, as sent or percent-decoded) holds
   one of those secrets: a path names what is written, so it isn't rewritten.
 - **A review can't read its thread** other than from `TASK_DIGEST` ([Reviews](#reviews)):
   for a review run, the gateway refuses issue and pull request comments, reviews and review
@@ -308,17 +309,20 @@ to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to the
   calls in flight per run.
 - `*.githubusercontent.com` (raw files, release assets) stays a plain allowed host: it carries
   no token.
-- **Two exceptions, without a token.** A research run (`NO_TOKEN`) isn't relayed: it gets no
-  CA and nothing from the gateway, and reads public GitHub (other projects' READMEs, issues,
-  releases) anonymously through a tunnel, as it did before the gateway.
-- **The engine, accepted (#404's decisions)**: a run's [container engine](#container-engine)
-  keeps reaching GitHub's hosts through a tunnel, as its builds and containers don't trust
-  the CA, so the proxy can't relay them: refusing them would break builds that fetch from
-  GitHub (a release asset, `go mod`, an `npm` dependency). The engine holds no token (neither
-  the secret nor, by its address, the gateway's: a call from it without a secret gets `401`),
-  so what it gets is anonymous. A sandbox can reach GitHub around the gateway that way, but
-  only anonymously, or with a credential it got elsewhere, which any other allowed host
-  would take too.
+- **Two exceptions, neither with a token**, which reach GitHub's hosts through a tunnel
+  rather than the gateway, so what they get is anonymous (both accepted in pull request
+  #411):
+  - **A research run** (`NO_TOKEN`) isn't relayed: it gets no CA and nothing from the
+    gateway, and reads public GitHub (other projects' READMEs, issues, releases) as it did
+    before the gateway.
+  - **A run's [container engine](#container-engine)**: its builds and containers don't trust
+    the CA, so the proxy can't relay them, and refusing them would break builds that fetch
+    from GitHub (a release asset, `go mod`, an `npm` dependency). The engine holds neither
+    the secret nor, by its address, the gateway's token: a call from it without a secret
+    gets `401`.
+
+  A sandbox can reach GitHub around the gateway through its engine, but only anonymously,
+  or with a credential it got elsewhere, which any other allowed host would take too.
 
 ### The Claude credential
 

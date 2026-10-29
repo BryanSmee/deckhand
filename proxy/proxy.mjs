@@ -349,6 +349,9 @@ export function createProxy({
     for (const name of Object.keys(headers)) {
       if (name.startsWith("proxy-")) delete headers[name];
     }
+    // Only a relayed request names its client: nobody else may pass the name on (should a host
+    // the operator names lead back to the listener).
+    delete headers[CLIENT_HEADER];
     const to = { address, url, host, headers };
     const use = cache?.enabled && cacheOk ? requestUse(req) : "skip";
     if (use !== "skip") return cached(req, res, to, use);

@@ -118,7 +118,7 @@ export function createBrokerHttp(ctx) {
     const live = task?.live;
     // Its container engine's plain HTTP is cached too, but its HTTPS never decrypted: its
     // builds and containers don't trust Deckhand's CA. So GitHub's hosts aren't relayed for it
-    // but tunnelled, anonymously (the gateway gives its address no token): an exception #404
+    // but tunnelled, anonymously (the gateway gives its address no token): an exception #411
     // accepted, rather than break builds that fetch from GitHub.
     const engine = !!live?.engineIp?.includes(ip);
     // GitHub's hosts go to the GitHub gateway, but for a research run (NO_TOKEN): it has no

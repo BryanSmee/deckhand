@@ -252,7 +252,7 @@ test("relay: an agent's relayed hosts, decrypted and handed to the listener, nev
   ]);
 });
 
-test("GitHub's hosts: relayed for a sandbox, a tunnel for its engine (#404's exception)", () => {
+test("GitHub's hosts: relayed for a sandbox, a tunnel for its engine (#411's exception)", () => {
   const config = testConfig();
   const relayed = githubHosts(config);
   assert.deepEqual(relayed, ["github.com", "api.github.com"]);

@@ -2,6 +2,7 @@
 // go on with a token for its run's repo, their writes redacted; nobody else's do.
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { gzipSync } from "node:zlib";
 import { createBroker } from "../listener/broker.mjs";
 import { NO_TOKEN } from "../listener/github-app.mjs";
 import {
@@ -268,6 +269,40 @@ test("a fetch's pack request streams through unread, binary as it is", async (t)
   assert.equal(res.status, 200);
   assert.deepEqual(gw.calls[0].body, pack);
   assert.deepEqual(notes, []);
+});
+
+test("a compressed write is refused, a review's GraphQL call too: neither could be read", async (t) => {
+  const gw = await gateway(t);
+  const { secret } = gw.register();
+  const review = gw.register(undefined, { mode: "review" });
+  const cases = [
+    [secret, "/api/v3/repos/org/repo/issues/1/comments", { body: `Mine: ${secret}` }],
+    [
+      review.secret,
+      "/api/graphql",
+      { query: "{ viewer { issueComments(last: 5) { nodes { body } } } }" },
+    ],
+  ];
+  for (const [who, path, json] of cases) {
+    for (const encoding of ["gzip", "deflate", " GZIP "]) {
+      const res = await gw.call(path, {
+        secret: who,
+        method: "POST",
+        body: gzipSync(JSON.stringify(json)),
+        headers: { "content-encoding": encoding },
+      });
+      assert.equal(res.status, 415, `${path} ${encoding}`);
+    }
+  }
+  assert.deepEqual(gw.calls, []);
+  // Uncompressed, said so: read as usual.
+  const plain = await gw.call("/api/v3/repos/org/repo/issues/1/comments", {
+    secret,
+    method: "POST",
+    body: '{"body": "Done."}',
+    headers: { "content-encoding": "identity" },
+  });
+  assert.equal(plain.status, 200);
 });
 
 test("a write too big to read is refused", async (t) => {

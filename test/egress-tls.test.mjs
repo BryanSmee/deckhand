@@ -31,6 +31,8 @@ async function setup(
   { upstreamCa = publicCa.certificate(), cacheOn = true, decrypt = true, relayUrl = null } = {},
 ) {
   const seen = [];
+  // Each request's headers, as the host got them.
+  const heard = [];
   const contexts = {};
   for (const host of ["cached.test", "other.test"]) {
     contexts[host] = createSecureContext(await publicCa.certFor(host));
@@ -39,6 +41,7 @@ async function setup(
     { SNICallback: (name, done) => done(null, contexts[name] ?? contexts["other.test"]) },
     (req, res) => {
       seen.push({ url: req.url, host: req.headers.host });
+      heard.push(req.headers);
       res.writeHead(200, { "content-type": "text/plain", "cache-control": "max-age=60" });
       res.end(`body of ${req.url}`);
     },
@@ -120,7 +123,7 @@ async function setup(
     });
   }
 
-  return { get, tunnel, seen, asked, authority, proxyPort, plainPort, upstreamPort };
+  return { get, tunnel, seen, heard, asked, authority, proxyPort, plainPort, upstreamPort };
 }
 
 test("HTTPS to a cached host: decrypted with Deckhand's CA, and the second GET is a hit", async (t) => {
@@ -137,6 +140,19 @@ test("HTTPS to a cached host: decrypted with Deckhand's CA, and the second GET i
   assert.equal(second.body, "body of /pkg.tgz");
   assert.equal(second.headers["x-deckhand-cache"], "hit");
   assert.deepEqual(seen, [{ url: "/pkg.tgz", host: `cached.test:${upstreamPort}` }]);
+});
+
+test("a cached host's request never names a client: only a relayed one does", async (t) => {
+  // Decrypted to be cached, but with a credential: sent on as is, past the cache.
+  const { get, heard, authority } = await setup(t);
+  const answer = await get("cached.test", "/x", authority.certificate(), {
+    "x-deckhand-client": "10.9.0.7",
+    authorization: "Bearer mine",
+  });
+  assert.equal(answer.status, 200);
+  assert.equal(heard.length, 1);
+  assert.equal(heard[0]["x-deckhand-client"], undefined);
+  assert.equal(heard[0].authorization, "Bearer mine");
 });
 
 test("other hosts, or the cache off: a raw tunnel, with the real server's certificate", async (t) => {

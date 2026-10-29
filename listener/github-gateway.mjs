@@ -236,6 +236,15 @@ export function createGithubGateway({
     try {
       let body;
       if (!streamed) {
+        // A compressed body would hide what redaction and a review's check look for: refused
+        // rather than inflated, as the git gateway does.
+        const encoding = String(req.headers["content-encoding"] ?? "identity")
+          .trim()
+          .toLowerCase();
+        if (encoding !== "identity") {
+          req.resume();
+          return fail(res, 415, `a ${encoding}-encoded body: Deckhand reads writes uncompressed`);
+        }
         body = await readBody(req, maxWrite, idleMs, clock);
         if (body === null) return fail(res, 413, `a write over ${maxWrite} bytes`);
         // Every body a review sends, whatever its path's spelling: its token only reads, so a
