@@ -35,6 +35,7 @@ import {
   type GraphNode,
   inLine,
   isParent,
+  nextInLine,
   movable,
   moveOnto,
   workLists,
@@ -169,6 +170,11 @@ export function Board({
     (state?.tasks ?? []).filter((t) => sameRepo(t.repo, repo)),
     order.moving,
   );
+  // Every repo's, as shown: what Run next can't pass is maybe another repo's.
+  const nextKey = nextInLine([
+    ...tasks,
+    ...(state?.tasks ?? []).filter((t) => !sameRepo(t.repo, repo)),
+  ]);
   const brainstorms = brainstormsOf(tasks, work.pending);
   const { nodes, edges, hidden } = graphOf(tasks, state?.edges ?? [], state?.blockers ?? [], {
     showClosed,
@@ -311,7 +317,7 @@ export function Board({
       // Let go anywhere but a queued node's edge: it stays where it is.
       const where = at(point.x, point.y);
       const move = where?.target ? moveOnto(line, d.key, where.target, where.side) : null;
-      if (move) reorder({ key: move.key, before: move.before });
+      if (move) reorder(move);
     },
   });
 
@@ -539,6 +545,7 @@ export function Board({
             line={line}
             onMove={reorder}
             moving={!!order.moving}
+            nextKey={nextKey}
             targets={targets}
             github={github}
             picked={picked}
@@ -630,6 +637,7 @@ export function Board({
             line={line}
             onMove={reorder}
             moving={!!order.moving}
+            nextKey={nextKey}
             targets={targets}
             github={github}
             picked={picked}

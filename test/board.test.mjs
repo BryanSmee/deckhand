@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { waitEdges } from "../listener/http.mjs";
-import { board, isLive } from "../listener/board.mjs";
+import { board, isLive, runPlaces } from "../listener/board.mjs";
 
 const run = (key, startedAt, extra = {}) => ({
   id: `${key}-${startedAt}`,
@@ -99,6 +99,29 @@ test("a task waiting for a slot has its place in the run order; a brainstorm sta
   assert.equal(byKey["acme/api#2"].position, 1);
   assert.equal(byKey["acme/api#2"].startsFirst, true);
   assert.equal(byKey["acme/api#3"].position, undefined);
+});
+
+test("runPlaces: counted among the repos the user sees, which tell nothing of the others", () => {
+  const queue = [
+    { repo: "acme/api", id: "1" },
+    { repo: "acme/secret", id: "2" },
+    { repo: "acme/api", id: "pr-3" },
+  ];
+  assert.deepEqual(
+    [...runPlaces(queue)],
+    [
+      ["acme/api#1", 1],
+      ["acme/secret#2", 2],
+      ["acme/api#pr-3", 3],
+    ],
+  );
+  assert.deepEqual(
+    [...runPlaces(queue, (repo) => repo !== "acme/secret")],
+    [
+      ["acme/api#1", 1],
+      ["acme/api#pr-3", 2],
+    ],
+  );
 });
 
 test("a comment waiting for other issues: its state and what it waits for", () => {

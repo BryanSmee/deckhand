@@ -14,6 +14,10 @@ test("move: the queue as it starts now, with the task moved; it survives a resta
   // Down one: before the one after next, all of them placed already.
   order.move("org/app#1", { before: null }, order.keys());
   assert.deepEqual(createOrder({ path }).keys(), ["org/app#3", "org/app#2", "org/app#1"]);
+  // Right after another, whatever its spelling: the end of the line stays where it was.
+  order.move("org/app#3", { after: "Org/App#2" }, order.keys());
+  assert.deepEqual(order.keys(), ["org/app#2", "org/app#3", "org/app#1"]);
+  order.move("org/app#3", { first: true }, order.keys());
   // Before another, whatever its spelling.
   order.move("org/app#1", { before: "Org/App#2" }, order.keys());
   assert.deepEqual(createOrder({ path }).keys(), ["org/app#3", "org/app#1", "org/app#2"]);

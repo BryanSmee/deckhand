@@ -6,7 +6,7 @@ import { createServer } from "node:http";
 import { join } from "node:path";
 import { pipeline } from "node:stream";
 import { authPage } from "./auth.mjs";
-import { board, isLive, STATES } from "./board.mjs";
+import { board, isLive, runPlaces, STATES } from "./board.mjs";
 import { createSlots, readDelivery, sourceOf } from "./deliveries.mjs";
 import {
   closedItem,
@@ -134,10 +134,7 @@ export function createHttp(ctx, { dashboardDir }) {
   // only the repos they may see; all of them without one.
   function shownTasks(user = null) {
     const mine = (list) => (user ? list.filter((x) => sees(user, repoOf(x.key))) : list);
-    // Where each task waiting for a slot is in the run order (tasks.mjs queueOrder()), 1 first.
-    const places = new Map(
-      (ctx.queueOrder?.() ?? []).map((t, i) => [taskKey(t.repo, t.id), i + 1]),
-    );
+    const places = runPlaces(ctx.queueOrder?.() ?? [], (repo) => !user || sees(user, repo));
     // A running task's comments are queued only when they wait for a follow-up run: the others
     // are on their way to the live session.
     const queued = [...tasks.values()]

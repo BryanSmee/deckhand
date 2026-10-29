@@ -323,11 +323,11 @@ export function inLine(tasks: Task[], moving: OrderMove | null): { tasks: Task[]
   const moved = moving && line.find((t) => t.key === moving.key);
   if (!moving || !moved) return { tasks, line };
   line = line.filter((t) => t !== moved);
-  const at = moving.first
-    ? line.filter((t) => t.startsFirst).length
-    : moving.before
-      ? line.findIndex((t) => t.key === moving.before)
-      : -1;
+  const find = (key: string) => line.findIndex((t) => t.key === key);
+  let at = -1;
+  if (moving.first) at = line.filter((t) => t.startsFirst).length;
+  else if (moving.before) at = find(moving.before);
+  else if (moving.after) at = find(moving.after) < 0 ? -1 : find(moving.after) + 1;
   line.splice(at < 0 ? line.length : at, 0, moved);
   line = line.map((t, i) => (t.position === places[i] ? t : { ...t, position: places[i] }));
   const placed = new Map(line.map((t) => [t.key, t]));
@@ -342,13 +342,17 @@ export function moveOnto(
   key: string,
   target: string,
   side: number,
-): (OrderMove & { after: boolean }) | null {
+): OrderMove | null {
   const onto = line.find((t) => t.key === target);
   if (key === target || !onto || !reorderable(onto) || (side > 0.3 && side < 0.7)) return null;
-  if (side <= 0.3) return { key, before: target, after: false };
-  const rest = line.filter((t) => t.key !== key);
-  const next = rest[rest.indexOf(onto) + 1];
-  return { key, before: next?.key ?? null, after: true };
+  return side <= 0.3 ? { key, before: target } : { key, after: target };
+}
+
+// The task "Run next" can't move any higher: the first that moves of `tasks` (every repo's the
+// user sees, inLine()'s), the brainstorms aside. Null: none queued.
+export function nextInLine(tasks: Task[]): string | null {
+  const movers = tasks.filter(reorderable).sort((a, b) => a.position! - b.position!);
+  return movers[0]?.key ?? null;
 }
 
 // A node a drag moves, on `repo`'s tab (none on All, or while its config has errors): only an

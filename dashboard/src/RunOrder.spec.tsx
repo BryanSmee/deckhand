@@ -88,11 +88,12 @@ test("Run next, Move up and Move down send the move, which shows at once", async
       within(list).getByRole<HTMLButtonElement>("button", { name: "Move #41 down" }).disabled,
     ).toBe(false),
   );
-  fireEvent.click(within(list).getByRole("button", { name: "Move #41 down" }));
+  // Down one: right after the next of the repo's, not to the end of every repo's line.
+  fireEvent.click(within(list).getByRole("button", { name: "Move #42 down" }));
   await waitFor(() =>
     expect(api.bodies().slice(1)).toEqual([
       { key: "acme/app#pr-43", before: "acme/app#42" },
-      { key: "acme/app#41", before: "acme/app#pr-43" },
+      { key: "acme/app#42", after: "acme/app#pr-43" },
     ]),
   );
 });
@@ -111,7 +112,9 @@ test("a card dragged onto the bottom half of another goes after it, the top half
   // jsdom's boxes are empty: any point is at or below the middle.
   fireEvent.dragOver(card("43"), { dataTransfer: data, clientY: 10 });
   fireEvent.drop(card("43"), { dataTransfer: data, clientY: 10 });
-  await waitFor(() => expect(api.bodies()).toEqual([{ key: "acme/app#41", before: null }]));
+  await waitFor(() =>
+    expect(api.bodies()).toEqual([{ key: "acme/app#41", after: "acme/app#pr-43" }]),
+  );
   // Onto the brainstorm: nothing.
   fireEvent.dragStart(card("42"), { dataTransfer: transfer() });
   fireEvent.drop(card("44"), {
@@ -128,6 +131,30 @@ test("on a phone: Run next, Move up and Move down on each card, 44 px", () => {
   }
 });
 
+test("Run next is off for the first work run of every repo shown, another's brainstorm before it", () => {
+  history.replaceState(null, "", "#/acme/app/board");
+  // acme/api's brainstorm is 1st, acme/app's first work run 2nd: nothing to pass.
+  const other = queued(7, 1, { repo: "acme/api", key: "acme/api#7", startsFirst: true });
+  render(<Dashboard state={makeState({}, [other, queued(41, 2), queued(42, 4)])} error={null} />);
+  fireEvent.click(screen.getByRole("tab", { name: /^Queued/ }));
+  expect(screen.getByRole<HTMLButtonElement>("button", { name: "Run #41 next" }).disabled).toBe(
+    true,
+  );
+  expect(screen.getByRole<HTMLButtonElement>("button", { name: "Run #42 next" }).disabled).toBe(
+    false,
+  );
+});
+
+test("Run next is on when another repo's work run is before the first of this one's", () => {
+  history.replaceState(null, "", "#/acme/app/board");
+  const other = queued(7, 1, { repo: "acme/api", key: "acme/api#7" });
+  render(<Dashboard state={makeState({}, [other, queued(41, 2)])} error={null} />);
+  fireEvent.click(screen.getByRole("tab", { name: /^Queued/ }));
+  expect(screen.getByRole<HTMLButtonElement>("button", { name: "Run #41 next" }).disabled).toBe(
+    false,
+  );
+});
+
 test("inLine: a move on its way, the repo's places dealt out again", () => {
   const { line, tasks } = inLine(LINE, { key: "acme/app#41", before: null });
   expect(line.map((t) => [t.number, t.position])).toEqual([
@@ -137,6 +164,18 @@ test("inLine: a move on its way, the repo's places dealt out again", () => {
     [41, 5],
   ]);
   expect(tasks.find((t) => t.number === 41)?.position).toBe(5);
+  // Right after another: the places of the repo's tasks dealt out again.
+  expect(
+    inLine(LINE, { key: "acme/app#41", after: "acme/app#42" }).line.map((t) => [
+      t.number,
+      t.position,
+    ]),
+  ).toEqual([
+    [44, 1],
+    [42, 2],
+    [41, 4],
+    [43, 5],
+  ]);
   // Run next goes after the brainstorms.
   expect(inLine(LINE, { key: "acme/app#42", first: true }).line.map((t) => t.number)).toEqual([
     44, 42, 41, 43,
@@ -148,14 +187,11 @@ test("moveOnto: a queued node's left edge before it, its right edge after it, it
   expect(moveOnto(line, "acme/app#pr-43", "acme/app#41", 0.1)).toEqual({
     key: "acme/app#pr-43",
     before: "acme/app#41",
-    after: false,
   });
-  expect(moveOnto(line, "acme/app#41", "acme/app#42", 0.9)).toEqual({
+  expect(moveOnto(line, "acme/app#41", "acme/app#pr-43", 0.9)).toEqual({
     key: "acme/app#41",
-    before: "acme/app#pr-43",
-    after: true,
+    after: "acme/app#pr-43",
   });
-  expect(moveOnto(line, "acme/app#41", "acme/app#pr-43", 0.9)?.before).toBeNull();
   expect(moveOnto(line, "acme/app#41", "acme/app#42", 0.5)).toBeNull();
   // Not onto a brainstorm, nor itself.
   expect(moveOnto(line, "acme/app#41", "acme/app#44", 0.1)).toBeNull();

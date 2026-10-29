@@ -23,12 +23,16 @@ export function createOrder({ path } = {}) {
     order.save();
   }
 
-  // Task `key` goes before `before` (a key), first (`first`) or last (neither). `current`: the
-  // queued tasks' keys in the order they start now, all of them placed with it: moving one
-  // past a task nobody placed keeps the rest where they were.
-  function move(key, { before = null, first = false } = {}, current = []) {
+  // Task `key` goes right before `before` or right after `after` (keys), first (`first`) or
+  // last (none of them). `current`: the queued tasks' keys in the order they start now, all of
+  // them placed with it: moving one past a task nobody placed keeps the rest where they were.
+  function move(key, { before = null, after = null, first = false } = {}, current = []) {
     const keys = current.filter((k) => taskId(k) !== taskId(key));
-    const at = first ? 0 : before ? keys.findIndex((k) => taskId(k) === taskId(before)) : -1;
+    const find = (k) => keys.findIndex((q) => taskId(q) === taskId(k));
+    let at = -1;
+    if (first) at = 0;
+    else if (before) at = find(before);
+    else if (after) at = find(after) < 0 ? -1 : find(after) + 1;
     keys.splice(at < 0 ? keys.length : at, 0, key);
     write(keys);
   }

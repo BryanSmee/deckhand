@@ -8,14 +8,7 @@ import { createDismissals } from "../listener/dismissals.mjs";
 import { createLanes } from "../listener/lanes.mjs";
 import { createOrder } from "../listener/order.mjs";
 import { MAX_TREE, leadsTo } from "../listener/plans.mjs";
-import {
-  COUNT_MS,
-  ISSUES_MS,
-  checkAction,
-  createWorkApi,
-  ordinal,
-  staleFor,
-} from "../listener/work.mjs";
+import { COUNT_MS, ISSUES_MS, checkAction, createWorkApi, staleFor } from "../listener/work.mjs";
 import { createAnalysis } from "../listener/analysis.mjs";
 import { MAX_TEXT } from "../listener/answers.mjs";
 import { board as boardOf } from "../listener/board.mjs";
@@ -1089,14 +1082,14 @@ test("lane refused: keys of another repo or a discussion, a long name, users, a 
 const reorder = (w, body, opts = {}) =>
   call(w.api, "POST", "/api/repos/org/app/order", { body, ...opts });
 
-test("order: before another, first or last; the queued tasks nobody placed keep their places", async () => {
+test("order: before or after another, first or last; the queued tasks nobody placed keep their places", async () => {
   const w = setup({
     queue: ["org/other#9", "org/app#1", "org/app#2", "org/app#pr-3", "org/app#discussion-4"],
   });
   const keys = () => w.order.keys();
   assert.deepEqual(await reorder(w, { key: "org/app#pr-3", first: true }), {
     status: 200,
-    body: { message: "#3 is 1st in line." },
+    body: { message: "#3 moved first in line." },
   });
   assert.deepEqual(keys(), [
     "org/app#pr-3",
@@ -1107,12 +1100,9 @@ test("order: before another, first or last; the queued tasks nobody placed keep 
   ]);
   // Spelled as GitHub has it, the task's own key goes in.
   assert.deepEqual((await reorder(w, { key: "Org/App#1", before: "org/app#pr-3" })).body, {
-    message: "#1 is 1st in line.",
+    message: "#1 moved before #3.",
   });
-  assert.equal(
-    (await reorder(w, { key: "org/app#1", before: null })).body.message,
-    "#1 is 5th in line.",
-  );
+  assert.equal((await reorder(w, { key: "org/app#1" })).body.message, "#1 moved last in line.");
   assert.deepEqual(keys(), [
     "org/app#pr-3",
     "org/other#9",
@@ -1121,6 +1111,23 @@ test("order: before another, first or last; the queued tasks nobody placed keep 
     "org/app#1",
   ]);
   assert.ok(w.logs.some((l) => /alice moves org\/app#1 last in the run order/.test(l)));
+});
+
+test("order: down one, right after the next of the repo's, never past another repo's tasks", async () => {
+  // org/app holds places 1 and 2, org/other 3 to 5.
+  const w = setup({
+    queue: ["org/app#1", "org/app#2", "org/other#7", "org/other#8", "org/other#9"],
+  });
+  assert.deepEqual((await reorder(w, { key: "org/app#1", after: "org/app#2" })).body, {
+    message: "#1 moved after #2.",
+  });
+  assert.deepEqual(w.order.keys(), [
+    "org/app#2",
+    "org/app#1",
+    "org/other#7",
+    "org/other#8",
+    "org/other#9",
+  ]);
 });
 
 test("order refused: not queued, a brainstorm, another repo's, users, a broken config", async () => {
@@ -1139,28 +1146,19 @@ test("order refused: not queued, a brainstorm, another repo's, users, a broken c
   assert.match(await refused({ key: "org/other#3", first: true }, 400), /org\/app's tasks/);
   await refused({ key: "org/app#1", before: "org/other#3" }, 400);
   await refused({ key: "org/app#1", first: "yes" }, 400);
+  // Itself, or two places at once: nobody asked for anywhere.
+  assert.match(await refused({ key: "org/app#1", before: "Org/App#1" }, 400), /another task/);
+  await refused({ key: "org/app#1", after: "org/app#1" }, 400);
+  await refused({ key: "org/app#1", after: "org/other#3" }, 400);
+  await refused({ key: "org/app#1", before: "org/app#2", after: "org/app#2" }, 400);
+  await refused({ key: "org/app#1", first: true, after: "org/app#2" }, 400);
+  assert.match(await refused({ key: "org/app#1", after: "org/app#6" }, 409), /#6 is no longer/);
   await refused({ key: 12 }, 400);
   await refused({ key: "org/app#1", first: true }, 403, { user: "mallory" });
   await refused({ key: "org/app#1", first: true }, 403, { origin: "https://evil.example" });
   const broken = setup({ errors: ["bad"], queue: ["org/app#1"] });
   assert.equal((await reorder(broken, { key: "org/app#1", first: true })).status, 409);
   assert.deepEqual(w.order.keys(), []);
-});
-
-test("ordinal: 1st, 2nd, 3rd, 4th, 11th to 13th, 21st, 112th", () => {
-  assert.deepEqual([1, 2, 3, 4, 11, 12, 13, 21, 22, 101, 112].map(ordinal), [
-    "1st",
-    "2nd",
-    "3rd",
-    "4th",
-    "11th",
-    "12th",
-    "13th",
-    "21st",
-    "22nd",
-    "101st",
-    "112th",
-  ]);
 });
 
 test("plan without open sub-issues: it starts, or queues", async () => {

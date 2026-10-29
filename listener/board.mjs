@@ -18,7 +18,7 @@
 // A task whose last run is error, interrupted or cancelled is `rerunnable` when it may run
 // again, and `dismissed` ({ by, at }) while that run is the one someone dismissed from the
 // dashboard (dismissals.mjs): it keeps its state, but no longer asks for attention.
-import { parseKey } from "./events.mjs";
+import { parseKey, taskKey } from "./events.mjs";
 import { LIGHT } from "./modes.mjs";
 import { taskId } from "./spelling.mjs";
 
@@ -43,6 +43,13 @@ const ENDED = ["done", "error", "interrupted", "cancelled"];
 // Whether something is going on or waits on the task: what ended (done, error, interrupted,
 // cancelled) isn't. The work area's backlog lists an open issue again once its task isn't live.
 export const isLive = (t) => !ENDED.includes(t.state);
+
+// Where each task waiting for a slot is in the run order, 1 next to start: task key → place.
+// `queue`: tasks.mjs queueOrder()'s tasks; `shown(repo)`: whether the user sees the repo. Only
+// those are counted, so the places don't tell of tasks in repos the user can't see.
+export function runPlaces(queue, shown = () => true) {
+  return new Map(queue.filter((t) => shown(t.repo)).map((t, i) => [taskKey(t.repo, t.id), i + 1]));
+}
 
 // Runs kept per entry: older ones stay in the logs.
 const RUNS_PER_TASK = 20;

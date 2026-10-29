@@ -91,6 +91,8 @@ interface Props {
   line: Task[];
   onMove: (move: OrderMove) => void;
   moving: boolean;
+  // The task already next among every repo's work runs (graphModel.ts nextInLine()).
+  nextKey: string | null;
   // What "Queue after…" offers: the graph's issues.
   targets: Target[];
   github: string;
@@ -120,6 +122,7 @@ export function WorkQueue({
   line,
   onMove,
   moving,
+  nextKey,
   targets,
   github,
   picked,
@@ -205,8 +208,8 @@ export function WorkQueue({
   const taskUrl = (t: Task) =>
     `${github}/${repo}/${t.kind === "pr" ? "pull" : t.kind === "discussion" ? "discussions" : "issues"}/${t.number}`;
 
-  // The cards that move, and where a move puts one: up before the one above, down before the
-  // one after next (last: the end of the line), Run next first.
+  // The cards that move, and where a move puts one: up right before the one above, down right
+  // after the one below (never past another repo's tasks), Run next first.
   const movers = line.filter(reorderable);
   const move = (m: OrderMove) => {
     onNotice(null);
@@ -217,8 +220,8 @@ export function WorkQueue({
     if (i < 0) return [];
     const ref = `#${t.number}`;
     const still = moving || blocked;
-    // First of all, nothing of another repo's before it.
-    const next = i === 0 && t.position === line.indexOf(t) + 1;
+    // First of the work runs of every repo shown: Run next has nothing to pass.
+    const next = t.key === nextKey;
     return [
       {
         label: "Run next",
@@ -243,24 +246,19 @@ export function WorkQueue({
         aria: `Move ${ref} down`,
         iconOnly: true,
         icon: <Icon.ChevronDown size={touch ? 18 : 14} />,
-        run: () => move({ key: t.key, before: movers[i + 2]?.key ?? null }),
+        run: () => move({ key: t.key, after: movers[i + 1].key }),
         disabled: still || i === movers.length - 1,
       },
     ];
   };
 
-  // A Queued card let go over `onto`: above it, before it; below it, before the one after it.
+  // A Queued card let go over `onto`: above it, right before it; below it, right after it.
+  // Where it is already, nothing.
   const dropOnto = (key: string, onto: Task, above: boolean) => {
     if (key === onto.key || !reorderable(onto)) return;
-    const rest = movers.filter((t) => t.key !== key);
-    const at = rest.indexOf(onto) + (above ? 0 : 1);
-    const before = rest[at]?.key ?? null;
-    // Where it is already.
     const now = movers.findIndex((t) => t.key === key);
-    if (movers[now + 1]?.key === (before ?? undefined) || (now === movers.length - 1 && !before)) {
-      return;
-    }
-    move({ key, before });
+    if (movers[now + (above ? 1 : -1)] === onto) return;
+    move(above ? { key, before: onto.key } : { key, after: onto.key });
   };
   const queuedRows: Row[] = line.map((t) => {
     const mode = t.mode && t.mode !== "work" ? t.mode : null;

@@ -3653,7 +3653,7 @@ mounts:
       body: JSON.stringify({ key: "org/repo#6", first: true }),
     });
     assert.equal(res.status, 200, await res.clone().text());
-    assert.equal((await res.json()).message, "#6 is 1st in line.");
+    assert.equal((await res.json()).message, "#6 moved first in line.");
     assert.deepEqual(await positions(), { "org/repo#6": 1, "org/repo#5": 2 });
     const kept = JSON.parse(readFileSync(join(dir, "order.json"), "utf8"));
     assert.deepEqual(Object.keys(kept), ["org/repo#6", "org/repo#5"]);

@@ -252,12 +252,14 @@ maintainer placed, in the order `order.json` keeps (`order.mjs`, by lowercase ta
 respelled at start with the rest), then the others by when their first pending comment was
 queued (`queuedAt`, kept in `queue.json` through a restart). `schedule()` hands the ready ones
 to `startable()` in that order, which still skips a task whose repo is at its cap and starts the
-next. `POST /api/repos/<owner>/<repo>/order { key, before?: key | null, first?: true }`
-(`work.mjs` `reorder`, the repo's users, a queued task of the repo that isn't light) writes the
-whole current order with the task moved, so moving one past tasks nobody placed keeps them where
+next. `POST /api/repos/<owner>/<repo>/order { key, before?: key, after?: key, first?: true }`
+(`work.mjs` `reorder`, the repo's users, a queued task of the repo that isn't light; `before` and
+`after` another of the repo's, none of them: last) writes the whole current order with the task
+moved: right after another, Move down never jumps another repo's tasks, so moving one past tasks nobody placed keeps them where
 they were. A key leaves the order when its run starts or its queued comments are dropped
 (`runs.mjs`), and `schedule()` drops any other key no longer queued. `api/state` gives each
-queued task its `position` (1 next to start, across repos) and `startsFirst` for a light one;
+queued task its `position` (1 next to start, among the tasks of every repo the user sees: the
+places don't tell of the others) and `startsFirst` for a light one;
 the board's Queued tab and the graph's badges show it, and reorder from there.
 
 The dashboard's New request (Idea, Bug report) sends ideas and bug reports to a repo's inbox:

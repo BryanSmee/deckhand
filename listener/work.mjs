@@ -38,9 +38,10 @@
 //   POST /api/repos/<owner>/<repo>/lane   { keys: ["owner/repo#12", …], name }
 //                                         names the lane of these issues (lanes.mjs), "" takes
 //                                         its name off
-//   POST /api/repos/<owner>/<repo>/order  { key, before?: key | null, first?: true }
+//   POST /api/repos/<owner>/<repo>/order  { key, before?: key, after?: key, first?: true }
 //                                         moves a queued task in the run order (order.mjs):
-//                                         before another of the repo's, first, or last
+//                                         right before or after another of the repo's,
+//                                         first, or last (none of them)
 //   GET  /api/repos/<owner>/<repo>/analyze?count=&kinds=a,b&outcomes=c,d
 //                                         what an analysis of these runs would read: how many
 //                                         match, the digest's size and tokens, the kinds there
@@ -893,19 +894,31 @@ export function createWorkApi({
   }
 
   // A queued task of the repo moves in the run order, as anyone allowed to start it could:
-  // before `before` (another of the repo's queued tasks), first, or last (`before` null). Only
-  // a task waiting for a slot, and not a brainstorm: those start first whatever the order.
+  // right before `before` or right after `after` (another of the repo's queued tasks), first,
+  // or last (none of them). Only a task waiting for a slot, and not a brainstorm: those start
+  // first whatever the order. The reply names no place: it would count other repos' tasks,
+  // which the user may not see.
   async function reorder(req, res, user, repo) {
-    const { key, before = null, first = false } = (await readJsonBody(req, MAX_BODY)) ?? {};
+    const body = (await readJsonBody(req, MAX_BODY)) ?? {};
+    const { key, before = null, after = null, first = false } = body;
     const ours = (k) => {
       const parsed = typeof k === "string" && parseKey(k);
       return !!parsed && sameRepo(parsed.repo, repo);
     };
     if (!ours(key)) refuse(400, `\`key\` is the task key of one of ${repo}'s tasks.`);
-    if (before !== null && !ours(before)) {
-      refuse(400, `\`before\` is null or the task key of one of ${repo}'s tasks.`);
+    for (const [field, value] of [
+      ["before", before],
+      ["after", after],
+    ]) {
+      if (value === null) continue;
+      if (!ours(value))
+        refuse(400, `\`${field}\` is null or the task key of one of ${repo}'s tasks.`);
+      if (taskId(value) === taskId(key)) refuse(400, `\`${field}\` is another task than \`key\`.`);
     }
     if (typeof first !== "boolean") refuse(400, "`first` is true or false.");
+    if ([before !== null, after !== null, first].filter(Boolean).length > 1) {
+      refuse(400, "One of `before`, `after` and `first` at most.");
+    }
     await checkedRepo(repo, user);
     const queue = queueOrder();
     const keys = queue.map((t) => taskKey(t.repo, t.id));
@@ -916,14 +929,24 @@ export function createWorkApi({
     if (isLight(queue[at], queue[at].pending.at(-1)?.mode)) {
       refuse(409, `${name} is a brainstorm: brainstorms start before work runs anyway.`);
     }
-    if (before !== null && !first && find(before) < 0) {
-      refuse(409, `#${parseKey(before).number} is no longer queued.`);
+    const other = before ?? after;
+    if (other !== null && find(other) < 0) {
+      refuse(409, `#${parseKey(other).number} is no longer queued.`);
     }
-    order.move(keys[at], { before: before && keys[find(before)], first }, keys);
-    const where = first ? "first" : before ? `before #${parseKey(before).number}` : "last";
+    order.move(
+      keys[at],
+      { before: before && keys[find(before)], after: after && keys[find(after)], first },
+      keys,
+    );
+    const where = first
+      ? "first"
+      : other
+        ? `${before ? "before" : "after"} #${parseKey(other).number}`
+        : "last";
     log(`Work area: ${user} moves ${keys[at]} ${where} in the run order`);
-    const now = queueOrder().findIndex((t) => taskId(taskKey(t.repo, t.id)) === taskId(key));
-    send(res, 200, { message: `${name} is ${ordinal(now + 1)} in line.` });
+    send(res, 200, {
+      message: `${name} moved ${where === "first" || where === "last" ? `${where} in line` : where}.`,
+    });
   }
 
   async function analyze(req, res, user, repo) {
@@ -979,12 +1002,6 @@ export function createWorkApi({
   }
 
   return { handle, stale, counts, ticked };
-}
-
-// "1st", "2nd", "3rd", "4th", "11th", "21st".
-export function ordinal(n) {
-  const teen = n % 100 >= 11 && n % 100 <= 13;
-  return `${n}${(!teen && ["th", "st", "nd", "rd"][n % 10]) || "th"}`;
 }
 
 // Which deliveries make a repo's backlog stale: an issue opened, closed, edited, moved or
