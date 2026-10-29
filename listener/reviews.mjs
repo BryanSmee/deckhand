@@ -686,8 +686,10 @@ const severities = (findings) =>
 const fixesOf = (entry) => entry?.fixes ?? (entry?.fixedAt ? 1 : 0);
 const reviewedFixesOf = (entry) => entry?.reviewedFixes ?? (entry?.rereviewAt ? 1 : 0);
 
-// The automatic reviews kept per pull request (`rounds`): the operator's MAX_FIX_ROUNDS is
-// lower, but a pull request turning ready again starts a new first review.
+// The automatic reviews kept per pull request (`rounds`): more than the operator's
+// MAX_FIX_ROUNDS allows in one loop, as the history goes on across the pull request turning
+// ready again: its fix count carries over, so that review is numbered after the fix runs so
+// far (R<fixes>), not a new first review.
 const ROUNDS_KEPT = 20;
 
 // Where the fix loop of a pull request is, for the dashboard (board.mjs), from its entry in
@@ -939,20 +941,21 @@ export function createReviews({
     const found = reviewCandidate(config, event, payload, skip);
     if (!found) return null;
     const { repo, base, pr, author } = found;
-    const { settings, errors } = await repoSettings(repo, base);
-    // A broken config: its next comment's reply says why; nothing is posted for a webhook.
-    if (errors.length) return skip(`review: ${repo}'s config has errors`);
-    if (settings.review?.on !== "ready") return skip(`review: not on in ${repo}`);
-    if (author && !settings.users.includes(author.toLowerCase())) {
-      return skip(`review: ${author} not in ${repo}'s users`);
-    }
     const key = taskKey(repo, prId(pr.number));
     const head = pr.head?.sha ?? null;
     if (head && reviewed.get(key)?.head === head) {
       return skip(`review: #${pr.number} at ${head.slice(0, 7)} was reviewed already`);
     }
-    // The policies may take a while: the pull request is in review from now on, not ready.
+    // The repo's settings and the policies may take a while: the pull request is in review
+    // from its ready delivery on, not ready, until the review is queued or skipped.
     return deciding(key, "review", async () => {
+      const { settings, errors } = await repoSettings(repo, base);
+      // A broken config: its next comment's reply says why; nothing is posted for a webhook.
+      if (errors.length) return skip(`review: ${repo}'s config has errors`);
+      if (settings.review?.on !== "ready") return skip(`review: not on in ${repo}`);
+      if (author && !settings.users.includes(author.toLowerCase())) {
+        return skip(`review: ${author} not in ${repo}'s users`);
+      }
       const denied = await denyReview(repo, base, pr, [
         passed("Ready for review"),
         passed(author ? "Opened by an allowed user" : "Deckhand's own pull request"),

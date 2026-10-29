@@ -967,8 +967,22 @@ test("review loop: in review while a ready pull request's review is decided, bef
     },
   };
   s = setup(t, undefined, { policies });
+  // The repo's settings, read from GitHub first: in review already.
+  const read = s.read;
+  s.reviews = createReviews({
+    path: s.path,
+    config,
+    repoSettings: async () => {
+      seen.push(reviewLoop(s.reviews.entry("org/repo", 5))?.loop);
+      return read;
+    },
+    accept: async (item) => s.accepted.push(item),
+    busy: () => false,
+    policies,
+    now: () => 1_800_000_000_000,
+  });
   await s.reviews.consider("pull_request", delivery());
-  assert.deepEqual(seen, ["reviewing"]);
+  assert.deepEqual(seen, ["reviewing", "reviewing"]);
   assert.equal(s.accepted.length, 1);
   // Decided: the queued review says it (next), no longer the decision.
   assert.equal(s.reviews.entry("org/repo", 5).deciding, undefined);
@@ -979,6 +993,10 @@ test("review loop: in review while a ready pull request's review is decided, bef
   });
   await refused.reviews.consider("pull_request", delivery());
   assert.equal(refused.reviews.entry("org/repo", 5), null);
+  // Off in the repo: skipped, nothing left either.
+  const off = setup(t, "review:\n  on: manual\n");
+  await off.reviews.consider("pull_request", delivery());
+  assert.equal(off.reviews.entry("org/repo", 5), null);
 });
 
 test("review loop: a step queued while the last one is decided stays on its way", async (t) => {
