@@ -98,6 +98,7 @@ export function createAntigravityLogin({
   // `agy models` in a container of its own: the file in, the file `agy` left out. Outside the
   // runs' networks (INSTALL_NETWORK, as the installs): no repo or agent input runs here.
   async function refresh(json) {
+    if (!jobs?.run) throw new Error(`the ${config.runner} runner runs no login refresh`);
     await install();
     const forced = { ...json, token: { ...json.token, expiry: EXPIRED } };
     const result = await jobs.run({

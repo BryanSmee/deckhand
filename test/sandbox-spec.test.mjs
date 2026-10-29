@@ -212,3 +212,12 @@ test("createBackend: Docker's runner, images and jobs; another runner is refused
     /RUNNER: expected docker/,
   );
 });
+
+test("sandboxArgs: a spec without a user or limits is still hardened", () => {
+  assert.deepEqual(sandboxArgs({ volumes: [] }), [
+    "--cap-drop",
+    "ALL",
+    "--security-opt",
+    "no-new-privileges",
+  ]);
+});

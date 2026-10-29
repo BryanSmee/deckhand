@@ -32,11 +32,13 @@ import { spawn as nodeSpawn } from "node:child_process";
 import { agentFor } from "../agents/index.mjs";
 import {
   checked,
+  envArgs,
   hardening,
   hardeningArgs,
   labelArgs,
   mountArgs,
   userArg,
+  volumeArgs,
   volumeExists,
 } from "../docker.mjs";
 import { engineEnv, engineName } from "./engine.mjs";
@@ -114,7 +116,7 @@ export function sandboxArgs({ user, limits, caps = [], volumes = [] }) {
           `type=volume,src=${v.name},dst=${v.path},volume-subpath=${v.subpath}${ro}`,
         ];
       }
-      return ["-v", `${v.name}:${v.path}${v.readOnly ? ":ro" : ""}`];
+      return volumeArgs([v]);
     }),
   ];
 }
@@ -188,7 +190,7 @@ export function createDockerRunner({
       name,
       ...labelArgs(labels),
       ...Object.keys(env).flatMap((k) => ["-e", k]),
-      ...Object.entries(engineVars).flatMap(([k, v]) => ["-e", `${k}=${v}`]),
+      ...envArgs(engineVars),
       ...inbox.args(run, ca, digest),
       "--network",
       run,

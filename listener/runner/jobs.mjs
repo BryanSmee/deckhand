@@ -1,8 +1,8 @@
 // The Docker runner's short containers that aren't sandboxes: an agent's install, a cache
 // volume's chown and the Antigravity login's refresh (jobs: run()), and preview hooks
-// (preview), which hold the host's Docker socket. A backend without one of them refuses what
-// needs it (../previews.mjs, ../antigravity-login.mjs).
-import { hardening, labelArgs, userArg } from "../docker.mjs";
+// (preview), which hold the host's Docker socket. A backend without them refuses what needs
+// them (../previews.mjs, ../antigravity-login.mjs).
+import { envArgs, hardening, labelArgs, userArg, volumeArgs } from "../docker.mjs";
 
 export function createDockerJobs({ config, docker }) {
   // `job`: { image, user ({ uid, gid }), caps, network ("install": INSTALL_NETWORK, outside
@@ -29,8 +29,8 @@ export function createDockerJobs({ config, docker }) {
         "--network",
         network === "install" ? config.installNetwork : network,
         ...["--user", userArg(user), ...hardening(...caps)],
-        ...Object.entries(env).flatMap(([name, value]) => ["-e", `${name}=${value}`]),
-        ...volumes.flatMap((v) => ["-v", `${v.name}:${v.path}${v.readOnly ? ":ro" : ""}`]),
+        ...envArgs(env),
+        ...volumeArgs(volumes),
         "--entrypoint",
         entrypoint,
         image,
@@ -54,7 +54,7 @@ export function createDockerJobs({ config, docker }) {
         "0",
         "-v",
         `${config.dockerSocket}:/var/run/docker.sock`,
-        ...Object.entries(env).flatMap(([k, v]) => ["-e", `${k}=${v}`]),
+        ...envArgs(env),
         "--entrypoint",
         "sh",
         image,

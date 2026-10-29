@@ -548,3 +548,17 @@ test("with GEMINI_API_KEY: only agy's calls go on, not files, cached contents or
   }
   assert.equal(google.requests.length, 5);
 });
+
+test("a runner without short containers refuses the refresh, naming itself: nothing installed", async (t) => {
+  const file = loginFile(t, tokenFile("ya29.old", "2026-10-17T12:04:00Z"));
+  let installs = 0;
+  const login = createAntigravityLogin({
+    file,
+    config: { ...config, runner: "other" },
+    jobs: null,
+    install: async () => installs++,
+    now: () => NOW,
+  });
+  await assert.rejects(login.headers(), /the other runner runs no login refresh/);
+  assert.equal(installs, 0);
+});
