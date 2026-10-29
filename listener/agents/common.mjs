@@ -19,6 +19,10 @@ export function installSpec(pkg, { volume, version, versionVar, env }) {
   };
 }
 
+// A tool call's or output's `id`, which pairs them in the dashboard, when the agent gives one:
+// a call with one has an output to come (a call without one may have none).
+export const idOf = (id) => (typeof id === "string" && id ? { id } : {});
+
 // An agent's normalize(): one line of its output → Deckhand's events, by the line's JSON
 // `type` (`events`: type → (event) → events), or the field `key` names. Lines that aren't its
 // JSON, or of other types, give none.

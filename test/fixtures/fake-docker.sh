@@ -50,7 +50,14 @@ case "$1" in
   logs)
     n=${@: -1}
     [ -d "$c/$n" ] || exit 1
-    exec tail -n +1 -f --pid="$(cat "$c/$n/pid")" -s 0.05 "$c/$n/out" ;;
+    follow() { tail -n +1 -f --pid="$(cat "$c/$n/pid")" -s 0.05 "$c/$n/out"; }
+    case "$*" in
+      # Each line after when it was read, as Docker's RFC 3339 nanoseconds.
+      *--timestamps*) follow | while IFS= read -r line || [ -n "$line" ]; do
+          printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%S.%NZ)" "$line"
+        done ;;
+      *) follow ;;
+    esac ;;
   network)
     n=${@: -1}
     net=${@: -2:1}

@@ -3,7 +3,7 @@
 // one line of its own with the turn's outcome (`deckhand.result`): Codex's JSONL has no
 // event that holds both the last message and whether the turn worked.
 import { OPENAI_CREDENTIALS } from "../openai.mjs";
-import { EFFORTS, installSpec, normalizer } from "./common.mjs";
+import { EFFORTS, idOf, installSpec, normalizer } from "./common.mjs";
 
 // Deckhand's model tiers → the pinned Codex's own catalog (`codex` lists it as best: frontier,
 // balanced: the default workhorse, fast: for easier tasks). The operator can point them
@@ -56,8 +56,13 @@ const COMPLETED = {
   web_search: (i) => [{ type: "tool", name: "web_search", detail: i.query ?? "" }],
 };
 
+// A call that starts, and its output once it completes, with the item's id, which pairs them:
+// a call with an id has an output to come. Those that come whole (an edit, a search) have
+// none.
 function itemEvents(table, item) {
-  return item && Object.hasOwn(table, item.type) ? table[item.type](item) : [];
+  if (!item || !Object.hasOwn(table, item.type)) return [];
+  const id = Object.hasOwn(STARTED, item.type) ? idOf(item.id) : {};
+  return table[item.type](item).map((e) => ({ ...e, ...id }));
 }
 
 // Codex's JSONL event types → Deckhand's events; other types give none (turn.completed,
@@ -104,7 +109,7 @@ export const codex = {
   efforts: EFFORTS,
   modelProblem: (model) =>
     CLAUDE_MODEL.test(model) ? `\`${model}\` is a Claude model, not one of Codex's` : null,
-  // One line of its output → Deckhand's events: started, text, tool{name, detail},
-  // toolOutput{text, error}, result{ok, text, durationMs}.
+  // One line of its output → Deckhand's events: started, text, tool{name, detail, id},
+  // toolOutput{text, error, id}, result{ok, text, durationMs}.
   normalize: normalizer(EVENTS),
 };

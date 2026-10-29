@@ -610,10 +610,55 @@ test("follow: whole lines of each stream, skipping what was already read", async
   await new Promise((resolve) => setImmediate(resolve));
   child.emit("close", 0);
   await done;
-  assert.deepEqual(asked, ["docker", "logs", "--follow", "x"]);
+  assert.deepEqual(asked, ["docker", "logs", "--follow", "--timestamps", "x"]);
   // A line cut short isn't read: the next follow() reads it whole.
   assert.deepEqual(out, ['{"a":3}']);
   assert.deepEqual(err, ["new"]);
+});
+
+// #414: Docker's time for each line, without its stamp, for lines read again after a restart
+// too (skipped ones count as before).
+test("follow: each line with when Docker says it was written", async () => {
+  const child = new EventEmitter();
+  child.stdout = new PassThrough();
+  child.stderr = new PassThrough();
+  const { r } = runner({ spawn: () => child });
+  const out = [];
+  const err = [];
+  const done = r.follow("x", {
+    skip: { out: 1, err: 0 },
+    onOut: (line, at) => out.push([line, at]),
+    onErr: (line, at) => err.push([line, at]),
+  });
+  child.stdout.write("2026-10-29T08:00:00.000000000Z old\n2026-10-29T08:00:12.345678901Z ");
+  child.stdout.write('{"a":1}\n2026-10-29T10:00:01+02:00 {"a":2}\nno stamp\n');
+  child.stderr.write("2026-10-29T08:00:00.5Z Cloning\n");
+  await new Promise((resolve) => setImmediate(resolve));
+  child.emit("close", 0);
+  await done;
+  assert.deepEqual(out, [
+    ['{"a":1}', Date.parse("2026-10-29T08:00:12.345Z")],
+    ['{"a":2}', Date.parse("2026-10-29T08:00:01Z")],
+    ["no stamp", null],
+  ]);
+  assert.deepEqual(err, [["Cloning", Date.parse("2026-10-29T08:00:00.500Z")]]);
+});
+
+test("follow: a stamped line over MAX_LINE is cut at MAX_LINE of its own", async () => {
+  const child = new EventEmitter();
+  child.stdout = new PassThrough();
+  child.stderr = new PassThrough();
+  const { r } = runner({ spawn: () => child });
+  const out = [];
+  const done = r.follow("x", { onOut: (line, at) => out.push([line, at]), onErr: () => {} });
+  child.stdout.write("2026-10-29T08:00:00.000000000Z " + "x".repeat(MAX_LINE + 10) + "\nnext\n");
+  await new Promise((resolve) => setImmediate(resolve));
+  child.emit("close", 0);
+  await done;
+  assert.deepEqual(out, [
+    ["x".repeat(MAX_LINE) + LINE_CUT, Date.parse("2026-10-29T08:00:00Z")],
+    ["next", null],
+  ]);
 });
 
 // #241: unbounded, a line with no newline grew until its string couldn't, and the stream's

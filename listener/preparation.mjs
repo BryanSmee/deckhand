@@ -21,7 +21,7 @@ import { imageRef } from "./images.mjs";
 import { OPEN } from "./modes.mjs";
 import { handoffMessage } from "./prompts.mjs";
 import { reviewThread } from "./reviews.mjs";
-import { enterPhase } from "./runlog.mjs";
+import { buildOutput, enterPhase } from "./runlog.mjs";
 import { operatorSecrets, redact } from "./secrets.mjs";
 
 // What a research run reads of its issue: the last comments, each clipped.
@@ -222,22 +222,26 @@ export function createPreparation(ctx) {
     const { record, logFile } = task.live;
     const { base } = task;
     const output = (chunk) => logFile.write(chunk);
+    // By whole lines, each build step's first one timed (runlog.mjs buildOutput()).
+    const build = buildOutput(logFile);
     try {
       const source = await imageSource(task, items, settings, grant, pulls);
-      const image = await ctx.images.imageFor({
-        repo: task.repo,
-        ref: source.ref,
-        branch: source.branch,
-        dockerfile: settings.dockerfile,
-        onBuild: (tag) => {
-          record.phase = "building image";
-          enterPhase(task.live, "image");
-          note(
-            `Building ${tag} from ${settings.dockerfile} (${source.branch ? "pull request branch" : base})`,
-          );
-        },
-        output,
-      });
+      const image = await ctx.images
+        .imageFor({
+          repo: task.repo,
+          ref: source.ref,
+          branch: source.branch,
+          dockerfile: settings.dockerfile,
+          onBuild: (tag) => {
+            record.phase = "building image";
+            enterPhase(task.live, "image");
+            note(
+              `Building ${tag} from ${settings.dockerfile} (${source.branch ? "pull request branch" : base})`,
+            );
+          },
+          output: build.write,
+        })
+        .finally(build.flush);
       record.phase = null;
       // The sandbox's part of the setup comes after the image's build.
       enterPhase(task.live, "setup");

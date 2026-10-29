@@ -1,7 +1,7 @@
 // Claude Code, the agent behind the seam (index.mjs): what Deckhand needs to install it, run
 // it and read it. Its sandbox half is ../../sandbox/agents/claude.sh.
 import { CREDENTIALS, NAMED } from "../anthropic.mjs";
-import { EFFORTS, installSpec, normalizer } from "./common.mjs";
+import { EFFORTS, idOf, installSpec, normalizer } from "./common.mjs";
 
 // Deckhand's model tiers (`/model best`) → Claude Code's aliases, which the operator can point
 // elsewhere (ANTHROPIC_DEFAULT_OPUS_MODEL…, config.modelAliases).
@@ -37,7 +37,8 @@ const EVENTS = {
   assistant: (e) =>
     contentOf(e.message).flatMap((c) => {
       if (c.type === "text") return [{ type: "text", text: c.text }];
-      if (c.type === "tool_use") return [{ type: "tool", name: c.name, detail: detailOf(c.input) }];
+      if (c.type === "tool_use")
+        return [{ type: "tool", name: c.name, detail: detailOf(c.input), ...idOf(c.id) }];
       return [];
     }),
   // What the tools gave back.
@@ -50,6 +51,7 @@ const EVENTS = {
         text: Array.isArray(c.content)
           ? c.content.map((p) => p.text ?? "").join("\n")
           : (c.content ?? ""),
+        ...idOf(c.tool_use_id),
       })),
   result: (e) => [
     {
@@ -121,6 +123,6 @@ export const claude = {
   speeds: ["normal", "fast"],
   fastModels: /opus/i,
   // One line of its output (stream-json) → Deckhand's events: started{model}, text,
-  // tool{name, detail}, toolOutput{text, error}, result{ok, text, durationMs}.
+  // tool{name, detail, id}, toolOutput{text, error, id}, result{ok, text, durationMs}.
   normalize: normalizer(EVENTS),
 };

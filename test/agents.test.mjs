@@ -60,11 +60,11 @@ test("normalize: assistant text and tool calls, with what each call is about", (
   };
   assert.deepEqual(claude.normalize(line(assistant)), [
     { type: "text", text: "Looking at the README." },
-    { type: "tool", name: "Bash", detail: "ls" },
-    { type: "tool", name: "Read", detail: "/workspace/a.md" },
-    { type: "tool", name: "TodoWrite", detail: '{"todos":[]}' },
-    { type: "tool", name: "ExitPlanMode", detail: "" },
-    { type: "tool", name: "Odd", detail: "" },
+    { type: "tool", name: "Bash", detail: "ls", id: "t1" },
+    { type: "tool", name: "Read", detail: "/workspace/a.md", id: "t2" },
+    { type: "tool", name: "TodoWrite", detail: '{"todos":[]}', id: "t3" },
+    { type: "tool", name: "ExitPlanMode", detail: "", id: "t4" },
+    { type: "tool", name: "Odd", detail: "", id: "t5" },
   ]);
 });
 
@@ -89,9 +89,9 @@ test("normalize: tool results, as text or parts, errors flagged", () => {
     },
   };
   assert.deepEqual(claude.normalize(line(user)), [
-    { type: "toolOutput", error: false, text: "a.md\nb.md" },
-    { type: "toolOutput", error: true, text: "No such file\n" },
-    { type: "toolOutput", error: false, text: "" },
+    { type: "toolOutput", error: false, text: "a.md\nb.md", id: "t1" },
+    { type: "toolOutput", error: true, text: "No such file\n", id: "t2" },
+    { type: "toolOutput", error: false, text: "", id: "t3" },
   ]);
   // A user message that is only text (a comment echoed back) has no tool output.
   assert.deepEqual(claude.normalize(line({ type: "user", message: { content: "Hi" } })), []);
@@ -221,17 +221,23 @@ test("normalize: a Codex turn, from its recorded JSONL", () => {
   assert.deepEqual(events, [
     { type: "started" },
     { type: "text", text: "Looking at the files first." },
-    { type: "tool", name: "command", detail: "ls -a" },
-    { type: "toolOutput", error: false, text: ".\n..\n.git\nhello.txt\n" },
-    { type: "tool", name: "command", detail: "cat missing.txt" },
-    { type: "toolOutput", error: true, text: "cat: missing.txt: No such file or directory\n" },
+    { type: "tool", name: "command", detail: "ls -a", id: "item_4" },
+    { type: "toolOutput", error: false, text: ".\n..\n.git\nhello.txt\n", id: "item_4" },
+    { type: "tool", name: "command", detail: "cat missing.txt", id: "item_5" },
+    {
+      type: "toolOutput",
+      error: true,
+      text: "cat: missing.txt: No such file or directory\n",
+      id: "item_5",
+    },
     { type: "tool", name: "edit", detail: "add /workspace/hello.txt" },
     {
       type: "tool",
       name: "mcp__playwright__browser_navigate",
       detail: '{"url":"http://localhost:5173"}',
+      id: "item_7",
     },
-    { type: "toolOutput", error: false, text: "Navigated to http://localhost:5173" },
+    { type: "toolOutput", error: false, text: "Navigated to http://localhost:5173", id: "item_7" },
     { type: "text", text: "<!-- needs-input -->\n## Needs your input\n\n1. Which?" },
     {
       type: "result",

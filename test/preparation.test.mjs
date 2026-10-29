@@ -242,8 +242,13 @@ test("a run whose image builds: its log's image phase, then setup again", async 
     return "deckhand-repo:abc";
   };
   const { task } = await workRun(t, "org/repo", { imageFor, written });
-  const phases = written.map((w) => (w.startsWith("{") ? JSON.parse(w).phase : w));
-  assert.deepEqual(phases, ["image", "#1 [a 1/1] RUN make\n#1 DONE 1.0s\n", "setup"]);
+  const lines = written.map((w) => (w.startsWith("{") ? JSON.parse(w) : w));
+  // By whole lines, the step's first after the time it started (runlog.mjs buildOutput()).
+  assert.deepEqual(
+    lines.map((l) => l.phase ?? l.event ?? l),
+    ["image", "at", "#1 [a 1/1] RUN make\n", "#1 DONE 1.0s\n", "setup"],
+  );
+  assert.equal(typeof lines[1].at, "number");
   assert.equal(task.live.logPhase, "setup");
 });
 

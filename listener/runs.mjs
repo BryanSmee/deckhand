@@ -34,6 +34,7 @@ import {
   questionsOf,
   saveSummary,
   summaryOf,
+  timed,
   writeEvent,
 } from "./runlog.mjs";
 import { sandboxSpec } from "./sandbox-spec.mjs";
@@ -344,7 +345,7 @@ export function createRuns(ctx) {
       for (;;) {
         await ctx.runner.follow(task.name, {
           skip: { ...live.lines },
-          onOut: (line) => output(task, line),
+          onOut: (line, at) => output(task, line, at),
           // Setup output (clone, install) before the agent starts.
           onErr: (line) => {
             if (ctx.stopping) return; // left for the next listener
@@ -378,7 +379,8 @@ export function createRuns(ctx) {
     return [live.secret, ...operatorSecrets(ctx), ...tokens];
   }
 
-  function output(task, raw) {
+  // `at`: when the sandbox wrote it (runner.follow()), null when Docker didn't say.
+  function output(task, raw, at = null) {
     const live = task.live;
     if (ctx.stopping) return; // left for the next listener
     const line = hidden(live, raw);
@@ -387,6 +389,10 @@ export function createRuns(ctx) {
     // restarts doesn't write it again.
     const phase = fits(live, line) ? phaseOf(live.logPhase, events) : null;
     if (phase && enterPhase(live, phase)) ctx.saveLive(task);
+    // When a tool call or its output came, for the dashboard's durations: a line of the
+    // listener's before it, so the agent's line stays as it printed it (runlog.mjs reader()).
+    if (at !== null && fits(live, line) && events.some(timed))
+      writeEvent(live.logFile, "at", { at });
     const kept = keep(task, line);
     live.lines.out++;
     if (!kept) return;

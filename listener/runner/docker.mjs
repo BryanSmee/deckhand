@@ -47,6 +47,19 @@ const KILL_GRACE_S = 10;
 export const MAX_LINE = 1024 * 1024;
 export const LINE_CUT = " … (line cut)";
 
+// The RFC 3339 time `docker logs --timestamps` starts each line with, nanoseconds and all.
+const STAMP = /^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(\.\d+)?(Z|[+-]\d\d:\d\d) /;
+
+// A line of `docker logs --timestamps` → the line as written, and when (ms), or null for a
+// line without the stamp.
+export function unstamped(line) {
+  const m = STAMP.exec(line);
+  if (!m) return [line, null];
+  // Date.parse() takes milliseconds, not Docker's nanoseconds.
+  const at = Date.parse(m[1] + (m[2] ?? "").slice(0, 4) + m[3]);
+  return [line.slice(m[0].length), Number.isNaN(at) ? null : at];
+}
+
 export function createDockerRunner({
   config,
   docker, // ../docker.mjs
@@ -164,10 +177,12 @@ export function createDockerRunner({
   // Resolves once the sandbox's output ends (it exited, or `docker logs` stopped: state()
   // tells). `skip`: { out, err } lines of each stream already read by a previous listener.
   // Only whole lines count: one cut short is read again, whole, by the next follow(). A line
-  // over MAX_LINE is cut there and counts as one line, the same for the next follow().
+  // over MAX_LINE is cut there and counts as one line, the same for the next follow(). Each
+  // handler gets the line and when Docker says it was written (ms; null without a stamp):
+  // Docker's time, so a line read again after a restart keeps its own.
   function follow(name, { skip = { out: 0, err: 0 }, onOut, onErr }) {
     return new Promise((resolve) => {
-      const child = spawn("docker", ["logs", "--follow", name], {
+      const child = spawn("docker", ["logs", "--follow", "--timestamps", name], {
         stdio: ["ignore", "pipe", "pipe"],
       });
       const lines = (stream, n, each) => {
@@ -175,10 +190,11 @@ export function createDockerRunner({
         let cut = false; // the current line was cut: dropped up to its newline
         let seen = 0;
         // A handler that throws (its log's disk full, say) loses that line, not the listener.
-        const emit = (line) => {
+        const emit = (stamped) => {
           if (seen++ < n) return;
+          const [line, at] = unstamped(stamped);
           try {
-            each(line);
+            each(line, at);
           } catch (error) {
             log(`docker logs ${name}: ${error.stack ?? error}`);
           }
@@ -187,8 +203,9 @@ export function createDockerRunner({
         const add = (part) => {
           if (cut) return;
           rest += part;
-          if (rest.length <= MAX_LINE) return;
-          emit(rest.slice(0, MAX_LINE) + LINE_CUT);
+          const room = MAX_LINE + (STAMP.exec(rest)?.[0].length ?? 0);
+          if (rest.length <= room) return;
+          emit(rest.slice(0, room) + LINE_CUT);
           rest = "";
           cut = true;
         };
