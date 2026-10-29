@@ -24,8 +24,10 @@ import {
   getOperationAST,
   getVariableValues,
   Kind,
+  OverlappingFieldsCanBeMergedRule,
   parse,
   print,
+  specifiedRules,
   validate,
 } from "./vendor/graphql.mjs";
 
@@ -283,12 +285,23 @@ function parsed(query) {
   }
 }
 
+// The rules a document without a mutation is validated with: all of the spec's but the one on
+// fields that can't merge, which GitHub doesn't apply to fragments on distinct types (gh's own
+// `issue view` selects `...on Issue{state}` and `...on PullRequest{state}`, of two enums). A
+// query only gets a token that reads; a mutation keeps every rule, so what its fields write
+// is never ambiguous.
+const READ_RULES = specifiedRules.filter((rule) => rule !== OverlappingFieldsCanBeMergedRule);
+const mutates = (doc) =>
+  doc.definitions.some((d) => d.kind === Kind.OPERATION_DEFINITION && d.operation === "mutation");
+
 // Why a document isn't valid on GitHub, or null when it is: what the worker answers
 // (github-graphql-worker.mjs), and the in-thread validator of the tests.
 export function validationError(query, schema = githubSchema()) {
   const doc = parsed(query);
   if (doc.refused) return doc.refused.message;
-  const errors = validate(schema, doc, undefined, { maxErrors: 1 });
+  const errors = validate(schema, doc, mutates(doc) ? specifiedRules : READ_RULES, {
+    maxErrors: 1,
+  });
   return errors.length ? `its GraphQL isn't valid on GitHub: ${errors[0].message}` : null;
 }
 

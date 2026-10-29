@@ -886,6 +886,9 @@ commands) goes through the same checks, field by field:
    validate, one over 2,500 tokens or 64 KiB (gh's are a few hundred) or 10 mutation
    fields (gh sends one), a subscription, and
    a document with several operations and no `operationName` naming one of them are refused.
+   A query isn't held to the rule on fields that can't merge, which GitHub doesn't apply
+   either (`gh issue view` selects a `state` of two types from an issue or a pull request); a
+   mutation is.
 2. **Queries go on.** Each field of a mutation, through its fragments and under any alias,
    must be one Deckhand knows (`createIssue`, `updateIssue`, `addComment`, `addSubIssue`,
    `removeSubIssue`, `reprioritizeSubIssue`, `addLabelsToLabelable`,

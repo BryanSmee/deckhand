@@ -352,7 +352,9 @@ to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to the
   fields) or validate, a
   subscription, a document with several operations and no `operationName` naming one, a
   GraphQL `GET` and a query string are refused, as GitHub would otherwise run something
-  unchecked. Validation runs in a worker thread (`createValidator()`), never on the listener's
+  unchecked. A document with no mutation skips one of the spec's rules, the one on fields
+  that can't merge (fragments on distinct types selecting a field of two types, as
+  `gh issue view` does): GitHub doesn't apply it, and a query's token only reads. Validation runs in a worker thread (`createValidator()`), never on the listener's
   thread (its webhooks, dashboard and REST calls), one document at a time, taken from the
   runs in turn, so one that floods the worker (with as many calls as the gateway lets a run
   have at once) delays itself, not the other runs. A document validated for over 10
