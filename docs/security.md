@@ -571,17 +571,18 @@ endpoint forwards a fixed list of methods and paths, what its agent calls, and n
 
 A sandbox only gets Docker named volumes:
 
-| Volume                                                          | What                                                              |
-| --------------------------------------------------------------- | ----------------------------------------------------------------- |
-| `<prefix>-<owner>-<repo>-<n>-<hash>-workspace`                  | the issue's clone, kept between its runs                          |
-| `<prefix>-<owner>-<repo>-<n>-<hash>-<agent>`                    | the issue's agent session (`~/.claude`, `~/.codex`, `~/.gemini`)  |
-| `<prefix>-<owner>-<repo>-<n>-<hash>-light-workspace`            | the clone of the issue's light runs                               |
-| `<prefix>-<owner>-<repo>-<n>-<hash>-light-<agent>`              | the agent session of its light runs                               |
-| `<prefix>-<owner>-<repo>-<n>-<hash>-research-…`                 | a research run's own (see [Research runs](#research-runs))        |
-| `<prefix>-claude-code`, `-codex`, `-antigravity`, **read-only** | the run's agent, installed by the listener                        |
-| `<prefix>-cache-<owner>-<repo>-<path>-<hash>`                   | the repo's `caches`, its own                                      |
-| `<prefix>-screenshots`, **its run's folder only**               | screenshots, served under `/shots/<folder>/` (regular files only) |
-| `<prefix>-runs`, **its run's folder, read-only**                | its inbox: comments that arrive mid-run                           |
+| Volume                                                          | What                                                                                            |
+| --------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `<prefix>-<owner>-<repo>-<n>-<hash>-workspace`                  | the issue's clone, kept between its runs                                                        |
+| `<prefix>-<owner>-<repo>-<n>-<hash>-fork-workspace`             | the clone of its fork's runs (see [What a fork's code may reach](#what-a-forks-code-may-reach)) |
+| `<prefix>-<owner>-<repo>-<n>-<hash>-<agent>`                    | the issue's agent session (`~/.claude`, `~/.codex`, `~/.gemini`)                                |
+| `<prefix>-<owner>-<repo>-<n>-<hash>-light-workspace`            | the clone of the issue's light runs                                                             |
+| `<prefix>-<owner>-<repo>-<n>-<hash>-light-<agent>`              | the agent session of its light runs                                                             |
+| `<prefix>-<owner>-<repo>-<n>-<hash>-research-…`                 | a research run's own (see [Research runs](#research-runs))                                      |
+| `<prefix>-claude-code`, `-codex`, `-antigravity`, **read-only** | the run's agent, installed by the listener                                                      |
+| `<prefix>-cache-<owner>-<repo>-<path>-<hash>`                   | the repo's `caches`, its own                                                                    |
+| `<prefix>-screenshots`, **its run's folder only**               | screenshots, served under `/shots/<folder>/` (regular files only)                               |
+| `<prefix>-runs`, **its run's folder, read-only**                | its inbox: comments that arrive mid-run                                                         |
 
 `<agent>` is the run's agent (`claude`, `codex`, `antigravity`), and `<prefix>` the
 deployment's `NAME_PREFIX` (`deckhand` by default).
@@ -663,9 +664,11 @@ see the difference, and doesn't claim to.
   (its forks') through the repository itself. So a fetch's `want`s, and a commit a call names,
   must be the repository's: a ref of its own pointed at it in what GitHub advertised to the
   run's git (a branch, a tag, a pull request from one of its branches), its default branch has
-  it (`compare`), or it is a branch's head (`branches-where-head`). Anything else, a commit a
-  branch dropped or one only a tag reaches, is refused rather than looked for (for a minute,
-  without asking GitHub again), and a fetch wanting over 20 objects no ref named is refused at
+  it (`compare`), it is a branch's head (`branches-where-head`), or a pull request from one of
+  its branches holds it (`commits/<sha>/pulls`: an earlier commit of an open one, one whose
+  branch went with its squash-merge; a fork's commit only lists the fork's pull request).
+  Anything else, a commit a branch dropped with no pull request or one only a tag reaches, is
+  refused rather than looked for (for a minute, without asking GitHub again), and a fetch wanting over 20 objects no ref named is refused at
   once. An id is a possible commit from 4 hex digits (git's shortest abbreviation): a branch
   or tag of the repository named so is looked up first and passes (`cafe`, the tag `2024.1`,
   the branch `2024/q4`: a parameter's whole value, or each prefix of a path, one
@@ -684,9 +687,11 @@ see the difference, and doesn't claim to.
 - **A page of the repository**: on the web host, the checks read the shapes above (archives,
   `raw/`, `blob/`, `tree/`, `blame/`, `commit/`, `compare/`, `pull/<n>`) and let through git's
   own calls and the pages that show no file (its home, issues, pull request lists, releases
-  and their assets, tags, branches, labels, milestones, Actions, discussions, the wiki,
-  security, insights, settings). Every other page of the repository is refused, fail closed:
-  GitHub's pages are many, and `blob_excerpt/<id>` serves a blob's lines by its id.
+  and their assets, tags, branches, labels, milestones, the Actions and workflow lists,
+  discussions, the wiki, pulse, graphs, stargazers, watchers, forks, settings); a workflow
+  run's pages are its run's (below). Every other page of the repository is refused, fail
+  closed: GitHub's pages are many, `blob_excerpt/<id>` serves a blob's lines by its id, and
+  code scanning's quote the code a pull request's analysis read.
 - **A blob by its id** (`git/blobs/<sha>`, or a fetch's `want` of one): whoever wrote a fork
   can name its blobs (`git hash-object`), and nothing says where one comes from, so such a run
   gets none, its repository's own included: it reads a file with `contents/<path>?ref=` or from
@@ -698,11 +703,18 @@ see the difference, and doesn't claim to.
   `github-cloud.githubusercontent.com`): named by their sha256, which whoever wrote a fork
   knows, as a blob's id, so the batch API is refused. An LFS file is read by its branch from
   `media.githubusercontent.com` (checked as raw files are). The sandbox image has no `git-lfs`.
-- **A workflow run's artifacts and logs**, which a fork's pull request's workflow writes as it
-  likes (its tree zipped, say): their downloads (`actions/artifacts/<id>/…`,
-  `actions/runs/<id>/logs`, `actions/jobs/<id>/logs`, a run's artifact and job pages) are
-  refused unless the run's head repository is the repository itself (looked up on GitHub). A
-  run's metadata (`gh run view`) isn't refused.
+- **What a workflow run made and shows**, which a fork's pull request's workflow writes as it
+  likes (its tree zipped, say): its artifacts' and logs' downloads (`actions/artifacts/<id>/…`,
+  `actions/runs/<id>/logs`, `actions/jobs/<id>/logs`) and every page of the run
+  (`actions/runs/<id>/…`: its workflow file, the fork's own, its summaries, jobs and
+  artifacts) are refused unless the run's head repository is the repository itself (looked up
+  on GitHub). A run's metadata over the API (`gh run view`) isn't refused. A code scanning
+  analysis downloaded as SARIF (`code-scanning/analyses/<id>`, which may quote the code it
+  read, a pull request's) is checked by its ref, as any.
+- **Lookups**: a run's calls may cause 120 lookups on GitHub a minute (answers already kept
+  don't count), whatever host they came by: past that, its calls that need one get `429`
+  until the minute is over. The installation's rate limit is the repository's other runs'
+  and the listener's too.
 - **GraphQL** (`listener/github-forks.mjs` `checkGraphql()`, its fields followed with their
   types through the pinned schema): a fragment on `Blob`, the only type that holds a whole
   file, is refused whatever it names (an expression such as `refs/pull/7/head:a.js` can name a
@@ -740,7 +752,7 @@ agent would otherwise run a fork left checked out there (its `SANDBOX_SETUP` and
 hooks, `.claude/settings.json`, before the model reads anything). Before either starts:
 
 - `.git` loses its hooks and keeps only the config a clone needs (origin, set back to the
-  repository's URL, and its branches): no `core.fsmonitor`, `core.hooksPath`, filter
+  repository's URL and git's default refspec, and its branches): no `core.fsmonitor`, `core.hooksPath`, filter
   drivers or includes that a fork's code could have left, for this start's commands and the
   checkouts after it (`draft-pr.sh`). The `pre-push` hook is copied back.
 - The clone goes back to the branch it was on when that tracks a branch of the repository

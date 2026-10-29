@@ -49,6 +49,8 @@ const MAX_SEGMENTS = 20;
 // How long a commit found nowhere in the repository stays refused without asking GitHub again:
 // briefly, as a run may push it meanwhile.
 export const REFUSED_MS = 60_000;
+// The GitHub lookups a run's calls may cause in a minute (createForkChecks() ask()).
+export const RUN_LOOKUPS = 120;
 // What may be a commit's id, abbreviated as git allows (4 digits and up).
 const HEX = /^[0-9a-f]{4,64}$/i;
 // The parameters GitHub reads a ref or commit from, on any of its calls that takes one (`ref`
@@ -59,9 +61,11 @@ const REF_PARAMS = ["ref", "sha", "head", "base"];
 // A repository's web pages that show no file's content: its home, git's own calls (checked as
 // fetches: github-gateway.mjs), issues, pull request lists, releases (their assets the
 // maintainers' uploads; their source archives are archive/ links, checked), tags, branches,
-// labels, milestones, Actions, discussions, the wiki, security, insights and settings.
+// labels, milestones, the Actions and workflow lists (a run's own pages are its run's:
+// callTargets()), discussions, the wiki, pulse, graphs, stargazers, watchers, forks and
+// settings. Not security's (code scanning quotes a pull request's code), nor any other.
 const WEB_PAGES = new RegExp(
-  String.raw`^(?:|info\/refs|git-upload-pack|(?:issues|pulls|releases|tags|branches|labels|milestones?|actions|discussions|wiki|security|pulse|graphs|network|activity|stargazers|watchers|forks|contributors|settings|projects)(?:\/.*)?)$`,
+  String.raw`^(?:|info\/refs|git-upload-pack|actions(?:\/workflows\/[^/]+)?|pulls(?:\/[a-z-]+)?|(?:issues|releases|tags|branches|labels|milestones?|discussions|wiki|pulse|graphs|stargazers|watchers|forks|settings)(?:\/.*)?)$`,
   "i",
 );
 // Where a commit's metadata is read, not its patch: its statuses, checks, pull requests.
@@ -165,9 +169,9 @@ export function refKind(spec, { path = false } = {}) {
 }
 
 // The repository a call names, and what in it may be a fork's: { repo } (owner/name) or { id },
-// and { refs, paths, pulls, actions, blob, lfs, page } (refKind()'s specs: whole refs, and
-// refs followed by a file's path; pull request numbers; the workflow runs, jobs or artifacts
-// whose output it downloads; whether it reads a blob by its id, git LFS's objects, or a web page
+// and { refs, paths, pulls, actions, analyses, blob, lfs, page } (refKind()'s specs: whole
+// refs, and refs followed by a file's path; pull request numbers; the workflow runs, jobs or
+// artifacts whose output it downloads; the code scanning analyses it downloads as SARIF; whether it reads a blob by its id, git LFS's objects, or a web page
 // these checks don't read); null for a call that names none. `kind`: "api" (REST, its path under the API's
 // base), "web" (the web host's path, and patch-diff.githubusercontent.com's) or "raw"
 // (raw.githubusercontent.com's, and media.githubusercontent.com's); `query`, its
@@ -193,6 +197,7 @@ export function callTargets(kind, path, query = new URLSearchParams(), accept = 
   const paths = [];
   const pulls = [];
   const actions = [];
+  const analyses = [];
   let blob = false;
   let lfs = false;
   let page = false;
@@ -227,13 +232,19 @@ export function callTargets(kind, path, query = new URLSearchParams(), accept = 
       actions.push({ artifact: Number(m[1]) });
     } else if ((m = /^actions\/runs\/(\d+)\/(?:attempts\/\d+\/)?logs$/i.exec(rest))) {
       actions.push({ run: Number(m[1]) });
-    } else if ((m = /^actions\/jobs\/(\d+)\/logs$/i.exec(rest)))
+    } else if ((m = /^actions\/jobs\/(\d+)\/logs$/i.exec(rest))) {
       actions.push({ job: Number(m[1]) });
+    }
+    // A code scanning analysis as SARIF, which may quote the code it analysed (a pull request's).
+    else if ((m = /^code-scanning\/analyses\/(\d+)$/i.exec(rest)) && /sarif/i.test(accept)) {
+      analyses.push(Number(m[1]));
+    }
   } else if ((m = /^(?:archive|tarball|zipball|commit|commits)\/(.+)$/i.exec(rest))) {
     refs.push(strip(m[1]));
   } else if ((m = /^(?:raw|blob|tree|blame)\/(.+)$/i.exec(rest))) paths.push(m[1]);
-  // A workflow run's artifacts and jobs' logs, on its pages.
-  else if ((m = /^actions\/runs\/(\d+)\/(?:artifacts|job)(?:\/|$)/i.exec(rest))) {
+  // A workflow run's pages, all of them: its artifacts, its jobs' logs, its workflow file (for
+  // a fork's pull request, the fork's), its summaries.
+  else if ((m = /^actions\/runs\/(\d+)(?:\/|$)/i.exec(rest))) {
     actions.push({ run: Number(m[1]) });
   } else if ((m = /^pull\/(\d+)(?:[./]|$)/i.exec(rest))) pulls.push(Number(m[1]));
   // git LFS's batch API (`<repo>.git/info/lfs/…`): its objects are named by their sha256, which
@@ -243,7 +254,7 @@ export function callTargets(kind, path, query = new URLSearchParams(), accept = 
   // Any other page: refused unless it is one of those that show no file (fail closed: GitHub's
   // pages are many, `blob_excerpt/<id>` serves a blob's lines by its id).
   else if (kind === "web" && !WEB_PAGES.test(rest)) page = true;
-  return { repo, id, refs, paths, pulls, actions, blob, lfs, page };
+  return { repo, id, refs, paths, pulls, actions, analyses, blob, lfs, page };
 }
 
 // What a repository reached through anything but `repository(owner:, name:)` (a pull request's
@@ -360,6 +371,22 @@ export function createForkChecks({
   log = () => {},
   now = Date.now,
 }) {
+  // run → { since, count }: the lookups it caused in the current minute (ask()).
+  const budgets = new WeakMap();
+
+  // A lookup on GitHub for `run`, with the App's token for its repository: RUN_LOOKUPS a minute
+  // at most, whatever calls it (a file host's included, which aren't counted in flight), so that
+  // no run can spend the installation's rate limit, which the repository's other runs and the
+  // listener share. Past it, throws (checked() answers 429).
+  function ask(run, path, expected) {
+    const budget = budgets.get(run);
+    if (!budget || now() - budget.since >= 60_000) budgets.set(run, { since: now(), count: 1 });
+    else if (++budget.count > RUN_LOOKUPS) {
+      throw Object.assign(new Error("over its lookups"), { budget: true });
+    }
+    return get(run.repo, path, expected);
+  }
+
   const repos = kept(LOOKUP_MS, MAX_KEPT, now);
   const pulls = kept(LOOKUP_MS, MAX_KEPT, now);
   const commits = kept(LOOKUP_MS, MAX_KEPT, now);
@@ -376,7 +403,7 @@ export function createForkChecks({
     const key = repo ? repo.toLowerCase() : `#${id}`;
     let info = repos.get(key);
     if (info === undefined) {
-      info = await get(run.repo, repo ? `/repos/${repo}` : `/repositories/${id}`, [404, 410]);
+      info = await ask(run, repo ? `/repos/${repo}` : `/repositories/${id}`, [404, 410]);
       repos.set(key, info);
     }
     return info;
@@ -405,7 +432,7 @@ export function createForkChecks({
     const key = `${repo}#${n}`;
     let pr = pulls.get(key);
     if (pr === undefined) {
-      pr = await get(run.repo, `/repos/${repo}/pulls/${n}`, [404, 410]);
+      pr = await ask(run, `/repos/${repo}/pulls/${n}`, [404, 410]);
       pulls.set(key, pr);
     }
     if (!pr) return `${repo} has no pull request #${n} Deckhand could check`;
@@ -415,7 +442,8 @@ export function createForkChecks({
   }
 
   // Why commit `sha` of `repo` can't be fetched (it may be a fork's), or null: an own ref's in
-  // what GitHub advertised to the run, on the default branch, or a branch's head.
+  // what GitHub advertised to the run, on the default branch, a branch's head, or in a pull
+  // request from one of its branches.
   async function commitRefusal(run, repo, sha) {
     const as = advertised.get(run)?.get(repo)?.get(sha);
     if (as) return advertisedRefusal(run, repo, as);
@@ -426,8 +454,8 @@ export function createForkChecks({
     const info = await repoOf(run, { repo });
     const base = info?.default_branch;
     if (base) {
-      const compared = await get(
-        run.repo,
+      const compared = await ask(
+        run,
         `/repos/${repo}/compare/${sha}...${encodeURIComponent(base)}?per_page=1`,
         [404, 410, 422],
       );
@@ -436,8 +464,8 @@ export function createForkChecks({
         return null;
       }
     }
-    const heads = await get(
-      run.repo,
+    const heads = await ask(
+      run,
       `/repos/${repo}/commits/${sha}/branches-where-head`,
       [404, 410, 422],
     );
@@ -445,7 +473,19 @@ export function createForkChecks({
       commits.set(key, true);
       return null;
     }
-    const why = `${sha.slice(0, 12)} isn't a commit on ${repo}'s default branch nor a branch's head, so it may be a fork's (a blob or tree isn't fetched on its own here: the clone is whole); fetch a branch of ${repo} instead, or: ${FORK_RUN}`;
+    // A commit of a pull request from one of its branches (an earlier one, or one whose branch
+    // is gone since it was squash-merged): pushed there by someone who may. A fork's commit only
+    // lists the fork's pull request.
+    const pullsOf = await ask(
+      run,
+      `/repos/${repo}/commits/${sha}/pulls?per_page=100`,
+      [404, 410, 422],
+    );
+    if (Array.isArray(pullsOf) && pullsOf.some((pr) => headInRepo(pr, repo))) {
+      commits.set(key, true);
+      return null;
+    }
+    const why = `${sha.slice(0, 12)} isn't a commit on ${repo}'s default branch, a branch's head nor a pull request from one of its branches, so it may be a fork's (a blob or tree isn't fetched on its own here: the clone is whole); fetch a branch of ${repo} instead, or: ${FORK_RUN}`;
     refusedCommits.set(key, why);
     return why;
   }
@@ -496,20 +536,20 @@ export function createForkChecks({
       let id = runId;
       head = null;
       if (artifact !== undefined) {
-        const found = await get(run.repo, `${path}/artifacts/${artifact}`, [404, 410]);
+        const found = await ask(run, `${path}/artifacts/${artifact}`, [404, 410]);
         head = found?.workflow_run?.head_repository_id ?? null;
         id = found?.workflow_run?.id;
       } else if (job !== undefined) {
-        id = (await get(run.repo, `${path}/jobs/${job}`, [404, 410]))?.run_id;
+        id = (await ask(run, `${path}/jobs/${job}`, [404, 410]))?.run_id;
       }
       if (head === null && id !== undefined) {
-        head = (await get(run.repo, `${path}/runs/${id}`, [404, 410]))?.head_repository?.id ?? null;
+        head = (await ask(run, `${path}/runs/${id}`, [404, 410]))?.head_repository?.id ?? null;
       }
       workflows.set(key, head);
     }
     const own = (await repoOf(run, { repo }))?.id;
     if (head !== null && head === own) return null;
-    return `this workflow run's head isn't ${repo}'s own (a fork's pull request runs the fork's workflow): its artifacts and logs may carry the fork's code; ${FORK_RUN}`;
+    return `this workflow run's head isn't ${repo}'s own (a fork's pull request runs the fork's workflow): what it shows and made (its workflow file, summaries, logs, artifacts) may be the fork's code; ${FORK_RUN}`;
   }
 
   // Whether one of `names` (refKind()'s) is a branch or a tag of `repo`: those whose names
@@ -520,8 +560,8 @@ export function createForkChecks({
     if (found === undefined) {
       found = [];
       for (const kind of ["heads", "tags"]) {
-        const refs = await get(
-          run.repo,
+        const refs = await ask(
+          run,
           `/repos/${repo}/git/matching-refs/${kind}/${encodeURIComponent(first)}?per_page=100`,
           [404, 409, 410, 422],
         );
@@ -540,9 +580,20 @@ export function createForkChecks({
       const why = await fn();
       return why && { status: 403, message: why };
     } catch (error) {
-      log(`GitHub gateway: ${run.repo}: checking ${what}: ${error.message ?? error}`);
-      return { status: 502, message: `couldn't check whether ${what} is a fork's; try again` };
+      return failed(run, what, error);
     }
+  }
+
+  // What a check that couldn't look something up answers: 429 past the run's lookups, else 502.
+  function failed(run, what, error) {
+    if (error.budget) {
+      return {
+        status: 429,
+        message: `this run's calls needed over ${RUN_LOOKUPS} lookups on GitHub in a minute to check them; wait a minute`,
+      };
+    }
+    log(`GitHub gateway: ${run.repo}: checking ${what}: ${error.message ?? error}`);
+    return { status: 502, message: `couldn't check whether ${what} is a fork's; try again` };
   }
 
   // A REST, web or raw call of a restricted run → null when it may go on, else { status,
@@ -579,6 +630,15 @@ export function createForkChecks({
         const why = await workflowRefusal(run, where.repo, action);
         if (why) return why;
       }
+      for (const analysis of target.analyses) {
+        const path = `/repos/${where.repo}/code-scanning/analyses/${analysis}`;
+        const ref = (await ask(run, path, [404, 410]))?.ref;
+        if (typeof ref !== "string") {
+          return `code scanning analysis ${analysis} names no ref Deckhand can check`;
+        }
+        const why = await refRefusal(run, where.repo, ref);
+        if (why) return why;
+      }
       return null;
     });
   }
@@ -592,10 +652,7 @@ export function createForkChecks({
       if (where?.refused) return { refused: { status: 403, message: where.refused } };
       return where;
     } catch (error) {
-      log(`GitHub gateway: ${run.repo}: checking ${repo}: ${error.message ?? error}`);
-      return {
-        refused: { status: 502, message: `couldn't check whether ${repo} is a fork's; try again` },
-      };
+      return { refused: failed(run, repo, error) };
     }
   }
 

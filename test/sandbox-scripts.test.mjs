@@ -508,7 +508,8 @@ function resetClone(t) {
       clone,
       `printf '#!/bin/sh\ntouch "${hooked}"\n' > "${dir}/hook" && chmod +x "${dir}/hook" &&
       cp "${dir}/hook" .git/hooks/post-checkout && git config core.fsmonitor "${dir}/hook" &&
-      git config remote.origin.url https://example.com/elsewhere.git`,
+      git config remote.origin.url https://example.com/elsewhere.git &&
+      git config --add remote.origin.fetch '+refs/pull/*/head:refs/remotes/origin/pr/*'`,
     );
   // A fork's head as `gh pr checkout` leaves it: project hooks, untracked and ignored files.
   const leave = (branch, remote, merge) =>
@@ -534,6 +535,11 @@ function resetClone(t) {
     assert.deepEqual(readdirSync(join(clone, ".git", "hooks")), []);
     assert.equal(sh(clone, "git config core.fsmonitor || true"), "");
     assert.equal(sh(clone, "git config remote.origin.url"), origin);
+    // git's default refspec, whatever a run widened it to (a fork's pull requests').
+    assert.equal(
+      sh(clone, "git config --get-all remote.origin.fetch"),
+      "+refs/heads/*:refs/remotes/origin/*",
+    );
     // Not just during the reset: the checkout draft-pr.sh may do next runs no hook either.
     sh(clone, "git checkout -q feat && git checkout -q -");
     assert.ok(!existsSync(hooked), "a git hook ran");

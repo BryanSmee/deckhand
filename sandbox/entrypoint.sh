@@ -142,7 +142,7 @@ reset_clone() {
 whole_clone() {
   [ -n "${SANDBOX_FULL_CLONE:-}" ] || return 0
   [ -n "$(git config remote.origin.partialclonefilter || true)" ] || return 0
-  git fetch --quiet --refetch --no-filter origin
+  git fetch --quiet --refetch --no-filter origin '+refs/heads/*:refs/remotes/origin/*'
   git config --unset remote.origin.partialclonefilter
 }
 
@@ -159,7 +159,7 @@ clean_git_dir() {
     case $key in
       core.repositoryformatversion | core.filemode | core.bare | core.logallrefupdates | \
         core.ignorecase | core.precomposeunicode | core.symlinks | extensions.objectformat | \
-        extensions.partialclone | extensions.refstorage | remote.origin.fetch | \
+        extensions.partialclone | extensions.refstorage | \
         remote.origin.promisor | remote.origin.partialclonefilter | remote.origin.gh-resolved | \
         branch.*.remote | branch.*.merge)
         git config --file "$kept" --add "$key" "${entry#*$'\n'}"
@@ -167,6 +167,9 @@ clean_git_dir() {
     esac
   done < <(git config --file "$config" --null --list)
   git config --file "$kept" remote.origin.url "$REPO_URL"
+  # The clone's own refspec, git's default: one widened to refs/pull/* would have every fetch
+  # want the forks' pull requests, which the GitHub gateway refuses a work run.
+  git config --file "$kept" remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*'
   mv "$kept" "$config"
   rm -f .git/config.worktree
   rm -rf .git/hooks

@@ -267,6 +267,11 @@ test("first message: brainstorms, follow-ups and new inbox sessions", () => {
     firstMessage({ mode: "work", text: "Go on", started: true }),
     /new container: your session is kept, and so are \/workspace's commits and branches, but its uncommitted files were stashed .* its ignored files removed, and \/tmp and the rest/,
   );
+  // A fork's run and the issue's other work runs share the session, not the clone.
+  assert.match(
+    firstMessage({ mode: "work", text: "Go on", started: true }),
+    /A run started from a fork's pull request keeps a clone of its own, apart from the other runs': what one did in \/workspace \(commits, branches, a stash\) isn't in the other's\./,
+  );
   assert.doesNotMatch(
     firstMessage({ mode: "work", text: "Do it", started: false }),
     /new container/,

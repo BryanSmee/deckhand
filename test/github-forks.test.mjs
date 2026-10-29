@@ -16,6 +16,7 @@ import {
   fetchBody,
   fetchRequest,
   MAX_LOOKUPS,
+  RUN_LOOKUPS,
   graphqlReads,
   refKind,
 } from "../listener/github-forks.mjs";
@@ -31,6 +32,7 @@ const FORK = "c".repeat(40); // a fork's pull request's head
 const TAG = "d".repeat(40);
 const PEELED = "e".repeat(40);
 const MERGE = "f".repeat(40); // an own pull request's merge, on no branch
+const BELOW = "0b".repeat(20); // an own branch's commit, below its head, in its pull request
 
 // GitHub as the checks' lookups see it: Org/Repo, its fork evil/repo, an unrelated other/lib,
 // pull requests #7 (from the fork) and #8 (from a branch of the repository).
@@ -73,6 +75,14 @@ function fakeGithub(repos = REPOS) {
     if ((m = /\/actions\/artifacts\/(\d+)$/.exec(path))) {
       const own = m[1] === "30";
       return { workflow_run: { id: own ? 10 : 11, head_repository_id: own ? 1 : 2 } };
+    }
+    // A commit below an own branch's head, in its pull request (#8); a fork's, in #7.
+    if ((m = /\/commits\/([^/]+)\/pulls\?/.exec(path))) {
+      return m[1] === BELOW ? [PULLS[8]] : m[1] === FORK ? [PULLS[7]] : [];
+    }
+    // Code scanning analyses: 40 of the default branch, 41 of #7.
+    if ((m = /\/code-scanning\/analyses\/(\d+)$/.exec(path))) {
+      return { ref: m[1] === "40" ? "refs/heads/main" : "refs/pull/7/merge" };
     }
     if ((m = /\/commits\/([^/]+)\/branches-where-head$/.exec(path))) {
       return m[1] === HEAD ? [{ name: "feature" }] : [];
@@ -216,6 +226,7 @@ test("refKind and callTargets: what a call names that may be a fork's", () => {
     paths: [],
     pulls: [],
     actions: [],
+    analyses: [],
     blob: false,
     lfs: false,
     page: false,
@@ -274,6 +285,14 @@ test("refKind and callTargets: what a call names that may be a fork's", () => {
   ]);
   assert.deepEqual(callTargets("api", "repos/o/r/actions/jobs/7/logs").actions, [{ job: 7 }]);
   assert.deepEqual(callTargets("web", "o/r/actions/runs/6/artifacts/5").actions, [{ run: 6 }]);
+  assert.deepEqual(callTargets("web", "o/r/actions/runs/6/workflow").actions, [{ run: 6 }]);
+  assert.deepEqual(callTargets("web", "o/r/actions/runs/6").actions, [{ run: 6 }]);
+  // A code scanning analysis as SARIF.
+  assert.deepEqual(
+    callTargets("api", "repos/o/r/code-scanning/analyses/4", q(""), "application/sarif+json")
+      .analyses,
+    [4],
+  );
   assert.deepEqual(callTargets("api", "repos/o/r/actions/runs/6").actions, []);
 });
 
@@ -402,7 +421,7 @@ test("a fork's pull request, its repository and its commits are refused; the rep
     const refused = await check(kind, path, query);
     assert.match(
       refused?.message ?? "",
-      /isn't a commit on org\/repo's default branch nor a branch's head/,
+      /isn't a commit on org\/repo's default branch, a branch's head nor a pull request/,
       path,
     );
   }
@@ -455,6 +474,10 @@ test("a fork's pull request, its repository and its commits are refused; the rep
     ["api", "repos/org/repo/actions/runs/11/logs"],
     ["api", "repos/org/repo/actions/jobs/21/logs"],
     ["web", "org/repo/actions/runs/11/artifacts/31"],
+    // Its pages: its workflow file (the fork's own), its attempts and summaries.
+    ["web", "org/repo/actions/runs/11/workflow"],
+    ["web", "org/repo/actions/runs/11/attempts/1"],
+    ["web", "org/repo/actions/runs/11"],
   ]) {
     assert.match(
       (await check(kind, path)).message,
@@ -464,13 +487,24 @@ test("a fork's pull request, its repository and its commits are refused; the rep
   }
   // A page that isn't one of those that show no file: refused, fail closed. blob_excerpt serves
   // a blob's lines by its id.
-  for (const path of [`org/repo/blob_excerpt/${FORK}`, "org/repo/some-new-page/x"]) {
+  for (const path of [
+    `org/repo/blob_excerpt/${FORK}`,
+    "org/repo/some-new-page/x",
+    "org/repo/security/code-scanning/1",
+    "org/repo/network",
+  ]) {
     assert.match((await check("web", path)).message, /is a page Deckhand doesn't check/, path);
   }
   // git LFS's batch API: its objects named by their sha256.
   for (const path of ["org/repo.git/info/lfs/objects/batch", "org/repo/info/lfs/locks"]) {
     assert.match((await check("web", path)).message, /git LFS's objects are named by their sha256/);
   }
+  // A pull request's code scanning analysis as SARIF, which may quote its code.
+  assert.match(
+    (await check("api", "repos/org/repo/code-scanning/analyses/41", "", "application/sarif+json"))
+      .message,
+    /pull request #7 is from a fork/,
+  );
   // A blob by its id, even the repository's own: nothing says where one comes from.
   for (const sha of [OWN, FORK]) {
     assert.match(
@@ -509,7 +543,14 @@ test("a fork's pull request, its repository and its commits are refused; the rep
     ["web", "org/repo"],
     ["web", "org/repo/issues/7"],
     ["web", "org/repo/releases/download/v1/tool.tgz"],
-    ["web", "org/repo/actions/runs/1"],
+    ["web", "org/repo/actions/runs/10/workflow"],
+    ["web", "org/repo/actions"],
+    ["web", "org/repo/actions/workflows/ci.yml"],
+    // A commit below an own branch's head, in its pull request: the repository's.
+    ["api", `repos/org/repo/commits/${BELOW}`],
+    ["raw", `org/repo/${BELOW}/a.js`],
+    // The default branch's code scanning analysis as SARIF.
+    ["api", "repos/org/repo/code-scanning/analyses/40", "", "application/sarif+json"],
     // A file whose own name holds "..", after the ref.
     ["raw", "org/repo/main/a..b.js"],
     ["web", "org/repo/blob/main/docs/a..b.md"],
@@ -1021,4 +1062,37 @@ test("a ref parameter behind a ';' is read as one: the gateway splits a query on
   );
   assert.equal(res.status, 403);
   assert.match((await res.json()).message, /pull request #7 is from a fork/);
+});
+
+test("a run's calls cause so many lookups on GitHub a minute, cached ones aside", async () => {
+  let at = 0;
+  const { get, asked } = fakeGithub();
+  const forks = createForkChecks({ get, now: () => at });
+  const run = workRun();
+  const ref = (i) => `ref=${i.toString(16).padStart(40, "9")}`;
+  const check = (i) =>
+    forks.checkCall(run, {
+      kind: "raw",
+      path: "org/repo/main/a.js",
+      query: new URLSearchParams(ref(i)),
+    });
+  // Each ref is a commit found nowhere: refused (403), after a few lookups each, until the
+  // run has spent its lookups.
+  let i = 0;
+  let refused = null;
+  while (refused?.status !== 429 && i <= RUN_LOOKUPS) refused = await check(i++);
+  assert.equal(refused?.status, 429);
+  assert.match(refused.message, /over 120 lookups on GitHub in a minute/);
+  assert.ok(asked.length <= RUN_LOOKUPS);
+  // Another run's are its own; a minute later, this one's again.
+  assert.equal(
+    await forks.checkCall(workRun(), {
+      kind: "raw",
+      path: "org/repo/main/a.js",
+      query: new URLSearchParams(),
+    }),
+    null,
+  );
+  at += 60_000;
+  assert.equal((await check(i)).status, 403);
 });
