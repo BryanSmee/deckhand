@@ -8,6 +8,7 @@ import { useState } from "preact/hooks";
 import { type RepoList, sendDismiss, sendRerun } from "./api";
 import {
   type ChipId,
+  findingsLeft,
   githubUrl,
   inChip,
   issueList,
@@ -28,6 +29,7 @@ import {
   waitingOnYou,
 } from "./overview";
 import { Questions } from "./Questions";
+import { FindingsLeft } from "./ReviewLoop";
 import { RepoBadge } from "./RepoBadge";
 import { formatRoute } from "./route";
 import type { Repo, State, Task } from "./types";
@@ -304,7 +306,10 @@ function WaitingOnYou({
           {rows.map((row) => {
             const t = row.task;
             return (
-              <li key={t.key} class={styles.need}>
+              <li
+                key={t.key}
+                class={`${styles.need} ${row.need === "ready" && findingsLeft(t) ? styles.warned : ""}`}
+              >
                 <StatusBadge
                   class={styles.badge}
                   state={t.state}
@@ -318,6 +323,7 @@ function WaitingOnYou({
                   )}
                   {titleOf(t)}
                 </a>
+                {row.need === "ready" && <FindingsLeft task={t} class={styles.left} />}
                 <span class={styles.needRepo}>{t.repo}</span>
                 <span class={styles.age} title={new Date(row.at).toLocaleString()}>
                   {age(row.at, now)}

@@ -2,9 +2,11 @@
 import type {
   Auth,
   Kind,
+  LoopState,
   PrState,
   PullRequest,
   RepoStatus,
+  ReviewRound,
   Run,
   RunStatus,
   ServerInfo,
@@ -18,6 +20,7 @@ export const STATE_NAMES: Record<TaskState, string> = {
   working: "Working",
   stopping: "Stopping",
   queued: "Queued",
+  "in-review": "In review",
   waiting: "Waiting",
   brainstorm: "Brainstorm",
   "idle-brainstorm": "Idle brainstorm",
@@ -55,13 +58,22 @@ export const PR_NAMES: Record<PrState, string> = {
 // way to a run, like a queued one. A brainstorm waiting for its next comment waits for
 // the maintainer, like a run that stopped to ask. "Ready" (for review) is the pull request's
 // state, whatever the task's: what waits for the maintainer's review. A run someone stopped
-// is over, not failed.
+// is over, not failed. A pull request in its review-and-fix loop is still on its way: ready once
+// the loop ends.
 export const CHIPS = [
   { id: "all", name: "All", states: null },
   {
     id: "running",
     name: "Running",
-    states: ["scheduled", "building-image", "working", "stopping", "queued", "waiting"],
+    states: [
+      "scheduled",
+      "building-image",
+      "working",
+      "stopping",
+      "queued",
+      "in-review",
+      "waiting",
+    ],
   },
   { id: "input", name: "Needs you", states: ["needs-input", "brainstorm", "idle-brainstorm"] },
   { id: "review", name: "Ready", states: null },
@@ -78,7 +90,57 @@ export function inChip(chip: ChipId, t: Task): boolean {
   return !states || states.includes(t.state);
 }
 
-export const isReady = (t: Task) => t.pr?.state === "ready";
+// Ready for the maintainer's review: its pull request is, and Deckhand's review-and-fix loop
+// on it is over (inLoop()).
+export const isReady = (t: Pick<Task, "pr" | "review">) => t.pr?.state === "ready" && !inLoop(t);
+
+// The loop's states while it goes on: a review or fix run of it queued or running, or its
+// auto-merge waiting for checks (listener/reviews.mjs reviewLoop()).
+const LOOPING: LoopState[] = ["reviewing", "fixing", "checks"];
+export const inLoop = (t: Pick<Task, "review">) => !!t.review && LOOPING.includes(t.review.loop);
+
+// A loop still going, for a row: "Review · first review", "Review · round 2 of 3", "Review ·
+// waiting for checks"; null otherwise.
+export function loopLine(t: Pick<Task, "review">): string | null {
+  const r = t.review;
+  if (!r || !inLoop(t)) return null;
+  if (r.loop === "checks") return "Review · waiting for checks";
+  if (!r.round) return "Review · first review";
+  return r.rounds ? `Review · round ${r.round} of ${r.rounds}` : `Review · round ${r.round}`;
+}
+
+const SEVERITIES = ["critical", "high", "medium", "low"] as const;
+
+// What a loop that ended blocking left, for the ready rows and its notification: "2 high
+// findings left after 3 fix rounds", "1 critical and 1 high finding left after the review";
+// null when it ended clean or still goes on. The blocking findings are the most severe ones.
+export function findingsLeft(t: Pick<Task, "review">): string | null {
+  const r = t.review;
+  const last = r?.history.at(-1);
+  if (!r || !["rounds-out", "stopped"].includes(r.loop) || !last?.blocking) return null;
+  const parts: string[] = [];
+  let left = last.blocking;
+  for (const s of SEVERITIES) {
+    const n = Math.min(last.counts[s] ?? 0, left);
+    if (n) parts.push(`${n} ${s}`);
+    left -= n;
+    if (!left) break;
+  }
+  const what = parts.length > 1 ? `${parts.slice(0, -1).join(", ")} and ${parts.at(-1)}` : parts[0];
+  const after = last.round ? `after ${plural(last.round, "fix round")}` : "after the review";
+  return `${what ?? last.blocking} ${last.blocking === 1 ? "finding" : "findings"} left ${after}`;
+}
+
+// A review's findings by severity: "1 critical · 3 high", "no findings".
+export function roundCounts(r: ReviewRound): string {
+  const parts = SEVERITIES.filter((s) => r.counts[s]).map((s) => `${r.counts[s]} ${s}`);
+  return parts.join(" · ") || "no findings";
+}
+
+// A review that still blocks on as many findings as the one before it, or more: the fix run
+// between them made no progress.
+export const noProgress = (history: ReviewRound[], i: number) =>
+  i > 0 && history[i].blocking > 0 && history[i].blocking >= history[i - 1].blocking;
 
 // A failure that no longer asks for attention, though the task keeps its state: someone
 // dismissed it, or its issue is closed or its pull request merged or closed, so it can't run
@@ -119,6 +181,9 @@ export function toneOf(state: TaskState | RunStatus): Tone {
     case "needs-input":
     case "brainstorm":
       return "input";
+    // Deckhand reviews its own pull request: the one the maintainer reviews next.
+    case "in-review":
+      return "ready";
     case "done":
     case "ok":
       return "done";

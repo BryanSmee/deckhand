@@ -16,7 +16,8 @@ export interface Waiting {
 }
 
 // The tasks waiting on you, oldest first: open questions, a brainstorm's turn, a failed run
-// (unless isSettled()), a pull request ready for review (once nothing runs on it). One row per task: what asks
+// (unless isSettled()), a pull request ready for review (once nothing runs on it and its
+// review-and-fix loop is over). One row per task: what asks
 // first, then what failed.
 export function waitingOnYou(tasks: Task[]): Waiting[] {
   const rows: Waiting[] = [];
@@ -63,7 +64,10 @@ export function repoParts(tasks: Task[], now: number): Part[] {
     const tone = taskTone(t);
     // A failure that no longer asks (isSettled()) isn't "failed" here either.
     if (tone === "err" && isSettled(t)) continue;
-    add(tone === "idle" ? (["queued", "waiting"].includes(t.state) ? "queued" : "idle") : tone);
+    // In review: Deckhand still works on it, between the runs of its loop.
+    if (t.state === "in-review") add("run");
+    else
+      add(tone === "idle" ? (["queued", "waiting"].includes(t.state) ? "queued" : "idle") : tone);
   }
   const words: Record<string, (n: number) => string> = {
     run: (n) => `${n} running`,

@@ -110,6 +110,10 @@
   font-family: var(--mono);
 }
 
+.left {
+  grid-column: 2 / 4;
+}
+
 .repo {
   color: var(--text-2);
   font-weight: 500;

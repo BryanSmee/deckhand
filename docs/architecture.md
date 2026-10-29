@@ -528,6 +528,24 @@ one more review of what it pushed, once per fix run (`reviewedFixes`;
 (`settle()`), or, in auto-merge mode, a comment when it failed or pushed nothing. At start,
 `server.mjs` logs a warning for each repository granted `allow_auto_merge`.
 
+The dashboard follows the loop. Before `startFix()`, `settle()` appends each automatic review
+to its pull request's `rounds` in `reviews.json` (`recordRound()`): `{ round, at, head,
+counts: { critical, high, medium, low }, blocking }`, `round` the fix runs before it (0 for the
+first review), `blocking` the findings above the tolerance, counts only, never the findings'
+text, with `fixRounds`, what `review.fix` allows. An entry from before has none, and shows no
+loop. `reviewLoop()` derives where the loop is from that entry and the reason of the task's
+run going or queued (`board.mjs`, the task's pull request from `pulls.mjs`, as `reviews.json`
+is keyed by the pull request): `reviewing` or `fixing` while a review or fix run is queued or
+running, `checks` while the auto-merge is `waiting`, then `clean` (nothing blocking),
+`rounds-out` (the review after the last fix run still blocks) or `stopped` (it blocks, and no
+fix run follows). `api/state` sends it as the task's `review` ({ loop, round, rounds,
+history }). Between the loop's runs (its next one queued, or the checks), the task's state is
+`in-review` instead of `queued` or `done`; a running run keeps its own. The dashboard lists it
+as running, not ready, until the loop ends: then a ready row whose loop ended blocking says
+what it left ("2 high findings left after 3 fix rounds"), and the task's page lists each
+round's counts, marking those whose blocking count didn't go down. The listener's behaviour
+doesn't change: the loop still runs all its rounds.
+
 ## Waiting for other issues
 
 `/after #77 #80` (on the trigger line or its own line, same repo only; `events.mjs`

@@ -1,11 +1,12 @@
 // Pull requests ready for review are counted in the tab's title. While the page is open, a
 // browser notification, which opens its task, for each event Preferences has on: a pull
 // request turning ready (not those already ready when it loaded, nor those the listener
-// found without a webhook: no readyAt), a run stopping for answers (questions, a brainstorm's turn), a run failing.
+// found without a webhook: no readyAt), once Deckhand's review-and-fix loop on it is over and
+// with what that loop left (findingsLeft()), a run stopping for answers (questions, a brainstorm's turn), a run failing.
 // Answers and failures are what changed between two states the page got: a task already
 // waiting or failed when it loaded is old news.
 import { useEffect, useRef, useState } from "preact/hooks";
-import { isReady, STATE_NAMES, titleOf, toneOf } from "./format";
+import { findingsLeft, isReady, STATE_NAMES, titleOf, toneOf } from "./format";
 import { getPref } from "./prefs";
 import { formatRoute } from "./route";
 import type { State, Task } from "./types";
@@ -66,13 +67,14 @@ export function useNotifications(state: State | null) {
     const once = (id: string) => !shown.current.has(id) && !!shown.current.add(id);
     for (const t of state.tasks) {
       const pr = t.pr;
-      if (pr?.state === "ready" && pr.readyAt && pr.readyAt > since.current!) {
+      if (pr && isReady(t) && pr.readyAt && pr.readyAt > since.current!) {
         // Draft and ready again: a new readyAt, so a new notification.
         const id = `${t.key}@${pr.readyAt}`;
+        const left = findingsLeft(t);
         if (once(id) && getPref("notifyReady"))
           show(
             `Ready for review: ${titleOf(t)}`,
-            { body: `${t.repo} · pull request #${pr.number}`, tag: id },
+            { body: `${t.repo} · pull request #${pr.number}${left ? ` · ${left}` : ""}`, tag: id },
             openTask(t),
           );
       }

@@ -88,6 +88,8 @@ function statusOf(
   // Merged with no human review: the graph says so, for a maintainer looking for them later.
   if (look === "done" && t.pr?.state === "merged" && t.pr.autoMerged) return "Merged by Deckhand";
   if (look === "done") return t.closed === "completed" ? "Implemented" : "Merged";
+  // Deckhand still reviews it, between the runs of its review-and-fix loop.
+  if (look === "ready" && t.state === "in-review") return "In review";
   if (look === "ready") return "Ready for review";
   if (look === "input" && t.pr?.state === "ready") return "Needs input, PR ready";
   if (t.closed === "not_planned") return "Closed, not planned";

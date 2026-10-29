@@ -178,6 +178,18 @@
   justify-self: end;
 }
 
+/* A ready pull request whose review-and-fix loop left blocking findings: a line under it. */
+.need.warned {
+  grid-template-areas:
+    "badge title repo age action"
+    ". left left left action";
+  row-gap: 4px;
+}
+
+.left {
+  grid-area: left;
+}
+
 /* A failed run's: Rerun (or Open) and Dismiss. */
 .actions {
   grid-area: action;
@@ -288,6 +300,13 @@
       "repo action";
     gap: 6px 12px;
     padding: 12px 16px;
+  }
+  .need.warned {
+    grid-template-areas:
+      "badge age"
+      "title title"
+      "left left"
+      "repo action";
   }
   .needTitle {
     white-space: normal;

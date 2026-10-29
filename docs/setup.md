@@ -190,8 +190,10 @@ tasks.
 
 The dashboard lists every issue, pull request and discussion Deckhand worked on, by title,
 with a tab per repository (the most recently active first; each counts its running tasks and
-those waiting for you) and chips by state: running (queued and `/after` waits too), needs input (a brainstorm waiting for your
-comment too), ready for review, done, error. Titles come with the webhooks; for tasks from before the dashboard
+those waiting for you) and chips by state: running (queued and `/after` waits too, and a pull request in review: between the runs of
+its review-and-fix loop, `review.fix`), needs input (a brainstorm waiting for your
+comment too), ready for review (once that loop is over; a loop that left blocking findings says
+how many), done, error. Titles come with the webhooks; for tasks from before the dashboard
 had them, the listener asks GitHub once and keeps them in `titles.json` in its data volume.
 
 Each task also links to its pull request (the one that closes its issue, or the pull request
