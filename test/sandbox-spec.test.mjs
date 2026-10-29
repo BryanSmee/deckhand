@@ -104,6 +104,14 @@ test("sandboxSpec: a work run with a comment from a fork's pull request mounts r
   assert.equal(spec.volumes.find((v) => v.kind === "mount").readOnly, true);
   assert.ok(spec.volumes.some((v) => v.name === "deckhand-org-app-12-workspace"));
   assert.ok(!spec.volumes.some((v) => v.kind === "cache"));
+  // Blobless, as before: its own pull request's head is no fork's to it (github-forks.mjs).
+  assert.equal(spec.env.SANDBOX_FULL_CLONE, "");
+});
+
+test("sandboxSpec: a work run that isn't a fork's clones whole; a light run doesn't", () => {
+  assert.equal(sandboxSpec(runOf(), "p", "m", parts).env.SANDBOX_FULL_CLONE, "1");
+  const light = sandboxSpec(runOf({ light: true, mode: "brainstorm" }), "p", "m", parts);
+  assert.equal(light.env.SANDBOX_FULL_CLONE, "");
 });
 
 // The `docker run` options the spec carried itself before it became a description (#392):

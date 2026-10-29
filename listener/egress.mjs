@@ -25,19 +25,25 @@ export function githubHosts(config) {
   return [...new Set([hostOf(config.githubUrl), hostOf(config.githubApi)])];
 }
 
-// The hosts relayed to the GitHub gateway: GitHub's, and its raw files'.
+// The hosts relayed to the GitHub gateway: GitHub's, and its files' (GITHUB_FILES).
 export function relayedGithub(config) {
-  return [...githubHosts(config), RAW_HOST];
+  return [...githubHosts(config), ...GITHUB_FILES];
 }
 
 // Where GitHub serves a repository's files, any public one's without a token, a fork's pull
-// request's included: relayed to the GitHub gateway too, which checks what a work run reads
-// there (github-forks.mjs) and sends it on anonymously.
-export const RAW_HOST = "raw.githubusercontent.com";
+// request's included: its raw files, its LFS files, its pull requests' and commits' diffs.
+// Relayed to the GitHub gateway too, which checks what a work run reads there (github-forks.mjs)
+// and sends it on anonymously (github-gateway.mjs FILES).
+export const GITHUB_FILES = [
+  "raw.githubusercontent.com",
+  "media.githubusercontent.com",
+  "patch-diff.githubusercontent.com",
+];
 
 // What the agent (its `hosts`, agents/; by default the operator's) and GitHub need. Raw files
 // and release downloads come from *.githubusercontent.com, which carries no token: allowed,
-// RAW_HOST relayed (relayedGithub()), the others plain hosts. The listener (the broker) is reached directly, on the run's own network.
+// GITHUB_FILES relayed (relayedGithub()), the others (release assets, avatars) plain hosts.
+// The listener (the broker) is reached directly, on the run's own network.
 export function mandatoryHosts(config, agent = agentFor(config.agent)) {
   return [...agent.hosts, ...githubHosts(config), "*.githubusercontent.com"];
 }

@@ -9,12 +9,15 @@
 //   id: its git, its API, its pages and raw files, all of it;
 // - in its repository (and its parent, when the repository is itself a fork), a pull request's
 //   head or merge from a fork (`refs/pull/<n>/…`), and a commit that isn't the repository's:
-//   in a fetch's `want`s, an archive, contents, a commit or comparison (their patches), a
-//   tree, raw files and web pages, and a fork's pull request's diff and files. A commit is the
+//   in a fetch's `want`s, an archive, contents, a commit or comparison (their patches), raw
+//   files and web pages, and a fork's pull request's diff and files. A commit is the
 //   repository's when a ref of its own pointed at it in what GitHub advertised to the run's
 //   git, when its default branch has it, or when it is a branch's head; a branch or tag name
-//   always is. Anything else (a commit a branch dropped, one reachable only from a tag) is
-//   refused rather than looked for;
+//   always is. Anything else (a commit a branch dropped, one reachable only from a tag, a blob
+//   or tree wanted on its own) is refused rather than looked for;
+// - a blob read by its id (`git/blobs/<sha>`, or a fetch's `want`): whoever wrote a fork can
+//   name its blobs, and nothing says where one comes from. So such a run's clone is whole
+//   (sandbox-spec.mjs SANDBOX_FULL_CLONE), and never fetches a blob on its own;
 // - reading a file's content over GraphQL (`... on Blob`): github-graphql.mjs, with blobs().
 //
 // What GitHub answers for the lookups is kept a while: whether a pull request or repository is
@@ -25,13 +28,17 @@ import { headInRepo } from "./events.mjs";
 // How long a pull request's, repository's or commit's answer is kept, and how many of each.
 export const LOOKUP_MS = 10 * 60_000;
 const MAX_KEPT = 10_000;
-// The advertised refs a run's memory keeps, per repository; past it, the oldest go.
-export const MAX_REFS = 200_000;
-// The most of an advertisement read for them, and of a fetch's request (inflated).
-export const MAX_ADVERTISEMENT = 32 * 1024 * 1024;
+// The advertised objects a run's memory keeps, per repository; past it, the oldest go, and
+// what they named is looked up again.
+export const MAX_REFS = 100_000;
+// The most of a fetch's request read (inflated).
 export const MAX_FETCH = 16 * 1024 * 1024;
+// The wants of a fetch looked up on GitHub (no ref advertised them), at most: a fetch of many
+// such objects is a partial clone's, never one of a ref's, and is refused at once.
+export const MAX_LOOKUPS = 20;
 
-const OID = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/;
+// A SHA-1 or SHA-256 object id, as git reads it: any case.
+const OID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i;
 const HEX = /^[0-9a-f]{7,64}$/i;
 // Where a commit's metadata is read, not its patch: its statuses, checks, pull requests.
 const COMMIT_METADATA =
@@ -68,8 +75,9 @@ export function pkt(text) {
 }
 
 // An upload-pack request (protocol v0's or v2's) → { command, wants, refs }: the command (v2's
-// `fetch` or `ls-refs`; null for v0, whose requests only fetch), the objects it asks for and
-// the refs it asks for by name (v2's `want-ref`). Throws on what isn't one.
+// `fetch` or `ls-refs`; null for v0, whose requests only fetch), the objects it asks for
+// (lowercased: git reads an id in any case) and the refs it asks for by name (v2's
+// `want-ref`). Throws on what isn't one, and on a `want` line it can't read: fail closed.
 export function fetchRequest(body) {
   const lines = pktLines(body);
   if (!lines.length) throw new Error("not a git fetch");
@@ -79,10 +87,12 @@ export function fetchRequest(body) {
   for (const line of lines) {
     const named = /^command=(\S+)$/.exec(line);
     if (named) command = named[1];
-    const want = /^want ([0-9a-f]{40,64})(?:\s|$)/.exec(line);
-    if (want) wants.push(want[1]);
+    if (!/^want/i.test(line)) continue;
+    const want = /^want ([0-9a-f]+)(?:\s|$)/i.exec(line);
     const ref = /^want-ref (\S+)$/.exec(line);
-    if (ref) refs.push(ref[1]);
+    if (want && OID.test(want[1])) wants.push(want[1].toLowerCase());
+    else if (ref) refs.push(ref[1]);
+    else throw new Error("a fetch line Deckhand can't read");
   }
   return { command, wants, refs };
 }
@@ -96,20 +106,48 @@ export function fetchBody(body, encoding = "identity") {
   return gunzipSync(body, { maxOutputLength: MAX_FETCH });
 }
 
-// The refs an advertisement names (v0's info/refs, v2's ls-refs answer) → [{ oid, ref }], a
-// peeled tag's commit under its tag's name too.
-export function advertisedRefs(buffer) {
+// The refs an advertisement names (v0's info/refs, v2's ls-refs answer), read as it streams:
+// push(chunk) each chunk, refs() → [{ oid, ref }], a peeled tag's commit under its tag's name
+// too, MAX_REFS of them at most. Only a line being cut is held: a pkt-line is 64 KiB at most.
+export function advertisementReader() {
+  let held = Buffer.alloc(0);
+  let done = false;
   const refs = [];
-  for (const line of pktLines(buffer)) {
-    const [text] = line.split("\0");
-    const match = /^([0-9a-f]{40,64}) (\S+)(.*)$/.exec(text);
-    if (!match || /^0+$/.test(match[1])) continue;
+  const add = (oid, ref) => refs.length < MAX_REFS && refs.push({ oid: oid.toLowerCase(), ref });
+  function line(text) {
+    const match = /^([0-9a-f]+) (\S+)(.*)$/i.exec(text.split("\0")[0].replace(/\n$/, ""));
+    if (!match || !OID.test(match[1]) || /^0+$/.test(match[1])) return;
     const ref = match[2].replace(/\^\{\}$/, "");
-    refs.push({ oid: match[1], ref });
-    const peeled = /\bpeeled:([0-9a-f]{40,64})/.exec(match[3]);
-    if (peeled) refs.push({ oid: peeled[1], ref });
+    add(match[1], ref);
+    const peeled = /\bpeeled:([0-9a-f]+)/i.exec(match[3]);
+    if (peeled && OID.test(peeled[1])) add(peeled[1], ref);
   }
-  return refs;
+  function push(chunk) {
+    if (done) return;
+    const buffer = held.length ? Buffer.concat([held, chunk]) : chunk;
+    let at = 0;
+    while (at + 4 <= buffer.length) {
+      const hex = buffer.toString("latin1", at, at + 4);
+      if (!/^[0-9a-f]{4}$/i.test(hex)) return void (done = true);
+      const length = parseInt(hex, 16);
+      if (length < 4) {
+        at += 4;
+        continue;
+      }
+      if (at + length > buffer.length) break;
+      line(buffer.toString("latin1", at + 4, at + length));
+      at += length;
+    }
+    held = Buffer.from(buffer.subarray(at));
+  }
+  return { push, refs: () => refs };
+}
+
+// advertisementReader()'s refs of a whole advertisement.
+export function advertisedRefs(buffer) {
+  const reader = advertisementReader();
+  reader.push(buffer);
+  return reader.refs();
 }
 
 // What a ref, branch or commit names, as a path or parameter spells it (with what follows it in
@@ -127,9 +165,12 @@ export function refKind(spec) {
 }
 
 // The repository a call names, and what in it may be a fork's: { repo } (owner/name) or { id },
-// and { refs, pulls } (refKind()'s specs, pull request numbers); null for a call that names
-// none. `kind`: "api" (REST, its path under the API's base), "web" (the web host's path) or
-// "raw" (raw.githubusercontent.com's); `query`, its URLSearchParams; `accept`, its header.
+// and { refs, pulls, blob } (refKind()'s specs, pull request numbers, whether it reads a blob
+// by its id); null for a call that names none. `kind`: "api" (REST, its path under the API's
+// base), "web" (the web host's path, and patch-diff.githubusercontent.com's) or "raw"
+// (raw.githubusercontent.com's, and media.githubusercontent.com's); `query`, its
+// URLSearchParams; `accept`, its header. Trees and a commit's metadata (`git/trees`,
+// `git/commits`) hold no file's content: not checked.
 export function callTargets(kind, path, query = new URLSearchParams(), accept = "") {
   let repo = null;
   let id = null;
@@ -148,6 +189,7 @@ export function callTargets(kind, path, query = new URLSearchParams(), accept = 
   }
   const refs = [];
   const pulls = [];
+  let blob = false;
   const strip = (ref) => ref.replace(/\.(?:tar\.gz|tgz|zip|diff|patch)$/i, "");
   const sides = (spec) =>
     strip(spec)
@@ -158,9 +200,9 @@ export function callTargets(kind, path, query = new URLSearchParams(), accept = 
     if (rest) refs.push(rest);
   } else if (kind === "api") {
     if ((m = /^(?:tarball|zipball)\/(.+)$/i.exec(rest))) refs.push(m[1]);
-    else if (/^(?:contents|readme)(?:\/|$)/i.test(rest) && query.get("ref")) {
-      refs.push(query.get("ref"));
-    } else if ((m = /^git\/(?:commits|trees)\/(.+)$/i.exec(rest))) refs.push(m[1]);
+    // Every `ref` it repeats: GitHub may read any of them.
+    else if (/^(?:contents|readme)(?:\/|$)/i.test(rest)) refs.push(...query.getAll("ref"));
+    else if (/^git\/blobs(?:\/|$)/i.test(rest)) blob = true;
     else if ((m = /^commits\/(.+)$/i.exec(rest)) && !COMMIT_METADATA.test(rest)) refs.push(m[1]);
     else if ((m = /^compare\/(.+)$/i.exec(rest))) refs.push(...sides(m[1]));
     else if ((m = /^pulls\/(\d+)\/files$/i.exec(rest))) pulls.push(Number(m[1]));
@@ -173,7 +215,7 @@ export function callTargets(kind, path, query = new URLSearchParams(), accept = 
     refs.push(strip(m[1]));
   } else if ((m = /^pull\/(\d+)(?:[./]|$)/i.exec(rest))) pulls.push(Number(m[1]));
   else if ((m = /^compare\/(.+)$/i.exec(rest))) refs.push(...sides(m[1]));
-  return { repo, id, refs, pulls };
+  return { repo, id, refs, pulls, blob };
 }
 
 // Whether `doc` (a parsed GraphQL document) reads a file's content: a fragment on `Blob`, the
@@ -218,8 +260,10 @@ export function createForkChecks({
   const repos = kept(LOOKUP_MS, MAX_KEPT, now);
   const pulls = kept(LOOKUP_MS, MAX_KEPT, now);
   const commits = kept(LOOKUP_MS, MAX_KEPT, now);
-  // run → repository → oid → the refs GitHub advertised it under, to the run's git.
+  // run → repository → oid → what GitHub advertised it as, to the run's git: OWN_REF (a ref of
+  // the repository's own: a branch, a tag) or the numbers of the pull requests whose refs it is.
   const advertised = new WeakMap();
+  const OWN_REF = "own";
 
   // Whether `run`'s fetches are checked: a work run (it has caches, mounts and maybe an engine,
   // and pushes) that isn't a fork's.
@@ -271,8 +315,8 @@ export function createForkChecks({
   // Why commit `sha` of `repo` can't be fetched (it may be a fork's), or null: an own ref's in
   // what GitHub advertised to the run, on the default branch, or a branch's head.
   async function commitRefusal(run, repo, sha) {
-    const refs = advertised.get(run)?.get(repo)?.get(sha);
-    if (refs) return refsRefusal(run, repo, refs);
+    const as = advertised.get(run)?.get(repo)?.get(sha);
+    if (as) return advertisedRefusal(run, repo, as);
     const key = `${repo}@${sha}`;
     if (commits.get(key)) return null;
     const info = await repoOf(run, { repo });
@@ -297,16 +341,15 @@ export function createForkChecks({
       commits.set(key, true);
       return null;
     }
-    return `commit ${sha.slice(0, 12)} isn't on ${repo}'s default branch nor a branch's head, so it may be a fork's; fetch a branch of ${repo} instead, or: ${FORK_RUN}`;
+    return `${sha.slice(0, 12)} isn't a commit on ${repo}'s default branch nor a branch's head, so it may be a fork's (a blob or tree isn't fetched on its own here: the clone is whole); fetch a branch of ${repo} instead, or: ${FORK_RUN}`;
   }
 
-  // An advertised commit's refs: fine when one is the repository's own (a branch, a tag), or a
-  // pull request's from one of its branches.
-  async function refsRefusal(run, repo, refs) {
+  // An advertised commit: fine when a ref of the repository's own named it (a branch, a tag), or
+  // a pull request's from one of its branches.
+  async function advertisedRefusal(run, repo, as) {
+    if (as === OWN_REF) return null;
     let why = null;
-    for (const ref of refs) {
-      const { pull } = refKind(ref);
-      if (pull === undefined) return null;
+    for (const pull of as) {
       why = await pullRefusal(run, repo, pull);
       if (!why) return null;
     }
@@ -345,6 +388,9 @@ export function createForkChecks({
       const where = await scope(run, target);
       if (!where) return null;
       if (where.refused) return where.refused;
+      if (target.blob) {
+        return `a blob read by its id may be a fork's (whoever wrote one can name its blobs): read the file with contents/<path>?ref=<branch>, or from the clone; ${FORK_RUN}`;
+      }
       for (const n of target.pulls) {
         const why = await pullRefusal(run, where.repo, n);
         if (why) return why;
@@ -374,9 +420,17 @@ export function createForkChecks({
   }
 
   // A fetch's request (fetchRequest()) of `repo` → null when it may go on, else { status,
-  // message }: each object it wants is the repository's own, and each ref it names too.
+  // message }: each object it wants is the repository's own, and each ref it names too. Those
+  // no ref advertised are looked up, MAX_LOOKUPS at most: more is a partial clone's lazy fetch
+  // of blobs, refused without asking GitHub.
   function checkFetch(run, repo, { wants, refs }) {
     return checked(run, repo, async () => {
+      const unknown = [...new Set(wants)].filter(
+        (oid) => !advertised.get(run)?.get(repo)?.has(oid),
+      );
+      if (unknown.length > MAX_LOOKUPS) {
+        return `this fetch wants ${unknown.length} objects no ref of ${repo} points at, which may be a fork's (a blob or tree isn't fetched on its own here: the clone is whole); fetch a branch of ${repo} instead, or: ${FORK_RUN}`;
+      }
       for (const oid of new Set(wants)) {
         const why = await commitRefusal(run, repo, oid);
         if (why) return why;
@@ -389,18 +443,21 @@ export function createForkChecks({
     });
   }
 
-  // What GitHub advertised to the run's git for `repo` (advertisedRefs()), kept for its wants.
-  function remember(run, repo, buffer) {
+  // What GitHub advertised to the run's git for `repo` (advertisementReader()'s refs), kept for
+  // its wants: for each object, whether a ref of the repository's own named it, else the pull
+  // requests whose refs did.
+  function remember(run, repo, refs) {
     const byRepo = advertised.get(run) ?? new Map();
     advertised.set(run, byRepo);
     const oids = byRepo.get(repo) ?? new Map();
     byRepo.set(repo, oids);
-    for (const { oid, ref } of advertisedRefs(buffer)) {
-      if (!OID.test(oid)) continue;
-      if (oids.size >= MAX_REFS && !oids.has(oid)) oids.delete(oids.keys().next().value);
-      const refs = oids.get(oid) ?? [];
-      if (!refs.includes(ref)) refs.push(ref);
-      oids.set(oid, refs);
+    for (const { oid, ref } of refs) {
+      const before = oids.get(oid);
+      if (before === OWN_REF) continue;
+      if (before === undefined && oids.size >= MAX_REFS) oids.delete(oids.keys().next().value);
+      const { pull } = refKind(ref);
+      if (pull === undefined) oids.set(oid, OWN_REF);
+      else oids.set(oid, [...new Set([...(before ?? []), pull])]);
     }
   }
 

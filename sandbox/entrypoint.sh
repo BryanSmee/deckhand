@@ -8,7 +8,8 @@
 # the egress proxy and waits for the engine before the setup; every prompt ends with whether
 # the run has one. SANDBOX_LIGHT=1 (brainstorms, inbox entries, discussions) skips the branch and the
 # setup. SANDBOX_NO_CLONE=1 (research runs: the open internet, nothing from GitHub) skips the clone
-# and git's credential helper too: the agent starts in an empty /workspace.
+# and git's credential helper too: the agent starts in an empty /workspace. SANDBOX_FULL_CLONE=1
+# (a work run that isn't a fork's) clones whole, and makes a kept blobless clone whole.
 #
 #   (no arguments)      the agent, interactive
 #   -p "<task>" …       arguments for the agent's CLI, e.g. a headless task
@@ -88,8 +89,12 @@ if [ -n "${SANDBOX_NO_CLONE:-}" ]; then
   git config --global credential.helper ""
 elif [ ! -d /workspace/.git ]; then
   # Blobless clone: full history for git log/blame, file contents fetched on demand. The
-  # checkout's blob fetch ignores --quiet, so its output is only shown on failure.
-  git clone --filter=blob:none --branch "$BASE_BRANCH" "$REPO_URL" /workspace \
+  # checkout's blob fetch ignores --quiet, so its output is only shown on failure. Whole for a
+  # work run that isn't a fork's: the GitHub gateway refuses it a blob fetched on its own, which
+  # may be a fork's (listener/github-forks.mjs).
+  filter=(--filter=blob:none)
+  [ -z "${SANDBOX_FULL_CLONE:-}" ] || filter=()
+  git clone "${filter[@]}" --branch "$BASE_BRANCH" "$REPO_URL" /workspace \
     > /tmp/clone.log 2>&1 || { cat /tmp/clone.log >&2; exit 1; }
 fi
 cd /workspace
@@ -105,6 +110,7 @@ cd /workspace
 reset_clone() {
   local branch target=$BASE_BRANCH
   clean_git_dir
+  whole_clone
   # Reviews read pull requests in worktrees under /tmp, gone with their container: a stale
   # one would keep its branch from being checked out here.
   git worktree prune
@@ -127,6 +133,17 @@ reset_clone() {
     git checkout --quiet --force -B "$BASE_BRANCH" "origin/$BASE_BRANCH"
   fi
   git clean -ffdxq
+}
+
+# A kept clone a fork's run or an older Deckhand made blobless, in a work run that
+# isn't a fork's (SANDBOX_FULL_CLONE): the blobs it lacks fetched once, whole (--refetch, git
+# 2.36), before any checkout would ask for them one by one, which the GitHub gateway refuses
+# such a run. It stays a promisor: a blob still missing is asked for, and refused saying why.
+whole_clone() {
+  [ -n "${SANDBOX_FULL_CLONE:-}" ] || return 0
+  [ -n "$(git config remote.origin.partialclonefilter || true)" ] || return 0
+  git fetch --quiet --refetch --no-filter origin
+  git config --unset remote.origin.partialclonefilter
 }
 
 # .git is the volume's too, and a fork's code that ran in a work run could have written in

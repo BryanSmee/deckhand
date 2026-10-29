@@ -2,23 +2,28 @@
 // fork's pull request's head, a fork's repository and a commit that isn't its repository's are
 // refused, by git, the API, an archive, a page or a raw file; its own branches' never are.
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
+import { join } from "node:path";
 import { test } from "node:test";
 import { gzipSync } from "node:zlib";
 import { createBroker } from "../listener/broker.mjs";
+import { GITHUB_FILES } from "../listener/egress.mjs";
 import {
   advertisedRefs,
+  advertisementReader,
   callTargets,
   createForkChecks,
   fetchBody,
   fetchRequest,
+  MAX_LOOKUPS,
   pkt,
   readsBlobs,
   refKind,
 } from "../listener/github-forks.mjs";
-import { createGithubGateway } from "../listener/github-gateway.mjs";
+import { createGithubGateway, FILES } from "../listener/github-gateway.mjs";
 import { createGraphqlChecks } from "../listener/github-graphql.mjs";
 import { parse } from "../listener/vendor/graphql.mjs";
-import { sandboxAt, serve } from "./helpers.mjs";
+import { sandboxAt, serve, tempDir } from "./helpers.mjs";
 
 const OWN = "a".repeat(40); // on the default branch
 const HEAD = "b".repeat(40); // a branch's head, not on the default one
@@ -89,6 +94,13 @@ test("fetchRequest reads what a fetch wants, in protocol v0 and v2", () => {
     wants: [FORK],
     refs: ["refs/pull/7/head"],
   });
+  // git reads an id in any case: so does this, lowercased. A want line it can't read fails.
+  const upper = Buffer.concat([pkt("command=fetch\n"), pkt(`want ${FORK.toUpperCase()}\n`)]);
+  assert.deepEqual(fetchRequest(upper).wants, [FORK]);
+  for (const line of [`want ${FORK.slice(1)}`, `WANT-REF  refs/pull/7/head`, `want-refs x`]) {
+    const odd = Buffer.concat([pkt("command=fetch\n"), pkt(`${line}\n`)]);
+    assert.throws(() => fetchRequest(odd), /a fetch line Deckhand can't read/, line);
+  }
   const ls = Buffer.concat([pkt("command=ls-refs\n"), Buffer.from("0001"), pkt("peel\n")]);
   assert.equal(fetchRequest(ls).command, "ls-refs");
   assert.throws(() => fetchRequest(Buffer.from("not git")), /not a git fetch/);
@@ -121,6 +133,10 @@ test("advertisedRefs reads v0's and v2's advertisements, a tag's peeled commit t
     { oid: TAG, ref: "refs/tags/v1" },
     { oid: PEELED, ref: "refs/tags/v1" },
   ]);
+  // Read as it streams: the same, whatever its chunks, only a cut line held.
+  const reader = advertisementReader();
+  for (let i = 0; i < v0.length; i += 7) reader.push(v0.subarray(i, i + 7));
+  assert.deepEqual(reader.refs(), advertisedRefs(v0));
 });
 
 test("refKind and callTargets: what a call names that may be a fork's", () => {
@@ -138,9 +154,19 @@ test("refKind and callTargets: what a call names that may be a fork's", () => {
     id: null,
     refs: ["refs/pull/7/head"],
     pulls: [],
+    blob: false,
   });
   assert.deepEqual(callTargets("api", "repos/o/r/contents/a.js", q(`ref=${FORK}`)).refs, [FORK]);
   assert.deepEqual(callTargets("api", "repos/o/r/contents/a.js").refs, []);
+  // Every ref it repeats: GitHub may read the last.
+  assert.deepEqual(
+    callTargets("api", "repos/o/r/contents/a.js", q("ref=main&ref=refs/pull/7/head")).refs,
+    ["main", "refs/pull/7/head"],
+  );
+  // A blob by its id: flagged. A tree's or a commit's metadata hold no file: not checked.
+  assert.equal(callTargets("api", `repos/o/r/git/blobs/${FORK}`).blob, true);
+  assert.deepEqual(callTargets("api", `repos/o/r/git/trees/${FORK}`).refs, []);
+  assert.deepEqual(callTargets("api", `repos/o/r/git/commits/${FORK}`).refs, []);
   assert.deepEqual(callTargets("api", "repos/o/r/compare/main...evil:x").refs, ["main", "evil:x"]);
   assert.deepEqual(callTargets("api", `repos/o/r/commits/${FORK}`).refs, [FORK]);
   assert.deepEqual(callTargets("api", `repos/o/r/commits/${FORK}/check-runs`).refs, []);
@@ -206,6 +232,7 @@ test("a fork's pull request, its repository and its commits are refused; the rep
     ["api", "repos/org/repo/tarball/refs/pull/7/head"],
     ["api", "repos/org/repo/zipball/pull/7/merge"],
     ["api", "repos/org/repo/contents/package.json", "ref=refs/pull/7/head"],
+    ["api", "repos/org/repo/contents/package.json", "ref=main&ref=refs/pull/7/head"],
     ["api", "repos/org/repo/pulls/7/files"],
     ["api", "repos/org/repo/pulls/7", "", "application/vnd.github.diff"],
     ["web", "Org/Repo/archive/refs/pull/7/head.zip"],
@@ -232,7 +259,6 @@ test("a fork's pull request, its repository and its commits are refused; the rep
   for (const [kind, path, query] of [
     ["api", `repos/org/repo/tarball/${FORK}`],
     ["api", `repos/org/repo/commits/${FORK}`],
-    ["api", `repos/org/repo/git/trees/${FORK}`],
     ["api", "repos/org/repo/contents/a.js", `ref=${FORK.slice(0, 7)}`],
     ["raw", `org/repo/${FORK}/a.js`],
     ["web", `org/repo/commit/${FORK}.patch`],
@@ -240,7 +266,7 @@ test("a fork's pull request, its repository and its commits are refused; the rep
     const refused = await check(kind, path, query);
     assert.match(
       refused?.message ?? "",
-      /isn't on org\/repo's default branch nor a branch's head/,
+      /isn't a commit on org\/repo's default branch nor a branch's head/,
       path,
     );
   }
@@ -248,6 +274,13 @@ test("a fork's pull request, its repository and its commits are refused; the rep
     (await check("api", "repos/org/repo/compare/main...evil:main")).message,
     /another repository's/,
   );
+  // A blob by its id, even the repository's own: nothing says where one comes from.
+  for (const sha of [OWN, FORK]) {
+    assert.match(
+      (await check("api", `repos/org/repo/git/blobs/${sha}`)).message,
+      /a blob read by its id may be a fork's/,
+    );
+  }
 
   // The repository's own: its branches, tags, commits, a pull request from one of its branches.
   for (const [kind, path, query, accept] of [
@@ -261,6 +294,8 @@ test("a fork's pull request, its repository and its commits are refused; the rep
     ["api", "repos/org/repo/compare/main...feature"],
     ["api", "repos/org/repo/compare/main...org:feature"],
     ["api", `repos/org/repo/commits/${FORK}/check-runs`],
+    // A tree lists names and ids, no file: the usual way to walk the repository.
+    ["api", `repos/org/repo/git/trees/${"7".repeat(40)}`, "recursive=1"],
     ["api", "repos/org/repo/issues/7"],
     ["web", "org/repo/archive/refs/pull/8/head.zip"],
     ["raw", "org/repo/feature/x/README.md"],
@@ -325,12 +360,14 @@ test("a fetch's wants: an own ref's advertised commit goes, a fork's pull reques
   forks.remember(
     run,
     "org/repo",
-    advertisement([
-      `${OWN} refs/heads/main`,
-      `${FORK} refs/pull/7/head`,
-      `${MERGE} refs/pull/8/merge`,
-      `${TAG} refs/tags/v1 peeled:${PEELED}`,
-    ]),
+    advertisedRefs(
+      advertisement([
+        `${OWN} refs/heads/main`,
+        `${FORK} refs/pull/7/head`,
+        `${MERGE} refs/pull/8/merge`,
+        `${TAG} refs/tags/v1 peeled:${PEELED}`,
+      ]),
+    ),
   );
   const fetch = (wants, refs = []) => forks.checkFetch(run, "org/repo", { wants, refs });
   assert.equal(await fetch([OWN, TAG, PEELED, MERGE]), null);
@@ -339,11 +376,21 @@ test("a fetch's wants: an own ref's advertised commit goes, a fork's pull reques
   assert.match((await fetch([], ["refs/pull/7/head"])).message, /pull request #7 is from a fork/);
   // Not advertised: the repository's when its default branch has it, or a branch's head.
   assert.equal(await fetch([HEAD]), null);
-  assert.match((await fetch(["9".repeat(40)])).message, /isn't on org\/repo's default branch/);
+  assert.match((await fetch(["9".repeat(40)])).message, /isn't a commit on org\/repo's default/);
+  // A blobless clone's lazy fetch: a blob, which no ref names and GitHub can't place.
+  assert.match(
+    (await fetch(["b10b".repeat(10)])).message,
+    /a blob or tree isn't fetched on its own/,
+  );
+  // Many of them (a checkout's): refused without asking GitHub at all.
+  const many = Array.from({ length: MAX_LOOKUPS + 1 }, (_, i) => i.toString(16).padStart(40, "0"));
+  const asking = asked.length;
+  assert.match((await fetch([OWN, ...many])).message, /wants 21 objects no ref of org\/repo/);
+  assert.equal(asked.length, asking);
   // Another run's memory isn't this one's.
   assert.match(
     (await forks.checkFetch(workRun(), "org/repo", { wants: [FORK], refs: [] })).message,
-    /isn't on org\/repo's default branch/,
+    /isn't a commit on org\/repo's default branch/,
   );
   // A fork's repository, fetched by its own URL; another repository's isn't checked.
   assert.match((await forks.fetchScope(run, "evil/repo")).refused.message, /is a fork/);
@@ -387,7 +434,8 @@ async function gateway(t) {
     });
   };
   const github = await serve(t, upstream);
-  const raw = await serve(t, upstream);
+  const files = await serve(t, upstream);
+  const at = `http://localhost:${files.port}`;
   const broker = createBroker({ sentFrom: sandboxAt() });
   const forks = createForkChecks({ get: fakeGithub().get });
   const gw = createGithubGateway({
@@ -395,7 +443,12 @@ async function gateway(t) {
     app: () => ({ repoToken: async () => ({ token: "repo-token-0123456789abcdef" }) }),
     api: `${github.url}/api/v3`,
     web: github.url,
-    raw: `http://localhost:${raw.port}`,
+    // GitHub's file hosts (FILES), on the same fake.
+    files: [
+      { host: "localhost", url: at, kind: "raw", prefix: "" },
+      { host: "media.test", url: at, kind: "raw", prefix: "media/" },
+      { host: "patch-diff.test", url: at, kind: "web", prefix: "raw/" },
+    ],
     forks,
   });
   const { url } = await serve(t, (req, res) => gw.handle(req, res));
@@ -505,4 +558,175 @@ test("raw files are relayed without a token, a fork's refused to a work run", as
     body: "x",
   });
   assert.equal(put.status, 405);
+});
+
+test("a fork's pull request's diff and LFS files are refused on GitHub's other file hosts too", async (t) => {
+  const gw = await gateway(t);
+  const { secret } = gw.register(false);
+  // patch-diff.githubusercontent.com, where github.com/<repo>/pull/<n>.diff redirects.
+  const diff = await gw.call("patch-diff.test", "/raw/org/repo/pull/7.diff", secret);
+  assert.equal(diff.status, 403);
+  assert.match(await diff.text(), /^Deckhand: pull request #7 is from a fork/);
+  const own = await gw.call("patch-diff.test", "/raw/org/repo/pull/8.diff", secret);
+  assert.equal(own.status, 200);
+  assert.equal(gw.calls.at(-1).url, "/raw/org/repo/pull/8.diff");
+  assert.equal(gw.calls.at(-1).headers.authorization, undefined);
+  // media.githubusercontent.com, LFS files by ref.
+  const lfs = await gw.call("media.test", "/media/org/repo/refs/pull/7/head/model.bin", secret);
+  assert.equal(lfs.status, 403);
+  // A path the checks don't read: refused, not let through.
+  const odd = await gw.call("patch-diff.test", "/elsewhere/org/repo/pull/7.diff", secret);
+  assert.equal(odd.status, 403);
+  assert.match(await odd.text(), /Deckhand doesn't read/);
+});
+
+test("the gateway's file hosts are the ones the egress proxy relays", () => {
+  assert.deepEqual(
+    FILES.map((f) => f.host),
+    GITHUB_FILES,
+  );
+});
+
+// Real git, through the gateway, against GitHub's git as `git http-backend` serves it: a work
+// run's whole clone and own pull request go, a fork's pull request doesn't, by its ref or its
+// commit, and a blobless clone's checkout (its blobs wanted one by one) doesn't either: hence
+// SANDBOX_FULL_CLONE. A fork's run fetches its pull request as before.
+test("real git through the gateway: a whole clone goes, a fork's head and lone blobs don't", async (t) => {
+  const dir = tempDir(t, "forks-git-");
+  const env = {
+    PATH: process.env.PATH,
+    HOME: dir,
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_TERMINAL_PROMPT: "0",
+    ...Object.fromEntries(
+      ["AUTHOR", "COMMITTER"].flatMap((w) => [
+        [`GIT_${w}_NAME`, "a"],
+        [`GIT_${w}_EMAIL`, "a@example"],
+      ]),
+    ),
+  };
+  // Async: the servers answering git run on this thread.
+  const sh = (command) =>
+    new Promise((resolve) => {
+      const child = spawn("bash", ["-c", command], { cwd: dir, env });
+      let out = "";
+      child.stdout.on("data", (d) => (out += d));
+      child.stderr.on("data", (d) => (out += d));
+      child.on("close", (code) => resolve({ code, out: out.trim() }));
+    });
+  const repo = join(dir, "root", "org", "repo.git");
+  const made = await sh(
+    `git init -q -b main src && cd src && for v in 1 2 3; do echo $v > f && git add f &&
+    git commit -qm $v; done && git checkout -q -b fork && echo evil > evil.sh && git add . &&
+    git commit -qm fork && git checkout -q main && git clone -q --bare . ${repo} &&
+    cd ${repo} && git update-ref refs/pull/7/head fork && git update-ref refs/pull/8/head main &&
+    git branch -q -D fork && git config uploadpack.allowFilter true &&
+    git config uploadpack.allowAnySHA1InWant true && git rev-parse refs/pull/7/head`,
+  );
+  assert.equal(made.code, 0, made.out);
+  const forkSha = made.out.split("\n").at(-1);
+  const github = await serve(t, (req, res) => {
+    const url = new URL(req.url, "http://github");
+    const cgi = spawn("git", ["http-backend"], {
+      env: {
+        ...env,
+        GIT_PROJECT_ROOT: join(dir, "root"),
+        GIT_HTTP_EXPORT_ALL: "1",
+        PATH_INFO: url.pathname,
+        QUERY_STRING: url.search.slice(1),
+        REQUEST_METHOD: req.method,
+        CONTENT_TYPE: req.headers["content-type"] ?? "",
+        GIT_PROTOCOL: req.headers["git-protocol"] ?? "",
+        HTTP_CONTENT_ENCODING: req.headers["content-encoding"] ?? "",
+      },
+    });
+    req.pipe(cgi.stdin);
+    let head = Buffer.alloc(0);
+    let started = false;
+    cgi.stdout.on("data", (chunk) => {
+      if (started) return res.write(chunk);
+      head = Buffer.concat([head, chunk]);
+      const end = head.indexOf("\r\n\r\n");
+      if (end < 0) return;
+      const headers = {};
+      let status = 200;
+      for (const line of head.subarray(0, end).toString().split("\r\n")) {
+        const [name, value] = [line.slice(0, line.indexOf(":")), line.slice(line.indexOf(":") + 2)];
+        if (name.toLowerCase() === "status") status = parseInt(value);
+        else headers[name] = value;
+      }
+      started = true;
+      res.writeHead(status, headers);
+      res.write(head.subarray(end + 4));
+    });
+    cgi.stdout.on("end", () => res.end());
+  });
+  // GitHub's API as the checks ask it: #7 a fork's, #8 a branch's; compare from the clone.
+  const get = async (_, path) => {
+    let m;
+    if (path === "/repos/org/repo") return { id: 1, full_name: "org/repo", default_branch: "main" };
+    if ((m = /pulls\/(\d+)$/.exec(path))) return PULLS[m[1]] ?? null;
+    if ((m = /compare\/([0-9a-f]+)\.\.\./.exec(path))) {
+      const on = await sh(`git -C ${repo} merge-base --is-ancestor ${m[1]} main`);
+      return on.code === 0 ? { status: "ahead" } : null;
+    }
+    return /branches-where-head/.test(path) ? [] : null;
+  };
+  const broker = createBroker({ sentFrom: async () => true });
+  let current = null;
+  const gw = createGithubGateway({
+    broker,
+    app: () => ({ repoToken: async () => ({ token: "repo-token-0123456789abcdef" }) }),
+    api: `${github.url}/api/v3`,
+    web: github.url,
+    forks: createForkChecks({ get }),
+    // git's calls carry no secret: the run whose sandbox sent them.
+    runFrom: async () => current,
+  });
+  const { url } = await serve(t, (req, res) => gw.handle(req, res));
+  const via = `${url}/relay/127.0.0.1/org/repo.git`;
+  const as = (fork) => {
+    const secret = broker.register("org/repo", {}, { push: true });
+    broker.allow(secret, [], fork);
+    current = broker.runOf(secret);
+  };
+
+  as(false);
+  assert.equal(
+    (await sh(`git clone -q ${via} whole && git -C whole log --oneline | wc -l`)).out,
+    "3",
+  );
+  assert.equal((await sh("git -C whole fetch -q origin refs/pull/8/head")).code, 0);
+  for (const what of ["refs/pull/7/head", forkSha]) {
+    const fetched = await sh(`git -C whole fetch -q origin ${what}`);
+    assert.notEqual(fetched.code, 0, what);
+    assert.match(
+      fetched.out,
+      /remote error: Deckhand: pull request #7 is from a fork \(evil\/repo\)/,
+    );
+  }
+  const blobless = await sh(`git clone -q --filter=blob:none ${via} blobless`);
+  assert.match(
+    blobless.out,
+    /remote error: Deckhand: \w+ isn't a commit on org\/repo's default branch/,
+  );
+  assert.match(blobless.out, /checkout failed/);
+
+  as(true);
+  assert.equal(
+    (
+      await sh(
+        "git -C whole fetch -q origin refs/pull/7/head && git -C whole show FETCH_HEAD:evil.sh",
+      )
+    ).out,
+    "evil",
+  );
+  assert.equal((await sh(`git clone -q --filter=blob:none ${via} kept`)).code, 0);
+  // The entrypoint's whole_clone(), in the next work run: every blob at once, through the gateway.
+  as(false);
+  const whole = await sh(
+    `cd kept && git fetch -q --refetch --no-filter origin && git log -p >/dev/null &&
+    git rev-list --objects --missing=print --all | grep -c '^?' || true`,
+  );
+  assert.equal(whole.out, "0");
 });

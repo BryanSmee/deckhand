@@ -11,7 +11,7 @@ import {
   matchHost,
   operatorHosts,
   proxyEnv,
-  RAW_HOST,
+  GITHUB_FILES,
   relayedGithub,
 } from "../listener/egress.mjs";
 import { grantFor, grantsFrom } from "../listener/grants.mjs";
@@ -277,13 +277,16 @@ test("GitHub's hosts: relayed for a sandbox, a tunnel for its engine (#411's exc
       relay: false,
     });
   }
-  // Raw files carry no token, but are relayed too (the gateway checks what a work run reads
-  // there: github-forks.mjs); GitHub's other githubusercontent.com hosts aren't.
+  // GitHub's file hosts (raw files, LFS files, diffs) carry no token, but are relayed too (the
+  // gateway checks what a work run reads there: github-forks.mjs); its other
+  // githubusercontent.com hosts (release assets, avatars) aren't.
   const all = relayedGithub(config);
-  assert.deepEqual(all, [...relayed, RAW_HOST]);
-  assert.equal(egressPolicy(RAW_HOST, hosts, hosts, [], hosts, { relayed: all }).relay, true);
-  const engine = egressPolicy(RAW_HOST, hosts, hosts, [], hosts, { decrypt: false, relayed: all });
-  assert.equal(engine.relay, false);
+  assert.deepEqual(all, [...relayed, ...GITHUB_FILES]);
+  for (const host of GITHUB_FILES) {
+    assert.equal(egressPolicy(host, hosts, hosts, [], hosts, { relayed: all }).relay, true);
+    const engine = egressPolicy(host, hosts, hosts, [], hosts, { decrypt: false, relayed: all });
+    assert.equal(engine.relay, false);
+  }
   const assets = egressPolicy("objects.githubusercontent.com", hosts, hosts, [], hosts, {
     relayed: all,
   });

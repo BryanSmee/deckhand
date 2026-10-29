@@ -391,10 +391,11 @@ to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to the
   repository, a fork's pull request's head, a commit that isn't its repository's, by git, the
   API, an archive, a page or a raw file ([What a fork's code may
   reach](#what-a-forks-code-may-reach)).
-- `raw.githubusercontent.com` (raw files) is relayed to the gateway too, for that check, and
-  goes on without a token, the sandbox's `Authorization` and cookies dropped; GitHub's other
-  `*.githubusercontent.com` hosts (release assets, avatars) stay plain allowed hosts: none
-  carries a token.
+- GitHub's file hosts (`listener/egress.mjs` `GITHUB_FILES`: `raw.githubusercontent.com`,
+  `media.githubusercontent.com` for LFS files, `patch-diff.githubusercontent.com` for diffs)
+  are relayed to the gateway too, for that check, and go on without a token, the sandbox's
+  `Authorization` and cookies dropped; GitHub's other `*.githubusercontent.com` hosts (release
+  assets, avatars) stay plain allowed hosts: none carries a token.
 - **Two exceptions, neither with a token**, which reach GitHub's hosts through a tunnel
   rather than the gateway, so what they get is anonymous (both accepted in pull request
   #411):
@@ -641,24 +642,38 @@ comment from an allowed user on the fork's pull request starts a fork's run, whi
   pull request looked up on GitHub: its head isn't in the repository): in a fetch (a
   `want-ref`, or a `want` of the commit GitHub advertised under it, which git shows as
   `remote error: Deckhand: …`), an archive (`tarball`, `zipball`, `archive/`), contents and
-  `readme` (`?ref=`), a tree or commit, a comparison, raw files, and its diff and files
-  (`gh pr diff`, `pulls/<n>/files`, `pull/<n>.diff`). Its metadata (`gh pr view`) isn't
+  `readme` (`?ref=`, each one when it is repeated), a commit, a comparison, raw and LFS
+  files, and its diff and files (`gh pr diff`, `pulls/<n>/files`, `pull/<n>.diff` and
+  `patch-diff.githubusercontent.com`, where it redirects). Its metadata (`gh pr view`) isn't
   refused.
 - **A commit that isn't the repository's**: GitHub serves any commit of a repository's network
   (its forks') through the repository itself. So a fetch's `want`s, and a commit a call names
-  (an archive's, a tree's, a comparison's sides, `?ref=`), must be the repository's: a ref of
+  (an archive's, a comparison's sides, `?ref=`), must be the repository's: a ref of
   its own pointed at it in what GitHub advertised to the run's git (a branch, a tag, a pull
   request from one of its branches), its default branch has it (`compare`), or it is a
   branch's head (`branches-where-head`). A branch or tag name is the repository's. Anything
   else, a commit a branch dropped or one only a tag reaches, is refused rather than looked
-  for. A comparison with another owner's branch (`main...someone:branch`) is refused too.
+  for, and a fetch wanting over 20 objects no ref named is refused without asking GitHub. A
+  comparison with another owner's branch (`main...someone:branch`) is refused too. A tree and
+  a commit's metadata (`git/trees`, `git/commits`) hold no file's content: not checked.
+- **A blob by its id** (`git/blobs/<sha>`, or a fetch's `want` of one): whoever wrote a fork
+  can name its blobs (`git hash-object`), and nothing says where one comes from, so such a
+  run gets none, its repository's own included: it reads a file with `contents/<path>?ref=`
+  or from its clone. That clone is whole (`SANDBOX_FULL_CLONE`, set by
+  `listener/sandbox-spec.mjs`), where other runs' are blobless (`--filter=blob:none`), whose
+  checkouts ask for each blob they lack: a kept blobless clone (a fork's run's, or an older
+  Deckhand's) gets every blob it lacks at the start, at once (`git fetch --refetch`), before
+  any checkout.
 - **A file's content over GraphQL** (a fragment on `Blob`, the only type that has it) is
   refused to such a run whatever it names: an expression such as `refs/pull/7/head:a.js` can
   name a fork's.
-- **Raw files**: `raw.githubusercontent.com` serves any file of a public repository without a
-  token, a fork's pull request's included (`/<owner>/<repo>/refs/pull/<n>/head/<path>`, or a
-  fork's commit through the repository). So the egress proxy relays it to the gateway too,
-  which checks it as above and sends it on without a token, as when it was a plain host.
+- **GitHub's file hosts**: `raw.githubusercontent.com` serves any file of a public repository
+  without a token, a fork's pull request's included (`/<owner>/<repo>/refs/pull/<n>/head/<path>`,
+  or a fork's commit through the repository), `media.githubusercontent.com` its LFS files the
+  same way (`/media/…`), and `patch-diff.githubusercontent.com` its pull requests' diffs
+  (`/raw/<owner>/<repo>/pull/<n>.diff`), which carry a new file whole. So the egress proxy
+  relays them to the gateway too, which checks them as above (a path in another shape is
+  refused) and sends them on without a token, as when they were plain hosts.
   Archives come from `codeload.github.com`, where `github.com/<repo>/archive/…` and the API's
   `tarball` and `zipball` redirect: it isn't a mandatory host, and a grant that adds it
   reaches any public repository's archives, around these checks.
@@ -1565,8 +1580,8 @@ real server's certificate.
   sandbox, through the gateway, while the run lasts. A key that leaks lets its holder read
   and change the GitHub traffic of the sandboxes running then (what they read and write, as
   the proxy does), not act as them elsewhere. `githubusercontent.com` is certifiable too: only
-  `raw.githubusercontent.com` is relayed (it carries no token), the others neither relayed
-  nor decrypted unless you cache them. The providers' names stay excluded: the
+  GitHub's file hosts (`GITHUB_FILES`) are relayed (they carry no token), the others neither
+  relayed nor decrypted unless you cache them. The providers' names stay excluded: the
   operator's credentials still go there, from the listener.
 - **Trust in the sandbox**: for every run that reaches GitHub (all but research runs), and
   when its repository's grant has `cached_hosts` or its agent's calls are relayed (the
@@ -1643,7 +1658,7 @@ instructions and the dashboard's repository panel all name these files.
 | `api.anthropic.com`       | Claude Code's runs only: WebFetch's domain check                               |
 | `github.com`              | git over HTTPS (`GITHUB_URL`), relayed to the [gateway](#the-github-gateway)   |
 | `api.github.com`          | `gh` and the API (`GITHUB_API`), relayed to the [gateway](#the-github-gateway) |
-| `*.githubusercontent.com` | raw files (relayed), release downloads, avatars                                |
+| `*.githubusercontent.com` | raw and LFS files, diffs (relayed), release downloads, avatars                 |
 | the listener              | the broker and the agent's API calls, directly                                 |
 
 That list was checked against Claude Code 2.1.300 (the pinned version) by reading the hosts
@@ -1704,9 +1719,7 @@ it again when you change `AGY_VERSION`.
   exception in [The GitHub gateway](#the-github-gateway)), so a build there can fetch a
   public fork; a `codeload.github.com` grant serves any public repository's archives; and the
   same code anywhere else (another repository, a gist, a package registry the run may reach)
-  is no fork's to any check. A blob fetched by its id (`git/blobs/<sha>`) isn't checked: its
-  id comes from a tree, which is. Ask for work on a fork's pull request from that pull
-  request.
+  is no fork's to any check. Ask for work on a fork's pull request from that pull request.
 - **Image builds** (a repo's `dockerfile`, with `allow_dockerfile`) and the **Claude Code
   install** run with normal network access: they run on the host's Docker, outside the
   sandboxes' networks. Builds run the repo's Dockerfile from its default branch (or its pull

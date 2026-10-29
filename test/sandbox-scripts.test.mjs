@@ -470,7 +470,7 @@ test("the prompt says whether the run has a container engine, and whether it ans
 // on trusted code, and nothing of the last run's is lost.
 function resetClone(t) {
   const script = readFileSync(`${bin}entrypoint.sh`, "utf8");
-  const fns = ["reset_clone", "clean_git_dir"]
+  const fns = ["reset_clone", "clean_git_dir", "whole_clone"]
     .map((name) => new RegExp(`^${name}\\(\\) \\{[^]*?^\\}$`, "m").exec(script)[0])
     .join("\n");
   const dir = tempDir(t, "reset-");
@@ -538,7 +538,7 @@ function resetClone(t) {
     sh(clone, "git checkout -q feat && git checkout -q -");
     assert.ok(!existsSync(hooked), "a git hook ran");
   };
-  return { sh, origin, clone, leave, reset, clean, script };
+  return { sh, origin, clone, leave, reset, clean, script, fns };
 }
 
 test("every start puts the kept clone back on a branch of the repository, with nothing untracked", (t) => {
@@ -572,6 +572,39 @@ test("every start puts the kept clone back on a branch of the repository, with n
   assert.match(
     script,
     /\|\| reset_clone\n[^]*?bash -c "\$SANDBOX_SETUP"[^]*?agent_run "\$session"/,
+  );
+});
+
+// A work run that isn't a fork's fetches no blob on its own (the GitHub gateway refuses it:
+// github-forks.mjs): a blobless clone kept from a fork's run or an older Deckhand gets them all
+// at once, before the checkout would ask for them; other runs leave it blobless.
+test("a work run that isn't a fork's makes a kept blobless clone whole, before any checkout", (t) => {
+  const { sh, origin, fns, script } = resetClone(t);
+  sh(
+    origin,
+    `git config uploadpack.allowFilter true && for v in 1 2 3; do echo $v > f && git add f &&
+    git commit -qm $v; done`,
+  );
+  const dir = join(origin, "..");
+  const missing = (clone) =>
+    sh(clone, "git rev-list --objects --missing=print --all | grep -c '^?' || true");
+  const start = (name, extra) => {
+    sh(dir, `git clone -q --filter=blob:none file://${origin} ${name}`);
+    const clone = join(dir, name);
+    assert.equal(missing(clone), "2");
+    sh(clone, `${fns}\nset -euo pipefail\nBASE_BRANCH=main\nreset_clone`, extra);
+    return clone;
+  };
+  const whole = start("whole", { SANDBOX_FULL_CLONE: "1" });
+  assert.equal(missing(whole), "0");
+  assert.equal(sh(whole, "git config remote.origin.partialclonefilter || true"), "");
+  const light = start("light", {});
+  assert.equal(missing(light), "2");
+  assert.equal(sh(light, "git config remote.origin.partialclonefilter"), "blob:none");
+  // A new clone is whole from the start.
+  assert.match(
+    script,
+    /filter=\(--filter=blob:none\)\n\s*\[ -z "\$\{SANDBOX_FULL_CLONE:-\}" \] \|\| filter=\(\)/,
   );
 });
 

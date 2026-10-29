@@ -124,6 +124,10 @@ export function sandboxEnv(
     // Reading and answering needs no project setup.
     SANDBOX_LIGHT: light ? "1" : "",
     SANDBOX_NO_CLONE: open ? "1" : "",
+    // A work run that isn't a fork's clones whole: the GitHub gateway lets it fetch the
+    // repository's commits only, never a blob on its own, as a blobless clone does on demand
+    // (github-forks.mjs).
+    SANDBOX_FULL_CLONE: !light && !open && !live.fork ? "1" : "",
     SANDBOX_SETUP: light ? "" : (settings.setup ?? ""),
     // Read by the sandbox from its default branch (origin/BASE_BRANCH), like the config.
     SANDBOX_INSTRUCTIONS: open ? "" : (settings.instructions ?? ""),
