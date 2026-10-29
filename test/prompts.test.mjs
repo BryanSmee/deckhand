@@ -110,6 +110,9 @@ test("prompts: each kind of run gets its own", () => {
   assert.match(prompt(issue, "stop"), /^Brainstorm GitHub issue #12/);
   assert.match(prompt(issue, "idea"), /^New on the ideas inbox of org\/repo \(issue #12\)/);
   assert.match(prompt(issue, "idea"), /The entry:\n\nthe comments$/);
+  // Its parts that wait for others say so, so they start in order.
+  assert.match(prompt(issue, "idea"), /issues\/<n>\/dependencies\/blocked_by -F issue_id=<id>/);
+  assert.match(prompt(issue, "idea"), /Never block the parent by its own sub-issues/);
   assert.match(
     prompt(issue, "discussion"),
     /gh api graphql -F owner=org -F name=repo -F number=12/,
@@ -307,6 +310,9 @@ test("prompts: a brainstorm proposes follow-up issues and files the kept ones", 
   );
   // A part of the issue becomes its sub-issue; separate work only links back.
   assert.match(text, /issues\/<this issue>\/sub_issues -F sub_issue_id=<id>/);
+  // Parts that wait for others say so, so they start in order.
+  assert.match(text, /issues\/<n>\/dependencies\/blocked_by -F issue_id=<id>/);
+  assert.match(text, /Never block this issue by its own sub-issues/);
   assert.match(text, /Separate work stays a plain issue that links back/);
   // The summary lists them; the description links them.
   assert.match(text, /the issues you created or linked/);

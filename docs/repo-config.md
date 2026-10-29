@@ -878,6 +878,18 @@ the run, so a listener restart keeps them. A GraphQL answer counts only under th
 key of a `createIssue` field the gateway parsed, selecting GitHub's own `issue { url }`
 (unaliased), and the issue must be the App's bot's.
 
+A "blocked by" link (`POST …/issues/<n>/dependencies/blocked_by` with the blocker's
+`issue_id`, `DELETE …/issues/<n>/dependencies/blocked_by/<issue_id>`, or GraphQL's
+`addBlockedBy` and `removeBlockedBy`) is a `link` too: its target is the blocked issue, held to
+the ceiling as any link's, and its blocker must be an issue the run created, one under the
+run's issue, or any open issue of the run's repository (not a pull request, nor another
+repository's issue, though GitHub allows those). A REST blocker, named by its id only, is
+looked for among the repository's 1,000 newest open issues and pull requests (GitHub lists
+them together) past the run's own (GitHub can't
+look an issue up by its id); GraphQL's, by its node ID, is looked up wherever it is. A call
+without its blocker is refused. The listener reads these links to order a plan
+([architecture](architecture.md)): a sub-issue waits on the graph until its blockers close.
+
 **GraphQL** (`gh issue create`, `gh issue comment`, `gh issue edit` and most of `gh`'s own
 commands) goes through the same checks, field by field:
 
@@ -891,7 +903,8 @@ commands) goes through the same checks, field by field:
    mutation is.
 2. **Queries go on.** Each field of a mutation, through its fragments and under any alias,
    must be one Deckhand knows (`createIssue`, `updateIssue`, `addComment`, `addSubIssue`,
-   `removeSubIssue`, `reprioritizeSubIssue`, `addLabelsToLabelable`,
+   `removeSubIssue`, `reprioritizeSubIssue`, `addBlockedBy`, `removeBlockedBy`,
+   `addLabelsToLabelable`,
    `removeLabelsFromLabelable`, `addAssigneesToAssignable`, `removeAssigneesFromAssignable`,
    `closeIssue`, `reopenIssue`, `addReaction`, `createPullRequest`, `updatePullRequest`,
    `markPullRequestReadyForReview`, `convertPullRequestToDraft`), setting only the
@@ -954,6 +967,7 @@ go through Deckhand's git gateway) or settings, or another repository.
 | `change.labels_added`   | The labels it adds (or sets, for a `PUT` or a `PATCH` with `labels`, or creates, for `label`).                                                                                                                                                                                                                 |
 | `change.labels_removed` | The labels it removes: those a `PUT` or a `PATCH` with `labels` leaves out of the issue's, or the one it deletes; `["*"]` when it deletes them all.                                                                                                                                                            |
 | `change.sub_issue`      | A link's child: `id`, `number`, `kind` (`sub_issue` or `created_issue`). Absent from other writes.                                                                                                                                                                                                             |
+| `change.blocked_by`     | A "blocked by" link's blocker: `id`, `number`, `kind` (`sub_issue`, `created_issue`, or an open issue's kind as a target's: `own_issue`, `other_issue`). Absent from other writes.                                                                                                                             |
 
 ```json
 {
@@ -990,7 +1004,15 @@ deny_github contains msg if {
 deny_github contains msg if {
   input.mode in {"brainstorm", "stop"}
   not input.target.kind in {"own_issue", "new_issue", "label"}
+  not orders_follow_ups
   msg := sprintf("a brainstorm writes only its own issue, not #%d", [input.target.number])
+}
+
+# But it orders its follow-ups: "blocked by" links on its sub-issues and the issues it filed.
+orders_follow_ups if {
+  input.action == "link"
+  input.change.blocked_by
+  input.target.kind in {"sub_issue", "created_issue"}
 }
 
 # Inbox entries only file issues (with their label), and link the ones they split.

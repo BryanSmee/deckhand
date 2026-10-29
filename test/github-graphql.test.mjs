@@ -15,7 +15,7 @@ import {
   parseCall,
   restName,
 } from "../listener/github-graphql.mjs";
-import { createWriteChecks } from "../listener/github-writes.mjs";
+import { classify, createWriteChecks } from "../listener/github-writes.mjs";
 
 const json = (value) => Buffer.from(JSON.stringify(value));
 const call = (query, variables, operationName) => json({ query, variables, operationName });
@@ -42,6 +42,12 @@ const NODES = {
     databaseId: 103,
     repository: { nameWithOwner: "Org/Repo" },
   },
+  I_4: {
+    __typename: "Issue",
+    number: 4,
+    databaseId: 104,
+    repository: { nameWithOwner: "Org/Repo" },
+  },
   I_o: {
     __typename: "Issue",
     number: 1,
@@ -57,11 +63,12 @@ const NODES = {
 };
 
 // GitHub's REST answers the write checks look up (github-writes.mjs resolve()): #1 the run's,
-// #2 a sub-issue of it, #3 someone else's, #7 a pull request.
+// #2 a sub-issue of it, #3 someone else's, #4 someone else's closed, #7 a pull request.
 const ISSUES = {
   1: { number: 1, user: { login: "alice" }, labels: [] },
   2: { number: 2, user: { login: "bob" }, labels: [{ name: "idea" }] },
-  3: { number: 3, user: { login: "bob" }, labels: [] },
+  3: { number: 3, state: "open", user: { login: "bob" }, labels: [] },
+  4: { number: 4, state: "closed", user: { login: "bob" }, labels: [] },
   7: { number: 7, pull_request: {}, user: { login: "deckhand[bot]" }, labels: [] },
 };
 async function lookup(repo, path) {
@@ -575,6 +582,74 @@ test("a sub-issue link: its child resolved from its node, never moved from anoth
   assert.match((await check(brainstorm, link("I_1", "PR_7"))).refused.message, /isn't an issue/);
 });
 
+test("a blocked-by link: its blocker resolved from its node, an issue of the run's repo", async () => {
+  const { check, writes } = checks();
+  const work = run("work");
+  const link = (name, issueId, blockingIssueId) =>
+    call(
+      `mutation { ${name}(input: { issueId: "${issueId}", blockingIssueId: "${blockingIssueId}" }) { clientMutationId } }`,
+    );
+  // Its sub-issue blocked by its own issue's other sub-issue, or by any open issue: added and
+  // removed.
+  for (const name of ["addBlockedBy", "removeBlockedBy"]) {
+    for (const [target, blocker] of [
+      ["I_2", "I_3"],
+      ["I_1", "I_3"],
+      ["I_1", "I_2"],
+    ]) {
+      assert.equal((await check(work, link(name, target, blocker))).write, true, name);
+    }
+  }
+  assert.deepEqual(writes.at(-1).blocker, { id: 102, number: 2, repo: "org/repo" });
+  assert.deepEqual(writes.at(-1).actions, ["link"]);
+  // One spelling for the policies: GraphQL's blocker field as REST names it, added or removed.
+  const rest = [
+    classify("POST", "repos/org/repo/issues/1/dependencies/blocked_by", json({ issue_id: 102 })),
+    classify("DELETE", "repos/org/repo/issues/1/dependencies/blocked_by/102", Buffer.alloc(0)),
+  ];
+  assert.deepEqual(
+    writes.slice(-4).map((w) => w.change.fields),
+    Array(4).fill(["issue_id"]),
+  );
+  assert.deepEqual(
+    rest.map((w) => w.change.fields),
+    [["issue_id"], ["issue_id"]],
+  );
+  // A closed issue it didn't create, another repository's, a pull request: refused.
+  assert.match(
+    (await check(work, link("addBlockedBy", "I_2", "I_4"))).refused.message,
+    /an open issue of its repository/,
+  );
+  assert.match(
+    (await check(work, link("addBlockedBy", "I_2", "I_o"))).refused.message,
+    /blockingIssueId isn't in the run's repository/,
+  );
+  assert.match(
+    (await check(work, link("addBlockedBy", "I_2", "PR_7"))).refused.message,
+    /isn't an issue/,
+  );
+  // The target goes through the ceiling: someone else's issue isn't a work run's to link.
+  assert.match(
+    (await check(work, link("addBlockedBy", "I_3", "I_2"))).refused.message,
+    /can't link on other_issue #3/,
+  );
+  // Nor is anything an analysis's.
+  assert.match(
+    (await check(run("analyze"), link("addBlockedBy", "I_2", "I_3"))).refused.message,
+    /its ceiling/,
+  );
+  // Without its blocker: GitHub's schema requires it.
+  assert.match(
+    (
+      await check(
+        work,
+        call('mutation { addBlockedBy(input: { issueId: "I_2" }) { clientMutationId } }'),
+      )
+    ).refused.message,
+    /blockingIssueId/,
+  );
+});
+
 test("lookupNodes: GitHub's nodes in order, a missing one null; a failed answer throws", async () => {
   const sent = [];
   const github =
@@ -695,8 +770,18 @@ test("restName: GraphQL's input names as REST's body names them", () => {
       "title",
       "subIssueId",
       "stateReason",
+      "blockingIssueId",
     ].map(restName),
-    ["labels", "assignees", "milestone", "base", "title", "sub_issue_id", "state_reason"],
+    [
+      "labels",
+      "assignees",
+      "milestone",
+      "base",
+      "title",
+      "sub_issue_id",
+      "state_reason",
+      "issue_id",
+    ],
   );
 });
 

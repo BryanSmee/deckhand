@@ -13,7 +13,9 @@ import {
 // created; `other_issue`, `pr`, the rest; `new_issue`, an issue it creates; `new_pr`, a pull
 // request it opens (from one of its branches: github-pulls.mjs); `label`, a label of the repo
 // it creates. A link's child must be a sub-issue or an issue the run created
-// (github-writes.mjs), and moving one from another parent is in no ceiling. Brainstorms
+// (github-writes.mjs), and moving one from another parent is in no ceiling. A "blocked by"
+// link is a `link` on the blocked issue, its blocker one of those or any open issue of the
+// repo (github-writes.mjs resolveBlocker()). Brainstorms
 // comment elsewhere in theirs, which the default policy refuses
 // (docs/repo-config.md#the-github-input).
 const WORK_CEILING = {
