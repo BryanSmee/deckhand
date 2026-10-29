@@ -576,8 +576,9 @@ export function writeOf({ name, spec, input }, nodes, repo) {
       id: sub.databaseId ?? null,
       number: sub.number,
       repo: repoOf(sub).toLowerCase(),
-      // Moving it from another parent: in no ceiling (github-writes.mjs).
-      replace_parent: input.replaceParent === true,
+      // Moving it from another parent: in no ceiling (github-writes.mjs). Any value but false,
+      // null too, as REST's child() reads it: fail closed.
+      replace_parent: "replaceParent" in input && input.replaceParent !== false,
     };
   }
   return write;

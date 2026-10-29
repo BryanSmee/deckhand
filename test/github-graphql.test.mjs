@@ -490,10 +490,24 @@ test("a sub-issue link: its child resolved from its node, never moved from anoth
       child,
     );
   }
-  assert.match(
-    (await check(brainstorm, link("I_1", "I_2", ", replaceParent: true"))).refused.message,
-    /replace_parent/,
-  );
+  for (const value of ["true", "null"]) {
+    assert.match(
+      (await check(brainstorm, link("I_1", "I_2", `, replaceParent: ${value}`))).refused.message,
+      /replace_parent/,
+      value,
+    );
+  }
+  // From the variables too; false is no move.
+  const linked = (replaceParent) =>
+    check(
+      brainstorm,
+      call(
+        "mutation($input: AddSubIssueInput!) { addSubIssue(input: $input) { clientMutationId } }",
+        { input: { issueId: "I_1", subIssueId: "I_2", replaceParent } },
+      ),
+    );
+  assert.match((await linked(null)).refused.message, /replace_parent/);
+  assert.equal((await linked(false)).write, true);
   assert.match((await check(brainstorm, link("I_1", "PR_7"))).refused.message, /isn't an issue/);
 });
 
