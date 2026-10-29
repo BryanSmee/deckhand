@@ -1,0 +1,157 @@
+// A run's pull request writes (issue #407): `gh pr create`, `gh pr edit`, `gh pr ready
+// [--undo]`, or the same over REST, are writes the GitHub gateway checks like any other
+// (github-writes.mjs, github-graphql.mjs): its mode's ceiling holds them for a work run's own
+// pull requests only (modes.mjs WORK_CEILING). Then, before the policies, here:
+//
+// - a pull request is opened from a branch of the run's repo it may push (broker.mjs allow()),
+//   never `owner:branch` nor another repository's head, and only with the fields GitHub's create
+//   takes for that (not `issue`, which turns an issue into one);
+// - one that is opened, edited, labelled, readied or drafted runs its workflows from a new merge
+//   of its branch with its base: for a repo granted `allow_workflows`, its workflow files are
+//   checked in that merge first, as the git gateway checks a push (git-gateway.mjs
+//   checkBranch());
+// - one whose token must write more than its mode's (`permissions`: pull requests for a create
+//   or an edit, contents for ready and draft) is from one of the run's branches, not only the
+//   pull request it was triggered on: a fork's head isn't the run's to vouch for;
+// - one that conflicts with its base isn't made ready.
+//
+// Each change that went on is recorded for the dashboard at once (`record`, answered()): the
+// `pull_request` delivery that follows may never come.
+import { branchAllowed } from "./broker.mjs";
+
+// What a create may set (REST's names: github-graphql.mjs restName()).
+const CREATE_FIELDS = new Set(["title", "body", "head", "base", "draft", "maintainer_can_modify"]);
+// Actions that run none of the pull request's workflows from its branch: a comment's run from
+// the default branch (`issue_comment`).
+const UNCHECKED = new Set(["comment", "react"]);
+
+const refusal = (status, message) => ({ status, message });
+
+// `lookup(repo, path)`: GitHub's JSON with the listener's token, null for a 404 (github.mjs
+// getJson()); `checkWorkflows(repo, branch, base)`: why `branch`'s workflows can't run merged
+// with `base`, or null (git-gateway.mjs checkBranch()); `record(repo, pull request as GitHub
+// has it, readyAt or null)`: pulls.mjs's.
+export function createPullChecks({
+  lookup,
+  checkWorkflows = async () => null,
+  record = () => {},
+  now = Date.now,
+  log = () => {},
+}) {
+  // A write within the ceiling (github-writes.mjs checkWrite()), its target resolved → null when
+  // it may go on, else { status, message }. `get`: `lookup`, kept across the call's writes.
+  async function check(run, write, target, get = lookup) {
+    if (target.kind !== "new_pr" && target.kind !== "own_pr") return null;
+    if (write.actions.every((a) => UNCHECKED.has(a))) return null;
+    const { repo } = write;
+    if (target.kind === "new_pr") {
+      const { head, base } = write.pull ?? {};
+      const extra = write.change.fields.filter((f) => !CREATE_FIELDS.has(f));
+      if (extra.length) {
+        return refusal(403, `a run opens a pull request without its ${extra.join(", ")}`);
+      }
+      if (typeof head !== "string" || !head || head.includes(":")) {
+        return refusal(403, "a run opens pull requests from a branch of its own repository only");
+      }
+      if (!branchAllowed(run.branches ?? [], head)) {
+        return refusal(403, `${head} is not this run's branch`);
+      }
+      if (typeof base !== "string" || !base) return refusal(422, "a pull request needs its base");
+      return workflows(repo, head, base, repo);
+    }
+    const ref = `${repo}#${target.number}`;
+    let pr;
+    try {
+      pr = await get(repo, `/repos/${repo}/pulls/${target.number}`);
+    } catch (error) {
+      log(`GitHub gateway: ${ref}: ${error.message ?? error}`);
+      return refusal(502, `#${target.number} can't be looked up on GitHub`);
+    }
+    if (!pr) return refusal(404, `#${target.number} isn't there`);
+    const branch = pr.head?.ref;
+    const own = pr.head?.repo?.full_name?.toLowerCase() === repo;
+    if (write.permissions && !(own && branchAllowed(run.branches ?? [], branch))) {
+      return refusal(403, `#${target.number}'s branch, ${branch}, is not this run's`);
+    }
+    // Conflicts with its base: not ready, whatever the run thinks. Only `dirty` is refused:
+    // GitHub computes the state lazily (`unknown`, null) and the rest (checks, reviews) is for
+    // the reviewer to weigh.
+    const base = write.pull?.base ?? pr.base?.ref;
+    if (write.actions.includes("ready") && pr.draft && pr.mergeable_state === "dirty") {
+      const into = pr.base?.ref ?? "the base branch";
+      return refusal(
+        409,
+        `#${target.number} conflicts with ${into}: rebase on origin/${into} first (git fetch origin, git rebase origin/${into}, git push --force-with-lease)`,
+      );
+    }
+    // A fork's workflows run without the repo's secrets: nothing of the run's to check.
+    return own ? workflows(repo, branch, base, ref) : null;
+  }
+
+  // Whether `branch`'s workflows may run merged with `base`: null, else why not.
+  async function workflows(repo, branch, base, ref) {
+    let why;
+    try {
+      why = await checkWorkflows(repo, branch, base);
+    } catch (error) {
+      log(`GitHub gateway: ${ref}: ${error.message ?? error}`);
+      return refusal(502, `${branch}'s workflow files can't be checked; try again`);
+    }
+    if (!why) return null;
+    log(`GitHub gateway: ${ref}: refused: ${why}`);
+    return refusal(422, why);
+  }
+
+  // GitHub's answer to a run's write that went on (github-gateway.mjs wroteWrite()): each pull
+  // request it changed is looked up and recorded, with when it turned ready if it was opened or
+  // readied. `pulls`: [{ key, number | head, ready }], what it wrote to (a GraphQL call's
+  // response key, null over REST, whose status says whether it went on).
+  async function answered(run, { pulls = [], graphql }, status, answer) {
+    if (!pulls.length || status < 200 || status >= 300) return;
+    let json = null;
+    try {
+      json = JSON.parse(answer.toString("utf8"));
+    } catch {}
+    for (const { key, number, head, ready } of pulls) {
+      // A GraphQL field that failed answers null, beside the others' data.
+      if (graphql && !json?.data?.[key]) continue;
+      try {
+        // A REST create answers with the pull request it opened.
+        const pr =
+          graphql || number != null || !json?.number ? await found(run.repo, number, head) : json;
+        if (!pr?.number) continue;
+        record(run.repo, pr, ready && pr.state === "open" && !pr.draft ? now() : null);
+      } catch (error) {
+        log(`GitHub gateway: ${run.repo} pull request: ${error.message ?? error}`);
+      }
+    }
+  }
+
+  // A pull request by its number, or the open one from `head`.
+  async function found(repo, number, head) {
+    if (number != null) return lookup(repo, `/repos/${repo}/pulls/${number}`);
+    const owner = repo.split("/")[0];
+    const list = await lookup(
+      repo,
+      `/repos/${repo}/pulls?head=${encodeURIComponent(`${owner}:${head}`)}&state=open&per_page=1`,
+    );
+    return Array.isArray(list) ? list[0] : null;
+  }
+
+  return { check, answered };
+}
+
+// What answered() records of a classified write (github-writes.mjs classify(), github-graphql.mjs
+// writeOf()), or null for one that isn't a pull request's own: `key`, its GraphQL field's
+// response key.
+export function pullOf(write, key = null) {
+  if (!write?.pull) return null;
+  const number = write.target.number ?? null;
+  const ready = write.actions.includes("ready") || write.actions.includes("create");
+  return { key, number, head: write.pull.head ?? null, ready };
+}
+
+// The token permissions a classified write needs beyond its mode's, merged: a call's several.
+export function permissionsOf(writes) {
+  return Object.assign({}, ...writes.map((w) => w?.permissions ?? {}));
+}

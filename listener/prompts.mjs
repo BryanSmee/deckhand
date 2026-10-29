@@ -173,7 +173,7 @@ function brainstormMessage(mode, text, restored) {
 }
 
 // Before `gh pr ready`: the base may have moved during the run, and a pull request marked
-// ready with conflicts isn't ready (pr-ready.mjs refuses it too). `base`: a branch name, or
+// ready with conflicts isn't ready (github-pulls.mjs refuses it too). `base`: a branch name, or
 // how to find it.
 function rebaseStep(base) {
   return `bring the branch up to date: \`git fetch origin\`, \`git rebase origin/${base}\`,

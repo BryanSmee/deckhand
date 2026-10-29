@@ -4,14 +4,16 @@
 // when its mode's ceiling (modes.mjs ceilingOf()) holds each action on that kind and the
 // policies' `deny_github` (policies.mjs) refuses nothing. A write it can't classify is refused.
 // GraphQL's mutations are classified by github-graphql.mjs (#406), each into the same shape,
-// and held to the same checks (checkWrite()).
+// and held to the same checks (checkWrite()). A pull request's own writes (opening, editing,
+// readying, drafting one) are then held to github-pulls.mjs's checks too.
 //
 // Kinds: `own_issue` (the run's issue), `own_pr` (the run's pull request, or one from a branch
 // it may push: broker.mjs allow()), `sub_issue` (an issue whose parent is the run's, in its
 // repo), `created_issue` (one this run created: GitHub answered the run's own create with it,
 // over REST or GraphQL, as `gh issue create` sends: answered()),
-// `other_issue`, `pr`, `new_issue` (an issue it creates), `label` (a label of the repo it
-// creates), and `new_pr`, `comment`, `review` for writes no ceiling allows anyway.
+// `other_issue`, `pr`, `new_issue` (an issue it creates), `new_pr` (a pull request it opens),
+// `label` (a label of the repo it creates), and `comment`, `review` for writes no ceiling
+// allows anyway.
 //
 // A sub-issue link names two issues: its target is the parent, in the path, and the child, by
 // its id in the body, must be one the run created or one already under the run's issue (a
@@ -20,11 +22,15 @@
 // but false) is in no ceiling: a link would otherwise take any issue under the run's.
 // Format of the policies' input: ../docs/repo-config.md#the-github-input.
 import { branchAllowed } from "./broker.mjs";
+import { createPullChecks } from "./github-pulls.mjs";
 import { ceilingOf, issueLabelOf } from "./modes.mjs";
 
 // Actions on another target than an issue or pull request by number: no ceiling holds them,
 // so they are refused before any look-up.
-const ID_TARGETS = new Set(["comment", "review", "new_pr"]);
+const ID_TARGETS = new Set(["comment", "review"]);
+// What a pull request's own write needs of its token beyond its mode's: GitHub opens and edits a
+// pull request with `pull_requests: write` only (github-pulls.mjs).
+const PULL_WRITE = { pull_requests: "write" };
 
 // The label names of a body's `labels` (strings, or objects with a name), or of the body itself
 // when it is the list (PUT …/labels takes either).
@@ -68,7 +74,9 @@ function child(body) {
   return { id, replace_parent: "replace_parent" in body && body.replace_parent !== false };
 }
 
-// [method, path under the repo (case-insensitive), match → { actions, target, change }].
+// [method, path under the repo (case-insensitive), match → { actions, target, change, pull,
+// permissions }]: `pull`, a pull request's own write's head, base and draft (github-pulls.mjs),
+// `permissions`, its token's (PULL_WRITE).
 // `number`: an issue's or pull request's; `body`: the write's JSON.
 const ROUTES = [
   [
@@ -80,10 +88,16 @@ const ROUTES = [
       change: { labels_added: labelNames(body.labels) },
     }),
   ],
+  ["PATCH", /^issues\/(\d+)$/i, (m, body) => ({ ...patched(body), target: { number: +m[1] } })],
   [
     "PATCH",
-    /^(?:issues|pulls)\/(\d+)$/i,
-    (m, body) => ({ ...patched(body), target: { number: +m[1] } }),
+    /^pulls\/(\d+)$/i,
+    (m, body) => ({
+      ...patched(body),
+      target: { number: +m[1] },
+      pull: { base: body.base },
+      permissions: PULL_WRITE,
+    }),
   ],
   [
     "POST",
@@ -176,7 +190,16 @@ const ROUTES = [
   ],
   ["PATCH", /^labels\/.+$/i, () => ({ actions: ["edit"], target: { kind: "label" } })],
   ["DELETE", /^labels\/.+$/i, () => ({ actions: ["delete"], target: { kind: "label" } })],
-  ["POST", /^pulls$/i, () => ({ actions: ["create"], target: { kind: "new_pr" } })],
+  [
+    "POST",
+    /^pulls$/i,
+    (m, body) => ({
+      actions: ["create"],
+      target: { kind: "new_pr" },
+      pull: { head: body.head, base: body.base, draft: body.draft === true },
+      permissions: PULL_WRITE,
+    }),
+  ],
   ["PUT", /^pulls\/(\d+)\/merge$/i, (m) => ({ actions: ["merge"], target: { number: +m[1] } })],
   [
     "PUT",
@@ -193,7 +216,7 @@ const ROUTES = [
 
 // A write → { repo, actions, target: { number } | { kind }, child (a link's: { id,
 // replace_parent }), change: { fields, labels_added, labels_removed, labels_set (the labels
-// it sets replace the issue's) } }, `{ read: true }` for a POST that writes nothing (rendering markdown), or
+// it sets replace the issue's) }, pull, permissions (ROUTES') }, `{ read: true }` for a POST that writes nothing (rendering markdown), or
 // null when it can't be classified. `path`: under the API's base, decoded, without its query
 // (github-gateway.mjs route()); `body`: the bytes sent.
 export function classify(method, path, body) {
@@ -225,6 +248,7 @@ export function classify(method, path, body) {
       actions: write.actions,
       target: write.target,
       ...(write.child && { child: write.child }),
+      ...(write.pull && { pull: write.pull, permissions: write.permissions }),
       change: {
         fields: Array.isArray(json) ? [] : Object.keys(json),
         labels_added: [],
@@ -256,8 +280,15 @@ const SKEW_MS = 2 * 60_000;
 
 // `lookup(repo, path)`: GitHub's JSON with the listener's token, null for a 404 (github.mjs
 // getJson()); `bot()`: the App's login (`slug[bot]`), null before /setup; `policies`:
-// policies.mjs's, null without; `log`: the listener's.
-export function createWriteChecks({ lookup, bot = () => null, policies = null, log = () => {} }) {
+// policies.mjs's, null without; `pulls`: github-pulls.mjs's checks (its workflow check and
+// record, none by default); `log`: the listener's.
+export function createWriteChecks({
+  lookup,
+  bot = () => null,
+  policies = null,
+  pulls = createPullChecks({ lookup }),
+  log = () => {},
+}) {
   // Whether GitHub's issue is one `run` created: GitHub answered one of the run's own creates
   // with it (answered()), it is no older than that call, and the App's bot wrote it. The bot
   // files issues for every run and for the listener too: its authorship alone says nothing.
@@ -320,12 +351,17 @@ export function createWriteChecks({ lookup, bot = () => null, policies = null, l
     return { id, number: null, kind: "other_issue" };
   }
 
-  // GitHub's answer to a run's write that went on (github-gateway.mjs wroteWrite()): the issues
-  // it created, from a REST create (201, its JSON) or a GraphQL `createIssue` (what `gh issue
+  // GitHub's answer to a run's write that went on (github-gateway.mjs wroteWrite()): the pull
+  // requests it changed go to the dashboard (github-pulls.mjs answered()), and the issues it
+  // created, from a REST create (201, its JSON) or a GraphQL `createIssue` (what `gh issue
   // create` sends: `data.<its response key>.issue`, by its URL, `creates` naming the keys:
   // github-graphql.mjs), in the run's repo, are kept on the run (`run.created`, saved with it:
   // restart.mjs), with when the call was sent.
-  function answered(run, { method, path, body, graphql, creates = [], at }, status, answer) {
+  function answered(run, call, status, answer) {
+    const { method, path, body, graphql, creates = [], at } = call;
+    pulls
+      .answered(run, call, status, answer)
+      .catch((error) => log(`GitHub gateway: ${run.repo}: ${error.stack ?? error}`));
     let json;
     try {
       json = JSON.parse(answer.toString("utf8"));
@@ -367,14 +403,12 @@ export function createWriteChecks({ lookup, bot = () => null, policies = null, l
   // A classified write (classify()'s shape, or a GraphQL mutation's: github-graphql.mjs) → the
   // same as check(). `memo`: a Map that keeps GitHub's answers across the writes of one call (a
   // GraphQL call's several fields), so the same target is looked up once.
-  async function checkWrite(run, write, memo = null) {
-    const get = memo
-      ? (repo, path) => {
-          const key = `${repo} ${path}`;
-          if (!memo.has(key)) memo.set(key, lookup(repo, path));
-          return memo.get(key);
-        }
-      : lookup;
+  async function checkWrite(run, write, memo = new Map()) {
+    const get = (repo, path) => {
+      const key = `${repo} ${path}`;
+      if (!memo.has(key)) memo.set(key, lookup(repo, path));
+      return memo.get(key);
+    };
     if (write.repo !== run.repo) {
       return refusal(403, "a run writes only to its own repository");
     }
@@ -433,6 +467,8 @@ export function createWriteChecks({ lookup, bot = () => null, policies = null, l
       }
       change.sub_issue = sub;
     }
+    const pulled = await pulls.check(run, write, target, get);
+    if (pulled) return pulled;
     if (!policies) return null;
     const input = {
       repo: run.repo,

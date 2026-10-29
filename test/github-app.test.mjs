@@ -82,8 +82,8 @@ test("a sandbox token covers its repo only, with the sandbox's permissions", asy
   assert.equal(SANDBOX_PERMISSIONS.deployments, undefined);
   // Pushes go through the git gateway: a sandbox token never writes the code.
   assert.equal(SANDBOX_PERMISSIONS.contents, "read");
-  // Nor reviews, which `pull_requests: write` would let it approve: the listener opens and
-  // edits its pull requests (pr-ready.mjs).
+  // Nor reviews, which `pull_requests: write` would let it approve: the gateway adds it to the
+  // checked writes of its own pull requests only (github-pulls.mjs).
   assert.equal(SANDBOX_PERMISSIONS.pull_requests, "read");
 });
 

@@ -1443,19 +1443,24 @@ mounts:
     }
   }
 
-  // What the running sandbox's secret gets from the git gateway and from `gh pr ready`.
-  async function pushAndReady({ dir, brokerPort }) {
+  // What the running sandbox's secret gets from the git gateway and from opening its pull
+  // request through the GitHub gateway (`gh pr create`'s write, over REST).
+  async function pushAndOpen({ dir, brokerPort }) {
     const secret = readFileSync(join(dir, "run-secret"), "utf8").trim();
     const basic = Buffer.from(`deckhand:${secret}`).toString("base64");
     const push = await fetch(
       `http://127.0.0.1:${brokerPort}/git/org/repo.git/info/refs?service=git-receive-pack`,
       { headers: { authorization: `Basic ${basic}` } },
     );
-    const ready = await fetch(`http://127.0.0.1:${brokerPort}/pr/org/repo/13/ready`, {
-      method: "POST",
-      headers: { authorization: `Bearer ${secret}` },
-    });
-    return [`${push.status} ${await push.text()}`, `${ready.status} ${await ready.text()}`];
+    const opened = await fetch(
+      `http://127.0.0.1:${brokerPort}/relay/127.0.0.1/repos/org/repo/pulls`,
+      {
+        method: "POST",
+        headers: { authorization: `token ${secret}` },
+        body: JSON.stringify({ title: "t", head: "issue-12-x", base: "trunk" }),
+      },
+    );
+    return [`${push.status} ${await push.text()}`, `${opened.status} ${await opened.text()}`];
   }
 
   // The reactions a comment got, by content.
@@ -1606,11 +1611,14 @@ mounts:
     );
   });
 
-  test("a brainstorm can't push or mark a pull request ready, before or after a restart", async (t) => {
+  test("a brainstorm can't push or open a pull request, before or after a restart", async (t) => {
     const ctx = await holding(t, "Deckhand\n/mode brainstorm\nWhat about dark mode?");
-    const refused = [/^403 Deckhand: this run can't push/, /^403 .*can't change pull requests/];
+    const refused = [
+      /^403 Deckhand: this run can't push/,
+      /^403 .*can't create on new_pr \(its ceiling\)/,
+    ];
     const check = async () => {
-      const answers = await pushAndReady(ctx);
+      const answers = await pushAndOpen(ctx);
       answers.forEach((answer, i) => assert.match(answer, refused[i]));
     };
     await check();
@@ -1725,18 +1733,18 @@ mounts:
       headers: { authorization: `token ${secret}` },
     });
     assert.equal(token.status, 403);
-    for (const answer of [`${token.status} ${await token.text()}`, ...(await pushAndReady(ctx))]) {
+    for (const answer of [`${token.status} ${await token.text()}`, ...(await pushAndOpen(ctx))]) {
       assert.match(answer, /^403 [^]*only works from its own sandbox/);
     }
   });
 
-  test("a work run still pushes and marks ready, before and after a restart", async (t) => {
+  test("a work run still pushes and opens its pull request, before and after a restart", async (t) => {
     const ctx = await holding(t, undefined, (dir, github) => ({ GITHUB_URL: github.url }));
     // Past the run checks: on to GitHub (here, a fake one that knows neither, rather than
     // github.com, which a sandbox without network waits for).
     const check = async () => {
-      for (const answer of await pushAndReady(ctx)) {
-        assert.doesNotMatch(answer, /^401|can't push|can't change pull requests/);
+      for (const answer of await pushAndOpen(ctx)) {
+        assert.doesNotMatch(answer, /^40[13]|can't push|its ceiling/);
       }
     };
     await check();
@@ -4121,16 +4129,25 @@ mounts:
     const mirrorFetches = () =>
       github.requests.filter((r) => r.path.startsWith("/org/repo.git/info/refs")).length;
     const before = mirrorFetches();
-    const opened = await fetch(`http://127.0.0.1:${brokerPort}/pr/org/repo/create`, {
-      method: "POST",
-      headers: { authorization: `Bearer ${secret}` },
-      body: JSON.stringify({ title: "t", head: "issue-12-x" }),
-    });
-    assert.equal(opened.status, 201);
+    const opened = await fetch(
+      `http://127.0.0.1:${brokerPort}/relay/127.0.0.1/repos/org/repo/pulls`,
+      {
+        method: "POST",
+        headers: { authorization: `token ${secret}` },
+        body: JSON.stringify({ title: "t", head: "issue-12-x", base: "trunk" }),
+      },
+    );
+    assert.equal(opened.status, 200);
     assert.equal(mirrorFetches(), before + 1);
-    // The push's token writes workflows; the sandbox's own tokens never do.
+    // The push's token writes workflows; the sandbox's own tokens never do. Opening a pull
+    // request is the one call whose token writes pull requests.
     const minted = github.requests.filter((r) => r.path.endsWith("/access_tokens"));
     assert.equal(minted.filter((r) => r.body.includes("workflows")).length, 1);
+    const pullWrite = (r) => r.body.includes('"pull_requests":"write"');
+    assert.equal(minted.filter(pullWrite).length, 1);
+    assert.ok(
+      github.requests.some((r) => r.method === "POST" && r.path === "/repos/org/repo/pulls"),
+    );
     // Taken back: the next push streams through without it, no restart.
     writeGrant(dir, "");
     await pushProbe(brokerPort, secret, "refs/heads/issue-12-x");

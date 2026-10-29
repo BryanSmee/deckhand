@@ -1100,7 +1100,7 @@ test("allow_workflows: merges with the bases of the branch's pull requests, and 
   assert.match(res.stderr, /ci\.yml \(merged with release\): mentions `secrets`/);
   delete pulls["issue-1-x"];
   assert.ok((await git(work, "push", remote(), "HEAD:refs/heads/issue-1-x")).ok);
-  // Before a pull request into release opens (pr-ready.mjs), the same check.
+  // Before a pull request into release opens (github-pulls.mjs), the same check.
   assert.match(
     await gateway.checkBranch("org/repo", "issue-1-x", "release"),
     /ci\.yml \(merged with release\): mentions `secrets`/,

@@ -72,7 +72,8 @@ export async function checkAppEvents(asApp, log, { githubUrl, credentials = {} }
 // repos), and a token that writes contents could also push or merge into it directly.
 // Pull requests read-only too: `pull_requests: write` would let it approve any pull request of
 // its repo as the App, or replace the review mode's verdict (GitHub counts a reviewer's latest
-// review). The listener opens and edits its own pull requests for it (pr-ready.mjs).
+// review). Its own pull requests' writes get a token that writes them, from the GitHub gateway,
+// once checked (github-pulls.mjs): the sandbox never holds it, and it carries only that write.
 export const SANDBOX_PERMISSIONS = {
   contents: "read",
   issues: "write",
@@ -81,8 +82,8 @@ export const SANDBOX_PERMISSIONS = {
   actions: "read",
 };
 // Built-in light runs (brainstorms, inbox entries, discussions) comment and create issues, and
-// never touch a pull request: they can't push either (the broker's `push`), so the listener
-// changes none for them.
+// never touch a pull request: they can't push either (the broker's `push`), and their
+// ceilings hold no pull request's write but a brainstorm's comment.
 // Their `issues: write`, like every token's writes, only reaches a write the GitHub gateway
 // checked against their ceiling and policies: anything else gets readsOf() below.
 export const LIGHT_PERMISSIONS = { pull_requests: "read" };

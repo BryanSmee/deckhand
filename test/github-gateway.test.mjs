@@ -781,3 +781,37 @@ test("a POST that writes nothing (rendering markdown) goes on with a token that 
     [readsOf(extra), extra],
   );
 });
+
+test("a pull request's own write goes on with the token it needs, its answer to wroteWrite", async (t) => {
+  const wrote = [];
+  const gw = await gateway(t, {
+    wroteWrite: (run, write, status) => wrote.push([write.graphql, write.pulls, status]),
+    // github-graphql.mjs: gh pr ready's mutation, and a query.
+    checkGraphql: async (run, body) =>
+      body.includes("mutation")
+        ? {
+            body,
+            write: true,
+            creates: [],
+            permissions: { contents: "write" },
+            pulls: [{ key: "m", number: 7, head: null, ready: true }],
+          }
+        : { body, write: false, creates: [], permissions: {}, pulls: [] },
+  });
+  const { secret } = gw.register(undefined, { mode: "work", push: true, issue: 1 });
+  const post = (path, body) => gw.call(path, { secret, method: "POST", body });
+  assert.equal((await post("/api/graphql", '{"query": "mutation { m }"}')).status, 200);
+  assert.equal((await post("/api/graphql", '{"query": "{ viewer { login } }"}')).status, 200);
+  const create = '{"title": "T", "head": "issue-1-x", "base": "main"}';
+  assert.equal((await post("/api/v3/repos/org/repo/pulls", create)).status, 200);
+  assert.equal((await post("/api/v3/repos/org/repo/issues/1/comments", "{}")).status, 200);
+  assert.deepEqual(
+    gw.minted.map(([, perms]) => perms),
+    [{ contents: "write" }, readsOf(), { pull_requests: "write" }, {}],
+  );
+  assert.deepEqual(wrote, [
+    [true, [{ key: "m", number: 7, head: null, ready: true }], 200],
+    [false, [{ key: null, number: null, head: "issue-1-x", ready: true }], 200],
+    [false, [], 200],
+  ]);
+});

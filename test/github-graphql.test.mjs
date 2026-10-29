@@ -402,8 +402,8 @@ test("an unknown mutation, or an input field Deckhand doesn't check, is refused 
     [GH_EDIT, { id: "I_1", issueTypeId: null }, /updateIssue's issueTypeId/],
     [
       "mutation($input: UpdatePullRequestInput!) { updatePullRequest(input: $input) { __typename } }",
-      { pullRequestId: "PR_7", milestoneId: null },
-      /updatePullRequest's milestoneId/,
+      { pullRequestId: "PR_7", projectIds: null },
+      /updatePullRequest's projectIds/,
     ],
   ]) {
     const out = await check(work, call(query, { input }));

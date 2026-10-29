@@ -10,17 +10,19 @@ import {
 // The modes' ceilings (MODES' `ceiling` below), by the kinds github-writes.mjs resolves from
 // GitHub: `own_issue`, the run's issue; `own_pr`, its pull request or one from a branch it
 // may push; `sub_issue`, an issue whose parent is the run's; `created_issue`, one the run
-// created; `other_issue`, `pr`, the rest; `new_issue`, an issue it creates; `label`, a label
-// of the repo it creates. A link's child must be a sub-issue or an issue the run created
+// created; `other_issue`, `pr`, the rest; `new_issue`, an issue it creates; `new_pr`, a pull
+// request it opens (from one of its branches: github-pulls.mjs); `label`, a label of the repo
+// it creates. A link's child must be a sub-issue or an issue the run created
 // (github-writes.mjs), and moving one from another parent is in no ceiling. Brainstorms
 // comment elsewhere in theirs, which the default policy refuses
 // (docs/repo-config.md#the-github-input).
 const WORK_CEILING = {
   own_issue: ["edit", "comment", "label", "link"],
-  own_pr: ["edit", "comment", "label"],
+  own_pr: ["edit", "comment", "label", "ready", "draft"],
   sub_issue: ["edit", "comment", "link"],
   created_issue: ["edit", "comment", "link"],
   new_issue: ["create"],
+  new_pr: ["create"],
 };
 const BRAINSTORM_CEILING = {
   own_issue: ["edit", "comment", "link"],
