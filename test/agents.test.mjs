@@ -68,6 +68,26 @@ test("normalize: assistant text and tool calls, with what each call is about", (
   ]);
 });
 
+// #414: a line cut at MAX_LINE no longer parses: its output's id, near its start, still pairs it.
+test("normalize: a cut tool result or command output keeps its call's id", () => {
+  const claudeCut =
+    '{"type":"user","message":{"role":"user","content":[{"tool_use_id":"toolu_1","type":"tool_result","content":[{"type":"image" … (line cut)';
+  assert.deepEqual(claude.normalize(claudeCut), [
+    { type: "toolOutput", error: false, text: claudeCut, id: "toolu_1" },
+  ]);
+  const codexCut =
+    '{"type":"item.completed","item":{"id":"item_4","type":"command_execution","command":"cat big" … (line cut)';
+  assert.deepEqual(codex.normalize(codexCut), [
+    { type: "toolOutput", error: false, text: codexCut, id: "item_4" },
+  ]);
+  // A cut call, or text, isn't an output.
+  assert.deepEqual(claude.normalize('{"type":"assistant","message":{"content":[ … (line cut)'), []);
+  assert.deepEqual(
+    codex.normalize('{"type":"item.started","item":{"id":"item_4","type":"command_execution" …'),
+    [],
+  );
+});
+
 test("normalize: tool results, as text or parts, errors flagged", () => {
   const user = {
     type: "user",

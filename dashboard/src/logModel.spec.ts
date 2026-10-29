@@ -304,3 +304,40 @@ test("clock: a running timer", () => {
   expect(clock(725)).toBe("12:05");
   expect(clock(3729)).toBe("1:02:09");
 });
+
+// A call's or output's line cut at MAX_LINE: no wrong pairing, no endless timer.
+test("an output with an id no call has stands on its own, not under the call before it", () => {
+  const items = logSections(
+    work([
+      { kind: "tool", name: "Bash", text: "ls", id: "t1", at: 1000 },
+      { kind: "raw", text: '{"type":"assistant"… (line cut)' },
+      { kind: "output", text: "big", error: false, id: "t2", at: 2000 },
+    ]),
+    60000,
+    true,
+  )[0].items;
+  expect(items.map((i) => i.kind)).toEqual(["tool", "raw", "output"]);
+  const [ls] = items;
+  expect(ls.kind === "tool" && ls.time).toEqual({ seconds: 59, state: "running" });
+});
+
+test("a call whose output never made it to the log ends with the agent's turn", () => {
+  const entries: Entry[] = [
+    { kind: "tool", name: "Read", text: "shot.png", id: "t1", at: 1000 },
+    { kind: "raw", text: '{"type":"user"… (line cut)' },
+    { kind: "result", status: "ok", text: "Done.", minutes: 1 },
+  ];
+  expect(tools(entries, 90000, true)[0].time).toBeNull();
+  expect(tools(entries, 90000, false)[0].time).toBeNull();
+});
+
+test("as text: a running build step with its timer", () => {
+  const text = plainText(
+    logSections(
+      [{ kind: "phase", phase: "image", at: 0 }, step(4, "running", { at: 1000 })],
+      43000,
+      true,
+    ),
+  );
+  expect(text).toContain("#4 [build 4/9] RUN step 4 · ⏱ 0:42");
+});

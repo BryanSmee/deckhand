@@ -512,6 +512,31 @@ test("format: a line that isn't JSON is clipped, an agent's event cut at MAX_LIN
   assert.equal(entry.text, `${cut.slice(0, 4000)}… (1024 KB in all)`);
 });
 
+// #414: a tool's result cut at MAX_LINE is still its call's output, so its call's time ends.
+test("format: a tool result cut at MAX_LINE is its call's output, by id", () => {
+  const cut = `{"type":"user","message":{"role":"user","content":[{"tool_use_id":"t9","type":"tool_result","content":[{"type":"image","source":{"data":"${"A".repeat(5000)} … (line cut)`;
+  const [entry, ...more] = format(cut);
+  assert.deepEqual(more, []);
+  assert.equal(entry.kind, "output");
+  assert.equal(entry.id, "t9");
+  assert.equal(entry.error, false);
+  assert.equal(entry.text, `${cut.slice(0, 4000)}\n…`);
+  // An id deep in the output isn't its call's.
+  const late = `{"type":"user","message":{"role":"user","content":[{"type":"tool_result","content":"${"b".repeat(400)}\"tool_use_id\":\"t1\"`;
+  assert.equal(format(late)[0].kind, "raw");
+});
+
+test("buildOutput: a character split between two chunks stays whole", () => {
+  const written = [];
+  const out = buildOutput({ write: (text) => written.push(text) }, () => 1);
+  const bytes = Buffer.from("#1 0.1 ✓ ok\n#1 ✓");
+  out.write(bytes.subarray(0, 9));
+  out.write(bytes.subarray(9, bytes.length - 1));
+  out.write(bytes.subarray(bytes.length - 1));
+  out.flush();
+  assert.deepEqual(written.slice(1), ["#1 0.1 ✓ ok\n", "#1 ✓"]);
+});
+
 const fixture = (name) => readFileSync(new URL(`fixtures/${name}`, import.meta.url), "utf8");
 const phase = (name, at) => line({ type: "listener", event: "phase", phase: name, at });
 

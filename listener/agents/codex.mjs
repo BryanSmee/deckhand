@@ -3,7 +3,7 @@
 // one line of its own with the turn's outcome (`deckhand.result`): Codex's JSONL has no
 // event that holds both the last message and whether the turn worked.
 import { OPENAI_CREDENTIALS } from "../openai.mjs";
-import { EFFORTS, idOf, installSpec, normalizer } from "./common.mjs";
+import { cutOutput, EFFORTS, idOf, installSpec, normalizer } from "./common.mjs";
 
 // Deckhand's model tiers → the pinned Codex's own catalog (`codex` lists it as best: frontier,
 // balanced: the default workhorse, fast: for easier tasks). The operator can point them
@@ -111,5 +111,12 @@ export const codex = {
     CLAUDE_MODEL.test(model) ? `\`${model}\` is a Claude model, not one of Codex's` : null,
   // One line of its output → Deckhand's events: started, text, tool{name, detail, id},
   // toolOutput{text, error, id}, result{ok, text, durationMs}.
-  normalize: normalizer(EVENTS),
+  // A command's or MCP call's output cut at MAX_LINE: still its call's.
+  normalize: normalizer(
+    EVENTS,
+    "type",
+    cutOutput(
+      /^\{"type":"item\.completed","item":\{"id":"([^"]+)","type":"(?:command_execution|mcp_tool_call)"/,
+    ),
+  ),
 };

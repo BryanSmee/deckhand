@@ -14,6 +14,8 @@ import {
   statSync,
 } from "node:fs";
 import { join } from "node:path";
+import { StringDecoder } from "node:string_decoder";
+import { idOf } from "./agents/common.mjs";
 import { agentFor, entryName } from "./agents/index.mjs";
 import { entryLabel } from "./agents/select.mjs";
 import { kindOf } from "./modes.mjs";
@@ -418,17 +420,15 @@ function agentEntry(e, agent) {
       return { kind: "text", text: e.text };
     // `id`: what pairs an output with its call, for agents that give one.
     case "tool":
-      return { kind: "tool", name: e.name, text: clip(e.detail, 6, 600), ...idOf(e) };
+      return { kind: "tool", name: e.name, text: clip(e.detail, 6, 600), ...idOf(e.id) };
     case "toolOutput":
-      return { kind: "output", error: e.error, text: clip(e.text, 40, 4000), ...idOf(e) };
+      return { kind: "output", error: e.error, text: clip(e.text, 40, 4000), ...idOf(e.id) };
     case "result": {
       return { kind: "result", status: outcome(e), text: e.text, minutes: minutes(e.durationMs) };
     }
   }
   return null;
 }
-
-const idOf = (e) => (e.id ? { id: e.id } : {});
 
 // The most of a line that isn't JSON the dashboard gets: setup output, or an agent's event cut
 // at follow()'s MAX_LINE (a screenshot read in a tool's result, say), which no longer parses.
@@ -444,7 +444,11 @@ function clipRaw(line) {
 export function format(line, agent = agentFor()) {
   if (!line.trim()) return [];
   const e = parse(line);
-  if (!e) return [{ kind: "raw", text: clipRaw(line) }];
+  // A line cut at MAX_LINE: raw, unless the agent still knows whose output it was.
+  if (!e) {
+    const cut = agent.normalize(line).flatMap((event) => agentEntry(event, agent) ?? []);
+    return cut.length ? cut : [{ kind: "raw", text: clipRaw(line) }];
+  }
   if (e.type === "listener") return listenerEntries(e, agent);
   return agent.normalize(line).flatMap((event) => agentEntry(event, agent) ?? []);
 }
@@ -537,6 +541,8 @@ export function reader(agent = agentFor()) {
 // BuildKit's own lines say when a step ends, not when it started. `flush()` writes what is
 // left once the build ends.
 export function buildOutput(file, now = Date.now) {
+  // docker() gives Buffers: a character split between two stays whole.
+  const decoder = new StringDecoder("utf8");
   let rest = "";
   const seen = new Set();
   const write = (line) => {
@@ -549,11 +555,12 @@ export function buildOutput(file, now = Date.now) {
   };
   return {
     write: (chunk) => {
-      const lines = (rest + chunk).split("\n");
+      const lines = (rest + decoder.write(chunk)).split("\n");
       rest = lines.pop();
       for (const line of lines) write(line);
     },
     flush: () => {
+      rest += decoder.end();
       if (rest) file.write(rest);
       rest = "";
     },

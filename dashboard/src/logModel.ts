@@ -130,9 +130,12 @@ type ToolItem = Extract<Item, { kind: "tool" }>;
 // call before them;
 // an image build's steps once each, as the latest of their entries says, with their output,
 // and the cached ones next to each other as one.
+// `ended`: calls still without output when the agent's turn ended (a `result`): done, though
+// their output never made it to the log.
 interface Calls {
   byId: Map<string, ToolItem>;
   byEntry: Map<Entry, ToolItem>;
+  ended: Set<ToolItem>;
 }
 
 function itemsOf(phase: Phase, entries: Entry[], calls: Calls): Item[] {
@@ -147,7 +150,8 @@ function itemsOf(phase: Phase, entries: Entry[], calls: Calls): Item[] {
         error: e.error,
         ...(e.at !== undefined && { at: e.at }),
       };
-      const call = (e.id && calls.byId.get(e.id)) || (last?.kind === "tool" ? last : null);
+      // One with an id no call has (its call's line was cut) stands on its own.
+      const call = e.id ? calls.byId.get(e.id) : last?.kind === "tool" ? last : null;
       if (call) call.outputs.push(output);
       else out.push({ id: id(), kind: "output", ...output });
     } else if (e.kind === "tool") {
@@ -158,9 +162,10 @@ function itemsOf(phase: Phase, entries: Entry[], calls: Calls): Item[] {
       out.push(item);
     } else if (e.kind === "text") out.push({ id: id(), kind: "say", text: e.text });
     else if (e.kind === "meta") out.push({ id: id(), kind: "note", text: e.text });
-    else if (e.kind === "result")
+    else if (e.kind === "result") {
+      for (const call of calls.byEntry.values()) if (!call.outputs.length) calls.ended.add(call);
       out.push({ id: id(), ...e, text: e.text.replace(NEEDS_INPUT, "").trim() });
-    else if (e.kind === "step") {
+    } else if (e.kind === "step") {
       const known = steps.get(e.step);
       if (known) Object.assign(known, { ...e, output: known.output, at: known.at ?? e.at });
       else {
@@ -206,7 +211,7 @@ export function logSections(entries: Entry[], end: number, live: boolean): LogSe
     } else byPhase.set(p.phase, { entries: [...p.entries], seconds });
   });
   const lastPhase = parts.at(-1)?.phase;
-  const calls: Calls = { byId: new Map(), byEntry: new Map() };
+  const calls: Calls = { byId: new Map(), byEntry: new Map(), ended: new Set() };
   const list = [...byPhase].map(([phase, { entries: own, seconds }]) => {
     const items = itemsOf(phase, own, calls);
     return {
@@ -225,7 +230,8 @@ export function logSections(entries: Entry[], end: number, live: boolean): LogSe
       if (item.kind === "tool") {
         // Without an id, a call with no output only runs while nothing came after it: some
         // calls never have one (an edit, for some agents).
-        const pending = !item.outputs.length && (!!item.call || item === lastCall);
+        const pending =
+          !item.outputs.length && !calls.ended.has(item) && (!!item.call || item === lastCall);
         const to = item.outputs.at(-1)?.at ?? null;
         item.time = timing(item.at, to, { pending, end, live });
       } else if (item.kind === "step" && item.step.status === "running") {
@@ -349,7 +355,8 @@ export function plainText(list: LogSection[]): string {
           break;
         case "step": {
           const status = stepStatus(item.step);
-          lines.push(stepName(item.step) + (status ? ` · ${status}` : ""));
+          const time = item.step.time ? ` · ${timeLabel(item.step.time)}` : "";
+          lines.push(stepName(item.step) + (status ? ` · ${status}` : "") + time);
           for (const o of item.step.output) lines.push(indent(o));
           break;
         }

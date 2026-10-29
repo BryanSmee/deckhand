@@ -1,7 +1,7 @@
 // Claude Code, the agent behind the seam (index.mjs): what Deckhand needs to install it, run
 // it and read it. Its sandbox half is ../../sandbox/agents/claude.sh.
 import { CREDENTIALS, NAMED } from "../anthropic.mjs";
-import { EFFORTS, idOf, installSpec, normalizer } from "./common.mjs";
+import { cutOutput, EFFORTS, idOf, installSpec, normalizer } from "./common.mjs";
 
 // Deckhand's model tiers (`/model best`) → Claude Code's aliases, which the operator can point
 // elsewhere (ANTHROPIC_DEFAULT_OPUS_MODEL…, config.modelAliases).
@@ -124,5 +124,10 @@ export const claude = {
   fastModels: /opus/i,
   // One line of its output (stream-json) → Deckhand's events: started{model}, text,
   // tool{name, detail, id}, toolOutput{text, error, id}, result{ok, text, durationMs}.
-  normalize: normalizer(EVENTS),
+  // A tool's result cut at MAX_LINE (a screenshot read, say): still its call's output.
+  normalize: normalizer(
+    EVENTS,
+    "type",
+    cutOutput(/^\{"type":"user","message":\{"role":"user","content":\[\{"tool_use_id":"([^"]+)"/),
+  ),
 };
