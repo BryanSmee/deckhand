@@ -8,3 +8,5 @@
 test
 dashboard/node_modules
 dashboard/dist
+listener/vendor/node_modules
+listener/vendor/graphql.mjs

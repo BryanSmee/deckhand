@@ -5,7 +5,8 @@ import { request } from "node:http";
 import { test } from "node:test";
 import { gzipSync } from "node:zlib";
 import { createBroker } from "../listener/broker.mjs";
-import { NO_TOKEN } from "../listener/github-app.mjs";
+import { NO_TOKEN, readsOf } from "../listener/github-app.mjs";
+import { createGraphqlChecks } from "../listener/github-graphql.mjs";
 import {
   createGithubGateway,
   readsThread,
@@ -20,7 +21,8 @@ const OPERATOR = "operator-key-0123456789abcdef";
 // A fake GitHub, on GitHub Enterprise Server's layout (its API under /api/v3, on the web's
 // host), and a gateway in front of it. `anonymous`: the run a call without a secret is from.
 // `checkWrite`: what the REST writes are held to (github-writes.mjs): here, nothing; null, the
-// gateway's own default.
+// gateway's own default. `checkGraphql`: the same for GraphQL (github-graphql.mjs): here, its
+// body goes on as a read.
 async function gateway(
   t,
   {
@@ -29,6 +31,7 @@ async function gateway(
     maxInFlight,
     hold,
     checkWrite = async () => null,
+    checkGraphql = async (run, body) => ({ body, write: false, creates: [] }),
     wroteWrite,
   } = {},
 ) {
@@ -61,6 +64,7 @@ async function gateway(
     log: (line) => logged.push(line),
     maxInFlight,
     ...(checkWrite && { checkWrite }),
+    ...(checkGraphql && { checkGraphql }),
     ...(wroteWrite && { wroteWrite }),
   });
   const { url } = await serve(t, (req, res) => gw.handle(req, res));
@@ -133,8 +137,9 @@ test("a run's call goes on with a token for its repo, whichever way it sends its
   });
   assert.equal(graphql.status, 200);
   assert.equal(gw.calls.at(-1).url, "/api/graphql");
-  // Minted for its repo, with its mode's permissions; kept for redaction (runs.mjs).
-  assert.deepEqual(gw.minted[0], ["org/repo", { issues: "read" }]);
+  // Minted for its repo, with its mode's permissions, only read: none of these wrote; kept for
+  // redaction (runs.mjs).
+  assert.deepEqual(gw.minted[0], ["org/repo", readsOf({ issues: "read" })]);
   assert.deepEqual([...run.tokens], [TOKEN]);
   // Nothing of the sandbox's credential or address reaches GitHub.
   assert.ok(gw.calls.every((c) => !JSON.stringify(c.headers).includes(secret)));
@@ -482,7 +487,7 @@ test("a review can't read its thread's comments and reviews; other runs can", as
   assert.equal((await graphql(work.secret, "{ viewer { comments: login } }")).status, 200);
 });
 
-test("a REST write goes on only when its check passes; GraphQL's and git's aren't checked", async (t) => {
+test("a REST write goes on only when its check passes; GraphQL and git don't go through the REST check", async (t) => {
   const checked = [];
   const gw = await gateway(t, {
     checkWrite: async (run, write) => {
@@ -553,17 +558,36 @@ test("a REST write with a query string is refused unchecked: GitHub may read it"
   assert.deepEqual(checked, []);
   assert.deepEqual(gw.calls, []);
   assert.match(notes[1], /refused the run's GitHub write PATCH .*: a write with a query string/);
-  // GraphQL's and reads' queries are theirs.
-  await gw.call("/api/graphql?x=1", { secret, method: "POST", body: '{"query": "{ a }"}' });
+  // GraphQL's too, whatever it holds; reads' are theirs.
+  const graphql = await gw.call("/api/graphql?x=1", {
+    secret,
+    method: "POST",
+    body: '{"query": "{ a }"}',
+  });
+  assert.equal(graphql.status, 400);
   await gw.call("/api/v3/repos/org/repo/issues?state=open", { secret });
-  assert.equal(gw.calls.length, 2);
+  assert.equal(gw.calls.length, 1);
 });
 
 test("the answers of REST writes and GraphQL createIssue calls go to wroteWrite, uncompressed", async (t) => {
   const wrote = [];
   const gw = await gateway(t, {
     wroteWrite: (run, write, status, answer) =>
-      wrote.push([run, write.method, write.path, write.graphql, status, answer.toString()]),
+      wrote.push([
+        run,
+        write.method,
+        write.path,
+        write.graphql,
+        write.creates,
+        status,
+        answer.toString(),
+      ]),
+    // github-graphql.mjs: the response keys of a call's createIssue fields.
+    checkGraphql: async (run, body) => ({
+      body,
+      write: true,
+      creates: body.includes("createIssue") ? ["createIssue", "b"] : [],
+    }),
   });
   const { secret, run } = gw.register(undefined, { mode: "work", push: true, issue: 1 });
   const gzip = { "accept-encoding": "gzip" };
@@ -573,7 +597,6 @@ test("the answers of REST writes and GraphQL createIssue calls go to wroteWrite,
     body: '{"title": "T"}',
     headers: gzip,
   });
-  // `gh issue create`'s mutation, and one escaped in its JSON.
   const mutation = "mutation { createIssue(input: {}) { issue { url } } }";
   await gw.call("/api/graphql", {
     secret,
@@ -581,23 +604,17 @@ test("the answers of REST writes and GraphQL createIssue calls go to wroteWrite,
     body: JSON.stringify({ query: mutation }),
     headers: gzip,
   });
-  await gw.call("/api/graphql", {
-    secret,
-    method: "POST",
-    body: '{"query": "mutation { \\u0063reateIssue(input: {}) { issue { url } } }"}',
-    headers: gzip,
-  });
   // Neither a read nor another GraphQL call: their answers aren't read, nor their encoding set.
   await gw.call("/api/v3/repos/org/repo", { secret, headers: gzip });
   await gw.call("/api/graphql", {
     secret,
     method: "POST",
-    body: '{"query": "{ viewer { login } }"}',
+    body: '{"query": "mutation { addComment(input: {}) { clientMutationId } }"}',
     headers: gzip,
   });
   assert.deepEqual(
     gw.calls.map((c) => c.headers["accept-encoding"]),
-    ["identity", "identity", "identity", "gzip", "gzip"],
+    ["identity", "identity", "gzip", "gzip"],
   );
   assert.deepEqual(
     wrote.map(([r, ...rest]) => [r === run, ...rest]),
@@ -607,13 +624,67 @@ test("the answers of REST writes and GraphQL createIssue calls go to wroteWrite,
         "POST",
         "repos/org/repo/issues",
         false,
+        undefined,
         200,
         '{"url":"/api/v3/repos/org/repo/issues"}',
       ],
-      [true, "POST", "api/graphql", true, 200, '{"url":"/api/graphql"}'],
-      [true, "POST", "api/graphql", true, 200, '{"url":"/api/graphql"}'],
+      [true, "POST", "api/graphql", true, ["createIssue", "b"], 200, '{"url":"/api/graphql"}'],
     ],
   );
+});
+
+test("GraphQL goes on as its check printed it, with a token that writes only for a checked write", async (t) => {
+  const checked = [];
+  const gw = await gateway(t, {
+    checkGraphql: async (run, body) => {
+      checked.push(body.toString());
+      if (body.includes("deleteIssue")) {
+        return { refused: { status: 403, message: "Deckhand doesn't let a run send deleteIssue" } };
+      }
+      const write = body.includes("mutation");
+      return { body: Buffer.from(`{"query":"printed ${write}"}`), write, creates: [] };
+    },
+  });
+  const extra = { issues: "write" };
+  const { secret, notes } = gw.register(extra, { mode: "brainstorm", issue: 1 });
+  const post = (query, path = "/api/graphql") =>
+    gw.call(path, { secret, method: "POST", body: JSON.stringify({ query }) });
+  assert.equal((await post("{ viewer { login } }")).status, 200);
+  assert.equal((await post("mutation { addComment }")).status, 200);
+  const refused = await post("mutation { deleteIssue }");
+  assert.equal(refused.status, 403);
+  assert.deepEqual(await refused.json(), {
+    message: "Deckhand: Deckhand doesn't let a run send deleteIssue",
+  });
+  assert.match(notes.at(-1), /refused the run's GitHub write POST \/api\/graphql: .*deleteIssue/);
+  // What GitHub got: the check's document, never the call's own bytes.
+  assert.deepEqual(
+    gw.calls.map((c) => c.body.toString()),
+    ['{"query":"printed false"}', '{"query":"printed true"}'],
+  );
+  // The read with a token that only reads, the checked mutation with its mode's.
+  assert.deepEqual(
+    gw.minted.map(([, perms]) => perms),
+    [readsOf(extra), extra],
+  );
+  assert.equal(readsOf(extra).issues, "read");
+  // GraphQL is a POST: a GET's query would go on unchecked.
+  const get = await gw.call("/api/graphql?query=mutation%7BdeleteIssue%7D", { secret });
+  assert.equal(get.status, 405);
+  assert.equal(checked.length, 3);
+  assert.equal(gw.calls.length, 2);
+});
+
+test("without a GraphQL check, every GraphQL call is refused", async (t) => {
+  const gw = await gateway(t, { checkGraphql: null });
+  const { secret } = gw.register(undefined, { mode: "work", push: true });
+  const res = await gw.call("/api/graphql", {
+    secret,
+    method: "POST",
+    body: '{"query": "{ viewer { login } }"}',
+  });
+  assert.equal(res.status, 403);
+  assert.deepEqual(gw.calls, []);
 });
 
 test("without a write check, every REST write is refused", async (t) => {
@@ -672,4 +743,41 @@ test("secretOf, redactBody and readsThread", () => {
   assert.equal(String(redactBody(Buffer.from(`a=${secret}`), [secret])), "a=[redacted]");
   assert.equal(readsThread('{"query": "{ viewer { login } }"}'), false);
   assert.equal(readsThread('{"query": "{ a { reviewThreads { b } } }"}'), true);
+});
+
+test("a secret spelled with GraphQL's own escapes is redacted from the document as printed", async (t) => {
+  const checks = createGraphqlChecks({ nodes: async () => [], checkWrite: async () => null });
+  const gw = await gateway(t, { checkGraphql: checks.check });
+  const { secret, notes } = gw.register(undefined, { mode: "work", push: true, issue: 1 });
+  // Every third character as \u00XX: the call's JSON holds no secret, its GraphQL does.
+  const escaped = [...OPERATOR]
+    .map((c, i) => (i % 3 ? c : `\\u00${c.charCodeAt(0).toString(16).padStart(2, "0")}`))
+    .join("");
+  const query = `{ repository(owner: "${escaped}", name: "repo") { id } }`;
+  const res = await gw.call("/api/graphql", {
+    secret,
+    method: "POST",
+    body: JSON.stringify({ query }),
+  });
+  assert.equal(res.status, 200);
+  const sent = gw.calls.at(-1).body.toString();
+  assert.ok(!sent.includes(OPERATOR));
+  assert.match(JSON.parse(sent).query, /owner: "\[redacted\]"/);
+  assert.match(
+    notes.join("\n"),
+    /redacted a secret from the run's GitHub write POST \/api\/graphql/,
+  );
+});
+
+test("a POST that writes nothing (rendering markdown) goes on with a token that only reads", async (t) => {
+  const gw = await gateway(t);
+  const extra = { issues: "write" };
+  const { secret } = gw.register(extra, { mode: "work", push: true, issue: 1 });
+  const post = (path) => gw.call(path, { secret, method: "POST", body: '{"text": "**Hi**"}' });
+  assert.equal((await post("/api/v3/markdown")).status, 200);
+  assert.equal((await post("/api/v3/repos/org/repo/issues/1/comments")).status, 200);
+  assert.deepEqual(
+    gw.minted.map(([, perms]) => perms),
+    [readsOf(extra), extra],
+  );
 });

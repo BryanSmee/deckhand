@@ -8,8 +8,11 @@ inbox:
 caches:
   - /home/node/.npm
 
-# The dashboard's build-time packages, for its tests and build (AGENTS.md).
-setup: cd dashboard && npm ci --no-audit --no-fund
+# The dashboard's build-time packages, for its tests and build, and graphql-js's bundle, which
+# the listener's tests import (AGENTS.md).
+setup: >-
+  (cd dashboard && npm ci --no-audit --no-fund) &&
+  cd listener/vendor && npm ci --no-audit --no-fund && npm run build
 
 # A container engine for building and starting listener/Dockerfile and the other images.
 docker:

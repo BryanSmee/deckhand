@@ -5,3 +5,4 @@ grants.yaml
 config.yaml
 /server/
 /credentials/
+listener/vendor/graphql.mjs

@@ -13,20 +13,20 @@ brainstorm sessions). The plan and its decisions: PocketBerry's PB-135 and issue
 
 ## Commands
 
-Node 26. The listener has no dependencies; the dashboard has build-time ones (see
-Conventions).
+Node 26. The listener has one dependency, graphql-js, bundled into a file before it runs; the
+dashboard has build-time ones (see Conventions).
 
 | Task            | Command                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Tests           | `node --test`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| Tests           | `node --test` (after `cd listener/vendor && npm ci && npm run build`, which bundles graphql-js)                                                                                                                                                                                                                                                                                                                                                                                                         |
 | Dashboard       | `cd dashboard && npm ci && npm test && npm run build` (types, tests, build)                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | Syntax check    | `node --check listener/server.mjs`, `bash -n sandbox/*.sh sandbox/agents/*.sh sandbox/agents/claude/install sandbox/agents/codex/install sandbox/agents/antigravity/install sandbox/agents/antigravity/refresh sandbox/agents/npm-install sandbox/agents/release-install sandbox/deckhand-broker sandbox/deckhand-token sandbox/gh sandbox/git-credential-deckhand sandbox/pre-push engine/entrypoint.sh test/fixtures/fake-docker.sh test/fixtures/fake-opa.sh`, `node --check sandbox/deckhand-inbox` |
 | Format          | `npx --yes prettier@3 --check .` (`--write` to fix; `npx --yes prettier@3 --write --ignore-unknown <files>` for just the files you changed)                                                                                                                                                                                                                                                                                                                                                             |
 | Dashboard (dev) | `cd dashboard && npm run dev` (proxies the API to a listener on `:8080`)                                                                                                                                                                                                                                                                                                                                                                                                                                |
 
 Run the first four before pushing (the dashboard's when it changed). Work runs on this
-repository start with the dashboard's packages installed (`setup` in `.deckhand.yaml`) and
-the npm cache kept between runs.
+repository start with the dashboard's packages installed and graphql-js bundled (`setup` in
+`.deckhand.yaml`) and the npm cache kept between runs.
 
 Work runs also have a container engine (`docker`, `DOCKER_HOST=tcp://engine:2375`) when the
 operator grants one (your prompt says whether this run has it), but never webhooks: test the
@@ -40,10 +40,12 @@ docker build -t deckhand-listener -f listener/Dockerfile .
 # Start it: ALLOWED_USERS is all it needs to come up. Ports answer on engine, not localhost.
 docker run -d --name listener -p 8080:8080 -e ALLOWED_USERS=someone deckhand-listener
 curl engine:8080/health
-# The tests on another Node: a Debian image (bash and git for the fakes), jq, not root.
+# The tests on another Node: a Debian image (bash and git for the fakes), jq, not root, and
+# graphql-js bundled first (listener/vendor/graphql.mjs isn't committed).
 git ls-files -z | tar --null -T - -c | docker run --rm -i node:<v> sh -c \
   'apt-get update -qq && apt-get install -y -qq jq && mkdir /w && cd /w && tar x &&
-   chown -R node . && su node -c "node --test"'
+   chown -R node . && su node -c "cd listener/vendor && npm ci && npm run build && cd ../.. &&
+   node --test"'
 ```
 
 The engine is slower than the sandbox: a timing test failing there alone (`deliveries`,
@@ -73,6 +75,14 @@ docs/         setup, per-repo config reference, security model, architecture
 
 - **No runtime dependencies.** The listener uses `node:http`, `node:crypto`, `node:fs` and the
   docker CLI only. Ask before adding a package.
+- **graphql-js is the listener's one exception** (`listener/vendor/`, issue #406): the GitHub
+  gateway must parse the runs' GraphQL to check their writes (`github-graphql.mjs`), and a
+  parser of its own would be the bigger risk. Pinned to an exact version (`package-lock.json`
+  too), and bundled with esbuild into one file, `listener/vendor/graphql.mjs` (not committed),
+  in the image's build stage: the released image has no `node_modules`. `graphql.entry.mjs`
+  lists what the listener takes from it. GitHub's schema is pinned beside it
+  (`github.graphql`): `npm run schema` there reads it again through `gh`, on purpose, and its
+  diff is reviewed.
 - **The dashboard is the exception** (`dashboard/`, issue #22): Preact, Vite and TypeScript,
   with hand-written CSS Modules, no UI or chart library. Its packages are build-time only: the
   image's build stage turns them into static files in `dashboard/dist/`, which the listener

@@ -21,6 +21,7 @@ import { createBroker } from "./broker.mjs";
 import { clientAddress, createBrokerHttp, runAt, runFrom } from "./broker-http.mjs";
 import { createGitGateway } from "./git-gateway.mjs";
 import { createGithubGateway } from "./github-gateway.mjs";
+import { createGraphqlChecks, createValidator, lookupNodes } from "./github-graphql.mjs";
 import { createWriteChecks } from "./github-writes.mjs";
 import { createPrReady } from "./pr-ready.mjs";
 import { createBrainstorms, createIssueModes } from "./brainstorms.mjs";
@@ -335,6 +336,14 @@ const writeChecks = createWriteChecks({
   policies,
   log,
 });
+// Their GraphQL: parsed, validated (in a worker: a document can take a moment), and each
+// mutation held to the same checks, its node IDs looked up with the listener's token.
+const graphqlChecks = createGraphqlChecks({
+  validator: createValidator().check,
+  nodes: (repo, ids) => lookupNodes(github, repo, ids),
+  checkWrite: writeChecks.checkWrite,
+  log,
+});
 ctx.githubGateway = createGithubGateway({
   broker: ctx.broker,
   app: () => ctx.app,
@@ -349,9 +358,10 @@ ctx.githubGateway = createGithubGateway({
       .map((t) => t.live.secret),
     ...operatorSecrets(ctx),
   ],
-  // Their REST writes: within their mode's ceiling, and what the policies' `deny_github`
-  // allows. Their targets are looked up with the listener's token.
+  // Their REST writes and GraphQL mutations: within their mode's ceiling, and what the
+  // policies' `deny_github` allows. Their targets are looked up with the listener's token.
   checkWrite: writeChecks.check,
+  checkGraphql: graphqlChecks.check,
   // Their creates' answers: the issues each run created, for its links.
   wroteWrite: writeChecks.answered,
   log,

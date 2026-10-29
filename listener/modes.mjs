@@ -59,11 +59,12 @@ const NO_WRITES = {};
 //   before the trigger line. An analysis reports: the maintainer files what they want of it.
 //   A review reads: the listener posts its GitHub review (reviews.mjs), a diff can't write.
 //   Research gets none (NO_TOKEN): a web page it reads can't make it read the repo.
-// - ceiling: the most its REST writes to GitHub can ever do, whatever the policies say
-//   (github-writes.mjs): target kind → the actions allowed on it. None: it writes nothing.
-//   Reviews, merges, closing, deleting, labels' and the repo's settings, and anything outside
-//   the run's repo are in no ceiling. GitHub closes an issue when its pull request merges.
-// - issueLabel: the label each issue it creates over REST must carry, in its ceiling too
+// - ceiling: the most its writes to GitHub (REST, and GraphQL mutations: github-graphql.mjs)
+//   can ever do, whatever the policies say (github-writes.mjs): target kind → the actions
+//   allowed on it. None: it writes nothing. Reviews, merges, closing, deleting, labels' and
+//   the repo's settings, and anything outside the run's repo are in no ceiling. GitHub closes
+//   an issue when its pull request merges.
+// - issueLabel: the label each issue it creates must carry, in its ceiling too
 //   (issueLabelOf(), github-writes.mjs).
 // - prompt: its instructions, in ../prompts/ (prompts.mjs).
 // Their names are reserved: a repo's `modes:` can't take them (repo-config.mjs). The
@@ -230,7 +231,7 @@ export function permissionsFor(mode, light) {
   return builtIn(mode)?.permissions ?? (light ? READ_ONLY_PERMISSIONS : undefined);
 }
 
-// The most a run's REST writes can do (`ceiling` above): a built-in mode's, else one of the
+// The most a run's writes can do (`ceiling` above): a built-in mode's, else one of the
 // repo's own modes: a light one writes nothing (unless the operator grants more, which no
 // grant does yet), the others as work runs. Fail closed: no mode, nothing.
 export function ceilingOf(mode, light) {

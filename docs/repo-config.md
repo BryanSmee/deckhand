@@ -788,7 +788,7 @@ maintainer. Four decisions:
 | `deny_merge`  | An [auto-merge](#auto-merge), after every other gate passed, right before the merge. Only with `review.merge` and its grant.                                             | Refuses the merge: the "Not merged automatically" comment quotes the messages (5 at most, 200 characters each).                                                                                                          |
 | `deny_review` | A review that starts by itself ([`review.on: ready`](#reviews)), after its own checks, and the review after each fix run. Never a `/mode review` a maintainer asked for. | Skips the review: the listener's log says why, nothing is posted. After a fix run, the fix loop stops; in auto-merge mode the merge waits for a maintainer, the "Not merged automatically" comment quoting the messages. |
 | `deny_fix`    | A [`review.fix`](#reviews) run, after its own checks, right before it is queued.                                                                                         | Starts no fix run: a "No fix run" comment on the pull request quotes the messages. With `review.merge`, nothing is merged: the refusal quotes them too. The round isn't used: a later review may start it.               |
-| `deny_github` | Each REST write a run makes to GitHub (a comment, an issue edit, a label…), after [its mode's ceiling](#the-github-input).                                               | Refuses the write: GitHub's error shape with the messages, which `gh` prints to the agent, and a line in the run's log.                                                                                                  |
+| `deny_github` | Each write a run makes to GitHub (a comment, an issue edit, a label…), REST or a GraphQL mutation's field, after [its mode's ceiling](#the-github-input).                | Refuses the write: GitHub's error shape with the messages, which `gh` prints to the agent, and a line in the run's log.                                                                                                  |
 
 Another `deny_*` rule is reported by the config check, as probably misspelled.
 
@@ -874,12 +874,37 @@ created, or one already under the run's issue, and moving an issue from another 
 issue under the run's, where its ceiling would let it edit it. The issues the App's bot files
 for other runs or for the listener (an analysis, an onboarding issue) aren't the run's, even
 while it runs: only the answers to its own calls say what it created, and they are saved with
-the run, so a listener restart keeps them. A GraphQL answer counts only for a `mutation`
-calling `createIssue` with nothing aliased `createIssue`, and the issue must be the App's
-bot's.
+the run, so a listener restart keeps them. A GraphQL answer counts only under the response
+key of a `createIssue` field the gateway parsed, selecting GitHub's own `issue { url }`
+(unaliased), and the issue must be the App's bot's.
 
-GraphQL writes (`gh issue comment`, `gh issue create` and most of `gh`'s own commands) aren't
-checked yet: they go on as the run's token allows, until issue #406 classifies them.
+**GraphQL** (`gh issue create`, `gh issue comment`, `gh issue edit` and most of `gh`'s own
+commands) goes through the same checks, field by field:
+
+1. **Parsed and validated** against GitHub's public schema, pinned in Deckhand
+   (`listener/vendor/github.graphql`, updated on purpose): a call that doesn't parse or
+   validate, one over 2,500 tokens or 64 KiB (gh's are a few hundred) or 10 mutation
+   fields (gh sends one), a subscription, and
+   a document with several operations and no `operationName` naming one of them are refused.
+2. **Queries go on.** Each field of a mutation, through its fragments and under any alias,
+   must be one Deckhand knows (`createIssue`, `updateIssue`, `addComment`, `addSubIssue`,
+   `removeSubIssue`, `reprioritizeSubIssue`, `addLabelsToLabelable`,
+   `removeLabelsFromLabelable`, `addAssigneesToAssignable`, `removeAssigneesFromAssignable`,
+   `closeIssue`, `reopenIssue`, `addReaction`, and the pull request ones), setting only the
+   input fields Deckhand checks (no projects, no `parentIssueId` or `issueTemplate`, a sub-issue by its
+   `subIssueId` only): any other is refused before any policy runs, even sent as `null`, which
+   GitHub may read as clearing it.
+3. **Its targets are GitHub's:** the node IDs it names, inline or in its variables, are looked
+   up with the listener's token, to a repository, a kind and a number. A create's
+   `repositoryId` must be the run's repository, and its labels' IDs labels of it.
+4. **Each field is then a write as above**, held to the ceiling and `deny_github` with the
+   same input. One refusal refuses the whole call, its message starting with the field's
+   response key.
+5. **What GitHub gets is the document the gateway parsed**, printed again, never the call's
+   own bytes: GitHub runs what was checked.
+
+The token behind a run's calls only reads, but for a write that passed these checks: a
+brainstorm's or an inbox entry's `issues: write` never reaches anything else.
 
 | Mode                                                            | Ceiling                                                                                                                                                                                 |
 | --------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -897,22 +922,22 @@ go through Deckhand's git gateway) or settings, or another repository.
 
 `input` of `deny_github`:
 
-| Field                   | What                                                                                                                                                                                     |
-| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `version`               | `1`.                                                                                                                                                                                     |
-| `repo`                  | `"owner/repo"`, in lower case.                                                                                                                                                           |
-| `mode`                  | The run's: `work`, `brainstorm`, `stop`, `idea`, `bug`, `discussion`, or one of the repository's `modes:`.                                                                               |
-| `issue`                 | The number of the run's issue (or pull request).                                                                                                                                         |
-| `action`                | What the write does: `create`, `edit`, `comment`, `label`, `link`. A write that does several (a `PATCH` setting labels and a title) has them all in `actions`, `action` being the first. |
-| `actions`               | All of them: `close` or `reopen` first, then `label`, `assign`, `milestone`, then `edit`.                                                                                                |
-| `target.kind`           | `own_issue`, `own_pr`, `sub_issue`, `created_issue` (one the run created), `other_issue`, `pr`, `new_issue` (an issue it creates), `label` (a label it creates).                         |
-| `target.number`         | The issue's or pull request's, `null` for `new_issue` and `label`.                                                                                                                       |
-| `target.labels`         | Its labels' names, as GitHub has them now.                                                                                                                                               |
-| `target.author`         | Its author's login.                                                                                                                                                                      |
-| `change.fields`         | The keys of the write's JSON body (`["title", "body"]`).                                                                                                                                 |
-| `change.labels_added`   | The labels it adds (or sets, for a `PUT` or a `PATCH` with `labels`, or creates, for `label`).                                                                                           |
-| `change.labels_removed` | The labels it removes: those a `PUT` or a `PATCH` with `labels` leaves out of the issue's, or the one it deletes; `["*"]` when it deletes them all.                                      |
-| `change.sub_issue`      | A link's child: `id`, `number`, `kind` (`sub_issue` or `created_issue`). Absent from other writes.                                                                                       |
+| Field                   | What                                                                                                                                                                                                                                                                                                           |
+| ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `version`               | `1`.                                                                                                                                                                                                                                                                                                           |
+| `repo`                  | `"owner/repo"`, in lower case.                                                                                                                                                                                                                                                                                 |
+| `mode`                  | The run's: `work`, `brainstorm`, `stop`, `idea`, `bug`, `discussion`, or one of the repository's `modes:`.                                                                                                                                                                                                     |
+| `issue`                 | The number of the run's issue (or pull request).                                                                                                                                                                                                                                                               |
+| `action`                | What the write does: `create`, `edit`, `comment`, `label`, `link`. A write that does several (a `PATCH` setting labels and a title) has them all in `actions`, `action` being the first.                                                                                                                       |
+| `actions`               | All of them: `close` or `reopen` first, then `label`, `assign`, `milestone`, then `edit`.                                                                                                                                                                                                                      |
+| `target.kind`           | `own_issue`, `own_pr`, `sub_issue`, `created_issue` (one the run created), `other_issue`, `pr`, `new_issue` (an issue it creates), `label` (a label it creates).                                                                                                                                               |
+| `target.number`         | The issue's or pull request's, `null` for `new_issue` and `label`.                                                                                                                                                                                                                                             |
+| `target.labels`         | Its labels' names, as GitHub has them now.                                                                                                                                                                                                                                                                     |
+| `target.author`         | Its author's login.                                                                                                                                                                                                                                                                                            |
+| `change.fields`         | The keys of the write's JSON body (`["title", "body"]`), or the input fields a GraphQL mutation sets, its target's aside, named as REST names them (`labelIds` → `labels`, `assigneeIds` → `assignees`, `milestoneId` → `milestone`, `baseRefName` → `base`, the others in snake case): one spelling for both. |
+| `change.labels_added`   | The labels it adds (or sets, for a `PUT` or a `PATCH` with `labels`, or creates, for `label`).                                                                                                                                                                                                                 |
+| `change.labels_removed` | The labels it removes: those a `PUT` or a `PATCH` with `labels` leaves out of the issue's, or the one it deletes; `["*"]` when it deletes them all.                                                                                                                                                            |
+| `change.sub_issue`      | A link's child: `id`, `number`, `kind` (`sub_issue` or `created_issue`). Absent from other writes.                                                                                                                                                                                                             |
 
 ```json
 {

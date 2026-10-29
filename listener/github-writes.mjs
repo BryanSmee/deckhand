@@ -1,9 +1,10 @@
-// What a run may write to GitHub over REST (issue #405): each write the GitHub gateway relays
+// What a run may write to GitHub (issue #405): each REST write the GitHub gateway relays
 // (github-gateway.mjs) is classified from its method, path and body into actions on a target,
 // the target's kind is resolved from GitHub (never from the request), and the write goes on only
 // when its mode's ceiling (modes.mjs ceilingOf()) holds each action on that kind and the
 // policies' `deny_github` (policies.mjs) refuses nothing. A write it can't classify is refused.
-// GraphQL's writes are #406's: they go on as the token allows until then.
+// GraphQL's mutations are classified by github-graphql.mjs (#406), each into the same shape,
+// and held to the same checks (checkWrite()).
 //
 // Kinds: `own_issue` (the run's issue), `own_pr` (the run's pull request, or one from a branch
 // it may push: broker.mjs allow()), `sub_issue` (an issue whose parent is the run's, in its
@@ -253,43 +254,6 @@ const MAX_CREATED = 100;
 // listener's and GitHub's clocks differ, and `created_at` is in seconds.
 const SKEW_MS = 2 * 60_000;
 
-// Whether a GraphQL call's body creates an issue, so that its answer's
-// `data.createIssue.issue` is the issue it created: its document is one `mutation` (with
-// fragments at most) calling `createIssue(`, and nothing in it is aliased `createIssue` (a
-// read or another mutation could otherwise answer under that name with an issue of its
-// choosing). Read as text, string literals and comments left out, until #406 parses GraphQL.
-export function createsIssueMutation(body) {
-  let query;
-  try {
-    ({ query } = JSON.parse(body.toString("utf8")));
-  } catch {
-    return false;
-  }
-  if (typeof query !== "string") return false;
-  const doc = query
-    .replace(/"""[\s\S]*?"""/g, " ")
-    .replace(/"(?:[^"\\\n]|\\.)*"/g, " ")
-    .replace(/#[^\n\r]*/g, " ");
-  if (/\bcreateIssue\s*:/.test(doc) || !/\bcreateIssue\s*\(/.test(doc)) return false;
-  // Each top-level definition's head: the text before its block.
-  const heads = [];
-  let depth = 0;
-  let head = "";
-  for (const c of doc) {
-    if (c === "{") {
-      if (depth === 0) heads.push(head.trim());
-      depth++;
-      head = "";
-    } else if (c === "}") {
-      depth--;
-      if (depth < 0) return false;
-    } else if (depth === 0) head += c;
-  }
-  if (depth !== 0 || head.trim()) return false;
-  const [first, ...rest] = heads;
-  return /^mutation\b/.test(first ?? "") && rest.every((h) => /^fragment\b/.test(h));
-}
-
 // `lookup(repo, path)`: GitHub's JSON with the listener's token, null for a 404 (github.mjs
 // getJson()); `bot()`: the App's login (`slug[bot]`), null before /setup; `policies`:
 // policies.mjs's, null without; `log`: the listener's.
@@ -308,7 +272,7 @@ export function createWriteChecks({ lookup, bot = () => null, policies = null, l
   }
 
   // The target's kind, number, labels and author, from GitHub. Null when it isn't there.
-  async function resolve(run, repo, number) {
+  async function resolve(run, repo, number, lookup) {
     const issue = await lookup(repo, `/repos/${repo}/issues/${number}`);
     if (!issue) return null;
     const target = {
@@ -334,8 +298,15 @@ export function createWriteChecks({ lookup, bot = () => null, policies = null, l
 
   // A link's child → { id, number, kind }: `sub_issue` when it is already under the run's issue
   // (its sub-issues list them with their ids), `created_issue` when the run created it (the
-  // issues it created, looked up: their ids are GitHub's), else `other_issue`.
-  async function resolveChild(run, repo, { id }) {
+  // issues it created, looked up: their ids are GitHub's), else `other_issue`. A GraphQL
+  // link's child comes with its number and repo, resolved from its node ID: resolved as a
+  // target is.
+  async function resolveChild(run, repo, { id, number, repo: at }, lookup) {
+    if (number !== undefined) {
+      if (at !== repo) return { id, number, kind: "other_issue" };
+      const found = await resolve(run, repo, number, lookup);
+      return { id, number, kind: found?.kind ?? "other_issue" };
+    }
     if (run.issue != null) {
       // One page: GitHub takes 100 sub-issues per parent at most.
       const subs = await lookup(repo, `/repos/${repo}/issues/${run.issue}/sub_issues?per_page=100`);
@@ -349,42 +320,61 @@ export function createWriteChecks({ lookup, bot = () => null, policies = null, l
     return { id, number: null, kind: "other_issue" };
   }
 
-  // GitHub's answer to a run's write that went on (github-gateway.mjs wroteWrite()): the issue
+  // GitHub's answer to a run's write that went on (github-gateway.mjs wroteWrite()): the issues
   // it created, from a REST create (201, its JSON) or a GraphQL `createIssue` (what `gh issue
-  // create` sends: `data.createIssue.issue`, by its URL or number), in the run's repo, is kept
-  // on the run (`run.created`, saved with it: restart.mjs), with when the call was sent.
-  function answered(run, { method, path, body, graphql, at }, status, answer) {
+  // create` sends: `data.<its response key>.issue`, by its URL, `creates` naming the keys:
+  // github-graphql.mjs), in the run's repo, are kept on the run (`run.created`, saved with it:
+  // restart.mjs), with when the call was sent.
+  function answered(run, { method, path, body, graphql, creates = [], at }, status, answer) {
     let json;
     try {
       json = JSON.parse(answer.toString("utf8"));
     } catch {
       return;
     }
-    let issue;
+    let issues;
     if (graphql) {
-      if (status !== 200 || !createsIssueMutation(body)) return;
-      issue = json?.data?.createIssue?.issue;
+      if (status !== 200) return;
+      issues = creates.map((key) => json?.data?.[key]?.issue);
     } else {
       const write = classify(method, path, body);
       if (status !== 201 || write?.target?.kind !== "new_issue" || write.repo !== run.repo) return;
       if (!inRepo(json, run.repo)) return;
-      issue = json;
+      issues = [json];
     }
-    const number = numberOf(issue, run.repo);
-    if (number === null || !Array.isArray(run.created)) return;
-    if (run.created.some((c) => c.number === number)) return;
-    run.created.push({ number, at });
-    run.createdChanged?.();
+    if (!Array.isArray(run.created)) return;
+    let added = false;
+    for (const issue of issues) {
+      const number = numberOf(issue, run.repo);
+      if (number === null || run.created.some((c) => c.number === number)) continue;
+      run.created.push({ number, at });
+      added = true;
+    }
+    if (added) run.createdChanged?.();
   }
 
-  // A run's write → null when it may go on, else { status, message }: GitHub's status and why,
-  // which `gh` prints. `path`, `body`: classify()'s.
+  // A run's REST write → null when it may go on, else { status, message }: GitHub's status and
+  // why, which `gh` prints. `path`, `body`: classify()'s.
   async function check(run, { method, path, body }) {
     const write = classify(method, path, body);
     if (write?.read) return null;
     if (!write) {
       return refusal(403, "it can't tell what this write does, so it refuses it");
     }
+    return checkWrite(run, write);
+  }
+
+  // A classified write (classify()'s shape, or a GraphQL mutation's: github-graphql.mjs) → the
+  // same as check(). `memo`: a Map that keeps GitHub's answers across the writes of one call (a
+  // GraphQL call's several fields), so the same target is looked up once.
+  async function checkWrite(run, write, memo = null) {
+    const get = memo
+      ? (repo, path) => {
+          const key = `${repo} ${path}`;
+          if (!memo.has(key)) memo.set(key, lookup(repo, path));
+          return memo.get(key);
+        }
+      : lookup;
     if (write.repo !== run.repo) {
       return refusal(403, "a run writes only to its own repository");
     }
@@ -400,7 +390,7 @@ export function createWriteChecks({ lookup, bot = () => null, policies = null, l
     let target = write.target;
     if (target.number !== undefined) {
       try {
-        target = await resolve(run, write.repo, target.number);
+        target = await resolve(run, write.repo, target.number, get);
       } catch (error) {
         log(`GitHub gateway: ${run.repo}#${write.target.number}: ${error.message ?? error}`);
         return refusal(502, `#${write.target.number} can't be looked up on GitHub`);
@@ -430,7 +420,7 @@ export function createWriteChecks({ lookup, bot = () => null, policies = null, l
     if (write.child) {
       let sub;
       try {
-        sub = await resolveChild(run, write.repo, write.child);
+        sub = await resolveChild(run, write.repo, write.child, get);
       } catch (error) {
         log(`GitHub gateway: ${run.repo} sub-issue ${write.child.id}: ${error.message ?? error}`);
         return refusal(502, "the sub-issue can't be looked up on GitHub");
@@ -458,7 +448,7 @@ export function createWriteChecks({ lookup, bot = () => null, policies = null, l
     return refusal(403, `the policies refuse it (deny_github): ${messages.join("; ")}`);
   }
 
-  return { check, answered };
+  return { check, checkWrite, answered };
 }
 
 // An issue of GitHub's answer → its number, when it is in `repo`: its `url` (GraphQL's is the

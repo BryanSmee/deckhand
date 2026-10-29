@@ -285,7 +285,7 @@ to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to the
   in each string of its JSON (so an escaped character can't split one), replaced in place so
   the rest of the body goes on as it was sent, then as text (a body that isn't JSON; one
   that isn't UTF-8, byte for byte). GraphQL is redacted that way too, its query and variables, inline literals
-  included, until #406 parses it. A redacted write still goes through, with `[redacted]` in
+  included, before it is parsed. A redacted write still goes through, with `[redacted]` in
   place of the secret, and the run's log says so (each call once, 20 at most). A comment,
   an issue edit or a `gh api` write can't publish what the sandbox holds, a mount's content
   that looks like the operator's key say, any more than its reply can. Refused instead of
@@ -303,10 +303,9 @@ to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to the
   text matches quote it), any GraphQL call that names `comments`, `reviews`,
   `latestReviews`, `reviewThreads`, `timelineItems`, the `Comment` interface, a comment's or
   review's type, their edit history or `search` (any name that holds "comment", "review",
-  "timeline", "contentedit", "search" or "textmatch", whatever its case) (read as text until #406 parses GraphQL, then per
-  field), and anything on the web host but git's fetches (its pages
+  "timeline", "contentedit", "search" or "textmatch", whatever its case) (read as text, which refuses more than a parsed document's fields would), and anything on the web host but git's fetches (its pages
   show the comments). Other runs read them.
-- **REST writes are checked** (`listener/github-writes.mjs`, issue #405): each one (anything
+- **Writes are checked** (`listener/github-writes.mjs`, issue #405): each REST one (anything
   but `GET` and `HEAD` under the API, but GraphQL's and rendering markdown) is classified from
   its method, path and body into actions on a target (`create`, `edit`, `comment`, `label`,
   `link`, `close`…), and its target's kind is looked up on GitHub with the listener's own
@@ -315,8 +314,10 @@ to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to the
   sub-issue of its issue (its parent on GitHub, in the same repository), an issue the run
   created (GitHub answered one of the run's own calls with it: a REST create, or GraphQL's
   `createIssue`, which `gh issue create` sends and whose answer the gateway reads for that
-  alone: only a `mutation` calling `createIssue` with nothing aliased `createIssue`, since a
-  read could answer under that name with any issue; no older than that call; written by the
+  alone: only under the response key of a `createIssue` field it parsed, and only when that
+  field selects GitHub's own `issue { url }`, unaliased (an alias such as `url: title` would
+  answer with a URL of the run's choosing), since another field could answer under that name
+  with any issue; no older than that call; written by the
   App's bot, which files issues for every run and for the listener, so that alone says
   nothing; saved with the run across restarts), another issue
   or pull request. A sub-issue link's child, named by its id, must be one the run created or
@@ -335,12 +336,43 @@ to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to the
 
   A refusal (a look-up GitHub fails: `502`, fail closed) answers in GitHub's error shape
   (`{"message": "Deckhand: …"}`, with the policies' reasons), which `gh` prints to the agent,
-  and the run's log notes it. GraphQL's writes (most of `gh`'s own commands) aren't classified
-  until #406: they go on as the token allows, which is why light runs keep `issues: write`
-  until then.
+  and the run's log notes it.
 
-- **On to GitHub** with the run's token (`token …` for the API, Basic with
-  `x-access-token` for git, as GitHub expects an App's), the sandbox's `Authorization` and
+- **GraphQL is parsed** (`listener/github-graphql.mjs`, issue #406), with graphql-js (the
+  listener's one runtime package, bundled into a file at image build) and validated against
+  GitHub's public schema, pinned in the repository (`listener/vendor/github.graphql`,
+  updated on purpose): a call that doesn't parse (or holds over 2,500 tokens or
+  64 KiB, refused before validation, whose cost grows with the square of a document's repeated
+  fields) or validate, a
+  subscription, a document with several operations and no `operationName` naming one, a
+  GraphQL `GET` and a query string are refused, as GitHub would otherwise run something
+  unchecked. Validation runs in a worker thread (`createValidator()`), never on the listener's
+  thread (its webhooks, dashboard and REST calls), one document at a time, taken from the
+  runs in turn, so one that floods the worker (with as many calls as the gateway lets a run
+  have at once) delays itself, not the other runs. A document validated for over 10
+  seconds is refused alone (`503`), and the worker started again for the others. A query goes on. A call holds 10 mutation
+  fields at most (gh sends one), each response key checked once (GitHub runs it once), and
+  the targets of one call looked up once each: a call can't spend the installation's rate
+  limit on look-ups. Each field of a mutation, aliases and fragments included, must
+  be one of the mutations Deckhand knows, setting only the input fields it checks, whatever their value, `null` too (projects,
+  a parent or a template at creation, Copilot's assignment, a sub-issue by URL are refused): a mutation
+  GitHub adds is refused until Deckhand names it. The node IDs the fields name, inline or in
+  their variables (resolved as GitHub resolves them), are looked up with the listener's
+  token to a repository, a kind and a number, so the call's own claims say nothing; a node
+  outside the run's repository is refused like a missing one, before its type is named; each
+  field is then a write as above, held to the ceiling and `deny_github` with the same input,
+  and one refusal refuses the call. What goes on is the document as the gateway parsed it,
+  printed again (`print()`), never the call's bytes: GitHub runs exactly what was checked.
+  That document is redacted again: a secret spelled with GraphQL's own escapes (`\u0064`)
+  only shows once printed, the call's JSON having hidden it.
+  A new mutation in GitHub's schema means `npm run schema` in `listener/vendor/`, a reviewed
+  diff, and its entry in `MUTATIONS` before any run may send it.
+
+- **On to GitHub** with a token for the run's repository: its mode's permissions only for a
+  write that passed these checks, the same permissions read-only for everything else
+  (`listener/github-app.mjs` `readsOf()`), so a brainstorm's or an inbox entry's
+  `issues: write` reaches only what its ceiling and the policies allowed (`token …` for the
+  API, Basic with `x-access-token` for git, as GitHub expects an App's), the sandbox's `Authorization` and
   cookies dropped. The answer streams back as it comes, with the agents' endpoints' limits
   (`listener/upstream.mjs`): a call cut off after 10 minutes without a byte either way, 16
   calls in flight per run.
@@ -1261,7 +1293,7 @@ trusted, and whose default branch deploys nothing you couldn't roll back.
 
 [Policies](repo-config.md#policies) are Rego rules that refuse a decision (`deny_merge`, the
 last gate of an auto-merge; `deny_review`, a review that starts by itself; `deny_fix`, a
-review's fix run; `deny_github`, a run's REST write to GitHub, under its mode's built-in
+review's fix run; `deny_github`, a run's write to GitHub (REST, or a GraphQL mutation's field), under its mode's built-in
 ceiling: [The GitHub gateway](#the-github-gateway)). Yours are the `*.rego` files of `policy/` in the grants folder,
 read again at each decision: the defaults of every repository. A repository's own are in
 `.deckhand/policy/` on its default branch; one with the same name as yours replaces it, others
@@ -1296,7 +1328,7 @@ add to them.
   that can't be read (yours or GitHub's). For `deny_merge`, the pull request then waits for a
   human, as with any refusal; for `deny_review`, the review is skipped (the log says why); for
   `deny_fix`, no fix run starts and a comment says why; for `deny_github`, the run's write is
-  refused, so a broken policy stops every run's REST writes in that repository. A refusal only
+  refused, so a broken policy stops every run's writes in that repository. A refusal only
   ever costs a run, a write or a merge, never starts one. Your folder's compile errors are logged at start; a repository's
   appear in its onboarding pull request's config check and its config panel on the dashboard.
 - **A dry run decides nothing**: `/mode policy` on a pull request, only from an allowed user

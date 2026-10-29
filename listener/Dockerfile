@@ -12,7 +12,17 @@ RUN npm ci
 COPY dashboard/ ./
 RUN npm run build
 
-# The listener has no dependencies: only the dashboard's build, no node_modules.
+# graphql-js, the listener's one runtime package (AGENTS.md): bundled into a single file the
+# GitHub gateway imports (github-graphql.mjs), so the image has no node_modules either.
+FROM --platform=$BUILDPLATFORM node:26-alpine AS vendor
+WORKDIR /vendor
+COPY listener/vendor/package.json listener/vendor/package-lock.json ./
+RUN npm ci
+COPY listener/vendor/graphql.entry.mjs ./
+RUN npm run build
+
+# The listener has no other dependencies: the dashboard's build and graphql-js's bundle, no
+# node_modules.
 FROM node:26-alpine
 # buildx: repo images build with BuildKit. GNU tar: checkouts strip GitHub's top folder.
 # git: the git gateway reads the workflow files a push of a repo granted `allow_workflows`
@@ -38,6 +48,9 @@ RUN case "$TARGETARCH" in \
 WORKDIR /app
 COPY listener/*.mjs listener/
 COPY --from=dashboard /dashboard/dist/ dashboard/dist/
+# GitHub's GraphQL schema, pinned (vendor/update-schema.mjs), which the gateway validates against.
+COPY --from=vendor /vendor/graphql.mjs listener/vendor/
+COPY listener/vendor/github.graphql listener/vendor/
 COPY listener/runner/ listener/runner/
 COPY listener/agents/ listener/agents/
 COPY prompts/brainstorm.md prompts/idea.md prompts/bug.md prompts/discussion.md prompts/onboarding.md prompts/analyze.md prompts/research.md prompts/review.md prompts/

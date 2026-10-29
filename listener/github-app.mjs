@@ -83,6 +83,8 @@ export const SANDBOX_PERMISSIONS = {
 // Built-in light runs (brainstorms, inbox entries, discussions) comment and create issues, and
 // never touch a pull request: they can't push either (the broker's `push`), so the listener
 // changes none for them.
+// Their `issues: write`, like every token's writes, only reaches a write the GitHub gateway
+// checked against their ceiling and policies: anything else gets readsOf() below.
 export const LIGHT_PERMISSIONS = { pull_requests: "read" };
 // Added for discussion runs only: an App created before discussions keeps working elsewhere.
 export const DISCUSSION_PERMISSIONS = { ...LIGHT_PERMISSIONS, discussions: "write" };
@@ -100,6 +102,16 @@ export const READ_ONLY_PERMISSIONS = {
   issues: "read",
   pull_requests: "read",
 };
+
+// What a run's token gets for anything but a write the GitHub gateway checked and let through
+// (github-gateway.mjs): its permissions (`extra`, over SANDBOX_PERMISSIONS), each only read. A
+// light run's `issues: write` then only ever reaches the writes its ceiling and policies allow.
+export function readsOf(extra = {}) {
+  const levels = { ...SANDBOX_PERMISSIONS, ...extra };
+  return Object.fromEntries(
+    Object.entries(levels).map(([name, level]) => [name, level === "write" ? "read" : level]),
+  );
+}
 
 // Installation tokens last an hour: a cached one is renewed when less than this is left, so
 // whoever gets it can use it for at least that long.
