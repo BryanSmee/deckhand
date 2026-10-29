@@ -261,13 +261,16 @@ const STEPS = ["review", "review-fix"];
 function inReview(t, q, p, reviewed) {
   if (!p) return;
   const last = t.runs[0];
-  const step = last?.status === "running" ? last.reason : q?.reason;
+  // The loop's step: its run going, else queued, whatever else runs (the work run that marked
+  // the pull request ready may still be).
+  const running = last?.status === "running" ? last.reason : null;
+  const step = [running, q?.reason].find((r) => STEPS.includes(r)) ?? null;
   const settling = last?.status === "ok" && STEPS.includes(last.reason) ? last : null;
-  const review = reviewLoop(reviewed(t.repo, p.number), step ?? null, { settling });
+  const review = reviewLoop(reviewed(t.repo, p.number), step, { settling });
   if (!review) return;
   t.review = review;
   if (!LOOPING.includes(review.loop)) return;
-  if (t.state === "done" || (t.state === "queued" && STEPS.includes(q?.reason))) {
+  if (t.state === "done" || (t.state === "queued" && STEPS.includes(q?.reason) && !q.others)) {
     t.state = "in-review";
   }
 }

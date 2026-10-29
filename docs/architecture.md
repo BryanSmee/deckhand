@@ -545,7 +545,13 @@ while the task's last run is that step's own (started after `nextAt`) and over, 
 still there; an earlier run of the same kind isn't, when the step queued since never ran
 (cancelled, refused). At start, after the runs going and the queue are back, `forgetSteps()`
 drops the `next` of pull requests with no review or fix run reattached or queued
-(`stepsGoing()`): a listener stopped while it decided never will. `api/state` sends it as the task's `review` ({ loop, round, rounds,
+(`stepsGoing()`): a listener stopped while it decided never will. While `consider()`, `settle()` or `fixed()`
+decide (policies and GitHub calls), an in-memory mark says so too (`deciding()`, the entry's
+`deciding`), so a pull request turning ready is in review before its review is queued. The
+board takes the loop's step from the task's run going or its queued items, whichever is the
+loop's (the work run that marked the pull request ready may still run), and a task with a
+maintainer's comment queued beside the loop's step stays `queued`. The dashboard's ready
+notification is one per `readyAt` and loop end. `api/state` sends it as the task's `review` ({ loop, round, rounds,
 history }). Between the loop's runs (its next one queued, or the checks), the task's state is
 `in-review` instead of `queued` or `done`; a running run keeps its own. The dashboard lists it
 as running, not ready, until the loop ends: then a ready row whose loop ended blocking says

@@ -184,3 +184,31 @@ test("the ready notification waits for the loop's end, and says what it left", (
     "acme/app · pull request #25 · 2 high findings left after 2 fix rounds",
   );
 });
+
+test("ready before its loop began (no review yet), the loop's end still notifies", () => {
+  vi.stubGlobal("Notification", FakeNotification);
+  FakeNotification.shown = [];
+  const pr = {
+    ...state.tasks.find((t) => t.key === KEY)!.pr!,
+    state: "ready" as const,
+    readyAt: state.now + 1000,
+  };
+  const { rerender } = render(<Dashboard state={state} error={null} />);
+  const at = (over: Partial<Task>, now: number) => ({ ...withReview(state, over), now });
+  rerender(<Dashboard state={at({ state: "done", pr }, state.now + 2000)} error={null} />);
+  expect(FakeNotification.shown).toHaveLength(1);
+  const fixing = { state: "in-review" as const, pr, review: loop({ loop: "fixing", round: 1 }) };
+  rerender(<Dashboard state={at(fixing, state.now + 4000)} error={null} />);
+  rerender(
+    <Dashboard state={at({ state: "done", pr, review: loop() }, state.now + 6000)} error={null} />,
+  );
+  expect(FakeNotification.shown.map((n) => n.options.body)).toEqual([
+    "acme/app · pull request #25",
+    "acme/app · pull request #25 · 2 high findings left after 2 fix rounds",
+  ]);
+  // The next polls: no third.
+  rerender(
+    <Dashboard state={at({ state: "done", pr, review: loop() }, state.now + 8000)} error={null} />,
+  );
+  expect(FakeNotification.shown).toHaveLength(2);
+});

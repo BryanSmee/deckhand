@@ -96,6 +96,13 @@ export function waitEdges(shown, waits) {
   return { edges, blockers: [...blockers] };
 }
 
+// The queued items' fix loop step, for board(): { reason, others }, `reason` the last loop
+// item's ("review", "review-fix") or null, `others` whether any other item waits.
+export function loopStep(pending) {
+  const steps = pending.filter((i) => ["review", "review-fix"].includes(i.reason));
+  return { reason: steps.at(-1)?.reason ?? null, others: steps.length < pending.length };
+}
+
 // `ctx` (server.mjs): the listener's state and services, read at call time. `dashboardDir`:
 // the dashboard's build (../dashboard/, `npm run build`), copied there by the image.
 export function createHttp(ctx, { dashboardDir }) {
@@ -146,8 +153,10 @@ export function createHttp(ctx, { dashboardDir }) {
         mode: t.pending.at(-1).mode,
         repo: t.repo,
         replyTo: t.pending.at(-1).replyTo,
-        // Why the listener queued it itself ("review", "review-fix"): a fix loop's step.
-        reason: t.pending.at(-1).reason ?? null,
+        // A fix loop's step among them ("review", "review-fix", the last one's), and whether
+        // anything else waits too (a maintainer's comment): then the task is queued, not in
+        // review (board.mjs).
+        ...loopStep(t.pending),
         position: places.get(taskKey(t.repo, t.id)) ?? null,
         // A brainstorm, or one of the repo's light modes: before any work run, whatever the order.
         ...(isLight(t, t.pending.at(-1).mode) && { startsFirst: true }),

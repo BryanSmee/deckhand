@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { waitEdges } from "../listener/http.mjs";
+import { loopStep, waitEdges } from "../listener/http.mjs";
 import { board, isLive, runPlaces } from "../listener/board.mjs";
 
 const run = (key, startedAt, extra = {}) => ({
@@ -565,4 +565,32 @@ test("in review: a maintainer's comment queued meanwhile stays queued; a loop ru
   assert.equal(of("acme/api#1").review.loop, "checks");
   assert.deepEqual([of("acme/api#2").state, of("acme/api#2").review.loop], ["in-review", "fixing"]);
   assert.equal(of("acme/api#3").state, "error");
+});
+
+test("a review queued while the work run that marked the pull request ready still runs", () => {
+  const pr = { number: 5, state: "ready" };
+  const review = { reason: "review", replyTo: 5 };
+  const comment = { reason: undefined, replyTo: 12 };
+  // The review queued alone, behind the work run: in review already, the run's state kept.
+  assert.deepEqual(loopStep([review]), { reason: "review", others: false });
+  // A maintainer's comment queued before it: the task is queued, its comment in the run order.
+  assert.deepEqual(loopStep([comment, review]), { reason: "review", others: true });
+  assert.deepEqual(loopStep([comment]), { reason: null, others: true });
+  const tasks = board({
+    runs: [run("acme/api#1", 30, { status: "running" }), run("acme/api#2", 20)],
+    queued: [
+      { key: "acme/api#1", kind: "issue", repo: "acme/api", ...loopStep([review]) },
+      { key: "acme/api#2", kind: "issue", repo: "acme/api", ...loopStep([comment, review]) },
+    ],
+    brainstorms: [],
+    pr: () => pr,
+    // Nothing reviewed yet: the first review.
+    reviewed: () => null,
+  });
+  const of = (key) => tasks.find((t) => t.key === key);
+  assert.deepEqual(
+    [of("acme/api#1").state, of("acme/api#1").review.loop],
+    ["working", "reviewing"],
+  );
+  assert.deepEqual([of("acme/api#2").state, of("acme/api#2").review.loop], ["queued", "reviewing"]);
 });

@@ -707,11 +707,13 @@ const ROUNDS_KEPT = 20;
 // over: while the listener decides what follows it, its `next` step is still that one
 // (nextStep()), and the loop is still there. Only the step's own run: one started after the
 // step was queued (`nextAt`), not an earlier run of the same kind when the step queued since
-// never ran (cancelled, refused).
+// never ran (cancelled, refused). `entry.deciding`: the listener is deciding about the loop's
+// step right now (createReviews() entry()): it is there too.
 // `round`: the fix runs started so far (0 for the first review), of `rounds` the repo allows;
 // `history`: each review's { round, at, head, counts, blocking }, oldest first.
 export function reviewLoop(entry, step = null, { settling = null } = {}) {
   const history = entry?.rounds ?? [];
+  if (!step && entry?.deciding) step = entry.deciding;
   const own = settling && settling.startedAt >= (entry?.nextAt ?? 0);
   if (!step && own && entry?.next === settling.reason) step = settling.reason;
   const looping = step === "review" || step === "review-fix";
@@ -899,6 +901,22 @@ export function createReviews({
   // Entries from before the rounds have fixedAt and rereviewAt (fixesOf()); from before the
   // dashboard's, no `rounds`.
   const reviewed = persistentMap(path);
+  // Pull request key → { step } while the listener decides about its loop's step, in memory
+  // (deciding()): a webhook's review until it is queued, a run's end until what follows it is.
+  const decisions = new Map();
+
+  // `work()`, with the loop of pull request `key` at `step` meanwhile ("review", "review-fix"),
+  // for the dashboard: its GitHub calls and policies may outlast a poll. Its own mark only is
+  // taken off: another decision started since keeps its own.
+  async function deciding(key, step, work) {
+    const mark = { step };
+    decisions.set(key, mark);
+    try {
+      return await work();
+    } finally {
+      if (decisions.get(key) === mark) decisions.delete(key);
+    }
+  }
 
   // At start, after the runs going and the queue are back (restart.mjs): the steps on their way
   // (`next`) whose run nothing has any more, `going(repo, number)` saying which pull requests
@@ -933,15 +951,18 @@ export function createReviews({
     if (head && reviewed.get(key)?.head === head) {
       return skip(`review: #${pr.number} at ${head.slice(0, 7)} was reviewed already`);
     }
-    const denied = await denyReview(repo, base, pr, [
-      passed("Ready for review"),
-      passed(author ? "Opened by an allowed user" : "Deckhand's own pull request"),
-      passed("Not reviewed at this commit"),
-    ]);
-    if (denied.length) return skip(`review: #${pr.number}, ${policyWhy("deny_review", denied)}`);
-    remember(key, head);
-    log(`${key}: pull request #${pr.number} is ready, starting a review`);
-    return queueReview({ repo, base, pr, settings, author });
+    // The policies may take a while: the pull request is in review from now on, not ready.
+    return deciding(key, "review", async () => {
+      const denied = await denyReview(repo, base, pr, [
+        passed("Ready for review"),
+        passed(author ? "Opened by an allowed user" : "Deckhand's own pull request"),
+        passed("Not reviewed at this commit"),
+      ]);
+      if (denied.length) return skip(`review: #${pr.number}, ${policyWhy("deny_review", denied)}`);
+      remember(key, head);
+      log(`${key}: pull request #${pr.number} is ready, starting a review`);
+      return queueReview({ repo, base, pr, settings, author });
+    });
   }
 
   // The policies, asked about pull request `pr`: what they decide, when one applies, is kept
@@ -1021,9 +1042,11 @@ export function createReviews({
   // The loop's step on its way on pull request `key` (`next`: "review", "review-fix"), from
   // when it is queued until what follows its run is decided (settle(), fixed()), which may take
   // GitHub calls: the dashboard keeps it in review meanwhile (reviewLoop()). Null: decided.
-  function nextStep(key, step) {
+  // `since`: when clearing, the `nextAt` of the step decided about; another queued since stays.
+  function nextStep(key, step, since = undefined) {
     const entry = reviewed.get(key);
     if (!step && !entry?.next) return;
+    if (!step && since !== undefined && entry.nextAt !== since) return;
     remember(key, entry?.head ?? null, {
       next: step ?? undefined,
       nextAt: step ? now() : undefined,
@@ -1144,19 +1167,25 @@ export function createReviews({
   // an automatic review (`auto`), with `review.merge` on, the merge ({ sha, method }) or the
   // comment saying why not (null); without, the comment when the rounds ran out (roundsOut()).
   async function settle(run, posted) {
-    if (run.auto) recordRound(run, posted);
+    const key = taskKey(run.repo, prId(run.number));
+    if (!run.auto) return (await startFix(run, posted)).item;
+    const since = reviewed.get(key)?.nextAt;
+    recordRound(run, posted);
     let item = null;
-    try {
-      const started = await startFix(run, posted);
-      item = started.item;
-      if (item || !run.auto) return item;
-      const mode = await mergeMode(run.repo, run.base);
-      if (!mode) return roundsOut(run, posted);
-      return autoMerge(run, posted, started.denied, mode);
-    } finally {
-      // Nothing more on its way, unless a fix run was queued (startFix() said so).
-      if (run.auto && !item) nextStep(taskKey(run.repo, prId(run.number)), null);
-    }
+    return deciding(key, "review", async () => {
+      try {
+        const started = await startFix(run, posted);
+        item = started.item;
+        if (item) return item;
+        const mode = await mergeMode(run.repo, run.base);
+        if (!mode) return roundsOut(run, posted);
+        return autoMerge(run, posted, started.denied, mode);
+      } finally {
+        // Nothing more on its way, unless a fix run was queued (startFix() said so) or a new
+        // review since (the pull request ready again meanwhile).
+        if (!item) nextStep(key, null, since);
+      }
+    });
   }
 
   // An automatic review posted on pull request `number`: its round of the fix loop, kept in
@@ -1457,14 +1486,18 @@ export function createReviews({
   // comment says why it isn't merged.
   async function fixed(run) {
     const key = taskKey(run.repo, prId(run.number));
+    const since = reviewed.get(key)?.nextAt;
     let item = null;
-    try {
-      item = await reviewFix(run);
-      return item;
-    } finally {
-      // Its review queued says it is on its way (queueReview()); else the loop is over.
-      if (!item) nextStep(key, null);
-    }
+    return deciding(key, "review-fix", async () => {
+      try {
+        item = await reviewFix(run);
+        return item;
+      } finally {
+        // Its review queued says it is on its way (queueReview()); else the loop is over,
+        // unless another step was queued since.
+        if (!item) nextStep(key, null, since);
+      }
+    });
   }
 
   // fixed()'s work: the review queued, or null.
@@ -1631,7 +1664,13 @@ export function createReviews({
     stop,
     keys: () => [...reviewed.keys()],
     // The entry of pull request `number` in `repo` (reviewLoop()), or null.
-    entry: (repo, number) => reviewed.get(taskKey(repo, prId(number))) ?? null,
+    // `deciding`: the step the listener is deciding about right now (deciding()).
+    entry: (repo, number) => {
+      const key = taskKey(repo, prId(number));
+      const decision = decisions.get(key);
+      const entry = reviewed.get(key) ?? null;
+      return decision ? { ...entry, deciding: decision.step } : entry;
+    },
     respell,
     forgetSteps,
   };

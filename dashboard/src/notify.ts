@@ -68,8 +68,10 @@ export function useNotifications(state: State | null) {
     for (const t of state.tasks) {
       const pr = t.pr;
       if (pr && isReady(t) && pr.readyAt && pr.readyAt > since.current!) {
-        // Draft and ready again: a new readyAt, so a new notification.
-        const id = `${t.key}@${pr.readyAt}`;
+        // Draft and ready again: a new readyAt, so a new notification. A review-and-fix loop's
+        // end is one too, should the listener have let it look ready before the loop began.
+        const end = t.review?.history.at(-1)?.at;
+        const id = `${t.key}@${pr.readyAt}${end ? `@${end}` : ""}`;
         const left = findingsLeft(t);
         if (once(id) && getPref("notifyReady"))
           show(
