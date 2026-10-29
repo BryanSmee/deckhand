@@ -146,6 +146,8 @@ export function createHttp(ctx, { dashboardDir }) {
         mode: t.pending.at(-1).mode,
         repo: t.repo,
         replyTo: t.pending.at(-1).replyTo,
+        // Why the listener queued it itself ("review", "review-fix"): a fix loop's step.
+        reason: t.pending.at(-1).reason ?? null,
         position: places.get(taskKey(t.repo, t.id)) ?? null,
         // A brainstorm, or one of the repo's light modes: before any work run, whatever the order.
         ...(isLight(t, t.pending.at(-1).mode) && { startsFirst: true }),
@@ -160,6 +162,7 @@ export function createHttp(ctx, { dashboardDir }) {
       dismissals: ctx.dismissals?.list() ?? [],
       pr: (key) => ctx.pulls.get(key),
       decisions: (key) => ctx.decisions?.get(key) ?? [],
+      reviewed: (repo, number) => ctx.reviews?.entry(repo, number) ?? null,
     }).slice(0, 200);
     return { shown, queued };
   }

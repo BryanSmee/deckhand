@@ -497,3 +497,47 @@ test("a task's update time is the latest Deckhand saw, and orders the list", () 
   );
   assert.equal(tasks.find((t) => t.key === "acme/api#3").since, 100);
 });
+
+test("a pull request in its fix loop: in review between its runs, its round on the task", () => {
+  const pr = { number: 5, state: "ready" };
+  const history = [{ round: 0, at: 1, head: "a", counts: { high: 2 }, blocking: 2 }];
+  const entry = { head: "a", at: 1, fixes: 1, fixRounds: 3, rounds: history };
+  const reviewed = (repo, number) => (number === 5 ? entry : null);
+  const tasks = board({
+    runs: [
+      // The fix run's review is queued after it: in review, not queued.
+      run("acme/api#1", 30, { reason: "review-fix", round: 1, rounds: 3 }),
+      // The fix run is running: still working.
+      run("acme/api#2", 20, { status: "running", reason: "review-fix" }),
+      run("acme/api#3", 10),
+      run("acme/api#4", 5),
+    ],
+    queued: [{ key: "acme/api#1", kind: "issue", repo: "acme/api", reason: "review" }],
+    brainstorms: [],
+    pr: (key) => (key === "acme/api#4" ? { number: 6, state: "ready" } : pr),
+    reviewed: (repo, number) =>
+      number === 6 ? { ...entry, waiting: { sha: "a" } } : reviewed(repo, number),
+  });
+  const of = (key) => tasks.find((t) => t.key === key);
+  assert.equal(of("acme/api#1").state, "in-review");
+  assert.deepEqual(
+    [of("acme/api#1").review.loop, of("acme/api#1").review.round, of("acme/api#1").review.rounds],
+    ["reviewing", 1, 3],
+  );
+  assert.equal(of("acme/api#2").state, "working");
+  assert.equal(of("acme/api#2").review.loop, "fixing");
+  // Nothing going: how the loop ended, with the task's own state.
+  assert.equal(of("acme/api#3").state, "done");
+  assert.equal(of("acme/api#3").review.loop, "stopped");
+  // The auto-merge waits for checks: in review.
+  assert.equal(of("acme/api#4").state, "in-review");
+  assert.equal(of("acme/api#4").review.loop, "checks");
+  // In review is live: on top with the running ones.
+  assert.deepEqual(
+    tasks.slice(0, 3).map((t) => t.key),
+    ["acme/api#1", "acme/api#2", "acme/api#4"],
+  );
+  // No pull request, or none reviewed: no `review`.
+  const plain = board({ runs: [run("acme/api#7", 1)], queued: [], brainstorms: [] });
+  assert.equal(plain[0].review, undefined);
+});
