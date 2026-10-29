@@ -12,6 +12,10 @@
 //   close(run)           no more messages: the agent exits once it has answered (or is
 //                        stopped if it stays silent after that, runs.mjs linger())
 //   closed(run)          whether close() was called, for a listener that restarts
+//   poll(run, from, opts)  the inbox's whole lines after byte `from`, waiting for one up to
+//                        `timeout` ms (the sandbox's long poll, ../run-files.mjs); null
+//                        without an inbox
+//   file(run, name)      the run's "ca" (the egress proxy's) or "digest", or null
 //   wait(name)           until it exits
 //   kill(name)           ends it now (a cancelled run, or one silent after its answer):
 //                        SIGTERM, then SIGKILL after 10 s
@@ -24,7 +28,8 @@
 //                        again, and removes the networks of runs that are gone
 //   proxyAddresses()     the egress proxy's addresses, on all of its networks
 //
-// This file composes its parts, which share `docker`: inbox.mjs (the messages' file),
+// This file composes its parts, which share `docker`: inbox.mjs (the messages' file and the
+// run's other files, which the sandbox fetches from the broker rather than mounts),
 // networks.mjs (each run's own network), volumes.mjs (a run's container engine and its
 // storage) and gc.mjs (relink()). What else the listener has Docker do, images and short
 // containers of its own, is in images.mjs and jobs.mjs beside it (index.mjs).
@@ -127,11 +132,12 @@ export function createDockerRunner({
   config,
   docker, // ../docker.mjs
   spawn = nodeSpawn, // `docker logs --follow`, a stream rather than one answer
-  inboxDir, // the runs volume, as the listener mounts it
+  inboxDir, // the runs folder, in the listener's own volume
   log = () => {},
   now = Date.now,
+  timers, // inbox.mjs poll()'s clock
 }) {
-  const inbox = createInbox({ config, inboxDir });
+  const inbox = createInbox({ inboxDir, timers });
   const networks = createNetworks({ config, docker, log, now });
   const engines = createEngines({ config, docker });
   // Runs whose network exists before their sandbox does: relink() leaves them alone.
@@ -142,8 +148,9 @@ export function createDockerRunner({
   // (sandboxArgs()); `engine`: { limits, cache } for a run granted a
   // container engine, `cache` the base name of the repo's cache volume when it keeps one;
   // `ca`: the egress proxy's CA certificate (PEM), which the sandbox trusts, in its inbox
-  // folder (DECKHAND_CA); `digest`: a run analysis's digest of past runs (analysis.mjs), there
-  // too (TASK_DIGEST). → { engine: { backend, volume, cached } } when it has one.
+  // folder (DECKHAND_CA, where the sandbox fetches it); `digest`: a run analysis's digest of
+  // past runs (analysis.mjs), there too (TASK_DIGEST). → { engine: { backend, volume, cached } }
+  // when it has one.
   async function start(spec) {
     const { run, name, image, labels = {}, env: values = {}, engine, ca, digest } = spec;
     const args = sandboxArgs(spec);
@@ -160,15 +167,15 @@ export function createDockerRunner({
     try {
       await networks.create(run);
       if (engine) started = await engines.start(run, name, labels, engine);
-      // Not secrets: where the engine is, as values.
-      const engineVars = started ? engineEnv(started.backend) : {};
+      // Not secrets: where the engine and the run's files are, as values.
+      const engineVars = {
+        ...(started ? engineEnv(started.backend) : {}),
+        ...inbox.env(config.brokerUrl, ca, digest),
+      };
       checked(
-        await docker(
-          runArgs({ run, name, image, labels: all, env, engineVars, args, ca, digest }),
-          {
-            env: { ...process.env, ...env },
-          },
-        ),
+        await docker(runArgs({ run, name, image, labels: all, env, engineVars, args }), {
+          env: { ...process.env, ...env },
+        }),
         "the sandbox didn't start",
       );
     } catch (error) {
@@ -182,8 +189,8 @@ export function createDockerRunner({
   }
 
   // start()'s `docker run` arguments: secrets in `env` by name only, the engine's variables
-  // (not secrets) as values, the inbox volume read-only, on the run's own network.
-  function runArgs({ run, name, image, labels, env, engineVars, args, ca, digest }) {
+  // and the run files' URLs (not secrets) as values, on the run's own network.
+  function runArgs({ run, name, image, labels, env, engineVars, args }) {
     return [
       "run",
       "--detach",
@@ -193,7 +200,6 @@ export function createDockerRunner({
       ...labelArgs(labels),
       ...Object.keys(env).flatMap((k) => ["-e", k]),
       ...envArgs(engineVars),
-      ...inbox.args(run, ca, digest),
       "--network",
       run,
       ...args,
@@ -351,6 +357,8 @@ export function createDockerRunner({
     send: inbox.send,
     close: inbox.close,
     closed: inbox.closed,
+    poll: inbox.poll,
+    file: inbox.file,
     wait,
     kill,
     remove,

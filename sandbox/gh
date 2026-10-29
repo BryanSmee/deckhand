@@ -12,4 +12,7 @@ GH_TOKEN=$(deckhand-token) || {
   exit 1
 }
 export GH_TOKEN
+# The run's screenshots first, so a pull request or comment that links them finds them. A
+# refused one is said on stderr, which the agent reads; its status is ignored.
+[ -z "${SCREENSHOT_DIR:-}" ] || deckhand-files shots > /dev/null || true
 exec "$real" "$@"

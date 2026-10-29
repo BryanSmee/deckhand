@@ -103,7 +103,8 @@ kills that shell.
 ## Screenshots
 
 When a change affects what users see, show it on the pull request. `SCREENSHOT_DIR` is an
-empty folder for this run, publicly served at `SCREENSHOT_URL`:
+empty folder for this run, publicly served at `SCREENSHOT_URL` (its PNG, JPEG and WebP
+files, up to 10 MB each, are uploaded within seconds, before each `gh` call and push, and when your turn ends):
 
 1. Save PNGs of each page or state you changed there, with names saying what they show:
    desktop at 1440×900 and mobile at 390×844 (`settings-desktop.png`,

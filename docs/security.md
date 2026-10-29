@@ -586,8 +586,6 @@ A sandbox only gets Docker named volumes:
 | `<prefix>-<owner>-<repo>-<n>-<hash>-research-…`                 | a research run's own (see [Research runs](#research-runs))                                      |
 | `<prefix>-claude-code`, `-codex`, `-antigravity`, **read-only** | the run's agent, installed by the listener                                                      |
 | `<prefix>-cache-<owner>-<repo>-<path>-<hash>`                   | the repo's `caches`, its own                                                                    |
-| `<prefix>-screenshots`, **its run's folder only**               | screenshots, served under `/shots/<folder>/` (regular files only)                               |
-| `<prefix>-runs`, **its run's folder, read-only**                | its inbox: comments that arrive mid-run                                                         |
 
 `<agent>` is the run's agent (`claude`, `codex`, `antigravity`), and `<prefix>` the
 deployment's `NAME_PREFIX` (`deckhand` by default).
@@ -811,14 +809,22 @@ hooks, `.claude/settings.json`, before the model reads anything). Before either 
 
 What it can still reach is in [Not covered](#not-covered).
 
-Each run mounts only its own folder of the screenshots volume (`volume-subpath`, Docker
-Engine 26 or later), named with 24 random hex digits: it can't list or read another run's.
-The listener serves only the regular files of that folder: a symbolic link (opened with
-`O_NOFOLLOW`), a hard link or a path that resolves elsewhere is a 404, so a run can't link
-`/screenshots/a.png` to the listener's own files (`app.json`, its private key).
-Its inbox folder is mounted the same way, read-only: the listener writes the comments
-delivered to the run there (a file rather than the container's stdin, so a run outlives a
-listener restart).
+No volume of the listener's is mounted (#393). A run's files go through the broker's port
+(`run-files.mjs`, [Run files](architecture.md#run-files)), with the run's secret, which works
+from its own sandbox only (`broker.mjs` `sentBy()`), and only for its own run's files:
+
+- **Its inbox** (the comments delivered to it), **the egress proxy's CA and its digest**: read
+  only, from the listener's runs folder (a file rather than the container's stdin, so a run
+  outlives a listener restart). Another run's secret, or one sent from another sandbox, gets
+  `403`; none, or a finished run's, `401`.
+- **Its screenshots**: uploaded into its own folder of the listener's `shots/`, named with
+  24 random hex digits, which it can't list. The listener writes each file itself, after
+  checking it: a name `GET /shots` serves (`[\w.-]+` with `.png`, `.jpg`, `.jpeg` or `.webp`),
+  content starting the way that type does (so no HTML is served as an image), at most 10 MB a
+  file and 100 MB a run. It renames it into place, so `/shots` never serves half a file. A
+  research run has no folder: refused. `/shots` still serves only regular files (no
+  symbolic or hard link, nothing resolving elsewhere): folders from before #393 were written
+  by sandboxes.
 
 Each agent's install volume (Claude Code's, Codex's, the Antigravity CLI's) is shared by
 every repository, so it is read-only in sandboxes: a run that could replace `claude` there
@@ -869,7 +875,8 @@ A refused mount stops the run, and the reply on the issue lists each refused pat
 A read-write request under a read-only root is mounted read-only (noted in the run's log).
 
 Paths the sandbox mounts itself can't be mount targets, nor anything inside or above them:
-`/workspace`, `/screenshots`, `/deckhand` (the run's inbox), and each agent's session and
+`/workspace`, `/tmp/screenshots` and `/tmp/deckhand` (the run's screenshots and files, kept
+in its own filesystem), and each agent's session and
 install (`/home/node/.claude` and `/opt/claude-code`, `/home/node/.codex` and `/opt/codex`,
 `/home/node/.gemini` and `/opt/antigravity`), for every agent, whichever the run has. The
 list comes from the agents' definitions, so a new agent's paths are reserved too. Neither
@@ -1188,8 +1195,8 @@ repository's half of these checks too; its preview (`GET`, the same path) all bu
 as it changes nothing. It only ever reads runs of that repository: they are picked by the
 repo of each run's record, and its digest is built from those alone. Its run never gets the
 logs themselves (they cover every repository, and are a few MB each), nor a mount of the logs
-folder: the listener writes a digest into the run's own read-only inbox folder
-(`TASK_DIGEST`), built from the dashboard's entries (`runlog.mjs` `format()`, tool details and
+folder: the listener writes a digest into the run's inbox folder, which its sandbox alone fetches
+from the broker (`TASK_DIGEST`), built from the dashboard's entries (`runlog.mjs` `format()`, tool details and
 outputs clipped), redacted of the operator's credentials and of GitHub tokens (`secrets.mjs`)
 and capped at about 400 KB. Its token only reads, as onboarding's: it replies, and files
 nothing itself.
@@ -1695,7 +1702,8 @@ real server's certificate.
   when its repository's grant has `cached_hosts` or its agent's calls are relayed (the
   Antigravity CLI's), the listener
   asks the proxy for the CA's certificate (public, at `http://egress:3128/deckhand-ca.crt`)
-  and puts it in the run's read-only inbox folder. The sandbox's entrypoint adds it to a
+  and puts it in the run's inbox folder, which its sandbox alone fetches from the broker at
+  start (a run that can't stops). The sandbox's entrypoint adds it to a
   bundle with the image's own roots, which `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`,
   `CURL_CA_BUNDLE`, `GIT_SSL_CAINFO`, `REQUESTS_CA_BUNDLE` and `PIP_CERT` point at, and to
   Chromium's store (`~/.pki/nssdb`, with `certutil`). A tool that reads none of them refuses

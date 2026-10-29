@@ -183,12 +183,17 @@ test("paths in the repo and cache paths", () => {
   }
 });
 
-test("every agent's session and install, and the inbox, are reserved", () => {
+test("every agent's session and install, and the run's own files, are reserved", () => {
   for (const agent of Object.values(AGENTS)) {
     assert.ok(RESERVED.includes(agent.session.path), agent.name);
     assert.ok(RESERVED.includes(agent.install(config).mount), agent.name);
   }
-  for (const path of ["/home/node/.gemini/x", "/opt/antigravity", "/deckhand", "/screenshots"]) {
+  for (const path of [
+    "/home/node/.gemini/x",
+    "/opt/antigravity",
+    "/tmp/deckhand",
+    "/tmp/screenshots/x",
+  ]) {
     assert.ok(cacheProblem(path), path);
   }
   const { errors } = parseRepoConfig("caches:\n  - /home/node/.gemini/x\n", config);

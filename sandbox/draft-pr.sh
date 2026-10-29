@@ -11,6 +11,9 @@
 #                            Stop` without its payload): opens the draft for the current branch
 #                            if it is pushed and has no pull request yet, whatever its name.
 #                            Never blocks the agent: after a push it only tells it the URL.
+#                            Both times, for every run, it uploads the run's screenshots
+#                            first (deckhand-files shots), so the final message and the pushed
+#                            work find them before the sandbox stops.
 #
 # Only for work runs on an issue: TASK_ISSUE (GitHub issue number, from the listener).
 # Brainstorms and pull request runs don't set it, so nothing is created for them. Never
@@ -18,6 +21,26 @@
 set -uo pipefail
 
 base=${BASE_BRANCH:-main}
+
+# The hook's event ("Stop ", "PostToolUse <command>"), read once: its payload is on stdin.
+if [ "${1:-}" = hook ]; then
+  if [ -n "${2:-}" ]; then
+    event="$2 "
+  else
+    event=$(jq -r '"\(.hook_event_name) \(.tool_input.command // "")"')
+  fi
+  # Its stdout is the agent's hook answer, and a hook's stderr reaches only the run's log
+  # (--log): a refusal is still told by the next gh call or push. After `git push`, pre-push
+  # uploaded and told already. Last, on exit (the early ones below too), and within 20 s: the
+  # draft pull request and its URL come first in the agent's 60 s for the hook.
+  case $event in
+    "Stop "* | PostToolUse*"git push"*)
+      [ -z "${SCREENSHOT_DIR:-}" ] ||
+        trap 'timeout 20 deckhand-files shots --log > /dev/null || true' EXIT
+      ;;
+  esac
+fi
+
 # In .git: survives between runs of the same issue, never committed.
 cache=/workspace/.git/deckhand-task.json
 
@@ -96,12 +119,7 @@ start() {
 }
 
 hook() {
-  local event url
-  if [ -n "${1:-}" ]; then
-    event="$1 "
-  else
-    event=$(jq -r '"\(.hook_event_name) \(.tool_input.command // "")"')
-  fi
+  local url
   case $event in
     "Stop "*) ensure > /dev/null ;;
     PostToolUse*"git push"*)
@@ -115,7 +133,7 @@ hook() {
 
 case "${1:-}" in
   start) start ;;
-  hook) hook "${2:-}" ;;
+  hook) hook ;;
   *)
     sed -n '4,12s/^# \{0,1\}//p' "$0" >&2
     exit 2

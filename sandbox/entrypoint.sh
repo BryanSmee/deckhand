@@ -20,14 +20,40 @@ set -euo pipefail
 : "${BASE_BRANCH:=main}"
 
 # TASK_INPUT=stream (the webhook listener): comments that arrive while the agent works, as
-# its messages, from the run's inbox (TASK_INBOX, followed by deckhand-inbox until the
-# listener closes it) or else stdin. Stdin is set aside on fd 3 so no setup command reads it.
+# its messages, from the run's inbox (TASK_INBOX, the broker's URL for it, followed by
+# deckhand-inbox until the listener closes it) or else stdin. Stdin is set aside on fd 3 so no setup command reads it.
 if [ "${TASK_INPUT:-}" = "stream" ]; then
   exec 3<&0 < /dev/null
 fi
 deckhand_messages() {
   if [ -n "${TASK_INBOX:-}" ]; then deckhand-inbox "$TASK_INBOX"; else cat <&3; fi
 }
+
+# The run's files on the broker (../listener/run-files.mjs), rather than in a volume shared
+# with the listener: the egress proxy's CA and the run's digest, fetched once into files of
+# the sandbox's own, which DECKHAND_CA and TASK_DIGEST then name. A path (a sandbox started by
+# hand) is used as it is. Without them the run can't do its job: it stops (set -e). `$1`: the
+# folder (/tmp/deckhand, reserved in repo-config.mjs).
+fetch_run_files() {
+  local var name
+  for var in DECKHAND_CA:egress-ca.crt TASK_DIGEST:digest.md; do
+    name=${var%%:*}
+    if [[ "${!name:-}" == http://* || "${!name:-}" == https://* ]]; then
+      mkdir -p "$1"
+      deckhand-files get "${!name}" "$1/${var#*:}"
+      export "$name=$1/${var#*:}"
+    fi
+  done
+}
+fetch_run_files /tmp/deckhand
+
+# Screenshots (SCREENSHOT_DIR, a folder of the sandbox's own): uploaded to the broker every
+# few seconds while the agent works (and by the agent's Stop hook, each push and the gh
+# wrapper before each call: draft-pr.sh, pre-push, gh), served under SCREENSHOT_URL. On stderr: stdout is the agent's.
+if [ -n "${SCREENSHOT_DIR:-}" ]; then
+  mkdir -p "$SCREENSHOT_DIR"
+  [ -z "${DECKHAND_BROKER_URL:-}" ] || deckhand-files shots --watch >&2 < /dev/null &
+fi
 
 # The egress proxy's CA (DECKHAND_CA, a file from the listener for every run that reaches
 # GitHub, whose calls the proxy relays to the listener's GitHub gateway, and when the

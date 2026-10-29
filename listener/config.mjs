@@ -403,9 +403,6 @@ function sandboxConfig(env, s) {
   return {
     prefix,
     image: env.SANDBOX_IMAGE || `${prefix}-sandbox`,
-    shotsVolume: env.SHOTS_VOLUME || `${prefix}-screenshots`,
-    // Each run's inbox (runner/docker.mjs), mounted by the listener at <dataDir>/runs.
-    runsVolume: env.RUNS_VOLUME || `${prefix}-runs`,
     claudeCodeVolume: s.CLAUDE_CODE_VOLUME,
     claudeCodeVersion: s.CLAUDE_CODE_VERSION,
     codexVolume: s.CODEX_VOLUME,

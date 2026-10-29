@@ -5,6 +5,7 @@
 import { proxyEnv } from "./egress.mjs";
 import { isFresh, OPEN, sessionName } from "./modes.mjs";
 import { ENGINE_HOST } from "./runner/engine.mjs";
+import { SCREENSHOT_DIR } from "./runner/inbox.mjs";
 
 // The sandbox's user: the base image's `node`.
 export const SANDBOX_USER = { uid: 1000, gid: 1000 };
@@ -14,7 +15,7 @@ export const SANDBOX_USER = { uid: 1000, gid: 1000 };
 // (images.caches()); `mounts`: the host paths granted (access.mjs).
 //
 // → { run, name, image, labels, env, user, limits, caps, volumes, engine, ca, digest }, each of
-// `volumes` { kind, name, path, readOnly, subpath }: `kind` agent, session, cache, shots or
+// `volumes` { kind, name, path, readOnly, subpath }: `kind` agent, session, cache or
 // mount, `name` the volume (a mount's: the host path), `subpath` the folder of it mounted.
 export function sandboxSpec(
   run,
@@ -29,11 +30,6 @@ export function sandboxSpec(
   const install = agent.install(config);
   // Its network is its own (runner/).
   const volumes = [
-    // Its own folder of the screenshots volume only: no run sees another's. None for a
-    // research run, whose only output is its reply: the volume is publicly served.
-    ...(live.shots
-      ? [{ kind: "shots", name: config.shotsVolume, path: "/screenshots", subpath: live.shots }]
-      : []),
     // The agent, installed by the listener before the run (images.installAgent()).
     // Read-only: shared by every repository, so a run that could rewrite it would run its
     // code in the next sandbox of any repository, with that run's broker secret.
@@ -141,7 +137,10 @@ export function sandboxEnv(
     SANDBOX_EFFORT: live.record.effort,
     // "fast": the agent's fast mode, already checked against the settings (agents/select.mjs).
     SANDBOX_SPEED: live.record.speed ?? "normal",
-    SCREENSHOT_DIR: live.shots ? "/screenshots" : "",
+    // A folder of its own, which ../sandbox/deckhand-files uploads to the broker
+    // (run-files.mjs). None for a research run, whose only output is its reply: the folder is
+    // publicly served.
+    SCREENSHOT_DIR: live.shots ? SCREENSHOT_DIR : "",
     SCREENSHOT_URL: live.shots ? `${publicUrl}/shots/${live.shots}` : "",
     // The engine is reached directly, on the run's network.
     ...proxyEnv(config, engine ? [ENGINE_HOST] : []),

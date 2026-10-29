@@ -147,9 +147,13 @@ case "$1" in
     case "$*" in *--entrypoint*) echo "$*" >> "$dir/docker-calls"; exit 0 ;; esac
     # A run's container engine: its arguments, one per line, and nothing runs.
     case "$*" in *"--network-alias engine"*) printf '%s\n' "$@" > "$dir/engine-args"; exit 0 ;; esac
-    # Its name and its run's id, from its arguments.
+    # Its name and its run's id, from its arguments, and the values `-e NAME=value` gives it
+    # (the run files' URLs): Docker's environment for it.
     for arg in "$@"; do
       [ "${prev-}" = --name ] && name=$arg
+      if [ "${prev-}" = -e ] && [[ "$arg" == TASK_DIGEST=* || "$arg" == DECKHAND_CA=* ]]; then
+        export "${arg?}"
+      fi
       case "$arg" in deckhand.run=*) run=${arg#deckhand.run=} ;; esac
       prev=$arg
     done
@@ -169,6 +173,15 @@ case "$1" in
       api=${GITHUB_API#*://}
       curl -fsS -H "Authorization: token $DECKHAND_RUN_SECRET" \
         "$DECKHAND_BROKER_URL/relay/${api%%[:/]*}/repos/org/repo" > "$dir/broker-answer"
+      # The run'"'"'s files on the broker, as deckhand-files fetches and uploads them: its digest
+      # when it has one, and a screenshot when the test leaves one in shot.
+      if [ -n "${TASK_DIGEST:-}" ]; then
+        curl -sS -H "Authorization: Bearer $DECKHAND_RUN_SECRET" "$TASK_DIGEST" > "$dir/digest-fetched"
+      fi
+      if [ -e "$dir/shot" ]; then
+        curl -sS -o /dev/null -w "%{http_code}" -X PUT -H "Authorization: Bearer $DECKHAND_RUN_SECRET" \
+          --data-binary "@$dir/shot" "$DECKHAND_BROKER_URL/run/shots/page.png" > "$dir/shot-answer"
+      fi
       # What the egress proxy would ask about this sandbox'"'"'s connections, "host answer"
       # lines: one curl for them all (the tests run many sandboxes, each process counts).
       hosts=(api.anthropic.com github.com objects.githubusercontent.com raw.githubusercontent.com evil.example

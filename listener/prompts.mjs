@@ -47,7 +47,7 @@ ${mode === "discussion" ? "The message" : "The entry"}:
 ${text}`;
 }
 
-// A run analysis (analysis.mjs): its digest is a file in the run's inbox (TASK_DIGEST), the
+// A run analysis (analysis.mjs): its digest is the run's file TASK_DIGEST names, the
 // selection the maintainer made is `text`.
 function analyzePrompt(task, text) {
   return `Analyze recent Deckhand runs of ${task.repo}, on GitHub issue #${task.number}. The digest of
@@ -58,8 +58,8 @@ ${modeInstructions.analyze}
 ${text ? `\nThe selection:\n\n${text}\n` : ""}`;
 }
 
-// A research run (modes.mjs OPEN) has no token to read the issue with: its thread is a file in
-// the run's inbox (TASK_DIGEST, preparation.mjs threadDigest()).
+// A research run (modes.mjs OPEN) has no token to read the issue with: its thread is the run's
+// file TASK_DIGEST names (preparation.mjs threadDigest()).
 function researchPrompt(task) {
   return `Research what GitHub issue #${task.number} of ${task.repo} asks. Its thread (title, description
 and latest comments) is at \`$TASK_DIGEST\` (\`cat "$TASK_DIGEST"\`).
@@ -89,7 +89,7 @@ function verdictRule(text, allowed) {
 }
 
 // A review (reviews.mjs) of pull request `pull`: its task may be the issue the pull request
-// closes. Its thread is a file in the run's inbox (TASK_DIGEST, reviews.mjs reviewThread()).
+// closes. Its thread is the run's file TASK_DIGEST names (reviews.mjs reviewThread()).
 // `instructions`: the repo's `review.instructions` file, if any; `text`: what the
 // "/mode review" comment adds; `allowed`: the review's tolerance (verdictRule()).
 function reviewPrompt(task, pull, instructions, text, allowed = "low") {

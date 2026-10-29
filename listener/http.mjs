@@ -31,6 +31,7 @@ import { publicRun, stream } from "./runlog.mjs";
 import { serveAsset } from "./static.mjs";
 import { closedAs } from "./titles.mjs";
 import { apiRoute, send, sendJson } from "./web.mjs";
+import { SHOT_NAME } from "./run-files.mjs";
 
 // On every answer: the dashboard's own scripts, styles and images only (its build has no
 // inline script), never in a frame (a page on a sibling domain, which SameSite=Lax lets
@@ -40,6 +41,9 @@ export const SECURITY_HEADERS = {
   "content-security-policy": "default-src 'self'; frame-ancestors 'none'",
   "x-content-type-options": "nosniff",
 };
+
+// /shots/<folder>/<file>: the names the sandboxes may upload (run-files.mjs), nothing else.
+const SHOT_PATH = new RegExp(`^/shots/([0-9a-f]{24})/(${SHOT_NAME.source.slice(1, -1)})$`);
 
 const imageTypes = {
   png: "image/png",
@@ -280,7 +284,7 @@ export function createHttp(ctx, { dashboardDir }) {
 
   // Public, like any image in a GitHub comment; the folder token is the only protection.
   function serveShot(req, res) {
-    const match = /^\/shots\/([0-9a-f]{24})\/([\w.-]+\.(png|jpe?g|webp))$/.exec(req.url);
+    const match = SHOT_PATH.exec(req.url);
     const fd = match && openShot(match[1], match[2]);
     if (fd === null) {
       res.statusCode = 404;

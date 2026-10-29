@@ -1,30 +1,84 @@
 #!/usr/bin/env node
-// Prints the lines the listener appends to a run's inbox (TASK_INBOX, in a volume mounted
-// read-only) as they come, until its close line: the agent's input (deckhand_messages in
-// entrypoint.sh; Claude Code's stream-json), fed through a file rather than stdin so that it
-// survives a restart of the listener (runner/docker.mjs).
+// Prints the lines the listener appends to a run's inbox as they come, until its close line:
+// the agent's input (deckhand_messages in entrypoint.sh; Claude Code's stream-json). Fed
+// through the inbox rather than stdin so that it survives a restart of the listener
+// (runner/docker.mjs). TASK_INBOX is the broker's URL for it (../listener/run-files.mjs),
+// asked with the run's secret for what follows the bytes already read: a listener that
+// restarts meanwhile is asked again, from the same offset, so no line is lost or printed
+// twice. A file path (a sandbox started by hand) is followed instead.
 "use strict";
 const { closeSync, openSync, readSync } = require("node:fs");
 
 const CLOSE = JSON.stringify({ type: "deckhand", event: "close" });
-const fd = openSync(process.argv[2], "r");
-const buffer = Buffer.alloc(64 * 1024);
+const source = process.argv[2];
 let rest = "";
 
-function poll() {
-  let n;
-  while ((n = readSync(fd, buffer, 0, buffer.length, null)) > 0) {
-    const lines = (rest + buffer.toString("utf8", 0, n)).split("\n");
-    rest = lines.pop();
-    for (const line of lines) {
-      if (line === CLOSE) {
-        closeSync(fd);
-        return;
-      }
-      process.stdout.write(line + "\n");
-    }
+// The lines of `text` (after what came before), until the close line: whether it came.
+function print(text) {
+  const lines = (rest + text).split("\n");
+  rest = lines.pop();
+  for (const line of lines) {
+    if (line === CLOSE) return true;
+    process.stdout.write(line + "\n");
   }
-  setTimeout(poll, 500);
+  return false;
 }
 
-poll();
+function followFile() {
+  const fd = openSync(source, "r");
+  const buffer = Buffer.alloc(64 * 1024);
+  const poll = () => {
+    let n;
+    while ((n = readSync(fd, buffer, 0, buffer.length, null)) > 0) {
+      if (print(buffer.toString("utf8", 0, n))) return closeSync(fd);
+    }
+    setTimeout(poll, 500);
+  };
+  poll();
+}
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// The broker answers whole lines only, so `offset` stays on a line's start. Over its 25 s
+// wait, or while the listener restarts: asked again, waiting a little longer each time. A
+// refusal is said once on stderr (the run's log), then again only when the answer changes.
+async function followBroker() {
+  const headers = { authorization: `Bearer ${process.env.DECKHAND_RUN_SECRET ?? ""}` };
+  let offset = 0;
+  let pause = 500;
+  let said = "";
+  const say = (why) => {
+    if (why !== said) process.stderr.write(`deckhand-inbox: ${why}, asking again\n`);
+    said = why;
+  };
+  for (;;) {
+    try {
+      const res = await fetch(`${source}?from=${offset}`, {
+        headers,
+        signal: AbortSignal.timeout(60_000),
+      });
+      if (res.status === 200) {
+        const bytes = Buffer.from(await res.arrayBuffer());
+        offset += bytes.length;
+        pause = 500;
+        said = "";
+        if (print(bytes.toString("utf8"))) return;
+        continue;
+      }
+      if (res.status === 204) {
+        pause = 500;
+        said = "";
+        continue;
+      }
+      say(`the broker answered ${res.status} ${(await res.text()).trim()}`);
+    } catch (error) {
+      // The listener restarting: asked again below.
+      say(`the broker didn't answer (${error.cause?.code ?? error.message})`);
+    }
+    await sleep(pause);
+    pause = Math.min(pause * 2, 10_000);
+  }
+}
+
+if (/^https?:\/\//.test(source)) followBroker();
+else followFile();
