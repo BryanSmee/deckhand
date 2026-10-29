@@ -908,8 +908,9 @@ commands) goes through the same checks, field by field:
 REST's `POST` and `PATCH` of `…/pulls`) are in a work run's ceiling only, for its own pull
 requests (`own_pr`) and the ones it opens (`new_pr`). Past the ceiling, before `deny_github`:
 a new one's head must be a branch of the repository the run may push (not `owner:branch`,
-another repository's, or an issue turned into a pull request), an existing one's too before
-its token writes pull requests or contents; one with conflicts isn't made ready; and for a
+another repository's, or an issue turned into a pull request), an existing one's too before it
+is edited (over `…/issues/<n>` too), readied or drafted, or its token writes pull requests or
+contents (a fork's pull request is only commented on and labelled); one with conflicts isn't made ready; and for a
 repository granted `allow_workflows`, opening, editing, labelling, readying or drafting one
 first checks its workflow files merged with its base, as a push's are.
 

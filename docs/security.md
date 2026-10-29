@@ -55,9 +55,11 @@ that file asks for, so none can:
   pull requests and new ones. Then `listener/github-pulls.mjs` checks that a new pull
   request's head is a branch of the repository the run may push (above), never
   `owner:branch`, another repository's head (`head_repo`, `headRepositoryId`) or an issue
-  turned into one (`issue`), and that an existing one's head is too before its token writes
-  more than the run's own (a run on a fork's pull request may still comment on it and label
-  it): another task's pull request is refused, and so is opening one from another branch.
+  turned into one (`issue`), and that an existing one's head is too before it is edited,
+  readied or drafted, over any endpoint (`…/issues/<n>` included, which the run's own
+  `issues: write` would reach), or its token writes more than the run's own (a run on a
+  fork's pull request may still comment on it and label it, not rewrite its author's title
+  and description): another task's pull request is refused, and so is opening one from another branch.
   A pull request that conflicts with its base (`mergeable_state: dirty`) is refused ready
   with a 409 until the run rebases it. Only then does that one call get the token it needs
   besides the mode's: `pull_requests: write` to open or edit one, `contents: write` to ready

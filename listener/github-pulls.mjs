@@ -10,9 +10,11 @@
 //   of its branch with its base: for a repo granted `allow_workflows`, its workflow files are
 //   checked in that merge first, as the git gateway checks a push (git-gateway.mjs
 //   checkBranch());
-// - one whose token must write more than its mode's (`permissions`: pull requests for a create
-//   or an edit, contents for ready and draft) is from one of the run's branches, not only the
-//   pull request it was triggered on: a fork's head isn't the run's to vouch for;
+// - one that is edited, readied or drafted, over any endpoint (`…/pulls/<n>`, `…/issues/<n>`,
+//   GraphQL), or whose token must write more than its mode's (`permissions`: pull requests for a
+//   create or an edit, contents for ready and draft), is from one of the run's branches, not
+//   only the pull request it was triggered on: a fork's head isn't the run's to vouch for, nor
+//   its author's title and description the run's to rewrite. A comment or a label still is;
 // - one that conflicts with its base isn't made ready.
 //
 // Each change that went on is recorded for the dashboard at once (`record`, answered()): the
@@ -24,6 +26,14 @@ const CREATE_FIELDS = new Set(["title", "body", "head", "base", "draft", "mainta
 // Actions that run none of the pull request's workflows from its branch: a comment's run from
 // the default branch (`issue_comment`).
 const UNCHECKED = new Set(["comment", "react"]);
+// Actions on a pull request that need its head to be one of the run's branches.
+const OWN_BRANCH = new Set(["edit", "ready", "draft"]);
+
+// What a pull request's own write needs of its token beyond its mode's: GitHub opens and edits
+// one with `pull_requests: write`, and readies or drafts one with `contents: write` for an
+// App's token.
+export const PULL_WRITE = { pull_requests: "write" };
+export const CONTENTS_WRITE = { contents: "write" };
 
 const refusal = (status, message) => ({ status, message });
 
@@ -70,13 +80,18 @@ export function createPullChecks({
     if (!pr) return refusal(404, `#${target.number} isn't there`);
     const branch = pr.head?.ref;
     const own = pr.head?.repo?.full_name?.toLowerCase() === repo;
-    if (write.permissions && !(own && branchAllowed(run.branches ?? [], branch))) {
+    const needsBranch = write.permissions || write.actions.some((a) => OWN_BRANCH.has(a));
+    if (needsBranch && !(own && branchAllowed(run.branches ?? [], branch))) {
       return refusal(403, `#${target.number}'s branch, ${branch}, is not this run's`);
+    }
+    const asked = write.pull?.base;
+    if (asked !== undefined && (typeof asked !== "string" || !asked)) {
+      return refusal(422, "a pull request's base is a branch name");
     }
     // Conflicts with its base: not ready, whatever the run thinks. Only `dirty` is refused:
     // GitHub computes the state lazily (`unknown`, null) and the rest (checks, reviews) is for
     // the reviewer to weigh.
-    const base = write.pull?.base ?? pr.base?.ref;
+    const base = asked ?? pr.base?.ref;
     if (write.actions.includes("ready") && pr.draft && pr.mergeable_state === "dirty") {
       const into = pr.base?.ref ?? "the base branch";
       return refusal(
@@ -118,7 +133,9 @@ export function createPullChecks({
       try {
         // A REST create answers with the pull request it opened.
         const pr =
-          graphql || number != null || !json?.number ? await found(run.repo, number, head) : json;
+          graphql || number != null || !json?.number
+            ? await found(run.repo, number, head, claimed(json?.data?.[key], run.repo))
+            : json;
         if (!pr?.number) continue;
         record(run.repo, pr, ready && pr.state === "open" && !pr.draft ? now() : null);
       } catch (error) {
@@ -127,9 +144,16 @@ export function createPullChecks({
     }
   }
 
-  // A pull request by its number, or the open one from `head`.
-  async function found(repo, number, head) {
+  // A pull request by its number, or the one opened from `head`: the number the create's answer
+  // claims (`claimed`, gh's `pullRequest { url }`), when that pull request is from `head`, which
+  // an alias in the run's document can't fake; else the open one from `head`, which may be
+  // another into a different base.
+  async function found(repo, number, head, claimed = null) {
     if (number != null) return lookup(repo, `/repos/${repo}/pulls/${number}`);
+    if (claimed != null) {
+      const pr = await lookup(repo, `/repos/${repo}/pulls/${claimed}`);
+      if (pr?.head?.ref === head && pr.head.repo?.full_name?.toLowerCase() === repo) return pr;
+    }
     const owner = repo.split("/")[0];
     const list = await lookup(
       repo,
@@ -149,6 +173,15 @@ export function pullOf(write, key = null) {
   const number = write.target.number ?? null;
   const ready = write.actions.includes("ready") || write.actions.includes("create");
   return { key, number, head: write.pull.head ?? null, ready };
+}
+
+// The number of the pull request a GraphQL create's answer names in its repo (`pullRequest {
+// url }`, or `number`), or null.
+function claimed(answer, repo) {
+  const pr = answer?.pullRequest;
+  const m = /\/([^/]+\/[^/]+)\/pull\/(\d+)$/.exec(String(pr?.url ?? ""));
+  if (m && m[1].toLowerCase() === repo) return Number(m[2]);
+  return Number.isSafeInteger(pr?.number) ? pr.number : null;
 }
 
 // The token permissions a classified write needs beyond its mode's, merged: a call's several.

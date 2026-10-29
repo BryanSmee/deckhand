@@ -17,7 +17,7 @@
 //   variables and operation name, never the call's own bytes: GitHub runs what was checked.
 import { readFileSync } from "node:fs";
 import { Worker } from "node:worker_threads";
-import { permissionsOf, pullOf } from "./github-pulls.mjs";
+import { CONTENTS_WRITE, permissionsOf, PULL_WRITE, pullOf } from "./github-pulls.mjs";
 import {
   buildSchema,
   getArgumentValues,
@@ -82,9 +82,6 @@ function updated(input) {
   if (!actions.length || Object.keys(input).some((k) => !rest.includes(k))) actions.push("edit");
   return actions;
 }
-
-const PULL_WRITE = { pull_requests: "write" };
-const CONTENTS_WRITE = { contents: "write" };
 
 // The mutations a run may send, by name. Each one's:
 // - target: the input field that holds what it writes to, and the types it may be (`repo`: a
@@ -219,7 +216,6 @@ export const MUTATIONS = {
     pull: (input) => ({ base: input.baseRefName ?? undefined }),
     permissions: PULL_WRITE,
   },
-  // GitHub lets an App's token do these with `contents: write` only.
   markPullRequestReadyForReview: {
     target: "pullRequestId",
     types: ["PullRequest"],

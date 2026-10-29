@@ -22,15 +22,12 @@
 // but false) is in no ceiling: a link would otherwise take any issue under the run's.
 // Format of the policies' input: ../docs/repo-config.md#the-github-input.
 import { branchAllowed } from "./broker.mjs";
-import { createPullChecks } from "./github-pulls.mjs";
+import { createPullChecks, PULL_WRITE } from "./github-pulls.mjs";
 import { ceilingOf, issueLabelOf } from "./modes.mjs";
 
 // Actions on another target than an issue or pull request by number: no ceiling holds them,
 // so they are refused before any look-up.
 const ID_TARGETS = new Set(["comment", "review"]);
-// What a pull request's own write needs of its token beyond its mode's: GitHub opens and edits a
-// pull request with `pull_requests: write` only (github-pulls.mjs).
-const PULL_WRITE = { pull_requests: "write" };
 
 // The label names of a body's `labels` (strings, or objects with a name), or of the body itself
 // when it is the list (PUT …/labels takes either).

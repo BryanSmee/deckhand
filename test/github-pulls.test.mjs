@@ -154,7 +154,7 @@ test("gh pr create, edit, ready and ready --undo: a work run's own pull request,
       query,
     );
   }
-  // Each of them but the label checked its workflows, merged with the base it will have.
+  // Each of them checked its workflows, the label's too, merged with the base it will have.
   assert.deepEqual(checked, [
     ["org/repo", "issue-1-x", "main"],
     ["org/repo", "issue-1-x", "main"],
@@ -255,10 +255,17 @@ test("refused: another branch, a fork's head, a create that names more than its 
   );
   const ready = await graphql(onFork, call(GH_READY, { pullRequestId: "PR_9" }));
   assert.match(ready.refused.message, /#9's branch, issue-1-x, is not this run's/);
-  assert.match(
-    (await rest(onFork, "PATCH", "repos/org/repo/pulls/9", { title: "T" })).message,
-    /#9's branch/,
-  );
+  // Nor rewrite its author's title and description, over any endpoint: its token's issues
+  // would be enough over the issue's path.
+  for (const path of ["repos/org/repo/pulls/9", "repos/org/repo/issues/9"]) {
+    const edited = await rest(onFork, "PATCH", path, { title: "T", body: "B" });
+    assert.match(edited?.message ?? "", /#9's branch, issue-1-x, is not this run's/, path);
+  }
+  const update = await graphql(onFork, call(GH_UPDATE, { pullRequestId: "PR_9", title: "T" }));
+  assert.match(update.refused.message, /#9's branch/);
+  assert.equal(await rest(onFork, "POST", "repos/org/repo/issues/9/comments", { body: "x" }), null);
+  // Its own pull request's title over the issue's path: fine.
+  assert.equal(await rest(run(), "PATCH", "repos/org/repo/issues/7", { title: "T" }), null);
 });
 
 test("outside work runs, and reviews, approvals and merges from any run: refused", async () => {
@@ -329,6 +336,16 @@ test("allow_workflows: a branch whose workflows fail merged with its base is nei
     assert.ok(out.refused.message.endsWith(`: ${why}`), out.refused.message);
   }
   assert.equal(checked.length, 5);
+  // A REST base change: checked merged with the new base; a base that isn't a branch name,
+  // refused before any check.
+  const free = checks();
+  assert.equal(await free.rest(work, "PATCH", "repos/org/repo/pulls/7", { base: "release" }), null);
+  assert.deepEqual(free.checked, [["org/repo", "issue-1-x", "release"]]);
+  for (const base of [["main"], 3, ""]) {
+    const out = await free.rest(work, "PATCH", "repos/org/repo/pulls/7", { base });
+    assert.equal(out?.status, 422, JSON.stringify(base));
+  }
+  assert.equal(free.checked.length, 1);
   // A comment runs none of the branch's workflows: not checked.
   assert.equal(await rest(work, "POST", "repos/org/repo/issues/7/comments", { body: "x" }), null);
   assert.equal(checked.length, 5);
@@ -415,4 +432,36 @@ test("the dashboard is told of each change that went on, at once", async () => {
     ["org/repo", 12, 1000],
   ]);
   assert.ok(calls.includes("/repos/org/repo/pulls?head=org%3Aissue-1-x&state=open&per_page=1"));
+});
+
+test("a GraphQL create is recorded by the number its answer names, when that one is from its head", async () => {
+  const { writes, recorded, calls } = checks();
+  const work = run();
+  const created = () => ({
+    graphql: true,
+    creates: [],
+    pulls: [{ key: "c", number: null, head: "issue-1-x", ready: true }],
+    at: 0,
+  });
+  // gh's `pullRequest { id url }`: #7, from issue-1-x.
+  writes.answered(
+    work,
+    created(),
+    200,
+    json({ data: { c: { pullRequest: { url: "https://github.com/Org/Repo/pull/7" } } } }),
+  );
+  // One whose answer names another branch's (an alias can say anything): found by its head.
+  writes.answered(
+    work,
+    created(),
+    200,
+    json({ data: { c: { pullRequest: { url: "https://github.com/org/repo/pull/8" } } } }),
+  );
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  recorded.sort((a, b) => a[1] - b[1]);
+  assert.deepEqual(recorded, [
+    ["org/repo", 7, null],
+    ["org/repo", 11, 1000],
+  ]);
+  assert.equal(calls.filter((c) => c.includes("?head=")).length, 1);
 });
