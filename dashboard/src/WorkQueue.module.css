@@ -1,8 +1,8 @@
-/* The work queue: tabs, then the open tab's cards and a one-line hint. A panel of 360 px
-   beside the graph; on a phone, a bottom sheet with 44 px rows. */
+/* The work queue: tabs, then the open tab's cards and a one-line hint. A panel of 412 px at
+   most beside the graph, its five tabs in a row; on a phone, a bottom sheet with 44 px rows. */
 .queue {
   flex: 1 1 300px;
-  max-width: 360px;
+  max-width: 412px;
   min-width: 0;
   min-height: 0;
   display: flex;
@@ -17,7 +17,7 @@
   padding: 0 4px;
 }
 
-/* Five tabs and their counts in 360 px. */
+/* Five tabs and their counts in 412 px; narrower, they scroll. */
 .tabs [role="tab"] {
   gap: 4px;
   padding: 0 4px;
@@ -189,12 +189,13 @@ a.name:hover {
 }
 
 .sheet .tabs {
-  padding: 0 10px;
+  padding: 0 2px;
 }
 
 .sheet .tabs [role="tab"] {
   height: 44px;
-  font-size: 14px;
+  padding: 0 5px;
+  font-size: 13px;
 }
 
 .handle {

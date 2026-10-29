@@ -224,7 +224,9 @@ export function WorkQueue({
         label: "Run next",
         shortcut: "start",
         aria: `Run ${ref} next`,
-        icon: <Icon.Play size={11} />,
+        // A phone's row: three icons leave its title some room.
+        iconOnly: touch,
+        icon: touch ? <Icon.ToTop size={16} /> : <Icon.Play size={11} />,
         run: () => move({ key: t.key, first: true }),
         disabled: still || next,
       },
@@ -232,7 +234,7 @@ export function WorkQueue({
         label: "Move up",
         aria: `Move ${ref} up`,
         iconOnly: true,
-        icon: <Icon.ChevronUp size={14} />,
+        icon: <Icon.ChevronUp size={touch ? 18 : 14} />,
         run: () => move({ key: t.key, before: movers[i - 1].key }),
         disabled: still || i === 0,
       },
@@ -240,7 +242,7 @@ export function WorkQueue({
         label: "Move down",
         aria: `Move ${ref} down`,
         iconOnly: true,
-        icon: <Icon.ChevronDown size={14} />,
+        icon: <Icon.ChevronDown size={touch ? 18 : 14} />,
         run: () => move({ key: t.key, before: movers[i + 2]?.key ?? null }),
         disabled: still || i === movers.length - 1,
       },
@@ -532,7 +534,7 @@ export function WorkQueue({
       return (
         <li key={row.key} class={styles.row} data-card data-number={row.number}>
           {text}
-          {first && button(row, first, true)}
+          {first && button(row, first, !first.iconOnly)}
           {inline.map((a) => button(row, a, false))}
           {rest.length > 0 && (
             <IconButton
@@ -588,6 +590,8 @@ export function WorkQueue({
     answers: answering.length,
     queued: line.length,
   };
+  // On a phone, five tabs fit in a row only without their zeros.
+  const count = (id: QueueTab) => (touch && !counts[id] ? undefined : counts[id]);
   const panelId = `queue-${repo.replace(/\W/g, "-")}`;
   const list = LISTS[tab];
   const zone = tab === "backlog" ? stopZone : tab === "brainstorm" ? brainstormZone : null;
@@ -623,21 +627,21 @@ export function WorkQueue({
           {
             id: "backlog",
             label: "Backlog",
-            count: counts.backlog,
+            count: count("backlog"),
             attrs: { ...stopZone.handlers, class: stopZone.over ? styles.over : undefined },
           },
           {
             id: "brainstorm",
             label: "Brainstorm",
-            count: counts.brainstorm,
+            count: count("brainstorm"),
             attrs: {
               ...brainstormZone.handlers,
               class: brainstormZone.over ? styles.over : undefined,
             },
           },
-          { id: "waiting", label: "Waiting", count: counts.waiting },
-          { id: "answers", label: "Answers", count: counts.answers, hot: counts.answers > 0 },
-          { id: "queued", label: "Queued", count: counts.queued },
+          { id: "waiting", label: "Waiting", count: count("waiting") },
+          { id: "answers", label: "Answers", count: count("answers"), hot: counts.answers > 0 },
+          { id: "queued", label: "Queued", count: count("queued") },
         ]}
       />
       <div
