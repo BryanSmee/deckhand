@@ -57,7 +57,7 @@ interface Props {
 }
 
 // The states a run is going on in, which Stop ends.
-const STOPPABLE: Task["state"][] = ["building-image", "working", "stopping"];
+const STOPPABLE: Task["state"][] = ["scheduled", "building-image", "working", "stopping"];
 // A discussion's tab before its runs', and the Policies tab after them.
 const THREAD = "thread";
 const POLICIES = "policies";

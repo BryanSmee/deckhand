@@ -13,6 +13,7 @@ import type {
 } from "./types";
 
 export const STATE_NAMES: Record<TaskState, string> = {
+  scheduled: "Scheduled",
   "building-image": "Building image",
   working: "Working",
   stopping: "Stopping",
@@ -60,7 +61,7 @@ export const CHIPS = [
   {
     id: "running",
     name: "Running",
-    states: ["building-image", "working", "stopping", "queued", "waiting"],
+    states: ["scheduled", "building-image", "working", "stopping", "queued", "waiting"],
   },
   { id: "input", name: "Needs you", states: ["needs-input", "brainstorm", "idle-brainstorm"] },
   { id: "review", name: "Ready", states: null },
@@ -109,6 +110,7 @@ export type Tone = "run" | "input" | "ready" | "done" | "err" | "idle";
 
 export function toneOf(state: TaskState | RunStatus): Tone {
   switch (state) {
+    case "scheduled":
     case "building-image":
     case "working":
     case "stopping":
@@ -135,7 +137,8 @@ export function taskTone(t: Pick<Task, "state" | "pr">): Tone {
   return t.pr?.state === "ready" && (tone === "done" || tone === "idle") ? "ready" : tone;
 }
 
-export const isLive = (t: Task) => ["building-image", "working", "stopping"].includes(t.state);
+export const isLive = (t: Task) =>
+  ["scheduled", "building-image", "working", "stopping"].includes(t.state);
 
 const KIND_NAMES: Record<string, string> = { pr: "Pull request", discussion: "Discussion" };
 // The listener's own modes (MODES in listener/modes.mjs, which a test keeps

@@ -57,7 +57,8 @@ test("a repository's tasks by tone, ended ones for a week", () => {
   const now = 10 * WEEK_MS;
   const tasks = [
     makeTask({ number: 1, state: "working" }),
-    makeTask({ number: 2, state: "working" }),
+    // Taken from the queue, its agent not started yet: running too.
+    makeTask({ number: 2, state: "scheduled" }),
     makeTask({ number: 3, state: "needs-input" }),
     makeTask({ number: 4, state: "queued" }),
     makeTask({ number: 5, state: "idle-brainstorm" }),

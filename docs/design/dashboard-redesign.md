@@ -50,14 +50,14 @@ theme class on the root from the Preferences choice (System follows `prefers-col
 
 Status tones: each has a text colour, a soft fill and a solid (dot, border).
 
-| Tone      | Means                                      | Light text / fill / solid     | Dark text / fill / solid      |
-| --------- | ------------------------------------------ | ----------------------------- | ----------------------------- |
-| `s-run`   | Building image, working, stopping          | `#1D4ED8` `#E7EEFD` `#3B6FF0` | `#8FB1FF` `#16213D` `#5B86F5` |
-| `s-input` | Needs you: questions, a brainstorm turn    | `#9A4A06` `#FDF0DC` `#E8890C` | `#F4B35E` `#33240E` `#E8930F` |
-| `s-ready` | Its pull request is ready for review       | `#6A2DD0` `#F0EAFD` `#8B5CF6` | `#C3A6FF` `#271C44` `#9670F5` |
-| `s-done`  | Done, merged, closed as completed          | `#146C34` `#E3F3E8` `#22A355` | `#6CCF8B` `#11281A` `#2DA55A` |
-| `s-err`   | Error, interrupted                         | `#B42318` `#FDEBEA` `#C8322A` | `#FF8E86` `#3A1614` `#C93A31` |
-| `s-idle`  | Queued, waiting for another issue, stopped | `#4B5463` `#EDEFF3` `#98A1B0` | `#AAB1BE` `#20242D` `#6B7383` |
+| Tone      | Means                                        | Light text / fill / solid     | Dark text / fill / solid      |
+| --------- | -------------------------------------------- | ----------------------------- | ----------------------------- |
+| `s-run`   | Scheduled, building image, working, stopping | `#1D4ED8` `#E7EEFD` `#3B6FF0` | `#8FB1FF` `#16213D` `#5B86F5` |
+| `s-input` | Needs you: questions, a brainstorm turn      | `#9A4A06` `#FDF0DC` `#E8890C` | `#F4B35E` `#33240E` `#E8930F` |
+| `s-ready` | Its pull request is ready for review         | `#6A2DD0` `#F0EAFD` `#8B5CF6` | `#C3A6FF` `#271C44` `#9670F5` |
+| `s-done`  | Done, merged, closed as completed            | `#146C34` `#E3F3E8` `#22A355` | `#6CCF8B` `#11281A` `#2DA55A` |
+| `s-err`   | Error, interrupted                           | `#B42318` `#FDEBEA` `#C8322A` | `#FF8E86` `#3A1614` `#C93A31` |
+| `s-idle`  | Queued, waiting for another issue, stopped   | `#4B5463` `#EDEFF3` `#98A1B0` | `#AAB1BE` `#20242D` `#6B7383` |
 
 Rules: a status colour is never alone (every badge has its word, every dot sits next to one);
 running is the only thing that moves (a pulse, off with `prefers-reduced-motion`); a brainstorm

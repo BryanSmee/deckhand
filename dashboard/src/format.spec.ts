@@ -64,6 +64,8 @@ test("state chips group states: a waiting brainstorm needs input", () => {
   const states = (chip: Parameters<typeof inChip>[0]) =>
     state.tasks.filter((t) => inChip(chip, t)).map((t) => t.state);
   expect(states("running").sort()).toEqual(["building-image", "queued", "waiting", "working"]);
+  // A run taken from the queue whose agent hasn't started yet is running too.
+  expect(inChip("running", makeTask({ state: "scheduled" }))).toBe(true);
   expect(states("input").sort()).toEqual(["brainstorm", "idle-brainstorm", "needs-input"]);
   // #127, interrupted, has its pull request merged since: only All lists it.
   expect(states("error").sort()).toEqual(["error"]);
@@ -203,6 +205,7 @@ describe("status tones", () => {
     const tones = Object.fromEntries(
       (
         [
+          "scheduled",
           "building-image",
           "working",
           "stopping",
@@ -221,6 +224,7 @@ describe("status tones", () => {
       ).map((s) => [s, toneOf(s)]),
     );
     expect(tones).toEqual({
+      scheduled: "run",
       "building-image": "run",
       working: "run",
       stopping: "run",
@@ -243,6 +247,7 @@ describe("status tones", () => {
     expect(taskTone({ state: "done", pr: ready })).toBe("ready");
     expect(taskTone({ state: "queued", pr: ready })).toBe("ready");
     expect(taskTone({ state: "working", pr: ready })).toBe("run");
+    expect(taskTone({ state: "scheduled", pr: ready })).toBe("run");
     expect(taskTone({ state: "needs-input", pr: ready })).toBe("input");
     expect(taskTone({ state: "error", pr: ready })).toBe("err");
     expect(taskTone({ state: "done", pr: null })).toBe("done");

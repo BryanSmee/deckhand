@@ -4,6 +4,7 @@
 // (listener/work.mjs, answers.mjs).
 
 export type TaskState =
+  | "scheduled"
   | "building-image"
   | "working"
   | "stopping"

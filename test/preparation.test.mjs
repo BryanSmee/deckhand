@@ -250,6 +250,8 @@ test("a run whose image builds: its log's image phase, then setup again", async 
   );
   assert.equal(typeof lines[1].at, "number");
   assert.equal(task.live.logPhase, "setup");
+  // Scheduled again on the dashboard until its agent starts (board.mjs runState()).
+  assert.equal(task.live.record.phase, "setup");
 });
 
 test("a run whose image is built already: no image phase", async (t) => {

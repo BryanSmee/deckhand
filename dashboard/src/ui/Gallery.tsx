@@ -195,6 +195,7 @@ function Theme({ name, class: theme }: { name: string; class: string }) {
       <section class={styles.section}>
         <h3>Status</h3>
         <div class={styles.row}>
+          <StatusBadge state="scheduled" />
           <StatusBadge state="working" />
           <StatusBadge state="building-image" />
           <StatusBadge state="needs-input" />

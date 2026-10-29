@@ -143,6 +143,7 @@ test("the looks: implemented is green, not a run that ended done", () => {
   expect(lookOf(task(1, { state: "needs-input", pr: pr("merged") }))).toBe("done");
   expect(lookOf(task(1, { state: "needs-input", closed: "completed" }))).toBe("done");
   expect(lookOf(task(1, { state: "working", closed: "completed" }))).toBe("run");
+  expect(lookOf(task(1, { state: "scheduled" }))).toBe("run");
   expect(lookOf(task(1, { state: "interrupted" }))).toBe("err");
   expect(lookOf(task(1, { state: "queued" }))).toBe("idle");
 });

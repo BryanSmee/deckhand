@@ -205,7 +205,10 @@ export function createRestart(ctx) {
     const logPath = join(ctx.logDir, `${saved.id}.log`);
     // State saved before records kept their screenshots' folder has it beside them.
     const shots = saved.record.shots ?? saved.shots ?? null;
-    const record = { ...saved.record, shots, logPath, status: "running", finishedAt: null };
+    // Its phase as its log has it: records saved before they kept it in step have none, or
+    // "building image".
+    const phase = saved.logPhase ?? saved.record.phase ?? null;
+    const record = { ...saved.record, shots, phase, logPath, status: "running", finishedAt: null };
     addRun(ctx, record);
     let task = tasks.get(key);
     if (!task) {

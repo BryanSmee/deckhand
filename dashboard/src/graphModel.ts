@@ -67,7 +67,8 @@ export function lookOf(t: {
   closed: Task["closed"];
   pr?: { state: PrState; autoMerged?: boolean } | null;
 }): Look {
-  if (t.state && ["building-image", "working", "stopping"].includes(t.state)) return "run";
+  if (t.state && ["scheduled", "building-image", "working", "stopping"].includes(t.state))
+    return "run";
   if (t.closed === "completed" || t.pr?.state === "merged") return "done";
   if (t.state === "needs-input") return "input";
   if (t.pr?.state === "ready") return "ready";
@@ -103,6 +104,7 @@ const NOT_WORK: Task["kind"][] = ["idea", "bug", "discussion"];
 // graph. Its kind says it until "/stop", its mode after (board.mjs).
 const BRAINSTORMING: Task["state"][] = [
   "queued",
+  "scheduled",
   "building-image",
   "working",
   "stopping",

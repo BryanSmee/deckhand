@@ -217,9 +217,10 @@ export function createPreparation(ctx) {
   }
 
   // The run's image (built first if the repo's Dockerfile changed), its agent and the repo's
-  // cache volumes. While an image builds, the dashboard shows the run as "building image".
+  // cache volumes. While an image builds, the dashboard shows the run as "building image"
+  // (its `image` phase, board.mjs runState()).
   async function prepareImage(task, items, settings, grant, note, pulls) {
-    const { record, logFile } = task.live;
+    const { logFile } = task.live;
     const { base } = task;
     const output = (chunk) => logFile.write(chunk);
     // By whole lines, each build step's first one timed (runlog.mjs buildOutput()).
@@ -232,7 +233,6 @@ export function createPreparation(ctx) {
         branch: source.branch,
         dockerfile: settings.dockerfile,
         onBuild: (tag) => {
-          record.phase = "building image";
           enterPhase(task.live, "image");
           note(
             `Building ${tag} from ${settings.dockerfile} (${source.branch ? "pull request branch" : base})`,
@@ -241,7 +241,6 @@ export function createPreparation(ctx) {
         output: build.write,
       });
       build.flush();
-      record.phase = null;
       // The sandbox's part of the setup comes after the image's build.
       enterPhase(task.live, "setup");
       if (image !== config.image)

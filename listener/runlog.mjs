@@ -88,8 +88,10 @@ function stampOf(line) {
 const PHASES = new Set(["setup", "image", "work", "push", "wrap-up"]);
 
 // Moves a live run (runs.mjs) to `phase`: a `phase` line in its log, only when it changes.
+// Its record keeps it too, for the dashboard's state (board.mjs runState()).
 export function enterPhase(live, phase) {
   if (!PHASES.has(phase)) throw new Error(`no such phase: ${phase}`);
+  if (live.record) live.record.phase = phase;
   if (live.logPhase === phase) return false;
   live.logPhase = phase;
   writeEvent(live.logFile, "phase", { phase });
@@ -205,6 +207,9 @@ export function newRecord(
       text,
     })),
     mode: null,
+    // The part of the run it is in (enterPhase()), while it runs: setup from the moment it
+    // leaves the queue, so the dashboard shows it scheduled until its agent starts.
+    phase: "setup",
     startedAt: Date.now(),
     finishedAt: null,
     status: "running",

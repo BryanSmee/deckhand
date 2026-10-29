@@ -270,8 +270,9 @@ Each task shows its listener's state:
 | State             | What                                                                    |
 | ----------------- | ----------------------------------------------------------------------- |
 | `queued`          | comments wait for a run (a free slot, or the running one)               |
+| `scheduled`       | a run left the queue; its sandbox is set up, its agent not started yet  |
 | `building image`  | a run waits for the repository's image to build                         |
-| `working`         | a run is in progress                                                    |
+| `working`         | the run's agent is at work                                              |
 | `stopping`        | a brainstorm is wrapping up (`/stop`)                                   |
 | `needs input`     | the last run stopped to ask; the issue has the label                    |
 | `brainstorm`      | a brainstorm waits for your next comment                                |

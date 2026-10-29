@@ -13,12 +13,14 @@ test("a badge has its state's word and tone", () => {
   render(
     <>
       <StatusBadge state="needs-input" />
+      <StatusBadge state="scheduled" />
       <StatusBadge state="cancelled" />
       <StatusBadge state="ok" />
       <StatusBadge tone="ready" label="Ready for review" />
     </>,
   );
   expect(screen.getByText("Needs input").className).toContain("s-input");
+  expect(screen.getByText("Scheduled").className).toContain("s-run");
   expect(screen.getByText("Stopped").className).toContain("s-idle");
   expect(screen.getByText("Done").className).toContain("s-done");
   expect(screen.getByText("Ready for review").className).toContain("s-ready");
@@ -28,6 +30,7 @@ test("only a run going on pulses; a brainstorm's turn is outlined", () => {
   render(
     <>
       <StatusBadge state="working" />
+      <StatusBadge state="scheduled" />
       <StatusBadge state="building-image" />
       <StatusBadge state="brainstorm" />
       <StatusBadge state="needs-input" />
@@ -36,6 +39,8 @@ test("only a run going on pulses; a brainstorm's turn is outlined", () => {
   const dot = (word: string) => screen.getByText(word).querySelector("span")!;
   expect(dot("Working").className).toContain("pulse");
   expect(dot("Building image").className).not.toContain("pulse");
+  // Its agent hasn't started yet: nothing moves.
+  expect(dot("Scheduled").className).not.toContain("pulse");
   expect(screen.getByText("Brainstorm").className).toContain("outline");
   expect(screen.getByText("Needs input").className).not.toContain("outline");
 });
