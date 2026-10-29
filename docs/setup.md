@@ -269,18 +269,19 @@ letting go does ("Queue #31 after #19"); each action shows at once as a dashed n
 
 Each task shows its listener's state:
 
-| State             | What                                                                    |
-| ----------------- | ----------------------------------------------------------------------- |
-| `queued`          | comments wait for a run (a free slot, or the running one)               |
-| `scheduled`       | a run left the queue; its sandbox is set up, its agent not started yet  |
-| `building image`  | a run waits for the repository's image to build                         |
-| `working`         | the run's agent is at work                                              |
-| `stopping`        | a brainstorm is wrapping up (`/stop`)                                   |
-| `needs input`     | the last run stopped to ask; the issue has the label                    |
-| `brainstorm`      | a brainstorm waits for your next comment                                |
-| `idle brainstorm` | no comment for a while; the next one restores the session               |
-| `done`, `error`   | how the last run ended (`interrupted`: a restart came before its start) |
-| `cancelled`       | someone stopped its last run (`/cancel` or the dashboard's Stop)        |
+| State             | What                                                                      |
+| ----------------- | ------------------------------------------------------------------------- |
+| `queued`          | comments wait for a run (a free slot, or the running one)                 |
+| `scheduled`       | a run left the queue; its sandbox is set up, its agent not started yet    |
+| `in review`       | between the runs of its pull request's review-and-fix loop (`review.fix`) |
+| `building image`  | a run waits for the repository's image to build                           |
+| `working`         | the run's agent is at work                                                |
+| `stopping`        | a brainstorm is wrapping up (`/stop`)                                     |
+| `needs input`     | the last run stopped to ask; the issue has the label                      |
+| `brainstorm`      | a brainstorm waits for your next comment                                  |
+| `idle brainstorm` | no comment for a while; the next one restores the session                 |
+| `done`, `error`   | how the last run ended (`interrupted`: a restart came before its start)   |
+| `cancelled`       | someone stopped its last run (`/cancel` or the dashboard's Stop)          |
 
 Pick one to see the first line of its last reply and its latest run's log live (and the
 next runs as they start), or an earlier run. The address keeps the tab, task and run, so a
