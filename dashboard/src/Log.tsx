@@ -31,6 +31,8 @@ import {
   shown,
   type Step,
   stepStatus,
+  type Timing,
+  timeLabel,
   toolLabel,
 } from "./logModel";
 import { getPref, usePref } from "./prefs";
@@ -626,13 +628,10 @@ function ItemView({ item, isOpen, toggle }: ItemProps) {
       const short = mcp && <span class={styles.toolName}>{mcp.tool}</span>;
       if (!item.outputs.length)
         return (
-          <div class={styles.line} data-item={item.id}>
-            {tag}
-            <span class={styles.text}>
-              {short}
-              <Hl text={item.text} field={f(0)} />
-            </span>
-          </div>
+          <TimedLine id={item.id} time={item.time} tag={tag}>
+            {short}
+            <Hl text={item.text} field={f(0)} />
+          </TimedLine>
         );
       const lines = item.outputs.reduce((n, o) => n + o.text.split("\n").length, 0);
       return (
@@ -648,7 +647,12 @@ function ItemView({ item, isOpen, toggle }: ItemProps) {
               <Hl text={item.text || " "} field={f(0)} />
             </>
           }
-          meta={error ? "failed" : plural(lines, "line")}
+          meta={
+            <>
+              {error ? "failed" : plural(lines, "line")}
+              {item.time && <Time time={item.time} />}
+            </>
+          }
         >
           {item.outputs.map((o, i) => (
             <pre key={i} class={`${styles.out} ${o.error ? styles.error : ""}`}>
@@ -673,13 +677,10 @@ function StepView({
   const error = s.status === "error";
   if (!s.output.length && !error)
     return (
-      <div class={styles.line} data-item={id}>
-        <span class={styles.tag}>#{s.step}</span>
-        <span class={styles.text}>
-          <Hl text={s.name} field={f(0)} />
-          {stepStatus(s) && <span class={styles.muted}> · {stepStatus(s)}</span>}
-        </span>
-      </div>
+      <TimedLine id={id} time={s.time} tag={<span class={styles.tag}>#{s.step}</span>}>
+        <Hl text={s.name} field={f(0)} />
+        {stepStatus(s) && <span class={styles.muted}> · {stepStatus(s)}</span>}
+      </TimedLine>
     );
   const meta = error
     ? "failed"
@@ -695,7 +696,12 @@ function StepView({
       onToggle={toggle(id, fallback)}
       tag={<span class={styles.tag}>#{s.step}</span>}
       head={<Hl text={s.name} field={f(0)} />}
-      meta={meta}
+      meta={
+        <>
+          {meta}
+          {s.time && <Time time={s.time} />}
+        </>
+      }
     >
       <pre class={`${styles.out} ${error ? styles.error : ""}`}>
         {s.output.map((line, i) => (
@@ -707,6 +713,47 @@ function StepView({
         {error && <Hl text={stepStatus(s)} field={f(s.output.length + 1)} />}
       </pre>
     </Sub>
+  );
+}
+
+// A tool call or a build step with nothing under it: its tag and text, and its time when it
+// is slow (logModel.ts timing()); the one in progress stands out.
+function TimedLine({
+  id,
+  time,
+  tag,
+  children,
+}: {
+  id: string;
+  time: Timing | null;
+  tag: ComponentChildren;
+  children: ComponentChildren;
+}) {
+  const running = time?.state === "running";
+  return (
+    <div
+      class={`${styles.line} ${time ? styles.timed : ""} ${running ? styles.running : ""}`}
+      data-item={id}
+    >
+      {tag}
+      <span class={styles.text}>{children}</span>
+      {time && <Time time={time} />}
+    </div>
+  );
+}
+
+const TIME_TITLES: Record<Timing["state"], string> = {
+  done: "How long it took",
+  running: "Running for",
+  unfinished: "Still running when the run ended",
+};
+
+// "12s", "⏱ 0:42" while it runs, "4m 05s, unfinished".
+function Time({ time }: { time: Timing }) {
+  return (
+    <span class={`${styles.time} ${styles[time.state] ?? ""}`} title={TIME_TITLES[time.state]}>
+      {timeLabel(time)}
+    </span>
   );
 }
 
@@ -753,7 +800,7 @@ function Sub({
   onToggle: (open: boolean) => void;
   tag: ComponentChildren;
   head: ComponentChildren;
-  meta: string;
+  meta: ComponentChildren;
   children: ComponentChildren;
 }) {
   return (

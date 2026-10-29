@@ -610,10 +610,107 @@ test("follow: whole lines of each stream, skipping what was already read", async
   await new Promise((resolve) => setImmediate(resolve));
   child.emit("close", 0);
   await done;
-  assert.deepEqual(asked, ["docker", "logs", "--follow", "x"]);
+  assert.deepEqual(asked, ["docker", "logs", "--follow", "--timestamps", "x"]);
   // A line cut short isn't read: the next follow() reads it whole.
   assert.deepEqual(out, ['{"a":3}']);
   assert.deepEqual(err, ["new"]);
+});
+
+// #414: Docker's time for each line, without its stamp, for lines read again after a restart
+// too (skipped ones count as before).
+test("follow: each line with when Docker says it was written", async () => {
+  const child = new EventEmitter();
+  child.stdout = new PassThrough();
+  child.stderr = new PassThrough();
+  const { r } = runner({ spawn: () => child });
+  const out = [];
+  const err = [];
+  const done = r.follow("x", {
+    skip: { out: 1, err: 0 },
+    onOut: (line, at) => out.push([line, at]),
+    onErr: (line, at) => err.push([line, at]),
+  });
+  child.stdout.write("2026-10-29T08:00:00.000000000Z old\n2026-10-29T08:00:12.345678901Z ");
+  child.stdout.write('{"a":1}\n2026-10-29T10:00:01+02:00 {"a":2}\nno stamp\n');
+  child.stderr.write("2026-10-29T08:00:00.5Z Cloning\n");
+  await new Promise((resolve) => setImmediate(resolve));
+  child.emit("close", 0);
+  await done;
+  assert.deepEqual(out, [
+    ['{"a":1}', Date.parse("2026-10-29T08:00:12.345Z")],
+    ['{"a":2}', Date.parse("2026-10-29T08:00:01Z")],
+    ["no stamp", null],
+  ]);
+  assert.deepEqual(err, [["Cloning", Date.parse("2026-10-29T08:00:00.500Z")]]);
+});
+
+// Docker keeps a line over 16 KiB in parts of 16384 bytes, and --timestamps stamps each one,
+// inside the line (moby/moby#37681): stamps at those bytes go, even inside a character.
+test("follow: the stamps Docker writes inside a line over 16 KiB go", async () => {
+  const child = new EventEmitter();
+  child.stdout = new PassThrough();
+  child.stderr = new PassThrough();
+  const { r } = runner({ spawn: () => child });
+  const out = [];
+  const done = r.follow("x", { onOut: (line, at) => out.push([line, at]), onErr: () => {} });
+  // A "✓" (3 bytes) across the first part's end, the second stamp shorter (no nanoseconds).
+  const line = Buffer.from(`{"a":"${"x".repeat(16384 - 7)}✓${"y".repeat(20000)}"}`);
+  const stamps = [
+    "2026-10-29T08:00:12.345678901Z ",
+    "2026-10-29T08:00:12.4Z ",
+    "2026-10-29T08:00:13Z ",
+  ];
+  const parts = [];
+  for (let i = 0; i * 16384 < line.length; i++)
+    parts.push(Buffer.from(stamps[i]), line.subarray(i * 16384, (i + 1) * 16384));
+  const all = Buffer.concat([...parts, Buffer.from("\n2026-10-29T08:00:14Z next\n")]);
+  // In odd chunks, as a pipe gives them.
+  for (let i = 0; i < all.length; i += 1000) child.stdout.write(all.subarray(i, i + 1000));
+  await new Promise((resolve) => setImmediate(resolve));
+  child.emit("close", 0);
+  await done;
+  assert.equal(out.length, 2);
+  assert.equal(out[0][0], line.toString("utf8"));
+  assert.deepEqual(JSON.parse(out[0][0]).a.length, 16384 - 7 + 1 + 20000);
+  assert.equal(out[0][1], Date.parse("2026-10-29T08:00:12.345Z"));
+  assert.deepEqual(out[1], ["next", Date.parse("2026-10-29T08:00:14Z")]);
+});
+
+// As Docker 28 writes it: the bytes of a character split between two parts are U+FFFDs, so the
+// first part is 16386 bytes, and the inner stamp comes 2 bytes later.
+test("follow: an inner stamp after a part that U+FFFDs made longer goes too", async () => {
+  const child = new EventEmitter();
+  child.stdout = new PassThrough();
+  child.stderr = new PassThrough();
+  const { r } = runner({ spawn: () => child });
+  const out = [];
+  const done = r.follow("x", { onOut: (line) => out.push(line), onErr: () => {} });
+  const stamp = "2026-10-29T16:50:21.752745188Z ";
+  const first = `${"x".repeat(16383)}\uFFFD`;
+  const second = `\uFFFD\uFFFD${"✓".repeat(100)}`;
+  assert.equal(Buffer.byteLength(first), 16386);
+  child.stdout.write(`${stamp}${first}${stamp}${second}\n`);
+  await new Promise((resolve) => setImmediate(resolve));
+  child.emit("close", 0);
+  await done;
+  assert.deepEqual(out, [first + second]);
+});
+
+test("follow: a stamped line over MAX_LINE is cut at MAX_LINE of its own", async () => {
+  const child = new EventEmitter();
+  child.stdout = new PassThrough();
+  child.stderr = new PassThrough();
+  const { r } = runner({ spawn: () => child });
+  const out = [];
+  const done = r.follow("x", { onOut: (line, at) => out.push([line, at]), onErr: () => {} });
+  child.stdout.write("2026-10-29T08:00:00.000000000Z " + "x".repeat(MAX_LINE + 10) + "\nnext\n");
+  await new Promise((resolve) => setImmediate(resolve));
+  child.emit("close", 0);
+  await done;
+  assert.deepEqual(out, [
+    ["x".repeat(MAX_LINE) + LINE_CUT, Date.parse("2026-10-29T08:00:00Z")],
+    ["next", null],
+  ]);
 });
 
 // #241: unbounded, a line with no newline grew until its string couldn't, and the stream's

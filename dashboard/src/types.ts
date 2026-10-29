@@ -371,8 +371,11 @@ export type Entry =
   | { kind: "meta"; text: string }
   // Setup output; with `step`, the output of that image build step, without BuildKit's prefix.
   | { kind: "raw"; text: string; step?: number }
-  | { kind: "tool"; name: string; text: string }
-  | { kind: "output"; text: string; error: boolean }
+  // `id`: what pairs a call with its outputs, when the agent gives one (a call with one has an
+  // output to come); `done`: it came whole, with no output to wait for (Codex's edits);
+  // `at`: when it came (ms, listener/runlog.mjs reader()). None in logs from before them.
+  | { kind: "tool"; name: string; text: string; id?: string; done?: boolean; at?: number }
+  | { kind: "output"; text: string; error: boolean; id?: string; at?: number }
   | { kind: "result"; status: "ok" | "needs-input" | "error"; text: string; minutes: number }
   // The entries after it, up to the next one, are this phase's; `at`: when it started (ms).
   | { kind: "phase"; phase: Phase; at: number }
@@ -387,6 +390,8 @@ export type Entry =
       status: StepStatus;
       seconds: number | null;
       error: string | null;
+      // When it started (ms), in logs since steps were timed.
+      at?: number;
     };
 
 // configured: its default branch has .deckhand.yaml; invalid: it has, but no run starts (the

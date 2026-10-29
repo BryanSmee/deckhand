@@ -14,6 +14,8 @@ import {
   statSync,
 } from "node:fs";
 import { join } from "node:path";
+import { StringDecoder } from "node:string_decoder";
+import { idOf } from "./agents/common.mjs";
 import { agentFor, entryName } from "./agents/index.mjs";
 import { entryLabel } from "./agents/select.mjs";
 import { kindOf } from "./modes.mjs";
@@ -64,6 +66,17 @@ export function openLog(path) {
 export function writeEvent(file, event, fields = {}) {
   const at = "at" in fields ? {} : { at: Date.now() };
   file.write(JSON.stringify({ type: "listener", event, ...at, ...fields }) + "\n");
+}
+
+// The agent's events whose time a run's log keeps (runs.mjs output()): its tool calls and
+// their outputs, for the dashboard's durations.
+export const timed = (e) => e.type === "tool" || e.type === "toolOutput";
+
+// An `at` line of the listener's (writeEvent()): when the next line came, or null.
+function stampOf(line) {
+  if (!line.includes('"event":"at"')) return null;
+  const e = parse(line);
+  return e?.type === "listener" && e.event === "at" && Number.isFinite(e.at) ? e.at : null;
 }
 
 // The parts of a run, each its own section in the dashboard's log: getting the sandbox ready
@@ -356,6 +369,8 @@ const REASONS = {
 
 // The listener's own lines: a run's first line (what it is), notes and delivered comments.
 function listenerEntries(e, agent) {
+  // When the next line came: reader() puts it on that line's entries.
+  if (e.event === "at") return [];
   if (e.event === "phase") return [{ kind: "phase", phase: e.phase, at: e.at }];
   if (e.event === "note") return [{ kind: "meta", text: e.message }];
   if (e.event === "cancelled") {
@@ -403,10 +418,18 @@ function agentEntry(e, agent) {
     }
     case "text":
       return { kind: "text", text: e.text };
+    // `id`: what pairs an output with its call, for agents that give one; `done`: a call that
+    // came whole, with no output to wait for.
     case "tool":
-      return { kind: "tool", name: e.name, text: clip(e.detail, 6, 600) };
+      return {
+        kind: "tool",
+        name: e.name,
+        text: clip(e.detail, 6, 600),
+        ...idOf(e.id),
+        ...(e.done && { done: true }),
+      };
     case "toolOutput":
-      return { kind: "output", error: e.error, text: clip(e.text, 40, 4000) };
+      return { kind: "output", error: e.error, text: clip(e.text, 40, 4000), ...idOf(e.id) };
     case "result": {
       return { kind: "result", status: outcome(e), text: e.text, minutes: minutes(e.durationMs) };
     }
@@ -428,7 +451,11 @@ function clipRaw(line) {
 export function format(line, agent = agentFor()) {
   if (!line.trim()) return [];
   const e = parse(line);
-  if (!e) return [{ kind: "raw", text: clipRaw(line) }];
+  // A line cut at MAX_LINE: raw, unless the agent still knows whose output it was.
+  if (!e) {
+    const cut = agent.normalize(line).flatMap((event) => agentEntry(event, agent) ?? []);
+    return cut.length ? cut : [{ kind: "raw", text: clipRaw(line) }];
+  }
   if (e.type === "listener") return listenerEntries(e, agent);
   return agent.normalize(line).flatMap((event) => agentEntry(event, agent) ?? []);
 }
@@ -444,7 +471,7 @@ const ENDED = /^(?:(CACHED)|DONE (\d+(?:\.\d+)?)s|ERROR:? ?(.*)|(CANCELED))$/;
 // One line of an image build → its step's entries: a `step` entry when the step starts or
 // its status changes (the latest one for a number says it), a `raw` one with its number for
 // its output. Null for lines of no step (the error summary at the end): format()'s.
-function buildEntries(line, steps) {
+function buildEntries(line, steps, at = null) {
   const m = BUILD_LINE.exec(line.trimEnd());
   if (!m) return null;
   const n = Number(m[1]);
@@ -461,6 +488,7 @@ function buildEntries(line, steps) {
       status: "running",
       seconds: null,
       error: null,
+      ...(at !== null && { at }),
     };
     steps.set(n, { header: text, step });
     return [step];
@@ -479,12 +507,18 @@ function buildEntries(line, steps) {
   return [known.step];
 }
 
-// format() for a stream of a log's lines, in order: it follows the phase they are in, and
-// the image build's lines come as its steps (buildEntries()).
+// The entries that take the time of an `at` line before theirs: a tool call, an output, an
+// image build step as it starts.
+const STAMPED = new Set(["tool", "output", "step"]);
+
+// format() for a stream of a log's lines, in order: it follows the phase they are in, the
+// image build's lines come as its steps (buildEntries()), and a line after an `at` one gets
+// its time (`at`, ms). Logs from before `at` lines have none.
 export function reader(agent = agentFor()) {
   let phase = null;
   let steps = new Map();
-  return (line) => {
+  let at = null;
+  const read = (line) => {
     const entries = format(line, agent);
     for (const e of entries) {
       if (e.kind !== "phase") continue;
@@ -492,7 +526,52 @@ export function reader(agent = agentFor()) {
       if (phase === "image") steps = new Map();
     }
     if (phase !== "image" || entries.length !== 1 || entries[0].kind !== "raw") return entries;
-    return buildEntries(line, steps) ?? entries;
+    return buildEntries(line, steps, at) ?? entries;
+  };
+  return (line) => {
+    const stamp = stampOf(line);
+    if (stamp !== null) {
+      at = stamp;
+      return [];
+    }
+    if (!line.trim()) return [];
+    const entries = read(line);
+    if (at !== null)
+      for (const e of entries) if (STAMPED.has(e.kind) && e.at === undefined) e.at = at;
+    at = null;
+    return entries;
+  };
+}
+
+// An image build's output (images.mjs), written to a run's log (`file`: openLog()'s) by whole
+// lines, each step's first one after an `at` line: what times the step in the dashboard.
+// BuildKit's own lines say when a step ends, not when it started. `flush()` writes what is
+// left once the build ends, as a whole line.
+export function buildOutput(file, now = Date.now) {
+  // docker() gives Buffers: a character split between two stays whole.
+  const decoder = new StringDecoder("utf8");
+  let rest = "";
+  const seen = new Set();
+  const write = (line) => {
+    const n = BUILD_LINE.exec(line)?.[1];
+    if (n && !seen.has(n)) {
+      seen.add(n);
+      writeEvent(file, "at", { at: now() });
+    }
+    file.write(line + "\n");
+  };
+  return {
+    write: (chunk) => {
+      const lines = (rest + decoder.write(chunk)).split("\n");
+      rest = lines.pop();
+      for (const line of lines) write(line);
+    },
+    flush: () => {
+      rest += decoder.end();
+      // A line of its own: the listener's next one (a phase, a note) must still parse.
+      if (rest) file.write(rest + "\n");
+      rest = "";
+    },
   };
 }
 

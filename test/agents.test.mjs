@@ -60,12 +60,36 @@ test("normalize: assistant text and tool calls, with what each call is about", (
   };
   assert.deepEqual(claude.normalize(line(assistant)), [
     { type: "text", text: "Looking at the README." },
-    { type: "tool", name: "Bash", detail: "ls" },
-    { type: "tool", name: "Read", detail: "/workspace/a.md" },
-    { type: "tool", name: "TodoWrite", detail: '{"todos":[]}' },
-    { type: "tool", name: "ExitPlanMode", detail: "" },
-    { type: "tool", name: "Odd", detail: "" },
+    { type: "tool", name: "Bash", detail: "ls", id: "t1" },
+    { type: "tool", name: "Read", detail: "/workspace/a.md", id: "t2" },
+    { type: "tool", name: "TodoWrite", detail: '{"todos":[]}', id: "t3" },
+    { type: "tool", name: "ExitPlanMode", detail: "", id: "t4" },
+    { type: "tool", name: "Odd", detail: "", id: "t5" },
   ]);
+});
+
+// #414: a line cut at MAX_LINE no longer parses: its output's id, near its start, still pairs it.
+test("normalize: a cut tool result or command output keeps its call's id", () => {
+  const claudeCut =
+    '{"type":"user","message":{"role":"user","content":[{"tool_use_id":"toolu_1","type":"tool_result","content":[{"type":"image" … (line cut)';
+  assert.deepEqual(claude.normalize(claudeCut), [
+    { type: "toolOutput", error: false, text: claudeCut, id: "toolu_1" },
+  ]);
+  // Without its role, or other fields first: the first tool_use_id in its first bytes.
+  const bare =
+    '{"type":"user","message":{"content":[{"tool_use_id":"t2","type":"tool_result","content":"aaa … (line cut)';
+  assert.equal(claude.normalize(bare)[0].id, "t2");
+  const codexCut =
+    '{"type":"item.completed","item":{"id":"item_4","type":"command_execution","command":"cat big" … (line cut)';
+  assert.deepEqual(codex.normalize(codexCut), [
+    { type: "toolOutput", error: false, text: codexCut, id: "item_4" },
+  ]);
+  // A cut call, or text, isn't an output.
+  assert.deepEqual(claude.normalize('{"type":"assistant","message":{"content":[ … (line cut)'), []);
+  assert.deepEqual(
+    codex.normalize('{"type":"item.started","item":{"id":"item_4","type":"command_execution" …'),
+    [],
+  );
 });
 
 test("normalize: tool results, as text or parts, errors flagged", () => {
@@ -89,9 +113,9 @@ test("normalize: tool results, as text or parts, errors flagged", () => {
     },
   };
   assert.deepEqual(claude.normalize(line(user)), [
-    { type: "toolOutput", error: false, text: "a.md\nb.md" },
-    { type: "toolOutput", error: true, text: "No such file\n" },
-    { type: "toolOutput", error: false, text: "" },
+    { type: "toolOutput", error: false, text: "a.md\nb.md", id: "t1" },
+    { type: "toolOutput", error: true, text: "No such file\n", id: "t2" },
+    { type: "toolOutput", error: false, text: "", id: "t3" },
   ]);
   // A user message that is only text (a comment echoed back) has no tool output.
   assert.deepEqual(claude.normalize(line({ type: "user", message: { content: "Hi" } })), []);
@@ -221,17 +245,23 @@ test("normalize: a Codex turn, from its recorded JSONL", () => {
   assert.deepEqual(events, [
     { type: "started" },
     { type: "text", text: "Looking at the files first." },
-    { type: "tool", name: "command", detail: "ls -a" },
-    { type: "toolOutput", error: false, text: ".\n..\n.git\nhello.txt\n" },
-    { type: "tool", name: "command", detail: "cat missing.txt" },
-    { type: "toolOutput", error: true, text: "cat: missing.txt: No such file or directory\n" },
-    { type: "tool", name: "edit", detail: "add /workspace/hello.txt" },
+    { type: "tool", name: "command", detail: "ls -a", id: "item_4" },
+    { type: "toolOutput", error: false, text: ".\n..\n.git\nhello.txt\n", id: "item_4" },
+    { type: "tool", name: "command", detail: "cat missing.txt", id: "item_5" },
+    {
+      type: "toolOutput",
+      error: true,
+      text: "cat: missing.txt: No such file or directory\n",
+      id: "item_5",
+    },
+    { type: "tool", name: "edit", detail: "add /workspace/hello.txt", done: true },
     {
       type: "tool",
       name: "mcp__playwright__browser_navigate",
       detail: '{"url":"http://localhost:5173"}',
+      id: "item_7",
     },
-    { type: "toolOutput", error: false, text: "Navigated to http://localhost:5173" },
+    { type: "toolOutput", error: false, text: "Navigated to http://localhost:5173", id: "item_7" },
     { type: "text", text: "<!-- needs-input -->\n## Needs your input\n\n1. Which?" },
     {
       type: "result",
@@ -273,7 +303,7 @@ test("normalize: Codex's other items, failed edits and MCP errors, and what isn'
       }),
     ),
     [
-      { type: "tool", name: "edit", detail: "update a.md" },
+      { type: "tool", name: "edit", detail: "update a.md", done: true },
       { type: "toolOutput", error: true, text: "Not applied" },
     ],
   );
@@ -284,7 +314,7 @@ test("normalize: Codex's other items, failed edits and MCP errors, and what isn'
     [{ type: "toolOutput", error: true, text: "No browser" }],
   );
   assert.deepEqual(codex.normalize(completed({ type: "web_search", query: "codex hooks" })), [
-    { type: "tool", name: "web_search", detail: "codex hooks" },
+    { type: "tool", name: "web_search", detail: "codex hooks", done: true },
   ]);
   // A command with a quote in it, unwrapped from Codex's shell.
   assert.deepEqual(

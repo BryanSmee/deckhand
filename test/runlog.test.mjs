@@ -14,6 +14,7 @@ import {
   outcome,
   phaseOf,
   publicRun,
+  buildOutput,
   reader,
   saveSummary,
   stream,
@@ -511,6 +512,31 @@ test("format: a line that isn't JSON is clipped, an agent's event cut at MAX_LIN
   assert.equal(entry.text, `${cut.slice(0, 4000)}… (1024 KB in all)`);
 });
 
+// #414: a tool's result cut at MAX_LINE is still its call's output, so its call's time ends.
+test("format: a tool result cut at MAX_LINE is its call's output, by id", () => {
+  const cut = `{"type":"user","message":{"role":"user","content":[{"tool_use_id":"t9","type":"tool_result","content":[{"type":"image","source":{"data":"${"A".repeat(5000)} … (line cut)`;
+  const [entry, ...more] = format(cut);
+  assert.deepEqual(more, []);
+  assert.equal(entry.kind, "output");
+  assert.equal(entry.id, "t9");
+  assert.equal(entry.error, false);
+  assert.equal(entry.text, `${cut.slice(0, 4000)}\n…`);
+  // An id deep in the output isn't its call's.
+  const late = `{"type":"user","message":{"role":"user","content":[{"type":"tool_result","content":"${"b".repeat(400)}\"tool_use_id\":\"t1\"`;
+  assert.equal(format(late)[0].kind, "raw");
+});
+
+test("buildOutput: a character split between two chunks stays whole", () => {
+  const written = [];
+  const out = buildOutput({ write: (text) => written.push(text) }, () => 1);
+  const bytes = Buffer.from("#1 0.1 ✓ ok\n#1 ✓");
+  out.write(bytes.subarray(0, 9));
+  out.write(bytes.subarray(9, bytes.length - 1));
+  out.write(bytes.subarray(bytes.length - 1));
+  out.flush();
+  assert.deepEqual(written.slice(1), ["#1 0.1 ✓ ok\n", "#1 ✓\n"]);
+});
+
 const fixture = (name) => readFileSync(new URL(`fixtures/${name}`, import.meta.url), "utf8");
 const phase = (name, at) => line({ type: "listener", event: "phase", phase: name, at });
 
@@ -719,4 +745,63 @@ test("stream: a log's entries with their phases and build steps", { timeout: 500
       ["phase", "work"],
     ],
   );
+});
+
+// #414: an `at` line times the entries of the next line, its tool calls and outputs (with
+// their ids) and an image build step as it starts; format() alone shows nothing of it.
+test("reader: the time of an `at` line goes on the next line's calls and outputs", () => {
+  const at = (ms) => line({ type: "listener", event: "at", at: ms });
+  const call = line({
+    type: "assistant",
+    message: {
+      content: [
+        { type: "tool_use", id: "t1", name: "Bash", input: { command: "npm test" } },
+        { type: "tool_use", id: "t2", name: "Read", input: { file_path: "a.md" } },
+      ],
+    },
+  });
+  const output = line({
+    type: "user",
+    message: { content: [{ type: "tool_result", tool_use_id: "t2", content: "a" }] },
+  });
+  const text = line({ type: "assistant", message: { content: [{ type: "text", text: "Hm." }] } });
+  assert.deepEqual(format(at(1000)), []);
+  const entries = [at(1000), call, text, at(5000), output, output].flatMap(reader());
+  assert.deepEqual(entries, [
+    { kind: "tool", name: "Bash", text: "npm test", id: "t1", at: 1000 },
+    { kind: "tool", name: "Read", text: "a.md", id: "t2", at: 1000 },
+    { kind: "text", text: "Hm." },
+    { kind: "output", error: false, text: "a", id: "t2", at: 5000 },
+    // A line with no `at` before it has none.
+    { kind: "output", error: false, text: "a", id: "t2" },
+  ]);
+  const build = [phase("image", 0), at(7000), "#5 [a 1/2] RUN npm ci", "#5 DONE 3.0s"];
+  const steps = build.flatMap(reader()).filter((e) => e.kind === "step");
+  assert.deepEqual(
+    steps.map((s) => [s.status, s.at]),
+    [
+      ["running", 7000],
+      ["done", 7000],
+    ],
+  );
+});
+
+test("buildOutput: whole lines, each step's first after when it came, the rest at the end", () => {
+  const written = [];
+  let now = 100;
+  const out = buildOutput({ write: (text) => written.push(text) }, () => now++);
+  out.write("#1 [internal] load\n#1 DO");
+  out.write("NE 0.1s\n\n#2 [a 1/2] RUN npm ci\n#2 0.5 added\n#1 [internal] load\nERROR: x");
+  out.flush();
+  assert.deepEqual(written, [
+    line({ type: "listener", event: "at", at: 100 }) + "\n",
+    "#1 [internal] load\n",
+    "#1 DONE 0.1s\n",
+    "\n",
+    line({ type: "listener", event: "at", at: 101 }) + "\n",
+    "#2 [a 1/2] RUN npm ci\n",
+    "#2 0.5 added\n",
+    "#1 [internal] load\n",
+    "ERROR: x\n",
+  ]);
 });

@@ -1,5 +1,15 @@
 import { expect, test } from "vitest";
-import { fields, logSections, plainText, search, shortDuration, toolLabel } from "./logModel";
+import {
+  clock,
+  fields,
+  type Item,
+  logSections,
+  plainText,
+  search,
+  shortDuration,
+  timeLabel,
+  toolLabel,
+} from "./logModel";
 import type { Entry } from "./types";
 
 const step = (n: number, status: string, extra: object = {}) =>
@@ -82,9 +92,7 @@ test("work: messages, tool calls with their output, the result without its marke
   )[2];
   expect(work.items.map((i) => i.kind)).toEqual(["say", "tool", "tool", "result", "result"]);
   const bash = work.items[1];
-  expect(bash.kind === "tool" && bash.outputs).toEqual([
-    { kind: "output", text: "✖ retries once", error: true },
-  ]);
+  expect(bash.kind === "tool" && bash.outputs).toEqual([{ text: "✖ retries once", error: true }]);
   const last = work.items.at(-1)!;
   expect(last.kind === "result" && last.text).toBe("Which?");
 });
@@ -174,4 +182,170 @@ test("search reads an MCP call's full name, after its outputs; not a Bash call's
   expect(search([work], "navigate", "all").matches).toHaveLength(1);
   expect(search([work], "bash", "all").matches).toEqual([]);
   expect(plainText([work])).toContain('[mcp__playwright__browser_navigate] {"url":"http://a"}');
+});
+
+// #414: outputs go with their call by id, so each call's time is its own.
+const work = (entries: Entry[]): Entry[] => [{ kind: "phase", phase: "work", at: 0 }, ...entries];
+const tools = (entries: Entry[], end: number, live: boolean) =>
+  logSections(work(entries), end, live)[0].items.filter(
+    (i): i is Extract<Item, { kind: "tool" }> => i.kind === "tool",
+  );
+
+test("parallel calls: each output under its own call, by id; by order without ids", () => {
+  const [a, b] = tools(
+    [
+      { kind: "tool", name: "Bash", text: "npm test", id: "t1", at: 1000 },
+      { kind: "tool", name: "Read", text: "a.md", id: "t2", at: 1000 },
+      { kind: "output", text: "a", error: false, id: "t2", at: 1200 },
+      { kind: "output", text: "ok", error: false, id: "t1", at: 246000 },
+    ],
+    300000,
+    false,
+  );
+  expect(a.outputs.map((o) => o.text)).toEqual(["ok"]);
+  expect(b.outputs.map((o) => o.text)).toEqual(["a"]);
+  // Slow: its time; fast: none.
+  expect(a.time).toEqual({ seconds: 245, state: "done" });
+  expect(b.time).toBeNull();
+  expect(timeLabel(a.time!)).toBe("4m 05s");
+  // An older log: by order, and no time.
+  const [c, d] = tools(
+    [
+      { kind: "tool", name: "Bash", text: "npm test" },
+      { kind: "tool", name: "Read", text: "a.md" },
+      { kind: "output", text: "a", error: false },
+      { kind: "output", text: "ok", error: false },
+    ],
+    300000,
+    false,
+  );
+  expect(c.outputs).toEqual([]);
+  expect(d.outputs.map((o) => o.text)).toEqual(["a", "ok"]);
+  expect([c.time, d.time]).toEqual([null, null]);
+});
+
+test("a call's output in the next section still goes with it", () => {
+  const sections = logSections(
+    [
+      ...work([{ kind: "tool", name: "Bash", text: "npm test", id: "t1", at: 0 }]),
+      { kind: "phase", phase: "push", at: 1000 },
+      { kind: "tool", name: "Bash", text: "git push", id: "t2", at: 1000 },
+      { kind: "output", text: "ok", error: false, id: "t1", at: 12000 },
+      { kind: "output", text: "pushed", error: false, id: "t2", at: 2000 },
+    ],
+    20000,
+    false,
+  );
+  const [test, push] = sections.map((s) => s.items[0]);
+  expect(test.kind === "tool" && test.outputs.map((o) => o.text)).toEqual(["ok"]);
+  expect(test.kind === "tool" && test.time).toEqual({ seconds: 12, state: "done" });
+  expect(push.kind === "tool" && push.outputs.map((o) => o.text)).toEqual(["pushed"]);
+});
+
+test("the call in progress: a timer after 10 s, live; unfinished once the run ended", () => {
+  const entries: Entry[] = [
+    { kind: "tool", name: "Bash", text: "npm test", id: "t1", at: 1000 },
+    { kind: "tool", name: "Read", text: "a.md", id: "t2", at: 1000 },
+    { kind: "output", text: "a", error: false, id: "t2", at: 1100 },
+  ];
+  expect(tools(entries, 9000, true)[0].time).toBeNull();
+  const [running] = tools(entries, 43000, true);
+  expect(running.time).toEqual({ seconds: 42, state: "running" });
+  expect(timeLabel(running.time!)).toBe("⏱ 0:42");
+  // Its output stops the timer.
+  const done = [...entries, { kind: "output", text: "ok", error: false, id: "t1", at: 50000 }];
+  expect(tools(done as Entry[], 90000, true)[0].time).toEqual({ seconds: 49, state: "done" });
+  // The run ended (finished, cancelled, timed out) first: its time up to the end, whatever it.
+  const [left] = tools(entries, 4000, false);
+  expect(left.time).toEqual({ seconds: 3, state: "unfinished" });
+  expect(timeLabel(left.time!)).toBe("3s, unfinished");
+  expect(plainText(logSections(work(entries), 4000, false))).toContain(
+    "[Bash] npm test · 3s, unfinished",
+  );
+});
+
+test("a call without an id and no output runs only while it is the log's last line", () => {
+  // Antigravity's: whether it has an output to come isn't known.
+  const command: Entry = { kind: "tool", name: "command", text: "false", at: 1000 };
+  expect(tools([command], 30000, true)[0].time).toEqual({ seconds: 29, state: "running" });
+  const later: Entry[] = [command, { kind: "text", text: "Done." }];
+  expect(tools(later, 30000, true)[0].time).toBeNull();
+});
+
+test("a call that came whole never runs, even as the log's last line", () => {
+  // Codex's edits and searches: done as they come.
+  const edit: Entry = { kind: "tool", name: "edit", text: "a.md", done: true, at: 1000 };
+  expect(tools([edit], 30000, true)[0].time).toBeNull();
+  expect(tools([edit], 30000, false)[0].time).toBeNull();
+});
+
+test("a running build step: a timer from its first line, while its build runs", () => {
+  const build = (live: boolean, end: number, after: Entry[] = []) =>
+    logSections(
+      [
+        { kind: "phase", phase: "image", at: 0 },
+        step(1, "running", { at: 1000 }),
+        step(1, "done", { seconds: 0.1, at: 1000 }),
+        step(2, "running", { at: 2000 }),
+        ...after,
+      ],
+      end,
+      live,
+    )[0].items.flatMap((i) => (i.kind === "step" ? [i.step.time] : []));
+  expect(build(true, 5000)).toEqual([null, null]);
+  expect(build(true, 74000)).toEqual([null, { seconds: 72, state: "running" }]);
+  expect(build(true, 80000, [step(2, "done", { seconds: 60 })])).toEqual([null, null]);
+  // Past its build, a step that never said how it ended isn't timed.
+  expect(build(true, 80000, [{ kind: "phase", phase: "setup", at: 70000 }])).toEqual([null, null]);
+  // An older log: no times.
+  expect(
+    logSections(
+      [{ kind: "phase", phase: "image", at: 0 }, step(1, "running")],
+      60000,
+      true,
+    )[0].items.flatMap((i) => (i.kind === "step" ? [i.step.time] : [])),
+  ).toEqual([null]);
+});
+
+test("clock: a running timer", () => {
+  expect(clock(9.7)).toBe("0:09");
+  expect(clock(725)).toBe("12:05");
+  expect(clock(3729)).toBe("1:02:09");
+});
+
+// A call's or output's line cut at MAX_LINE: no wrong pairing, no endless timer.
+test("an output with an id no call has stands on its own, not under the call before it", () => {
+  const items = logSections(
+    work([
+      { kind: "tool", name: "Bash", text: "ls", id: "t1", at: 1000 },
+      { kind: "raw", text: '{"type":"assistant"… (line cut)' },
+      { kind: "output", text: "big", error: false, id: "t2", at: 2000 },
+    ]),
+    60000,
+    true,
+  )[0].items;
+  expect(items.map((i) => i.kind)).toEqual(["tool", "raw", "output"]);
+  const [ls] = items;
+  expect(ls.kind === "tool" && ls.time).toEqual({ seconds: 59, state: "running" });
+});
+
+test("a call whose output never made it to the log ends with the agent's turn", () => {
+  const entries: Entry[] = [
+    { kind: "tool", name: "Read", text: "shot.png", id: "t1", at: 1000 },
+    { kind: "raw", text: '{"type":"user"… (line cut)' },
+    { kind: "result", status: "ok", text: "Done.", minutes: 1 },
+  ];
+  expect(tools(entries, 90000, true)[0].time).toBeNull();
+  expect(tools(entries, 90000, false)[0].time).toBeNull();
+});
+
+test("as text: a running build step with its timer", () => {
+  const text = plainText(
+    logSections(
+      [{ kind: "phase", phase: "image", at: 0 }, step(4, "running", { at: 1000 })],
+      43000,
+      true,
+    ),
+  );
+  expect(text).toContain("#4 [build 4/9] RUN step 4 · ⏱ 0:42");
 });

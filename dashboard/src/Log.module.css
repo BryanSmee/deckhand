@@ -229,6 +229,37 @@
   font-weight: 600;
 }
 
+/* A slow call's or build step's time (logModel.ts timing()), at the end of its line. */
+.line.timed {
+  grid-template-columns: 52px minmax(0, 1fr) auto;
+  padding-right: 12px;
+}
+
+.time {
+  margin-left: 8px;
+  color: var(--text-3);
+  font: 12px/20px var(--mono);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* The call or step in progress, and its ticking timer. */
+.line.running {
+  border-radius: 6px;
+  background: var(--run-soft);
+}
+
+.time.running {
+  color: var(--run);
+  font-weight: 600;
+}
+
+/* Left running when the run ended. */
+.time.unfinished {
+  color: var(--input);
+  font-weight: 600;
+}
+
 pre.out {
   margin: 0;
   padding: 6px 12px 8px 88px;
@@ -433,6 +464,15 @@ mark.current {
   }
   .sub > summary > :last-child {
     grid-column: 3;
+  }
+  /* A time under its text, as a call's meta. */
+  .line.timed {
+    grid-template-columns: 44px minmax(0, 1fr);
+    padding-right: 8px;
+  }
+  .line.timed > .time {
+    grid-column: 2;
+    margin-left: 0;
   }
   pre.out {
     padding-left: 12px;

@@ -335,3 +335,47 @@ test("an MCP call: its server as an icon named by the full name, its short tool 
   expect(screen.getByText("1 / 1")).toBeTruthy();
   expect(icon.querySelector("mark[data-current]")).toBeTruthy();
 });
+
+// #414: how long slow calls took, the one in progress timed, one left running marked.
+const timed: Entry[] = [
+  { kind: "phase", phase: "work", at: 0 },
+  { kind: "tool", name: "Bash", text: "npm test", id: "t1", at: 1000 },
+  { kind: "tool", name: "Read", text: "a.md", id: "t2", at: 1000 },
+  { kind: "output", text: "a", error: false, id: "t2", at: 1100 },
+  { kind: "output", text: "58 passed", error: false, id: "t1", at: 246000 },
+  { kind: "tool", name: "Bash", text: "npm run build", id: "t3", at: 250000 },
+];
+
+test("a slow call shows how long it took, a fast one doesn't; the one in progress ticks", () => {
+  const live = { ...run, status: "running", finishedAt: null } as Run;
+  const view = show({ run: live, now: 255000 }, timed);
+  const summary = (text: string) => screen.getByText(text).closest("summary, div")!;
+  expect(summary("npm test").textContent).toMatch(/1 line4m 05s$/);
+  expect(summary("a.md").textContent).not.toMatch(/\ds/);
+  // Under 10 s, nothing yet; then a timer, ticking with `now`.
+  expect(screen.queryByTitle("Running for")).toBeNull();
+  view.rerender(<Streamed run={live} now={292000} />);
+  const timer = screen.getByTitle("Running for");
+  expect(timer.textContent).toBe("⏱ 0:42");
+  view.rerender(<Streamed run={live} now={293000} />);
+  expect(timer.textContent).toBe("⏱ 0:43");
+  // Its output stops it.
+  act(() =>
+    FakeSource.last!.emit("entries", [
+      { kind: "output", text: "built", error: false, id: "t3", at: 294000 },
+    ]),
+  );
+  expect(screen.queryByTitle("Running for")).toBeNull();
+  expect(summary("npm run build").textContent).toMatch(/44s$/);
+});
+
+test("a call left without output when the run ended: unfinished, timed to the end", () => {
+  show({ run: { ...run, status: "cancelled", finishedAt: 253000 } }, timed);
+  expect(screen.getByTitle("Still running when the run ended").textContent).toBe("3s, unfinished");
+});
+
+test("an older log, without times, shows none", () => {
+  show();
+  expect(document.querySelector("[title='How long it took']")).toBeNull();
+  expect(screen.queryByTitle("Running for")).toBeNull();
+});

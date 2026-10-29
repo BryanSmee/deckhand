@@ -16,13 +16,42 @@ export interface Step {
   seconds: number | null;
   error: string | null;
   output: string[];
+  // When it started (ms), if the log says.
+  at?: number;
+  // While it runs, or if the run ended with it running: for how long (timing()).
+  time: Timing | null;
+}
+
+// Calls and steps that took less than this (s) show no time: the log stays quiet.
+export const SLOW_SECONDS = 10;
+
+// How long a tool call or a build step took: done, still running in a live run, or left
+// running when the run ended (up to its end).
+export interface Timing {
+  seconds: number;
+  state: "done" | "running" | "unfinished";
+}
+
+export interface Output {
+  text: string;
+  error: boolean;
+  at?: number;
 }
 
 export type Item = { id: string } & (
   | { kind: "say"; text: string }
   | { kind: "note"; text: string }
   | { kind: "raw"; text: string }
-  | { kind: "tool"; name: string; text: string; outputs: { text: string; error: boolean }[] }
+  // `call`: the agent's id for it, which its outputs have too; `at`: when it came (ms).
+  | {
+      kind: "tool";
+      name: string;
+      text: string;
+      call?: string;
+      at?: number;
+      outputs: Output[];
+      time: Timing | null;
+    }
   // An output with no call before it.
   | { kind: "output"; text: string; error: boolean }
   | { kind: "result"; status: "ok" | "needs-input" | "error"; text: string; minutes: number }
@@ -94,27 +123,54 @@ export const cachedLine = (steps: Step[]) =>
     ? `${stepName(steps[0])} · CACHED`
     : `#${steps[0].step}–#${steps.at(-1)!.step} ${steps[0].name} … ${steps.at(-1)!.name} · CACHED`;
 
-// A section's entries as items: a tool's outputs go with the call before it; an image build's
-// steps once each, as the latest of their entries says, with their output, and the cached
-// ones next to each other as one.
-function itemsOf(phase: Phase, entries: Entry[]): Item[] {
+type ToolItem = Extract<Item, { kind: "tool" }>;
+
+// A section's entries as items: a tool's outputs go with their call, by its id (`calls`: the
+// log's, by id and by entry, as a call's output may come in the next section), else with the
+// call before them;
+// an image build's steps once each, as the latest of their entries says, with their output,
+// and the cached ones next to each other as one.
+// `ended`: calls that came whole (`done`), and those still without output when the agent's
+// turn ended (a `result`): done, though their output never made it to the log.
+interface Calls {
+  byId: Map<string, ToolItem>;
+  byEntry: Map<Entry, ToolItem>;
+  ended: Set<ToolItem>;
+}
+
+function itemsOf(phase: Phase, entries: Entry[], calls: Calls): Item[] {
   const out: Item[] = [];
   const steps = new Map<number, Step>();
   const id = () => `${phase}:${out.length}`;
   for (const e of entries) {
     const last = out.at(-1);
-    if (e.kind === "output" && last?.kind === "tool") last.outputs.push(e);
-    else if (e.kind === "tool") out.push({ id: id(), ...e, outputs: [] });
-    else if (e.kind === "output") out.push({ id: id(), ...e });
-    else if (e.kind === "text") out.push({ id: id(), kind: "say", text: e.text });
+    if (e.kind === "output") {
+      const output: Output = {
+        text: e.text,
+        error: e.error,
+        ...(e.at !== undefined && { at: e.at }),
+      };
+      // One with an id no call has (its call's line was cut) stands on its own.
+      const call = e.id ? calls.byId.get(e.id) : last?.kind === "tool" ? last : null;
+      if (call) call.outputs.push(output);
+      else out.push({ id: id(), kind: "output", ...output });
+    } else if (e.kind === "tool") {
+      const { id: call, done: _, ...rest } = e;
+      const item: ToolItem = { id: id(), ...rest, ...(call && { call }), outputs: [], time: null };
+      if (call) calls.byId.set(call, item);
+      if (e.done) calls.ended.add(item);
+      calls.byEntry.set(e, item);
+      out.push(item);
+    } else if (e.kind === "text") out.push({ id: id(), kind: "say", text: e.text });
     else if (e.kind === "meta") out.push({ id: id(), kind: "note", text: e.text });
-    else if (e.kind === "result")
+    else if (e.kind === "result") {
+      for (const call of calls.byEntry.values()) if (!call.outputs.length) calls.ended.add(call);
       out.push({ id: id(), ...e, text: e.text.replace(NEEDS_INPUT, "").trim() });
-    else if (e.kind === "step") {
+    } else if (e.kind === "step") {
       const known = steps.get(e.step);
-      if (known) Object.assign(known, { ...e, output: known.output });
+      if (known) Object.assign(known, { ...e, output: known.output, at: known.at ?? e.at });
       else {
-        const step: Step = { ...e, output: [] };
+        const step: Step = { ...e, output: [], time: null };
         steps.set(e.step, step);
         out.push({ id: id(), kind: "step", step });
       }
@@ -156,8 +212,9 @@ export function logSections(entries: Entry[], end: number, live: boolean): LogSe
     } else byPhase.set(p.phase, { entries: [...p.entries], seconds });
   });
   const lastPhase = parts.at(-1)?.phase;
-  return [...byPhase].map(([phase, { entries: own, seconds }]) => {
-    const items = itemsOf(phase, own);
+  const calls: Calls = { byId: new Map(), byEntry: new Map(), ended: new Set() };
+  const list = [...byPhase].map(([phase, { entries: own, seconds }]) => {
+    const items = itemsOf(phase, own, calls);
     return {
       phase,
       items,
@@ -166,6 +223,57 @@ export function logSections(entries: Entry[], end: number, live: boolean): LogSe
       current: live && phase === lastPhase,
     };
   });
+  // The call the log ends with, if it does.
+  const final = entries.findLast((e) => e.kind !== "phase");
+  const lastCall = final && calls.byEntry.get(final);
+  for (const s of list) {
+    for (const item of s.items) {
+      if (item.kind === "tool") {
+        // Without an id, a call with no output only runs while nothing came after it: for some
+        // agents (Antigravity), whether a call has one to come isn't known.
+        const pending =
+          !item.outputs.length && !calls.ended.has(item) && (!!item.call || item === lastCall);
+        const to = item.outputs.at(-1)?.at ?? null;
+        item.time = timing(item.at, to, { pending, end, live });
+      } else if (item.kind === "step" && item.step.status === "running") {
+        // A live run's build step runs while its build does.
+        if (!live || s.current)
+          item.step.time = timing(item.step.at, null, { pending: true, end, live });
+      }
+    }
+  }
+  return list;
+}
+
+// A call or step from `from` to `to` (ms), or, `pending`, still going: until `end` (now in a
+// live run, else when it ended). Null when the log has no times, or when it took less than
+// SLOW_SECONDS: an unfinished one shows whatever its time.
+function timing(
+  from: number | undefined,
+  to: number | null,
+  { pending, end, live }: { pending: boolean; end: number; live: boolean },
+): Timing | null {
+  if (from === undefined) return null;
+  const until = pending ? end : to;
+  if (until === null) return null;
+  const seconds = Math.max(0, (until - from) / 1000);
+  const state = !pending ? "done" : live ? "running" : "unfinished";
+  if (state !== "unfinished" && seconds < SLOW_SECONDS) return null;
+  return { seconds, state };
+}
+
+// A running call's or step's time, as a timer: "0:42", "12:05", "1:02:09".
+export function clock(seconds: number): string {
+  const s = Math.floor(seconds);
+  const mm = `${Math.floor((s % 3600) / 60)}`;
+  const ss = String(s % 60).padStart(2, "0");
+  return s >= 3600 ? `${Math.floor(s / 3600)}:${mm.padStart(2, "0")}:${ss}` : `${mm}:${ss}`;
+}
+
+// What a call or a step says of its time: "12s", "⏱ 0:42" while it runs, "4m 05s, unfinished".
+export function timeLabel(t: Timing): string {
+  if (t.state === "running") return `⏱ ${clock(t.seconds)}`;
+  return shortDuration(t.seconds) + (t.state === "unfinished" ? ", unfinished" : "");
 }
 
 // The texts an item shows, which search reads, in the order it shows them; an MCP call's full
@@ -243,12 +351,13 @@ export function plainText(list: LogSection[]): string {
     for (const item of s.items) {
       switch (item.kind) {
         case "tool":
-          lines.push(`[${item.name}] ${item.text}`);
+          lines.push(`[${item.name}] ${item.text}${item.time ? ` · ${timeLabel(item.time)}` : ""}`);
           for (const o of item.outputs) lines.push(indent(o.error ? `ERROR: ${o.text}` : o.text));
           break;
         case "step": {
           const status = stepStatus(item.step);
-          lines.push(stepName(item.step) + (status ? ` · ${status}` : ""));
+          const time = item.step.time ? ` · ${timeLabel(item.step.time)}` : "";
+          lines.push(stepName(item.step) + (status ? ` · ${status}` : "") + time);
           for (const o of item.step.output) lines.push(indent(o));
           break;
         }

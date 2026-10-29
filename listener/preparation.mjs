@@ -21,7 +21,7 @@ import { imageRef } from "./images.mjs";
 import { OPEN } from "./modes.mjs";
 import { handoffMessage } from "./prompts.mjs";
 import { reviewThread } from "./reviews.mjs";
-import { enterPhase } from "./runlog.mjs";
+import { buildOutput, enterPhase } from "./runlog.mjs";
 import { operatorSecrets, redact } from "./secrets.mjs";
 
 // What a research run reads of its issue: the last comments, each clipped.
@@ -222,6 +222,8 @@ export function createPreparation(ctx) {
     const { record, logFile } = task.live;
     const { base } = task;
     const output = (chunk) => logFile.write(chunk);
+    // By whole lines, each build step's first one timed (runlog.mjs buildOutput()).
+    const build = buildOutput(logFile);
     try {
       const source = await imageSource(task, items, settings, grant, pulls);
       const image = await ctx.images.imageFor({
@@ -236,8 +238,9 @@ export function createPreparation(ctx) {
             `Building ${tag} from ${settings.dockerfile} (${source.branch ? "pull request branch" : base})`,
           );
         },
-        output,
+        output: build.write,
       });
+      build.flush();
       record.phase = null;
       // The sandbox's part of the setup comes after the image's build.
       enterPhase(task.live, "setup");
@@ -254,6 +257,8 @@ export function createPreparation(ctx) {
           : await ctx.images.caches(task.repo, settings.caches, image);
       return { image, cacheArgs, settings };
     } catch (error) {
+      // What a failed build printed last (flushing again writes nothing).
+      build.flush();
       throw new RunError(
         `${agentOf(task).displayName} couldn't start: ${error.message}\n\nThe run's log on the dashboard has the details.`,
       );

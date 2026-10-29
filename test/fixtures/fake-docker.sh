@@ -50,7 +50,20 @@ case "$1" in
   logs)
     n=${@: -1}
     [ -d "$c/$n" ] || exit 1
-    exec tail -n +1 -f --pid="$(cat "$c/$n/pid")" -s 0.05 "$c/$n/out" ;;
+    follow() { tail -n +1 -f --pid="$(cat "$c/$n/pid")" -s 0.05 "$c/$n/out"; }
+    case "$*" in
+      # Each line after when it was read, as Docker's RFC 3339 nanoseconds, and, as Docker
+      # does, again before each 16384 bytes of a longer line (moby/moby#37681).
+      *--timestamps*) follow | while IFS= read -r line || [ -n "$line" ]; do
+          stamp=$(date -u +%Y-%m-%dT%H:%M:%S.%NZ)
+          LC_ALL=C
+          out="$stamp ${line:0:16384}"
+          for ((i = 16384; i < ${#line}; i += 16384)); do out+="$stamp ${line:i:16384}"; done
+          printf '%s\n' "$out"
+          LC_ALL=
+        done ;;
+      *) follow ;;
+    esac ;;
   network)
     n=${@: -1}
     net=${@: -2:1}

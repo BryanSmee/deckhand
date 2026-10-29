@@ -26,62 +26,74 @@
   {
     "kind": "tool",
     "name": "Bash",
-    "text": "grep -n teh README.md\nwc -l README.md"
+    "text": "grep -n teh README.md\nwc -l README.md",
+    "id": "t1"
   },
   {
     "kind": "output",
     "error": false,
-    "text": "3:Fix teh typo\n42 README.md"
+    "text": "3:Fix teh typo\n42 README.md",
+    "id": "t1"
   },
   {
     "kind": "tool",
     "name": "Edit",
-    "text": "/workspace/README.md"
+    "text": "/workspace/README.md",
+    "id": "t2"
   },
   {
     "kind": "tool",
     "name": "mcp__playwright__browser_navigate",
-    "text": "http://localhost:5173"
+    "text": "http://localhost:5173",
+    "id": "t3"
   },
   {
     "kind": "tool",
     "name": "TodoWrite",
-    "text": "{\"todos\":[{\"content\":\"fix\",\"status\":\"done\"}]}"
+    "text": "{\"todos\":[{\"content\":\"fix\",\"status\":\"done\"}]}",
+    "id": "t4"
   },
   {
     "kind": "tool",
     "name": "Agent",
-    "text": "Search the docs"
+    "text": "Search the docs",
+    "id": "t5"
   },
   {
     "kind": "tool",
     "name": "WebSearch",
-    "text": "deckhand"
+    "text": "deckhand",
+    "id": "t6"
   },
   {
     "kind": "tool",
     "name": "Glob",
-    "text": "**/*.md"
+    "text": "**/*.md",
+    "id": "t7"
   },
   {
     "kind": "tool",
     "name": "ExitPlanMode",
-    "text": ""
+    "text": "",
+    "id": "t8"
   },
   {
     "kind": "output",
     "error": false,
-    "text": "The file was updated."
+    "text": "The file was updated.",
+    "id": "t2"
   },
   {
     "kind": "output",
     "error": true,
-    "text": "net::ERR_CONNECTION_REFUSED\n"
+    "text": "net::ERR_CONNECTION_REFUSED\n",
+    "id": "t3"
   },
   {
     "kind": "output",
     "error": false,
-    "text": ""
+    "text": "",
+    "id": "t4"
   },
   {
     "kind": "result",
