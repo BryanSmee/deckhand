@@ -465,6 +465,15 @@ mark.current {
   .sub > summary > :last-child {
     grid-column: 3;
   }
+  /* A time under its text, as a call's meta. */
+  .line.timed {
+    grid-template-columns: 44px minmax(0, 1fr);
+    padding-right: 8px;
+  }
+  .line.timed > .time {
+    grid-column: 2;
+    margin-left: 0;
+  }
   pre.out {
     padding-left: 12px;
   }
