@@ -704,9 +704,10 @@ export function dryRunText({ number, sha = null, files, errors = [], results = [
   if (errors.length) {
     parts.push(`The config check has errors:\n\n${errors.map((e) => `- ${quote(e)}`).join("\n")}`);
   }
-  const result = ({ rule, defined, messages }) => {
-    if (messages.length) return `- \`${rule}\`: **denies**: ${messages.map(quote).join(", ")}`;
-    return `- \`${rule}\`: ${defined ? "allows" : "allows (no file defines it)"}`;
+  const result = ({ rule, defined, messages, sample }) => {
+    const name = `\`${rule}\`${sample ? ` (${sample})` : ""}`;
+    if (messages.length) return `- ${name}: **denies**: ${messages.map(quote).join(", ")}`;
+    return `- ${name}: ${defined ? "allows" : "allows (no file defines it)"}`;
   };
   parts.push(results.map(result).join("\n"));
   let json = JSON.stringify(input, null, 2);
@@ -717,6 +718,35 @@ export function dryRunText({ number, sha = null, files, errors = [], results = [
     `<details><summary>The input (\`deny_merge\`'s: review and fix get the same without \`checks\`, fix with its \`round\` and \`rounds\`; no review here)</summary>\n\n${fence}json\n${json}\n${fence}\n\n</details>`,
   );
   return parts.join("\n\n");
+}
+
+// The writes a dry run asks `deny_github` about, on pull request `pr` (GitHub's): a comment by
+// a work run whose pull request it is, and by a brainstorm on another issue. → [{ what, input }]
+// (docs/repo-config.md#the-github-input).
+export function githubSamples(repo, pr) {
+  const target = (kind) => ({
+    kind,
+    number: pr.number,
+    labels: (pr.labels ?? []).map((l) => l.name),
+    author: pr.user?.login ?? null,
+  });
+  const change = { fields: ["body"], labels_added: [], labels_removed: [] };
+  const sample = (what, mode, kind, issue) => ({
+    what,
+    input: {
+      repo: repo.toLowerCase(),
+      mode,
+      issue,
+      action: "comment",
+      actions: ["comment"],
+      target: target(kind),
+      change,
+    },
+  });
+  return [
+    sample("a work run's comment on its pull request", "work", "own_pr", pr.number),
+    sample("a brainstorm's comment on it", "brainstorm", "pr", null),
+  ];
 }
 
 // How much of the input a dry run's reply shows: GitHub takes 65536 characters a comment.
@@ -1390,6 +1420,15 @@ export function createReviews({
     const results = [];
     for (const rule of RULES) {
       const defined = files.some((f) => f.rules.includes(rule));
+      // No write to decide on: a comment on this pull request, by a run whose own it is and
+      // by a brainstorm elsewhere.
+      if (rule === "deny_github") {
+        for (const sample of githubSamples(repo, pr)) {
+          const messages = await policies.denied(rule, repo, texts, () => sample.input);
+          results.push({ rule, defined, messages, sample: sample.what });
+        }
+        continue;
+      }
       const decision = rule.replace(/^deny_/, "");
       const own = { ...input, decision };
       if (decision !== "merge") delete own.checks;

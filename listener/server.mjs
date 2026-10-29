@@ -21,6 +21,7 @@ import { createBroker } from "./broker.mjs";
 import { clientAddress, createBrokerHttp, runAt, runFrom } from "./broker-http.mjs";
 import { createGitGateway } from "./git-gateway.mjs";
 import { createGithubGateway } from "./github-gateway.mjs";
+import { createWriteChecks } from "./github-writes.mjs";
 import { createPrReady } from "./pr-ready.mjs";
 import { createBrainstorms, createIssueModes } from "./brainstorms.mjs";
 import { checkout } from "./checkout.mjs";
@@ -35,7 +36,14 @@ import {
   saveCredentials,
 } from "./github-app.mjs";
 import { pullEntry } from "./events.mjs";
-import { createGitHub, fetchPull, fetchTitle, listLabelled, listPulls } from "./github.mjs";
+import {
+  createGitHub,
+  fetchPull,
+  getJson,
+  fetchTitle,
+  listLabelled,
+  listPulls,
+} from "./github.mjs";
 import { autoMergeGrants, grantErrors, grantFor, loadGrants } from "./grants.mjs";
 import { createHttp } from "./http.mjs";
 import { createHistory } from "./history.mjs";
@@ -335,6 +343,13 @@ ctx.githubGateway = createGithubGateway({
       .map((t) => t.live.secret),
     ...operatorSecrets(ctx),
   ],
+  // Their REST writes: within their mode's ceiling, and what the policies' `deny_github`
+  // allows. Their targets are looked up with the listener's token.
+  checkWrite: createWriteChecks({
+    lookup: (repo, path) => getJson(github, repo, path, [404, 410]),
+    policies,
+    log,
+  }).check,
   log,
 });
 // Their pushes, on the broker's port: to the run's own branches only, never the default one.

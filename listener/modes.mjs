@@ -7,6 +7,37 @@ import {
   READ_ONLY_PERMISSIONS,
 } from "./github-app.mjs";
 
+// The modes' ceilings (MODES' `ceiling` below), by the kinds github-writes.mjs resolves from
+// GitHub: `own_issue`, the run's issue; `own_pr`, its pull request or one from a branch it
+// may push; `sub_issue`, an issue whose parent is the run's; `other_issue`, `pr`, the rest;
+// `new_issue`, an issue it creates; `label`, a label of the repo it creates. Brainstorms
+// comment elsewhere in theirs, which the default policy refuses
+// (docs/repo-config.md#the-github-input).
+const WORK_CEILING = {
+  own_issue: ["edit", "comment", "label", "link"],
+  own_pr: ["edit", "comment", "label"],
+  sub_issue: ["edit", "comment", "link"],
+  new_issue: ["create"],
+};
+const BRAINSTORM_CEILING = {
+  own_issue: ["edit", "comment", "link"],
+  sub_issue: ["edit", "comment", "link"],
+  new_issue: ["create"],
+  label: ["create"],
+  own_pr: ["comment"],
+  other_issue: ["comment"],
+  pr: ["comment"],
+};
+// An inbox entry files issues, parents with their sub-issues (prompts/idea.md): the parent is
+// one it created, so linking reaches other issues.
+const INBOX_CEILING = {
+  own_issue: ["comment"],
+  other_issue: ["link"],
+  new_issue: ["create"],
+  label: ["create"],
+};
+const NO_WRITES = {};
+
 // The listener's own modes, each with its traits:
 // - picked: "/mode" picks it; the others come from the inbox, discussions, "/stop" and the
 //   dashboard's Analyze (analysis.mjs).
@@ -24,16 +55,21 @@ import {
 //   before the trigger line. An analysis reports: the maintainer files what they want of it.
 //   A review reads: the listener posts its GitHub review (reviews.mjs), a diff can't write.
 //   Research gets none (NO_TOKEN): a web page it reads can't make it read the repo.
+// - ceiling: the most its REST writes to GitHub can ever do, whatever the policies say
+//   (github-writes.mjs): target kind → the actions allowed on it. None: it writes nothing.
+//   Reviews, merges, closing, deleting, labels' and the repo's settings, and anything outside
+//   the run's repo are in no ceiling. GitHub closes an issue when its pull request merges.
 // - prompt: its instructions, in ../prompts/ (prompts.mjs).
 // Their names are reserved: a repo's `modes:` can't take them (repo-config.mjs). The
 // dashboard has a copy of the list (format.ts), checked by a test.
 export const MODES = {
-  work: { picked: true },
+  work: { picked: true, ceiling: WORK_CEILING },
   brainstorm: {
     picked: true,
     light: true,
     kind: "brainstorm",
     permissions: LIGHT_PERMISSIONS,
+    ceiling: BRAINSTORM_CEILING,
     prompt: "brainstorm.md",
   },
   onboarding: {
@@ -56,6 +92,7 @@ export const MODES = {
     light: true,
     kind: "brainstorm",
     permissions: LIGHT_PERMISSIONS,
+    ceiling: BRAINSTORM_CEILING,
     prompt: "brainstorm.md",
   },
   idea: {
@@ -64,6 +101,7 @@ export const MODES = {
     inbox: true,
     kind: "idea",
     permissions: LIGHT_PERMISSIONS,
+    ceiling: INBOX_CEILING,
     prompt: "idea.md",
   },
   bug: {
@@ -72,6 +110,7 @@ export const MODES = {
     inbox: true,
     kind: "bug",
     permissions: LIGHT_PERMISSIONS,
+    ceiling: INBOX_CEILING,
     prompt: "bug.md",
   },
   // A discussion keeps its session, like a brainstorm.
@@ -80,6 +119,7 @@ export const MODES = {
     inbox: true,
     kind: "discussion",
     permissions: DISCUSSION_PERMISSIONS,
+    ceiling: { new_issue: ["create"] },
     prompt: "discussion.md",
   },
   analyze: { light: true, fresh: true, permissions: READ_ONLY_PERMISSIONS, prompt: "analyze.md" },
@@ -180,4 +220,14 @@ export function kindOf(mode, kind) {
 // token only reads.
 export function permissionsFor(mode, light) {
   return builtIn(mode)?.permissions ?? (light ? READ_ONLY_PERMISSIONS : undefined);
+}
+
+// The most a run's REST writes can do (`ceiling` above): a built-in mode's, else one of the
+// repo's own modes: a light one writes nothing (unless the operator grants more, which no
+// grant does yet), the others as work runs. Fail closed: no mode, nothing.
+export function ceilingOf(mode, light) {
+  const own = builtIn(mode);
+  if (own) return own.ceiling ?? NO_WRITES;
+  if (!mode || light !== false) return NO_WRITES;
+  return WORK_CEILING;
 }

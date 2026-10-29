@@ -232,6 +232,8 @@ export function createRestart(ctx) {
       // Fail closed: a saved run that doesn't say it was a work run doesn't push.
       push: saved.light === false,
       mode: saved.mode,
+      issue: task.number,
+      base: task.base,
       secret: saved.secret,
     });
     // State saved before runs had branches: none, rather than any.

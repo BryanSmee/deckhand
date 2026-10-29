@@ -135,7 +135,12 @@ export function createRuns(ctx) {
       logFile: openLog(record.logPath),
       // What its sandbox holds instead of a GitHub token: the GitHub gateway swaps it for one
       // limited to this repo, while this run lasts.
-      secret: ctx.broker.register(task.repo, permissionsFor(mode, light), { push: !light, mode }),
+      secret: ctx.broker.register(task.repo, permissionsFor(mode, light), {
+        push: !light,
+        mode,
+        issue: task.number,
+        base: task.base,
+      }),
       asked: replyTo, // where errors go
       replyTo, // where the reply goes: the issue or pull request of the last comment it took
       open: false, // whether its inbox takes comments

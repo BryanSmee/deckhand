@@ -66,6 +66,12 @@ const DECISIONS: {
     denies: "A denial starts no fix run; a comment on the pull request says why.",
     refused: (until) => `Every fix run is refused ${until}.`,
   },
+  {
+    rule: "deny_github",
+    name: "GitHub writes",
+    denies: "A denial refuses a run's REST write to GitHub; gh prints the messages to the agent.",
+    refused: (until) => `Every run's REST write to GitHub is refused ${until}.`,
+  },
 ];
 
 // How many times a file defines `rule` (each definition is a rule of its own): at least once,
@@ -233,8 +239,8 @@ function Banner({
         </b>
         <span>
           Policies fail closed, and the files are checked together. Until {one ? "it's" : "they're"}{" "}
-          fixed, auto-merges, automatic reviews and fix runs here are all refused with “policy
-          error”. Runs started by a comment aren't affected.
+          fixed, auto-merges, automatic reviews, fix runs and runs' REST writes to GitHub here are
+          all refused with “policy error”. Runs started by a comment still start.
         </span>
         {one && first.file ? (
           lineLink(first, `Line ${first.row} ↓`)

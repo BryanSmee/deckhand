@@ -625,11 +625,15 @@ test("/mode policy: every rule on the pull request now, nothing reviewed, fixed 
     files: { "size.rego": 'package deckhand\ndeny_merge contains "x" if true\n' },
     // Replaced by the repo's: not one of the files the dry run evaluates.
     operator: { "size.rego": 'package deckhand\ndeny_review contains "y" if true\n' },
-    messages: (input, rule) => (rule === "deny_merge" ? ["a `human` merges this one"] : []),
+    messages: (input, rule) => {
+      if (rule === "deny_merge") return ["a `human` merges this one"];
+      if (rule === "deny_github" && input.mode === "brainstorm") return ["not on pull requests"];
+      return [];
+    },
   });
   const s = setup(t, { policies: policy.engine, pr: { additions: 12 } });
   const { text, denials } = await s.reviews.dryRun({ repo: "org/repo", base: "main", number: 5 });
-  assert.equal(denials, 1);
+  assert.equal(denials, 2);
   assert.match(
     text,
     /^\*\*Policy dry run\*\* on #5 at sha-1: nothing was reviewed, fixed or merged\./,
@@ -638,6 +642,16 @@ test("/mode policy: every rule on the pull request now, nothing reviewed, fixed 
   assert.match(text, /- `deny_merge`: \*\*denies\*\*: `a 'human' merges this one`/);
   assert.match(text, /- `deny_review`: allows \(no file defines it\)/);
   assert.match(text, /- `deny_fix`: allows \(no file defines it\)/);
+  // deny_github on sample writes: a comment on the pull request by its work run, and by a
+  // brainstorm.
+  assert.match(
+    text,
+    /- `deny_github` \(a work run's comment on its pull request\): allows \(no file defines it\)/,
+  );
+  assert.match(
+    text,
+    /- `deny_github` \(a brainstorm's comment on it\): \*\*denies\*\*: `not on pull requests`/,
+  );
   assert.match(text, /<details><summary>The input/);
   const json = JSON.parse(/```json\n([\s\S]*)\n```/.exec(text)[1]);
   assert.equal(json.version, 1);
@@ -652,6 +666,15 @@ test("/mode policy: every rule on the pull request now, nothing reviewed, fixed 
       ["deny_merge", "merge", true],
       ["deny_review", "review", false],
       ["deny_fix", "fix", false],
+      ["deny_github", undefined, false],
+      ["deny_github", undefined, false],
+    ],
+  );
+  assert.deepEqual(
+    policy.evals.slice(3).map((e) => [e.mode, e.action, e.target.kind, e.target.number]),
+    [
+      ["work", "comment", "own_pr", 5],
+      ["brainstorm", "comment", "pr", 5],
     ],
   );
   assert.equal(s.accepted.length + s.merges().length + s.replies.length + s.decided.length, 0);

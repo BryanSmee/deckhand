@@ -11,6 +11,9 @@
 // - pushes are refused: they go to the git gateway (git-gateway.mjs, pushInsteadOf);
 // - a review's reads of its thread (comments, reviews, review comments) are refused: it reads
 //   only what allowed users wrote, from TASK_DIGEST (reviews.mjs);
+// - every REST write is checked (github-writes.mjs): classified, its target's kind resolved from
+//   GitHub, then held to its mode's ceiling and the policies' `deny_github`; GraphQL's writes go
+//   on as the token allows until #406 classifies them;
 // - every write's body is redacted (the run's secret, the operator's credentials, the tokens
 //   used for it, anything shaped like a GitHub token) before GitHub gets it, and the run's log
 //   says so: what a run posts itself would otherwise skip the redaction of its reply and log;
@@ -148,6 +151,9 @@ export function createGithubGateway({
   // run → the secrets its writes must not carry, besides its tokens: its own secret and the
   // operator's credentials (secrets.mjs operatorSecrets()).
   secrets = () => [],
+  // (run, { method, path, body }) → null when a REST write may go on, else { status, message }
+  // (github-writes.mjs createWriteChecks()). None: every REST write is refused.
+  checkWrite = async () => ({ status: 403, message: "no write is checked here" }),
   log = () => {},
   maxInFlight = MAX_IN_FLIGHT,
   maxWrite = MAX_WRITE,
@@ -158,6 +164,9 @@ export function createGithubGateway({
   // GitHub Enterprise Server's GraphQL is beside its REST API (/api/graphql, /api/v3/).
   const graphql = new URL(apiBase.pathname.endsWith("/v3/") ? "../graphql" : "graphql", apiBase);
   const webBase = baseOf(web);
+  // GraphQL's path as route() decodes it, and the spellings GitHub may read as it too.
+  const graphqlPaths = new Set(["graphql", graphql.pathname.slice(1).toLowerCase()]);
+  const isGraphql = (path) => graphqlPaths.has(path.toLowerCase().replace(/\/+$/, ""));
   // run → its calls in flight; run → what its log noted.
   const inFlight = new WeakMap();
   const noted = new WeakMap();
@@ -272,6 +281,17 @@ export function createGithubGateway({
           `Deckhand refused the run's GitHub write ${clip(run, call)}: its URL holds a secret`,
         );
         return fail(res, 403, "this write's URL holds a secret");
+      }
+      if (write && where.api && !isGraphql(where.path)) {
+        const refused = await checkWrite(run, { method: req.method, path: where.path, body });
+        if (refused) {
+          note(
+            run,
+            `Deckhand refused the run's GitHub write ${clip(run, call)}: ${refused.message}`,
+          );
+          log(`GitHub gateway: refused ${clip(run, call)} for ${run.repo}: ${refused.message}`);
+          return fail(res, refused.status, refused.message);
+        }
       }
       await proxied(req, res, run, github, where, body);
     } finally {

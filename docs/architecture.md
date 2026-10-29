@@ -348,7 +348,9 @@ changes, and its output as `raw` entries with the step's number; the lines of no
   secret (bound to that address) or, without one, by its sandbox's address (never its
   engine's); refuses finished, foreign,
   research and push calls and a review's reads of its thread; redacts every write's body
-  (`redact()`, the run's and operator's secrets) and notes it in the run's log; and sends the
+  (`redact()`, the run's and operator's secrets) and notes it in the run's log; holds each
+  REST write to its mode's ceiling and the policies' `deny_github` (`github-writes.mjs`, its
+  target's kind looked up with the listener's token); and sends the
   call on with a token limited to the run's repo and mode (`permissionsFor()`), streaming the
   answer back (`upstream.mjs` `forward()`). The CA certifies GitHub for this
   (`proxy/authority.mjs` `EXCLUDED` keeps only the agents' providers): no sandbox's GitHub
@@ -813,6 +815,7 @@ tests fake it.
 | `github-app.mjs`, `github.mjs`                                    | The App's tokens and calls; `createGitHub()`, `getJson`, `paginate`, `graphql` and the stores' lookups on top.                                                                                                                                       |
 | `broker.mjs`, `git-gateway.mjs`                                   | The runs' secrets, each for its own sandbox only; their pushes, to the run's own branches only.                                                                                                                                                      |
 | `github-gateway.mjs`                                              | The sandboxes' GitHub calls, relayed by the egress proxy: the run's token in place of its secret, writes redacted, a review's thread reads refused.                                                                                                  |
+| `github-writes.mjs`                                               | The REST writes the GitHub gateway relays: classified, their target's kind read from GitHub, held to the mode's ceiling (`modes.mjs` `ceilingOf()`) and the policies' `deny_github`.                                                                 |
 | `git-mirror.mjs`, `workflow-check.mjs`                            | The git gateway's mirrors of the repositories granted `allow_workflows`, and the checks on the workflow files their pushes change (a strict YAML subset).                                                                                            |
 | `pr-ready.mjs`                                                    | The sandboxes' pull requests opened, edited, and marked ready for review or back to draft (`gh pr create`, `edit`, `ready`).                                                                                                                         |
 | `anthropic.mjs`, `openai.mjs`, `upstream.mjs`                     | The sandboxes' Claude and OpenAI API calls, with the operator's credential; what both endpoints share (`createApiProxy()`).                                                                                                                          |

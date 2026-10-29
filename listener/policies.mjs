@@ -4,7 +4,8 @@
 // like the grants; a repo's are .deckhand/policy/*.rego on its default branch, like its
 // .deckhand.yaml. A repo file with the same name as an operator file replaces it, any other
 // name adds rules. Each decision is a set rule of package `deckhand` (`deny_merge`,
-// `deny_review`, `deny_fix`), whose strings are the reasons shown to the maintainer.
+// `deny_review`, `deny_fix`, and `deny_github` for a run's GitHub writes: github-writes.mjs),
+// whose strings are the reasons shown to the maintainer (or the run, for `deny_github`).
 //
 // Isolation: the policies are code a repo's maintainers write, and the listener holds the
 // Docker socket and the App's key. `opa` runs with an empty environment, under a timeout, and
@@ -25,7 +26,7 @@ export const POLICY_DIR = ".deckhand/policy";
 const OPERATOR_DIR = "policy";
 
 // The rules the listener evaluates: another `deny_*` rule is a mistake the config check says.
-export const RULES = ["deny_merge", "deny_review", "deny_fix"];
+export const RULES = ["deny_merge", "deny_review", "deny_fix", "deny_github"];
 
 // What the input looks like (docs/repo-config.md#the-merge-input): a policy can check it.
 export const INPUT_VERSION = 1;
