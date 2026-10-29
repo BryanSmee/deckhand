@@ -119,7 +119,8 @@ test("the pinned schema is GitHub's, with the mutations Deckhand classifies", ()
   for (const name of Object.keys(MUTATIONS)) {
     assert.ok(fields[name], name);
     const input = fields[name].args.find((a) => a.name === "input").type.ofType.getFields();
-    for (const field of [MUTATIONS[name].target, ...MUTATIONS[name].fields]) {
+    const { target, fields: known, empty = [] } = MUTATIONS[name];
+    for (const field of [target, ...known, ...empty]) {
       assert.ok(input[field], `${name}.${field}`);
     }
   }
@@ -223,14 +224,24 @@ test("parseCall picks the operation GitHub runs: by its name, among several", ()
 test("gh issue create, comment and edit: classified from GitHub's nodes, checked as REST writes", async () => {
   const { check, writes, asked } = checks();
   const idea = run("idea", null);
+  // gh's real variables (GH_DEBUG=api, gh 2.103.3): `projectIds: null` whenever it resolves a
+  // label, which sets nothing (issue #422).
   const created = await check(
     idea,
     call(GH_CREATE, {
-      input: { repositoryId: "R_repo", title: "T", body: "B", labelIds: ["L_idea"] },
+      input: {
+        body: "B",
+        labelIds: ["L_idea"],
+        projectIds: null,
+        repositoryId: "R_repo",
+        title: "T",
+      },
     }),
   );
   assert.equal(created.write, true);
   assert.deepEqual(created.creates, ["createIssue"]);
+  // GitHub gets it as gh sent it: it accepts a null projectIds.
+  assert.equal(JSON.parse(created.body).variables.input.projectIds, null);
   assert.deepEqual(asked, [["org/repo", ["R_repo", "L_idea"]]]);
   assert.deepEqual(writes[0], {
     repo: "org/repo",
@@ -238,6 +249,29 @@ test("gh issue create, comment and edit: classified from GitHub's nodes, checked
     target: { kind: "new_issue" },
     change: { fields: ["title", "body", "labels"], labels_added: ["idea"], labels_removed: [] },
   });
+  // An empty list sets nothing either: the same write. One with a project is refused.
+  const listed = await check(
+    idea,
+    call(GH_CREATE, {
+      input: {
+        repositoryId: "R_repo",
+        title: "T",
+        body: "B",
+        labelIds: ["L_idea"],
+        projectIds: [],
+      },
+    }),
+  );
+  assert.equal(listed.write, true);
+  assert.deepEqual(writes.at(-1), writes[0]);
+  const project = await check(
+    idea,
+    call(GH_CREATE, {
+      input: { repositoryId: "R_repo", title: "T", labelIds: ["L_idea"], projectIds: ["PRJ_1"] },
+    }),
+  );
+  assert.equal(project.refused?.status, 403);
+  assert.match(project.refused.message, /createIssue's projectIds/);
   // Without its label, an idea run's create is above its ceiling.
   const bare = await check(
     idea,
@@ -427,13 +461,14 @@ test("an unknown mutation, or an input field Deckhand doesn't check, is refused 
   assert.deepEqual([asked, writes], [[], []]);
   // A field it doesn't check sent as null: GitHub may read it as clearing it, so refused too.
   for (const [query, input, field] of [
-    [GH_CREATE, { repositoryId: "R_repo", title: "T", projectIds: null }, /projectIds/],
     [GH_EDIT, { id: "I_1", issueTypeId: null }, /updateIssue's issueTypeId/],
     [
       "mutation($input: UpdatePullRequestInput!) { updatePullRequest(input: $input) { __typename } }",
       { pullRequestId: "PR_7", projectIds: null },
       /updatePullRequest's projectIds/,
     ],
+    // Only a create's empty projectIds goes (issue #422): an update's may clear them.
+    [GH_EDIT, { id: "I_1", projectIds: [] }, /updateIssue's projectIds/],
   ]) {
     const out = await check(work, call(query, { input }));
     assert.equal(out.refused?.status, 403, JSON.stringify(input));

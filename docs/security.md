@@ -363,7 +363,8 @@ to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to the
   the targets of one call looked up once each: a call can't spend the installation's rate
   limit on look-ups. Each field of a mutation, aliases and fragments included, must
   be one of the mutations Deckhand knows, setting only the input fields it checks, whatever their value, `null` too (projects,
-  a parent or a template at creation, Copilot's assignment, a sub-issue by URL are refused): a mutation
+  a parent or a template at creation, Copilot's assignment, a sub-issue by URL are refused), except the empty fields gh always sends, which set nothing
+  (`createIssue`'s `projectIds` as `null` or `[]`, issue #422; one with a project is refused): a mutation
   GitHub adds is refused until Deckhand names it. The node IDs the fields name, inline or in
   their variables (resolved as GitHub resolves them), are looked up with the listener's
   token to a repository, a kind and a number, so the call's own claims say nothing; a node
