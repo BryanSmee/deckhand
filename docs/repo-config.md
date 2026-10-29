@@ -892,7 +892,8 @@ commands) goes through the same checks, field by field:
    `removeLabelsFromLabelable`, `addAssigneesToAssignable`, `removeAssigneesFromAssignable`,
    `closeIssue`, `reopenIssue`, `addReaction`, and the pull request ones), setting only the
    input fields Deckhand checks (no projects, no `parentIssueId` or `issueTemplate`, a sub-issue by its
-   `subIssueId` only): any other is refused before any policy runs.
+   `subIssueId` only): any other is refused before any policy runs, even sent as `null`, which
+   GitHub may read as clearing it.
 3. **Its targets are GitHub's:** the node IDs it names, inline or in its variables, are looked
    up with the listener's token, to a repository, a kind and a number. A create's
    `repositoryId` must be the run's repository, and its labels' IDs labels of it.

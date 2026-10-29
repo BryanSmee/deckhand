@@ -38,8 +38,10 @@ export const MAX_QUERY = 64 * 1024;
 // The most mutation fields a call may hold (gh sends one): each is looked up on GitHub and
 // held to the policies, with the listener's token and rate limit.
 export const MAX_FIELDS = 10;
-// How long a document may wait for the worker and be validated there.
+// How long a document may take to validate in the worker, and how many of a run's may wait
+// there (gh sends one at a time).
 export const VALIDATE_MS = 10_000;
+export const VALIDATE_PER_RUN = 2;
 // The most node IDs a call's mutations may name: GitHub looks up 100 at once.
 export const MAX_NODES = 100;
 
@@ -90,7 +92,9 @@ function updated(input) {
 // - labels: the input field of label IDs it adds (`added`) or removes (`removed`), or sets in
 //   place of the issue's (`set`);
 // - child: a link's sub-issue field.
-// The pull request ones are refused by every ceiling until #407 moves `gh pr` here.
+// The pull request ones: `createPullRequest`, `markPullRequestReadyForReview` and
+// `convertPullRequestToDraft` are in no ceiling until #407 moves `gh pr` here;
+// `updatePullRequest`'s `edit` is in a work run's own pull request's.
 export const MUTATIONS = {
   createIssue: {
     target: "repositoryId",
@@ -296,55 +300,99 @@ export function parseCall(body, schema = githubSchema()) {
   return operationOf(schema, call);
 }
 
-// Validation in a worker thread: query → a promise of null (valid) or { status, message }. The
-// worker takes one document at a time; one that waits or runs past `timeoutMs` stops it, and
-// every document it held is refused, so a run's document can hold up GitHub's other GraphQL
-// calls for that long at most, and the listener's webhooks, dashboard and REST calls never.
-export function createValidator({ timeoutMs = VALIDATE_MS } = {}) {
+// Validation in a worker thread: (query, run) → a promise of null (valid) or { status,
+// message }, so the listener's webhooks, dashboard and REST calls never wait for it. The worker
+// validates one document at a time, taken from the runs in turn, each run holding
+// `perRun` documents at most in the queue (more are refused, `429`): a run that floods it
+// only delays itself, the others waiting one document of each run ahead at most. A document
+// validated for over `timeoutMs` is refused alone, the worker stopped and started again for the
+// rest (its time counted once the worker has built GitHub's schema).
+export function createValidator({ timeoutMs = VALIDATE_MS, perRun = VALIDATE_PER_RUN } = {}) {
   let worker = null;
   let next = 0;
-  const pending = new Map();
-  function stop(message) {
-    const was = worker;
-    worker = null;
-    was?.terminate();
-    for (const p of pending.values()) {
-      clearTimeout(p.timer);
-      p.resolve(refusal(503, message));
-    }
-    pending.clear();
-  }
+  // run → its documents waiting, in order; the runs in turn (a Map keeps the order they came
+  // in, and a run served goes to its end).
+  const queues = new Map();
+  let current = null;
   function start() {
     const started = new Worker(new URL("./github-graphql-worker.mjs", import.meta.url));
     started.unref();
-    started.on("message", ({ id, error }) => {
-      const p = pending.get(id);
-      if (!p) return;
-      pending.delete(id);
-      clearTimeout(p.timer);
-      p.resolve(error === null ? null : refusal(400, error));
+    started.on("message", ({ ready, id, error }) => {
+      // Its schema built: what it takes is timed from now on.
+      if (ready) return ((started.ready = true), pump());
+      if (current?.id !== id) return;
+      finish(error === null ? null : refusal(400, error));
     });
-    started.on(
-      "error",
-      (error) => worker === started && stop(`its GraphQL couldn't be validated: ${error.message}`),
-    );
-    started.on("exit", () => worker === started && stop("its GraphQL couldn't be validated"));
+    const lost = (message) => {
+      if (worker !== started) return;
+      worker = null;
+      // One that never got ready would only fail again: what waits is refused, and the next
+      // call tries anew.
+      if (!started.ready) refuseAll(message);
+      finish(refusal(503, message));
+    };
+    started.on("error", (error) => lost(`its GraphQL couldn't be validated: ${error.message}`));
+    started.on("exit", () => lost("its GraphQL couldn't be validated"));
     return started;
   }
-  function check(query) {
+  // The document being validated is answered, and the next one sent.
+  function finish(answer) {
+    const done = current;
+    current = null;
+    if (done) {
+      clearTimeout(done.timer);
+      done.resolve(answer);
+    }
+    pump();
+  }
+  function pump() {
+    if (current || !queues.size) return;
     worker ??= start();
-    const id = next++;
-    return new Promise((resolve) => {
-      const timer = setTimeout(
-        () => stop(`its GraphQL took over ${timeoutMs / 1000} s to validate`),
-        timeoutMs,
+    if (!worker.ready) return;
+    const [run, queue] = queues.entries().next().value;
+    current = queue.shift();
+    queues.delete(run);
+    if (queue.length) queues.set(run, queue);
+    current.timer = setTimeout(() => {
+      const stuck = worker;
+      worker = null;
+      stuck?.terminate();
+      finish(refusal(503, `its GraphQL took over ${timeoutMs / 1000} s to validate`));
+    }, timeoutMs);
+    current.timer.unref?.();
+    worker.postMessage({ id: current.id, query: current.query });
+  }
+  function check(query, run = null) {
+    const queue = queues.get(run) ?? [];
+    if (queue.length >= perRun) {
+      return Promise.resolve(
+        refusal(429, `more than ${perRun} GraphQL documents of the run's waiting to be validated`),
       );
-      timer.unref?.();
-      pending.set(id, { resolve, timer });
-      worker.postMessage({ id, query });
+    }
+    return new Promise((resolve) => {
+      queue.push({ id: next++, query, resolve });
+      if (!queues.has(run)) queues.set(run, queue);
+      pump();
     });
   }
-  return { check, close: () => stop("the validator is closed") };
+  function refuseAll(message) {
+    for (const queue of queues.values()) {
+      for (const p of queue) p.resolve(refusal(503, message));
+    }
+    queues.clear();
+  }
+  function close() {
+    refuseAll("the validator is closed");
+    const was = worker;
+    worker = null;
+    was?.terminate();
+    if (current) {
+      clearTimeout(current.timer);
+      current.resolve(refusal(503, "the validator is closed"));
+      current = null;
+    }
+  }
+  return { check, close };
 }
 
 // The fields an operation selects at its root (selected()). Validation has ruled out cycles and
@@ -376,13 +424,11 @@ export function mutationFields({ doc, op, coerced }, schema = githubSchema()) {
     const spec = Object.hasOwn(MUTATIONS, name) ? MUTATIONS[name] : null;
     if (!spec) return { refused: refusal(403, `Deckhand doesn't let a run send ${name}`) };
     const { input = {} } = getArgumentValues(defs[name], field, coerced);
-    // The fields it sets, null ones too (updated()); an unknown one only refuses it with a
-    // value: null is the most it could do.
+    // The fields it sets, null ones too: GitHub may read null as clearing a field (updated()),
+    // so an unknown one sent as null is refused as one with a value is.
     const known = [spec.target, ...spec.fields];
     const set = Object.fromEntries(
-      Object.entries(input ?? {}).filter(
-        ([k, v]) => k !== "clientMutationId" && (known.includes(k) || v != null),
-      ),
+      Object.entries(input ?? {}).filter(([k]) => k !== "clientMutationId"),
     );
     const unknown = Object.keys(set).filter((k) => !known.includes(k));
     if (unknown.length) {
@@ -541,7 +587,7 @@ export function createGraphqlChecks({
   async function check(run, body) {
     const call = readCall(body);
     if (call.refused) return call;
-    const invalid = await validator(call.query);
+    const invalid = await validator(call.query, run);
     if (invalid) return { refused: invalid };
     const parsed = operationOf(schema(), call);
     if (parsed.refused) return parsed;

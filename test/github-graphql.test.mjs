@@ -395,12 +395,21 @@ test("an unknown mutation, or an input field Deckhand doesn't check, is refused 
     assert.match(out.refused.message, message, query);
   }
   assert.deepEqual([asked, writes], [[], []]);
-  // A field set to null is GitHub's "not set": no refusal for it.
-  const nulls = await check(
-    work,
-    call(GH_CREATE, { input: { repositoryId: "R_repo", title: "T", projectIds: null } }),
-  );
-  assert.equal(nulls.write, true);
+  // A field it doesn't check sent as null: GitHub may read it as clearing it, so refused too.
+  for (const [query, input, field] of [
+    [GH_CREATE, { repositoryId: "R_repo", title: "T", projectIds: null }, /projectIds/],
+    [GH_EDIT, { id: "I_1", issueTypeId: null }, /updateIssue's issueTypeId/],
+    [
+      "mutation($input: UpdatePullRequestInput!) { updatePullRequest(input: $input) { __typename } }",
+      { pullRequestId: "PR_7", milestoneId: null },
+      /updatePullRequest's milestoneId/,
+    ],
+  ]) {
+    const out = await check(work, call(query, { input }));
+    assert.equal(out.refused?.status, 403, JSON.stringify(input));
+    assert.match(out.refused.message, field);
+  }
+  assert.deepEqual([asked, writes], [[], []]);
   // Only __typename: nothing written, nothing looked up.
   assert.equal((await check(work, call("mutation { __typename }"))).write, false);
 });
@@ -558,16 +567,32 @@ test("the gateway's validator runs in a worker: the listener's thread goes on me
   assert.ok(longest < 100, `the thread stalled ${Math.round(longest)} ms`);
 });
 
-test("a document the worker can't validate in time is refused, and the worker starts again", async (t) => {
-  const slow = createValidator({ timeoutMs: 1 });
-  t.after(slow.close);
-  const refused = await slow.check("{ viewer { login } }");
-  assert.equal(refused.status, 503);
-  assert.match(refused.message, /took over/);
-  // The next call starts another worker (here too slow again), rather than waiting on the one
-  // stopped.
-  assert.equal((await slow.check("{ viewer { login } }")).status, 503);
-  const again = createValidator();
-  t.after(again.close);
-  assert.equal(await again.check("{ viewer { login } }"), null);
+// A document that takes the worker a while: one field repeated, with arguments.
+const SLOW = `{ viewer { ${"repositories(first: 1) { totalCount } ".repeat(270)} } }`;
+
+test("a document the worker can't validate in time is refused alone; the others go on", async (t) => {
+  const validator = createValidator({ timeoutMs: 150 });
+  t.after(validator.close);
+  const [slow, quick] = await Promise.all([
+    validator.check(SLOW, "a"),
+    validator.check("{ viewer { login } }", "b"),
+  ]);
+  assert.equal(slow.status, 503);
+  assert.match(slow.message, /took over/);
+  // Validated by the worker started again.
+  assert.equal(quick, null);
+});
+
+test("a run that floods the validator delays itself only: the runs take turns", async (t) => {
+  const validator = createValidator();
+  t.after(validator.close);
+  const order = [];
+  const sent = (query, run, name) =>
+    validator.check(query, run).then((answer) => (order.push(name), answer));
+  const calls = [sent(SLOW, "a", "a1"), sent(SLOW, "a", "a2")];
+  // Its third waits for none: refused at once.
+  assert.equal((await validator.check(SLOW, "a")).status, 429);
+  calls.push(sent("{ viewer { login } }", "b", "b1"));
+  assert.deepEqual(await Promise.all(calls), [null, null, null]);
+  assert.deepEqual(order, ["a1", "b1", "a2"]);
 });

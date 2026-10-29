@@ -26,6 +26,7 @@
 // Served on the broker's port, which only the runs' networks reach.
 import { addressOf, NOT_ITS_SANDBOX } from "./broker.mjs";
 import { NO_TOKEN, readsOf } from "./github-app.mjs";
+import { classify } from "./github-writes.mjs";
 import { redact } from "./redact.mjs";
 import { baseOf, forward, forwarded, IDLE_MS, MAX_IN_FLIGHT } from "./upstream.mjs";
 import { sendJson } from "./web.mjs";
@@ -334,7 +335,8 @@ export function createGithubGateway({
       } else if (!refused && write && where.api) {
         watched = { method: req.method, path: where.path, body, graphql: false };
         refused = await checkWrite(run, { method: req.method, path: where.path, body });
-        writing = !refused;
+        // A POST that writes nothing (rendering markdown) passes, with a token that only reads.
+        writing = !refused && !classify(req.method, where.path, body)?.read;
       }
       if (refused) {
         note(

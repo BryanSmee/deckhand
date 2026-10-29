@@ -346,14 +346,15 @@ to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to the
   fields) or validate, a
   subscription, a document with several operations and no `operationName` naming one, a
   GraphQL `GET` and a query string are refused, as GitHub would otherwise run something
-  unchecked. Validation runs in a worker thread (`createValidator()`), one document at a
-  time, so a slow document holds up other GraphQL calls at most, never the listener's
-  webhooks, dashboard or REST calls; one that takes over 10 seconds, waiting included, is
-  refused (`503`) and the worker started again. A query goes on. A call holds 10 mutation
+  unchecked. Validation runs in a worker thread (`createValidator()`), never on the listener's
+  thread (its webhooks, dashboard and REST calls), one document at a time, taken from the
+  runs in turn: a run has 2 documents waiting at most (more are refused, `429`), so one that
+  floods the worker delays itself, not the other runs. A document validated for over 10
+  seconds is refused alone (`503`), and the worker started again for the others. A query goes on. A call holds 10 mutation
   fields at most (gh sends one), each response key checked once (GitHub runs it once), and
   the targets of one call looked up once each: a call can't spend the installation's rate
   limit on look-ups. Each field of a mutation, aliases and fragments included, must
-  be one of the mutations Deckhand knows, setting only the input fields it checks (projects,
+  be one of the mutations Deckhand knows, setting only the input fields it checks, whatever their value, `null` too (projects,
   a parent or a template at creation, Copilot's assignment, a sub-issue by URL are refused): a mutation
   GitHub adds is refused until Deckhand names it. The node IDs the fields name, inline or in
   their variables (resolved as GitHub resolves them), are looked up with the listener's

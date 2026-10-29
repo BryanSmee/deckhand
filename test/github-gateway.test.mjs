@@ -768,3 +768,16 @@ test("a secret spelled with GraphQL's own escapes is redacted from the document 
     /redacted a secret from the run's GitHub write POST \/api\/graphql/,
   );
 });
+
+test("a POST that writes nothing (rendering markdown) goes on with a token that only reads", async (t) => {
+  const gw = await gateway(t);
+  const extra = { issues: "write" };
+  const { secret } = gw.register(extra, { mode: "work", push: true, issue: 1 });
+  const post = (path) => gw.call(path, { secret, method: "POST", body: '{"text": "**Hi**"}' });
+  assert.equal((await post("/api/v3/markdown")).status, 200);
+  assert.equal((await post("/api/v3/repos/org/repo/issues/1/comments")).status, 200);
+  assert.deepEqual(
+    gw.minted.map(([, perms]) => perms),
+    [readsOf(extra), extra],
+  );
+});
