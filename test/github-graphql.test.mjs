@@ -179,10 +179,39 @@ test("a document over its caps is refused before it is validated: validation wou
   const bytes = call(`{ viewer { login } } # ${"x".repeat(MAX_QUERY)}`);
   assert.equal(parseCall(bytes, null).refused.status, 413);
   // The worst a document under the caps can do: repeated fields, in a fraction of a second.
-  const worst = call(`{ ${"a: viewer { login } ".repeat(Math.floor((MAX_TOKENS - 2) / 6))} }`);
-  const start = performance.now();
-  assert.equal(parseCall(worst).refused, undefined);
-  assert.ok(performance.now() - start < 1000);
+  // A mutation, which keeps the rule on fields that can't merge, the quadratic one.
+  for (const worst of [
+    call(`{ ${"a: viewer { login } ".repeat(Math.floor((MAX_TOKENS - 2) / 6))} }`),
+    call(`mutation { ${"a: __typename ".repeat(Math.floor((MAX_TOKENS - 3) / 3))} }`),
+  ]) {
+    const start = performance.now();
+    assert.equal(parseCall(worst).refused, undefined);
+    assert.ok(performance.now() - start < 1000);
+  }
+});
+
+test("gh issue view's query is valid: fragments on distinct types may select a field of two types, as GitHub allows, in a query only", () => {
+  // gh's IssueByNumber, trimmed: Issue.state is an IssueState, PullRequest.state a
+  // PullRequestState.
+  const view = `query IssueByNumber($owner: String!, $repo: String!, $number: Int!) {
+    repository(owner: $owner, name: $repo) {
+      issue: issueOrPullRequest(number: $number) {
+        __typename
+        ...on Issue { number, state, labels(first: 100) { nodes { name } } }
+        ...on PullRequest { number, state, author { login, ...on User { name } } }
+      }
+    }
+  }`;
+  const variables = { owner: "o", repo: "r", number: 1 };
+  assert.equal(parseCall(call(view, variables)).op.operation, "query");
+  // A mutation keeps the rule: what it selects back can't merge either.
+  const comment = `mutation($input: AddCommentInput!) {
+    addComment(input: $input) {
+      subject { ...on Issue { state } ...on PullRequest { state } }
+    }
+  }`;
+  const out = parseCall(call(comment, { input: { subjectId: "I_1", body: "b" } }));
+  assert.match(out.refused.message, /isn't valid on GitHub: Fields "state" conflict/);
 });
 
 test("parseCall picks the operation GitHub runs: by its name, among several", () => {
@@ -568,7 +597,8 @@ test("the gateway's validator runs in a worker: the listener's thread goes on me
   });
   assert.match((await check("{")).message, /doesn't parse/);
   // The slowest shape under the caps: one field repeated in a selection set.
-  const worst = `{ viewer { ... on User { ${"login ".repeat(MAX_TOKENS - 15)} } } }`;
+  const worst = `mutation { addStar(input: { starrableId: "x" }) { starrable { ... on Repository {
+    owner { ... on User { ${"login ".repeat(MAX_TOKENS - 40)} } } } } } }`;
   let longest = 0;
   let last = performance.now();
   const tick = setInterval(() => {
@@ -583,8 +613,10 @@ test("the gateway's validator runs in a worker: the listener's thread goes on me
   assert.ok(longest < 100, `the thread stalled ${Math.round(longest)} ms`);
 });
 
-// A document that takes the worker a while: one field repeated, with arguments.
-const SLOW = `{ viewer { ${"repositories(first: 1) { totalCount } ".repeat(270)} } }`;
+// A document that takes the worker a while: one field repeated, with arguments, in a mutation
+// (a query skips the rule that takes the time).
+const SLOW = `mutation { addStar(input: { starrableId: "x" }) { starrable { ... on Repository {
+  owner { ${"repositories(first: 1) { totalCount } ".repeat(270)} } } } } }`;
 
 test("a document the worker can't validate in time is refused alone; the others go on", async (t) => {
   const validator = createValidator({ timeoutMs: 150 });

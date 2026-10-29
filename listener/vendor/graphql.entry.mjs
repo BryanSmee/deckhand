@@ -7,7 +7,9 @@ export {
   getOperationAST,
   getVariableValues,
   Kind,
+  OverlappingFieldsCanBeMergedRule,
   parse,
   print,
+  specifiedRules,
   validate,
 } from "graphql";
