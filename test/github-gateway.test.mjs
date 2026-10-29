@@ -486,7 +486,7 @@ test("a review can't read its thread's comments and reviews; other runs can", as
   assert.equal((await graphql(work.secret, "{ viewer { comments: login } }")).status, 200);
 });
 
-test("a REST write goes on only when its check passes; GraphQL's and git's aren't checked", async (t) => {
+test("a REST write goes on only when its check passes; GraphQL and git don't go through the REST check", async (t) => {
   const checked = [];
   const gw = await gateway(t, {
     checkWrite: async (run, write) => {

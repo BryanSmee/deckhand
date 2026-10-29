@@ -62,12 +62,14 @@ const COMMENTS = new Set([
 // What a set of fields makes of an issue's or a pull request's update, as REST's PATCH does
 // (github-writes.mjs patched()): a state first, then labels, assignees, the milestone, then
 // the rest.
+// A field sent as null counts as set: GraphQL tells it from one left out, and GitHub may read it
+// as clearing the field (REST's `"milestone" in body` does the same).
 function updated(input) {
   const actions = [];
-  if (input.state != null) actions.push(input.state === "CLOSED" ? "close" : "reopen");
-  if (input.labelIds != null) actions.push("label");
-  if (input.assigneeIds != null) actions.push("assign");
-  if (input.milestoneId != null) actions.push("milestone");
+  if ("state" in input) actions.push(input.state === "CLOSED" ? "close" : "reopen");
+  if ("labelIds" in input) actions.push("label");
+  if ("assigneeIds" in input) actions.push("assign");
+  if ("milestoneId" in input) actions.push("milestone");
   const rest = ["state", "labelIds", "assigneeIds", "milestoneId"];
   if (!actions.length || Object.keys(input).some((k) => !rest.includes(k))) actions.push("edit");
   return actions;
@@ -92,8 +94,8 @@ export const MUTATIONS = {
     fields: ["title", "body", "labelIds", "assigneeIds", "milestoneId"],
     actions: (input) => [
       "create",
-      ...(input.assigneeIds != null ? ["assign"] : []),
-      ...(input.milestoneId != null ? ["milestone"] : []),
+      ...("assigneeIds" in input ? ["assign"] : []),
+      ...("milestoneId" in input ? ["milestone"] : []),
     ],
     labels: { field: "labelIds", as: "added" },
   },
@@ -264,25 +266,10 @@ export function parseCall(body, schema = githubSchema()) {
   return { doc, op, variables, operationName, coerced: values.variableValues };
 }
 
-// The fields an operation selects at its root, through its fragments (spread or inline), each
-// once. Validation has ruled out cycles and fragments on other types.
+// The fields an operation selects at its root (selected()). Validation has ruled out cycles and
+// fragments on other types.
 export function rootFields(doc, op) {
-  const fragments = new Map(
-    doc.definitions
-      .filter((d) => d.kind === Kind.FRAGMENT_DEFINITION)
-      .map((d) => [d.name.value, d]),
-  );
-  const fields = [];
-  const walk = (set) => {
-    for (const node of set.selections) {
-      if (node.kind === Kind.FIELD) fields.push(node);
-      else if (node.kind === Kind.INLINE_FRAGMENT) walk(node.selectionSet);
-      else if (node.kind === Kind.FRAGMENT_SPREAD)
-        walk(fragments.get(node.name.value).selectionSet);
-    }
-  };
-  walk(op.selectionSet);
-  return fields;
+  return selected(doc, op.selectionSet);
 }
 
 // A mutation's root fields → [{ name, key, spec, input }], or { refused }: each one MUTATIONS
@@ -297,11 +284,14 @@ export function mutationFields({ doc, op, coerced }, schema = githubSchema()) {
     const spec = Object.hasOwn(MUTATIONS, name) ? MUTATIONS[name] : null;
     if (!spec) return { refused: refusal(403, `Deckhand doesn't let a run send ${name}`) };
     const { input = {} } = getArgumentValues(defs[name], field, coerced);
-    // Fields set to null are GitHub's "not set": only those with a value count.
-    const set = Object.fromEntries(
-      Object.entries(input ?? {}).filter(([k, v]) => v != null && k !== "clientMutationId"),
-    );
+    // The fields it sets, null ones too (updated()); an unknown one only refuses it with a
+    // value: null is the most it could do.
     const known = [spec.target, ...spec.fields];
+    const set = Object.fromEntries(
+      Object.entries(input ?? {}).filter(
+        ([k, v]) => k !== "clientMutationId" && (known.includes(k) || v != null),
+      ),
+    );
     const unknown = Object.keys(set).filter((k) => !known.includes(k));
     if (unknown.length) {
       return {
@@ -332,20 +322,27 @@ function idsOf(fields) {
 
 const repoOf = (node) => String(node?.nameWithOwner ?? node?.repository?.nameWithOwner ?? "");
 
-// The fields a selection set selects, through its fragments: each with its response key.
+// The fields a selection set selects, through its fragments (spread or inline), each node
+// once: a fragment is walked the first time it is spread only, since its fields are the same
+// nodes wherever it is spread again. Walking it each time would expand a small document
+// exponentially (fragments spreading each other ten times over), which validation doesn't
+// catch.
 function selected(doc, set) {
   const fragments = new Map(
     doc.definitions
       .filter((d) => d.kind === Kind.FRAGMENT_DEFINITION)
       .map((d) => [d.name.value, d]),
   );
+  const seen = new Set();
   const fields = [];
   const walk = (inner) => {
     for (const node of inner?.selections ?? []) {
       if (node.kind === Kind.FIELD) fields.push(node);
       else if (node.kind === Kind.INLINE_FRAGMENT) walk(node.selectionSet);
-      else if (node.kind === Kind.FRAGMENT_SPREAD)
+      else if (node.kind === Kind.FRAGMENT_SPREAD && !seen.has(node.name.value)) {
+        seen.add(node.name.value);
         walk(fragments.get(node.name.value)?.selectionSet);
+      }
     }
   };
   walk(set);
@@ -393,9 +390,10 @@ export function writeOf({ name, spec, input }, nodes, repo) {
   const { [spec.target]: _, ...set } = input;
   const actions = spec.actions(set);
   const change = { fields: Object.keys(set), labels_added: [], labels_removed: [] };
-  if (spec.labels && input[spec.labels.field]) {
+  // Labels set to null: none, so a `set` removes them all.
+  if (spec.labels && spec.labels.field in input) {
     const names = [];
-    for (const id of input[spec.labels.field]) {
+    for (const id of input[spec.labels.field] ?? []) {
       const label = nodes.get(id);
       if (label?.__typename !== "Label" || repoOf(label).toLowerCase() !== repo) {
         return { refused: refusal(403, `${name} names a label that isn't its repository's`) };

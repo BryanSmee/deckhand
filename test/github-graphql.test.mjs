@@ -237,6 +237,51 @@ test("gh issue create, comment and edit: classified from GitHub's nodes, checked
   assert.match(elsewhere.refused.message, /repositoryId isn't in the run's repository/);
 });
 
+test("fragments spreading each other many times over: each field once, quickly", async () => {
+  // M0 spreads M1 ten times, which spreads M2 ten times…: 10^9 spreads if walked each time.
+  const depth = 9;
+  const fragments = Array.from({ length: depth }, (_, i) =>
+    i === depth - 1
+      ? `fragment M${i} on Mutation { addComment(input: { subjectId: "I_1", body: "x" }) { clientMutationId } __typename }`
+      : `fragment M${i} on Mutation { ${`...M${i + 1} `.repeat(10)} }`,
+  ).join(" ");
+  const { check, writes, asked } = checks();
+  const start = performance.now();
+  const out = await check(run("work"), call(`mutation { ...M0 } ${fragments}`));
+  assert.ok(performance.now() - start < 1000);
+  assert.equal(out.write, true);
+  assert.equal(writes.length, 1);
+  assert.deepEqual(asked, [["org/repo", ["I_1"]]]);
+});
+
+test("a field sent as null counts as set: clearing labels, a milestone or assignees", async () => {
+  const { check, writes } = checks();
+  const edit = (input) => call(GH_EDIT, { input: { id: "I_1", ...input } });
+  // Above a brainstorm's ceiling on its own issue (edit, comment, link only).
+  for (const [input, action] of [
+    [{ milestoneId: null }, /can't milestone/],
+    [{ assigneeIds: null }, /can't assign/],
+    [{ labelIds: null }, /can't label/],
+  ]) {
+    assert.match((await check(run("brainstorm"), edit(input))).refused.message, action);
+  }
+  // A work run labels its issue: labels set to null remove them all.
+  assert.equal((await check(run("work"), edit({ labelIds: null }))).write, true);
+  assert.deepEqual(writes.at(-1).actions, ["label"]);
+  assert.deepEqual(writes.at(-1).change, {
+    fields: ["labelIds"],
+    labels_added: [],
+    labels_removed: [],
+    labels_set: true,
+  });
+  // A create with a null milestone sets one.
+  await check(
+    run("work"),
+    call(GH_CREATE, { input: { repositoryId: "R_repo", title: "T", milestoneId: null } }),
+  );
+  assert.deepEqual(writes.at(-1).actions, ["create", "milestone"]);
+});
+
 test("variables and inline IDs, aliases and fragments: each field is checked, one refusal refuses all", async () => {
   const { check, writes } = checks();
   const work = run("work");
