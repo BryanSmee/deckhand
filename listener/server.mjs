@@ -331,7 +331,6 @@ Object.assign(ctx, {
 // proxy, go on with a token for their run's repo that they never see, their writes redacted.
 const writeChecks = createWriteChecks({
   lookup: (repo, path) => getJson(github, repo, path, [404, 410]),
-  bot: () => config.bot,
   policies,
   log,
 });
@@ -352,6 +351,8 @@ ctx.githubGateway = createGithubGateway({
   // Their REST writes: within their mode's ceiling, and what the policies' `deny_github`
   // allows. Their targets are looked up with the listener's token.
   checkWrite: writeChecks.check,
+  // Their creates' answers: the issues each run created, for its links.
+  wroteWrite: writeChecks.answered,
   log,
 });
 // Their pushes, on the broker's port: to the run's own branches only, never the default one.

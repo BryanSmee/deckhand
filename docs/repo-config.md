@@ -861,19 +861,20 @@ tool sends it: `gh`, `gh api`, curl) is checked there, in this order:
 2. **Its target's kind is read from GitHub**, never from the request: whether it is the run's
    issue, a pull request (its own when it is the run's, or from a branch the run may push),
    a sub-issue of the run's issue (its parent on GitHub, in the same repository), an issue the
-   run created (by the App's bot, since the run started, however it was created: `gh issue
-create` is GraphQL).
+   run created (GitHub answered one of the run's own creates with it, over REST or GraphQL's
+   `createIssue`, as `gh issue create` sends, and it is no older than that call).
 3. **The mode's ceiling**, built into Deckhand: the most a run of that mode can ever write. A
    write above it is refused before any policy runs; no policy can allow more.
 4. **`deny_github`**, on the input below: the policies can only narrow the ceiling.
 
 A sub-issue link (`POST`, `DELETE` or reordering `…/issues/<parent>/sub_issues`) names two
 issues: the parent, its target, and the child, by its id: the child must be an issue the run
-created (found among the repository's newest issues, back to the run's start) or one already
-under the run's issue, and moving an issue from another parent (`replace_parent` with any
-value but `false`) is refused. A link can't take someone else's issue under the run's, where
-its ceiling would let it edit it. Another run of the App's that files an issue while this one
-runs is the only other author an issue "created by the run" could have.
+or one already under the run's issue, and moving an issue from another parent
+(`replace_parent` with any value but `false`) is refused. A link can't take someone else's
+issue under the run's, where its ceiling would let it edit it. The issues the App's bot files
+for other runs or for the listener (an analysis, an onboarding issue) aren't the run's, even
+while it runs: only the answers to its own calls say what it created, and they are saved with
+the run, so a listener restart keeps them.
 
 GraphQL writes (`gh issue comment`, `gh issue create` and most of `gh`'s own commands) aren't
 checked yet: they go on as the run's token allows, until issue #406 classifies them.
@@ -970,7 +971,8 @@ deny_github contains msg if {
 `deny_review` and `deny_fix` on the pull request as it is now, and `deny_github` on two
 sample writes (a comment on it by the work run whose pull request it is, and one by a
 brainstorm of another issue, `issue: null`), and replies with each rule's result (denies, with
-its messages, or allows) and the merge's input, in a collapsed block. Nothing is
+its messages, or allows), the merge's input and the samples' inputs, in collapsed blocks. The
+samples' results are labelled as such and aren't counted as denials. Nothing is
 reviewed, fixed or merged, and it is no decision: it debugs a rule without waiting for a pull
 request to turn ready. The task's page shows its last one: who asked, when, how many denials,
 and a link to the reply. The input is the merge's, read now, with `review: null` (no review

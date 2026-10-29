@@ -125,6 +125,8 @@ export function createRuns(ctx) {
         logDir: ctx.logDir,
       },
     );
+    // The issues it creates, as GitHub answers its calls (github-writes.mjs), saved with it.
+    const created = [];
     return {
       id,
       key,
@@ -140,7 +142,7 @@ export function createRuns(ctx) {
         mode,
         issue: task.number,
         base: task.base,
-        since: record.startedAt,
+        created,
       }),
       asked: replyTo, // where errors go
       replyTo, // where the reply goes: the issue or pull request of the last comment it took
@@ -158,6 +160,7 @@ export function createRuns(ctx) {
       engineIp: null,
       // What it may push (pushBranches()), once it starts.
       branches: [],
+      created,
       shots: null,
       lines: { out: 0, err: 0 }, // of its output read so far, so a restart skips them
       logPhase: null, // the part of the run its log is in (runlog.mjs PHASES, enterPhase())

@@ -29,6 +29,8 @@ import { sendJson } from "./web.mjs";
 
 // The largest write body read: GitHub's own limits for an issue or a comment are far below.
 export const MAX_WRITE = 16 * 1024 * 1024;
+// How much of a watched write's answer is read: an issue's JSON is far below.
+export const MAX_ANSWER = 1024 * 1024;
 // The redacted writes and refused calls a run's log notes, each once and only so many.
 export const MAX_NOTED = 20;
 
@@ -98,6 +100,16 @@ export function redactBody(body, secrets) {
   return out === text ? null : Buffer.from(out);
 }
 
+// Whether a GraphQL call's body (as text) may create an issue: names `createIssue`, as sent or
+// in its decoded JSON (an escaped character can't hide it).
+export function createsIssue(text) {
+  let query = "";
+  try {
+    query = JSON.stringify(JSON.parse(text));
+  } catch {}
+  return /createissue/i.test(text) || /createissue/i.test(query);
+}
+
 // Whether a GraphQL call's body (as text) reads a thread's comments or reviews.
 export function readsThread(text) {
   let query = "";
@@ -154,6 +166,10 @@ export function createGithubGateway({
   // (run, { method, path, body }) → null when a REST write may go on, else { status, message }
   // (github-writes.mjs createWriteChecks()). None: every REST write is refused.
   checkWrite = async () => ({ status: 403, message: "no write is checked here" }),
+  // (run, { method, path, body, graphql, at }, status, answer) → GitHub's answer to a write that
+  // went on and may create an issue (a REST write, a GraphQL `createIssue`), its bytes up to
+  // MAX_ANSWER, `at` when it was sent (github-writes.mjs answered(): the issues a run created).
+  wroteWrite = () => {},
   log = () => {},
   maxInFlight = MAX_IN_FLIGHT,
   maxWrite = MAX_WRITE,
@@ -282,7 +298,13 @@ export function createGithubGateway({
         );
         return fail(res, 403, "this write's URL holds a secret");
       }
+      // A write whose answer may say which issue it created: read as it goes on.
+      let watched = null;
+      if (write && where.api && isGraphql(where.path) && createsIssue(body.toString("utf8"))) {
+        watched = { method: req.method, path: where.path, body, graphql: true };
+      }
       if (write && where.api && !isGraphql(where.path)) {
+        watched = { method: req.method, path: where.path, body, graphql: false };
         // GitHub may read parameters from a query too, which the check never sees: no write it
         // classifies needs one.
         const refused = where.target.search
@@ -297,7 +319,7 @@ export function createGithubGateway({
           return fail(res, refused.status, refused.message);
         }
       }
-      await proxied(req, res, run, github, where, body);
+      await proxied(req, res, run, github, where, body, watched);
     } finally {
       inFlight.set(run, inFlight.get(run) - 1);
     }
@@ -370,7 +392,8 @@ export function createGithubGateway({
     return clean;
   }
 
-  async function proxied(req, res, run, github, { target, api }, body) {
+  // `watched`: a write whose answer goes to wroteWrite().
+  async function proxied(req, res, run, github, { target, api }, body, watched = null) {
     let token;
     try {
       ({ token } = await github.repoToken(run.repo, run.extra));
@@ -385,6 +408,17 @@ export function createGithubGateway({
       ? `token ${token}`
       : `Basic ${Buffer.from(`x-access-token:${token}`).toString("base64")}`;
     if (body !== undefined) headers["content-length"] = String(body.length);
+    // A watched write's answer is read as it goes on: uncompressed, and only so much of it.
+    let status = 0;
+    let answer = [];
+    let size = 0;
+    if (watched) headers["accept-encoding"] = "identity";
+    const tap = (chunk) => {
+      size += chunk.length;
+      if (size <= MAX_ANSWER) answer?.push(chunk);
+      else answer = null;
+    };
+    const at = Date.now();
     await forward(req, res, {
       target,
       headers,
@@ -394,7 +428,14 @@ export function createGithubGateway({
       what: "GitHub gateway",
       idleMs,
       clock,
+      ...(watched && { tap, answered: (code) => (status = code) }),
     });
+    if (!watched || !answer) return;
+    try {
+      wroteWrite(run, { ...watched, at }, status, Buffer.concat(answer));
+    } catch (error) {
+      log(`GitHub gateway: after ${clip(run, `${watched.method} ${target.pathname}`)}: ${error}`);
+    }
   }
 
   return { handle };

@@ -633,7 +633,8 @@ test("/mode policy: every rule on the pull request now, nothing reviewed, fixed 
   });
   const s = setup(t, { policies: policy.engine, pr: { additions: 12 } });
   const { text, denials } = await s.reviews.dryRun({ repo: "org/repo", base: "main", number: 5 });
-  assert.equal(denials, 2);
+  // The brainstorm sample's denial is no decision: not counted.
+  assert.equal(denials, 1);
   assert.match(
     text,
     /^\*\*Policy dry run\*\* on #5 at sha-1: nothing was reviewed, fixed or merged\./,
@@ -646,14 +647,26 @@ test("/mode policy: every rule on the pull request now, nothing reviewed, fixed 
   // brainstorm.
   assert.match(
     text,
-    /- `deny_github` \(a work run's comment on its pull request\): allows \(no file defines it\)/,
+    /- `deny_github` \(sample: a work run's comment on its pull request\): allows \(no file defines it\)/,
   );
   assert.match(
     text,
-    /- `deny_github` \(a brainstorm's comment on it\): \*\*denies\*\*: `not on pull requests`/,
+    /- `deny_github` \(sample: a brainstorm's comment on it\): \*\*denies\*\*: `not on pull requests`/,
   );
+  assert.match(text, /sample writes, not decisions on this pull request/);
   assert.match(text, /<details><summary>The input/);
-  const json = JSON.parse(/```json\n([\s\S]*)\n```/.exec(text)[1]);
+  const [json, samples] = [...text.matchAll(/```json\n([\s\S]*?)\n```/g)].map((m) =>
+    JSON.parse(m[1]),
+  );
+  // The samples' inputs, in a block of their own.
+  assert.match(text, /<details><summary>The `deny_github` samples' inputs/);
+  assert.deepEqual(
+    samples.map((x) => [x.sample, x.input.version, x.input.mode, x.input.target.kind]),
+    [
+      ["a work run's comment on its pull request", 1, "work", "own_pr"],
+      ["a brainstorm's comment on it", 1, "brainstorm", "pr"],
+    ],
+  );
   assert.equal(json.version, 1);
   assert.equal(json.decision, "merge");
   assert.equal(json.pr.additions, 12);

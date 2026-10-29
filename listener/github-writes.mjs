@@ -7,15 +7,15 @@
 //
 // Kinds: `own_issue` (the run's issue), `own_pr` (the run's pull request, or one from a branch
 // it may push: broker.mjs allow()), `sub_issue` (an issue whose parent is the run's, in its
-// repo), `created_issue` (one this run created: by the App's bot, since the run started, as
-// GitHub says, however it was created: `gh issue create` is GraphQL),
+// repo), `created_issue` (one this run created: GitHub answered the run's own create with it,
+// over REST or GraphQL, as `gh issue create` sends: answered()),
 // `other_issue`, `pr`, `new_issue` (an issue it creates), `label` (a label of the repo it
 // creates), and `new_pr`, `comment`, `review` for writes no ceiling allows anyway.
 //
 // A sub-issue link names two issues: its target is the parent, in the path, and the child, by
 // its id in the body, must be one the run created or one already under the run's issue (a
-// REST issue can't be looked up by its id: the repo's newest issues and the run's issue's
-// sub-issues carry theirs). Moving an issue from another parent (`replace_parent`, any value
+// REST issue can't be looked up by its id: the run's issue's sub-issues and the issues it
+// created carry theirs). Moving an issue from another parent (`replace_parent`, any value
 // but false) is in no ceiling: a link would otherwise take any issue under the run's.
 // Format of the policies' input: ../docs/repo-config.md#the-github-input.
 import { branchAllowed } from "./broker.mjs";
@@ -247,21 +247,22 @@ function anyKindHolds(ceiling, actions) {
   return Object.values(ceiling).some((allowed) => actions.every((a) => allowed.includes(a)));
 }
 
-// How many pages of the repo's newest issues a link's child is looked for in: they go back to
-// the run's start, so a busy repo's are all there.
-const MAX_PAGES = 5;
+// The issues a run created that a link's child is looked for among: a run files a few.
+const MAX_CREATED = 100;
+// How much earlier than the call that created it GitHub may say an issue was created: the
+// listener's and GitHub's clocks differ, and `created_at` is in seconds.
+const SKEW_MS = 2 * 60_000;
 
 // `lookup(repo, path)`: GitHub's JSON with the listener's token, null for a 404 (github.mjs
-// getJson()); `bot()`: the App's login (`slug[bot]`), null before /setup; `policies`:
-// policies.mjs's, null without; `log`: the listener's.
-export function createWriteChecks({ lookup, bot = () => null, policies = null, log = () => {} }) {
-  // Whether GitHub's issue is one `run` created: by the App's bot, since the run started.
-  // Another run of the App's that created one meanwhile is the only other author it could be.
+// getJson()); `policies`: policies.mjs's, null without; `log`: the listener's.
+export function createWriteChecks({ lookup, policies = null, log = () => {} }) {
+  // Whether GitHub's issue is one `run` created: GitHub answered one of the run's own calls
+  // with it (answered()), and it is no older than that call. The App's bot files issues for
+  // every run and for the listener: its authorship alone says nothing.
   function created(run, issue) {
-    const login = bot();
-    if (!login || !Number.isFinite(run.since)) return false;
-    if (String(issue?.user?.login ?? "").toLowerCase() !== login.toLowerCase()) return false;
-    return Date.parse(issue.created_at) >= run.since && !issue.pull_request;
+    if (issue?.pull_request) return false;
+    const made = (run.created ?? []).find((c) => c.number === issue?.number);
+    return !!made && Date.parse(issue.created_at) >= made.at - SKEW_MS;
   }
 
   // The target's kind, number, labels and author, from GitHub. Null when it isn't there.
@@ -290,31 +291,47 @@ export function createWriteChecks({ lookup, bot = () => null, policies = null, l
   }
 
   // A link's child → { id, number, kind }: `sub_issue` when it is already under the run's issue
-  // (its sub-issues list them with their ids), `created_issue` when the run created it (among
-  // the repo's newest issues, back to the run's start), else `other_issue`.
+  // (its sub-issues list them with their ids), `created_issue` when the run created it (the
+  // issues it created, looked up: their ids are GitHub's), else `other_issue`.
   async function resolveChild(run, repo, { id }) {
     if (run.issue != null) {
       const subs = await lookup(repo, `/repos/${repo}/issues/${run.issue}/sub_issues?per_page=100`);
       const found = Array.isArray(subs) ? subs.find((i) => i?.id === id) : null;
       if (found) return { id, number: found.number ?? null, kind: "sub_issue" };
     }
-    if (bot() && Number.isFinite(run.since)) {
-      for (let page = 1; page <= MAX_PAGES; page++) {
-        const issues = await lookup(
-          repo,
-          `/repos/${repo}/issues?state=all&sort=created&direction=desc&per_page=100&page=${page}`,
-        );
-        if (!Array.isArray(issues) || !issues.length) break;
-        const found = issues.find((i) => i?.id === id);
-        if (found) {
-          const kind = created(run, found) ? "created_issue" : "other_issue";
-          return { id, number: found.number ?? null, kind };
-        }
-        // Older than the run: none further on is its own.
-        if (Date.parse(issues.at(-1)?.created_at) < run.since) break;
-      }
+    for (const { number } of (run.created ?? []).slice(-MAX_CREATED)) {
+      const issue = await lookup(repo, `/repos/${repo}/issues/${number}`);
+      if (issue?.id === id && created(run, issue)) return { id, number, kind: "created_issue" };
     }
     return { id, number: null, kind: "other_issue" };
+  }
+
+  // GitHub's answer to a run's write that went on (github-gateway.mjs wroteWrite()): the issue
+  // it created, from a REST create (201, its JSON) or a GraphQL `createIssue` (what `gh issue
+  // create` sends: `data.createIssue.issue`, by its URL or number), in the run's repo, is kept
+  // on the run (`run.created`, saved with it: restart.mjs), with when the call was sent.
+  function answered(run, { method, path, body, graphql, at }, status, answer) {
+    let json;
+    try {
+      json = JSON.parse(answer.toString("utf8"));
+    } catch {
+      return;
+    }
+    let issue;
+    if (graphql) {
+      if (status !== 200) return;
+      issue = json?.data?.createIssue?.issue;
+    } else {
+      const write = classify(method, path, body);
+      if (status !== 201 || write?.target?.kind !== "new_issue" || write.repo !== run.repo) return;
+      if (!inRepo(json, run.repo)) return;
+      issue = json;
+    }
+    const number = numberOf(issue, run.repo);
+    if (number === null || !Array.isArray(run.created)) return;
+    if (run.created.some((c) => c.number === number)) return;
+    run.created.push({ number, at });
+    run.createdChanged?.();
   }
 
   // A run's write → null when it may go on, else { status, message }: GitHub's status and why,
@@ -392,7 +409,17 @@ export function createWriteChecks({ lookup, bot = () => null, policies = null, l
     return refusal(403, `the policies refuse it (deny_github): ${messages.join("; ")}`);
   }
 
-  return { check };
+  return { check, answered };
+}
+
+// An issue of GitHub's answer → its number, when it is in `repo`: its `url` (GraphQL's is the
+// web page, REST's the API's) says which repository it is in; a bare number only with REST's
+// `repository_url` checked by the caller.
+function numberOf(issue, repo) {
+  const url = String(issue?.url ?? issue?.html_url ?? "");
+  const m = /\/(?:repos\/)?([^/]+\/[^/]+)\/issues\/(\d+)$/.exec(url);
+  if (m) return m[1].toLowerCase() === repo ? Number(m[2]) : null;
+  return null;
 }
 
 // The children a link may name (resolveChild()).

@@ -23,7 +23,14 @@ const OPERATOR = "operator-key-0123456789abcdef";
 // gateway's own default.
 async function gateway(
   t,
-  { sentFrom = sandboxAt(), app = true, maxInFlight, hold, checkWrite = async () => null } = {},
+  {
+    sentFrom = sandboxAt(),
+    app = true,
+    maxInFlight,
+    hold,
+    checkWrite = async () => null,
+    wroteWrite,
+  } = {},
 ) {
   const calls = [];
   const github = await serve(t, (req, res) => {
@@ -54,6 +61,7 @@ async function gateway(
     log: (line) => logged.push(line),
     maxInFlight,
     ...(checkWrite && { checkWrite }),
+    ...(wroteWrite && { wroteWrite }),
   });
   const { url } = await serve(t, (req, res) => gw.handle(req, res));
   // A run, its log's notes beside it.
@@ -549,6 +557,63 @@ test("a REST write with a query string is refused unchecked: GitHub may read it"
   await gw.call("/api/graphql?x=1", { secret, method: "POST", body: '{"query": "{ a }"}' });
   await gw.call("/api/v3/repos/org/repo/issues?state=open", { secret });
   assert.equal(gw.calls.length, 2);
+});
+
+test("the answers of REST writes and GraphQL createIssue calls go to wroteWrite, uncompressed", async (t) => {
+  const wrote = [];
+  const gw = await gateway(t, {
+    wroteWrite: (run, write, status, answer) =>
+      wrote.push([run, write.method, write.path, write.graphql, status, answer.toString()]),
+  });
+  const { secret, run } = gw.register(undefined, { mode: "work", push: true, issue: 1 });
+  const gzip = { "accept-encoding": "gzip" };
+  await gw.call("/api/v3/repos/org/repo/issues", {
+    secret,
+    method: "POST",
+    body: '{"title": "T"}',
+    headers: gzip,
+  });
+  // `gh issue create`'s mutation, and one escaped in its JSON.
+  const mutation = "mutation { createIssue(input: {}) { issue { url } } }";
+  await gw.call("/api/graphql", {
+    secret,
+    method: "POST",
+    body: JSON.stringify({ query: mutation }),
+    headers: gzip,
+  });
+  await gw.call("/api/graphql", {
+    secret,
+    method: "POST",
+    body: '{"query": "mutation { \\u0063reateIssue(input: {}) { issue { url } } }"}',
+    headers: gzip,
+  });
+  // Neither a read nor another GraphQL call: their answers aren't read, nor their encoding set.
+  await gw.call("/api/v3/repos/org/repo", { secret, headers: gzip });
+  await gw.call("/api/graphql", {
+    secret,
+    method: "POST",
+    body: '{"query": "{ viewer { login } }"}',
+    headers: gzip,
+  });
+  assert.deepEqual(
+    gw.calls.map((c) => c.headers["accept-encoding"]),
+    ["identity", "identity", "identity", "gzip", "gzip"],
+  );
+  assert.deepEqual(
+    wrote.map(([r, ...rest]) => [r === run, ...rest]),
+    [
+      [
+        true,
+        "POST",
+        "repos/org/repo/issues",
+        false,
+        200,
+        '{"url":"/api/v3/repos/org/repo/issues"}',
+      ],
+      [true, "POST", "api/graphql", true, 200, '{"url":"/api/graphql"}'],
+      [true, "POST", "api/graphql", true, 200, '{"url":"/api/graphql"}'],
+    ],
+  );
 });
 
 test("without a write check, every REST write is refused", async (t) => {

@@ -81,6 +81,44 @@ test("a restored run's pushes go on its record, saved with it", async (t) => {
   assert.deepEqual([saved.record.branch, saved.record.lastPushAt], ["issue-1-x", 1234]);
 });
 
+test("a restored run keeps the issues it created, and saves those it creates next", async (t) => {
+  const dir = tempDir(t);
+  const broker = createBroker({});
+  const ctx = {
+    config: { dataDir: dir },
+    log: () => {},
+    tasks: new Map(),
+    logDir: dir,
+    runs: [],
+    runsById: new Map(),
+    runner: { closed: () => false },
+    broker,
+    running: 0,
+  };
+  const secret = saveRun(dir, "r1", 1, { agent: "claude" });
+  const saved = JSON.parse(readFileSync(join(dir, "r1.live.json"), "utf8"));
+  writeFileSync(
+    join(dir, "r1.live.json"),
+    JSON.stringify({ ...saved, created: [{ number: 30, at: 5 }] }),
+  );
+  // Saved before runs kept them: none.
+  const old = saveRun(dir, "r2", 2, { agent: "claude" });
+  createRestart(ctx).restoreRuns();
+  const run = broker.runOf(secret);
+  assert.deepEqual(run.created, [{ number: 30, at: 5 }]);
+  assert.deepEqual(broker.runOf(old).created, []);
+  // What github-writes.mjs answered() does for the next one: the live state's own list.
+  run.created.push({ number: 31, at: 6 });
+  run.createdChanged();
+  const task = [...ctx.tasks.values()].find((t) => t.live.secret === secret);
+  await task.live.saving;
+  const again = JSON.parse(readFileSync(join(dir, "r1.live.json"), "utf8"));
+  assert.deepEqual(again.created, [
+    { number: 30, at: 5 },
+    { number: 31, at: 6 },
+  ]);
+});
+
 // A data dir whose runs, run going and queue have one repo under two spellings: `live` the
 // running one's, `newest` the last finished run's.
 function twoSpellings(t, { live, newest }) {

@@ -141,8 +141,8 @@ Skip screenshots for changes with nothing visible (API, tests, tooling).
   repository to each call (you never hold it): no `gh auth login`, no SSH. It covers this
   repository only. Deckhand replaces any secret in what you write to GitHub yourself (a
   comment, an issue edit, a `gh api` call) with `[redacted]`. It also refuses writes beyond
-  what this kind of run may do (a work run writes only its own issue, its pull requests and
-  its issue's sub-issues): a refusal starts with `Deckhand:` and says why; don't look for a
+  what this kind of run may do (a work run writes only its own issue, its pull requests, its
+  issue's sub-issues and the issues it created): a refusal starts with `Deckhand:` and says why; don't look for a
   way around it.
 - Commits and comments come from the GitHub App's bot; the git identity is already set.
 - Pushes go through Deckhand, which only lets this task's branch through (the issue's
