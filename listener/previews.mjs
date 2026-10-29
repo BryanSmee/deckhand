@@ -16,6 +16,9 @@ import { CONFIG_FILE } from "./repo-config.mjs";
 
 export const MAX_WAITING = 3;
 
+// What a runner without preview containers (runner/jobs.mjs preview) says.
+const refusal = (config) => `the ${config.runner} runner runs no preview hooks`;
+
 // What a newer event replaces: the same pull request's, or the same workflow run's.
 function subject(event, payload) {
   const id = event === "workflow_run" ? payload.workflow_run?.id : payload.pull_request?.number;
@@ -90,7 +93,7 @@ export function createPreviews({
     let dir = null;
     let timer = null;
     try {
-      if (!containers) throw new Error(`the ${config.runner} runner runs no preview hooks`);
+      if (!containers) throw new Error(refusal(config));
       dir = await checkout(repo, ref);
       await containers.create({
         name,
@@ -123,7 +126,8 @@ export function createPreviews({
     return [...hooks].map(([name, h]) => ({ name, ...h }));
   }
 
-  return { run, status };
+  // Whether the runner can run hooks at all: previewHook() asks before it builds or queues one.
+  return { run, status, runs: Boolean(containers) };
 }
 
 // A delivery's preview hook (events.mjs previewEvent()), run when the repo's config has one
@@ -134,6 +138,10 @@ export async function previewHook(ctx, { repo, base, event }, payload) {
   const { settings, errors } = await ctx.repoSettings(repo, base);
   if (errors.length) return skip(`${event}: ${CONFIG_FILE} of ${repo} has errors`);
   if (!settings.preview) return skip(`${event}: ${repo} has no preview hook`);
+  // Before the image's build and the queue: neither helps a runner that can't run it.
+  if (!ctx.previews.runs) {
+    return skip(`${event}: preview hook of ${repo} not run: ${refusal(config)}`);
+  }
   // Root on the host: only when the operator's grants say so (grants.mjs).
   let grant;
   try {

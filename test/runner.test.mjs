@@ -14,8 +14,11 @@ import {
   LINE_CUT,
   MAX_LINE,
 } from "../listener/runner/docker.mjs";
+import { SANDBOX_USER } from "../listener/sandbox-spec.mjs";
 import { overlaps, parseCidr } from "../listener/subnets.mjs";
 import { tempDir } from "./helpers.mjs";
+
+const SPEC = { user: SANDBOX_USER, limits: { cpus: "1", memory: "1g", pids: 256 } };
 
 const config = {
   prefix: "dh",
@@ -211,13 +214,15 @@ function runner({
     return fake.docker(args);
   };
   const inboxDir = tempDir(null, "deckhand-runs-");
-  const r = createDockerRunner({
+  const runner = createDockerRunner({
     config: { ...config, engine, subnets: subnets ?? null },
     docker,
     spawn,
     inboxDir,
     now,
   });
+  // A sandbox spec always has its user and limits (sandbox-spec.mjs): these tests give the rest.
+  const r = { ...runner, start: (spec) => runner.start({ ...SPEC, ...spec }) };
   return { r, calls, inboxDir, ...fake };
 }
 
@@ -351,6 +356,18 @@ test("start: a sandbox that doesn't start leaves no network", async () => {
   const { r, nets } = runner({ answers: { run: { code: 125, out: "", err: "no such image" } } });
   await assert.rejects(r.start({ run: "dh-a-1", name: "dh-a", image: "i" }), /no such image/);
   assert.equal(nets.has("dh-a-1"), false);
+});
+
+test("start: a spec without its user or limits starts nothing, not even its network", async () => {
+  const { r, calls, nets } = runner();
+  for (const missing of [{ user: undefined }, { limits: undefined }]) {
+    await assert.rejects(
+      r.start({ run: "dh-a-1", name: "dh-a", image: "i", ...missing }),
+      /the sandbox spec has no (user|limits)/,
+    );
+  }
+  assert.equal(nets.has("dh-a-1"), false);
+  assert.ok(!calls.some((c) => ["run", "network"].includes(c.args[0])));
 });
 
 test("start: without the proxy's container, no run", async () => {

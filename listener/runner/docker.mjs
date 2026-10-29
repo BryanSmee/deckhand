@@ -33,7 +33,6 @@ import { agentFor } from "../agents/index.mjs";
 import {
   checked,
   envArgs,
-  hardening,
   hardeningArgs,
   labelArgs,
   mountArgs,
@@ -100,11 +99,14 @@ const ROOM = MAX_LINE + (Math.ceil(MAX_LINE / PART) + 1) * STAMP_MAX;
 
 // A sandbox spec's user, hardening, limits and volumes (sandbox-spec.mjs) as `docker run`
 // options: a volume's folder (`subpath`) and a host path through --mount, the others -v.
-// Hardened whatever the spec leaves out.
+// Fail closed: a spec without its user or limits starts nothing, rather than a sandbox as the
+// image's user (root, for some) or without the operator's limits.
 export function sandboxArgs({ user, limits, caps = [], volumes = [] }) {
+  if (!user) throw new Error("the sandbox spec has no user");
+  if (!limits) throw new Error("the sandbox spec has no limits");
   return [
-    ...(user ? ["--user", userArg(user)] : []),
-    ...(limits ? hardeningArgs(limits, caps) : hardening(...caps)),
+    ...["--user", userArg(user)],
+    ...hardeningArgs(limits, caps),
     ...volumes.flatMap((v) => {
       if (v.kind === "mount") {
         return mountArgs([{ source: v.name, target: v.path, readOnly: v.readOnly }]);

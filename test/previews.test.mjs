@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { previewEvent } from "../listener/events.mjs";
-import { createPreviews, MAX_WAITING } from "../listener/previews.mjs";
+import { createPreviews, MAX_WAITING, previewHook } from "../listener/previews.mjs";
 import { createDockerJobs } from "../listener/runner/jobs.mjs";
 import { tempDir, testConfig } from "./helpers.mjs";
 
@@ -177,4 +177,22 @@ test("a runner without preview containers refuses the hook: nothing runs", async
   assert.equal(code, null);
   assert.equal(checkouts, 0);
   assert.match(logs.join("\n"), /the docker runner runs no preview hooks/);
+});
+
+test("previewHook: a runner without preview containers skips it before any image or queue", async () => {
+  const skipped = [];
+  const ctx = {
+    config: { ...config, runner: "other" },
+    skip: (why) => skipped.push(why),
+    repoSettings: async () => ({
+      settings: { preview: { command: "./preview.sh" }, dockerfile: "Dockerfile" },
+      errors: [],
+    }),
+    images: { imageFor: async () => assert.fail("no image for a hook that can't run") },
+    previews: { runs: false, run: async () => assert.fail("not queued") },
+  };
+  await previewHook(ctx, { repo: "org/a", base: "trunk", event: "pull_request" }, {});
+  assert.deepEqual(skipped, [
+    "pull_request: preview hook of org/a not run: the other runner runs no preview hooks",
+  ]);
 });

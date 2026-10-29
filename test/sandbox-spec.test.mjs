@@ -213,11 +213,11 @@ test("createBackend: Docker's runner, images and jobs; another runner is refused
   );
 });
 
-test("sandboxArgs: a spec without a user or limits is still hardened", () => {
-  assert.deepEqual(sandboxArgs({ volumes: [] }), [
-    "--cap-drop",
-    "ALL",
-    "--security-opt",
-    "no-new-privileges",
-  ]);
+// Fail closed: never a sandbox as the image's user, or without the operator's limits.
+test("sandboxArgs: a spec without a user or limits is refused", () => {
+  assert.throws(() => sandboxArgs({ limits, volumes: [] }), /the sandbox spec has no user/);
+  assert.throws(
+    () => sandboxArgs({ user: SANDBOX_USER, volumes: [] }),
+    /the sandbox spec has no limits/,
+  );
 });
