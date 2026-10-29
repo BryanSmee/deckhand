@@ -121,7 +121,7 @@ export function createPreparation(ctx) {
       instructions: null,
       access,
       engine: null,
-      prepared: { image: config.image, cacheArgs: [], settings },
+      prepared: { image: config.image, caches: [], settings },
       ca,
       digest: await threadDigest(task, note),
     };
@@ -250,11 +250,11 @@ export function createPreparation(ctx) {
       // came from a fork's pull request: its code would write into what every later run uses.
       if (task.live.fork && !task.live.light && settings.caches?.length)
         note("No caches: a pull request from a fork");
-      const cacheArgs =
+      const caches =
         task.live.light || task.live.fork
           ? []
           : await ctx.images.caches(task.repo, settings.caches, image);
-      return { image, cacheArgs, settings };
+      return { image, caches, settings };
     } catch (error) {
       // What a failed build printed last (flushing again writes nothing).
       build.flush();

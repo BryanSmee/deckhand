@@ -1,5 +1,5 @@
-// The docker CLI, the listener's only way to the host's Docker. Injected into the modules
-// that use it (images.mjs, previews.mjs), so their tests play Docker instead.
+// The docker CLI, the listener's only way to the host's Docker. Injected into the Docker
+// runner (runner/index.mjs) and its parts, so their tests play Docker instead.
 import { spawn } from "node:child_process";
 
 // Resolves with { code, out, err } (trimmed). `input`: written to stdin, then closed.
@@ -25,7 +25,7 @@ export function docker(args, { input, onData, env } = {}) {
 }
 
 // No capabilities but `caps`, no privilege gain through setuid binaries: every container
-// Deckhand starts but the engine sidecar (runner/engine.mjs) and preview hooks (previews.mjs).
+// Deckhand starts but the engine sidecar (runner/engine.mjs) and preview hooks (runner/jobs.mjs).
 export function hardening(...caps) {
   return [
     ...["--cap-drop", "ALL"],
@@ -61,4 +61,32 @@ export async function volumeExists(docker, name) {
 // A volume that may be missing.
 export async function removeVolume(docker, name) {
   if (await volumeExists(docker, name)) await docker(["volume", "rm", name]);
+}
+
+// Host paths ({ source, target, readOnly }, grants.mjs resolveMounts()) as bind mounts.
+export function mountArgs(mounts) {
+  return mounts.flatMap(({ source, target, readOnly }) => [
+    "--mount",
+    `type=bind,src=${source},dst=${target}${readOnly ? ",readonly" : ""}`,
+  ]);
+}
+
+// Volumes ({ name, path, readOnly }) as -v options.
+export function volumeArgs(volumes) {
+  return volumes.flatMap((v) => ["-v", `${v.name}:${v.path}${v.readOnly ? ":ro" : ""}`]);
+}
+
+// { NAME: value } → ["-e", "NAME=value"]: values on the command line, so never secrets.
+export function envArgs(env) {
+  return Object.entries(env).flatMap(([name, value]) => ["-e", `${name}=${value}`]);
+}
+
+// No capabilities but `caps`, no privilege gain through setuid binaries, and the repo's limits.
+export function hardeningArgs(limits, caps = []) {
+  return [...hardening(...caps), ...limitArgs(limits)];
+}
+
+// { uid, gid } → "1000:1000"; without a gid, the uid alone ("0").
+export function userArg({ uid, gid }) {
+  return gid === undefined ? String(uid) : `${uid}:${gid}`;
 }

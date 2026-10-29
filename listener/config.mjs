@@ -89,6 +89,9 @@ const AGY_DEFAULT_SHA256 =
   "x64:fd96967583c1eed94733c039638fa59b71ddbd823c75ebc8dd0e677463565aad," +
   "arm64:cf953adcc69f87d00d71f97c3f35dc723a8669a350accf9a199df781f0523f56";
 
+// The runners there is a backend for (runner/index.mjs).
+const RUNNERS = ["docker"];
+
 // The operator's settings, by environment variable (in lowercase, its config.yaml key), in the
 // order they are read: a default can use the ones before it. Each one has
 // - type: the YAML config.yaml takes (FILE_SETTINGS): scalar unless it says list or boolean;
@@ -156,6 +159,8 @@ export const SETTINGS = {
   SANDBOX_FAST_MODE: { default: false, parse: fastModeSetting },
   BRAINSTORM_IDLE_MINUTES: { default: 10, parse: whole("a whole number of minutes") },
   MAX_PARALLEL: { default: 2, parse: whole("a whole number of sandboxes") },
+  // Where sandboxes run (runner/index.mjs): Docker, the only backend so far.
+  RUNNER: { default: "docker", parse: runnerSetting },
   // The container engine sidecar of runs whose repo is granted allow_docker
   // (runner/engine.mjs); none until the operator picks one.
   SANDBOX_ENGINE: { default: null, parse: engineSetting },
@@ -410,6 +415,7 @@ function sandboxConfig(env, s) {
     agySha256: s.AGY_SHA256,
     // Where the listener refreshes the plan's login with `agy` itself (antigravity-login.mjs).
     agyLoginVolume: `${s.AGY_VOLUME}-login`,
+    runner: s.RUNNER,
     maxParallel: s.MAX_PARALLEL,
     subnets: s.SANDBOX_SUBNETS,
     // Per sandbox, under the grants folder's: default.yaml's limits, then a repo's own.
@@ -547,6 +553,16 @@ function fastModeSetting(text, { label }) {
   if (value === "allowed") return true;
   if (["", "off"].includes(value)) return false;
   throw new ConfigError(`${label}: expected allowed or off, got ${text}`);
+}
+
+// RUNNER: docker, or nothing (docker). Another name stops the listener: falling back to
+// Docker would start sandboxes where the operator didn't ask for them.
+function runnerSetting(text, { label }) {
+  const runner = text.trim().toLowerCase();
+  if (!runner || RUNNERS.includes(runner)) return runner || "docker";
+  throw new ConfigError(
+    `${label}: expected ${RUNNERS.join(", ")} (the only runner so far), got ${text}`,
+  );
 }
 
 function engineSetting(text, { label }) {

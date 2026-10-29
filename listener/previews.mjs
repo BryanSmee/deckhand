@@ -11,11 +11,13 @@
 // waits for it. A hook that starts something long-lived should run until it is done.
 import { createWriteStream, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { labelArgs } from "./docker.mjs";
 import { grantFor, loadGrants, ungranted } from "./grants.mjs";
 import { CONFIG_FILE } from "./repo-config.mjs";
 
 export const MAX_WAITING = 3;
+
+// What a runner without preview containers (runner/jobs.mjs preview) says.
+const refusal = (config) => `the ${config.runner} runner runs no preview hooks`;
 
 // What a newer event replaces: the same pull request's, or the same workflow run's.
 function subject(event, payload) {
@@ -25,7 +27,7 @@ function subject(event, payload) {
 
 export function createPreviews({
   config,
-  docker, // docker.mjs
+  containers, // the runner's preview containers (runner/jobs.mjs preview), or none: it runs none
   checkout, // (repo, ref) → folder (checkout.mjs)
   logDir,
   log = () => {},
@@ -91,41 +93,24 @@ export function createPreviews({
     let dir = null;
     let timer = null;
     try {
+      if (!containers) throw new Error(refusal(config));
       dir = await checkout(repo, ref);
-      const created = await docker([
-        "create",
-        "-i",
-        "--name",
+      await containers.create({
         name,
-        ...labelArgs({ "deckhand.preview": repo.toLowerCase() }),
-        // Root: the socket belongs to root, and whoever holds it is root on the host anyway.
-        "--user",
-        "0",
-        "-v",
-        `${config.dockerSocket}:/var/run/docker.sock`,
-        "-e",
-        `GITHUB_EVENT_NAME=${event}`,
-        "-e",
-        `DECKHAND_REPO=${repo}`,
-        "--entrypoint",
-        "sh",
+        repo,
         image,
-        "-c",
-        'cd /deckhand-checkout && exec sh -c "$1"',
-        "preview",
-        hook.command,
-      ]);
-      if (created.code !== 0) throw new Error(`creating its container: ${created.err}`);
-      const copied = await docker(["cp", dir, `${name}:/deckhand-checkout`]);
-      if (copied.code !== 0) throw new Error(`copying the checkout: ${copied.err}`);
+        env: { GITHUB_EVENT_NAME: event, DECKHAND_REPO: repo },
+        command: hook.command,
+      });
+      await containers.copy(name, dir);
       log(`${repo}: preview hook for ${event} ${payload.action ?? ""} (${name})`);
       timer = setTimeout(() => {
         log(`${repo}: preview hook ${name} timed out after ${hook.timeoutMinutes} min`);
-        docker(["kill", name]);
+        containers.kill(name);
       }, hook.timeoutMinutes * 60000);
-      const { code } = await docker(["start", "-ai", name], {
+      const code = await containers.start(name, {
         input: JSON.stringify(payload),
-        onData: (d) => logFile.write(d),
+        output: (d) => logFile.write(d),
       });
       log(`${repo}: preview hook ${name} exited with ${code}`);
       return code;
@@ -133,7 +118,7 @@ export function createPreviews({
       clearTimeout(timer);
       logFile.end();
       if (dir) rmSync(dir, { recursive: true, force: true });
-      await docker(["rm", "-f", name]);
+      if (containers) await containers.remove(name);
     }
   }
 
@@ -141,7 +126,8 @@ export function createPreviews({
     return [...hooks].map(([name, h]) => ({ name, ...h }));
   }
 
-  return { run, status };
+  // Whether the runner can run hooks at all: previewHook() asks before it builds or queues one.
+  return { run, status, runs: Boolean(containers) };
 }
 
 // A delivery's preview hook (events.mjs previewEvent()), run when the repo's config has one
@@ -152,6 +138,10 @@ export async function previewHook(ctx, { repo, base, event }, payload) {
   const { settings, errors } = await ctx.repoSettings(repo, base);
   if (errors.length) return skip(`${event}: ${CONFIG_FILE} of ${repo} has errors`);
   if (!settings.preview) return skip(`${event}: ${repo} has no preview hook`);
+  // Before the image's build and the queue: neither helps a runner that can't run it.
+  if (!ctx.previews.runs) {
+    return skip(`${event}: preview hook of ${repo} not run: ${refusal(config)}`);
+  }
   // Root on the host: only when the operator's grants say so (grants.mjs).
   let grant;
   try {

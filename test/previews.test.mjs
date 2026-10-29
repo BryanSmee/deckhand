@@ -3,7 +3,8 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { previewEvent } from "../listener/events.mjs";
-import { createPreviews, MAX_WAITING } from "../listener/previews.mjs";
+import { createPreviews, MAX_WAITING, previewHook } from "../listener/previews.mjs";
+import { createDockerJobs } from "../listener/runner/jobs.mjs";
 import { tempDir, testConfig } from "./helpers.mjs";
 
 const config = testConfig({ ALLOWED_USERS: "a", DOCKER_SOCKET: "/run/docker.sock" });
@@ -27,7 +28,7 @@ function setup() {
   const logDir = tempDir(null, "deckhand-previews-");
   const previews = createPreviews({
     config,
-    docker,
+    containers: createDockerJobs({ config, docker }).preview,
     checkout: async () => tempDir(null, "deckhand-ctx-"),
     logDir,
   });
@@ -153,4 +154,45 @@ test("a repo's waiting hooks are capped, and a newer event replaces its pull req
   );
   assert.equal(calls.filter((c) => c[0] === "start").length, 5);
   assert.deepEqual(previews.status(), []);
+});
+
+test("a runner without preview containers refuses the hook: nothing runs", async () => {
+  const logs = [];
+  let checkouts = 0;
+  const previews = createPreviews({
+    config,
+    containers: null,
+    checkout: async () => (checkouts++, tempDir(null, "deckhand-ctx-")),
+    logDir: tempDir(null, "deckhand-previews-"),
+    log: (line) => logs.push(line),
+  });
+  const code = await previews.run({
+    repo: "org/a",
+    event: "pull_request",
+    payload: { action: "opened" },
+    ref: "trunk",
+    hook,
+    image: "docker:cli",
+  });
+  assert.equal(code, null);
+  assert.equal(checkouts, 0);
+  assert.match(logs.join("\n"), /the docker runner runs no preview hooks/);
+});
+
+test("previewHook: a runner without preview containers skips it before any image or queue", async () => {
+  const skipped = [];
+  const ctx = {
+    config: { ...config, runner: "other" },
+    skip: (why) => skipped.push(why),
+    repoSettings: async () => ({
+      settings: { preview: { command: "./preview.sh" }, dockerfile: "Dockerfile" },
+      errors: [],
+    }),
+    images: { imageFor: async () => assert.fail("no image for a hook that can't run") },
+    previews: { runs: false, run: async () => assert.fail("not queued") },
+  };
+  await previewHook(ctx, { repo: "org/a", base: "trunk", event: "pull_request" }, {});
+  assert.deepEqual(skipped, [
+    "pull_request: preview hook of org/a not run: the other runner runs no preview hooks",
+  ]);
 });

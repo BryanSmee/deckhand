@@ -29,7 +29,6 @@ import { checkout } from "./checkout.mjs";
 import { createComments } from "./comments.mjs";
 import { createConflicts, intoDefaultBranch } from "./conflicts.mjs";
 import { ConfigError, loadConfig, readConfigFile, withCredentialFiles } from "./config.mjs";
-import { docker } from "./docker.mjs";
 import {
   checkAppEvents,
   createGitHubApp,
@@ -66,7 +65,7 @@ import { createReviews, stepsGoing } from "./reviews.mjs";
 import { loadRuns } from "./runlog.mjs";
 import { createDiscussionApi, fromKey } from "./discussions.mjs";
 import { createDismissals } from "./dismissals.mjs";
-import { createDockerRunner } from "./runner/docker.mjs";
+import { createBackend } from "./runner/index.mjs";
 import { operatorSecrets } from "./secrets.mjs";
 import { createRuns } from "./runs.mjs";
 import { createSetup } from "./setup.mjs";
@@ -114,6 +113,9 @@ for (const dir of [logDir, shotsDir, runsDir]) mkdirSync(dir, { recursive: true 
 function log(...args) {
   console.log(new Date().toISOString(), ...args);
 }
+
+// Where sandboxes, images and the listener's own short containers run (RUNNER).
+const backend = createBackend({ config, inboxDir: runsDir, log });
 
 // Logs why a delivery is ignored: deliveries that do nothing are the usual question.
 function skip(reason) {
@@ -316,10 +318,17 @@ Object.assign(ctx, {
     accept: (item) => ctx.accept(item),
     log,
   }),
-  images: createImages({ config, docker, readFile: repoFile, checkout: fetchCheckout, log }),
+  images: createImages({
+    config,
+    backend: backend.images,
+    jobs: backend.jobs,
+    readFile: repoFile,
+    checkout: fetchCheckout,
+    log,
+  }),
   previews: createPreviews({
     config,
-    docker,
+    containers: backend.jobs.preview,
     checkout: fetchCheckout,
     logDir: join(config.dataDir, "previews"),
     log,
@@ -330,7 +339,7 @@ Object.assign(ctx, {
   // cached_hosts (egress.mjs).
   egressCa: () => fetchEgressCa(config.egressProxy),
   // Sandboxes are started, followed and removed through it; they run detached.
-  runner: createDockerRunner({ config, docker, inboxDir: runsDir, log }),
+  runner: backend.runner,
 });
 
 // The sandboxes' only way to GitHub, on the broker's port: their calls, relayed by the egress
@@ -435,7 +444,7 @@ const agyLogin =
     ? createAntigravityLogin({
         file: env.AGY_AUTH_FILE,
         config,
-        docker,
+        jobs: backend.jobs,
         install: () => ctx.images.installAgent(antigravity, () => {}),
         log,
       })

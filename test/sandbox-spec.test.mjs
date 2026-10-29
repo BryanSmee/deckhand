@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { AGENTS } from "../listener/agents/index.mjs";
-import { sandboxEnv, sandboxSpec } from "../listener/sandbox-spec.mjs";
+import { sandboxArgs } from "../listener/runner/docker.mjs";
+import { createBackend } from "../listener/runner/index.mjs";
+import { SANDBOX_USER, sandboxEnv, sandboxSpec } from "../listener/sandbox-spec.mjs";
 
 const config = {
   shotsVolume: "deckhand-shots",
@@ -47,7 +49,7 @@ function runOf({
 
 const parts = {
   image: "deckhand-sandbox:latest",
-  cacheArgs: ["-v", "cache-npm:/home/node/.npm"],
+  caches: [{ name: "cache-npm", path: "/home/node/.npm" }],
   settings: { setup: "npm ci", instructions: "AGENTS.md" },
   mounts: [{ source: "/srv/data", target: "/data", readOnly: false }],
   limits,
@@ -56,37 +58,92 @@ const parts = {
   digest: undefined,
 };
 
-test("sandboxSpec: hardened, as uid 1000, its own shots folder, the agent read-only", () => {
+test("sandboxSpec: as uid 1000, no capabilities, its own shots folder, the agent read-only", () => {
   const spec = sandboxSpec(runOf(), "the prompt", "the message", parts);
   assert.equal(spec.run, "deckhand-org-app-12-1");
   assert.equal(spec.name, "deckhand-org-app-12");
   assert.equal(spec.image, "deckhand-sandbox:latest");
   assert.deepEqual(spec.labels, { "deckhand.task": "org/app#12" });
-  const args = spec.args.join(" ");
-  assert.match(args, /^--user 1000:1000 --cap-drop ALL --security-opt no-new-privileges/);
-  assert.match(args, /volume-subpath=f{24}/);
-  assert.match(args, /-v deckhand-claude-code:\/opt\/claude-code:ro/);
-  assert.match(args, /-v deckhand-org-app-12-workspace:\/workspace/);
-  assert.match(args, /-v cache-npm:\/home\/node\/.npm/);
-  assert.match(args, /type=bind,src=\/srv\/data,dst=\/data( |$)/);
+  assert.deepEqual(spec.user, SANDBOX_USER);
+  assert.deepEqual(spec.limits, limits);
+  assert.deepEqual(spec.caps, []);
+  assert.deepEqual(spec.volumes, [
+    { kind: "shots", name: "deckhand-shots", path: "/screenshots", subpath: "f".repeat(24) },
+    { kind: "agent", name: "deckhand-claude-code", path: "/opt/claude-code", readOnly: true },
+    { kind: "session", name: "deckhand-org-app-12-workspace", path: "/workspace" },
+    { kind: "session", name: "deckhand-org-app-12-claude", path: "/home/node/.claude" },
+    { kind: "cache", name: "cache-npm", path: "/home/node/.npm" },
+    { kind: "mount", name: "/srv/data", path: "/data", readOnly: false },
+  ]);
   assert.equal(spec.engine, undefined);
   assert.equal(spec.ca, undefined);
 });
 
+// Backend-neutral: what the sandbox needs, never a backend's own options.
+test("sandboxSpec: no docker flags", () => {
+  const spec = sandboxSpec(runOf(), "p", "m", parts);
+  assert.equal(spec.args, undefined);
+  const text = JSON.stringify({ ...spec, env: undefined });
+  assert.doesNotMatch(text, /--|type=bind|volume-subpath/);
+});
+
 test("sandboxSpec: a light run's mounts are read-only, and its volumes its own", () => {
   const spec = sandboxSpec(runOf({ light: true, mode: "brainstorm" }), "p", "m", parts);
-  const args = spec.args.join(" ");
-  assert.match(args, /type=bind,src=\/srv\/data,dst=\/data,readonly/);
-  assert.doesNotMatch(args, /deckhand-org-app-12-workspace/);
+  const mount = spec.volumes.find((v) => v.kind === "mount");
+  assert.equal(mount.readOnly, true);
+  const sessions = spec.volumes.filter((v) => v.kind === "session").map((v) => v.name);
+  assert.deepEqual(sessions, [
+    "deckhand-org-app-12-light-workspace",
+    "deckhand-org-app-12-light-claude",
+  ]);
 });
 
 // Its code could leave a tampered file there for the repo's later work runs, which trust them.
 test("sandboxSpec: a work run with a comment from a fork's pull request mounts read-only", () => {
-  const spec = sandboxSpec(runOf({ fork: true }), "p", "m", { ...parts, cacheArgs: [] });
-  const args = spec.args.join(" ");
-  assert.match(args, /type=bind,src=\/srv\/data,dst=\/data,readonly/);
-  assert.match(args, /-v deckhand-org-app-12-workspace:\/workspace/);
+  const spec = sandboxSpec(runOf({ fork: true }), "p", "m", { ...parts, caches: [] });
+  assert.equal(spec.volumes.find((v) => v.kind === "mount").readOnly, true);
+  assert.ok(spec.volumes.some((v) => v.name === "deckhand-org-app-12-workspace"));
+  assert.ok(!spec.volumes.some((v) => v.kind === "cache"));
 });
+
+// The `docker run` options the spec carried itself before it became a description (#392):
+// the Docker runner must still give these, word for word.
+const BEFORE = {
+  work: "--user 1000:1000 --cap-drop ALL --security-opt no-new-privileges --cpus 2 --memory 4g --memory-swap 4g --pids-limit 512 --mount type=volume,src=deckhand-shots,dst=/screenshots,volume-subpath=ffffffffffffffffffffffff -v deckhand-claude-code:/opt/claude-code:ro -v deckhand-org-app-12-workspace:/workspace -v deckhand-org-app-12-claude:/home/node/.claude",
+  light:
+    "--user 1000:1000 --cap-drop ALL --security-opt no-new-privileges --cpus 2 --memory 4g --memory-swap 4g --pids-limit 512 --mount type=volume,src=deckhand-shots,dst=/screenshots,volume-subpath=ffffffffffffffffffffffff -v deckhand-claude-code:/opt/claude-code:ro -v deckhand-org-app-12-light-workspace:/workspace -v deckhand-org-app-12-light-claude:/home/node/.claude",
+  fork: "--user 1000:1000 --cap-drop ALL --security-opt no-new-privileges --cpus 2 --memory 4g --memory-swap 4g --pids-limit 512 --mount type=volume,src=deckhand-shots,dst=/screenshots,volume-subpath=ffffffffffffffffffffffff -v deckhand-claude-code:/opt/claude-code:ro -v deckhand-org-app-12-workspace:/workspace -v deckhand-org-app-12-claude:/home/node/.claude --mount type=bind,src=/srv/data,dst=/data,readonly --mount type=bind,src=/srv/ref,dst=/ref,readonly",
+  caches:
+    "--user 1000:1000 --cap-drop ALL --security-opt no-new-privileges --cpus 2 --memory 4g --memory-swap 4g --pids-limit 512 --mount type=volume,src=deckhand-shots,dst=/screenshots,volume-subpath=ffffffffffffffffffffffff -v deckhand-claude-code:/opt/claude-code:ro -v deckhand-org-app-12-workspace:/workspace -v deckhand-org-app-12-claude:/home/node/.claude -v deckhand-cache-a:/home/node/.npm -v deckhand-cache-b:/home/node/.cache/pip",
+  mounts:
+    "--user 1000:1000 --cap-drop ALL --security-opt no-new-privileges --cpus 2 --memory 4g --memory-swap 4g --pids-limit 512 --mount type=volume,src=deckhand-shots,dst=/screenshots,volume-subpath=ffffffffffffffffffffffff -v deckhand-claude-code:/opt/claude-code:ro -v deckhand-org-app-12-workspace:/workspace -v deckhand-org-app-12-claude:/home/node/.claude --mount type=bind,src=/srv/data,dst=/data --mount type=bind,src=/srv/ref,dst=/ref,readonly",
+};
+
+const mounts = [
+  { source: "/srv/data", target: "/data", readOnly: false },
+  { source: "/srv/ref", target: "/ref", readOnly: true },
+];
+const caches = [
+  { name: "deckhand-cache-a", path: "/home/node/.npm" },
+  { name: "deckhand-cache-b", path: "/home/node/.cache/pip" },
+];
+const CASES = {
+  work: [{}, { caches: [], mounts: [] }],
+  light: [
+    { light: true, mode: "brainstorm" },
+    { caches: [], mounts: [] },
+  ],
+  fork: [{ fork: true }, { caches: [], mounts }],
+  caches: [{}, { caches, mounts: [] }],
+  mounts: [{}, { caches: [], mounts }],
+};
+
+for (const [name, [run, { caches, mounts }]] of Object.entries(CASES)) {
+  test(`sandboxArgs: a ${name} run's docker run options, as before the spec described them`, () => {
+    const spec = sandboxSpec(runOf(run), "p", "m", { ...parts, caches, mounts });
+    assert.equal(sandboxArgs(spec).join(" "), BEFORE[name]);
+  });
+}
 
 test("sandboxEnv: the run's secret in place of a credential, its prompt, mode and setup", () => {
   const env = sandboxEnv(runOf(), "the prompt", "the message", parts.settings, null);
@@ -131,4 +188,36 @@ test("sandboxEnv: the run's speed, as speedFor() decided it", () => {
   const run = runOf();
   run.task.live.record.speed = "fast";
   assert.equal(sandboxEnv(run, "p", "m", parts.settings, null).SANDBOX_SPEED, "fast");
+});
+
+test("sandboxArgs: caps, a read-only volume folder, a root user", () => {
+  const args = sandboxArgs({
+    user: { uid: 0 },
+    limits,
+    caps: ["CHOWN"],
+    volumes: [{ kind: "shots", name: "v", path: "/s", subpath: "x", readOnly: true }],
+  });
+  assert.equal(
+    args.join(" "),
+    "--user 0 --cap-drop ALL --cap-add CHOWN --security-opt no-new-privileges --cpus 2 --memory 4g --memory-swap 4g --pids-limit 512 --mount type=volume,src=v,dst=/s,volume-subpath=x,readonly",
+  );
+});
+
+test("createBackend: Docker's runner, images and jobs; another runner is refused", () => {
+  const backend = createBackend({ config: { runner: "docker" }, docker: async () => ({}) });
+  assert.deepEqual(Object.keys(backend).sort(), ["images", "jobs", "runner"]);
+  assert.equal(typeof backend.jobs.preview.create, "function");
+  assert.throws(
+    () => createBackend({ config: { runner: "kubernetes" } }),
+    /RUNNER: expected docker/,
+  );
+});
+
+// Fail closed: never a sandbox as the image's user, or without the operator's limits.
+test("sandboxArgs: a spec without a user or limits is refused", () => {
+  assert.throws(() => sandboxArgs({ limits, volumes: [] }), /the sandbox spec has no user/);
+  assert.throws(
+    () => sandboxArgs({ user: SANDBOX_USER, volumes: [] }),
+    /the sandbox spec has no limits/,
+  );
 });

@@ -113,11 +113,15 @@ test("a research run: the base image, no mounts, caches, engine, CA, screenshots
   assert.equal(spec.image, config.image);
   assert.equal(spec.engine, undefined);
   assert.equal(spec.ca, undefined);
-  const args = spec.args.join(" ");
   // Volumes of its own, which no work or light run mounts; nothing else of the repo's.
-  assert.match(args, /-v deckhand-org-repo-12-research-workspace:\/workspace/);
-  assert.doesNotMatch(args, /-light-|deckhand-org-repo-12-workspace/);
-  assert.doesNotMatch(args, /type=bind|npm|screenshots|volume-subpath/);
+  assert.deepEqual(
+    spec.volumes.map((v) => [v.kind, v.name]),
+    [
+      ["agent", "deckhand-claude-code"],
+      ["session", "deckhand-org-repo-12-research-workspace"],
+      ["session", "deckhand-org-repo-12-research-claude"],
+    ],
+  );
   assert.equal(spec.env.SANDBOX_NO_CLONE, "1");
   assert.equal(spec.env.SANDBOX_LIGHT, "1");
   assert.equal(spec.env.SANDBOX_SETUP, "");
@@ -169,7 +173,7 @@ async function workRun(t, head, { imageFor, written = [], ca = "the CA" } = {}) 
       imageFor: imageFor ?? (async () => config.image),
       caches: async (repo, paths) => {
         calls.push(`caches ${paths.join(" ")}`);
-        return ["-v", "cache-npm:/home/node/.npm"];
+        return [{ name: "cache-npm", path: "/home/node/.npm" }];
       },
     },
     egressCa: async () => ca,
@@ -209,7 +213,7 @@ async function workRun(t, head, { imageFor, written = [], ca = "the CA" } = {}) 
 test("a work run with a comment from a fork's pull request gets no caches, and says so", async (t) => {
   const { parts, task, calls, notes } = await workRun(t, "someone/repo");
   assert.equal(task.live.fork, true);
-  assert.deepEqual(parts.prepared.cacheArgs, []);
+  assert.deepEqual(parts.prepared.caches, []);
   assert.deepEqual(calls, []);
   assert.ok(notes.includes("No caches: a pull request from a fork"));
   assert.deepEqual(task.live.branches, ["issue-12-*"]);
@@ -218,7 +222,7 @@ test("a work run with a comment from a fork's pull request gets no caches, and s
 test("a work run with a comment from the repo's own pull request keeps its caches", async (t) => {
   const { parts, task, calls, notes } = await workRun(t, "org/repo");
   assert.equal(task.live.fork, false);
-  assert.deepEqual(parts.prepared.cacheArgs, ["-v", "cache-npm:/home/node/.npm"]);
+  assert.deepEqual(parts.prepared.caches, [{ name: "cache-npm", path: "/home/node/.npm" }]);
   assert.deepEqual(calls, ["caches /home/node/.npm"]);
   assert.ok(!notes.some((n) => /fork/.test(n)));
   assert.deepEqual(task.live.branches, ["issue-12-*", "feat"]);
