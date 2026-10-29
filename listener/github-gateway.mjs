@@ -137,7 +137,8 @@ export function createGithubGateway({
   // req → the address of the sandbox that sent it: the one the egress proxy names when it
   // relayed the call (broker-http.mjs clientAddress()).
   clientOf = async (req) => addressOf(req),
-  // address → the live run whose sandbox (or engine) has it, or null: a call without a secret.
+  // address → the live run whose sandbox has it (never its engine), or null: a call without a
+  // secret (broker-http.mjs runFrom()).
   runFrom = async () => null,
   // run → the secrets its writes must not carry, besides its tokens: its own secret and the
   // operator's credentials (secrets.mjs operatorSecrets()).

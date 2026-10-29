@@ -344,7 +344,8 @@ changes, and its output as `raw` entries with the step's number; the lines of no
   every run but research trusts) and relays them to the GitHub gateway (`github-gateway.mjs`,
   on `BROKER_PORT`, only on the runs' networks), with the address of the sandbox they came
   from, which the listener believes from the proxy alone. The gateway finds the run by its
-  secret (bound to that address) or, without one, by the address; refuses finished, foreign,
+  secret (bound to that address) or, without one, by its sandbox's address (never its
+  engine's); refuses finished, foreign,
   research and push calls and a review's reads of its thread; redacts every write's body
   (`redact()`, the run's and operator's secrets) and notes it in the run's log; and sends the
   call on with a token limited to the run's repo and mode (`permissionsFor()`), streaming the
