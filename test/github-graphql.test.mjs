@@ -13,6 +13,7 @@ import {
   MAX_TOKENS,
   MUTATIONS,
   parseCall,
+  restName,
 } from "../listener/github-graphql.mjs";
 import { createWriteChecks } from "../listener/github-writes.mjs";
 
@@ -48,7 +49,7 @@ const NODES = {
     repository: { nameWithOwner: "org/other" },
   },
   PR_7: { __typename: "PullRequest", number: 7, repository: { nameWithOwner: "Org/Repo" } },
-  IC_1: { __typename: "IssueComment" },
+  IC_1: { __typename: "IssueComment", repository: { nameWithOwner: "Org/Repo" } },
   L_idea: { __typename: "Label", name: "idea", repository: { nameWithOwner: "Org/Repo" } },
   L_bug: { __typename: "Label", name: "bug", repository: { nameWithOwner: "Org/Repo" } },
   L_o: { __typename: "Label", name: "idea", repository: { nameWithOwner: "org/other" } },
@@ -206,7 +207,7 @@ test("gh issue create, comment and edit: classified from GitHub's nodes, checked
     repo: "org/repo",
     actions: ["create"],
     target: { kind: "new_issue" },
-    change: { fields: ["title", "body", "labelIds"], labels_added: ["idea"], labels_removed: [] },
+    change: { fields: ["title", "body", "labels"], labels_added: ["idea"], labels_removed: [] },
   });
   // Without its label, an idea run's create is above its ceiling.
   const bare = await check(
@@ -279,7 +280,7 @@ test("a field sent as null counts as set: clearing labels, a milestone or assign
   assert.equal((await check(run("work"), edit({ labelIds: null }))).write, true);
   assert.deepEqual(writes.at(-1).actions, ["label"]);
   assert.deepEqual(writes.at(-1).change, {
-    fields: ["labelIds"],
+    fields: ["labels"],
     labels_added: [],
     labels_removed: [],
     labels_set: true,
@@ -450,6 +451,7 @@ test("targets come from GitHub's nodes: a missing one, a wrong type, another rep
     ),
   );
   assert.equal(react.refused.status, 403);
+  assert.match(react.refused.message, /can't react here \(its ceiling\)/);
   // A look-up that fails refuses the call.
   const { check: failing } = createGraphqlChecks({
     nodes: async () => {
@@ -589,10 +591,44 @@ test("a run that floods the validator delays itself only: the runs take turns", 
   const order = [];
   const sent = (query, run, name) =>
     validator.check(query, run).then((answer) => (order.push(name), answer));
-  const calls = [sent(SLOW, "a", "a1"), sent(SLOW, "a", "a2")];
-  // Its third waits for none: refused at once.
-  assert.equal((await validator.check(SLOW, "a")).status, 429);
+  const calls = [sent(SLOW, "a", "a1"), sent(SLOW, "a", "a2"), sent(SLOW, "a", "a3")];
   calls.push(sent("{ viewer { login } }", "b", "b1"));
-  assert.deepEqual(await Promise.all(calls), [null, null, null]);
-  assert.deepEqual(order, ["a1", "b1", "a2"]);
+  assert.deepEqual(await Promise.all(calls), [null, null, null, null]);
+  assert.deepEqual(order, ["a1", "b1", "a2", "a3"]);
+});
+
+test("a run's parallel calls while the worker starts all go through", async (t) => {
+  const validator = createValidator();
+  t.after(validator.close);
+  const calls = Array.from({ length: 16 }, () => validator.check("{ viewer { login } }", "a"));
+  assert.deepEqual(await Promise.all(calls), Array(16).fill(null));
+});
+
+test("restName: GraphQL's input names as REST's body names them", () => {
+  assert.deepEqual(
+    [
+      "labelIds",
+      "assigneeIds",
+      "milestoneId",
+      "baseRefName",
+      "title",
+      "subIssueId",
+      "stateReason",
+    ].map(restName),
+    ["labels", "assignees", "milestone", "base", "title", "sub_issue_id", "state_reason"],
+  );
+});
+
+test("an argument graphql-js refuses after validation: the call refused, nothing thrown", async () => {
+  const { check, asked } = checks();
+  const out = await check(
+    run("work"),
+    call(
+      'mutation($s: ID = "I_1") { addComment(input: { subjectId: $s, body: "x" }) { __typename } }',
+      { s: null },
+    ),
+  );
+  assert.equal(out.refused.status, 400);
+  assert.match(out.refused.message, /^its GraphQL arguments: .*not to be null/);
+  assert.deepEqual(asked, []);
 });

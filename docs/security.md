@@ -348,8 +348,8 @@ to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to the
   GraphQL `GET` and a query string are refused, as GitHub would otherwise run something
   unchecked. Validation runs in a worker thread (`createValidator()`), never on the listener's
   thread (its webhooks, dashboard and REST calls), one document at a time, taken from the
-  runs in turn: a run has 2 documents waiting at most (more are refused, `429`), so one that
-  floods the worker delays itself, not the other runs. A document validated for over 10
+  runs in turn, so one that floods the worker (with as many calls as the gateway lets a run
+  have at once) delays itself, not the other runs. A document validated for over 10
   seconds is refused alone (`503`), and the worker started again for the others. A query goes on. A call holds 10 mutation
   fields at most (gh sends one), each response key checked once (GitHub runs it once), and
   the targets of one call looked up once each: a call can't spend the installation's rate

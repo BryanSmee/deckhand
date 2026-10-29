@@ -38,10 +38,8 @@ export const MAX_QUERY = 64 * 1024;
 // The most mutation fields a call may hold (gh sends one): each is looked up on GitHub and
 // held to the policies, with the listener's token and rate limit.
 export const MAX_FIELDS = 10;
-// How long a document may take to validate in the worker, and how many of a run's may wait
-// there (gh sends one at a time).
+// How long a document may take to validate in the worker.
 export const VALIDATE_MS = 10_000;
-export const VALIDATE_PER_RUN = 2;
 // The most node IDs a call's mutations may name: GitHub looks up 100 at once.
 export const MAX_NODES = 100;
 
@@ -58,12 +56,13 @@ export function githubSchema() {
 // The types a target or a subject may be, as GitHub's node lookup answers them.
 const ISSUE = ["Issue"];
 const ISSUE_OR_PR = ["Issue", "PullRequest"];
-// Comments no ceiling lets a run edit or react to: refused as REST refuses them.
+// Comments no ceiling lets a run edit or react to: refused as REST refuses them. Those of a
+// repository (RepositoryNode, which NODES reads); a discussion's comment has none, and is
+// refused as outside it.
 const COMMENTS = new Set([
   "IssueComment",
   "PullRequestReviewComment",
   "CommitComment",
-  "DiscussionComment",
   "PullRequestReview",
 ]);
 
@@ -219,6 +218,7 @@ const NODES = `query($ids: [ID!]!) {
     ... on Issue { number databaseId repository { nameWithOwner } }
     ... on PullRequest { number repository { nameWithOwner } }
     ... on Label { name repository { nameWithOwner } }
+    ... on RepositoryNode { repository { nameWithOwner } }
   }
 }`;
 
@@ -302,12 +302,12 @@ export function parseCall(body, schema = githubSchema()) {
 
 // Validation in a worker thread: (query, run) → a promise of null (valid) or { status,
 // message }, so the listener's webhooks, dashboard and REST calls never wait for it. The worker
-// validates one document at a time, taken from the runs in turn, each run holding
-// `perRun` documents at most in the queue (more are refused, `429`): a run that floods it
-// only delays itself, the others waiting one document of each run ahead at most. A document
+// validates one document at a time, taken from the runs in turn: a run that floods it only
+// delays itself, the others waiting one document of each run ahead at most (the gateway's
+// `maxInFlight` bounds how many a run sends at once). A document
 // validated for over `timeoutMs` is refused alone, the worker stopped and started again for the
 // rest (its time counted once the worker has built GitHub's schema).
-export function createValidator({ timeoutMs = VALIDATE_MS, perRun = VALIDATE_PER_RUN } = {}) {
+export function createValidator({ timeoutMs = VALIDATE_MS } = {}) {
   let worker = null;
   let next = 0;
   // run → its documents waiting, in order; the runs in turn (a Map keeps the order they came
@@ -364,11 +364,6 @@ export function createValidator({ timeoutMs = VALIDATE_MS, perRun = VALIDATE_PER
   }
   function check(query, run = null) {
     const queue = queues.get(run) ?? [];
-    if (queue.length >= perRun) {
-      return Promise.resolve(
-        refusal(429, `more than ${perRun} GraphQL documents of the run's waiting to be validated`),
-      );
-    }
     return new Promise((resolve) => {
       queue.push({ id: next++, query, resolve });
       if (!queues.has(run)) queues.set(run, queue);
@@ -423,7 +418,14 @@ export function mutationFields({ doc, op, coerced }, schema = githubSchema()) {
     }
     const spec = Object.hasOwn(MUTATIONS, name) ? MUTATIONS[name] : null;
     if (!spec) return { refused: refusal(403, `Deckhand doesn't let a run send ${name}`) };
-    const { input = {} } = getArgumentValues(defs[name], field, coerced);
+    // It can still refuse a value validation let through (a variable's default replaced by
+    // null where the argument takes none).
+    let input;
+    try {
+      ({ input = {} } = getArgumentValues(defs[name], field, coerced));
+    } catch (error) {
+      return { refused: refusal(400, `its GraphQL arguments: ${error.message}`) };
+    }
     // The fields it sets, null ones too: GitHub may read null as clearing a field (updated()),
     // so an unknown one sent as null is refused as one with a value is.
     const known = [spec.target, ...spec.fields];
@@ -458,6 +460,20 @@ function idsOf(fields) {
     for (const id of spec.labels ? (input[spec.labels.field] ?? []) : []) ids.add(id);
   }
   return [...ids];
+}
+
+// An input field's name as a REST body would name it, so a policy on `change.fields` reads one
+// spelling for both: `labelIds` → `labels`, `assigneeIds` → `assignees`, `milestoneId` →
+// `milestone`, `baseRefName` → `base`, the others in snake case (`subIssueId` → `sub_issue_id`).
+const REST_NAMES = {
+  labelIds: "labels",
+  assigneeIds: "assignees",
+  milestoneId: "milestone",
+  baseRefName: "base",
+  headRefName: "head",
+};
+export function restName(field) {
+  return REST_NAMES[field] ?? field.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`);
 }
 
 const repoOf = (node) => String(node?.nameWithOwner ?? node?.repository?.nameWithOwner ?? "");
@@ -534,7 +550,7 @@ export function writeOf({ name, spec, input }, nodes, repo) {
   // What it sets, as a REST write's body would: its target is its path's.
   const { [spec.target]: _, ...set } = input;
   const actions = spec.actions(set);
-  const change = { fields: Object.keys(set), labels_added: [], labels_removed: [] };
+  const change = { fields: Object.keys(set).map(restName), labels_added: [], labels_removed: [] };
   // Labels set to null: none, so a `set` removes them all.
   if (spec.labels && spec.labels.field in input) {
     const names = [];
