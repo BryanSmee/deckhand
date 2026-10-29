@@ -1,7 +1,7 @@
 import { expect, test } from "vitest";
 import { issueOfLink } from "./dnd";
 import { dropTarget, layout, SIZES } from "./graphLayout";
-import { brainstormsOf, graphOf, lookOf } from "./graphModel";
+import { brainstormsOf, graphOf, type GraphNode, lookOf, movable } from "./graphModel";
 import type { Pending, Task, WorkAction } from "./types";
 
 const task = (n: number, extra: Partial<Task> = {}): Task => ({
@@ -418,4 +418,32 @@ test("brainstorms pending: a start in brainstorm mode or a stop stays in the col
   ]);
   const g = graphOf(tasks, [], [], { pending });
   expect(g.nodes.map((n) => [n.number, n.status])).toEqual([[2, "Starting…"]]);
+});
+
+test("movable: a stopped or failed open issue's node moves like its backlog card", () => {
+  // As graphOf() draws it (an ended brainstorm isn't drawn: as it would be).
+  const node = (extra: Partial<Task>): GraphNode => {
+    const t = task(5, extra);
+    const look = lookOf(t);
+    const n = { key: t.key, repo: t.repo, number: 5, kind: t.kind, title: t.title, look };
+    return { ...n, status: "", closed: t.closed, position: null, task: t };
+  };
+  // The backlog lists issue 5.
+  const listed = new Set([5]);
+  for (const state of ["cancelled", "error", "interrupted"] as const) {
+    expect(movable(node({ state }), "org/app", false, listed)).toBe(true);
+    // Not until the backlog lists it (a read after the stop), on the All tab, nor while the
+    // repo's config has errors.
+    expect(movable(node({ state }), "org/app", false)).toBe(false);
+    expect(movable(node({ state }), null, false, listed)).toBe(false);
+    expect(movable(node({ state }), "org/app", true, listed)).toBe(false);
+    // Closed, a pull request's or a brainstorm's that ended: they stay.
+    expect(movable(node({ state, closed: "not_planned" }), "org/app", false, listed)).toBe(false);
+    expect(movable(node({ state, kind: "pr" }), "org/app", false, listed)).toBe(false);
+    expect(movable(node({ state, mode: "brainstorm" }), "org/app", false, listed)).toBe(false);
+  }
+  // Finished, or running: they stay too.
+  for (const state of ["done", "working", "scheduled", "stopping"] as const) {
+    expect(movable(node({ state }), "org/app", false, listed)).toBe(false);
+  }
 });

@@ -374,10 +374,17 @@ export function nextInLine(tasks: Task[]): string | null {
 }
 
 // A node a drag moves, on `repo`'s tab (none on All, or while its config has errors): only an
-// issue's, and not what runs or ran; a queued one moves in the run order. Those waiting for
+// issue's, and not what runs or finished; a queued one moves in the run order. Those waiting for
 // answers move whatever their last run was (a brainstorm's kind is "brainstorm"): not a pull
-// request.
-export const movable = (n: GraphNode, repo: string | null, blocked: boolean) =>
+// request. An open issue whose last run was stopped or failed moves like its card in the
+// backlog, once the backlog lists it (`listed`, its issue numbers): until a read after the stop
+// says so, whether it has sub-issues to lay out isn't known.
+export const movable = (
+  n: GraphNode,
+  repo: string | null,
+  blocked: boolean,
+  listed: ReadonlySet<number> = new Set(),
+) =>
   !!repo &&
   !blocked &&
   n.look !== "pending" &&
@@ -385,7 +392,13 @@ export const movable = (n: GraphNode, repo: string | null, blocked: boolean) =>
   !!n.task &&
   (n.task.state === "waiting"
     ? n.kind === "issue"
-    : reorderable(n.task) || waitsForAnswers(n.task));
+    : stopped(n.task)
+      ? n.kind === "issue" && listed.has(n.number)
+      : reorderable(n.task) || waitsForAnswers(n.task));
+
+// An open issue's task whose last run was stopped, failed or cut short by a restart.
+const stopped = (t: Task) =>
+  ["cancelled", "error", "interrupted"].includes(t.state) && !t.closed && t.mode !== "brainstorm";
 
 // The work queue's lists besides the backlog: the issues waiting for others, less those a
 // Start or Remove on its way takes out of their wait; those waiting for answers, less those an

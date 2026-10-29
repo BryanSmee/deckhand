@@ -1,5 +1,6 @@
 // Dragging issues waiting for answers onto the graph: the work queue's cards, and the graph's
-// own nodes (fetch mocked). Brainstorms are the Brainstorm tab's: Brainstorms.spec.tsx.
+// own nodes; and the nodes of stopped or failed issues, which move like their backlog cards
+// (fetch mocked). Brainstorms are the Brainstorm tab's: Brainstorms.spec.tsx.
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/preact";
 import { beforeEach, expect, test } from "vitest";
 import { Dashboard } from "./App";
@@ -130,5 +131,107 @@ test("a parent issue's card shows its sub-issues; dropped on the graph, it lays 
   dragCard(card, screen.getByRole("list", { name: "Issues of acme/api" }).parentElement!);
   await waitFor(() =>
     expect(api.posted.map((p) => p.body)).toEqual([{ action: "plan", number: 10, mode: "review" }]),
+  );
+});
+
+// Issue #160 on the graph as `taskState` has it, its backlog read listing it (`listed`: with
+// that many sub-issues, null not at all): the node, once the backlog is read.
+const showStopped = async (taskState: Task["state"], listed: number | null = 0) => {
+  const issue = {
+    number: 160,
+    title: "Stopped",
+    url: "https://github.example.com/acme/api/issues/160",
+  };
+  const issues = listed === null ? [] : [{ ...issue, subIssues: listed || undefined }];
+  api = mockApi({ "api/repos/acme/api/issues": () => ({ ...BACKLOG, issues }) });
+  render(
+    <Dashboard
+      state={{ ...state, tasks: [...state.tasks, task(160, "issue", taskState)] }}
+      error={null}
+    />,
+  );
+  const work = screen.getByRole("region", { name: "Work queue" });
+  if (listed === null) await within(work).findByText("No open issue left to start.");
+  else await within(work).findByRole("button", { name: "Start #160" });
+  return screen.getByRole("listitem", { name: /^#160 / });
+};
+
+// A node pressed and moved onto the node at the drawing's corner (jsdom puts the drawing at 0,
+// 0), what letting go there says, then let go.
+const dragOnto = (node: HTMLElement) => {
+  fireEvent.pointerDown(node, { button: 0, pointerId: 1, clientX: 400, clientY: 400 });
+  fireEvent.pointerMove(node, { pointerId: 1, clientX: 20, clientY: 20 });
+  const label = screen.getByText(/^Queue #\d+ after (PR )?#\d+$/).textContent;
+  fireEvent.pointerUp(node, { pointerId: 1, clientX: 20, clientY: 20 });
+  return label;
+};
+
+test.each(["cancelled", "error", "interrupted"] as const)(
+  "a %s issue's node dragged onto another node is queued after it",
+  async (ended) => {
+    const node = await showStopped(ended);
+    expect(node.className).toMatch(/movable/);
+    const label = dragOnto(node);
+    const after = Number(label!.match(/^Queue #160 after (?:PR )?#(\d+)$/)![1]);
+    await waitFor(() =>
+      expect(api.posted.map((p) => p.body)).toEqual([{ action: "queue", number: 160, after }]),
+    );
+    // On its way: dashed, saying so, no longer movable.
+    const sent = screen.getByRole("listitem", { name: /^#160 / });
+    expect(sent.className).toMatch(/pending/);
+    expect(sent.className).not.toMatch(/movable/);
+  },
+);
+
+test("a stopped issue's node let go in the open starts in the mode picked", async () => {
+  const node = await showStopped("cancelled");
+  fireEvent.change(screen.getByRole("combobox", { name: /Start in/ }), {
+    target: { value: "review" },
+  });
+  fireEvent.pointerDown(node, { button: 0, pointerId: 1, clientX: 5000, clientY: 5000 });
+  fireEvent.pointerMove(node, { pointerId: 1, clientX: 5100, clientY: 5100 });
+  expect(screen.getByText("Start #160 in review")).toBeTruthy();
+  fireEvent.pointerUp(node, { pointerId: 1, clientX: 5100, clientY: 5100 });
+  await waitFor(() =>
+    expect(api.posted.map((p) => p.body)).toEqual([
+      { action: "start", number: 160, mode: "review" },
+    ]),
+  );
+});
+
+test("a stopped parent issue's node is laid out with its sub-issues", async () => {
+  dragNode(await showStopped("cancelled", 2));
+  await waitFor(() =>
+    expect(api.posted.map((p) => p.body)).toEqual([{ action: "plan", number: 160 }]),
+  );
+});
+
+// Right after a stop, the listener leaves the issue out of the backlog until a read after it:
+// whether it has sub-issues to lay out isn't known yet.
+test("a stopped issue's node the backlog doesn't list yet stays where it is", async () => {
+  const node = await showStopped("cancelled", null);
+  expect(node.className).not.toMatch(/movable/);
+  dragNode(node);
+  await new Promise((r) => setTimeout(r, 10));
+  expect(api.posted).toEqual([]);
+});
+
+test("a done issue's node and a stopped pull request's stay where they are", async () => {
+  await show([task(161, "issue", "done"), task(163, "pr", "cancelled")]);
+  for (const name of [/^#161 /, /^PR #163 /]) {
+    const node = screen.getByRole("listitem", { name });
+    expect(node.className).not.toMatch(/movable/);
+    dragNode(node);
+  }
+  await new Promise((r) => setTimeout(r, 10));
+  expect(api.posted).toEqual([]);
+});
+
+test("S on a selected stopped node starts it, as its backlog card's Start", async () => {
+  const node = await showStopped("cancelled");
+  node.focus();
+  fireEvent.keyDown(node, { key: "s" });
+  await waitFor(() =>
+    expect(api.posted.map((p) => p.body)).toEqual([{ action: "start", number: 160 }]),
   );
 });
