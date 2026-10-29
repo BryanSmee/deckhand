@@ -132,3 +132,104 @@ test("a parent issue's card shows its sub-issues; dropped on the graph, it lays 
     expect(api.posted.map((p) => p.body)).toEqual([{ action: "plan", number: 10, mode: "review" }]),
   );
 });
+
+// A node pressed and moved onto the node at the drawing's corner (jsdom puts the drawing at 0,
+// 0), what letting go there says, then let go.
+const dragOnto = (node: HTMLElement) => {
+  fireEvent.pointerDown(node, { button: 0, pointerId: 1, clientX: 400, clientY: 400 });
+  fireEvent.pointerMove(node, { pointerId: 1, clientX: 20, clientY: 20 });
+  const label = screen.getByText(/^Queue #\d+ after (PR )?#\d+$/).textContent;
+  fireEvent.pointerUp(node, { pointerId: 1, clientX: 20, clientY: 20 });
+  return label;
+};
+
+test.each(["cancelled", "error", "interrupted"] as const)(
+  "a %s issue's node dragged onto another node is queued after it",
+  async (ended) => {
+    await show([task(160, "issue", ended)]);
+    const node = screen.getByRole("listitem", { name: /^#160 / });
+    expect(node.className).toMatch(/movable/);
+    const label = dragOnto(node);
+    const after = Number(label!.match(/^Queue #160 after (?:PR )?#(\d+)$/)![1]);
+    await waitFor(() =>
+      expect(api.posted.map((p) => p.body)).toEqual([{ action: "queue", number: 160, after }]),
+    );
+    // On its way: dashed, saying so, no longer movable.
+    const sent = screen.getByRole("listitem", { name: /^#160 / });
+    expect(sent.className).toMatch(/pending/);
+    expect(sent.className).not.toMatch(/movable/);
+  },
+);
+
+test("a stopped issue's node let go in the open starts in the mode picked", async () => {
+  await show([task(160, "issue", "cancelled")]);
+  fireEvent.change(screen.getByRole("combobox", { name: /Start in/ }), {
+    target: { value: "review" },
+  });
+  const node = screen.getByRole("listitem", { name: /^#160 / });
+  fireEvent.pointerDown(node, { button: 0, pointerId: 1, clientX: 5000, clientY: 5000 });
+  fireEvent.pointerMove(node, { pointerId: 1, clientX: 5100, clientY: 5100 });
+  expect(screen.getByText("Start #160 in review")).toBeTruthy();
+  fireEvent.pointerUp(node, { pointerId: 1, clientX: 5100, clientY: 5100 });
+  await waitFor(() =>
+    expect(api.posted.map((p) => p.body)).toEqual([
+      { action: "start", number: 160, mode: "review" },
+    ]),
+  );
+});
+
+test("a stopped parent issue's node is laid out with its sub-issues", async () => {
+  const epic = {
+    number: 160,
+    title: "Epic",
+    url: "https://github.example.com/acme/api/issues/160",
+  };
+  api = mockApi({
+    "api/repos/acme/api/issues": () => ({ ...BACKLOG, issues: [{ ...epic, subIssues: 2 }] }),
+  });
+  render(
+    <Dashboard
+      state={{ ...state, tasks: [...state.tasks, task(160, "issue", "cancelled")] }}
+      error={null}
+    />,
+  );
+  const work = screen.getByRole("region", { name: "Work queue" });
+  await within(work).findByText(/^2 sub-issues/);
+  dragNode(screen.getByRole("listitem", { name: /^#160 / }));
+  await waitFor(() =>
+    expect(api.posted.map((p) => p.body)).toEqual([{ action: "plan", number: 160 }]),
+  );
+});
+
+test("a done issue's node and a stopped pull request's stay where they are", async () => {
+  await show([task(161, "issue", "done"), task(163, "pr", "cancelled")]);
+  for (const name of [/^#161 /, /^PR #163 /]) {
+    const node = screen.getByRole("listitem", { name });
+    expect(node.className).not.toMatch(/movable/);
+    dragNode(node);
+  }
+  await new Promise((r) => setTimeout(r, 10));
+  expect(api.posted).toEqual([]);
+});
+
+test("S on a selected stopped node starts it, as its backlog card's Start", async () => {
+  const issue = {
+    number: 160,
+    title: "Stopped",
+    url: "https://github.example.com/acme/api/issues/160",
+  };
+  api = mockApi({ "api/repos/acme/api/issues": () => ({ ...BACKLOG, issues: [issue] }) });
+  render(
+    <Dashboard
+      state={{ ...state, tasks: [...state.tasks, task(160, "issue", "cancelled")] }}
+      error={null}
+    />,
+  );
+  await screen.findByRole("button", { name: "Start #160" });
+  const node = screen.getByRole("listitem", { name: /^#160 / });
+  node.focus();
+  fireEvent.keyDown(node, { key: "s" });
+  await waitFor(() =>
+    expect(api.posted.map((p) => p.body)).toEqual([{ action: "start", number: 160 }]),
+  );
+});

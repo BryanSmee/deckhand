@@ -2,9 +2,9 @@
 // (WorkQueue.tsx) beside what waits for what, as a graph (GraphDrawing.tsx) or as lanes
 // (Lanes.tsx); on a phone, the lanes with the queue as a bottom sheet. An issue dropped on the
 // graph starts, dropped on a node it waits for that one; a waiting node dragged away stops
-// waiting, onto another node waits for that one instead. An issue waiting for answers moves
-// too, once they are in: the drag opens its open questions first (QuestionsDialog.tsx), and so
-// does a click on its node. A brainstorm dropped on the graph starts work. A queued node dragged
+// waiting, onto another node waits for that one instead. A stopped or failed issue's node moves
+// like its backlog card. An issue waiting for answers moves too, once they are in: the drag
+// opens its open questions first (QuestionsDialog.tsx), and so does a click on its node. A brainstorm dropped on the graph starts work. A queued node dragged
 // onto another queued node's left or right edge moves before or after it in the run order
 // (the Queued tab does it too). While a drag goes
 // on, the graph says what letting go does ("Queue #31 after #19"); each action shows at once,
@@ -72,7 +72,8 @@ interface Props {
   header?: (controls: ComponentChildren) => ComponentChildren;
 }
 
-// What is dragged onto the graph: a card from the backlog (or one waiting for answers), a
+// What is dragged onto the graph: a card from the backlog or a stopped issue's node (or one
+// waiting for answers), a
 // brainstorm (Start in doesn't apply: it starts work), a waiting node (let go in the open, it
 // stops waiting), a queued node (onto a queued node's left or right edge, it moves in the run
 // order).
