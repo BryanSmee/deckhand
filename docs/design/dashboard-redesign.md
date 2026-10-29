@@ -13,7 +13,7 @@ the tokens and the rules. The code is the reference: the tokens in
 
 - **The graph with the backlog is hard to read and doesn't fit a phone.** The backlog, the
   Brainstorm column and the waiting issues squeezed the graph into a third of the screen. They
-  become one **work queue** panel with tabs (Backlog, Brainstorm, Waiting, Answers), the sidebar
+  become one **work queue** panel with tabs (Backlog, Brainstorm, Waiting, Answers, Queued), the sidebar
   collapses to a rail on the board, and on a phone the graph becomes **lanes** (each chain as a
   vertical list) with the queue in a bottom sheet.
 - **The all-repositories graph had a graph but no backlog.** It is gone. "All repositories" is an

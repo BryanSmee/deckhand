@@ -20,6 +20,7 @@ import type {
   InboxEntry,
   InboxResult,
   LaneNaming,
+  OrderMove,
   Onboarded,
   Pending,
   Repo,
@@ -405,6 +406,23 @@ export function sendCancel(repo: string, number: number, pr: boolean): Promise<W
 // listener says, or why it refused.
 export const sendLaneName = (repo: string, naming: LaneNaming) =>
   postJson<WorkResult>(`api/repos/${repo}/lane`, naming);
+
+// A queued task's move in the run order (api/repos/<repo>/order), on its way while `moving`:
+// the Queued tab and the graph show it at once (graphModel.ts inLine()), and api/state read
+// again settles it. What the listener said, or why it refused.
+export function useRunOrder(repo: string | null, refresh: () => Promise<void> = async () => {}) {
+  const [moving, setMoving] = useState<OrderMove | null>(null);
+  useEffect(() => setMoving(null), [repo]);
+  const move = async (m: OrderMove): Promise<WorkResult> => {
+    if (!repo) return { error: "No repository." };
+    setMoving(m);
+    const said = await postJson<WorkResult>(`api/repos/${repo}/order`, m);
+    if (!said.error) await refresh();
+    setMoving(null);
+    return said;
+  };
+  return { moving, move };
+}
 
 // An idea or a bug report for the repo's inbox (api/repos/<repo>/inbox): the comment it
 // became and the inbox's task, or why it was refused.

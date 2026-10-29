@@ -4,7 +4,9 @@
 // graph starts, dropped on a node it waits for that one; a waiting node dragged away stops
 // waiting, onto another node waits for that one instead. An issue waiting for answers moves
 // too, once they are in: the drag opens its open questions first (QuestionsDialog.tsx), and so
-// does a click on its node. A brainstorm dropped on the graph starts work. While a drag goes
+// does a click on its node. A brainstorm dropped on the graph starts work. A queued node dragged
+// onto another queued node's left or right edge moves before or after it in the run order
+// (the Queued tab does it too). While a drag goes
 // on, the graph says what letting go does ("Queue #31 after #19"); each action shows at once,
 // its node dashed ("Starting…"), before api/state is read again. Its shortcuts: the arrows move
 // between the cards (the work queue's, the graph's or the lanes'), Enter opens the one
@@ -12,7 +14,7 @@
 // V switches the view, C shows the closed issues, + − 0 zoom and fit, Space and a drag pan.
 import type { ComponentChildren } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
-import { useWorkArea } from "./api";
+import { useRunOrder, useWorkArea } from "./api";
 import {
   BRAINSTORM_TYPE,
   carriedCard,
@@ -27,7 +29,17 @@ import { type DropLabel, GHOST_GRIP, GraphDrawing, nodeRef, PAD, targetsOf } fro
 import { useAnswering, useKeptLayout, useNodeDrag } from "./graphHooks";
 import { dropTarget } from "./graphLayout";
 import { GraphLegend } from "./GraphLegend";
-import { brainstormsOf, graphOf, type GraphNode, isParent, movable, workLists } from "./graphModel";
+import {
+  brainstormsOf,
+  graphOf,
+  type GraphNode,
+  inLine,
+  isParent,
+  nextInLine,
+  movable,
+  moveOnto,
+  workLists,
+} from "./graphModel";
 import { typesOf, useDropZone } from "./hooks";
 import { useHeldKey, useShortcuts, withKey } from "./keys";
 import { formatRoute } from "./route";
@@ -62,8 +74,9 @@ interface Props {
 
 // What is dragged onto the graph: a card from the backlog (or one waiting for answers), a
 // brainstorm (Start in doesn't apply: it starts work), a waiting node (let go in the open, it
-// stops waiting).
-type Dragged = "new" | "brainstorm" | "waits";
+// stops waiting), a queued node (onto a queued node's left or right edge, it moves in the run
+// order).
+type Dragged = "new" | "brainstorm" | "waits" | "queued";
 
 // A drag over the graph: the node it would queue after, what is dragged, where (drawing units).
 interface Hover {
@@ -73,6 +86,9 @@ interface Hover {
   number: number | null;
   // A work queue card's state and title, for its ghost. Null: a link, or a node moved.
   look: Look | null;
+  // A queued node's key, and where on its target it is (moveOnto()).
+  key?: string;
+  side: number;
   x: number;
   y: number;
 }
@@ -123,6 +139,7 @@ export function Board({
   header,
 }: Props) {
   const work = useWorkArea(repo, refresh);
+  const order = useRunOrder(repo, refresh);
   const questions = useAnswering(repo, refresh);
   const [mode, setMode] = useState("work");
   const [notice, setNotice] = useState<string | null>(null);
@@ -148,7 +165,14 @@ export function Board({
   const spaced = useHeldKey("space", view === "graph");
   const [panning, setPanning] = useState(false);
 
-  const tasks = (state?.tasks ?? []).filter((t) => sameRepo(t.repo, repo));
+  // A move in the run order shows at once, over every repo's line as the listener moves it
+  // (`everyLine`); this repo's tasks and queue are taken from it.
+  const shown = inLine(state?.tasks ?? [], order.moving);
+  const everyLine = shown.line;
+  const tasks = shown.tasks.filter((t) => sameRepo(t.repo, repo));
+  const line = everyLine.filter((t) => sameRepo(t.repo, repo));
+  // What Run next can't pass is maybe another repo's.
+  const nextKey = nextInLine(everyLine);
   const brainstorms = brainstormsOf(tasks, work.pending);
   const { nodes, edges, hidden } = graphOf(tasks, state?.edges ?? [], state?.blockers ?? [], {
     showClosed,
@@ -172,7 +196,11 @@ export function Board({
     if (!box) return null;
     const x = (clientX - box.left) / zoom - PAD;
     const y = (clientY - box.top) / zoom - PAD;
-    return { x, y, target: dropTarget(shape, x, y) };
+    const target = dropTarget(shape, x, y);
+    const hit = target && shape.boxes.find((b) => b.key === target);
+    // Where on the target, 0 its left edge, 1 its right: a queued node's edges move it.
+    const side = hit ? (x - hit.x) / shape.w : 0.5;
+    return { x, y, target, side };
   };
   const targetAt = (clientX: number, clientY: number) => at(clientX, clientY)?.target ?? null;
 
@@ -180,6 +208,12 @@ export function Board({
   const asked = (number: number | null) => {
     const task = tasks.find((t) => t.key === `${repo}#${number}`);
     return task?.state === "needs-input" && !!task.questions && task.waitForAnswers !== false;
+  };
+
+  // A queued node moved in the run order, from the graph's drag or the Queued tab.
+  const reorder = (move: Parameters<typeof order.move>[0]) => {
+    setNotice(null);
+    void order.move(move).then((said) => said.error && setNotice(said.error));
   };
 
   // Issue `number` let go on the area, after `onto` (a node) or in the open. A waiting node
@@ -202,6 +236,14 @@ export function Board({
   // What letting go does, said where it would happen.
   const labelOf = (h: Hover): DropLabel | null => {
     const node = h.target ? byKey.get(h.target) : null;
+    if (h.what === "queued") {
+      const move =
+        node && h.key && !order.moving ? moveOnto(everyLine, h.key, node.key, h.side) : null;
+      const box = node && shape.boxes.find((b) => b.key === node.key);
+      if (!move || !box) return null;
+      const text = `Move #${h.number} ${move.after ? "after" : "before"} ${nodeRef(node, false, 0)} in line`;
+      return { text, x: box.x, y: box.y >= 30 ? box.y - 30 : box.y + shape.h + 6 };
+    }
     if (node && node.number === h.number) return null;
     const ref = h.number ? `#${h.number}` : "the issue";
     const parent = h.what === "new" && h.number !== null && isParent(work.backlog, h.number);
@@ -261,13 +303,23 @@ export function Board({
     },
   );
 
+  const dragged = (d: { waits: boolean; queued: boolean }): Dragged =>
+    d.queued ? "queued" : d.waits ? "waits" : "new";
   const drag = useNodeDrag({
     onMove: (point, d) => {
       const where = point && at(point.x, point.y);
       if (!where || !d) return setHover(null);
-      setHover({ ...where, what: d.waits ? "waits" : "new", number: d.number, look: null });
+      setHover({ ...where, what: dragged(d), number: d.number, key: d.key, look: null });
     },
-    onDrop: (d, point) => dropped(d.number, targetAt(point.x, point.y), d.waits ? "waits" : "new"),
+    onDrop: (d, point) => {
+      if (!d.queued) return dropped(d.number, targetAt(point.x, point.y), dragged(d));
+      // Let go anywhere but a queued node's edge, or while another move is on its way: it stays
+      // where it is. Its middle doesn't queue it after: the listener refuses a queued task.
+      if (order.moving) return;
+      const where = at(point.x, point.y);
+      const move = where?.target ? moveOnto(everyLine, d.key, where.target, where.side) : null;
+      if (move) reorder(move);
+    },
   });
 
   const fit = () => {
@@ -491,6 +543,11 @@ export function Board({
             cards={brainstorms}
             waiting={waiting}
             answering={answering}
+            line={line}
+            everyLine={everyLine}
+            onMove={reorder}
+            moving={!!order.moving}
+            nextKey={nextKey}
             targets={targets}
             github={github}
             picked={picked}
@@ -579,6 +636,11 @@ export function Board({
             cards={brainstorms}
             waiting={waiting}
             answering={answering}
+            line={line}
+            everyLine={everyLine}
+            onMove={reorder}
+            moving={!!order.moving}
+            nextKey={nextKey}
             targets={targets}
             github={github}
             picked={picked}

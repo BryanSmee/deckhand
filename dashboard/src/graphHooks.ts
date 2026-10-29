@@ -5,7 +5,7 @@ import type { JSX } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
 import { sendAnswers } from "./api";
 import { type Layout, layout } from "./graphLayout";
-import type { GraphNode } from "./graphModel";
+import { type GraphNode, reorderable } from "./graphModel";
 import type { Answers, Edge, Pending, Task, WorkAction, WorkResult } from "./types";
 
 // The layout of `nodes`, keeping the last drawing's places on this tab (`repo`) and at this
@@ -42,6 +42,8 @@ export interface NodeDrag {
   number: number;
   // A waiting node (let go in the open, it stops waiting), not one waiting for answers.
   waits: boolean;
+  // A queued one, which moves in the run order.
+  queued: boolean;
   pointer: number;
   x: number;
   y: number;
@@ -75,6 +77,7 @@ export function useNodeDrag({ onMove, onDrop }: NodeDragEvents) {
         key: n.key,
         number: n.number!,
         waits: n.task?.state === "waiting",
+        queued: !!n.task && reorderable(n.task),
         pointer: e.pointerId,
         x: e.clientX,
         y: e.clientY,

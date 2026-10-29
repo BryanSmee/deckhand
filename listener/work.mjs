@@ -38,6 +38,10 @@
 //   POST /api/repos/<owner>/<repo>/lane   { keys: ["owner/repo#12", …], name }
 //                                         names the lane of these issues (lanes.mjs), "" takes
 //                                         its name off
+//   POST /api/repos/<owner>/<repo>/order  { key, before?: key, after?: key, first?: true }
+//                                         moves a queued task in the run order (order.mjs):
+//                                         right before or after another of the repo's,
+//                                         first, or last (none of them)
 //   GET  /api/repos/<owner>/<repo>/analyze?count=&kinds=a,b&outcomes=c,d
 //                                         what an analysis of these runs would read: how many
 //                                         match, the digest's size and tokens, the kinds there
@@ -57,6 +61,7 @@ import { labelFailed } from "./comments.mjs";
 import { repoAllowed } from "./config.mjs";
 import { FAILED } from "./board.mjs";
 import { createDismissals } from "./dismissals.mjs";
+import { createOrder } from "./order.mjs";
 import { fromDashboard } from "./discussions.mjs";
 import { inboxItem, issueItem, parseKey, prId, sameRepo, taskKey, unmarked } from "./events.mjs";
 import { getJson } from "./github.mjs";
@@ -64,8 +69,10 @@ import { createInputSeeder } from "./inputs.mjs";
 import { createRepoCheck } from "./repo-check.mjs";
 import { MAX_NAME, createLanes, laneName } from "./lanes.mjs";
 import { leadsTo, planSummary, readTree, waitsOf } from "./plans.mjs";
+import { isLight } from "./modes.mjs";
 import { CONFIG_FILE, modeNames } from "./repo-config.mjs";
 import { issueList, waitsFor } from "./waits.mjs";
+import { taskId } from "./spelling.mjs";
 import { apiRoute, readJsonBody, refuse, send } from "./web.mjs";
 
 // How long a repo's open issues are served before they are read again (in the background):
@@ -117,6 +124,8 @@ export function checkAction(body) {
 // "running", "queued" or null. `analysis`: run digests (analysis.mjs createAnalysis()).
 // `lanes`: the lanes' names (lanes.mjs), which a plan and the dashboard's renaming set.
 // `dismissals`: the failed runs dismissed from the dashboard (dismissals.mjs).
+// `order`: the run order (order.mjs); `queueOrder()`: the tasks waiting for a slot, in the
+// order they start (tasks.mjs).
 export function createWorkApi({
   config,
   github,
@@ -135,6 +144,8 @@ export function createWorkApi({
   analysis = createAnalysis({ runs: () => [] }),
   lanes = createLanes(),
   dismissals = createDismissals(),
+  order = createOrder(),
+  queueOrder = () => [],
   publicUrl = () => null,
   // The key of the dashboard's "from" lines (discussions.mjs fromKey()), or null.
   fromKey = () => null,
@@ -882,6 +893,62 @@ export function createWorkApi({
     send(res, 200, { message: name ? `Lane named “${name}”.` : "Lane name taken off." });
   }
 
+  // A queued task of the repo moves in the run order, as anyone allowed to start it could:
+  // right before `before` or right after `after` (another of the repo's queued tasks), first,
+  // or last (none of them). Only a task waiting for a slot, and not a brainstorm: those start
+  // first whatever the order. The reply names no place: it would count other repos' tasks,
+  // which the user may not see.
+  async function reorder(req, res, user, repo) {
+    const body = (await readJsonBody(req, MAX_BODY)) ?? {};
+    const { key, before = null, after = null, first = false } = body;
+    const ours = (k) => {
+      const parsed = typeof k === "string" && parseKey(k);
+      return !!parsed && sameRepo(parsed.repo, repo);
+    };
+    if (!ours(key)) refuse(400, `\`key\` is the task key of one of ${repo}'s tasks.`);
+    for (const [field, value] of [
+      ["before", before],
+      ["after", after],
+    ]) {
+      if (value === null) continue;
+      if (!ours(value))
+        refuse(400, `\`${field}\` is null or the task key of one of ${repo}'s tasks.`);
+      if (taskId(value) === taskId(key)) refuse(400, `\`${field}\` is another task than \`key\`.`);
+    }
+    if (typeof first !== "boolean") refuse(400, "`first` is true or false.");
+    if ([before !== null, after !== null, first].filter(Boolean).length > 1) {
+      refuse(400, "One of `before`, `after` and `first` at most.");
+    }
+    await checkedRepo(repo, user);
+    const queue = queueOrder();
+    const keys = queue.map((t) => taskKey(t.repo, t.id));
+    const find = (k) => keys.findIndex((q) => taskId(q) === taskId(k));
+    const at = find(key);
+    const name = `#${parseKey(key).number}`;
+    if (at < 0) refuse(409, `${name} isn't waiting for a slot: only queued tasks move.`);
+    if (isLight(queue[at], queue[at].pending.at(-1)?.mode)) {
+      refuse(409, `${name} is a brainstorm: brainstorms start before work runs anyway.`);
+    }
+    const other = before ?? after;
+    if (other !== null && find(other) < 0) {
+      refuse(409, `#${parseKey(other).number} is no longer queued.`);
+    }
+    order.move(
+      keys[at],
+      { before: before && keys[find(before)], after: after && keys[find(after)], first },
+      keys,
+    );
+    const where = first
+      ? "first"
+      : other
+        ? `${before ? "before" : "after"} #${parseKey(other).number}`
+        : "last";
+    log(`Work area: ${user} moves ${keys[at]} ${where} in the run order`);
+    send(res, 200, {
+      message: `${name} moved ${where === "first" || where === "last" ? `${where} in line` : where}.`,
+    });
+  }
+
   async function analyze(req, res, user, repo) {
     const body = await readJsonBody(req, MAX_BODY);
     const selection = checkSelection(body, (message) => refuse(400, message));
@@ -893,18 +960,27 @@ export function createWorkApi({
     );
   }
 
-  // Handles /api/repos/<owner>/<repo>/issues, /work, /answer, /rerun, /dismiss, /inbox, /lane
-  // and /analyze; false for any other path.
+  // Handles /api/repos/<owner>/<repo>/issues, /work, /answer, /rerun, /dismiss, /inbox, /lane,
+  // /order and /analyze; false for any other path.
   const handle = apiRoute({
     name: "Work area",
     route: (pathname) => {
       const one =
-        /^\/api\/repos\/([\w.-]+)\/([\w.-]+)\/(issues|work|answer|rerun|dismiss|inbox|lane|analyze)$/.exec(
+        /^\/api\/repos\/([\w.-]+)\/([\w.-]+)\/(issues|work|answer|rerun|dismiss|inbox|lane|order|analyze)$/.exec(
           pathname,
         );
       return one && { repo: `${one[1]}/${one[2]}`, what: one[3] };
     },
-    posts: { work, answer: answers, rerun: reruns, dismiss: dismissal, inbox, lane, analyze },
+    posts: {
+      work,
+      answer: answers,
+      rerun: reruns,
+      dismiss: dismissal,
+      inbox,
+      lane,
+      order: reorder,
+      analyze,
+    },
     gets: {
       issues: (req, res, user, repo) => backlog(res, repo, user),
       analyze: previewAnalysis,

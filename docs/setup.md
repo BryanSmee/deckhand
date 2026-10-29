@@ -242,7 +242,7 @@ closed** brings them back; your browser keeps the choice. Runs on the ideas and 
 discussions are never drawn: they have no pull request and no `/after`. Only the issues drawn
 can be queued after.
 
-Beside the graph, the **work queue** (a sheet at the bottom on a phone) has four tabs.
+Beside the graph, the **work queue** (a sheet at the bottom on a phone) has five tabs.
 **Backlog** lists the open issues with nothing live (running, queued, waiting, brainstorming or
 needing input): drop one on the graph to start it (in the mode picked in **Start in**, in the
 page's header), on a node to queue it after that one; one with sub-issues brings them along.
@@ -252,7 +252,14 @@ brainstorm on the graph to start work on it (the brainstorm ends), or on the Bac
 it: the wrap-up a `/stop` comment runs, its summary posted and the issue updated. Once it is
 over, the issue is back in the backlog. **Waiting** lists the issues waiting for others: drag
 one's node away to end its wait, onto another node to wait for that one. **Answers** lists those
-waiting for your answers: starting or queueing one asks its open questions first. Each card has
+waiting for your answers: starting or queueing one asks its open questions first. **Queued**
+lists the tasks waiting for a free slot, in the order they start (the **run order**): drag a card
+above or below another to move it, or use its **Run next**, **Move up** and **Move down**
+buttons. On the graph, a queued node shows its place ("2nd"), and dragging it onto another queued
+node's left or right edge moves it before or after that one (dropped anywhere else, it stays).
+Brainstorms always start before work runs and don't move. A task whose repository is at its
+`max_parallel` is skipped, and the next one starts: the order is a priority, not a strict line.
+Tasks you never moved go after the ones you did, in the order they were queued. Each card has
 a button for each drag (on a phone, its first one and a menu for the rest), for phones and
 keyboards. While you drag, the graph outlines the node a drop would queue after and says what
 letting go does ("Queue #31 after #19"); each action shows at once as a dashed node

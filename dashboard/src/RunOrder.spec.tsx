@@ -1,0 +1,300 @@
+// The run order (listener/order.mjs): the Queued tab of the board's work queue, its buttons
+// and drags, the graph's place badges and a queued node dragged onto another one's edge.
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/preact";
+import { beforeEach, expect, test, vi } from "vitest";
+import { Dashboard } from "./App";
+import { inLine, moveOnto } from "./graphModel";
+import { BACKLOG, makeState, makeTask, mockApi, transfer } from "./testUtils";
+
+const queued = (number: number, position: number, extra = {}) =>
+  makeTask({ number, title: `Queued ${number}`, state: "queued", position, ...extra });
+
+// #44 a brainstorm, which starts first; #41 next, then another repo's task (acme/api#9), then
+// #42 and #43.
+const LINE = [
+  queued(44, 1, { startsFirst: true, kind: "brainstorm", mode: "brainstorm" }),
+  queued(41, 2),
+  queued(9, 3, { repo: "acme/api", key: "acme/api#9", title: "Elsewhere" }),
+  queued(42, 4),
+  queued(43, 5, { kind: "pr", key: "acme/app#pr-43" }),
+];
+
+let api: ReturnType<typeof mockApi>;
+beforeEach(() => {
+  api = mockApi({
+    "api/repos/acme/app/issues": () => BACKLOG,
+    "POST api/repos/acme/app/order": ({ body }) =>
+      body.key === "acme/app#42" && body.first
+        ? Response.json({ error: "#42 isn't waiting for a slot." }, { status: 409 })
+        : { message: "moved" },
+  });
+});
+
+const open = (narrow = false) => {
+  history.replaceState(null, "", "#/acme/app/board");
+  vi.stubGlobal("matchMedia", (query: string) => ({
+    matches: query.includes("min-width") ? !narrow : false,
+    addEventListener() {},
+    removeEventListener() {},
+  }));
+  render(<Dashboard state={makeState({}, LINE)} error={null} />);
+  fireEvent.click(screen.getByRole("tab", { name: /^Queued/ }));
+  return screen.getByRole("list", { name: "Tasks waiting for a slot, in run order" });
+};
+
+const cards = (list: HTMLElement) =>
+  within(list)
+    .getAllByRole("listitem")
+    .map((li) => li.querySelector("[class*=ref]")?.textContent);
+
+test("the Queued tab lists the repo's queued tasks in run order, with their place", () => {
+  const list = open();
+  expect(cards(list)).toEqual(["#44", "#41", "#42", "#43"]);
+  expect(within(list).getByText("1st in line · brainstorm · starts first")).toBeTruthy();
+  expect(within(list).getByText("4th in line")).toBeTruthy();
+  // A brainstorm doesn't move; the first work run can't go any higher.
+  expect(within(list).queryByRole("button", { name: "Run #44 next" })).toBeNull();
+  expect(
+    within(list).getByRole<HTMLButtonElement>("button", { name: "Run #41 next" }).disabled,
+  ).toBe(true);
+  expect(
+    within(list).getByRole<HTMLButtonElement>("button", { name: "Move #41 up" }).disabled,
+  ).toBe(true);
+  expect(
+    within(list).getByRole<HTMLButtonElement>("button", { name: "Move #43 down" }).disabled,
+  ).toBe(true);
+  // Its pull request's link.
+  expect(within(list).getByText("Queued 43").closest("a")?.getAttribute("href")).toMatch(
+    /\/pull\/43$/,
+  );
+});
+
+test("Run next, Move up and Move down send the move, which shows at once", async () => {
+  const list = open();
+  const release = api.hold();
+  fireEvent.click(within(list).getByRole("button", { name: "Run #43 next" }));
+  expect(api.bodies()).toEqual([{ key: "acme/app#pr-43", first: true }]);
+  // On its way: in its new place, the line numbered again as the listener will (acme/api#9
+  // moves down one too), every button off.
+  await waitFor(() => expect(cards(list)).toEqual(["#44", "#43", "#41", "#42"]));
+  expect(within(list).getByText("Queued 43").closest("li")!.textContent).toMatch(/2nd in line/);
+  expect(within(list).getByText("Queued 41").closest("li")!.textContent).toMatch(/3rd in line/);
+  expect(within(list).getByText("Queued 42").closest("li")!.textContent).toMatch(/5th in line/);
+  expect(
+    within(list).getByRole<HTMLButtonElement>("button", { name: "Move #42 up" }).disabled,
+  ).toBe(true);
+  release();
+  // The fake listener's state doesn't change: back where it was once answered.
+  await waitFor(() => expect(cards(list)).toEqual(["#44", "#41", "#42", "#43"]));
+  fireEvent.click(within(list).getByRole("button", { name: "Move #43 up" }));
+  await waitFor(() =>
+    expect(
+      within(list).getByRole<HTMLButtonElement>("button", { name: "Move #41 down" }).disabled,
+    ).toBe(false),
+  );
+  // Down one: right after the next of the repo's, not to the end of every repo's line.
+  fireEvent.click(within(list).getByRole("button", { name: "Move #42 down" }));
+  await waitFor(() =>
+    expect(api.bodies().slice(1)).toEqual([
+      { key: "acme/app#pr-43", before: "acme/app#42" },
+      { key: "acme/app#42", after: "acme/app#pr-43" },
+    ]),
+  );
+});
+
+test("a refusal shows as the listener says it", async () => {
+  const list = open();
+  fireEvent.click(within(list).getByRole("button", { name: "Run #42 next" }));
+  expect(await screen.findByText("#42 isn't waiting for a slot.")).toBeTruthy();
+});
+
+test("a card dragged onto the bottom half of another goes after it, the top half before it", async () => {
+  const list = open();
+  const card = (n: string) => within(list).getByText(`Queued ${n}`).closest("li")!;
+  const data = transfer();
+  fireEvent.dragStart(card("41"), { dataTransfer: data });
+  // jsdom's boxes are empty: any point is at or below the middle.
+  fireEvent.dragOver(card("43"), { dataTransfer: data, clientY: 10 });
+  fireEvent.drop(card("43"), { dataTransfer: data, clientY: 10 });
+  await waitFor(() =>
+    expect(api.bodies()).toEqual([{ key: "acme/app#41", after: "acme/app#pr-43" }]),
+  );
+  // Onto the brainstorm: nothing.
+  fireEvent.dragStart(card("42"), { dataTransfer: transfer() });
+  fireEvent.drop(card("44"), {
+    dataTransfer: transfer({ "application/x-deckhand-queued": "acme/app#42" }),
+  });
+  expect(api.bodies()).toHaveLength(1);
+});
+
+test("on a phone: Run next, Move up and Move down on each card, 44 px", () => {
+  const list = open(true);
+  const item = within(list).getByText("Queued 42").closest("li")!;
+  for (const name of ["Run #42 next", "Move #42 up", "Move #42 down"]) {
+    expect(within(item).getByRole("button", { name }).className).toMatch(/touch/);
+  }
+});
+
+test("Run next is off for the first work run of every repo shown, another's brainstorm before it", () => {
+  history.replaceState(null, "", "#/acme/app/board");
+  // acme/api's brainstorm is 1st, acme/app's first work run 2nd: nothing to pass.
+  const other = queued(7, 1, { repo: "acme/api", key: "acme/api#7", startsFirst: true });
+  render(<Dashboard state={makeState({}, [other, queued(41, 2), queued(42, 4)])} error={null} />);
+  fireEvent.click(screen.getByRole("tab", { name: /^Queued/ }));
+  expect(screen.getByRole<HTMLButtonElement>("button", { name: "Run #41 next" }).disabled).toBe(
+    true,
+  );
+  expect(screen.getByRole<HTMLButtonElement>("button", { name: "Run #42 next" }).disabled).toBe(
+    false,
+  );
+});
+
+test("Run next is on when another repo's work run is before the first of this one's", () => {
+  history.replaceState(null, "", "#/acme/app/board");
+  const other = queued(7, 1, { repo: "acme/api", key: "acme/api#7" });
+  render(<Dashboard state={makeState({}, [other, queued(41, 2)])} error={null} />);
+  fireEvent.click(screen.getByRole("tab", { name: /^Queued/ }));
+  expect(screen.getByRole<HTMLButtonElement>("button", { name: "Run #41 next" }).disabled).toBe(
+    false,
+  );
+});
+
+test("inLine: a move on its way, the whole line numbered again as the listener moves it", () => {
+  const numbers = (moving: Parameters<typeof inLine>[1]) =>
+    inLine(LINE, moving).line.map((t) => [t.number, t.position]);
+  // Last: behind every repo's tasks.
+  expect(numbers({ key: "acme/app#41", before: null })).toEqual([
+    [44, 1],
+    [9, 2],
+    [42, 3],
+    [43, 4],
+    [41, 5],
+  ]);
+  expect(inLine(LINE, { key: "acme/app#41" }).tasks.find((t) => t.number === 41)?.position).toBe(5);
+  // Down one, right after #42: acme/api#9 comes up to 2nd, as order.mjs writes it.
+  expect(numbers({ key: "acme/app#41", after: "acme/app#42" })).toEqual([
+    [44, 1],
+    [9, 2],
+    [42, 3],
+    [41, 4],
+    [43, 5],
+  ]);
+  // Up one, right before #42: past acme/api#9.
+  expect(numbers({ key: "acme/app#pr-43", before: "acme/app#42" })).toEqual([
+    [44, 1],
+    [41, 2],
+    [9, 3],
+    [43, 4],
+    [42, 5],
+  ]);
+  // Run next: ahead of every repo's work runs, after the brainstorms.
+  expect(numbers({ key: "acme/app#42", first: true })).toEqual([
+    [44, 1],
+    [42, 2],
+    [41, 3],
+    [9, 4],
+    [43, 5],
+  ]);
+});
+
+test("moveOnto: a queued node's left edge before it, its right edge after it, its middle nothing", () => {
+  const { line } = inLine(LINE, null);
+  expect(moveOnto(line, "acme/app#pr-43", "acme/app#41", 0.1)).toEqual({
+    key: "acme/app#pr-43",
+    before: "acme/app#41",
+  });
+  expect(moveOnto(line, "acme/app#41", "acme/app#pr-43", 0.9)).toEqual({
+    key: "acme/app#41",
+    after: "acme/app#pr-43",
+  });
+  expect(moveOnto(line, "acme/app#41", "acme/app#42", 0.5)).toBeNull();
+  // Where it is already: right before the next, right after the one before it.
+  expect(moveOnto(line, "acme/app#42", "acme/app#pr-43", 0.1)).toBeNull();
+  expect(moveOnto(line, "acme/app#pr-43", "acme/app#42", 0.9)).toBeNull();
+  // Another repo's task between: a move all the same, which it jumps.
+  expect(moveOnto(line, "acme/app#41", "acme/app#42", 0.1)).toEqual({
+    key: "acme/app#41",
+    before: "acme/app#42",
+  });
+  // Not onto a brainstorm, nor itself.
+  expect(moveOnto(line, "acme/app#41", "acme/app#44", 0.1)).toBeNull();
+  expect(moveOnto(line, "acme/app#41", "acme/app#41", 0.1)).toBeNull();
+});
+
+test("the graph's queued nodes show their place", async () => {
+  history.replaceState(null, "", "#/acme/app/board");
+  render(<Dashboard state={makeState({}, LINE)} error={null} />);
+  const node = await screen.findByRole("listitem", { name: /^#41 Queued 41: Queued, 2nd in line/ });
+  expect(within(node).getByText("2nd")).toBeTruthy();
+});
+
+// Where a node is drawn (its transform, in drawing units) and its size: jsdom puts the drawing
+// at 0, 0, so the pointer's place is these plus the drawing's padding.
+const PAD = 8;
+const boxOf = (node: HTMLElement) => {
+  const [x, y] = /translate\(([-\d.]+)px, ([-\d.]+)px\)/
+    .exec(node.style.transform)!
+    .slice(1)
+    .map(Number);
+  return {
+    x: x + PAD,
+    y: y + PAD,
+    w: parseFloat(node.style.width),
+    h: parseFloat(node.style.height),
+  };
+};
+
+test("on the graph: a queued node onto another's right edge goes after it; its middle or the open, nothing", async () => {
+  open();
+  const node = (n: number) =>
+    screen.getByRole("listitem", { name: new RegExp(`^#${n} Queued ${n}:`) });
+  const from = node(41);
+  const start = boxOf(from);
+  const drag = (to: { x: number; y: number }) => {
+    fireEvent.pointerDown(from, {
+      button: 0,
+      pointerId: 1,
+      clientX: start.x + 5,
+      clientY: start.y + 5,
+    });
+    fireEvent.pointerMove(from, { pointerId: 1, clientX: to.x, clientY: to.y });
+  };
+  const target = boxOf(node(42));
+  const at = (side: number) => ({ x: target.x + target.w * side, y: target.y + target.h / 2 });
+
+  // Its middle: no label, nothing sent.
+  drag(at(0.5));
+  expect(screen.queryByText(/^Move #/)).toBeNull();
+  fireEvent.pointerUp(from, { pointerId: 1, ...{ clientX: at(0.5).x, clientY: at(0.5).y } });
+  // In the open: nothing either.
+  drag({ x: 5000, y: 5000 });
+  fireEvent.pointerUp(from, { pointerId: 1, clientX: 5000, clientY: 5000 });
+  // #42 onto PR #43's left edge: right before it, where #42 is already.
+  const second = node(42);
+  const s0 = boxOf(second);
+  const pr = boxOf(screen.getByRole("listitem", { name: /^PR #43 Queued 43:/ }));
+  const edge = { clientX: pr.x + pr.w * 0.1, clientY: pr.y + pr.h / 2 };
+  fireEvent.pointerDown(second, { button: 0, pointerId: 3, clientX: s0.x + 5, clientY: s0.y + 5 });
+  fireEvent.pointerMove(second, { pointerId: 3, ...edge });
+  expect(screen.queryByText(/^Move #/)).toBeNull();
+  fireEvent.pointerUp(second, { pointerId: 3, ...edge });
+  expect(api.bodies()).toEqual([]);
+
+  // Its right edge: after it.
+  drag(at(0.9));
+  expect(screen.getByText("Move #41 after #42 in line")).toBeTruthy();
+  const release = api.hold();
+  fireEvent.pointerUp(from, { pointerId: 1, clientX: at(0.9).x, clientY: at(0.9).y });
+  await waitFor(() => expect(api.bodies()).toEqual([{ key: "acme/app#41", after: "acme/app#42" }]));
+  // Another drag while that move is on its way (#42 then #41, shown at once): #42 onto #41's
+  // right edge would move it, but nothing is sent meanwhile.
+  const other = node(42);
+  const o = boxOf(other);
+  const right = { x: start.x + start.w * 0.9, y: start.y + start.h / 2 };
+  fireEvent.pointerDown(other, { button: 0, pointerId: 2, clientX: o.x + 5, clientY: o.y + 5 });
+  fireEvent.pointerMove(other, { pointerId: 2, clientX: right.x, clientY: right.y });
+  expect(screen.queryByText(/^Move #/)).toBeNull();
+  fireEvent.pointerUp(other, { pointerId: 2, clientX: right.x, clientY: right.y });
+  release();
+  await waitFor(() => expect(api.bodies()).toHaveLength(1));
+});

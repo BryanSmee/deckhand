@@ -1,13 +1,14 @@
-// What the board's graph draws (Board.tsx): its nodes (each one's number, state, "?" badge and
-// two-line title, in its status tone) on a dotted canvas, the orthogonal arrows between them,
-// and while something is dragged, what letting it go does. Or why there is nothing to draw.
+// What the board's graph draws (Board.tsx): its nodes (each one's number, state, place in the
+// run order, "?" badge and two-line title, in its status tone) on a dotted canvas, the
+// orthogonal arrows between them, and while something is dragged, what letting it go does. Or
+// why there is nothing to draw.
 import type { JSX, RefObject } from "preact";
 import type { Target } from "./Chooser";
 import type { Look } from "./dnd";
 import { kindName, numberOf, plural, shortRepo, shorten } from "./format";
 import type { NodeDrag } from "./graphHooks";
 import type { Layout } from "./graphLayout";
-import { type GraphNode, LOUD, TONES } from "./graphModel";
+import { type GraphNode, LOUD, ordinal, TONES } from "./graphModel";
 import { formatRoute } from "./route";
 import type { Edge, Task } from "./types";
 import { StatusDot, toneClass } from "./ui/Status";
@@ -56,6 +57,7 @@ export function nodeLabel(n: GraphNode, waits: number): string {
   return (
     `${nodeRef(n, false, 0)} ${n.title ?? ""}`.trim() +
     `: ${n.status}` +
+    (n.position ? `, ${ordinal(n.position)} in line` : "") +
     (count ? `, ${plural(count, "question")}` : "") +
     (waits ? `, waits for ${plural(waits, "issue")}` : "")
   );
@@ -73,6 +75,16 @@ export function lookClasses(n: GraphNode, s: Record<string, string>): string {
   ]
     .filter(Boolean)
     .join(" ");
+}
+
+// A queued node's place in the run order: "1st", "2nd"…
+export function PlaceBadge({ n, class: className }: { n: GraphNode; class: string }) {
+  if (!n.position) return null;
+  return (
+    <span class={className} aria-hidden="true" title={`${ordinal(n.position)} in line to start`}>
+      {ordinal(n.position)}
+    </span>
+  );
 }
 
 // The "?" badge: with the open question count, or alone (questions not in the format).
@@ -150,6 +162,7 @@ export function GraphNodeView({
         <StatusDot tone={TONES[n.look]} pulse={n.look === "run"} />
         <span class={styles.ref}>{nodeRef(n, false, 0)}</span>
         <span class={styles.state}>{n.status}</span>
+        <PlaceBadge n={n} class={styles.place} />
         <QuestionBadge n={n} class={styles.badge} />
       </span>
       <span class={styles.title}>{title}</span>

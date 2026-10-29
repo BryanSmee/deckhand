@@ -245,6 +245,27 @@ by, at }` while that run is still its last and it still ended so. Any new run sh
 the stale entry is dropped on the next start. `{ runId, undo: true }` takes it back. Nothing is
 posted on GitHub: it only matters to the dashboard.
 
+When every slot is taken (`MAX_PARALLEL`, or a repo's `max_parallel`), the **run order**
+decides which queued task starts next (issue #413). `tasks.mjs` `queueOrder()` sorts the tasks
+waiting for a slot: light runs (brainstorms, the repo's light modes) first, then those the
+maintainer placed, in the order `order.json` keeps (`order.mjs`, by lowercase task key,
+respelled at start with the rest), then the others by when their first pending comment was
+queued (`queuedAt`, kept in `queue.json` through a restart). `schedule()` hands the ready ones
+to `startable()` in that order, which still skips a task whose repo is at its cap and starts the
+next. `POST /api/repos/<owner>/<repo>/order { key, before?: key, after?: key, first?: true }`
+(`work.mjs` `reorder`, the repo's users, a queued task of the repo that isn't light; `before` and
+`after` another of the repo's, none of them: last) writes the whole current order with the task
+moved, so moving one past tasks nobody placed keeps them where they were. Move down sends
+`after`: the task goes right after the next of its repo's (another repo's tasks between them
+come up before it), not to the end of the line. A key leaves the order when its run starts or
+its queued comments are dropped (`runs.mjs`); `schedule()` drops any other key of a task with no
+comments left or a run going, and so does the start, after `loadQueue()` (`queue.json` is only
+written when the listener stops, so a crash loses the comments but not their keys). `api/state`
+gives each queued task its `position` (1 next to start, among the tasks of every repo the user
+sees: the places don't tell of the others) and `startsFirst` for a light one; the board's Queued
+tab and the graph's badges show it, and reorder from there. A move shows at once: the dashboard
+moves the whole line as `order.mjs` does (`graphModel.ts` `inLine()`).
+
 The dashboard's New request (Idea, Bug report) sends ideas and bug reports to a repo's inbox:
 `POST /api/repos/<owner>/<repo>/inbox { kind: "idea" | "bug", text }` (`work.mjs`
 `sendToInbox`; the dialog's title, a blank line, then its details) posts the text on the inbox issue as the App's comment ("From the dashboard by
@@ -838,6 +859,7 @@ tests fake it.
 | `policies.mjs`                                                    | Rules as code: the operator's (`GRANTS_DIR/policy/`) and the repos' (`.deckhand/policy/`) Rego policies, merged by file name and evaluated by `opa` (no environment, no network, a timeout), fail closed.                                            |
 | `waits.mjs`                                                       | Comments waiting for other issues to be done (`/after`, `waits.json`).                                                                                                                                                                               |
 | `work.mjs`                                                        | The graph's work area: the backlog, starting or queueing issues, answers, reruns, dismissals, inbox entries, lane names, analyses.                                                                                                                   |
+| `order.mjs`                                                       | The run order: which queued task starts next when a slot frees, as the maintainer placed them (`order.json`).                                                                                                                                        |
 | `dismissals.mjs`                                                  | Failed runs dismissed from the dashboard, while each is its task's last (`dismissed.json`).                                                                                                                                                          |
 | `lanes.mjs`                                                       | The board's lanes' names: typed on the dashboard, a plan's or GitHub's parent, or an inbox (`lanes.json`).                                                                                                                                           |
 | `plans.mjs`                                                       | A parent issue dropped on the graph: its sub-issues' tree, all levels down, and what each waits for from their "blocked by" links.                                                                                                                   |

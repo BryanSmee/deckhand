@@ -2,7 +2,9 @@
 // Backlog: the repo's open issues with nothing live, to start, queue after another or
 // brainstorm. Brainstorm: the issues being brainstormed, to start work on, queue or stop.
 // Waiting: those waiting for others, to start now, queue after another or take out of their
-// wait. Answers: those waiting for answers, which a start or a queue asks first. Each card has
+// wait. Answers: those waiting for answers, which a start or a queue asks first. Queued: the
+// tasks waiting for a slot, in the order they start (the run order, listener/order.mjs): drag
+// one above or below another, or Run next, Move up and Move down. Each card has
 // a button for each drag (on a phone, its first one and a menu for the rest), so phones and
 // keyboards can do the same. The drags onto the graph are the board's (Board.tsx); the tabs
 // take drops too: a card on Brainstorm brainstorms it, a brainstorm on Backlog stops it.
@@ -12,9 +14,9 @@ import type { WorkAreaState } from "./api";
 import { Chooser, type Target } from "./Chooser";
 import { BRAINSTORM_TYPE, dragEnded, dragOf, droppedIssue, ISSUE_TYPE, LINK_TYPES } from "./dnd";
 import { issueList, plural, sameRepo, STATE_NAMES, when } from "./format";
-import { type BrainstormCard } from "./graphModel";
+import { alreadyThere, type BrainstormCard, ordinal, reorderable } from "./graphModel";
 import { typesOf, useDropZone } from "./hooks";
-import type { Task, WorkAction } from "./types";
+import type { OrderMove, Task, WorkAction } from "./types";
 import { Button, IconButton } from "./ui/Button";
 import { Field } from "./ui/Field";
 import * as Icon from "./ui/icons";
@@ -23,7 +25,10 @@ import { Notice } from "./ui/Surface";
 import { Tabs } from "./ui/Tabs";
 import styles from "./WorkQueue.module.css";
 
-export type QueueTab = "backlog" | "brainstorm" | "waiting" | "answers";
+export type QueueTab = "backlog" | "brainstorm" | "waiting" | "answers" | "queued";
+
+// A Queued card's drag: its task's key.
+const QUEUED_TYPE = "application/x-deckhand-queued";
 
 // What can be done to a brainstorm now: start work on it, or stop it. Not while a reply or its
 // wrap-up is on its way (the listener refuses a busy issue).
@@ -39,6 +44,8 @@ interface RowAction {
   run?: () => void;
   after?: (number: number) => void;
   icon?: ComponentChildren;
+  // Its icon alone, `label` its name: beside the first button on a phone too, not in the menu.
+  iconOnly?: boolean;
   // Its key on the board, for the card selected ("Queue after…" is always Q).
   shortcut?: "start" | "brainstorm";
   disabled: boolean;
@@ -54,6 +61,8 @@ interface Row {
   meta: string;
   // Its drag, if it has one: the card's payload.
   drag?: (e: DragEvent) => void;
+  // A Queued card: dropped above or below another, it moves there in the run order.
+  queued?: boolean;
   actions: RowAction[];
 }
 
@@ -66,6 +75,8 @@ const HINTS: Record<QueueTab, string> = {
   waiting:
     "On the board, drag a waiting card away to end its wait, or onto another card to wait for that one.",
   answers: "Drag onto the board to answer and start · onto a card to answer and queue after it.",
+  queued:
+    "The order they start in when a slot frees · drag above or below another card to move it. Brainstorms start first.",
 };
 
 interface Props {
@@ -75,6 +86,15 @@ interface Props {
   cards: BrainstormCard[];
   waiting: Task[];
   answering: Task[];
+  // The repo's tasks waiting for a slot, in run order (graphModel.ts inLine()), and their move:
+  // `moving` while one is on its way.
+  line: Task[];
+  // Every repo's, as `line`: a drop where a card is already changes nothing.
+  everyLine: Task[];
+  onMove: (move: OrderMove) => void;
+  moving: boolean;
+  // The task already next among every repo's work runs (graphModel.ts nextInLine()).
+  nextKey: string | null;
   // What "Queue after…" offers: the graph's issues.
   targets: Target[];
   github: string;
@@ -101,6 +121,11 @@ export function WorkQueue({
   cards,
   waiting,
   answering,
+  line,
+  everyLine,
+  onMove,
+  moving,
+  nextKey,
   targets,
   github,
   picked,
@@ -122,6 +147,8 @@ export function WorkQueue({
   const [menu, setMenu] = useState<string | null>(null);
   // The card being dragged: dimmed in its list meanwhile.
   const [dragging, setDragging] = useState<string | null>(null);
+  // A Queued card dragged over another: where it would go, above or below it.
+  const [dropAt, setDropAt] = useState<{ key: string; above: boolean } | null>(null);
   const [filter, setFilter] = useState("");
   // A phone's sheet: open, or its tabs alone.
   const [open, setOpen] = useState(true);
@@ -181,7 +208,82 @@ export function WorkQueue({
   );
 
   const issueUrl = (number: number) => `${github}/${repo}/issues/${number}`;
+  const taskUrl = (t: Task) =>
+    `${github}/${repo}/${t.kind === "pr" ? "pull" : t.kind === "discussion" ? "discussions" : "issues"}/${t.number}`;
+
+  // The cards that move, and where a move puts one: up right before the one above, down right
+  // after the one below (another repo's tasks between them move past it), Run next first.
+  const movers = line.filter(reorderable);
+  const move = (m: OrderMove) => {
+    onNotice(null);
+    onMove(m);
+  };
+  const queuedActions = (t: Task): RowAction[] => {
+    const i = movers.indexOf(t);
+    if (i < 0) return [];
+    const ref = `#${t.number}`;
+    const still = moving || blocked;
+    // First of the work runs of every repo shown: Run next has nothing to pass.
+    const next = t.key === nextKey;
+    return [
+      {
+        label: "Run next",
+        shortcut: "start",
+        aria: `Run ${ref} next`,
+        // A phone's row: three icons leave its title some room.
+        iconOnly: touch,
+        icon: touch ? <Icon.ToTop size={16} /> : <Icon.Play size={11} />,
+        run: () => move({ key: t.key, first: true }),
+        disabled: still || next,
+      },
+      {
+        label: "Move up",
+        aria: `Move ${ref} up`,
+        iconOnly: true,
+        icon: <Icon.ChevronUp size={touch ? 18 : 14} />,
+        run: () => move({ key: t.key, before: movers[i - 1].key }),
+        disabled: still || i === 0,
+      },
+      {
+        label: "Move down",
+        aria: `Move ${ref} down`,
+        iconOnly: true,
+        icon: <Icon.ChevronDown size={touch ? 18 : 14} />,
+        run: () => move({ key: t.key, after: movers[i + 1].key }),
+        disabled: still || i === movers.length - 1,
+      },
+    ];
+  };
+
+  // A Queued card let go over `onto`: above it, right before it; below it, right after it.
+  // Where it is already, nothing.
+  const dropOnto = (key: string, onto: Task, above: boolean) => {
+    if (key === onto.key || !reorderable(onto) || alreadyThere(everyLine, key, onto, above)) return;
+    move(above ? { key, before: onto.key } : { key, after: onto.key });
+  };
+  const queuedRows: Row[] = line.map((t) => {
+    const mode = t.mode && t.mode !== "work" ? t.mode : null;
+    const first = t.startsFirst ? "starts first" : null;
+    const can = !blocked && !moving && reorderable(t);
+    return {
+      key: t.key,
+      number: t.number!,
+      title: t.title,
+      href: taskUrl(t),
+      meta: [`${ordinal(t.position!)} in line`, mode, first].filter(Boolean).join(" · "),
+      queued: true,
+      drag: can
+        ? (e: DragEvent) => {
+            e.dataTransfer?.setData(QUEUED_TYPE, t.key);
+            if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
+          }
+        : undefined,
+      actions: queuedActions(t),
+    };
+  });
+
   const rows: Record<QueueTab, Row[]> = {
+    queued: queuedRows,
     backlog: shown.map((i) => {
       // A parent with open sub-issues is laid out with them ("plan").
       const parent = !!i.subIssues;
@@ -334,11 +436,25 @@ export function WorkQueue({
     brainstorm: { label: "Issues being brainstormed", empty: "No brainstorm going on." },
     waiting: { label: "Waiting issues", empty: "No issue waits for another." },
     answers: { label: "Issues waiting for answers", empty: "No issue waits for your answers." },
+    queued: { label: "Tasks waiting for a slot, in run order", empty: "Nothing waits for a slot." },
   };
 
   const button = (row: Row, a: RowAction, first: boolean, inMenu = false) => {
     const queue = !!a.after;
     const key = queue ? "queue" : a.shortcut;
+    if (a.iconOnly) {
+      return (
+        <IconButton
+          key={a.label}
+          size={touch ? "touch" : "small"}
+          variant="ghost"
+          label={a.aria ?? a.label}
+          icon={a.icon}
+          disabled={a.disabled}
+          onClick={() => a.run?.()}
+        />
+      );
+    }
     return (
       <Button
         key={a.label}
@@ -363,6 +479,36 @@ export function WorkQueue({
     );
   };
 
+  // A Queued card takes another one: the top half of it above, the bottom half below.
+  const queuedDrop = (row: Row) => {
+    const onto = line.find((t) => t.key === row.key);
+    const above = (e: DragEvent) => {
+      const box = (e.currentTarget as HTMLElement).getBoundingClientRect();
+      return e.clientY < box.top + box.height / 2;
+    };
+    const takes = (e: DragEvent) => !!onto && reorderable(onto) && typesOf(e).includes(QUEUED_TYPE);
+    return {
+      onDragOver: (e: DragEvent) => {
+        if (!takes(e)) return;
+        e.preventDefault();
+        if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+        const up = above(e);
+        if (dropAt?.key !== row.key || dropAt.above !== up) setDropAt({ key: row.key, above: up });
+      },
+      onDragLeave: (e: DragEvent) => {
+        const to = e.relatedTarget as Node | null;
+        if (!to || !(e.currentTarget as Node).contains(to)) setDropAt(null);
+      },
+      onDrop: (e: DragEvent) => {
+        if (!takes(e)) return;
+        e.preventDefault();
+        setDropAt(null);
+        const key = e.dataTransfer?.getData(QUEUED_TYPE);
+        if (key && onto) dropOnto(key, onto, above(e));
+      },
+    };
+  };
+
   const card = (row: Row) => {
     const name = row.title ?? `Issue #${row.number}`;
     const text = (
@@ -380,12 +526,15 @@ export function WorkQueue({
       </div>
     );
     if (touch) {
-      const [first, ...rest] = row.actions;
+      const [first, ...others] = row.actions;
+      const inline = others.filter((a) => a.iconOnly);
+      const rest = others.filter((a) => !a.iconOnly);
       const opened = menu === row.key;
       return (
         <li key={row.key} class={styles.row} data-card data-number={row.number}>
           {text}
-          {button(row, first, true)}
+          {first && button(row, first, !first.iconOnly)}
+          {inline.map((a) => button(row, a, false))}
           {rest.length > 0 && (
             <IconButton
               variant="ghost"
@@ -410,7 +559,7 @@ export function WorkQueue({
         key={row.key}
         data-card
         data-number={row.number}
-        class={`${styles.item} ${row.drag ? styles.draggable : ""} ${dragging === row.key ? styles.ghosted : ""}`}
+        class={`${styles.item} ${row.drag ? styles.draggable : ""} ${dragging === row.key ? styles.ghosted : ""} ${dropAt?.key === row.key ? (dropAt.above ? styles.dropAbove : styles.dropBelow) : ""}`}
         draggable={!!row.drag}
         onDragStart={(e) => {
           if (!row.drag) return;
@@ -420,7 +569,9 @@ export function WorkQueue({
         onDragEnd={() => {
           dragEnded();
           setDragging(null);
+          setDropAt(null);
         }}
+        {...(row.queued && queuedDrop(row))}
       >
         <span class={styles.grip} aria-hidden="true">
           {row.drag && <Icon.Grip size={14} />}
@@ -436,7 +587,10 @@ export function WorkQueue({
     brainstorm: cards.length,
     waiting: waiting.length,
     answers: answering.length,
+    queued: line.length,
   };
+  // On a phone, five tabs fit in a row only without their zeros.
+  const count = (id: QueueTab) => (touch && !counts[id] ? undefined : counts[id]);
   const panelId = `queue-${repo.replace(/\W/g, "-")}`;
   const list = LISTS[tab];
   const zone = tab === "backlog" ? stopZone : tab === "brainstorm" ? brainstormZone : null;
@@ -472,20 +626,21 @@ export function WorkQueue({
           {
             id: "backlog",
             label: "Backlog",
-            count: counts.backlog,
+            count: count("backlog"),
             attrs: { ...stopZone.handlers, class: stopZone.over ? styles.over : undefined },
           },
           {
             id: "brainstorm",
             label: "Brainstorm",
-            count: counts.brainstorm,
+            count: count("brainstorm"),
             attrs: {
               ...brainstormZone.handlers,
               class: brainstormZone.over ? styles.over : undefined,
             },
           },
-          { id: "waiting", label: "Waiting", count: counts.waiting },
-          { id: "answers", label: "Answers", count: counts.answers, hot: counts.answers > 0 },
+          { id: "waiting", label: "Waiting", count: count("waiting") },
+          { id: "answers", label: "Answers", count: count("answers"), hot: counts.answers > 0 },
+          { id: "queued", label: "Queued", count: count("queued") },
         ]}
       />
       <div

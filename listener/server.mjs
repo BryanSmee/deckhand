@@ -36,7 +36,7 @@ import {
   loadCredentials,
   saveCredentials,
 } from "./github-app.mjs";
-import { pullEntry } from "./events.mjs";
+import { pullEntry, taskKey } from "./events.mjs";
 import {
   createGitHub,
   fetchPull,
@@ -74,6 +74,7 @@ import { createStatus, serverInfo, serverSetup } from "./status.mjs";
 import { createSync } from "./sync.mjs";
 import { busyTask, createTasks } from "./tasks.mjs";
 import { createLanes, fetchParent } from "./lanes.mjs";
+import { createOrder } from "./order.mjs";
 import { createTitles } from "./titles.mjs";
 import { createWaits } from "./waits.mjs";
 import { createWorkApi } from "./work.mjs";
@@ -237,6 +238,9 @@ const inputs = createInputs({
 // Failed runs dismissed from the dashboard, while each is its task's last (dismissals.mjs).
 const dismissals = createDismissals({ path: join(config.dataDir, "dismissed.json") });
 
+// The run order the maintainer set on the dashboard: which queued task starts next (order.mjs).
+const order = createOrder({ path: join(config.dataDir, "order.json") });
+
 // --- Per-repo settings, images and preview hooks -------------------------------------------
 
 const repoFile = (repo, path, ref) => readRepoFile(github, repo, path, ref);
@@ -298,6 +302,7 @@ Object.assign(ctx, {
   pulls,
   inputs,
   dismissals,
+  order,
   onboarded,
   repoList,
   // Replies, reactions and the needs-input label.
@@ -563,6 +568,8 @@ ctx.workApi = createWorkApi({
   analysis: ctx.analysis,
   lanes,
   dismissals,
+  order,
+  queueOrder: () => ctx.queueOrder(),
   publicUrl,
   fromKey: dashboardKey,
   log,
@@ -597,6 +604,7 @@ const keyed = [
   titles,
   lanes,
   dismissals,
+  order,
 ];
 const spelled = await ctx.unifySpellings({
   nameOf: discussionChecks.nameOf,
@@ -664,6 +672,9 @@ if (!ctx.app) log(`No GitHub App yet. Set it up at ${setup.link()}`);
 // left queued (comments for those runs are delivered to them).
 const restored = ctx.restoreRuns();
 ctx.loadQueue();
+// queue.json is only written when the listener stops: after a crash, the keys of comments it
+// lost stay in order.json, and would rank a new comment there as placed.
+order.keep(ctx.queueOrder().map((t) => taskKey(t.repo, t.id)));
 ctx.reattach(restored).catch((error) => log(`Re-attaching: ${error.stack ?? error}`));
 const relinking = setInterval(ctx.relink, RELINK_MS);
 ctx.conflicts.start();
