@@ -19,7 +19,7 @@
 // but false) is in no ceiling: a link would otherwise take any issue under the run's.
 // Format of the policies' input: ../docs/repo-config.md#the-github-input.
 import { branchAllowed } from "./broker.mjs";
-import { ceilingOf } from "./modes.mjs";
+import { ceilingOf, issueLabelOf } from "./modes.mjs";
 
 // Actions on another target than an issue or pull request by number: no ceiling holds them,
 // so they are refused before any look-up.
@@ -253,14 +253,56 @@ const MAX_CREATED = 100;
 // listener's and GitHub's clocks differ, and `created_at` is in seconds.
 const SKEW_MS = 2 * 60_000;
 
+// Whether a GraphQL call's body creates an issue, so that its answer's
+// `data.createIssue.issue` is the issue it created: its document is one `mutation` (with
+// fragments at most) calling `createIssue(`, and nothing in it is aliased `createIssue` (a
+// read or another mutation could otherwise answer under that name with an issue of its
+// choosing). Read as text, string literals and comments left out, until #406 parses GraphQL.
+export function createsIssueMutation(body) {
+  let query;
+  try {
+    ({ query } = JSON.parse(body.toString("utf8")));
+  } catch {
+    return false;
+  }
+  if (typeof query !== "string") return false;
+  const doc = query
+    .replace(/"""[\s\S]*?"""/g, " ")
+    .replace(/"(?:[^"\\\n]|\\.)*"/g, " ")
+    .replace(/#[^\n\r]*/g, " ");
+  if (/\bcreateIssue\s*:/.test(doc) || !/\bcreateIssue\s*\(/.test(doc)) return false;
+  // Each top-level definition's head: the text before its block.
+  const heads = [];
+  let depth = 0;
+  let head = "";
+  for (const c of doc) {
+    if (c === "{") {
+      if (depth === 0) heads.push(head.trim());
+      depth++;
+      head = "";
+    } else if (c === "}") {
+      depth--;
+      if (depth < 0) return false;
+    } else if (depth === 0) head += c;
+  }
+  if (depth !== 0 || head.trim()) return false;
+  const [first, ...rest] = heads;
+  return /^mutation\b/.test(first ?? "") && rest.every((h) => /^fragment\b/.test(h));
+}
+
 // `lookup(repo, path)`: GitHub's JSON with the listener's token, null for a 404 (github.mjs
-// getJson()); `policies`: policies.mjs's, null without; `log`: the listener's.
-export function createWriteChecks({ lookup, policies = null, log = () => {} }) {
-  // Whether GitHub's issue is one `run` created: GitHub answered one of the run's own calls
-  // with it (answered()), and it is no older than that call. The App's bot files issues for
-  // every run and for the listener: its authorship alone says nothing.
+// getJson()); `bot()`: the App's login (`slug[bot]`), null before /setup; `policies`:
+// policies.mjs's, null without; `log`: the listener's.
+export function createWriteChecks({ lookup, bot = () => null, policies = null, log = () => {} }) {
+  // Whether GitHub's issue is one `run` created: GitHub answered one of the run's own creates
+  // with it (answered()), it is no older than that call, and the App's bot wrote it. The bot
+  // files issues for every run and for the listener too: its authorship alone says nothing.
   function created(run, issue) {
     if (issue?.pull_request) return false;
+    const login = bot();
+    if (!login || String(issue?.user?.login ?? "").toLowerCase() !== login.toLowerCase()) {
+      return false;
+    }
     const made = (run.created ?? []).find((c) => c.number === issue?.number);
     return !!made && Date.parse(issue.created_at) >= made.at - SKEW_MS;
   }
@@ -295,6 +337,7 @@ export function createWriteChecks({ lookup, policies = null, log = () => {} }) {
   // issues it created, looked up: their ids are GitHub's), else `other_issue`.
   async function resolveChild(run, repo, { id }) {
     if (run.issue != null) {
+      // One page: GitHub takes 100 sub-issues per parent at most.
       const subs = await lookup(repo, `/repos/${repo}/issues/${run.issue}/sub_issues?per_page=100`);
       const found = Array.isArray(subs) ? subs.find((i) => i?.id === id) : null;
       if (found) return { id, number: found.number ?? null, kind: "sub_issue" };
@@ -319,7 +362,7 @@ export function createWriteChecks({ lookup, policies = null, log = () => {} }) {
     }
     let issue;
     if (graphql) {
-      if (status !== 200) return;
+      if (status !== 200 || !createsIssueMutation(body)) return;
       issue = json?.data?.createIssue?.issue;
     } else {
       const write = classify(method, path, body);
@@ -370,6 +413,12 @@ export function createWriteChecks({ lookup, policies = null, log = () => {} }) {
     if (above.length) {
       const on = target.number === null ? target.kind : `${target.kind} #${target.number}`;
       return refusal(403, `a ${mode} run can't ${above.join(", ")} on ${on} (its ceiling)`);
+    }
+    // An inbox run's issues carry its label (prompts/idea.md, bug.md): in its ceiling too.
+    const label = issueLabelOf(run.mode);
+    const labelled = write.change.labels_added.some((l) => l.toLowerCase() === label);
+    if (label && target.kind === "new_issue" && !labelled) {
+      return refusal(403, `${mode} runs' issues carry the ${label} label (their ceiling)`);
     }
     const change = { ...write.change };
     // Labels that replace the issue's remove those they leave out.

@@ -63,6 +63,8 @@ const NO_WRITES = {};
 //   (github-writes.mjs): target kind → the actions allowed on it. None: it writes nothing.
 //   Reviews, merges, closing, deleting, labels' and the repo's settings, and anything outside
 //   the run's repo are in no ceiling. GitHub closes an issue when its pull request merges.
+// - issueLabel: the label each issue it creates over REST must carry, in its ceiling too
+//   (issueLabelOf(), github-writes.mjs).
 // - prompt: its instructions, in ../prompts/ (prompts.mjs).
 // Their names are reserved: a repo's `modes:` can't take them (repo-config.mjs). The
 // dashboard has a copy of the list (format.ts), checked by a test.
@@ -106,6 +108,7 @@ export const MODES = {
     kind: "idea",
     permissions: LIGHT_PERMISSIONS,
     ceiling: INBOX_CEILING,
+    issueLabel: "idea",
     prompt: "idea.md",
   },
   bug: {
@@ -115,6 +118,7 @@ export const MODES = {
     kind: "bug",
     permissions: LIGHT_PERMISSIONS,
     ceiling: INBOX_CEILING,
+    issueLabel: "bug",
     prompt: "bug.md",
   },
   // A discussion keeps its session, like a brainstorm.
@@ -234,4 +238,9 @@ export function ceilingOf(mode, light) {
   if (own) return own.ceiling ?? NO_WRITES;
   if (!mode || light !== false) return NO_WRITES;
   return WORK_CEILING;
+}
+
+// The label a mode's issues carry (`issueLabel` above), or null when any do.
+export function issueLabelOf(mode) {
+  return builtIn(mode)?.issueLabel ?? null;
 }

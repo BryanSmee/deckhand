@@ -315,8 +315,10 @@ to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to the
   sub-issue of its issue (its parent on GitHub, in the same repository), an issue the run
   created (GitHub answered one of the run's own calls with it: a REST create, or GraphQL's
   `createIssue`, which `gh issue create` sends and whose answer the gateway reads for that
-  alone; no older than that call; saved with the run across restarts. The App's bot files
-  issues for every run and for the listener, so its authorship says nothing), another issue
+  alone: only a `mutation` calling `createIssue` with nothing aliased `createIssue`, since a
+  read could answer under that name with any issue; no older than that call; written by the
+  App's bot, which files issues for every run and for the listener, so that alone says
+  nothing; saved with the run across restarts), another issue
   or pull request. A sub-issue link's child, named by its id, must be one the run created or
   one already under its issue, and moving an issue from
   another parent (`replace_parent` with any value but `false`) is refused: a link could

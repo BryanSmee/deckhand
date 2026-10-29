@@ -869,12 +869,14 @@ tool sends it: `gh`, `gh api`, curl) is checked there, in this order:
 
 A sub-issue link (`POST`, `DELETE` or reordering `…/issues/<parent>/sub_issues`) names two
 issues: the parent, its target, and the child, by its id: the child must be an issue the run
-or one already under the run's issue, and moving an issue from another parent
+created, or one already under the run's issue, and moving an issue from another parent
 (`replace_parent` with any value but `false`) is refused. A link can't take someone else's
 issue under the run's, where its ceiling would let it edit it. The issues the App's bot files
 for other runs or for the listener (an analysis, an onboarding issue) aren't the run's, even
 while it runs: only the answers to its own calls say what it created, and they are saved with
-the run, so a listener restart keeps them.
+the run, so a listener restart keeps them. A GraphQL answer counts only for a `mutation`
+calling `createIssue` with nothing aliased `createIssue`, and the issue must be the App's
+bot's.
 
 GraphQL writes (`gh issue comment`, `gh issue create` and most of `gh`'s own commands) aren't
 checked yet: they go on as the run's token allows, until issue #406 classifies them.
@@ -882,7 +884,7 @@ checked yet: they go on as the run's token allows, until issue #406 classifies t
 | Mode                                                            | Ceiling                                                                                                                                                                                 |
 | --------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `brainstorm`, `stop`                                            | its issue: `edit`, `comment`, `link`; its sub-issues and the issues it created: `edit`, `comment`, `link`; new issues and labels: `create`; other issues and pull requests: `comment`   |
-| `idea`, `bug`                                                   | new issues and labels: `create`; the issues it created: `link` (the parents it files); its issue: `comment`                                                                             |
+| `idea`, `bug`                                                   | new issues (with the `idea` or `bug` label) and labels: `create`; the issues it created: `link` (the parents it files); its issue: `comment`                                            |
 | `discussion`                                                    | new issues: `create`                                                                                                                                                                    |
 | `onboarding`, `analyze`, `review`, `research`, a light `modes:` | nothing                                                                                                                                                                                 |
 | `work`, a `modes:` entry that isn't light                       | its issue: `edit`, `comment`, `label`, `link`; its pull requests: `edit`, `comment`, `label`; its sub-issues and the issues it created: `edit`, `comment`, `link`; new issues: `create` |

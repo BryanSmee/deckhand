@@ -331,6 +331,7 @@ Object.assign(ctx, {
 // proxy, go on with a token for their run's repo that they never see, their writes redacted.
 const writeChecks = createWriteChecks({
   lookup: (repo, path) => getJson(github, repo, path, [404, 410]),
+  bot: () => config.bot,
   policies,
   log,
 });

@@ -7,7 +7,12 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { createBroker } from "../listener/broker.mjs";
 import { createGithubGateway } from "../listener/github-gateway.mjs";
-import { aboveCeiling, classify, createWriteChecks } from "../listener/github-writes.mjs";
+import {
+  aboveCeiling,
+  classify,
+  createsIssueMutation,
+  createWriteChecks,
+} from "../listener/github-writes.mjs";
 import { ceilingOf, MODES } from "../listener/modes.mjs";
 import { createPolicies, opaRunner } from "../listener/policies.mjs";
 import { policyEngine, sandboxAt, serve, tempDir } from "./helpers.mjs";
@@ -17,6 +22,7 @@ const json = (value) => Buffer.from(JSON.stringify(value));
 // When the tests' runs sent their creates, and GitHub's time `s` seconds from then.
 const START = Date.parse("2026-10-29T10:00:00Z");
 const at = (s) => new Date(START + s * 1000).toISOString();
+const BOT = () => "deckhand[bot]";
 
 test("classify: a write's actions, its target and what it changes", () => {
   const cases = [
@@ -206,6 +212,8 @@ const GITHUB = {
     },
     // The bot's during the run, filed by another run or a dashboard analysis.
     34: { number: 34, id: 904, user: { login: "deckhand[bot]" }, created_at: at(3), labels: [] },
+    // A person's, filed during the run.
+    50: { number: 50, id: 950, user: { login: "alice" }, created_at: at(4), labels: [] },
     7: { number: 7, pull_request: {}, user: { login: "deckhand[bot]" }, labels: [] },
     8: { number: 8, pull_request: {}, user: { login: "bob" }, labels: [] },
   },
@@ -334,7 +342,23 @@ test("light runs: brainstorms, inbox entries, discussions and the modes that rea
   await ok("stop", write("POST", "repos/org/repo/labels", { name: "idea" }));
   await no("brainstorm", write("PATCH", "repos/org/repo/issues/3", { body: "x" }));
   await no("brainstorm", write("PATCH", "repos/org/repo/issues/1", { labels: ["x"] }));
-  await ok("idea", write("POST", "repos/org/repo/issues", { title: "x" }));
+  // An inbox entry's issues carry its label: in its ceiling.
+  await ok("idea", write("POST", "repos/org/repo/issues", { title: "x", labels: ["Idea", "ui"] }));
+  await ok(
+    "bug",
+    write("POST", "repos/org/repo/issues", { title: "x", labels: [{ name: "bug" }] }),
+  );
+  for (const labels of [undefined, [], ["ui"], ["bug"]]) {
+    const refused = await check(
+      run("idea"),
+      write("POST", "repos/org/repo/issues", { title: "x", labels }),
+    );
+    assert.match(
+      refused?.message ?? "",
+      /idea runs' issues carry the idea label \(their ceiling\)/,
+      `${labels}`,
+    );
+  }
   // Linking under an issue it didn't create: no (sub_issue_links below).
   await no("bug", write("POST", "repos/org/repo/issues/3/sub_issues", { sub_issue_id: 202 }));
   await ok("bug", write("POST", "repos/org/repo/issues/1/comments", { body: "x" }));
@@ -374,6 +398,34 @@ const restIssue = (number, repo = "Org/Repo") =>
     repository_url: `https://api.github.com/repos/${repo}`,
   });
 
+test("createsIssueMutation: one mutation calling createIssue, nothing aliased so", () => {
+  const body = (query) => json({ query });
+  for (const query of [
+    "mutation IssueCreate($input: CreateIssueInput!) { createIssue(input: $input) { issue { id url } } }",
+    "mutation { createIssue(input: {}) { ...F } } fragment F on CreateIssuePayload { issue { url } }",
+    // An alias in a string or a comment is no alias.
+    'mutation { createIssue(input: {title: "createIssue: x {"}) { issue { url } } } # createIssue: y',
+  ]) {
+    assert.equal(createsIssueMutation(body(query)), true, query);
+  }
+  for (const query of [
+    // The review's: a read answering under that name.
+    'query { createIssue: repository(owner: "o", name: "r") { issue(number: 50) { url } } }',
+    '{ createIssue: repository(owner: "o", name: "r") { issue(number: 50) { url } } }',
+    // Another mutation answering so, and another operation beside the mutation.
+    'mutation { createIssue: updateIssue(input: {id: "I_1"}) { issue { url } } }',
+    "mutation { createIssue(input: {}) { issue { url } } } query Q { viewer { login } }",
+    "mutation { createIssue(input: {}) { issue { url } } } { viewer { login } }",
+    // No createIssue call; braces that don't close; not a query at all.
+    "mutation { updateIssue(input: {}) { issue { url } } }",
+    "mutation { createIssue(input: {}) { issue { url } }",
+  ]) {
+    assert.equal(createsIssueMutation(body(query)), false, query);
+  }
+  assert.equal(createsIssueMutation(Buffer.from("not json")), false);
+  assert.equal(createsIssueMutation(json({ query: 5 })), false);
+});
+
 test("the issues a run created: GitHub's answers to its own creates, REST and GraphQL", () => {
   const { answered } = createWriteChecks({ lookup: fakeLookup(GITHUB).lookup });
   const work = run("work");
@@ -409,7 +461,7 @@ test("the issues a run created: GitHub's answers to its own creates, REST and Gr
 
 test("a sub-issue link: its child is one the run created or already under its issue, never moved", async () => {
   const { lookup } = fakeLookup(GITHUB);
-  const { check, answered } = createWriteChecks({ lookup });
+  const { check, answered } = createWriteChecks({ lookup, bot: BOT });
   const work = run("work");
   const link = (parent, body) => write("POST", `repos/org/repo/issues/${parent}/sub_issues`, body);
   // Any issue of the repo, by its id: refused, and moved from its parent all the more, however
@@ -452,6 +504,29 @@ test("a sub-issue link: its child is one the run created or already under its is
     (await check(work, write("PATCH", "repos/org/repo/issues/31", { body: "x" }))).message,
     /other_issue #31/,
   );
+  // Nor does a read that aliases a field `createIssue`, naming an issue filed meanwhile by
+  // someone or by the bot; and an issue the bot didn't write is never one the run created.
+  const read = (query) => ({ ...GRAPHQL_CREATE, body: json({ query }) });
+  for (const n of [50, 34]) {
+    const before = work.created.length;
+    answered(
+      work,
+      read(
+        `query { createIssue: repository(owner: "org", name: "repo") { issue(number: ${n}) { url } } }`,
+      ),
+      200,
+      created(n),
+    );
+    assert.equal(work.created.length, before, `#${n}`);
+  }
+  answered(work, GRAPHQL_CREATE, 200, created(50));
+  assert.match(
+    (await check(work, write("PATCH", "repos/org/repo/issues/50", { title: "x" }))).message,
+    /other_issue #50/,
+  );
+  // Without the App's login, nothing is the run's.
+  const unknown = createWriteChecks({ lookup });
+  assert.match((await unknown.check(work, link(1, { sub_issue_id: 900 }))).message, /links only/);
   // Another run's creations aren't this one's.
   assert.ok(await check(run("work"), link(1, { sub_issue_id: 900 })));
   // An inbox entry links under the parents it created only, the children it created too.
