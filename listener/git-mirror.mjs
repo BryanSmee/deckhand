@@ -321,6 +321,53 @@ export function createMirrors({
     );
   }
 
+  // The refs of a push whose new tips reach an object it doesn't carry and the repository doesn't
+  // have: [{ ref, missing }], `missing` the first such object. The repository's own is what the
+  // mirror's branches and tags reach (never refs/pull/*); GitHub keeps a fork network's objects
+  // together, so a push needn't carry a fork's commit, tree or blob to point a branch at it, nor
+  // a thin pack's delta base. It is git's own connectivity check, against the repository's
+  // objects rather than its network's (github-forks.mjs: a work run that isn't a fork's). The
+  // pack (`file` from `start`, null: none) goes into a quarantine of its own in `dir`. Throws
+  // when the mirror can't be fetched or the pack read.
+  async function connect({ repo, token, updates, file = null, start = null, dir }) {
+    const mirror = join(root, `${repo}.git`);
+    return locked(repo, async () => {
+      await fetch(repo, mirror, token);
+      const objects = join(dir, "connect", "objects");
+      await mkdir(join(objects, "pack"), { recursive: true });
+      const env = {
+        GIT_DIR: mirror,
+        GIT_OBJECT_DIRECTORY: objects,
+        GIT_ALTERNATE_OBJECT_DIRECTORIES: join(mirror, "objects"),
+      };
+      if (start !== null) {
+        await git(["index-pack", "--stdin", "--fix-thin"], {
+          env,
+          input: createReadStream(file, { start }),
+        });
+      }
+      const unconnected = [];
+      for (const { ref, new: tip } of updates) {
+        if (/^0+$/.test(tip)) continue;
+        let out;
+        try {
+          out = await git(["rev-list", "--objects", "--missing=print", tip, "--not", "--all"], {
+            env,
+          });
+        } catch {
+          // Its tip itself is neither in the push nor the repository's.
+          unconnected.push({ ref, missing: tip });
+          continue;
+        }
+        const missing = String(out)
+          .split("\n")
+          .find((line) => line.startsWith("?"));
+        if (missing) unconnected.push({ ref, missing: missing.slice(1) });
+      }
+      return unconnected;
+    });
+  }
+
   // check() for a branch already on GitHub (`branch`), merged with `into`: before a pull
   // request is opened into it or marked ready, which run its workflows from a new merge.
   async function checkBranch({ repo, token, base, branch, into }) {
@@ -376,5 +423,11 @@ export function createMirrors({
     }
   }
 
-  return { spool, check, checkBranch, remove: (dir) => rm(dir, { recursive: true, force: true }) };
+  return {
+    spool,
+    check,
+    connect,
+    checkBranch,
+    remove: (dir) => rm(dir, { recursive: true, force: true }),
+  };
 }

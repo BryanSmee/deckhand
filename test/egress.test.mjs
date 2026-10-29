@@ -12,7 +12,7 @@ import {
   operatorHosts,
   proxyEnv,
   GITHUB_FILES,
-  relayedGithub,
+  githubContent,
 } from "../listener/egress.mjs";
 import { grantFor, grantsFrom } from "../listener/grants.mjs";
 import { parseRepoConfig } from "../listener/repo-config.mjs";
@@ -277,20 +277,27 @@ test("GitHub's hosts: relayed for a sandbox, a tunnel for its engine (#411's exc
       relay: false,
     });
   }
-  // GitHub's file hosts (raw files, LFS files, diffs) carry no token, but are relayed too (the
-  // gateway checks what a work run reads there: github-forks.mjs); its other
-  // githubusercontent.com hosts (release assets, avatars) aren't.
-  const all = relayedGithub(config);
-  assert.deepEqual(all, [...relayed, ...GITHUB_FILES]);
-  for (const host of GITHUB_FILES) {
-    assert.equal(egressPolicy(host, hosts, hosts, [], hosts, { relayed: all }).relay, true);
-    const engine = egressPolicy(host, hosts, hosts, [], hosts, { decrypt: false, relayed: all });
-    assert.equal(engine.relay, false);
+  // GitHub's content hosts: every *.githubusercontent.com host, which its CDN answers for one
+  // another (broker-http.mjs relays them for a run the gateway checks); nothing else.
+  for (const host of [
+    ...GITHUB_FILES,
+    "objects.githubusercontent.com",
+    "a.b.githubusercontent.com",
+  ]) {
+    assert.equal(githubContent(host), true, host);
+    const relayedTo = egressPolicy(host, hosts, hosts, [], hosts, { relayed: [host] });
+    assert.equal(relayedTo.relay, true, host);
+    const engine = egressPolicy(host, hosts, hosts, [], hosts, { decrypt: false, relayed: [host] });
+    assert.equal(engine.relay, false, host);
   }
-  const assets = egressPolicy("objects.githubusercontent.com", hosts, hosts, [], hosts, {
-    relayed: all,
-  });
-  assert.deepEqual([assets.allowed, assets.relay], [true, false]);
+  for (const host of [
+    "githubusercontent.com",
+    "raw.githubusercontent.com.evil.example",
+    "rawgithubusercontent.com",
+    "github.com",
+  ]) {
+    assert.equal(githubContent(host), false, host);
+  }
 });
 
 test("host matching: names, subdomain wildcards, *", () => {

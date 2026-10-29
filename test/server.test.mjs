@@ -1262,7 +1262,9 @@ caches:
       decrypt: true,
       relay: true,
     });
-    assert.equal(withCa.egress["objects.githubusercontent.com"].relay, false);
+    // A work run that isn't a fork's: every *.githubusercontent.com host relayed, as GitHub's CDN
+    // answers for one another (egress.mjs githubContent()).
+    assert.equal(withCa.egress["objects.githubusercontent.com"].relay, true);
     // Raw files too, which the gateway sends on without a token (github-forks.mjs).
     assert.equal(withCa.egress["raw.githubusercontent.com"].relay, true);
 
@@ -4186,9 +4188,38 @@ mounts:
 
   // What the git gateway answers a push of `ref` with the run's secret: refused pushes are
   // answered by the gateway itself, the others reach the fake GitHub.
-  async function pushProbe(brokerPort, secret, ref) {
-    const line = `${"0".repeat(40)} ${"a".repeat(40)} ${ref}\0report-status\n`;
-    const body = `${(line.length + 4).toString(16).padStart(4, "0")}${line}0000`;
+  // A commit over the empty tree, and a pack holding both: a push that carries what its branch
+  // reaches, as a work run's must (git-mirror.mjs connect()).
+  let carried = null;
+  function commitPack() {
+    if (carried) return carried;
+    const repo = tempDir(null, "pack-");
+    execFileSync("git", ["init", "-q", repo]);
+    const git = (args, input) =>
+      execFileSync("git", ["-C", repo, ...args], {
+        input,
+        env: {
+          ...process.env,
+          GIT_AUTHOR_NAME: "a",
+          GIT_AUTHOR_EMAIL: "a@a",
+          GIT_COMMITTER_NAME: "a",
+          GIT_COMMITTER_EMAIL: "a@a",
+        },
+      });
+    const tree = git(["hash-object", "-t", "tree", "-w", "--stdin"], "").toString().trim();
+    const sha = git(["commit-tree", tree, "-m", "c"]).toString().trim();
+    return (carried = { sha, pack: git(["pack-objects", "--stdout"], `${sha}\n${tree}\n`) });
+  }
+
+  // A push of `ref` by hand: by default with a real commit and its pack; `carries: false`, to a
+  // commit nobody has, without one.
+  async function pushProbe(brokerPort, secret, ref, { carries = true } = {}) {
+    const { sha, pack } = carries ? commitPack() : { sha: "a".repeat(40), pack: Buffer.alloc(0) };
+    const line = `${"0".repeat(40)} ${sha} ${ref}\0report-status\n`;
+    const body = Buffer.concat([
+      Buffer.from(`${(line.length + 4).toString(16).padStart(4, "0")}${line}0000`),
+      pack,
+    ]);
     const res = await fetch(`http://127.0.0.1:${brokerPort}/git/org/repo.git/git-receive-pack`, {
       method: "POST",
       headers: { authorization: `Basic ${Buffer.from(`deckhand:${secret}`).toString("base64")}` },
@@ -4270,11 +4301,12 @@ mounts:
       github.requests
         .filter((r) => r.path === "/org/repo.git/git-receive-pack")
         .map((r) => Buffer.from(r.auth.split(" ")[1], "base64").toString().split(":")[1]);
-    // Its workflow files are read first, against a mirror fetched from GitHub with a token
-    // that reads: this fake GitHub doesn't serve git, so the push is refused, never forwarded.
+    // Read first, against a mirror fetched from GitHub with a token that reads (this fake GitHub
+    // serves no git: an empty one): a branch pointed at a commit the push doesn't carry and the
+    // repository doesn't have is refused, never forwarded (a work run that isn't a fork's).
     assert.match(
-      await pushProbe(brokerPort, secret, "refs/heads/issue-12-x"),
-      /ng refs\/heads\/issue-12-x Deckhand: couldn't check the workflow files of this push; try again/,
+      await pushProbe(brokerPort, secret, "refs/heads/issue-12-x", { carries: false }),
+      /ng refs\/heads\/issue-12-x Deckhand: this push points refs\/heads\/issue-12-x at a{12}, which it doesn't carry and org\/repo doesn't have/,
     );
     assert.ok(existsSync(join(dir, "git-mirrors", "org/repo.git")));
     const fetched = github.requests.find((r) => r.path.startsWith("/org/repo.git/info/refs"));
@@ -4308,7 +4340,8 @@ mounts:
     assert.ok(
       github.requests.some((r) => r.method === "POST" && r.path === "/repos/org/repo/pulls"),
     );
-    // Taken back: the next push streams through without it, no restart.
+    // Taken back: the next push goes through without it, no restart, read for what it carries
+    // alone.
     writeGrant(dir, "");
     await pushProbe(brokerPort, secret, "refs/heads/issue-12-x");
     assert.deepEqual(pushedWith(), ["repo-token"]);

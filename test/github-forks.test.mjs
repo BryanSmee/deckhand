@@ -3,6 +3,7 @@
 // refused, by git, the API, an archive, a page or a raw file; its own branches' never are.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { request } from "node:http";
 import { join } from "node:path";
 import { test } from "node:test";
 import { gzipSync } from "node:zlib";
@@ -198,6 +199,8 @@ test("refKind and callTargets: what a call names that may be a fork's", () => {
   assert.deepEqual(refKind(`org:${FORK}`), { owner: "org", name: null, ref: FORK });
   assert.deepEqual(refKind("org:repo:main"), { owner: "org", name: "repo", ref: "main" });
   assert.deepEqual(refKind(`:${FORK}`), { invalid: true });
+  // Git refuses a component starting with ".".
+  assert.deepEqual(refKind(`.${FORK}`), { invalid: true });
   assert.deepEqual(refKind("feature/x/README.md"), {});
   assert.deepEqual(refKind("refs/heads/main/a"), {});
   assert.deepEqual(refKind("evil:main"), { owner: "evil", name: null, ref: "main" });
@@ -429,6 +432,11 @@ test("a fork's pull request, its repository and its commits are refused; the rep
     (await check("api", "repos/org/repo/compare/main...evil:main")).message,
     /another repository's/,
   );
+  // More dots than a comparison has: no sides to read, refused whole.
+  assert.match(
+    (await check("api", `repos/org/repo/compare/main....${FORK}`)).message,
+    /isn't spelled as git names a ref/,
+  );
   // Named with the repository's own owner: what follows is checked all the same.
   for (const [kind, path] of [
     ["api", `repos/org/repo/compare/main...org:${FORK}`],
@@ -460,7 +468,7 @@ test("a fork's pull request, its repository and its commits are refused; the rep
     /isn't a commit on org\/repo's default/,
   );
   // A ref spelled as git wouldn't name one: refused, not taken for a branch.
-  for (const ref of [` ${FORK}`, "refs//pull/7/head", "main\n", "main..x"]) {
+  for (const ref of [` ${FORK}`, "refs//pull/7/head", "main\n", "main..x", `.${FORK}`]) {
     const query = new URLSearchParams({ ref }).toString();
     assert.match(
       (await check("api", "repos/org/repo/contents/a.js", query)).message,
@@ -751,6 +759,8 @@ async function gateway(t, { maxInFlight } = {}) {
       { host: "media.test", url: at, kind: "raw", prefix: "media/" },
       { host: "patch-diff.test", url: at, kind: "web", prefix: "raw/" },
     ],
+    // GitHub's other content hosts, on the same fake.
+    content: (host) => (host.endsWith(".content.test") ? new URL(`${at}/`) : null),
     forks,
     maxInFlight,
   });
@@ -768,7 +778,17 @@ async function gateway(t, { maxInFlight } = {}) {
       body,
       headers: { authorization: `token ${secret}`, ...headers },
     });
-  return { calls, register, call };
+  // A GET with headers fetch() won't send (`Host`), through node:http.
+  const raw = (host, path, headers) =>
+    new Promise((resolve, reject) => {
+      const req = request(`${url}/relay/${host}${path}`, { headers }, (res) => {
+        res.resume();
+        res.on("end", () => resolve(res.statusCode));
+      });
+      req.on("error", reject);
+      req.end();
+    });
+  return { calls, register, call, raw };
 }
 
 const fetchOf = (want) =>
@@ -1095,4 +1115,53 @@ test("a run's calls cause so many lookups on GitHub a minute, cached ones aside"
   );
   at += 60_000;
   assert.equal((await check(i)).status, 403);
+});
+
+test("GitHub's other content hosts are relayed as they are, to the host they name, read only", async (t) => {
+  const gw = await gateway(t);
+  const { secret } = gw.register(false);
+  // A tunnel to avatars.githubusercontent.com would answer as raw. when asked so: relayed, the
+  // call goes to the host it names whatever `Host` the sandbox wrote, without its credentials.
+  const status = await gw.raw("avatars.content.test", "/u/1?v=4", {
+    host: "raw.githubusercontent.com",
+    cookie: "a=b",
+    authorization: `token ${secret}`,
+  });
+  assert.equal(status, 200);
+  const sent = gw.calls.at(-1);
+  assert.equal(sent.url, "/u/1?v=4");
+  assert.match(sent.headers.host, /^localhost:\d+$/);
+  assert.equal(sent.headers.authorization, undefined);
+  assert.equal(sent.headers.cookie, undefined);
+  const put = await gw.call("avatars.content.test", "/u/1", secret, { method: "PUT", body: "x" });
+  assert.equal(put.status, 405);
+});
+
+test("git's paths in any case are a fetch's, checked as one; another spelling is refused", async (t) => {
+  const gw = await gateway(t);
+  const { secret } = gw.register(false);
+  await gw.call("127.0.0.1", "/org/repo.git/git-upload-pack", secret, {
+    method: "POST",
+    body: LS_REFS,
+  });
+  const before = gw.calls.length;
+  const upper = await gw.call("127.0.0.1", "/org/repo.git/GIT-UPLOAD-PACK", secret, {
+    method: "POST",
+    body: fetchOf(FORK),
+  });
+  assert.match(Buffer.from(await upper.arrayBuffer()).toString(), /ERR Deckhand: pull request #7/);
+  const refs = await gw.call(
+    "127.0.0.1",
+    "/evil/repo.git/Info/Refs?service=git-upload-pack",
+    secret,
+  );
+  assert.equal(refs.status, 403);
+  assert.match(await refs.text(), /evil\/repo is a fork/);
+  // Not git's path, not a page that shows no file: refused, never sent on unchecked.
+  const slash = await gw.call("127.0.0.1", "/org/repo.git/git-upload-pack/", secret, {
+    method: "POST",
+    body: fetchOf(FORK),
+  });
+  assert.equal(slash.status, 403);
+  assert.equal(gw.calls.length, before);
 });

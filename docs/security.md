@@ -391,13 +391,14 @@ to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to the
   repository, a fork's pull request's head, a commit that isn't its repository's, by git, the
   API, an archive, a page or a raw file ([What a fork's code may
   reach](#what-a-forks-code-may-reach)).
-- GitHub's file hosts (`listener/egress.mjs` `GITHUB_FILES`: `raw.githubusercontent.com`,
+- GitHub's content hosts (`*.githubusercontent.com`, `listener/egress.mjs`
+  `githubContent()`), all of them, are relayed to the gateway too for such a run
+  (`listener/broker-http.mjs`): its file hosts (`GITHUB_FILES`: `raw.githubusercontent.com`,
   `media.githubusercontent.com` for LFS files, `patch-diff.githubusercontent.com` for diffs)
-  are relayed to the gateway too for such a run (`listener/broker-http.mjs`), for that check,
-  and go on without a token, the sandbox's `Authorization` and cookies dropped; they don't
-  count towards its calls in flight, as when they were plain hosts. For every other run, and
-  GitHub's other `*.githubusercontent.com` hosts (release assets, avatars), they stay plain
-  allowed hosts: none carries a token.
+  for that check, the others (release assets, avatars, Actions logs…) as they are, read only,
+  to the host they name. Both go on without a token, the sandbox's `Authorization` and
+  cookies dropped, and don't count towards its calls in flight, as when they were plain
+  hosts. For every other run they stay plain allowed hosts: none carries a token.
 - **Two exceptions, neither with a token**, which reach GitHub's hosts through a tunnel
   rather than the gateway, so what they get is anonymous (both accepted in pull request
   #411):
@@ -681,7 +682,8 @@ see the difference, and doesn't claim to.
   there. A comparison's sides are refs too: another owner's (`main...someone:branch`) is
   refused, and after the repository's own owner (`main...org:<ref>`, `org:repo:<ref>`), the ref
   is checked as any. A ref spelled as git wouldn't name one (whitespace or a control
-  character, `//`, `..`, `@{`, a backslash, a leading `-`, `/` or `:`) is refused rather than
+  character, `//`, `..`, `@{`, a backslash, a leading `-`, `.`, `/` or `:`, a comparison with
+  more than three dots) is refused rather than
   taken for a branch, so the check doesn't rest on how GitHub reads it; after a ref, a file's
   own name may hold `..`, `@{` or spaces (`main/a..b.js`).
 - **A page of the repository**: on the web host, the checks read the shapes above (archives,
@@ -726,16 +728,40 @@ see the difference, and doesn't claim to.
   `RepositoryInfo` interface's fields, ids, settings, the viewer's), not its files
   (`codeOfConduct`, `codeowners`, its templates and guidelines…) nor its tree (`object`,
   `ref`, `releases`…), which are many and grow.
-- **GitHub's file hosts**: `raw.githubusercontent.com` serves any file of a public repository
-  without a token, a fork's pull request's included (`/<owner>/<repo>/refs/pull/<n>/head/<path>`,
-  or a fork's commit through the repository), `media.githubusercontent.com` its LFS files by
-  ref the same way (`/media/…`), and `patch-diff.githubusercontent.com` its pull requests' diffs
-  (`/raw/<owner>/<repo>/pull/<n>.diff`), which carry a new file whole. So the egress proxy
-  relays them to the gateway too, for a run it checks, which checks them as above (a path in
-  another shape is refused) and sends them on without a token, as when they were plain hosts.
+- **GitHub's content hosts**: `raw.githubusercontent.com` serves any file of a public
+  repository without a token, a fork's pull request's included
+  (`/<owner>/<repo>/refs/pull/<n>/head/<path>`, or a fork's commit through the repository),
+  `media.githubusercontent.com` its LFS files by ref the same way (`/media/…`), and
+  `patch-diff.githubusercontent.com` its pull requests' diffs
+  (`/raw/<owner>/<repo>/pull/<n>.diff`), which carry a new file whole. And they all share one
+  CDN, which answers for any of them whatever name the connection was made to: a tunnel to
+  `avatars.githubusercontent.com` (or `objects.`) served a fork pull request's raw file when
+  asked with `Host: raw.githubusercontent.com`, its SNI `avatars.` or `raw.` alike (checked on
+  a public repository). So the egress proxy relays every `*.githubusercontent.com` host to the
+  gateway, for a run it checks, never a tunnel: the three file hosts' calls are checked as
+  above (a path in another shape is refused), the others' sent on as they are to the host
+  they name, whatever `Host` the sandbox wrote, read only, and all without a token, as when
+  they were plain hosts. Other CDNs' tenants answered `Host: raw.githubusercontent.com` with
+  their own `404` (`pypi.org`, `registry.npmjs.org`).
   Archives come from `codeload.github.com`, where `github.com/<repo>/archive/…` and the API's
   `tarball` and `zipball` redirect: it isn't a mandatory host, and a grant that adds it
   reaches any public repository's archives, around these checks.
+- **A branch pointed at a fork's objects**: GitHub keeps a network's objects together, so a
+  push needn't carry a commit only a fork has to set a branch to it, nor a new commit's tree
+  (a fork's tree, whose id is in any of its commits' metadata), nor a thin pack's delta base;
+  that branch would then be advertised as the repository's own to the next fetch. So the git
+  gateway reads each push of a work run that isn't a fork's whole and runs git's
+  connectivity check against the repository's own objects rather than its network's
+  (`listener/git-mirror.mjs` `connect()`): every object its new tips reach must be in the
+  push or in the gateway's mirror of the repository's branches and tags (never `refs/pull/*`),
+  fetched just before. Else the push is refused, saying which object. That mirror is the one
+  `allow_workflows` keeps ([GitHub Actions on Deckhand's branches](#github-actions-on-deckhands-branches)), now for
+  every repository whose work runs push: a copy of each in the data volume (`git-mirrors/`),
+  whose first fetch is a whole clone. A fork's run may push its pull request's commits to its
+  branch, as before: from then on they are the repository's, which the issue's later work runs
+  start from (see [Not covered](#not-covered)).
+- **Git's paths in any case** (`GIT-UPLOAD-PACK`, `Info/Refs`) are a fetch's, checked as one;
+  any other spelling of them is a page, and refused.
 - **The issue's kept clone**: a fork's run gets a clone of its own (a `-fork-workspace`
   volume, `listener/sandbox-spec.mjs`), so what it checked out (the fork's commits, its
   branch, a stash) never sits in the clone the issue's other work runs start from, where no
@@ -1644,8 +1670,8 @@ real server's certificate.
   sandbox, through the gateway, while the run lasts. A key that leaks lets its holder read
   and change the GitHub traffic of the sandboxes running then (what they read and write, as
   the proxy does), not act as them elsewhere. `githubusercontent.com` is certifiable too: only
-  GitHub's file hosts (`GITHUB_FILES`) are relayed, for a work run that isn't a fork's (they
-  carry no token), the others neither relayed nor decrypted unless you cache them. The
+  GitHub's content hosts are relayed, for a work run that isn't a fork's (they carry no
+  token), and neither relayed nor decrypted for the others unless you cache them. The
   providers' names stay excluded: the operator's credentials still go there, from the
   listener.
 - **Trust in the sandbox**: for every run that reaches GitHub (all but research runs), and
@@ -1718,13 +1744,13 @@ instructions and the dashboard's repository panel all name these files.
 
 **Mandatory hosts**, always allowed:
 
-| Host                      | For                                                                            |
-| ------------------------- | ------------------------------------------------------------------------------ |
-| `api.anthropic.com`       | Claude Code's runs only: WebFetch's domain check                               |
-| `github.com`              | git over HTTPS (`GITHUB_URL`), relayed to the [gateway](#the-github-gateway)   |
-| `api.github.com`          | `gh` and the API (`GITHUB_API`), relayed to the [gateway](#the-github-gateway) |
-| `*.githubusercontent.com` | raw and LFS files, diffs (relayed), release downloads, avatars                 |
-| the listener              | the broker and the agent's API calls, directly                                 |
+| Host                      | For                                                                             |
+| ------------------------- | ------------------------------------------------------------------------------- |
+| `api.anthropic.com`       | Claude Code's runs only: WebFetch's domain check                                |
+| `github.com`              | git over HTTPS (`GITHUB_URL`), relayed to the [gateway](#the-github-gateway)    |
+| `api.github.com`          | `gh` and the API (`GITHUB_API`), relayed to the [gateway](#the-github-gateway)  |
+| `*.githubusercontent.com` | raw and LFS files, diffs, release downloads, avatars (relayed for checked runs) |
+| the listener              | the broker and the agent's API calls, directly                                  |
 
 That list was checked against Claude Code 2.1.300 (the pinned version) by reading the hosts
 in its binary. With `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` (set in the image) and the
@@ -1773,8 +1799,9 @@ it again when you change `AGY_VERSION`.
   `.git` keeps besides hooks (objects, refs, the stash, and the branches' `remote` and
   `merge`), enough to make a branch of its own look like one of the repository's, stays in a
   fork's run's own clone (`-fork-workspace`), which only the issue's later fork's runs start
-  from. It can also push the run's own branch,
-  which a repository granted `allow_branch_docker_images` builds. It ran with the same token
+  from. It can also push the run's own branch, its pull request's commits included, which a
+  repository granted `allow_branch_docker_images` builds and the issue's later work runs
+  fetch as the repository's own. It ran with the same token
   and hosts as the run it would reach, one an allowed user asked for: read what a fork's pull
   request does before asking for work on it (see [What a fork's code may reach](#what-a-forks-code-may-reach)).
 - **A fork's pull request only mentioned** (in an issue, or a comment from elsewhere: "check
@@ -1784,7 +1811,10 @@ it again when you change `AGY_VERSION`.
   gateway, though: the run's container engine reaches GitHub anonymously, around it (the
   exception in [The GitHub gateway](#the-github-gateway)), so a build there can fetch a
   public fork; a `codeload.github.com` grant serves any public repository's archives; and the
-  same code anywhere else (another repository, a gist, a package registry the run may reach),
+  same code anywhere else (another repository, a gist, a package registry the run may reach;
+  a granted host whose name leads to GitHub's content CDN, or another of GitHub's own hosts
+  granted (`codeload.github.com`, `*.github.com`), whose front ends may answer for one another
+  as the content CDN does: a tunnel to either would reach them unchecked),
   or written as text (a pull request's description, a comment, a workflow's check-run
   summary), is no fork's tree to any check. Ask for work on a fork's pull request from that
   pull request.

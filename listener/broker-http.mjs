@@ -7,7 +7,7 @@
 import { createServer } from "node:http";
 import { agentFor } from "./agents/index.mjs";
 import { addressOf } from "./broker.mjs";
-import { egressPolicy, GITHUB_FILES, githubHosts, relayedGithub } from "./egress.mjs";
+import { egressPolicy, githubContent, githubHosts } from "./egress.mjs";
 import { restricted } from "./github-forks.mjs";
 import { NO_TOKEN } from "./github-app.mjs";
 import { taskKey } from "./events.mjs";
@@ -105,13 +105,11 @@ export async function runAt(ctx, run, ip) {
 export function createBrokerHttp(ctx) {
   const { config, log, tasks } = ctx;
   // GitHub's hosts first: the other relayed ones are Google's.
+  const gateway = { service: "githubGateway", name: "GitHub gateway", destroy: true };
   const routes = [
-    ...relayedGithub(config).map((host) => ({
-      prefix: `/relay/${host}/`,
-      service: "githubGateway",
-      name: "GitHub gateway",
-      destroy: true,
-    })),
+    ...githubHosts(config).map((host) => ({ prefix: `/relay/${host}/`, ...gateway })),
+    // GitHub's content hosts, any of them (egress.mjs githubContent()).
+    { match: (url) => githubContent(/^\/relay\/([^/]+)\//.exec(url)?.[1] ?? ""), ...gateway },
     ...ROUTES,
   ];
 
@@ -143,9 +141,9 @@ export function createBrokerHttp(ctx) {
     // as an engine does.
     const run = live ? ctx.broker.runOf(live.secret) : null;
     const github = !!live && run?.extra !== NO_TOKEN;
-    // GitHub's file hosts only for a run the gateway checks (github-forks.mjs restricted()): the
-    // others reach them as plain hosts, as before.
-    const files = github && restricted(run) ? GITHUB_FILES : [];
+    // GitHub's content hosts only for a run the gateway checks (github-forks.mjs restricted()),
+    // every one of them (egress.mjs githubContent()): the others reach them as plain hosts.
+    const files = github && restricted(run) && githubContent(host) ? [host] : [];
     // What its agent's calls need: hosts handed to the listener, hosts refused.
     const agent = agentFor(live?.record?.agent);
     const answer = task
@@ -171,7 +169,7 @@ export function createBrokerHttp(ctx) {
     if (req.method === "GET" && req.url.startsWith("/egress?")) {
       return egressAnswer(req, res).catch(failed(res, "Egress", false));
     }
-    const route = routes.find((r) => req.url.startsWith(r.prefix));
+    const route = routes.find((r) => (r.match ? r.match(req.url) : req.url.startsWith(r.prefix)));
     if (route) {
       return ctx[route.service].handle(req, res).catch(failed(res, route.name, route.destroy));
     }

@@ -32,6 +32,7 @@
 //
 // Served on the broker's port, which only the runs' networks reach.
 import { addressOf, NOT_ITS_SANDBOX } from "./broker.mjs";
+import { githubContent } from "./egress.mjs";
 import { NO_TOKEN, readsOf } from "./github-app.mjs";
 import { advertisementReader, fetchBody, fetchRequest, MAX_FETCH } from "./github-forks.mjs";
 import { pullOf } from "./github-pulls.mjs";
@@ -72,13 +73,18 @@ const THREAD_READS = [
 const THREAD_FIELDS = /comment|review|timeline|contentedit|search|textmatch/i;
 // What git fetches with on the web host; a review reads nothing else there (web pages show the
 // comments).
-const GIT_READ = /^[^/]+\/[^/]+?(?:\.git)?\/(?:info\/refs|git-upload-pack)$/;
-const GIT_PUSH = /\/git-receive-pack$/;
+// Any case: GitHub may route a path whatever its case, and a spelling these miss must not reach
+// it unchecked (github-forks.mjs refuses any other page of a repository).
+const GIT_READ = /^[^/]+\/[^/]+?(?:\.git)?\/(?:info\/refs|git-upload-pack)$/i;
+const GIT_PUSH = /\/git-receive-pack$/i;
 // A fetch's calls, and the repository they name.
-const GIT_FETCH = /^([^/]+\/[^/]+?)(?:\.git)?\/(info\/refs|git-upload-pack)$/;
+const GIT_FETCH = /^([^/]+\/[^/]+?)(?:\.git)?\/(info\/refs|git-upload-pack)$/i;
 // GitHub's file hosts (egress.mjs GITHUB_FILES, the same list): relayed, and sent on without a
 // token. How a work run's calls there are checked (github-forks.mjs callTargets()): their path
-// past `prefix`, read as `kind` reads it.
+// past `prefix`, read as `kind` reads it. GitHub's other content hosts (egress.mjs
+// githubContent(): release assets, avatars, Actions logs…) are relayed too, read only, and sent
+// on as they are to the host they name: whatever `Host` the sandbox wrote, so that none answers
+// as one of these.
 export const FILES = [
   { host: "raw.githubusercontent.com", kind: "raw", prefix: "" },
   { host: "media.githubusercontent.com", kind: "raw", prefix: "media/" },
@@ -170,6 +176,9 @@ export function createGithubGateway({
   web, // its GITHUB_URL
   // GitHub's file hosts (FILES), each with the `url` its calls go to (https://<host>).
   files = FILES,
+  // host → the URL GitHub's other content hosts' calls go to, or null for a host that isn't one
+  // (egress.mjs githubContent()).
+  content = (host) => (githubContent(host) ? new URL(`https://${host.toLowerCase()}/`) : null),
   // github-forks.mjs createForkChecks(): what a work run that isn't a fork's may fetch. None:
   // nothing is checked.
   forks = null,
@@ -253,7 +262,10 @@ export function createGithubGateway({
       }
       // Not the API's: the web host's, when it is the same host (GitHub Enterprise Server).
     }
-    const file = fileHosts.find((f) => f.host === host.toLowerCase());
+    const other = fileHosts.some((f) => f.host === host.toLowerCase()) ? null : content(host);
+    const file =
+      fileHosts.find((f) => f.host === host.toLowerCase()) ??
+      (other && { host: host.toLowerCase(), base: other, passthrough: true });
     if (file) {
       let target;
       try {
@@ -285,7 +297,7 @@ export function createGithubGateway({
     const run = await runOf(req, res);
     if (!run) return;
     const call = `${req.method} ${where.target.pathname}`;
-    if (!where.api && (GIT_PUSH.test(where.path) || /service=git-receive-pack/.test(req.url))) {
+    if (!where.api && (GIT_PUSH.test(where.path) || /service=git-receive-pack/i.test(req.url))) {
       return fail(res, 403, "pushes go through Deckhand's git gateway (pushInsteadOf)");
     }
     const write = !["GET", "HEAD", "OPTIONS"].includes(req.method);
@@ -298,7 +310,7 @@ export function createGithubGateway({
     }
     // A fetch's pack request is a POST, and binary: streamed, not redacted (a work run's is read
     // for what it wants, below: forkCheck()).
-    const streamed = !write || (!where.api && /\/git-upload-pack$/.test(where.path));
+    const streamed = !write || (!where.api && /\/git-upload-pack$/i.test(where.path));
     if (where.file && write) return fail(res, 405, `${where.file.host} is only read`);
     const review = run.mode === "review";
     // Files aren't the thread: a review reads them as before.
@@ -472,6 +484,8 @@ export function createGithubGateway({
     if (!forks?.restricted(run)) return null;
     if (where.api && isGraphql(where.path)) return null;
     const { file } = where;
+    // GitHub's other content hosts serve no repository's file: nothing to check.
+    if (file?.passthrough) return null;
     if (file) {
       // A path these checks don't read is refused: fail closed.
       if (!where.path.toLowerCase().startsWith(file.prefix)) {

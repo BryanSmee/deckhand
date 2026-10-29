@@ -408,6 +408,8 @@ ctx.gitGateway = createGitGateway({
   app: () => ctx.app,
   // Read on each push: a grant taken back applies to the next one.
   allowWorkflows: (repo) => grantFor(loadGrants(config), config, repo).allowWorkflows,
+  // A work run that isn't a fork's pushes nothing that reaches a fork's objects.
+  forks: forkChecks,
   githubUrl: config.githubUrl,
   // Granted repos' copies, their pushed workflow files checked against them (git-mirror.mjs).
   mirrorDir: join(config.dataDir, "git-mirrors"),

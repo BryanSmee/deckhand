@@ -58,14 +58,15 @@ const HEX = /^[0-9a-f]{4,64}$/i;
 // whatever the path, rather than a list of the calls that would serve a file. A pull request
 // list's `head` and `base` only filter it, by branch: not checked there.
 const REF_PARAMS = ["ref", "sha", "head", "base"];
-// A repository's web pages that show no file's content: its home, git's own calls (checked as
-// fetches: github-gateway.mjs), issues, pull request lists, releases (their assets the
-// maintainers' uploads; their source archives are archive/ links, checked), tags, branches,
-// labels, milestones, the Actions and workflow lists (a run's own pages are its run's:
-// callTargets()), discussions, the wiki, pulse, graphs, stargazers, watchers, forks and
-// settings. Not security's (code scanning quotes a pull request's code), nor any other.
+// A repository's web pages that show no file's content: its home, issues, pull request lists,
+// releases (their assets the maintainers' uploads; their source archives are archive/ links,
+// checked), tags, branches, labels, milestones, the Actions and workflow lists (a run's own
+// pages are its run's: callTargets()), discussions, the wiki, pulse, graphs, stargazers,
+// watchers, forks and settings. Not git's calls, which the GitHub gateway checks as fetches
+// first (any other spelling of them lands here, refused), nor security's (code scanning quotes
+// a pull request's code), nor any other.
 const WEB_PAGES = new RegExp(
-  String.raw`^(?:|info\/refs|git-upload-pack|actions(?:\/workflows\/[^/]+)?|pulls(?:\/[a-z-]+)?|(?:issues|releases|tags|branches|labels|milestones?|discussions|wiki|pulse|graphs|stargazers|watchers|forks|settings)(?:\/.*)?)$`,
+  String.raw`^(?:|actions(?:\/workflows\/[^/]+)?|pulls(?:\/[a-z-]+)?|(?:issues|releases|tags|branches|labels|milestones?|discussions|wiki|pulse|graphs|stargazers|watchers|forks|settings)(?:\/.*)?)$`,
   "i",
 );
 // Where a commit's metadata is read, not its patch: its statuses, checks, pull requests.
@@ -138,15 +139,16 @@ export function advertisedRefs(buffer) {
 // `path`: it is a ref followed by a file's path (raw files, `blob/`, `tree/`), whose own name
 // may hold `..`, `@{` or spaces: only its first segment, where the ref starts, is held to them.
 function readableRef(text, path = false) {
-  if (!text || /^[\s/:-]/.test(text) || /[\x00-\x1f\x7f\\]|\/\//.test(text)) return false;
+  if (!text || /^[\s/:.-]/.test(text) || /[\x00-\x1f\x7f\\]|\/\//.test(text)) return false;
   const first = text.split("/")[0];
   return !/\.\.|@\{/.test(path ? first : text) && !/[\s?*[]/.test(first);
 }
 
-// What a ref, branch or commit names, as a path or parameter spells it (with what follows it in
-// a path, a revision's suffix; `path`: a file's path follows, readableRef()): { pull } for a pull request's refs (`refs/pull/<n>/head`,
-// `pull/<n>/merge`), { sha, first, names } for what may be a commit (its first segment's hex
-// digits as spelled, and the branch or tag names it may be instead), { owner, name, ref } for a ref named with its repository's owner (compare's
+// What a ref, branch or commit names, as a path or parameter spells it (with what follows it in a
+// path, a revision's suffix; `path`: a file's path follows, readableRef()): { pull } for a pull
+// request's refs (`refs/pull/<n>/head`, `pull/<n>/merge`), { sha, first, names } for what may be a
+// commit (its first segment's hex digits as spelled, and the branch or tag names it may be
+// instead), { owner, name, ref } for a ref named with its repository's owner (compare's
 // `owner:ref`, `owner:repo:ref`), { invalid } for what git wouldn't take for a ref's name
 // (readableRef()), else {}: a branch or tag, the repository's own.
 export function refKind(spec, { path = false } = {}) {
@@ -168,15 +170,15 @@ export function refKind(spec, { path = false } = {}) {
   return { sha: first.toLowerCase(), first, names: [...new Set([...prefixes, first])] };
 }
 
-// The repository a call names, and what in it may be a fork's: { repo } (owner/name) or { id },
-// and { refs, paths, pulls, actions, analyses, blob, lfs, page } (refKind()'s specs: whole
-// refs, and refs followed by a file's path; pull request numbers; the workflow runs, jobs or
-// artifacts whose output it downloads; the code scanning analyses it downloads as SARIF; whether it reads a blob by its id, git LFS's objects, or a web page
-// these checks don't read); null for a call that names none. `kind`: "api" (REST, its path under the API's
-// base), "web" (the web host's path, and patch-diff.githubusercontent.com's) or "raw"
-// (raw.githubusercontent.com's, and media.githubusercontent.com's); `query`, its
-// URLSearchParams; `accept`, its header. Trees and a commit's metadata (`git/trees`,
-// `git/commits`) hold no file's content: not checked.
+// The repository a call names, and what in it may be a fork's: { repo } (owner/name) or { id }, and
+// { refs, paths, pulls, actions, analyses, blob, lfs, page } (refKind()'s specs: whole refs, and
+// refs followed by a file's path; pull request numbers; the workflow runs, jobs or artifacts whose
+// output it downloads; the code scanning analyses it downloads as SARIF; whether it reads a blob by
+// its id, git LFS's objects, or a web page these checks don't read); null for a call that names
+// none. `kind`: "api" (REST, its path under the API's base), "web" (the web host's path, and
+// patch-diff.githubusercontent.com's) or "raw" (raw.githubusercontent.com's, and
+// media.githubusercontent.com's); `query`, its URLSearchParams; `accept`, its header. Trees and a
+// commit's metadata (`git/trees`, `git/commits`) hold no file's content: not checked.
 export function callTargets(kind, path, query = new URLSearchParams(), accept = "") {
   let repo = null;
   let id = null;
@@ -210,10 +212,14 @@ export function callTargets(kind, path, query = new URLSearchParams(), accept = 
     refs.push(value);
   }
   const strip = (ref) => ref.replace(/\.(?:tar\.gz|tgz|zip|diff|patch)$/i, "");
+  // A comparison's sides: `a...b` or `a..b`; one with more dots is no comparison git reads, and
+  // goes whole to the checks, which refuse its `..`.
   const sides = (spec) =>
-    strip(spec)
-      .split(/\.{2,3}/)
-      .filter(Boolean);
+    /\.{4,}/.test(spec)
+      ? [spec]
+      : strip(spec)
+          .split(/\.{2,3}/)
+          .filter(Boolean);
   let m;
   if (kind === "raw") {
     if (rest) paths.push(rest);
