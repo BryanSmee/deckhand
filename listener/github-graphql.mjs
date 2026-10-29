@@ -90,6 +90,8 @@ function updated(input) {
 //   Repository, for a create, whose target is then `kind`);
 // - fields: the input fields it may set besides that one and `clientMutationId` (any other set
 //   is refused: a field GitHub adds may do what no ceiling knows);
+// - empty: input fields gh always sends, as null or [] when it sets nothing, dropped then (issue
+//   #422): on a create, an empty one sets nothing;
 // - actions(input): what it does, as github-writes.mjs names actions;
 // - labels: the input field of label IDs it adds (`added`) or removes (`removed`), or sets in
 //   place of the issue's (`set`);
@@ -106,6 +108,8 @@ export const MUTATIONS = {
     kind: "new_issue",
     // Not `issueTemplate`: GitHub would add its labels and assignees, which no check sees.
     fields: ["title", "body", "labelIds", "assigneeIds", "milestoneId"],
+    // gh issue create sends `projectIds: null` whenever it resolves any metadata (a label).
+    empty: ["projectIds"],
     actions: (input) => [
       "create",
       ...("assigneeIds" in input ? ["assign"] : []),
@@ -465,10 +469,13 @@ export function mutationFields({ doc, op, coerced }, schema = githubSchema()) {
       return { refused: refusal(400, `its GraphQL arguments: ${error.message}`) };
     }
     // The fields it sets, null ones too: GitHub may read null as clearing a field (updated()),
-    // so an unknown one sent as null is refused as one with a value is.
+    // so an unknown one sent as null is refused as one with a value is. Only those the spec
+    // names `empty` go when empty; the document GitHub gets still has them, which it accepts.
     const known = [spec.target, ...spec.fields];
+    const empty = (k, v) =>
+      spec.empty?.includes(k) && (v === null || (Array.isArray(v) && !v.length));
     const set = Object.fromEntries(
-      Object.entries(input ?? {}).filter(([k]) => k !== "clientMutationId"),
+      Object.entries(input ?? {}).filter(([k, v]) => k !== "clientMutationId" && !empty(k, v)),
     );
     const unknown = Object.keys(set).filter((k) => !known.includes(k));
     if (unknown.length) {
