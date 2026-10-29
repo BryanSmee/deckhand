@@ -336,7 +336,7 @@ export function inLine(tasks: Task[], moving: OrderMove | null): { tasks: Task[]
 
 // Where a queued node dropped on another queued one moves it: on its left edge before it, on
 // its right edge after it (`line`: inLine()'s). `side`: where on the target it was let go, 0 its
-// left edge, 1 its right. Null: its middle, or no move.
+// left edge, 1 its right. Null: its middle, or where it is already.
 export function moveOnto(
   line: Task[],
   key: string,
@@ -345,7 +345,12 @@ export function moveOnto(
 ): OrderMove | null {
   const onto = line.find((t) => t.key === target);
   if (key === target || !onto || !reorderable(onto) || (side > 0.3 && side < 0.7)) return null;
-  return side <= 0.3 ? { key, before: target } : { key, after: target };
+  const before = side <= 0.3;
+  // Where it is already: right before the one after it, right after the one before it.
+  const movers = line.filter(reorderable);
+  const at = movers.findIndex((t) => t.key === key);
+  if (at >= 0 && movers[at + (before ? 1 : -1)] === onto) return null;
+  return before ? { key, before: target } : { key, after: target };
 }
 
 // The task "Run next" can't move any higher: the first that moves of `tasks` (every repo's the
@@ -356,8 +361,9 @@ export function nextInLine(tasks: Task[]): string | null {
 }
 
 // A node a drag moves, on `repo`'s tab (none on All, or while its config has errors): only an
-// issue's, and not what runs or ran; a queued one moves in the run order. Those waiting for answers move whatever their last run was
-// (a brainstorm's kind is "brainstorm"): not a pull request.
+// issue's, and not what runs or ran; a queued one moves in the run order. Those waiting for
+// answers move whatever their last run was (a brainstorm's kind is "brainstorm"): not a pull
+// request.
 export const movable = (n: GraphNode, repo: string | null, blocked: boolean) =>
   !!repo &&
   !blocked &&

@@ -36,7 +36,7 @@ import {
   loadCredentials,
   saveCredentials,
 } from "./github-app.mjs";
-import { pullEntry } from "./events.mjs";
+import { pullEntry, taskKey } from "./events.mjs";
 import {
   createGitHub,
   fetchPull,
@@ -672,6 +672,9 @@ if (!ctx.app) log(`No GitHub App yet. Set it up at ${setup.link()}`);
 // left queued (comments for those runs are delivered to them).
 const restored = ctx.restoreRuns();
 ctx.loadQueue();
+// queue.json is only written when the listener stops: after a crash, the keys of comments it
+// lost stay in order.json, and would rank a new comment there as placed.
+order.keep(ctx.queueOrder().map((t) => taskKey(t.repo, t.id)));
 ctx.reattach(restored).catch((error) => log(`Re-attaching: ${error.stack ?? error}`));
 const relinking = setInterval(ctx.relink, RELINK_MS);
 ctx.conflicts.start();

@@ -3615,10 +3615,15 @@ mounts:
   });
 
   test("Run order: a queued task moved first has position 1, in order.json", async (t) => {
-    const { dir, port, send, listener } = await listen(t, {}, (dir, github) => ({
-      DEBOUNCE_MS: "60000",
-      GITHUB_URL: github.url,
-    }));
+    const { dir, port, send, listener } = await listen(t, {}, (dir, github) => {
+      // A key whose comments a crash lost (queue.json is only written at a stop): dropped at start.
+      writeFileSync(
+        join(dir, "order.json"),
+        JSON.stringify({ "org/repo#99": { key: "org/repo#99" } }),
+      );
+      return { DEBOUNCE_MS: "60000", GITHUB_URL: github.url };
+    });
+    assert.deepEqual(JSON.parse(readFileSync(join(dir, "order.json"), "utf8")), {});
     for (const [number, id] of [
       [5, 105],
       [6, 106],

@@ -193,6 +193,9 @@ test("moveOnto: a queued node's left edge before it, its right edge after it, it
     after: "acme/app#pr-43",
   });
   expect(moveOnto(line, "acme/app#41", "acme/app#42", 0.5)).toBeNull();
+  // Where it is already: before the next of the repo's, after the one before it.
+  expect(moveOnto(line, "acme/app#41", "acme/app#42", 0.1)).toBeNull();
+  expect(moveOnto(line, "acme/app#42", "acme/app#41", 0.9)).toBeNull();
   // Not onto a brainstorm, nor itself.
   expect(moveOnto(line, "acme/app#41", "acme/app#44", 0.1)).toBeNull();
   expect(moveOnto(line, "acme/app#41", "acme/app#41", 0.1)).toBeNull();
@@ -203,4 +206,70 @@ test("the graph's queued nodes show their place", async () => {
   render(<Dashboard state={makeState({}, LINE)} error={null} />);
   const node = await screen.findByRole("listitem", { name: /^#41 Queued 41: Queued, 2nd in line/ });
   expect(within(node).getByText("2nd")).toBeTruthy();
+});
+
+// Where a node is drawn (its transform, in drawing units) and its size: jsdom puts the drawing
+// at 0, 0, so the pointer's place is these plus the drawing's padding.
+const PAD = 8;
+const boxOf = (node: HTMLElement) => {
+  const [x, y] = /translate\(([-\d.]+)px, ([-\d.]+)px\)/
+    .exec(node.style.transform)!
+    .slice(1)
+    .map(Number);
+  return {
+    x: x + PAD,
+    y: y + PAD,
+    w: parseFloat(node.style.width),
+    h: parseFloat(node.style.height),
+  };
+};
+
+test("on the graph: a queued node onto another's right edge goes after it; its middle or the open, nothing", async () => {
+  open();
+  const node = (n: number) =>
+    screen.getByRole("listitem", { name: new RegExp(`^#${n} Queued ${n}:`) });
+  const from = node(41);
+  const start = boxOf(from);
+  const drag = (to: { x: number; y: number }) => {
+    fireEvent.pointerDown(from, {
+      button: 0,
+      pointerId: 1,
+      clientX: start.x + 5,
+      clientY: start.y + 5,
+    });
+    fireEvent.pointerMove(from, { pointerId: 1, clientX: to.x, clientY: to.y });
+  };
+  const target = boxOf(node(42));
+  const at = (side: number) => ({ x: target.x + target.w * side, y: target.y + target.h / 2 });
+
+  // Its middle: no label, nothing sent.
+  drag(at(0.5));
+  expect(screen.queryByText(/^Move #/)).toBeNull();
+  fireEvent.pointerUp(from, { pointerId: 1, ...{ clientX: at(0.5).x, clientY: at(0.5).y } });
+  // In the open: nothing either.
+  drag({ x: 5000, y: 5000 });
+  fireEvent.pointerUp(from, { pointerId: 1, clientX: 5000, clientY: 5000 });
+  // Its left edge: right before #42, where #41 is already.
+  drag(at(0.1));
+  expect(screen.queryByText(/^Move #/)).toBeNull();
+  fireEvent.pointerUp(from, { pointerId: 1, clientX: at(0.1).x, clientY: at(0.1).y });
+  expect(api.bodies()).toEqual([]);
+
+  // Its right edge: after it.
+  drag(at(0.9));
+  expect(screen.getByText("Move #41 after #42 in line")).toBeTruthy();
+  const release = api.hold();
+  fireEvent.pointerUp(from, { pointerId: 1, clientX: at(0.9).x, clientY: at(0.9).y });
+  await waitFor(() => expect(api.bodies()).toEqual([{ key: "acme/app#41", after: "acme/app#42" }]));
+  // Another drag while that move is on its way (#42 then #41, shown at once): #42 onto #41's
+  // right edge would move it, but nothing is sent meanwhile.
+  const other = node(42);
+  const o = boxOf(other);
+  const right = { x: start.x + start.w * 0.9, y: start.y + start.h / 2 };
+  fireEvent.pointerDown(other, { button: 0, pointerId: 2, clientX: o.x + 5, clientY: o.y + 5 });
+  fireEvent.pointerMove(other, { pointerId: 2, clientX: right.x, clientY: right.y });
+  expect(screen.queryByText(/^Move #/)).toBeNull();
+  fireEvent.pointerUp(other, { pointerId: 2, clientX: right.x, clientY: right.y });
+  release();
+  await waitFor(() => expect(api.bodies()).toHaveLength(1));
 });

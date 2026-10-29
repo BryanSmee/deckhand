@@ -239,7 +239,7 @@ export function Board({
   const labelOf = (h: Hover): DropLabel | null => {
     const node = h.target ? byKey.get(h.target) : null;
     if (h.what === "queued") {
-      const move = node && h.key ? moveOnto(line, h.key, node.key, h.side) : null;
+      const move = node && h.key && !order.moving ? moveOnto(line, h.key, node.key, h.side) : null;
       const box = node && shape.boxes.find((b) => b.key === node.key);
       if (!move || !box) return null;
       const text = `Move #${h.number} ${move.after ? "after" : "before"} ${nodeRef(node, false, 0)} in line`;
@@ -314,7 +314,9 @@ export function Board({
     },
     onDrop: (d, point) => {
       if (!d.queued) return dropped(d.number, targetAt(point.x, point.y), dragged(d));
-      // Let go anywhere but a queued node's edge: it stays where it is.
+      // Let go anywhere but a queued node's edge, or while another move is on its way: it stays
+      // where it is. Its middle doesn't queue it after: the listener refuses a queued task.
+      if (order.moving) return;
       const where = at(point.x, point.y);
       const move = where?.target ? moveOnto(line, d.key, where.target, where.side) : null;
       if (move) reorder(move);
