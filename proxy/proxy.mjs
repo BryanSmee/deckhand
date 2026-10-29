@@ -71,11 +71,18 @@ export function listenerPolicy(url, timeoutMs = 5000) {
   };
 }
 
+// A dot segment ("." or "..", plain or percent-encoded), which the URL parser would resolve.
+// Dots elsewhere are a path's own: GitHub's compare (`main...feature`), a search's date range
+// in the query (`2026-01-01..2026-02-01`), a file named `a%2Ejs`.
+const DOT_SEGMENT = /(?:^|\/)(?:\.|%2e){1,2}(?:\/|$)/i;
+
 // Where a relayed request goes: <relayUrl>/<host><path>, or null for a path that isn't plain
-// origin-form ("/…") or that could climb out of <relayUrl>/<host>/ once parsed ("..", "%2e",
-// "\\"), and checked again on the parsed URL.
+// origin-form ("/…") or that could climb out of <relayUrl>/<host>/ once parsed (a dot segment
+// or a "\\" in its path), and checked again on the parsed URL.
 export function relayTarget(relayUrl, host, path) {
-  if (typeof path !== "string" || !path.startsWith("/") || /\.\.|%2e|\\/i.test(path)) return null;
+  if (typeof path !== "string" || !path.startsWith("/")) return null;
+  const pathname = path.split("?")[0];
+  if (DOT_SEGMENT.test(pathname) || pathname.includes("\\")) return null;
   let url;
   try {
     url = new URL(`${relayUrl}/${host}${path}`);

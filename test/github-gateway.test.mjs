@@ -1,6 +1,7 @@
 // The GitHub gateway (github-gateway.mjs): a sandbox's GitHub calls, relayed by the egress proxy,
 // go on with a token for its run's repo, their writes redacted; nobody else's do.
 import assert from "node:assert/strict";
+import { request } from "node:http";
 import { test } from "node:test";
 import { gzipSync } from "node:zlib";
 import { createBroker } from "../listener/broker.mjs";
@@ -74,6 +75,20 @@ async function gateway(t, { sentFrom = sandboxAt(), app = true, maxInFlight, hol
     register,
     call,
     anonymousFrom: (secret) => (anonymous = secret),
+    // A call fetch() won't send (a GET with a body): node:http's → { status, message } (none for
+    // a HEAD).
+    raw: (path, method, headers, body) =>
+      new Promise((resolve, reject) => {
+        const req = request(`${url}/relay/127.0.0.1${path}`, { method, headers }, (res) => {
+          let text = "";
+          res.on("data", (d) => (text += d));
+          res.on("end", () =>
+            resolve({ status: res.statusCode, message: text && JSON.parse(text).message }),
+          );
+        });
+        req.on("error", reject);
+        req.end(body);
+      }),
   };
 }
 
@@ -271,6 +286,33 @@ test("a fetch's pack request streams through unread, binary as it is", async (t)
   assert.deepEqual(notes, []);
 });
 
+test("a read with a body is refused: its body would go on unread", async (t) => {
+  const gw = await gateway(t);
+  const review = gw.register(undefined, { mode: "review" });
+  const auth = { authorization: `token ${review.secret}` };
+  const query =
+    '{ repository(owner: "o", name: "r") { pullRequest(number: 1) { comments(last: 9) { nodes { body } } } } }';
+  const body = JSON.stringify({ query, note: OPERATOR });
+  for (const method of ["GET", "HEAD", "OPTIONS"]) {
+    const headers = { ...auth, "content-length": String(Buffer.byteLength(body)) };
+    const res = await gw.raw("/api/graphql", method, headers, method === "HEAD" ? "" : body);
+    assert.equal(res.status, 400, method);
+  }
+  const got = await gw.raw("/api/graphql", "GET", { ...auth, "content-length": "5" }, "hello");
+  assert.match(got.message, /a GET with a body/);
+  // Chunked, without a length: a body too.
+  const chunked = await gw.raw(
+    "/api/v3/repos/org/repo",
+    "GET",
+    { ...auth, "transfer-encoding": "chunked" },
+    body,
+  );
+  assert.equal(chunked.status, 400);
+  assert.deepEqual(gw.calls, []);
+  // Without one: read as usual.
+  assert.equal((await gw.call("/api/v3/repos/org/repo", { secret: review.secret })).status, 200);
+});
+
 test("a compressed write is refused, a review's GraphQL call too: neither could be read", async (t) => {
   const gw = await gateway(t);
   const { secret } = gw.register();
@@ -343,6 +385,8 @@ test("a review can't read its thread's comments and reviews; other runs can", as
     ["/api/v3/users/mallory/received_events", "GET"],
     ["/api/v3/orgs/org/events", "GET"],
     ["/api/v3/events", "GET"],
+    // Issue search, whose in:comments and text matches read comment text.
+    ["/api/v3/search/issues?q=repo:org/repo+in:comments+deploy", "GET"],
     // The web host's pages show them too.
     ["/org/repo/pull/12", "GET"],
   ];
@@ -368,6 +412,11 @@ test("a review can't read its thread's comments and reviews; other runs can", as
     JSON.stringify({ query: '{ node(id: "UCE_1") { ... on UserContentEdit { diff } } }' }),
     // Escaped in its JSON.
     '{"query": "{ node(id: \\"x\\") { ... on Issue\\u0043omment { body } } }"}',
+    // Search, whose text matches quote what they matched.
+    JSON.stringify({
+      query:
+        '{ search(query: "repo:o/r in:comments x", type: ISSUE, first: 5) { edges { textMatches { fragment } } } }',
+    }),
     // Connections named after them: a repository's commit comments, a commenter's comments.
     JSON.stringify({
       query:

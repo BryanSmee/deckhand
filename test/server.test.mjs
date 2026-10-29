@@ -2159,6 +2159,11 @@ mounts:
     await send(followUp(99, "Deckhand"));
     await until(() => replies(github).length === 1, "the run's questions");
     await listener.until("done (needs-input)");
+    // Its comment's outcome comes once the run is over (runs.mjs cleanUp()): before, the task is
+    // still busy, and ticking a box then can't continue it.
+    await github.waitFor(
+      (r) => r.path === "/repos/org/repo/issues/comments/99/reactions" && /confused/.test(r.body),
+    );
     rmSync(join(dir, "result"));
     const posted = JSON.parse(replies(github)[0].body).body;
     // alice ticks A in the App's comment: GitHub's edit, by her, of the bot's comment.

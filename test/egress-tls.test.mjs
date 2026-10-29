@@ -315,10 +315,26 @@ test("relayTarget: only origin-form paths that stay under /relay/<host>/", () =>
     "http://listener:8081/relay/a.test/v1internal:x?alt=sse",
   );
   assert.equal(relayTarget(base, "a.test", "/")?.href, "http://listener:8081/relay/a.test/");
+  // Dots that are no dot segment: GitHub's compare, a search's date range, a file's name.
+  for (const path of [
+    "/repos/o/r/compare/main...feature",
+    "/o/r/compare/v1.0..v1.1",
+    "/search/issues?q=repo:o/r+created:2026-01-01..2026-02-01",
+    "/search/issues?q=a/../b",
+    "/repos/o/r/contents/a%2Ejs",
+    "/repos/o/r/contents/.github/x.yml",
+    "/a/...",
+  ]) {
+    assert.equal(relayTarget(base, "a.test", path)?.href, `${base}/a.test${path}`, path);
+  }
   for (const path of [
     "/../../egress",
     "/%2E%2e/egress",
     "/a/%2e./b",
+    "/a/..",
+    "/a/./b",
+    "/a/%2E",
+    "/.",
     "/a\\b",
     "http://elsewhere/x",
     "*",

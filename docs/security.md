@@ -288,18 +288,22 @@ to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to the
   included, until #406 parses it. A redacted write still goes through, with `[redacted]` in
   place of the secret, and the run's log says so (each call once, 20 at most). A comment,
   an issue edit or a `gh api` write can't publish what the sandbox holds, a mount's content
-  that looks like the operator's key say, any more than its reply can. A write over 16 MiB is
-  refused, as is a compressed one (`Content-Encoding` other than `identity`, `415`: it couldn't
-  be read), and so is a write whose URL (its path or query, as sent or percent-decoded) holds
-  one of those secrets: a path names what is written, so it isn't rewritten.
+  that looks like the operator's key say, any more than its reply can. Refused instead of
+  read: a write over 16 MiB; a compressed one (`Content-Encoding` other than `identity`,
+  `415`), which couldn't be read; a read (`GET`, `HEAD`, `OPTIONS`) that carries a body
+  (`400`), which would go on unread (git and `gh` never send one); and a write whose URL (its
+  path or query, as sent or percent-decoded) holds one of those secrets: a path names what is
+  written, so it isn't rewritten.
 - **A review can't read its thread** other than from `TASK_DIGEST` ([Reviews](#reviews)):
   for a review run, the gateway refuses issue and pull request comments, reviews and review
   comments, the timeline and commit comments over REST, under `repos/<owner>/<repo>` or
   `repositories/<id>` (whatever the case or the encoding of the path), the event feeds
   (a repository's, a network's, a user's, an organization's, the public one: their comment and
-  review events carry the bodies), any GraphQL call that names `comments`, `reviews`,
+  review events carry the bodies), issue search (`in:comments` matches comment text, and its
+  text matches quote it), any GraphQL call that names `comments`, `reviews`,
   `latestReviews`, `reviewThreads`, `timelineItems`, the `Comment` interface, a comment's or
-  review's type or their edit history (read as text until #406 parses GraphQL, then per
+  review's type, their edit history or `search` (any name that holds "comment", "review",
+  "timeline", "contentedit", "search" or "textmatch", whatever its case) (read as text until #406 parses GraphQL, then per
   field), and anything on the web host but git's fetches (its pages
   show the comments). Other runs read them.
 - **On to GitHub** with the run's token (`token …` for the API, Basic with

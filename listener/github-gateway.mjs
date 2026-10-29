@@ -41,13 +41,16 @@ const THREAD_READS = [
   String.raw`^${REPO}\/pulls\/[^/]+\/(?:comments|reviews)(?:\/|$)`,
   String.raw`^${REPO}\/(?:commits\/[^/]+\/)?comments(?:\/|$)`,
   String.raw`^(?:(?:${REPO}|networks\/[^/]+\/[^/]+|users\/[^/]+|orgs\/[^/]+)\/)?(?:received_)?events(?:\/|$)`,
+  // Issue search: `in:comments` matches comment text, and its text matches quote it.
+  String.raw`^search\/issues(?:\/|$)`,
 ].map((re) => new RegExp(re, "i"));
 // The same in GraphQL, read as text until #406 parses it: any name that holds "comment",
 // "review", "timeline" or "contentedit", whatever its case: their fields (`comments`,
 // `issueComments`, `commitComments`, `latestReviews`, `timelineItems`, `userContentEdits`…),
-// types and interfaces (`Comment`, `IssueComment`, `PullRequestReview`…). It refuses more than
-// it must (`reviewDecision`): a review reads its pull request over REST.
-const THREAD_FIELDS = /comment|review|timeline|contentedit/i;
+// types and interfaces (`Comment`, `IssueComment`, `PullRequestReview`…), and search, whose
+// text matches quote what they matched. It refuses more than it must (`reviewDecision`): a
+// review reads its pull request over REST.
+const THREAD_FIELDS = /comment|review|timeline|contentedit|search|textmatch/i;
 // What git fetches with on the web host; a review reads nothing else there (web pages show the
 // comments).
 const GIT_READ = /^[^/]+\/[^/]+?(?:\.git)?\/(?:info\/refs|git-upload-pack)$/;
@@ -182,7 +185,7 @@ export function createGithubGateway({
     const match = /^\/relay\/([^/]+)(\/[^]*)$/.exec(url);
     if (!match) return null;
     const [, host, rest] = match;
-    if (rest.startsWith("//") || /\\/.test(rest)) return null;
+    if (rest.startsWith("//") || rest.split("?")[0].includes("\\")) return null;
     for (const base of [apiBase, webBase]) {
       if (base.hostname !== host.toLowerCase()) continue;
       let target;
@@ -224,6 +227,13 @@ export function createGithubGateway({
       return fail(res, 403, "pushes go through Deckhand's git gateway (pushInsteadOf)");
     }
     const write = !["GET", "HEAD", "OPTIONS"].includes(req.method);
+    // A read with a body would go on unread, past redaction and a review's check: git and gh
+    // never send one, so it is refused rather than read.
+    const sized = (req.headers["content-length"] ?? "0").trim() !== "0";
+    if (!write && (sized || req.headers["transfer-encoding"] !== undefined)) {
+      req.resume();
+      return fail(res, 400, `a ${req.method} with a body`);
+    }
     // A fetch's pack request is a POST, and binary: streamed, never read.
     const streamed = !write || (!where.api && /\/git-upload-pack$/.test(where.path));
     const review = run.mode === "review";
