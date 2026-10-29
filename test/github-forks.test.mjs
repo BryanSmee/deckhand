@@ -199,8 +199,20 @@ test("refKind and callTargets: what a call names that may be a fork's", () => {
   assert.deepEqual(refKind(`org:${FORK}`), { owner: "org", name: null, ref: FORK });
   assert.deepEqual(refKind("org:repo:main"), { owner: "org", name: "repo", ref: "main" });
   assert.deepEqual(refKind(`:${FORK}`), { invalid: true });
-  // Git refuses a component starting with ".".
-  assert.deepEqual(refKind(`.${FORK}`), { invalid: true });
+  // Git refuses a component starting with ".", anywhere in a ref, and a revision's leading
+  // "^" or "~".
+  for (const odd of [
+    `.${FORK}`,
+    "refs/./pull/7/head",
+    "refs/pull/./7/head",
+    "refs/.pull/7/head",
+    "^refs/pull/7/head",
+    "~refs/pull/7/head",
+  ]) {
+    assert.deepEqual(refKind(odd), { invalid: true }, odd);
+  }
+  // After a ref, a file's path may name a dotfile.
+  assert.deepEqual(refKind("main/.github/workflows/ci.yml", { path: true }), {});
   assert.deepEqual(refKind("feature/x/README.md"), {});
   assert.deepEqual(refKind("refs/heads/main/a"), {});
   assert.deepEqual(refKind("evil:main"), { owner: "evil", name: null, ref: "main" });
@@ -468,7 +480,17 @@ test("a fork's pull request, its repository and its commits are refused; the rep
     /isn't a commit on org\/repo's default/,
   );
   // A ref spelled as git wouldn't name one: refused, not taken for a branch.
-  for (const ref of [` ${FORK}`, "refs//pull/7/head", "main\n", "main..x", `.${FORK}`]) {
+  for (const ref of [
+    ` ${FORK}`,
+    "refs//pull/7/head",
+    "main\n",
+    "main..x",
+    `.${FORK}`,
+    "refs/./pull/7/head",
+    "refs/pull/./7/head",
+    "^refs/pull/7/head",
+    "org:refs/./pull/7/head",
+  ]) {
     const query = new URLSearchParams({ ref }).toString();
     assert.match(
       (await check("api", "repos/org/repo/contents/a.js", query)).message,
@@ -638,6 +660,7 @@ test("a fetch's wants: an own ref's advertised commit goes, a fork's pull reques
   assert.deepEqual(asked, ["/repos/org/repo/pulls/8"]);
   assert.match((await fetch([OWN, FORK])).message, /pull request #7 is from a fork/);
   assert.match((await fetch([], ["refs/pull/7/head"])).message, /pull request #7 is from a fork/);
+  assert.match((await fetch([], ["refs/./pull/7/head"])).message, /isn't spelled as git names/);
   // Not advertised: the repository's when its default branch has it, or a branch's head.
   assert.equal(await fetch([HEAD]), null);
   assert.match((await fetch(["9".repeat(40)])).message, /isn't a commit on org\/repo's default/);

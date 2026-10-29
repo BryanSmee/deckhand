@@ -136,12 +136,17 @@ export function advertisedRefs(buffer) {
 
 // Whether `text` is spelled as git names refs (git check-ref-format), so that GitHub can't read
 // past what the checks read: a branch name that isn't one isn't taken for the repository's own.
-// `path`: it is a ref followed by a file's path (raw files, `blob/`, `tree/`), whose own name
-// may hold `..`, `@{` or spaces: only its first segment, where the ref starts, is held to them.
+// No component may start with "." (`refs/./pull/7/head`, `.x`), nor the whole with "^" or "~"
+// (a revision's syntax), nor hold control characters, a backslash or "//". `path`: it is a ref
+// followed by a file's path (raw files, `blob/`, `tree/`), whose own name may hold "..", "@{",
+// spaces or a dotfile (`.github/`): only its first segment, where the ref starts, is held to
+// them (the URL parser has resolved its "." and ".." segments).
 function readableRef(text, path = false) {
-  if (!text || /^[\s/:.-]/.test(text) || /[\x00-\x1f\x7f\\]|\/\//.test(text)) return false;
-  const first = text.split("/")[0];
-  return !/\.\.|@\{/.test(path ? first : text) && !/[\s?*[]/.test(first);
+  if (!text || /^[\s/:.^~-]/.test(text) || /[\x00-\x1f\x7f\\]|\/\//.test(text)) return false;
+  const segments = text.split("/");
+  const ref = path ? segments.slice(0, 1) : segments;
+  if (ref.some((segment) => segment.startsWith("."))) return false;
+  return !/\.\.|@\{/.test(ref.join("/")) && !/[\s?*[]/.test(segments[0]);
 }
 
 // What a ref, branch or commit names, as a path or parameter spells it (with what follows it in a
@@ -520,7 +525,7 @@ export function createForkChecks({
       return `${kind.owner}'s ${kind.ref} is another repository's, maybe a fork's: ${FORK_RUN}`;
     }
     if (kind.invalid) {
-      return `${JSON.stringify(String(spec).slice(0, 80))} isn't spelled as git names a ref (whitespace, a control character, "//", "..", "@{", a leading "-", "/" or ":"): name a branch, a tag or a commit of ${repo}`;
+      return `${JSON.stringify(String(spec).slice(0, 80))} isn't spelled as git names a ref (whitespace, a control character, "//", "..", "@{", a component starting with ".", a leading "-", "/", ":", "^" or "~"): name a branch, a tag or a commit of ${repo}`;
     }
     if (kind.pull !== undefined) return pullRefusal(run, repo, kind.pull);
     if (kind.sha !== undefined) {

@@ -682,8 +682,9 @@ see the difference, and doesn't claim to.
   there. A comparison's sides are refs too: another owner's (`main...someone:branch`) is
   refused, and after the repository's own owner (`main...org:<ref>`, `org:repo:<ref>`), the ref
   is checked as any. A ref spelled as git wouldn't name one (whitespace or a control
-  character, `//`, `..`, `@{`, a backslash, a leading `-`, `.`, `/` or `:`, a comparison with
-  more than three dots) is refused rather than
+  character, `//`, `..`, `@{`, a backslash, a component starting with `.` (`refs/./pull/…`),
+  a leading `-`, `/`, `:`, `^` or `~`, a comparison with more than three dots) is refused
+  rather than
   taken for a branch, so the check doesn't rest on how GitHub reads it; after a ref, a file's
   own name may hold `..`, `@{` or spaces (`main/a..b.js`).
 - **A page of the repository**: on the web host, the checks read the shapes above (archives,
@@ -1826,7 +1827,11 @@ it again when you change `AGY_VERSION`.
   same code anywhere else (another repository, a gist, a package registry the run may reach;
   a granted host whose name leads to GitHub's content CDN, or another of GitHub's own hosts
   granted (`codeload.github.com`, `*.github.com`), whose front ends may answer for one another
-  as the content CDN does: a tunnel to either would reach them unchecked),
+  as the content CDN does: a tunnel to either would reach them unchecked; a granted host that
+  fetches from GitHub for the sandbox by the repository's own name, as the Go module proxy
+  does for `go get github.com/<owner>/<repo>@<sha>` or jsDelivr for `/gh/<owner>/<repo>@<sha>/`:
+  GitHub serves a fork's commit through the repository's name, so such a host likely does
+  too),
   or written as text (a pull request's description, a comment, a workflow's check-run
   summary), is no fork's tree to any check. Ask for work on a fork's pull request from that
   pull request.
