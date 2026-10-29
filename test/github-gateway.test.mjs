@@ -23,7 +23,14 @@ const OPERATOR = "operator-key-0123456789abcdef";
 // gateway's own default.
 async function gateway(
   t,
-  { sentFrom = sandboxAt(), app = true, maxInFlight, hold, checkWrite = async () => null } = {},
+  {
+    sentFrom = sandboxAt(),
+    app = true,
+    maxInFlight,
+    hold,
+    checkWrite = async () => null,
+    wroteWrite,
+  } = {},
 ) {
   const calls = [];
   const github = await serve(t, (req, res) => {
@@ -54,6 +61,7 @@ async function gateway(
     log: (line) => logged.push(line),
     maxInFlight,
     ...(checkWrite && { checkWrite }),
+    ...(wroteWrite && { wroteWrite }),
   });
   const { url } = await serve(t, (req, res) => gw.handle(req, res));
   // A run, its log's notes beside it.
@@ -524,6 +532,39 @@ test("a REST write goes on only when its check passes; GraphQL's and git's aren'
   await gw.call("/org/repo.git/git-upload-pack", { secret, method: "POST", body: "0000" });
   assert.equal(checked.length, 2);
   assert.equal(gw.calls.length, 5);
+});
+
+test("a checked write's answer, asked uncompressed, goes to wroteWrite as it goes on", async (t) => {
+  const wrote = [];
+  const gw = await gateway(t, {
+    wroteWrite: (run, write, status, answer) =>
+      wrote.push([run, write.method, write.path, status, answer.toString()]),
+  });
+  const { secret, run } = gw.register(undefined, { mode: "work", push: true, issue: 1 });
+  const res = await gw.call("/api/v3/repos/org/repo/issues", {
+    secret,
+    method: "POST",
+    body: '{"title": "T"}',
+    headers: { "accept-encoding": "gzip" },
+  });
+  assert.deepEqual(await res.json(), { url: "/api/v3/repos/org/repo/issues" });
+  assert.equal(gw.calls[0].headers["accept-encoding"], "identity");
+  assert.deepEqual(wrote, [
+    [run, "POST", "repos/org/repo/issues", 200, '{"url":"/api/v3/repos/org/repo/issues"}'],
+  ]);
+  // Reads and GraphQL's writes aren't checked: their answers neither, nor their encoding.
+  await gw.call("/api/v3/repos/org/repo", { secret, headers: { "accept-encoding": "gzip" } });
+  await gw.call("/api/graphql", {
+    secret,
+    method: "POST",
+    body: '{"query": "{ viewer { login } }"}',
+    headers: { "accept-encoding": "gzip" },
+  });
+  assert.deepEqual(
+    gw.calls.slice(1).map((c) => c.headers["accept-encoding"]),
+    ["gzip", "gzip"],
+  );
+  assert.equal(wrote.length, 1);
 });
 
 test("without a write check, every REST write is refused", async (t) => {

@@ -9,30 +9,34 @@ import {
 
 // The modes' ceilings (MODES' `ceiling` below), by the kinds github-writes.mjs resolves from
 // GitHub: `own_issue`, the run's issue; `own_pr`, its pull request or one from a branch it
-// may push; `sub_issue`, an issue whose parent is the run's; `other_issue`, `pr`, the rest;
-// `new_issue`, an issue it creates; `label`, a label of the repo it creates. Brainstorms
+// may push; `sub_issue`, an issue whose parent is the run's; `created_issue`, one the run
+// created; `other_issue`, `pr`, the rest; `new_issue`, an issue it creates; `label`, a label
+// of the repo it creates. A link's child must be a sub-issue or an issue the run created
+// (github-writes.mjs), and moving one from another parent is in no ceiling. Brainstorms
 // comment elsewhere in theirs, which the default policy refuses
 // (docs/repo-config.md#the-github-input).
 const WORK_CEILING = {
   own_issue: ["edit", "comment", "label", "link"],
   own_pr: ["edit", "comment", "label"],
   sub_issue: ["edit", "comment", "link"],
+  created_issue: ["edit", "comment", "link"],
   new_issue: ["create"],
 };
 const BRAINSTORM_CEILING = {
   own_issue: ["edit", "comment", "link"],
   sub_issue: ["edit", "comment", "link"],
+  created_issue: ["edit", "comment", "link"],
   new_issue: ["create"],
   label: ["create"],
   own_pr: ["comment"],
   other_issue: ["comment"],
   pr: ["comment"],
 };
-// An inbox entry files issues, parents with their sub-issues (prompts/idea.md): the parent is
-// one it created, so linking reaches other issues.
+// An inbox entry files issues, parents with their sub-issues (prompts/idea.md): it links under
+// the parents it created.
 const INBOX_CEILING = {
   own_issue: ["comment"],
-  other_issue: ["link"],
+  created_issue: ["link"],
   new_issue: ["create"],
   label: ["create"],
 };

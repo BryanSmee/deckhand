@@ -859,24 +859,33 @@ tool sends it: `gh`, `gh api`, curl) is checked there, in this order:
    classify, or one outside the run's repository, is refused.
 2. **Its target's kind is read from GitHub**, never from the request: whether it is the run's
    issue, a pull request (its own when it is the run's, or from a branch the run may push),
-   a sub-issue of the run's issue (its parent on GitHub).
+   a sub-issue of the run's issue (its parent on GitHub, in the same repository), an issue the
+   run created (GitHub's answers to its creates).
 3. **The mode's ceiling**, built into Deckhand: the most a run of that mode can ever write. A
    write above it is refused before any policy runs; no policy can allow more.
 4. **`deny_github`**, on the input below: the policies can only narrow the ceiling.
 
+A sub-issue link (`POST`, `DELETE` or reordering `…/issues/<parent>/sub_issues`) names two
+issues: the parent, its target, and the child, by its id: the child must be an issue the run
+created or one already under the run's issue, and moving an issue from another parent
+(`replace_parent`) is refused. A link can't take someone else's issue under the run's, where
+its ceiling would let it edit it. The issues a run created are kept while it lasts: after a
+listener restart, it links only those already under its issue.
+
 GraphQL writes (`gh issue comment`, `gh issue create` and most of `gh`'s own commands) aren't
 checked yet: they go on as the run's token allows, until issue #406 classifies them.
 
-| Mode                                                            | Ceiling                                                                                                                                                       |
-| --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `brainstorm`, `stop`                                            | its issue: `edit`, `comment`, `link`; its sub-issues: `edit`, `comment`, `link`; new issues and labels: `create`; other issues and pull requests: `comment`   |
-| `idea`, `bug`                                                   | new issues and labels: `create`; other issues: `link` (the parents it files); its issue: `comment`                                                            |
-| `discussion`                                                    | new issues: `create`                                                                                                                                          |
-| `onboarding`, `analyze`, `review`, `research`, a light `modes:` | nothing                                                                                                                                                       |
-| `work`, a `modes:` entry that isn't light                       | its issue: `edit`, `comment`, `label`, `link`; its pull requests: `edit`, `comment`, `label`; its sub-issues: `edit`, `comment`, `link`; new issues: `create` |
+| Mode                                                            | Ceiling                                                                                                                                                                                 |
+| --------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `brainstorm`, `stop`                                            | its issue: `edit`, `comment`, `link`; its sub-issues and the issues it created: `edit`, `comment`, `link`; new issues and labels: `create`; other issues and pull requests: `comment`   |
+| `idea`, `bug`                                                   | new issues and labels: `create`; the issues it created: `link` (the parents it files); its issue: `comment`                                                                             |
+| `discussion`                                                    | new issues: `create`                                                                                                                                                                    |
+| `onboarding`, `analyze`, `review`, `research`, a light `modes:` | nothing                                                                                                                                                                                 |
+| `work`, a `modes:` entry that isn't light                       | its issue: `edit`, `comment`, `label`, `link`; its pull requests: `edit`, `comment`, `label`; its sub-issues and the issues it created: `edit`, `comment`, `link`; new issues: `create` |
 
 No ceiling holds closing or reopening (GitHub closes an issue when its pull request merges),
-merging, reviews and their comments, assignees, milestones, locks, reactions, editing or
+merging, reviews and their comments, assignees and milestones (an issue created with them
+too), moving an issue from another parent, locks, reactions, editing or
 deleting comments, deleting anything, a label's settings, the repository's contents (pushes
 go through Deckhand's git gateway) or settings, or another repository.
 
@@ -890,13 +899,14 @@ go through Deckhand's git gateway) or settings, or another repository.
 | `issue`                 | The number of the run's issue (or pull request).                                                                                                                                         |
 | `action`                | What the write does: `create`, `edit`, `comment`, `label`, `link`. A write that does several (a `PATCH` setting labels and a title) has them all in `actions`, `action` being the first. |
 | `actions`               | All of them: `close` or `reopen` first, then `label`, `assign`, `milestone`, then `edit`.                                                                                                |
-| `target.kind`           | `own_issue`, `own_pr`, `sub_issue`, `other_issue`, `pr`, `new_issue` (an issue it creates), `label` (a label it creates).                                                                |
+| `target.kind`           | `own_issue`, `own_pr`, `sub_issue`, `created_issue` (one the run created), `other_issue`, `pr`, `new_issue` (an issue it creates), `label` (a label it creates).                         |
 | `target.number`         | The issue's or pull request's, `null` for `new_issue` and `label`.                                                                                                                       |
 | `target.labels`         | Its labels' names, as GitHub has them now.                                                                                                                                               |
 | `target.author`         | Its author's login.                                                                                                                                                                      |
 | `change.fields`         | The keys of the write's JSON body (`["title", "body"]`).                                                                                                                                 |
-| `change.labels_added`   | The labels it adds (or sets, for a `PUT`, or creates, for `label`).                                                                                                                      |
-| `change.labels_removed` | The labels it removes; `["*"]` when it removes them all.                                                                                                                                 |
+| `change.labels_added`   | The labels it adds (or sets, for a `PUT` or a `PATCH` with `labels`, or creates, for `label`).                                                                                           |
+| `change.labels_removed` | The labels it removes: those a `PUT` or a `PATCH` with `labels` leaves out of the issue's, or the one it deletes; `["*"]` when it deletes them all.                                      |
+| `change.sub_issue`      | A link's child: `id`, `number`, `kind` (`sub_issue` or `created_issue`). Absent from other writes.                                                                                       |
 
 ```json
 {

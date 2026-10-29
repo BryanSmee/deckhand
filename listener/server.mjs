@@ -329,6 +329,11 @@ Object.assign(ctx, {
 
 // The sandboxes' only way to GitHub, on the broker's port: their calls, relayed by the egress
 // proxy, go on with a token for their run's repo that they never see, their writes redacted.
+const writeChecks = createWriteChecks({
+  lookup: (repo, path) => getJson(github, repo, path, [404, 410]),
+  policies,
+  log,
+});
 ctx.githubGateway = createGithubGateway({
   broker: ctx.broker,
   app: () => ctx.app,
@@ -344,12 +349,10 @@ ctx.githubGateway = createGithubGateway({
     ...operatorSecrets(ctx),
   ],
   // Their REST writes: within their mode's ceiling, and what the policies' `deny_github`
-  // allows. Their targets are looked up with the listener's token.
-  checkWrite: createWriteChecks({
-    lookup: (repo, path) => getJson(github, repo, path, [404, 410]),
-    policies,
-    log,
-  }).check,
+  // allows. Their targets are looked up with the listener's token; GitHub's answers tell which
+  // issues each run created.
+  checkWrite: writeChecks.check,
+  wroteWrite: writeChecks.answered,
   log,
 });
 // Their pushes, on the broker's port: to the run's own branches only, never the default one.

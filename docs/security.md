@@ -312,7 +312,12 @@ to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to the
   `link`, `close`…), and its target's kind is looked up on GitHub with the listener's own
   token, never taken from the request: the run's issue, its pull request (by its number, or
   its head on a branch of the repository the run may push: `broker.mjs` `allow()`), a
-  sub-issue of its issue (its parent on GitHub), another issue or pull request. Then:
+  sub-issue of its issue (its parent on GitHub, in the same repository), an issue the run
+  created (kept from GitHub's answers to its creates, while it lasts), another issue or pull
+  request. A sub-issue link's child, named by its id, must be one the run created or one
+  already under its issue, and moving an issue from another parent (`replace_parent`) is
+  refused: a link could otherwise take any issue under the run's, where its ceiling lets it
+  edit. Then:
   - a write it can't classify, one outside the run's repository, and one above the **mode's
     ceiling** (`listener/modes.mjs` `ceilingOf()`, built in: [the table](repo-config.md#the-github-input))
     are refused before any policy runs. A work run writes its own issue, its pull requests and

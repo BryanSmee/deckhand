@@ -29,6 +29,8 @@ import { sendJson } from "./web.mjs";
 
 // The largest write body read: GitHub's own limits for an issue or a comment are far below.
 export const MAX_WRITE = 16 * 1024 * 1024;
+// How much of a checked write's answer is read: an issue's JSON is far below.
+export const MAX_ANSWER = 1024 * 1024;
 // The redacted writes and refused calls a run's log notes, each once and only so many.
 export const MAX_NOTED = 20;
 
@@ -154,6 +156,9 @@ export function createGithubGateway({
   // (run, { method, path, body }) → null when a REST write may go on, else { status, message }
   // (github-writes.mjs createWriteChecks()). None: every REST write is refused.
   checkWrite = async () => ({ status: 403, message: "no write is checked here" }),
+  // (run, { method, path, body }, status, answer) → GitHub's answer to a REST write that went
+  // on, its bytes up to MAX_ANSWER (github-writes.mjs: the issues a run creates).
+  wroteWrite = () => {},
   log = () => {},
   maxInFlight = MAX_IN_FLIGHT,
   maxWrite = MAX_WRITE,
@@ -282,8 +287,10 @@ export function createGithubGateway({
         );
         return fail(res, 403, "this write's URL holds a secret");
       }
+      let rest = null;
       if (write && where.api && !isGraphql(where.path)) {
-        const refused = await checkWrite(run, { method: req.method, path: where.path, body });
+        rest = { method: req.method, path: where.path, body };
+        const refused = await checkWrite(run, rest);
         if (refused) {
           note(
             run,
@@ -293,7 +300,7 @@ export function createGithubGateway({
           return fail(res, refused.status, refused.message);
         }
       }
-      await proxied(req, res, run, github, where, body);
+      await proxied(req, res, run, github, where, body, rest);
     } finally {
       inFlight.set(run, inFlight.get(run) - 1);
     }
@@ -366,7 +373,8 @@ export function createGithubGateway({
     return clean;
   }
 
-  async function proxied(req, res, run, github, { target, api }, body) {
+  // `rest`: a checked REST write, whose answer goes to wroteWrite().
+  async function proxied(req, res, run, github, { target, api }, body, rest = null) {
     let token;
     try {
       ({ token } = await github.repoToken(run.repo, run.extra));
@@ -381,6 +389,16 @@ export function createGithubGateway({
       ? `token ${token}`
       : `Basic ${Buffer.from(`x-access-token:${token}`).toString("base64")}`;
     if (body !== undefined) headers["content-length"] = String(body.length);
+    // A checked write's answer is read as it goes on: uncompressed, and only so much of it.
+    let status = 0;
+    let answer = [];
+    let size = 0;
+    if (rest) headers["accept-encoding"] = "identity";
+    const tap = (chunk) => {
+      size += chunk.length;
+      if (size <= MAX_ANSWER) answer.push(chunk);
+      else answer = null;
+    };
     await forward(req, res, {
       target,
       headers,
@@ -390,7 +408,15 @@ export function createGithubGateway({
       what: "GitHub gateway",
       idleMs,
       clock,
+      ...(rest && { tap, answered: (code) => (status = code) }),
     });
+    if (rest && answer) {
+      try {
+        wroteWrite(run, rest, status, Buffer.concat(answer));
+      } catch (error) {
+        log(`GitHub gateway: after ${clip(run, `${rest.method} ${rest.path}`)}: ${error.message}`);
+      }
+    }
   }
 
   return { handle };

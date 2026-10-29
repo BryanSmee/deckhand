@@ -6,9 +6,15 @@
 // GraphQL's writes are #406's: they go on as the token allows until then.
 //
 // Kinds: `own_issue` (the run's issue), `own_pr` (the run's pull request, or one from a branch
-// it may push: broker.mjs allow()), `sub_issue` (an issue whose parent is the run's),
+// it may push: broker.mjs allow()), `sub_issue` (an issue whose parent is the run's, in its
+// repo), `created_issue` (one this run created: GitHub's answers to its creates, answered()),
 // `other_issue`, `pr`, `new_issue` (an issue it creates), `label` (a label of the repo it
 // creates), and `new_pr`, `comment`, `review` for writes no ceiling allows anyway.
+//
+// A sub-issue link names two issues: its target is the parent, in the path, and the child, by
+// its id in the body, must be one the run created or one already under the run's issue (a
+// REST issue can't be looked up by its id). Moving an issue from another parent
+// (`replace_parent`) is in no ceiling: a link would otherwise take any issue under the run's.
 // Format of the policies' input: ../docs/repo-config.md#the-github-input.
 import { branchAllowed } from "./broker.mjs";
 import { ceilingOf } from "./modes.mjs";
@@ -34,11 +40,28 @@ function patched(body) {
   const keys = Object.keys(body);
   if ("state" in body) actions.push(body.state === "closed" ? "close" : "reopen");
   if ("labels" in body) actions.push("label");
-  if ("assignees" in body || "assignee" in body) actions.push("assign");
-  if ("milestone" in body) actions.push("milestone");
+  actions.push(...assigned(body));
   const rest = ["state", "state_reason", "labels", "assignees", "assignee", "milestone"];
   if (!actions.length || keys.some((k) => !rest.includes(k))) actions.push("edit");
-  return { actions, labels_added: labelNames(body.labels) };
+  // Labels set replace the issue's: what they remove is known once it is looked up.
+  const change = { labels_added: labelNames(body.labels) };
+  return { actions, change: "labels" in body ? { ...change, labels_set: true } : change };
+}
+
+// The assignees and milestone a body sets, which a create and an edit both take.
+function assigned(body) {
+  const actions = [];
+  if ("assignees" in body || "assignee" in body) actions.push("assign");
+  if ("milestone" in body) actions.push("milestone");
+  return actions;
+}
+
+// A sub-issue link's child: the `sub_issue_id` of its body, and whether it would leave another
+// parent. Null without one: GitHub needs it.
+function child(body) {
+  const id = Number(body.sub_issue_id);
+  if (!Number.isSafeInteger(id) || id <= 0) return null;
+  return { id, replace_parent: body.replace_parent === true || body.replace_parent === "true" };
 }
 
 // [method, path under the repo (case-insensitive), match → { actions, target, change }].
@@ -48,7 +71,7 @@ const ROUTES = [
     "POST",
     /^issues$/i,
     (m, body) => ({
-      actions: ["create"],
+      actions: ["create", ...assigned(body)],
       target: { kind: "new_issue" },
       change: { labels_added: labelNames(body.labels) },
     }),
@@ -56,10 +79,7 @@ const ROUTES = [
   [
     "PATCH",
     /^(?:issues|pulls)\/(\d+)$/i,
-    (m, body) => {
-      const { actions, labels_added } = patched(body);
-      return { actions, target: { number: +m[1] }, change: { labels_added } };
-    },
+    (m, body) => ({ ...patched(body), target: { number: +m[1] } }),
   ],
   [
     "POST",
@@ -67,12 +87,24 @@ const ROUTES = [
     (m) => ({ actions: ["comment"], target: { number: +m[1] } }),
   ],
   [
-    /^(?:POST|PUT)$/,
+    "POST",
     /^issues\/(\d+)\/labels$/i,
     (m, body) => ({
       actions: ["label"],
       target: { number: +m[1] },
       change: { labels_added: labelNames(Array.isArray(body) ? body : body.labels) },
+    }),
+  ],
+  [
+    "PUT",
+    /^issues\/(\d+)\/labels$/i,
+    (m, body) => ({
+      actions: ["label"],
+      target: { number: +m[1] },
+      change: {
+        labels_added: labelNames(Array.isArray(body) ? body : body.labels),
+        labels_set: true,
+      },
     }),
   ],
   [
@@ -85,14 +117,14 @@ const ROUTES = [
     }),
   ],
   [
-    /^(?:POST|DELETE)$/,
-    /^issues\/(\d+)\/sub_issues?$/i,
-    (m) => ({ actions: ["link"], target: { number: +m[1] } }),
+    "POST",
+    /^issues\/(\d+)\/sub_issues$/i,
+    (m, body) => ({ actions: ["link"], target: { number: +m[1] }, child: child(body) }),
   ],
   [
-    "PATCH",
-    /^issues\/(\d+)\/sub_issues\/priority$/i,
-    (m) => ({ actions: ["link"], target: { number: +m[1] } }),
+    /^(?:DELETE|PATCH)$/,
+    /^issues\/(\d+)\/(?:sub_issue|sub_issues\/priority)$/i,
+    (m, body) => ({ actions: ["link"], target: { number: +m[1] }, child: child(body) }),
   ],
   [
     /^(?:POST|DELETE)$/,
@@ -155,8 +187,9 @@ const ROUTES = [
   ],
 ];
 
-// A write → { repo, actions, target: { number } | { kind }, change: { fields, labels_added,
-// labels_removed } }, `{ read: true }` for a POST that writes nothing (rendering markdown), or
+// A write → { repo, actions, target: { number } | { kind }, child (a link's: { id,
+// replace_parent }), change: { fields, labels_added, labels_removed, labels_set (the labels
+// it sets replace the issue's) } }, `{ read: true }` for a POST that writes nothing (rendering markdown), or
 // null when it can't be classified. `path`: under the API's base, decoded, without its query
 // (github-gateway.mjs route()); `body`: the bytes sent.
 export function classify(method, path, body) {
@@ -181,10 +214,13 @@ export function classify(method, path, body) {
     const m = route.exec(rest);
     if (!m) continue;
     const write = build(m, json);
+    // A link without its child can't be checked.
+    if (write.child === null) return null;
     return {
       repo: `${owner}/${name}`.toLowerCase(),
       actions: write.actions,
       target: write.target,
+      ...(write.child && { child: write.child }),
       change: {
         fields: Array.isArray(json) ? [] : Object.keys(json),
         labels_added: [],
@@ -230,8 +266,44 @@ export function createWriteChecks({ lookup, policies = null, log = () => {} }) {
     }
     if (number === run.issue) return { ...target, kind: "own_issue" };
     const parent = await lookup(repo, `/repos/${repo}/issues/${number}/parent`);
-    const sub = parent && run.issue != null && parent.number === run.issue;
-    return { ...target, kind: sub ? "sub_issue" : "other_issue" };
+    // Sub-issues cross repositories: the run's #n is its repo's.
+    const sub = run.issue != null && parent?.number === run.issue && inRepo(parent, repo);
+    if (sub) return { ...target, kind: "sub_issue" };
+    const created = createdBy(run).numbers.has(number);
+    return { ...target, kind: created ? "created_issue" : "other_issue" };
+  }
+
+  // A link's child → { id, number, kind }: `sub_issue` when it is already under the run's issue
+  // (its sub-issues list them with their ids), `created_issue` when the run created it, else
+  // `other_issue`.
+  async function resolveChild(run, repo, { id }) {
+    const made = createdBy(run).ids.get(id);
+    if (run.issue != null) {
+      const subs = await lookup(repo, `/repos/${repo}/issues/${run.issue}/sub_issues?per_page=100`);
+      const found = Array.isArray(subs) ? subs.find((i) => i?.id === id) : null;
+      if (found) return { id, number: found.number ?? null, kind: "sub_issue" };
+    }
+    if (made !== undefined) return { id, number: made, kind: "created_issue" };
+    return { id, number: null, kind: "other_issue" };
+  }
+
+  // GitHub's answer to a write that went on (github-gateway.mjs wroteWrite()): an issue the run
+  // created is kept, by number and id, for the links it makes next.
+  function answered(run, { method, path, body }, status, answer) {
+    if (status !== 201) return;
+    const write = classify(method, path, body);
+    if (write?.target?.kind !== "new_issue" || write.repo !== run.repo) return;
+    let issue;
+    try {
+      issue = JSON.parse(answer.toString("utf8"));
+    } catch {
+      return;
+    }
+    if (!Number.isInteger(issue?.number) || !Number.isSafeInteger(issue?.id)) return;
+    if (issue.pull_request || !inRepo(issue, run.repo)) return;
+    const made = createdBy(run);
+    made.numbers.add(issue.number);
+    made.ids.set(issue.id, issue.number);
   }
 
   // A run's write → null when it may go on, else { status, message }: GitHub's status and why,
@@ -251,6 +323,9 @@ export function createWriteChecks({ lookup, policies = null, log = () => {} }) {
     if (!anyKindHolds(ceiling, write.actions) || ID_TARGETS.has(write.target.kind)) {
       return refusal(403, `a ${mode} run can't ${what} here (its ceiling)`);
     }
+    if (write.child?.replace_parent) {
+      return refusal(403, "a run can't move an issue from its parent (replace_parent)");
+    }
     let target = write.target;
     if (target.number !== undefined) {
       try {
@@ -268,6 +343,29 @@ export function createWriteChecks({ lookup, policies = null, log = () => {} }) {
       const on = target.number === null ? target.kind : `${target.kind} #${target.number}`;
       return refusal(403, `a ${mode} run can't ${above.join(", ")} on ${on} (its ceiling)`);
     }
+    const change = { ...write.change };
+    // Labels that replace the issue's remove those they leave out.
+    if (change.labels_set) {
+      const kept = new Set(change.labels_added.map((l) => l.toLowerCase()));
+      change.labels_removed = target.labels.filter((l) => !kept.has(l.toLowerCase()));
+    }
+    delete change.labels_set;
+    if (write.child) {
+      let sub;
+      try {
+        sub = await resolveChild(run, write.repo, write.child);
+      } catch (error) {
+        log(`GitHub gateway: ${run.repo} sub-issue ${write.child.id}: ${error.message ?? error}`);
+        return refusal(502, "the sub-issue can't be looked up on GitHub");
+      }
+      if (!LINKABLE.has(sub.kind)) {
+        return refusal(
+          403,
+          "a run links only issues it created, or those already under its issue (its ceiling)",
+        );
+      }
+      change.sub_issue = sub;
+    }
     if (!policies) return null;
     const input = {
       repo: run.repo,
@@ -276,14 +374,29 @@ export function createWriteChecks({ lookup, policies = null, log = () => {} }) {
       action: write.actions[0],
       actions: write.actions,
       target,
-      change: write.change,
+      change,
     };
     const messages = await policies.deny("deny_github", run.repo, run.base || "main", () => input);
     if (!messages.length) return null;
     return refusal(403, `the policies refuse it (deny_github): ${messages.join("; ")}`);
   }
 
-  return { check };
+  return { check, answered };
+}
+
+// The children a link may name (resolveChild()).
+const LINKABLE = new Set(["sub_issue", "created_issue"]);
+
+// Whether GitHub's issue (or parent) is in `repo` ("owner/name", lower case).
+function inRepo(issue, repo) {
+  const url = String(issue?.repository_url ?? "").toLowerCase();
+  return url.endsWith(`/repos/${repo}`);
+}
+
+// The issues `run` created (broker.mjs's run, for its lifetime): numbers, and id → number.
+function createdBy(run) {
+  run.created ??= { numbers: new Set(), ids: new Map() };
+  return run.created;
 }
 
 const refusal = (status, message) => ({ status, message });

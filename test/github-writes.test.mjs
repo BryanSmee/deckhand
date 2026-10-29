@@ -61,6 +61,13 @@ test("classify: a write's actions, its target and what it changes", () => {
     ["DELETE", "repos/org/repo/issues/12/labels", null, { labels_removed: ["*"] }],
     ["POST", "repos/org/repo/issues/12/sub_issues", { sub_issue_id: 9 }, { actions: ["link"] }],
     ["DELETE", "repos/org/repo/issues/12/sub_issue", { sub_issue_id: 9 }, { actions: ["link"] }],
+    // Assignees and a milestone are their own actions, on a create too; labels set, a flag.
+    [
+      "POST",
+      "repos/org/repo/issues",
+      { title: "T", assignees: ["a"], milestone: 2 },
+      { actions: ["create", "assign", "milestone"] },
+    ],
     [
       "POST",
       "repos/org/repo/labels",
@@ -92,6 +99,14 @@ test("classify: a write's actions, its target and what it changes", () => {
     if (want.labels_removed)
       assert.deepEqual(got.change.labels_removed, want.labels_removed, label);
   }
+  assert.deepEqual(
+    classify("POST", "repos/org/repo/issues/12/sub_issues", json({ sub_issue_id: 9 })).child,
+    { id: 9, replace_parent: false },
+  );
+  assert.equal(
+    classify("PUT", "repos/org/repo/issues/12/labels", json(["a"])).change.labels_set,
+    true,
+  );
   // Rendering markdown writes nothing.
   assert.deepEqual(classify("POST", "markdown/raw", Buffer.from("# x")), { read: true });
   // What it can't classify: null.
@@ -104,6 +119,9 @@ test("classify: a write's actions, its target and what it changes", () => {
     ["POST", "repos/org/repo/issues/1/comments", "not json"],
     ["PATCH", "repos/org/repo/issues/1", '"a string"'],
     ["POST", "repos/org/repo/issues/x/comments", "{}"],
+    // A link without its child.
+    ["POST", "repos/org/repo/issues/1/sub_issues", "{}"],
+    ["DELETE", "repos/org/repo/issues/1/sub_issue", '{"sub_issue_id": "x"}'],
   ]) {
     assert.equal(classify(method, path, Buffer.from(body)), null, `${method} ${path}`);
   }
@@ -142,15 +160,24 @@ test("the ceilings: what each mode can ever write", () => {
 });
 
 // A fake GitHub for the look-ups: issues by number (a `pull_request` field for a pull
-// request), pull requests' heads, issues' parents.
-function fakeLookup({ issues = {}, pulls = {}, parents = {} } = {}) {
+// request), pull requests' heads, issues' parents (a number: in the repo; else GitHub's
+// parent), issues' sub-issues.
+function fakeLookup({ issues = {}, pulls = {}, parents = {}, subs = {} } = {}) {
   const calls = [];
   const lookup = async (repo, path) => {
     calls.push(path);
-    const m = /^\/repos\/org\/repo\/(issues|pulls)\/(\d+)(\/parent)?$/.exec(path);
+    const m =
+      /^\/repos\/org\/repo\/(issues|pulls)\/(\d+)(\/parent|\/sub_issues\?per_page=100)?$/.exec(
+        path,
+      );
     if (!m) throw new Error(`unexpected look-up ${path}`);
     const n = +m[2];
-    if (m[3]) return parents[n] ? { number: parents[n] } : null;
+    if (m[3]?.startsWith("/sub_issues")) return subs[n] ?? [];
+    if (m[3]) {
+      const parent = parents[n];
+      if (typeof parent !== "number") return parent ?? null;
+      return { number: parent, repository_url: "https://api.github.com/repos/Org/Repo" };
+    }
     if (m[1] === "pulls") return pulls[n] ?? null;
     return issues[n] ?? null;
   };
@@ -162,6 +189,8 @@ const GITHUB = {
     1: { number: 1, user: { login: "alice" }, labels: [{ name: "idea" }] },
     2: { number: 2, user: { login: "bob" }, labels: [] },
     3: { number: 3, user: { login: "bob" }, labels: [] },
+    4: { number: 4, user: { login: "bob" }, labels: [] },
+    30: { number: 30, user: { login: "deckhand[bot]" }, labels: [] },
     7: { number: 7, pull_request: {}, user: { login: "deckhand[bot]" }, labels: [] },
     8: { number: 8, pull_request: {}, user: { login: "bob" }, labels: [] },
   },
@@ -170,7 +199,12 @@ const GITHUB = {
     // Another branch, and one named like the run's but in a fork.
     8: { head: { ref: "issue-1-thing", repo: { full_name: "mallory/repo" } } },
   },
-  parents: { 2: 1 },
+  // #4's parent is another repository's #1.
+  parents: {
+    2: 1,
+    4: { number: 1, repository_url: "https://api.github.com/repos/org/other" },
+  },
+  subs: { 1: [{ id: 202, number: 2 }] },
 };
 
 function run(mode, { push = mode === "work", issue = 1, branches = ["issue-1-*"] } = {}) {
@@ -187,7 +221,7 @@ test("a work run writes its issue, its pull requests and its sub-issues, nothing
     write("PATCH", "repos/org/repo/issues/1", { body: "x" }),
     write("POST", "repos/org/repo/issues/1/comments", { body: "x" }),
     write("POST", "repos/org/repo/issues/1/labels", { labels: ["a"] }),
-    write("POST", "repos/org/repo/issues/1/sub_issues", { sub_issue_id: 9 }),
+    write("POST", "repos/org/repo/issues/1/sub_issues", { sub_issue_id: 202 }),
     write("PATCH", "repos/org/repo/pulls/7", { title: "x" }),
     write("POST", "repos/org/repo/issues/7/comments", { body: "x" }),
     write("PATCH", "repos/org/repo/issues/2", { body: "x" }),
@@ -212,6 +246,12 @@ test("a work run writes its issue, its pull requests and its sub-issues, nothing
     [write("POST", "repos/other/repo/issues/1/comments", { body: "x" }), /its own repository/],
     [write("PUT", "repos/org/repo/contents/a", {}), /can't tell what this write does/],
     [write("POST", "repos/org/repo/issues/99/comments", { body: "x" }), /#99 isn't there/],
+    // An issue whose parent is another repository's #1 isn't its sub-issue.
+    [write("PATCH", "repos/org/repo/issues/4", { body: "x" }), /can't edit on other_issue #4/],
+    [
+      write("POST", "repos/org/repo/issues", { title: "x", assignees: ["a"] }),
+      /can't create, assign here/,
+    ],
   ];
   for (const [w, why] of refused) {
     const got = await check(work, w);
@@ -234,7 +274,12 @@ test("target kinds come from GitHub, never from the request", async () => {
   );
   // An issue path naming a pull request is the pull request.
   assert.match(
-    (await check(run("idea"), write("POST", "repos/org/repo/issues/7/sub_issues", {}))).message,
+    (
+      await check(
+        run("idea"),
+        write("POST", "repos/org/repo/issues/7/sub_issues", { sub_issue_id: 5 }),
+      )
+    ).message,
     /can't link on pr #7/,
   );
   // A sub-issue by its parent on GitHub: the body's sub_issue_id says nothing.
@@ -275,7 +320,8 @@ test("light runs: brainstorms, inbox entries, discussions and the modes that rea
   await no("brainstorm", write("PATCH", "repos/org/repo/issues/3", { body: "x" }));
   await no("brainstorm", write("PATCH", "repos/org/repo/issues/1", { labels: ["x"] }));
   await ok("idea", write("POST", "repos/org/repo/issues", { title: "x" }));
-  await ok("bug", write("POST", "repos/org/repo/issues/3/sub_issues", { sub_issue_id: 1 }));
+  // Linking under an issue it didn't create: no (sub_issue_links below).
+  await no("bug", write("POST", "repos/org/repo/issues/3/sub_issues", { sub_issue_id: 202 }));
   await ok("bug", write("POST", "repos/org/repo/issues/1/comments", { body: "x" }));
   await no("idea", write("PATCH", "repos/org/repo/issues/1", { body: "x" }));
   await ok("discussion", write("POST", "repos/org/repo/issues", { title: "x" }));
@@ -284,6 +330,51 @@ test("light runs: brainstorms, inbox entries, discussions and the modes that rea
     await no(mode, write("POST", "repos/org/repo/issues/1/comments", { body: "x" }));
     await no(mode, write("POST", "repos/org/repo/issues", { title: "x" }));
   }
+});
+
+test("a sub-issue link: its child is one the run created or already under its issue, never moved", async () => {
+  const { lookup } = fakeLookup(GITHUB);
+  const { check, answered } = createWriteChecks({ lookup });
+  const work = run("work");
+  const link = (parent, body) => write("POST", `repos/org/repo/issues/${parent}/sub_issues`, body);
+  // Any issue of the repo, by its id: refused, and moved from its parent all the more.
+  assert.match(
+    (await check(work, link(1, { sub_issue_id: 9 }))).message,
+    /links only issues it created, or those already under its issue/,
+  );
+  for (const replace_parent of [true, "true"]) {
+    const moved = await check(work, link(1, { sub_issue_id: 202, replace_parent }));
+    assert.match(moved.message, /can't move an issue from its parent \(replace_parent\)/);
+  }
+  // Already under its issue: unlinked, reordered.
+  assert.equal(
+    await check(work, write("DELETE", "repos/org/repo/issues/1/sub_issue", { sub_issue_id: 202 })),
+    null,
+  );
+  // One it created, as GitHub answered its create: linked, then written like a sub-issue.
+  const create = write("POST", "repos/org/repo/issues", { title: "x" });
+  const issue = (id, number, repo = "Org/Repo") =>
+    json({ id, number, repository_url: `https://api.github.com/repos/${repo}` });
+  answered(work, create, 201, issue(900, 30));
+  // Not created: refused by GitHub, another repo's, an answer that isn't an issue.
+  answered(work, create, 422, issue(901, 31));
+  answered(work, write("POST", "repos/org/repo/issues/1/comments", {}), 201, issue(902, 32));
+  answered(work, create, 201, issue(903, 33, "org/other"));
+  answered(work, create, 201, Buffer.from("not json"));
+  assert.equal(await check(work, link(1, { sub_issue_id: 900 })), null);
+  assert.equal(await check(work, write("PATCH", "repos/org/repo/issues/30", { body: "x" })), null);
+  for (const id of [901, 902, 903]) {
+    assert.ok(await check(work, link(1, { sub_issue_id: id })), String(id));
+  }
+  // Another run's creations aren't this one's.
+  assert.ok(await check(run("work"), link(1, { sub_issue_id: 900 })));
+  // An inbox entry links under the parents it created only, the children it created too.
+  const idea = run("idea");
+  answered(idea, create, 201, issue(900, 30));
+  answered(idea, create, 201, issue(904, 34));
+  assert.equal(await check(idea, link(30, { sub_issue_id: 904 })), null);
+  assert.match((await check(idea, link(3, { sub_issue_id: 904 }))).message, /other_issue #3/);
+  assert.match((await check(idea, link(30, { sub_issue_id: 9 }))).message, /links only issues/);
 });
 
 test("deny_github: its input, and its reasons refusing the write", async (t) => {
@@ -320,6 +411,21 @@ test("deny_github: its input, and its reasons refusing the write", async (t) => 
     target: { number: 3, labels: [], author: "bob", kind: "other_issue" },
     change: { fields: ["body"], labels_added: [], labels_removed: [] },
   });
+  // Labels set in place of the issue's remove those they leave out (#1 has `idea`).
+  const work = run("work");
+  await check(work, write("PUT", "repos/org/repo/issues/1/labels", ["bug"]));
+  assert.deepEqual(evals.at(-1).change, {
+    fields: [],
+    labels_added: ["bug"],
+    labels_removed: ["idea"],
+  });
+  await check(work, write("PATCH", "repos/org/repo/issues/1", { labels: ["Idea", "ui"] }));
+  assert.deepEqual(evals.at(-1).change.labels_removed, []);
+  await check(work, write("PATCH", "repos/org/repo/issues/1", { labels: [] }));
+  assert.deepEqual(evals.at(-1).change.labels_removed, ["idea"]);
+  // A link's child, with its kind.
+  await check(work, write("POST", "repos/org/repo/issues/1/sub_issues", { sub_issue_id: 202 }));
+  assert.deepEqual(evals.at(-1).change.sub_issue, { id: 202, number: 2, kind: "sub_issue" });
   // Above the ceiling: refused before any policy runs.
   const asked = evals.length;
   await check(brainstorm, write("PATCH", "repos/org/repo/issues/3", { body: "x" }));
