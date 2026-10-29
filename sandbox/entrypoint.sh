@@ -138,12 +138,16 @@ reset_clone() {
 # A kept clone a fork's run or an older Deckhand made blobless, in a work run that
 # isn't a fork's (SANDBOX_FULL_CLONE): the blobs it lacks fetched once, whole (--refetch, git
 # 2.36), before any checkout would ask for them one by one, which the GitHub gateway refuses
-# such a run. It stays a promisor: a blob still missing is asked for, and refused saying why.
+# such a run. What the repository's branches don't reach (a local branch or a stash whose
+# commits aren't on them: force-pushed away, a fork's merged in) stays missing: counted, and the
+# agent told (reset_missing), rather than a checkout of it failing on a refusal later.
 whole_clone() {
   [ -n "${SANDBOX_FULL_CLONE:-}" ] || return 0
   [ -n "$(git config remote.origin.partialclonefilter || true)" ] || return 0
   git fetch --quiet --refetch --no-filter origin '+refs/heads/*:refs/remotes/origin/*'
   git config --unset remote.origin.partialclonefilter
+  reset_missing=$(git rev-list --objects --missing=print --all 2> /dev/null | grep -c '^?' || true)
+  [ "${reset_missing:-0}" != 0 ] || reset_missing=
 }
 
 # .git is the volume's too, and a fork's code that ran in a work run could have written in
@@ -342,6 +346,15 @@ The clone in /workspace was put back on \`$(git branch --show-current)\` before 
 with nothing untracked: the last run left it on \`$reset_from\`, which isn't a branch of this
 repository or has commits that aren't on it (still there). Check it out again
 (\`gh pr checkout <n>\` for a pull request) if you need it."
+  fi
+  if [ -n "${reset_missing:-}" ]; then
+    prompt+="
+
+The clone in /workspace was made whole before you started (every blob of the repository's
+branches fetched at once), but $reset_missing objects of its local branches or stash, which no
+branch of the repository has, are still missing. This run can't fetch them one by one (they may
+be a fork's): a checkout or diff that needs them fails. Leave those branches alone; a maintainer
+can ask for work on a fork's pull request from that pull request."
   fi
   if [ -n "${reset_stashed:-}" ]; then
     prompt+="

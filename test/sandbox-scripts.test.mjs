@@ -604,6 +604,19 @@ test("a work run that isn't a fork's makes a kept blobless clone whole, before a
   const whole = start("whole", { SANDBOX_FULL_CLONE: "1" });
   assert.equal(missing(whole), "0");
   assert.equal(sh(whole, "git config remote.origin.partialclonefilter || true"), "");
+  // A local branch whose commit no branch of the repository has any more: its blob stays
+  // missing, counted for the agent.
+  const kept = start("kept", {});
+  sh(origin, "git checkout -q -b gone && echo gone > g && git add g && git commit -qm gone");
+  sh(origin, "git checkout -q main");
+  sh(kept, "git fetch -q origin gone && git branch -q gone FETCH_HEAD");
+  sh(origin, "git checkout -q main && git branch -q -D gone");
+  const said = sh(
+    kept,
+    `${fns}\nset -euo pipefail\nBASE_BRANCH=main\nSANDBOX_FULL_CLONE=1\nreset_clone\necho "\${reset_missing:-}"`,
+  );
+  assert.equal(said, "1");
+  assert.match(script, /\$reset_missing objects of its local branches or stash/);
   const light = start("light", {});
   assert.equal(missing(light), "2");
   assert.equal(sh(light, "git config remote.origin.partialclonefilter"), "blob:none");

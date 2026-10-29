@@ -700,7 +700,10 @@ see the difference, and doesn't claim to.
   its clone. That clone is whole (`SANDBOX_FULL_CLONE`, set by `listener/sandbox-spec.mjs`),
   where other runs' are blobless (`--filter=blob:none`), whose checkouts ask for each blob they
   lack: a kept blobless clone (an older Deckhand's) gets every blob it lacks at the start, at
-  once (`git fetch --refetch`), before any checkout.
+  once (`git fetch --refetch`), before any checkout. What the repository's branches don't reach
+  (a local branch or a stash whose commits aren't on them) stays missing: the agent is told how
+  many objects, and that this run can't fetch them, rather than a checkout of them failing on a
+  refusal later.
 - **git LFS's objects** (its batch API, `<repo>.git/info/lfs/…`, whose download links are on
   `github-cloud.githubusercontent.com`): named by their sha256, which whoever wrote a fork
   knows, as a blob's id, so the batch API is refused. An LFS file is read by its branch from
@@ -761,7 +764,16 @@ see the difference, and doesn't claim to.
   branch, as before: from then on they are the repository's, which the issue's later work runs
   start from (see [Not covered](#not-covered)).
 - **Git's paths in any case** (`GIT-UPLOAD-PACK`, `Info/Refs`) are a fetch's, checked as one;
-  any other spelling of them is a page, and refused.
+  any other spelling of them is a page, and refused. Git's fetch takes its own methods only,
+  for every run: `GET` for its advertisement, `POST` for its pack request; any other would be a
+  write streamed past the fetch's checks (`405`).
+- **The call the checks read is the one that goes on**: the gateway serves a relayed host only
+  as the egress proxy spells it (lowercase, no trailing dot, no port), as a sandbox can reach
+  the gateway directly too, where `raw.githubusercontent.com.` would otherwise pass for an
+  unchecked content host. The URL parser resolves dot segments, encoded ones too (`%2e%2e`), in
+  the URL that goes on; a path whose decoding still holds one (`..%2f`), a backslash or a NUL
+  is refused. Headers some front ends route or rewrite by (`X-Original-URL`, `X-Rewrite-URL`,
+  `X-Forwarded-Host`, `Forwarded`, `X-HTTP-Method-Override`…) are never passed on.
 - **The issue's kept clone**: a fork's run gets a clone of its own (a `-fork-workspace`
   volume, `listener/sandbox-spec.mjs`), so what it checked out (the fork's commits, its
   branch, a stash) never sits in the clone the issue's other work runs start from, where no

@@ -91,6 +91,23 @@ export const FILES = [
   { host: "patch-diff.githubusercontent.com", kind: "web", prefix: "raw/" },
 ];
 
+// Headers some front ends route or rewrite by (the path, the host, the method): never passed
+// on, so that GitHub reads the call the checks read, whatever it honours.
+export const ROUTING_HEADERS = [
+  "forwarded",
+  "x-forwarded-for",
+  "x-forwarded-host",
+  "x-forwarded-proto",
+  "x-forwarded-server",
+  "x-original-url",
+  "x-rewrite-url",
+  "x-original-host",
+  "x-host",
+  "x-http-method",
+  "x-http-method-override",
+  "x-method-override",
+];
+
 // The secret a call sent in place of a token: `token <secret>` (gh), `Bearer <secret>` or Basic
 // with it as the password (git). Undefined without an Authorization header; "" for one that
 // holds none.
@@ -245,9 +262,13 @@ export function createGithubGateway({
     const match = /^\/relay\/([^/]+)(\/[^]*)$/.exec(url);
     if (!match) return null;
     const [, host, rest] = match;
+    // Only a host spelled as the egress proxy relays one (lowercase, no trailing dot, no port): a
+    // sandbox can reach this port directly too, and another spelling of a checked host must not
+    // pass for an unchecked one (`raw.githubusercontent.com.` for a content host, say).
+    if (!/^[a-z0-9-]+(?:\.[a-z0-9-]+)*$/.test(host)) return null;
     if (rest.startsWith("//") || rest.split("?")[0].includes("\\")) return null;
     for (const base of [apiBase, webBase]) {
-      if (base.hostname !== host.toLowerCase()) continue;
+      if (base.hostname !== host) continue;
       let target;
       try {
         target = new URL(rest, base.origin);
@@ -262,10 +283,9 @@ export function createGithubGateway({
       }
       // Not the API's: the web host's, when it is the same host (GitHub Enterprise Server).
     }
-    const other = fileHosts.some((f) => f.host === host.toLowerCase()) ? null : content(host);
+    const other = fileHosts.some((f) => f.host === host) ? null : content(host);
     const file =
-      fileHosts.find((f) => f.host === host.toLowerCase()) ??
-      (other && { host: host.toLowerCase(), base: other, passthrough: true });
+      fileHosts.find((f) => f.host === host) ?? (other && { host, base: other, passthrough: true });
     if (file) {
       let target;
       try {
@@ -280,15 +300,21 @@ export function createGithubGateway({
   }
 
   // The path under `base`, percent-decoded and with repeated slashes as one: what GitHub reads.
+  // The URL parser has resolved its dot segments, encoded ones too (`%2e%2e`), in the URL that
+  // goes on: what is checked is what is sent. Null for one whose decoding still holds a dot
+  // segment (`..%2f`), a backslash or a NUL, which a front end could read otherwise.
   function decoded(pathname, base) {
     const under = pathname.startsWith(base.pathname)
       ? pathname.slice(base.pathname.length)
       : pathname.slice(1);
+    let path;
     try {
-      return decodeURIComponent(under).replace(/\/{2,}/g, "/");
+      path = decodeURIComponent(under).replace(/\/{2,}/g, "/");
     } catch {
       return null;
     }
+    if (/(?:^|\/)\.{1,2}(?:\/|$)|[\\\0]/.test(path)) return null;
+    return path;
   }
 
   async function handle(req, res) {
@@ -299,6 +325,13 @@ export function createGithubGateway({
     const call = `${req.method} ${where.target.pathname}`;
     if (!where.api && (GIT_PUSH.test(where.path) || /service=git-receive-pack/i.test(req.url))) {
       return fail(res, 403, "pushes go through Deckhand's git gateway (pushInsteadOf)");
+    }
+    // Git's fetch, as git sends it: its advertisement a GET, its pack request a POST. Any other
+    // method there would be a write, streamed past the fetch's checks.
+    const fetching = where.api || where.file ? null : GIT_FETCH.exec(where.path);
+    if (fetching && req.method !== (/info\/refs$/i.test(fetching[2]) ? "GET" : "POST")) {
+      req.resume();
+      return fail(res, 405, `git's ${fetching[2]} takes no ${req.method}`);
     }
     const write = !["GET", "HEAD", "OPTIONS"].includes(req.method);
     // A read with a body would go on unread, past redaction and a review's check: git and gh
@@ -541,7 +574,7 @@ export function createGithubGateway({
   function anonymous(req, res, { target, file }) {
     return forward(req, res, {
       target,
-      headers: forwarded(req.headers, ["authorization", "cookie"]),
+      headers: forwarded(req.headers, ["authorization", "cookie", ...ROUTING_HEADERS]),
       unreachable: () => fail(res, 502, `${file.host} can't be reached`),
       log,
       what: "GitHub gateway",
@@ -625,6 +658,7 @@ export function createGithubGateway({
     const headers = forwarded(req.headers, [
       "authorization",
       "cookie",
+      ...ROUTING_HEADERS,
       ...(inflated ? ["content-encoding"] : []),
     ]);
     // git asks with Basic, as GitHub expects an App's token on its web host.

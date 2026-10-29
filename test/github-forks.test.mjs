@@ -21,7 +21,7 @@ import {
   graphqlReads,
   refKind,
 } from "../listener/github-forks.mjs";
-import { createGithubGateway, FILES } from "../listener/github-gateway.mjs";
+import { createGithubGateway, FILES, ROUTING_HEADERS } from "../listener/github-gateway.mjs";
 import { createGraphqlChecks, githubSchema } from "../listener/github-graphql.mjs";
 import { pkt, pktLines } from "../listener/pkt-line.mjs";
 import { parse } from "../listener/vendor/graphql.mjs";
@@ -1164,4 +1164,104 @@ test("git's paths in any case are a fetch's, checked as one; another spelling is
   });
   assert.equal(slash.status, 403);
   assert.equal(gw.calls.length, before);
+});
+
+// The gateway as the listener builds it: its real file hosts and content hosts. Only calls it
+// refuses are made, refused before anything leaves: none reaches GitHub. Sent through node:http,
+// exactly as written (fetch() would resolve an encoded dot segment itself).
+async function realGateway(t) {
+  const broker = createBroker({ sentFrom: sandboxAt() });
+  const gw = createGithubGateway({
+    broker,
+    // A call that passed every check would get no token: it fails here, never reaching GitHub.
+    app: () => ({
+      repoToken: async () => {
+        throw new Error("a test's call passed the checks");
+      },
+    }),
+    api: "https://api.github.com",
+    web: "https://github.com",
+    forks: createForkChecks({ get: fakeGithub().get }),
+  });
+  const { port } = await serve(t, (req, res) => gw.handle(req, res));
+  const secret = broker.register("Org/Repo", {}, { push: true });
+  broker.allow(secret, ["issue-1-*"], false);
+  return (host, path, { method = "GET", body } = {}) =>
+    new Promise((resolve, reject) => {
+      const headers = { authorization: `token ${secret}` };
+      const options = { host: "127.0.0.1", port, path: `/relay/${host}${path}`, method, headers };
+      const req = request(options, (res) => {
+        let text = "";
+        res.on("data", (d) => (text += d));
+        res.on("end", () => resolve({ status: res.statusCode, text }));
+      });
+      req.on("error", reject);
+      req.end(body);
+    });
+}
+
+test("a host spelled otherwise than the proxy relays it is no host the gateway serves", async (t) => {
+  const call = await realGateway(t);
+  const path = "/org/repo/refs/pull/7/head/a.js";
+  // As the proxy relays it: checked, refused.
+  const checked = await call("raw.githubusercontent.com", path);
+  assert.equal(checked.status, 403);
+  assert.match(checked.text, /pull request #7 is from a fork/);
+  // Any other spelling (a trailing dot, another case, a port, an encoding): not a host it
+  // relays, never a content host sent on unchecked.
+  for (const host of [
+    "raw.githubusercontent.com.",
+    "RAW.githubusercontent.com",
+    "raw.githubusercontent.com:443",
+    "raw%2egithubusercontent.com",
+    "GitHub.com",
+  ]) {
+    const res = await call(host, path);
+    assert.equal(res.status, 404, host);
+    assert.match(JSON.parse(res.text).message, /not a GitHub host it relays/, host);
+  }
+});
+
+test("git's fetch takes its own methods only; a dot segment only decoding shows is refused", async (t) => {
+  const call = await realGateway(t);
+  for (const [path, method] of [
+    ["/org/repo.git/git-upload-pack", "PUT"],
+    ["/org/repo.git/git-upload-pack", "PATCH"],
+    ["/org/repo.git/git-upload-pack", "GET"],
+    ["/org/repo.git/info/refs?service=git-upload-pack", "POST"],
+  ]) {
+    const res = await call("github.com", path, {
+      method,
+      ...(method !== "GET" && { body: fetchOf(FORK) }),
+    });
+    assert.equal(res.status, 405, `${method} ${path}`);
+  }
+  // An encoded dot segment the URL parser resolves: the call that goes on is the one checked.
+  const resolved = await call("api.github.com", "/repos/x/%2e%2e/evil/repo/tarball/main");
+  assert.equal(resolved.status, 403);
+  assert.match(resolved.text, /evil\/repo is a fork/);
+  // One it doesn't, which only decoding shows, a backslash, a NUL: refused.
+  for (const path of [
+    "/repos/org/repo/..%2f..%2frepos/evil/repo/tarball/main",
+    "/repos/org/repo/contents/a%5c..%5cb",
+    "/repos/org/repo/contents/a%00b",
+  ]) {
+    assert.equal((await call("api.github.com", path)).status, 404, path);
+  }
+});
+
+test("headers some front ends route by never reach GitHub", async (t) => {
+  const gw = await gateway(t);
+  const { secret } = gw.register(true);
+  const status = await gw.raw("127.0.0.1", "/api/v3/repos/org/repo", {
+    authorization: `token ${secret}`,
+    "x-original-url": "/repos/evil/repo/tarball/main",
+    "x-rewrite-url": "/repos/evil/repo/tarball/main",
+    "x-forwarded-host": "raw.githubusercontent.com",
+    "x-http-method-override": "DELETE",
+    forwarded: "host=raw.githubusercontent.com",
+  });
+  assert.equal(status, 200);
+  const sent = gw.calls.at(-1).headers;
+  for (const name of ROUTING_HEADERS) assert.equal(sent[name], undefined, name);
 });
