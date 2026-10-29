@@ -27,8 +27,13 @@ import {
   validate,
 } from "./vendor/graphql.mjs";
 
-// The most tokens a document may hold: gh's largest is far below, and parsing stops there.
-export const MAX_TOKENS = 50_000;
+// The most tokens a document may hold (parsing stops there), and its most bytes, checked before
+// it is parsed: gh's are a few hundred tokens, every field it can ask of a pull request or an
+// issue about 1,200, and its bodies go in variables. Validation is quadratic in a document's
+// repeated fields, and the listener's one thread waits for it: at this size, a fifth of a
+// second at worst.
+export const MAX_TOKENS = 2_500;
+export const MAX_QUERY = 64 * 1024;
 // The most node IDs a call's mutations may name: GitHub looks up 100 at once.
 export const MAX_NODES = 100;
 
@@ -83,7 +88,8 @@ export const MUTATIONS = {
     target: "repositoryId",
     repo: true,
     kind: "new_issue",
-    fields: ["title", "body", "labelIds", "assigneeIds", "milestoneId", "issueTemplate"],
+    // Not `issueTemplate`: GitHub would add its labels and assignees, which no check sees.
+    fields: ["title", "body", "labelIds", "assigneeIds", "milestoneId"],
     actions: (input) => [
       "create",
       ...(input.assigneeIds != null ? ["assign"] : []),
@@ -224,6 +230,9 @@ export function parseCall(body, schema = githubSchema()) {
   if (operationName !== null && typeof operationName !== "string") {
     return { refused: refusal(400, "a GraphQL call whose operationName isn't a string") };
   }
+  if (Buffer.byteLength(query) > MAX_QUERY) {
+    return { refused: refusal(413, `a GraphQL document over ${MAX_QUERY} bytes`) };
+  }
   let doc;
   try {
     doc = parse(query, { maxTokens: MAX_TOKENS, noLocation: true });
@@ -305,7 +314,7 @@ export function mutationFields({ doc, op, coerced }, schema = githubSchema()) {
     if (spec.child && typeof set[spec.child] !== "string") {
       return { refused: refusal(403, `${name} names its sub-issue by its ${spec.child} only`) };
     }
-    out.push({ name, key: field.alias?.value ?? name, spec, input: set });
+    out.push({ name, key: field.alias?.value ?? name, spec, input: set, node: field });
   }
   return out;
 }
@@ -323,11 +332,49 @@ function idsOf(fields) {
 
 const repoOf = (node) => String(node?.nameWithOwner ?? node?.repository?.nameWithOwner ?? "");
 
+// The fields a selection set selects, through its fragments: each with its response key.
+function selected(doc, set) {
+  const fragments = new Map(
+    doc.definitions
+      .filter((d) => d.kind === Kind.FRAGMENT_DEFINITION)
+      .map((d) => [d.name.value, d]),
+  );
+  const fields = [];
+  const walk = (inner) => {
+    for (const node of inner?.selections ?? []) {
+      if (node.kind === Kind.FIELD) fields.push(node);
+      else if (node.kind === Kind.INLINE_FRAGMENT) walk(node.selectionSet);
+      else if (node.kind === Kind.FRAGMENT_SPREAD)
+        walk(fragments.get(node.name.value)?.selectionSet);
+    }
+  };
+  walk(set);
+  return fields;
+}
+const keyOf = (field) => field.alias?.value ?? field.name.value;
+
+// Whether a createIssue field's answer names the issue it created where github-writes.mjs
+// answered() reads it (`issue.url`, else `issue.html_url`), as GitHub's own fields: `issue`
+// and `url` unaliased (or aliased to themselves), and no `html_url`, which GraphQL's Issue
+// doesn't have, so it could only be another field's alias. Otherwise a run could answer
+// `url: title` with a title of its choosing, and claim an issue it didn't create.
+export function answersCreated(doc, field) {
+  const issues = selected(doc, field.selectionSet).filter((f) => keyOf(f) === "issue");
+  if (!issues.length || issues.some((f) => f.name.value !== "issue")) return false;
+  const inner = issues.flatMap((f) => selected(doc, f.selectionSet));
+  const urls = inner.filter((f) => keyOf(f) === "url");
+  if (!urls.length || urls.some((f) => f.name.value !== "url")) return false;
+  return !inner.some((f) => keyOf(f) === "html_url");
+}
+
 // A mutation field and the nodes it names → a write in github-writes.mjs classify()'s shape,
-// or { refused }.
-export function writeOf({ name, spec, input }, nodes) {
+// or { refused }. `repo`: the run's: a node elsewhere, or missing, is refused alike before its
+// type is named, so a refusal says nothing of another repository's nodes.
+export function writeOf({ name, spec, input }, nodes, repo) {
   const node = nodes.get(input[spec.target]);
-  if (!node) return { refused: refusal(404, `${name}'s ${spec.target} isn't there`) };
+  const elsewhere = (field) =>
+    refusal(403, `${name}'s ${field} isn't in the run's repository, or isn't there`);
+  if (!node || repoOf(node).toLowerCase() !== repo) return { refused: elsewhere(spec.target) };
   let target;
   if (spec.repo) {
     if (node.__typename !== "Repository") {
@@ -342,7 +389,6 @@ export function writeOf({ name, spec, input }, nodes) {
   } else {
     return { refused: refusal(403, `${name} on a ${node.__typename} isn't something it checks`) };
   }
-  const repo = repoOf(node).toLowerCase();
   // What it sets, as a REST write's body would: its target is its path's.
   const { [spec.target]: _, ...set } = input;
   const actions = spec.actions(set);
@@ -363,7 +409,8 @@ export function writeOf({ name, spec, input }, nodes) {
   const write = { repo, actions, target, change };
   if (spec.child) {
     const sub = nodes.get(input[spec.child]);
-    if (sub?.__typename !== "Issue") {
+    if (!sub || repoOf(sub).toLowerCase() !== repo) return { refused: elsewhere(spec.child) };
+    if (sub.__typename !== "Issue") {
       return { refused: refusal(404, `${name}'s ${spec.child} isn't an issue`) };
     }
     write.child = {
@@ -413,14 +460,17 @@ export function createGraphqlChecks({ nodes, checkWrite, schema = githubSchema, 
       }
     }
     for (const field of fields) {
-      const write = writeOf(field, found);
+      const write = writeOf(field, found, run.repo);
       if (write.refused) return write;
       const refused = await checkWrite(run, write);
       if (refused) {
         return { refused: { ...refused, message: `${field.key}: ${refused.message}` } };
       }
     }
-    const creates = fields.filter((f) => f.name === "createIssue").map((f) => f.key);
+    // Only those whose answer is GitHub's own `issue { url }`.
+    const creates = fields
+      .filter((f) => f.name === "createIssue" && answersCreated(doc, f.node))
+      .map((f) => f.key);
     return { body: forwarded, write: fields.length > 0, creates };
   }
 

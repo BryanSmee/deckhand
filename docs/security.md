@@ -314,8 +314,10 @@ to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to the
   sub-issue of its issue (its parent on GitHub, in the same repository), an issue the run
   created (GitHub answered one of the run's own calls with it: a REST create, or GraphQL's
   `createIssue`, which `gh issue create` sends and whose answer the gateway reads for that
-  alone: only under the response key of a `createIssue` field it parsed, since another field
-  could answer under that name with any issue; no older than that call; written by the
+  alone: only under the response key of a `createIssue` field it parsed, and only when that
+  field selects GitHub's own `issue { url }`, unaliased (an alias such as `url: title` would
+  answer with a URL of the run's choosing), since another field could answer under that name
+  with any issue; no older than that call; written by the
   App's bot, which files issues for every run and for the listener, so that alone says
   nothing; saved with the run across restarts), another issue
   or pull request. A sub-issue link's child, named by its id, must be one the run created or
@@ -339,15 +341,18 @@ to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to the
 - **GraphQL is parsed** (`listener/github-graphql.mjs`, issue #406), with graphql-js (the
   listener's one runtime package, bundled into a file at image build) and validated against
   GitHub's public schema, pinned in the repository (`listener/vendor/github.graphql`,
-  updated on purpose): a call that doesn't parse (or holds over 50,000 tokens) or validate, a
+  updated on purpose): a call that doesn't parse (or holds over 2,500 tokens or
+  64 KiB, refused before validation, whose cost grows with the square of a document's repeated
+  fields and would hold the listener's one thread) or validate, a
   subscription, a document with several operations and no `operationName` naming one, a
   GraphQL `GET` and a query string are refused, as GitHub would otherwise run something
   unchecked. A query goes on. Each field of a mutation, aliases and fragments included, must
   be one of the mutations Deckhand knows, setting only the input fields it checks (projects,
-  a parent at creation, Copilot's assignment, a sub-issue by URL are refused): a mutation
+  a parent or a template at creation, Copilot's assignment, a sub-issue by URL are refused): a mutation
   GitHub adds is refused until Deckhand names it. The node IDs the fields name, inline or in
   their variables (resolved as GitHub resolves them), are looked up with the listener's
-  token to a repository, a kind and a number, so the call's own claims say nothing; each
+  token to a repository, a kind and a number, so the call's own claims say nothing; a node
+  outside the run's repository is refused like a missing one, before its type is named; each
   field is then a write as above, held to the ceiling and `deny_github` with the same input,
   and one refusal refuses the call. What goes on is the document as the gateway parsed it,
   printed again (`print()`), never the call's bytes: GitHub runs exactly what was checked.

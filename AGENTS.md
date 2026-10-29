@@ -40,10 +40,12 @@ docker build -t deckhand-listener -f listener/Dockerfile .
 # Start it: ALLOWED_USERS is all it needs to come up. Ports answer on engine, not localhost.
 docker run -d --name listener -p 8080:8080 -e ALLOWED_USERS=someone deckhand-listener
 curl engine:8080/health
-# The tests on another Node: a Debian image (bash and git for the fakes), jq, not root.
+# The tests on another Node: a Debian image (bash and git for the fakes), jq, not root, and
+# graphql-js bundled first (listener/vendor/graphql.mjs isn't committed).
 git ls-files -z | tar --null -T - -c | docker run --rm -i node:<v> sh -c \
   'apt-get update -qq && apt-get install -y -qq jq && mkdir /w && cd /w && tar x &&
-   chown -R node . && su node -c "node --test"'
+   chown -R node . && su node -c "cd listener/vendor && npm ci && npm run build && cd ../.. &&
+   node --test"'
 ```
 
 The engine is slower than the sandbox: a timing test failing there alone (`deliveries`,

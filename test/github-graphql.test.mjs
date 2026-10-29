@@ -7,6 +7,8 @@ import {
   createGraphqlChecks,
   githubSchema,
   lookupNodes,
+  MAX_QUERY,
+  MAX_TOKENS,
   MUTATIONS,
   parseCall,
 } from "../listener/github-graphql.mjs";
@@ -155,10 +157,21 @@ test("refused: what doesn't parse or validate, several operations without their 
     assert.equal(out.refused?.status, 400, body.toString());
     assert.match(out.refused.message, message, body.toString());
   }
-  // A document too long to read.
-  const long = call(`{ ${"viewer { login } ".repeat(20_000)} }`);
-  assert.match((await check(run("work"), long)).refused.message, /doesn't parse/);
   assert.deepEqual(asked, []);
+});
+
+test("a document over its caps is refused before it is validated: validation would hold the listener", () => {
+  // No schema: validating would throw.
+  const tokens = call(`{ ${"a: viewer { login } ".repeat(MAX_TOKENS / 6 + 1)} }`);
+  assert.ok(tokens.length < MAX_QUERY);
+  assert.match(parseCall(tokens, null).refused.message, /doesn't parse: .*tokens/);
+  const bytes = call(`{ viewer { login } } # ${"x".repeat(MAX_QUERY)}`);
+  assert.equal(parseCall(bytes, null).refused.status, 413);
+  // The worst a document under the caps can do: repeated fields, in a fraction of a second.
+  const worst = call(`{ ${"a: viewer { login } ".repeat(Math.floor((MAX_TOKENS - 2) / 6))} }`);
+  const start = performance.now();
+  assert.equal(parseCall(worst).refused, undefined);
+  assert.ok(performance.now() - start < 1000);
 });
 
 test("parseCall picks the operation GitHub runs: by its name, among several", () => {
@@ -215,13 +228,13 @@ test("gh issue create, comment and edit: classified from GitHub's nodes, checked
     run("work"),
     call(GH_COMMENT, { input: { subjectId: "I_o", body: "x" } }),
   );
-  assert.match(away.refused.message, /only to its own repository/);
+  assert.match(away.refused.message, /subjectId isn't in the run's repository/);
   // A create in another repository.
   const elsewhere = await check(
     run("work"),
     call(GH_CREATE, { input: { repositoryId: "R_other", title: "T" } }),
   );
-  assert.match(elsewhere.refused.message, /only to its own repository/);
+  assert.match(elsewhere.refused.message, /repositoryId isn't in the run's repository/);
 });
 
 test("variables and inline IDs, aliases and fragments: each field is checked, one refusal refuses all", async () => {
@@ -250,6 +263,40 @@ test("variables and inline IDs, aliases and fragments: each field is checked, on
   assert.deepEqual((await check(work, call(two))).creates, ["x", "createIssue"]);
 });
 
+test("a createIssue answer counts only as GitHub's own issue { url }: no alias can name another issue", async () => {
+  const { check } = checks();
+  const work = run("work");
+  const create = (selection, extra = "") =>
+    call(
+      `mutation { createIssue(input: { repositoryId: "R_repo", title: "https://github.com/org/repo/issues/77" }) ${selection} } ${extra}`,
+    );
+  const counted = [
+    ["{ issue { id url } }", ""],
+    ["{ issue { url: url } }", ""],
+    ["{ ...P }", "fragment P on CreateIssuePayload { issue { url } }"],
+    ["{ ... on CreateIssuePayload { issue { ...I } } }", "fragment I on Issue { url }"],
+  ];
+  for (const [selection, fragments] of counted) {
+    const out = await check(work, create(selection, fragments));
+    assert.deepEqual(out.creates, ["createIssue"], selection);
+  }
+  const fakes = [
+    "{ issue { url: title } }",
+    "{ issue { id html_url: title } }",
+    "{ issue { url html_url: title } }",
+    "{ issue: clientMutationId }",
+    "{ clientMutationId }",
+    "{ issue { id } }",
+    "{ issue { ...T } }",
+  ];
+  for (const selection of fakes) {
+    const extra = selection.includes("...T") ? "fragment T on Issue { url: title }" : "";
+    const out = await check(work, create(selection, extra));
+    assert.equal(out.write, true, selection);
+    assert.deepEqual(out.creates, [], selection);
+  }
+});
+
 test("an unknown mutation, or an input field Deckhand doesn't check, is refused before any look-up", async () => {
   const { check, asked, writes } = checks();
   const work = run("work");
@@ -275,6 +322,11 @@ test("an unknown mutation, or an input field Deckhand doesn't check, is refused 
     [
       'mutation { createIssue(input: { repositoryId: "R_repo", title: "T", parentIssueId: "I_1" }) { clientMutationId } }',
       /createIssue's parentIssueId/,
+    ],
+    // A template: GitHub would add its labels and assignees, unchecked.
+    [
+      'mutation { createIssue(input: { repositoryId: "R_repo", title: "T", issueTemplate: "Bug report" }) { clientMutationId } }',
+      /createIssue's issueTemplate/,
     ],
     // A sub-issue by URL: only its node ID is looked up.
     [
@@ -302,8 +354,10 @@ test("targets come from GitHub's nodes: a missing one, a wrong type, another rep
   const { check } = checks();
   const work = run("work");
   const cases = [
-    [GH_COMMENT, { input: { subjectId: "I_404", body: "x" } }, 404, /subjectId isn't there/],
-    [GH_COMMENT, { input: { subjectId: "U_1", body: "x" } }, 403, /on a User/],
+    // Missing, or another repository's: the same refusal, its type unnamed.
+    [GH_COMMENT, { input: { subjectId: "I_404", body: "x" } }, 403, /isn't in the run's repo/],
+    [GH_COMMENT, { input: { subjectId: "R_other", body: "x" } }, 403, /isn't in the run's repo/],
+    [GH_COMMENT, { input: { subjectId: "U_1", body: "x" } }, 403, /isn't in the run's repo/],
     [GH_CREATE, { input: { repositoryId: "I_1", title: "T" } }, 403, /isn't a repository/],
     [GH_EDIT, { input: { id: "PR_7", title: "T" } }, 403, /on a PullRequest/],
     [
@@ -358,8 +412,12 @@ test("a sub-issue link: its child resolved from its node, never moved from anoth
     repo: "org/repo",
     replace_parent: false,
   });
-  // Someone else's issue as the child, another repo's, the run's own issue.
-  for (const child of ["I_3", "I_o", "I_1"]) {
+  assert.match(
+    (await check(brainstorm, link("I_1", "I_o"))).refused.message,
+    /subIssueId isn't in the run's repository/,
+  );
+  // Someone else's issue as the child, the run's own issue.
+  for (const child of ["I_3", "I_1"]) {
     assert.match(
       (await check(brainstorm, link("I_1", child))).refused.message,
       /links only/,

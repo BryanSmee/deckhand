@@ -875,21 +875,22 @@ issue under the run's, where its ceiling would let it edit it. The issues the Ap
 for other runs or for the listener (an analysis, an onboarding issue) aren't the run's, even
 while it runs: only the answers to its own calls say what it created, and they are saved with
 the run, so a listener restart keeps them. A GraphQL answer counts only under the response
-key of a `createIssue` field the gateway parsed, and the issue must be the App's bot's.
+key of a `createIssue` field the gateway parsed, selecting GitHub's own `issue { url }`
+(unaliased), and the issue must be the App's bot's.
 
 **GraphQL** (`gh issue create`, `gh issue comment`, `gh issue edit` and most of `gh`'s own
 commands) goes through the same checks, field by field:
 
 1. **Parsed and validated** against GitHub's public schema, pinned in Deckhand
    (`listener/vendor/github.graphql`, updated on purpose): a call that doesn't parse or
-   validate, a subscription, and a document with several operations and no `operationName`
-   naming one of them are refused.
+   validate, one over 2,500 tokens or 64 KiB (gh's are a few hundred), a subscription, and
+   a document with several operations and no `operationName` naming one of them are refused.
 2. **Queries go on.** Each field of a mutation, through its fragments and under any alias,
    must be one Deckhand knows (`createIssue`, `updateIssue`, `addComment`, `addSubIssue`,
    `removeSubIssue`, `reprioritizeSubIssue`, `addLabelsToLabelable`,
    `removeLabelsFromLabelable`, `addAssigneesToAssignable`, `removeAssigneesFromAssignable`,
    `closeIssue`, `reopenIssue`, `addReaction`, and the pull request ones), setting only the
-   input fields Deckhand checks (no projects, no `parentIssueId`, a sub-issue by its
+   input fields Deckhand checks (no projects, no `parentIssueId` or `issueTemplate`, a sub-issue by its
    `subIssueId` only): any other is refused before any policy runs.
 3. **Its targets are GitHub's:** the node IDs it names, inline or in its variables, are looked
    up with the listener's token, to a repository, a kind and a number. A create's
