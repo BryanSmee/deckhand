@@ -16,6 +16,7 @@
 // - what goes on to GitHub is the document as parsed here, printed again (print()), with its
 //   variables and operation name, never the call's own bytes: GitHub runs what was checked.
 import { readFileSync } from "node:fs";
+import { Worker } from "node:worker_threads";
 import {
   buildSchema,
   getArgumentValues,
@@ -30,10 +31,15 @@ import {
 // The most tokens a document may hold (parsing stops there), and its most bytes, checked before
 // it is parsed: gh's are a few hundred tokens, every field it can ask of a pull request or an
 // issue about 1,200, and its bodies go in variables. Validation is quadratic in a document's
-// repeated fields, and the listener's one thread waits for it: at this size, a fifth of a
-// second at worst.
+// repeated fields: at this size, under half a second at worst, which is why the gateway
+// validates in a worker (createValidator()), not on the listener's one thread.
 export const MAX_TOKENS = 2_500;
 export const MAX_QUERY = 64 * 1024;
+// The most mutation fields a call may hold (gh sends one): each is looked up on GitHub and
+// held to the policies, with the listener's token and rate limit.
+export const MAX_FIELDS = 10;
+// How long a document may wait for the worker and be validated there.
+export const VALIDATE_MS = 10_000;
 // The most node IDs a call's mutations may name: GitHub looks up 100 at once.
 export const MAX_NODES = 100;
 
@@ -214,10 +220,9 @@ const NODES = `query($ids: [ID!]!) {
 
 const refusal = (status, message) => ({ status, message });
 
-// A GraphQL call's body → { doc, op, variables, operationName, coerced } or { refused }:
-// parsed, validated against `schema`, its operation picked as GitHub picks it, and its
-// variables coerced to their types.
-export function parseCall(body, schema = githubSchema()) {
+// A GraphQL call's body → { query, doc, variables, operationName } or { refused }: its JSON
+// read, its document under the caps and parsed (in linear time: validation is apart).
+export function readCall(body) {
   let call;
   try {
     call = JSON.parse(body.toString("utf8"));
@@ -232,19 +237,35 @@ export function parseCall(body, schema = githubSchema()) {
   if (operationName !== null && typeof operationName !== "string") {
     return { refused: refusal(400, "a GraphQL call whose operationName isn't a string") };
   }
+  const doc = parsed(query);
+  if (doc.refused) return doc;
+  return { query, doc, variables, operationName };
+}
+
+// A document under the caps, parsed, or { refused }.
+function parsed(query) {
   if (Buffer.byteLength(query) > MAX_QUERY) {
     return { refused: refusal(413, `a GraphQL document over ${MAX_QUERY} bytes`) };
   }
-  let doc;
   try {
-    doc = parse(query, { maxTokens: MAX_TOKENS, noLocation: true });
+    return parse(query, { maxTokens: MAX_TOKENS, noLocation: true });
   } catch (error) {
     return { refused: refusal(400, `its GraphQL doesn't parse: ${error.message}`) };
   }
+}
+
+// Why a document isn't valid on GitHub, or null when it is: what the worker answers
+// (github-graphql-worker.mjs), and the in-thread validator of the tests.
+export function validationError(query, schema = githubSchema()) {
+  const doc = parsed(query);
+  if (doc.refused) return doc.refused.message;
   const errors = validate(schema, doc, undefined, { maxErrors: 1 });
-  if (errors.length) {
-    return { refused: refusal(400, `its GraphQL isn't valid on GitHub: ${errors[0].message}`) };
-  }
+  return errors.length ? `its GraphQL isn't valid on GitHub: ${errors[0].message}` : null;
+}
+
+// A read and validated call → { doc, op, variables, operationName, coerced } or { refused }:
+// its operation picked as GitHub picks it, and its variables coerced to their types.
+export function operationOf(schema, { doc, variables, operationName }) {
   const op = getOperationAST(doc, operationName ?? undefined);
   if (!op) {
     return {
@@ -266,6 +287,66 @@ export function parseCall(body, schema = githubSchema()) {
   return { doc, op, variables, operationName, coerced: values.variableValues };
 }
 
+// A GraphQL call's body → operationOf()'s, validated on this thread: the tests' shortcut.
+export function parseCall(body, schema = githubSchema()) {
+  const call = readCall(body);
+  if (call.refused) return call;
+  const error = validationError(call.query, schema);
+  if (error) return { refused: refusal(400, error) };
+  return operationOf(schema, call);
+}
+
+// Validation in a worker thread: query → a promise of null (valid) or { status, message }. The
+// worker takes one document at a time; one that waits or runs past `timeoutMs` stops it, and
+// every document it held is refused, so a run's document can hold up GitHub's other GraphQL
+// calls for that long at most, and the listener's webhooks, dashboard and REST calls never.
+export function createValidator({ timeoutMs = VALIDATE_MS } = {}) {
+  let worker = null;
+  let next = 0;
+  const pending = new Map();
+  function stop(message) {
+    const was = worker;
+    worker = null;
+    was?.terminate();
+    for (const p of pending.values()) {
+      clearTimeout(p.timer);
+      p.resolve(refusal(503, message));
+    }
+    pending.clear();
+  }
+  function start() {
+    const started = new Worker(new URL("./github-graphql-worker.mjs", import.meta.url));
+    started.unref();
+    started.on("message", ({ id, error }) => {
+      const p = pending.get(id);
+      if (!p) return;
+      pending.delete(id);
+      clearTimeout(p.timer);
+      p.resolve(error === null ? null : refusal(400, error));
+    });
+    started.on(
+      "error",
+      (error) => worker === started && stop(`its GraphQL couldn't be validated: ${error.message}`),
+    );
+    started.on("exit", () => worker === started && stop("its GraphQL couldn't be validated"));
+    return started;
+  }
+  function check(query) {
+    worker ??= start();
+    const id = next++;
+    return new Promise((resolve) => {
+      const timer = setTimeout(
+        () => stop(`its GraphQL took over ${timeoutMs / 1000} s to validate`),
+        timeoutMs,
+      );
+      timer.unref?.();
+      pending.set(id, { resolve, timer });
+      worker.postMessage({ id, query });
+    });
+  }
+  return { check, close: () => stop("the validator is closed") };
+}
+
 // The fields an operation selects at its root (selected()). Validation has ruled out cycles and
 // fragments on other types.
 export function rootFields(doc, op) {
@@ -278,9 +359,20 @@ export function rootFields(doc, op) {
 export function mutationFields({ doc, op, coerced }, schema = githubSchema()) {
   const defs = schema.getMutationType().getFields();
   const out = [];
+  // Fields with the same response key are one, which GitHub runs once (validation has made
+  // sure they are the same field with the same arguments): checked once, their nodes together.
+  const byKey = new Map();
   for (const field of rootFields(doc, op)) {
     const name = field.name.value;
     if (name === "__typename") continue;
+    const key = field.alias?.value ?? name;
+    if (byKey.has(key)) {
+      byKey.get(key).nodes.push(field);
+      continue;
+    }
+    if (byKey.size >= MAX_FIELDS) {
+      return { refused: refusal(400, `a GraphQL call with over ${MAX_FIELDS} mutation fields`) };
+    }
     const spec = Object.hasOwn(MUTATIONS, name) ? MUTATIONS[name] : null;
     if (!spec) return { refused: refusal(403, `Deckhand doesn't let a run send ${name}`) };
     const { input = {} } = getArgumentValues(defs[name], field, coerced);
@@ -304,7 +396,9 @@ export function mutationFields({ doc, op, coerced }, schema = githubSchema()) {
     if (spec.child && typeof set[spec.child] !== "string") {
       return { refused: refusal(403, `${name} names its sub-issue by its ${spec.child} only`) };
     }
-    out.push({ name, key: field.alias?.value ?? name, spec, input: set, node: field });
+    const entry = { name, key, spec, input: set, nodes: [field] };
+    byKey.set(key, entry);
+    out.push(entry);
   }
   return out;
 }
@@ -322,12 +416,12 @@ function idsOf(fields) {
 
 const repoOf = (node) => String(node?.nameWithOwner ?? node?.repository?.nameWithOwner ?? "");
 
-// The fields a selection set selects, through its fragments (spread or inline), each node
+// The fields selection sets select, through their fragments (spread or inline), each node
 // once: a fragment is walked the first time it is spread only, since its fields are the same
 // nodes wherever it is spread again. Walking it each time would expand a small document
 // exponentially (fragments spreading each other ten times over), which validation doesn't
-// catch.
-function selected(doc, set) {
+// catch. `sets`: one, or a list, walked together.
+function selected(doc, sets) {
   const fragments = new Map(
     doc.definitions
       .filter((d) => d.kind === Kind.FRAGMENT_DEFINITION)
@@ -345,7 +439,7 @@ function selected(doc, set) {
       }
     }
   };
-  walk(set);
+  for (const set of [sets].flat()) walk(set);
   return fields;
 }
 const keyOf = (field) => field.alias?.value ?? field.name.value;
@@ -354,11 +448,16 @@ const keyOf = (field) => field.alias?.value ?? field.name.value;
 // answered() reads it (`issue.url`, else `issue.html_url`), as GitHub's own fields: `issue`
 // and `url` unaliased (or aliased to themselves), and no `html_url`, which GraphQL's Issue
 // doesn't have, so it could only be another field's alias. Otherwise a run could answer
-// `url: title` with a title of its choosing, and claim an issue it didn't create.
-export function answersCreated(doc, field) {
-  const issues = selected(doc, field.selectionSet).filter((f) => keyOf(f) === "issue");
+// `url: title` with a title of its choosing, and claim an issue it didn't create. `fields`: the
+// nodes of one response key, whose selections GitHub merges.
+export function answersCreated(doc, fields) {
+  const sets = [fields].flat().map((f) => f.selectionSet);
+  const issues = selected(doc, sets).filter((f) => keyOf(f) === "issue");
   if (!issues.length || issues.some((f) => f.name.value !== "issue")) return false;
-  const inner = issues.flatMap((f) => selected(doc, f.selectionSet));
+  const inner = selected(
+    doc,
+    issues.map((f) => f.selectionSet),
+  );
   const urls = inner.filter((f) => keyOf(f) === "url");
   if (!urls.length || urls.some((f) => f.name.value !== "url")) return false;
   return !inner.some((f) => keyOf(f) === "html_url");
@@ -424,13 +523,27 @@ export function writeOf({ name, spec, input }, nodes, repo) {
 
 // `nodes(repo, ids)`: GitHub's answer to NODES for those IDs, with the listener's token (a
 // missing one: null); `checkWrite(run, write)`: github-writes.mjs's, null when it may go on.
-export function createGraphqlChecks({ nodes, checkWrite, schema = githubSchema, log = () => {} }) {
+// `validator`: createValidator()'s check, or (the tests') validationError() on this thread.
+export function createGraphqlChecks({
+  nodes,
+  checkWrite,
+  schema = githubSchema,
+  validator = async (query) => {
+    const error = validationError(query, schema());
+    return error && refusal(400, error);
+  },
+  log = () => {},
+}) {
   // A run's GraphQL call → { refused } or { body, write, creates }: what goes on to GitHub
   // (printed again), whether it writes (its token then may), and the response keys of its
   // `createIssue` fields, whose answers name the issues it created (github-writes.mjs
   // answered()).
   async function check(run, body) {
-    const parsed = parseCall(body, schema());
+    const call = readCall(body);
+    if (call.refused) return call;
+    const invalid = await validator(call.query);
+    if (invalid) return { refused: invalid };
+    const parsed = operationOf(schema(), call);
     if (parsed.refused) return parsed;
     const { doc, op, variables, operationName } = parsed;
     const forwarded = Buffer.from(
@@ -457,17 +570,19 @@ export function createGraphqlChecks({ nodes, checkWrite, schema = githubSchema, 
         return { refused: refusal(502, "its GraphQL's nodes can't be looked up on GitHub") };
       }
     }
+    // GitHub's answers about the targets, kept across the call's fields.
+    const memo = new Map();
     for (const field of fields) {
       const write = writeOf(field, found, run.repo);
       if (write.refused) return write;
-      const refused = await checkWrite(run, write);
+      const refused = await checkWrite(run, write, memo);
       if (refused) {
         return { refused: { ...refused, message: `${field.key}: ${refused.message}` } };
       }
     }
     // Only those whose answer is GitHub's own `issue { url }`.
     const creates = fields
-      .filter((f) => f.name === "createIssue" && answersCreated(doc, f.node))
+      .filter((f) => f.name === "createIssue" && answersCreated(doc, f.nodes))
       .map((f) => f.key);
     return { body: forwarded, write: fields.length > 0, creates };
   }

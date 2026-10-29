@@ -6,6 +6,7 @@ import { test } from "node:test";
 import { gzipSync } from "node:zlib";
 import { createBroker } from "../listener/broker.mjs";
 import { NO_TOKEN, readsOf } from "../listener/github-app.mjs";
+import { createGraphqlChecks } from "../listener/github-graphql.mjs";
 import {
   createGithubGateway,
   readsThread,
@@ -742,4 +743,28 @@ test("secretOf, redactBody and readsThread", () => {
   assert.equal(String(redactBody(Buffer.from(`a=${secret}`), [secret])), "a=[redacted]");
   assert.equal(readsThread('{"query": "{ viewer { login } }"}'), false);
   assert.equal(readsThread('{"query": "{ a { reviewThreads { b } } }"}'), true);
+});
+
+test("a secret spelled with GraphQL's own escapes is redacted from the document as printed", async (t) => {
+  const checks = createGraphqlChecks({ nodes: async () => [], checkWrite: async () => null });
+  const gw = await gateway(t, { checkGraphql: checks.check });
+  const { secret, notes } = gw.register(undefined, { mode: "work", push: true, issue: 1 });
+  // Every third character as \u00XX: the call's JSON holds no secret, its GraphQL does.
+  const escaped = [...OPERATOR]
+    .map((c, i) => (i % 3 ? c : `\\u00${c.charCodeAt(0).toString(16).padStart(2, "0")}`))
+    .join("");
+  const query = `{ repository(owner: "${escaped}", name: "repo") { id } }`;
+  const res = await gw.call("/api/graphql", {
+    secret,
+    method: "POST",
+    body: JSON.stringify({ query }),
+  });
+  assert.equal(res.status, 200);
+  const sent = gw.calls.at(-1).body.toString();
+  assert.ok(!sent.includes(OPERATOR));
+  assert.match(JSON.parse(sent).query, /owner: "\[redacted\]"/);
+  assert.match(
+    notes.join("\n"),
+    /redacted a secret from the run's GitHub write POST \/api\/graphql/,
+  );
 });

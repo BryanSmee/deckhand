@@ -272,7 +272,7 @@ export function createWriteChecks({ lookup, bot = () => null, policies = null, l
   }
 
   // The target's kind, number, labels and author, from GitHub. Null when it isn't there.
-  async function resolve(run, repo, number) {
+  async function resolve(run, repo, number, lookup) {
     const issue = await lookup(repo, `/repos/${repo}/issues/${number}`);
     if (!issue) return null;
     const target = {
@@ -301,10 +301,10 @@ export function createWriteChecks({ lookup, bot = () => null, policies = null, l
   // issues it created, looked up: their ids are GitHub's), else `other_issue`. A GraphQL
   // link's child comes with its number and repo, resolved from its node ID: resolved as a
   // target is.
-  async function resolveChild(run, repo, { id, number, repo: at }) {
+  async function resolveChild(run, repo, { id, number, repo: at }, lookup) {
     if (number !== undefined) {
       if (at !== repo) return { id, number, kind: "other_issue" };
-      const found = await resolve(run, repo, number);
+      const found = await resolve(run, repo, number, lookup);
       return { id, number, kind: found?.kind ?? "other_issue" };
     }
     if (run.issue != null) {
@@ -365,8 +365,16 @@ export function createWriteChecks({ lookup, bot = () => null, policies = null, l
   }
 
   // A classified write (classify()'s shape, or a GraphQL mutation's: github-graphql.mjs) → the
-  // same as check().
-  async function checkWrite(run, write) {
+  // same as check(). `memo`: a Map that keeps GitHub's answers across the writes of one call (a
+  // GraphQL call's several fields), so the same target is looked up once.
+  async function checkWrite(run, write, memo = null) {
+    const get = memo
+      ? (repo, path) => {
+          const key = `${repo} ${path}`;
+          if (!memo.has(key)) memo.set(key, lookup(repo, path));
+          return memo.get(key);
+        }
+      : lookup;
     if (write.repo !== run.repo) {
       return refusal(403, "a run writes only to its own repository");
     }
@@ -382,7 +390,7 @@ export function createWriteChecks({ lookup, bot = () => null, policies = null, l
     let target = write.target;
     if (target.number !== undefined) {
       try {
-        target = await resolve(run, write.repo, target.number);
+        target = await resolve(run, write.repo, target.number, get);
       } catch (error) {
         log(`GitHub gateway: ${run.repo}#${write.target.number}: ${error.message ?? error}`);
         return refusal(502, `#${write.target.number} can't be looked up on GitHub`);
@@ -412,7 +420,7 @@ export function createWriteChecks({ lookup, bot = () => null, policies = null, l
     if (write.child) {
       let sub;
       try {
-        sub = await resolveChild(run, write.repo, write.child);
+        sub = await resolveChild(run, write.repo, write.child, get);
       } catch (error) {
         log(`GitHub gateway: ${run.repo} sub-issue ${write.child.id}: ${error.message ?? error}`);
         return refusal(502, "the sub-issue can't be looked up on GitHub");

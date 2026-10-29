@@ -343,10 +343,16 @@ to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to the
   GitHub's public schema, pinned in the repository (`listener/vendor/github.graphql`,
   updated on purpose): a call that doesn't parse (or holds over 2,500 tokens or
   64 KiB, refused before validation, whose cost grows with the square of a document's repeated
-  fields and would hold the listener's one thread) or validate, a
+  fields) or validate, a
   subscription, a document with several operations and no `operationName` naming one, a
   GraphQL `GET` and a query string are refused, as GitHub would otherwise run something
-  unchecked. A query goes on. Each field of a mutation, aliases and fragments included, must
+  unchecked. Validation runs in a worker thread (`createValidator()`), one document at a
+  time, so a slow document holds up other GraphQL calls at most, never the listener's
+  webhooks, dashboard or REST calls; one that takes over 10 seconds, waiting included, is
+  refused (`503`) and the worker started again. A query goes on. A call holds 10 mutation
+  fields at most (gh sends one), each response key checked once (GitHub runs it once), and
+  the targets of one call looked up once each: a call can't spend the installation's rate
+  limit on look-ups. Each field of a mutation, aliases and fragments included, must
   be one of the mutations Deckhand knows, setting only the input fields it checks (projects,
   a parent or a template at creation, Copilot's assignment, a sub-issue by URL are refused): a mutation
   GitHub adds is refused until Deckhand names it. The node IDs the fields name, inline or in
@@ -356,6 +362,8 @@ to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to the
   field is then a write as above, held to the ceiling and `deny_github` with the same input,
   and one refusal refuses the call. What goes on is the document as the gateway parsed it,
   printed again (`print()`), never the call's bytes: GitHub runs exactly what was checked.
+  That document is redacted again: a secret spelled with GraphQL's own escapes (`\u0064`)
+  only shows once printed, the call's JSON having hidden it.
   A new mutation in GitHub's schema means `npm run schema` in `listener/vendor/`, a reviewed
   diff, and its entry in `MUTATIONS` before any run may send it.
 

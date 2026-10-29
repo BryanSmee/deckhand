@@ -317,7 +317,9 @@ export function createGithubGateway({
         const checked = await checkGraphql(run, body);
         if (checked.refused) refused = checked.refused;
         else {
-          body = checked.body;
+          // Redacted again as printed: GraphQL's own escapes (`\u0064`) decode only now, which
+          // the call's JSON hid from the redaction above.
+          body = redacted(run, req, checked.body, call);
           writing = checked.write;
           if (checked.creates.length) {
             watched = {

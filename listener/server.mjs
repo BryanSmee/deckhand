@@ -21,7 +21,7 @@ import { createBroker } from "./broker.mjs";
 import { clientAddress, createBrokerHttp, runAt, runFrom } from "./broker-http.mjs";
 import { createGitGateway } from "./git-gateway.mjs";
 import { createGithubGateway } from "./github-gateway.mjs";
-import { createGraphqlChecks, lookupNodes } from "./github-graphql.mjs";
+import { createGraphqlChecks, createValidator, lookupNodes } from "./github-graphql.mjs";
 import { createWriteChecks } from "./github-writes.mjs";
 import { createPrReady } from "./pr-ready.mjs";
 import { createBrainstorms, createIssueModes } from "./brainstorms.mjs";
@@ -336,9 +336,10 @@ const writeChecks = createWriteChecks({
   policies,
   log,
 });
-// Their GraphQL: parsed, validated, and each mutation held to the same checks, its node IDs
-// looked up with the listener's token.
+// Their GraphQL: parsed, validated (in a worker: a document can take a moment), and each
+// mutation held to the same checks, its node IDs looked up with the listener's token.
 const graphqlChecks = createGraphqlChecks({
+  validator: createValidator().check,
   nodes: (repo, ids) => lookupNodes(github, repo, ids),
   checkWrite: writeChecks.checkWrite,
   log,

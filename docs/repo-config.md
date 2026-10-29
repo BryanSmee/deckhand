@@ -883,7 +883,8 @@ commands) goes through the same checks, field by field:
 
 1. **Parsed and validated** against GitHub's public schema, pinned in Deckhand
    (`listener/vendor/github.graphql`, updated on purpose): a call that doesn't parse or
-   validate, one over 2,500 tokens or 64 KiB (gh's are a few hundred), a subscription, and
+   validate, one over 2,500 tokens or 64 KiB (gh's are a few hundred) or 10 mutation
+   fields (gh sends one), a subscription, and
    a document with several operations and no `operationName` naming one of them are refused.
 2. **Queries go on.** Each field of a mutation, through its fragments and under any alias,
    must be one Deckhand knows (`createIssue`, `updateIssue`, `addComment`, `addSubIssue`,

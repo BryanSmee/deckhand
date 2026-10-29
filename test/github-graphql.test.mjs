@@ -5,8 +5,10 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   createGraphqlChecks,
+  createValidator,
   githubSchema,
   lookupNodes,
+  MAX_FIELDS,
   MAX_QUERY,
   MAX_TOKENS,
   MUTATIONS,
@@ -87,12 +89,20 @@ const run = (mode, issue = 1) => ({
 function checks({ checkWrite } = {}) {
   const writes = [];
   const asked = [];
-  const real = createWriteChecks({ lookup, bot: () => "deckhand[bot]" }).checkWrite;
+  // The REST look-ups the write checks made.
+  const looked = [];
+  const real = createWriteChecks({
+    lookup: (repo, path) => (looked.push(path), lookup(repo, path)),
+    bot: () => "deckhand[bot]",
+  }).checkWrite;
   const { check } = createGraphqlChecks({
     nodes: async (repo, ids) => (asked.push([repo, ids]), ids.map((id) => NODES[id] ?? null)),
-    checkWrite: async (r, write) => (writes.push(write), (checkWrite ?? real)(r, write)),
+    checkWrite: async (r, write, memo) => (
+      writes.push(write),
+      (checkWrite ?? real)(r, write, memo)
+    ),
   });
-  return { check, writes, asked };
+  return { check, writes, asked, looked };
 }
 
 // gh's own calls (cli/cli: api/queries_issue.go, pkg/cmd/issue/…).
@@ -498,4 +508,66 @@ test("lookupNodes: GitHub's nodes in order, a missing one null; a failed answer 
     lookupNodes(github({ message: "Bad credentials" }, 401), "org/repo", ["I_1"]),
   );
   await assert.rejects(lookupNodes(github({ data: { nodes: [] } }), "org/repo", ["I_1"]));
+});
+
+test("a call holds so many mutation fields; one response key is one field, its targets looked up once", async () => {
+  const { check, writes, asked, looked } = checks();
+  const work = run("work");
+  const comment = (key) =>
+    `${key}: addComment(input: { subjectId: "I_1", body: "x" }) { clientMutationId }`;
+  const many = Array.from({ length: MAX_FIELDS + 1 }, (_, i) => comment(`a${i}`)).join(" ");
+  const over = await check(work, call(`mutation { ${many} }`));
+  assert.equal(over.refused.status, 400);
+  assert.match(over.refused.message, /over 10 mutation fields/);
+  assert.deepEqual([writes, asked, looked], [[], [], []]);
+  // The same field again and again, unaliased: GitHub runs it once, it is checked once.
+  const same = await check(work, call(`mutation { ${comment("c").repeat(50)} }`));
+  assert.equal(same.write, true);
+  assert.equal(writes.length, 1);
+  // Two fields on the same issue: GitHub is asked about it once.
+  writes.length = 0;
+  looked.length = 0;
+  const two = await check(work, call(`mutation { ${comment("a")} ${comment("b")} }`));
+  assert.equal(two.write, true);
+  assert.equal(writes.length, 2);
+  assert.deepEqual(looked, ["/repos/org/repo/issues/1"]);
+});
+
+test("the gateway's validator runs in a worker: the listener's thread goes on meanwhile", async (t) => {
+  const { check, close } = createValidator();
+  t.after(close);
+  assert.equal(await check("{ viewer { login } }"), null);
+  assert.deepEqual(await check("{ nope }"), {
+    status: 400,
+    message: `its GraphQL isn't valid on GitHub: Cannot query field "nope" on type "Query". Did you mean "node" or "nodes"?`,
+  });
+  assert.match((await check("{")).message, /doesn't parse/);
+  // The slowest shape under the caps: one field repeated in a selection set.
+  const worst = `{ viewer { ... on User { ${"login ".repeat(MAX_TOKENS - 15)} } } }`;
+  let longest = 0;
+  let last = performance.now();
+  const tick = setInterval(() => {
+    const now = performance.now();
+    longest = Math.max(longest, now - last);
+    last = now;
+  }, 5);
+  const start = performance.now();
+  assert.equal(await check(worst), null);
+  clearInterval(tick);
+  assert.ok(performance.now() - start < 5000);
+  assert.ok(longest < 100, `the thread stalled ${Math.round(longest)} ms`);
+});
+
+test("a document the worker can't validate in time is refused, and the worker starts again", async (t) => {
+  const slow = createValidator({ timeoutMs: 1 });
+  t.after(slow.close);
+  const refused = await slow.check("{ viewer { login } }");
+  assert.equal(refused.status, 503);
+  assert.match(refused.message, /took over/);
+  // The next call starts another worker (here too slow again), rather than waiting on the one
+  // stopped.
+  assert.equal((await slow.check("{ viewer { login } }")).status, 503);
+  const again = createValidator();
+  t.after(again.close);
+  assert.equal(await again.check("{ viewer { login } }"), null);
 });
