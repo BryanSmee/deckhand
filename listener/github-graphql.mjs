@@ -17,7 +17,7 @@
 //   variables and operation name, never the call's own bytes: GitHub runs what was checked.
 import { readFileSync } from "node:fs";
 import { Worker } from "node:worker_threads";
-import { FORK_RUN, readsBlobs } from "./github-forks.mjs";
+import { FORK_RUN, readsFiles } from "./github-forks.mjs";
 import { CONTENTS_WRITE, permissionsOf, PULL_WRITE, pullOf } from "./github-pulls.mjs";
 import {
   buildSchema,
@@ -634,12 +634,13 @@ export function writeOf({ name, spec, input }, nodes, repo) {
 // `nodes(repo, ids)`: GitHub's answer to NODES for those IDs, with the listener's token (a
 // missing one: null); `checkWrite(run, write)`: github-writes.mjs's, null when it may go on.
 // `validator`: createValidator()'s check, or (the tests') validationError() on this thread.
-// `blobs(run)`: whether the run may read a file's content (`... on Blob`), which may be a fork's
-// (github-forks.mjs: a work run that isn't a fork's may not).
+// `files(run)`: whether the run may read a file's content at a ref it names (`... on Blob`,
+// `codeowners(refName:)`: github-forks.mjs readsFiles()), which may be a fork's (a work run that
+// isn't a fork's may not).
 export function createGraphqlChecks({
   nodes,
   checkWrite,
-  blobs = () => true,
+  files = () => true,
   schema = githubSchema,
   validator = async (query) => {
     const error = validationError(query, schema());
@@ -660,11 +661,11 @@ export function createGraphqlChecks({
     const parsed = operationOf(schema(), call);
     if (parsed.refused) return parsed;
     const { doc, op, variables, operationName } = parsed;
-    if (!blobs(run) && readsBlobs(doc)) {
+    if (!files(run) && readsFiles(doc)) {
       return {
         refused: refusal(
           403,
-          `reading a file's content over GraphQL (Blob) may read a fork's: read the repository's files from its clone; ${FORK_RUN}`,
+          `reading a file's content over GraphQL (Blob, codeowners at a ref) may read a fork's: read the repository's files from its clone; ${FORK_RUN}`,
         ),
       };
     }

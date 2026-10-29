@@ -365,16 +365,16 @@ const writeChecks = createWriteChecks({
   pulls: pullChecks,
   log,
 });
-// Their GraphQL: parsed, validated (in a worker: a document can take a moment), and each
-// mutation held to the same checks, its node IDs looked up with the listener's token.
 // What a work run that isn't a fork's may fetch: nothing that brings a fork's code.
 const forkChecks = createForkChecks({
   get: (repo, path, expected) => getJson(github, repo, path, expected),
   log,
 });
+// Their GraphQL: parsed, validated (in a worker: a document can take a moment), and each
+// mutation held to the same checks, its node IDs looked up with the listener's token.
 const graphqlChecks = createGraphqlChecks({
   validator: createValidator().check,
-  blobs: (run) => !forkChecks.restricted(run),
+  files: (run) => !forkChecks.restricted(run),
   nodes: (repo, ids) => lookupNodes(github, repo, ids),
   checkWrite: writeChecks.checkWrite,
   log,

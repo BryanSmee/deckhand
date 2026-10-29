@@ -16,7 +16,7 @@ import {
   fetchBody,
   fetchRequest,
   MAX_LOOKUPS,
-  readsBlobs,
+  readsFiles,
   refKind,
 } from "../listener/github-forks.mjs";
 import { createGithubGateway, FILES } from "../listener/github-gateway.mjs";
@@ -57,6 +57,9 @@ function fakeGithub(repos = REPOS) {
     if ((m = /\/compare\/([^.]+)\.\.\./.exec(path))) {
       return { status: m[1] === OWN ? "ahead" : "diverged" };
     }
+    // A branch named as a short commit id could be.
+    if (/\/git\/ref\/heads\/cafe$/.test(path)) return { ref: "refs/heads/cafe" };
+    if (/\/git\/ref\/tags\/2024\.1$/.test(path)) return { ref: "refs/tags/2024.1" };
     if ((m = /\/commits\/([^/]+)\/branches-where-head$/.exec(path))) {
       return m[1] === HEAD ? [{ name: "feature" }] : [];
     }
@@ -149,11 +152,19 @@ test("advertisedRefs reads v0's and v2's advertisements, a tag's peeled commit t
 test("refKind and callTargets: what a call names that may be a fork's", () => {
   assert.deepEqual(refKind("refs/pull/7/head"), { pull: 7 });
   assert.deepEqual(refKind("pull/12/merge/src/a.js"), { pull: 12 });
-  assert.deepEqual(refKind(`${FORK}/package.json`), { sha: FORK });
-  assert.deepEqual(refKind("abc1234~2"), { sha: "abc1234" });
+  assert.deepEqual(refKind(`${FORK}/package.json`), { sha: FORK, names: [FORK] });
+  assert.deepEqual(refKind("abc1234~2"), { sha: "abc1234", names: ["abc1234~2", "abc1234"] });
+  // Abbreviated as git allows, from 4 digits: possibly a commit, as spelled.
+  assert.deepEqual(refKind("CafE"), { sha: "cafe", names: ["CafE"] });
+  assert.deepEqual(refKind("2024.1/a.js"), { sha: "2024", names: ["2024.1", "2024"] });
+  assert.deepEqual(refKind("abc"), {});
+  // owner:ref and owner:repo:ref, the ref after it read as any other.
+  assert.deepEqual(refKind(`org:${FORK}`), { owner: "org", name: null, ref: FORK });
+  assert.deepEqual(refKind("org:repo:main"), { owner: "org", name: "repo", ref: "main" });
+  assert.deepEqual(refKind(`:${FORK}`), { invalid: true });
   assert.deepEqual(refKind("feature/x/README.md"), {});
   assert.deepEqual(refKind("refs/heads/main/a"), {});
-  assert.deepEqual(refKind("evil:main"), { owner: "evil" });
+  assert.deepEqual(refKind("evil:main"), { owner: "evil", name: null, ref: "main" });
   // What git wouldn't take for a ref's name isn't taken for a branch of the repository's own.
   for (const odd of [
     ` ${FORK}`,
@@ -218,8 +229,25 @@ test("refKind and callTargets: what a call names that may be a fork's", () => {
   assert.deepEqual(callTargets("raw", "o/r/refs/pull/7/head/a.js").refs, ["refs/pull/7/head/a.js"]);
 });
 
-test("readsBlobs: a fragment on Blob, inline or named", () => {
-  const reads = (q) => readsBlobs(parse(q));
+test("readsFiles: a fragment on Blob, inline or named, or codeowners at a ref", () => {
+  const reads = (q) => readsFiles(parse(q));
+  // CODEOWNERS' lines at that ref, quoted in its errors; the default branch's without one.
+  assert.equal(
+    reads(
+      `{ repository(owner:"o",name:"r") { codeowners(refName:"refs/pull/7/head") { errors { source } } } }`,
+    ),
+    true,
+  );
+  assert.equal(
+    reads(
+      `query($r: String) { repository(owner:"o",name:"r") { codeowners(refName: $r) { errors { line } } } }`,
+    ),
+    true,
+  );
+  assert.equal(
+    reads(`{ repository(owner:"o",name:"r") { codeowners { errors { source } } } }`),
+    false,
+  );
   assert.equal(
     reads(
       `{ repository(owner:"o",name:"r") { object(expression:"main:a") { ... on Blob { text } } } }`,
@@ -312,6 +340,29 @@ test("a fork's pull request, its repository and its commits are refused; the rep
     (await check("api", "repos/org/repo/compare/main...evil:main")).message,
     /another repository's/,
   );
+  // Named with the repository's own owner: what follows is checked all the same.
+  for (const [kind, path] of [
+    ["api", `repos/org/repo/compare/main...org:${FORK}`],
+    ["api", `repos/org/repo/compare/main...org:repo:${FORK}`],
+    ["web", `org/repo/compare/main...org:${FORK}`],
+  ]) {
+    assert.match((await check(kind, path)).message, /isn't a commit on org\/repo's default/, path);
+  }
+  assert.match(
+    (await check("api", "repos/org/repo/compare/main...org:refs/pull/7/head")).message,
+    /pull request #7 is from a fork/,
+  );
+  assert.match(
+    (await check("api", "repos/org/repo/compare/main...org:other:main")).message,
+    /another repository's/,
+  );
+  // A short id, from 4 digits: a fork's commit unless the repository has a branch named so.
+  assert.match(
+    (await check("api", `repos/org/repo/tarball/${FORK.slice(0, 5)}`)).message,
+    /isn't a commit on org\/repo's default/,
+  );
+  assert.equal(await check("api", "repos/org/repo/tarball/cafe"), null);
+  assert.equal(await check("raw", "org/repo/2024.1/README.md"), null);
   // A ref spelled as git wouldn't name one: refused, not taken for a branch.
   for (const ref of [` ${FORK}`, "refs//pull/7/head", "main\n"]) {
     const query = new URLSearchParams({ ref }).toString();
@@ -467,18 +518,18 @@ test("over GraphQL, a work run that isn't a fork's can't read a file's content",
   const checks = createGraphqlChecks({
     nodes: async () => [],
     checkWrite: async () => null,
-    blobs: (run) => run.fork,
+    files: (run) => run.fork,
   });
-  const query = JSON.stringify({
-    query: `{ repository(owner:"o",name:"r") { object(expression:"refs/pull/7/head:a.js") { ... on Blob { text } } } }`,
-  });
-  const refused = await checks.check({ repo: "o/r", fork: false }, Buffer.from(query));
-  assert.equal(refused.refused.status, 403);
-  assert.match(refused.refused.message, /Blob/);
-  assert.equal(
-    (await checks.check({ repo: "o/r", fork: true }, Buffer.from(query))).refused,
-    undefined,
-  );
+  for (const query of [
+    `{ repository(owner:"o",name:"r") { object(expression:"refs/pull/7/head:a.js") { ... on Blob { text } } } }`,
+    `{ repository(owner:"o",name:"r") { codeowners(refName:"refs/pull/7/head") { errors { source } } } }`,
+  ]) {
+    const body = Buffer.from(JSON.stringify({ query }));
+    const refused = await checks.check({ repo: "o/r", fork: false }, body);
+    assert.equal(refused.refused.status, 403);
+    assert.match(refused.refused.message, /Blob, codeowners at a ref/);
+    assert.equal((await checks.check({ repo: "o/r", fork: true }, body)).refused, undefined);
+  }
 });
 
 // The gateway in front of a fake GitHub that serves git's advertisements, and raw files.
