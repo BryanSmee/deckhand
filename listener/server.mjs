@@ -18,8 +18,9 @@ import { createGoogleRelay } from "./google.mjs";
 import { createOpenAiProxy } from "./openai.mjs";
 import { planWarning } from "./upstream.mjs";
 import { createBroker } from "./broker.mjs";
-import { createBrokerHttp, runAt } from "./broker-http.mjs";
+import { clientAddress, createBrokerHttp, runAt, runFrom } from "./broker-http.mjs";
 import { createGitGateway } from "./git-gateway.mjs";
+import { createGithubGateway } from "./github-gateway.mjs";
 import { createPrReady } from "./pr-ready.mjs";
 import { createBrainstorms, createIssueModes } from "./brainstorms.mjs";
 import { checkout } from "./checkout.mjs";
@@ -309,19 +310,33 @@ Object.assign(ctx, {
     logDir: join(config.dataDir, "previews"),
     log,
   }),
-  // The sandboxes' only way to GitHub: short-lived tokens for their run's repo, which only
-  // read the code, for requests from that run's sandbox alone.
-  broker: createBroker({
-    app: () => ctx.app,
-    sentFrom: (run, ip) => runAt(ctx, run, ip),
-    log,
-  }),
-  // The egress proxy's CA certificate, for runs whose grant has cached_hosts (egress.mjs).
+  // The runs' secrets, which work from their own sandbox alone.
+  broker: createBroker({ sentFrom: (run, ip) => runAt(ctx, run, ip) }),
+  // The egress proxy's CA certificate, for runs that reach GitHub, or whose grant has
+  // cached_hosts (egress.mjs).
   egressCa: () => fetchEgressCa(config.egressProxy),
   // Sandboxes are started, followed and removed through it; they run detached.
   runner: createDockerRunner({ config, docker, inboxDir: runsDir, log }),
 });
 
+// The sandboxes' only way to GitHub, on the broker's port: their calls, relayed by the egress
+// proxy, go on with a token for their run's repo that they never see, their writes redacted.
+ctx.githubGateway = createGithubGateway({
+  broker: ctx.broker,
+  app: () => ctx.app,
+  api: config.githubApi,
+  web: config.githubUrl,
+  clientOf: (req) => clientAddress(ctx, req),
+  runFrom: (ip) => runFrom(ctx, ip),
+  // The run's own secret too, which the broker keeps by hash only.
+  secrets: (run) => [
+    ...[...ctx.tasks.values()]
+      .filter((t) => t.live?.secret && ctx.broker.runOf(t.live.secret) === run)
+      .map((t) => t.live.secret),
+    ...operatorSecrets(ctx),
+  ],
+  log,
+});
 // Their pushes, on the broker's port: to the run's own branches only, never the default one.
 ctx.gitGateway = createGitGateway({
   broker: ctx.broker,

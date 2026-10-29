@@ -2,16 +2,17 @@
 // addresses, never another running sandbox's.
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { runAt } from "../listener/broker-http.mjs";
+import { clientAddress, runAt, runFrom } from "../listener/broker-http.mjs";
 import { createBroker } from "../listener/broker.mjs";
 
 // Two running tasks, A and B, each with its sandbox's and its engine's addresses.
 function twoRuns() {
-  const broker = createBroker({ app: () => null });
+  const broker = createBroker({});
   const looked = [];
   const addresses = { a: ["10.1.0.2"], b: ["10.2.0.2"] };
   const engines = { a: ["10.1.0.3"], b: null };
   const runner = {
+    proxyAddresses: async () => ["10.0.0.9"],
     address: async (name) => (looked.push(name), [...addresses[name], ...(engines[name] ?? [])]),
     engineAddress: async (name) => engines[name],
   };
@@ -54,4 +55,29 @@ test("runAt: a finished run (finish() cleared its hosts and addresses) is nobody
   live.ip = null;
   assert.equal(await runAt(ctx, a, "10.1.0.2"), false);
   assert.equal(live.ip, null, "not looked up again");
+});
+
+test("runFrom: the record of the running task whose sandbox has the address, never its engine", async () => {
+  const { ctx, tasks, runOf } = twoRuns();
+  assert.equal(await runFrom(ctx, "10.1.0.2"), runOf("org/a#1"));
+  // The engine's builds and containers have no secret: nobody's run, so no token.
+  assert.equal(await runFrom(ctx, "10.1.0.3"), null);
+  assert.equal(await runFrom(ctx, "10.2.0.2"), runOf("org/b#2"));
+  assert.equal(await runFrom(ctx, "10.3.0.2"), null);
+  // Finished: nobody's.
+  tasks.get("org/a#1").live.hosts = null;
+  assert.equal(await runFrom(ctx, "10.1.0.2"), null);
+});
+
+test("clientAddress: the sandbox the egress proxy names, believed from the proxy alone", async () => {
+  const { ctx } = twoRuns();
+  const req = (from, named) => ({
+    socket: { remoteAddress: from },
+    headers: named ? { "x-deckhand-client": named } : {},
+  });
+  assert.equal(await clientAddress(ctx, req("::ffff:10.0.0.9", "10.1.0.2")), "10.1.0.2");
+  assert.equal(await clientAddress(ctx, req("10.0.0.9")), "10.0.0.9");
+  // A sandbox naming another one gets its own address.
+  assert.equal(await clientAddress(ctx, req("10.2.0.2", "10.1.0.2")), "10.2.0.2");
+  assert.equal(await clientAddress(ctx, req("::ffff:10.2.0.2")), "10.2.0.2");
 });

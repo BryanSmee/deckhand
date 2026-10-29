@@ -18,16 +18,18 @@ function hostOf(url) {
   return new URL(url).hostname.toLowerCase();
 }
 
-// What the agent (its `hosts`, agents/; by default the operator's) and GitHub need. git and
-// gh use the GitHub hosts the listener is configured with; raw files and release downloads
-// come from *.githubusercontent.com. The listener (the broker) is reached directly, on the
-// run's own network.
+// The GitHub hosts the listener is configured with, the web's and the API's (one, on GitHub
+// Enterprise Server): what git and gh use. The egress proxy relays them to the listener's GitHub
+// gateway (github-gateway.mjs), which holds the token: never a raw tunnel from a sandbox.
+export function githubHosts(config) {
+  return [...new Set([hostOf(config.githubUrl), hostOf(config.githubApi)])];
+}
+
+// What the agent (its `hosts`, agents/; by default the operator's) and GitHub need. Raw files
+// and release downloads come from *.githubusercontent.com, which carries no token: a plain
+// allowed host. The listener (the broker) is reached directly, on the run's own network.
 export function mandatoryHosts(config, agent = agentFor(config.agent)) {
-  return [
-    ...agent.hosts,
-    ...new Set([hostOf(config.githubUrl), hostOf(config.githubApi)]),
-    "*.githubusercontent.com",
-  ];
+  return [...agent.hosts, ...githubHosts(config), "*.githubusercontent.com"];
 }
 
 // What the operator allows a repo's runs of `agent`: the mandatory hosts and its grant's
@@ -53,9 +55,9 @@ export function matchHost(host, patterns) {
 // the `uncached` ones (mandatoryHosts(): their traffic carries the run's tokens) whatever
 // `cached` says; `decrypt`: and its HTTPS, decrypted to do so, unless `decrypt` is false (a
 // container engine, whose builds and containers don't trust Deckhand's CA: plain HTTP only).
-// `relayed` (the run's agent's, agents/): hosts whose HTTPS the proxy decrypts and hands to the
-// listener, which puts the operator's credential in place of the run's secret (google.mjs);
-// never cached. `blocked` (the agent's too): refused whatever the grants say.
+// `relayed` (GitHub's, githubHosts(), and the run's agent's, agents/): hosts whose HTTPS the
+// proxy decrypts and hands to the listener, which puts a token or the operator's credential in
+// place of the run's secret (github-gateway.mjs, google.mjs); never cached. `blocked` (the agent's too): refused whatever the grants say.
 export function egressPolicy(
   host,
   hosts,
@@ -101,9 +103,9 @@ export function proxyEnv(config, others = []) {
   };
 }
 
-// The egress proxy's CA certificate (../proxy/authority.mjs), which sandboxes trust when their
-// grant has cached_hosts or their agent has relayed hosts; null when it has none or doesn't
-// answer. Asked at each such run: a new proxy volume is a new CA.
+// The egress proxy's CA certificate (../proxy/authority.mjs), which sandboxes trust when they
+// reach GitHub (relayed), their grant has cached_hosts or their agent has relayed hosts; null
+// when it has none or doesn't answer. Asked at each such run: a new proxy volume is a new CA.
 export async function fetchEgressCa(egressProxy) {
   try {
     const res = await fetch(`${egressProxy}/deckhand-ca.crt`, {

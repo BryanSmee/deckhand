@@ -6,8 +6,10 @@
 // short-lived certificate of its own, kept in memory and on disk, made again when it nears its
 // end or the CA changed.
 //
-// The CA can't vouch for GitHub or the agents' providers (EXCLUDED, its name constraints): the
-// sandboxes' tokens go there, and its key, should it leak, mustn't open that traffic.
+// The CA can't vouch for the agents' providers (EXCLUDED, its name constraints): the operator's
+// credentials go there, and its key, should it leak, mustn't open that traffic. It does vouch
+// for GitHub, whose calls the proxy relays to the listener's GitHub gateway: no sandbox holds a
+// GitHub token any more, so a leaked key opens none.
 //
 // Node can't create certificates: the `openssl` CLI does, as the listener uses the docker
 // CLI. No dependencies.
@@ -26,15 +28,12 @@ export const HOST_DAYS = 7;
 const RENEW_MS = 2 * DAY;
 const CA_RENEW_MS = 30 * DAY;
 
-// Names (and their subdomains) the CA may never certify: the mandatory hosts whose traffic
-// carries a run's tokens (../listener/egress.mjs mandatoryHosts()), never decrypted.
-export const EXCLUDED = [
-  "github.com",
-  "githubusercontent.com",
-  "anthropic.com",
-  "openai.com",
-  "chatgpt.com",
-];
+// Names (and their subdomains) the CA may never certify: the agents' providers, whose traffic
+// would carry the operator's credentials, never decrypted.
+export const EXCLUDED = ["anthropic.com", "openai.com", "chatgpt.com"];
+// Names a CA from before the GitHub gateway excluded: one that still does is made again, or
+// the proxy couldn't relay GitHub's calls (../listener/github-gateway.mjs).
+export const NO_LONGER_EXCLUDED = ["github.com", "githubusercontent.com"];
 export const excluded = (host) =>
   EXCLUDED.some((name) => host === name || host.endsWith(`.${name}`));
 
@@ -97,14 +96,17 @@ export function createAuthority({ dir, openssl = runOpenssl, now = Date.now, log
   }
 
   // Whether `found` is still the CA to use: not near its end, and made with the name
-  // constraints and lifetime of now (an older one lasted ten years and had none).
+  // constraints and lifetime of now (an older one lasted ten years and had none, and a later
+  // one excluded GitHub: its names show in the extension's DER, as IA5 strings).
   function current(found) {
     const from = Date.parse(found.x509.validFrom);
     const to = Date.parse(found.x509.validTo);
+    const { raw } = found.x509;
     return (
       to - now() > CA_RENEW_MS &&
       to - from <= (CA_DAYS + 1) * DAY &&
-      found.x509.raw.includes(NAME_CONSTRAINTS)
+      raw.includes(NAME_CONSTRAINTS) &&
+      !NO_LONGER_EXCLUDED.some((name) => raw.includes(name))
     );
   }
 
@@ -126,7 +128,7 @@ export function createAuthority({ dir, openssl = runOpenssl, now = Date.now, log
           ca = found;
           return ca;
         }
-        log(`CA in ${dir}: near its end, or without name constraints; making a new one`);
+        log(`CA in ${dir}: near its end, or without the name constraints of now; making a new one`);
       } catch {}
     } else {
       log(`CA in ${dir}: near its end; making a new one`);

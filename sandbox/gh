@@ -1,7 +1,8 @@
 #!/bin/bash
-# gh with a token fresh from the broker on every call (deckhand-token): a run outlives any
-# token it could get at start. Installed ahead of the real gh on PATH. Outside a Deckhand run
-# (no broker), gh runs as usual.
+# gh with the run's secret as its token (deckhand-token): the egress proxy relays its calls to
+# the listener's GitHub gateway (../listener/github-gateway.mjs), which swaps it for a token the
+# sandbox never sees. Installed ahead of the real gh on PATH. Outside a Deckhand run (no
+# broker), gh runs as usual.
 #
 # The run's token only reads pull requests (it could approve them otherwise): `gh pr ready
 # [--undo]`, `gh pr create` and `gh pr edit` (title and body) go to the listener
@@ -10,7 +11,7 @@ real=${DECKHAND_REAL_GH:-/usr/bin/gh}
 [ -n "${DECKHAND_BROKER_URL:-}" ] || exec "$real" "$@"
 
 GH_TOKEN=$(deckhand-token) || {
-  echo "gh: no GitHub token from Deckhand's broker" >&2
+  echo "gh: no run secret for Deckhand's GitHub gateway" >&2
   exit 1
 }
 export GH_TOKEN

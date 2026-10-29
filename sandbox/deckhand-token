@@ -1,8 +1,8 @@
 #!/bin/bash
-# Prints a GitHub token for this run's repo, fresh from the listener's broker
-# (../listener/broker.mjs): installation tokens expire after an hour, runs last longer, so
-# nothing keeps one. The git credential helper and the gh wrapper call it.
+# Prints what this run gives GitHub in place of a token: its secret. The egress proxy relays
+# its GitHub calls to the listener's GitHub gateway (../listener/github-gateway.mjs), which
+# swaps it for a token limited to the run's repo that the sandbox never sees, while the run
+# lasts. The git credential helper and the gh wrapper call it.
 set -euo pipefail
-: "${DECKHAND_BROKER_URL:?not a Deckhand run: no broker}"
 : "${DECKHAND_RUN_SECRET:?not a Deckhand run: no run secret}"
-deckhand-broker token -fsS --max-time 30 --retry 2 | jq -er .token
+printf '%s\n' "$DECKHAND_RUN_SECRET"

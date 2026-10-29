@@ -1,4 +1,5 @@
-// The sandbox's side of the broker: git's credential helper asks it for a token per call.
+// The sandbox's scripts: git's credential helper and the gh wrapper hand out the run's secret
+// (the listener's GitHub gateway swaps it for a token), the entrypoint, the agents' scripts.
 import assert from "node:assert/strict";
 import { execFile, spawnSync } from "node:child_process";
 import {
@@ -19,22 +20,7 @@ import { sandboxAt, serve, tempDir } from "./helpers.mjs";
 
 const bin = new URL("../sandbox/", import.meta.url).pathname;
 
-async function broker(t) {
-  let n = 0;
-  const b = createBroker({
-    app: () => ({
-      repoToken: async () => ({
-        token: `fresh-${++n}`,
-        expiresAt: Date.now() + 1,
-      }),
-    }),
-    sentFrom: sandboxAt(),
-  });
-  const { url } = await serve(t, (req, res) => b.handle(req, res));
-  return { b, url };
-}
-
-// Async: the broker answers from this same process.
+// Async: a broker the tests serve may answer from this same process.
 function helper(env, input) {
   return new Promise((resolve) => {
     const child = execFile(
@@ -47,32 +33,24 @@ function helper(env, input) {
   });
 }
 
-test("git gets a fresh token for the repo's host on each call", async (t) => {
-  const { b, url } = await broker(t);
+test("git gets the run's secret for the repo's host, which the GitHub gateway takes", async () => {
   const env = {
-    DECKHAND_BROKER_URL: url,
-    DECKHAND_RUN_SECRET: b.register("org/repo", undefined, { push: true }),
+    DECKHAND_BROKER_URL: "http://listener:8081",
+    DECKHAND_RUN_SECRET: "the-secret",
     REPO_URL: "https://github.com/org/repo.git",
   };
   const ask = "protocol=https\nhost=github.com\n\n";
-  assert.equal((await helper(env, ask)).stdout, "username=x-access-token\npassword=fresh-1\n");
-  assert.equal((await helper(env, ask)).stdout, "username=x-access-token\npassword=fresh-2\n");
-  // Another host never sees the token.
+  assert.equal((await helper(env, ask)).stdout, "username=x-access-token\npassword=the-secret\n");
+  // Another host never sees it.
   assert.equal((await helper(env, "protocol=https\nhost=evil.example\n\n")).stdout, "");
-});
-
-test("a finished run's helper answers nothing, so git fails instead of using a stale token", async (t) => {
-  const { b, url } = await broker(t);
-  const secret = b.register("org/repo", undefined, { push: true });
-  b.revoke(secret);
-  const env = {
-    DECKHAND_BROKER_URL: url,
-    DECKHAND_RUN_SECRET: secret,
-    REPO_URL: "https://github.com/o/r",
-  };
-  const res = await helper(env, "protocol=https\nhost=github.com\n\n");
-  assert.equal(res.status, 0);
-  assert.equal(res.stdout, "");
+  // Outside a run, or without a secret: nothing, and git asks elsewhere.
+  const { DECKHAND_RUN_SECRET, ...noSecret } = env;
+  for (const without of [{ ...env, DECKHAND_BROKER_URL: "" }, noSecret]) {
+    const res = await helper(without, ask);
+    assert.equal(res.status, 0);
+    assert.equal(res.stdout, "");
+  }
+  assert.ok(DECKHAND_RUN_SECRET);
 });
 
 // The Claude Code volume is read-only in a sandbox: a missing version is the listener's to
@@ -661,17 +639,14 @@ test(
   },
 );
 
-test("for the broker's host, git gets the run's secret: what the git gateway takes", async (t) => {
-  const { b, url } = await broker(t);
-  const secret = b.register("org/repo", undefined, { push: true });
+test("for the broker's host, git gets the run's secret: what the git gateway takes", async () => {
   const env = {
-    DECKHAND_BROKER_URL: url,
-    DECKHAND_RUN_SECRET: secret,
+    DECKHAND_BROKER_URL: "http://listener:8081",
+    DECKHAND_RUN_SECRET: "the-secret",
     REPO_URL: "https://github.com/org/repo.git",
   };
-  const host = new URL(url).host;
-  const res = await helper(env, `protocol=http\nhost=${host}\n\n`);
-  assert.equal(res.stdout, `username=deckhand\npassword=${secret}\n`);
+  const res = await helper(env, "protocol=http\nhost=listener:8081\n\n");
+  assert.equal(res.stdout, "username=deckhand\npassword=the-secret\n");
 });
 
 // --- gh pr ready, create and edit, through the listener ----------------------------------------
@@ -699,7 +674,7 @@ async function prBroker(t) {
       });
     },
   };
-  const b = createBroker({ app: () => github, sentFrom: sandboxAt() });
+  const b = createBroker({ sentFrom: sandboxAt() });
   const prReady = createPrReady({
     broker: b,
     app: () => github,
@@ -775,11 +750,12 @@ test("gh pr ready goes to the listener, with or without a number, and --undo too
     "convertPullRequestToDraft PR_8",
     "convertPullRequestToDraft PR_8",
   ]);
-  // The real gh only looked the pull requests up, with a fresh token.
+  // The real gh only looked the pull requests up, with the run's secret as its token.
+  const secret = env.DECKHAND_RUN_SECRET;
   assert.deepEqual(real.calls(), [
-    "token pr view --json url --jq .url",
-    "token pr view 8 --json url --jq .url",
-    "token pr view 8 --repo org/repo --json url --jq .url",
+    `${secret} pr view --json url --jq .url`,
+    `${secret} pr view 8 --json url --jq .url`,
+    `${secret} pr view 8 --repo org/repo --json url --jq .url`,
   ]);
 });
 
@@ -797,7 +773,7 @@ test("a refused gh pr ready fails with the listener's reason", async (t) => {
   assert.deepEqual(mutations, []);
 });
 
-test("other gh commands go to the real gh, with a fresh token", async (t) => {
+test("other gh commands go to the real gh, with the run's secret as its token", async (t) => {
   const { b, mutations, url } = await prBroker(t);
   const real = fakeGh(t);
   const env = {
@@ -807,7 +783,8 @@ test("other gh commands go to the real gh, with a fresh token", async (t) => {
   };
   assert.equal((await gh(env, "pr", "view", "7", "--comments")).status, 0);
   assert.equal((await gh(env, "issue", "view", "3")).status, 0);
-  assert.deepEqual(real.calls(), ["token pr view 7 --comments", "token issue view 3"]);
+  const secret = env.DECKHAND_RUN_SECRET;
+  assert.deepEqual(real.calls(), [`${secret} pr view 7 --comments`, `${secret} issue view 3`]);
   assert.deepEqual(mutations, []);
 });
 

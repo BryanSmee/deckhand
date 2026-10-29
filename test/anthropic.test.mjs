@@ -44,7 +44,7 @@ async function serveProxy(
   } = {},
 ) {
   const upstream = await fakeAnthropic(t);
-  const broker = createBroker({ app: () => null, sentFrom });
+  const broker = createBroker({ sentFrom });
   const proxy = createAnthropicProxy({ broker, name, credential, upstream: upstream.url });
   const { url } = await serve(t, (req, res) => proxy.handle(req, res));
   return { url, broker, upstream };
@@ -139,7 +139,7 @@ test("an API key run's secret is swapped for the key", async (t) => {
 test("a gateway's token goes as a bearer, under the gateway's own path", async (t) => {
   const upstream = await fakeAnthropic(t);
   upstream.release();
-  const broker = createBroker({ app: () => null, sentFrom: sandboxAt() });
+  const broker = createBroker({ sentFrom: sandboxAt() });
   const proxy = createAnthropicProxy({
     broker,
     name: "ANTHROPIC_AUTH_TOKEN",
@@ -170,7 +170,7 @@ async function serveBoth(t, limited = false) {
       res.end('{"type":"error","error":{"type":"rate_limit_error"}}');
     });
   });
-  const broker = createBroker({ app: () => null, sentFrom: sandboxAt() });
+  const broker = createBroker({ sentFrom: sandboxAt() });
   const proxy = createAnthropicProxy({
     broker,
     name: "CLAUDE_CODE_OAUTH_TOKEN",
@@ -232,7 +232,7 @@ test("a plan's 429: the run learns when its limit resets; a key's doesn't", asyn
 
 test("a run naming a credential the operator didn't set gets none, and says which", async (t) => {
   const upstream = await fakeAnthropic(t);
-  const broker = createBroker({ app: () => null, sentFrom: sandboxAt() });
+  const broker = createBroker({ sentFrom: sandboxAt() });
   const proxy = createAnthropicProxy({
     broker,
     name: "CLAUDE_CODE_OAUTH_TOKEN",
@@ -374,7 +374,7 @@ test("without a credential set, a live run gets an error rather than an empty he
 });
 
 test("Anthropic out of reach: a 502 in Anthropic's error shape", async (t) => {
-  const broker = createBroker({ app: () => null, sentFrom: sandboxAt() });
+  const broker = createBroker({ sentFrom: sandboxAt() });
   const proxy = createAnthropicProxy({
     broker,
     name: "ANTHROPIC_API_KEY",
@@ -413,7 +413,7 @@ test("a run on another provider goes to its URL with its key; the provider's sta
   const anthropic = await fakeAnthropic(t);
   const openrouter = await fakeAnthropic(t);
   openrouter.release();
-  const broker = createBroker({ app: () => null, sentFrom: sandboxAt() });
+  const broker = createBroker({ sentFrom: sandboxAt() });
   const proxy = createAnthropicProxy({
     broker,
     name: "CLAUDE_CODE_OAUTH_TOKEN",
@@ -450,7 +450,7 @@ test("a run on another provider goes to its URL with its key; the provider's sta
 });
 
 test("a provider that can't be reached counts as a 502", async (t) => {
-  const broker = createBroker({ app: () => null, sentFrom: sandboxAt() });
+  const broker = createBroker({ sentFrom: sandboxAt() });
   const proxy = createAnthropicProxy({
     broker,
     name: "ANTHROPIC_API_KEY",

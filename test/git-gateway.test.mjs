@@ -314,7 +314,7 @@ async function setup(
       return Response.json({ default_branch: "main" });
     },
   };
-  const broker = createBroker({ app: () => github, sentFrom });
+  const broker = createBroker({ sentFrom });
   const secret = register(broker);
   const logs = [];
   const mirrorDir = join(dir, "mirrors");
@@ -1151,7 +1151,7 @@ test("saved pushes a stopped listener left are swept, never a check's in progres
   mkdirSync(join(spoolDir, "push-new"));
   const old = new Date(Date.now() - 3 * 3600_000);
   utimesSync(join(spoolDir, "push-old"), old, old);
-  const broker = createBroker({ app: () => null, sentFrom: sandboxAt() });
+  const broker = createBroker({ sentFrom: sandboxAt() });
   const gateway = createGitGateway({ broker, app: () => null, mirrorDir: dir, spoolDir });
   // The sweep runs before any check: a branch check of an ungranted repo is a no-op that
   // doesn't wait for it, so wait for it here.

@@ -1,11 +1,14 @@
 // The broker's HTTP server, on the runs' networks only (compose.yaml doesn't publish its
-// port): the egress proxy's questions (may this sandbox reach this host?), the token broker
-// (broker.mjs), the git gateway (git-gateway.mjs), ready for review (pr-ready.mjs) and the
-// agents' API endpoints (anthropic.mjs, openai.mjs, and google.mjs, which the proxy sends the
-// Antigravity CLI's calls to).
+// port): the egress proxy's questions (may this sandbox reach this host?), the GitHub gateway
+// (github-gateway.mjs), which the proxy sends the sandboxes' GitHub calls to, the git gateway
+// (git-gateway.mjs), ready for review (pr-ready.mjs) and the agents' API endpoints
+// (anthropic.mjs, openai.mjs, and google.mjs, which the proxy sends the Antigravity CLI's calls
+// to). The runs' secrets are the broker's (broker.mjs).
 import { createServer } from "node:http";
 import { agentFor } from "./agents/index.mjs";
-import { egressPolicy } from "./egress.mjs";
+import { addressOf } from "./broker.mjs";
+import { egressPolicy, githubHosts } from "./egress.mjs";
+import { NO_TOKEN } from "./github-app.mjs";
 import { taskKey } from "./events.mjs";
 import { sendJson } from "./web.mjs";
 
@@ -34,6 +37,42 @@ async function hasAddress(ctx, task, ip) {
   return task.live === live && !!live.hosts && !!live.ip?.includes(ip);
 }
 
+// The header in which the egress proxy names the sandbox a call it relays came from
+// (../proxy/proxy.mjs): believed from the proxy alone.
+export const CLIENT_HEADER = "x-deckhand-client";
+
+// Whether `req` comes from the egress proxy. It is on every run's network, so its name may
+// resolve to its address on any of them: the caller is compared with all of them (`docker
+// inspect`).
+export async function fromProxy(ctx, req) {
+  const caller = addressOf(req);
+  if ((await ctx.runner.proxyAddresses()).includes(caller)) return true;
+  return (await ctx.runner.proxyAddresses({ fresh: true })).includes(caller);
+}
+
+// The address of the sandbox that sent `req`: the one the egress proxy names when it relayed
+// it, else its source address. A sandbox that sets the header itself gets its own address.
+export async function clientAddress(ctx, req) {
+  const named = req.headers[CLIENT_HEADER];
+  if (typeof named === "string" && named && (await fromProxy(ctx, req))) {
+    return named.replace(/^::ffff:/, "");
+  }
+  return addressOf(req);
+}
+
+// The broker's record of the running task whose sandbox has address `ip`, or null: what a call
+// without a secret is bound to (github-gateway.mjs). Never its engine's: the builds and
+// containers there don't get the run's secret, and mustn't get its GitHub token without it.
+export async function runFrom(ctx, ip) {
+  for (const task of ctx.tasks.values()) {
+    if (task.live?.secret && (await hasAddress(ctx, task, ip))) {
+      if (task.live.engineIp?.includes(ip)) return null;
+      return ctx.broker.runOf(task.live.secret) ?? null;
+    }
+  }
+  return null;
+}
+
 // Whether `ip` is the sandbox's (or engine's) of the running task the broker's `run` is: what
 // binds a run's secret to its sandbox (broker.mjs sentBy()). The run is found by its record,
 // so no secret is compared here.
@@ -48,6 +87,16 @@ export async function runAt(ctx, run, ip) {
 // `ctx` (server.mjs): the listener's state and services, read at call time.
 export function createBrokerHttp(ctx) {
   const { config, log, tasks } = ctx;
+  // GitHub's hosts first: the other relayed ones are Google's.
+  const routes = [
+    ...githubHosts(config).map((host) => ({
+      prefix: `/relay/${host}/`,
+      service: "githubGateway",
+      name: "GitHub gateway",
+      destroy: true,
+    })),
+    ...ROUTES,
+  ];
 
   // The running task whose sandbox has this address on its network.
   async function taskAt(ip) {
@@ -57,33 +106,31 @@ export function createBrokerHttp(ctx) {
     return null;
   }
 
-  // Only the proxy may ask: it is the one that knows the connection's source address. It is on
-  // every run's network, so its name may resolve to its address on any of them: the caller is
-  // compared with all of them (`docker inspect`).
-  async function fromProxy(req) {
-    const caller = req.socket.remoteAddress.replace(/^::ffff:/, "");
-    if ((await ctx.runner.proxyAddresses()).includes(caller)) return true;
-    return (await ctx.runner.proxyAddresses({ fresh: true })).includes(caller);
-  }
-
   async function egressAnswer(req, res) {
     const url = new URL(req.url, "http://broker");
     const ip = url.searchParams.get("ip") ?? "";
     const host = url.searchParams.get("host") ?? "";
-    if (!(await fromProxy(req))) {
+    // Only the proxy may ask: it is the one that knows the connection's source address.
+    if (!(await fromProxy(ctx, req))) {
       return sendJson(res, { allowed: false }, 403);
     }
     const task = await taskAt(ip);
     const live = task?.live;
     // Its container engine's plain HTTP is cached too, but its HTTPS never decrypted: its
-    // builds and containers don't trust Deckhand's CA.
+    // builds and containers don't trust Deckhand's CA. So GitHub's hosts aren't relayed for it
+    // but tunnelled, anonymously (the gateway gives its address no token): an exception #411
+    // accepted, rather than break builds that fetch from GitHub.
     const engine = !!live?.engineIp?.includes(ip);
+    // GitHub's hosts go to the GitHub gateway, but for a research run (NO_TOKEN): it has no
+    // token there, nor the CA, and reads public GitHub anonymously through a tunnel instead,
+    // as an engine does.
+    const github = !!live && ctx.broker.runOf(live.secret)?.extra !== NO_TOKEN;
     // What its agent's calls need: hosts handed to the listener, hosts refused.
     const agent = agentFor(live?.record?.agent);
     const answer = task
       ? egressPolicy(host, live.hosts, live.trusted, live.cached, live.uncached ?? [], {
           decrypt: !engine,
-          relayed: agent.relayed,
+          relayed: [...(github ? githubHosts(config) : []), ...(agent.relayed ?? [])],
           blocked: agent.blocked,
         })
       : { allowed: false, private: false, cache: false, decrypt: false, relay: false };
@@ -103,11 +150,12 @@ export function createBrokerHttp(ctx) {
     if (req.method === "GET" && req.url.startsWith("/egress?")) {
       return egressAnswer(req, res).catch(failed(res, "Egress", false));
     }
-    const route = ROUTES.find((r) => req.url.startsWith(r.prefix));
+    const route = routes.find((r) => req.url.startsWith(r.prefix));
     if (route) {
       return ctx[route.service].handle(req, res).catch(failed(res, route.name, route.destroy));
     }
-    ctx.broker.handle(req, res).catch(failed(res, "Broker", false));
+    // No /token any more: sandboxes hold no GitHub token (github-gateway.mjs).
+    sendJson(res, { error: "not found" }, 404);
   }
 
   function listen() {

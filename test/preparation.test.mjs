@@ -154,8 +154,9 @@ test("a research run without allow_research stops before anything is asked for",
 });
 
 // A work run on issue #12 asked from pull request #7, from `head` (a repo's full name), and
-// what it asked of the images. `imageFor`: the images' own, `written`: what goes to its log.
-async function workRun(t, head, { imageFor, written = [] } = {}) {
+// what it asked of the images. `imageFor`: the images' own, `written`: what goes to its log,
+// `ca`: the egress proxy's CA certificate, or null.
+async function workRun(t, head, { imageFor, written = [], ca = "the CA" } = {}) {
   const dir = realpathSync(tempDir(t));
   const config = testConfig({ GRANTS_DIR: dir });
   const calls = [];
@@ -171,7 +172,7 @@ async function workRun(t, head, { imageFor, written = [] } = {}) {
         return ["-v", "cache-npm:/home/node/.npm"];
       },
     },
-    egressCa: async () => null,
+    egressCa: async () => ca,
     broker: { allow: () => {}, runOf: () => ({ push: true }) },
     github: async () =>
       new Response(JSON.stringify({ head: { ref: "feat", repo: { full_name: head } } }), {
@@ -221,6 +222,16 @@ test("a work run with a comment from the repo's own pull request keeps its cache
   assert.deepEqual(calls, ["caches /home/node/.npm"]);
   assert.ok(!notes.some((n) => /fork/.test(n)));
   assert.deepEqual(task.live.branches, ["issue-12-*", "feat"]);
+});
+
+test("a work run trusts the egress proxy's CA without cached hosts: its GitHub calls are relayed", async (t) => {
+  const { parts, task } = await workRun(t, "org/repo");
+  assert.equal(parts.ca, "the CA");
+  assert.deepEqual(task.live.cached, []);
+  await assert.rejects(
+    workRun(t, "org/repo", { ca: null }),
+    (e) => e instanceof RunError && /no CA, and its calls to GitHub go through it/.test(e.message),
+  );
 });
 
 test("a run whose image builds: its log's image phase, then setup again", async (t) => {

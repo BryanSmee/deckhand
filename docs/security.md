@@ -2,7 +2,8 @@
 
 Sandboxes run Claude Code without permission prompts, on issues anyone may have written.
 Deckhand assumes that whatever runs inside one may try to read what it shouldn't or send it
-out, and limits what it can reach: GitHub tokens for its own repository only (see
+out, and limits what it can reach: no GitHub token, only calls through a gateway that adds
+one for its own repository (see [Tokens](#tokens) and
 [Setup](setup.md#how-sandboxes-reach-github)), no pushes to its default branch, no host
 paths unless you grant them, a restricted network, and no privileges.
 
@@ -16,7 +17,8 @@ the App on many repositories, whoever can push one's default branch must not get
 host through it. A sandbox that could write to a default branch could still change what
 that file asks for, so none can:
 
-- Sandbox tokens only **read** the code (`contents: read`). They can't push, write files
+- Sandbox tokens (what the [GitHub gateway](#the-github-gateway) adds to a sandbox's calls:
+  no sandbox holds one) only **read** the code (`contents: read`). They can't push, write files
   through the API or merge a pull request, whatever the repo's settings.
 - Pushes go through the listener's **git gateway** (`listener/git-gateway.mjs`), on the
   broker's port: the sandbox's git sends them there (`url.<broker>/git/.pushInsteadOf`),
@@ -214,43 +216,117 @@ Assume it could, and keep secrets away from workflows on `issue-*` branches as a
 
 A run's secret only lives as long as the run: the listener revokes it when the run ends, and
 the broker then refuses it. It also only works from that run's sandbox (or its container
-engine): the broker's `/token`, the git gateway, the pull request endpoints (`gh pr ready`,
-`create`, `edit`) and the agents' API endpoints `/anthropic/` and `/openai/` compare the
-request's source address with that run's addresses on its networks (`docker inspect`, looked
-up once per run and forgotten when its sandbox exits) and answer `403` otherwise. A secret that leaks, to a research run on the open web say, gets
-another sandbox neither a token, a push, nor calls on the operator's Claude or OpenAI
-credential. Google's endpoints still check the secret alone: `/relay/`'s calls reach the
-listener through the egress proxy, whose address says nothing of the run, and `/google/`'s,
-which come from the sandbox itself, aren't bound yet (#254).
-The installation tokens a sandbox already got are another matter:
+engine): the [GitHub gateway](#the-github-gateway), the git gateway, the pull request
+endpoints (`gh pr ready`, `create`, `edit`) and the agents' API endpoints `/anthropic/` and
+`/openai/` compare the request's source address (for a call the egress proxy relayed, the
+address it names, below) with that run's addresses on its networks (`docker inspect`, looked
+up once per run and forgotten when its sandbox exits) and answer `403` otherwise. A secret
+that leaks, to a research run on the open web say, gets another sandbox neither GitHub, a
+push, nor calls on the operator's Claude or OpenAI credential. Google's endpoints still check
+the secret alone (#254).
 
-- GitHub makes them valid for **one hour** from when they are minted, and the listener can't
-  shorten that. The broker hands out a cached token while it has more than 10 minutes left,
-  so a token a sandbox fetched stays valid for up to an hour, including after its run ended.
-- Tokens are cached per repository and permission set, and shared by that repository's runs
-  with the same permissions: a run may get the very token another run of the same repository
-  got before.
-- A token only reaches the run's repository, with the sandbox's permissions: it reads the
-  code, can't push (pushes go through the gateway, with the run's secret), and can write
-  issues (and discussions, for discussion runs) there. Onboarding, run analyses, reviews and
-  a repo's light modes only read issues.
+**No sandbox holds a GitHub token.** Its `GH_TOKEN`, `deckhand-token` and git credential
+helper hand out the run's secret, and every call to GitHub goes through the listener's GitHub
+gateway, which adds the token. In this document, "a sandbox's token" or "a run's token" is
+that token: what the gateway sends GitHub for the run's calls, never something the sandbox
+can read.
+
+- It is an installation token minted for the run's repository only, with its mode's
+  permissions (`listener/modes.mjs` `permissionsFor()`): it reads the code, can't push
+  (pushes go through the git gateway, with the run's secret), and can write issues (and
+  discussions, for discussion runs) there. Onboarding, run analyses, reviews and a repo's
+  light modes only read issues.
 - **No sandbox token writes pull requests** (`pull_requests: read`, work runs included), so
   no sandbox can review one: `pull_requests: write` would let a run approve any pull request
   of its repository as the App, its own included, or replace a review mode's request for
   changes (GitHub counts a reviewer's latest review). The listener opens a work run's pull
   requests and edits their title and body for it ([The default branch](#the-default-branch)).
   Comments on a pull request take `issues: write`.
+- Tokens are cached per repository and permission set, renewed 10 minutes before their
+  end, and shared by that repository's runs with the same permissions. GitHub makes them
+  valid for an hour, which the listener can't shorten, but none leaves the listener, so none
+  outlives its run in a sandbox: once the run ends, its secret gets nothing. Uninstalling the
+  App, or suspending its installation, revokes them at once.
 
-So what a run copied out (through an allowed host) can be used against its own repository,
-with those permissions, for up to an hour. Uninstalling the App, or suspending its
-installation, revokes its tokens at once.
+What a run prints doesn't publish one either way: the broker keeps the installation tokens
+the gateway used for each run, and the listener redacts them from the run's log (what the
+dashboard shows), the run analysis digest and its reply, as `[redacted]`, a defence in depth
+now that the sandbox never sees them. Anything shaped like a GitHub token (`ghs_`, `ghp_`,
+`gho_`, `ghu_`, `ghr_` followed by 36 characters or more, `github_pat_…`) is redacted too,
+wherever it came from: a token a restarted listener no longer lists, or one the agent found
+elsewhere.
 
-What a run prints doesn't publish them: the broker keeps the installation tokens it gave each
-run, and the listener redacts them from the run's log (what the dashboard shows), the run
-analysis digest and its reply, as `[redacted]`. Anything shaped like a GitHub token (`ghs_`,
-`ghp_`, `gho_`, `ghu_`, `ghr_` followed by 36 characters or more, `github_pat_…`) is redacted
-too, wherever it came from: a token a restarted listener no longer lists, or one the agent
-found elsewhere.
+### The GitHub gateway
+
+`listener/github-gateway.mjs`, on the broker's port. The egress proxy relays GitHub's hosts
+(`GITHUB_API`'s and `GITHUB_URL`'s, `listener/egress.mjs` `githubHosts()`) to it, as it relays
+the Antigravity CLI's: it decrypts their HTTPS with [Deckhand's CA](#https-and-deckhands-ca),
+which every run that reaches GitHub trusts, and sends each request to the listener as
+`/relay/<host>/<path>` instead of the host. REST, GraphQL, clones and fetches all go there;
+tools keep talking to `api.github.com` and `github.com` unchanged. A sandbox has no other way
+to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to them is refused
+(but for the two exceptions without a token, below).
+
+- **Its run**: the secret the call carries in place of a token (`token <secret>` from `gh`,
+  `Bearer`, or Basic with it as the password from git), checked as above. A call that
+  carries none (git's first request, a download with `curl`) is the run's whose sandbox has
+  its address; never its engine's, whose builds and containers don't get the secret (from
+  there, such a call gets `401`). The proxy names that address in an `X-Deckhand-Client` header, replacing any
+  the client sent (and drops one from every request it doesn't relay), and the listener believes it only from the proxy's own addresses: a
+  sandbox that sets it itself is judged by its own address. An unknown or finished run's
+  secret, or any other credential, gets `401`; another sandbox's address `403`; a research
+  run (`NO_TOKEN`) `403`, whatever it sends.
+- **Pushes** to GitHub's web host (`git-receive-pack`) are refused: they go to the git
+  gateway (`pushInsteadOf`), as before.
+- **Writes are redacted before GitHub gets them.** The body of every call but a read (`GET`,
+  `HEAD`) and a fetch's pack request goes through the same redaction as the run's reply and
+  log: the run's secret, the operator's credentials (`listener/secrets.mjs`
+  `operatorSecrets()`), the tokens used for the run and anything shaped like a GitHub token,
+  in each string of its JSON (so an escaped character can't split one), replaced in place so
+  the rest of the body goes on as it was sent, then as text (a body that isn't JSON; one
+  that isn't UTF-8, byte for byte). GraphQL is redacted that way too, its query and variables, inline literals
+  included, until #406 parses it. A redacted write still goes through, with `[redacted]` in
+  place of the secret, and the run's log says so (each call once, 20 at most). A comment,
+  an issue edit or a `gh api` write can't publish what the sandbox holds, a mount's content
+  that looks like the operator's key say, any more than its reply can. Refused instead of
+  read: a write over 16 MiB; a compressed one (`Content-Encoding` other than `identity`,
+  `415`), which couldn't be read; a read (`GET`, `HEAD`, `OPTIONS`) that carries a body
+  (`400`), which would go on unread (git and `gh` never send one); and a write whose URL (its
+  path or query, as sent or percent-decoded) holds one of those secrets: a path names what is
+  written, so it isn't rewritten.
+- **A review can't read its thread** other than from `TASK_DIGEST` ([Reviews](#reviews)):
+  for a review run, the gateway refuses issue and pull request comments, reviews and review
+  comments, the timeline and commit comments over REST, under `repos/<owner>/<repo>` or
+  `repositories/<id>` (whatever the case or the encoding of the path), the event feeds
+  (a repository's, a network's, a user's, an organization's, the public one: their comment and
+  review events carry the bodies), issue search (`in:comments` matches comment text, and its
+  text matches quote it), any GraphQL call that names `comments`, `reviews`,
+  `latestReviews`, `reviewThreads`, `timelineItems`, the `Comment` interface, a comment's or
+  review's type, their edit history or `search` (any name that holds "comment", "review",
+  "timeline", "contentedit", "search" or "textmatch", whatever its case) (read as text until #406 parses GraphQL, then per
+  field), and anything on the web host but git's fetches (its pages
+  show the comments). Other runs read them.
+- **On to GitHub** with the run's token (`token …` for the API, Basic with
+  `x-access-token` for git, as GitHub expects an App's), the sandbox's `Authorization` and
+  cookies dropped. The answer streams back as it comes, with the agents' endpoints' limits
+  (`listener/upstream.mjs`): a call cut off after 10 minutes without a byte either way, 16
+  calls in flight per run.
+- `*.githubusercontent.com` (raw files, release assets) stays a plain allowed host: it carries
+  no token.
+- **Two exceptions, neither with a token**, which reach GitHub's hosts through a tunnel
+  rather than the gateway, so what they get is anonymous (both accepted in pull request
+  #411):
+  - **A research run** (`NO_TOKEN`) isn't relayed: it gets no CA and nothing from the
+    gateway, and reads public GitHub (other projects' READMEs, issues, releases) as it did
+    before the gateway.
+  - **A run's [container engine](#container-engine)**: its builds and containers don't trust
+    the CA, so the proxy can't relay them, and refusing them would break builds that fetch
+    from GitHub (a release asset, `go mod`, an `npm` dependency). The engine holds neither
+    the secret nor, by its address, the gateway's token: a call from it without a secret
+    gets `401`.
+
+  A sandbox can reach GitHub around the gateway through its engine, but only anonymously,
+  or with a credential it got elsewhere, which any other allowed host would take too.
 
 ### The Claude credential
 
@@ -469,11 +545,11 @@ description). The fork's code then runs with everything a fork's run is denied:
 - the run's **token and push rights**: it can push the run's own branch, workflow changes
   included with `allow_workflows`.
 
-Until the GitHub gateway (#404) relays GitHub's git and API traffic through the listener, the
-only guard is the sandbox's instructions (don't install, build or run a fork's pull request
-you weren't triggered from): the listener doesn't see a sandbox's fetches, and a GitHub App's
-`contents: read` can't be limited to the repository's own refs. The GitHub gateway (#404) is
-to refuse, in a run that isn't a fork's, fetches of a fork pull request's `refs/pull/<n>/head`
+The [GitHub gateway](#the-github-gateway) now relays GitHub's git and API traffic through the
+listener, but doesn't refuse a fork's code yet: the only guard is still the sandbox's
+instructions (don't install, build or run a fork's pull request you weren't triggered from),
+and a GitHub App's `contents: read` can't be limited to the repository's own refs. The
+gateway is to refuse, in a run that isn't a fork's, fetches of a fork pull request's `refs/pull/<n>/head`
 and of a fork's refs or objects, and API or archive downloads of a fork's head, saying why: a
 comment from an allowed user on the fork's pull request starts a fork's run, which fetches it
 as today. Pull requests from the repository's own branches stay allowed. The refusal can't tell
@@ -483,14 +559,14 @@ the agent to read such a pull request's code in a worktree under `/tmp`
 request instead. #409 tracks that enforcement, and that change to `prompts/sandbox.md`, until
 they land.
 
-Not every way goes through hosts the GitHub gateway (#404) is to relay. Archives
+Not every way goes through the hosts the GitHub gateway relays. Archives
 (`codeload.github.com`, where `github.com/<repo>/archive/…` and the API's `tarball` and
 `zipball` redirect) are refused by the egress proxy unless a grant adds that host. But
-`raw.githubusercontent.com`, a mandatory host the GitHub gateway is to leave alone, serves any
+`raw.githubusercontent.com`, a mandatory host the GitHub gateway leaves alone, serves any
 file of a public repository without a token, a fork's pull request's included
 (`/<owner>/<repo>/refs/pull/<n>/head/<path>`, or its commit, from the base repository or the
 fork): checked on a public repository's fork pull request. A private repository's raw files
-need a token, which a sandbox will no longer have once the GitHub gateway lands. For a public
+need a token, which a sandbox no longer has. For a public
 repository, the GitHub gateway alone won't close it: #409 tracks closing it too.
 
 Every run, a fork's or not, protects the issue's clone, kept for its next runs: setup and the
@@ -1036,9 +1112,11 @@ only). It widens nothing, so it needs no grant: a review is a light run with a r
   description, comments and reviews, and the issue it closes) from a file the listener writes
   (`TASK_DIGEST`), with only what users of `ALLOWED_USERS` and the repo's `users`, and the App
   itself, wrote. What anyone else wrote, another bot included, is replaced with a line saying
-  it was left out; an allowed user who wants it read quotes it in a comment of their own. Its
-  prompt tells it not to read the thread another way. That is an instruction, not a wall: its
-  token can read the comments, so it narrows what an outsider can put in front of it, no more.
+  it was left out; an allowed user who wants it read quotes it in a comment of their own. It
+  can't read the thread another way: the [GitHub gateway](#the-github-gateway) refuses a
+  review's calls for comments, reviews and review comments, REST and GraphQL alike, and the
+  web host's pages. What an outsider can still put in front of it is the pull request's own
+  description and diff, which it reviews.
 - **No loops**: each pull request's head commit is reviewed by itself once (`reviews.json`),
   and the App's review is a bot's `pull_request_review`, which starts nothing. Acting on a
   review is the maintainer's call, with a trigger comment, unless the repo sets `review.fix`
@@ -1208,7 +1286,7 @@ holds to any host, so it holds almost nothing:
 | ------------------------------ | --------------------------------------------------------------------------------------- |
 | Hosts                          | any public one (`*`); private addresses only for the mandatory hosts, not the grant's   |
 | The repository's code          | none: no clone, `/workspace` starts empty                                               |
-| GitHub token                   | none: `/token`, the git gateway and the pull request endpoints refuse the run           |
+| GitHub                         | public pages and API, anonymously; the GitHub and git gateways and `/pr/` refuse it     |
 | Other runs' secrets            | useless: a secret only works from its own run's sandbox ([Tokens](#tokens))             |
 | Input                          | the issue's title, description and last 50 comments, written by the listener (redacted) |
 | Output                         | its final message, posted by the listener as the reply; no screenshots folder           |
@@ -1282,10 +1360,12 @@ inspect`) and answers from that run's list. Only the proxy may ask: the listener
   `2002::/16`) are checked as that IPv4 address, so `[::ffff:a9fe:a9fe]` is the metadata
   service too.
 - The proxy keeps answers from the hosts you list in `cached_hosts`, and decrypts their
-  HTTPS to do so (see [The egress cache](#the-egress-cache)). It also decrypts the hosts that
-  carry the Antigravity CLI's token, for its runs only, and hands their requests to the
-  listener (see [The Antigravity CLI's login](#the-antigravity-clis-login)). Every other
-  `CONNECT` stays a tunnel the proxy can't read.
+  HTTPS to do so (see [The egress cache](#the-egress-cache)). It also decrypts GitHub's hosts
+  and those that carry the Antigravity CLI's token (for its runs only), and hands their
+  requests to the listener, naming the sandbox they came from (see
+  [The GitHub gateway](#the-github-gateway) and
+  [The Antigravity CLI's login](#the-antigravity-clis-login)). Every other `CONNECT` stays a
+  tunnel the proxy can't read.
 - The listener forgets a sandbox's address as soon as it sees the sandbox exit, before
   posting its reply: Docker may give the address to another sandbox, which must not get the
   finished run's hosts.
@@ -1358,38 +1438,49 @@ mandatory): `cached_hosts` alone opens nothing.
 #### HTTPS and Deckhand's CA
 
 HTTPS reaches the proxy as a `CONNECT` tunnel, which it can't read. For a host in
-`cached_hosts`, and only then, the proxy ends the client's TLS itself, with a certificate
-for that host signed by a CA of its own, and serves the requests inside through the cache
-above; what isn't served from it goes on to the host over TLS, which the proxy checks
+`cached_hosts` (and the relayed hosts: GitHub's, the Antigravity CLI's), and only then, the
+proxy ends the client's TLS itself, with a certificate for that host signed by a CA of its
+own, and serves the requests inside through the cache above (or hands them to the listener); what isn't served from it goes on to the host over TLS, which the proxy checks
 against Node's trust store. Everything else keeps the raw tunnel, and the client sees the
 real server's certificate.
 
 - **The CA** is made by the proxy on its first start (the `openssl` CLI, in its image),
   in its volume (`ca/` in the `egress-cache` volume), and kept across restarts: a new
   volume is a new CA, which the next runs get. It lasts a year, and the proxy makes a new
-  one a month before its end (and replaces one from before name constraints): sandboxes get
-  it at their next start, and runs going on then lose their cached and relayed hosts' HTTPS
-  (their certificates are the old CA's) until their next run. Its key (`ca.key`) never
-  leaves that volume; no sandbox, engine or listener mounts it. Its **name constraints** exclude GitHub
-  (`github.com`, `githubusercontent.com` and their subdomains) and the agents' providers
-  (`anthropic.com`, `openai.com`, `chatgpt.com`): a certificate it signs for them fails
-  verification, and the proxy never asks for one. Each host's certificate lasts 7 days, and is
-  made again 2 days before its end. It exists with the cache off too (`EGRESS_CACHE_MAX`
-  `0`): the Antigravity CLI's runs need it (see
-  [The Antigravity CLI's login](#the-antigravity-clis-login)).
-- **Trust in the sandbox**: when its repository's grant has `cached_hosts`, or its agent's
-  calls are relayed (the Antigravity CLI's), the listener
+  one a month before its end (and replaces one from before name constraints, or whose
+  constraints still exclude GitHub, below, on its next start): sandboxes get it at their
+  next start, and runs going on then lose their cached and relayed hosts' HTTPS (their
+  certificates are the old CA's), GitHub's included, until their next run. Its key
+  (`ca.key`) never leaves that volume; no sandbox, engine or listener mounts it. Its **name
+  constraints** exclude the agents' providers (`anthropic.com`, `openai.com`, `chatgpt.com`
+  and their subdomains): a certificate it signs for them fails verification, and the proxy
+  never asks for one. Each host's certificate lasts 7 days, and is made again 2 days before
+  its end. It exists with the cache off too (`EGRESS_CACHE_MAX` `0`): every run's GitHub
+  calls need it.
+- **Why GitHub is no longer excluded**: the CA must certify `github.com` and
+  `api.github.com` for the proxy to relay them to the [GitHub gateway](#the-github-gateway).
+  The exclusion kept a leaked CA key from opening live tokens; since the same change, no
+  sandbox's traffic to GitHub carries one, only the run's secret, which works from its own
+  sandbox, through the gateway, while the run lasts. A key that leaks lets its holder read
+  and change the GitHub traffic of the sandboxes running then (what they read and write, as
+  the proxy does), not act as them elsewhere. `githubusercontent.com` is certifiable too, but
+  neither relayed nor decrypted unless you cache it. The providers' names stay excluded: the
+  operator's credentials still go there, from the listener.
+- **Trust in the sandbox**: for every run that reaches GitHub (all but research runs), and
+  when its repository's grant has `cached_hosts` or its agent's calls are relayed (the
+  Antigravity CLI's), the listener
   asks the proxy for the CA's certificate (public, at `http://egress:3128/deckhand-ca.crt`)
   and puts it in the run's read-only inbox folder. The sandbox's entrypoint adds it to a
   bundle with the image's own roots, which `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`,
   `CURL_CA_BUNDLE`, `GIT_SSL_CAINFO`, `REQUESTS_CA_BUNDLE` and `PIP_CERT` point at, and to
   Chromium's store (`~/.pki/nssdb`, with `certutil`). A tool that reads none of them refuses
   cached hosts' certificates, and fails rather than going round the proxy. When the
-  listener can't get the CA (the proxy doesn't answer), the run has no cached hosts at all,
-  and says so in its log; an Antigravity CLI run stops.
-- **Never decrypted**, whatever `cached_hosts` says: the agent's hosts (but those relayed to
-  the listener, above) and GitHub's (the mandatory hosts below). Their traffic carries the
-  run's tokens, which the cache would refuse anyway. Nor a run's [container engine](#container-engine): its builds and
+  listener can't get the CA (the proxy doesn't answer), the run stops, saying so: it couldn't
+  reach GitHub. (A research run, whose GitHub isn't relayed, then has no cached hosts, and
+  an Antigravity CLI one on a plan stops.)
+- **Never cached**, whatever `cached_hosts` says: the mandatory hosts below, the agent's and
+  GitHub's (decrypted only to be relayed to the listener). Their traffic carries the run's
+  secret, which the cache would refuse anyway. Nor a run's [container engine](#container-engine): its builds and
   containers don't trust the CA, so its connections keep the tunnel, and only plain HTTP is
   cached for them; caching in the engine itself is `docker: { cache: true }`'s.
 - **An upstream certificate that doesn't verify** (expired, self-signed, for another name)
@@ -1408,10 +1499,10 @@ kept); the key never leaves the proxy's volume, which neither sandboxes nor engi
 reach, and the proxy runs read-only, without capabilities; and a sandbox
 trusting the CA gains nothing it could use: it reaches the same hosts as before, through
 the same proxy. Someone who gets the key (from the host, or the proxy's volume) can
-impersonate any other host to the sandboxes running then, for at most the CA's year, but
-not `github.com`, `githubusercontent.com`, Anthropic's or OpenAI's hosts (a GitHub Enterprise
-host isn't excluded, though never decrypted either, nor are Google's, which the Antigravity
-CLI's runs relay): treat the volume like the listener's data. Removing the volume (or `ca/`
+impersonate any other host to the sandboxes running then, for at most the CA's year, GitHub's
+included (whose traffic from a sandbox carries no token), but not Anthropic's or OpenAI's
+hosts (nor Google's, which the Antigravity CLI's runs relay, are excluded): treat the volume
+like the listener's data. Removing the volume (or `ca/`
 in it) and restarting the proxy makes a new CA.
 
 ### Where a sandbox's hosts come from
@@ -1445,13 +1536,13 @@ instructions and the dashboard's repository panel all name these files.
 
 **Mandatory hosts**, always allowed:
 
-| Host                      | For                                              |
-| ------------------------- | ------------------------------------------------ |
-| `api.anthropic.com`       | Claude Code's runs only: WebFetch's domain check |
-| `github.com`              | git over HTTPS (`GITHUB_URL`)                    |
-| `api.github.com`          | `gh` and the API (`GITHUB_API`)                  |
-| `*.githubusercontent.com` | raw files, release downloads, avatars            |
-| the listener              | the broker and the agent's API calls, directly   |
+| Host                      | For                                                                            |
+| ------------------------- | ------------------------------------------------------------------------------ |
+| `api.anthropic.com`       | Claude Code's runs only: WebFetch's domain check                               |
+| `github.com`              | git over HTTPS (`GITHUB_URL`), relayed to the [gateway](#the-github-gateway)   |
+| `api.github.com`          | `gh` and the API (`GITHUB_API`), relayed to the [gateway](#the-github-gateway) |
+| `*.githubusercontent.com` | raw files, release downloads, avatars                                          |
+| the listener              | the broker and the agent's API calls, directly                                 |
 
 That list was checked against Claude Code 2.1.300 (the pinned version) by reading the hosts
 in its binary. With `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` (set in the image) and the
@@ -1506,8 +1597,8 @@ it again when you change `AGY_VERSION`.
 - **A fork's pull request only mentioned** (in an issue, or a comment from elsewhere: "check
   out #7 and fix it") isn't seen as a fork's run: the run gets the repository's caches,
   read-write mounts and engine. The agent is told not to install, build or run such a pull
-  request's code (the sandbox's instructions), but nothing enforces it until the GitHub
-  gateway (#404), and a public repository's raw files are to bypass it even then (see
+  request's code (the sandbox's instructions), but nothing enforces it yet: #409 is to make
+  the GitHub gateway refuse it, and a public repository's raw files bypass that gateway (see
   [What a fork's code may reach](#what-a-forks-code-may-reach)); #409 tracks both. Ask for
   work on a fork's pull request from that pull request.
 - **Image builds** (a repo's `dockerfile`, with `allow_dockerfile`) and the **Claude Code

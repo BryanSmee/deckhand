@@ -59,6 +59,8 @@ const HOP = new Set([
   "transfer-encoding",
   "upgrade",
   "host",
+  // The sandbox's address, which the egress proxy adds to the calls it relays (proxy.mjs).
+  "x-deckhand-client",
 ]);
 
 export function forwarded(headers, drop = []) {
@@ -76,7 +78,8 @@ export function baseOf(upstream) {
 // provider can't be reached before anything was sent back. `answered(status, headers)`: the
 // provider's status and headers, 502 (no headers) when it can't be reached (what a fallback reads, agents/ providerError()).
 // `idleMs`: how long the call may go without a byte either way before it is cut off, on
-// `clock`'s timers: a stalled provider doesn't hold a listener every run shares.
+// `clock`'s timers: a stalled provider doesn't hold a listener every run shares. `body`: what
+// is sent in place of the request's own, already read (github-gateway.mjs's redacted writes).
 export function forward(
   req,
   res,
@@ -89,6 +92,7 @@ export function forward(
     answered = () => {},
     idleMs = IDLE_MS,
     clock = globalThis,
+    body,
   },
 ) {
   const send = target.protocol === "https:" ? httpsRequest : httpRequest;
@@ -134,7 +138,8 @@ export function forward(
       if (!res.writableFinished) out.destroy();
       resolve();
     });
-    req.pipe(out);
+    if (body === undefined) req.pipe(out);
+    else out.end(body);
   });
 }
 

@@ -94,8 +94,10 @@ line go on in the issue's current mode (`modes.json`).
 
 `/mode research` (repos granted `allow_research`) is a built-in light mode for the open web
 (`OPEN` in `modes.mjs`): any public host (`researchAccess()` in `access.mjs`), and nothing of
-the repo's. No clone (`SANDBOX_NO_CLONE`), no token (the broker's `NO_TOKEN`), the base
-image, no setup, caches, mounts, engine, CA or screenshots, and volumes of its own
+the repo's. No clone (`SANDBOX_NO_CLONE`), no GitHub token (the broker's `NO_TOKEN`,
+which the GitHub gateway refuses: GitHub's hosts aren't relayed for it, and it reads public
+GitHub anonymously through a tunnel), the base image, no setup, caches, mounts, engine, CA or
+screenshots, and volumes of its own
 (`<name>-research-…`). Its input is the issue's thread, which `preparation.mjs`
 (`threadDigest()`) writes into the run's inbox like an analysis's digest; its output, its
 reply (`prompts/research.md`).
@@ -337,9 +339,22 @@ changes, and its output as `raw` entries with the step's number; the lines of no
 ## Around the runs
 
 - **GitHub**: the operator's private App, created at `/setup` and stored in the data volume.
-  The listener calls GitHub with installation tokens; sandboxes get none up front and ask the
-  broker (`BROKER_PORT`, only on the runs' networks) for a fresh token limited to their
-  repo, with a secret that dies with the run. Those tokens only read the code: pushes go
+  The listener calls GitHub with installation tokens; sandboxes get none. A sandbox holds a
+  secret that dies with the run (`broker.mjs`), which its `gh` and git hand out as their
+  token; the egress proxy decrypts its calls to GitHub's hosts (with Deckhand's CA, which
+  every run but research trusts) and relays them to the GitHub gateway (`github-gateway.mjs`,
+  on `BROKER_PORT`, only on the runs' networks), with the address of the sandbox they came
+  from, which the listener believes from the proxy alone. The gateway finds the run by its
+  secret (bound to that address) or, without one, by its sandbox's address (never its
+  engine's); refuses finished, foreign,
+  research and push calls and a review's reads of its thread; redacts every write's body
+  (`redact()`, the run's and operator's secrets) and notes it in the run's log; and sends the
+  call on with a token limited to the run's repo and mode (`permissionsFor()`), streaming the
+  answer back (`upstream.mjs` `forward()`). The CA certifies GitHub for this
+  (`proxy/authority.mjs` `EXCLUDED` keeps only the agents' providers): no sandbox's GitHub
+  traffic carries a token any more, so a leaked CA key opens none, and a CA from before,
+  whose name constraints excluded GitHub, is made again on the proxy's next start. Those
+  tokens only read the code: pushes go
   through the git gateway on the same port, which only lets through the run's own branches
   (and, for a repository granted `allow_workflows`, workflow files that only read and name no
   secret, checked against a mirror of the repository in the data volume),
@@ -770,7 +785,7 @@ tests fake it.
 | `http.mjs`, `deliveries.mjs`                                      | The public server: webhook deliveries, the dashboard and its API, `/status`, screenshots; the places for unverified bodies.                                                                                                                          |
 | `redeliveries.mjs`                                                | Deliveries GitHub couldn't hand over, found in the App's delivery list and redelivered once (`redeliveries.json`).                                                                                                                                   |
 | `sync.mjs`                                                        | The last catch-up with GitHub (redeliveries, pull requests, conflicts), for `api/state`.                                                                                                                                                             |
-| `broker-http.mjs`                                                 | The broker's server, on the runs' networks: egress answers, tokens, git, ready for review, the agents' API calls.                                                                                                                                    |
+| `broker-http.mjs`                                                 | The broker's server, on the runs' networks: egress answers, GitHub, git, ready for review, the agents' API calls; the sandbox the proxy names.                                                                                                       |
 | `status.mjs`                                                      | `/status`: running runs, reaction updates in flight (`track()`), preview hooks; whether the listener is idle.                                                                                                                                        |
 | `tasks.mjs`                                                       | One queue per issue: admission (`admit()`, `resume()`, open questions), the pause, delivery to a running session.                                                                                                                                    |
 | `task-modes.mjs`                                                  | Which mode a queued comment runs in: trigger and `/mode` lines, brainstorms, the issue's current mode.                                                                                                                                               |
@@ -796,13 +811,14 @@ tests fake it.
 | `repo-check.mjs`                                                  | The checks a dashboard action makes on a repo and user before acting as a comment would.                                                                                                                                                             |
 | `grants.mjs`, `egress.mjs`, `subnets.mjs`                         | The operator's grants (hosts, mounts, limits), the egress policy and the proxy's CA; the runs' subnets.                                                                                                                                              |
 | `github-app.mjs`, `github.mjs`                                    | The App's tokens and calls; `createGitHub()`, `getJson`, `paginate`, `graphql` and the stores' lookups on top.                                                                                                                                       |
-| `broker.mjs`, `git-gateway.mjs`                                   | The sandboxes' token broker, for each run's own sandbox only; their pushes, to the run's own branches only.                                                                                                                                          |
+| `broker.mjs`, `git-gateway.mjs`                                   | The runs' secrets, each for its own sandbox only; their pushes, to the run's own branches only.                                                                                                                                                      |
+| `github-gateway.mjs`                                              | The sandboxes' GitHub calls, relayed by the egress proxy: the run's token in place of its secret, writes redacted, a review's thread reads refused.                                                                                                  |
 | `git-mirror.mjs`, `workflow-check.mjs`                            | The git gateway's mirrors of the repositories granted `allow_workflows`, and the checks on the workflow files their pushes change (a strict YAML subset).                                                                                            |
 | `pr-ready.mjs`                                                    | The sandboxes' pull requests opened, edited, and marked ready for review or back to draft (`gh pr create`, `edit`, `ready`).                                                                                                                         |
 | `anthropic.mjs`, `openai.mjs`, `upstream.mjs`                     | The sandboxes' Claude and OpenAI API calls, with the operator's credential; what both endpoints share (`createApiProxy()`).                                                                                                                          |
 | `chatgpt.mjs`                                                     | A ChatGPT plan's login for Codex, held and refreshed by the listener alone.                                                                                                                                                                          |
 | `google.mjs`, `antigravity-login.mjs`                             | The Antigravity CLI's calls (`/google/` with `GEMINI_API_KEY`, or `/relay/` from the egress proxy with the plan's access token); its Google AI plan login, held by the listener and refreshed by `agy` in a container of its own.                    |
-| `secrets.mjs`, `redact.mjs`                                       | The operator's secrets and the runs' GitHub tokens, redacted from replies and logs (whole, parts of 16 characters or more, GitHub token shapes).                                                                                                     |
+| `secrets.mjs`, `redact.mjs`                                       | The operator's secrets and the runs' GitHub tokens, redacted from replies, logs and GitHub writes (whole, parts of 16 characters or more, GitHub token shapes).                                                                                      |
 | `setup.mjs`, `auth.mjs`                                           | `/setup` (creating the App) and signing in with GitHub.                                                                                                                                                                                              |
 | `docker.mjs`, `runner/`                                           | The docker CLI and its shared arguments (labels, hardening, limits); the Docker runner (`runner/docker.mjs`), composed of `inbox.mjs`, `networks.mjs`, `volumes.mjs` (container engines, `engine.mjs`, and their storage) and `gc.mjs` (`relink()`). |
 | `images.mjs`, `checkout.mjs`                                      | Repo images, the agent's install, caches; checkouts.                                                                                                                                                                                                 |

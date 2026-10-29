@@ -1,7 +1,7 @@
 #!/bin/bash
 # Calls the listener's broker (../listener/broker.mjs) as this run: deckhand-broker <path>
-# [curl options…] prints its answer and exits with curl's status. deckhand-token and the gh
-# wrapper go through it.
+# [curl options…] prints its answer and exits with curl's status. The gh wrapper's pull request
+# commands go through it.
 set -euo pipefail
 : "${DECKHAND_BROKER_URL:?not a Deckhand run: no broker}"
 : "${DECKHAND_RUN_SECRET:?not a Deckhand run: no run secret}"

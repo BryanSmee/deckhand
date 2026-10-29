@@ -151,8 +151,11 @@ case "$1" in
     printf '%s\n' "$@" > "$dir/run-args.part" && mv "$dir/run-args.part" "$dir/run-args"
     setsid bash -c '
       nap() { [ -n "${never-}" ] || exec {never}<> <(:); read -r -t 0.05 -u "$never" _ || :; }
-      curl -fsS -H "Authorization: Bearer $DECKHAND_RUN_SECRET" "$DECKHAND_BROKER_URL/token" \
-        > "$dir/broker-answer"
+      # A GitHub call as the egress proxy relays it (/relay/<the API'"'"'s host>/<path>), with the
+      # run'"'"'s secret as gh sends it: the listener'"'"'s settings are in this environment too.
+      api=${GITHUB_API#*://}
+      curl -fsS -H "Authorization: token $DECKHAND_RUN_SECRET" \
+        "$DECKHAND_BROKER_URL/relay/${api%%[:/]*}/repos/org/repo" > "$dir/broker-answer"
       # What the egress proxy would ask about this sandbox'"'"'s connections, "host answer"
       # lines: one curl for them all (the tests run many sandboxes, each process counts).
       hosts=(api.anthropic.com github.com objects.githubusercontent.com evil.example

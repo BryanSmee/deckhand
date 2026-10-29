@@ -58,7 +58,8 @@ export function createPreparation(ctx) {
     live.hosts = access.hosts;
     live.trusted = access.trusted;
     live.uncached = mandatoryHosts(config, agent);
-    const { ca, cached } = await egressCache(access.grant, ctx.egressCa, note, agent, config);
+    // Its GitHub calls are relayed through the proxy: it trusts the CA.
+    const { ca, cached } = await egressCache(access.grant, ctx.egressCa, note, agent, config, true);
     live.cached = cached;
     const digest = live.mode === "review" ? await reviewDigest(task, settings, note) : undefined;
     return {

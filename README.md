@@ -64,7 +64,8 @@ operator, across as many repositories as the App is installed on.
 ```
 GitHub ──webhook──▶ listener ──docker──▶ sandbox (one per issue, Claude Code inside)
                      │  ▲                   │
-                     │  └── token broker ◀──┤  short-lived token for that repo only
+                     │  └─ GitHub gateway ◀─┤  the run's secret, which the listener swaps
+                     │                      │  for a token for that repo only
                      │                      └──▶ egress proxy ──▶ allowed hosts only
                      └── dashboard
 ```
@@ -173,10 +174,12 @@ Out of the box, without any configuration:
   unless you say otherwise.
 - **Privileges:** containers run as `node` with `--cap-drop ALL`, `no-new-privileges`, and
   CPU, memory and pids limits (2 CPUs, `4g`, 2048 processes; `limits` in the grants folder).
-- **GitHub:** no long-lived token or SSH key. Each run asks the listener's token broker for
-  an installation token limited to its own repository, with a secret that dies with the
-  run. That token only reads the code: pushes go through the listener, which refuses the
-  default branch, where Deckhand reads its config.
+- **GitHub:** no token or SSH key in a sandbox. Its GitHub calls carry a secret that dies
+  with the run; the egress proxy relays them to the listener's GitHub gateway, which sends
+  them on with an installation token limited to the run's repository, redacts secrets from
+  what they write, and keeps a review from reading outsiders' comments. That token only
+  reads the code: pushes go through the listener, which refuses the default branch, where
+  Deckhand reads its config.
 
 ## Security model
 
