@@ -700,9 +700,11 @@ const HIGH_ONE = "- **high** `a.mjs:1`: a hole.\n\nRating: 4/10\nVerdict: reques
 const CLEAN = "- **low** `c.mjs:3`: a typo.\n\nRating: 9/10\nVerdict: approve";
 
 // Its pull request turned ready at sha-1: the first review was queued.
-async function loopSetup(t, yaml = "review:\n  on: ready\n  fix: 2\n") {
+// `during(path)`: called on each GitHub call, while the listener decides what follows a run.
+async function loopSetup(t, yaml = "review:\n  on: ready\n  fix: 2\n", { during } = {}) {
   let head = "sha-1";
   const github = async (repo, method, path) => {
+    during?.(path);
     if (path === "/repos/org/repo/issues/12") return Response.json({ labels: [] });
     if (path === "/repos/org/repo/pulls/5")
       return Response.json({
@@ -711,7 +713,7 @@ async function loopSetup(t, yaml = "review:\n  on: ready\n  fix: 2\n") {
       });
     return new Response("{}", { status: 404 });
   };
-  const s = setup(t, yaml, { github });
+  const s = setup(t, yaml, { github, path: join(tempDir(t), "reviews.json") });
   await s.reviews.consider("pull_request", delivery("ready_for_review", posted().pr));
   const run = { repo: "org/repo", number: 5, base: "trunk", settings: s.read.settings, auto: true };
   // A review posted at the current head, then its fix run pushing `next`.
@@ -724,7 +726,7 @@ async function loopSetup(t, yaml = "review:\n  on: ready\n  fix: 2\n") {
     head = next ?? head;
     return s.reviews.fixed({ repo: "org/repo", number: 5, base: "trunk", status });
   };
-  const loop = (step) => reviewLoop(s.reviews.entry("org/repo", 5), step);
+  const loop = (step, options) => reviewLoop(s.reviews.entry("org/repo", 5), step, options);
   return { ...s, review, fixed, loop };
 }
 
@@ -817,4 +819,80 @@ test("review loop: waiting for checks, and entries from before the rounds", () =
     rounds: 0,
     history: [],
   });
+});
+
+test("review loop: fix: true without merge, its one fix run unreviewed by design", async (t) => {
+  const s = await loopSetup(t, "review:\n  on: ready\n  fix: true\n");
+  assert.equal((await s.review(HIGH_ONE)).reason, "review-fix");
+  assert.equal(await s.fixed("sha-2"), null);
+  // Nothing reviewed what it pushed: the first review's findings aren't said to be left.
+  assert.deepEqual([s.loop().loop, s.loop().round, s.loop().rounds], ["fixed", 1, 1]);
+  // Its fix run failed: they still are.
+  const failed = await loopSetup(t, "review:\n  on: ready\n  fix: true\n");
+  await failed.review(HIGH_ONE);
+  await failed.fixed("sha-2", "error");
+  assert.equal(failed.loop().loop, "stopped");
+});
+
+test("review loop: in review while the listener decides what follows a run", async (t) => {
+  const seen = [];
+  let s;
+  // The loop's last run over: what the dashboard sees during the GitHub calls after it.
+  const during = () => {
+    const run = seen.at(-1)?.after;
+    if (run) seen.at(-1).loops.push(s.loop(null, { settling: run }).loop);
+  };
+  s = await loopSetup(t, undefined, { during });
+  assert.equal(s.reviews.entry("org/repo", 5).next, "review");
+  seen.push({ after: "review", loops: [] });
+  await s.review(HIGH_ONE);
+  assert.equal(s.reviews.entry("org/repo", 5).next, "review-fix");
+  seen.push({ after: "review-fix", loops: [] });
+  await s.fixed("sha-2");
+  assert.equal(s.reviews.entry("org/repo", 5).next, "review");
+  // A clean review: nothing to ask GitHub, decided at once.
+  await s.review(CLEAN);
+  assert.deepEqual(
+    seen.map((x) => [x.after, [...new Set(x.loops)]]),
+    [
+      ["review", ["reviewing"]],
+      ["review-fix", ["fixing"]],
+    ],
+  );
+  // Decided: the loop's end, whatever the last run was.
+  assert.equal(s.reviews.entry("org/repo", 5).next, undefined);
+  assert.equal(s.loop(null, { settling: "review" }).loop, "clean");
+  // A step on its way only counts after a run of that step: not after a failed or other run.
+  const pending = { ...s.reviews.entry("org/repo", 5), next: "review-fix" };
+  assert.equal(reviewLoop(pending, null, { settling: "review" }).loop, "clean");
+  assert.equal(reviewLoop(pending).loop, "clean");
+});
+
+test("review loop: a listener stopped before it decided forgets the step on its way", async (t) => {
+  const s = await loopSetup(t);
+  await s.review(HIGH_ONE);
+  assert.equal(s.reviews.entry("org/repo", 5).next, "review-fix");
+  const again = setup(t, undefined, { path: s.path });
+  assert.equal(again.reviews.entry("org/repo", 5).next, undefined);
+  assert.equal(again.reviews.entry("org/repo", 5).fixes, 1);
+});
+
+test("remember: the entry it updates stays, however old, with what it counted", async (t) => {
+  const path = join(tempDir(t), "reviews.json");
+  // Over 90 days before the fake clock (1_800_000_000_000).
+  writeFileSync(
+    path,
+    JSON.stringify({
+      "org/repo#pr-5": { head: "sha-1", at: 1, fixes: 2, fixedAt: 1 },
+      "org/repo#pr-6": { head: "sha-6", at: 1 },
+    }),
+  );
+  const { reviews } = setup(t, "review:\n  on: ready\n  fix: 3\n", { path });
+  await reviews.settle(
+    { repo: "org/repo", number: 5, base: "trunk", settings: null, auto: true },
+    posted(CLEAN),
+  );
+  assert.equal(reviews.entry("org/repo", 5).fixes, 2);
+  // Another old one is forgotten.
+  assert.equal(reviews.entry("org/repo", 6), null);
 });

@@ -3614,6 +3614,86 @@ mounts:
     assert.equal(kept["org/repo#5"].runId, "org-repo-5-1000");
   });
 
+  test("api/state: a task's pull request in its fix loop has its review, in review between runs", async (t) => {
+    const { port, send, listener } = await listen(t, {}, (dir, github) => {
+      mkdirSync(join(dir, "logs"));
+      // #12's fix run is over; the auto-merge of its pull request #13 waits for checks.
+      writeFileSync(
+        join(dir, "logs", "org-repo-12-1000.log"),
+        [
+          {
+            type: "listener",
+            key: "org/repo#12",
+            repo: "org/repo",
+            taskMode: "work",
+            reason: "review-fix",
+            startedAt: 1000,
+          },
+          { type: "result", result: "Fixed.", duration_ms: 6000 },
+        ]
+          .map((l) => JSON.stringify(l))
+          .join("\n") + "\n",
+      );
+      const url = "https://github.com/org/repo/pull/13";
+      writeFileSync(
+        join(dir, "pulls.json"),
+        JSON.stringify({ "org/repo#12": { number: 13, url, state: "ready", readyAt: 1 } }),
+      );
+      const counts = { critical: 0, high: 1, medium: 0, low: 0 };
+      const round = (n, blocking) => ({
+        round: n,
+        at: Date.now(),
+        head: `sha-${n}`,
+        counts,
+        blocking,
+      });
+      writeFileSync(
+        join(dir, "reviews.json"),
+        JSON.stringify({
+          "org/repo#pr-13": {
+            head: "sha-1",
+            at: Date.now(),
+            fixes: 1,
+            reviewedFixes: 1,
+            fixRounds: 3,
+            rounds: [round(0, 1), round(1, 0)],
+            waiting: { sha: "sha-1", since: Date.now() },
+          },
+        }),
+      );
+      return { DEBOUNCE_MS: "60000", GITHUB_URL: github.url };
+    });
+    const base = `http://127.0.0.1:${port}`;
+    const get = (path, cookie) =>
+      fetch(base + path, { redirect: "manual", headers: cookie ? { cookie } : {} });
+    const login = await get("/auth/login");
+    const to = new URL(login.headers.get("location"));
+    const state = login.headers.getSetCookie()[0].split(";")[0];
+    const back = await get(`/auth/callback?code=c&state=${to.searchParams.get("state")}`, state);
+    const session = back.headers
+      .getSetCookie()
+      .find((c) => c.startsWith("deckhand_session="))
+      .split(";")[0];
+    const task = async () =>
+      (await (await get("/api/state", session)).json()).tasks.find((x) => x.key === "org/repo#12");
+    const waiting = await task();
+    assert.equal(waiting.state, "in-review");
+    assert.deepEqual(
+      [waiting.review.loop, waiting.review.round, waiting.review.rounds],
+      ["checks", 1, 3],
+    );
+    assert.deepEqual(
+      waiting.review.history.map((r) => r.blocking),
+      [1, 0],
+    );
+    // A maintainer's comment queued meanwhile: queued, the loop still on the task.
+    const c = comment("alice");
+    await send({ ...c, issue: { number: 12 }, comment: { ...c.comment, id: 112 } });
+    await listener.until("org/repo#12: queued (work");
+    const queued = await task();
+    assert.deepEqual([queued.state, queued.review.loop], ["queued", "checks"]);
+  });
+
   test("Run order: a queued task moved first has position 1, in order.json", async (t) => {
     const { dir, port, send, listener } = await listen(t, {}, (dir, github) => {
       // A key whose comments a crash lost (queue.json is only written at a stop): dropped at start.

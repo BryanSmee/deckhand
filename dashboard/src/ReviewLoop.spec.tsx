@@ -56,6 +56,8 @@ test("a loop's lines: its round while it goes on, what it left once it ended blo
   );
   expect(findingsLeft({ review: loop({ loop: "clean" }) })).toBeNull();
   expect(findingsLeft({ review: loop({ loop: "fixing" }) })).toBeNull();
+  // Its one fix run unreviewed by design (`review.fix: true`): nothing said to be left.
+  expect(findingsLeft({ review: loop({ loop: "fixed", round: 1, history: first }) })).toBeNull();
   expect(roundCounts(HISTORY[0])).toBe("1 critical · 3 high · 1 low");
   expect(roundCounts(round(3, {}, 0))).toBe("no findings");
   expect(HISTORY.map((_, i) => noProgress(HISTORY, i))).toEqual([false, false, true]);

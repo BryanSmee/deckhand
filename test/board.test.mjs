@@ -541,3 +541,28 @@ test("a pull request in its fix loop: in review between its runs, its round on t
   const plain = board({ runs: [run("acme/api#7", 1)], queued: [], brainstorms: [] });
   assert.equal(plain[0].review, undefined);
 });
+
+test("in review: a maintainer's comment queued meanwhile stays queued; a loop run over, in review", () => {
+  const pr = { number: 5, state: "ready" };
+  const history = [{ round: 0, at: 1, head: "a", counts: { high: 1 }, blocking: 1 }];
+  const entry = { head: "a", at: 1, fixes: 1, fixRounds: 3, rounds: history };
+  const tasks = board({
+    runs: [
+      run("acme/api#1", 30, { reason: "review" }),
+      // Its fix run over, the listener still deciding: in review, fixing.
+      run("acme/api#2", 20, { reason: "review-fix" }),
+      // A fix run that failed: its step isn't on its way.
+      run("acme/api#3", 10, { reason: "review-fix", status: "error" }),
+    ],
+    // Auto-merge waits for checks on #1's pull request; a maintainer commented meanwhile.
+    queued: [{ key: "acme/api#1", kind: "issue", repo: "acme/api", reason: null, position: 1 }],
+    brainstorms: [],
+    pr: () => pr,
+    reviewed: () => ({ ...entry, waiting: { sha: "a" }, next: "review-fix" }),
+  });
+  const of = (key) => tasks.find((t) => t.key === key);
+  assert.deepEqual([of("acme/api#1").state, of("acme/api#1").position], ["queued", 1]);
+  assert.equal(of("acme/api#1").review.loop, "checks");
+  assert.deepEqual([of("acme/api#2").state, of("acme/api#2").review.loop], ["in-review", "fixing"]);
+  assert.equal(of("acme/api#3").state, "error");
+});

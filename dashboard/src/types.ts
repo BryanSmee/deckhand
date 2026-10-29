@@ -197,8 +197,10 @@ export interface Task {
 
 // Where a pull request's review-and-fix loop is: a review or fix run of it queued or running,
 // the auto-merge waiting for checks, or how it ended (clean; rounds-out: the review after the
-// last fix run still blocks; stopped: it blocks, and no fix run follows).
-export type LoopState = "reviewing" | "fixing" | "checks" | "clean" | "rounds-out" | "stopped";
+// last fix run still blocks; fixed: by design nothing reviewed its one fix run, `review.fix:
+// true` without `merge`; stopped: it blocks, and no fix run follows).
+export type LoopState =
+  "reviewing" | "fixing" | "checks" | "clean" | "rounds-out" | "fixed" | "stopped";
 
 export interface ReviewLoop {
   loop: LoopState;

@@ -24,6 +24,7 @@ const ENDS: Record<string, string> = {
   checks: "Waiting for checks",
   clean: "Nothing blocking",
   "rounds-out": "Fix rounds ran out",
+  fixed: "Fixed, not reviewed again",
   stopped: "Stopped",
 };
 

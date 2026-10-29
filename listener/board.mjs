@@ -10,9 +10,9 @@
 //   queued          comments wait for a run (a free slot, or the running one to finish);
 //                   `position`: its place in the run order while it waits for a slot
 //   in-review       its pull request is in the automatic review-and-fix loop, between its
-//                   runs: the next review or fix run queued, or the auto-merge waiting for
-//                   checks (`review`, reviews.mjs reviewLoop()); while one runs, the task has
-//                   that run's state, and its `review` says the round
+//                   runs: the next review or fix run queued or being decided, or the
+//                   auto-merge waiting for checks (`review`, reviews.mjs reviewLoop()); while
+//                   one runs, the task has that run's state, and its `review` says the round
 //   waiting         a comment waits for other issues to be done ("/after #12", waits.mjs)
 //                   (needs-input once they are, while its open questions aren't answered)
 //   brainstorm      a brainstorm waits for the maintainer's next comment
@@ -251,17 +251,23 @@ function settle(t, q, b, w, input) {
 
 // The loop's states, between two of its runs: the task is in review, not queued or done.
 const LOOPING = ["reviewing", "fixing", "checks"];
+// The reasons of the loop's own runs (reviews.mjs).
+const STEPS = ["review", "review-fix"];
 
 // The fix loop of the task's pull request `p` (reviews.mjs reviewLoop()) as its `review`,
-// from the reason of its run going or queued (`q`); `in-review` between the loop's runs.
+// from the reason of its run going or queued (`q`), or, its last run one of the loop's and
+// over, the step the listener said is on its way. `in-review` between the loop's runs: done,
+// or queued for the loop's next run; a maintainer's comment queued meanwhile stays queued.
 function inReview(t, q, p, reviewed) {
   if (!p) return;
   const last = t.runs[0];
   const step = last?.status === "running" ? last.reason : q?.reason;
-  const review = reviewLoop(reviewed(t.repo, p.number), step ?? null);
+  const settling = last?.status === "ok" && STEPS.includes(last.reason) ? last.reason : null;
+  const review = reviewLoop(reviewed(t.repo, p.number), step ?? null, { settling });
   if (!review) return;
   t.review = review;
-  if (LOOPING.includes(review.loop) && ["queued", "done"].includes(t.state)) {
+  if (!LOOPING.includes(review.loop)) return;
+  if (t.state === "done" || (t.state === "queued" && STEPS.includes(q?.reason))) {
     t.state = "in-review";
   }
 }

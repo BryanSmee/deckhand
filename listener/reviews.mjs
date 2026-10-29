@@ -698,12 +698,19 @@ const ROUNDS_KEPT = 20;
 //   checks             the auto-merge waits for the reviewed commit's Actions runs
 //   clean              the last review had nothing above the tolerance
 //   rounds-out         the review after the last fix run `review.fix` allows still blocks
+//   fixed              a fix run followed the last review, and by design nothing reviews it
+//                      (`review.fix: true` without `merge`): what that review found isn't
+//                      known to be left
 //   stopped            it still blocks, and no more fix run comes: one ended badly or pushed
 //                      nothing, a policy refused it, the task was busy or waits for input
+// `settling`: the reason of the task's last run when it was one of the loop's and is over:
+// while the listener decides what follows it, its `next` step is still that one (nextStep()),
+// and the loop is still there.
 // `round`: the fix runs started so far (0 for the first review), of `rounds` the repo allows;
 // `history`: each review's { round, at, head, counts, blocking }, oldest first.
-export function reviewLoop(entry, step = null) {
+export function reviewLoop(entry, step = null, { settling = null } = {}) {
   const history = entry?.rounds ?? [];
+  if (!step && settling && entry?.next === settling) step = settling;
   const looping = step === "review" || step === "review-fix";
   if (!history.length && !looping) return null;
   const fixes = fixesOf(entry);
@@ -714,6 +721,9 @@ export function reviewLoop(entry, step = null) {
   if (step === "review-fix") return { loop: "fixing", ...at };
   if (entry.waiting && !entry.mergeAt) return { loop: "checks", ...at };
   if (!last.blocking) return { loop: "clean", ...at };
+  if (entry.unreviewedFix === fixes && last.round < fixes) {
+    return { loop: "fixed", ...at, round: fixes };
+  }
   // The review of the last fix run is the last one: nothing more was started after it.
   const out = fixes >= rounds && last.round >= fixes;
   return { loop: out ? "rounds-out" : "stopped", ...at };
@@ -863,13 +873,20 @@ export function createReviews({
   sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
 }) {
   // "org/repo#pr-5" → { head, at, fixes, fixedAt, reviewedFixes, roundsOutAt, mergeAt,
-  // waiting, rounds, fixRounds } of its last automatic review, how many fix runs it had and
-  // when the last one was queued, how many of them had their review queued, the comment saying
-  // the rounds ran out, and its auto-merge (merged or refused), or the auto-merge waiting for
-  // its checks (decide()); each automatic review's counts and the fix runs allowed, for the
-  // dashboard (recordRound(), reviewLoop()). Entries from before the rounds have fixedAt and
+  // waiting, rounds, fixRounds, next, unreviewedFix } of its last automatic review, how many
+  // fix runs it had and when the last one was queued, how many of them had their review
+  // queued, the comment saying the rounds ran out, and its auto-merge (merged or refused), or
+  // the auto-merge waiting for its checks (decide()); each automatic review's counts and the
+  // fix runs allowed, the loop's step on its way and the fix run nothing reviews, for the
+  // dashboard (recordRound(), nextStep(), reviewLoop()). Entries from before the rounds have fixedAt and
   // rereviewAt (fixesOf()); from before the dashboard's, no `rounds`.
   const reviewed = persistentMap(path);
+  // A loop step said to be on its way (`next`, nextStep()) by a listener stopped before it
+  // decided: its run was lost with it, and a queued one says itself (board.mjs).
+  if ([...reviewed.values()].some((v) => v.next)) {
+    for (const [k, v] of reviewed) if (v.next) reviewed.set(k, { ...v, next: undefined });
+    reviewed.save();
+  }
 
   // A `pull_request` delivery: a review run, if the repo's `review.on` asks for one and this
   // head commit hasn't had one.
@@ -969,8 +986,18 @@ export function createReviews({
     // Deckhand's own pull request is its issue's task, like a comment on it (events.mjs).
     const issue = linkedIssue(pr, repo, config.bot);
     const queued = issue ? linkTo(item, issue) : item;
+    nextStep(taskKey(repo, prId(pr.number)), "review");
     await accept(queued);
     return queued;
+  }
+
+  // The loop's step on its way on pull request `key` (`next`: "review", "review-fix"), from
+  // when it is queued until what follows its run is decided (settle(), fixed()), which may take
+  // GitHub calls: the dashboard keeps it in review meanwhile (reviewLoop()). Null: decided.
+  function nextStep(key, step) {
+    const entry = reviewed.get(key);
+    if (!step && !entry?.next) return;
+    remember(key, entry?.head ?? null, { next: step ?? undefined });
   }
 
   function remember(key, head, fields = {}) {
@@ -1051,7 +1078,11 @@ export function createReviews({
     // Checked again: a comment may have come during the calls above.
     if (busy(task)) return skip(`#${issue} has a run going or queued`);
     // Before queuing: whatever happens next, never this round twice.
-    remember(key, reviewed.get(key)?.head ?? null, { fixes: round, fixedAt: now() });
+    remember(key, reviewed.get(key)?.head ?? null, {
+      fixes: round,
+      fixedAt: now(),
+      next: "review-fix",
+    });
     const of = rounds > 1 ? ` (${round} of ${rounds})` : "";
     log(`${key}: the review requests changes, starting a fix run${of}`);
     const item = {
@@ -1083,11 +1114,18 @@ export function createReviews({
   // comment saying why not (null); without, the comment when the rounds ran out (roundsOut()).
   async function settle(run, posted) {
     if (run.auto) recordRound(run, posted);
-    const { item, denied } = await startFix(run, posted);
-    if (item || !run.auto) return item;
-    const mode = await mergeMode(run.repo, run.base);
-    if (!mode) return roundsOut(run, posted);
-    return autoMerge(run, posted, denied, mode);
+    let item = null;
+    try {
+      const started = await startFix(run, posted);
+      item = started.item;
+      if (item || !run.auto) return item;
+      const mode = await mergeMode(run.repo, run.base);
+      if (!mode) return roundsOut(run, posted);
+      return autoMerge(run, posted, started.denied, mode);
+    } finally {
+      // Nothing more on its way, unless a fix run was queued (startFix() said so).
+      if (run.auto && !item) nextStep(taskKey(run.repo, prId(run.number)), null);
+    }
   }
 
   // An automatic review posted on pull request `number`: its round of the fix loop, kept in
@@ -1386,7 +1424,20 @@ export function createReviews({
   // `merge` reviews nothing after its one fix run, as before the rounds (issue #376). A fix that
   // failed or pushed nothing leaves the pull request to the maintainer: in auto-merge mode, a
   // comment says why it isn't merged.
-  async function fixed({ repo, number, base, status }) {
+  async function fixed(run) {
+    const key = taskKey(run.repo, prId(run.number));
+    let item = null;
+    try {
+      item = await reviewFix(run);
+      return item;
+    } finally {
+      // Its review queued says it is on its way (queueReview()); else the loop is over.
+      if (!item) nextStep(key, null);
+    }
+  }
+
+  // fixed()'s work: the review queued, or null.
+  async function reviewFix({ repo, number, base, status }) {
     const key = taskKey(repo, prId(number));
     const { settings, errors } = await repoSettings(repo, base);
     if (errors.length || !settings.review?.fix) return null;
@@ -1394,7 +1445,12 @@ export function createReviews({
     const fixes = fixesOf(entry);
     if (!fixes || reviewedFixesOf(entry) >= fixes || entry.mergeAt || entry.waiting) return null;
     const mode = await mergeMode(repo, base);
-    if (!mode && roundsOf(settings) < 2) return null;
+    // `fix: true` without `merge`: by design, nothing reviews what it pushed. Kept, so the
+    // dashboard doesn't take the review before it for what is left (reviewLoop()).
+    if (!mode && roundsOf(settings) < 2) {
+      if (status === "ok") remember(key, entry.head ?? null, { unreviewedFix: fixes });
+      return null;
+    }
     remember(key, entry.head ?? null, { reviewedFixes: fixes });
     const stop = async (why) => {
       if (!mode) {
