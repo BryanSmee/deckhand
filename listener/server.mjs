@@ -62,7 +62,7 @@ import { readRepoFile } from "./repo-config.mjs";
 import { createRepoSettings } from "./repo-settings.mjs";
 import { createRepoApi, createRepoList } from "./repos.mjs";
 import { createRestart } from "./restart.mjs";
-import { createReviews } from "./reviews.mjs";
+import { createReviews, stepsGoing } from "./reviews.mjs";
 import { loadRuns } from "./runlog.mjs";
 import { createDiscussionApi, fromKey } from "./discussions.mjs";
 import { createDismissals } from "./dismissals.mjs";
@@ -672,6 +672,8 @@ if (!ctx.app) log(`No GitHub App yet. Set it up at ${setup.link()}`);
 // left queued (comments for those runs are delivered to them).
 const restored = ctx.restoreRuns();
 ctx.loadQueue();
+// A fix loop's step whose run neither came back nor waits in the queue: no longer on its way.
+ctx.reviews.forgetSteps(stepsGoing(ctx.tasks));
 // queue.json is only written when the listener stops: after a crash, the keys of comments it
 // lost stay in order.json, and would rank a new comment there as placed.
 order.keep(ctx.queueOrder().map((t) => taskKey(t.repo, t.id)));

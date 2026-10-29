@@ -15,6 +15,7 @@ import {
   reviewCandidate,
   reviewEvent,
   reviewLoop,
+  stepsGoing,
 } from "../listener/reviews.mjs";
 import { tempDir, testConfig } from "./helpers.mjs";
 
@@ -834,13 +835,17 @@ test("review loop: fix: true without merge, its one fix run unreviewed by design
   assert.equal(failed.loop().loop, "stopped");
 });
 
+// The task's last run, over: one of `reason`, started at `startedAt` (by default, after its
+// step was queued).
+const ran = (reason, startedAt = Number.MAX_SAFE_INTEGER) => ({ reason, startedAt });
+
 test("review loop: in review while the listener decides what follows a run", async (t) => {
   const seen = [];
   let s;
   // The loop's last run over: what the dashboard sees during the GitHub calls after it.
   const during = () => {
     const run = seen.at(-1)?.after;
-    if (run) seen.at(-1).loops.push(s.loop(null, { settling: run }).loop);
+    if (run) seen.at(-1).loops.push(s.loop(null, { settling: ran(run) }).loop);
   };
   s = await loopSetup(t, undefined, { during });
   assert.equal(s.reviews.entry("org/repo", 5).next, "review");
@@ -861,18 +866,65 @@ test("review loop: in review while the listener decides what follows a run", asy
   );
   // Decided: the loop's end, whatever the last run was.
   assert.equal(s.reviews.entry("org/repo", 5).next, undefined);
-  assert.equal(s.loop(null, { settling: "review" }).loop, "clean");
+  assert.equal(s.loop(null, { settling: ran("review") }).loop, "clean");
   // A step on its way only counts after a run of that step: not after a failed or other run.
   const pending = { ...s.reviews.entry("org/repo", 5), next: "review-fix" };
-  assert.equal(reviewLoop(pending, null, { settling: "review" }).loop, "clean");
+  assert.equal(reviewLoop(pending, null, { settling: ran("review") }).loop, "clean");
   assert.equal(reviewLoop(pending).loop, "clean");
 });
 
-test("review loop: a listener stopped before it decided forgets the step on its way", async (t) => {
+test("review loop: a step queued and never run (cancelled) isn't taken for an earlier run's", async (t) => {
+  const s = await loopSetup(t);
+  await s.review(CLEAN);
+  const before = s.reviews.entry("org/repo", 5);
+  assert.equal(before.next, undefined);
+  // Ready again at a new head: a new review queued, then cancelled before it ran.
+  s.advance(60_000);
+  await s.reviews.consider(
+    "pull_request",
+    delivery("ready_for_review", {
+      ...posted().pr,
+      head: { sha: "sha-9", repo: { full_name: "org/repo" } },
+    }),
+  );
+  const entry = s.reviews.entry("org/repo", 5);
+  assert.equal(entry.next, "review");
+  // The task's last run is still the earlier review, started before this one was queued.
+  assert.equal(
+    reviewLoop(entry, null, { settling: ran("review", entry.nextAt - 60_000) }).loop,
+    "clean",
+  );
+  // Its own run, started after it was queued, over: still reviewing while it is decided.
+  assert.equal(
+    reviewLoop(entry, null, { settling: ran("review", entry.nextAt) }).loop,
+    "reviewing",
+  );
+});
+
+test("review loop: at start, a step whose run came back or waits stays; the others go", async (t) => {
   const s = await loopSetup(t);
   await s.review(HIGH_ONE);
   assert.equal(s.reviews.entry("org/repo", 5).next, "review-fix");
+  // Its fix run reattached after a listener update: kept, for the decision after it.
+  const fixRun = { reason: "review-fix", replyTo: 5, repo: "org/repo" };
+  const live = new Map([
+    ["org/repo#12", { repo: "Org/Repo", pending: [], running: true, live: { handled: [fixRun] } }],
+  ]);
   const again = setup(t, undefined, { path: s.path });
+  again.reviews.forgetSteps(stepsGoing(live));
+  assert.equal(again.reviews.entry("org/repo", 5).next, "review-fix");
+  // Queued: kept too.
+  const queued = new Map([
+    ["org/repo#12", { repo: "org/repo", pending: [fixRun], running: false }],
+  ]);
+  again.reviews.forgetSteps(stepsGoing(queued));
+  assert.equal(again.reviews.entry("org/repo", 5).next, "review-fix");
+  // Neither, or another pull request's, or a maintainer's comment: forgotten, its count kept.
+  const other = new Map([
+    ["org/repo#13", { repo: "org/repo", pending: [{ ...fixRun, replyTo: 6 }], running: false }],
+    ["org/repo#12", { repo: "org/repo", pending: [{ replyTo: 5, reason: null }], running: false }],
+  ]);
+  again.reviews.forgetSteps(stepsGoing(other));
   assert.equal(again.reviews.entry("org/repo", 5).next, undefined);
   assert.equal(again.reviews.entry("org/repo", 5).fixes, 1);
 });

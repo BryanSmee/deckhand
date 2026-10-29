@@ -539,10 +539,13 @@ is keyed by the pull request): `reviewing` or `fixing` while a review or fix run
 running, `checks` while the auto-merge is `waiting`, then `clean` (nothing blocking),
 `rounds-out` (the review after the last fix run still blocks), `fixed` (`fix: true` without
 `merge`: by design nothing reviews its one fix run, `unreviewedFix`) or `stopped` (it blocks,
-and no fix run follows). The step on its way is kept as `next` from when it is queued until
-`settle()` or `fixed()` decided what follows its run, GitHub calls included: while the task's
-last run is that step's and over, the loop is still there. A listener's start forgets `next`,
-whose run it lost. `api/state` sends it as the task's `review` ({ loop, round, rounds,
+and no fix run follows). The step on its way is kept as `next` from when it is queued
+(`nextAt`) until `settle()` or `fixed()` decided what follows its run, GitHub calls included:
+while the task's last run is that step's own (started after `nextAt`) and over, the loop is
+still there; an earlier run of the same kind isn't, when the step queued since never ran
+(cancelled, refused). At start, after the runs going and the queue are back, `forgetSteps()`
+drops the `next` of pull requests with no review or fix run reattached or queued
+(`stepsGoing()`): a listener stopped while it decided never will. `api/state` sends it as the task's `review` ({ loop, round, rounds,
 history }). Between the loop's runs (its next one queued, or the checks), the task's state is
 `in-review` instead of `queued` or `done`; a running run keeps its own. The dashboard lists it
 as running, not ready, until the loop ends: then a ready row whose loop ended blocking says

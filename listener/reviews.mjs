@@ -703,14 +703,17 @@ const ROUNDS_KEPT = 20;
 //                      known to be left
 //   stopped            it still blocks, and no more fix run comes: one ended badly or pushed
 //                      nothing, a policy refused it, the task was busy or waits for input
-// `settling`: the reason of the task's last run when it was one of the loop's and is over:
-// while the listener decides what follows it, its `next` step is still that one (nextStep()),
-// and the loop is still there.
+// `settling`: the task's last run ({ reason, startedAt }) when it was one of the loop's and is
+// over: while the listener decides what follows it, its `next` step is still that one
+// (nextStep()), and the loop is still there. Only the step's own run: one started after the
+// step was queued (`nextAt`), not an earlier run of the same kind when the step queued since
+// never ran (cancelled, refused).
 // `round`: the fix runs started so far (0 for the first review), of `rounds` the repo allows;
 // `history`: each review's { round, at, head, counts, blocking }, oldest first.
 export function reviewLoop(entry, step = null, { settling = null } = {}) {
   const history = entry?.rounds ?? [];
-  if (!step && settling && entry?.next === settling) step = settling;
+  const own = settling && settling.startedAt >= (entry?.nextAt ?? 0);
+  if (!step && own && entry?.next === settling.reason) step = settling.reason;
   const looping = step === "review" || step === "review-fix";
   if (!history.length && !looping) return null;
   const fixes = fixesOf(entry);
@@ -727,6 +730,20 @@ export function reviewLoop(entry, step = null, { settling = null } = {}) {
   // The review of the last fix run is the last one: nothing more was started after it.
   const out = fixes >= rounds && last.round >= fixes;
   return { loop: out ? "rounds-out" : "stopped", ...at };
+}
+
+// Which pull requests have a review or fix run of their loop running or queued, among `tasks`
+// (tasks.mjs, their `pending` items and their live run's `handled` ones) → going(repo, number),
+// for forgetSteps(). Both items reply on the pull request.
+export function stepsGoing(tasks) {
+  return (repo, number) =>
+    [...tasks.values()].some(
+      (t) =>
+        sameRepo(t.repo, repo) &&
+        [...(t.pending ?? []), ...(t.running ? (t.live?.handled ?? []) : [])].some(
+          (item) => ["review", "review-fix"].includes(item.reason) && item.replyTo === number,
+        ),
+    );
 }
 
 // How many fix runs a repo's settings allow per pull request (`review.fix`).
@@ -873,19 +890,29 @@ export function createReviews({
   sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
 }) {
   // "org/repo#pr-5" → { head, at, fixes, fixedAt, reviewedFixes, roundsOutAt, mergeAt,
-  // waiting, rounds, fixRounds, next, unreviewedFix } of its last automatic review, how many
-  // fix runs it had and when the last one was queued, how many of them had their review
-  // queued, the comment saying the rounds ran out, and its auto-merge (merged or refused), or
-  // the auto-merge waiting for its checks (decide()); each automatic review's counts and the
-  // fix runs allowed, the loop's step on its way and the fix run nothing reviews, for the
-  // dashboard (recordRound(), nextStep(), reviewLoop()). Entries from before the rounds have fixedAt and
-  // rereviewAt (fixesOf()); from before the dashboard's, no `rounds`.
+  // waiting, rounds, fixRounds, next, nextAt, unreviewedFix } of its last automatic review,
+  // how many fix runs it had and when the last one was queued, how many of them had their
+  // review queued, the comment saying the rounds ran out, and its auto-merge (merged or
+  // refused), or the auto-merge waiting for its checks (decide()); each automatic review's
+  // counts and the fix runs allowed, the loop's step on its way and when it was queued, and
+  // the fix run nothing reviews, for the dashboard (recordRound(), nextStep(), reviewLoop()).
+  // Entries from before the rounds have fixedAt and rereviewAt (fixesOf()); from before the
+  // dashboard's, no `rounds`.
   const reviewed = persistentMap(path);
-  // A loop step said to be on its way (`next`, nextStep()) by a listener stopped before it
-  // decided: its run was lost with it, and a queued one says itself (board.mjs).
-  if ([...reviewed.values()].some((v) => v.next)) {
-    for (const [k, v] of reviewed) if (v.next) reviewed.set(k, { ...v, next: undefined });
-    reviewed.save();
+
+  // At start, after the runs going and the queue are back (restart.mjs): the steps on their way
+  // (`next`) whose run nothing has any more, `going(repo, number)` saying which pull requests
+  // still have a review or fix run running or queued. A listener stopped while it decided what
+  // follows a run never will: the run it settles was over, and nothing settles it now.
+  function forgetSteps(going) {
+    let changed = false;
+    for (const [k, v] of reviewed) {
+      const at = parseKey(k);
+      if (!v.next || (at && going(at.repo, at.number))) continue;
+      reviewed.set(k, { ...v, next: undefined, nextAt: undefined });
+      changed = true;
+    }
+    if (changed) reviewed.save();
   }
 
   // A `pull_request` delivery: a review run, if the repo's `review.on` asks for one and this
@@ -997,7 +1024,10 @@ export function createReviews({
   function nextStep(key, step) {
     const entry = reviewed.get(key);
     if (!step && !entry?.next) return;
-    remember(key, entry?.head ?? null, { next: step ?? undefined });
+    remember(key, entry?.head ?? null, {
+      next: step ?? undefined,
+      nextAt: step ? now() : undefined,
+    });
   }
 
   function remember(key, head, fields = {}) {
@@ -1082,6 +1112,7 @@ export function createReviews({
       fixes: round,
       fixedAt: now(),
       next: "review-fix",
+      nextAt: now(),
     });
     const of = rounds > 1 ? ` (${round} of ${rounds})` : "";
     log(`${key}: the review requests changes, starting a fix run${of}`);
@@ -1602,5 +1633,6 @@ export function createReviews({
     // The entry of pull request `number` in `repo` (reviewLoop()), or null.
     entry: (repo, number) => reviewed.get(taskKey(repo, prId(number))) ?? null,
     respell,
+    forgetSteps,
   };
 }
