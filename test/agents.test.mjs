@@ -75,6 +75,10 @@ test("normalize: a cut tool result or command output keeps its call's id", () =>
   assert.deepEqual(claude.normalize(claudeCut), [
     { type: "toolOutput", error: false, text: claudeCut, id: "toolu_1" },
   ]);
+  // Without its role, or other fields first: the first tool_use_id in its first bytes.
+  const bare =
+    '{"type":"user","message":{"content":[{"tool_use_id":"t2","type":"tool_result","content":"aaa … (line cut)';
+  assert.equal(claude.normalize(bare)[0].id, "t2");
   const codexCut =
     '{"type":"item.completed","item":{"id":"item_4","type":"command_execution","command":"cat big" … (line cut)';
   assert.deepEqual(codex.normalize(codexCut), [
@@ -250,7 +254,7 @@ test("normalize: a Codex turn, from its recorded JSONL", () => {
       text: "cat: missing.txt: No such file or directory\n",
       id: "item_5",
     },
-    { type: "tool", name: "edit", detail: "add /workspace/hello.txt" },
+    { type: "tool", name: "edit", detail: "add /workspace/hello.txt", done: true },
     {
       type: "tool",
       name: "mcp__playwright__browser_navigate",
@@ -299,7 +303,7 @@ test("normalize: Codex's other items, failed edits and MCP errors, and what isn'
       }),
     ),
     [
-      { type: "tool", name: "edit", detail: "update a.md" },
+      { type: "tool", name: "edit", detail: "update a.md", done: true },
       { type: "toolOutput", error: true, text: "Not applied" },
     ],
   );
@@ -310,7 +314,7 @@ test("normalize: Codex's other items, failed edits and MCP errors, and what isn'
     [{ type: "toolOutput", error: true, text: "No browser" }],
   );
   assert.deepEqual(codex.normalize(completed({ type: "web_search", query: "codex hooks" })), [
-    { type: "tool", name: "web_search", detail: "codex hooks" },
+    { type: "tool", name: "web_search", detail: "codex hooks", done: true },
   ]);
   // A command with a quote in it, unwrapped from Codex's shell.
   assert.deepEqual(

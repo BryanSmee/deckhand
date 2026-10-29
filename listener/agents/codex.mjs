@@ -57,12 +57,17 @@ const COMPLETED = {
 };
 
 // A call that starts, and its output once it completes, with the item's id, which pairs them:
-// a call with an id has an output to come. Those that come whole (an edit, a search) have
-// none.
+// a call with an id has an output to come. A call that comes whole (an edit, a search) has
+// none, and is `done`: it isn't running.
 function itemEvents(table, item) {
   if (!item || !Object.hasOwn(table, item.type)) return [];
-  const id = Object.hasOwn(STARTED, item.type) ? idOf(item.id) : {};
-  return table[item.type](item).map((e) => ({ ...e, ...id }));
+  const paired = Object.hasOwn(STARTED, item.type);
+  const id = paired ? idOf(item.id) : {};
+  return table[item.type](item).map((e) => ({
+    ...e,
+    ...id,
+    ...(!paired && e.type === "tool" && { done: true }),
+  }));
 }
 
 // Codex's JSONL event types → Deckhand's events; other types give none (turn.completed,
@@ -109,7 +114,7 @@ export const codex = {
   efforts: EFFORTS,
   modelProblem: (model) =>
     CLAUDE_MODEL.test(model) ? `\`${model}\` is a Claude model, not one of Codex's` : null,
-  // One line of its output → Deckhand's events: started, text, tool{name, detail, id},
+  // One line of its output → Deckhand's events: started, text, tool{name, detail, id, done},
   // toolOutput{text, error, id}, result{ok, text, durationMs}.
   // A command's or MCP call's output cut at MAX_LINE: still its call's.
   normalize: normalizer(

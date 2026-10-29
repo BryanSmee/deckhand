@@ -418,9 +418,16 @@ function agentEntry(e, agent) {
     }
     case "text":
       return { kind: "text", text: e.text };
-    // `id`: what pairs an output with its call, for agents that give one.
+    // `id`: what pairs an output with its call, for agents that give one; `done`: a call that
+    // came whole, with no output to wait for.
     case "tool":
-      return { kind: "tool", name: e.name, text: clip(e.detail, 6, 600), ...idOf(e.id) };
+      return {
+        kind: "tool",
+        name: e.name,
+        text: clip(e.detail, 6, 600),
+        ...idOf(e.id),
+        ...(e.done && { done: true }),
+      };
     case "toolOutput":
       return { kind: "output", error: e.error, text: clip(e.text, 40, 4000), ...idOf(e.id) };
     case "result": {

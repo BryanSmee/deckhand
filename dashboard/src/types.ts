@@ -357,9 +357,9 @@ export type Entry =
   // Setup output; with `step`, the output of that image build step, without BuildKit's prefix.
   | { kind: "raw"; text: string; step?: number }
   // `id`: what pairs a call with its outputs, when the agent gives one (a call with one has an
-  // output to come); `at`: when it came (ms, listener/runlog.mjs reader()). Neither in logs
-  // from before them.
-  | { kind: "tool"; name: string; text: string; id?: string; at?: number }
+  // output to come); `done`: it came whole, with no output to wait for (Codex's edits);
+  // `at`: when it came (ms, listener/runlog.mjs reader()). None in logs from before them.
+  | { kind: "tool"; name: string; text: string; id?: string; done?: boolean; at?: number }
   | { kind: "output"; text: string; error: boolean; id?: string; at?: number }
   | { kind: "result"; status: "ok" | "needs-input" | "error"; text: string; minutes: number }
   // The entries after it, up to the next one, are this phase's; `at`: when it started (ms).

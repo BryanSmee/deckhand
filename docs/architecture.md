@@ -332,7 +332,8 @@ wouldn't fit under `RUN_LOG_MAX_MB` isn't written. Logs from before phases have 
 
 The dashboard times slow steps from `at` lines (`{"type":"listener","event":"at","at":…}`).
 The runner follows the sandbox with `docker logs --follow --timestamps` (`runner.follow()`
-hands each line Docker's time, without the stamp, after a restart too). Before an agent line
+hands each line Docker's time, without the stamp, after a restart too; Docker also stamps
+each 16 KiB part of a longer line inside it, moby/moby#37681, and those stamps go too). Before an agent line
 with a tool call or a tool result, `runs.mjs` writes an `at` line with that time, so the agent's
 line stays as it printed it; text lines get none. An image build's output is written by whole
 lines (`buildOutput()`), with an `at` line, at the listener's time, before each step's first
@@ -714,12 +715,14 @@ credential for, and its defaults), checked when its config is read (`repo-config
     (Claude Code), and the models it takes (`/opus/i`); without it, `/speed fast` runs at
     normal speed;
   - `normalize(line)`: a line of its output → Deckhand's own events, `started{model}`,
-    `text{text}`, `tool{name, detail, id}`, `toolOutput{text, error, id}` and
+    `text{text}`, `tool{name, detail, id, done}`, `toolOutput{text, error, id}` and
     `result{ok, text, durationMs}`, the last and the first with `fastMode` (`on`,
     `cooldown`, `off`) when the agent says it. `id` (optional) pairs a call with its outputs
     in the dashboard, and means an output will follow: until it does, the call shows as in
-    progress. So a call that may end with no output (Antigravity's steps, Codex's edits and
-    searches) gets none, and pairs by order; `agents/common.mjs` `idOf()`. A line that
+    progress. So a call that may end with no output gets none, and pairs by order
+    (`agents/common.mjs` `idOf()`); `done` marks one that came whole (Codex's edits and
+    searches), never in progress. A call with neither (Antigravity's steps) only shows as in
+    progress while it is the log's last line. A line that
     `follow()` cut at `MAX_LINE` no longer parses: `normalizer()`'s `cut(line)` may still
     read whose output it held (`cutOutput()`, the id near the line's start), so its call
     stops running.

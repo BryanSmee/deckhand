@@ -125,9 +125,5 @@ export const claude = {
   // One line of its output (stream-json) → Deckhand's events: started{model}, text,
   // tool{name, detail, id}, toolOutput{text, error, id}, result{ok, text, durationMs}.
   // A tool's result cut at MAX_LINE (a screenshot read, say): still its call's output.
-  normalize: normalizer(
-    EVENTS,
-    "type",
-    cutOutput(/^\{"type":"user","message":\{"role":"user","content":\[\{"tool_use_id":"([^"]+)"/),
-  ),
+  normalize: normalizer(EVENTS, "type", cutOutput(/^\{"type":"user".*?"tool_use_id":"([^"]+)"/)),
 };

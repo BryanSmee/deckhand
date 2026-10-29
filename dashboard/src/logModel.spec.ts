@@ -265,10 +265,18 @@ test("the call in progress: a timer after 10 s, live; unfinished once the run en
 });
 
 test("a call without an id and no output runs only while it is the log's last line", () => {
-  const edit: Entry = { kind: "tool", name: "edit", text: "a.md", at: 1000 };
-  expect(tools([edit], 30000, true)[0].time).toEqual({ seconds: 29, state: "running" });
-  const later: Entry[] = [edit, { kind: "text", text: "Done." }];
+  // Antigravity's: whether it has an output to come isn't known.
+  const command: Entry = { kind: "tool", name: "command", text: "false", at: 1000 };
+  expect(tools([command], 30000, true)[0].time).toEqual({ seconds: 29, state: "running" });
+  const later: Entry[] = [command, { kind: "text", text: "Done." }];
   expect(tools(later, 30000, true)[0].time).toBeNull();
+});
+
+test("a call that came whole never runs, even as the log's last line", () => {
+  // Codex's edits and searches: done as they come.
+  const edit: Entry = { kind: "tool", name: "edit", text: "a.md", done: true, at: 1000 };
+  expect(tools([edit], 30000, true)[0].time).toBeNull();
+  expect(tools([edit], 30000, false)[0].time).toBeNull();
 });
 
 test("a running build step: a timer from its first line, while its build runs", () => {

@@ -130,8 +130,8 @@ type ToolItem = Extract<Item, { kind: "tool" }>;
 // call before them;
 // an image build's steps once each, as the latest of their entries says, with their output,
 // and the cached ones next to each other as one.
-// `ended`: calls still without output when the agent's turn ended (a `result`): done, though
-// their output never made it to the log.
+// `ended`: calls that came whole (`done`), and those still without output when the agent's
+// turn ended (a `result`): done, though their output never made it to the log.
 interface Calls {
   byId: Map<string, ToolItem>;
   byEntry: Map<Entry, ToolItem>;
@@ -155,9 +155,10 @@ function itemsOf(phase: Phase, entries: Entry[], calls: Calls): Item[] {
       if (call) call.outputs.push(output);
       else out.push({ id: id(), kind: "output", ...output });
     } else if (e.kind === "tool") {
-      const { id: call, ...rest } = e;
+      const { id: call, done: _, ...rest } = e;
       const item: ToolItem = { id: id(), ...rest, ...(call && { call }), outputs: [], time: null };
       if (call) calls.byId.set(call, item);
+      if (e.done) calls.ended.add(item);
       calls.byEntry.set(e, item);
       out.push(item);
     } else if (e.kind === "text") out.push({ id: id(), kind: "say", text: e.text });
@@ -228,8 +229,8 @@ export function logSections(entries: Entry[], end: number, live: boolean): LogSe
   for (const s of list) {
     for (const item of s.items) {
       if (item.kind === "tool") {
-        // Without an id, a call with no output only runs while nothing came after it: some
-        // calls never have one (an edit, for some agents).
+        // Without an id, a call with no output only runs while nothing came after it: for some
+        // agents (Antigravity), whether a call has one to come isn't known.
         const pending =
           !item.outputs.length && !calls.ended.has(item) && (!!item.call || item === lastCall);
         const to = item.outputs.at(-1)?.at ?? null;
