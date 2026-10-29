@@ -330,11 +330,21 @@ the build), `work` at the agent's first event, `push` at a shell command that ru
 `work` again at the next other tool call, `wrap-up` after its final answer. A phase whose line
 wouldn't fit under `RUN_LOG_MAX_MB` isn't written. Logs from before phases have none, and read as one Work section.
 
+The dashboard times slow steps from `at` lines (`{"type":"listener","event":"at","at":…}`).
+The runner follows the sandbox with `docker logs --follow --timestamps` (`runner.follow()`
+hands each line Docker's time, without the stamp, after a restart too). Before an agent line
+with a tool call or a tool result, `runs.mjs` writes an `at` line with that time, so the agent's
+line stays as it printed it; text lines get none. An image build's output is written by whole
+lines (`buildOutput()`), with an `at` line, at the listener's time, before each step's first
+line. Logs from before `at` lines have none, and show no times.
+
 The log stream (`stream()`) reads lines in order (`reader()`): in the image phase, BuildKit's
 plain progress (`#12 [build 5/9] RUN npm ci`, `#12 CACHED`, `#12 DONE 41.2s`,
 `#12 ERROR: …`) comes as `step` entries, one when a step starts and one each time its status
 changes, and its output as `raw` entries with the step's number; the lines of no step
-(BuildKit's error summary) stay `raw`. `dashboard/src/types.ts` `Entry` is the contract.
+(BuildKit's error summary) stay `raw`. An `at` line gives no entry: its time goes on the next
+line's `tool`, `output` and starting `step` entries (`at`, ms). `dashboard/src/types.ts`
+`Entry` is the contract.
 
 ## Around the runs
 
@@ -704,9 +714,15 @@ credential for, and its defaults), checked when its config is read (`repo-config
     (Claude Code), and the models it takes (`/opus/i`); without it, `/speed fast` runs at
     normal speed;
   - `normalize(line)`: a line of its output → Deckhand's own events, `started{model}`,
-    `text{text}`, `tool{name, detail}`, `toolOutput{text, error}` and
+    `text{text}`, `tool{name, detail, id}`, `toolOutput{text, error, id}` and
     `result{ok, text, durationMs}`, the last and the first with `fastMode` (`on`,
-    `cooldown`, `off`) when the agent says it.
+    `cooldown`, `off`) when the agent says it. `id` (optional) pairs a call with its outputs
+    in the dashboard, and means an output will follow: until it does, the call shows as in
+    progress. So a call that may end with no output (Antigravity's steps, Codex's edits and
+    searches) gets none, and pairs by order; `agents/common.mjs` `idOf()`. A line that
+    `follow()` cut at `MAX_LINE` no longer parses: `normalizer()`'s `cut(line)` may still
+    read whose output it held (`cutOutput()`, the id near the line's start), so its call
+    stops running.
 
 The rest of the listener reads only those events: `runs.mjs` the results (the reply, its
 duration, needs-input), `runlog.mjs` all of them (the dashboard's entries). Logs keep the

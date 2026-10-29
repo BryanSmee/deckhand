@@ -226,22 +226,21 @@ export function createPreparation(ctx) {
     const build = buildOutput(logFile);
     try {
       const source = await imageSource(task, items, settings, grant, pulls);
-      const image = await ctx.images
-        .imageFor({
-          repo: task.repo,
-          ref: source.ref,
-          branch: source.branch,
-          dockerfile: settings.dockerfile,
-          onBuild: (tag) => {
-            record.phase = "building image";
-            enterPhase(task.live, "image");
-            note(
-              `Building ${tag} from ${settings.dockerfile} (${source.branch ? "pull request branch" : base})`,
-            );
-          },
-          output: build.write,
-        })
-        .finally(build.flush);
+      const image = await ctx.images.imageFor({
+        repo: task.repo,
+        ref: source.ref,
+        branch: source.branch,
+        dockerfile: settings.dockerfile,
+        onBuild: (tag) => {
+          record.phase = "building image";
+          enterPhase(task.live, "image");
+          note(
+            `Building ${tag} from ${settings.dockerfile} (${source.branch ? "pull request branch" : base})`,
+          );
+        },
+        output: build.write,
+      });
+      build.flush();
       record.phase = null;
       // The sandbox's part of the setup comes after the image's build.
       enterPhase(task.live, "setup");
@@ -258,6 +257,8 @@ export function createPreparation(ctx) {
           : await ctx.images.caches(task.repo, settings.caches, image);
       return { image, cacheArgs, settings };
     } catch (error) {
+      // What a failed build printed last (flushing again writes nothing).
+      build.flush();
       throw new RunError(
         `${agentOf(task).displayName} couldn't start: ${error.message}\n\nThe run's log on the dashboard has the details.`,
       );

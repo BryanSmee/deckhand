@@ -539,7 +539,7 @@ export function reader(agent = agentFor()) {
 // An image build's output (images.mjs), written to a run's log (`file`: openLog()'s) by whole
 // lines, each step's first one after an `at` line: what times the step in the dashboard.
 // BuildKit's own lines say when a step ends, not when it started. `flush()` writes what is
-// left once the build ends.
+// left once the build ends, as a whole line.
 export function buildOutput(file, now = Date.now) {
   // docker() gives Buffers: a character split between two stays whole.
   const decoder = new StringDecoder("utf8");
@@ -561,7 +561,8 @@ export function buildOutput(file, now = Date.now) {
     },
     flush: () => {
       rest += decoder.end();
-      if (rest) file.write(rest);
+      // A line of its own: the listener's next one (a phase, a note) must still parse.
+      if (rest) file.write(rest + "\n");
       rest = "";
     },
   };

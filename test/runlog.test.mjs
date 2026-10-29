@@ -534,7 +534,7 @@ test("buildOutput: a character split between two chunks stays whole", () => {
   out.write(bytes.subarray(9, bytes.length - 1));
   out.write(bytes.subarray(bytes.length - 1));
   out.flush();
-  assert.deepEqual(written.slice(1), ["#1 0.1 ✓ ok\n", "#1 ✓"]);
+  assert.deepEqual(written.slice(1), ["#1 0.1 ✓ ok\n", "#1 ✓\n"]);
 });
 
 const fixture = (name) => readFileSync(new URL(`fixtures/${name}`, import.meta.url), "utf8");
@@ -802,6 +802,6 @@ test("buildOutput: whole lines, each step's first after when it came, the rest a
     "#2 [a 1/2] RUN npm ci\n",
     "#2 0.5 added\n",
     "#1 [internal] load\n",
-    "ERROR: x",
+    "ERROR: x\n",
   ]);
 });
