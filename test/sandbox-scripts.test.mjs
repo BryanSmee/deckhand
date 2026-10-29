@@ -470,7 +470,7 @@ test("the prompt says whether the run has a container engine, and whether it ans
 // on trusted code, and nothing of the last run's is lost.
 function resetClone(t) {
   const script = readFileSync(`${bin}entrypoint.sh`, "utf8");
-  const fns = ["reset_clone", "clean_git_dir"]
+  const fns = ["reset_clone", "clean_git_dir", "whole_clone"]
     .map((name) => new RegExp(`^${name}\\(\\) \\{[^]*?^\\}$`, "m").exec(script)[0])
     .join("\n");
   const dir = tempDir(t, "reset-");
@@ -508,7 +508,8 @@ function resetClone(t) {
       clone,
       `printf '#!/bin/sh\ntouch "${hooked}"\n' > "${dir}/hook" && chmod +x "${dir}/hook" &&
       cp "${dir}/hook" .git/hooks/post-checkout && git config core.fsmonitor "${dir}/hook" &&
-      git config remote.origin.url https://example.com/elsewhere.git`,
+      git config remote.origin.url https://example.com/elsewhere.git &&
+      git config --add remote.origin.fetch '+refs/pull/*/head:refs/remotes/origin/pr/*'`,
     );
   // A fork's head as `gh pr checkout` leaves it: project hooks, untracked and ignored files.
   const leave = (branch, remote, merge) =>
@@ -534,11 +535,16 @@ function resetClone(t) {
     assert.deepEqual(readdirSync(join(clone, ".git", "hooks")), []);
     assert.equal(sh(clone, "git config core.fsmonitor || true"), "");
     assert.equal(sh(clone, "git config remote.origin.url"), origin);
+    // git's default refspec, whatever a run widened it to (a fork's pull requests').
+    assert.equal(
+      sh(clone, "git config --get-all remote.origin.fetch"),
+      "+refs/heads/*:refs/remotes/origin/*",
+    );
     // Not just during the reset: the checkout draft-pr.sh may do next runs no hook either.
     sh(clone, "git checkout -q feat && git checkout -q -");
     assert.ok(!existsSync(hooked), "a git hook ran");
   };
-  return { sh, origin, clone, leave, reset, clean, script };
+  return { sh, origin, clone, leave, reset, clean, script, fns };
 }
 
 test("every start puts the kept clone back on a branch of the repository, with nothing untracked", (t) => {
@@ -572,6 +578,52 @@ test("every start puts the kept clone back on a branch of the repository, with n
   assert.match(
     script,
     /\|\| reset_clone\n[^]*?bash -c "\$SANDBOX_SETUP"[^]*?agent_run "\$session"/,
+  );
+});
+
+// A work run that isn't a fork's fetches no blob on its own (the GitHub gateway refuses it:
+// github-forks.mjs): a blobless clone kept from a fork's run or an older Deckhand gets them all
+// at once, before the checkout would ask for them; other runs leave it blobless.
+test("a work run that isn't a fork's makes a kept blobless clone whole, before any checkout", (t) => {
+  const { sh, origin, fns, script } = resetClone(t);
+  sh(
+    origin,
+    `git config uploadpack.allowFilter true && for v in 1 2 3; do echo $v > f && git add f &&
+    git commit -qm $v; done`,
+  );
+  const dir = join(origin, "..");
+  const missing = (clone) =>
+    sh(clone, "git rev-list --objects --missing=print --all | grep -c '^?' || true");
+  const start = (name, extra) => {
+    sh(dir, `git clone -q --filter=blob:none file://${origin} ${name}`);
+    const clone = join(dir, name);
+    assert.equal(missing(clone), "2");
+    sh(clone, `${fns}\nset -euo pipefail\nBASE_BRANCH=main\nreset_clone`, extra);
+    return clone;
+  };
+  const whole = start("whole", { SANDBOX_FULL_CLONE: "1" });
+  assert.equal(missing(whole), "0");
+  assert.equal(sh(whole, "git config remote.origin.partialclonefilter || true"), "");
+  // A local branch whose commit no branch of the repository has any more: its blob stays
+  // missing, counted for the agent.
+  const kept = start("kept", {});
+  sh(origin, "git checkout -q -b gone && echo gone > g && git add g && git commit -qm gone");
+  sh(origin, "git checkout -q main");
+  sh(kept, "git fetch -q origin gone && git branch -q gone FETCH_HEAD");
+  sh(origin, "git checkout -q main && git branch -q -D gone");
+  const said = sh(
+    kept,
+    `${fns}\nset -euo pipefail\nBASE_BRANCH=main\nSANDBOX_FULL_CLONE=1\nreset_clone\necho "\${reset_missing:-}"`,
+  );
+  assert.equal(said, "1");
+  assert.match(script, /\$reset_missing objects of its local branches or stash/);
+  const light = start("light", {});
+  assert.equal(missing(light), "2");
+  assert.equal(sh(light, "git config remote.origin.partialclonefilter"), "blob:none");
+  // A new clone is whole from the start.
+  assert.match(
+    script,
+    /filter=\(--filter=blob:none\)\n\s*\[ -z "\$\{SANDBOX_FULL_CLONE:-\}" \] \|\| filter=\(\)/,
   );
 });
 

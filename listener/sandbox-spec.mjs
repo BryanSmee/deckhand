@@ -40,7 +40,13 @@ export function sandboxSpec(
     { kind: "agent", name: install.volume, path: install.mount, readOnly: true },
     // The issue's clone and agent session, kept between its runs: those of its light runs
     // apart from those of its work (sessionName()).
-    { kind: "session", name: `${session}-workspace`, path: "/workspace" },
+    // A fork's run gets a clone of its own: what it checked out (the fork's commits, branches, a
+    // stash) stays out of the issue's other work runs, which may not fetch it (github-forks.mjs).
+    {
+      kind: "session",
+      name: `${session}${live.fork ? "-fork" : ""}-workspace`,
+      path: "/workspace",
+    },
     { kind: "session", name: `${session}-${agent.session.volume}`, path: agent.session.path },
     // The repo's caches (its config's `caches`), one volume per path, kept across its runs.
     ...caches.map(({ name, path }) => ({ kind: "cache", name, path })),
@@ -124,6 +130,10 @@ export function sandboxEnv(
     // Reading and answering needs no project setup.
     SANDBOX_LIGHT: light ? "1" : "",
     SANDBOX_NO_CLONE: open ? "1" : "",
+    // A work run that isn't a fork's clones whole: the GitHub gateway lets it fetch the
+    // repository's commits only, never a blob on its own, as a blobless clone does on demand
+    // (github-forks.mjs).
+    SANDBOX_FULL_CLONE: !light && !open && !live.fork ? "1" : "",
     SANDBOX_SETUP: light ? "" : (settings.setup ?? ""),
     // Read by the sandbox from its default branch (origin/BASE_BRANCH), like the config.
     SANDBOX_INSTRUCTIONS: open ? "" : (settings.instructions ?? ""),

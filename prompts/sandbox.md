@@ -154,12 +154,16 @@ Skip screenshots for changes with nothing visible (API, tests, tooling).
   never on any other branch. Rebase it on the base branch before `gh pr ready`: Deckhand
   refuses to mark a pull request with conflicts ready.
 - A pull request from a fork that you weren't triggered from (one an issue or a comment only
-  mentions): read its code, but don't install, build or run it (its setup, tests, scripts),
-  and don't merge it into a branch: this run has the repository's caches and mounts, which
-  later runs trust. Say in your reply that a maintainer can ask for the work on that pull
-  request itself. The clone in /workspace is kept for the next runs: read a fork in a
-  worktree under /tmp (`git fetch origin pull/<n>/head && git worktree add --detach
-/tmp/pr-<n> FETCH_HEAD`).
+  mentions): don't install, build or run its code (its setup, tests, scripts), nor merge it
+  into a branch. In a work run (one that pushes a branch), its code doesn't come at all: the
+  run has the repository's caches and mounts, which later runs trust, so Deckhand refuses it
+  what would bring a fork's code (`gh pr checkout`, `git fetch origin pull/<n>/head`, its
+  diff, an archive, its raw files) and says why: don't look for a way around it, read what
+  `gh pr view <n>` says of it. In a run that only reads and answers (a review, a brainstorm),
+  you may read its code, in a worktree under /tmp, as /workspace is kept for the next runs
+  (`git fetch origin pull/<n>/head && git worktree add --detach /tmp/pr-<n> FETCH_HEAD`).
+  Either way, say in your reply that a maintainer can ask for the work on that pull request
+  itself.
 - Each run is a new container. What carries over to the next runs: your session, the clone's
   commits and branches (its uncommitted files are stashed or removed, its ignored files
   removed), and the repository's caches and mounts. `/tmp` and the rest of the container's own

@@ -27,6 +27,7 @@ import {
   rejection,
 } from "../listener/git-gateway.mjs";
 import { NO_TOKEN } from "../listener/github-app.mjs";
+import { createForkChecks } from "../listener/github-forks.mjs";
 import { sandboxAt, serve, tempDir } from "./helpers.mjs";
 
 const ZERO = "0".repeat(40);
@@ -267,6 +268,8 @@ async function setup(
     drainMs,
     sentFrom = sandboxAt(),
     allowWorkflows,
+    // () => github-forks.mjs createForkChecks()'s: whose pushes are read for a fork's objects.
+    forks,
     // (extra) => the error minting a token with `extra` fails with, or nothing.
     mintError = () => null,
     maxPush,
@@ -325,6 +328,7 @@ async function setup(
     githubUrl,
     log: (line) => logs.push(line),
     allowWorkflows,
+    forks: forks?.(),
     mirrorDir,
     spoolDir,
     maxPush,
@@ -406,6 +410,7 @@ async function setup(
     bare,
     pulls,
     gateway,
+    secret,
   };
 }
 
@@ -1160,4 +1165,127 @@ test("saved pushes a stopped listener left are swept, never a check's in progres
     await new Promise((r) => setTimeout(r, 20));
   }
   assert.deepEqual(readdirSync(spoolDir), ["push-new"]);
+});
+
+// A push as a run could send it by hand: `command`'s ref update and `pack`, to the gateway, with
+// the run's secret. → the report GitHub (or the gateway) answered, as text.
+async function rawPush({ port, secret }, command, pack) {
+  const body = Buffer.concat([
+    Buffer.from(pkt(`${command}\0report-status\n`)),
+    Buffer.from("0000"),
+    pack,
+  ]);
+  const auth = Buffer.from(`deckhand:${secret}`).toString("base64");
+  const res = await fetch(`http://127.0.0.1:${port}/git/org/repo.git/git-receive-pack`, {
+    method: "POST",
+    headers: {
+      authorization: `Basic ${auth}`,
+      "content-type": "application/x-git-receive-pack-request",
+    },
+    body,
+  });
+  return Buffer.from(await res.arrayBuffer()).toString("latin1");
+}
+
+// The fork checks (github-forks.mjs), for whose pushes are read for a fork's objects: a work
+// run that isn't a fork's. On the fake GitHub, a fork's commit sits under refs/pull/7/head
+// only, as GitHub keeps a network's objects together.
+const forkChecks = () => createForkChecks({ get: async () => null });
+
+// A fork's commit, with a file of its own, pushed to the fake GitHub under its pull request's
+// ref only; the work clone goes back to where it was. → its sha.
+function forkCommit({ work, bare }) {
+  execFileSync("git", ["checkout", "-q", "-b", "fork"], { cwd: work, env: gitEnv });
+  writeFileSync(join(work, "evil.sh"), "echo the fork's code\n");
+  execFileSync("git", ["add", "evil.sh"], { cwd: work, env: gitEnv });
+  execFileSync("git", ["commit", "-q", "-m", "the fork's"], { cwd: work, env: gitEnv });
+  execFileSync("git", ["push", "-q", bare, "HEAD:refs/pull/7/head"], { cwd: work, env: gitEnv });
+  const sha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: work }).toString().trim();
+  execFileSync("git", ["checkout", "-q", "main"], { cwd: work, env: gitEnv });
+  return sha;
+}
+
+test("a work run that isn't a fork's can't point its branch at a fork's objects GitHub has", async (t) => {
+  const run = await setup(t, { forks: forkChecks });
+  const { work, remote, upstream, sha } = run;
+  run.seed("main");
+  const fork = forkCommit(run);
+  // The fork's commit itself: the push carries nothing, as GitHub has it.
+  const pointed = await git(work, "push", remote(), `${fork}:refs/heads/issue-1-x`);
+  assert.equal(pointed.ok, false);
+  assert.match(
+    pointed.stderr,
+    /this push points refs\/heads\/issue-1-x at \w{12}, which it doesn't carry and org\/repo doesn't have/,
+  );
+  // A new commit over the fork's tree, pushed carrying that commit alone, as a run that never had
+  // the fork's tree would (its id is in the fork's commit's metadata): a pack made by hand.
+  const tree = execFileSync("git", ["rev-parse", `${fork}^{tree}`], { cwd: work })
+    .toString()
+    .trim();
+  const crafted = execFileSync("git", ["commit-tree", tree, "-m", "mine, honest"], {
+    cwd: work,
+    env: gitEnv,
+  })
+    .toString()
+    .trim();
+  const pack = execFileSync("git", ["pack-objects", "--stdout"], {
+    cwd: work,
+    input: `${crafted}\n`,
+  });
+  const over = await rawPush(run, `${ZERO} ${crafted} refs/heads/issue-1-y`, pack);
+  assert.match(
+    over,
+    /ng refs\/heads\/issue-1-y Deckhand: this push points refs\/heads\/issue-1-y at \w{12}, which it doesn't carry/,
+  );
+  assert.equal(upstream("refs/heads/issue-1-x"), "");
+  assert.equal(upstream("refs/heads/issue-1-y"), "");
+  // The same commit, its tree and the fork's file carried: the push's own, as any.
+  const carried = execFileSync("git", ["pack-objects", "--stdout", "--revs"], {
+    cwd: work,
+    input: `${crafted}\n^${sha("refs/heads/main")}\n`,
+  });
+  assert.match(
+    await rawPush(run, `${ZERO} ${crafted} refs/heads/issue-1-v`, carried),
+    /ok refs\/heads\/issue-1-v/,
+  );
+  // Its own commits (the push carries them), and the repository's: as before.
+  execFileSync("git", ["commit", "-q", "--allow-empty", "-m", "the run's"], {
+    cwd: work,
+    env: gitEnv,
+  });
+  const own = await git(work, "push", remote(), "HEAD:refs/heads/issue-1-z");
+  assert.ok(own.ok, own.stderr);
+  const main = await git(work, "push", remote(), `${sha("refs/heads/main")}:refs/heads/issue-1-w`);
+  assert.ok(main.ok, main.stderr);
+});
+
+test("a fork's run points its branch at its pull request's commit, as before", async (t) => {
+  const register = (b) => {
+    const secret = b.register("org/repo", undefined, { push: true });
+    b.allow(secret, ["issue-1-*"], true);
+    return secret;
+  };
+  const run = await setup(t, { forks: forkChecks, register });
+  const { work, remote, upstream } = run;
+  run.seed("main");
+  const fork = forkCommit(run);
+  const pushed = await git(work, "push", remote(), `${fork}:refs/heads/issue-1-x`);
+  assert.ok(pushed.ok, pushed.stderr);
+  assert.equal(upstream("refs/heads/issue-1-x"), "refs/heads/issue-1-x");
+  // GitHub takes a commit over the fork's tree that carries it alone: what the check above
+  // refuses a work run is no refusal of GitHub's own.
+  const tree = execFileSync("git", ["rev-parse", `${fork}^{tree}`], { cwd: work })
+    .toString()
+    .trim();
+  const crafted = execFileSync("git", ["commit-tree", tree, "-m", "c"], { cwd: work, env: gitEnv })
+    .toString()
+    .trim();
+  const pack = execFileSync("git", ["pack-objects", "--stdout"], {
+    cwd: work,
+    input: `${crafted}\n`,
+  });
+  assert.match(
+    await rawPush(run, `${ZERO} ${crafted} refs/heads/issue-1-y`, pack),
+    /ok refs\/heads\/issue-1-y/,
+  );
 });

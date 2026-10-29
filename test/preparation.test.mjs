@@ -123,6 +123,7 @@ test("a research run: the base image, no mounts, caches, engine, CA, screenshots
     ],
   );
   assert.equal(spec.env.SANDBOX_NO_CLONE, "1");
+  assert.equal(spec.env.SANDBOX_FULL_CLONE, "");
   assert.equal(spec.env.SANDBOX_LIGHT, "1");
   assert.equal(spec.env.SANDBOX_SETUP, "");
   assert.equal(spec.env.SANDBOX_INSTRUCTIONS, "");

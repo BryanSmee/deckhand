@@ -47,7 +47,7 @@ export function createPreparation(ctx) {
     // A fork's code may run in it: nothing it can leave for the repo's later runs, which
     // trust what they find (prepareImage(), sandbox-spec.mjs).
     live.fork = fork;
-    ctx.broker.allow(live.secret, live.branches);
+    ctx.broker.allow(live.secret, live.branches, fork);
     // A review's are optional (its `review` block); a repo's mode always has them.
     const instructions = own?.instructions ? await modeInstructions(task, own) : null;
     const access = grantedAccess(config, task, settings, { agent, note, log });

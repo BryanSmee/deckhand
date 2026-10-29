@@ -171,7 +171,7 @@ case "$1" in
         "$DECKHAND_BROKER_URL/relay/${api%%[:/]*}/repos/org/repo" > "$dir/broker-answer"
       # What the egress proxy would ask about this sandbox'"'"'s connections, "host answer"
       # lines: one curl for them all (the tests run many sandboxes, each process counts).
-      hosts=(api.anthropic.com github.com objects.githubusercontent.com evil.example
+      hosts=(api.anthropic.com github.com objects.githubusercontent.com raw.githubusercontent.com evil.example
         registry.npmjs.org pypi.org a.b.example.com example.com lan.internal)
       urls=()
       for host in "${hosts[@]}"; do urls+=("$DECKHAND_BROKER_URL/egress?ip=10.9.0.5&host=$host"); done

@@ -82,6 +82,7 @@ export function createBroker({
       base,
       created: Array.isArray(created) ? created : [],
       branches: [],
+      fork: false,
       provider: null,
       credential: null,
       apiStatus: null,
@@ -114,10 +115,11 @@ export function createBroker({
   }
 
   // The branches a run may push and whose pull requests it may mark ready: names, or
-  // prefixes ending in "*" (branchAllowed()).
-  function allow(secret, branches) {
+  // prefixes ending in "*" (branchAllowed()). `fork`: whether a fork's pull request started it,
+  // so its code may run there anyway (github-forks.mjs): a work run is checked until it says so.
+  function allow(secret, branches, fork = false) {
     const run = runOf(secret);
-    if (run) run.branches = run.push ? [...branches] : [];
+    if (run) Object.assign(run, { branches: run.push ? [...branches] : [], fork: fork === true });
   }
 
   // The live run a secret belongs to, or undefined.

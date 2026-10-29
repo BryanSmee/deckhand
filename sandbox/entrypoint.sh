@@ -8,7 +8,8 @@
 # the egress proxy and waits for the engine before the setup; every prompt ends with whether
 # the run has one. SANDBOX_LIGHT=1 (brainstorms, inbox entries, discussions) skips the branch and the
 # setup. SANDBOX_NO_CLONE=1 (research runs: the open internet, nothing from GitHub) skips the clone
-# and git's credential helper too: the agent starts in an empty /workspace.
+# and git's credential helper too: the agent starts in an empty /workspace. SANDBOX_FULL_CLONE=1
+# (a work run that isn't a fork's) clones whole, and makes a kept blobless clone whole.
 #
 #   (no arguments)      the agent, interactive
 #   -p "<task>" …       arguments for the agent's CLI, e.g. a headless task
@@ -88,8 +89,12 @@ if [ -n "${SANDBOX_NO_CLONE:-}" ]; then
   git config --global credential.helper ""
 elif [ ! -d /workspace/.git ]; then
   # Blobless clone: full history for git log/blame, file contents fetched on demand. The
-  # checkout's blob fetch ignores --quiet, so its output is only shown on failure.
-  git clone --filter=blob:none --branch "$BASE_BRANCH" "$REPO_URL" /workspace \
+  # checkout's blob fetch ignores --quiet, so its output is only shown on failure. Whole for a
+  # work run that isn't a fork's: the GitHub gateway refuses it a blob fetched on its own, which
+  # may be a fork's (listener/github-forks.mjs).
+  filter=(--filter=blob:none)
+  [ -z "${SANDBOX_FULL_CLONE:-}" ] || filter=()
+  git clone "${filter[@]}" --branch "$BASE_BRANCH" "$REPO_URL" /workspace \
     > /tmp/clone.log 2>&1 || { cat /tmp/clone.log >&2; exit 1; }
 fi
 cd /workspace
@@ -105,6 +110,7 @@ cd /workspace
 reset_clone() {
   local branch target=$BASE_BRANCH
   clean_git_dir
+  whole_clone
   # Reviews read pull requests in worktrees under /tmp, gone with their container: a stale
   # one would keep its branch from being checked out here.
   git worktree prune
@@ -129,6 +135,21 @@ reset_clone() {
   git clean -ffdxq
 }
 
+# A kept clone a fork's run or an older Deckhand made blobless, in a work run that
+# isn't a fork's (SANDBOX_FULL_CLONE): the blobs it lacks fetched once, whole (--refetch, git
+# 2.36), before any checkout would ask for them one by one, which the GitHub gateway refuses
+# such a run. What the repository's branches don't reach (a local branch or a stash whose
+# commits aren't on them: force-pushed away, a fork's merged in) stays missing: counted, and the
+# agent told (reset_missing), rather than a checkout of it failing on a refusal later.
+whole_clone() {
+  [ -n "${SANDBOX_FULL_CLONE:-}" ] || return 0
+  [ -n "$(git config remote.origin.partialclonefilter || true)" ] || return 0
+  git fetch --quiet --refetch --no-filter origin '+refs/heads/*:refs/remotes/origin/*'
+  git config --unset remote.origin.partialclonefilter
+  reset_missing=$(git rev-list --objects --missing=print --all 2> /dev/null | grep -c '^?' || true)
+  [ "${reset_missing:-0}" != 0 ] || reset_missing=
+}
+
 # .git is the volume's too, and a fork's code that ran in a work run could have written in
 # it what git runs: hooks, and settings (core.fsmonitor, core.hooksPath, filter drivers,
 # include.path, a config.worktree…). Emptied for good, not just for the reset's commands:
@@ -142,7 +163,7 @@ clean_git_dir() {
     case $key in
       core.repositoryformatversion | core.filemode | core.bare | core.logallrefupdates | \
         core.ignorecase | core.precomposeunicode | core.symlinks | extensions.objectformat | \
-        extensions.partialclone | extensions.refstorage | remote.origin.fetch | \
+        extensions.partialclone | extensions.refstorage | \
         remote.origin.promisor | remote.origin.partialclonefilter | remote.origin.gh-resolved | \
         branch.*.remote | branch.*.merge)
         git config --file "$kept" --add "$key" "${entry#*$'\n'}"
@@ -150,6 +171,9 @@ clean_git_dir() {
     esac
   done < <(git config --file "$config" --null --list)
   git config --file "$kept" remote.origin.url "$REPO_URL"
+  # The clone's own refspec, git's default: one widened to refs/pull/* would have every fetch
+  # want the forks' pull requests, which the GitHub gateway refuses a work run.
+  git config --file "$kept" remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*'
   mv "$kept" "$config"
   rm -f .git/config.worktree
   rm -rf .git/hooks
@@ -322,6 +346,15 @@ The clone in /workspace was put back on \`$(git branch --show-current)\` before 
 with nothing untracked: the last run left it on \`$reset_from\`, which isn't a branch of this
 repository or has commits that aren't on it (still there). Check it out again
 (\`gh pr checkout <n>\` for a pull request) if you need it."
+  fi
+  if [ -n "${reset_missing:-}" ]; then
+    prompt+="
+
+The clone in /workspace was made whole before you started (every blob of the repository's
+branches fetched at once), but $reset_missing objects of its local branches or stash, which no
+branch of the repository has, are still missing. This run can't fetch them one by one (they may
+be a fork's): a checkout or diff that needs them fails. Leave those branches alone; a maintainer
+can ask for work on a fork's pull request from that pull request."
   fi
   if [ -n "${reset_stashed:-}" ]; then
     prompt+="

@@ -11,6 +11,8 @@ import {
   matchHost,
   operatorHosts,
   proxyEnv,
+  GITHUB_FILES,
+  githubContent,
 } from "../listener/egress.mjs";
 import { grantFor, grantsFrom } from "../listener/grants.mjs";
 import { parseRepoConfig } from "../listener/repo-config.mjs";
@@ -275,9 +277,27 @@ test("GitHub's hosts: relayed for a sandbox, a tunnel for its engine (#411's exc
       relay: false,
     });
   }
-  // Raw files carry no token: never relayed.
-  const raw = egressPolicy("raw.githubusercontent.com", hosts, hosts, [], hosts, { relayed });
-  assert.equal(raw.relay, false);
+  // GitHub's content hosts: every *.githubusercontent.com host, which its CDN answers for one
+  // another (broker-http.mjs relays them for a run the gateway checks); nothing else.
+  for (const host of [
+    ...GITHUB_FILES,
+    "objects.githubusercontent.com",
+    "a.b.githubusercontent.com",
+  ]) {
+    assert.equal(githubContent(host), true, host);
+    const relayedTo = egressPolicy(host, hosts, hosts, [], hosts, { relayed: [host] });
+    assert.equal(relayedTo.relay, true, host);
+    const engine = egressPolicy(host, hosts, hosts, [], hosts, { decrypt: false, relayed: [host] });
+    assert.equal(engine.relay, false, host);
+  }
+  for (const host of [
+    "githubusercontent.com",
+    "raw.githubusercontent.com.evil.example",
+    "rawgithubusercontent.com",
+    "github.com",
+  ]) {
+    assert.equal(githubContent(host), false, host);
+  }
 });
 
 test("host matching: names, subdomain wildcards, *", () => {
