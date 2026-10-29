@@ -43,7 +43,7 @@ const POLL_MS = 25_000;
 // task of the broker's record (broker-http.mjs, which imports this file).
 export function createRunFiles(ctx, { taskOf }) {
   const liveOf = (run) => taskOf(ctx, run)?.live ?? null;
-  // Run folder → name → the bytes its uploads in flight reserved: counted against MAX_SHOTS.
+  // Run folder → name → the bytes its upload in flight reserved: counted against MAX_SHOTS.
   const pending = new Map();
 
   // The live run a request comes from, or null once refused.
@@ -85,11 +85,15 @@ export function createRunFiles(ctx, { taskOf }) {
     if (!match) return sendJson(res, { message: "only .png, .jpg, .jpeg and .webp files" }, 400);
     if (!live.shots) return sendJson(res, { message: "this run has no screenshots" }, 403);
     const folder = join(ctx.shotsDir, live.shots);
-    // What the run's other uploads in flight may still add (the watcher's and gh's at once).
-    // Not the same name's: that upload replaces this one's file, it doesn't add to it.
+    // One upload of a name at a time (the watcher's and gh's may meet): a second one is told
+    // to come back (409, which deckhand-files retries), never held in memory beside it.
     const inFlight = pending.get(folder) ?? new Map();
+    if (inFlight.has(name)) {
+      return sendJson(res, { message: `${name} is being uploaded already` }, 409);
+    }
+    // What the run's other uploads in flight may still add.
     let others = 0;
-    for (const [other, bytes] of inFlight) if (other !== name) others += bytes;
+    for (const bytes of inFlight.values()) others += bytes;
     const used = folderSize(folder, name) + others;
     const room = Math.min(MAX_SHOT, MAX_SHOTS - used);
     const tooBig = () =>
@@ -97,7 +101,7 @@ export function createRunFiles(ctx, { taskOf }) {
     const declared = Number(req.headers["content-length"]);
     if (declared > room || room <= 0) return tooBig();
     const reserved = Number.isSafeInteger(declared) ? declared : room;
-    inFlight.set(name, (inFlight.get(name) ?? 0) + reserved);
+    inFlight.set(name, reserved);
     pending.set(folder, inFlight);
     const part = join(folder, `.${randomBytes(6).toString("hex")}.part`);
     try {
@@ -111,9 +115,7 @@ export function createRunFiles(ctx, { taskOf }) {
       renameSync(part, join(folder, name));
     } finally {
       rmSync(part, { force: true });
-      const left = inFlight.get(name) - reserved;
-      if (left > 0) inFlight.set(name, left);
-      else inFlight.delete(name);
+      inFlight.delete(name);
       if (!inFlight.size) pending.delete(folder);
     }
     res.writeHead(204).end();

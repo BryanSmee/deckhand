@@ -188,8 +188,9 @@ test("screenshots: a run's total is capped too; a research run (no folder) has n
   slow.write(PNG);
   await new Promise((resolve) => setTimeout(resolve, 100));
   assert.equal(await put("meanwhile.png", 1024), 413);
-  // The same name again (the watcher and gh both sending it) replaces it: not refused.
-  assert.equal(await put("slow.png", 1024), 204);
+  // The same name again (the watcher and gh both sending it): told to come back, not refused
+  // (413 would be final) nor held beside the first in memory.
+  assert.equal(await put("slow.png", 1024), 409);
   slow.end(Buffer.alloc(MAX_SHOT - PNG.length));
   assert.equal((await answered)[0].statusCode, 204);
   assert.equal(await put("one-more.png", 1024), 413);
@@ -268,6 +269,23 @@ test("deckhand-files: get fetches a run file, shots uploads new and changed imag
   assert.match((await run("shots", "--log")).err, /huge\.webp refused: 415/);
   assert.match((await run("shots")).err, /huge\.webp refused: 415/);
   assert.equal((await run("shots")).err, "");
+  // A pass merges what it decided into the state as it is when it ends: another pass's entry,
+  // written while this one uploads (by the broker here), stays.
+  const state = join(tmp, "deckhand-shots.json");
+  const meanwhile = await serve(t, (req, res) => {
+    const now = JSON.parse(readFileSync(state, "utf8"));
+    writeFileSync(state, JSON.stringify({ ...now, "elsewhere.png": "1:2" }));
+    req.resume().on("end", () => res.writeHead(204).end());
+  });
+  writeFileSync(join(shots, "new.png"), image(PNG));
+  const broker = env.DECKHAND_BROKER_URL;
+  env.DECKHAND_BROKER_URL = meanwhile.url;
+  await run("shots");
+  env.DECKHAND_BROKER_URL = broker;
+  const merged = JSON.parse(readFileSync(state, "utf8"));
+  assert.equal(merged["elsewhere.png"], "1:2");
+  assert.equal(typeof merged["new.png"], "string");
+  assert.equal(merged["huge.webp"].told, true);
 });
 
 test("deckhand-inbox: a refusal it keeps getting is said once on stderr", async (t) => {

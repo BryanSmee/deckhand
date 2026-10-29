@@ -21,8 +21,8 @@ const broker = process.env.DECKHAND_BROKER_URL ?? "";
 const headers = { authorization: `Bearer ${process.env.DECKHAND_RUN_SECRET ?? ""}` };
 const SHOT = /^[\w.-]+\.(png|jpe?g|webp)$/;
 // What the file itself makes the broker refuse (its name, its size, its type): final until it
-// changes. Others (401, 403 while a restarted listener takes the run back, 5xx) are tried
-// again next time.
+// changes. Others (401, 403 while a restarted listener takes the run back, 409 while another
+// pass sends it, 5xx) are tried again next time.
 const FINAL = new Set([400, 413, 415]);
 // What was uploaded already: name → "size:mtime", or { seen, refused, told } for a file the
 // broker refused (`told`: said where the agent sees it). Shared by every caller.
@@ -71,7 +71,10 @@ async function shots(watching = false) {
     return; // nothing saved yet
   }
   const done = sent();
-  let changed = false;
+  // What this pass decided, merged into the file as it is then: other passes (the watcher,
+  // gh, a push, a hook) write it meanwhile, and their entries stay.
+  const updates = {};
+  const set = (name, value) => (done[name] = updates[name] = value);
   for (const name of names.filter((n) => SHOT.test(n))) {
     let stat;
     try {
@@ -86,8 +89,7 @@ async function shots(watching = false) {
     if (before?.seen === seen) {
       if (!watching && !before.told) {
         console.error(`deckhand-files: ${name} refused: ${before.refused}`);
-        done[name] = { ...before, told: true };
-        changed = true;
+        set(name, { ...before, told: true });
       }
       continue;
     }
@@ -99,13 +101,11 @@ async function shots(watching = false) {
         signal: AbortSignal.timeout(60_000),
       });
       if (res.ok) {
-        done[name] = seen;
-        changed = true;
+        set(name, seen);
       } else if (FINAL.has(res.status)) {
         const refused = `${res.status} ${(await res.text()).trim()}`;
         console.error(`deckhand-files: ${name} refused: ${refused}`);
-        done[name] = { seen, refused, told: !watching };
-        changed = true;
+        set(name, { seen, refused, told: !watching });
       } else {
         await res.body?.cancel();
       }
@@ -113,8 +113,8 @@ async function shots(watching = false) {
       // The listener restarting: sent next time.
     }
   }
-  if (changed) {
-    writeFileSync(`${SENT}.${process.pid}`, JSON.stringify(done));
+  if (Object.keys(updates).length) {
+    writeFileSync(`${SENT}.${process.pid}`, JSON.stringify({ ...sent(), ...updates }));
     renameSync(`${SENT}.${process.pid}`, SENT);
   }
 }

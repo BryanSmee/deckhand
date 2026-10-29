@@ -11,9 +11,9 @@
 #                            Stop` without its payload): opens the draft for the current branch
 #                            if it is pushed and has no pull request yet, whatever its name.
 #                            Never blocks the agent: after a push it only tells it the URL.
-#                            Both times, for every run, it uploads the run's screenshots
-#                            first (deckhand-files shots), so the final message and the pushed
-#                            work find them before the sandbox stops.
+#                            Both times, for every run, it then uploads the run's screenshots
+#                            (deckhand-files shots), last and within 20 s, so the final message
+#                            and the pushed work find them before the sandbox stops.
 #
 # Only for work runs on an issue: TASK_ISSUE (GitHub issue number, from the listener).
 # Brainstorms and pull request runs don't set it, so nothing is created for them. Never
@@ -32,13 +32,15 @@ if [ "${1:-}" = hook ]; then
   # Its stdout is the agent's hook answer, and a hook's stderr reaches only the run's log
   # (--log): a refusal is still told by the next gh call or push. After `git push`, pre-push
   # uploaded and told already. Last, on exit (the early ones below too), and within 20 s: the
-  # draft pull request and its URL come first in the agent's 60 s for the hook.
+  # draft pull request and its URL come first in the agent's 60 s for the hook, so its gh
+  # calls don't upload (DECKHAND_SHOTS_SKIP, the gh wrapper).
   case $event in
     "Stop "* | PostToolUse*"git push"*)
       [ -z "${SCREENSHOT_DIR:-}" ] ||
         trap 'timeout 20 deckhand-files shots --log > /dev/null || true' EXIT
       ;;
   esac
+  export DECKHAND_SHOTS_SKIP=1
 fi
 
 # In .git: survives between runs of the same issue, never committed.

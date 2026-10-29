@@ -740,28 +740,59 @@ test("the Stop hook, a git push hook and pre-push upload the screenshots; other 
   const push = spawnSync(`${bin}pre-push`, [], { env, input: "", encoding: "utf8" });
   assert.equal(push.status, 0);
   // After the hook's own work (on exit), within 20 s: a work run's Stop hook opens the draft
-  // first, whatever the upload takes.
+  // first, whatever the upload takes, and its gh calls (the wrapper) don't upload.
   const order = join(fake, "order");
-  // ensure()'s first step is git's (the branch, then whether it is pushed: not here).
   writeFileSync(
     join(fake, "git"),
-    `#!/bin/sh\necho "git $1" >> ${order}\n[ "$1" = branch ] && echo feat\n[ "$1" = branch ]\n`,
+    `#!/bin/sh\necho "git $1" >> ${order}\n[ "$1" = branch ] && echo feat\nexit 0\n`,
   );
-  writeFileSync(join(fake, "timeout"), `#!/bin/sh\necho "timeout $1" >> ${order}\n`);
-  for (const f of ["git", "timeout"]) chmodSync(join(fake, f), 0o755);
+  writeFileSync(join(fake, "timeout"), `#!/bin/sh\necho "timeout $1 $2" >> ${order}\n`);
+  writeFileSync(
+    join(fake, "real-gh"),
+    `#!/bin/sh\necho "gh $1 $2" >> ${order}\n[ "$1" = issue ] && echo "A title"\nexit 0\n`,
+  );
+  for (const f of ["git", "timeout", "real-gh"]) chmodSync(join(fake, f), 0o755);
+  mkdirSync(join(fake, ".git"));
   const script = readFileSync(`${bin}draft-pr.sh`, "utf8").replace(/\/workspace/g, fake);
   writeFileSync(join(fake, "draft-pr.sh"), script);
   spawnSync("bash", [join(fake, "draft-pr.sh"), "hook", "Stop"], {
-    env: { ...env, TASK_ISSUE: "5" },
+    env: {
+      ...env,
+      // The image's gh wrapper (sandbox/gh), in front of a fake real gh.
+      PATH: `${fake}:${bin}:${process.env.PATH}`,
+      DECKHAND_REAL_GH: join(fake, "real-gh"),
+      DECKHAND_BROKER_URL: "http://listener:8081",
+      DECKHAND_RUN_SECRET: "s",
+      TASK_ISSUE: "5",
+    },
     encoding: "utf8",
   });
   assert.deepEqual(readFileSync(order, "utf8").trim().split("\n"), [
     "git branch",
     "git ls-remote",
-    "timeout 20",
+    "gh pr list",
+    "gh issue view",
+    "gh pr create",
+    "timeout 20 deckhand-files",
+  ]);
+  // Outside the hooks, gh uploads first, within 20 s.
+  rmSync(order);
+  spawnSync(`${bin}gh`, ["pr", "view"], {
+    env: {
+      ...env,
+      DECKHAND_REAL_GH: join(fake, "real-gh"),
+      DECKHAND_BROKER_URL: "http://x",
+      DECKHAND_RUN_SECRET: "s",
+      PATH: `${fake}:${bin}:${process.env.PATH}`,
+    },
+  });
+  assert.deepEqual(readFileSync(order, "utf8").trim().split("\n"), [
+    "timeout 20 deckhand-files",
+    "gh pr view",
   ]);
   rmSync(join(fake, "git"));
   rmSync(join(fake, "timeout"));
+  rmSync(join(fake, "real-gh"));
   // The hooks' stderr is only the run's log (--log); git push's is the agent's.
   assert.equal(readFileSync(calls, "utf8"), "shots --log\n".repeat(3) + "shots\n");
   // A failure blocks no push.

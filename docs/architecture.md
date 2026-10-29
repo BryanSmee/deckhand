@@ -704,9 +704,13 @@ upload, and the 3 s watcher covers what saves files outside a turn. A refusal fo
 (its name, size or type: `400`, `413`, `415`) is final until it changes, and said on
 stderr by the next `gh` call or push, where the agent reads it, even when the watcher or a
 hook (whose stderr is only the run's log) met it first; any other is tried again. Fetching
-the CA or digest at start retries a 401, 403 or 5xx for a minute; only a 404 fails at once. Uploads in flight reserve their size, so parallel ones can't pass the run's cap
-together. Sandboxes from before #393 still mount
-the `runs` and `screenshots` volumes, which is why compose keeps them at the same paths.
+the CA or digest at start retries a 401, 403 or 5xx for a minute; only a 404 fails at once.
+Uploads in flight reserve their size, so parallel ones can't pass the run's cap together,
+and a name has one at a time: a second gets `409`, tried again later. The hooks upload last
+(an `EXIT` trap in `draft-pr.sh`, which sets `DECKHAND_SHOTS_SKIP` so its own `gh` calls
+don't), and every caller within 20 s: opening the draft pull request keeps the hook's 60 s.
+Sandboxes from before #393 still mount the `runs` and `screenshots` volumes, which is why
+compose keeps them at the same paths.
 
 The dashboard's run list comes back from the runs' summaries (`logs/<run>.json`, written
 when a run ends): a log is read only for a run without one (from before summaries, or a
