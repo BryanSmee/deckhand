@@ -62,14 +62,25 @@ export function createBroker({
   // `push`: whether it may push and change its pull requests, which only work runs do (light
   // runs' pushes would run in the issue's next work run). Decided by the kind of run, not
   // its token: fail closed. `mode`: the run's (modes.mjs), for what the GitHub gateway refuses
-  // a review. `secret`: a run's own again, when a restarted listener picks it up.
-  function register(repo, extra, { push = false, mode = null, secret = random() } = {}) {
+  // a review and its writes' ceiling. `issue`: the number of its issue or pull request, and
+  // `base`, its repo's default branch, for what its writes may reach (github-writes.mjs), and
+  // `created`, the list of the issues it created ({ number, at }), which the GitHub gateway adds
+  // to: the run's live state's own list, saved with it (restart.mjs).
+  // `secret`: a run's own again, when a restarted listener picks it up.
+  function register(
+    repo,
+    extra,
+    { push = false, mode = null, issue = null, base = null, created = [], secret = random() } = {},
+  ) {
     // No branch until allow() names them: a run that can push still pushes nothing else.
     runs.set(hash(secret), {
       repo: repo.toLowerCase(),
       extra,
       push: push === true,
       mode,
+      issue: Number.isInteger(issue) ? issue : null,
+      base,
+      created: Array.isArray(created) ? created : [],
       branches: [],
       provider: null,
       credential: null,
@@ -87,6 +98,13 @@ export function createBroker({
   function provide(secret, provider, note = null, credential = null) {
     const run = runOf(secret);
     if (run) Object.assign(run, { provider, credential, note });
+  }
+
+  // `changed()`: called when the run created an issue (github-writes.mjs answered()), so its
+  // saved state keeps it.
+  function watchCreated(secret, changed) {
+    const run = runOf(secret);
+    if (run) run.createdChanged = changed;
   }
 
   // `pushed({ branch, at })`: called by the git gateway for each push of the run's GitHub took.
@@ -123,6 +141,7 @@ export function createBroker({
     allow,
     provide,
     watchPushes,
+    watchCreated,
     revoke,
     runOf,
     sentBy,

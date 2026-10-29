@@ -1616,6 +1616,44 @@ mounts:
     await check();
   });
 
+  test("a brainstorm's REST writes: its issue's description, not another issue's, after a restart too", async (t) => {
+    const files = {
+      "issue:12": JSON.stringify({ number: 12, user: { login: "alice" }, labels: [] }),
+      "issue:3": JSON.stringify({ number: 3, user: { login: "bob" }, labels: [] }),
+    };
+    const ctx = await listen(t, files, (dir) => (writeFileSync(join(dir, "hold"), ""), {}));
+    await ctx.send(comment("alice", "Deckhand\n/mode brainstorm\nWhat about dark mode?"));
+    await until(() => exists(join(ctx.dir, "egress"))?.trim().split("\n").length === 9, "the run");
+    const secret = readFileSync(join(ctx.dir, "run-secret"), "utf8").trim();
+    const patch = (number) =>
+      fetch(`http://127.0.0.1:${ctx.brokerPort}/relay/127.0.0.1/repos/org/repo/issues/${number}`, {
+        method: "PATCH",
+        headers: { authorization: `token ${secret}` },
+        body: JSON.stringify({ body: "Updated." }),
+      });
+    const check = async () => {
+      const own = await patch(12);
+      assert.equal(own.status, 200);
+      const other = await patch(3);
+      assert.equal(other.status, 403);
+      assert.match((await other.json()).message, /a brainstorm run can't edit on other_issue #3/);
+    };
+    await check();
+    const edits = ctx.github.requests.filter((r) => r.method === "PATCH");
+    assert.deepEqual(
+      edits.map((r) => [r.path, r.auth]),
+      [["/repos/org/repo/issues/12", "token repo-token"]],
+    );
+    // Its kind looked up with the listener's token, not the run's.
+    const lookup = ctx.github.requests.find(
+      (r) => r.method === "GET" && r.path === "/repos/org/repo/issues/3/parent",
+    );
+    assert.equal(lookup.auth, "Bearer app-token");
+    await ctx.restart();
+    await ctx.listener.until("again");
+    await check();
+  });
+
   test("a run's secret sent from another address: no GitHub, push or ready", async (t) => {
     const ctx = await holding(t, undefined, (dir, github) => ({ GITHUB_URL: github.url }));
     // The sandbox no longer has the address the requests come from; a restarted listener

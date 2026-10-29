@@ -19,7 +19,19 @@ const OPERATOR = "operator-key-0123456789abcdef";
 
 // A fake GitHub, on GitHub Enterprise Server's layout (its API under /api/v3, on the web's
 // host), and a gateway in front of it. `anonymous`: the run a call without a secret is from.
-async function gateway(t, { sentFrom = sandboxAt(), app = true, maxInFlight, hold } = {}) {
+// `checkWrite`: what the REST writes are held to (github-writes.mjs): here, nothing; null, the
+// gateway's own default.
+async function gateway(
+  t,
+  {
+    sentFrom = sandboxAt(),
+    app = true,
+    maxInFlight,
+    hold,
+    checkWrite = async () => null,
+    wroteWrite,
+  } = {},
+) {
   const calls = [];
   const github = await serve(t, (req, res) => {
     const chunks = [];
@@ -48,6 +60,8 @@ async function gateway(t, { sentFrom = sandboxAt(), app = true, maxInFlight, hol
     secrets: () => [OPERATOR],
     log: (line) => logged.push(line),
     maxInFlight,
+    ...(checkWrite && { checkWrite }),
+    ...(wroteWrite && { wroteWrite }),
   });
   const { url } = await serve(t, (req, res) => gw.handle(req, res));
   // A run, its log's notes beside it.
@@ -466,6 +480,152 @@ test("a review can't read its thread's comments and reviews; other runs can", as
     assert.equal((await gw.call(path, { secret: work.secret })).status, 200, path);
   }
   assert.equal((await graphql(work.secret, "{ viewer { comments: login } }")).status, 200);
+});
+
+test("a REST write goes on only when its check passes; GraphQL's and git's aren't checked", async (t) => {
+  const checked = [];
+  const gw = await gateway(t, {
+    checkWrite: async (run, write) => {
+      checked.push({ ...write, body: write.body.toString() });
+      return write.path.endsWith("/comments")
+        ? { status: 403, message: "the policies refuse it (deny_github): not here" }
+        : null;
+    },
+  });
+  const { secret, notes } = gw.register(undefined, { mode: "work", push: true, issue: 1 });
+  const refused = await gw.call("/api/v3/repos/org/repo/issues/2/comments", {
+    secret,
+    method: "POST",
+    body: '{"body": "Hi"}',
+  });
+  assert.equal(refused.status, 403);
+  // GitHub's error shape: what gh prints.
+  assert.deepEqual(await refused.json(), {
+    message: "Deckhand: the policies refuse it (deny_github): not here",
+  });
+  assert.deepEqual(notes, [
+    "Deckhand refused the run's GitHub write POST /api/v3/repos/org/repo/issues/2/comments: the policies refuse it (deny_github): not here",
+  ]);
+  assert.match(gw.logged.join("\n"), /refused POST .*issues\/2\/comments for org\/repo/);
+  const ok = await gw.call("/api/v3/repos/org/repo/issues/1", {
+    secret,
+    method: "PATCH",
+    body: '{"title": "T"}',
+  });
+  assert.equal(ok.status, 200);
+  assert.deepEqual(
+    gw.calls.map((c) => c.url),
+    ["/api/v3/repos/org/repo/issues/1"],
+  );
+  // The path under the API's base, decoded; the body as GitHub gets it.
+  assert.deepEqual(checked, [
+    {
+      method: "POST",
+      path: "repos/org/repo/issues/2/comments",
+      body: '{"body": "Hi"}',
+    },
+    { method: "PATCH", path: "repos/org/repo/issues/1", body: '{"title": "T"}' },
+  ]);
+  for (const path of ["/api/graphql", "/api/v3/graphql", "/api/GraphQL/"]) {
+    await gw.call(path, { secret, method: "POST", body: '{"query": "{ viewer { login } }"}' });
+  }
+  await gw.call("/org/repo.git/git-upload-pack", { secret, method: "POST", body: "0000" });
+  assert.equal(checked.length, 2);
+  assert.equal(gw.calls.length, 5);
+});
+
+test("a REST write with a query string is refused unchecked: GitHub may read it", async (t) => {
+  const checked = [];
+  const gw = await gateway(t, { checkWrite: async (run, write) => (checked.push(write), null) });
+  const { secret, notes } = gw.register(undefined, { mode: "work", push: true, issue: 1 });
+  for (const path of [
+    "/api/v3/repos/org/repo/issues/1/sub_issues?replace_parent=true",
+    "/api/v3/repos/org/repo/issues/1?state=closed",
+  ]) {
+    const res = await gw.call(path, {
+      secret,
+      method: path.includes("sub_issues") ? "POST" : "PATCH",
+      body: '{"sub_issue_id": 2, "title": "T"}',
+    });
+    assert.equal(res.status, 400, path);
+    assert.match((await res.json()).message, /a write with a query string/);
+  }
+  assert.deepEqual(checked, []);
+  assert.deepEqual(gw.calls, []);
+  assert.match(notes[1], /refused the run's GitHub write PATCH .*: a write with a query string/);
+  // GraphQL's and reads' queries are theirs.
+  await gw.call("/api/graphql?x=1", { secret, method: "POST", body: '{"query": "{ a }"}' });
+  await gw.call("/api/v3/repos/org/repo/issues?state=open", { secret });
+  assert.equal(gw.calls.length, 2);
+});
+
+test("the answers of REST writes and GraphQL createIssue calls go to wroteWrite, uncompressed", async (t) => {
+  const wrote = [];
+  const gw = await gateway(t, {
+    wroteWrite: (run, write, status, answer) =>
+      wrote.push([run, write.method, write.path, write.graphql, status, answer.toString()]),
+  });
+  const { secret, run } = gw.register(undefined, { mode: "work", push: true, issue: 1 });
+  const gzip = { "accept-encoding": "gzip" };
+  await gw.call("/api/v3/repos/org/repo/issues", {
+    secret,
+    method: "POST",
+    body: '{"title": "T"}',
+    headers: gzip,
+  });
+  // `gh issue create`'s mutation, and one escaped in its JSON.
+  const mutation = "mutation { createIssue(input: {}) { issue { url } } }";
+  await gw.call("/api/graphql", {
+    secret,
+    method: "POST",
+    body: JSON.stringify({ query: mutation }),
+    headers: gzip,
+  });
+  await gw.call("/api/graphql", {
+    secret,
+    method: "POST",
+    body: '{"query": "mutation { \\u0063reateIssue(input: {}) { issue { url } } }"}',
+    headers: gzip,
+  });
+  // Neither a read nor another GraphQL call: their answers aren't read, nor their encoding set.
+  await gw.call("/api/v3/repos/org/repo", { secret, headers: gzip });
+  await gw.call("/api/graphql", {
+    secret,
+    method: "POST",
+    body: '{"query": "{ viewer { login } }"}',
+    headers: gzip,
+  });
+  assert.deepEqual(
+    gw.calls.map((c) => c.headers["accept-encoding"]),
+    ["identity", "identity", "identity", "gzip", "gzip"],
+  );
+  assert.deepEqual(
+    wrote.map(([r, ...rest]) => [r === run, ...rest]),
+    [
+      [
+        true,
+        "POST",
+        "repos/org/repo/issues",
+        false,
+        200,
+        '{"url":"/api/v3/repos/org/repo/issues"}',
+      ],
+      [true, "POST", "api/graphql", true, 200, '{"url":"/api/graphql"}'],
+      [true, "POST", "api/graphql", true, 200, '{"url":"/api/graphql"}'],
+    ],
+  );
+});
+
+test("without a write check, every REST write is refused", async (t) => {
+  const gw = await gateway(t, { checkWrite: null });
+  const { secret } = gw.register(undefined, { mode: "work", push: true });
+  const res = await gw.call("/api/v3/repos/org/repo/issues", {
+    secret,
+    method: "POST",
+    body: "{}",
+  });
+  assert.equal(res.status, 403);
+  assert.deepEqual(gw.calls, []);
 });
 
 test("a run has so many calls in flight at once", async (t) => {

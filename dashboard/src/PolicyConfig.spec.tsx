@@ -112,7 +112,8 @@ test("a policy that doesn't compile: the badge, the banner, the cards and its ro
   expect(alert.textContent).toContain(
     "payments.rego:7 doesn't compile: every decision a policy is asked for refuses",
   );
-  expect(alert.textContent).toContain("Runs started by a comment aren't affected.");
+  expect(alert.textContent).toContain("runs' REST writes to GitHub");
+  expect(alert.textContent).toContain("Runs started by a comment still start.");
   // The header's badge and the tab's count.
   expect(screen.getByText("1 policy doesn't compile")).toBeTruthy();
   const tabs = screen.getByRole("navigation", { name: "Repository settings" });
@@ -129,6 +130,7 @@ test("a policy that doesn't compile: the badge, the banner, the cards and its ro
   expect(within(fix).getByText("Refused")).toBeTruthy();
   expect(fix.textContent).toContain("No rule of its own, but refused too");
   expect(fix.textContent).toContain("none in any file");
+  expect(within(card("GitHub writes")).getByText("Refused")).toBeTruthy();
   // Its row, and its source: open, the bad line marked with its error.
   const payments = rows().find((r) => r.textContent!.includes("payments.rego"))!;
   expect(within(payments).getByText("Error")).toBeTruthy();

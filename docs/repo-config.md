@@ -781,13 +781,14 @@ to them. With no policy anywhere, nothing changes: `opa` isn't run, and the repo
 folder is listed once, then again only after a push to its default branch (or 10 minutes).
 
 **The rules**: one set of strings per decision, each string a reason shown to the
-maintainer. Three decisions:
+maintainer. Four decisions:
 
 | Rule          | When                                                                                                                                                                     | A message does                                                                                                                                                                                                           |
 | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `deny_merge`  | An [auto-merge](#auto-merge), after every other gate passed, right before the merge. Only with `review.merge` and its grant.                                             | Refuses the merge: the "Not merged automatically" comment quotes the messages (5 at most, 200 characters each).                                                                                                          |
 | `deny_review` | A review that starts by itself ([`review.on: ready`](#reviews)), after its own checks, and the review after each fix run. Never a `/mode review` a maintainer asked for. | Skips the review: the listener's log says why, nothing is posted. After a fix run, the fix loop stops; in auto-merge mode the merge waits for a maintainer, the "Not merged automatically" comment quoting the messages. |
 | `deny_fix`    | A [`review.fix`](#reviews) run, after its own checks, right before it is queued.                                                                                         | Starts no fix run: a "No fix run" comment on the pull request quotes the messages. With `review.merge`, nothing is merged: the refusal quotes them too. The round isn't used: a later review may start it.               |
+| `deny_github` | Each REST write a run makes to GitHub (a comment, an issue edit, a label…), after [its mode's ceiling](#the-github-input).                                               | Refuses the write: GitHub's error shape with the messages, which `gh` prints to the agent, and a line in the run's log.                                                                                                  |
 
 Another `deny_*` rule is reported by the config check, as probably misspelled.
 
@@ -848,11 +849,132 @@ deny_fix contains msg if {
 }
 ```
 
+### The GitHub input
+
+A run's sandbox holds no GitHub token: its calls go through the listener's GitHub gateway
+([security model](security.md)). Each **REST write** (anything but `GET` and `HEAD`, whatever
+tool sends it: `gh`, `gh api`, curl) is checked there, in this order:
+
+1. **Classified** from its method, path and body into actions on a target. A write it can't
+   classify, one outside the run's repository, and one with a query string (GitHub may read
+   parameters there too, which the check wouldn't see) are refused.
+2. **Its target's kind is read from GitHub**, never from the request: whether it is the run's
+   issue, a pull request (its own when it is the run's, or from a branch the run may push),
+   a sub-issue of the run's issue (its parent on GitHub, in the same repository), an issue the
+   run created (GitHub answered one of the run's own creates with it, over REST or GraphQL's
+   `createIssue`, as `gh issue create` sends, and it is no older than that call).
+3. **The mode's ceiling**, built into Deckhand: the most a run of that mode can ever write. A
+   write above it is refused before any policy runs; no policy can allow more.
+4. **`deny_github`**, on the input below: the policies can only narrow the ceiling.
+
+A sub-issue link (`POST`, `DELETE` or reordering `…/issues/<parent>/sub_issues`) names two
+issues: the parent, its target, and the child, by its id: the child must be an issue the run
+created, or one already under the run's issue, and moving an issue from another parent
+(`replace_parent` with any value but `false`) is refused. A link can't take someone else's
+issue under the run's, where its ceiling would let it edit it. The issues the App's bot files
+for other runs or for the listener (an analysis, an onboarding issue) aren't the run's, even
+while it runs: only the answers to its own calls say what it created, and they are saved with
+the run, so a listener restart keeps them. A GraphQL answer counts only for a `mutation`
+calling `createIssue` with nothing aliased `createIssue`, and the issue must be the App's
+bot's.
+
+GraphQL writes (`gh issue comment`, `gh issue create` and most of `gh`'s own commands) aren't
+checked yet: they go on as the run's token allows, until issue #406 classifies them.
+
+| Mode                                                            | Ceiling                                                                                                                                                                                 |
+| --------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `brainstorm`, `stop`                                            | its issue: `edit`, `comment`, `link`; its sub-issues and the issues it created: `edit`, `comment`, `link`; new issues and labels: `create`; other issues and pull requests: `comment`   |
+| `idea`, `bug`                                                   | new issues (with the `idea` or `bug` label) and labels: `create`; the issues it created: `link` (the parents it files); its issue: `comment`                                            |
+| `discussion`                                                    | new issues: `create`                                                                                                                                                                    |
+| `onboarding`, `analyze`, `review`, `research`, a light `modes:` | nothing                                                                                                                                                                                 |
+| `work`, a `modes:` entry that isn't light                       | its issue: `edit`, `comment`, `label`, `link`; its pull requests: `edit`, `comment`, `label`; its sub-issues and the issues it created: `edit`, `comment`, `link`; new issues: `create` |
+
+No ceiling holds closing or reopening (GitHub closes an issue when its pull request merges),
+merging, reviews and their comments, assignees and milestones (an issue created with them
+too), moving an issue from another parent, locks, reactions, editing or
+deleting comments, deleting anything, a label's settings, the repository's contents (pushes
+go through Deckhand's git gateway) or settings, or another repository.
+
+`input` of `deny_github`:
+
+| Field                   | What                                                                                                                                                                                     |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `version`               | `1`.                                                                                                                                                                                     |
+| `repo`                  | `"owner/repo"`, in lower case.                                                                                                                                                           |
+| `mode`                  | The run's: `work`, `brainstorm`, `stop`, `idea`, `bug`, `discussion`, or one of the repository's `modes:`.                                                                               |
+| `issue`                 | The number of the run's issue (or pull request).                                                                                                                                         |
+| `action`                | What the write does: `create`, `edit`, `comment`, `label`, `link`. A write that does several (a `PATCH` setting labels and a title) has them all in `actions`, `action` being the first. |
+| `actions`               | All of them: `close` or `reopen` first, then `label`, `assign`, `milestone`, then `edit`.                                                                                                |
+| `target.kind`           | `own_issue`, `own_pr`, `sub_issue`, `created_issue` (one the run created), `other_issue`, `pr`, `new_issue` (an issue it creates), `label` (a label it creates).                         |
+| `target.number`         | The issue's or pull request's, `null` for `new_issue` and `label`.                                                                                                                       |
+| `target.labels`         | Its labels' names, as GitHub has them now.                                                                                                                                               |
+| `target.author`         | Its author's login.                                                                                                                                                                      |
+| `change.fields`         | The keys of the write's JSON body (`["title", "body"]`).                                                                                                                                 |
+| `change.labels_added`   | The labels it adds (or sets, for a `PUT` or a `PATCH` with `labels`, or creates, for `label`).                                                                                           |
+| `change.labels_removed` | The labels it removes: those a `PUT` or a `PATCH` with `labels` leaves out of the issue's, or the one it deletes; `["*"]` when it deletes them all.                                      |
+| `change.sub_issue`      | A link's child: `id`, `number`, `kind` (`sub_issue` or `created_issue`). Absent from other writes.                                                                                       |
+
+```json
+{
+  "version": 1,
+  "repo": "owner/repo",
+  "mode": "brainstorm",
+  "issue": 12,
+  "action": "comment",
+  "actions": ["comment"],
+  "target": { "kind": "other_issue", "number": 40, "labels": [], "author": "someone" },
+  "change": { "fields": ["body"], "labels_added": [], "labels_removed": [] }
+}
+```
+
+**The default policy**: the ceilings leave room for what a prompt may need one day; this
+template narrows them to what Deckhand's prompts ask for. Put it in the grants folder's
+`policy/github.rego` for every repository (a repository's own `.deckhand/policy/github.rego`
+then replaces it), or in a repository's `.deckhand/policy/`:
+
+<!-- github.rego: test/github-writes.test.mjs evaluates this block with the real opa -->
+
+```rego
+# policy/github.rego
+package deckhand
+
+# Brainstorms edit their own issue's description, and file and link their follow-ups: the
+# listener posts their replies, so they comment nowhere, and write to no other issue.
+deny_github contains msg if {
+  input.mode in {"brainstorm", "stop"}
+  input.action == "comment"
+  msg := "a brainstorm doesn't comment: its final message is posted as its reply"
+}
+
+deny_github contains msg if {
+  input.mode in {"brainstorm", "stop"}
+  not input.target.kind in {"own_issue", "new_issue", "label"}
+  msg := sprintf("a brainstorm writes only its own issue, not #%d", [input.target.number])
+}
+
+# Inbox entries only file issues (with their label), and link the ones they split.
+deny_github contains msg if {
+  input.mode in {"idea", "bug"}
+  not input.action in {"create", "link"}
+  msg := sprintf("%s entries only file issues", [input.mode])
+}
+
+deny_github contains msg if {
+  input.mode in {"idea", "bug"}
+  input.target.kind == "new_issue"
+  not input.mode in input.change.labels_added
+  msg := sprintf("%s entries' issues carry the %s label", [input.mode, input.mode])
+}
+```
+
 ### A dry run and the dashboard
 
 **`/mode policy`**, commented on a pull request by an allowed user, evaluates `deny_merge`,
-`deny_review` and `deny_fix` on the pull request as it is now, and replies with each rule's
-result (denies, with its messages, or allows) and the input, in a collapsed block. Nothing is
+`deny_review` and `deny_fix` on the pull request as it is now, and `deny_github` on two
+sample writes (a comment on it by the work run whose pull request it is, and one by a
+brainstorm of another issue, `issue: null`), and replies with each rule's result (denies, with
+its messages, or allows), the merge's input and the samples' inputs, in collapsed blocks. The
+samples' results are labelled as such and aren't counted as denials. Nothing is
 reviewed, fixed or merged, and it is no decision: it debugs a rule without waiting for a pull
 request to turn ready. The task's page shows its last one: who asked, when, how many denials,
 and a link to the reply. The input is the merge's, read now, with `review: null` (no review

@@ -625,10 +625,15 @@ test("/mode policy: every rule on the pull request now, nothing reviewed, fixed 
     files: { "size.rego": 'package deckhand\ndeny_merge contains "x" if true\n' },
     // Replaced by the repo's: not one of the files the dry run evaluates.
     operator: { "size.rego": 'package deckhand\ndeny_review contains "y" if true\n' },
-    messages: (input, rule) => (rule === "deny_merge" ? ["a `human` merges this one"] : []),
+    messages: (input, rule) => {
+      if (rule === "deny_merge") return ["a `human` merges this one"];
+      if (rule === "deny_github" && input.mode === "brainstorm") return ["not on pull requests"];
+      return [];
+    },
   });
   const s = setup(t, { policies: policy.engine, pr: { additions: 12 } });
   const { text, denials } = await s.reviews.dryRun({ repo: "org/repo", base: "main", number: 5 });
+  // The brainstorm sample's denial is no decision: not counted.
   assert.equal(denials, 1);
   assert.match(
     text,
@@ -638,8 +643,30 @@ test("/mode policy: every rule on the pull request now, nothing reviewed, fixed 
   assert.match(text, /- `deny_merge`: \*\*denies\*\*: `a 'human' merges this one`/);
   assert.match(text, /- `deny_review`: allows \(no file defines it\)/);
   assert.match(text, /- `deny_fix`: allows \(no file defines it\)/);
+  // deny_github on sample writes: a comment on the pull request by its work run, and by a
+  // brainstorm.
+  assert.match(
+    text,
+    /- `deny_github` \(sample: a work run's comment on its pull request\): allows \(no file defines it\)/,
+  );
+  assert.match(
+    text,
+    /- `deny_github` \(sample: a brainstorm's comment on it\): \*\*denies\*\*: `not on pull requests`/,
+  );
+  assert.match(text, /sample writes, not decisions on this pull request/);
   assert.match(text, /<details><summary>The input/);
-  const json = JSON.parse(/```json\n([\s\S]*)\n```/.exec(text)[1]);
+  const [json, samples] = [...text.matchAll(/```json\n([\s\S]*?)\n```/g)].map((m) =>
+    JSON.parse(m[1]),
+  );
+  // The samples' inputs, in a block of their own.
+  assert.match(text, /<details><summary>The `deny_github` samples' inputs/);
+  assert.deepEqual(
+    samples.map((x) => [x.sample, x.input.version, x.input.mode, x.input.target.kind]),
+    [
+      ["a work run's comment on its pull request", 1, "work", "own_pr"],
+      ["a brainstorm's comment on it", 1, "brainstorm", "pr"],
+    ],
+  );
   assert.equal(json.version, 1);
   assert.equal(json.decision, "merge");
   assert.equal(json.pr.additions, 12);
@@ -652,6 +679,15 @@ test("/mode policy: every rule on the pull request now, nothing reviewed, fixed 
       ["deny_merge", "merge", true],
       ["deny_review", "review", false],
       ["deny_fix", "fix", false],
+      ["deny_github", undefined, false],
+      ["deny_github", undefined, false],
+    ],
+  );
+  assert.deepEqual(
+    policy.evals.slice(3).map((e) => [e.mode, e.action, e.target.kind, e.target.number]),
+    [
+      ["work", "comment", "own_pr", 5],
+      ["brainstorm", "comment", "pr", 5],
     ],
   );
   assert.equal(s.accepted.length + s.merges().length + s.replies.length + s.decided.length, 0);

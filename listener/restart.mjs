@@ -155,7 +155,7 @@ export function createRestart(ctx) {
         ...Object.fromEntries(
           ["id", "mode", "talk", "light", "secret", "asked", "replyTo", "replied", "hosts", "shots"]
             .concat(["trusted", "cached", "uncached", "branches", "lines", "result", "later"])
-            .concat(["cancelled", "overflow", "answered", "logPhase"])
+            .concat(["cancelled", "overflow", "answered", "logPhase", "created"])
             .map((k) => [k, live[k]]),
         ),
         record,
@@ -174,10 +174,14 @@ export function createRestart(ctx) {
 
   // The pushes of the run's GitHub took (git-gateway.mjs), on its record: when it last pushed,
   // and which branch, for the dashboard. Saved with it, so a restart keeps them.
+  // The issues it creates too (github-writes.mjs answered()), in `live.created`.
   function watchPushes(task) {
     const { live } = task;
     ctx.broker.watchPushes(live.secret, ({ branch, at }) => {
       Object.assign(live.record, { branch, lastPushAt: at });
+      if (task.live === live) saveLive(task);
+    });
+    ctx.broker.watchCreated(live.secret, () => {
       if (task.live === live) saveLive(task);
     });
   }
@@ -223,6 +227,8 @@ export function createRestart(ctx) {
       engineIp: null,
       handled,
       unanswered: saved.unanswered.map((i) => handled[i]).filter(Boolean),
+      // State saved before runs kept the issues they created: none.
+      created: Array.isArray(saved.created) ? saved.created : [],
       saving: null,
     };
     delete task.live.task;
@@ -232,6 +238,10 @@ export function createRestart(ctx) {
       // Fail closed: a saved run that doesn't say it was a work run doesn't push.
       push: saved.light === false,
       mode: saved.mode,
+      issue: task.number,
+      base: task.base,
+      // The same list as its live state's, which saveLive() writes.
+      created: task.live.created,
       secret: saved.secret,
     });
     // State saved before runs had branches: none, rather than any.

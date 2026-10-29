@@ -693,6 +693,8 @@ const roundsOf = (settings) =>
 // The reply to `/mode policy` (reviews' dryRun()): which files apply, each rule's result, and
 // the input in a collapsed block. Messages are quoted as code, as policyWhy()'s. `files`: none,
 // no policy applies here.
+// `results[]`: { rule, defined, messages, sample, input }: `sample` names the sample write a
+// `deny_github` result is about, `input` its input, shown apart from the merge's (`input`).
 export function dryRunText({ number, sha = null, files, errors = [], results = [], input = null }) {
   const head = `**Policy dry run** on #${number}${sha ? ` at ${short(sha)}` : ""}: nothing was reviewed, fixed or merged.`;
   if (!files.length) {
@@ -704,19 +706,68 @@ export function dryRunText({ number, sha = null, files, errors = [], results = [
   if (errors.length) {
     parts.push(`The config check has errors:\n\n${errors.map((e) => `- ${quote(e)}`).join("\n")}`);
   }
-  const result = ({ rule, defined, messages }) => {
-    if (messages.length) return `- \`${rule}\`: **denies**: ${messages.map(quote).join(", ")}`;
-    return `- \`${rule}\`: ${defined ? "allows" : "allows (no file defines it)"}`;
+  const result = ({ rule, defined, messages, sample }) => {
+    const name = `\`${rule}\`${sample ? ` (sample: ${sample})` : ""}`;
+    if (messages.length) return `- ${name}: **denies**: ${messages.map(quote).join(", ")}`;
+    return `- ${name}: ${defined ? "allows" : "allows (no file defines it)"}`;
   };
   parts.push(results.map(result).join("\n"));
-  let json = JSON.stringify(input, null, 2);
+  const samples = results.filter((r) => r.sample);
+  if (samples.length) {
+    parts.push(
+      "The `deny_github` lines are sample writes, not decisions on this pull request: they aren't counted as denials.",
+    );
+  }
+  parts.push(
+    details(
+      "The input (`deny_merge`'s: review and fix get the same without `checks`, fix with its `round` and `rounds`; no review here)",
+      input,
+    ),
+  );
+  if (samples.length) {
+    const inputs = samples.map((r) => ({ sample: r.sample, input: r.input }));
+    parts.push(details("The `deny_github` samples' inputs", inputs));
+  }
+  return parts.join("\n\n");
+}
+
+// `value` as JSON in a collapsed block under `summary`, cut at DRY_RUN_INPUT, fenced longer
+// than any backticks it holds.
+function details(summary, value) {
+  let json = JSON.stringify(value, null, 2);
   if (json.length > DRY_RUN_INPUT) json = `${json.slice(0, DRY_RUN_INPUT)}\n… (cut)`;
   const longest = Math.max(0, ...(json.match(/`+/g) ?? []).map((run) => run.length));
   const fence = "`".repeat(Math.max(3, longest + 1));
-  parts.push(
-    `<details><summary>The input (\`deny_merge\`'s: review and fix get the same without \`checks\`, fix with its \`round\` and \`rounds\`; no review here)</summary>\n\n${fence}json\n${json}\n${fence}\n\n</details>`,
-  );
-  return parts.join("\n\n");
+  return `<details><summary>${summary}</summary>\n\n${fence}json\n${json}\n${fence}\n\n</details>`;
+}
+
+// The writes a dry run asks `deny_github` about, on pull request `pr` (GitHub's): a comment by
+// a work run whose pull request it is, and by a brainstorm on another issue. → [{ what, input }]
+// (docs/repo-config.md#the-github-input).
+export function githubSamples(repo, pr) {
+  const target = (kind) => ({
+    kind,
+    number: pr.number,
+    labels: (pr.labels ?? []).map((l) => l.name),
+    author: pr.user?.login ?? null,
+  });
+  const change = { fields: ["body"], labels_added: [], labels_removed: [] };
+  const sample = (what, mode, kind, issue) => ({
+    what,
+    input: {
+      repo: repo.toLowerCase(),
+      mode,
+      issue,
+      action: "comment",
+      actions: ["comment"],
+      target: target(kind),
+      change,
+    },
+  });
+  return [
+    sample("a work run's comment on its pull request", "work", "own_pr", pr.number),
+    sample("a brainstorm's comment on it", "brainstorm", "pr", null),
+  ];
 }
 
 // How much of the input a dry run's reply shows: GitHub takes 65536 characters a comment.
@@ -1390,6 +1441,16 @@ export function createReviews({
     const results = [];
     for (const rule of RULES) {
       const defined = files.some((f) => f.rules.includes(rule));
+      // No write to decide on: a comment on this pull request, by a run whose own it is and
+      // by a brainstorm elsewhere.
+      if (rule === "deny_github") {
+        for (const sample of githubSamples(repo, pr)) {
+          const messages = await policies.denied(rule, repo, texts, () => sample.input);
+          const input = { version: INPUT_VERSION, ...sample.input };
+          results.push({ rule, defined, messages, sample: sample.what, input });
+        }
+        continue;
+      }
       const decision = rule.replace(/^deny_/, "");
       const own = { ...input, decision };
       if (decision !== "merge") delete own.checks;
@@ -1405,7 +1466,9 @@ export function createReviews({
       results,
       input: { version: INPUT_VERSION, ...input },
     });
-    return { text, denials: results.reduce((n, r) => n + r.messages.length, 0) };
+    // A sample write's denial is no decision on this pull request.
+    const decided = results.filter((r) => !r.sample);
+    return { text, denials: decided.reduce((n, r) => n + r.messages.length, 0) };
   }
 
   return {

@@ -306,6 +306,39 @@ to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to the
   "timeline", "contentedit", "search" or "textmatch", whatever its case) (read as text until #406 parses GraphQL, then per
   field), and anything on the web host but git's fetches (its pages
   show the comments). Other runs read them.
+- **REST writes are checked** (`listener/github-writes.mjs`, issue #405): each one (anything
+  but `GET` and `HEAD` under the API, but GraphQL's and rendering markdown) is classified from
+  its method, path and body into actions on a target (`create`, `edit`, `comment`, `label`,
+  `link`, `close`…), and its target's kind is looked up on GitHub with the listener's own
+  token, never taken from the request: the run's issue, its pull request (by its number, or
+  its head on a branch of the repository the run may push: `broker.mjs` `allow()`), a
+  sub-issue of its issue (its parent on GitHub, in the same repository), an issue the run
+  created (GitHub answered one of the run's own calls with it: a REST create, or GraphQL's
+  `createIssue`, which `gh issue create` sends and whose answer the gateway reads for that
+  alone: only a `mutation` calling `createIssue` with nothing aliased `createIssue`, since a
+  read could answer under that name with any issue; no older than that call; written by the
+  App's bot, which files issues for every run and for the listener, so that alone says
+  nothing; saved with the run across restarts), another issue
+  or pull request. A sub-issue link's child, named by its id, must be one the run created or
+  one already under its issue, and moving an issue from
+  another parent (`replace_parent` with any value but `false`) is refused: a link could
+  otherwise take any issue under the run's, where its ceiling lets it edit. A write with a
+  query string is refused unchecked: GitHub may read parameters there too. Then:
+  - a write it can't classify, one outside the run's repository, and one above the **mode's
+    ceiling** (`listener/modes.mjs` `ceilingOf()`, built in: [the table](repo-config.md#the-github-input))
+    are refused before any policy runs. A work run writes its own issue, its pull requests,
+    its issue's sub-issues and the issues it created, and creates issues, nothing else: not other issues and pull
+    requests, though its token could. No ceiling holds closing, merging, reviews, deleting,
+    the repository's contents or settings; onboarding, analyses, reviews and a repository's
+    light modes write nothing. Only a grant could widen a ceiling, and none does yet;
+  - then the policies' **`deny_github`** ([Policies](#policies)), which can only narrow it.
+
+  A refusal (a look-up GitHub fails: `502`, fail closed) answers in GitHub's error shape
+  (`{"message": "Deckhand: …"}`, with the policies' reasons), which `gh` prints to the agent,
+  and the run's log notes it. GraphQL's writes (most of `gh`'s own commands) aren't classified
+  until #406: they go on as the token allows, which is why light runs keep `issues: write`
+  until then.
+
 - **On to GitHub** with the run's token (`token …` for the API, Basic with
   `x-access-token` for git, as GitHub expects an App's), the sandbox's `Authorization` and
   cookies dropped. The answer streams back as it comes, with the agents' endpoints' limits
@@ -1228,7 +1261,8 @@ trusted, and whose default branch deploys nothing you couldn't roll back.
 
 [Policies](repo-config.md#policies) are Rego rules that refuse a decision (`deny_merge`, the
 last gate of an auto-merge; `deny_review`, a review that starts by itself; `deny_fix`, a
-review's fix run). Yours are the `*.rego` files of `policy/` in the grants folder,
+review's fix run; `deny_github`, a run's REST write to GitHub, under its mode's built-in
+ceiling: [The GitHub gateway](#the-github-gateway)). Yours are the `*.rego` files of `policy/` in the grants folder,
 read again at each decision: the defaults of every repository. A repository's own are in
 `.deckhand/policy/` on its default branch; one with the same name as yours replaces it, others
 add to them.
@@ -1261,8 +1295,9 @@ add to them.
   of strings refuses the decision with a `policy error: …` reason; so does a policy folder
   that can't be read (yours or GitHub's). For `deny_merge`, the pull request then waits for a
   human, as with any refusal; for `deny_review`, the review is skipped (the log says why); for
-  `deny_fix`, no fix run starts and a comment says why. A refusal only ever costs a run or a
-  merge, never starts one. Your folder's compile errors are logged at start; a repository's
+  `deny_fix`, no fix run starts and a comment says why; for `deny_github`, the run's write is
+  refused, so a broken policy stops every run's REST writes in that repository. A refusal only
+  ever costs a run, a write or a merge, never starts one. Your folder's compile errors are logged at start; a repository's
   appear in its onboarding pull request's config check and its config panel on the dashboard.
 - **A dry run decides nothing**: `/mode policy` on a pull request, only from an allowed user
   (like any comment that reaches Deckhand), evaluates the rules and replies with their results
