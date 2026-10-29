@@ -7,7 +7,7 @@
 import { createServer } from "node:http";
 import { agentFor } from "./agents/index.mjs";
 import { addressOf } from "./broker.mjs";
-import { egressPolicy, githubHosts } from "./egress.mjs";
+import { egressPolicy, relayedGithub } from "./egress.mjs";
 import { NO_TOKEN } from "./github-app.mjs";
 import { taskKey } from "./events.mjs";
 import { sendJson } from "./web.mjs";
@@ -105,7 +105,7 @@ export function createBrokerHttp(ctx) {
   const { config, log, tasks } = ctx;
   // GitHub's hosts first: the other relayed ones are Google's.
   const routes = [
-    ...githubHosts(config).map((host) => ({
+    ...relayedGithub(config).map((host) => ({
       prefix: `/relay/${host}/`,
       service: "githubGateway",
       name: "GitHub gateway",
@@ -146,7 +146,7 @@ export function createBrokerHttp(ctx) {
     const answer = task
       ? egressPolicy(host, live.hosts, live.trusted, live.cached, live.uncached ?? [], {
           decrypt: !engine,
-          relayed: [...(github ? githubHosts(config) : []), ...(agent.relayed ?? [])],
+          relayed: [...(github ? relayedGithub(config) : []), ...(agent.relayed ?? [])],
           blocked: agent.blocked,
         })
       : { allowed: false, private: false, cache: false, decrypt: false, relay: false };

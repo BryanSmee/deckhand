@@ -634,7 +634,7 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
     );
     await send(comment("alice"));
     const egress = join(dir, "egress");
-    await until(() => exists(egress)?.trim().split("\n").length === 9, "the sandbox");
+    await until(() => exists(egress)?.trim().split("\n").length === 10, "the sandbox");
 
     // Codex, installed into its own volume, with its session volume and the run's secret.
     const secret = readFileSync(join(dir, "run-secret"), "utf8").trim();
@@ -1060,6 +1060,7 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
       "api.anthropic.com",
       "github.com",
       "objects.githubusercontent.com",
+      "raw.githubusercontent.com",
     ]);
     assert.match(listener.output(), /Egress: refused evil\.example for org\/repo#12/);
 
@@ -1262,6 +1263,8 @@ caches:
       relay: true,
     });
     assert.equal(withCa.egress["objects.githubusercontent.com"].relay, false);
+    // Raw files too, which the gateway sends on without a token (github-forks.mjs).
+    assert.equal(withCa.egress["raw.githubusercontent.com"].relay, true);
 
     // The proxy has no CA (its cache is off): the run can't reach GitHub, and stops saying so.
     serving = false;
@@ -1307,6 +1310,7 @@ mounts:
       "api.anthropic.com",
       "github.com",
       "objects.githubusercontent.com",
+      "raw.githubusercontent.com",
       "registry.npmjs.org",
       "pypi.org",
       "a.b.example.com",
@@ -1429,7 +1433,7 @@ mounts:
     });
     await ctx.send(comment("alice", body));
     const egress = join(ctx.dir, "egress");
-    await until(() => exists(egress)?.trim().split("\n").length === 9, "the sandbox");
+    await until(() => exists(egress)?.trim().split("\n").length === 10, "the sandbox");
     return ctx;
   }
 
@@ -1635,7 +1639,7 @@ mounts:
     };
     const ctx = await listen(t, files, (dir) => (writeFileSync(join(dir, "hold"), ""), {}));
     await ctx.send(comment("alice", "Deckhand\n/mode brainstorm\nWhat about dark mode?"));
-    await until(() => exists(join(ctx.dir, "egress"))?.trim().split("\n").length === 9, "the run");
+    await until(() => exists(join(ctx.dir, "egress"))?.trim().split("\n").length === 10, "the run");
     const secret = readFileSync(join(ctx.dir, "run-secret"), "utf8").trim();
     const patch = (number) =>
       fetch(`http://127.0.0.1:${ctx.brokerPort}/relay/127.0.0.1/repos/org/repo/issues/${number}`, {
@@ -1680,7 +1684,7 @@ mounts:
     };
     const ctx = await listen(t, files, (dir) => (writeFileSync(join(dir, "hold"), ""), {}));
     await ctx.send(comment("alice", "Deckhand\n/mode brainstorm\nWhat about dark mode?"));
-    await until(() => exists(join(ctx.dir, "egress"))?.trim().split("\n").length === 9, "the run");
+    await until(() => exists(join(ctx.dir, "egress"))?.trim().split("\n").length === 10, "the run");
     const secret = readFileSync(join(ctx.dir, "run-secret"), "utf8").trim();
     const graphql = (query) =>
       fetch(`http://127.0.0.1:${ctx.brokerPort}/relay/127.0.0.1/graphql`, {
@@ -1746,6 +1750,17 @@ mounts:
       for (const answer of await pushAndOpen(ctx)) {
         assert.doesNotMatch(answer, /^40[13]|can't push|its ceiling/);
       }
+      // Not a fork's run: a fork's pull request's head is refused it (github-forks.mjs).
+      const secret = readFileSync(join(ctx.dir, "run-secret"), "utf8").trim();
+      const archive = await fetch(
+        `http://127.0.0.1:${ctx.brokerPort}/relay/127.0.0.1/repos/org/repo/tarball/refs/pull/41/head`,
+        { headers: { authorization: `token ${secret}` } },
+      );
+      assert.equal(archive.status, 403);
+      assert.match(
+        (await archive.json()).message,
+        /pull request #41 is from a fork \(someone\/repo\)/,
+      );
     };
     await check();
     await ctx.restart();
@@ -1831,7 +1846,7 @@ mounts:
     });
     const { dir } = ctx;
     await ctx.send(comment("alice"));
-    await until(() => exists(join(dir, "egress"))?.trim().split("\n").length === 9, "the sandbox");
+    await until(() => exists(join(dir, "egress"))?.trim().split("\n").length === 10, "the sandbox");
     // Bob's comment waits out a long pause for the running session, then the listener stops.
     await ctx.restart({ DEBOUNCE_MS: "60000" });
     await ctx.listener.until("picked up deckhand-org-repo-12-0e9572aae2 again");
@@ -2365,7 +2380,7 @@ mounts:
       },
     );
     await send(entry(99, "The login page is blank"));
-    await until(() => exists(join(dir, "egress"))?.trim().split("\n").length === 9, "the sandbox");
+    await until(() => exists(join(dir, "egress"))?.trim().split("\n").length === 10, "the sandbox");
     await send(entry(100, "Dates are off by one"));
     await listener.until("queued after the running one (bug)");
     await new Promise((resolve) => setTimeout(resolve, 200));
@@ -2723,6 +2738,7 @@ modes:
       "api.anthropic.com",
       "github.com",
       "objects.githubusercontent.com",
+      "raw.githubusercontent.com",
       "registry.npmjs.org",
       "pypi.org",
     ]);
@@ -2790,7 +2806,7 @@ modes:
     writeGrant(dir, "allow_research: true\nhosts: [registry.npmjs.org]\n");
     await send(followUp(100, "Deckhand\n/mode research\nWhich one?"));
     const egress = join(dir, "egress");
-    await until(() => exists(egress)?.trim().split("\n").length === 9, "the sandbox");
+    await until(() => exists(egress)?.trim().split("\n").length === 10, "the sandbox");
     const runEnv = readFileSync(join(dir, "run-env"), "utf8");
     assert.match(runEnv, /^TASK_MODE=research$/m);
     assert.match(runEnv, /^SANDBOX_NO_CLONE=1$/m);
@@ -3297,7 +3313,7 @@ mounts:
     const base = `http://127.0.0.1:${port}`;
     assert.equal((await (await fetch(`${base}/status`)).json()).idle, true);
     await send(comment("bob"));
-    await until(() => exists(join(dir, "egress"))?.trim().split("\n").length === 9, "the sandbox");
+    await until(() => exists(join(dir, "egress"))?.trim().split("\n").length === 10, "the sandbox");
     // Forwarded, so not a call from inside the container: the session decides.
     const get = (path, cookie) =>
       fetch(base + path, {
@@ -4194,7 +4210,7 @@ mounts:
     });
     const { dir, github, brokerPort } = ctx;
     await ctx.send(comment("alice"));
-    await until(() => exists(join(dir, "egress"))?.trim().split("\n").length === 9, "the sandbox");
+    await until(() => exists(join(dir, "egress"))?.trim().split("\n").length === 10, "the sandbox");
     assert.deepEqual(await savedBranches(dir), ["issue-12-*"]);
     const secret = readFileSync(join(dir, "run-secret"), "utf8").trim();
     const forwarded = () =>
@@ -4242,7 +4258,7 @@ mounts:
     });
     const { dir, github, brokerPort } = ctx;
     await ctx.send(comment("alice"));
-    await until(() => exists(join(dir, "egress"))?.trim().split("\n").length === 9, "the sandbox");
+    await until(() => exists(join(dir, "egress"))?.trim().split("\n").length === 10, "the sandbox");
     const secret = readFileSync(join(dir, "run-secret"), "utf8").trim();
     // The token each push reached GitHub with.
     const pushedWith = () =>
@@ -4307,7 +4323,7 @@ mounts:
       return payload;
     };
     await ctx.send(onPull(40));
-    await until(() => exists(join(dir, "egress"))?.trim().split("\n").length === 9, "the sandbox");
+    await until(() => exists(join(dir, "egress"))?.trim().split("\n").length === 10, "the sandbox");
     assert.deepEqual(await savedBranches(dir), ["feature/maintainer"]);
     assert.match(
       readFileSync(join(dir, "run-env"), "utf8"),
@@ -4319,7 +4335,7 @@ mounts:
     rmSync(join(dir, "go"));
 
     await ctx.send(onPull(41));
-    await until(() => exists(join(dir, "egress"))?.trim().split("\n").length === 9, "the sandbox");
+    await until(() => exists(join(dir, "egress"))?.trim().split("\n").length === 10, "the sandbox");
     assert.deepEqual(await savedBranches(dir), []);
     assert.match(readFileSync(join(dir, "run-env"), "utf8"), /its branch is in a fork/);
     writeFileSync(join(dir, "go"), "");

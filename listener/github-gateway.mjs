@@ -15,6 +15,10 @@
 //   GitHub, then held to its mode's ceiling and the policies' `deny_github`; every GraphQL call
 //   is parsed and validated, and each of its mutations checked the same way (github-graphql.mjs),
 //   and what goes on is the document as parsed, printed again;
+// - a work run that isn't a fork's gets nothing that would bring a fork's code (github-forks.mjs):
+//   a fork's repository, a fork's pull request's head, a commit that isn't its repository's,
+//   in a fetch, an archive, the API, a page or a raw file (raw.githubusercontent.com, relayed
+//   here too, but anonymously: it never gets a token);
 // - every write's body is redacted (the run's secret, the operator's credentials, the tokens
 //   used for it, anything shaped like a GitHub token) before GitHub gets it, and the run's log
 //   says so: what a run posts itself would otherwise skip the redaction of its reply and log;
@@ -27,6 +31,7 @@
 // Served on the broker's port, which only the runs' networks reach.
 import { addressOf, NOT_ITS_SANDBOX } from "./broker.mjs";
 import { NO_TOKEN, readsOf } from "./github-app.mjs";
+import { fetchBody, fetchRequest, MAX_ADVERTISEMENT, MAX_FETCH, pkt } from "./github-forks.mjs";
 import { pullOf } from "./github-pulls.mjs";
 import { classify } from "./github-writes.mjs";
 import { redact } from "./redact.mjs";
@@ -66,6 +71,10 @@ const THREAD_FIELDS = /comment|review|timeline|contentedit|search|textmatch/i;
 // comments).
 const GIT_READ = /^[^/]+\/[^/]+?(?:\.git)?\/(?:info\/refs|git-upload-pack)$/;
 const GIT_PUSH = /\/git-receive-pack$/;
+// A fetch's calls, and the repository they name.
+const GIT_FETCH = /^([^/]+\/[^/]+?)(?:\.git)?\/(info\/refs|git-upload-pack)$/;
+// Where raw files come from: relayed, without a token (egress.mjs RAW_HOST).
+export const RAW = "https://raw.githubusercontent.com";
 
 // The secret a call sent in place of a token: `token <secret>` (gh), `Bearer <secret>` or Basic
 // with it as the password (git). Undefined without an Authorization header; "" for one that
@@ -150,6 +159,10 @@ export function createGithubGateway({
   app, // () => the GitHub App (github-app.mjs), or null before /setup
   api, // the listener's GITHUB_API
   web, // its GITHUB_URL
+  raw = RAW, // where raw files come from
+  // github-forks.mjs createForkChecks(): what a work run that isn't a fork's may fetch. None:
+  // nothing is checked.
+  forks = null,
   // req → the address of the sandbox that sent it: the one the egress proxy names when it
   // relayed the call (broker-http.mjs clientAddress()).
   clientOf = async (req) => addressOf(req),
@@ -182,6 +195,7 @@ export function createGithubGateway({
   // GitHub Enterprise Server's GraphQL is beside its REST API (/api/graphql, /api/v3/).
   const graphql = new URL(apiBase.pathname.endsWith("/v3/") ? "../graphql" : "graphql", apiBase);
   const webBase = baseOf(web);
+  const rawBase = baseOf(raw);
   // GraphQL's path as route() decodes it, and the spellings GitHub may read as it too.
   const graphqlPaths = new Set(["graphql", graphql.pathname.slice(1).toLowerCase()]);
   const isGraphql = (path) => graphqlPaths.has(path.toLowerCase().replace(/\/+$/, ""));
@@ -205,9 +219,9 @@ export function createGithubGateway({
     );
   }
 
-  // /relay/<host>/<path> → { target, api, path }: the URL on GitHub, whether it is the API's
-  // (REST or GraphQL) or the web host's, and the path under that base, decoded. Null for a host
-  // that isn't GitHub's or a path that would leave it.
+  // /relay/<host>/<path> → { target, api, raw, path }: the URL on GitHub, whether it is the API's
+  // (REST or GraphQL), raw files' or the web host's, and the path under that base, decoded. Null
+  // for a host that isn't GitHub's or a path that would leave it.
   function route(url) {
     const match = /^\/relay\/([^/]+)(\/[^]*)$/.exec(url);
     if (!match) return null;
@@ -228,6 +242,16 @@ export function createGithubGateway({
         return { target, api: true, path: decoded(pathname, apiBase) };
       }
       // Not the API's: the web host's, when it is the same host (GitHub Enterprise Server).
+    }
+    if (rawBase.hostname === host.toLowerCase()) {
+      let target;
+      try {
+        target = new URL(rest, rawBase.origin);
+      } catch {
+        return null;
+      }
+      if (target.origin !== rawBase.origin) return null;
+      return { target, api: false, raw: true, path: decoded(target.pathname, rawBase) };
     }
     return null;
   }
@@ -261,10 +285,13 @@ export function createGithubGateway({
       req.resume();
       return fail(res, 400, `a ${req.method} with a body`);
     }
-    // A fetch's pack request is a POST, and binary: streamed, never read.
+    // A fetch's pack request is a POST, and binary: streamed, not redacted (a work run's is read
+    // for what it wants, below: forkCheck()).
     const streamed = !write || (!where.api && /\/git-upload-pack$/.test(where.path));
+    if (where.raw && write) return fail(res, 405, "raw files are only read");
     const review = run.mode === "review";
-    if (review && refusedToReview(where)) return refuseThread(run, res, call);
+    // Raw files aren't the thread: a review reads them as before.
+    if (review && !where.raw && refusedToReview(where)) return refuseThread(run, res, call);
     const github = app();
     if (!github) return fail(res, 503, "the GitHub App is not set up");
     const calls = inFlight.get(run) ?? 0;
@@ -272,6 +299,32 @@ export function createGithubGateway({
     inFlight.set(run, calls + 1);
     try {
       let body;
+      // A fetch's: the repository whose refs GitHub's answer advertises (info/refs, ls-refs), for
+      // its wants (github-forks.mjs remember()); whether its body was inflated.
+      let advertised = null;
+      let inflated = false;
+      const fork = await forkCheck(run, req, where);
+      if (fork?.refused) return refuseFork(run, req, res, where, call, fork.refused, fork.git);
+      if (where.raw) return await anonymous(req, res, where.target);
+      if (fork?.fetch && req.method === "POST") {
+        // Read whole, to check what it wants: git compresses a long negotiation.
+        body = await readBody(req, maxWrite, idleMs, clock);
+        if (body === null) return fail(res, 413, `a fetch over ${maxWrite} bytes`);
+        let request;
+        try {
+          inflated = req.headers["content-encoding"] !== undefined;
+          body = fetchBody(body, req.headers["content-encoding"]);
+          request = fetchRequest(body);
+        } catch (error) {
+          const message = /maxOutputLength|buffer/i.test(error.message)
+            ? `a fetch over ${MAX_FETCH} bytes`
+            : error.message;
+          return refuseFork(run, req, res, where, call, { status: 400, message }, true);
+        }
+        const refused = await forks.checkFetch(run, fork.fetch, request);
+        if (refused) return refuseFork(run, req, res, where, call, refused, true);
+        if (request.command === "ls-refs") advertised = fork.fetch;
+      } else if (fork?.fetch) advertised = fork.fetch;
       if (!streamed) {
         // A compressed body would hide what redaction and a review's check look for: refused
         // rather than inflated, as the git gateway does.
@@ -364,7 +417,10 @@ export function createGithubGateway({
         log(`GitHub gateway: refused ${clip(run, call)} for ${run.repo}: ${refused.message}`);
         return fail(res, refused.status, refused.message);
       }
-      await proxied(req, res, run, github, where, body, watched, writing && permissions);
+      await proxied(req, res, run, github, where, body, watched, writing && permissions, {
+        advertised,
+        inflated,
+      });
     } finally {
       inFlight.set(run, inFlight.get(run) - 1);
     }
@@ -387,6 +443,60 @@ export function createGithubGateway({
       return (fail(res, 403, "this run gets nothing from GitHub"), null);
     }
     return run;
+  }
+
+  // A restricted run's call (github-forks.mjs restricted()) → { refused, git } when it would
+  // bring a fork's code, { fetch } (the repository) for a git call whose fetch is checked and
+  // whose advertisement is remembered, or null. GraphQL's are github-graphql.mjs's.
+  async function forkCheck(run, req, where) {
+    if (!forks?.restricted(run)) return null;
+    if (where.api && isGraphql(where.path)) return null;
+    const git = where.api || where.raw ? null : GIT_FETCH.exec(where.path);
+    if (git) {
+      const scoped = await forks.fetchScope(run, git[1]);
+      if (scoped?.refused) return { refused: scoped.refused, git: true };
+      return scoped ? { fetch: scoped.repo } : null;
+    }
+    const refused = await forks.checkCall(run, {
+      kind: where.api ? "api" : where.raw ? "raw" : "web",
+      path: where.path,
+      query: where.target.searchParams,
+      accept: String(req.headers.accept ?? ""),
+    });
+    return refused && { refused, git: false };
+  }
+
+  // What would bring a fork's code, refused and noted. Git shows a fetch's `ERR` line as
+  // "remote error: …", and a refused first request's plain text as "remote: …"; gh shows the
+  // API's message; a page or raw file gets the text.
+  function refuseFork(run, req, res, { api }, call, { status, message }, git) {
+    note(run, `Deckhand refused the run's GitHub call ${clip(run, call)}: ${message}`);
+    log(`GitHub gateway: refused ${clip(run, call)} for ${run.repo}: ${message}`);
+    req.resume();
+    if (git && req.method === "POST") {
+      res.writeHead(200, {
+        "content-type": "application/x-git-upload-pack-result",
+        "cache-control": "no-cache",
+      });
+      return res.end(pkt(`ERR Deckhand: ${message}\n`));
+    }
+    if (api) return fail(res, status, message);
+    res.writeHead(status, { "content-type": "text/plain" });
+    res.end(`Deckhand: ${message}\n`);
+  }
+
+  // A raw file, anonymously: raw.githubusercontent.com gets no token, nor the sandbox's
+  // credentials, as when it was a plain host.
+  function anonymous(req, res, target) {
+    return forward(req, res, {
+      target,
+      headers: forwarded(req.headers, ["authorization", "cookie"]),
+      unreachable: () => fail(res, 502, "raw.githubusercontent.com can't be reached"),
+      log,
+      what: "GitHub gateway",
+      idleMs,
+      clock,
+    });
   }
 
   function refusedToReview({ api, path }) {
@@ -439,7 +549,19 @@ export function createGithubGateway({
 
   // `watched`: a write whose answer goes to wroteWrite(); `writing`: for one that passed its
   // checks, whose token may write, the permissions it needs beyond its mode's; else false.
-  async function proxied(req, res, run, github, { target, api }, body, watched, writing) {
+  // `advertised`: the repository whose refs the answer advertises to the run's git, remembered
+  // (github-forks.mjs); `inflated`: whether `body` is the request's own, inflated.
+  async function proxied(
+    req,
+    res,
+    run,
+    github,
+    { target, api },
+    body,
+    watched,
+    writing,
+    { advertised = null, inflated = false } = {},
+  ) {
     let token;
     const permissions = writing ? { ...run.extra, ...writing } : readsOf(run.extra);
     try {
@@ -449,7 +571,11 @@ export function createGithubGateway({
       return fail(res, 502, "GitHub refused the token");
     }
     run.tokens.add(token);
-    const headers = forwarded(req.headers, ["authorization", "cookie"]);
+    const headers = forwarded(req.headers, [
+      "authorization",
+      "cookie",
+      ...(inflated ? ["content-encoding"] : []),
+    ]);
     // git asks with Basic, as GitHub expects an App's token on its web host.
     headers.authorization = api
       ? `token ${token}`
@@ -459,10 +585,11 @@ export function createGithubGateway({
     let status = 0;
     let answer = [];
     let size = 0;
-    if (watched) headers["accept-encoding"] = "identity";
+    if (watched || advertised) headers["accept-encoding"] = "identity";
+    const most = watched ? MAX_ANSWER : MAX_ADVERTISEMENT;
     const tap = (chunk) => {
       size += chunk.length;
-      if (size <= MAX_ANSWER) answer?.push(chunk);
+      if (size <= most) answer?.push(chunk);
       else answer = null;
     };
     const at = Date.now();
@@ -475,8 +602,11 @@ export function createGithubGateway({
       what: "GitHub gateway",
       idleMs,
       clock,
-      ...(watched && { tap, answered: (code) => (status = code) }),
+      ...((watched || advertised) && { tap, answered: (code) => (status = code) }),
     });
+    if (advertised && answer && status === 200) {
+      forks.remember(run, advertised, Buffer.concat(answer));
+    }
     if (!watched || !answer) return;
     try {
       wroteWrite(run, { ...watched, at }, status, Buffer.concat(answer));

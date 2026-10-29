@@ -20,6 +20,7 @@ import { planWarning } from "./upstream.mjs";
 import { createBroker } from "./broker.mjs";
 import { clientAddress, createBrokerHttp, runAt, runFrom } from "./broker-http.mjs";
 import { createGitGateway } from "./git-gateway.mjs";
+import { createForkChecks } from "./github-forks.mjs";
 import { createGithubGateway } from "./github-gateway.mjs";
 import { createGraphqlChecks, createValidator, lookupNodes } from "./github-graphql.mjs";
 import { createPullChecks } from "./github-pulls.mjs";
@@ -366,8 +367,14 @@ const writeChecks = createWriteChecks({
 });
 // Their GraphQL: parsed, validated (in a worker: a document can take a moment), and each
 // mutation held to the same checks, its node IDs looked up with the listener's token.
+// What a work run that isn't a fork's may fetch: nothing that brings a fork's code.
+const forkChecks = createForkChecks({
+  get: (repo, path, expected) => getJson(github, repo, path, expected),
+  log,
+});
 const graphqlChecks = createGraphqlChecks({
   validator: createValidator().check,
+  blobs: (run) => !forkChecks.restricted(run),
   nodes: (repo, ids) => lookupNodes(github, repo, ids),
   checkWrite: writeChecks.checkWrite,
   log,
@@ -377,6 +384,7 @@ ctx.githubGateway = createGithubGateway({
   app: () => ctx.app,
   api: config.githubApi,
   web: config.githubUrl,
+  forks: forkChecks,
   clientOf: (req) => clientAddress(ctx, req),
   runFrom: (ip) => runFrom(ctx, ip),
   // The run's own secret too, which the broker keeps by hash only.

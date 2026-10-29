@@ -155,7 +155,7 @@ export function createRestart(ctx) {
         ...Object.fromEntries(
           ["id", "mode", "talk", "light", "secret", "asked", "replyTo", "replied", "hosts", "shots"]
             .concat(["trusted", "cached", "uncached", "branches", "lines", "result", "later"])
-            .concat(["cancelled", "overflow", "answered", "logPhase", "created"])
+            .concat(["cancelled", "overflow", "answered", "logPhase", "created", "fork"])
             .map((k) => [k, live[k]]),
         ),
         record,
@@ -247,8 +247,9 @@ export function createRestart(ctx) {
       created: task.live.created,
       secret: saved.secret,
     });
-    // State saved before runs had branches: none, rather than any.
-    ctx.broker.allow(saved.secret, saved.branches ?? []);
+    // State saved before runs had branches: none, rather than any; before they kept whether they
+    // were a fork's, not one: what it fetches is checked (github-forks.mjs).
+    ctx.broker.allow(saved.secret, saved.branches ?? [], saved.fork === true);
     const { logFile } = task.live;
     // Its agent's calls go on to the provider and credential it started on (a fallback's), or its
     // agent's own when the record has none: never another agent's credential.
