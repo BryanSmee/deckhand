@@ -119,7 +119,8 @@ test("the pinned schema is GitHub's, with the mutations Deckhand classifies", ()
   for (const name of Object.keys(MUTATIONS)) {
     assert.ok(fields[name], name);
     const input = fields[name].args.find((a) => a.name === "input").type.ofType.getFields();
-    for (const field of [MUTATIONS[name].target, ...MUTATIONS[name].fields]) {
+    const { target, fields: known, empty = [] } = MUTATIONS[name];
+    for (const field of [target, ...known, ...empty]) {
       assert.ok(input[field], `${name}.${field}`);
     }
   }
