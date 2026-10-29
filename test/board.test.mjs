@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { waitEdges } from "../listener/http.mjs";
+import { loopStep, waitEdges } from "../listener/http.mjs";
 import { board, isLive, runPlaces } from "../listener/board.mjs";
 
 const run = (key, startedAt, extra = {}) => ({
@@ -496,4 +496,101 @@ test("a task's update time is the latest Deckhand saw, and orders the list", () 
     ["acme/api#1", "acme/api#3", "acme/api#6", "acme/api#5", "acme/api#4", "acme/api#2"],
   );
   assert.equal(tasks.find((t) => t.key === "acme/api#3").since, 100);
+});
+
+test("a pull request in its fix loop: in review between its runs, its round on the task", () => {
+  const pr = { number: 5, state: "ready" };
+  const history = [{ round: 0, at: 1, head: "a", counts: { high: 2 }, blocking: 2 }];
+  const entry = { head: "a", at: 1, fixes: 1, fixRounds: 3, rounds: history };
+  const reviewed = (repo, number) => (number === 5 ? entry : null);
+  const tasks = board({
+    runs: [
+      // The fix run's review is queued after it: in review, not queued.
+      run("acme/api#1", 30, { reason: "review-fix", round: 1, rounds: 3 }),
+      // The fix run is running: still working.
+      run("acme/api#2", 20, { status: "running", reason: "review-fix" }),
+      run("acme/api#3", 10),
+      run("acme/api#4", 5),
+    ],
+    queued: [{ key: "acme/api#1", kind: "issue", repo: "acme/api", reason: "review" }],
+    brainstorms: [],
+    pr: (key) => (key === "acme/api#4" ? { number: 6, state: "ready" } : pr),
+    reviewed: (repo, number) =>
+      number === 6 ? { ...entry, waiting: { sha: "a" } } : reviewed(repo, number),
+  });
+  const of = (key) => tasks.find((t) => t.key === key);
+  assert.equal(of("acme/api#1").state, "in-review");
+  assert.deepEqual(
+    [of("acme/api#1").review.loop, of("acme/api#1").review.round, of("acme/api#1").review.rounds],
+    ["reviewing", 1, 3],
+  );
+  assert.equal(of("acme/api#2").state, "working");
+  assert.equal(of("acme/api#2").review.loop, "fixing");
+  // Nothing going: how the loop ended, with the task's own state.
+  assert.equal(of("acme/api#3").state, "done");
+  assert.equal(of("acme/api#3").review.loop, "stopped");
+  // The auto-merge waits for checks: in review.
+  assert.equal(of("acme/api#4").state, "in-review");
+  assert.equal(of("acme/api#4").review.loop, "checks");
+  // In review is live: on top with the running ones.
+  assert.deepEqual(
+    tasks.slice(0, 3).map((t) => t.key),
+    ["acme/api#1", "acme/api#2", "acme/api#4"],
+  );
+  // No pull request, or none reviewed: no `review`.
+  const plain = board({ runs: [run("acme/api#7", 1)], queued: [], brainstorms: [] });
+  assert.equal(plain[0].review, undefined);
+});
+
+test("in review: a maintainer's comment queued meanwhile stays queued; a loop run over, in review", () => {
+  const pr = { number: 5, state: "ready" };
+  const history = [{ round: 0, at: 1, head: "a", counts: { high: 1 }, blocking: 1 }];
+  const entry = { head: "a", at: 1, fixes: 1, fixRounds: 3, rounds: history };
+  const tasks = board({
+    runs: [
+      run("acme/api#1", 30, { reason: "review" }),
+      // Its fix run over, the listener still deciding: in review, fixing.
+      run("acme/api#2", 20, { reason: "review-fix" }),
+      // A fix run that failed: its step isn't on its way.
+      run("acme/api#3", 10, { reason: "review-fix", status: "error" }),
+    ],
+    // Auto-merge waits for checks on #1's pull request; a maintainer commented meanwhile.
+    queued: [{ key: "acme/api#1", kind: "issue", repo: "acme/api", reason: null, position: 1 }],
+    brainstorms: [],
+    pr: () => pr,
+    reviewed: () => ({ ...entry, waiting: { sha: "a" }, next: "review-fix" }),
+  });
+  const of = (key) => tasks.find((t) => t.key === key);
+  assert.deepEqual([of("acme/api#1").state, of("acme/api#1").position], ["queued", 1]);
+  assert.equal(of("acme/api#1").review.loop, "checks");
+  assert.deepEqual([of("acme/api#2").state, of("acme/api#2").review.loop], ["in-review", "fixing"]);
+  assert.equal(of("acme/api#3").state, "error");
+});
+
+test("a review queued while the work run that marked the pull request ready still runs", () => {
+  const pr = { number: 5, state: "ready" };
+  const review = { reason: "review", replyTo: 5 };
+  const comment = { reason: undefined, replyTo: 12 };
+  // The review queued alone, behind the work run: in review already, the run's state kept.
+  assert.deepEqual(loopStep([review]), { reason: "review", others: false });
+  // A maintainer's comment queued before it: the task is queued, its comment in the run order.
+  assert.deepEqual(loopStep([comment, review]), { reason: "review", others: true });
+  assert.deepEqual(loopStep([comment]), { reason: null, others: true });
+  const tasks = board({
+    runs: [run("acme/api#1", 30, { status: "running" }), run("acme/api#2", 20)],
+    queued: [
+      { key: "acme/api#1", kind: "issue", repo: "acme/api", ...loopStep([review]) },
+      { key: "acme/api#2", kind: "issue", repo: "acme/api", ...loopStep([comment, review]) },
+    ],
+    brainstorms: [],
+    pr: () => pr,
+    // Nothing reviewed yet: the first review.
+    reviewed: () => null,
+  });
+  const of = (key) => tasks.find((t) => t.key === key);
+  assert.deepEqual(
+    [of("acme/api#1").state, of("acme/api#1").review.loop],
+    ["working", "reviewing"],
+  );
+  assert.deepEqual([of("acme/api#2").state, of("acme/api#2").review.loop], ["queued", "reviewing"]);
 });

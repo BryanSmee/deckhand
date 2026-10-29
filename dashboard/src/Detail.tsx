@@ -17,6 +17,7 @@ import {
   githubUrl,
   isPrTask,
   kindName,
+  loopLine,
   modeOf,
   PR_NAMES,
   runName,
@@ -30,6 +31,7 @@ import { logSections, plainText } from "./logModel";
 import { AuthTag, Outcome } from "./Outcome";
 import { heldMerge, PolicyTab } from "./Policies";
 import { Questions } from "./Questions";
+import { ReviewRounds } from "./ReviewLoop";
 import { StopDialog } from "./Stop";
 import { Thread } from "./Thread";
 import type { PullRequest, Run, Task } from "./types";
@@ -337,6 +339,7 @@ export function Detail({
           </div>
           <div class={styles.facts}>
             <StatusBadge state={t.state} tone={taskTone(t)} />
+            {loopLine(t) && <span>{loopLine(t)}</span>}
             {held && <StatusBadge tone="input" label="Not merged automatically" />}
             {r && (
               <span>
@@ -389,6 +392,7 @@ export function Detail({
               </a>
             )}
           </div>
+          <ReviewRounds task={t} />
           {reply && (thread || reply.id !== r?.id) && (
             <section class={styles.reply} aria-label="Last reply">
               <h3>Last reply</h3>

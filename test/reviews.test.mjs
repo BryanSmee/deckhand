@@ -14,6 +14,8 @@ import {
   reviewBody,
   reviewCandidate,
   reviewEvent,
+  reviewLoop,
+  stepsGoing,
 } from "../listener/reviews.mjs";
 import { tempDir, testConfig } from "./helpers.mjs";
 
@@ -302,7 +304,13 @@ test("reviewCandidate: ready pull requests of the repo, by the App or an allowed
 function setup(
   t,
   yaml = "review:\n  on: ready\n",
-  { path = join(tempDir(t), "reviews.json"), github, busy = () => false, settings = config } = {},
+  {
+    path = join(tempDir(t), "reviews.json"),
+    github,
+    busy = () => false,
+    settings = config,
+    policies = null,
+  } = {},
 ) {
   let time = 1_800_000_000_000;
   const accepted = [];
@@ -314,6 +322,7 @@ function setup(
     accept: async (item) => accepted.push(item),
     github,
     busy,
+    policies,
     now: () => time,
   });
   return { reviews, accepted, path, read, advance: (ms) => (time += ms) };
@@ -690,4 +699,330 @@ test("reviewThread: the repo's users narrow the operator's; no linked issue, no 
   // Not read: thrown, and the run doesn't start (preparation.mjs).
   const broken = threadGitHub({});
   await assert.rejects(reviewThread({ github: broken.github, config, settings }, "org/repo", 7));
+});
+
+// The fix loop's rounds as reviews.json keeps them for the dashboard (reviewLoop()).
+const HIGH_TWO =
+  "- **high** `a.mjs:1`: a hole.\n- **high** `b.mjs:2`: another.\n- **low** `c.mjs:3`: a typo.\n\nRating: 4/10\nVerdict: request-changes";
+const HIGH_ONE = "- **high** `a.mjs:1`: a hole.\n\nRating: 4/10\nVerdict: request-changes";
+const CLEAN = "- **low** `c.mjs:3`: a typo.\n\nRating: 9/10\nVerdict: approve";
+
+// Its pull request turned ready at sha-1: the first review was queued.
+// `during(path)`: called on each GitHub call, while the listener decides what follows a run.
+async function loopSetup(t, yaml = "review:\n  on: ready\n  fix: 2\n", { during } = {}) {
+  let head = "sha-1";
+  const github = async (repo, method, path) => {
+    during?.(path);
+    if (path === "/repos/org/repo/issues/12") return Response.json({ labels: [] });
+    if (path === "/repos/org/repo/pulls/5")
+      return Response.json({
+        ...posted().pr,
+        head: { sha: head, repo: { full_name: "org/repo" } },
+      });
+    return new Response("{}", { status: 404 });
+  };
+  const s = setup(t, yaml, { github, path: join(tempDir(t), "reviews.json") });
+  await s.reviews.consider("pull_request", delivery("ready_for_review", posted().pr));
+  const run = { repo: "org/repo", number: 5, base: "trunk", settings: s.read.settings, auto: true };
+  // A review posted at the current head, then its fix run pushing `next`.
+  const review = (message) =>
+    s.reviews.settle(
+      run,
+      posted(message, { head: { sha: head, repo: { full_name: "org/repo" } } }),
+    );
+  const fixed = async (next, status = "ok") => {
+    head = next ?? head;
+    return s.reviews.fixed({ repo: "org/repo", number: 5, base: "trunk", status });
+  };
+  const loop = (step, options) => reviewLoop(s.reviews.entry("org/repo", 5), step, options);
+  return { ...s, review, fixed, loop };
+}
+
+test("review loop: each automatic review's counts, and where the loop is", async (t) => {
+  const s = await loopSetup(t);
+  assert.equal(s.loop(), null);
+  // The first review queued: reviewing, round 0.
+  assert.deepEqual(reviewLoop(null, "review"), {
+    loop: "reviewing",
+    round: 0,
+    rounds: 0,
+    history: [],
+  });
+  const fix = await s.review(HIGH_TWO);
+  assert.equal(fix.reason, "review-fix");
+  const [first] = s.loop().history;
+  assert.deepEqual(first, {
+    round: 0,
+    at: first.at,
+    head: "sha-1",
+    counts: { critical: 0, high: 2, medium: 0, low: 1 },
+    blocking: 2,
+  });
+  // Counts only: no finding's text in reviews.json.
+  assert.doesNotMatch(readFileSync(s.path, "utf8"), /hole/);
+  assert.deepEqual(
+    [s.loop("review-fix").loop, s.loop("review-fix").round, s.loop("review-fix").rounds],
+    ["fixing", 1, 2],
+  );
+  assert.equal((await s.fixed("sha-2")).reason, "review");
+  assert.deepEqual([s.loop("review").loop, s.loop("review").round], ["reviewing", 1]);
+  await s.review(HIGH_ONE);
+  await s.fixed("sha-3");
+  // The review after the last fix run still blocks: the rounds ran out.
+  assert.equal(await s.review(HIGH_ONE), null);
+  const out = s.loop();
+  assert.deepEqual([out.loop, out.round, out.rounds], ["rounds-out", 2, 2]);
+  assert.deepEqual(
+    out.history.map((r) => [r.round, r.head, r.blocking]),
+    [
+      [0, "sha-1", 2],
+      [1, "sha-2", 1],
+      [2, "sha-3", 1],
+    ],
+  );
+  // The same review again: replaced, not added.
+  await s.review(HIGH_ONE);
+  assert.equal(s.loop().history.length, 3);
+});
+
+test("review loop: clean, or stopped when no fix run follows a blocking review", async (t) => {
+  const clean = await loopSetup(t);
+  await clean.review(HIGH_ONE);
+  await clean.fixed("sha-2");
+  await clean.review(CLEAN);
+  assert.deepEqual([clean.loop().loop, clean.loop().round], ["clean", 1]);
+  // The fix run pushed nothing: no review after it, the findings still stand.
+  const idle = await loopSetup(t);
+  await idle.review(HIGH_ONE);
+  assert.equal(await idle.fixed(), null);
+  assert.deepEqual([idle.loop().loop, idle.loop().round], ["stopped", 0]);
+  // Its fix run failed.
+  const failed = await loopSetup(t);
+  await failed.review(HIGH_ONE);
+  await failed.fixed("sha-2", "error");
+  assert.equal(failed.loop().loop, "stopped");
+  // A maintainer's review (`/mode review`) isn't the loop's.
+  const manual = await loopSetup(t);
+  await manual.reviews.settle(
+    { repo: "org/repo", number: 5, base: "trunk", settings: manual.read.settings, auto: false },
+    posted(HIGH_ONE),
+  );
+  assert.equal(manual.loop(), null);
+  // Without review.fix, a review that blocks has no fix round to wait for.
+  const single = await loopSetup(t, "review:\n  on: ready\n");
+  await single.review(HIGH_ONE);
+  assert.deepEqual([single.loop().loop, single.loop().rounds], ["rounds-out", 0]);
+});
+
+test("review loop: waiting for checks, and entries from before the rounds", () => {
+  const history = [{ round: 0, at: 1, head: "a", counts: {}, blocking: 0 }];
+  const waiting = { head: "a", at: 1, rounds: history, fixRounds: 1, waiting: { sha: "a" } };
+  assert.equal(reviewLoop(waiting).loop, "checks");
+  assert.equal(reviewLoop({ ...waiting, mergeAt: 2 }).loop, "clean");
+  // No `rounds`: nothing to show, unless a run of the loop is going.
+  assert.equal(reviewLoop({ head: "a", at: 1, fixedAt: 2 }), null);
+  assert.deepEqual(reviewLoop({ head: "a", at: 1, fixedAt: 2 }, "review"), {
+    loop: "reviewing",
+    round: 1,
+    rounds: 0,
+    history: [],
+  });
+});
+
+test("review loop: fix: true without merge, its one fix run unreviewed by design", async (t) => {
+  const s = await loopSetup(t, "review:\n  on: ready\n  fix: true\n");
+  assert.equal((await s.review(HIGH_ONE)).reason, "review-fix");
+  assert.equal(await s.fixed("sha-2"), null);
+  // Nothing reviewed what it pushed: the first review's findings aren't said to be left.
+  assert.deepEqual([s.loop().loop, s.loop().round, s.loop().rounds], ["fixed", 1, 1]);
+  // Its fix run failed: they still are.
+  const failed = await loopSetup(t, "review:\n  on: ready\n  fix: true\n");
+  await failed.review(HIGH_ONE);
+  await failed.fixed("sha-2", "error");
+  assert.equal(failed.loop().loop, "stopped");
+});
+
+// The task's last run, over: one of `reason`, started at `startedAt` (by default, after its
+// step was queued).
+const ran = (reason, startedAt = Number.MAX_SAFE_INTEGER) => ({ reason, startedAt });
+
+test("review loop: in review while the listener decides what follows a run", async (t) => {
+  const seen = [];
+  let s;
+  // The loop's last run over: what the dashboard sees during the GitHub calls after it.
+  const during = () => {
+    const run = seen.at(-1)?.after;
+    if (run) seen.at(-1).loops.push(s.loop(null, { settling: ran(run) }).loop);
+  };
+  s = await loopSetup(t, undefined, { during });
+  assert.equal(s.reviews.entry("org/repo", 5).next, "review");
+  seen.push({ after: "review", loops: [] });
+  await s.review(HIGH_ONE);
+  assert.equal(s.reviews.entry("org/repo", 5).next, "review-fix");
+  seen.push({ after: "review-fix", loops: [] });
+  await s.fixed("sha-2");
+  assert.equal(s.reviews.entry("org/repo", 5).next, "review");
+  // A clean review: nothing to ask GitHub, decided at once.
+  await s.review(CLEAN);
+  assert.deepEqual(
+    seen.map((x) => [x.after, [...new Set(x.loops)]]),
+    [
+      ["review", ["reviewing"]],
+      ["review-fix", ["fixing"]],
+    ],
+  );
+  // Decided: the loop's end, whatever the last run was.
+  assert.equal(s.reviews.entry("org/repo", 5).next, undefined);
+  assert.equal(s.loop(null, { settling: ran("review") }).loop, "clean");
+  // A step on its way only counts after a run of that step: not after a failed or other run.
+  const pending = { ...s.reviews.entry("org/repo", 5), next: "review-fix" };
+  assert.equal(reviewLoop(pending, null, { settling: ran("review") }).loop, "clean");
+  assert.equal(reviewLoop(pending).loop, "clean");
+});
+
+test("review loop: a step queued and never run (cancelled) isn't taken for an earlier run's", async (t) => {
+  const s = await loopSetup(t);
+  await s.review(CLEAN);
+  const before = s.reviews.entry("org/repo", 5);
+  assert.equal(before.next, undefined);
+  // Ready again at a new head: a new review queued, then cancelled before it ran.
+  s.advance(60_000);
+  await s.reviews.consider(
+    "pull_request",
+    delivery("ready_for_review", {
+      ...posted().pr,
+      head: { sha: "sha-9", repo: { full_name: "org/repo" } },
+    }),
+  );
+  const entry = s.reviews.entry("org/repo", 5);
+  assert.equal(entry.next, "review");
+  // The task's last run is still the earlier review, started before this one was queued.
+  assert.equal(
+    reviewLoop(entry, null, { settling: ran("review", entry.nextAt - 60_000) }).loop,
+    "clean",
+  );
+  // Its own run, started after it was queued, over: still reviewing while it is decided.
+  assert.equal(
+    reviewLoop(entry, null, { settling: ran("review", entry.nextAt) }).loop,
+    "reviewing",
+  );
+});
+
+test("review loop: at start, a step whose run came back or waits stays; the others go", async (t) => {
+  const s = await loopSetup(t);
+  await s.review(HIGH_ONE);
+  assert.equal(s.reviews.entry("org/repo", 5).next, "review-fix");
+  // Its fix run reattached after a listener update: kept, for the decision after it.
+  const fixRun = { reason: "review-fix", replyTo: 5, repo: "org/repo" };
+  const live = new Map([
+    ["org/repo#12", { repo: "Org/Repo", pending: [], running: true, live: { handled: [fixRun] } }],
+  ]);
+  const again = setup(t, undefined, { path: s.path });
+  again.reviews.forgetSteps(stepsGoing(live));
+  assert.equal(again.reviews.entry("org/repo", 5).next, "review-fix");
+  // Queued: kept too.
+  const queued = new Map([
+    ["org/repo#12", { repo: "org/repo", pending: [fixRun], running: false }],
+  ]);
+  again.reviews.forgetSteps(stepsGoing(queued));
+  assert.equal(again.reviews.entry("org/repo", 5).next, "review-fix");
+  // Neither, or another pull request's, or a maintainer's comment: forgotten, its count kept.
+  const other = new Map([
+    ["org/repo#13", { repo: "org/repo", pending: [{ ...fixRun, replyTo: 6 }], running: false }],
+    ["org/repo#12", { repo: "org/repo", pending: [{ replyTo: 5, reason: null }], running: false }],
+  ]);
+  again.reviews.forgetSteps(stepsGoing(other));
+  assert.equal(again.reviews.entry("org/repo", 5).next, undefined);
+  assert.equal(again.reviews.entry("org/repo", 5).fixes, 1);
+});
+
+test("remember: the entry it updates stays, however old, with what it counted", async (t) => {
+  const path = join(tempDir(t), "reviews.json");
+  // Over 90 days before the fake clock (1_800_000_000_000).
+  writeFileSync(
+    path,
+    JSON.stringify({
+      "org/repo#pr-5": { head: "sha-1", at: 1, fixes: 2, fixedAt: 1 },
+      "org/repo#pr-6": { head: "sha-6", at: 1 },
+    }),
+  );
+  const { reviews } = setup(t, "review:\n  on: ready\n  fix: 3\n", { path });
+  await reviews.settle(
+    { repo: "org/repo", number: 5, base: "trunk", settings: null, auto: true },
+    posted(CLEAN),
+  );
+  assert.equal(reviews.entry("org/repo", 5).fixes, 2);
+  // Another old one is forgotten.
+  assert.equal(reviews.entry("org/repo", 6), null);
+});
+
+test("review loop: in review while a ready pull request's review is decided, before it is queued", async (t) => {
+  let s;
+  const seen = [];
+  // A policy that takes its time: what the dashboard sees meanwhile.
+  const policies = {
+    decide: async () => {
+      seen.push(reviewLoop(s.reviews.entry("org/repo", 5))?.loop);
+      return { applied: false, messages: [] };
+    },
+  };
+  s = setup(t, undefined, { policies });
+  // The repo's settings, read from GitHub first: in review already.
+  const read = s.read;
+  s.reviews = createReviews({
+    path: s.path,
+    config,
+    repoSettings: async () => {
+      seen.push(reviewLoop(s.reviews.entry("org/repo", 5))?.loop);
+      return read;
+    },
+    accept: async (item) => s.accepted.push(item),
+    busy: () => false,
+    policies,
+    now: () => 1_800_000_000_000,
+  });
+  await s.reviews.consider("pull_request", delivery());
+  assert.deepEqual(seen, ["reviewing", "reviewing"]);
+  assert.equal(s.accepted.length, 1);
+  // Decided: the queued review says it (next), no longer the decision.
+  assert.equal(s.reviews.entry("org/repo", 5).deciding, undefined);
+  assert.equal(s.reviews.entry("org/repo", 5).next, "review");
+  // Refused: nothing on its way after the decision.
+  const refused = setup(t, undefined, {
+    policies: { decide: async () => ({ applied: true, messages: ["no"] }) },
+  });
+  await refused.reviews.consider("pull_request", delivery());
+  assert.equal(refused.reviews.entry("org/repo", 5), null);
+  // Off in the repo: skipped, nothing left either.
+  const off = setup(t, "review:\n  on: manual\n");
+  await off.reviews.consider("pull_request", delivery());
+  assert.equal(off.reviews.entry("org/repo", 5), null);
+});
+
+test("review loop: a step queued while the last one is decided stays on its way", async (t) => {
+  let s;
+  let again = false;
+  // While fixed() reads the pull request, it goes draft and ready again at a new head.
+  const during = (path) => {
+    if (!again || path !== "/repos/org/repo/pulls/5") return;
+    again = false;
+    s.advance(1000);
+    void s.reviews.consider(
+      "pull_request",
+      delivery("ready_for_review", {
+        ...posted().pr,
+        head: { sha: "sha-9", repo: { full_name: "org/repo" } },
+      }),
+    );
+  };
+  s = await loopSetup(t, undefined, { during });
+  await s.review(HIGH_ONE);
+  const fixAt = s.reviews.entry("org/repo", 5).nextAt;
+  again = true;
+  // The fix run pushed nothing (same head): the loop stops, but the new review is on its way.
+  assert.equal(await s.fixed(), null);
+  await new Promise((resolve) => setImmediate(resolve));
+  const entry = s.reviews.entry("org/repo", 5);
+  assert.equal(entry.next, "review");
+  assert.ok(entry.nextAt > fixAt);
 });

@@ -686,6 +686,70 @@ const severities = (findings) =>
 const fixesOf = (entry) => entry?.fixes ?? (entry?.fixedAt ? 1 : 0);
 const reviewedFixesOf = (entry) => entry?.reviewedFixes ?? (entry?.rereviewAt ? 1 : 0);
 
+// The automatic reviews kept per pull request (`rounds`): more than the operator's
+// MAX_FIX_ROUNDS allows in one loop, as the history goes on across the pull request turning
+// ready again: its fix count carries over, so that review is numbered after the fix runs so
+// far (R<fixes>), not a new first review.
+const ROUNDS_KEPT = 20;
+
+// Where the fix loop of a pull request is, for the dashboard (board.mjs), from its entry in
+// reviews.json and `step`, the reason of its task's run going or queued ("review",
+// "review-fix"; null for none, or a maintainer's comment) → { loop, round, rounds, history }
+// or null when it had no automatic review. `loop`:
+//   reviewing, fixing  a review or fix run of the loop is queued or running
+//   checks             the auto-merge waits for the reviewed commit's Actions runs
+//   clean              the last review had nothing above the tolerance
+//   rounds-out         the review after the last fix run `review.fix` allows still blocks
+//   fixed              a fix run followed the last review, and by design nothing reviews it
+//                      (`review.fix: true` without `merge`): what that review found isn't
+//                      known to be left
+//   stopped            it still blocks, and no more fix run comes: one ended badly or pushed
+//                      nothing, a policy refused it, the task was busy or waits for input
+// `settling`: the task's last run ({ reason, startedAt }) when it was one of the loop's and is
+// over: while the listener decides what follows it, its `next` step is still that one
+// (nextStep()), and the loop is still there. Only the step's own run: one started after the
+// step was queued (`nextAt`), not an earlier run of the same kind when the step queued since
+// never ran (cancelled, refused). `entry.deciding`: the listener is deciding about the loop's
+// step right now (createReviews() entry()): it is there too.
+// `round`: the fix runs started so far (0 for the first review), of `rounds` the repo allows;
+// `history`: each review's { round, at, head, counts, blocking }, oldest first.
+export function reviewLoop(entry, step = null, { settling = null } = {}) {
+  const history = entry?.rounds ?? [];
+  if (!step && entry?.deciding) step = entry.deciding;
+  const own = settling && settling.startedAt >= (entry?.nextAt ?? 0);
+  if (!step && own && entry?.next === settling.reason) step = settling.reason;
+  const looping = step === "review" || step === "review-fix";
+  if (!history.length && !looping) return null;
+  const fixes = fixesOf(entry);
+  const rounds = entry?.fixRounds ?? 0;
+  const last = history.at(-1);
+  const at = { round: looping ? fixes : (last?.round ?? fixes), rounds, history };
+  if (step === "review") return { loop: "reviewing", ...at };
+  if (step === "review-fix") return { loop: "fixing", ...at };
+  if (entry.waiting && !entry.mergeAt) return { loop: "checks", ...at };
+  if (!last.blocking) return { loop: "clean", ...at };
+  if (entry.unreviewedFix === fixes && last.round < fixes) {
+    return { loop: "fixed", ...at, round: fixes };
+  }
+  // The review of the last fix run is the last one: nothing more was started after it.
+  const out = fixes >= rounds && last.round >= fixes;
+  return { loop: out ? "rounds-out" : "stopped", ...at };
+}
+
+// Which pull requests have a review or fix run of their loop running or queued, among `tasks`
+// (tasks.mjs, their `pending` items and their live run's `handled` ones) → going(repo, number),
+// for forgetSteps(). Both items reply on the pull request.
+export function stepsGoing(tasks) {
+  return (repo, number) =>
+    [...tasks.values()].some(
+      (t) =>
+        sameRepo(t.repo, repo) &&
+        [...(t.pending ?? []), ...(t.running ? (t.live?.handled ?? []) : [])].some(
+          (item) => ["review", "review-fix"].includes(item.reason) && item.replyTo === number,
+        ),
+    );
+}
+
 // How many fix runs a repo's settings allow per pull request (`review.fix`).
 const roundsOf = (settings) =>
   settings?.review?.fix ? Math.max(1, settings.review.fixRounds ?? 1) : 0;
@@ -830,11 +894,46 @@ export function createReviews({
   sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
 }) {
   // "org/repo#pr-5" → { head, at, fixes, fixedAt, reviewedFixes, roundsOutAt, mergeAt,
-  // waiting } of its last automatic review, how many fix runs it had and when the last one was
-  // queued, how many of them had their review queued, the comment saying the rounds ran out,
-  // and its auto-merge (merged or refused), or the auto-merge waiting for its checks
-  // (decide()). Entries from before the rounds have fixedAt and rereviewAt (fixesOf()).
+  // waiting, rounds, fixRounds, next, nextAt, unreviewedFix } of its last automatic review,
+  // how many fix runs it had and when the last one was queued, how many of them had their
+  // review queued, the comment saying the rounds ran out, and its auto-merge (merged or
+  // refused), or the auto-merge waiting for its checks (decide()); each automatic review's
+  // counts and the fix runs allowed, the loop's step on its way and when it was queued, and
+  // the fix run nothing reviews, for the dashboard (recordRound(), nextStep(), reviewLoop()).
+  // Entries from before the rounds have fixedAt and rereviewAt (fixesOf()); from before the
+  // dashboard's, no `rounds`.
   const reviewed = persistentMap(path);
+  // Pull request key → { step } while the listener decides about its loop's step, in memory
+  // (deciding()): a webhook's review until it is queued, a run's end until what follows it is.
+  const decisions = new Map();
+
+  // `work()`, with the loop of pull request `key` at `step` meanwhile ("review", "review-fix"),
+  // for the dashboard: its GitHub calls and policies may outlast a poll. Its own mark only is
+  // taken off: another decision started since keeps its own.
+  async function deciding(key, step, work) {
+    const mark = { step };
+    decisions.set(key, mark);
+    try {
+      return await work();
+    } finally {
+      if (decisions.get(key) === mark) decisions.delete(key);
+    }
+  }
+
+  // At start, after the runs going and the queue are back (restart.mjs): the steps on their way
+  // (`next`) whose run nothing has any more, `going(repo, number)` saying which pull requests
+  // still have a review or fix run running or queued. A listener stopped while it decided what
+  // follows a run never will: the run it settles was over, and nothing settles it now.
+  function forgetSteps(going) {
+    let changed = false;
+    for (const [k, v] of reviewed) {
+      const at = parseKey(k);
+      if (!v.next || (at && going(at.repo, at.number))) continue;
+      reviewed.set(k, { ...v, next: undefined, nextAt: undefined });
+      changed = true;
+    }
+    if (changed) reviewed.save();
+  }
 
   // A `pull_request` delivery: a review run, if the repo's `review.on` asks for one and this
   // head commit hasn't had one.
@@ -842,27 +941,31 @@ export function createReviews({
     const found = reviewCandidate(config, event, payload, skip);
     if (!found) return null;
     const { repo, base, pr, author } = found;
-    const { settings, errors } = await repoSettings(repo, base);
-    // A broken config: its next comment's reply says why; nothing is posted for a webhook.
-    if (errors.length) return skip(`review: ${repo}'s config has errors`);
-    if (settings.review?.on !== "ready") return skip(`review: not on in ${repo}`);
-    if (author && !settings.users.includes(author.toLowerCase())) {
-      return skip(`review: ${author} not in ${repo}'s users`);
-    }
     const key = taskKey(repo, prId(pr.number));
     const head = pr.head?.sha ?? null;
     if (head && reviewed.get(key)?.head === head) {
       return skip(`review: #${pr.number} at ${head.slice(0, 7)} was reviewed already`);
     }
-    const denied = await denyReview(repo, base, pr, [
-      passed("Ready for review"),
-      passed(author ? "Opened by an allowed user" : "Deckhand's own pull request"),
-      passed("Not reviewed at this commit"),
-    ]);
-    if (denied.length) return skip(`review: #${pr.number}, ${policyWhy("deny_review", denied)}`);
-    remember(key, head);
-    log(`${key}: pull request #${pr.number} is ready, starting a review`);
-    return queueReview({ repo, base, pr, settings, author });
+    // The repo's settings and the policies may take a while: the pull request is in review
+    // from its ready delivery on, not ready, until the review is queued or skipped.
+    return deciding(key, "review", async () => {
+      const { settings, errors } = await repoSettings(repo, base);
+      // A broken config: its next comment's reply says why; nothing is posted for a webhook.
+      if (errors.length) return skip(`review: ${repo}'s config has errors`);
+      if (settings.review?.on !== "ready") return skip(`review: not on in ${repo}`);
+      if (author && !settings.users.includes(author.toLowerCase())) {
+        return skip(`review: ${author} not in ${repo}'s users`);
+      }
+      const denied = await denyReview(repo, base, pr, [
+        passed("Ready for review"),
+        passed(author ? "Opened by an allowed user" : "Deckhand's own pull request"),
+        passed("Not reviewed at this commit"),
+      ]);
+      if (denied.length) return skip(`review: #${pr.number}, ${policyWhy("deny_review", denied)}`);
+      remember(key, head);
+      log(`${key}: pull request #${pr.number} is ready, starting a review`);
+      return queueReview({ repo, base, pr, settings, author });
+    });
   }
 
   // The policies, asked about pull request `pr`: what they decide, when one applies, is kept
@@ -934,13 +1037,29 @@ export function createReviews({
     // Deckhand's own pull request is its issue's task, like a comment on it (events.mjs).
     const issue = linkedIssue(pr, repo, config.bot);
     const queued = issue ? linkTo(item, issue) : item;
+    nextStep(taskKey(repo, prId(pr.number)), "review");
     await accept(queued);
     return queued;
   }
 
+  // The loop's step on its way on pull request `key` (`next`: "review", "review-fix"), from
+  // when it is queued until what follows its run is decided (settle(), fixed()), which may take
+  // GitHub calls: the dashboard keeps it in review meanwhile (reviewLoop()). Null: decided.
+  // `since`: when clearing, the `nextAt` of the step decided about; another queued since stays.
+  function nextStep(key, step, since = undefined) {
+    const entry = reviewed.get(key);
+    if (!step && !entry?.next) return;
+    if (!step && since !== undefined && entry.nextAt !== since) return;
+    remember(key, entry?.head ?? null, {
+      next: step ?? undefined,
+      nextAt: step ? now() : undefined,
+    });
+  }
+
   function remember(key, head, fields = {}) {
     const cutoff = now() - KEEP_MS;
-    for (const [k, v] of reviewed) if (v.at < cutoff) reviewed.delete(k);
+    // Not the one it updates: what it counted so far still holds.
+    for (const [k, v] of reviewed) if (v.at < cutoff && k !== key) reviewed.delete(k);
     reviewed.set(key, { ...reviewed.get(key), head, at: now(), ...fields });
     reviewed.save();
   }
@@ -1015,7 +1134,12 @@ export function createReviews({
     // Checked again: a comment may have come during the calls above.
     if (busy(task)) return skip(`#${issue} has a run going or queued`);
     // Before queuing: whatever happens next, never this round twice.
-    remember(key, reviewed.get(key)?.head ?? null, { fixes: round, fixedAt: now() });
+    remember(key, reviewed.get(key)?.head ?? null, {
+      fixes: round,
+      fixedAt: now(),
+      next: "review-fix",
+      nextAt: now(),
+    });
     const of = rounds > 1 ? ` (${round} of ${rounds})` : "";
     log(`${key}: the review requests changes, starting a fix run${of}`);
     const item = {
@@ -1046,11 +1170,48 @@ export function createReviews({
   // an automatic review (`auto`), with `review.merge` on, the merge ({ sha, method }) or the
   // comment saying why not (null); without, the comment when the rounds ran out (roundsOut()).
   async function settle(run, posted) {
-    const { item, denied } = await startFix(run, posted);
-    if (item || !run.auto) return item;
-    const mode = await mergeMode(run.repo, run.base);
-    if (!mode) return roundsOut(run, posted);
-    return autoMerge(run, posted, denied, mode);
+    const key = taskKey(run.repo, prId(run.number));
+    if (!run.auto) return (await startFix(run, posted)).item;
+    const since = reviewed.get(key)?.nextAt;
+    recordRound(run, posted);
+    let item = null;
+    return deciding(key, "review", async () => {
+      try {
+        const started = await startFix(run, posted);
+        item = started.item;
+        if (item) return item;
+        const mode = await mergeMode(run.repo, run.base);
+        if (!mode) return roundsOut(run, posted);
+        return autoMerge(run, posted, started.denied, mode);
+      } finally {
+        // Nothing more on its way, unless a fix run was queued (startFix() said so) or a new
+        // review since (the pull request ready again meanwhile).
+        if (!item) nextStep(key, null, since);
+      }
+    });
+  }
+
+  // An automatic review posted on pull request `number`: its round of the fix loop, kept in
+  // its entry's `rounds` for the dashboard (reviewLoop()), before startFix() counts the next
+  // fix run. Counts only, never the findings' text. The same round at the same head again
+  // replaces it; `fixRounds`: how many fix runs the repo allows now.
+  function recordRound({ repo, number, settings }, posted) {
+    const review = posted?.review;
+    if (!review) return;
+    const key = taskKey(repo, prId(number));
+    const entry = reviewed.get(key) ?? {};
+    const round = fixesOf(entry);
+    const head = posted.pr?.head?.sha ?? entry.head ?? null;
+    const counts = Object.fromEntries(
+      SEVERITIES.map((s) => [s, review.findings.filter((f) => f.severity === s).length]),
+    );
+    const blocking = above(review, review.allowed).length;
+    const rounds = (entry.rounds ?? []).filter((r) => r.round !== round || r.head !== head);
+    rounds.push({ round, at: now(), head, counts, blocking });
+    remember(key, entry.head ?? null, {
+      rounds: rounds.slice(-ROUNDS_KEPT),
+      fixRounds: roundsOf(settings),
+    });
   }
 
   // Without auto-merge: a review that still requests changes after the last fix run `review.fix`
@@ -1326,7 +1487,24 @@ export function createReviews({
   // `merge` reviews nothing after its one fix run, as before the rounds (issue #376). A fix that
   // failed or pushed nothing leaves the pull request to the maintainer: in auto-merge mode, a
   // comment says why it isn't merged.
-  async function fixed({ repo, number, base, status }) {
+  async function fixed(run) {
+    const key = taskKey(run.repo, prId(run.number));
+    const since = reviewed.get(key)?.nextAt;
+    let item = null;
+    return deciding(key, "review-fix", async () => {
+      try {
+        item = await reviewFix(run);
+        return item;
+      } finally {
+        // Its review queued says it is on its way (queueReview()); else the loop is over,
+        // unless another step was queued since.
+        if (!item) nextStep(key, null, since);
+      }
+    });
+  }
+
+  // fixed()'s work: the review queued, or null.
+  async function reviewFix({ repo, number, base, status }) {
     const key = taskKey(repo, prId(number));
     const { settings, errors } = await repoSettings(repo, base);
     if (errors.length || !settings.review?.fix) return null;
@@ -1334,7 +1512,12 @@ export function createReviews({
     const fixes = fixesOf(entry);
     if (!fixes || reviewedFixesOf(entry) >= fixes || entry.mergeAt || entry.waiting) return null;
     const mode = await mergeMode(repo, base);
-    if (!mode && roundsOf(settings) < 2) return null;
+    // `fix: true` without `merge`: by design, nothing reviews what it pushed. Kept, so the
+    // dashboard doesn't take the review before it for what is left (reviewLoop()).
+    if (!mode && roundsOf(settings) < 2) {
+      if (status === "ok") remember(key, entry.head ?? null, { unreviewedFix: fixes });
+      return null;
+    }
     remember(key, entry.head ?? null, { reviewedFixes: fixes });
     const stop = async (why) => {
       if (!mode) {
@@ -1483,6 +1666,15 @@ export function createReviews({
     start,
     stop,
     keys: () => [...reviewed.keys()],
+    // The entry of pull request `number` in `repo` (reviewLoop()), or null.
+    // `deciding`: the step the listener is deciding about right now (deciding()).
+    entry: (repo, number) => {
+      const key = taskKey(repo, prId(number));
+      const decision = decisions.get(key);
+      const entry = reviewed.get(key) ?? null;
+      return decision ? { ...entry, deciding: decision.step } : entry;
+    },
     respell,
+    forgetSteps,
   };
 }

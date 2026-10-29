@@ -1,5 +1,6 @@
 // The tab's tasks, found by the search box and filtered by the state chips: each row its title
-// and time, then its number, repo, mode and pull request, its state on the right.
+// and time, then its number, repo, mode, pull request and review round, its state on the right;
+// under them, what a review-and-fix loop left on a ready pull request.
 import { Fragment } from "preact";
 import { useEffect, useRef } from "preact/hooks";
 import {
@@ -7,7 +8,9 @@ import {
   type ChipId,
   inChip,
   isPrTask,
+  isReady,
   kindName,
+  loopLine,
   matchesSearch,
   modeOf,
   numberOf,
@@ -20,6 +23,7 @@ import {
   whenTitle,
 } from "./format";
 import { useShortcuts, useShortcutsOn, withKey } from "./keys";
+import { FindingsLeft } from "./ReviewLoop";
 import type { Task } from "./types";
 import { Field } from "./ui/Field";
 import { FilterChip } from "./ui/FilterChip";
@@ -189,6 +193,7 @@ function Row({
         {prName(t.pr)}
       </span>
     ),
+    loopLine(t) && <span key="loop">{loopLine(t)}</span>,
   ].filter(Boolean);
   return (
     <button type="button" class={styles.row} aria-current={current} onClick={() => onSelect(t.key)}>
@@ -209,6 +214,7 @@ function Row({
         ))}
       </span>
       <span class={`${styles.state} ${toneClass(tone)}`}>{stateName(t.state)}</span>
+      {isReady(t) && <FindingsLeft task={t} class={styles.left} />}
     </button>
   );
 }

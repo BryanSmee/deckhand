@@ -9,6 +9,10 @@
 //   stopping        a brainstorm is wrapping up ("/stop")
 //   queued          comments wait for a run (a free slot, or the running one to finish);
 //                   `position`: its place in the run order while it waits for a slot
+//   in-review       its pull request is in the automatic review-and-fix loop, between its
+//                   runs: the next review or fix run queued or being decided, or the
+//                   auto-merge waiting for checks (`review`, reviews.mjs reviewLoop()); while
+//                   one runs, the task has that run's state, and its `review` says the round
 //   waiting         a comment waits for other issues to be done ("/after #12", waits.mjs)
 //                   (needs-input once they are, while its open questions aren't answered)
 //   brainstorm      a brainstorm waits for the maintainer's next comment
@@ -22,6 +26,7 @@
 // dashboard (dismissals.mjs): it keeps its state, but no longer asks for attention.
 import { parseKey, taskKey } from "./events.mjs";
 import { LIGHT } from "./modes.mjs";
+import { reviewLoop } from "./reviews.mjs";
 import { taskId } from "./spelling.mjs";
 
 export const STATES = [
@@ -30,6 +35,7 @@ export const STATES = [
   "working",
   "stopping",
   "queued",
+  "in-review",
   "waiting",
   "brainstorm",
   "idle-brainstorm",
@@ -108,7 +114,8 @@ function questionsFor(t, last, input) {
 // `runs`: newest first; `queued`, `brainstorms`, `waits`: as http.mjs's state() has them;
 // `inputs`: the open issues labelled needs-input (inputs.mjs list()); `dismissals`: the
 // dismissed runs (dismissals.mjs list()); `pr(key)`, `decisions(key)`: its pull request
-// (pulls.mjs) and policy decisions, newest first (decisions.mjs), for when it last changed.
+// (pulls.mjs) and policy decisions, newest first (decisions.mjs), for when it last changed;
+// `reviewed(repo, number)`: its pull request's entry in reviews.json, for its `review`.
 // A task waiting for input carries `questions`: { source, runId?, items, raw }, from the reply
 // of its last run when it stopped to ask, else from its issue's body (questions.mjs).
 export function board({
@@ -120,6 +127,7 @@ export function board({
   dismissals = [],
   pr = () => null,
   decisions = () => [],
+  reviewed = () => null,
 }) {
   const tasks = gather(runs, [queued, brainstorms, waits, inputs]);
   const byKey = (list) => new Map(list.map((x) => [one(x.key), x]));
@@ -131,12 +139,13 @@ export function board({
   for (const t of tasks.values()) {
     const k = one(t.key);
     settle(t, waiting.get(k), talks.get(k), held.get(k), labelled.get(k));
+    inReview(t, waiting.get(k), pr(t.key), reviewed);
     t.dismissed = dismissedOf(t, dismissed.get(k));
     t.updatedAt = updatedAt(t, pr(t.key), decisions(t.key));
   }
   // Most recent activity first, the live ones on top.
   const live = (t) =>
-    ["scheduled", "building-image", "working", "stopping", "queued"].includes(t.state);
+    ["scheduled", "building-image", "working", "stopping", "queued", "in-review"].includes(t.state);
   return [...tasks.values()].sort(
     (a, b) => Number(live(b)) - Number(live(a)) || b.updatedAt - a.updatedAt,
   );
@@ -238,4 +247,30 @@ function settle(t, q, b, w, input) {
     if (q.startsFirst) t.startsFirst = true;
   }
   t.rerunnable = rerunnable(t);
+}
+
+// The loop's states, between two of its runs: the task is in review, not queued or done.
+const LOOPING = ["reviewing", "fixing", "checks"];
+// The reasons of the loop's own runs (reviews.mjs).
+const STEPS = ["review", "review-fix"];
+
+// The fix loop of the task's pull request `p` (reviews.mjs reviewLoop()) as its `review`,
+// from the reason of its run going or queued (`q`), or, its last run one of the loop's and
+// over, the step the listener said is on its way. `in-review` between the loop's runs: done,
+// or queued for the loop's next run; a maintainer's comment queued meanwhile stays queued.
+function inReview(t, q, p, reviewed) {
+  if (!p) return;
+  const last = t.runs[0];
+  // The loop's step: its run going, else queued, whatever else runs (the work run that marked
+  // the pull request ready may still be).
+  const running = last?.status === "running" ? last.reason : null;
+  const step = [running, q?.reason].find((r) => STEPS.includes(r)) ?? null;
+  const settling = last?.status === "ok" && STEPS.includes(last.reason) ? last : null;
+  const review = reviewLoop(reviewed(t.repo, p.number), step, { settling });
+  if (!review) return;
+  t.review = review;
+  if (!LOOPING.includes(review.loop)) return;
+  if (t.state === "done" || (t.state === "queued" && STEPS.includes(q?.reason) && !q.others)) {
+    t.state = "in-review";
+  }
 }

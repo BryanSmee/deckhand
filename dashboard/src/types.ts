@@ -9,6 +9,7 @@ export type TaskState =
   | "working"
   | "stopping"
   | "queued"
+  | "in-review"
   | "waiting"
   | "brainstorm"
   | "idle-brainstorm"
@@ -189,7 +190,40 @@ export interface Task {
   // With its questions: false when its repo's `wait_for_answers` is off, and Start and Queue
   // go ahead without them (listener/work.mjs act()).
   waitForAnswers?: boolean;
+  // Its pull request's automatic review-and-fix loop (listener/reviews.mjs reviewLoop());
+  // absent when it had no automatic review.
+  review?: ReviewLoop;
 }
+
+// Where a pull request's review-and-fix loop is: a review or fix run of it queued or running,
+// the auto-merge waiting for checks, or how it ended (clean; rounds-out: the review after the
+// last fix run still blocks; fixed: by design nothing reviewed its one fix run, `review.fix:
+// true` without `merge`; stopped: it blocks, and no fix run follows).
+export type LoopState =
+  "reviewing" | "fixing" | "checks" | "clean" | "rounds-out" | "fixed" | "stopped";
+
+export interface ReviewLoop {
+  loop: LoopState;
+  // The fix runs started so far, 0 for the first review; of `rounds` the repo's `review.fix`
+  // allows (0 without it, or not known yet).
+  round: number;
+  rounds: number;
+  // Each automatic review, oldest first.
+  history: ReviewRound[];
+}
+
+export interface ReviewRound {
+  // The fix runs before it: 0 for the first review.
+  round: number;
+  at: number;
+  head: string | null;
+  // Its findings by severity; `blocking`: how many are above the tolerance
+  // (`review.max_allowed_severity`).
+  counts: Record<Severity, number>;
+  blocking: number;
+}
+
+export type Severity = "critical" | "high" | "medium" | "low";
 
 // An option of a question; one at most is `recommended` (the agent's pick). One option per
 // question, plus a free-text answer. `checked`: its box is ticked where it was asked ("[x]"):
