@@ -1,7 +1,7 @@
 // The graph page's model: what each issue looks like, and where it goes: the graph, or the
 // work queue's Brainstorm tab (brainstormsOf()). Where each node is drawn: graphLayout.ts.
 import { inChip, STATE_NAMES, type Tone } from "./format";
-import type { Backlog, Blocker, Edge, Pending, PrState, Task } from "./types";
+import type { Backlog, Blocker, Edge, OrderMove, Pending, PrState, Task } from "./types";
 
 // What a node looks like: the graph's own families, not the list's (format.ts toneOf()).
 // Merged is implemented, done. "pending": an action on it is on its way to the listener; not in
@@ -54,6 +54,8 @@ export interface GraphNode {
   // What its aria-label and tooltip say about its state.
   status: string;
   closed: Task["closed"];
+  // Queued: its place in the run order (1 next to start), else null.
+  position: number | null;
   // The board's task, which a click opens; null for a blocker not on the board.
   task: Task | null;
 }
@@ -259,6 +261,7 @@ export function graphOf(
       look,
       status: action ? pendingName(action) : sending ? "Sending…" : statusOf(look, t),
       closed: t.closed,
+      position: !sending && t.state === "queued" ? (t.position ?? null) : null,
       // Not on the board yet: nothing to open.
       task: real.has(t) ? t : null,
     });
@@ -279,6 +282,7 @@ export function graphOf(
       look,
       status: statusOf(look, { closed: b?.closed ?? null }),
       closed: b?.closed ?? null,
+      position: null,
       task: null,
     });
   }
@@ -299,8 +303,56 @@ export function graphOf(
 export const waitsForAnswers = (t: Task) =>
   inChip("input", t) && (t.kind === "issue" || t.kind === "brainstorm");
 
+// "1st", "2nd", "3rd", "4th", "11th", "21st".
+export function ordinal(n: number): string {
+  const teen = n % 100 >= 11 && n % 100 <= 13;
+  return `${n}${(!teen && ["th", "st", "nd", "rd"][n % 10]) || "th"}`;
+}
+
+// Whether a queued task moves in the run order: not a brainstorm, which starts first anyway.
+export const reorderable = (t: Task) => t.state === "queued" && !!t.position && !t.startsFirst;
+
+// `tasks` with the queued ones' places as they will be once `moving` is done (the Queued tab
+// and the graph's badges show a move at once), and those queued in run order. The places this
+// repo's tasks hold are dealt out again: another repo's in between keep theirs.
+export function inLine(tasks: Task[], moving: OrderMove | null): { tasks: Task[]; line: Task[] } {
+  let line = tasks
+    .filter((t) => t.state === "queued" && t.position)
+    .sort((a, b) => a.position! - b.position!);
+  const places = line.map((t) => t.position!);
+  const moved = moving && line.find((t) => t.key === moving.key);
+  if (!moving || !moved) return { tasks, line };
+  line = line.filter((t) => t !== moved);
+  const at = moving.first
+    ? line.filter((t) => t.startsFirst).length
+    : moving.before
+      ? line.findIndex((t) => t.key === moving.before)
+      : -1;
+  line.splice(at < 0 ? line.length : at, 0, moved);
+  line = line.map((t, i) => (t.position === places[i] ? t : { ...t, position: places[i] }));
+  const placed = new Map(line.map((t) => [t.key, t]));
+  return { tasks: tasks.map((t) => placed.get(t.key) ?? t), line };
+}
+
+// Where a queued node dropped on another queued one moves it: on its left edge before it, on
+// its right edge after it (`line`: inLine()'s). `side`: where on the target it was let go, 0 its
+// left edge, 1 its right. Null: its middle, or no move.
+export function moveOnto(
+  line: Task[],
+  key: string,
+  target: string,
+  side: number,
+): (OrderMove & { after: boolean }) | null {
+  const onto = line.find((t) => t.key === target);
+  if (key === target || !onto || !reorderable(onto) || (side > 0.3 && side < 0.7)) return null;
+  if (side <= 0.3) return { key, before: target, after: false };
+  const rest = line.filter((t) => t.key !== key);
+  const next = rest[rest.indexOf(onto) + 1];
+  return { key, before: next?.key ?? null, after: true };
+}
+
 // A node a drag moves, on `repo`'s tab (none on All, or while its config has errors): only an
-// issue's, and not what runs or ran. Those waiting for answers move whatever their last run was
+// issue's, and not what runs or ran; a queued one moves in the run order. Those waiting for answers move whatever their last run was
 // (a brainstorm's kind is "brainstorm"): not a pull request.
 export const movable = (n: GraphNode, repo: string | null, blocked: boolean) =>
   !!repo &&
@@ -308,7 +360,9 @@ export const movable = (n: GraphNode, repo: string | null, blocked: boolean) =>
   n.look !== "pending" &&
   n.number !== null &&
   !!n.task &&
-  (n.task.state === "waiting" ? n.kind === "issue" : waitsForAnswers(n.task));
+  (n.task.state === "waiting"
+    ? n.kind === "issue"
+    : reorderable(n.task) || waitsForAnswers(n.task));
 
 // The work queue's lists besides the backlog: the issues waiting for others, less those a
 // Start or Remove on its way takes out of their wait; those waiting for answers, less those an

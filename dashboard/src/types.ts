@@ -163,6 +163,11 @@ export interface Task {
   deadline?: number;
   // The issues or pull requests its next run waits for ("/after #77", listener/waits.mjs).
   waitingFor?: number[];
+  // Queued, waiting for a slot: its place in the run order across every repo, 1 next to start
+  // (listener/tasks.mjs queueOrder(), order.mjs). `startsFirst`: a brainstorm or a light mode,
+  // which goes before any work run whatever the order, and doesn't move.
+  position?: number;
+  startsFirst?: boolean;
   // Its issue or pull request closed: as completed (merged), not planned (closed without
   // merging), or null while open or not known yet (listener/titles.mjs).
   closed: Closed;
@@ -246,6 +251,14 @@ export interface LaneLabel {
 export interface LaneNaming {
   keys: string[];
   name: string;
+}
+
+// POST api/repos/<owner>/<repo>/order: queued task `key` moves before `before` (another of the
+// repo's queued tasks), first (`first`), or last (`before` null) in the run order.
+export interface OrderMove {
+  key: string;
+  before?: string | null;
+  first?: boolean;
 }
 
 // A preview hook waiting or running (listener/previews.mjs status()). Sent, not shown: the

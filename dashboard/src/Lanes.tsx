@@ -13,6 +13,7 @@ import {
   nodeHref,
   nodeLabel,
   nodeRef,
+  PlaceBadge,
   QuestionBadge,
 } from "./GraphDrawing";
 import { TONES, type GraphNode } from "./graphModel";
@@ -61,6 +62,7 @@ export function Lanes({ repo, nodes, edges, labels, github, narrow, onAsk, refre
           <span class={styles.ref}>{nodeRef(n, false, 0)}</span> {n.title ?? ""}
         </span>
         <span class={styles.state}>{n.status}</span>
+        <PlaceBadge n={n} class={styles.place} />
         <QuestionBadge n={n} class={styles.badge} />
       </a>
       {!narrow && !last && <Icon.ChevronRight class={styles.arrow} size={14} />}

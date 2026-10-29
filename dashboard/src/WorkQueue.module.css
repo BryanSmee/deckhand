@@ -17,11 +17,11 @@
   padding: 0 4px;
 }
 
-/* Four tabs and their counts in 360 px. */
+/* Five tabs and their counts in 360 px. */
 .tabs [role="tab"] {
-  gap: 5px;
-  padding: 0 6px;
-  font-size: 12.5px;
+  gap: 4px;
+  padding: 0 4px;
+  font-size: 12px;
 }
 
 /* A tab, or the panel, something it takes is dragged over. */
@@ -102,6 +102,15 @@
   opacity: 0.45;
   border-style: dashed;
   cursor: grabbing;
+}
+
+/* A Queued card dragged over this one: the line where it would go. */
+.dropAbove {
+  box-shadow: 0 -3px 0 0 var(--focus);
+}
+
+.dropBelow {
+  box-shadow: 0 3px 0 0 var(--focus);
 }
 
 .grip {
