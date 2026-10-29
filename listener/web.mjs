@@ -1,5 +1,5 @@
 // Small HTTP helpers shared by the listener's routes (http.mjs, repos.mjs, work.mjs,
-// discussions.mjs, broker.mjs, pr-ready.mjs, setup.mjs), and the dashboard API's envelope
+// discussions.mjs, broker.mjs, setup.mjs), and the dashboard API's envelope
 // (apiRoute()).
 
 // API answers are per request and per user: never cached.

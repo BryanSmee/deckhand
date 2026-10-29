@@ -17,6 +17,7 @@
 //   variables and operation name, never the call's own bytes: GitHub runs what was checked.
 import { readFileSync } from "node:fs";
 import { Worker } from "node:worker_threads";
+import { CONTENTS_WRITE, permissionsOf, PULL_WRITE, pullOf } from "./github-pulls.mjs";
 import {
   buildSchema,
   getArgumentValues,
@@ -90,10 +91,12 @@ function updated(input) {
 // - actions(input): what it does, as github-writes.mjs names actions;
 // - labels: the input field of label IDs it adds (`added`) or removes (`removed`), or sets in
 //   place of the issue's (`set`);
-// - child: a link's sub-issue field.
-// The pull request ones: `createPullRequest`, `markPullRequestReadyForReview` and
-// `convertPullRequestToDraft` are in no ceiling until #407 moves `gh pr` here;
-// `updatePullRequest`'s `edit` is in a work run's own pull request's.
+// - child: a link's sub-issue field;
+// - pull(input), permissions: a pull request's own write's head, base and draft, and what its
+//   token needs beyond its mode's (github-pulls.mjs, github-writes.mjs classify()'s).
+// The pull request ones are in a work run's ceiling, for its own pull requests only: opened,
+// edited (`gh pr create` sets its labels and milestone with `updatePullRequest`), readied and
+// drafted. Reviews and merges are in none.
 export const MUTATIONS = {
   createIssue: {
     target: "repositoryId",
@@ -188,24 +191,46 @@ export const MUTATIONS = {
     kind: "new_pr",
     fields: ["baseRefName", "headRefName", "title", "body", "maintainerCanModify", "draft"],
     actions: () => ["create"],
+    pull: (input) => ({
+      head: input.headRefName,
+      base: input.baseRefName,
+      draft: input.draft === true,
+    }),
+    permissions: PULL_WRITE,
   },
   updatePullRequest: {
     target: "pullRequestId",
     types: ["PullRequest"],
-    fields: ["baseRefName", "title", "body", "state", "maintainerCanModify"],
+    fields: [
+      "baseRefName",
+      "title",
+      "body",
+      "state",
+      "maintainerCanModify",
+      "labelIds",
+      "assigneeIds",
+      "milestoneId",
+    ],
     actions: updated,
+    labels: { field: "labelIds", as: "set" },
+    pull: (input) => ({ base: input.baseRefName ?? undefined }),
+    permissions: PULL_WRITE,
   },
   markPullRequestReadyForReview: {
     target: "pullRequestId",
     types: ["PullRequest"],
     fields: [],
     actions: () => ["ready"],
+    pull: () => ({}),
+    permissions: CONTENTS_WRITE,
   },
   convertPullRequestToDraft: {
     target: "pullRequestId",
     types: ["PullRequest"],
     fields: [],
     actions: () => ["draft"],
+    pull: () => ({}),
+    permissions: CONTENTS_WRITE,
   },
 };
 
@@ -566,6 +591,7 @@ export function writeOf({ name, spec, input }, nodes, repo) {
     if (spec.labels.as === "set") change.labels_set = true;
   }
   const write = { repo, actions, target, change };
+  if (spec.pull) Object.assign(write, { pull: spec.pull(set), permissions: spec.permissions });
   if (spec.child) {
     const sub = nodes.get(input[spec.child]);
     if (!sub || repoOf(sub).toLowerCase() !== repo) return { refused: elsewhere(spec.child) };
@@ -597,10 +623,11 @@ export function createGraphqlChecks({
   },
   log = () => {},
 }) {
-  // A run's GraphQL call → { refused } or { body, write, creates }: what goes on to GitHub
-  // (printed again), whether it writes (its token then may), and the response keys of its
-  // `createIssue` fields, whose answers name the issues it created (github-writes.mjs
-  // answered()).
+  // A run's GraphQL call → { refused } or { body, write, creates, permissions, pulls }: what
+  // goes on to GitHub (printed again), whether it writes (its token then may), the response
+  // keys of its `createIssue` fields, whose answers name the issues it created
+  // (github-writes.mjs answered()), what its token needs beyond its mode's, and the pull
+  // requests it changes (github-pulls.mjs permissionsOf(), pullOf()).
   async function check(run, body) {
     const call = readCall(body);
     if (call.refused) return call;
@@ -616,7 +643,9 @@ export function createGraphqlChecks({
         ...(variables !== null && { variables }),
       }),
     );
-    if (op.operation !== "mutation") return { body: forwarded, write: false, creates: [] };
+    if (op.operation !== "mutation") {
+      return { body: forwarded, write: false, creates: [], permissions: {}, pulls: [] };
+    }
     const fields = mutationFields(parsed, schema());
     if (fields.refused) return fields;
     const ids = idsOf(fields);
@@ -635,9 +664,11 @@ export function createGraphqlChecks({
     }
     // GitHub's answers about the targets, kept across the call's fields.
     const memo = new Map();
+    const writes = [];
     for (const field of fields) {
       const write = writeOf(field, found, run.repo);
       if (write.refused) return write;
+      writes.push(write);
       const refused = await checkWrite(run, write, memo);
       if (refused) {
         return { refused: { ...refused, message: `${field.key}: ${refused.message}` } };
@@ -647,7 +678,13 @@ export function createGraphqlChecks({
     const creates = fields
       .filter((f) => f.name === "createIssue" && answersCreated(doc, f.nodes))
       .map((f) => f.key);
-    return { body: forwarded, write: fields.length > 0, creates };
+    return {
+      body: forwarded,
+      write: fields.length > 0,
+      creates,
+      permissions: permissionsOf(writes),
+      pulls: writes.map((w, i) => pullOf(w, fields[i].key)).filter(Boolean),
+    };
   }
 
   return { check };

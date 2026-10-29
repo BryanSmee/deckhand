@@ -1,12 +1,9 @@
 #!/bin/bash
 # gh with the run's secret as its token (deckhand-token): the egress proxy relays its calls to
 # the listener's GitHub gateway (../listener/github-gateway.mjs), which swaps it for a token the
-# sandbox never sees. Installed ahead of the real gh on PATH. Outside a Deckhand run (no
+# sandbox never sees and checks its writes, `gh pr create`, `edit` and `ready` included
+# (github-pulls.mjs). Installed ahead of the real gh on PATH. Outside a Deckhand run (no
 # broker), gh runs as usual.
-#
-# The run's token only reads pull requests (it could approve them otherwise): `gh pr ready
-# [--undo]`, `gh pr create` and `gh pr edit` (title and body) go to the listener
-# (../listener/pr-ready.mjs), which makes the change for the run's own branches only.
 real=${DECKHAND_REAL_GH:-/usr/bin/gh}
 [ -n "${DECKHAND_BROKER_URL:-}" ] || exec "$real" "$@"
 
@@ -15,110 +12,4 @@ GH_TOKEN=$(deckhand-token) || {
   exit 1
 }
 export GH_TOKEN
-[ "${1:-}" = pr ] || exec "$real" "$@"
-command=${2:-}
-case $command in
-  ready | create | edit) ;;
-  *) exec "$real" "$@" ;;
-esac
-
-# Temporary files, gone when it exits. temp: a new one in $file (not in a subshell, which
-# would lose it from the list).
-temps=()
-trap 'rm -f "${temps[@]}"' EXIT
-temp() {
-  file=$(mktemp)
-  temps+=("$file")
-}
-
-action=$command
-selector=()
-repo=()
-fields=() # jq arguments: the JSON the listener gets
-head=
-args=("${@:3}")
-for ((i = 0; i < ${#args[@]}; i++)); do
-  arg=${args[i]}
-  # --flag=value as --flag value.
-  if [[ $arg == --*=* ]]; then
-    value=${arg#*=}
-    arg=${arg%%=*}
-  elif [[ $arg == -* ]]; then
-    value=${args[i + 1]:-}
-  fi
-  case $command:$arg in
-    ready:--undo) action=draft ;;
-    *:-R | *:--repo) repo=(--repo "$value") ;;
-    create:-t | create:--title | edit:-t | edit:--title) fields+=(--arg title "$value") ;;
-    create:-b | create:--body | edit:-b | edit:--body) fields+=(--arg body "$value") ;;
-    create:-F | create:--body-file | edit:-F | edit:--body-file)
-      # A socket for stdin can't be opened as /dev/stdin: copied to a file.
-      if [ "$value" = - ]; then
-        temp
-        value=$file
-        cat > "$value"
-      fi
-      [ -r "$value" ] || {
-        echo "gh pr $command: can't read $value" >&2
-        exit 1
-      }
-      fields+=(--rawfile body "$value")
-      ;;
-    create:-B | create:--base) fields+=(--arg base "$value") ;;
-    create:-H | create:--head) head=$value ;;
-    create:-d | create:--draft) fields+=(--argjson draft true) ;;
-    *:-h | *:--help) exec "$real" "$@" ;;
-    *:-*)
-      echo "gh pr $command: ${args[i]} isn't supported in a Deckhand run" >&2
-      [ "$command" = ready ] || echo "It takes --title, --body and --body-file$(
-        [ "$command" = create ] && echo ", --base, --head and --draft"
-      )." >&2
-      exit 1
-      ;;
-    *) selector=("$arg") ;;
-  esac
-  # The flags above that took the next argument as their value skip it.
-  case $arg in
-    -R | --repo | -t | --title | -b | --body | -F | --body-file | -B | --base | -H | --head)
-      [[ ${args[i]} == *=* ]] || ((i++))
-      ;;
-  esac
-done
-
-if [ "$command" = create ]; then
-  name=$("$real" repo view "${repo[@]:1}" --json nameWithOwner --jq .nameWithOwner) || exit 1
-  path="pr/$name/create"
-  # Like gh: the current branch when --head isn't given.
-  fields+=(--arg head "${head:-$(git branch --show-current)}")
-else
-  url=$("$real" pr view "${selector[@]}" "${repo[@]}" --json url --jq .url) || exit 1
-  if [[ ! $url =~ ^https?://[^/]+/([^/]+)/([^/]+)/pull/([0-9]+)$ ]]; then
-    echo "gh pr $command: unexpected pull request URL: $url" >&2
-    exit 1
-  fi
-  path="pr/${BASH_REMATCH[1]}/${BASH_REMATCH[2]}/${BASH_REMATCH[3]}/$action"
-fi
-
-request=()
-if [ "$command" != ready ]; then
-  # In a file: a description may be longer than a command line takes.
-  temp
-  body=$file
-  jq -n "${fields[@]}" '$ARGS.named' > "$body" || exit 1
-  request=(-H "content-type: application/json" --data-binary "@$body")
-fi
-answer=$(deckhand-broker "$path" -sS --max-time 60 --fail-with-body -X POST "${request[@]}")
-status=$?
-message=$(jq -r '.message // .error // empty' <<< "$answer" 2> /dev/null)
-if [ "$status" -ne 0 ]; then
-  echo "gh pr $command: ${message:-Deckhand's broker didn't answer}" >&2
-  exit 1
-fi
-# Like gh: the pull request's URL on stdout (draft-pr.sh reads it), the rest on stderr.
-url=$(jq -r '.url // empty' <<< "$answer" 2> /dev/null)
-if [ -n "$url" ]; then
-  echo "✓ $message" >&2
-  echo "$url"
-else
-  echo "✓ $message"
-fi
+exec "$real" "$@"

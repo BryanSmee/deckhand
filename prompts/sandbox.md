@@ -147,8 +147,8 @@ Skip screenshots for changes with nothing visible (API, tests, tooling).
 - Commits and comments come from the GitHub App's bot; the git identity is already set.
 - Pushes go through Deckhand, which only lets this task's branch through (the issue's
   `issue-<n>-…`, or the pull request's own), never the base branch or another one, and
-  `gh pr create`, `gh pr edit` (title and body) and `gh pr ready` only work on this task's
-  pull request. That token only reads the code and pull requests: no tags, no merging or
+  `gh pr create`, `gh pr edit` and `gh pr ready` only work on this task's pull request
+  (and not with reviewers, assignees, a milestone or projects). That token only reads the code and pull requests: no tags, no merging or
   reviewing pull requests, no writing files through the API.
 - Rewriting history (rebase, `git push --force-with-lease`) is fine on the task's own branch,
   never on any other branch. Rebase it on the base branch before `gh pr ready`: Deckhand

@@ -47,22 +47,26 @@ that file asks for, so none can:
 
 - The sandbox's `pre-push` hook only gives an earlier, clearer message: the gateway doesn't
   rely on it.
-- A sandbox's token only reads pull requests (see [Tokens](#tokens)), and marking one ready
-  for review, or back to draft, also takes `contents: write` for an App's token (GitHub's
-  `markPullRequestReadyForReview` and `convertPullRequestToDraft`). The sandbox's `gh`
-  wrapper sends `gh pr ready [--undo]`, `gh pr create` and `gh pr edit` to the listener
-  instead (`POST /pr/<owner>/<repo>/<number>/ready`, `/draft` or `/edit`, and
-  `POST /pr/<owner>/<repo>/create`, on the broker's port, `listener/pr-ready.mjs`), with the
-  run's secret. The listener checks that the run is live, that the call comes from its own
-  sandbox ([Tokens](#tokens)), and that it is a work run, that the pull request belongs to
-  the run's repository, that its head branch is in that repository too (not a fork) and is
-  one the run may push (above): another task's pull request is refused,
-  and so is opening one from another branch. Then it makes that one change with a token of
-  its own, which the sandbox never sees: the ready mutation, or a pull request's creation or
-  its title and body (`gh pr edit`'s other flags, labels, reviewers or base, are refused).
+- A sandbox's token only reads pull requests (see [Tokens](#tokens)). `gh pr create`,
+  `gh pr edit` and `gh pr ready [--undo]` (GitHub's `createPullRequest`, `updatePullRequest`,
+  `markPullRequestReadyForReview`, `convertPullRequestToDraft`, or REST's `POST` and `PATCH`
+  of `…/pulls`) go through the [GitHub gateway](#the-github-gateway) as any write, with
+  every `gh` flag the ceiling holds, and only a work run's ceiling holds them, for its own
+  pull requests and new ones. Then `listener/github-pulls.mjs` checks that a new pull
+  request's head is a branch of the repository the run may push (above), never
+  `owner:branch`, another repository's head (`head_repo`, `headRepositoryId`) or an issue
+  turned into one (`issue`), and that an existing one's head is too before it is edited,
+  readied or drafted, over any endpoint (`…/issues/<n>` included, which the run's own
+  `issues: write` would reach), or its token writes more than the run's own (a run on a
+  fork's pull request may still comment on it and label it, not rewrite its author's title
+  and description): another task's pull request is refused, and so is opening one from another branch.
   A pull request that conflicts with its base (`mergeable_state: dirty`) is refused ready
-  with a 409 until the run rebases it. Only the head is checked: a run may open its pull
-  request into any base branch, which it reaches only when a maintainer merges it.
+  with a 409 until the run rebases it. Only then does that one call get the token it needs
+  besides the mode's: `pull_requests: write` to open or edit one, `contents: write` to ready
+  or draft one (GitHub asks an App's token for it), which the sandbox never sees, and which
+  carries only the document the gateway checked. Only the head is checked: a run may open
+  its pull request into any base branch, which it reaches only when a maintainer merges
+  it.
 
 This doesn't depend on GitHub: branch protection and rulesets aren't enforced on private
 repositories of free plans. Where they are, a ruleset on the default branch (pull request
@@ -216,8 +220,8 @@ Assume it could, and keep secrets away from workflows on `issue-*` branches as a
 
 A run's secret only lives as long as the run: the listener revokes it when the run ends, and
 the broker then refuses it. It also only works from that run's sandbox (or its container
-engine): the [GitHub gateway](#the-github-gateway), the git gateway, the pull request
-endpoints (`gh pr ready`, `create`, `edit`) and the agents' API endpoints `/anthropic/` and
+engine): the [GitHub gateway](#the-github-gateway), the git gateway and the agents' API
+endpoints `/anthropic/` and
 `/openai/` compare the request's source address (for a call the egress proxy relayed, the
 address it names, below) with that run's addresses on its networks (`docker inspect`, looked
 up once per run and forgotten when its sandbox exits) and answer `403` otherwise. A secret
@@ -239,9 +243,10 @@ can read.
 - **No sandbox token writes pull requests** (`pull_requests: read`, work runs included), so
   no sandbox can review one: `pull_requests: write` would let a run approve any pull request
   of its repository as the App, its own included, or replace a review mode's request for
-  changes (GitHub counts a reviewer's latest review). The listener opens a work run's pull
-  requests and edits their title and body for it ([The default branch](#the-default-branch)).
-  Comments on a pull request take `issues: write`.
+  changes (GitHub counts a reviewer's latest review). The gateway adds it to a work run's
+  checked writes to its own pull requests alone, opening or editing one, whose document is
+  the one it checked ([The default branch](#the-default-branch)): reviews and merges are in
+  no ceiling. Comments on a pull request take `issues: write`.
 - Tokens are cached per repository and permission set, renewed 10 minutes before their
   end, and shared by that repository's runs with the same permissions. GitHub makes them
   valid for an hour, which the listener can't shorten, but none leaves the listener, so none
@@ -327,9 +332,10 @@ to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to the
   query string is refused unchecked: GitHub may read parameters there too. Then:
   - a write it can't classify, one outside the run's repository, and one above the **mode's
     ceiling** (`listener/modes.mjs` `ceilingOf()`, built in: [the table](repo-config.md#the-github-input))
-    are refused before any policy runs. A work run writes its own issue, its pull requests,
-    its issue's sub-issues and the issues it created, and creates issues, nothing else: not other issues and pull
-    requests, though its token could. No ceiling holds closing, merging, reviews, deleting,
+    are refused before any policy runs. A work run writes its own issue, its pull requests
+    (readying and drafting them too: [The default branch](#the-default-branch)), its issue's
+    sub-issues and the issues it created, and creates issues and pull requests from its own
+    branches, nothing else: not other issues and pull requests, though its token could. No ceiling holds closing, merging, reviews, deleting,
     the repository's contents or settings; onboarding, analyses, reviews and a repository's
     light modes write nothing. Only a grant could widen a ceiling, and none does yet;
   - then the policies' **`deny_github`** ([Policies](#policies)), which can only narrow it.
@@ -369,7 +375,9 @@ to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to the
   diff, and its entry in `MUTATIONS` before any run may send it.
 
 - **On to GitHub** with a token for the run's repository: its mode's permissions only for a
-  write that passed these checks, the same permissions read-only for everything else
+  write that passed these checks (and a pull request's own write's: `pull_requests` or
+  `contents`, [The default branch](#the-default-branch)), the same permissions read-only for
+  everything else
   (`listener/github-app.mjs` `readsOf()`), so a brainstorm's or an inbox entry's
   `issues: write` reaches only what its ceiling and the policies allowed (`token …` for the
   API, Basic with `x-access-token` for git, as GitHub expects an App's), the sandbox's `Authorization` and
@@ -576,7 +584,7 @@ whose old name is the same.
 
 Light runs (brainstorms, onboarding, inbox entries, discussions, the repo's light modes) read
 and comment (brainstorms, inbox entries and discussions also create issues); work runs push.
-The git gateway and `gh pr ready`, `create` and `edit` refuse light runs, and no sandbox's token writes pull requests. They never share a writable volume: what a light run could
+The git gateway refuses light runs, and their ceilings hold no pull request write but a brainstorm's comment. They never share a writable volume: what a light run could
 leave in a clone or a session (git hooks, Claude's hooks and settings, code) would otherwise
 run in the issue's next work run, with its token. So light runs get their own `-light-` clone and
 session, no cache volumes (they run no setup), and granted host paths read-only. A work run
@@ -1353,7 +1361,7 @@ holds to any host, so it holds almost nothing:
 | ------------------------------ | --------------------------------------------------------------------------------------- |
 | Hosts                          | any public one (`*`); private addresses only for the mandatory hosts, not the grant's   |
 | The repository's code          | none: no clone, `/workspace` starts empty                                               |
-| GitHub                         | public pages and API, anonymously; the GitHub and git gateways and `/pr/` refuse it     |
+| GitHub                         | public pages and API, anonymously; the GitHub and git gateways refuse it                |
 | Other runs' secrets            | useless: a secret only works from its own run's sandbox ([Tokens](#tokens))             |
 | Input                          | the issue's title, description and last 50 comments, written by the listener (redacted) |
 | Output                         | its final message, posted by the listener as the reply; no screenshots folder           |

@@ -890,7 +890,8 @@ commands) goes through the same checks, field by field:
    must be one Deckhand knows (`createIssue`, `updateIssue`, `addComment`, `addSubIssue`,
    `removeSubIssue`, `reprioritizeSubIssue`, `addLabelsToLabelable`,
    `removeLabelsFromLabelable`, `addAssigneesToAssignable`, `removeAssigneesFromAssignable`,
-   `closeIssue`, `reopenIssue`, `addReaction`, and the pull request ones), setting only the
+   `closeIssue`, `reopenIssue`, `addReaction`, `createPullRequest`, `updatePullRequest`,
+   `markPullRequestReadyForReview`, `convertPullRequestToDraft`), setting only the
    input fields Deckhand checks (no projects, no `parentIssueId` or `issueTemplate`, a sub-issue by its
    `subIssueId` only): any other is refused before any policy runs, even sent as `null`, which
    GitHub may read as clearing it.
@@ -903,16 +904,28 @@ commands) goes through the same checks, field by field:
 5. **What GitHub gets is the document the gateway parsed**, printed again, never the call's
    own bytes: GitHub runs what was checked.
 
-The token behind a run's calls only reads, but for a write that passed these checks: a
-brainstorm's or an inbox entry's `issues: write` never reaches anything else.
+**A pull request's own writes** (`gh pr create`, `gh pr edit`, `gh pr ready [--undo]`, or
+REST's `POST` and `PATCH` of `…/pulls`) are in a work run's ceiling only, for its own pull
+requests (`own_pr`) and the ones it opens (`new_pr`). Past the ceiling, before `deny_github`:
+a new one's head must be a branch of the repository the run may push (not `owner:branch`,
+another repository's, or an issue turned into a pull request), an existing one's too before it
+is edited (over `…/issues/<n>` too), readied or drafted, or its token writes pull requests or
+contents (a fork's pull request is only commented on and labelled); one with conflicts isn't made ready; and for a
+repository granted `allow_workflows`, opening, editing, labelling, readying or drafting one
+first checks its workflow files merged with its base, as a push's are.
 
-| Mode                                                            | Ceiling                                                                                                                                                                                 |
-| --------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `brainstorm`, `stop`                                            | its issue: `edit`, `comment`, `link`; its sub-issues and the issues it created: `edit`, `comment`, `link`; new issues and labels: `create`; other issues and pull requests: `comment`   |
-| `idea`, `bug`                                                   | new issues (with the `idea` or `bug` label) and labels: `create`; the issues it created: `link` (the parents it files); its issue: `comment`                                            |
-| `discussion`                                                    | new issues: `create`                                                                                                                                                                    |
-| `onboarding`, `analyze`, `review`, `research`, a light `modes:` | nothing                                                                                                                                                                                 |
-| `work`, a `modes:` entry that isn't light                       | its issue: `edit`, `comment`, `label`, `link`; its pull requests: `edit`, `comment`, `label`; its sub-issues and the issues it created: `edit`, `comment`, `link`; new issues: `create` |
+The token behind a run's calls only reads, but for a write that passed these checks: a
+brainstorm's or an inbox entry's `issues: write` never reaches anything else. A pull request's
+own write gets what GitHub needs for it besides: `pull_requests: write` to open or edit one,
+`contents: write` to ready or draft one.
+
+| Mode                                                            | Ceiling                                                                                                                                                                                                                                         |
+| --------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `brainstorm`, `stop`                                            | its issue: `edit`, `comment`, `link`; its sub-issues and the issues it created: `edit`, `comment`, `link`; new issues and labels: `create`; other issues and pull requests: `comment`                                                           |
+| `idea`, `bug`                                                   | new issues (with the `idea` or `bug` label) and labels: `create`; the issues it created: `link` (the parents it files); its issue: `comment`                                                                                                    |
+| `discussion`                                                    | new issues: `create`                                                                                                                                                                                                                            |
+| `onboarding`, `analyze`, `review`, `research`, a light `modes:` | nothing                                                                                                                                                                                                                                         |
+| `work`, a `modes:` entry that isn't light                       | its issue: `edit`, `comment`, `label`, `link`; its pull requests: `edit`, `comment`, `label`, `ready`, `draft`; its sub-issues and the issues it created: `edit`, `comment`, `link`; new issues and pull requests (from its branches): `create` |
 
 No ceiling holds closing or reopening (GitHub closes an issue when its pull request merges),
 merging, reviews and their comments, assignees and milestones (an issue created with them
@@ -928,10 +941,10 @@ go through Deckhand's git gateway) or settings, or another repository.
 | `repo`                  | `"owner/repo"`, in lower case.                                                                                                                                                                                                                                                                                 |
 | `mode`                  | The run's: `work`, `brainstorm`, `stop`, `idea`, `bug`, `discussion`, or one of the repository's `modes:`.                                                                                                                                                                                                     |
 | `issue`                 | The number of the run's issue (or pull request).                                                                                                                                                                                                                                                               |
-| `action`                | What the write does: `create`, `edit`, `comment`, `label`, `link`. A write that does several (a `PATCH` setting labels and a title) has them all in `actions`, `action` being the first.                                                                                                                       |
+| `action`                | What the write does: `create`, `edit`, `comment`, `label`, `link`, `ready`, `draft`. A write that does several (a `PATCH` setting labels and a title) has them all in `actions`, `action` being the first.                                                                                                     |
 | `actions`               | All of them: `close` or `reopen` first, then `label`, `assign`, `milestone`, then `edit`.                                                                                                                                                                                                                      |
-| `target.kind`           | `own_issue`, `own_pr`, `sub_issue`, `created_issue` (one the run created), `other_issue`, `pr`, `new_issue` (an issue it creates), `label` (a label it creates).                                                                                                                                               |
-| `target.number`         | The issue's or pull request's, `null` for `new_issue` and `label`.                                                                                                                                                                                                                                             |
+| `target.kind`           | `own_issue`, `own_pr`, `sub_issue`, `created_issue` (one the run created), `other_issue`, `pr`, `new_issue` (an issue it creates), `new_pr` (a pull request it opens), `label` (a label it creates).                                                                                                           |
+| `target.number`         | The issue's or pull request's, `null` for `new_issue`, `new_pr` and `label`.                                                                                                                                                                                                                                   |
 | `target.labels`         | Its labels' names, as GitHub has them now.                                                                                                                                                                                                                                                                     |
 | `target.author`         | Its author's login.                                                                                                                                                                                                                                                                                            |
 | `change.fields`         | The keys of the write's JSON body (`["title", "body"]`), or the input fields a GraphQL mutation sets, its target's aside, named as REST names them (`labelIds` → `labels`, `assigneeIds` → `assignees`, `milestoneId` → `milestone`, `baseRefName` → `base`, the others in snake case): one spelling for both. |

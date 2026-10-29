@@ -22,8 +22,8 @@ import { clientAddress, createBrokerHttp, runAt, runFrom } from "./broker-http.m
 import { createGitGateway } from "./git-gateway.mjs";
 import { createGithubGateway } from "./github-gateway.mjs";
 import { createGraphqlChecks, createValidator, lookupNodes } from "./github-graphql.mjs";
+import { createPullChecks } from "./github-pulls.mjs";
 import { createWriteChecks } from "./github-writes.mjs";
-import { createPrReady } from "./pr-ready.mjs";
 import { createBrainstorms, createIssueModes } from "./brainstorms.mjs";
 import { checkout } from "./checkout.mjs";
 import { createComments } from "./comments.mjs";
@@ -330,10 +330,24 @@ Object.assign(ctx, {
 
 // The sandboxes' only way to GitHub, on the broker's port: their calls, relayed by the egress
 // proxy, go on with a token for their run's repo that they never see, their writes redacted.
+const lookup = (repo, path) => getJson(github, repo, path, [404, 410]);
+// Their pull requests' own writes (`gh pr create`, `edit`, `ready`): from their own branches.
+const pullChecks = createPullChecks({
+  lookup,
+  // A granted repo's workflows, in the merge a new or changed pull request runs them from.
+  checkWorkflows: (repo, branch, base) => ctx.gitGateway.checkBranch(repo, branch, base),
+  // The dashboard has the change at once, whether its delivery comes or not.
+  record: (repo, pr, readyAt) => {
+    const { key, pr: entry } = pullEntry(repo, pr, readyAt);
+    if (pulls.record(key, entry)) log(`${key}: pull request #${entry.number} ${entry.state}`);
+  },
+  log,
+});
 const writeChecks = createWriteChecks({
-  lookup: (repo, path) => getJson(github, repo, path, [404, 410]),
+  lookup,
   bot: () => config.bot,
   policies,
+  pulls: pullChecks,
   log,
 });
 // Their GraphQL: parsed, validated (in a worker: a document can take a moment), and each
@@ -427,20 +441,6 @@ ctx.google = createGoogleRelay({
   login: agyLogin,
   upstream: config.geminiUrl,
   log,
-});
-// Their pull requests ready for review (or back to draft): their own token can't.
-ctx.prReady = createPrReady({
-  broker: ctx.broker,
-  app: () => ctx.app,
-  api: config.githubApi,
-  log,
-  // A granted repo's workflows, in the merge a new or ready pull request runs them from.
-  checkWorkflows: (repo, branch, base) => ctx.gitGateway.checkBranch(repo, branch, base),
-  // The dashboard has the change at once, whether its delivery comes or not.
-  record: (repo, pr, readyAt) => {
-    const { key, pr: entry } = pullEntry(repo, pr, readyAt);
-    if (pulls.record(key, entry)) log(`${key}: pull request #${entry.number} ${entry.state}`);
-  },
 });
 
 // --- Tasks, runs and restarts --------------------------------------------------------------

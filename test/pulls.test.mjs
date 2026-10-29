@@ -383,7 +383,7 @@ test("pulls: a pull request recorded without its size keeps the one known", (t) 
   const pulls = createPulls({ path: tempPath(t), listPulls: async () => [] });
   const sized = { additions: 86, deletions: 19, changedFiles: 4, commits: 3 };
   pulls.record("org/repo#30", { ...pr(31, "draft"), ...sized });
-  // The listener's own change (pr-ready.mjs), its object without them.
+  // The listener's own record (github-pulls.mjs), its object without them.
   pulls.record("org/repo#30", pr(31, "ready", NOW));
   assert.deepEqual(pulls.get("org/repo#30"), { ...pr(31, "ready", NOW), ...sized });
   // A newer size wins.
@@ -408,7 +408,7 @@ test("pulls: resync lets fill() look up the tasks without one again", async (t) 
 
 test("pulls: a ready pull request recorded ready again keeps when it turned ready", (t) => {
   const pulls = createPulls({ path: tempPath(t), listPulls: async () => [] });
-  // pr-ready.mjs, then its ready_for_review delivery: one readyAt, one notification.
+  // github-pulls.mjs, then its ready_for_review delivery: one readyAt, one notification.
   pulls.record("org/repo#30", pr(31, "ready", NOW));
   pulls.record("org/repo#30", pr(31, "ready", NOW + 5000));
   assert.equal(pulls.get("org/repo#30").readyAt, NOW);

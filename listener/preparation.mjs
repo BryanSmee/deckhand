@@ -261,7 +261,7 @@ export function createPreparation(ctx) {
   }
 
   // The branches the run may push (git-gateway.mjs) and whose pull requests it may mark ready
-  // (pr-ready.mjs): an issue's own, issue-<n>-* (draft-pr.sh names it from the title, which
+  // (github-pulls.mjs): an issue's own, issue-<n>-* (draft-pr.sh names it from the title, which
   // may change), and the head of each pull request its comments came from, a maintainer's
   // included, but not a fork's. None for a run that can't push. `fork`: whether one of them
   // is a fork's; `pulls`: number → the pull request, as GitHub has it, for imageSource().

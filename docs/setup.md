@@ -197,7 +197,7 @@ had them, the listener asks GitHub once and keeps them in `titles.json` in its d
 Each task also links to its pull request (the one that closes its issue, or the pull request
 itself), with a badge for its state: draft, ready for review, merged or closed. The
 `pull_request` webhooks keep it current, in `pulls.json`, and so do the changes the listener
-makes itself (a run's `gh pr ready`); for tasks from before, the listener looks through each
+lets through for runs (a run's `gh pr ready`); for tasks from before, the listener looks through each
 repository's 100 most recently updated pull requests once per start, and asks again about the
 open ones at each start, so one that changed while it was down shows its current state. The
 **Ready for review** chip lists the pull requests waiting for you, and the tab's title counts
@@ -1063,10 +1063,10 @@ No sandbox gets a GitHub token, an SSH key or the host's git configuration:
   gateway (same port, with the run's secret), which pushes the run's own branch only (its
   issue's `issue-<n>-*`, or its pull request's head), never the default one, with a token of
   its own (see [Security model](security.md#the-default-branch)): contents only, and
-  workflows too for a repository granted `allow_workflows`. The
-  listener also opens a run's pull request, edits its title and body, and marks it ready for
-  review (`gh pr create`, `edit` and `ready`), which that token can't: it only reads pull
-  requests. Commits
+  workflows too for a repository granted `allow_workflows`. A run's
+  `gh pr create`, `edit` and `ready` go through the GitHub gateway like its other calls, for
+  its own pull requests only, with a token that writes them for that one checked call: no
+  other call's token writes pull requests. Commits
   and comments come from the App's bot (`<app>[bot]`, identity set through `GIT_AUTHOR_*`
   and `GIT_COMMITTER_*`).
 

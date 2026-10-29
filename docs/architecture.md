@@ -363,10 +363,13 @@ changes, and its output as `raw` entries with the step's number; the lines of no
   through the git gateway on the same port, which only lets through the run's own branches
   (and, for a repository granted `allow_workflows`, workflow files that only read and name no
   secret, checked against a mirror of the repository in the data volume),
-  and `gh pr ready [--undo]`, `gh pr create` and `gh pr edit` ask the listener on that port
-  to mark the run's pull request ready for review (or back to draft), open it, or edit its
-  title and body, which their tokens can't: they only read pull requests, so no sandbox can
-  approve one. Both only take work runs: light runs can't push or change a pull request.
+  and `gh pr create`, `gh pr edit` and `gh pr ready [--undo]` are GraphQL writes like any
+  other, which the work mode's ceiling holds for the run's own pull requests only: then
+  `github-pulls.mjs` checks the pull request's head is one of the run's branches, its workflow
+  files (for a repository granted `allow_workflows`, as a push's) and its conflicts before
+  ready, and the one call goes on with the token it needs besides (`pull_requests: write` to
+  open or edit one, `contents: write` to ready or draft it), which no other call gets: no
+  sandbox can approve or merge one. Light runs can't push or change a pull request.
 - **Dashboard**: `GET /` shows every repo's issues and pull requests, their state and live
   logs, to `ALLOWED_USERS` signed in with GitHub through the App, built from `dashboard/`.
   `GET /status` says what is going on, to them and to calls from inside the container.
@@ -633,7 +636,7 @@ A delivery whose handling throws (`dispatch()`) is logged with its event and act
 listener goes on with the next one. GitHub got its `202` already, so it isn't redelivered.
 
 Pull request states don't hang on deliveries alone: the listener records the changes it makes
-for runs (`pr-ready.mjs`: ready, draft, opened, edited) in `pulls.json` at once (the
+for runs (`github-pulls.mjs`: ready, draft, opened, edited) in `pulls.json` at once (the
 `ready_for_review` delivery that follows keeps its `readyAt`: one notification), and asks
 GitHub about every open pull request it knows again at start and from Sync
 (`pulls.mjs` `resync()`), so a `ready_for_review`, merge or close older than the redelivery
@@ -821,7 +824,7 @@ tests fake it.
 | `github-writes.mjs`                                               | The REST writes the GitHub gateway relays: classified, their target's kind read from GitHub, held to the mode's ceiling (`modes.mjs` `ceilingOf()`) and the policies' `deny_github`.                                                                 |
 | `github-graphql.mjs`, `github-graphql-worker.mjs`, `vendor/`      | The GraphQL the GitHub gateway relays: parsed with graphql-js (bundled at image build), validated against GitHub's pinned schema in a worker (`github-graphql-worker.mjs`), each mutation field a write for `github-writes.mjs`, printed again.      |
 | `git-mirror.mjs`, `workflow-check.mjs`                            | The git gateway's mirrors of the repositories granted `allow_workflows`, and the checks on the workflow files their pushes change (a strict YAML subset).                                                                                            |
-| `pr-ready.mjs`                                                    | The sandboxes' pull requests opened, edited, and marked ready for review or back to draft (`gh pr create`, `edit`, `ready`).                                                                                                                         |
+| `github-pulls.mjs`                                                | A run's own pull requests' writes (`gh pr create`, `edit`, `ready`): from its branches, their workflow files and conflicts checked, the token they need, the dashboard's record.                                                                     |
 | `anthropic.mjs`, `openai.mjs`, `upstream.mjs`                     | The sandboxes' Claude and OpenAI API calls, with the operator's credential; what both endpoints share (`createApiProxy()`).                                                                                                                          |
 | `chatgpt.mjs`                                                     | A ChatGPT plan's login for Codex, held and refreshed by the listener alone.                                                                                                                                                                          |
 | `google.mjs`, `antigravity-login.mjs`                             | The Antigravity CLI's calls (`/google/` with `GEMINI_API_KEY`, or `/relay/` from the egress proxy with the plan's access token); its Google AI plan login, held by the listener and refreshed by `agy` in a container of its own.                    |

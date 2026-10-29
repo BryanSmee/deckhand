@@ -1,7 +1,7 @@
 // The broker's HTTP server, on the runs' networks only (compose.yaml doesn't publish its
 // port): the egress proxy's questions (may this sandbox reach this host?), the GitHub gateway
 // (github-gateway.mjs), which the proxy sends the sandboxes' GitHub calls to, the git gateway
-// (git-gateway.mjs), ready for review (pr-ready.mjs) and the agents' API endpoints
+// (git-gateway.mjs) and the agents' API endpoints
 // (anthropic.mjs, openai.mjs, and google.mjs, which the proxy sends the Antigravity CLI's calls
 // to). The runs' secrets are the broker's (broker.mjs).
 import { createServer } from "node:http";
@@ -21,7 +21,6 @@ const ROUTES = [
   { prefix: "/openai/", service: "openai", name: "OpenAI", destroy: true },
   { prefix: "/google/", service: "google", name: "Google", destroy: true },
   { prefix: "/relay/", service: "google", name: "Google", destroy: true },
-  { prefix: "/pr/", service: "prReady", name: "Pull requests", destroy: false },
 ];
 
 // Whether the running task's sandbox (or its engine) has address `ip`. Addresses are looked up

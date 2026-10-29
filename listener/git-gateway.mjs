@@ -528,7 +528,7 @@ export function createGitGateway({
   }
 
   // Why the run's branch `branch`, already on GitHub, can't have a pull request into `into`
-  // opened or marked ready (pr-ready.mjs): its workflows, merged with `into`, as a push of it
+  // opened, edited or marked ready (github-pulls.mjs): its workflows, merged with `into`, as a push of it
   // would be refused. Null when they pass, or the repo isn't granted `allow_workflows`.
   // Throws when they can't be checked.
   async function checkBranch(repo, branch, into) {

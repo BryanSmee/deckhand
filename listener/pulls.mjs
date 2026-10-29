@@ -2,7 +2,7 @@
 // { number, url, state, readyAt, autoMerged?, additions?, deletions?, changedFiles?, commits? },
 // its size and commit count as the last pull request object that had them said (events.mjs
 // pullSize()). `pull_request` webhooks keep it current (events.mjs pullRequest()), and the
-// listener's own changes (pr-ready.mjs); tasks older than that are looked up once per listener
+// listener's own record of the runs' changes (github-pulls.mjs); tasks older than that are looked up once per listener
 // start, from the repo's recent pull requests. Kept in pulls.json, so a restart neither forgets
 // nor asks again. The open ones are asked about again at start and from the dashboard's Sync
 // (resync()): a lost delivery would leave one a draft forever.
@@ -48,7 +48,7 @@ export function createPulls({ path, listPulls, getPull = async () => null, log =
     }
     // An edit or a close says nothing about when it turned ready: the earlier event did. Nor
     // does the `ready_for_review` delivery of a change the listener recorded already
-    // (pr-ready.mjs): one notification, not two.
+    // (github-pulls.mjs): one notification, not two.
     const already = before?.state === "ready" && pr.state === "ready";
     const readyAt = already ? before.readyAt : (pr.readyAt ?? before?.readyAt ?? null);
     // Merged by the listener (reviews.mjs autoMerge()): the `closed` delivery that follows
