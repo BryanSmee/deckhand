@@ -83,7 +83,21 @@ function fakeDocker({ answers = {}, routeOut = false, runtimes = ["runc"], taken
               .join("\n"),
           );
         }
+        if (args.join(" ").includes("IPv4Address")) {
+          // Each run network's ID and its containers' addresses (networks.mjs sandboxOf()).
+          return ok(
+            args
+              .slice(4)
+              .filter((n) => nets.has(n))
+              .map((n) => {
+                const ips = [...nets.get(n)].map((c) => ` ${containers.get(c).ip}/24 `);
+                return `id-${n}${ips.join("")}`;
+              })
+              .join("\n"),
+          );
+        }
         if (!nets.has(last)) return missing;
+        if (args[3] === "{{.Id}}") return ok(`id-${last}`);
         return args.join(" ").includes("Containers")
           ? ok([...nets.get(last)].map((c) => `${c} `).join(""))
           : ok(String(internal.has(last)));
@@ -251,6 +265,34 @@ test("start: detached, labelled, secrets by name only, its inbox at the broker",
   assert.doesNotMatch(joined, /--mount|-v /);
   assert.match(joined, /--network dh-org-repo-12-1 /);
   assert.equal(readFileSync(join(inboxDir, "dh-org-repo-12-1", "inbox.jsonl"), "utf8"), "");
+});
+
+test("start: the run's tokens bound to its network's ID, by name only; sandboxOf() finds it", async () => {
+  let now = 0;
+  const { r, calls } = runner({ now: () => now });
+  const bound = [];
+  await r.start({
+    run: "dh-org-repo-12-1",
+    name: "dh-org-repo-12",
+    image: "dh-sandbox",
+    env: { TASK_PROMPT: "p" },
+    tokens: async (sandbox) => (bound.push(sandbox), { DECKHAND_RUN_TOKEN: `t@${sandbox}` }),
+  });
+  assert.deepEqual(bound, ["id-dh-org-repo-12-1"]);
+  const { args, env } = calls.find((c) => c.args[0] === "run");
+  assert.ok(args.includes("DECKHAND_RUN_TOKEN"));
+  assert.doesNotMatch(args.join(" "), /t@/);
+  assert.equal(env.DECKHAND_RUN_TOKEN, "t@id-dh-org-repo-12-1");
+  // The sandbox's address on it, and the listener's and the proxy's: that network's ID.
+  assert.equal(await r.sandboxOf("10.1.0.2"), "id-dh-org-repo-12-1");
+  assert.equal(await r.sandboxOf("10.9.9.9"), null);
+  // Looked up once, until a miss lets it look again, at most every 2 seconds.
+  const looks = () => calls.filter((c) => c.args.join(" ").includes("IPv4Address")).length;
+  assert.equal(await r.sandboxOf("10.1.0.2"), "id-dh-org-repo-12-1");
+  assert.equal(looks(), 1);
+  // Gone with its network: an address never names a network that was removed.
+  await r.remove("dh-org-repo-12", "dh-org-repo-12-1");
+  assert.equal(await r.sandboxOf("10.1.0.2"), null);
 });
 
 test("start: the run's own internal network, with the listener and the proxy on it", async () => {

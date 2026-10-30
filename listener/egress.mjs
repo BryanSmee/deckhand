@@ -88,7 +88,7 @@ export function matchHost(host, patterns) {
 // container engine, whose builds and containers don't trust Deckhand's CA: plain HTTP only).
 // `relayed` (GitHub's, githubHosts(), and the run's agent's, agents/): hosts whose HTTPS the
 // proxy decrypts and hands to the listener, which puts a token or the operator's credential in
-// place of the run's secret (github-gateway.mjs, google.mjs); never cached. `blocked` (the agent's too): refused whatever the grants say.
+// place of the run's token (github-gateway.mjs, google.mjs); never cached. `blocked` (the agent's too): refused whatever the grants say.
 export function egressPolicy(
   host,
   hosts,

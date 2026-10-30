@@ -389,7 +389,8 @@ export function createKubernetesRunner({
 
   // `spec`: sandboxSpec()'s. → { engine: null }: no engine here.
   async function start(spec) {
-    const { run, name, labels = {}, env: values = {}, engine, ca, digest, volumes = [] } = spec;
+    const { run, name, labels = {}, env: values = {}, tokens, engine, ca, digest } = spec;
+    const { volumes = [] } = spec;
     if (engine) throw new Error("the kubernetes runner runs no container engine");
     for (const v of volumes) {
       // A cache's claim is images.mjs caches()'s, made only with a class to make it of.
@@ -399,12 +400,6 @@ export function createKubernetesRunner({
         );
       }
     }
-    // Unset values stay unset in the sandbox, as under Docker.
-    const env = Object.fromEntries(
-      Object.entries(values)
-        .filter(([, v]) => v !== undefined)
-        .map(([k, v]) => [k, String(v)]),
-    );
     inbox.write(run, ca, digest);
     const podLabels = { ...owner, "deckhand.run": labelValue(run), [ROLE]: SANDBOX };
     const made = []; // what start() created, removed again if it fails
@@ -417,19 +412,10 @@ export function createKubernetesRunner({
       }
       const agentInit = await agentInstall(volumes.find((v) => v.kind === "agent"));
       const secret = secretName(run);
-      await api.create("secrets", {
-        apiVersion: "v1",
-        kind: "Secret",
-        metadata: {
-          name: secret,
-          labels: { ...owner, "deckhand.run": labelValue(run), [ROLE]: ENV },
-          annotations: { "deckhand.run": run },
-        },
-        type: "Opaque",
-        stringData: env,
-      });
-      made.push(`secrets/${secret}`);
-      await api.create(
+      // The pod first: the run's tokens are bound to its UID (../sandbox-spec.mjs tokenEnv()).
+      // Its container waits for the Secret it reads (CreateContainerConfigError, which the
+      // kubelet retries), made right after.
+      const pod = await api.create(
         "pods",
         podSpec(spec, {
           pod: kubeName(name),
@@ -447,6 +433,26 @@ export function createKubernetesRunner({
           agentInit,
         }),
       );
+      made.push(podPath(name));
+      const bound = tokens ? await tokens(pod?.metadata?.uid) : {};
+      // Unset values stay unset in the sandbox, as under Docker.
+      const env = Object.fromEntries(
+        Object.entries({ ...bound, ...values })
+          .filter(([, v]) => v !== undefined)
+          .map(([k, v]) => [k, String(v)]),
+      );
+      await api.create("secrets", {
+        apiVersion: "v1",
+        kind: "Secret",
+        metadata: {
+          name: secret,
+          labels: { ...owner, "deckhand.run": labelValue(run), [ROLE]: ENV },
+          annotations: { "deckhand.run": run },
+        },
+        type: "Opaque",
+        stringData: env,
+      });
+      made.push(`secrets/${secret}`);
     } catch (error) {
       for (const path of made.reverse()) {
         await api.remove(path).catch((e) => log(`Removing ${path}: ${e.message}`));
@@ -765,6 +771,7 @@ export function createKubernetesRunner({
     const which = run ?? pod?.metadata?.annotations?.["deckhand.run"];
     const grace = pod && running(pod) ? KILL_GRACE_S : 0;
     await api.remove(podPath(name), { gracePeriodSeconds: grace });
+    uids = new Map();
     if (which) await api.remove(`secrets/${secretName(which)}`);
     if (run) inbox.remove(run);
   }
@@ -799,6 +806,33 @@ export function createKubernetesRunner({
     const found = (status?.podIPs ?? []).map((p) => p.ip).filter(Boolean);
     if (!found.length && status?.podIP) found.push(status.podIP);
     return found.length ? found : null;
+  }
+
+  // The UID of the sandbox's pod that has an IP, or null: what the run's tokens are bound to
+  // (../broker.mjs check()). A UID, not the pod's name (each of the issue's runs has the same)
+  // nor its IP (reused). Cached for PROXY_TTL_MS, as each call to the broker asks, and
+  // forgotten as a sandbox is removed.
+  let uids = new Map(); // ip → { uid, at }
+  async function sandboxOf(ip) {
+    const known = uids.get(ip);
+    if (known && now() - known.at < PROXY_TTL_MS) return known.uid;
+    let uid = null;
+    try {
+      const { items = [] } = await api.get("pods", {
+        labelSelector: selector(SANDBOX),
+        fieldSelector: `status.podIP=${ip}`,
+      });
+      // Checked here too: the API's answer for that address, and no other.
+      const at = (p) => p.status?.podIP === ip || (p.status?.podIPs ?? []).some((a) => a.ip === ip);
+      const live = items.filter((p) => at(p) && !p.metadata?.deletionTimestamp && running(p));
+      uid = live.length === 1 ? (live[0].metadata?.uid ?? null) : null;
+    } catch (error) {
+      log(`Looking up the sandbox at ${ip}: ${error.message}`);
+      return null;
+    }
+    if (uids.size > 1000) uids = new Map();
+    if (uid) uids.set(ip, { uid, at: now() });
+    return uid;
   }
 
   // The IPs of the pods behind the egress Service, ready or not (one starting still relays).
@@ -856,6 +890,7 @@ export function createKubernetesRunner({
     installing,
     relink,
     proxyAddresses,
+    sandboxOf,
   };
 }
 

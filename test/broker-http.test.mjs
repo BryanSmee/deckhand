@@ -1,4 +1,4 @@
-// What binds a run's secret to its sandbox (broker-http.mjs runAt()): the run's own task's
+// What binds a run's secret from before tokens to its sandbox (broker-http.mjs runAt()): the run's own task's
 // addresses, never another running sandbox's.
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
@@ -26,7 +26,8 @@ function twoRuns() {
     repo,
     // Whether it started an engine (runs.mjs launch()).
     live: {
-      secret: broker.register(repo),
+      id: name,
+      secret: broker.register(repo, undefined, { id: name, secret: `${name}-secret` }),
       hosts: ["github.com"],
       ip: null,
       engine: !!engines[name],

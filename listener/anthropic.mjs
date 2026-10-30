@@ -1,6 +1,6 @@
 // Anthropic endpoint: the operator's Claude credential never enters a sandbox, where Claude's
 // tools, the repo's setup and a fork's code could read it (and post it on a public issue).
-// A sandbox gets ANTHROPIC_BASE_URL=<broker>/anthropic and the run's secret in the variable
+// A sandbox gets ANTHROPIC_BASE_URL=<broker>/anthropic and the run's agent token in the variable
 // the credential would be in (agents/claude.mjs env()), so Claude Code keeps its mode: an OAuth token
 // goes as `Authorization: Bearer`, with its beta, a gateway's token (ANTHROPIC_AUTH_TOKEN,
 // for OpenRouter say) as `Authorization: Bearer` too, an API key as `x-api-key`. Here the secret
@@ -45,7 +45,7 @@ export function resetOf(headers) {
   return reset > 0 ? reset * 1000 : null;
 }
 
-// The run's secret, from whichever header Claude Code sent it in.
+// The run's agent token, from whichever header Claude Code sent it in.
 function secretOf(req) {
   const [scheme, value] = (req.headers.authorization ?? "").split(" ");
   return scheme === "Bearer" ? value : req.headers["x-api-key"];
@@ -72,7 +72,7 @@ const ERRORS = {
 };
 
 export function createAnthropicProxy({
-  broker, // broker.mjs: the run a secret belongs to
+  broker, // broker.mjs: the run a token belongs to
   name, // credentialName(): which header the credential goes in
   credential, // its value
   // The credentials a run can name (broker.mjs provide()): { plan, key } (NAMED) → value.
@@ -123,7 +123,7 @@ export function createAnthropicProxy({
       return { base: baseOf(upstream), what: own ? "Anthropic" : run.provider };
     },
     drop: ["authorization", "x-api-key"],
-    // In the header Claude Code sent the secret in.
+    // In the header Claude Code sent the token in.
     authHeaders: async (run) => {
       const { name, credential } = settingsOf(run);
       return name === "ANTHROPIC_API_KEY"

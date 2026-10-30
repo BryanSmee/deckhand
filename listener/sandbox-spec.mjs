@@ -1,7 +1,8 @@
 // What the runner (runner/) starts for a run: the sandbox's image, environment, user, limits
 // and volumes. A description, not a backend's options: runner/docker.mjs turns it into `docker
 // run` arguments (sandboxArgs()). Pure: runs.mjs start() gathers the parts. `run`: { config,
-// task (with its `live`, runs.mjs), agent (agents/), bot (the App's git identity), publicUrl }.
+// task (with its `live`, runs.mjs), agent (agents/), bot (the App's git identity), publicUrl,
+// broker (broker.mjs, which signs the run's tokens: tokens()) }.
 import { proxyEnv } from "./egress.mjs";
 import { isFresh, OPEN, sessionName } from "./modes.mjs";
 import { ENGINE_HOST } from "./runner/engine.mjs";
@@ -14,7 +15,9 @@ export const SANDBOX_USER = { uid: 1000, gid: 1000 };
 // run reach it through its inbox (tasks.mjs deliver()). `caches`: the repo's cache volumes
 // (images.caches()); `mounts`: the host paths granted (access.mjs).
 //
-// → { run, name, image, labels, env, user, limits, caps, volumes, engine, ca, digest }, each of
+// → { run, name, image, labels, env, tokens, user, limits, caps, volumes, engine, ca, digest },
+// `tokens(sandbox)` the variables that hold the run's tokens (tokenEnv()), which the runner adds
+// to `env` once it knows the ID of its sandbox's network or pod, each of
 // `volumes` { kind, name, path, readOnly, subpath }: `kind` agent, session, cache or
 // mount, `name` the volume (a mount's: the host path), `subpath` the folder of it mounted;
 // the agent's has `install` too ({ command, env }).
@@ -33,7 +36,7 @@ export function sandboxSpec(
   const volumes = [
     // The agent, installed by the listener before the run (images.installAgent()).
     // Read-only: shared by every repository, so a run that could rewrite it would run its
-    // code in the next sandbox of any repository, with that run's broker secret.
+    // code in the next sandbox of any repository, with that run's tokens.
     // `install`: how to fill it, for a runner that installs it in the sandbox's own pod
     // (runner/kubernetes.mjs, without a claim for it).
     {
@@ -77,6 +80,7 @@ export function sandboxSpec(
     image,
     labels,
     env,
+    tokens: (sandbox) => tokenEnv(run, sandbox),
     // Whatever a repo or branch image ends with: a sandbox as root would own root-owned files
     // in granted mounts (grants.mjs) and leave root-owned files in them and in cache volumes.
     // An image that needs root at runtime fails loudly.
@@ -91,9 +95,25 @@ export function sandboxSpec(
   };
 }
 
+// The run's tokens (broker.mjs issue()), bound to `sandbox`, the ID of its network or pod: the
+// run token, which the sandbox writes to a file and renews (../sandbox/deckhand-token), and
+// the agent's, which its env (agents/) gives it in place of the operator's credential. Kept
+// on the live run too, for its output's redaction after a restart (restart.mjs).
+export function tokenEnv({ config, task, agent, broker }, sandbox) {
+  const { live } = task;
+  const { token, agentToken } = broker.issue(live.id, sandbox);
+  live.agentToken = agentToken;
+  const provider = live.record.provider ?? agent.defaultProvider;
+  return {
+    ...agent.env(config, agentToken, provider, live.record.credential ?? null),
+    DECKHAND_RUN_TOKEN: token,
+  };
+}
+
 // Values reach the container by name only: they never show in `ps`. The App's credentials
 // are not among them: they stay in the data volume. Nor is the agent's credential: the
-// agent's env (agents/) gives it the run's secret in its place.
+// agent's env gives it the agent token in its place, which comes with the run token once the
+// runner knows where the sandbox runs (tokenEnv()).
 export function sandboxEnv(
   { config, task, agent, bot, publicUrl },
   prompt,
@@ -109,8 +129,6 @@ export function sandboxEnv(
   const install = agent.install(config);
   const provider = live.record.provider ?? agent.defaultProvider;
   return {
-    ...agent.env(config, live.secret, provider, live.record.credential ?? null),
-    DECKHAND_RUN_SECRET: live.secret,
     DECKHAND_BROKER_URL: config.brokerUrl,
     // Which of ../sandbox/agents/ runs, and its version.
     SANDBOX_AGENT: agent.name,

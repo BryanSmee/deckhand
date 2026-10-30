@@ -1,8 +1,73 @@
 #!/bin/bash
-# Prints what this run gives GitHub in place of a token: its secret. The egress proxy relays
-# its GitHub calls to the listener's GitHub gateway (../listener/github-gateway.mjs), which
-# swaps it for a token limited to the run's repo that the sandbox never sees, while the run
-# lasts. The git credential helper and the gh wrapper call it.
+# Prints what this run gives GitHub in place of a token: its run token, a JWT the listener's
+# broker signs (../listener/broker.mjs), bound to this sandbox and valid for 15 minutes. The
+# egress proxy relays its GitHub calls to the listener's GitHub gateway
+# (../listener/github-gateway.mjs), which swaps it for a token limited to the run's repo that the
+# sandbox never sees, while the run lasts. The git credential helper and the gh wrapper call it
+# each time: the token changes, so nothing may keep it.
+#
+#   deckhand-token          prints the token, from DECKHAND_TOKEN_FILE (a run's secret from
+#                           before tokens, DECKHAND_RUN_SECRET, when there is no file)
+#   deckhand-token --init   writes DECKHAND_RUN_TOKEN, the first token, to DECKHAND_TOKEN_FILE
+#                           (entrypoint.sh)
+#   deckhand-token --renew  asks the broker for a new one every DECKHAND_TOKEN_RENEW seconds
+#                           (300), presenting the current one, and replaces the file whole,
+#                           until the sandbox stops (entrypoint.sh, in the background). A
+#                           failure is said on stderr, and asked again after
+#                           DECKHAND_TOKEN_RETRY seconds (30).
 set -euo pipefail
-: "${DECKHAND_RUN_SECRET:?not a Deckhand run: no run secret}"
-printf '%s\n' "$DECKHAND_RUN_SECRET"
+file=${DECKHAND_TOKEN_FILE:-/dev/shm/deckhand/run-token}
+JWT='^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$'
+
+# The file replaced whole, owner-only: a reader never sees half a token.
+write() {
+  [[ $1 =~ $JWT ]] || return 1
+  mkdir -p -m 700 "$(dirname "$file")"
+  (umask 077 && printf '%s\n' "$1" > "$file.part")
+  mv -f "$file.part" "$file"
+}
+
+# A new token for the current one (POST /run/token). The token goes on stdin, not the command
+# line, where ps shows it.
+renew() {
+  local token new
+  token=$(< "$file") || return 1
+  new=$(printf 'Authorization: Bearer %s\n' "$token" |
+    curl -fsS --max-time 30 -X POST -H @- "$DECKHAND_BROKER_URL/run/token") || return 1
+  write "$new"
+}
+
+case "${1:-}" in
+  --init)
+    : "${DECKHAND_RUN_TOKEN:?no run token to write}"
+    write "$DECKHAND_RUN_TOKEN" || {
+      echo "deckhand-token: DECKHAND_RUN_TOKEN isn't a run token" >&2
+      exit 1
+    }
+    ;;
+  --renew)
+    : "${DECKHAND_BROKER_URL:?no broker to renew the run token with}"
+    every=${DECKHAND_TOKEN_RENEW:-300}
+    wait=$every
+    while sleep "$wait"; do
+      if renew; then
+        wait=$every
+      else
+        wait=${DECKHAND_TOKEN_RETRY:-30}
+        echo "deckhand-token: the run token couldn't be renewed, asking again in $wait s" >&2
+      fi
+    done
+    ;;
+  "")
+    if [ -f "$file" ]; then
+      printf '%s\n' "$(< "$file")"
+    else
+      : "${DECKHAND_RUN_SECRET:?not a Deckhand run: no run token}"
+      printf '%s\n' "$DECKHAND_RUN_SECRET"
+    fi
+    ;;
+  *)
+    echo "usage: deckhand-token [--init | --renew]" >&2
+    exit 2
+    ;;
+esac

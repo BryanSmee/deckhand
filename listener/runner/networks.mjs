@@ -190,7 +190,97 @@ export function createNetworks({ config, docker, log, now }) {
     return addresses;
   }
 
-  return { create, remove, connect, peers, networksOf, addressesOf, proxyAddresses };
+  // The ID of the run's network an address is on (a sandbox's, its engine's), or null: what a
+  // run's tokens are bound to (../broker.mjs check()). IDs, not names or addresses: both are
+  // reused, an ID never. Cached, as each call to the broker asks; forgotten whenever a network
+  // is created or removed, so an address never names a network that is gone. One not found
+  // makes the runner look again, at most every PROXY_RETRY_MS.
+  let sandboxes = { at: -Infinity, byAddress: new Map() };
+  let generation = 0; // counts forget()s
+  async function sandboxOf(ip) {
+    const age = now() - sandboxes.at;
+    const known = sandboxes.byAddress.get(ip);
+    if (known && age < PROXY_TTL_MS) return known;
+    if (age < PROXY_RETRY_MS) return known ?? null;
+    const at = now();
+    const seen = generation;
+    const byAddress = new Map();
+    try {
+      for (const [address, id] of await runAddresses()) byAddress.set(address, id);
+    } catch (error) {
+      log(`Looking up the runs' networks: ${error.message}`);
+    }
+    // Unless one was created or removed meanwhile: its answer would be older than that.
+    if (seen === generation) sandboxes = { at, byAddress };
+    return byAddress.get(ip) ?? null;
+  }
+
+  // [address, network ID] of every container on this deployment's runs' networks.
+  async function runAddresses() {
+    const { out } = checked(
+      await docker([
+        "network",
+        "ls",
+        "--quiet",
+        "--no-trunc",
+        "--filter",
+        `label=deckhand.owner=${config.prefix}`,
+        "--filter",
+        "label=deckhand.run",
+      ]),
+      "docker network ls",
+    );
+    const ids = out.split("\n").filter(Boolean);
+    if (!ids.length) return [];
+    // One removed meanwhile makes Docker exit 1 after printing the others.
+    const listed = await docker([
+      "network",
+      "inspect",
+      "--format",
+      "{{.Id}}{{range .Containers}} {{.IPv4Address}} {{.IPv6Address}}{{end}}",
+      ...ids,
+    ]);
+    return listed.out
+      .split("\n")
+      .filter(Boolean)
+      .flatMap((line) => {
+        const [id, ...addresses] = line.split(" ").filter(Boolean);
+        return addresses.map((a) => [a.replace(/\/\d+$/, ""), id]);
+      });
+  }
+
+  // Its ID, once created.
+  async function idOf(net) {
+    return checked(
+      await docker(["network", "inspect", "--format", "{{.Id}}", net]),
+      `the run's network ${net}`,
+    ).out;
+  }
+
+  function forget() {
+    generation++;
+    sandboxes = { at: -Infinity, byAddress: new Map() };
+  }
+
+  return {
+    create: async (run) => (forget(), await create(run)),
+    remove: async (net) => {
+      try {
+        return await remove(net);
+      } finally {
+        forget();
+      }
+    },
+    idOf,
+    sandboxOf,
+    // For a container that joined a network: its address must be looked up again.
+    forget,
+    connect,
+    peers,
+    networksOf,
+    addressesOf,
+    proxyAddresses,
+  };
 }
 
 // "http://listener:8081" → "listener": the name a sandbox calls it by on its network. None

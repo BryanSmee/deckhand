@@ -187,7 +187,7 @@ test("a run's secret sent from another sandbox's address: 403, and OpenAI never 
   assert.equal(res.status, 403);
   assert.deepEqual((await res.json()).error, {
     type: "permission_denied",
-    message: "Deckhand: this run's secret only works from its own sandbox",
+    message: "Deckhand: this run's token only works from its own sandbox",
   });
   assert.equal(upstream.requests.length, 0);
   assert.equal(broker.runOf(secret).apiError, null);

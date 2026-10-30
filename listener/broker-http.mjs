@@ -4,8 +4,8 @@
 // (github-gateway.mjs), which the proxy sends the sandboxes' GitHub calls to, the git gateway
 // (git-gateway.mjs) and the agents' API endpoints
 // (anthropic.mjs, openai.mjs, and google.mjs, which the proxy sends the Antigravity CLI's calls
-// to), and the runs' files: inbox, CA, digest and screenshots (run-files.mjs). The runs'
-// secrets are the broker's (broker.mjs).
+// to), the runs' files: inbox, CA, digest and screenshots (run-files.mjs), and their tokens'
+// renewal (POST /run/token). The runs' tokens are the broker's (broker.mjs).
 import { createServer } from "node:http";
 import { agentFor } from "./agents/index.mjs";
 import { addressOf } from "./broker.mjs";
@@ -129,20 +129,20 @@ export async function clientAddress(ctx, req) {
 }
 
 // The broker's record of the running task whose sandbox has address `ip`, or null: what a call
-// without a secret is bound to (github-gateway.mjs). Never its engine's: the builds and
-// containers there don't get the run's secret, and mustn't get its GitHub token without it.
+// without a token is bound to (github-gateway.mjs). Never its engine's: the builds and
+// containers there don't get the run's token, and mustn't get its GitHub token without it.
 export async function runFrom(ctx, ip) {
   for (const task of ctx.tasks.values()) {
-    if (task.live?.secret && (await hasAddress(ctx, task, ip))) {
+    if (ctx.broker.runOf(task.live?.id) && (await hasAddress(ctx, task, ip))) {
       if (task.live.engineIp?.includes(ip)) return null;
-      return ctx.broker.runOf(task.live.secret) ?? null;
+      return ctx.broker.runOf(task.live.id) ?? null;
     }
   }
   return null;
 }
 
 // Whether `ip` is the sandbox's (or engine's) of the running task the broker's `run` is: what
-// binds a run's secret to its sandbox (broker.mjs sentBy()). The run is found by its record,
+// binds the secret of a run from before tokens to its sandbox (broker.mjs sentBy()). The run is found by its record,
 // so no secret is compared here.
 export async function runAt(ctx, run, ip) {
   const task = taskOf(ctx, run);
@@ -152,7 +152,7 @@ export async function runAt(ctx, run, ip) {
 // The running task whose run the broker's record `run` is, or null.
 export function taskOf(ctx, run) {
   for (const task of ctx.tasks.values()) {
-    if (task.live?.secret && ctx.broker.runOf(task.live.secret) === run) return task;
+    if (run && task.live && ctx.broker.runOf(task.live.id) === run) return task;
   }
   return null;
 }
@@ -237,7 +237,7 @@ export function createBrokerHttp(ctx) {
     // GitHub's hosts go to the GitHub gateway, but for a research run (NO_TOKEN): it has no
     // token there, nor the CA, and reads public GitHub anonymously through a tunnel instead,
     // as an engine does.
-    const run = live ? ctx.broker.runOf(live.secret) : null;
+    const run = live ? ctx.broker.runOf(live.id) : null;
     const github = !!live && run?.extra !== NO_TOKEN;
     // GitHub's content hosts only for a run the gateway checks (github-forks.mjs restricted()),
     // every one of them (egress.mjs githubContent()): the others reach them as plain hosts.
@@ -256,6 +256,17 @@ export function createBrokerHttp(ctx) {
     sendJson(res, answer);
   }
 
+  // POST /run/token: a new run token for the one the sandbox sends (`Authorization: Bearer`),
+  // from its own sandbox, while its run lasts (broker.mjs renew()): ../sandbox/deckhand-token
+  // asks every few minutes, and writes it in place of the old one.
+  async function renewToken(req, res) {
+    const [scheme, token] = (req.headers.authorization ?? "").split(" ");
+    const renewed = await ctx.broker.renew(scheme === "Bearer" ? token : "", req);
+    if (!renewed.token) return sendJson(res, { message: renewed.message }, renewed.status);
+    res.writeHead(200, { "content-type": "text/plain", "cache-control": "no-store" });
+    res.end(`${renewed.token}\n`);
+  }
+
   // A handler's failure: logged, a 500 when nothing was answered yet.
   const failed = (res, name, destroy) => (error) => {
     log(`${name}: ${error.stack ?? error}`);
@@ -270,6 +281,9 @@ export function createBrokerHttp(ctx) {
     const route = routes.find((r) => (r.match ? r.match(req.url) : req.url.startsWith(r.prefix)));
     if (route) {
       return ctx[route.service].handle(req, res).catch(failed(res, route.name, route.destroy));
+    }
+    if (req.method === "POST" && req.url === "/run/token") {
+      return renewToken(req, res).catch(failed(res, "Run token", false));
     }
     if (req.url.startsWith("/run/")) {
       return runFiles.handle(req, res).catch(failed(res, "Run files", true));

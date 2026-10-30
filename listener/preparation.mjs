@@ -48,7 +48,7 @@ export function createPreparation(ctx) {
     // A fork's code may run in it: nothing it can leave for the repo's later runs, which
     // trust what they find (prepareImage(), sandbox-spec.mjs).
     live.fork = fork;
-    ctx.broker.allow(live.secret, live.branches, fork);
+    ctx.broker.allow(live.id, live.branches, fork);
     // A review's are optional (its `review` block); a repo's mode always has them.
     const instructions = own?.instructions ? await modeInstructions(task, own) : null;
     const access = grantedAccess(config, task, settings, { agent, note, log });
@@ -285,7 +285,7 @@ export function createPreparation(ctx) {
   // is a fork's; `pulls`: number → the pull request, as GitHub has it, for imageSource().
   async function pushBranches(task, items) {
     const pulls = new Map();
-    if (!ctx.broker.runOf(task.live.secret)?.push) return { branches: [], fork: false, pulls };
+    if (!ctx.broker.runOf(task.live.id)?.push) return { branches: [], fork: false, pulls };
     let fork = false;
     const branches = task.kind === "issue" ? [`issue-${task.number}-*`] : [];
     const numbers = new Set(items.map((i) => i.replyTo));

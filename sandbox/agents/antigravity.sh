@@ -4,7 +4,7 @@
 #
 # Its home, ~/.gemini, is the issue's session volume: its token file, settings, MCP servers and
 # hooks are written again on every start, so the volume never keeps an old copy. The token file
-# holds the run's secret, never the plan's login: the egress proxy hands the calls that carry it
+# holds the run's agent token, never the plan's login: the egress proxy hands the calls that carry it
 # to the listener, which puts the plan's access token in its place. `agy -p` takes no messages
 # once started (TASK_INPUT is ignored): comments that arrive mid-run wait for the next run,
 # which resumes the conversation.
@@ -59,9 +59,10 @@ agy_home() {
   local cli=$AGY_HOME/antigravity-cli config=$AGY_HOME/config settings
   mkdir -p "$cli" "$config"
   settings=$(cat "$cli/settings.json" 2> /dev/null || echo '{}')
-  # With a Gemini API key (the run's secret in GEMINI_API_KEY, and GOOGLE_GEMINI_BASE_URL),
+  # With a Gemini API key (the run's agent token in GEMINI_API_KEY, and GOOGLE_GEMINI_BASE_URL),
   # `agy` calls the Gemini API directly without signing in when modelProvider is "gemini".
-  # Otherwise the run's secret goes in its token file, with an expiry `agy` never reaches;
+  # Otherwise the run's agent token (DECKHAND_AGENT_TOKEN; a run's secret from before tokens,
+  # DECKHAND_RUN_SECRET) goes in its token file, with an expiry `agy` never reaches;
   # without the listener (by hand), the token file is yours. The clone is trusted.
   if [ -n "${GEMINI_API_KEY:-}" ]; then
     rm -f "$cli/antigravity-oauth-token"
@@ -74,10 +75,11 @@ agy_home() {
       <<< "$settings" > "$cli/settings.json" 2> /dev/null ||
       echo '{"modelProvider":"gemini","trustedWorkspaces":["/workspace"]}' > "$cli/settings.json"
   else
-    if [ -n "${DECKHAND_RUN_SECRET:-}" ]; then
+    local token=${DECKHAND_AGENT_TOKEN:-${DECKHAND_RUN_SECRET:-}}
+    if [ -n "$token" ]; then
       (
         umask 077
-        jq -n --arg token "$DECKHAND_RUN_SECRET" '{auth_method: "consumer", token: {
+        jq -n --arg token "$token" '{auth_method: "consumer", token: {
           access_token: $token, token_type: "Bearer", refresh_token: "deckhand-placeholder",
           expiry: "2099-01-01T00:00:00Z"}}' > "$cli/antigravity-oauth-token"
       )

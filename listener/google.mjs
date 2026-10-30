@@ -1,11 +1,11 @@
 // Google endpoint, the Antigravity CLI's like openai.mjs is Codex's. With a GEMINI_API_KEY, a
-// sandbox's `agy` gets GOOGLE_GEMINI_BASE_URL=<broker>/google and the run's secret as its key
-// (agents/antigravity.mjs, antigravity.sh); here the secret in `x-goog-api-key` is checked
-// against the broker, swapped for the operator's key, and the call goes on to Google (or the
+// sandbox's `agy` gets GOOGLE_GEMINI_BASE_URL=<broker>/google and the run's agent token as its
+// key (agents/antigravity.mjs, antigravity.sh); here the token in `x-goog-api-key` is checked
+// (broker.mjs check(), from its own sandbox), swapped for the operator's key, and the call goes on to Google (or the
 // listener's GEMINI_BASE_URL). With a Google AI plan's login instead (AGY_AUTH_FILE,
 // antigravity-login.mjs), `agy` has no base URL: the egress proxy decrypts the hosts that carry
 // its token, for its runs only (egress.mjs, agents/antigravity.mjs `relayed`), and sends each
-// request here as /relay/<host>/<path>, where the secret in `Authorization: Bearer` is swapped
+// request here as /relay/<host>/<path>, where the token in `Authorization: Bearer` is swapped
 // for the plan's access token. Served on the broker's port, which only the runs' networks reach.
 import { baseOf, createApiProxy } from "./upstream.mjs";
 
@@ -45,7 +45,7 @@ const ERRORS = {
 };
 
 export function createGoogleRelay({
-  broker, // broker.mjs: the run a secret belongs to
+  broker, // broker.mjs: the run a token belongs to
   credential = null, // the operator's GEMINI_API_KEY
   upstream = GEMINI_URL, // the listener's GEMINI_BASE_URL, if any (or host => url in tests)
   login = null, // without a key: antigravity-login.mjs's, from AGY_AUTH_FILE
@@ -64,7 +64,7 @@ export function createGoogleRelay({
     errorShape: ERRORS,
     notApi: "not a Gemini API path",
     secretOf: (req) => req.headers["x-goog-api-key"],
-    // Only the Antigravity CLI's runs: another agent's secret gets no key.
+    // Only the Antigravity CLI's runs: another agent's token gets no key.
     routeOf: (run) =>
       run.provider !== "google"
         ? { missing: "not a run of the Antigravity CLI" }
@@ -74,8 +74,6 @@ export function createGoogleRelay({
     drop: ["authorization", "x-goog-api-key"],
     authHeaders: async () => ({ "x-goog-api-key": credential }),
     secrets: () => [credential],
-    // Not bound to the sandbox's address yet (#254): see the relay's below.
-    bound: false,
     log,
   });
 
@@ -93,7 +91,7 @@ export function createGoogleRelay({
           const [scheme, secret] = (req.headers.authorization ?? "").split(" ");
           return scheme === "Bearer" ? secret : undefined;
         },
-        // Only the Antigravity CLI's runs: another agent's secret gets no plan.
+        // Only the Antigravity CLI's runs: another agent's token gets no plan.
         routeOf: (run) =>
           run.provider !== "google"
             ? { missing: "not a run of the Antigravity CLI" }
@@ -107,9 +105,6 @@ export function createGoogleRelay({
           if (status === 401) plan.refused(headers.authorization);
         },
         secrets: () => (plan ? plan.secrets() : []),
-        // Relayed calls arrive from the egress proxy, not the sandbox: their source address
-        // says nothing of the run (#254).
-        bound: false,
         log,
       });
       return { prefix, handle };

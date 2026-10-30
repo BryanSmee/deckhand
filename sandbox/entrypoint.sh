@@ -38,6 +38,21 @@ deckhand_messages() {
   if [ -n "${TASK_INBOX:-}" ]; then deckhand-inbox "$TASK_INBOX"; else cat <&3; fi
 }
 
+# The run token (DECKHAND_RUN_TOKEN, ../listener/broker.mjs), in a file on a tmpfs rather than
+# the environment, which a running process never reads again: deckhand-token prints it to gh,
+# git and the rest, and renews it every few minutes in the background until the sandbox stops,
+# as it lasts 15. A run started before tokens has DECKHAND_RUN_SECRET instead.
+if [ -n "${DECKHAND_RUN_TOKEN:-}" ]; then
+  if [ -z "${DECKHAND_TOKEN_FILE:-}" ]; then
+    DECKHAND_TOKEN_FILE=/dev/shm/deckhand/run-token
+    [ -w /dev/shm ] || DECKHAND_TOKEN_FILE=${TMPDIR:-/tmp}/deckhand/run-token
+  fi
+  export DECKHAND_TOKEN_FILE
+  deckhand-token --init
+  unset DECKHAND_RUN_TOKEN
+  [ -z "${DECKHAND_BROKER_URL:-}" ] || deckhand-token --renew >&2 < /dev/null &
+fi
+
 # The run's files on the broker (../listener/run-files.mjs), rather than in a volume shared
 # with the listener: the egress proxy's CA and the run's digest, fetched once into files of
 # the sandbox's own, which DECKHAND_CA and TASK_DIGEST then name. A path (a sandbox started by

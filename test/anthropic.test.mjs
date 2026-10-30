@@ -354,7 +354,7 @@ test("a run's secret sent from another sandbox's address: 403, and Anthropic nev
     assert.equal(res.status, 403);
     assert.deepEqual((await res.json()).error, {
       type: "permission_error",
-      message: "Deckhand: this run's secret only works from its own sandbox",
+      message: "Deckhand: this run's token only works from its own sandbox",
     });
   }
   assert.deepEqual(sentFrom.asked, [

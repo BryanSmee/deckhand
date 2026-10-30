@@ -194,12 +194,21 @@ const spec = (over = {}) => ({
   ...over,
 });
 
-test("start: a Secret with the run's env, a claim per session volume, then the Pod", async (t) => {
+test("start: a claim per session volume, the Pod, then a Secret with the run's env and tokens", async (t) => {
   const { runner, calls, objects } = setup(t);
-  assert.deepEqual(await runner.start(spec()), { engine: null });
+  const bound = [];
+  const tokens = (uid) => (bound.push(uid), { DECKHAND_RUN_TOKEN: `token-for-${uid}` });
+  assert.deepEqual(await runner.start(spec({ tokens })), { engine: null });
   const secret = objects.secrets.get("dh-org-repo-12-abc-1730000000-env");
-  // Unset values stay unset; the secrets are in the Secret, never in the Pod.
-  assert.deepEqual(secret.stringData, { DECKHAND_RUN_SECRET: "s3cret", TASK_PROMPT: "do it" });
+  // Unset values stay unset; the secrets are in the Secret, never in the Pod. The run's tokens
+  // are bound to the pod's UID, known once it is made.
+  const uid = objects.pods.get("dh-org-repo-12-abc").metadata.uid;
+  assert.deepEqual(bound, [uid]);
+  assert.deepEqual(secret.stringData, {
+    DECKHAND_RUN_TOKEN: `token-for-${uid}`,
+    DECKHAND_RUN_SECRET: "s3cret",
+    TASK_PROMPT: "do it",
+  });
   assert.equal(secret.metadata.annotations["deckhand.run"], "dh-org-repo-12-abc-1730000000");
   const pod = objects.pods.get("dh-org-repo-12-abc");
   assert.ok(!JSON.stringify(pod).includes("s3cret"));
@@ -244,9 +253,10 @@ test("start: a Secret with the run's env, a claim per session volume, then the P
     storageClassName: "fast",
   });
   assert.ok(!objects.persistentvolumeclaims.has("dh-claude-code"));
-  // The policy checked first, the Pod last.
+  // The policy checked first, the Pod, then its Secret, last.
   assert.match(calls[0], /networkpolicies$/);
-  assert.match(calls.at(-1), /^POST \/api\/v1\/namespaces\/runs\/pods$/);
+  assert.match(calls.at(-2), /^POST \/api\/v1\/namespaces\/runs\/pods$/);
+  assert.match(calls.at(-1), /^POST \/api\/v1\/namespaces\/runs\/secrets$/);
   // The inbox is the listener's: the next run's claims are already there.
   runner.send("dh-org-repo-12-abc-1730000000", "more", claude);
   assert.equal(runner.closed("dh-org-repo-12-abc-1730000000"), false);
@@ -254,7 +264,7 @@ test("start: a Secret with the run's env, a claim per session volume, then the P
   objects.pods.clear();
   calls.length = 0;
   await runner.start(spec({ run: "dh-org-repo-12-abc-1730000999" }));
-  assert.equal(calls.filter((c) => c.startsWith("POST")).length, 2); // Secret, Pod
+  assert.equal(calls.filter((c) => c.startsWith("POST")).length, 2); // Pod, Secret
 });
 
 test("podSpec: Pod Security restricted, no token, no restart, the grant's limits", () => {
@@ -307,7 +317,7 @@ test("podSpec: Pod Security restricted, no token, no restart, the grant's limits
   assert.throws(() => podSpec(spec({ caps: ["CHOWN"] }), {}), /no capabilities/);
 });
 
-test("start: a failure removes the Secret and the claims it made, keeps the older ones", async (t) => {
+test("start: a failure removes the Pod, Secret and claims it made, keeps the older ones", async (t) => {
   const { runner, objects } = setup(t, {
     fail: ({ method, path }) =>
       method === "POST" && path.endsWith("/pods")
@@ -320,6 +330,28 @@ test("start: a failure removes the Secret and the claims it made, keeps the olde
   await assert.rejects(runner.start(spec()), /POST pods: pods is forbidden/);
   assert.equal(objects.secrets.size, 0);
   assert.deepEqual([...objects.persistentvolumeclaims.keys()], ["dh-org-repo-12-abc-claude"]);
+});
+
+test("start: a Secret refused removes the Pod made before it", async (t) => {
+  const { runner, objects } = setup(t, {
+    fail: ({ method, path }) =>
+      method === "POST" && path.endsWith("/secrets")
+        ? Response.json({ message: "secrets is forbidden" }, { status: 403 })
+        : null,
+  });
+  await assert.rejects(runner.start(spec()), /POST secrets: secrets is forbidden/);
+  assert.equal(objects.pods.size, 0);
+});
+
+test("sandboxOf: the UID of the running sandbox pod at an address, else null", async (t) => {
+  const { runner, objects } = setup(t);
+  await runner.start(spec());
+  const uid = objects.pods.get("dh-org-repo-12-abc").metadata.uid;
+  assert.equal(await runner.sandboxOf("10.244.1.7"), uid);
+  assert.equal(await runner.sandboxOf("10.244.9.9"), null);
+  // Gone with its pod: an address never names a pod that was removed.
+  await runner.remove("dh-org-repo-12-abc", "dh-org-repo-12-abc-1730000000");
+  assert.equal(await runner.sandboxOf("10.244.1.7"), null);
 });
 
 test("start: without the namespace's NetworkPolicy, no run, and the reply says why", async (t) => {

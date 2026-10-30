@@ -21,7 +21,7 @@ const taskOf = (live = {}, task = {}) => ({
     mode: "work",
     light: false,
     fork: false,
-    secret: "s",
+    id: "run-1",
     branches: ["issue-12-*"],
     ...live,
   },
@@ -78,7 +78,7 @@ function linker({
     github,
     graphql,
     policies,
-    runOf: (secret) => (secret === "s" ? run : null),
+    runOf: (id) => (id === "run-1" ? run : null),
     decided: (key, entry) => decided.push({ key, ...entry }),
     log: (line) => logs.push(line),
   });

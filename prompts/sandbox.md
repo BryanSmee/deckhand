@@ -145,6 +145,11 @@ Skip screenshots for changes with nothing visible (API, tests, tooling).
   what this kind of run may do (a work run writes only its own issue, its pull requests, its
   issue's sub-issues and the issues it created): a refusal starts with `Deckhand:` and says why; don't look for a
   way around it.
+- What `git` and `gh` send Deckhand in place of that token is this run's token, which
+  `deckhand-token` prints: a tool that needs one of its own (`curl` to the API, another
+  process's `GH_TOKEN`) calls `deckhand-token` each time it runs. The token changes every few
+  minutes and lasts 15: never keep it in a variable, a file or a long-running process's
+  environment (a dev server started with `GH_TOKEN=$(deckhand-token)` fails after 15 minutes).
 - In a work run, to correct a comment you posted, edit it rather than posting another:
   `gh api -X PATCH repos/<owner>/<repo>/issues/comments/<id> -f body=…`, with the id that ends
   the URL gh printed for it (`#issuecomment-<id>`). Not `--edit-last`: it picks the bot's last

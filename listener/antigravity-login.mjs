@@ -1,7 +1,7 @@
 // A Google AI plan's login for the Antigravity CLI, held by the listener alone (AGY_AUTH_FILE:
 // the token file `agy` writes when you sign in, ~/.gemini/antigravity-cli/antigravity-oauth-token).
 // Its refresh token is an account-wide credential, and its access token is the plan's: neither
-// enters a sandbox. Sandboxes keep their run's secret in its place, google.mjs asks this module
+// enters a sandbox. Sandboxes keep their run's agent token in its place, google.mjs asks this module
 // for the plan's header, and the refresh happens here, one at a time, written back to the file
 // for the next start.
 //

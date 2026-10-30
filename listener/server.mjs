@@ -68,6 +68,7 @@ import { createRestart } from "./restart.mjs";
 import { createReviewers, openerOf } from "./reviewers.mjs";
 import { createReviews, stepsGoing } from "./reviews.mjs";
 import { loadRuns } from "./runlog.mjs";
+import { signingKey } from "./run-token.mjs";
 import { createDiscussionApi, fromKey } from "./discussions.mjs";
 import { createDismissals } from "./dismissals.mjs";
 import { createBackend } from "./runner/index.mjs";
@@ -370,9 +371,12 @@ Object.assign(ctx, {
     logDir: join(config.dataDir, "previews"),
     log,
   }),
-  // The runs' secrets, which work from their own sandbox alone, whether it calls the broker
-  // directly or through the egress proxy.
+  // Runs' tokens, signed with a key kept in the data volume, so they still check after a
+  // restart; and the secrets of runs from before them. Both work from their own sandbox alone,
+  // whether it calls the broker directly or through the egress proxy.
   broker: createBroker({
+    key: signingKey(config.dataDir),
+    sandboxOf: async (ip) => (await ctx.runner.sandboxOf?.(ip)) ?? null,
     sentFrom: (run, ip) => runAt(ctx, run, ip),
     clientOf: (req) => clientAddress(ctx, req),
   }),
@@ -452,10 +456,12 @@ ctx.githubGateway = createGithubGateway({
   forks: forkChecks,
   clientOf: (req) => clientAddress(ctx, req),
   runFrom: (ip) => runFrom(ctx, ip),
-  // The run's own secret too, which the broker keeps by hash only.
+  // The run's own tokens too, and its secret from before tokens, which the broker keeps by
+  // hash only.
   secrets: (run) => [
+    ...ctx.broker.secretsOf(run.id),
     ...[...ctx.tasks.values()]
-      .filter((t) => t.live?.secret && ctx.broker.runOf(t.live.secret) === run)
+      .filter((t) => t.live?.secret && ctx.broker.runOf(t.live.id) === run)
       .map((t) => t.live.secret),
     ...operatorSecrets(ctx),
   ],
@@ -584,7 +590,7 @@ ctx.linkedBranches = createLinkedBranches({
   github,
   graphql,
   policies,
-  runOf: (secret) => ctx.broker.runOf(secret),
+  runOf: (id) => ctx.broker.runOf(id),
   decided: (key, entry) => ctx.decisions.record(key, entry),
   log,
 });

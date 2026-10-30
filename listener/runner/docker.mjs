@@ -27,6 +27,8 @@
 //   relink()             joins the listener and the proxy to running sandboxes' networks
 //                        again, and removes the networks of runs that are gone
 //   proxyAddresses()     the egress proxy's addresses, on all of its networks
+//   sandboxOf(ip)        the ID of the run's network that address is on (its pod's UID, on
+//                        Kubernetes), or null: what the run's tokens are bound to
 //
 // This file composes its parts, which share `docker`: inbox.mjs (the messages' file and the
 // run's other files, which the sandbox fetches from the broker rather than mounts),
@@ -101,7 +103,7 @@ export function createDockerRunner({
   const starting = new Set();
 
   // `spec`: sandboxSpec()'s. `env` values reach the container by name only (`-e NAME`), so
-  // they never show in `ps`; its user, limits, caps and volumes become Docker's own options
+  // they never show in `ps`, with those of `tokens(sandbox)`, once its network's ID is known; its user, limits, caps and volumes become Docker's own options
   // (sandboxArgs()); `engine`: { limits, cache } for a run granted a
   // container engine, `cache` the base name of the repo's cache volume when it keeps one;
   // `ca`: the egress proxy's CA certificate (PEM), which the sandbox trusts, in its inbox
@@ -109,10 +111,8 @@ export function createDockerRunner({
   // past runs (analysis.mjs), there too (TASK_DIGEST). → { engine: { backend, volume, cached } }
   // when it has one.
   async function start(spec) {
-    const { run, name, image, labels = {}, env: values = {}, engine, ca, digest } = spec;
+    const { run, name, image, labels = {}, env: values = {}, tokens, engine, ca, digest } = spec;
     const args = sandboxArgs(spec);
-    // Unset values stay unset in the sandbox, as with `-e NAME` and no NAME.
-    const env = Object.fromEntries(Object.entries(values).filter(([, v]) => v !== undefined));
     inbox.write(run, ca, digest);
     const all = {
       "deckhand.owner": config.prefix,
@@ -123,6 +123,12 @@ export function createDockerRunner({
     let started = null;
     try {
       await networks.create(run);
+      // The run's tokens, bound to its network's ID (../sandbox-spec.mjs tokenEnv()). Unset
+      // values stay unset in the sandbox, as with `-e NAME` and no NAME.
+      const bound = tokens ? await tokens(await networks.idOf(run)) : {};
+      const env = Object.fromEntries(
+        Object.entries({ ...bound, ...values }).filter(([, v]) => v !== undefined),
+      );
       if (engine) started = await engines.start(run, name, labels, engine);
       // Not secrets: where the engine and the run's files are, as values.
       const engineVars = {
@@ -135,6 +141,8 @@ export function createDockerRunner({
         }),
         "the sandbox didn't start",
       );
+      // Its address is new: a lookup made since its network was created didn't see it.
+      networks.forget();
     } catch (error) {
       if (engine) await engines.remove(name, run);
       await networks.remove(run);
@@ -290,5 +298,6 @@ export function createDockerRunner({
     engineAddress,
     relink: createRelink({ config, docker, log, list, starting, networks, engines }),
     proxyAddresses: networks.proxyAddresses,
+    sandboxOf: networks.sandboxOf,
   };
 }

@@ -135,6 +135,19 @@ export function createRuns(ctx) {
     // The GitHub Actions runs it reruns, with their head commit, the same (github-writes.mjs
     // MAX_RERUNS).
     const reruns = [];
+    // Its tokens, which its sandbox holds instead of a GitHub token (the GitHub gateway swaps
+    // them for one limited to this repo) or the operator's credential, name it by its id while
+    // it lasts. Signed once its sandbox's network is known (sandbox-spec.mjs).
+    ctx.broker.register(task.repo, permissionsFor(mode, light), {
+      id,
+      push: !light,
+      mode,
+      issue: task.number,
+      base: task.base,
+      created,
+      reruns,
+      reason,
+    });
     return {
       id,
       key,
@@ -143,17 +156,9 @@ export function createRuns(ctx) {
       light,
       record,
       logFile: openLog(record.logPath),
-      // What its sandbox holds instead of a GitHub token: the GitHub gateway swaps it for one
-      // limited to this repo, while this run lasts.
-      secret: ctx.broker.register(task.repo, permissionsFor(mode, light), {
-        push: !light,
-        mode,
-        issue: task.number,
-        base: task.base,
-        created,
-        reruns,
-        reason,
-      }),
+      // Its agent's token, saved with it for redaction (restart.mjs): the broker's are gone
+      // after a restart.
+      agentToken: null,
       asked: replyTo, // where errors go
       replyTo, // where the reply goes: the issue or pull request of the last comment it took
       open: false, // whether its inbox takes comments
@@ -258,7 +263,7 @@ export function createRuns(ctx) {
       speedNote: chosen.speedNote,
     });
     ctx.broker.provide(
-      task.live.secret,
+      task.live.id,
       entry.provider,
       (message) => writeEvent(logFile, "note", { message }),
       entry.credential ?? null,
@@ -336,7 +341,7 @@ export function createRuns(ctx) {
     try {
       const bot = ctx.app.identity();
       const spec = sandboxSpec(
-        { config, task, agent, bot, publicUrl: ctx.publicUrl() },
+        { config, task, agent, bot, publicUrl: ctx.publicUrl(), broker: ctx.broker },
         prompt,
         message,
         { ...prepared, ...access, engine, ca, digest },
@@ -396,8 +401,8 @@ export function createRuns(ctx) {
   // though its sandbox never had them: redact() also knows their shape, for those a restarted
   // listener no longer lists.
   function secretValues(live) {
-    const tokens = ctx.broker.runOf(live.secret)?.tokens ?? [];
-    return [live.secret, ...operatorSecrets(ctx), ...tokens];
+    const tokens = ctx.broker.runOf(live.id)?.tokens ?? [];
+    return [live.secret, ...ctx.broker.secretsOf(live.id), ...operatorSecrets(ctx), ...tokens];
   }
 
   // `at`: when the sandbox wrote it (runner.follow()), null when Docker didn't say.
@@ -655,7 +660,7 @@ export function createRuns(ctx) {
       if (live.unanswered.length) task.pending.unshift(...live.unanswered);
       removeEmptyShots(live);
       const status = outcome(live.result);
-      const { apiStatus, apiReset } = ctx.broker.runOf(live.secret) ?? {};
+      const { apiStatus, apiReset } = ctx.broker.runOf(live.id) ?? {};
       const fallback =
         status === "error" && !live.replied
           ? nextFallback(config, record, live.result, apiStatus, { apiReset, now: Date.now() })
@@ -708,7 +713,7 @@ export function createRuns(ctx) {
     });
     const footer = replyFooter(live.record, result, hint, live.later);
     const check = status !== "error" && mode === "work" ? await configCheck(task) : null;
-    const apiError = ctx.broker.runOf(live.secret)?.apiError;
+    const apiError = ctx.broker.runOf(live.id)?.apiError;
     const why = apiError ? `Its last failed API call, through the listener: ${apiError}.\n\n` : "";
     const text =
       status !== "error"
@@ -744,7 +749,7 @@ export function createRuns(ctx) {
   async function teardown(task) {
     const live = task.live;
     live.record.phase = null;
-    ctx.broker.revoke(live.secret);
+    ctx.broker.revoke(live.id);
     live.record.finishedAt = Date.now();
     saveSummary(live.record, log);
     await ctx.runner.remove(task.name, live.id).catch((e) => log(`${live.key}: ${e}`));

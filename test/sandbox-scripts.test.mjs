@@ -60,6 +60,64 @@ test("git gets the run's secret for the repo's host, which the GitHub gateway ta
   assert.ok(DECKHAND_RUN_SECRET);
 });
 
+// The run token as the broker signs them: three base64url parts.
+const jwt = (n) => `eyJhbGciOiJFZERTQSJ9.eyJuIjo${n}fQ.c2lnbmF0dXJl${n}`;
+
+test("deckhand-token: the run token from its file, written once, renewed in place", async (t) => {
+  const dir = tempDir(t);
+  const file = join(dir, "deckhand", "run-token");
+  const asked = [];
+  let n = 0;
+  const broker = await serve(t, (req, res) => {
+    asked.push(`${req.method} ${req.url} ${req.headers.authorization}`);
+    // The first renewal refused (a listener restarting): asked again sooner.
+    if (n++ === 0) return res.writeHead(503).end();
+    res.end(`${jwt(n)}\n`);
+  });
+  const env = {
+    PATH: `${bin}:${process.env.PATH}`,
+    DECKHAND_TOKEN_FILE: file,
+    DECKHAND_BROKER_URL: broker.url,
+    DECKHAND_TOKEN_RENEW: "0.3",
+    DECKHAND_TOKEN_RETRY: "0.1",
+  };
+  const token = (extra = {}) =>
+    spawnSync(`${bin}deckhand-token`, [], { env: { ...env, ...extra }, encoding: "utf8" });
+  // Written once by the entrypoint, owner-only; not a token: refused.
+  const init = (value) =>
+    spawnSync(`${bin}deckhand-token`, ["--init"], {
+      env: { ...env, DECKHAND_RUN_TOKEN: value },
+      encoding: "utf8",
+    });
+  assert.equal(init("not a token").status, 1);
+  assert.equal(init(jwt(0)).status, 0);
+  assert.equal(statSync(file).mode & 0o777, 0o600);
+  assert.equal(statSync(join(dir, "deckhand")).mode & 0o777, 0o700);
+  assert.equal(token().stdout, `${jwt(0)}\n`);
+  // The file wins over a secret from before tokens, which is only for runs without one.
+  assert.equal(token({ DECKHAND_RUN_SECRET: "old" }).stdout, `${jwt(0)}\n`);
+  // Renewed in the background, presenting the current one, the file replaced whole.
+  const renew = execFile(`${bin}deckhand-token`, ["--renew"], { env });
+  let err = "";
+  renew.stderr.on("data", (d) => (err += d));
+  t.after(() => renew.kill());
+  for (let i = 0; i < 100 && n < 3; i++) await new Promise((r) => setTimeout(r, 50));
+  renew.kill();
+  assert.ok(n >= 3, "renewed twice");
+  assert.equal(asked[0], `POST /run/token Bearer ${jwt(0)}`);
+  assert.equal(asked[1], `POST /run/token Bearer ${jwt(0)}`);
+  assert.equal(asked[2], `POST /run/token Bearer ${jwt(2)}`);
+  assert.match(token().stdout, /^eyJ.*\n$/);
+  assert.match(err, /couldn't be renewed, asking again in 0\.1 s/);
+  assert.deepEqual(readdirSync(join(dir, "deckhand")), ["run-token"]);
+  // A sandbox from before tokens: its secret.
+  const old = spawnSync(`${bin}deckhand-token`, [], {
+    env: { PATH: env.PATH, DECKHAND_TOKEN_FILE: join(dir, "none"), DECKHAND_RUN_SECRET: "s" },
+    encoding: "utf8",
+  });
+  assert.equal(old.stdout, "s\n");
+});
+
 // The Claude Code volume is read-only in a sandbox: a missing version is the listener's to
 // install, and the entrypoint says so instead of trying.
 test("a sandbox without its Claude Code version stops with a clear message", () => {

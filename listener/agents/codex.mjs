@@ -93,7 +93,7 @@ export const codex = {
       version: config.codexVersion,
       versionVar: "CODEX_VERSION",
     }),
-  // The run's secret as its key, and the listener (openai.mjs) as its provider.
+  // The run's agent token as its key, and the listener (openai.mjs) as its provider.
   env: (config, secret) => ({
     OPENAI_API_KEY: secret,
     OPENAI_BASE_URL: `${config.brokerUrl}/openai`,

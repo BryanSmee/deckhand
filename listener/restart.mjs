@@ -153,7 +153,19 @@ export function createRestart(ctx) {
       const state = {
         task: pick(task),
         ...Object.fromEntries(
-          ["id", "mode", "talk", "light", "secret", "asked", "replyTo", "replied", "hosts", "shots"]
+          [
+            "id",
+            "mode",
+            "talk",
+            "light",
+            "secret",
+            "agentToken",
+            "asked",
+            "replyTo",
+            "replied",
+            "hosts",
+            "shots",
+          ]
             .concat(["trusted", "cached", "uncached", "branches", "lines", "result", "later"])
             .concat(["cancelled", "overflow", "answered", "logPhase", "created", "reruns", "fork"])
             .concat(["engine"])
@@ -164,7 +176,7 @@ export function createRestart(ctx) {
         // Delivered comments are among the handled ones.
         unanswered: live.unanswered.map((i) => live.handled.indexOf(i)),
       };
-      // The run's secret is in it: the owner's only.
+      // The run's agent token (or its secret, from before tokens) is in it: the owner's only.
       writeJsonAtomic(livePath(live.id), state, { mode: 0o600 });
     };
     live.saving = (live.saving ?? Promise.resolve())
@@ -180,11 +192,11 @@ export function createRestart(ctx) {
   // `live.reruns`.
   function watchPushes(task) {
     const { live } = task;
-    ctx.broker.watchPushes(live.secret, ({ branch, at }) => {
+    ctx.broker.watchPushes(live.id, ({ branch, at }) => {
       Object.assign(live.record, { branch, lastPushAt: at });
       if (task.live === live) saveLive(task);
     });
-    ctx.broker.watchChanges(live.secret, () => {
+    ctx.broker.watchChanges(live.id, () => {
       if (task.live === live) saveLive(task);
     });
   }
@@ -252,16 +264,19 @@ export function createRestart(ctx) {
       created: task.live.created,
       reruns: task.live.reruns,
       reason: record.reason ?? null,
-      secret: saved.secret,
+      // Its id, so its tokens still name it; a run from before tokens, its secret.
+      id: saved.id,
+      secret: saved.secret ?? null,
+      agentToken: saved.agentToken ?? null,
     });
     // State saved before runs had branches: none, rather than any; before they kept whether they
     // were a fork's, not one: what it fetches is checked (github-forks.mjs).
-    ctx.broker.allow(saved.secret, saved.branches ?? [], saved.fork === true);
+    ctx.broker.allow(saved.id, saved.branches ?? [], saved.fork === true);
     const { logFile } = task.live;
     // Its agent's calls go on to the provider and credential it started on (a fallback's), or its
     // agent's own when the record has none: never another agent's credential.
     ctx.broker.provide(
-      saved.secret,
+      saved.id,
       record.provider ?? agentFor(record.agent).defaultProvider,
       (message) => writeEvent(logFile, "note", { message }),
       record.credential ?? null,

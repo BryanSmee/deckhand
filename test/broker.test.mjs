@@ -83,3 +83,120 @@ test("a run's branches: none until allowed, and never for a run that can't push"
   broker.allow(work, ["x"]);
   assert.equal(broker.runOf(work), undefined);
 });
+
+// A broker whose runs' networks are at known addresses: address → network ID.
+function tokenBroker(networks = { "10.9.0.5": "net-a", "10.9.1.5": "net-b" }) {
+  const clock = { now: 1_900_000_000_000 };
+  const broker = createBroker({
+    sandboxOf: async (ip) => networks[ip] ?? null,
+    now: () => clock.now,
+  });
+  return { broker, clock };
+}
+
+test("a run's tokens name it from its own sandbox's network alone", async () => {
+  const { broker } = tokenBroker();
+  const id = broker.register("Org/A", undefined, { id: "run-a", mode: "work", push: true });
+  assert.equal(id, "run-a");
+  broker.allow(id, ["issue-1-*"]);
+  const { token, agentToken } = broker.issue(id, "net-a");
+  const claims = JSON.parse(Buffer.from(token.split(".")[1], "base64url"));
+  assert.deepEqual(
+    { ...claims, iat: 0, exp: 0 },
+    {
+      ver: 1,
+      jti: "run-a",
+      repo: "org/a",
+      mode: "work",
+      issue: null,
+      fork: false,
+      branches: ["issue-1-*"],
+      sandbox: "net-a",
+      caps: [],
+      aud: "deckhand:broker",
+      iat: 0,
+      exp: 0,
+    },
+  );
+  assert.equal((await broker.check(token, "10.9.0.5")).run, broker.runOf(id));
+  // Another sandbox's network, an address on none, or none at all.
+  for (const ip of ["10.9.1.5", "10.9.2.5", "", undefined]) {
+    assert.deepEqual(await broker.check(token, ip), {
+      status: 403,
+      message: "this run's token only works from its own sandbox",
+    });
+  }
+  // Each token for its own service: the agent's for the agents' endpoints alone.
+  assert.equal((await broker.check(token, "10.9.0.5", "deckhand:agents")).status, 401);
+  assert.equal((await broker.check(agentToken, "10.9.0.5")).status, 401);
+  assert.equal((await broker.check(agentToken, "10.9.0.5", "deckhand:agents")).run.id, "run-a");
+  // Its id is no secret: it names nothing on its own.
+  assert.equal((await broker.check("run-a", "10.9.0.5")).status, 401);
+  // Both go in its output's redaction.
+  assert.deepEqual(broker.secretsOf(id), [agentToken, token]);
+  // Ended: refused, and the network is no longer there to vouch for it anyway.
+  broker.revoke(id);
+  assert.deepEqual(await broker.check(token, "10.9.0.5"), {
+    status: 401,
+    message: "unknown or finished run",
+  });
+});
+
+test("a token from another broker's key is refused, as one signed for another sandbox", async () => {
+  const { broker } = tokenBroker();
+  const other = tokenBroker().broker;
+  other.register("org/a", undefined, { id: "run-a" });
+  broker.register("org/a", undefined, { id: "run-a" });
+  const { token } = other.issue("run-a", "net-a");
+  assert.match((await broker.check(token, "10.9.0.5")).message, /unknown key/);
+  const mine = broker.issue("run-a", "net-b").token;
+  assert.equal((await broker.check(mine, "10.9.0.5")).status, 403);
+  assert.equal((await broker.check(mine, "10.9.1.5")).run.id, "run-a");
+});
+
+test("a run longer than its token's lifetime keeps working, renewing every 5 minutes", async () => {
+  const { broker, clock } = tokenBroker();
+  broker.register("org/a", undefined, { id: "run-a" });
+  const first = broker.issue("run-a", "net-a").token;
+  let token = first;
+  const renewals = [];
+  for (let minute = 5; minute <= 60; minute += 5) {
+    clock.now += 5 * 60_000;
+    const renewed = await broker.renew(token, "10.9.0.5");
+    assert.ok(renewed.token, `renewed at ${minute} minutes`);
+    token = renewed.token;
+    renewals.push(token);
+    assert.ok((await broker.check(token, "10.9.0.5")).run);
+  }
+  // An hour on, the first token expired long ago; the last one works.
+  assert.match((await broker.check(first, "10.9.0.5")).message, /expired/);
+  assert.match((await broker.renew(first, "10.9.0.5")).message, /expired/);
+  // Its last few are kept for redaction, not every one.
+  assert.deepEqual(broker.secretsOf("run-a").slice(-4), renewals.slice(-4));
+  assert.equal(broker.secretsOf("run-a").length, 5);
+  // Never from another sandbox, nor for an ended run.
+  assert.equal((await broker.renew(token, "10.9.1.5")).status, 403);
+  broker.revoke("run-a");
+  assert.deepEqual(await broker.renew(token, "10.9.0.5"), {
+    status: 401,
+    message: "unknown or finished run",
+  });
+  assert.equal((await broker.renew("a-secret", "10.9.0.5")).status, 401);
+});
+
+test("a run from before tokens keeps its secret, bound to its sandbox's address", async () => {
+  const broker = createBroker({ sentFrom: sandboxAt("10.9.0.5") });
+  const secret = broker.register("org/a", undefined, { id: "old", secret: "kept-secret" });
+  assert.equal(secret, "kept-secret");
+  assert.equal(broker.runOf("old"), broker.runOf("kept-secret"));
+  assert.equal((await broker.check("kept-secret", "10.9.0.5")).run.id, "old");
+  assert.equal((await broker.check("kept-secret", "10.9.1.5")).status, 403);
+  assert.equal((await broker.check("kept-secret", undefined)).status, 403);
+  broker.revoke("old");
+  assert.equal((await broker.check("kept-secret", "10.9.0.5")).status, 401);
+  // A token run has no secret at all, and can't be issued once ended.
+  broker.register("org/a", undefined, { id: "new" });
+  assert.equal(broker.runOf("new").secret, undefined);
+  broker.revoke("new");
+  assert.throws(() => broker.issue("new", "net-a"), /ended/);
+});

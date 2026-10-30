@@ -14,7 +14,7 @@
 // The hosts the listener says may be cached go through a cache on disk (cached.mjs, cache.mjs):
 // their plain HTTP, and their HTTPS, which the proxy decrypts with a certificate from
 // Deckhand's CA (authority.mjs), that sandboxes trust, then sends on over TLS it verifies.
-// The hosts the listener says to relay (GitHub's, whose calls carry the run's secret in place of
+// The hosts the listener says to relay (GitHub's, whose calls carry the run token in place of
 // a token, ../listener/github-gateway.mjs, and an agent's, in place of the operator's
 // credential, ../listener/google.mjs) are decrypted the same way, whether the cache is on or
 // not, and each request goes to the listener (RELAY_URL) instead of the host, with the address
@@ -43,7 +43,7 @@ export { blockedAddress, v6Bytes } from "./addresses.mjs";
 const DRAIN_MS = 25_000;
 
 // The header that names, on a relayed request, the sandbox it came from: the listener binds a
-// run's secret to its sandbox's address (../listener/broker-http.mjs, which believes it from
+// run's token to its sandbox (../listener/broker-http.mjs, which believes it from
 // the proxy alone). Whatever the client sent in it is replaced.
 export const CLIENT_HEADER = "x-deckhand-client";
 
@@ -263,7 +263,7 @@ export function createProxy({
     }
     if (gone()) return client.destroy();
     head = Buffer.concat(early.filter(Boolean));
-    // Never a tunnel: the sandbox's calls would reach the host with the run's secret alone.
+    // Never a tunnel: the sandbox's calls would reach the host with the run's token alone.
     if (decision.relay) {
       if (authority && relayUrl && certifiable(to.host)) {
         return intercept(client, head, to, decision.address, req.socket.remoteAddress, true);
@@ -451,7 +451,7 @@ export function createProxy({
   }
 
   // A relayed host's request, to the listener as <relayUrl>/<host><path>: the listener checks
-  // the run's secret and sends it on with the operator's credential (../listener/google.mjs).
+  // the run's token and sends it on with the operator's credential (../listener/google.mjs).
   // Only under <relayUrl>/<host>/: the URL parser resolves "..", so a path that climbs out
   // would reach the listener's other endpoints (/egress) from the proxy's address. `from`: the
   // client's address.

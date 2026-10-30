@@ -1,5 +1,5 @@
 #!/bin/bash
-# gh with the run's secret as its token (deckhand-token): the egress proxy relays its calls to
+# gh with the run token as its token (deckhand-token): the egress proxy relays its calls to
 # the listener's GitHub gateway (../listener/github-gateway.mjs), which swaps it for a token the
 # sandbox never sees and checks its writes, `gh pr create`, `edit` and `ready` included
 # (github-pulls.mjs). Installed ahead of the real gh on PATH. Outside a Deckhand run (no
@@ -8,7 +8,7 @@ real=${DECKHAND_REAL_GH:-/usr/bin/gh}
 [ -n "${DECKHAND_BROKER_URL:-}" ] || exec "$real" "$@"
 
 GH_TOKEN=$(deckhand-token) || {
-  echo "gh: no run secret for Deckhand's GitHub gateway" >&2
+  echo "gh: no run token for Deckhand's GitHub gateway" >&2
   exit 1
 }
 export GH_TOKEN

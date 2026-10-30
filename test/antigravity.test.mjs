@@ -194,9 +194,9 @@ test("the agent: installed like Codex, its login out of the sandbox, no mid-run 
     hosts: ["github.com", "*.githubusercontent.com"],
     env: { AGY_SHA256: "x64:ab" },
   });
-  // With a plan login: nothing in its environment, the sandbox writes the run's secret in its
-  // token file. With GEMINI_API_KEY: the run's secret as GEMINI_API_KEY and the listener's URL.
-  assert.deepEqual(antigravity.env(config, "run-secret"), {});
+  // With a plan login: the agent token alone, which the sandbox writes in its token file. With
+  // GEMINI_API_KEY: the agent token as GEMINI_API_KEY and the listener's URL.
+  assert.deepEqual(antigravity.env(config, "run-secret"), { DECKHAND_AGENT_TOKEN: "run-secret" });
   assert.deepEqual(
     antigravity.env(
       { ...config, agyCredential: "GEMINI_API_KEY", brokerUrl: "http://b:8081" },

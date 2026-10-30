@@ -1,6 +1,6 @@
 // OpenAI endpoint, Codex's like anthropic.mjs is Claude Code's: the operator's OPENAI_API_KEY
 // never enters a sandbox. A sandbox's Codex gets <broker>/openai as its provider's base URL
-// and the run's secret as its key (agents/codex.mjs); here the secret is checked against the
+// and the run's agent token as its key (agents/codex.mjs); here the token is checked against the
 // broker, swapped for the key, and the call goes on to OpenAI (or the listener's own
 // OPENAI_BASE_URL), streaming back. With a ChatGPT plan's login instead (CODEX_AUTH_FILE,
 // chatgpt.mjs), the call goes to ChatGPT's Codex backend with the plan's tokens, which the
@@ -34,7 +34,7 @@ const ERRORS = {
 };
 
 export function createOpenAiProxy({
-  broker, // broker.mjs: the run a secret belongs to
+  broker, // broker.mjs: the run a token belongs to
   credential, // the operator's OPENAI_API_KEY
   upstream = "https://api.openai.com/v1", // the listener's OPENAI_BASE_URL, if any
   login = null, // without a key: chatgpt.mjs's login, and where its calls go
@@ -54,7 +54,7 @@ export function createOpenAiProxy({
       const [scheme, secret] = (req.headers.authorization ?? "").split(" ");
       return scheme === "Bearer" ? secret : undefined;
     },
-    // Only Codex's runs: another agent's secret gets no key.
+    // Only Codex's runs: another agent's token gets no key.
     routeOf: (run) =>
       run.provider !== "openai"
         ? { missing: "not a run of Codex" }

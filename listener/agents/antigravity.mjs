@@ -97,11 +97,12 @@ export const antigravity = {
       hosts: ["github.com", "*.githubusercontent.com"],
     }),
   // With a Gemini API key, `agy` calls the listener's /google endpoint directly; with a plan's
-  // login, the sandbox writes its token file with the run's secret instead (antigravity.sh).
+  // login, the sandbox writes its token file with the run's agent token instead
+  // (antigravity.sh, DECKHAND_AGENT_TOKEN).
   env: (config, secret) =>
     config?.agyCredential === "GEMINI_API_KEY"
       ? { GEMINI_API_KEY: secret, GOOGLE_GEMINI_BASE_URL: `${config.brokerUrl}/google` }
-      : {},
+      : { DECKHAND_AGENT_TOKEN: secret },
   secrets: GOOGLE_CREDENTIALS,
   providers: { google: { secrets: GOOGLE_CREDENTIALS } },
   defaultProvider: "google",

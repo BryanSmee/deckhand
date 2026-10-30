@@ -198,7 +198,7 @@ test("another run's secret, a finished run's, another sandbox's or a research ru
     "401 Deckhand: unknown or finished run",
     "401 Deckhand: unknown or finished run",
     "401 Deckhand: unknown or finished run",
-    "403 Deckhand: this run's secret only works from its own sandbox",
+    "403 Deckhand: this run's token only works from its own sandbox",
     "403 Deckhand: this run gets nothing from GitHub",
     "401 Deckhand: unknown or finished run",
   ]);

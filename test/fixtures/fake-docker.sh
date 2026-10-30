@@ -72,9 +72,26 @@ case "$1" in
         echo "$*" >> "$dir/docker-calls"
         mkdir -p "$dir/nets" && : > "$dir/nets/$n" ;;
       inspect)
+        case "$*" in
+          # Every run network's ID and its containers' addresses (runner/networks.mjs
+          # sandboxOf()): a sandbox's are 10.9.0.5 and 127.0.0.1 (see inspect below).
+          *IPv4Address*)
+            for net in "${@:5}"; do
+              [ -f "$dir/nets/$net" ] || continue
+              printf 'id-%s' "$net"
+              while IFS= read -r m; do
+                [ -f "$c/$m/run" ] || continue
+                printf ' 10.9.0.5/24'
+                [ -e "$dir/elsewhere" ] || printf ' 127.0.0.1/8'
+              done < "$dir/nets/$net"
+              echo
+            done
+            exit ;;
+        esac
         [ -f "$dir/nets/$n" ] || exit 1
         case "$*" in
           *Containers*) tr '\n' ' ' < "$dir/nets/$n" ;;
+          *.Id*) echo "id-$n" ;;
           # Internal unless the test says otherwise.
           *) internal=true
             [ -f "$dir/network-internal" ] && read -r internal < "$dir/network-internal"
@@ -157,6 +174,8 @@ case "$1" in
       case "$arg" in deckhand.run=*) run=${arg#deckhand.run=} ;; esac
       prev=$arg
     done
+    # The run token stands for the run's secret below: what the fake sandbox sends the listener.
+    export DECKHAND_RUN_SECRET=${DECKHAND_RUN_TOKEN:-${DECKHAND_RUN_SECRET-}}
     mkdir -p "$c/$name"
     echo "$run" > "$c/$name/run"
     # On its run's network before run-args tells a test it started.
@@ -202,11 +221,11 @@ case "$1" in
         echo "${hosts[i++]} $answer"
       done >> "$dir/egress"
       # Claude Code'"'"'s API call, through the listener, with the run'"'"'s secret.
-      # The run'"'"'s secret in ANTHROPIC_API_KEY (claude@anthropic:key): as an x-api-key, and an
+      # The agent'"'"'s token in ANTHROPIC_API_KEY (claude@anthropic:key): as an x-api-key, and an
       # entry of its own. (The listener'"'"'s own variables are in this environment too.)
       entry="$SANDBOX_AGENT@$SANDBOX_PROVIDER"
       bearer="${ANTHROPIC_AUTH_TOKEN:-$CLAUDE_CODE_OAUTH_TOKEN}"
-      if [ -n "${ANTHROPIC_API_KEY:-}" ] && [ "$ANTHROPIC_API_KEY" = "${DECKHAND_RUN_SECRET:-}" ]; then
+      if [[ ${ANTHROPIC_API_KEY:-} == eyJ* ]]; then
         entry="$entry:key"
         curl -sS -X POST -H "x-api-key: $ANTHROPIC_API_KEY" \
           -d "{}" "$ANTHROPIC_BASE_URL/v1/messages?beta=true" > "$dir/anthropic-answer"
@@ -257,11 +276,11 @@ case "$1" in
           play.googleapis.com lh3.googleusercontent.com; do
           echo "$host $(curl -sS "$DECKHAND_BROKER_URL/egress?ip=10.9.0.5&host=$host")"
         done >> "$dir/egress-agy"
-        curl -sS -o /dev/null -w "%{http_code}" -H "Authorization: Bearer $DECKHAND_RUN_SECRET" \
+        curl -sS -o /dev/null -w "%{http_code}" -H "Authorization: Bearer ${DECKHAND_AGENT_TOKEN:-$GEMINI_API_KEY}" \
           "$DECKHAND_BROKER_URL/relay/www.googleapis.com/drive/v3/files" > "$dir/relay-answer"
         # Its model list refused (the test says so): agy only says the model is unknown.
         if [ -e "$dir/agy-no-models" ]; then
-          curl -sS -o /dev/null -X POST -H "Authorization: Bearer $DECKHAND_RUN_SECRET" \
+          curl -sS -o /dev/null -X POST -H "Authorization: Bearer $DECKHAND_AGENT_TOKEN" \
             "$DECKHAND_BROKER_URL/relay/daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels"
           echo '"'"'{"event":"result","result":{"status":"ERROR","error":"invalid model selection (--model \"gemini-4-argon-high\" --effort \"\"): model gemini-4-argon-high is not recognized"}}'"'"'
           exit 0
