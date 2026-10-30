@@ -33,6 +33,12 @@ files_follow_ups if {
   input.target.kind == "created_issue"
 }
 
+# And puts the issues it filed in a milestone (their ceiling: nothing else of theirs).
+orders_follow_ups if {
+  input.actions == ["milestone"]
+  input.target.kind == "created_issue"
+}
+
 # Inbox entries only file issues (with their label), and link the ones they split.
 deny_github contains msg if {
   input.mode in {"idea", "bug"}

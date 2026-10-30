@@ -286,13 +286,32 @@ test("the ceilings: what each mode can ever write", () => {
   for (const mode of ["onboarding", "analyze", "review", "research", "policy"]) {
     assert.deepEqual(ceilingOf(mode, true), {}, mode);
   }
+  // Assignees and milestones: a work run's on its issue, pull requests, sub-issues and the issues
+  // it files; a brainstorm's milestone on the issues it files only (issue #453).
+  for (const kind of ["own_issue", "own_pr", "sub_issue", "created_issue", "new_issue", "new_pr"]) {
+    assert.deepEqual(aboveCeiling(work, kind, ["assign", "milestone"]), [], kind);
+  }
+  assert.deepEqual(aboveCeiling(work, "other_issue", ["assign", "milestone"]), [
+    "assign",
+    "milestone",
+  ]);
+  assert.deepEqual(aboveCeiling(work, "pr", ["milestone"]), ["milestone"]);
+  assert.deepEqual(aboveCeiling(brainstorm, "created_issue", ["milestone"]), []);
+  assert.deepEqual(aboveCeiling(brainstorm, "new_issue", ["create", "milestone"]), []);
+  for (const kind of ["own_issue", "sub_issue", "other_issue", "own_pr"]) {
+    assert.deepEqual(aboveCeiling(brainstorm, kind, ["milestone"]), ["milestone"], kind);
+  }
+  for (const mode of ["brainstorm", "idea", "bug", "discussion"]) {
+    const { ceiling } = MODES[mode];
+    assert.ok(!Object.values(ceiling).flat().includes("assign"), mode);
+  }
   assert.deepEqual(ceilingOf("triage", true), {});
   assert.deepEqual(ceilingOf("deploy", false), work);
   assert.deepEqual(ceilingOf(null, false), {});
   // No ceiling holds what stays out of every one.
   for (const [mode, { ceiling = {} }] of Object.entries(MODES)) {
     for (const actions of Object.values(ceiling)) {
-      for (const out of ["close", "reopen", "merge", "review", "assign", "lock"]) {
+      for (const out of ["close", "reopen", "merge", "review", "lock"]) {
         assert.ok(!actions.includes(out), `${mode}: ${out}`);
       }
     }
@@ -316,7 +335,7 @@ test("the ceilings: what each mode can ever write", () => {
 // A fake GitHub for the look-ups: issues by number (a `pull_request` field for a pull
 // request), pull requests' heads, issues' parents (a number: in the repo; else GitHub's
 // parent), issues' sub-issues, the repo's open issues (newest first, by pages of 100), its
-// issues' and pull requests' comments and review comments by their id.
+// issues' and pull requests' comments and review comments by their id, its milestones.
 function fakeLookup({
   issues = {},
   pulls = {},
@@ -325,12 +344,15 @@ function fakeLookup({
   open = [],
   comments = {},
   reviewComments = {},
+  milestones = {},
 } = {}) {
   const calls = [];
   const lookup = async (repo, path) => {
     calls.push(path);
     const comment = /^\/repos\/org\/repo\/(issues|pulls)\/comments\/(\d+)$/.exec(path);
     if (comment) return (comment[1] === "pulls" ? reviewComments : comments)[comment[2]] ?? null;
+    const milestone = /^\/repos\/org\/repo\/milestones\/(\d+)$/.exec(path);
+    if (milestone) return milestones[milestone[1]] ?? null;
     const page = /^\/repos\/org\/repo\/issues\?state=open&per_page=100&page=(\d+)$/.exec(path);
     if (page) return open.slice((page[1] - 1) * 100, page[1] * 100);
     const m =
@@ -387,6 +409,7 @@ const GITHUB = {
     4: { number: 1, repository_url: "https://api.github.com/repos/org/other" },
   },
   subs: { 1: [{ id: 202, number: 2 }] },
+  milestones: { 3: { number: 3, title: "v1" } },
   // Open: #3, and #8, a pull request, as GitHub's issues list them.
   open: [
     { number: 8, id: 908, pull_request: {} },
@@ -512,10 +535,12 @@ test("a work run writes its issue, its pull requests and its sub-issues, nothing
     [write("POST", "repos/org/repo/issues/99/comments", { body: "x" }), /#99 isn't there/],
     // An issue whose parent is another repository's #1 isn't its sub-issue.
     [write("PATCH", "repos/org/repo/issues/4", { body: "x" }), /can't edit on other_issue #4/],
+    // Its ceiling holds assignees, but the repository's allowed users only.
     [
       write("POST", "repos/org/repo/issues", { title: "x", assignees: ["a"] }),
-      /can't create, assign here/,
+      /assigns only the repository's allowed users or its own bot, not @a/,
     ],
+    [write("PATCH", "repos/org/repo/issues/3", { milestone: 3 }), /can't milestone on other_issue/],
   ];
   for (const [w, why] of refused) {
     const got = await check(work, w);
@@ -1878,6 +1903,115 @@ test("a project write: its project checked against the grants, then in deny_gith
   );
 });
 
+test("assignees and milestones: the repository's allowed users or the bot, never Copilot; their input", async (t) => {
+  const { engine: policies, evals } = policyEngine(t, {
+    operator: { "github.rego": "package deckhand\n" },
+  });
+  // #1 is assigned to carol, who isn't an allowed user (anymore).
+  const issues = { ...GITHUB.issues, 1: { ...GITHUB.issues[1], assignees: [{ login: "Carol" }] } };
+  const { lookup } = fakeLookup({ ...GITHUB, issues });
+  const asked = [];
+  const { check } = createWriteChecks({
+    needsInputLabel: () => null,
+    lookup,
+    bot: BOT,
+    users: (repo) => (asked.push(repo), ["alice", "bob", "copilot"]),
+    policies,
+  });
+  const work = run("work");
+  const ok = async (w, change) => {
+    assert.equal(await check(work, w), null, `${w.method} ${w.path}`);
+    for (const [key, value] of Object.entries(change)) {
+      assert.deepEqual(evals.at(-1).change[key], value, `${w.method} ${w.path} ${key}`);
+    }
+  };
+  await ok(write("POST", "repos/org/repo/issues/1/assignees", { assignees: ["Alice"] }), {
+    assignees: { added: ["Alice"], removed: [] },
+  });
+  await ok(write("DELETE", "repos/org/repo/issues/1/assignees", { assignees: ["carol"] }), {
+    assignees: { added: [], removed: ["carol"] },
+  });
+  // Set in place of the issue's: split against GitHub's, so carol kept isn't an assignment.
+  await ok(write("PATCH", "repos/org/repo/issues/1", { assignees: ["bob"] }), {
+    assignees: { added: ["bob"], removed: ["Carol"] },
+  });
+  await ok(write("PATCH", "repos/org/repo/issues/1", { assignees: ["carol", "bob"] }), {
+    assignees: { added: ["bob"], removed: [] },
+  });
+  await ok(write("PATCH", "repos/org/repo/issues/1", { assignee: null }), {
+    assignees: { added: [], removed: ["Carol"] },
+  });
+  // The App's bot, on a new issue and a pull request of the run's.
+  await ok(write("POST", "repos/org/repo/issues", { title: "T", assignees: ["deckhand[bot]"] }), {
+    assignees: { added: ["deckhand[bot]"], removed: [] },
+  });
+  await ok(write("PATCH", "repos/org/repo/pulls/7", { assignees: ["alice"], milestone: 3 }), {
+    assignees: { added: ["alice"], removed: [] },
+    milestone: { number: 3, title: "v1" },
+  });
+  // A milestone looked up, or cleared; absent from writes that don't set it.
+  await ok(write("PATCH", "repos/org/repo/issues/2", { milestone: "3" }), {
+    milestone: { number: 3, title: "v1" },
+  });
+  assert.deepEqual(evals.at(-1).actions, ["milestone"]);
+  await ok(write("PATCH", "repos/org/repo/issues/2", { milestone: null }), { milestone: null });
+  await ok(write("PATCH", "repos/org/repo/issues/2", { body: "x" }), {});
+  assert.ok(!("milestone" in evals.at(-1).change) && !("assignees" in evals.at(-1).change));
+  assert.ok(asked.every((repo) => repo === "org/repo"));
+  // Whatever the policies say: someone else, Copilot (even allowed), a milestone not there.
+  const asks = evals.length;
+  for (const [w, status, message] of [
+    [
+      write("POST", "repos/org/repo/issues/1/assignees", { assignees: ["alice", "mallory"] }),
+      403,
+      "a run assigns only the repository's allowed users or its own bot, not @mallory",
+    ],
+    [
+      write("PATCH", "repos/org/repo/issues/1", { assignees: ["carol", "dave"] }),
+      403,
+      "a run assigns only the repository's allowed users or its own bot, not @dave",
+    ],
+    [
+      write("POST", "repos/org/repo/issues", { title: "T", assignee: "Copilot" }),
+      403,
+      "a run doesn't assign Copilot",
+    ],
+    [write("PATCH", "repos/org/repo/issues/2", { milestone: 9 }), 404, "milestone 9 isn't there"],
+  ]) {
+    assert.deepEqual(await check(work, w), { status, message }, `${w.method} ${w.path}`);
+  }
+  assert.equal(evals.length, asks);
+  // What it can't read: refused as a write it can't classify.
+  for (const body of [{ assignees: "alice" }, { assignees: [1] }, { milestone: "v1" }]) {
+    const got = await check(work, write("PATCH", "repos/org/repo/issues/1", body));
+    assert.match(got.message, /can't tell what this write does/, JSON.stringify(body));
+  }
+  // No users known: nobody is assigned but the bot.
+  const bare = createWriteChecks({
+    needsInputLabel: () => null,
+    lookup,
+    bot: BOT,
+  });
+  const alice = write("POST", "repos/org/repo/issues/1/assignees", { assignees: ["alice"] });
+  assert.match((await bare.check(work, alice)).message, /not @alice/);
+  // A brainstorm: the milestone of the issues it files, nothing else.
+  const brainstorm = run("brainstorm");
+  assert.equal(
+    await bare.check(
+      brainstorm,
+      write("POST", "repos/org/repo/issues", { title: "T", milestone: 3 }),
+    ),
+    null,
+  );
+  for (const w of [
+    write("PATCH", "repos/org/repo/issues/1", { milestone: 3 }),
+    write("POST", "repos/org/repo/issues", { title: "T", assignees: ["deckhand[bot]"] }),
+    write("POST", "repos/org/repo/issues/1/assignees", { assignees: ["deckhand[bot]"] }),
+  ]) {
+    assert.match((await bare.check(brainstorm, w)).message, /its ceiling/, `${w.method} ${w.path}`);
+  }
+});
+
 test("a policy's refusal reaches the agent through the gateway, in GitHub's error shape", async (t) => {
   const github = await serve(t, (req, res) => {
     res.writeHead(200, { "content-type": "application/json" });
@@ -2029,6 +2163,11 @@ test(
     for (const kind of ["sub_issue", "created_issue"]) {
       assert.deepEqual(await ask("brainstorm", "link", kind, [], { blocked_by }), [], kind);
     }
+    // And puts the issues it filed in a milestone.
+    assert.deepEqual(await ask("brainstorm", "milestone", "created_issue"), []);
+    assert.deepEqual(await ask("brainstorm", "milestone", "sub_issue"), [
+      "a brainstorm writes only its own issue, not #7",
+    ]);
     assert.deepEqual(await ask("brainstorm", "link", "sub_issue"), [
       "a brainstorm writes only its own issue, not #7",
     ]);
@@ -2369,6 +2508,84 @@ test(
         'package deckhand\n\ndeny_github contains "no reactions here" if input.action in {"react", "unreact"}\n',
     };
     assert.match((await check(reacting("work"), react)).message, /no reactions here/);
+  },
+);
+
+test(
+  "the real opa: policy/gh-assign-milestone.rego, per mode, and a repository's file of the same name broadening it",
+  { skip: !opa && "no opa on the PATH" },
+  async (t) => {
+    // The repository's own, docs/repo-config.md's example: work runs assign the issue's author,
+    // and set milestones.
+    const docs = readFileSync(join(import.meta.dirname, "..", "docs", "repo-config.md"), "utf8");
+    const [, broader] =
+      /```rego\n# \.deckhand\/policy\/gh-assign-milestone\.rego\n([\s\S]*?)```/.exec(docs);
+    const engine = (repoFiles = {}) =>
+      createPolicies({
+        config: {},
+        github: async (repo, method, path) => {
+          if (path === "/repos/org/repo/contents/.deckhand/policy?ref=main") {
+            const names = Object.keys(repoFiles);
+            if (!names.length) return new Response("{}", { status: 404 });
+            return Response.json(names.map((name) => ({ type: "file", name, sha: name })));
+          }
+          const blob = /\/git\/blobs\/(.+)$/.exec(path);
+          if (blob) {
+            return Response.json({
+              content: Buffer.from(repoFiles[blob[1]]).toString("base64"),
+              encoding: "base64",
+            });
+          }
+          return new Response("{}", { status: 404 });
+        },
+        run: opaRunner(),
+        readBuiltIn: builtIn,
+        tmp: tempDir(t),
+      });
+    const checks = (policies) =>
+      createWriteChecks({
+        needsInputLabel: () => null,
+        lookup: fakeLookup(GITHUB).lookup,
+        bot: BOT,
+        users: () => ["alice"],
+        policies,
+      }).check;
+    const check = checks(engine());
+    const work = run("work");
+    const deploy = run("deploy", { push: true });
+    const milestone = (n) => write("PATCH", `repos/org/repo/issues/${n}`, { milestone: 3 });
+    const assign = (n, login) =>
+      write("POST", `repos/org/repo/issues/${n}/assignees`, { assignees: [login] });
+    // Work runs (fix and conflict runs are work runs) set milestones: their issue, pull request,
+    // sub-issue. They don't assign.
+    for (const n of [1, 7, 2]) assert.equal(await check(work, milestone(n)), null, `#${n}`);
+    const noAssign =
+      "the policies refuse it (deny_github): a run doesn't assign people unless .deckhand/policy/gh-assign-milestone.rego lets it";
+    assert.equal((await check(work, assign(1, "alice"))).message, noAssign);
+    // A brainstorm sets the milestone of an issue it files.
+    const create = write("POST", "repos/org/repo/issues", { title: "T", milestone: 3 });
+    assert.equal(await check(run("brainstorm"), create), null);
+    // The repository's modes: refused, though their ceiling holds them.
+    assert.equal(
+      (await check(deploy, milestone(1))).message,
+      "the policies refuse it (deny_github): a deploy run doesn't set milestones unless .deckhand/policy/gh-assign-milestone.rego lets it",
+    );
+    // A repository's file of the same name replaces the default: the issue's author assigned,
+    // and its modes' milestones.
+    const broad = checks(engine({ "gh-assign-milestone.rego": broader }));
+    assert.equal(await broad(work, assign(1, "alice")), null);
+    assert.equal(await broad(deploy, milestone(1)), null);
+    assert.match((await broad(work, assign(1, "deckhand[bot]"))).message, /the issue's author/);
+    assert.match((await broad(deploy, assign(1, "alice"))).message, /only work runs assign/);
+    // Never past the built-in limit (bob isn't an allowed user) or the ceiling.
+    assert.match((await broad(work, assign(2, "bob"))).message, /allowed users .* not @bob/);
+    assert.match((await broad(run("brainstorm"), milestone(1))).message, /its ceiling/);
+    assert.match((await broad(work, milestone(3))).message, /can't milestone on other_issue #3/);
+    // Its spelling of a login isn't GitHub's: compared in lower case.
+    assert.equal(await broad(work, assign(1, "ALICE")), null);
+    // A new issue has no author to compare with: refused, over REST and with any assignee.
+    const filed = write("POST", "repos/org/repo/issues", { title: "T", assignees: ["alice"] });
+    assert.match((await broad(work, filed)).message, /the issue's author/);
   },
 );
 

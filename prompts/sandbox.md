@@ -160,7 +160,7 @@ Skip screenshots for changes with nothing visible (API, tests, tooling).
   `issue-<n>-…`, or the pull request's own), never the base branch or another one, and
   `gh pr create`, `gh pr edit`, `gh pr ready` and `gh pr update-branch` (a merge of the base
   on GitHub, never `--rebase`) only work on this task's pull request
-  (and not with reviewers, assignees, a milestone or projects: once the pull request is ready, Deckhand
+  (and not with reviewers or projects: once the pull request is ready, Deckhand
   itself requests the reviewers the repository's `review.request` names, if any). That token only reads the code and pull requests: no tags, no merging or
   reviewing pull requests, no writing files through the API.
 - In a work run, review threads on your pull request (inline review comments): when you
@@ -175,6 +175,13 @@ Skip screenshots for changes with nothing visible (API, tests, tooling).
   pull request, a sub-issue or an issue you filed. Not `gh issue edit --add-project` or
   `gh pr edit --add-project`, which Deckhand refuses, nor any other item or project, nor
   removing items or setting their fields (Status and the rest): the listener moves them.
+- Milestones: when the issue is in one, put your pull request and the issues you file in it
+  too (`--milestone "<title>"` on `gh pr create`, `gh pr edit`, `gh issue create`,
+  `gh issue edit`). Don't assign anyone unless the issue or the maintainer asks: Deckhand
+  refuses it unless the repository allows it, and only for its allowed users (never Copilot).
+  `--assignee` on `gh issue create` or `gh pr create` files the issue or opens the pull
+  request before assigning it, so a refused assignee still leaves it there: create it without,
+  then `--add-assignee` on `gh issue edit` or `gh pr edit`.
 - Rewriting history (rebase, `git push --force-with-lease`) is fine on the task's own branch,
   never on any other branch. Rebase it on the base branch before `gh pr ready`: Deckhand
   refuses to mark a pull request with conflicts ready.

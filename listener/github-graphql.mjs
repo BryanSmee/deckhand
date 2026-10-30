@@ -110,6 +110,10 @@ function updated(input) {
 // - labels: the input field of label IDs it adds (`added`) or removes (`removed`), or sets in
 //   place of the issue's (`set`);
 // - named: the input field of the label it creates' name, its `labels_added` as REST's;
+// - assignees: the input fields of the assignees it adds (`added`), removes (`removed`), or
+//   sets in place of the issue's (`set`): `field`, by node ID (a User or a Bot), and `logins`,
+//   by login (github-writes.mjs assigneesOf());
+// - milestone: the input field of the milestone it sets (null clears it);
 // - child: a link's sub-issue field; blocker: a "blocked by" link's blocking issue field;
 // - reaction: `add` or `remove`, a reaction's (its subject may be a comment: REACTABLE_COMMENTS);
 // - thread: its target is a review thread, written to as its pull request (writeOf());
@@ -138,6 +142,8 @@ export const MUTATIONS = {
       ...("milestoneId" in input ? ["milestone"] : []),
     ],
     labels: { field: "labelIds", as: "added" },
+    assignees: { field: "assigneeIds", as: "added" },
+    milestone: "milestoneId",
   },
   // A label of the run's repository, as `gh label create` makes it over REST. Not
   // updateLabel or deleteLabel: a label's settings are in no ceiling.
@@ -155,6 +161,8 @@ export const MUTATIONS = {
     fields: ["title", "body", "labelIds", "assigneeIds", "milestoneId", "state"],
     actions: updated,
     labels: { field: "labelIds", as: "set" },
+    assignees: { field: "assigneeIds", as: "set" },
+    milestone: "milestoneId",
   },
   addComment: {
     target: "subjectId",
@@ -192,17 +200,29 @@ export const MUTATIONS = {
     actions: () => ["label"],
     labels: { field: "labelIds", as: "removed" },
   },
+  // Not their `assignees` or `agentAssignment`: Copilot's assignment, which starts it working.
   addAssigneesToAssignable: {
     target: "assignableId",
     types: ISSUE_OR_PR,
     fields: ["assigneeIds"],
     actions: () => ["assign"],
+    assignees: { field: "assigneeIds", as: "added" },
   },
   removeAssigneesFromAssignable: {
     target: "assignableId",
     types: ISSUE_OR_PR,
     fields: ["assigneeIds"],
     actions: () => ["assign"],
+    assignees: { field: "assigneeIds", as: "removed" },
+  },
+  // What `gh issue edit --add-assignee` and `gh issue create --assignee` send: every assignee,
+  // by login.
+  replaceActorsForAssignable: {
+    target: "assignableId",
+    types: ISSUE_OR_PR,
+    fields: ["actorIds", "actorLogins"],
+    actions: () => ["assign"],
+    assignees: { field: "actorIds", logins: "actorLogins", as: "set" },
   },
   addSubIssue: {
     target: "issueId",
@@ -307,6 +327,8 @@ export const MUTATIONS = {
     ],
     actions: updated,
     labels: { field: "labelIds", as: "set" },
+    assignees: { field: "assigneeIds", as: "set" },
+    milestone: "milestoneId",
     pull: (input) => ({ base: input.baseRefName ?? undefined }),
     permissions: PULL_WRITE,
   },
@@ -375,6 +397,8 @@ const NODES = `query($ids: [ID!]!) {
     ... on IssueComment { fullDatabaseId }
     ... on PullRequestReviewComment { fullDatabaseId }
     ... on ProjectV2 { number title owner { __typename ... on Organization { login } ... on User { login } } }
+    ... on Milestone { number title repository { nameWithOwner } }
+    ... on Actor { login }
     ... on RepositoryNode { repository { nameWithOwner } }
     ... on Reactable { reactionGroups { content viewerHasReacted } }
     ... on PullRequestReviewThread {
@@ -386,6 +410,8 @@ const NODES = `query($ids: [ID!]!) {
 }`;
 
 const refusal = (status, message) => ({ status, message });
+// Who may be assigned: no organization, mannequin or enterprise account.
+const ACTORS = new Set(["User", "Bot"]);
 
 // A GraphQL call's body → { query, doc, variables, operationName } or { refused }: its JSON
 // read, its document under the caps and parsed (in linear time: validation is apart).
@@ -634,8 +660,8 @@ export function mutationFields({ doc, op, coerced }, schema = githubSchema()) {
   return out;
 }
 
-// The node IDs a call's mutations name: their targets, sub-issues, blockers, projects and
-// labels.
+// The node IDs a call's mutations name: their targets, sub-issues, blockers, projects, labels,
+// assignees and milestones.
 function idsOf(fields) {
   const ids = new Set();
   for (const { spec, input } of fields) {
@@ -643,21 +669,26 @@ function idsOf(fields) {
     if (spec.child) ids.add(input[spec.child]);
     if (spec.blocker) ids.add(input[spec.blocker]);
     if (spec.project) ids.add(input[spec.project]);
+    if (spec.milestone && typeof input[spec.milestone] === "string") ids.add(input[spec.milestone]);
     for (const id of spec.labels ? (input[spec.labels.field] ?? []) : []) ids.add(id);
+    for (const id of spec.assignees ? (input[spec.assignees.field] ?? []) : []) ids.add(id);
   }
   return [...ids];
 }
 
 // An input field's name as a REST body would name it, so a policy on `change.fields` reads one
 // spelling for both: `labelIds` → `labels`, `assigneeIds` → `assignees`, `milestoneId` →
-// `milestone`, `baseRefName` → `base`, `blockingIssueId` → `issue_id`, `expectedHeadOid` →
-// `expected_head_sha`, the others in snake case
+// `milestone`, `actorIds` and `actorLogins` → `assignees`, `baseRefName` → `base`,
+// `blockingIssueId` → `issue_id`, `expectedHeadOid` → `expected_head_sha`, the others in snake
+// case
 // (`subIssueId` → `sub_issue_id`).
 const REST_NAMES = {
   blockingIssueId: "issue_id",
   labelIds: "labels",
   assigneeIds: "assignees",
   milestoneId: "milestone",
+  actorIds: "assignees",
+  actorLogins: "assignees",
   baseRefName: "base",
   headRefName: "head",
   expectedHeadOid: "expected_head_sha",
@@ -797,6 +828,8 @@ export function writeOf({ name, spec, input }, nodes, repo) {
     if (spec.labels.as === "set") change.labels_set = true;
   }
   if (spec.named) change.labels_added = labelNames([input[spec.named]]);
+  // The same field twice (`actorIds` and `actorLogins`, both `assignees`): once.
+  change.fields = [...new Set(change.fields)];
   const write = { repo, actions, target, change };
   // A reaction's subject and content, as REST's; `fresh`: one the bot (the listener's token's
   // viewer, as the run's) hasn't added yet, which the run's then is once GitHub runs it.
@@ -807,6 +840,33 @@ export function writeOf({ name, spec, input }, nodes, repo) {
       const group = (node.reactionGroups ?? []).find((g) => g?.content === input.content);
       write.reaction.fresh = !group?.viewerHasReacted;
     }
+  }
+  // Its assignees, by login as REST names them (a Bot's with `[bot]`): set to null or left
+  // out, none.
+  const { field: ids, logins } = spec.assignees ?? {};
+  if (spec.assignees && actions.includes("assign")) {
+    const names = [];
+    for (const id of input[ids] ?? []) {
+      const actor = nodes.get(id);
+      if (!ACTORS.has(actor?.__typename) || typeof actor.login !== "string") {
+        return { refused: refusal(403, `${name} names an assignee that isn't a user`) };
+      }
+      names.push(actor.__typename === "Bot" ? `${actor.login}[bot]` : actor.login);
+    }
+    names.push(...((logins && input[logins]) ?? []));
+    write.assignees = { logins: names, as: spec.assignees.as };
+  }
+  // Its milestone, the run's repository's, or null to clear it.
+  if (spec.milestone && spec.milestone in input) {
+    const id = input[spec.milestone];
+    const found = id === null ? null : nodes.get(id);
+    if (
+      id !== null &&
+      (found?.__typename !== "Milestone" || repoOf(found).toLowerCase() !== repo)
+    ) {
+      return { refused: elsewhere(spec.milestone) };
+    }
+    write.milestone = found ? { number: found.number, title: found.title } : { number: null };
   }
   if (spec.pull) write.pull = spec.pull(set);
   if (thread) write.thread = thread;

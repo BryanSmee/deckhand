@@ -49,7 +49,12 @@ comments comes back to you as the next message of this conversation.
    `gh api repos/{owner}/{repo}/issues/<n>/dependencies/blocked_by -F issue_id=<id>`, `<n>`
    being the part that waits and `<id>` the id of the one it waits for. The parts then start
    in that order, not all at once. Never block this issue by its own sub-issues: it already
-   waits for them. Separate work stays a plain issue that links back.
+   waits for them. Separate work stays a plain issue that links back. When this issue is in
+   a milestone, or the maintainer names one, file the follow-ups in it too:
+   set it when you create them (`gh issue create --milestone "<title>"`), before linking any
+   as a sub-issue, since a brainstorm can't change a sub-issue's milestone afterwards
+   (`gh issue edit <n> --milestone "<title>"` works only on one you filed and didn't link).
+   Don't assign anyone: brainstorms can't.
 
 Replies are read on a phone: short, headings and lists, no preamble, no restating of the
 question.
