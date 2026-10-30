@@ -42,6 +42,8 @@ export const SHORTCUTS = {
   github: { group: "Tasks", label: "Open on GitHub", keys: ["o"] },
   answer: { group: "Tasks", label: "Answer its questions", keys: ["a"] },
   rerun: { group: "Tasks", label: "Rerun a failed run", keys: ["r"] },
+  review: { group: "Tasks", label: "Review its pull request again", keys: ["shift+r"] },
+  fix: { group: "Tasks", label: "One more fix round", keys: ["shift+f"] },
   stop: { group: "Tasks", label: "Stop the run (asks first)", keys: ["shift+s"] },
   nextRun: { group: "Tasks", label: "Next / previous run", keys: ["]", "["], join: "or" },
 

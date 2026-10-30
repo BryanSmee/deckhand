@@ -390,6 +390,11 @@ export const sendAnswers = (repo: string, answers: Answers) =>
 export const sendRerun = (repo: string, runId: string) =>
   postJson<WorkResult>(`api/repos/${repo}/rerun`, { runId });
 
+// The task page's Review or Fix of pull request `number`, its review loop over
+// (api/repos/<repo>/review): what the listener says, or why it refused.
+export const sendReview = (repo: string, number: number, action: "review" | "fix") =>
+  postJson<WorkResult>(`api/repos/${repo}/review`, { number, action });
+
 // A task's last run, failed or stopped, no longer asks for attention until another run
 // (api/repos/<repo>/dismiss); `undo`: it asks again. What the listener says, or why it refused.
 export const sendDismiss = (repo: string, runId: string, undo = false) =>

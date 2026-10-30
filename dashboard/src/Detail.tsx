@@ -10,7 +10,7 @@
 // opens it on GitHub, A goes to its questions, R reruns, Shift S stops (asking first), [ and ]
 // go through its thread, every run (those without a tab too) and its policies.
 import { useEffect, useRef, useState } from "preact/hooks";
-import { sendCancel, sendDismiss, sendRerun, useRunLog } from "./api";
+import { sendCancel, sendDismiss, sendRerun, sendReview, useRunLog } from "./api";
 import {
   ago,
   canDismiss,
@@ -22,6 +22,7 @@ import {
   loopLine,
   modeOf,
   PR_NAMES,
+  reviewOffers,
   runName,
   taskTone,
   titleOf,
@@ -86,6 +87,10 @@ export function Detail({
   // The run whose rerun is on its way, and the one whose dismissal (or its undo) is.
   const [rerunning, setRerunning] = useState<string | null>(null);
   const [dismissing, setDismissing] = useState<string | null>(null);
+  // The task whose Review or Fix is on its way, and which.
+  const [reviewing, setReviewing] = useState<{ key: string; action: "review" | "fix" } | null>(
+    null,
+  );
   // A discussion's page shows its thread, or a run's log.
   const [showLog, setShowLog] = useState(false);
   // The task whose Policies tab is open.
@@ -165,6 +170,46 @@ export function Detail({
     if (!said.error) await refresh?.();
     setRerunning(null);
   };
+  // Review or Fix of its pull request, its review loop over.
+  const offers = reviewOffers(t);
+  const pending = reviewing?.key === t.key ? reviewing.action : null;
+  const review = async (action: "review" | "fix") => {
+    setReviewing({ key: t.key, action });
+    const said = await sendReview(t.repo, t.pr!.number, action);
+    const done = action === "fix" ? "Fix round queued." : "Review queued.";
+    setSent({ key: t.key, message: said.error ?? said.message ?? done, error: !!said.error });
+    if (!said.error) await refresh?.();
+    setReviewing(null);
+  };
+  const reviewActions = (offers.review || offers.fix) && (
+    <>
+      {offers.fix && (
+        <Button
+          variant="primary"
+          size={size}
+          pending={pending === "fix"}
+          pendingLabel="Fixing…"
+          disabled={pending === "review"}
+          title="One more fix run on the last review's findings, then its review"
+          shortcut="fix"
+          onClick={() => review("fix")}
+        >
+          Fix
+        </Button>
+      )}
+      <Button
+        size={size}
+        pending={pending === "review"}
+        pendingLabel="Reviewing…"
+        disabled={pending === "fix"}
+        title="Reviews the pull request's head now, as /mode review does"
+        shortcut="review"
+        onClick={() => review("review")}
+      >
+        Review
+      </Button>
+    </>
+  );
   // Dismiss, or its Undo: the task's last run stops asking, or asks again.
   const dismiss = async (run: Run, undo = false) => {
     setDismissing(run.id);
@@ -230,6 +275,8 @@ export function Detail({
     if (!last || rerunning) return false;
     void again(last);
   };
+  keys.review = () => (offers.review && !pending ? void review("review") : false);
+  keys.fix = () => (offers.fix && !pending ? void review("fix") : false);
   keys.stop = () => (stoppable && stopping !== t.key ? setConfirming(t.key) : false);
   // ] and [: every run in turn, not only those with a tab.
   const order = [
@@ -413,7 +460,7 @@ export function Detail({
               </a>
             )}
           </div>
-          <ReviewRounds task={t} />
+          <ReviewRounds task={t} actions={reviewActions || undefined} />
           {reply && (thread || reply.id !== r?.id) && (
             <section class={styles.reply} aria-label="Last reply">
               <h3>Last reply</h3>

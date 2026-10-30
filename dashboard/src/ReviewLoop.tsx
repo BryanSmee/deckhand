@@ -1,6 +1,8 @@
 // A pull request's review-and-fix loop (Task.review, listener/reviews.mjs reviewLoop()): the
 // mark a ready row gets when the loop left blocking findings, and the Detail page's rounds,
-// each review's counts with those that didn't lower the blocking ones marked.
+// each review's counts with those that didn't lower the blocking ones marked, and once the loop
+// is over, what the task page offers to do next (Review, Fix).
+import type { ComponentChildren } from "preact";
 import { findingsLeft, noProgress, roundCounts } from "./format";
 import type { Task } from "./types";
 import * as Icon from "./ui/icons";
@@ -32,9 +34,10 @@ const ENDS: Record<string, string> = {
 };
 
 // "Review loop · Fix rounds ran out", then R0 1 critical · 3 high → R1 2 high (no progress).
-export function ReviewRounds({ task }: { task: Task }) {
+// `actions`: the task page's buttons for a loop that is over.
+export function ReviewRounds({ task, actions }: { task: Task; actions?: ComponentChildren }) {
   const r = task.review;
-  if (!r?.history.length) return null;
+  if (!r || (!r.history.length && !actions)) return null;
   const of = r.rounds ? ` of ${r.rounds}` : "";
   return (
     <section class={styles.rounds} aria-label="Review loop">
@@ -53,6 +56,7 @@ export function ReviewRounds({ task }: { task: Task }) {
           </li>
         ))}
       </ol>
+      {actions && <div class={styles.actions}>{actions}</div>}
     </section>
   );
 }

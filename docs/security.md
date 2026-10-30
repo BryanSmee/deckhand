@@ -1426,7 +1426,10 @@ in `reviews.json` before it is queued, kept across restarts, so a redelivered we
 restart starts no extra one. It stops at a review with nothing above
 `review.max_allowed_severity`, when the rounds run out, at a fix that failed or pushed
 nothing, a policy's refusal (`deny_fix`, `deny_review`), a run going or queued on the issue,
-or the needs-input label. Each round costs a work run and a review run.
+or the needs-input label. Each round costs a work run and a review run. Once the loop is
+over, a maintainer's **Fix** on the dashboard grants one more round per click (counted the same
+way, `deny_fix` applying), with `review.fix` on only: it never turns findings into a pushing run
+on a repository that didn't opt in.
 
 **The risk**: this is the one path where a model's output, not a person's comment, becomes the
 message of a run that can push. The review's findings are written by a run that read the diff
