@@ -52,14 +52,14 @@ export function missingPermissions(has = {}, wanted = APP_PERMISSIONS) {
 const LEVELS = ["read", "write", "admin"];
 const covers = (has, level) => LEVELS.indexOf(has) >= Math.max(LEVELS.indexOf(level), 0);
 
-// The App's settings, read at start (`asApp`, the App's own calls): a warning for each event of
-// APP_EVENTS it isn't subscribed to, and each permission of APP_PERMISSIONS it or one of its
-// installations lacks. An App created before a feature lacks its events and permissions, and
-// an installation only gets a permission added to its App once an owner of its account accepts
-// it: nothing else tells the operator (docs/setup.md). Resolves to the missing ones and what the
+// The App's settings (`asApp`, the App's own calls), read at start and with each listing of its
+// repositories (repos.mjs): a warning for each event of APP_EVENTS it isn't subscribed to, and
+// each permission of APP_PERMISSIONS it lacks. An App created before a feature lacks its events
+// and permissions, and nothing else tells the operator (docs/setup.md); what its installations
+// have yet to accept is the listing's to say. Resolves to the missing ones and what the
 // dashboard's links need, { missing, permissions, app: { name, owner, ownerType } } (app null
 // when GitHub refused). `credentials`: the stored App, the fallback for its slug and owner.
-export async function checkAppEvents(asApp, log, { githubUrl, credentials = {} } = {}) {
+export async function checkAppSettings(asApp, log, { githubUrl, credentials = {} } = {}) {
   const res = await asApp("GET", "/app");
   if (!res.ok) return { missing: [], permissions: [], app: null };
   const { events = [], permissions: has = {}, name, slug, owner: account } = await res.json();
@@ -78,18 +78,9 @@ export async function checkAppEvents(asApp, log, { githubUrl, credentials = {} }
   }
   const permissions = missingPermissions(has);
   if (permissions.length) {
+    const them = permissions.length > 1 ? "them" : "it";
     log(
-      `The GitHub App lacks the permission${permissions.length > 1 ? "s" : ""} ${permissions.join(", ")}: add ${permissions.length > 1 ? "them" : "it"} under Permissions in its settings${where}, then accept ${permissions.length > 1 ? "them" : "it"} on each installation (docs/setup.md)`,
-    );
-  }
-  // An installation lacks what its App has but an owner of its account hasn't accepted yet.
-  const installed = await asApp("GET", "/app/installations?per_page=100");
-  for (const i of installed.ok ? await installed.json() : []) {
-    if (!i.permissions) continue;
-    const lacks = missingPermissions(i.permissions).filter((p) => !permissions.includes(p));
-    if (!lacks.length) continue;
-    log(
-      `The GitHub App's installation on ${i.account?.login ?? i.id} lacks ${lacks.join(", ")}: an owner of the account accepts the new permissions on ${i.html_url} (docs/setup.md)`,
+      `The GitHub App lacks the permission${permissions.length > 1 ? "s" : ""} ${permissions.join(", ")}: add ${them} under Permissions in its settings${where}, then accept ${them} on each installation (docs/setup.md)`,
     );
   }
   return { missing, permissions, app };
@@ -320,11 +311,9 @@ export function createGitHubApp({
     const levels = Object.entries(permissions ?? {}).map(([name, level]) => `${name}=${level}`);
     const key = `${installationId}:${repo ?? "*"}:${levels.sort().join(",")}`;
     const cached = tokens.get(key);
+    // A failing mint fails every caller waiting on it: one call to GitHub, not one each.
     if (cached) {
-      const still = await cached.then(
-        (t) => (t.expiresAt - now() > REFRESH_MS ? t : null),
-        () => null,
-      );
+      const still = await cached.then((t) => (t.expiresAt - now() > REFRESH_MS ? t : null));
       if (still) return still;
     }
     return mint(key, installationId, repo, permissions);

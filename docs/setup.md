@@ -105,10 +105,12 @@ itself, and an installation only gets it once an owner of its account accepts it
 2. On each installation's page (**configure ↗** beside its account, which reads **accept new
    permissions ↗** while it lacks one), review and accept the new permissions.
 
-At each start, the listener logs the permissions the App lacks (with the address of its
-settings) and, for each installation, those it hasn't accepted yet (with the address of
-its page). The dashboard's GitHub App card shows the same: a _Missing in its settings_ row
-for the App's events and permissions, and what each installation lacks beside it.
+At start, and each time it lists the repositories again (every 5 minutes while the dashboard
+is open, or its **Refresh**), the listener reads the App's settings again. It logs, once each,
+the permissions the App lacks (with the address of its settings) and, for each installation,
+those it hasn't accepted yet (with the address of its page). The dashboard's GitHub App card
+shows the same: a _Missing in its settings_ row for the App's events and permissions, and
+what each installation lacks beside it.
 
 Until then, the permissions a feature added later are optional (`OPTIONAL_PERMISSIONS`,
 `actions` for now): a run's token goes without one its installation lacks, and the GitHub

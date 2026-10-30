@@ -14,7 +14,7 @@ import {
   SANDBOX_PERMISSIONS,
   WORKFLOW_PUSH_PERMISSIONS,
   appSettingsUrl,
-  checkAppEvents,
+  checkAppSettings,
   createGitHubApp,
   loadCredentials,
   missingPermissions,
@@ -193,19 +193,15 @@ test("credentials are stored owner-only and read back", (t) => {
   assert.deepEqual(loadCredentials(dir), credentials);
 });
 
-// A fake GET /app (and the installations it lists), as `asApp` answers it.
+// A fake GET /app, as `asApp` answers it.
 const appAnswers =
   ({
     events = APP_EVENTS,
     permissions = APP_PERMISSIONS,
     status = 200,
     owner = { login: "acme", type: "Organization" },
-    installations = [],
   } = {}) =>
   async (method, path) => {
-    if (`${method} ${path}` === "GET /app/installations?per_page=100") {
-      return Response.json(installations);
-    }
     assert.equal(`${method} ${path}`, "GET /app");
     return Response.json(
       { events, permissions, name: "Acme Deckhand", slug: "acme-deckhand", owner },
@@ -213,12 +209,12 @@ const appAnswers =
     );
   };
 
-test("checkAppEvents: a warning naming the events the App isn't subscribed to, and where", async () => {
+test("checkAppSettings: a warning naming the events the App isn't subscribed to, and where", async () => {
   const logs = [];
   const where = { githubUrl: "https://github.com", credentials: { slug: "old", owner: "me" } };
   const without = APP_EVENTS.filter((e) => e !== "issues");
   const asApp = appAnswers({ events: without });
-  assert.deepEqual(await checkAppEvents(asApp, (l) => logs.push(l), where), {
+  assert.deepEqual(await checkAppSettings(asApp, (l) => logs.push(l), where), {
     missing: ["issues"],
     permissions: [],
     app: { name: "Acme Deckhand", slug: "acme-deckhand", owner: "acme", ownerType: "Organization" },
@@ -229,7 +225,7 @@ test("checkAppEvents: a warning naming the events the App isn't subscribed to, a
     logs[0].includes("(https://github.com/organizations/acme/settings/apps/acme-deckhand)"),
     logs[0],
   );
-  const user = await checkAppEvents(appAnswers({ owner: null }), (l) => logs.push(l), where);
+  const user = await checkAppSettings(appAnswers({ owner: null }), (l) => logs.push(l), where);
   // No owner in the answer: the stored one, its type unknown.
   assert.deepEqual(user, {
     missing: [],
@@ -237,7 +233,7 @@ test("checkAppEvents: a warning naming the events the App isn't subscribed to, a
     app: { name: "Acme Deckhand", slug: "acme-deckhand", owner: "me", ownerType: null },
   });
   // GitHub refusing is logged by asApp already.
-  assert.deepEqual(await checkAppEvents(appAnswers({ status: 401 }), (l) => logs.push(l)), {
+  assert.deepEqual(await checkAppSettings(appAnswers({ status: 401 }), (l) => logs.push(l)), {
     missing: [],
     permissions: [],
     app: null,
@@ -245,35 +241,30 @@ test("checkAppEvents: a warning naming the events the App isn't subscribed to, a
   assert.equal(logs.length, 1);
 });
 
-test("checkAppEvents: the permissions the App lacks, then those each installation hasn't accepted", async () => {
+test("checkAppSettings: the permissions the App lacks, at a lower level or not at all", async () => {
   const logs = [];
   const where = { githubUrl: "https://github.com" };
-  const installation = (id, login, permissions) => ({
-    id,
-    account: { login },
-    html_url: `https://github.com/organizations/${login}/settings/installations/${id}`,
-    permissions,
-  });
+  // No discussions, and workflows read only where Deckhand asks to write them.
   const asApp = appAnswers({
-    // No discussions, and actions read only where Deckhand asks to write them.
     permissions: { ...APP_PERMISSIONS, discussions: undefined, workflows: "read" },
-    installations: [
-      // It lacks what its App lacks too: said once, for the App.
-      installation(1, "org", { ...APP_PERMISSIONS, discussions: undefined, actions: undefined }),
-      installation(2, "other", APP_PERMISSIONS),
-    ],
   });
-  const checked = await checkAppEvents(asApp, (l) => logs.push(l), where);
+  const checked = await checkAppSettings(asApp, (l) => logs.push(l), where);
   assert.deepEqual(checked.permissions, ["discussions: write", "workflows: write"]);
-  assert.equal(logs.length, 2);
+  assert.equal(logs.length, 1);
   assert.match(
     logs[0],
     /lacks the permissions discussions: write, workflows: write: add them under Permissions in its settings \(https:\/\/github\.com\/organizations\/acme\/settings\/apps\/acme-deckhand\), then accept them on each installation/,
   );
-  assert.equal(
-    logs[1],
-    "The GitHub App's installation on org lacks actions: read: an owner of the account accepts the new permissions on https://github.com/organizations/org/settings/installations/1 (docs/setup.md)",
-  );
+});
+
+test("a failing token fails every caller waiting on it, from one call to GitHub", async () => {
+  const { app, gh } = installedWith({ ...SANDBOX_PERMISSIONS, issues: "read" });
+  const all = await Promise.allSettled([1, 2, 3, 4].map(() => app.repoToken("org/repo")));
+  assert.ok(all.every((r) => r.status === "rejected" && r.reason.status === 422));
+  assert.equal(gh.calls.filter((c) => c.path.endsWith("/access_tokens")).length, 1);
+  // Not cached: the next one asks again.
+  await assert.rejects(app.repoToken("org/repo"), { status: 422 });
+  assert.equal(gh.calls.filter((c) => c.path.endsWith("/access_tokens")).length, 2);
 });
 
 test("missingPermissions: what's absent or at a lower level, a higher one is enough", () => {

@@ -243,7 +243,7 @@ async function fakeGitHub(files = {}) {
       if (req.url.startsWith("/app/installations?")) {
         return res.end(files.installations ?? JSON.stringify([{ id: 7 }]));
       }
-      // The App's settings (github-app.mjs checkAppEvents()), when the test sets them.
+      // The App's settings (github-app.mjs checkAppSettings()), when the test sets them.
       if (req.url === "/app" && files.app) return res.end(files.app);
       if (req.url.startsWith("/installation/repositories?")) {
         return res.end(files.installed ?? JSON.stringify({ repositories: [] }));
@@ -3546,9 +3546,6 @@ mounts:
       (dir, github) => ({ GITHUB_URL: github.url }),
     );
     await listener.until("lacks the permission discussions: write");
-    await listener.until(
-      `installation on org lacks actions: read: an owner of the account accepts the new permissions on ${installation.html_url}`,
-    );
     const base = `http://127.0.0.1:${port}`;
     const get = (path, cookie) =>
       fetch(base + path, { redirect: "manual", headers: cookie ? { cookie } : {} });
@@ -3561,6 +3558,12 @@ mounts:
       .find((c) => c.startsWith("deckhand_session="))
       .split(";")[0];
     const { app } = await (await get("/api/repos", session)).json();
+    // The listing read the App's settings again, and said what the installation lacks.
+    const out = await listener.until(
+      `installation on org lacks actions: read: an owner of the account accepts the new permissions on ${installation.html_url}`,
+    );
+    // Logged once: read again, the App's warning isn't new.
+    assert.equal(out.split("lacks the permission discussions: write").length, 2);
     assert.deepEqual(app.missingEvents, []);
     assert.deepEqual(app.missingPermissions, ["discussions: write"]);
     // What the App lacks is said for the App alone.

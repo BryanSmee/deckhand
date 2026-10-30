@@ -149,6 +149,40 @@ function setup({ env = {}, grants = {}, fs, ...repos } = {}) {
 
 const configReads = (calls) => calls.filter((c) => c.includes("/contents/")).length;
 
+test("each listing reads the App's settings again, and warns about an installation's new lack once", async () => {
+  const { app, config, store } = setup({ first: [info("org/app")] });
+  const logs = [];
+  // What the App itself lacks, as checkApp() says it: not the installation's to accept.
+  let appLacks = ["actions: read"];
+  let settings = 0;
+  const list = createRepoList({
+    app: { ...app, settings: async () => (settings++, appLacks) },
+    config,
+    store,
+    grants: grantsOf({}, config),
+    log: (line) => logs.push(line),
+  });
+  await list.list();
+  assert.equal(settings, 1);
+  assert.deepEqual(logs, []);
+  // The operator added it to the App: the installation has yet to accept it, said once.
+  appLacks = [];
+  for (const _ of [1, 2]) {
+    list.refresh();
+    await list.list();
+  }
+  assert.equal(settings, 3);
+  assert.deepEqual(logs, [
+    "The GitHub App's installation on org lacks actions: read: an owner of the account accepts the new permissions on https://github.com/organizations/org/settings/installations/1 (docs/setup.md)",
+  ]);
+  // What the listing said each installation has goes to the tokens too.
+  assert.deepEqual(await app.lacking("org/app", { actions: "read" }), {
+    missing: ["actions: read"],
+    account: "org",
+    url: "https://github.com/organizations/org/settings/installations/1",
+  });
+});
+
 test("every repo of every installation, paginated, with its status", async () => {
   const many = Array.from({ length: 150 }, (_, i) => info(`org/r${String(i).padStart(3, "0")}`));
   const { gh, list, store } = setup({
