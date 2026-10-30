@@ -557,7 +557,8 @@ run is queued, running or settling, and `ci-failed` once the CI step stopped wit
 (`ciStopped`, cleared when a review is queued). A CI fix run waits for the issue's task to be
 free: `ciFailed()` keeps `ciWaiting` while it is busy, and `runEnded()`, called by `cleanUp()`
 after every run, decides again. A wait dropped (closed, a draft again) sets `ciDropped` to the
-head it never reviewed, so `consider()` doesn't skip that head as reviewed already.
+head it never reviewed, and a stopped CI step keeps its head in `ciStopped.sha`: `consider()`
+skips neither head as reviewed already.
 
 The dashboard follows the loop. Before `startFix()`, `settle()` appends each automatic review
 to its pull request's `rounds` in `reviews.json` (`recordRound()`): `{ round, at, head,

@@ -586,11 +586,14 @@ pull request's head commit (other checks and commit statuses aren't read, as for
   dashboard shows "Fixing CI", and the run "CI fix"; when the CI step stops without a review
   (a CI fix run refused, failed or pushing nothing), the ready pull request is marked "CI failed,
   not reviewed". A pull request turned back into a draft while it waits stops waiting: ready
-  again, even at the same commit, it waits and gets its review.
+  again, even at the same commit, it waits and gets its review. So does one whose CI step
+  stopped (once the maintainer answered, say): ready again at the same commit, the CI step
+  runs again.
 - **Bounded**: `ci_fix` CI fix runs per pull request (1 by default, `0` to the operator's
   `MAX_FIX_ROUNDS`), each counted in `reviews.json` before it is queued, apart from `fix`'s
-  rounds: a CI fix never uses up a round the review's findings need. When they have run out
-  and CI still fails, the comment says so and the review starts anyway, told CI failed, so the
+  rounds: a CI fix never uses up a round the review's findings need. They count across the
+  pull request's commits: when none is left and CI fails, the comment says so ("No CI fix run
+  left") and the review starts anyway, told CI failed, so the
   maintainer still gets one. So it does without `fix` (or with `ci_fix: 0`), and on a pull
   request that isn't Deckhand's own: the comment, then the review.
 

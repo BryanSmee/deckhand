@@ -734,8 +734,9 @@ export function ciFailedText(sha, failed, next) {
 export const CI_NEXT = {
   fix: (round, rounds) =>
     `Starting a CI fix run${rounds > 1 ? ` (${round} of ${rounds})` : ""} instead of a review.`,
+  // Counted across the pull request's heads: the last CI fix run may have fixed another commit.
   out: (n) =>
-    `CI still fails after ${n > 1 ? `${n} CI fix runs` : "the CI fix run"} (\`review.ci_fix\`): reviewing anyway.`,
+    `No CI fix run left (\`review.ci_fix\`: ${n > 1 ? `all ${n}` : "its one"} used on this pull request): reviewing anyway.`,
   none: (why) => `No CI fix run (${why}): reviewing anyway.`,
   stop: (why) => `No CI fix run: ${why}. It waits for a maintainer.`,
 };
@@ -1070,9 +1071,11 @@ export function createReviews({
     const { repo, base, pr, author } = found;
     const key = taskKey(repo, prId(pr.number));
     const head = pr.head?.sha ?? null;
-    // A wait for CI dropped at this head (ciDecide()) reviewed nothing.
+    // A wait for CI dropped at this head (ciDecide()), or a CI step stopped there without a
+    // review (ciFailed(), afterCiFix()), reviewed nothing: ready again, the CI step runs again.
     const known = reviewed.get(key);
-    if (head && known?.head === head && known.ciDropped !== head) {
+    const unreviewed = known?.ciDropped === head || known?.ciStopped?.sha === head;
+    if (head && known?.head === head && !unreviewed) {
       return skip(`review: #${pr.number} at ${head.slice(0, 7)} was reviewed already`);
     }
     // The repo's settings and the policies may take a while: the pull request is in review
@@ -1993,7 +1996,8 @@ export function createReviews({
     if (!fixes || (entry.ciSettled ?? 0) >= fixes) return null;
     remember(key, entry.head ?? null, { ciSettled: fixes });
     const stop = async (why) => {
-      remember(key, reviewed.get(key)?.head ?? null, { ciStopped: { at: now() } });
+      const head = reviewed.get(key)?.head ?? null;
+      remember(key, head, { ciStopped: { sha: head, at: now() } });
       log(`${key}: no review after the CI fix run, ${why}`);
       await reply(repo, number, ciStoppedText(why));
       return null;

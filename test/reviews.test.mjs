@@ -1293,7 +1293,7 @@ test("review.ci: CI fix runs run out, said once, then the review anyway", async 
   assert.equal(s.of("ci-fix").length, 1);
   assert.equal(
     s.replies[1],
-    "**CI failed** on sha-2 (`review.ci`): [`Tests`](https://github.com/org/repo/actions/runs/7) (failure). CI still fails after the CI fix run (`review.ci_fix`): reviewing anyway.",
+    "**CI failed** on sha-2 (`review.ci`): [`Tests`](https://github.com/org/repo/actions/runs/7) (failure). No CI fix run left (`review.ci_fix`: its one used on this pull request): reviewing anyway.",
   );
   // Without fix, or ci_fix: 0, the comment, then the review.
   for (const [yaml, why] of [
@@ -1360,6 +1360,11 @@ test("review.ci: the CI fix run's gates, as a review fix run's", async (t) => {
   assert.equal(await input.ready(), null);
   assert.match(input.replies[0], /No CI fix run: it or #12 waits for the maintainer's input\./);
   assert.equal(reviewLoop(input.entry()).loop, "ci-failed");
+  // Answered, then draft and ready again at the same head: the CI step runs again, and with
+  // the input no longer awaited, the CI fix run starts.
+  input.gh.issueLabels = [];
+  assert.equal((await input.ready()).reason, "ci-fix");
+  assert.equal(input.entry().ciStopped, undefined);
   // deny_fix, asked with `ci: true`: refused, said, the round not used.
   const policy = policyEngine(t, {
     ref: "trunk",
@@ -1424,6 +1429,11 @@ test("review.ci: a CI fix run that pushed nothing shows the loop as CI failed, u
   await s.ready();
   await s.ciFixed();
   assert.equal(reviewLoop(s.entry()).loop, "ci-failed");
+  assert.equal(s.entry().ciStopped.sha, "sha-1");
+  // Ready again at that same head: not reviewed yet, so the CI step runs again (its one CI fix
+  // run used: the review, said so).
+  assert.equal((await s.ready()).reason, "review");
+  assert.match(s.replies.at(-1), /No CI fix run left \(`review\.ci_fix`: its one used/);
   // Ready again with a new head that passes: the mark goes.
   s.gh.head = "sha-3";
   s.gh.runs = [GREEN];
