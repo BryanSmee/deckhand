@@ -162,7 +162,8 @@ test("a research run without allow_research stops before anything is asked for",
 // what it asked of the images. `imageFor`: the images' own, `written`: what goes to its log,
 // `ca`: the egress proxy's CA certificate, or null.
 // `runner`: RUNNER; `grant`: the repo's file in the grants folder; `yaml`: its config;
-// `keepsCaches`: the images'; `linkedBranches`: linked-branch.mjs's.
+// `keepsCaches`: the images'; `linkedBranches`: linked-branch.mjs's; `cancel`: cancelled while
+// its image is looked up.
 async function workRun(
   t,
   head,
@@ -175,6 +176,7 @@ async function workRun(
     yaml = "setup: npm ci\ncaches: [/home/node/.npm]\n",
     keepsCaches,
     linkedBranches,
+    cancel = false,
   } = {},
 ) {
   const dir = realpathSync(tempDir(t));
@@ -191,7 +193,10 @@ async function workRun(
     images: {
       keepsCaches,
       installAgent: async () => {},
-      imageFor: imageFor ?? (async () => config.image),
+      imageFor: async (args) => {
+        if (cancel) task.live.cancelled = { by: "alice", at: 1 };
+        return (imageFor ?? (async () => config.image))(args);
+      },
       caches: async (repo, paths) => {
         calls.push(`caches ${paths.join(" ")}`);
         return [{ name: "cache-npm", path: "/home/node/.npm" }];
@@ -277,6 +282,26 @@ test("a work run's issue branch, linked by the listener, is the sandbox's TASK_B
   assert.equal(env({ ...task.live, linkedBranch: null }).TASK_BRANCH, "");
   const none = await workRun(t, "org/repo");
   assert.equal(none.task.live.linkedBranch, null);
+});
+
+// Linked last: a run its preparation stops leaves no branch behind, which the next run would
+// find at the base's head without a commit.
+test("a work run whose preparation fails links no branch", async (t) => {
+  const asked = [];
+  const linkedBranches = { link: async () => (asked.push("link"), "issue-12-a-title") };
+  const imageFor = async () => {
+    throw new Error("the build failed");
+  };
+  await assert.rejects(workRun(t, "org/repo", { linkedBranches, imageFor }), RunError);
+  await assert.rejects(
+    workRun(t, "org/repo", { linkedBranches, ca: null }),
+    (e) => e instanceof RunError,
+  );
+  assert.deepEqual(asked, []);
+  // Cancelled while it was prepared: no sandbox starts, nor a branch.
+  const { task } = await workRun(t, "org/repo", { linkedBranches, cancel: true });
+  assert.equal(task.live.linkedBranch, null);
+  assert.deepEqual(asked, []);
 });
 
 test("on the Kubernetes runner, a granted Dockerfile stops the run with a reply naming it", async (t) => {

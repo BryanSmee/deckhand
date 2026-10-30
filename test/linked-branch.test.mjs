@@ -28,7 +28,8 @@ const taskOf = (live = {}, task = {}) => ({
 });
 
 // A linker on a fake GitHub where org/repo#12 is "Café : bientôt" and its branches are
-// `branches`; `linked`: what createLinkedBranch answers (an Error: GraphQL's errors).
+// `branches`; `linked`: what createLinkedBranch answers (an Error: GraphQL's errors; null: no
+// linked branch).
 // `run`: the broker's run; `policies`: policies.mjs's, none by default.
 function linker({
   branches = [],
@@ -66,6 +67,7 @@ function linker({
   const graphql = async (repo, query, variables) => {
     mutations.push({ repo, query, variables });
     if (linked instanceof Error) throw linked;
+    if (linked === null) return { createLinkedBranch: { linkedBranch: null } };
     return {
       createLinkedBranch: {
         linkedBranch: { ref: { name: linked ?? variables.input.name } },
@@ -131,10 +133,16 @@ test("a base branch with a slash is read by its ref's path", async () => {
 });
 
 test("an issue that has a branch already, a fix or conflict run's, gets no other", async () => {
-  const l = linker({ branches: ["issue-12-old-title"] });
-  assert.equal(await l.link(), null);
+  // Its one branch is the sandbox's, whatever the title says now: an earlier link whose run
+  // never started included.
+  const l = linker({ branches: ["issue-12-old-title", "issue-120-other", "feat"] });
+  assert.equal(await l.link(), "issue-12-old-title");
   assert.deepEqual(l.mutations, []);
   assert.deepEqual(l.notes, []);
+  // Several: the sandbox picks by its own name.
+  const several = linker({ branches: ["issue-12-a", "issue-12-b"] });
+  assert.equal(await several.link(), null);
+  assert.deepEqual(several.mutations, []);
   // issue-12- matches no longer prefix's branch: "issue-12-" alone isn't one of its.
   const other = linker({ branches: ["issue-12-"] });
   assert.equal(await other.link(), "issue-12-cafe-bientot");
@@ -172,6 +180,10 @@ test("a failure links nothing and fails no run: the log and the run's log say wh
   const renamed = linker({ linked: "main" });
   assert.equal(await renamed.link(), null);
   assert.deepEqual(renamed.notes, ["Branch not linked to #12: GitHub named the branch main"]);
+  // No linked branch in GitHub's answer, and no error: nothing confirmed.
+  const none = linker({ linked: null });
+  assert.equal(await none.link(), null);
+  assert.deepEqual(none.notes, ["Branch not linked to #12: GitHub created no linked branch"]);
 });
 
 test("deny_link_branch: its input, a denial links nothing, the decision kept for the task", async (t) => {

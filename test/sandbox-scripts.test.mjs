@@ -756,7 +756,7 @@ test("draft-pr's start leaves the issue's branch alone when it has commits that 
   chmodSync(join(fake, "gh"), 0o755);
   // Its functions only: the script itself works in /workspace.
   const script = readFileSync(`${bin}draft-pr.sh`, "utf8");
-  const fns = ["info", "ensure", "start"]
+  const fns = ["info", "ensure", "first_commit", "unpushed", "start"]
     .map((name) => new RegExp(`^${name}\\(\\) \\{[^]*?^\\}$`, "m").exec(script)[0])
     .join("\n");
   const start = () =>
@@ -784,7 +784,7 @@ test("draft-pr's start checks out the listener's linked branch and gives it its 
   );
   chmodSync(join(fake, "gh"), 0o755);
   const script = readFileSync(`${bin}draft-pr.sh`, "utf8");
-  const fns = ["info", "ensure", "start"]
+  const fns = ["info", "ensure", "first_commit", "unpushed", "start"]
     .map((name) => new RegExp(`^${name}\\(\\) \\{[^]*?^\\}$`, "m").exec(script)[0])
     .join("\n");
   sh(origin, "git branch issue-5-a-title main");
@@ -801,8 +801,33 @@ test("draft-pr's start checks out the listener's linked branch and gives it its 
   assert.deepEqual(readFileSync(calls, "utf8").trim().split("\n"), [
     "issue view",
     "pr list",
+    "pr list",
     "pr create",
   ]);
+  const start = (env) =>
+    sh(
+      clone,
+      `git checkout -q main\nbase=main\ncache=.git/deckhand-task.json\n${fns}\nstart\ngit branch --show-current`,
+      {
+        PATH: `${fake}:${process.env.PATH}`,
+        TASK_ISSUE: "5",
+        ...env,
+      },
+    );
+  // A link whose run stopped before its sandbox started: the next run's sandbox gives it its
+  // first commit, TASK_BRANCH or not.
+  for (const env of [{}, { TASK_BRANCH: "issue-5-retried" }]) {
+    sh(origin, "git branch -f issue-5-retried main");
+    sh(clone, "git checkout -q main && (git branch -qD issue-5-retried 2> /dev/null || true)");
+    sh(clone, `echo '{"title":"t","branch":"issue-5-retried"}' > .git/deckhand-task.json`);
+    assert.equal(start(env), "issue-5-retried");
+    assert.equal(sh(origin, "git log -1 --format=%s issue-5-retried"), "#5: start work");
+  }
+  // Its earlier run's branch with commits that aren't pushed: left for the agent, not replaced.
+  sh(clone, "git checkout -q -b issue-5-kept main && git commit -q --allow-empty -m unpushed");
+  sh(clone, `echo '{"title":"t","branch":"issue-5-kept"}' > .git/deckhand-task.json`);
+  assert.equal(start({ TASK_BRANCH: "issue-5-new" }), "main");
+  assert.equal(sh(clone, "jq -r .branch .git/deckhand-task.json"), "issue-5-kept");
 });
 
 // The entrypoint's fetch of the run's files (fetch_run_files()), against a fake deckhand-files:

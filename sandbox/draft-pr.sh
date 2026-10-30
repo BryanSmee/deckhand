@@ -95,10 +95,35 @@ Work in progress: ${AGENT_NAME:-Claude} is on it and fills this in when it is re
   gh pr create --draft --base "$base" --head "$branch" --title "$title" --body "$body"
 }
 
+# A branch with nothing over the base and no pull request (the listener's link, at the base's
+# head, maybe from a run that stopped before its sandbox started): its first commit, pushed, so
+# a pull request can open.
+first_commit() {
+  [ -z "$(git rev-list "origin/$base..HEAD")" ] || return 0
+  [ -z "$(gh pr list --head "$1" --state all --json number --jq '.[].number')" ] || return 0
+  git commit --quiet --allow-empty -m "#$TASK_ISSUE: start work"
+  git push --quiet -u origin "$1"
+}
+
+# Commits that aren't on the repository may be a fork's, merged in by a run that stopped
+# before pushing: entrypoint.sh left the branch for the agent to check out once it has read
+# them, not for setup to run on.
+unpushed() {
+  git show-ref --verify --quiet "refs/heads/$1" &&
+    [ -n "$(git rev-list "$1" --not --remotes=origin)" ] || return 1
+  echo "draft-pr: $1 has commits that aren't pushed, the agent checks it out" >&2
+}
+
 start() {
   # A resumed session is already on its branch (or chose to stay on the base one).
   [ "$(git branch --show-current)" = "$base" ] || return 0
-  local task branch
+  local task branch kept
+  # The listener's branch replaces the one an earlier run kept, not its unpushed commits.
+  kept=$([ -s "$cache" ] && jq -r .branch "$cache")
+  if [ -n "${TASK_BRANCH:-}" ] && [ -n "$kept" ] && [ "$kept" != "$TASK_BRANCH" ] &&
+    unpushed "$kept"; then
+    return 0
+  fi
   task=$(info) || {
     echo "draft-pr: could not read the task, the agent creates the branch" >&2
     return 0
@@ -106,21 +131,12 @@ start() {
   branch=$(jq -r .branch <<< "$task")
   git fetch --quiet origin "$base"
   if git show-ref --verify --quiet "refs/heads/$branch"; then
-    # Commits that aren't on the repository may be a fork's, merged in by a run that stopped
-    # before pushing: entrypoint.sh left the branch for the agent to check out once it has
-    # read them, not for setup to run on.
-    if [ -n "$(git rev-list "$branch" --not --remotes=origin)" ]; then
-      echo "draft-pr: $branch has commits that aren't pushed, the agent checks it out" >&2
-      return 0
-    fi
+    unpushed "$branch" && return 0
     git checkout --quiet "$branch"
+    first_commit "$branch" || return 0
   elif git fetch --quiet origin "$branch" 2> /dev/null; then
     git checkout --quiet -b "$branch" --track "origin/$branch"
-    # The listener's, at the base's head: its first commit, so a pull request can open.
-    if [ "$branch" = "${TASK_BRANCH:-}" ] && [ -z "$(git rev-list "origin/$base..HEAD")" ]; then
-      git commit --quiet --allow-empty -m "#$TASK_ISSUE: start work"
-      git push --quiet origin "$branch" || return 0
-    fi
+    first_commit "$branch" || return 0
   else
     git checkout --quiet -b "$branch" "origin/$base"
     git commit --quiet --allow-empty -m "#$TASK_ISSUE: start work"

@@ -1069,13 +1069,15 @@ go through Deckhand's git gateway) or settings, or another repository.
 A work run's branch shows in its issue's Development sidebar from the run's start, not only
 once its pull request says `Closes #n`. GitHub links a branch to an issue only as it creates
 it (`createLinkedBranch`, what `gh issue develop` calls), so the **listener** does it as a work
-run starts, before its sandbox does: when the run may push its issue's branch
-(`issue-<n>-*`, not a light run nor a fork's) and the issue has no `issue-<n>-…` branch yet. A
-fix or conflict run's branch, or a later run's, exists already: nothing is linked then. The
-branch is named from the issue's title as the sandbox names it, created at the base branch's
-head, and the sandbox checks it out and pushes its first commit through the git gateway as
-usual. A refusal or a failure links nothing and fails no run: the sandbox creates the branch
-itself, unlinked.
+run starts, once nothing else can stop the run (its image built, its access checked), before
+its sandbox does: when the run may push its issue's branch (`issue-<n>-*`, not a light run nor
+a fork's) and the issue has no `issue-<n>-…` branch yet. A fix or conflict run's branch, or a
+later run's, exists already: nothing is linked then, and the issue's one branch is the one the
+sandbox checks out, even if the title changed since. The branch is named from the issue's
+title as the sandbox names it, created at the base branch's head, and the sandbox checks it
+out and pushes its first commit through the git gateway as usual (a branch with nothing over
+the base and no pull request yet gets that commit whenever a run checks it out). A refusal or
+a failure links nothing and fails no run: the sandbox creates the branch itself, unlinked.
 
 `input` of `deny_link_branch`:
 
