@@ -38,6 +38,8 @@ flowchart LR
   orch --> runner
   orch --> broker
   runner --> broker
+  runner -. tarballs .-> github
+  edge -. run logs .-> runner
   orch --> github
   orch --> policy
   runner -. starts .-> sandbox
@@ -53,20 +55,23 @@ flowchart LR
   models -. refresh .-> runner
 ```
 
-| Service      | Holds                                     | Owns (its own store)                    | Reached by                                                                                           |
-| ------------ | ----------------------------------------- | --------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| edge         | webhook secret, session key, OAuth client | sessions                                | the internet, browsers                                                                               |
-| orchestrator | nothing secret                            | queue, waits, tasks, history, decisions | edge                                                                                                 |
-| runner       | Docker socket or Kubernetes API           | containers, networks, run logs          | orchestrator, models (the plan logins' refresh only)                                                 |
-| broker       | the tokens' signing key                   | live runs, run files                    | orchestrator, runner (a run's first token), proxy (sandboxes), every service (its own service token) |
-| github       | the App's key, installation tokens        | each run's issues, reactions, pushes    | edge, orchestrator, proxy                                                                            |
-| models       | the operator's agent credentials          | plan logins                             | proxy                                                                                                |
-| policy       | nothing secret                            | nothing (reads the policy folders)      | github, orchestrator, broker                                                                         |
-| proxy        | Deckhand's CA                             | the egress cache                        | sandboxes                                                                                            |
+| Service      | Holds                                     | Owns (its own store)                    | Reached by                                                                                                              |
+| ------------ | ----------------------------------------- | --------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| edge         | webhook secret, session key, OAuth client | sessions                                | the internet, browsers                                                                                                  |
+| orchestrator | nothing secret                            | queue, waits, tasks, history, decisions | edge                                                                                                                    |
+| runner       | Docker socket or Kubernetes API           | containers, networks, run logs          | orchestrator, models (the plan logins' refresh only), edge (the run's log, for the dashboard)                           |
+| broker       | the tokens' signing key                   | live runs, run files                    | orchestrator, runner (a run's first token), proxy (sandboxes), every service that calls another (its own service token) |
+| github       | the App's key, installation tokens        | each run's issues, reactions, pushes    | edge, orchestrator, proxy, runner (the repo's tarball, for build contexts and previews)                                 |
+| models       | the operator's agent credentials          | plan logins                             | proxy                                                                                                                   |
+| policy       | nothing secret                            | nothing (reads the policy folders)      | github, orchestrator, broker                                                                                            |
+| proxy        | Deckhand's CA                             | the egress cache                        | sandboxes                                                                                                               |
 
-The broker also serves the endpoints a sandbox calls about its own run: progress, needs-input,
-its files. Every service also calls it for its own service token (#500), which the diagram leaves
-out: each one reaches the broker, for that alone.
+The broker also serves the endpoints a sandbox calls about its own run: progress, needs-input, its
+files. Every service that calls another also calls it for its own service token (#500), which the
+diagram leaves out; the policy service calls none, and checks the tokens it gets offline. The dotted
+arrows are narrow: the runner fetches a repository's tarball from the github service for build
+contexts and preview hooks (the App's key stays there), edge reads a run's log from the runner for
+the dashboard's live view, and models has the runner start the plan logins' refresh.
 
 ## Upgrades without downtime
 
@@ -82,21 +87,21 @@ streams until the orchestrator acknowledges them.
 | proxy                        | 1, and a second during an update | both on every run's network under the same name; the new copy takes new connections, the old one drains up to 10 minutes, an agent call's length, as models (#500) |
 
 Every agent call goes through the proxy to the models service, so the proxy's drain has to last as
-long as the models service's. Today one proxy, joined to every run's network, drains for 25 s
-(#507): the next one only starts once it exits, and the agents' CLIs, git and `gh` don't try a
-refused connection again (only `deckhand-files` and `deckhand-inbox` do), so a longer drain would
-refuse every sandbox's new connections that long. A second copy during an update removes that limit
-(#500): it takes the new connections while the old one drains, as long as an agent call lasts. On
-Kubernetes, that's a Deployment's rolling update (one replica, `maxSurge: 1`, `maxUnavailable: 0`).
-Docker Compose stops a container before it starts the next, so on a Compose server a proxy update
-still cuts the agent calls going after 25 s. Until the split, the proxy waits for a restarting
-listener instead of failing (#507), for every call a sandbox makes to it (#511).
+long as the models service's. A single proxy can't: the next one only starts once it exits, and the
+agents' CLIs, git and `gh` don't try a refused connection again (only `deckhand-files` and
+`deckhand-inbox` do), so a long drain would refuse every sandbox's new connections that long. A
+second copy during an update removes that limit (#500): it takes the new connections while the old
+one drains, as long as an agent call lasts. On Kubernetes, that's a Deployment's rolling update (one
+replica, `maxSurge: 1`, `maxUnavailable: 0`).
 
-**On Docker Compose**, every service runs as one copy (the test server): Compose stops a
-container before it starts the next, so an update is a wait rather than a handover. The proxy
-waits 5 minutes for a service that refuses its connection (#507), long enough for a service's
-drain and the next one's start, but not for the models service's 10 minutes: new agent calls made
-in the last minutes of its drain fail. Two copies on Kubernetes have neither gap.
+**On Docker Compose**, every service runs as one copy (the test server): Compose stops a container
+before it starts the next, so an update is a wait rather than a handover. The proxy waits 5 minutes
+for a service that refuses its connection (#507), enough for a service's drain and the next one's
+start, but not for the models service's 10 minutes: a new agent call made more than 5 minutes before
+its drain ends gives up before the next copy starts, and fails; those made in its last 5 minutes
+wait and go through. A proxy update drains for 25 s only (#507), then cuts the agent calls still
+going. Until the split, the proxy waits for a restarting listener instead of failing, for every call
+a sandbox makes to it (#511). Two copies on Kubernetes have none of these gaps.
 
 Active/passive is safe because state is saved as it changes (#508), each lease holder gets a
 higher fencing epoch that the github service, the runner and the broker check, events are
