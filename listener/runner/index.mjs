@@ -8,7 +8,8 @@ import { createDockerRunner } from "./docker.mjs";
 import { createDockerImages } from "./images.mjs";
 import { createDockerJobs } from "./jobs.mjs";
 import { createKubeApi, SERVICE_ACCOUNT } from "./kube-api.mjs";
-import { createKubernetesImages, createKubernetesRunner } from "./kubernetes.mjs";
+import { createKubernetesImages } from "./kube-images.mjs";
+import { createKubernetesRunner } from "./kubernetes.mjs";
 
 // `kubeApi`: the tests' (kube-api.mjs createKubeApi() with their fetch).
 export function createBackend({
@@ -23,7 +24,7 @@ export function createBackend({
     const api = kubeApi ?? inCluster(config, readNamespace);
     return {
       runner: createKubernetesRunner({ config, api, inboxDir, log }),
-      images: createKubernetesImages({ config, api }),
+      images: createKubernetesImages({ config, api, log }),
       // No short containers: what needs them (an agent's install, a cache's chown, preview
       // hooks, the Antigravity login's refresh) says so.
       jobs: {},

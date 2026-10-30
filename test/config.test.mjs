@@ -402,6 +402,14 @@ test("KUBERNETES_*: the runner's namespace, Pending wait, storage class and clai
     pendingMs: 600000,
     storageClass: null,
     sessionSize: "10Gi",
+    registry: null,
+    registrySecret: null,
+    buildkit: "tcp://buildkitd:1234",
+    registryHosts: [],
+    cacheStorageClass: null,
+    cacheSize: "10Gi",
+    agentStorageClass: null,
+    agentSize: "5Gi",
   });
   const set = loadConfig({
     ALLOWED_USERS: "a",
@@ -415,6 +423,14 @@ test("KUBERNETES_*: the runner's namespace, Pending wait, storage class and clai
     pendingMs: 180000,
     storageClass: "fast",
     sessionSize: "20Gi",
+    registry: null,
+    registrySecret: null,
+    buildkit: "tcp://buildkitd:1234",
+    registryHosts: [],
+    cacheStorageClass: null,
+    cacheSize: "10Gi",
+    agentStorageClass: null,
+    agentSize: "5Gi",
   });
   assert.throws(
     () => loadConfig({ ALLOWED_USERS: "a", KUBERNETES_PENDING_MINUTES: "0" }),
@@ -423,6 +439,84 @@ test("KUBERNETES_*: the runner's namespace, Pending wait, storage class and clai
   assert.throws(
     () => loadConfig({ ALLOWED_USERS: "a", KUBERNETES_SESSION_SIZE: "lots" }),
     /KUBERNETES_SESSION_SIZE: expected a size/,
+  );
+});
+
+test("KUBERNETES_BUILDKIT: tcp:// and the daemon's Service by its short name, else the listener stops", () => {
+  assert.equal(
+    loadConfig({ ALLOWED_USERS: "a", KUBERNETES_BUILDKIT: "tcp://builder:1234" }).kubernetes
+      .buildkit,
+    "tcp://builder:1234",
+  );
+  for (const bad of [
+    "tcp://buildkitd.deckhand.svc.cluster.local:1234",
+    "tcp://10.96.0.20:1234",
+    "unix:///run/buildkit/buildkitd.sock",
+    "tcp://buildkitd",
+    "buildkitd:1234",
+  ]) {
+    assert.throws(
+      () => loadConfig({ ALLOWED_USERS: "a", KUBERNETES_BUILDKIT: bad }),
+      /KUBERNETES_BUILDKIT: expected tcp:\/\/<the daemon's Service name>:<port>/,
+      bad,
+    );
+  }
+});
+
+test("KUBERNETES_REGISTRY without KUBERNETES_REGISTRY_SECRET stops the listener: pushes need credentials", () => {
+  assert.throws(
+    () => loadConfig({ ALLOWED_USERS: "a", KUBERNETES_REGISTRY: "registry.example.com/dh" }),
+    /KUBERNETES_REGISTRY is set without KUBERNETES_REGISTRY_SECRET: name the dockerconfigjson Secret with its push credentials/,
+  );
+  // Neither: no repo images, nothing to require.
+  assert.equal(loadConfig({ ALLOWED_USERS: "a" }).kubernetes.registry, null);
+});
+
+test("KUBERNETES_REGISTRY and the shared claims: a registry's name, the agents' class the caches' by default", () => {
+  const set = loadConfig({
+    ALLOWED_USERS: "a",
+    KUBERNETES_REGISTRY: "Registry.Example.com:5000/deckhand/",
+    KUBERNETES_REGISTRY_SECRET: "pull",
+    KUBERNETES_BUILDKIT: "tcp://builder:1234",
+    KUBERNETES_REGISTRY_HOSTS: "S3.example.com, *.cdn.example",
+    KUBERNETES_CACHE_STORAGE_CLASS: "nfs",
+    KUBERNETES_CACHE_SIZE: "50Gi",
+  }).kubernetes;
+  assert.equal(set.registry, "registry.example.com:5000/deckhand");
+  assert.equal(set.registrySecret, "pull");
+  assert.equal(set.buildkit, "tcp://builder:1234");
+  assert.deepEqual(set.registryHosts, ["s3.example.com", "*.cdn.example"]);
+  assert.equal(set.cacheStorageClass, "nfs");
+  assert.equal(set.cacheSize, "50Gi");
+  assert.equal(set.agentStorageClass, "nfs");
+  const own = loadConfig({
+    ALLOWED_USERS: "a",
+    KUBERNETES_CACHE_STORAGE_CLASS: "nfs",
+    KUBERNETES_AGENT_STORAGE_CLASS: "efs",
+  }).kubernetes;
+  assert.equal(own.agentStorageClass, "efs");
+  assert.equal(
+    loadConfig({
+      ALLOWED_USERS: "a",
+      KUBERNETES_REGISTRY: "localhost:5000",
+      KUBERNETES_REGISTRY_SECRET: "pull",
+    }).kubernetes.registry,
+    "localhost:5000",
+  );
+  // A scheme, a tag, or a Docker Hub user would make every image's name wrong.
+  for (const bad of ["https://registry.example.com", "registry.example.com/x:tag", "someone"]) {
+    assert.throws(
+      () => loadConfig({ ALLOWED_USERS: "a", KUBERNETES_REGISTRY: bad }),
+      /KUBERNETES_REGISTRY: expected a registry host and an optional path/,
+    );
+  }
+  assert.throws(
+    () => loadConfig({ ALLOWED_USERS: "a", KUBERNETES_REGISTRY_HOSTS: "a.example, https://b" }),
+    /KUBERNETES_REGISTRY_HOSTS: https:\/\/b: expected a host name/,
+  );
+  assert.throws(
+    () => loadConfig({ ALLOWED_USERS: "a", KUBERNETES_CACHE_SIZE: "lots" }),
+    /KUBERNETES_CACHE_SIZE: expected a size/,
   );
 });
 

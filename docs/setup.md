@@ -929,38 +929,46 @@ The listener and the egress proxy also read these. `compose.yaml` doesn't take t
 others to their defaults. To change one, set its key in `config.yaml` when it has one, or
 else set it in the service's `environment`, for example in a `compose.override.yaml`.
 
-| Setting                                              | Key                          | Default                                               | What                                                                                                                                                                                                            |
-| ---------------------------------------------------- | ---------------------------- | ----------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `GRANTS_DIR`                                         | `grants_dir`                 | `/etc/deckhand/grants`                                | what you grant each repo, one file each: hosts, cached hosts, host mounts, limits, preview hook, Dockerfile (the server folder's)                                                                               |
-| `INSTALL_NETWORK`                                    | `install_network`            | `bridge`                                              | network of the agents' install containers (they need npm and GitHub's releases), and of the Antigravity CLI's login refresh                                                                                     |
-| `RUNNER`                                             | `runner`                     | `docker`                                              | where sandboxes run: `docker`, the host's Docker, or `kubernetes`, pods of the cluster the listener runs in (see [Kubernetes runner](#kubernetes-runner)); another value stops the listener at start, saying so |
-| `KUBERNETES_NAMESPACE`                               | `kubernetes_namespace`       | the listener's own                                    | the namespace of the [Kubernetes runner](#kubernetes-runner)'s pods, Secrets and claims, which has to hold the listener's and the egress proxy's pods too                                                       |
-| `KUBERNETES_PENDING_MINUTES`                         | `kubernetes_pending_minutes` | `10`                                                  | how long a sandbox's pod may stay Pending (no room, an image it can't pull) before its run fails, with the reason in its reply                                                                                  |
-| `KUBERNETES_STORAGE_CLASS`                           | `kubernetes_storage_class`   | the cluster's default                                 | the storage class of the issues' session claims                                                                                                                                                                 |
-| `KUBERNETES_SESSION_SIZE`                            | `kubernetes_session_size`    | `10Gi`                                                | the size of each session claim (an issue's clone, and its agent's session)                                                                                                                                      |
-| `KUBERNETES_SERVICE_HOST`, `KUBERNETES_SERVICE_PORT` | none: the cluster's          | set by Kubernetes in every pod                        | where the Kubernetes runner reaches the API server                                                                                                                                                              |
-| `DEBOUNCE_MS`                                        | `debounce_ms`                | `15000`                                               | pause after a comment before its run starts, so that comments posted together go in one run                                                                                                                     |
-| `BRAINSTORM_DEBOUNCE_MS`                             | `brainstorm_debounce_ms`     | `3000`                                                | the same before a light run (brainstorms, onboarding, light modes)                                                                                                                                              |
-| `CONFLICT_MERGE_DELAY_MS`                            | `conflict_merge_delay_ms`    | `30000`                                               | pause after a repo's default branch moved before its pull requests' conflicts are checked, while GitHub computes them again                                                                                     |
-| `DATA_DIR`                                           | none                         | `/data`                                               | the listener's state: the App's credentials, logs, queue, runs (the `data` volume)                                                                                                                              |
-| `DASHBOARD_DIR`                                      | none                         | the image's `dashboard/dist`                          | the built dashboard the listener serves                                                                                                                                                                         |
-| `SANDBOX_IMAGE`                                      | none                         | `<NAME_PREFIX>-sandbox`                               | the base image runs start from; compose sets the release's                                                                                                                                                      |
-| `ENGINE_IMAGE`, `ENGINE_PODMAN_IMAGE`                | none                         | `<NAME_PREFIX>-engine`, `<NAME_PREFIX>-engine-podman` | the [container engine](#container-engine)'s images, for Sysbox and for Podman; compose sets the release's                                                                                                       |
-| `BROKER_PORT`                                        | none                         | `8081`                                                | port of the broker, GitHub and git gateways and egress policy, on the runs' networks                                                                                                                            |
-| `BROKER_URL`                                         | none                         | `http://listener:<BROKER_PORT>`                       | the broker, as sandboxes reach it; compose sets it                                                                                                                                                              |
-| `EGRESS_PROXY`                                       | none                         | `http://egress:3128`                                  | the egress proxy, as sandboxes reach it; compose sets it                                                                                                                                                        |
-| `LISTENER_CONTAINER`                                 | none                         | the container's host name (its id)                    | the listener's container, which joins each run's network                                                                                                                                                        |
-| `EGRESS_CONTAINER`                                   | none                         | labelled `deckhand.role=egress`                       | the egress proxy's container, which joins each run's network; by default, the one in the listener's compose project                                                                                             |
-| `POLICY_URL` (egress proxy)                          | none                         | `http://listener:8081/egress`                         | where the proxy asks whether a sandbox may reach a host; compose sets it                                                                                                                                        |
-| `RELAY_URL` (egress proxy)                           | none                         | `POLICY_URL`'s host, `/relay`                         | where the proxy hands the requests it relays to the listener (the [Antigravity CLI](#antigravity-cli)'s)                                                                                                        |
-| `EGRESS_CACHE_DIR` (egress proxy)                    | none                         | `/cache`                                              | where the proxy keeps the [egress cache](security.md#the-egress-cache) and its CA (`ca/`, the `egress-cache` volume)                                                                                            |
-| `EGRESS_CACHE_MAX` (egress proxy)                    | none                         | `10g`                                                 | the egress cache's size, in bytes or with `k`, `m`, `g`, `t`; the least recently used answers go beyond it; `0`: no cache                                                                                       |
-| `EGRESS_CACHE_ENTRY_MAX` (egress proxy)              | none                         | `1g`                                                  | the largest answer it keeps                                                                                                                                                                                     |
-| `PORT` (in the containers)                           | none                         | `8080`, egress proxy: `3128`                          | port the listener and the proxy listen on; the `PORT` above only changes the published one                                                                                                                      |
-| `GITHUB_URL`, `GITHUB_API`                           | `github_url`, `github_api`   | `https://github.com`, `https://api.github.com`        | GitHub's web and API addresses, always allowed through the egress proxy                                                                                                                                         |
-| `CONFIG_FILE`                                        | none                         | `/etc/deckhand/config.yaml`                           | the settings file above; set on purpose, it has to exist                                                                                                                                                        |
-| `DECKHAND_VERSION` (in the image)                    | none                         | set when the image is built                           | the version the dashboard shows                                                                                                                                                                                 |
-| `DECKHAND_SOURCE` (in the image)                     | none                         | set when the image is built; empty from source        | the repository the image was built from: the dashboard links the version to its commit or release there                                                                                                         |
+| Setting                                              | Key                              | Default                                               | What                                                                                                                                                                                                                                           |
+| ---------------------------------------------------- | -------------------------------- | ----------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GRANTS_DIR`                                         | `grants_dir`                     | `/etc/deckhand/grants`                                | what you grant each repo, one file each: hosts, cached hosts, host mounts, limits, preview hook, Dockerfile (the server folder's)                                                                                                              |
+| `INSTALL_NETWORK`                                    | `install_network`                | `bridge`                                              | network of the agents' install containers (they need npm and GitHub's releases), and of the Antigravity CLI's login refresh                                                                                                                    |
+| `RUNNER`                                             | `runner`                         | `docker`                                              | where sandboxes run: `docker`, the host's Docker, or `kubernetes`, pods of the cluster the listener runs in (see [Kubernetes runner](#kubernetes-runner)); another value stops the listener at start, saying so                                |
+| `KUBERNETES_NAMESPACE`                               | `kubernetes_namespace`           | the listener's own                                    | the namespace of the [Kubernetes runner](#kubernetes-runner)'s pods, Secrets and claims, which has to hold the listener's and the egress proxy's pods too                                                                                      |
+| `KUBERNETES_PENDING_MINUTES`                         | `kubernetes_pending_minutes`     | `10`                                                  | how long a sandbox's pod may stay Pending (no room, an image it can't pull) before its run fails, with the reason in its reply                                                                                                                 |
+| `KUBERNETES_STORAGE_CLASS`                           | `kubernetes_storage_class`       | the cluster's default                                 | the storage class of the issues' session claims                                                                                                                                                                                                |
+| `KUBERNETES_SESSION_SIZE`                            | `kubernetes_session_size`        | `10Gi`                                                | the size of each session claim (an issue's clone, and its agent's session)                                                                                                                                                                     |
+| `KUBERNETES_REGISTRY`                                | `kubernetes_registry`            | none: no repo images                                  | the registry repo images are pushed to and the nodes pull from, with an optional path (`registry.example.com/deckhand`); see [Repo images on Kubernetes](#repo-images-on-kubernetes)                                                           |
+| `KUBERNETES_REGISTRY_SECRET`                         | `kubernetes_registry_secret`     | none; required with `KUBERNETES_REGISTRY`             | a `kubernetes.io/dockerconfigjson` Secret of the namespace, with credentials the registry requires to pull, push and delete: the nodes pull repo images and the agents' installs with it, and the listener and BuildKit push and prune with it |
+| `KUBERNETES_BUILDKIT`                                | `kubernetes_buildkit`            | `tcp://buildkitd:1234`                                | the BuildKit daemon that builds repo images (`buildctl --addr`); its host is the name of its Service in the namespace                                                                                                                          |
+| `KUBERNETES_REGISTRY_HOSTS`                          | `kubernetes_registry_hosts`      | none                                                  | more hosts the BuildKit daemon may reach while it builds (a registry's token service or layer storage the listener doesn't know), as a grant's `hosts` are written; see [Repo images on Kubernetes](#repo-images-on-kubernetes)                |
+| `KUBERNETES_CACHE_STORAGE_CLASS`                     | `kubernetes_cache_storage_class` | none: no caches                                       | a `ReadWriteMany` storage class for the repos' cache claims (`caches`), which concurrent runs mount                                                                                                                                            |
+| `KUBERNETES_CACHE_SIZE`                              | `kubernetes_cache_size`          | `10Gi`                                                | the size of each cache claim                                                                                                                                                                                                                   |
+| `KUBERNETES_AGENT_STORAGE_CLASS`                     | `kubernetes_agent_storage_class` | `KUBERNETES_CACHE_STORAGE_CLASS`                      | a `ReadWriteMany` storage class for the agents' claims, installed once per version; none (and no claim made beforehand): each run installs its agent in an init container                                                                      |
+| `KUBERNETES_AGENT_SIZE`                              | `kubernetes_agent_size`          | `5Gi`                                                 | the size of each agent's claim                                                                                                                                                                                                                 |
+| `KUBERNETES_SERVICE_HOST`, `KUBERNETES_SERVICE_PORT` | none: the cluster's              | set by Kubernetes in every pod                        | where the Kubernetes runner reaches the API server                                                                                                                                                                                             |
+| `DEBOUNCE_MS`                                        | `debounce_ms`                    | `15000`                                               | pause after a comment before its run starts, so that comments posted together go in one run                                                                                                                                                    |
+| `BRAINSTORM_DEBOUNCE_MS`                             | `brainstorm_debounce_ms`         | `3000`                                                | the same before a light run (brainstorms, onboarding, light modes)                                                                                                                                                                             |
+| `CONFLICT_MERGE_DELAY_MS`                            | `conflict_merge_delay_ms`        | `30000`                                               | pause after a repo's default branch moved before its pull requests' conflicts are checked, while GitHub computes them again                                                                                                                    |
+| `DATA_DIR`                                           | none                             | `/data`                                               | the listener's state: the App's credentials, logs, queue, runs (the `data` volume)                                                                                                                                                             |
+| `DASHBOARD_DIR`                                      | none                             | the image's `dashboard/dist`                          | the built dashboard the listener serves                                                                                                                                                                                                        |
+| `SANDBOX_IMAGE`                                      | none                             | `<NAME_PREFIX>-sandbox`                               | the base image runs start from; compose sets the release's                                                                                                                                                                                     |
+| `ENGINE_IMAGE`, `ENGINE_PODMAN_IMAGE`                | none                             | `<NAME_PREFIX>-engine`, `<NAME_PREFIX>-engine-podman` | the [container engine](#container-engine)'s images, for Sysbox and for Podman; compose sets the release's                                                                                                                                      |
+| `BROKER_PORT`                                        | none                             | `8081`                                                | port of the broker, GitHub and git gateways and egress policy, on the runs' networks                                                                                                                                                           |
+| `BROKER_URL`                                         | none                             | `http://listener:<BROKER_PORT>`                       | the broker, as sandboxes reach it; compose sets it                                                                                                                                                                                             |
+| `EGRESS_PROXY`                                       | none                             | `http://egress:3128`                                  | the egress proxy, as sandboxes reach it; compose sets it                                                                                                                                                                                       |
+| `LISTENER_CONTAINER`                                 | none                             | the container's host name (its id)                    | the listener's container, which joins each run's network                                                                                                                                                                                       |
+| `EGRESS_CONTAINER`                                   | none                             | labelled `deckhand.role=egress`                       | the egress proxy's container, which joins each run's network; by default, the one in the listener's compose project                                                                                                                            |
+| `POLICY_URL` (egress proxy)                          | none                             | `http://listener:8081/egress`                         | where the proxy asks whether a sandbox may reach a host; compose sets it                                                                                                                                                                       |
+| `RELAY_URL` (egress proxy)                           | none                             | `POLICY_URL`'s host, `/relay`                         | where the proxy hands the requests it relays to the listener (the [Antigravity CLI](#antigravity-cli)'s)                                                                                                                                       |
+| `EGRESS_CACHE_DIR` (egress proxy)                    | none                             | `/cache`                                              | where the proxy keeps the [egress cache](security.md#the-egress-cache) and its CA (`ca/`, the `egress-cache` volume)                                                                                                                           |
+| `EGRESS_CACHE_MAX` (egress proxy)                    | none                             | `10g`                                                 | the egress cache's size, in bytes or with `k`, `m`, `g`, `t`; the least recently used answers go beyond it; `0`: no cache                                                                                                                      |
+| `EGRESS_CACHE_ENTRY_MAX` (egress proxy)              | none                             | `1g`                                                  | the largest answer it keeps                                                                                                                                                                                                                    |
+| `PORT` (in the containers)                           | none                             | `8080`, egress proxy: `3128`                          | port the listener and the proxy listen on; the `PORT` above only changes the published one                                                                                                                                                     |
+| `GITHUB_URL`, `GITHUB_API`                           | `github_url`, `github_api`       | `https://github.com`, `https://api.github.com`        | GitHub's web and API addresses, always allowed through the egress proxy                                                                                                                                                                        |
+| `CONFIG_FILE`                                        | none                             | `/etc/deckhand/config.yaml`                           | the settings file above; set on purpose, it has to exist                                                                                                                                                                                       |
+| `DECKHAND_VERSION` (in the image)                    | none                             | set when the image is built                           | the version the dashboard shows                                                                                                                                                                                                                |
+| `DECKHAND_SOURCE` (in the image)                     | none                             | set when the image is built; empty from source        | the repository the image was built from: the dashboard links the version to its commit or release there                                                                                                                                        |
 
 ## Updating
 
@@ -1009,7 +1017,7 @@ policy check below accepts no peer in another namespace, so sandboxes elsewhere 
 be allowed to reach them, and every run would be refused.
 
 - **RBAC**: a Role for the listener's ServiceAccount: `create`, `get`, `list` and `delete` on
-  `pods`, `secrets` and `persistentvolumeclaims`, `get` on `pods/log` and `services`, and `list` on
+  `pods`, `secrets` and `persistentvolumeclaims` (the agents', caches' and sessions'), `get` on `pods/log` and `services`, and `list` on
   `events` (why a pod is stuck), `networkpolicies` (`networking.k8s.io`) and `endpointslices` (`discovery.k8s.io`).
   Nothing cluster-wide.
 - **Services** named after the hosts of `BROKER_URL` and `EGRESS_PROXY` (`listener` on 8081,
@@ -1039,16 +1047,7 @@ be allowed to reach them, and every run would be refused.
   The cluster's network plugin has to enforce NetworkPolicies (Calico, Cilium…): one that
   ignores them leaves the sandboxes unisolated, whatever the policy says.
 
-- **The agent's claim**: a PersistentVolumeClaim named after the agent's volume
-  (`CLAUDE_CODE_VOLUME`, `deckhand-claude-code` by default), which every sandbox mounts
-  read-only: `ReadOnlyMany` or `ReadWriteMany` across nodes (`ReadWriteOnce` will do on a
-  single node). The runner doesn't install agents yet: fill it once per version with a pod
-  that runs the base image's `deckhand-install-claude-code` as root, with
-  `CLAUDE_CODE_VERSION` set and the claim at `/opt/claude-code`. A claim belongs to its
-  namespace, so that pod runs in the sandboxes' namespace: if it enforces Pod Security
-  `restricted`, set it to `baseline` while the pod runs (root and the `CHOWN` capability are
-  allowed there), then back. Installing agents on Kubernetes is issue #395. A run whose claim
-  is missing fails, saying so.
+- **The agents**: see [Agents on Kubernetes](#agents-on-kubernetes).
 - **The kubelet**: a `containerLogMaxSize` above `RUN_LOG_MAX_MB` (the default 10 MiB rotates a
   run's log away, and a listener restarted mid-run then misses or repeats lines: it logs a
   warning), and a `podPidsLimit`, as Kubernetes only limits processes per node (grants'
@@ -1069,11 +1068,96 @@ with the run. An issue's clone and agent session are claims of their own
 stays Pending longer than `KUBERNETES_PENDING_MINUTES` (no node with the room, an image it
 can't pull) is removed, and its run fails with Kubernetes' reason in its reply.
 
-Not on Kubernetes yet: a run whose repository is granted its own image (`dockerfile`), a
-preview hook (`preview`) or host mounts (`mounts`) is refused, with a reply naming the runner,
-and so is one that would get a container engine (`docker`; a light run, a fork's or one
-without `SANDBOX_ENGINE` goes without, as under Docker). Caches are skipped, said in the run's log, and so is the Antigravity
-CLI's plan login, which the listener refreshes in a container.
+Not on Kubernetes yet: a run whose repository has a preview hook (`preview`) or host mounts
+(`mounts`) is refused, with a reply naming the runner, and so is one that would get a
+container engine (`docker`; a light run, a fork's or one without `SANDBOX_ENGINE` goes without,
+as under Docker), or its own image (`dockerfile`) without `KUBERNETES_REGISTRY`. So is the
+Antigravity CLI's plan login, which the listener refreshes in a container.
+
+### Repo images on Kubernetes
+
+A repository granted its own image (`allow_dockerfile`, and `allow_branch_docker_images` for a
+pull request's branch, under the same rules as on Docker: never a fork's) is built in the
+cluster and pushed to a registry, as nodes only pull from one:
+
+- **A registry** (`KUBERNETES_REGISTRY`), reached over HTTPS, that the nodes can pull from.
+  Repo images are named `<KUBERNETES_REGISTRY>/<NAME_PREFIX>-repo-<repo>-<hash>`, tagged as on
+  Docker: the same base image (its digest in its registry) and Dockerfile reuse a tag, a
+  change builds a new one. Old tags are pruned through the registry's API as on Docker (the
+  default branch's newest and the newest few kept, never one a pod runs), so it has to allow
+  deletes (`REGISTRY_STORAGE_DELETE_ENABLED=true` for the CNCF distribution registry); one that
+  doesn't keeps its tags, which the listener logs. A tag whose manifest a kept one shares (an
+  identical build) is deleted alone where the registry can, else kept. A tag whose date the listener can't read is kept, and logged.
+- **A pull Secret** (`KUBERNETES_REGISTRY_SECRET`, required with `KUBERNETES_REGISTRY`: the
+  listener doesn't start without it), of type `kubernetes.io/dockerconfigjson`, whose
+  credentials may pull from, push to and delete from the registry. The registry has to require them for all three, pulls included: sandboxes and builds can reach an in-cluster one, any run's sandbox among them (a research run's, a fork's, a repository's without `allow_dockerfile`). A registry that lets anyone push would let one run replace another repository's image, which then runs with that repository's grant; one that lets anyone pull would let any run read every repository's image, which holds whatever its Dockerfile copied of a private checkout. (On Docker, sandboxes can't read the host's images.) An in-cluster registry is best also kept out of the sandboxes' reach: a NetworkPolicy that lets only the listener, BuildKit and the nodes in. Sandbox pods, install pods and init containers pull with this Secret,
+  and the listener reads it (its Role's `get` on `secrets` covers it) to push through BuildKit
+  and prune. It replaces the ServiceAccount's own `imagePullSecrets`, which Kubernetes adds
+  only to a pod that lists none: when `SANDBOX_IMAGE` comes from a private registry, the
+  Secret has to hold that registry's credentials too. For a repository with its own image,
+  `SANDBOX_IMAGE` has to be readable through its registry's API as well: the listener reads
+  its digest there (anonymously for a public one, such as ghcr.io's releases). Runs on the
+  base image alone don't look it up: the nodes pull it as they can.
+- **A BuildKit daemon** (`moby/buildkit`, rootless), a Deployment with a Service named after
+  `KUBERNETES_BUILDKIT`'s host, in the namespace. The listener drives it with `buildctl`
+  (in its image), with the checkout as the build's context and `DECKHAND_BASE` as on Docker.
+  Only the listener may reach it, and it goes out only through the egress proxy: set
+  `HTTPS_PROXY` and `HTTP_PROXY` to `EGRESS_PROXY` in its Deployment, with `NO_PROXY` for an
+  in-cluster registry, and give its pods NetworkPolicies that one picks for `Egress` and one
+  for `Ingress`, letting them out to the namespace's pods only (the proxy, an in-cluster
+  registry) and to DNS (UDP or TCP port 53, no `endPort`), and in only from the namespace's pods that can't be sandboxes (the listener's: a peer has to ask for a label sandbox pods don't have, or a `deckhand.role` other than `sandbox`, as a sandbox's own policy lets it reach any pod but another sandbox). The
+  listener checks them before every build, as it checks the sandboxes', and refuses to build
+  otherwise, saying why (the Role's `get` on `pods` and `list` on `networkpolicies` and
+  `endpointslices` cover it). The proxy asks the listener about the daemon's pod IPs (the
+  endpoints of its Service): while a build runs, they may reach that run's hosts (the repo's
+  grant) and the registries of the image and its base, with the hosts those send a puller to
+  (Docker Hub's token service and layer storage, ghcr.io's layer storage, the token services
+  the listener has seen, and `KUBERNETES_REGISTRY_HOSTS`), tunnelled, never decrypted, and
+  nothing between builds. A Dockerfile that pulls from another registry (`FROM node:26` in a
+  stage) needs that registry's hosts in the repository's grant. Builds of repositories
+  granted other hosts wait for each other, in order of arrival, so one repository's
+  Dockerfile never reaches another's grant; a build stops after an hour. Its `RUN` steps get
+  the proxy as build arguments (`HTTP_PROXY`, `HTTPS_PROXY`).
+
+### Agents on Kubernetes
+
+Each agent (Claude Code, Codex, the Antigravity CLI) is installed once per version into a
+claim named after its volume (`CLAUDE_CODE_VOLUME`, `deckhand-claude-code` by default), which
+every sandbox mounts read-only, as on Docker:
+
+- **With `KUBERNETES_AGENT_STORAGE_CLASS`** (by default `KUBERNETES_CACHE_STORAGE_CLASS`), a
+  `ReadWriteMany` class (NFS, CephFS, EFS…), or a claim of that name made beforehand: the
+  listener makes the claim when it is missing, and before the first run of each version a pod
+  of its own (`deckhand.role: install`) runs the base image's installer into it, then goes. It
+  meets Pod Security `restricted`: it runs as uid 1001, neither root nor the sandbox's user,
+  so no sandbox can change what the next one runs, and sandboxes mount the claim read-only.
+  It goes out through the egress proxy, which lets it reach its agent's install hosts only
+  (npm's registry; GitHub's releases for the Antigravity CLI): its NetworkPolicy has to let it
+  reach the proxy (and the cluster's DNS, as it resolves `egress` there).
+- **Without either**, each sandbox installs its agent itself, in an init container (uid 1001
+  too) that fills an `emptyDir` the sandbox then mounts read-only: no shared storage, but a
+  slower start, which counts toward `KUBERNETES_PENDING_MINUTES`. While its pod is still
+  Pending (the init container running), the egress proxy lets it reach the agent's install
+  hosts only, nothing of the run's own; once the sandbox starts, those hosts are gone again.
+  A failed install fails the run, with the installer's output in the run's log.
+
+The shared claims (agents', caches') are written by their pods' users, uid 1001 for the
+installs and 1000 for the sandboxes, as the pods' `fsGroup` makes a new claim theirs. That
+holds only where the storage class applies `fsGroup`: a CSI driver with `fsGroupPolicy: File`
+(its default, `ReadWriteOnceWithFSType`, skips `ReadWriteMany` volumes), or a provisioner whose
+new volumes every user can write (NFS with `root_squash` ignores `fsGroup`; EFS needs an access
+point). The listener checks it: an install, or a short pod at a cache's first use, that can't
+write to its claim fails the run saying so (and a cache's claim is removed, so the next run
+makes it again). An agent's claim filled beforehand needs no write: its installer finds the
+version there and leaves it as it is.
+
+### Caches on Kubernetes
+
+With `KUBERNETES_CACHE_STORAGE_CLASS`, a `ReadWriteMany` class, a repository's `caches` are
+claims of their own (`KUBERNETES_CACHE_SIZE`), one per path, made at the first run that needs
+them, kept across its runs and mounted by concurrent ones; the sandbox pod's `fsGroup` makes a
+new one its user's (see above for what the class has to do for that). Without it, runs go
+without caches, said once in the run's log.
 
 ## Container engine
 

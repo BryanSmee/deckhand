@@ -7,11 +7,11 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { RunError, runnerRefusal } from "../listener/access.mjs";
 import { claude } from "../listener/agents/claude.mjs";
-import { createImages } from "../listener/images.mjs";
 import { apiBase, createKubeApi, KubeError } from "../listener/runner/kube-api.mjs";
 import {
-  createKubernetesImages,
   createKubernetesRunner,
+  INSTALL_USER,
+  INSTALLING,
   isolationProblem,
   kubeName,
   labelValue,
@@ -155,13 +155,14 @@ function fakeApi({
 
 // `now`: a clock of the test's own, else one that the runner's sleep() moves forward (its
 // retries and polls take time); `sleep(ms)` is called too.
-function setup(t, options = {}, { now, sleep = async () => {} } = {}) {
+// `kubernetes`: more of config.kubernetes.
+function setup(t, options = {}, { now, sleep = async () => {}, kubernetes = {} } = {}) {
   const fake = fakeApi(options);
   const logged = [];
   const inboxDir = tempDir(t);
   const clock = { at: Date.parse("2026-10-30T10:00:00Z") };
   const runner = createKubernetesRunner({
-    config,
+    config: { ...config, kubernetes: { ...config.kubernetes, ...kubernetes } },
     api: fake.api,
     inboxDir,
     log: (line) => logged.push(line),
@@ -423,9 +424,167 @@ test("start: an engine, a host mount or a cache is refused", async (t) => {
   await assert.rejects(runner.start(spec({ engine: { limits: {} } })), /no container engine/);
   const mount = { kind: "mount", name: "/srv", path: "/srv" };
   await assert.rejects(runner.start(spec({ volumes: [mount] })), /no host path/);
+  // A cache only with a class to make its claims of (KUBERNETES_CACHE_STORAGE_CLASS).
   const cache = { kind: "cache", name: "c", path: "/c" };
   await assert.rejects(runner.start(spec({ volumes: [cache] })), /no cache/);
   assert.equal(objects.pods.size + objects.secrets.size, 0);
+});
+
+test("start: with a cache class, a cache is its claim, mounted read-write", async (t) => {
+  const { runner, objects } = setup(t, {}, { kubernetes: { cacheStorageClass: "nfs" } });
+  const cache = { kind: "cache", name: "dh-cache-org-repo-npm", path: "/home/node/.npm" };
+  await runner.start(spec({ volumes: [...spec().volumes, cache] }));
+  const pod = objects.pods.get("dh-org-repo-12-abc");
+  assert.deepEqual(pod.spec.volumes.at(-1).persistentVolumeClaim, {
+    claimName: "dh-cache-org-repo-npm",
+  });
+  assert.deepEqual(pod.spec.containers[0].volumeMounts.at(-1), {
+    name: "v3",
+    mountPath: "/home/node/.npm",
+  });
+  // The cache's claim is the images' to make (kube-images.mjs), not the runner's.
+  assert.ok(!objects.persistentvolumeclaims.has("dh-cache-org-repo-npm"));
+});
+
+// The agent's volume as sandboxSpec() gives it, with how to fill it.
+const agentVolume = {
+  kind: "agent",
+  name: "dh-claude-code",
+  path: "/opt/claude-code",
+  readOnly: true,
+  install: { command: "deckhand-install-claude-code", env: { CLAUDE_CODE_VERSION: "9.9.9" } },
+};
+
+test("start: an agent without a claim is installed by an init container, mounted read-only", async (t) => {
+  const { runner, objects } = setup(t, {}, { kubernetes: { registrySecret: "pull" } });
+  const volumes = [agentVolume, ...spec().volumes.slice(1)];
+  await runner.start(spec({ volumes }));
+  const pod = objects.pods.get("dh-org-repo-12-abc");
+  assert.equal(pod.metadata.annotations["deckhand.agent-init"], "dh-claude-code");
+  // The nodes pull through the registry's Secret.
+  assert.deepEqual(pod.spec.imagePullSecrets, [{ name: "pull" }]);
+  assert.deepEqual(pod.spec.volumes[0], { name: "v0", emptyDir: {} });
+  const [init] = pod.spec.initContainers;
+  // From the base image, as neither root nor the sandbox's user, hardened as the sandbox is.
+  assert.equal(init.image, "dh-sandbox");
+  assert.deepEqual(init.command, ["deckhand-install-claude-code"]);
+  assert.deepEqual(init.securityContext, {
+    allowPrivilegeEscalation: false,
+    capabilities: { drop: ["ALL"] },
+    runAsNonRoot: true,
+    seccompProfile: { type: "RuntimeDefault" },
+    runAsUser: INSTALL_USER.uid,
+    runAsGroup: INSTALL_USER.gid,
+  });
+  assert.notEqual(INSTALL_USER.uid, SANDBOX_USER.uid);
+  assert.notEqual(INSTALL_USER.uid, 0);
+  assert.deepEqual(init.volumeMounts, [
+    { name: "v0", mountPath: "/opt/claude-code", readOnly: false },
+  ]);
+  const env = Object.fromEntries(init.env.map((e) => [e.name, e.value]));
+  assert.equal(env.CLAUDE_CODE_VERSION, "9.9.9");
+  // Out through the egress proxy, the only way out of a sandbox's pod.
+  assert.equal(env.HTTPS_PROXY, "http://egress:3128");
+  // Never the run's secrets: those are the sandbox's, in its Secret.
+  assert.ok(!JSON.stringify(init).includes("s3cret"));
+  // The sandbox only reads it.
+  assert.deepEqual(pod.spec.containers[0].volumeMounts[0], {
+    name: "v0",
+    mountPath: "/opt/claude-code",
+    readOnly: true,
+  });
+});
+
+test("start: an agent whose claim is there mounts it, no init container", async (t) => {
+  const { runner, objects } = setup(t);
+  objects.persistentvolumeclaims.set("dh-claude-code", { metadata: { name: "dh-claude-code" } });
+  await runner.start(spec({ volumes: [agentVolume, ...spec().volumes.slice(1)] }));
+  const pod = objects.pods.get("dh-org-repo-12-abc");
+  assert.equal(pod.spec.initContainers, undefined);
+  assert.equal(pod.spec.imagePullSecrets, undefined);
+  assert.equal(pod.metadata.annotations["deckhand.agent-init"], undefined);
+  assert.deepEqual(pod.spec.volumes[0].persistentVolumeClaim, {
+    claimName: "dh-claude-code",
+    readOnly: true,
+  });
+});
+
+test("installing: while its init container hasn't ended, whatever the pod's phase says yet", async (t) => {
+  const { runner, objects } = setup(t);
+  await runner.start(spec({ volumes: [agentVolume, ...spec().volumes.slice(1)] }));
+  const pod = objects.pods.get("dh-org-repo-12-abc");
+  pod.status.phase = "Pending";
+  assert.equal(await runner.installing("dh-org-repo-12-abc"), true);
+  // Its init container ended: the sandbox starts, before the kubelet reports Running.
+  pod.status.initContainerStatuses = [
+    { name: "agent-install", state: { terminated: { exitCode: 0 } } },
+  ];
+  assert.equal(await runner.installing("dh-org-repo-12-abc"), false);
+  pod.status.initContainerStatuses = [{ name: "agent-install", state: { running: {} } }];
+  assert.equal(await runner.installing("dh-org-repo-12-abc"), true);
+  pod.status.phase = "Running";
+  assert.equal(await runner.installing("dh-org-repo-12-abc"), false);
+  // A pod without an init container never installs.
+  objects.pods.clear();
+  await runner.start(spec({ run: "dh-org-repo-12-abc-1730000999" }));
+  objects.pods.get("dh-org-repo-12-abc").status.phase = "Pending";
+  assert.equal(await runner.installing("dh-org-repo-12-abc"), false);
+});
+
+test("installing: an API that can't tell is no answer, not a refused connection", async (t) => {
+  let failing = false;
+  const { runner } = setup(t, {
+    fail: ({ method, path }) =>
+      failing && method === "GET" && path.endsWith("/pods/dh-org-repo-12-abc")
+        ? Response.json({ message: "etcd timeout" }, { status: 500 })
+        : null,
+  });
+  await runner.start(spec({ volumes: [agentVolume, ...spec().volumes.slice(1)] }));
+  failing = true;
+  assert.equal(await runner.installing("dh-org-repo-12-abc"), null);
+});
+
+test("follow: a failed install in the init container fails the run, its output in the log", async (t) => {
+  const { runner, objects, calls, logged } = setup(t, {
+    logs: { "dh-org-repo-12-abc": ["npm error 403 registry.npmjs.org\n"] },
+  });
+  await runner.start(spec({ volumes: [agentVolume, ...spec().volumes.slice(1)] }));
+  const pod = objects.pods.get("dh-org-repo-12-abc");
+  pod.status = {
+    phase: "Failed",
+    initContainerStatuses: [{ name: "agent-install", state: { terminated: { exitCode: 1 } } }],
+  };
+  const err = [];
+  await assert.rejects(
+    runner.follow("dh-org-repo-12-abc", { onOut: () => {}, onErr: (line) => err.push(line) }),
+    (error) =>
+      error instanceof RunError &&
+      /installing its agent \(dh-claude-code\) in its init container failed \(exit 1\); the installer's output is in the run's log/.test(
+        error.message,
+      ),
+  );
+  assert.deepEqual(err, ["npm error 403 registry.npmjs.org"]);
+  assert.ok(calls.some((c) => c.includes("/log?container=agent-install")));
+  assert.ok(logged.some((line) => /installing dh-claude-code failed \(exit 1\)/.test(line)));
+});
+
+test("follow: an install still running past KUBERNETES_PENDING_MINUTES says so, not 'make room'", async (t) => {
+  const { runner, objects } = setup(t);
+  await runner.start(spec({ volumes: [agentVolume, ...spec().volumes.slice(1)] }));
+  const pod = objects.pods.get("dh-org-repo-12-abc");
+  pod.metadata.creationTimestamp = "2026-10-30T09:00:00Z";
+  pod.status = {
+    phase: "Pending",
+    initContainerStatuses: [{ name: "agent-install", state: { running: {} } }],
+    containerStatuses: [{ state: { waiting: { reason: "PodInitializing" } } }],
+  };
+  await assert.rejects(
+    runner.follow("dh-org-repo-12-abc", { onOut: () => {}, onErr: () => {} }),
+    (error) =>
+      /stayed Pending for 10 min \(its init container is installing the agent\)\. The operator can check that the agent's install reaches its hosts/.test(
+        error.message,
+      ),
+  );
 });
 
 test("list and state: this deployment's sandbox pods, Pending and Running as running", async (t) => {
@@ -607,6 +766,23 @@ test("follow: a pod stuck mounting its volumes fails with its latest Warning eve
     },
   });
   await assert.rejects(follow(), /\(Kubernetes gave no reason: its volumes may not have mounted\)/);
+});
+
+test("pendingReason: an init container's image it can't pull, or its install running", () => {
+  assert.equal(
+    pendingReason({
+      status: {
+        initContainerStatuses: [
+          { state: { waiting: { reason: "ErrImagePull", message: "denied" } } },
+        ],
+      },
+    }),
+    "ErrImagePull: denied",
+  );
+  assert.equal(
+    pendingReason({ status: { initContainerStatuses: [{ state: { running: {} } }] } }),
+    INSTALLING,
+  );
 });
 
 test("pendingReason: an image it can't pull before scheduling, else Kubernetes' silence", () => {
@@ -795,27 +971,6 @@ test("createKubeApi: the token at each call, the API's message in its errors", a
   ]);
 });
 
-test("images on Kubernetes: the base image only; the agent's claim must be there", async () => {
-  const claims = new Set();
-  const api = { find: async (path) => (claims.has(path.split("/")[1]) ? {} : null) };
-  const images = createImages({
-    config: { ...config, claudeCodeVolume: "dh-claude-code", claudeCodeVersion: "9.9.9" },
-    backend: createKubernetesImages({ config, api }),
-    jobs: {},
-    readFile: async () => null,
-    checkout: async () => null,
-  });
-  assert.equal(await images.imageFor({ repo: "org/a", ref: "main" }), "dh-sandbox");
-  await assert.rejects(
-    images.installAgent(claude, () => {}),
-    /Claude's volume dh-claude-code is missing: the kubernetes runner doesn't install agents, so Claude 9\.9\.9 has to be installed into it beforehand/,
-  );
-  claims.add("dh-claude-code");
-  await images.installAgent(claude, () => {});
-  assert.deepEqual(await images.caches("org/a", ["/c"], "dh-sandbox"), []);
-  assert.equal(images.keepsCaches, false);
-});
-
 test("runnerRefusal: what Kubernetes can't run yet, granted, gets a reply naming the runner", () => {
   const grant = { allowDocker: true, allowDockerfile: true, allowPreview: true };
   const settings = { docker: {}, dockerfile: "Dockerfile", preview: { command: "x" } };
@@ -824,13 +979,19 @@ test("runnerRefusal: what Kubernetes can't run yet, granted, gets a reply naming
   assert.equal(runnerRefusal({ runner: "docker" }, settings, { grant, mounts }, engine), null);
   assert.equal(
     runnerRefusal(config, settings, { grant, mounts }, engine),
-    "the operator runs sandboxes on the kubernetes runner, which doesn't support a container engine (`docker`), its own image (`dockerfile`), a preview hook (`preview`), host mounts (`mounts`) yet. The repository can remove them from `.deckhand.yaml`, or the operator can run its sandboxes on Docker (`RUNNER=docker`).",
+    "the operator runs sandboxes on the kubernetes runner, which doesn't support a container engine (`docker`), its own image (`dockerfile`) without a registry (`KUBERNETES_REGISTRY`), a preview hook (`preview`), host mounts (`mounts`) yet. The repository can remove them from `.deckhand.yaml`, or the operator can run its sandboxes on Docker (`RUNNER=docker`).",
   );
   // No engine for this run (a light run, a fork's, no SANDBOX_ENGINE): it goes without one,
   // as under Docker.
   assert.match(
     runnerRefusal(config, { docker: {}, dockerfile: "D" }, { grant, mounts: [] }, null),
-    /support its own image \(`dockerfile`\) yet\. The repository can remove it from/,
+    /support its own image \(`dockerfile`\) without a registry \(`KUBERNETES_REGISTRY`\) yet\. The repository can remove it from/,
+  );
+  // With a registry, its image is built (kube-images.mjs).
+  const registry = { ...config, kubernetes: { ...config.kubernetes, registry: "r.example.com" } };
+  assert.equal(
+    runnerRefusal(registry, { docker: {}, dockerfile: "D" }, { grant, mounts: [] }, null),
+    null,
   );
   assert.equal(runnerRefusal(config, { docker: {} }, { grant, mounts: [] }, null), null);
   assert.equal(runnerRefusal(config, {}, { grant, mounts: [] }, null), null);

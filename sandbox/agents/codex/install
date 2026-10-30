@@ -1,12 +1,12 @@
 #!/bin/bash
 # Installs Codex CODEX_VERSION into the shared /opt/codex volume, once, as
-# ../claude/install does for Claude Code (see there for why as root, and per version): the
+# ../claude/install does for Claude Code (see there for why as root or another user than the sandbox's, and per version): the
 # listener runs it in a container of its own before the first run that needs that version.
 # npm picks the platform's binary (an optional dependency of @openai/codex).
 set -euo pipefail
 
 : "${CODEX_VERSION:?CODEX_VERSION: the Codex version to install}"
-[ "$(id -u)" = 0 ] || { echo "install-codex: run it as root" >&2; exit 1; }
+[ "$(id -u)" != 1000 ] || { echo "install-codex: not as the sandbox's user" >&2; exit 1; }
 
 root=/opt/codex
 exec "$(dirname "$(readlink -f "$0")")/../npm-install" "$root" @openai/codex "$CODEX_VERSION" \

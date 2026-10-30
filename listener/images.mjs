@@ -1,8 +1,9 @@
 // What a run starts from: the base image (../sandbox/Dockerfile, harness only) or the
 // repo's own image built FROM it; Claude Code, installed once per version into a shared
 // volume by a container of its own; and the repo's cache volumes. What Docker does for them is
-// the runner's (runner/images.mjs, runner/jobs.mjs): this module decides which image, which
-// tag and which volumes.
+// the runner's (runner/images.mjs, runner/jobs.mjs; on Kubernetes, runner/kube-images.mjs:
+// BuildKit, a registry and claims): this module decides which image, which tag and which
+// volumes.
 //
 // A repo image is built from the default branch (or, when the operator's grants set
 // allow_branch_docker_images for the repo, from a pull request's own branch, never a fork's)
@@ -61,10 +62,17 @@ export function createImages({
   const installs = new Map(); // "<agent>@<version>" → Promise
   const volumes = new Map(); // cache volume → Promise
 
+  // A repo image's full name: under the registry, for a runner whose nodes pull from one.
+  const named = (name) => backend.repository?.(name) ?? name;
+
   async function baseId() {
     const out = await backend.id(config.image);
     if (!out) {
-      throw new Error(`the base image ${config.image} is missing: run docker compose build`);
+      throw new Error(
+        config.runner === "kubernetes"
+          ? `the base image ${config.image} is not in its registry: SANDBOX_IMAGE has to be one the nodes can pull`
+          : `the base image ${config.image} is missing: run docker compose build`,
+      );
     }
     return out;
   }
@@ -72,16 +80,31 @@ export function createImages({
   // The image to run: the base without a Dockerfile, else the repo's, built if needed.
   // `onBuild(tag)` is called when a build starts or is already under way; `output` gets its
   // log (the first caller's only). `branch`: `ref` is a pull request's head (imageRef()).
-  async function imageFor({ repo, ref, branch = false, dockerfile, onBuild = () => {}, output }) {
+  // `access`: the run's { hosts, trusted } (access.mjs), which a build may reach on a runner
+  // whose builder goes through the egress proxy (Kubernetes).
+  async function imageFor({
+    repo,
+    ref,
+    branch = false,
+    dockerfile,
+    onBuild = () => {},
+    output,
+    access = {},
+  }) {
+    // Without a Dockerfile, a registry's base image is the nodes' to pull, with their own
+    // credentials (a kind or ECR node's): not looked up. A host's Docker must have it.
+    if (!dockerfile) {
+      if (!backend.repository) await baseId();
+      return config.image;
+    }
     const id = await baseId();
-    if (!dockerfile) return config.image;
     const file = await readFile(repo, dockerfile, ref);
     if (!file)
       throw new Error(`${dockerfile} (the config's dockerfile) is not in ${repo} at ${ref}`);
-    const tag = imageTag(config, repo, id, dockerfile, file.sha, branch ? ref : null);
+    const tag = named(imageTag(config, repo, id, dockerfile, file.sha, branch ? ref : null));
     if ((await backend.id(tag)) !== null) return tag;
     if (!builds.has(tag)) {
-      const build = buildImage(repo, ref, dockerfile, tag, output).finally(() =>
+      const build = buildImage(repo, ref, dockerfile, tag, output, access).finally(() =>
         builds.delete(tag),
       );
       builds.set(tag, build);
@@ -91,7 +114,7 @@ export function createImages({
     return tag;
   }
 
-  async function buildImage(repo, ref, dockerfile, tag, output) {
+  async function buildImage(repo, ref, dockerfile, tag, output, { hosts, trusted }) {
     log(`${repo}: building ${tag} from ${dockerfile} at ${ref}`);
     const dir = await checkout(repo, ref);
     try {
@@ -101,6 +124,8 @@ export function createImages({
         tag,
         labels: { "deckhand.repo": repo.toLowerCase() },
         output,
+        hosts,
+        trusted,
       });
       checked(built, `building ${dockerfile} of ${repo} failed`);
     } finally {
@@ -112,18 +137,21 @@ export function createImages({
 
   // Newest first (docker's order); a tag still used by a container refuses to go, and stays.
   // The default branch's newest tag stays first: branch builds in a row don't push it out.
+  // The backend is told which stay (a registry deletes a manifest with all its tags).
   async function prune(repo, keep) {
-    const name = repoImage(config, repo);
+    const name = named(repoImage(config, repo));
     const tags = await backend.tags(name);
     if (!tags) return;
     const main = tags.find((t) => !t.startsWith(BRANCH));
-    const kept = new Set([keep.split(":")[1], ...(main ? [main] : [])]);
+    const kept = new Set([keep.slice(name.length + 1), ...(main ? [main] : [])]);
     for (const tag of tags) if (kept.size < KEEP_TAGS) kept.add(tag);
+    const keeping = [...kept].map((tag) => `${name}:${tag}`);
     for (const tag of tags) {
-      if (!kept.has(tag)) await backend.remove(`${name}:${tag}`);
+      if (!kept.has(tag)) await backend.remove(`${name}:${tag}`, keeping);
     }
     // Tags of the name before it had a hash: no run picks them any more, whichever repo built
-    // them.
+    // them. None under a registry, which never had them.
+    if (backend.repository) return;
     const legacy = legacyRepoImage(config, repo);
     for (const tag of (await backend.tags(legacy)) ?? []) {
       await backend.remove(`${legacy}:${tag}`);
@@ -135,28 +163,38 @@ export function createImages({
   // aren't the sandbox user's (uid 1000) to change: sandboxes mount the volume read-only,
   // and this still holds if a mount ever isn't. CHOWN only to take over a volume uid 1000
   // owned before (../sandbox/agents/claude/install). `agent`: agents/.
-  // A runner without short containers (Kubernetes, runner/kubernetes.mjs) installs nothing:
-  // the volume has to be there, filled beforehand (docs/setup.md, Kubernetes runner).
+  // A backend with its own way (Kubernetes: a pod of its own, or nothing when each sandbox
+  // installs it, runner/kube-images.mjs) installs it its way, once per version all the same.
   function installAgent(agent, output) {
-    const { volume, mount, version, versionVar, command, env = {} } = agent.install(config);
-    if (!jobs.run) return agentVolume(agent, volume, version);
+    const spec = agent.install(config);
+    const { volume, mount, version, versionVar, command, env = {} } = spec;
     const key = `${agent.name}@${version}`;
     if (!installs.has(key)) {
-      const install = jobs
-        .run({
-          image: config.image,
-          // npm's registry, outside the runs' networks: no repo or agent input runs here.
-          network: "install",
-          user: { uid: 0 },
-          caps: ["CHOWN"],
-          env: { [versionVar]: version, ...env },
-          volumes: [{ name: volume, path: mount }],
-          entrypoint: command,
-          output,
-        })
-        .then((result) => {
-          checked(result, `installing ${agent.displayName} ${version} failed`);
-        });
+      const install = (
+        backend.installAgent
+          ? backend.installAgent({
+              ...spec,
+              name: agent.name,
+              displayName: agent.displayName,
+              output,
+            })
+          : jobs.run({
+              image: config.image,
+              // npm's registry, outside the runs' networks: no repo or agent input runs here.
+              network: "install",
+              user: { uid: 0 },
+              caps: ["CHOWN"],
+              env: { [versionVar]: version, ...env },
+              volumes: [{ name: volume, path: mount }],
+              entrypoint: command,
+              output,
+            })
+      ).then((result) => {
+        // Left to the sandbox (a runner whose sandboxes install it without a volume): asked
+        // again at the next run, which may have a volume to fill by then.
+        if (result?.inSandbox) installs.get(key) === install && installs.delete(key);
+        else if (result) checked(result, `installing ${agent.displayName} ${version} failed`);
+      });
       // A failure is not kept: the next run tries again.
       install.catch(() => installs.get(key) === install && installs.delete(key));
       installs.set(key, install);
@@ -164,19 +202,13 @@ export function createImages({
     return installs.get(key);
   }
 
-  async function agentVolume(agent, volume, version) {
-    if (await backend.volumeExists(volume)) return;
-    throw new Error(
-      `${agent.displayName}'s volume ${volume} is missing: the ${config.runner} runner doesn't install agents, so ${agent.displayName} ${version} has to be installed into it beforehand (see Deckhand's docs/setup.md)`,
-    );
-  }
-
   // The repo's caches, [{ name, path }] (sandbox-spec.mjs). A new volume is handed to the
   // sandbox's user (uid 1000): Docker creates a missing mount point as root. None on a runner
-  // without short containers to do that (preparation.mjs says so).
+  // that keeps none (preparation.mjs says so).
+  const keepsCaches = backend.keepsCaches ?? Boolean(jobs.run);
   async function caches(repo, paths, image) {
     const found = [];
-    if (!jobs.run) return found;
+    if (!keepsCaches) return found;
     for (const path of paths) {
       const name = cacheVolume(config, repo, path);
       if (!volumes.has(name)) {
@@ -194,6 +226,8 @@ export function createImages({
     if (await backend.volumeExists(name)) return;
     const labels = { "deckhand.repo": repo.toLowerCase(), "deckhand.cache": path };
     checked(await backend.createVolume(name, labels), `creating the cache volume ${name}`);
+    // A backend whose volumes come to the sandbox's user anyway (Kubernetes' fsGroup).
+    if (backend.ownsVolumes) return;
     const owned = await jobs.run({
       image,
       network: "none",
@@ -214,7 +248,12 @@ export function createImages({
     installAgent,
     caches,
     // Whether caches() gives any.
-    keepsCaches: Boolean(jobs.run),
+    keepsCaches,
+    // Why there are none, when there aren't.
+    noCaches: keepsCaches ? null : (backend.noCaches ?? `the ${config.runner} runner keeps none`),
+    // The egress proxy's answer for a caller that isn't a sandbox (its builder, an install),
+    // or null (broker-http.mjs).
+    egressFor: async (ip, host) => (await backend.egressFor?.(ip, host)) ?? null,
     building: () => [...builds.keys()],
   };
 }

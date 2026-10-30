@@ -5,19 +5,21 @@
 #
 # Root-owned files: the volume is shared by every repository, so the sandbox's user
 # (uid 1000) must not be able to change what the next sandbox runs, even through a mount
-# made read-write by mistake.
+# made read-write by mistake. On Kubernetes, whose Pod Security `restricted` allows no root,
+# it runs as uid 1001 instead (the listener's runner/kube-images.mjs): any user but the
+# sandbox's.
 #
 # One folder per version, installed aside then renamed: ../npm-install, shared with Codex's.
 set -euo pipefail
 
 : "${CLAUDE_CODE_VERSION:?CLAUDE_CODE_VERSION: the Claude Code version to install}"
-[ "$(id -u)" = 0 ] || { echo "install-claude-code: run it as root" >&2; exit 1; }
+[ "$(id -u)" != 1000 ] || { echo "install-claude-code: not as the sandbox's user" >&2; exit 1; }
 
 root=/opt/claude-code
 umask 022
 # A volume from before installs ran as root belongs to uid 1000, and so does what any
 # sandbox could have changed in it: take it over and drop its contents, reinstalled below.
-if [ "$(stat -c %u "$root")" != 0 ]; then
+if [ "$(id -u)" = 0 ] && [ "$(stat -c %u "$root")" != 0 ]; then
   chown -R 0:0 "$root"
   chmod 755 "$root"
   find "$root" -mindepth 1 -delete

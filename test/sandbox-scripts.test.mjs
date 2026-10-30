@@ -20,6 +20,13 @@ import { sandboxAt, serve, tempDir } from "./helpers.mjs";
 
 const bin = new URL("../sandbox/", import.meta.url).pathname;
 
+// A PATH whose `id -u` says 1000, the sandbox's user, whoever runs the tests.
+function sandboxUid(t) {
+  const dir = tempDir(t);
+  writeFileSync(join(dir, "id"), "#!/bin/sh\necho 1000\n", { mode: 0o755 });
+  return `${dir}:${process.env.PATH}`;
+}
+
 // Async: a broker the tests serve may answer from this same process.
 function helper(env, input) {
   return new Promise((resolve) => {
@@ -506,18 +513,14 @@ test("Codex's session: its rollouts in the issue's volume, instructions beside",
   assert.equal(some.stdout, `yes\n# Rules\n${some.dir}/home Codex\n`);
 });
 
-test(
-  "installing Codex refuses to run as the sandbox's user",
-  { skip: process.getuid() === 0 },
-  () => {
-    const result = spawnSync(`${bin}agents/codex/install`, [], {
-      env: { PATH: process.env.PATH, CODEX_VERSION: "9.9.9" },
-      encoding: "utf8",
-    });
-    assert.equal(result.status, 1);
-    assert.match(result.stderr, /run it as root/);
-  },
-);
+test("installing Codex refuses to run as the sandbox's user", (t) => {
+  const result = spawnSync(`${bin}agents/codex/install`, [], {
+    env: { PATH: sandboxUid(t), CODEX_VERSION: "9.9.9" },
+    encoding: "utf8",
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /not as the sandbox's user/);
+});
 
 // The work feedback prompt can't run here (it needs Claude Code): its text, as bash has it.
 test("work feedback rebases on the base and force-pushes with a lease before gh pr ready", () => {
@@ -997,18 +1000,14 @@ test("draft-pr's branch slug: accents dropped, and never empty", () => {
   assert.equal(of("🔥 !"), "task");
 });
 
-test(
-  "installing Claude Code refuses to run as the sandbox's user",
-  { skip: process.getuid() === 0 },
-  () => {
-    const result = spawnSync(`${bin}agents/claude/install`, [], {
-      env: { PATH: process.env.PATH, CLAUDE_CODE_VERSION: "9.9.9" },
-      encoding: "utf8",
-    });
-    assert.equal(result.status, 1);
-    assert.match(result.stderr, /run it as root/);
-  },
-);
+test("installing Claude Code refuses to run as the sandbox's user", (t) => {
+  const result = spawnSync(`${bin}agents/claude/install`, [], {
+    env: { PATH: sandboxUid(t), CLAUDE_CODE_VERSION: "9.9.9" },
+    encoding: "utf8",
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /not as the sandbox's user/);
+});
 
 test("for the broker's host, git gets the run's secret: what the git gateway takes", async () => {
   const env = {

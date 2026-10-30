@@ -16,7 +16,8 @@ export const SANDBOX_USER = { uid: 1000, gid: 1000 };
 //
 // → { run, name, image, labels, env, user, limits, caps, volumes, engine, ca, digest }, each of
 // `volumes` { kind, name, path, readOnly, subpath }: `kind` agent, session, cache or
-// mount, `name` the volume (a mount's: the host path), `subpath` the folder of it mounted.
+// mount, `name` the volume (a mount's: the host path), `subpath` the folder of it mounted;
+// the agent's has `install` too ({ command, env }).
 export function sandboxSpec(
   run,
   prompt,
@@ -33,7 +34,18 @@ export function sandboxSpec(
     // The agent, installed by the listener before the run (images.installAgent()).
     // Read-only: shared by every repository, so a run that could rewrite it would run its
     // code in the next sandbox of any repository, with that run's broker secret.
-    { kind: "agent", name: install.volume, path: install.mount, readOnly: true },
+    // `install`: how to fill it, for a runner that installs it in the sandbox's own pod
+    // (runner/kubernetes.mjs, without a claim for it).
+    {
+      kind: "agent",
+      name: install.volume,
+      path: install.mount,
+      readOnly: true,
+      install: {
+        command: install.command,
+        env: { [install.versionVar]: install.version, ...install.env },
+      },
+    },
     // The issue's clone and agent session, kept between its runs: those of its light runs
     // apart from those of its work (sessionName()).
     // A fork's run gets a clone of its own: what it checked out (the fork's commits, branches, a

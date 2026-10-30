@@ -1,6 +1,6 @@
 #!/bin/bash
 # Installs a release's binary at one version into an agent's shared volume, for its installer
-# (agents/<name>/install, run as root):
+# (agents/<name>/install, run as root, or as uid 1001 on Kubernetes):
 #
 #   release-install <volume> <version> <owner/repo> <asset> <binary> <command> <name> <sha256>
 #

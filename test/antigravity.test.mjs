@@ -191,6 +191,7 @@ test("the agent: installed like Codex, its login out of the sandbox, no mid-run 
     version: "1.4.0",
     versionVar: "AGY_VERSION",
     command: "deckhand-install-antigravity",
+    hosts: ["github.com", "*.githubusercontent.com"],
     env: { AGY_SHA256: "x64:ab" },
   });
   // With a plan login: nothing in its environment, the sandbox writes the run's secret in its
@@ -596,15 +597,14 @@ test("the pinned sha256: the default version's by default, the operator's otherw
   );
 });
 
-test(
-  "installing the Antigravity CLI refuses to run as the sandbox's user",
-  { skip: process.getuid() === 0 },
-  () => {
-    const result = spawnSync(`${bin}agents/antigravity/install`, [], {
-      env: { PATH: process.env.PATH, AGY_VERSION: "9.9.9" },
-      encoding: "utf8",
-    });
-    assert.equal(result.status, 1);
-    assert.match(result.stderr, /run it as root/);
-  },
-);
+test("installing the Antigravity CLI refuses to run as the sandbox's user", (t) => {
+  // An `id -u` that says 1000, whoever runs the tests.
+  const dir = tempDir(t);
+  writeFileSync(join(dir, "id"), "#!/bin/sh\necho 1000\n", { mode: 0o755 });
+  const result = spawnSync(`${bin}agents/antigravity/install`, [], {
+    env: { PATH: `${dir}:${process.env.PATH}`, AGY_VERSION: "9.9.9" },
+    encoding: "utf8",
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /not as the sandbox's user/);
+});

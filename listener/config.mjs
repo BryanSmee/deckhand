@@ -12,6 +12,7 @@ import {
   entryOf,
 } from "./agents/index.mjs";
 import { credentialName } from "./anthropic.mjs";
+import { hostProblem } from "./egress.mjs";
 import { GEMINI_URL, GOOGLE_CREDENTIALS } from "./google.mjs";
 import { OPENAI_CREDENTIALS } from "./openai.mjs";
 import { MODEL_NAME } from "./events.mjs";
@@ -172,6 +173,22 @@ export const SETTINGS = {
   },
   KUBERNETES_STORAGE_CLASS: { default: null },
   KUBERNETES_SESSION_SIZE: { default: "10Gi", parse: storageSize },
+  // Repo images on Kubernetes (runner/kube-images.mjs): the registry they are pushed to and
+  // nodes pull them from (empty: no repo images), the kubernetes.io/dockerconfigjson Secret
+  // with its credentials, and the BuildKit daemon that builds them (buildctl's --addr).
+  KUBERNETES_REGISTRY: { default: null, parse: registrySetting },
+  KUBERNETES_REGISTRY_SECRET: { default: null },
+  KUBERNETES_BUILDKIT: { default: "tcp://buildkitd:1234", parse: buildkitAddress },
+  // More hosts the BuildKit daemon reaches while it pulls and pushes (a registry's token
+  // service, the storage it sends layers from), beyond those runner/kube-images.mjs knows.
+  KUBERNETES_REGISTRY_HOSTS: { type: "list", default: [], parse: hostList },
+  // Claims every run of a repo mounts at once, of a ReadWriteMany storage class: its caches
+  // (empty: none) and the agents' installs (empty: the caches' class; neither, and no claim
+  // made beforehand: each run installs its agent in an init container).
+  KUBERNETES_CACHE_STORAGE_CLASS: { default: null },
+  KUBERNETES_CACHE_SIZE: { default: "10Gi", parse: storageSize },
+  KUBERNETES_AGENT_STORAGE_CLASS: { default: (s) => s.KUBERNETES_CACHE_STORAGE_CLASS },
+  KUBERNETES_AGENT_SIZE: { default: "5Gi", parse: storageSize },
   // The container engine sidecar of runs whose repo is granted allow_docker
   // (runner/engine.mjs); none until the operator picks one.
   SANDBOX_ENGINE: { default: null, parse: engineSetting },
@@ -349,6 +366,7 @@ export function loadConfig(env, file = NO_FILE) {
   const from = settings(env, file);
   requiredSettings(env, from);
   const s = readSettings(env, from);
+  registryCredentials(s);
   const brokerPort = wholeNumber(env.BROKER_PORT, 8081, "BROKER_PORT", "a port");
   return {
     port: wholeNumber(env.PORT, 8080, "PORT", "a port"),
@@ -429,6 +447,14 @@ function sandboxConfig(env, s) {
       pendingMs: s.KUBERNETES_PENDING_MINUTES * 60000,
       storageClass: s.KUBERNETES_STORAGE_CLASS,
       sessionSize: s.KUBERNETES_SESSION_SIZE,
+      registry: s.KUBERNETES_REGISTRY,
+      registrySecret: s.KUBERNETES_REGISTRY_SECRET,
+      buildkit: s.KUBERNETES_BUILDKIT,
+      registryHosts: s.KUBERNETES_REGISTRY_HOSTS,
+      cacheStorageClass: s.KUBERNETES_CACHE_STORAGE_CLASS,
+      cacheSize: s.KUBERNETES_CACHE_SIZE,
+      agentStorageClass: s.KUBERNETES_AGENT_STORAGE_CLASS,
+      agentSize: s.KUBERNETES_AGENT_SIZE,
     },
     maxParallel: s.MAX_PARALLEL,
     subnets: s.SANDBOX_SUBNETS,
@@ -448,6 +474,18 @@ function sandboxConfig(env, s) {
     // The host's Docker socket, as preview hooks mount it.
     dockerSocket: env.DOCKER_SOCKET || "/var/run/docker.sock",
   };
+}
+
+// Fail closed: repo images run in their repos' sandboxes, with their broker secrets and
+// grants, so a registry anyone could push to (an in-cluster one the sandboxes and builds can
+// reach) would let one run replace another repo's image. Its credentials have to be there,
+// which a registry that asks for none would make pointless: docs/setup.md says it must.
+function registryCredentials(s) {
+  if (s.KUBERNETES_REGISTRY && !s.KUBERNETES_REGISTRY_SECRET) {
+    throw new ConfigError(
+      "KUBERNETES_REGISTRY is set without KUBERNETES_REGISTRY_SECRET: name the dockerconfigjson Secret with its push credentials, for a registry that requires them to pull, push and delete (docs/setup.md, Repo images on Kubernetes)",
+    );
+  }
 }
 
 // What must be settled before anything starts: who may trigger runs, and no setting that
@@ -510,6 +548,49 @@ function aboveZero(what) {
     if (!number) throw new ConfigError(`${label}: expected above 0, got 0`);
     return number;
   };
+}
+
+// "registry.example.com/deckhand" (a host, a port, a path; no scheme, no tag): what repo
+// images' names start with. A scheme or a tag would make every image reference wrong.
+function registrySetting(text, { label }) {
+  const value = text.trim().replace(/\/+$/, "");
+  if (!value) return null;
+  // Its host has a dot or a port (or is localhost), as a reference's first part must to be
+  // taken for a registry rather than a Docker Hub user.
+  const m = /^([a-z0-9.-]+)(:\d+)?(\/[a-z0-9._-]+)*$/.exec(value.toLowerCase());
+  if (m && (m[1].includes(".") || m[2] || m[1] === "localhost")) return value.toLowerCase();
+  throw new ConfigError(
+    `${label}: expected a registry host and an optional path (registry.example.com/deckhand), got ${text}`,
+  );
+}
+
+// "tcp://buildkitd:1234": its host is the name of the daemon's Service in the namespace, which
+// the listener finds its pods by (runner/kube-images.mjs builderIsolation()): a single DNS
+// label, not a full name or an address, or every build would be refused.
+function buildkitAddress(text, { label }) {
+  const value = text.trim();
+  let url;
+  try {
+    url = new URL(value);
+  } catch {}
+  if (
+    url?.protocol === "tcp:" &&
+    /^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$/.test(url.hostname) &&
+    url.port
+  ) {
+    return value;
+  }
+  throw new ConfigError(
+    `${label}: expected tcp://<the daemon's Service name>:<port> (tcp://buildkitd:1234), a Service of the namespace by its short name, got ${text} (docs/setup.md, Repo images on Kubernetes)`,
+  );
+}
+
+// "a.example.com, *.cdn.example" → the hosts, each checked as a grant's are (egress.mjs).
+function hostList(text, { label }) {
+  const hosts = list(text);
+  const bad = hosts.filter((host) => hostProblem(host));
+  if (bad.length) throw new ConfigError(`${label}: ${bad.join(", ")}: ${hostProblem(bad[0])}`);
+  return hosts;
 }
 
 // A claim's size as Kubernetes takes it: "10Gi", "500Mi", "1T".
