@@ -913,7 +913,7 @@ project.
 
 Runs only **add** items, to a granted project: a work run its issue, its pull request, its
 issue's sub-issues and the issues it files (`gh project item-add <number> --owner <org> --url
-<url>`, or `gh issue create --project`), a brainstorm the issues it files. They never set an
+<url>`, or `gh issue create --project`; not `gh issue edit` or `gh pr edit --add-project`, whose update with empty classic `projectIds` stays refused), a brainstorm the issues it files. They never set an
 item's fields, remove or archive items, or change the project. This is the `project` action
 of [the GitHub input](#the-github-input); a repository's own modes don't add items unless its
 policy says so (`gh-projects.rego`, [the default policies](#the-default-policies)).

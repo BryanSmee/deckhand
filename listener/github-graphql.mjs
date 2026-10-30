@@ -264,8 +264,10 @@ export const MUTATIONS = {
     actions: () => ["unreact"],
     reaction: "remove",
   },
-  // An item on a project (v2), as `gh project item-add`, `gh issue create --project` and
-  // `gh issue/pr edit --add-project` add it: its content is the target, an issue or a pull
+  // An item on a project (v2), as `gh project item-add` and `gh issue create --project` add it
+  // (not `gh issue/pr edit --add-project`, which sends an updateIssue or updatePullRequest
+  // with `projectIds: []` besides, refused as an update that may clear classic projects:
+  // issue #422): its content is the target, an issue or a pull
   // request of the run's, and its project one the operator grants the repo (issue #454). Not
   // deleteProjectV2Item, archiving, an item's field values (the listener sets them:
   // projects.mjs), nor the project's own settings, fields or views.

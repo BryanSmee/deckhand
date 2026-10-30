@@ -882,7 +882,8 @@ test("a blocked-by link: its blocker resolved from its node, an issue of the run
 });
 
 // gh's own (cli/cli: api/queries_pr.go UpdateProjectV2Items(), what `gh issue create --project`
-// and `gh issue/pr edit --add-project` send; `gh project item-add` sends one field the same).
+// sends; `gh project item-add` sends one field the same). `gh issue/pr edit --add-project` sends
+// it too, but with an update whose `projectIds: []` is refused (below).
 const GH_PROJECT_ADD =
   "mutation UpdateProjectV2Items($input_000: AddProjectV2ItemByIdInput!) { add_000: addProjectV2ItemById(input: $input_000) { item { id } } }";
 const addItem = (contentId, projectId = "PV_3") =>
@@ -952,6 +953,28 @@ test("a project item: its content one of the run's, its project one the grants l
     input: { repositoryId: "R_repo", title: "t", projectIds: ["PV_3"] },
   });
   assert.match((await check(work, create)).refused.message, /createIssue's projectIds/);
+});
+
+// What `gh issue edit --add-project` and `gh pr edit --add-project` send besides the item
+// (cli/cli pkg/cmd/pr/shared/editable_http.go replaceIssueFields()): an update with the
+// classic projects' ids, empty. Refused, as any update's projectIds (issue #422): on a GitHub
+// Enterprise Server with classic projects, it could clear them. The prompt says so.
+const GH_PR_EDIT =
+  "mutation PullRequestUpdate($input: UpdatePullRequestInput!) { updatePullRequest(input: $input) { __typename } }";
+
+test("gh issue/pr edit --add-project: its update's projectIds refused, the item itself goes", async () => {
+  const { check } = checks();
+  const work = run("work");
+  for (const [query, input] of [
+    [GH_EDIT, { id: "I_1", projectIds: [] }],
+    [GH_PR_EDIT, { pullRequestId: "PR_7", projectIds: [] }],
+  ]) {
+    assert.match(
+      (await check(work, call(query, { input }))).refused.message,
+      /Deckhand doesn't let a run set update(?:Issue|PullRequest)'s projectIds/,
+    );
+  }
+  assert.equal((await check(work, addItem("PR_7"))).write, true);
 });
 
 test("lookupNodes: GitHub's nodes in order, a missing one null; a failed answer throws", async () => {
