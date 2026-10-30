@@ -12,7 +12,9 @@ export const APP_PERMISSIONS = {
   contents: "write",
   metadata: "read",
   deployments: "write",
-  actions: "read",
+  // Optional (OPTIONAL_PERMISSIONS): runs read CI with it, and rerun their pull request's failed
+  // jobs (github-writes.mjs ACTIONS_WRITE), the only writes it ever gets.
+  actions: "write",
   discussions: "write",
   // Only the git gateway's push token carries it, for repos granted `allow_workflows`.
   workflows: "write",
@@ -138,7 +140,7 @@ export function readsOf(extra = {}) {
 // them yet, or the App was created before them), rather than GitHub refusing the whole token:
 // what needs one is refused by the GitHub gateway instead, saying which (github-gateway.mjs
 // NEEDS). Any other permission stays required: a token without it fails, as it would have.
-// `actions`: reading CI runs and logs, which a run can do without.
+// `actions`: reading CI runs and logs, and rerunning failed jobs, which a run can do without.
 export const OPTIONAL_PERMISSIONS = new Set(["actions"]);
 // How long an installation's permissions are trusted before GitHub is asked again: an owner
 // accepting new ones is also told by an `installation` delivery (rememberPermissions()).

@@ -67,8 +67,9 @@ export function createBroker({
   // `created`, the list of the issues it created ({ number, at }), the comments it posted
   // ({ comment, at }) and the reactions it added ({ reaction, at }: github-writes.mjs
   // answered()), which the GitHub gateway adds to: the run's live state's own list, saved with
-  // it (restart.mjs). `reason`: why the listener started it itself ("review-fix", "ci-fix",
-  // "conflict"), null for a comment's: the policies read it (github-writes.mjs).
+  // it (restart.mjs), and `reruns`, the same for the GitHub Actions runs it reran
+  // ({ run_id, sha, at }). `reason`: why the listener started it itself ("review-fix",
+  // "ci-fix", "conflict"), null for a comment's: the policies read it (github-writes.mjs).
   // `secret`: a run's own again, when a restarted listener picks it up.
   function register(
     repo,
@@ -79,6 +80,7 @@ export function createBroker({
       issue = null,
       base = null,
       created = [],
+      reruns = [],
       reason = null,
       secret = random(),
     } = {},
@@ -92,6 +94,7 @@ export function createBroker({
       issue: Number.isInteger(issue) ? issue : null,
       base,
       created: Array.isArray(created) ? created : [],
+      reruns: Array.isArray(reruns) ? reruns : [],
       reason: typeof reason === "string" ? reason : null,
       branches: [],
       fork: false,
@@ -113,11 +116,11 @@ export function createBroker({
     if (run) Object.assign(run, { provider, credential, note });
   }
 
-  // `changed()`: called when the run created an issue, posted a comment, or added or removed a
-  // reaction (github-writes.mjs answered()), so its saved state keeps it.
-  function watchCreated(secret, changed) {
+  // `changed()`: called when the run created an issue, posted a comment, added or removed a
+  // reaction, or reran a workflow run (github-writes.mjs answered()), so its saved state keeps it.
+  function watchChanges(secret, changed) {
     const run = runOf(secret);
-    if (run) run.createdChanged = changed;
+    if (run) run.changed = changed;
   }
 
   // `pushed({ branch, at })`: called by the git gateway for each push of the run's GitHub took.
@@ -155,7 +158,7 @@ export function createBroker({
     allow,
     provide,
     watchPushes,
-    watchCreated,
+    watchChanges,
     revoke,
     runOf,
     sentBy,

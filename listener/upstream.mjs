@@ -75,8 +75,10 @@ export function baseOf(upstream) {
 }
 
 // `req` to `target` with `headers`, its answer back to `res`. `unreachable()` answers when the
-// provider can't be reached before anything was sent back. `answered(status, headers)`: the
-// provider's status and headers, 502 (no headers) when it can't be reached (what a fallback reads, agents/ providerError()).
+// provider can't be reached before anything was sent back. `answered(status, headers, lost)`:
+// the provider's status and headers, 502 (no headers, `lost` true) when it can't be reached or
+// its answer never came, though the request may have gone out (what a fallback reads, agents/
+// providerError()).
 // `idleMs`: how long the call may go without a byte either way before it is cut off, on
 // `clock`'s timers: a stalled provider doesn't hold a listener every run shares. `body`: what
 // is sent in place of the request's own, already read (github-gateway.mjs's redacted writes).
@@ -148,7 +150,7 @@ export function forward(
     function failed(error) {
       log(`${what}: ${req.method} ${target.pathname}: ${error.message}`);
       if (!res.headersSent) {
-        answered(502, {});
+        answered(502, {}, true);
         unreachable();
       } else res.destroy();
       resolve();

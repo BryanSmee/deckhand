@@ -60,8 +60,8 @@ What the App asks for:
 | ----------------------------------------------- | --------------------------------------------- |
 | Issues, Pull requests, Contents: read and write | `issues`, `issue_comment`, `pull_request`     |
 | Deployments, Discussions: read and write        | `pull_request_review`                         |
-| Workflows: read and write                       | `pull_request_review_comment`, `workflow_run` |
-| Actions, Metadata: read                         | `discussion`, `discussion_comment`            |
+| Workflows, Actions: read and write              | `pull_request_review_comment`, `workflow_run` |
+| Metadata: read                                  | `discussion`, `discussion_comment`            |
 |                                                 | `push`                                        |
 
 An App created before Deckhand answered discussions lacks the `discussion` events and the
@@ -80,6 +80,13 @@ installation. Until then every push of a granted repository is refused, its runs
 included, with a message saying so. Read what the grant opens before setting it: the gateway
 refuses a pushed workflow that may write or names a secret, and what it doesn't check is
 listed there.
+
+Actions: read lets runs read their pull request's CI runs and logs; write, rerun the failed
+jobs of their own pull request's head (`gh run rerun --failed`), a call the GitHub gateway
+checks first ([repository config](repo-config.md#reruns)): the sandbox's own token only
+reads them. An App created before reruns has Actions: read only: set it to **read and
+write** in the App's settings, then accept it on each installation. Until then a run's rerun
+is refused with a message naming the permission, and everything else works.
 
 An App created before `/after` lacks the `issues` event: turn on **Issues** under _Subscribe
 to events_ in its settings. Without it, a comment waiting for an issue (`/after #77`) still

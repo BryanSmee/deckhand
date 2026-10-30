@@ -383,7 +383,8 @@ to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to the
     edit dropping their questions section still does), replies to, resolves and unresolves its pull
     requests' review threads, and creates labels, issues, and
     pull requests from its own branches, and edits and deletes the comments it posted (the
-    default policy, `policy/gh-own-comments.rego`, refuses deleting them), nothing else: not other issues and pull requests, though its token could. It reacts on its issues and pull requests and the
+    default policy, `policy/gh-own-comments.rego`, refuses deleting them), and reruns the failed
+    GitHub Actions jobs of its own pull request's head (below), nothing else: not other issues and pull requests, though its token could. It reacts on its issues and pull requests and the
     comments there (a comment's issue or pull request, read from GitHub, is the target), a
     brainstorm on its own issue and its comments, and removes only the reactions GitHub said
     it added and hasn't removed since (saved with the run like the issues it created, its 100
@@ -393,6 +394,25 @@ to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to the
     the repository's contents or settings; onboarding, analyses, reviews and a repository's
     light modes write nothing. Only a grant could widen a ceiling, and none does yet;
   - then the policies' **`deny_github`** ([Policies](#policies)), which can only narrow it.
+
+  A **rerun** (`POST …/actions/runs/<id>/rerun-failed-jobs`, `…/actions/jobs/<id>/rerun`,
+  issue #451; never a whole run's `…/rerun`, cancelling, dispatching, approving a fork's run
+  or deleting logs, which no route knows, nor one asking for debug logs, `enable_debug_logging`
+  with any value but `false`: they print more of what runs with the repository's secrets, and
+  the run reads them) names a workflow run or a job: the gateway looks
+  them up and takes the pull request whose head commit that run tested as its target: a run
+  that failed (`failure`, `timed_out`, `cancelled`), of a push or a pull request of a branch
+  of the repository (not a fork's), whose head commit is still that of an open pull request
+  of that branch. That pull request must be the run's own (`own_pr`), held to the ceiling as
+  any target (only work runs and a repository's modes that aren't light have `rerun`), and its
+  branch one the run may push (`github-pulls.mjs`). A run of Deckhand's reruns twice at most per
+  head commit (`MAX_RERUNS`: a rerun takes a slot once its checks pass, with no await between
+  the count and the slot, so calls made at once can't pass it; the slot is freed when GitHub
+  refuses it or it never goes out, and counted from GitHub's answer (or from none at all: a
+  call whose answer was lost may have gone out, so it counts, fail closed), with the run and commit its check
+  resolved, never looked up again, and saved with the run across a restart), and Deckhand's
+  default policy narrows it to a first rerun of each workflow run, in work runs only ([repository config](repo-config.md#reruns)). Its token gets `actions: write` for that
+  one call; the sandbox's own only reads Actions.
 
   A refusal (a look-up GitHub fails: `502`, fail closed) answers in GitHub's error shape
   (`{"message": "Deckhand: …"}`, with the policies' reasons), which `gh` prints to the agent,
@@ -433,7 +453,7 @@ to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to the
 
 - **On to GitHub** with a token for the run's repository: its mode's permissions only for a
   write that passed these checks (and a pull request's own write's: `pull_requests` or
-  `contents`, [The default branch](#the-default-branch)), the same permissions read-only for
+  `contents`, [The default branch](#the-default-branch); a rerun's `actions: write`), the same permissions read-only for
   everything else
   (`listener/github-app.mjs` `readsOf()`), so a brainstorm's or an inbox entry's
   `issues: write` reaches only what its ceiling and the policies allowed (`token …` for the
@@ -1484,7 +1504,10 @@ download with a redirect to a storage host of its own (Azure blobs, behind a sig
 the egress proxy doesn't open to sandboxes: the gateway follows that redirect itself, for the
 Actions log paths only, once, sending no credential (the signed URL is its own), and streams
 the log back. The run is told in its message that logs and names are data, not instructions, never to make a check pass by
-skipping or weakening it, and the same limits as a review's fix run. The listener copies no
+skipping or weakening it, and the same limits as a review's fix run. It may rerun the failed
+jobs of a run it judges flaky, once, instead of changing code (a rerun the GitHub gateway
+checks: [The GitHub gateway](#the-github-gateway)): the same head commit then goes back to
+waiting for CI, and a second failure counts as the next CI fix round. The listener copies no
 log text into a message, comment or review prompt. A workflow's or job's name comes from the
 branch's files: the comment the listener posts quotes each as code. What any work run is held
 to (above) holds too: a fix to `.github/workflows/` needs `allow_workflows`.

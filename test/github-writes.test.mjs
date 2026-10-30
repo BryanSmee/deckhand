@@ -637,7 +637,7 @@ test("the issues a run created: GitHub's answers to its own creates, REST and Gr
   });
   const work = run("work");
   let saved = 0;
-  work.createdChanged = () => saved++;
+  work.changed = () => saved++;
   answered(work, GRAPHQL_CREATE, 200, created(30));
   answered(work, REST_CREATE, 201, restIssue(35));
   // Again, refused by GitHub, another repository's, not an issue's answer, not a create.
@@ -721,7 +721,7 @@ test("the comments a run posted: GitHub's answers to its own comments, REST and 
   });
   const work = run("work");
   let saved = 0;
-  work.createdChanged = () => saved++;
+  work.changed = () => saved++;
   answered(work, GRAPHQL_COMMENT, 200, commented(3000000001));
   answered(work, GRAPHQL_COMMENT, 200, commented(3000000002, "Org/Repo", "pull/7"));
   answered(work, REST_COMMENT, 201, restComment(3000000003));
@@ -934,6 +934,357 @@ test(
   },
 );
 
+// GitHub Actions for the reruns' look-ups (issue #451), over fakeLookup(GITHUB): workflow runs
+// and jobs by id, and the open pull requests of a branch, with their head commits. #7 is the
+// work run's (issue-1-thing at `aaa`), #9 another branch's (`bbb`).
+const ACTIONS = {
+  runs: {
+    100: {
+      event: "pull_request",
+      head_branch: "issue-1-thing",
+      head_sha: "aaa",
+      conclusion: "failure",
+      run_attempt: 1,
+      name: "CI",
+      path: ".github/workflows/ci.yml",
+    },
+    101: {
+      event: "push",
+      head_branch: "issue-1-thing",
+      head_sha: "aaa",
+      conclusion: "success",
+      run_attempt: 1,
+    },
+    102: {
+      event: "push",
+      head_branch: "issue-1-thing",
+      head_sha: "old",
+      conclusion: "failure",
+      run_attempt: 1,
+    },
+    103: {
+      event: "pull_request",
+      head_branch: "issue-2-other",
+      head_sha: "bbb",
+      conclusion: "failure",
+      run_attempt: 1,
+    },
+    104: {
+      event: "workflow_dispatch",
+      head_branch: "issue-1-thing",
+      head_sha: "aaa",
+      conclusion: "failure",
+      run_attempt: 1,
+    },
+    105: {
+      event: "pull_request",
+      head_branch: "issue-1-thing",
+      head_sha: "aaa",
+      conclusion: "failure",
+      run_attempt: 1,
+      fork: true,
+    },
+    106: {
+      event: "push",
+      head_branch: "issue-1-thing",
+      head_sha: "aaa",
+      conclusion: null,
+      run_attempt: 2,
+    },
+    107: {
+      event: "push",
+      head_branch: "issue-1-thing",
+      head_sha: "aaa",
+      conclusion: "timed_out",
+      run_attempt: 2,
+      name: "E2E",
+      path: ".github/workflows/e2e.yml",
+    },
+  },
+  jobs: {
+    500: { run_id: 100, head_sha: "aaa", conclusion: "failure", run_attempt: 1, name: "test" },
+    501: { run_id: 100, head_sha: "aaa", conclusion: "success", run_attempt: 1, name: "lint" },
+  },
+  heads: {
+    "issue-1-thing": [{ number: 7, head: { sha: "aaa", repo: { full_name: "Org/Repo" } } }],
+    "issue-2-other": [{ number: 9, head: { sha: "bbb", repo: { full_name: "org/repo" } } }],
+  },
+};
+function rerunLookup() {
+  const github = {
+    ...GITHUB,
+    issues: {
+      ...GITHUB.issues,
+      9: { number: 9, pull_request: {}, user: { login: "bob" }, labels: [] },
+    },
+    pulls: {
+      ...GITHUB.pulls,
+      9: { head: { ref: "issue-2-other", repo: { full_name: "org/repo" } } },
+    },
+  };
+  const fake = fakeLookup(github);
+  const lookup = async (repo, path) => {
+    const m = /^\/repos\/org\/repo\/actions\/(runs|jobs)\/(\d+)$/.exec(path);
+    if (m && m[1] === "jobs") return ACTIONS.jobs[m[2]] ?? null;
+    if (m) {
+      const found = ACTIONS.runs[m[2]];
+      if (!found) return null;
+      const { fork, ...rest } = found;
+      return {
+        id: +m[2],
+        ...rest,
+        head_repository: { full_name: fork ? "mallory/repo" : "Org/Repo" },
+      };
+    }
+    const head = /^\/repos\/org\/repo\/pulls\?head=org%3A([^&]+)&state=open&per_page=100$/.exec(
+      path,
+    );
+    if (head) return ACTIONS.heads[decodeURIComponent(head[1])] ?? [];
+    return fake.lookup(repo, path);
+  };
+  return { lookup, calls: fake.calls };
+}
+
+test("classify: reruns of a workflow run's failed jobs and of a job, with actions: write", () => {
+  assert.deepEqual(
+    classify("POST", "repos/Org/Repo/actions/runs/100/rerun-failed-jobs", json({})),
+    {
+      repo: "org/repo",
+      actions: ["rerun"],
+      target: { run_id: 100 },
+      permissions: { actions: "write" },
+      change: { fields: [], labels_added: [], labels_removed: [] },
+    },
+  );
+  const job = classify(
+    "POST",
+    "repos/org/repo/actions/jobs/500/rerun",
+    json({ enable_debug_logging: true }),
+  );
+  assert.deepEqual(
+    [job.actions, job.target, job.change.fields, job.debug],
+    [["rerun"], { job_id: 500 }, ["enable_debug_logging"], true],
+  );
+  // Debug logs asked for, however GitHub would read it; `false` or none is a plain rerun.
+  for (const value of [true, "true", 1, "false", null]) {
+    const body = json({ enable_debug_logging: value });
+    const got = classify("POST", "repos/org/repo/actions/runs/100/rerun-failed-jobs", body);
+    assert.equal(got.debug, true, String(value));
+  }
+  for (const body of [json({ enable_debug_logging: false }), json({}), Buffer.alloc(0)]) {
+    const got = classify("POST", "repos/org/repo/actions/runs/100/rerun-failed-jobs", body);
+    assert.equal(got.debug, undefined);
+  }
+  // Not a whole run's rerun, cancelling, dispatching, approving a fork's run or deleting logs.
+  for (const [method, path] of [
+    ["POST", "repos/org/repo/actions/runs/100/rerun"],
+    ["POST", "repos/org/repo/actions/runs/100/cancel"],
+    ["POST", "repos/org/repo/actions/runs/100/force-cancel"],
+    ["POST", "repos/org/repo/actions/runs/100/approve"],
+    ["POST", "repos/org/repo/actions/workflows/ci.yml/dispatches"],
+    ["DELETE", "repos/org/repo/actions/runs/100/logs"],
+    ["DELETE", "repos/org/repo/actions/runs/100"],
+  ]) {
+    assert.equal(classify(method, path, json({})), null, `${method} ${path}`);
+  }
+});
+
+test("a rerun: the failed runs of its own pull request's head, from GitHub, at most MAX_RERUNS times", async () => {
+  const { lookup } = rerunLookup();
+  const { check } = createWriteChecks({ needsInputLabel: () => null, lookup });
+  const rerun = (id) => write("POST", `repos/org/repo/actions/runs/${id}/rerun-failed-jobs`);
+  const job = (id) => write("POST", `repos/org/repo/actions/jobs/${id}/rerun`);
+  const work = { ...run("work"), reruns: [] };
+  // Each passes, its slot freed again (GitHub refused it, say) before the next.
+  const passes = async (r, w) => {
+    assert.equal(await check(r, w), null, w.path);
+    w.rerun.release();
+  };
+  await passes(work, rerun(100));
+  await passes(work, job(500));
+  await passes(work, rerun(107));
+  // A fix run on the pull request itself: its own too.
+  await passes({ ...run("work", { issue: 7 }), reruns: [] }, rerun(100));
+  // No debug logs: refused before any look-up, a job's too.
+  for (const w of [
+    write("POST", "repos/org/repo/actions/runs/100/rerun-failed-jobs", {
+      enable_debug_logging: true,
+    }),
+    write("POST", "repos/org/repo/actions/jobs/500/rerun", { enable_debug_logging: "true" }),
+  ]) {
+    assert.deepEqual(await check(work, w), {
+      status: 403,
+      message: "a run reruns GitHub Actions jobs without debug logs (enable_debug_logging)",
+    });
+  }
+  await passes(
+    work,
+    write("POST", "repos/org/repo/actions/runs/100/rerun-failed-jobs", {
+      enable_debug_logging: false,
+    }),
+  );
+  const refused = [
+    [rerun(101), 403, /reruns only the failed .*: workflow run 101 ended with success/],
+    [rerun(106), 403, /workflow run 106 hasn't finished/],
+    [job(501), 403, /job 501 ended with success/],
+    [rerun(102), 403, /old isn't the head of an open pull request of issue-1-thing/],
+    [rerun(104), 403, /ran on workflow_dispatch, not a push or a pull request/],
+    [rerun(105), 403, /workflow run 105 isn't of a branch of org\/repo/],
+    // Another pull request's: above the ceiling.
+    [rerun(103), 403, /a work run can't rerun on pr #9 \(its ceiling\)/],
+    [rerun(999), 404, /workflow run 999 isn't there/],
+    [job(999), 404, /job 999 isn't there/],
+    [
+      write("POST", "repos/org/repo/actions/runs/100/rerun"),
+      403,
+      /can't tell what this write does/,
+    ],
+  ];
+  for (const [w, status, why] of refused) {
+    const got = await check(work, w);
+    assert.equal(got?.status, status, w.path);
+    assert.match(got.message, why, w.path);
+  }
+  // Light runs and the modes without it: their ceiling, before any look-up.
+  for (const mode of ["brainstorm", "idea", "review", "ask"]) {
+    assert.match((await check(run(mode), rerun(100))).message, /can't rerun here \(its ceiling\)/);
+  }
+  // Twice per head commit, its workflow runs' and jobs' reruns alike; another commit's don't count.
+  const twice = {
+    ...work,
+    reruns: [
+      { run_id: 100, sha: "aaa" },
+      { run_id: 107, sha: "aaa" },
+    ],
+  };
+  for (const w of [rerun(100), job(500), rerun(107)]) {
+    assert.match(
+      (await check(twice, w)).message,
+      /a run reruns GitHub Actions jobs at most 2 times per head commit, and it reran or is rerunning 2 on aaa/,
+    );
+  }
+  const before = {
+    ...work,
+    reruns: [
+      { run_id: 90, sha: "old" },
+      { run_id: 91, sha: "old" },
+    ],
+  };
+  assert.equal(await check(before, rerun(100)), null);
+});
+
+test("a rerun GitHub took is kept on the run, as its check resolved it, without asking again", async () => {
+  const { lookup: resolving } = rerunLookup();
+  // GitHub can't be read once the check is over: what it resolved is kept all the same.
+  let down = false;
+  const lookup = (repo, path) => (down ? Promise.reject(new Error("down")) : resolving(repo, path));
+  const { check, answered } = createWriteChecks({ needsInputLabel: () => null, lookup });
+  const work = { ...run("work"), reruns: [] };
+  let saved = 0;
+  work.changed = () => saved++;
+  const checked = async (path) => {
+    const call = { ...write("POST", path), graphql: false, at: START };
+    assert.equal(await check(work, call), null, path);
+    return call;
+  };
+  const job = await checked("repos/org/repo/actions/jobs/500/rerun");
+  assert.deepEqual([job.rerun.run_id, job.rerun.sha], [100, "aaa"]);
+  // Refused by GitHub: not counted, its slot free again.
+  const refused = await checked("repos/org/repo/actions/runs/100/rerun-failed-jobs");
+  answered(work, refused, 403, json({}));
+  // Not answered at all (0: the gateway's lost answer): it may have gone out, so it counts.
+  const lost = { ...run("work"), reruns: [] };
+  const lostCall = { ...write("POST", "repos/org/repo/actions/runs/100/rerun-failed-jobs") };
+  assert.equal(await check(lost, lostCall), null);
+  answered(lost, { ...lostCall, graphql: false, at: START }, 0, Buffer.alloc(0));
+  assert.deepEqual(lost.reruns, [{ run_id: 100, sha: "aaa", at: START }]);
+  const failed = await checked("repos/org/repo/actions/runs/107/rerun-failed-jobs");
+  down = true;
+  // Kept at once, before the gateway's answer is over.
+  answered(work, job, 201, Buffer.alloc(0));
+  answered(work, failed, 201, json({}));
+  assert.deepEqual(work.reruns, [
+    { run_id: 100, sha: "aaa", at: START },
+    { run_id: 107, sha: "aaa", at: START },
+  ]);
+  assert.equal(work.rerunsPending.size, 0);
+  assert.equal(saved, 2);
+  // A refused check holds no slot and sets nothing to keep.
+  down = false;
+  const other = write("POST", "repos/org/repo/actions/runs/101/rerun-failed-jobs");
+  assert.ok(await check(work, other));
+  assert.equal(other.rerun, undefined);
+  assert.equal(work.rerunsPending.size, 0);
+});
+
+test("reruns at the same time: each takes a slot once its checks pass, so the bound holds", async () => {
+  const { lookup } = rerunLookup();
+  const { check, answered } = createWriteChecks({ needsInputLabel: () => null, lookup });
+  // One rerun done on aaa: one slot left, which two workflow runs' reruns ask for at once.
+  const work = { ...run("work"), reruns: [{ run_id: 90, sha: "aaa", at: 1 }] };
+  const calls = [100, 107].map((id) => ({
+    ...write("POST", `repos/org/repo/actions/runs/${id}/rerun-failed-jobs`),
+    graphql: false,
+    at: START,
+  }));
+  const got = await Promise.all(calls.map((c) => check(work, c)));
+  assert.equal(got.filter((r) => r === null).length, 1);
+  assert.match(
+    got.find(Boolean).message,
+    /at most 2 times per head commit, and it reran or is rerunning 2 on aaa/,
+  );
+  const [taken] = calls.filter((c) => c.rerun);
+  // Still in flight: a third waits for nothing, refused.
+  const third = write("POST", "repos/org/repo/actions/jobs/500/rerun");
+  assert.match((await check(work, third)).message, /reran or is rerunning 2/);
+  // GitHub refused it: the slot is free again.
+  answered(work, taken, 422, json({}));
+  assert.equal(await check(work, third), null);
+});
+
+test("deny_github: a rerun's input, its workflow run and pull request", async (t) => {
+  const { engine: policies, evals } = policyEngine(t, {
+    operator: { "gh-actions-rerun.rego": "package deckhand\n" },
+  });
+  const { check } = createWriteChecks({
+    needsInputLabel: () => null,
+    lookup: rerunLookup().lookup,
+    policies,
+  });
+  const work = { ...run("work"), reason: "ci-fix", reruns: [] };
+  await check(work, write("POST", "repos/org/repo/actions/jobs/500/rerun"));
+  const { version: _, rule: __, ...input } = evals.at(-1);
+  assert.deepEqual(input, {
+    repo: "org/repo",
+    mode: "work",
+    custom_mode: false,
+    light: false,
+    reason: "ci-fix",
+    issue: 1,
+    action: "rerun",
+    actions: ["rerun"],
+    target: {
+      kind: "own_pr",
+      number: 7,
+      labels: [],
+      author: "deckhand[bot]",
+      run_id: 100,
+      sha: "aaa",
+      event: "pull_request",
+      workflow: { name: "CI", path: ".github/workflows/ci.yml" },
+      attempt: 1,
+      conclusion: "failure",
+      job: { id: 500, name: "test" },
+    },
+    change: { fields: [], labels_added: [], labels_removed: [] },
+  });
+  await check(work, write("POST", "repos/org/repo/actions/runs/107/rerun-failed-jobs"));
+  assert.deepEqual(
+    [evals.at(-1).target.attempt, evals.at(-1).target.conclusion, evals.at(-1).target.job],
+    [2, "timed_out", null],
+  );
+});
+
 test("a sub-issue link: its child is one the run created or already under its issue, never moved", async () => {
   const { lookup } = fakeLookup(GITHUB);
   const { check, answered } = createWriteChecks({ needsInputLabel: () => null, lookup, bot: BOT });
@@ -1142,7 +1493,7 @@ test("reactions: a brainstorm's on its issue and its comments; the modes that do
 test("reactions: a run removes only those it added, never the listener's", async () => {
   const { lookup } = fakeLookup(GITHUB);
   const { check, answered } = createWriteChecks({ needsInputLabel: () => null, lookup, bot: BOT });
-  const work = { ...run("work"), createdChanged: () => saved++ };
+  const work = { ...run("work"), changed: () => saved++ };
   let saved = 0;
   const post = (path, content) => ({
     method: "POST",
@@ -1403,6 +1754,63 @@ test("deny_github: its input, and its reasons refusing the write", async (t) => 
   assert.equal(evals.length, asked);
 });
 
+test("a rerun through the gateway: its installation's Actions permission named first, a lost answer counted", async (t) => {
+  // An installation without `actions`, then with read only, then with write: what it lacks.
+  let has = null;
+  const order = [null, "read", "write"];
+  const lacking = async (repo, wanted) => {
+    const want = wanted.actions;
+    if (!want || order.indexOf(has) >= order.indexOf(want)) return null;
+    return { missing: [`actions: ${want}`], account: "org", url: null };
+  };
+  // GitHub takes the rerun and drops the connection before answering.
+  const github = await serve(t, (req) => req.socket.destroy());
+  const { lookup: resolving } = rerunLookup();
+  const looked = [];
+  const lookup = (repo, path) => (looked.push(path), resolving(repo, path));
+  const broker = createBroker({ sentFrom: sandboxAt() });
+  const checks = createWriteChecks({ needsInputLabel: () => null, lookup });
+  const gw = createGithubGateway({
+    broker,
+    app: () => ({ repoToken: async () => ({ token: "t-0123456789abcdef" }), lacking }),
+    api: github.url,
+    web: "https://github.example",
+    checkWrite: checks.check,
+    wroteWrite: checks.answered,
+  });
+  const { url } = await serve(t, (req, res) => gw.handle(req, res));
+  const secret = broker.register("org/repo", undefined, { mode: "work", push: true, issue: 1 });
+  broker.allow(secret, ["issue-1-*"]);
+  const rerun = () =>
+    fetch(`${url}/relay/127.0.0.1/repos/org/repo/actions/runs/100/rerun-failed-jobs`, {
+      method: "POST",
+      headers: { authorization: `token ${secret}` },
+      body: "{}",
+    });
+  // No Actions at all: refused naming it before the checks, which couldn't read the run.
+  let res = await rerun();
+  assert.equal(res.status, 403);
+  assert.match((await res.json()).message, /the GitHub App's actions: read permission/);
+  assert.deepEqual(looked, []);
+  // Read only: checked, then refused naming write.
+  has = "read";
+  res = await rerun();
+  assert.equal(res.status, 403);
+  assert.match((await res.json()).message, /the GitHub App's actions: write permission/);
+  assert.ok(looked.includes("/repos/org/repo/actions/runs/100"));
+  const run = broker.runOf(secret);
+  assert.deepEqual([run.reruns, run.rerunsPending.size], [[], 0]);
+  // Write: it goes out, and no answer comes back. GitHub may have taken it: counted.
+  has = "write";
+  res = await rerun();
+  assert.equal(res.status, 502);
+  assert.deepEqual(
+    run.reruns.map((r) => [r.run_id, r.sha]),
+    [[100, "aaa"]],
+  );
+  assert.equal(run.rerunsPending.size, 0);
+});
+
 test("a policy's refusal reaches the agent through the gateway, in GitHub's error shape", async (t) => {
   const github = await serve(t, (req, res) => {
     res.writeHead(200, { "content-type": "application/json" });
@@ -1573,6 +1981,90 @@ test(
     assert.deepEqual(await ask("plan", "create", "label", ["a"]), []);
     assert.deepEqual(await ask("work", "label", "sub_issue", ["a"]), []);
     assert.deepEqual(await ask("discussion", "create", "new_issue"), []);
+  },
+);
+
+test("docs/repo-config.md shows gh-actions-rerun.rego as Deckhand ships it", () => {
+  const docs = readFileSync(join(import.meta.dirname, "..", "docs", "repo-config.md"), "utf8");
+  const [, shown] =
+    /<!-- gh-actions-rerun\.rego:[^\n]*-->\n\n```rego\n# policy\/gh-actions-rerun\.rego\n([\s\S]*?)```/.exec(
+      docs,
+    );
+  assert.equal(shown, builtIn().get("gh-actions-rerun.rego"));
+});
+
+test(
+  "the real opa: Deckhand's gh-actions-rerun.rego allows a first rerun, in work runs only",
+  { skip: !opa && "no opa on the PATH" },
+  async (t) => {
+    const rerunPolicies = (repo = {}) =>
+      createPolicies({
+        config: {},
+        github: async (_, method, path) => {
+          const files = Object.keys(repo);
+          if (path === "/repos/org/repo/contents/.deckhand/policy?ref=main" && files.length) {
+            return Response.json(files.map((name) => ({ type: "file", name, sha: name })));
+          }
+          if (path.startsWith("/repos/org/repo/git/blobs/")) {
+            const text = repo[path.split("/").pop()];
+            return Response.json({
+              content: Buffer.from(text).toString("base64"),
+              encoding: "base64",
+            });
+          }
+          return new Response("{}", { status: 404 });
+        },
+        run: opaRunner(),
+        readBuiltIn: builtIn,
+        tmp: tempDir(t),
+      });
+    const policies = rerunPolicies();
+    const rerun = (mode, attempt, light = false) =>
+      policies.deny("deny_github", "org/repo", "main", () => ({
+        repo: "org/repo",
+        mode,
+        custom_mode: !MODES[mode],
+        light,
+        reason: null,
+        issue: 1,
+        action: "rerun",
+        actions: ["rerun"],
+        target: { kind: "own_pr", number: 7, labels: [], author: "a", run_id: 100, attempt },
+        change: { fields: [], labels_added: [], labels_removed: [] },
+      }));
+    assert.deepEqual(await rerun("work", 1), []);
+    assert.deepEqual(await rerun("work", 2), [
+      "a workflow run is rerun once: run 100 is on its attempt 2",
+    ]);
+    assert.deepEqual(await rerun("plan", 1), ["plan runs don't rerun GitHub Actions jobs here"]);
+    // Through the gateway's checks: a first rerun goes on, a second is refused.
+    const { check } = createWriteChecks({
+      needsInputLabel: () => null,
+      lookup: rerunLookup().lookup,
+      policies,
+    });
+    const work = { ...run("work"), reruns: [] };
+    assert.equal(
+      await check(work, write("POST", "repos/org/repo/actions/runs/100/rerun-failed-jobs")),
+      null,
+    );
+    assert.match(
+      (await check(work, write("POST", "repos/org/repo/actions/runs/107/rerun-failed-jobs")))
+        .message,
+      /the policies refuse it \(deny_github\): a workflow run is rerun once/,
+    );
+    // A repository broadens it with its own file of that name, up to the built-in bound.
+    const broader = rerunPolicies({ "gh-actions-rerun.rego": "package deckhand\n" });
+    const { check: broad } = createWriteChecks({
+      needsInputLabel: () => null,
+      lookup: rerunLookup().lookup,
+      policies: broader,
+    });
+    const rerun107 = write("POST", "repos/org/repo/actions/runs/107/rerun-failed-jobs");
+    assert.equal(await broad(work, rerun107), null);
+    assert.equal(await broad({ ...run("plan", { push: true }), reruns: [] }, rerun107), null);
+    const twice = { ...work, reruns: [{ sha: "aaa" }, { sha: "aaa" }] };
+    assert.match((await broad(twice, rerun107)).message, /at most 2 times/);
   },
 );
 

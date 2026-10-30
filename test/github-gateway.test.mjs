@@ -976,6 +976,54 @@ test("a call needing an optional permission the installation lacks is refused, n
   assert.equal(gw.calls.length, 1);
 });
 
+test("a checked rerun gets actions: write for that call only, refused without it, naming it", async (t) => {
+  let accepted = false;
+  const wrote = [];
+  // The rerun's slot (github-writes.mjs reserve()): freed once each call is over.
+  let released = 0;
+  const gw = await gateway(t, {
+    // The checks resolve the rerun's run, which comes back with GitHub's answer.
+    checkWrite: async (run, call) => {
+      call.rerun = { run_id: 100, sha: "aaa", release: () => released++ };
+      return null;
+    },
+    wroteWrite: (run, call, status) => wrote.push([call.rerun, status]),
+    lacking: async (repo, wanted) =>
+      wanted.actions === "write" && !accepted
+        ? { missing: ["actions: write"], account: "org", url: "https://github.com/inst/7" }
+        : null,
+  });
+  const { secret, notes } = gw.register({});
+  const rerun = () =>
+    gw.call("/api/v3/repos/org/repo/actions/runs/100/rerun-failed-jobs", {
+      secret,
+      method: "POST",
+      body: "{}",
+    });
+  const refused = await rerun();
+  assert.equal(refused.status, 403);
+  assert.match(
+    (await refused.json()).message,
+    /^Deckhand: this needs the GitHub App's actions: write permission, which its installation on org lacks/,
+  );
+  assert.match(notes.at(-1), /refused the run's GitHub write .*actions: write/);
+  assert.equal(gw.calls.length, 0);
+  // Accepted: the rerun's token writes Actions, the next call's only reads them again.
+  accepted = true;
+  assert.deepEqual(wrote, []);
+  // Refused before it went out: its slot freed all the same.
+  assert.equal(released, 1);
+  assert.equal((await rerun()).status, 200);
+  assert.deepEqual(gw.minted.at(-1), ["org/repo", { actions: "write" }]);
+  assert.deepEqual(
+    wrote.map(([rerun, status]) => [rerun.run_id, rerun.sha, status]),
+    [[100, "aaa", 200]],
+  );
+  assert.equal(released, 2);
+  await gw.call("/api/v3/repos/org/repo/actions/runs/100", { secret });
+  assert.equal(gw.minted.at(-1)[1].actions, "read");
+});
+
 test("a work run's Actions log, its installation without `actions`: refused naming it, before the fork check", async (t) => {
   const checked = [];
   const gw = await gateway(t, {
