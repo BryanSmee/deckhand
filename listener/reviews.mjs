@@ -46,7 +46,7 @@ import {
 import { autoMergeProblems, previewProblem } from "./grants.mjs";
 import { RERUN_CONCLUSIONS, RERUN_EVENTS } from "./github-writes.mjs";
 import { getJson, paginate } from "./github.mjs";
-import { INPUT_VERSION, pullInput, RULES } from "./policies.mjs";
+import { denyKept, INPUT_VERSION, passed, pullInput, RULES } from "./policies.mjs";
 import { CONFIG_FILE } from "./repo-config.mjs";
 import { ownReady, requestInput, reviewersFor, runFields } from "./reviewers.mjs";
 import { respellMap } from "./spelling.mjs";
@@ -650,13 +650,18 @@ const checksOf = (runs) =>
 
 // How many fix runs the pull request had (`review.fix`): `fixed`, whether any, as rules from
 // before the rounds read it.
-const fixInput = (fixes) => ({ fixed: fixes > 0, fixes });
+export const fixInput = (fixes) => ({ fixed: fixes > 0, fixes });
 
 // The input of `deny_review` and `deny_fix` (docs/repo-config.md#the-review-and-fix-input),
 // read from GitHub now: only called when a policy applies (policies.mjs deny()), so a repo
 // without any pays no extra call. `issue`: the number of the issue the pull request closes,
-// or null; `extra`: the fix runs so far (fixInput()), and the fix's round.
-async function readPullInput(github, { decision, repo, pr, issue, review = null, now }, extra) {
+// or null; `extra`: the fix runs so far (fixInput()), and the fix's round and `reason`
+// (`review`, `ci`, `conflict`: conflicts.mjs).
+export async function readPullInput(
+  github,
+  { decision, repo, pr, issue, review = null, now },
+  extra,
+) {
   const info = await getJson(github, repo, `/repos/${repo}`);
   const files = await paginate(
     (path) => github(repo, "GET", path),
@@ -678,9 +683,6 @@ export function policyWhy(rule, messages) {
 }
 
 const short = (sha) => (sha ? sha.slice(0, 7) : "?");
-
-// A built-in gate that passed, as a decision lists it (decisions.mjs).
-const passed = (name) => ({ name, passed: true });
 
 // The comments an auto-merge posts on the pull request, for the maintainer to find later.
 // `fixes`: how many fix runs came before (a boolean in waits saved before the rounds).
@@ -1218,27 +1220,15 @@ export function createReviews({
   function asking(pr) {
     if (!policies) return null;
     return {
-      deny: async (rule, repo, ref, input, { gates = [] } = {}) => {
-        const { applied, messages, input: saw } = await policies.decide(rule, repo, ref, input);
-        if (applied) {
-          const decision = rule.replace(/^deny_/, "");
-          const entry = {
-            decision,
-            rule,
-            denied: messages.length > 0,
-            messages,
-            pr: pr.number,
+      deny: async (rule, repo, ref, input, { gates = [] } = {}) =>
+        (
+          await denyKept(policies, rule, repo, ref, input, {
+            pr,
             gates,
-            ...(saw && { input: saw }),
-          };
-          try {
-            decided(repo, pr, entry);
-          } catch (error) {
-            log(`${repo}#${pr.number}: keeping its ${rule} decision: ${error.message ?? error}`);
-          }
-        }
-        return messages;
-      },
+            keep: (entry) => decided(repo, pr, entry),
+            log,
+          })
+        ).messages,
     };
   }
 
@@ -1430,7 +1420,7 @@ export function createReviews({
           readPullInput(
             github,
             { decision: "fix", repo, pr, issue, review, now },
-            { ...fixInput(fixes), ci: false, round, rounds },
+            { ...fixInput(fixes), ci: false, reason: "review", round, rounds },
           ),
         { gates },
       );
@@ -2154,6 +2144,7 @@ export function createReviews({
       const extra = {
         ...fixInput(fixesOf(entry)),
         ci: true,
+        reason: "ci",
         round,
         rounds,
         checks: checksOf(runs),
@@ -2414,7 +2405,12 @@ export function createReviews({
       const own = { ...input, decision };
       if (decision !== "merge") delete own.checks;
       if (decision === "fix") {
-        Object.assign(own, { ci: false, round: fixes + 1, rounds: limitOf(settings, entry) });
+        Object.assign(own, {
+          ci: false,
+          reason: "review",
+          round: fixes + 1,
+          rounds: limitOf(settings, entry),
+        });
       }
       const messages = await policies.denied(rule, repo, texts, () => own);
       results.push({ rule, defined, messages });
@@ -2449,6 +2445,8 @@ export function createReviews({
     start,
     stop,
     keys: () => [...reviewed.keys()],
+    // How many fix runs pull request `number` had, for a conflict run's `deny_fix` (conflicts.mjs).
+    fixes: (repo, number) => fixesOf(reviewed.get(taskKey(repo, prId(number)))),
     // The entry of pull request `number` in `repo` (reviewLoop()), or null.
     // `deciding`: the step the listener is deciding about right now (deciding()).
     entry: (repo, number) => {

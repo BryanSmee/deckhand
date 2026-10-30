@@ -97,6 +97,44 @@ export function pullInput({ decision, info, pr, files, issue, review = null, now
   };
 }
 
+// A built-in gate that passed, as a decision lists it (decisions.mjs).
+export const passed = (name) => ({ name, passed: true });
+
+// `rule` asked of `policies` (createPolicies()) about pull request `pr` ({ number }: an
+// issue's, for deny_link_branch) → { messages, unread }, as decide()'s. When a policy applied, the
+// decision is kept for the task's page: `keep(entry)` (decisions.mjs record()) with the
+// built-in `gates` that passed before ([{ name, passed }]) and the input the rules saw;
+// without `keepUnread`, not when GitHub couldn't be read: a caller that asks again at its next
+// check (conflicts.mjs) shows no refusal that holds nothing.
+// reviews.mjs, conflicts.mjs and linked-branch.mjs share it, so their entries stay alike.
+export async function denyKept(
+  policies,
+  rule,
+  repo,
+  ref,
+  input,
+  { pr, gates = [], keep, log, keepUnread = true },
+) {
+  const { applied, messages, input: saw, unread } = await policies.decide(rule, repo, ref, input);
+  if (applied && (keepUnread || !unread)) {
+    const entry = {
+      decision: rule.replace(/^deny_/, ""),
+      rule,
+      denied: messages.length > 0,
+      messages,
+      pr: pr.number,
+      gates,
+      ...(saw && { input: saw }),
+    };
+    try {
+      keep(entry);
+    } catch (error) {
+      log(`${repo}#${pr.number}: keeping its ${rule} decision: ${error.message ?? error}`);
+    }
+  }
+  return { messages, unread: !!unread };
+}
+
 // One decision's evaluation, compile included. Long enough for `opa` to start and load a few
 // files, short enough that a loop in a policy doesn't hold a merge decision for long.
 export const TIMEOUT_MS = 2000;
@@ -447,9 +485,11 @@ export function createPolicies({
     return (await decide(rule, repo, ref, input)).messages;
   }
 
-  // deny()'s work → { applied, messages, input }: `applied`, whether any policy was asked (none
-  // anywhere: false, and nothing for the task's page to show); `input`, the document the rules
-  // saw, when it could be built (decisions.mjs keeps it, redacted).
+  // deny()'s work → { applied, messages, input, unread }: `applied`, whether any policy was
+  // asked (none anywhere: false, and nothing for the task's page to show); `input`, the
+  // document the rules saw, when it could be built (decisions.mjs keeps it, redacted);
+  // `unread`, the refusal is the policies or the input that couldn't be read (GitHub, most
+  // likely), not a rule's.
   async function decide(rule, repo, ref, input) {
     let files;
     try {
@@ -458,6 +498,7 @@ export function createPolicies({
       log(`${repo}: reading its policies: ${error.message ?? error}`);
       return {
         applied: true,
+        unread: true,
         messages: failure(`the policies can't be read (${error.message ?? error})`),
       };
     }
@@ -478,7 +519,10 @@ export function createPolicies({
       doc = { version: INPUT_VERSION, ...(await input()) };
     } catch (error) {
       log(`${repo}: the ${rule} input: ${error.message ?? error}`);
-      return { messages: failure(`its input can't be built (${error.message ?? error})`) };
+      return {
+        unread: true,
+        messages: failure(`its input can't be built (${error.message ?? error})`),
+      };
     }
     const messages = await evaluate(rule, files, doc);
     if (messages.length) log(`${repo}: ${rule} denies: ${messages.join(" | ")}`);

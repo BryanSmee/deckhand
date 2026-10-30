@@ -855,6 +855,14 @@ It is off without the key, and each conflict found is a run, so a bill.
 - Each pull request is tried once per pair of its head commit and its base branch's latest
   commit, across listener restarts: a rebase that failed or stopped to ask isn't tried again
   until someone pushes to the pull request or the base branch moves.
+- A conflict run is a fix run too: the [policies](#policies) are asked first (`deny_fix`,
+  with [`reason: "conflict"`](#the-review-and-fix-input)). A refusal starts nothing: a "No
+  rebase run" comment on the pull request quotes the messages, and the pair counts as tried,
+  so it isn't asked again until a push or a new base commit. Refused again for the same
+  messages, it isn't said again. A policy error refuses too, except when GitHub couldn't be
+  read (the policies, the pull request's files): then nothing starts and nothing is kept, and
+  the next check asks again. Without a policy that defines
+  `deny_fix` (Deckhand's defaults don't), conflict runs start as before.
 - The operator's `CONFLICT_CHECK_MINUTES` (default 5) is the shortest interval: a smaller
   `check_minutes` gets that one (with a warning in the run logs), and `0` turns conflict
   checks off for every repository. `check_minutes` must be a whole number above 0; any
@@ -865,7 +873,7 @@ It is off without the key, and each conflict found is a run, so a bill.
   the interval.
 - The dashboard's **Sync** checks now, whatever the interval: for when you see a pull request
   in conflict. It follows the same rules (the opt-in,
-  one try per pair, busy and needs-input tasks skipped) and says how many rebase runs it
+  one try per pair, busy and needs-input tasks skipped, `deny_fix`) and says how many rebase runs it
   started. A pull request GitHub is still computing is checked a minute later, as above.
 
 ## Projects
@@ -969,14 +977,14 @@ folder is listed once, then again only after a push to its default branch (or 10
 **The rules**: one set of strings per decision, each string a reason shown to the
 maintainer. Six decisions:
 
-| Rule                  | When                                                                                                                                                                     | A message does                                                                                                                                                                                                                                                                                                                                        |
-| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `deny_merge`          | An [auto-merge](#auto-merge), after every other gate passed, right before the merge. Only with `review.merge` and its grant.                                             | Refuses the merge: the "Not merged automatically" comment quotes the messages (5 at most, 200 characters each).                                                                                                                                                                                                                                       |
-| `deny_review`         | A review that starts by itself ([`review.on: ready`](#reviews)), after its own checks, and the review after each fix run. Never a `/mode review` a maintainer asked for. | Skips the review: the listener's log says why, nothing is posted. After a fix run, the fix loop stops; in auto-merge mode the merge waits for a maintainer, the "Not merged automatically" comment quoting the messages.                                                                                                                              |
-| `deny_fix`            | A [`review.fix`](#reviews) run, or a [CI fix run](#ci-before-the-review), after its own checks, right before it is queued.                                               | Starts no fix run: a "No fix run" comment on the pull request quotes the messages. With `review.merge`, nothing is merged: the refusal quotes them too. The round isn't used: a later review may start it. A CI fix run refused: the "CI failed" comment ends with "No CI fix run" and the messages, no review runs, and its round isn't used either. |
-| `deny_link_branch`    | A work run on an issue that has no branch yet, as it starts: the listener creates the run's `issue-<n>-…` branch and [links it to the issue](#the-linked-branch-input).  | Links no branch: the sandbox creates its branch itself, unlinked, as before, and the run's log quotes the messages.                                                                                                                                                                                                                                   |
-| `deny_request_review` | The [reviewers](#reviewers) of `review.request`, before the listener requests them on Deckhand's ready pull request, and again after a fix pushed to it.                 | Requests nobody at that head commit: the listener's log says why, nothing is posted.                                                                                                                                                                                                                                                                  |
-| `deny_github`         | Each write a run makes to GitHub (a comment, an issue edit, a label…), REST or a GraphQL mutation's field, after [its mode's ceiling](#the-github-input).                | Refuses the write: GitHub's error shape with the messages, which `gh` prints to the agent, and a line in the run's log.                                                                                                                                                                                                                               |
+| Rule                  | When                                                                                                                                                                                                | A message does                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `deny_merge`          | An [auto-merge](#auto-merge), after every other gate passed, right before the merge. Only with `review.merge` and its grant.                                                                        | Refuses the merge: the "Not merged automatically" comment quotes the messages (5 at most, 200 characters each).                                                                                                                                                                                                                                                                                                                                                 |
+| `deny_review`         | A review that starts by itself ([`review.on: ready`](#reviews)), after its own checks, and the review after each fix run. Never a `/mode review` a maintainer asked for.                            | Skips the review: the listener's log says why, nothing is posted. After a fix run, the fix loop stops; in auto-merge mode the merge waits for a maintainer, the "Not merged automatically" comment quoting the messages.                                                                                                                                                                                                                                        |
+| `deny_fix`            | A [`review.fix`](#reviews) run, a [CI fix run](#ci-before-the-review), or a [conflict](#conflicts)'s rebase run, after its own checks, right before it is queued (`input.reason` tells them apart). | Starts no fix run: a "No fix run" comment on the pull request quotes the messages. With `review.merge`, nothing is merged: the refusal quotes them too. The round isn't used: a later review may start it. A CI fix run refused: the "CI failed" comment ends with "No CI fix run" and the messages, no review runs, and its round isn't used either. A conflict run refused: a "No rebase run" comment quotes them, and that head and base aren't tried again. |
+| `deny_link_branch`    | A work run on an issue that has no branch yet, as it starts: the listener creates the run's `issue-<n>-…` branch and [links it to the issue](#the-linked-branch-input).                             | Links no branch: the sandbox creates its branch itself, unlinked, as before, and the run's log quotes the messages.                                                                                                                                                                                                                                                                                                                                             |
+| `deny_request_review` | The [reviewers](#reviewers) of `review.request`, before the listener requests them on Deckhand's ready pull request, and again after a fix pushed to it.                                            | Requests nobody at that head commit: the listener's log says why, nothing is posted.                                                                                                                                                                                                                                                                                                                                                                            |
+| `deny_github`         | Each write a run makes to GitHub (a comment, an issue edit, a label…), REST or a GraphQL mutation's field, after [its mode's ceiling](#the-github-input).                                           | Refuses the write: GitHub's error shape with the messages, which `gh` prints to the agent, and a line in the run's log.                                                                                                                                                                                                                                                                                                                                         |
 
 Another `deny_*` rule is reported by the config check, as probably misspelled.
 
@@ -1024,10 +1032,17 @@ far), without `checks`:
 | `review`   | `null`: the review hasn't run.                                                | The review that requests changes: `verdict`, `rating`, `allowed`, and its `findings[]`.           |
 | `round`    | none.                                                                         | The fix run this would be: `fixes + 1`.                                                           |
 | `rounds`   | none.                                                                         | How many fix runs `review.fix` allows (`true`: `1`), with the rounds the dashboard's Fix granted. |
-| `ci`       | none.                                                                         | `true` for a [CI fix run](#ci-before-the-review), `false` for a review's fix run.                 |
+| `ci`       | none.                                                                         | `true` for a [CI fix run](#ci-before-the-review), `false` for a review's fix run or a conflict's. |
+| `reason`   | none.                                                                         | Why the fix run would start: `"review"`, `"ci"` or `"conflict"`.                                  |
 
 A CI fix run's input has `review: null` (no review ran), `round` and `rounds` counting the CI
 fix runs (`review.ci_fix`), and the head commit's `checks[]` as the merge input has them.
+
+A [conflict](#conflicts)'s rebase run (`reason: "conflict"`) has `review: null` too, and
+`round` and `rounds` `null`: it has no rounds. `fixed` and `fixes` count the review's fix runs
+so far, and `pr.files[]` is there as for the others. A rule on `input.review.findings`
+matches nothing then (`review` is null), so policies written for review fixes refuse what
+they refused; one meant for a single kind of fix run checks `input.reason`.
 
 ```rego
 deny_review contains "work in progress" if "wip" in input.pr.labels
@@ -1038,6 +1053,22 @@ deny_fix contains msg if {
   some f in input.review.findings
   startswith(f.path, "migrations/")
   msg := sprintf("a finding in %s: migrations are fixed by a human", [f.path])
+}
+
+deny_fix contains "conflicts in migrations/ wait for a human" if {
+  input.reason == "conflict"
+  some f in input.pr.files
+  startswith(f.path, "migrations/")
+}
+
+deny_fix contains "on hold: no rebase" if {
+  input.reason == "conflict"
+  "hold" in input.pr.labels
+}
+
+deny_fix contains "too large to rebase unattended" if {
+  input.reason == "conflict"
+  input.pr.additions + input.pr.deletions > 1000
 }
 ```
 
@@ -1625,7 +1656,7 @@ reviewed, fixed or merged, and it is no decision: it debugs a rule without waiti
 request to turn ready. The task's page shows its last one: who asked, when, how many denials,
 and a link to the reply. The input is the merge's, read now, with `review: null` (no review
 ran); `deny_review` and `deny_fix` get it with their own `decision`, without `checks`,
-`deny_fix` with the `round` and `rounds` the next fix run would have, `deny_request_review`
+`deny_fix` with the `round` and `rounds` the next fix run would have (a review's: `reason: "review"`), `deny_request_review`
 with its `reviewers`, `when: "ready"` and the run that opened the pull request, as the listener would ask; its "allows" adds "but nobody would be requested" when the listener wouldn't ask (`review.request` names no allowed user, or it isn't Deckhand's own ready pull request). It works without a `review` block. On an issue, a reply says to comment it on the
 pull request.
 

@@ -2,10 +2,15 @@ import assert from "node:assert/strict";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
-import { createConflicts, intoDefaultBranch, rebaseMessage } from "../listener/conflicts.mjs";
+import {
+  createConflicts,
+  intoDefaultBranch,
+  noRebaseText,
+  rebaseMessage,
+} from "../listener/conflicts.mjs";
 import { parseRepoConfig } from "../listener/repo-config.mjs";
 import { busyTask } from "../listener/tasks.mjs";
-import { tempDir, testConfig } from "./helpers.mjs";
+import { policyEngine, tempDir, testConfig } from "./helpers.mjs";
 
 const MIN = 60_000;
 const config = testConfig({ CONFLICT_CHECK_MINUTES: "5" });
@@ -43,23 +48,34 @@ function setup({
   path = tempPath(),
   routes: more = {},
   sleep,
+  policies = null,
+  fixes = 0,
+  reply = null,
 } = {}) {
   let time = 1_800_000_000_000;
   const calls = [];
   const accepted = [];
+  const replies = [];
+  const decided = [];
+  const logged = [];
   const routes = {
+    "/repos/org/repo/pulls/31/files?per_page=100&page=1": () => w.files,
     "/repos/org/repo": { default_branch: "main" },
     "/repos/org/repo/git/ref/heads/main": () => ({ object: { sha: w.baseSha } }),
     "/repos/org/repo/issues/30": () => w.issue,
     ...more,
   };
   const w = {
+    files: [{ filename: "migrations/1.sql", status: "modified", additions: 3, deletions: 1 }],
     prs,
     issue,
     baseSha,
     settings,
     calls,
     accepted,
+    replies,
+    decided,
+    logged,
     advance: (ms) => (time += ms),
   };
   w.conflicts = createConflicts({
@@ -78,6 +94,11 @@ function setup({
     repoSettings: async () => w.settings,
     busy,
     accept: async (item) => accepted.push(item),
+    policies,
+    decided: (key, entry) => decided.push({ key, ...entry }),
+    fixes: (repo, number) => (repo === "org/repo" && number === 31 ? fixes : 0),
+    reply: reply ?? (async (repo, number, text) => replies.push({ repo, number, text })),
+    log: (line) => logged.push(line),
     now: () => time,
     ...(sleep ? { sleep } : {}),
   });
@@ -578,4 +599,173 @@ test("an auto-merge checks conflicts only when it went into the default branch",
   assert.equal(intoDefaultBranch(pr("main", {})), false);
   assert.equal(intoDefaultBranch(pr("main", null)), false);
   assert.equal(intoDefaultBranch({}), false);
+});
+
+test("deny_fix allows: the rebase run starts, asked with reason conflict", async (t) => {
+  const policy = policyEngine(t, { files: { "fix.rego": "package deckhand" } });
+  const w = setup({ policies: policy.engine, fixes: 2 });
+  await w.conflicts.tick();
+  assert.equal(w.accepted.length, 1);
+  assert.deepEqual(w.replies, []);
+  const asked = policy.evals.filter((e) => e.rule === "deny_fix");
+  assert.equal(asked.length, 1);
+  const [input] = asked;
+  assert.deepEqual(
+    [input.decision, input.reason, input.ci, input.review, input.round, input.rounds],
+    ["fix", "conflict", false, null, null, null],
+  );
+  assert.deepEqual(
+    [input.fixed, input.fixes, input.pr.number, input.issue.number],
+    [true, 2, 31, 30],
+  );
+  assert.deepEqual(
+    input.pr.files.map((f) => f.path),
+    ["migrations/1.sql"],
+  );
+  // Kept for the task's page, allowed.
+  assert.equal(w.decided.length, 1);
+  assert.deepEqual(
+    [w.decided[0].key, w.decided[0].rule, w.decided[0].denied, w.decided[0].pr],
+    ["org/repo#30", "deny_fix", false, 31],
+  );
+});
+
+test("deny_fix refuses: no run, one comment quoting why, the pair not asked again", async (t) => {
+  let reason = "conflicts in `migrations/` wait for a human";
+  const policy = policyEngine(t, {
+    files: { "fix.rego": "package deckhand" },
+    messages: (i, rule) =>
+      rule === "deny_fix" &&
+      i.reason === "conflict" &&
+      i.pr.files.some((f) => f.path.startsWith("migrations/"))
+        ? [reason]
+        : [],
+  });
+  const w = setup({ policies: policy.engine });
+  assert.deepEqual(await w.conflicts.tick(), { started: 0, pending: 0, errors: [] });
+  assert.deepEqual(w.accepted, []);
+  assert.deepEqual(w.replies, [
+    {
+      repo: "org/repo",
+      number: 31,
+      text: noRebaseText(
+        "the policies refuse it (`deny_fix`): `conflicts in 'migrations/' wait for a human`",
+        "main",
+      ),
+    },
+  ]);
+  assert.match(w.replies[0].text, /^\*\*No rebase run\*\* \(`conflicts.check_minutes`\)/);
+  assert.equal(w.decided[0].denied, true);
+  // Same head and base, at the next check and from the dashboard's Sync: nothing asked again.
+  w.advance(10 * MIN);
+  await w.conflicts.tick();
+  await w.conflicts.check();
+  assert.equal(policy.evals.length, 1);
+  assert.equal(w.replies.length, 1);
+  // The base moved: asked again, refused again for the same reason, not said again.
+  w.baseSha = "base-2";
+  await w.conflicts.check();
+  assert.equal(policy.evals.length, 2);
+  assert.equal(w.replies.length, 1);
+  assert.equal(w.decided.length, 2);
+  // Another reason: said.
+  reason = "on hold";
+  w.baseSha = "base-3";
+  await w.conflicts.check();
+  assert.equal(w.replies.length, 2);
+  assert.match(w.replies[1].text, /`on hold`/);
+  assert.deepEqual(w.accepted, []);
+});
+
+test("deny_fix refuses and the comment fails: logged, no run, the pair still tried", async (t) => {
+  const policy = policyEngine(t, {
+    files: { "fix.rego": "package deckhand" },
+    messages: (i, rule) => (rule === "deny_fix" ? ["no"] : []),
+  });
+  let failing = true;
+  const replies = [];
+  const w = setup({
+    policies: policy.engine,
+    reply: async (repo, number, text) => {
+      if (failing) throw new Error("GitHub said 502");
+      replies.push(text);
+    },
+  });
+  await w.conflicts.tick();
+  assert.deepEqual(w.accepted, []);
+  assert.ok(w.logged.includes("org/repo#30: saying no rebase run: GitHub said 502"));
+  w.advance(10 * MIN);
+  await w.conflicts.tick();
+  assert.equal(policy.evals.length, 1);
+  // The base moved: the same refusal, never said yet, is said now.
+  failing = false;
+  w.baseSha = "base-2";
+  await w.conflicts.check();
+  assert.equal(policy.evals.length, 2);
+  assert.equal(replies.length, 1);
+  assert.match(replies[0], /^\*\*No rebase run\*\*.*`no`/);
+  assert.deepEqual(w.accepted, []);
+});
+
+test("deny_fix: GitHub failing to give the input starts nothing, keeps no pair, asks again", async (t) => {
+  const policy = policyEngine(t, { files: { "fix.rego": "package deckhand" } });
+  const w = setup({ policies: policy.engine });
+  w.files = null;
+  const { started, errors } = await w.conflicts.tick();
+  assert.equal(started, 0);
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /^org\/repo: #31: .*policy error: its input can't be built/);
+  assert.deepEqual([w.accepted, w.replies, policy.evals, w.decided], [[], [], [], []]);
+  // GitHub answers again: the same pair is asked, allowed, and its run starts.
+  w.files = [];
+  w.advance(10 * MIN);
+  await w.conflicts.tick();
+  assert.equal(policy.evals.length, 1);
+  assert.equal(w.accepted.length, 1);
+});
+
+test("deny_fix: a policy error refuses the rebase run too", async (t) => {
+  const policy = policyEngine(t, {
+    files: { "fix.rego": "package deckhand" },
+    failure: { code: 0, stdout: JSON.stringify({ result: [{ expressions: [{ value: 3 }] }] }) },
+  });
+  const w = setup({ policies: policy.engine });
+  await w.conflicts.tick();
+  assert.deepEqual(w.accepted, []);
+  assert.equal(w.replies.length, 1);
+  assert.match(w.replies[0].text, /`policy error: 'deny_fix' must be a set of strings`/);
+  w.advance(10 * MIN);
+  await w.conflicts.tick();
+  assert.equal(w.replies.length, 1);
+});
+
+test("without any policy, the rebase run starts and no opa runs", async (t) => {
+  const policy = policyEngine(t);
+  const w = setup({ policies: policy.engine });
+  await w.conflicts.tick();
+  assert.equal(w.accepted.length, 1);
+  assert.deepEqual(policy.evals, []);
+  assert.deepEqual([w.replies, w.decided], [[], []]);
+});
+
+test("deny_fix: GitHub failing to list the policies starts nothing, keeps no pair, asks again", async (t) => {
+  let status = 502;
+  const policy = policyEngine(t, {
+    files: { "fix.rego": "package deckhand" },
+    listFails: () => status,
+  });
+  const w = setup({ policies: policy.engine });
+  const { started, errors } = await w.conflicts.tick();
+  assert.equal(started, 0);
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /^org\/repo: #31: .*policy error: the policies can't be read/);
+  // No run, no comment, no rule asked, no refusal for the task's page.
+  assert.deepEqual([w.accepted, w.replies, policy.evals, w.decided], [[], [], [], []]);
+  // GitHub answers again: the same pair is asked, allowed, and its run starts.
+  status = null;
+  w.advance(10 * MIN);
+  await w.conflicts.tick();
+  assert.equal(policy.evals.length, 1);
+  assert.equal(w.accepted.length, 1);
+  assert.equal(w.decided.length, 1);
 });

@@ -1626,7 +1626,7 @@ trusted, and whose default branch deploys nothing you couldn't roll back.
 
 [Policies](repo-config.md#policies) are Rego rules that refuse a decision (`deny_merge`, the
 last gate of an auto-merge; `deny_review`, a review that starts by itself; `deny_fix`, a
-review's fix run; `deny_link_branch`, the branch the listener links to a work run's issue
+review's fix run, a CI fix run or a conflict's rebase run; `deny_link_branch`, the branch the listener links to a work run's issue
 ([The default branch](#the-default-branch)); `deny_request_review`, the reviewers the listener
 requests on Deckhand's ready pull request (`review.request`, allowed users only, never a team,
 and never at a run's request); `deny_github`, a run's write to GitHub (REST, or a GraphQL mutation's field), under its mode's built-in

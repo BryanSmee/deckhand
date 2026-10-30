@@ -76,7 +76,8 @@ const DECISIONS: {
   {
     rule: "deny_fix",
     name: "Fix run",
-    denies: "A denial starts no fix run; a comment on the pull request says why.",
+    denies:
+      "A denial starts no fix run (a review's, a CI fix or a conflict's rebase); a comment on the pull request says why.",
     refused: (until) => `Every fix run is refused ${until}.`,
   },
   {
