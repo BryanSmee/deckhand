@@ -401,7 +401,9 @@ export function createKubernetesRunner({
       });
       for await (const chunk of res.body ?? []) split(Buffer.from(chunk));
     } catch (error) {
+      // The caller follows again while the pod runs (runs.mjs follow()).
       log(`The log of ${name}: ${error.message}`);
+      return;
     }
     // The kubelet rotates a container's log (containerLogMaxSize): what was rotated away is
     // gone, and lines were read twice or will be skipped.
