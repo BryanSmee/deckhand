@@ -1781,8 +1781,14 @@ inspect`) and answers from that run's list. Only the proxy may ask: the listener
 - The listener forgets a sandbox's address as soon as it sees the sandbox exit, before
   posting its reply: Docker may give the address to another sandbox, which must not get the
   finished run's hosts.
-- Sandboxes get `HTTP_PROXY`, `HTTPS_PROXY` (both cases), `NO_PROXY` (`localhost`, the
-  listener) and `NODE_USE_ENV_PROXY=1`: without it, Node's `fetch` ignores the proxy (and
+- The proxy forwards plain HTTP to the listener's broker (`BROKER_URL`'s origin: the agents'
+  APIs, pushes, the run's files) without asking the policy, naming the sandbox it came from
+  (`x-deckhand-client`, replaced whatever the sandbox sent), as for a relayed call: the broker
+  binds a run's secret to that address, and believes the header from the proxy's addresses
+  alone. It refuses the broker's `/egress` there, its URL parsed first (`..`, `%2e`): the
+  listener answers it to the proxy only.
+- Sandboxes get `HTTP_PROXY`, `HTTPS_PROXY` (both cases), `NO_PROXY` (`localhost`, and the
+  run's container engine) and `NODE_USE_ENV_PROXY=1`: without it, Node's `fetch` ignores the proxy (and
   fails, as nothing else goes out). The Playwright browser gets the proxy as flags. A tool
   that ignores proxy settings fails closed: it has no route out.
 
@@ -1957,7 +1963,7 @@ instructions and the dashboard's repository panel all name these files.
 | `github.com`              | git over HTTPS (`GITHUB_URL`), relayed to the [gateway](#the-github-gateway)    |
 | `api.github.com`          | `gh` and the API (`GITHUB_API`), relayed to the [gateway](#the-github-gateway)  |
 | `*.githubusercontent.com` | raw and LFS files, diffs, release downloads, avatars (relayed for checked runs) |
-| the listener              | the broker and the agent's API calls, directly                                  |
+| the listener              | the broker and the agent's API calls, forwarded by the proxy (`BROKER_URL`)     |
 
 That list was checked against Claude Code 2.1.300 (the pinned version) by reading the hosts
 in its binary. With `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` (set in the image) and the

@@ -370,8 +370,12 @@ Object.assign(ctx, {
     logDir: join(config.dataDir, "previews"),
     log,
   }),
-  // The runs' secrets, which work from their own sandbox alone.
-  broker: createBroker({ sentFrom: (run, ip) => runAt(ctx, run, ip) }),
+  // The runs' secrets, which work from their own sandbox alone, whether it calls the broker
+  // directly or through the egress proxy.
+  broker: createBroker({
+    sentFrom: (run, ip) => runAt(ctx, run, ip),
+    clientOf: (req) => clientAddress(ctx, req),
+  }),
   // The egress proxy's CA certificate, for runs that reach GitHub, or whose grant has
   // cached_hosts (egress.mjs).
   egressCa: () => fetchEgressCa(config.egressProxy),

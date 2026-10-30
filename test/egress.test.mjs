@@ -329,16 +329,18 @@ test("host patterns are checked, in the grants folder", () => {
   );
 });
 
-test("proxy settings for every kind of tool, the broker reached directly", () => {
+test("proxy settings for every kind of tool, the broker through the proxy too (#511)", () => {
   assert.deepEqual(proxyEnv(config), {
     HTTP_PROXY: "http://egress:3128",
     HTTPS_PROXY: "http://egress:3128",
     http_proxy: "http://egress:3128",
     https_proxy: "http://egress:3128",
-    NO_PROXY: "localhost,127.0.0.1,::1,listener",
-    no_proxy: "localhost,127.0.0.1,::1,listener",
+    NO_PROXY: "localhost,127.0.0.1,::1",
+    no_proxy: "localhost,127.0.0.1,::1",
     NODE_USE_ENV_PROXY: "1",
   });
+  // The run's container engine, on its own network: reached directly.
+  assert.equal(proxyEnv(config, ["engine"]).NO_PROXY, "localhost,127.0.0.1,::1,engine");
 });
 
 test("limits: built in, under default.yaml's, and checked", () => {

@@ -51,7 +51,7 @@ export const GITHUB_FILES = [
 // What the agent (its `hosts`, agents/; by default the operator's) and GitHub need. Raw files
 // and release downloads come from *.githubusercontent.com, which carries no token: allowed,
 // relayed for the runs the gateway checks (githubContent()), plain hosts for the others.
-// The listener (the broker) is reached directly, on the run's own network.
+// The listener (the broker) is no host of theirs: the proxy forwards its calls without asking.
 export function mandatoryHosts(config, agent = agentFor(config.agent)) {
   return [...agent.hosts, ...githubHosts(config), "*.githubusercontent.com"];
 }
@@ -112,9 +112,11 @@ export function egressPolicy(
 
 // The proxy settings a sandbox gets. Both cases, as tools disagree (curl only reads the
 // lowercase http_proxy); NODE_USE_ENV_PROXY because Node's fetch ignores them otherwise.
-// `others`: more hosts on the run's network (its container engine), reached directly.
+// `others`: more hosts on the run's network (its container engine), reached directly. The
+// broker isn't one (#511): its calls (agents' APIs, pushes, the run's files) go through the
+// proxy, which forwards them to it and waits for it while the listener restarts.
 export function proxyEnv(config, others = []) {
-  const direct = new Set(["localhost", "127.0.0.1", "::1", hostOf(config.brokerUrl), ...others]);
+  const direct = new Set(["localhost", "127.0.0.1", "::1", ...others]);
   const noProxy = [...direct].join(",");
   return {
     HTTP_PROXY: config.egressProxy,

@@ -43,6 +43,9 @@ export function createBroker({
   // (run, address) → whether that address is the run's sandbox's or its engine's
   // (broker-http.mjs runAt()). None: every request is refused.
   sentFrom = async () => false,
+  // req → the address of the sandbox that sent it: the one the egress proxy names when it
+  // relayed or forwarded the call (broker-http.mjs clientAddress()), else its source address.
+  clientOf = async (req) => addressOf(req),
   random = () => randomBytes(32).toString("hex"),
 }) {
   // hash(secret) → { repo, extra, push, mode, branches, provider, credential, note, pushed,
@@ -143,9 +146,10 @@ export function createBroker({
   }
 
   // Whether `req` comes from `run`'s own sandbox: its source address, not just the secret.
-  // `ip`: the sandbox's address the egress proxy vouches for, when it relayed the call
-  // (broker-http.mjs clientAddress()).
-  async function sentBy(run, req, ip = addressOf(req)) {
+  // `ip`: the sandbox's address, when the caller already has it; else clientOf()'s, the one the
+  // egress proxy vouches for when the call came through it.
+  async function sentBy(run, req, ip) {
+    ip ??= await clientOf(req);
     return !!ip && (await sentFrom(run, ip)) === true;
   }
 
