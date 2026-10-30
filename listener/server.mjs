@@ -24,7 +24,7 @@ import { createForkChecks } from "./github-forks.mjs";
 import { createGithubGateway } from "./github-gateway.mjs";
 import { createGraphqlChecks, createValidator, lookupNodes } from "./github-graphql.mjs";
 import { createPullChecks } from "./github-pulls.mjs";
-import { createWriteChecks } from "./github-writes.mjs";
+import { createReadChecks, createWriteChecks } from "./github-writes.mjs";
 import { createProjects } from "./projects.mjs";
 import { createBrainstorms, createIssueModes } from "./brainstorms.mjs";
 import { checkout } from "./checkout.mjs";
@@ -459,6 +459,8 @@ ctx.githubGateway = createGithubGateway({
   // policies' `deny_github` allows. Their targets are looked up with the listener's token.
   checkWrite: writeChecks.check,
   checkGraphql: graphqlChecks.check,
+  // Their reads of CI's results beyond Actions: what `deny_github` allows, once per run.
+  checkRead: createReadChecks({ policies }).checkRead,
   // Their creates' and comments' answers: the issues each run created, for its links, and the
   // comments it posted, which it may edit.
   wroteWrite: writeChecks.answered,

@@ -15,6 +15,8 @@
 //   GitHub, then held to its mode's ceiling and the policies' `deny_github`; every GraphQL call
 //   is parsed and validated, and each of its mutations checked the same way (github-graphql.mjs),
 //   and what goes on is the document as parsed, printed again;
+// - a read of CI's results beyond Actions (check runs, statuses: CHECK_READS, or a GraphQL call
+//   selecting them) is held to `deny_github` as `read_checks`, once per run;
 // - a work run that isn't a fork's gets nothing that would bring a fork's code (github-forks.mjs):
 //   a fork's repository, a fork's pull request's head, a commit that isn't its repository's,
 //   in a fetch, an archive, the API, a page or a file of GitHub's file hosts (FILES:
@@ -82,12 +84,30 @@ export const ACTIONS_LOGS = new RegExp(
   "i",
 );
 const REDIRECTS = new Set([301, 302, 303, 307, 308]);
+// The reads of CI's results beyond Actions (check runs and suites, commit statuses), which
+// `deny_github` sees as `read_checks` (checkRead()), of any repository, by name or id: a
+// commit's, and one by its id. A ref may hold a slash (GitHub's path decoded).
+const CHECKS_PATH = String.raw`\/(?:commits\/.+\/)?check-(?:runs|suites)(?:\/|$)`;
+const STATUSES_PATH = String.raw`\/(?:commits\/.+\/status(?:es)?|statuses\/.+)\/?$`;
+export const CHECK_READS = [
+  { permission: "checks", path: new RegExp(`^${REPO}${CHECKS_PATH}`, "i") },
+  { permission: "statuses", path: new RegExp(`^${REPO}${STATUSES_PATH}`, "i") },
+];
 // The REST paths (under the API's base) that need one of the App's optional permissions
 // (github-app.mjs OPTIONAL_PERMISSIONS), at least to read: a run's token goes without one its
 // installation lacks, and the call is refused here, naming it, rather than by GitHub, without.
 // Only its own repository's, by name: another's (a public repository's CI) GitHub may answer
 // without the permission, and the run's installation isn't the one to accept it.
-export const NEEDS = [{ permission: "actions", path: /^repos\/([^/]+\/[^/]+)\/actions(?:\/|$)/i }];
+export const NEEDS = [
+  { permission: "actions", path: /^repos\/([^/]+\/[^/]+)\/actions(?:\/|$)/i },
+  { permission: "checks", path: new RegExp(String.raw`^repos\/([^/]+\/[^/]+)${CHECKS_PATH}`, "i") },
+  {
+    permission: "statuses",
+    path: new RegExp(String.raw`^repos\/([^/]+\/[^/]+)${STATUSES_PATH}`, "i"),
+  },
+];
+// Whether a REST path reads CI's results beyond Actions (CHECK_READS).
+export const readsChecks = (path) => CHECK_READS.some(({ path: re }) => re.test(path));
 // Whether a run's mode's ceiling holds `project` on any kind (modes.mjs ceilingOf()): its token
 // may then read projects, in a repo granted one.
 function addsItems(run) {
@@ -194,6 +214,38 @@ export function redactBody(body, secrets) {
   return out === text ? null : Buffer.from(out);
 }
 
+// A GraphQL answer whose check or status fields GitHub refused (`FORBIDDEN`, "Resource not
+// accessible by integration": its token went without a permission its installation lacks) →
+// the answer with those errors' messages as Deckhand's `message`, which `gh` prints; null when
+// it has none, or isn't JSON. Only an error whose `path` is at or under one of `paths` (the
+// response paths of those fields, github-graphql.mjs checkSelections(), without list indices):
+// any other refusal (another repository's data, SAML, an IP allow list…) keeps GitHub's own
+// message, and so does every error when `paths` is null. The data GitHub could answer is kept.
+export function explained(answer, message, paths) {
+  if (!paths?.length) return null;
+  let doc;
+  try {
+    doc = JSON.parse(answer.toString("utf8"));
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(doc?.errors)) return null;
+  const forbidden = (e) =>
+    e?.type === "FORBIDDEN" || /not accessible by integration/i.test(String(e?.message ?? ""));
+  const under = (e) => {
+    if (!Array.isArray(e?.path)) return false;
+    const keys = e.path.filter((k) => typeof k === "string");
+    return paths.some((p) => p.length <= keys.length && p.every((k, i) => k === keys[i]));
+  };
+  let changed = false;
+  doc.errors = doc.errors.map((e) => {
+    if (!forbidden(e) || !under(e)) return e;
+    changed = true;
+    return { ...e, message: `Deckhand: ${message}` };
+  });
+  return changed ? Buffer.from(JSON.stringify(doc)) : null;
+}
+
 // Whether a GraphQL call's body (as text) reads a thread's comments or reviews.
 export function readsThread(text) {
   let query = "";
@@ -258,8 +310,12 @@ export function createGithubGateway({
   // (run, { method, path, body }) → null when a REST write may go on, else { status, message }
   // (github-writes.mjs createWriteChecks()). None: every REST write is refused.
   checkWrite = async () => ({ status: 403, message: "no write is checked here" }),
+  // (run, action) → null when the run may make that kind of read, else { status, message }
+  // (github-writes.mjs createReadChecks(): `read_checks`, once per run). None: every such read
+  // is refused.
+  checkRead = async () => ({ status: 403, message: "no read of CI's checks is checked here" }),
   // (run, body) → a GraphQL call's { body, write, creates, comments, reacts, unreacts,
-  // permissions, pulls } as it goes on, or { refused } (github-graphql.mjs
+  // permissions, pulls, reads, readPaths } as it goes on, or { refused } (github-graphql.mjs
   // createGraphqlChecks()). None: every GraphQL call is refused.
   checkGraphql = async () => ({ refused: { status: 403, message: "no GraphQL is checked here" } }),
   // (run, { method, path, body, graphql, creates, comments, reacts, unreacts, pulls, at },
@@ -484,6 +540,12 @@ export function createGithubGateway({
       let watched = null;
       let writing = false;
       let permissions = {};
+      // What a read needs of the optional permissions (CI's results, over GraphQL).
+      let reads = {};
+      // Where those fields are in its answer (explained()).
+      let readPaths = null;
+      // Whether a GraphQL call writes, once the GraphQL checks parsed it.
+      let parsedWrite = null;
       const graphqlCall = where.api && isGraphql(where.path);
       let refused = null;
       // GitHub may read parameters from a query too, which the checks never see: no write they
@@ -511,7 +573,10 @@ export function createGithubGateway({
           // the call's JSON hid from the redaction above.
           body = redacted(run, req, checked.body, call);
           writing = checked.write;
+          parsedWrite = checked.write;
           permissions = checked.permissions ?? {};
+          reads = checked.reads ?? {};
+          readPaths = checked.readPaths ?? null;
           const pulls = checked.pulls ?? [];
           const comments = checked.comments ?? [];
           const reacts = checked.reacts ?? [];
@@ -552,10 +617,26 @@ export function createGithubGateway({
       }
       // The write's own permissions: its path's were checked above.
       if (!refused && writing) refused = await unaccepted(github, run, needed("", permissions));
-      if (refused) return refuse(run, res, call, write, refused);
+      // CI's results beyond Actions: the policies' answer, once per run (a REST read's
+      // permission was checked above).
+      const checks = graphqlCall
+        ? "checks" in reads || "statuses" in reads
+        : where.api && !write && readsChecks(where.path);
+      if (!refused && checks) refused = await checkRead(run, "read_checks");
+      // A GraphQL read of CI's checks the installation lacks a permission for goes on without
+      // it: GitHub answers the rest (`gh pr view` selects the rollup, on commits without any
+      // check too), and its refusal of those fields is explained (explained()).
+      let lacks = null;
+      if (!refused && graphqlCall && Object.keys(reads).length) {
+        lacks = await unaccepted(github, run, reads);
+      }
+      // A GraphQL call is a POST whatever it does: a write once parsed only if it mutates (a
+      // refused read of checks is a call, not a write).
+      if (refused) return refuse(run, res, call, parsedWrite ?? write, refused);
       await proxied(req, res, run, github, where, body, watched, writing && permissions, {
         advertised,
         inflated,
+        lacks: lacks && { message: lacks.message, paths: readPaths },
       });
     } finally {
       slot?.release?.();
@@ -750,7 +831,7 @@ export function createGithubGateway({
     body,
     watched,
     writing,
-    { advertised = null, inflated = false } = {},
+    { advertised = null, inflated = false, lacks = null } = {},
   ) {
     let token;
     let extra = run.extra;
@@ -786,7 +867,7 @@ export function createGithubGateway({
     let status = 0;
     let answer = [];
     let size = 0;
-    if (watched || advertised) headers["accept-encoding"] = "identity";
+    if (watched || advertised || lacks) headers["accept-encoding"] = "identity";
     // An advertisement is read as it streams, only its refs kept (github-forks.mjs).
     const refs = advertised ? advertisementReader() : null;
     const tap = (chunk) => {
@@ -830,6 +911,20 @@ export function createGithubGateway({
         answered: (code, _, lost) => (status = lost ? 0 : code),
       }),
       ...(logs && { follow }),
+      ...(lacks && {
+        transform: (code, _, answer) => {
+          const out = explained(answer, lacks.message, lacks.paths);
+          if (out) {
+            const call = `${req.method} ${target.pathname}`;
+            note(
+              run,
+              `Deckhand explained GitHub's refusal of ${clip(run, call)}: ${lacks.message}`,
+            );
+          }
+          return out;
+        },
+        maxTransform: MAX_ANSWER,
+      }),
     });
     if (refs && status === 200) forks.remember(run, advertised, refs.refs());
     if (!watched || !answer) return;

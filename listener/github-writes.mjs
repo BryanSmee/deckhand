@@ -1202,6 +1202,48 @@ export function createWriteChecks({
   return { check, checkWrite, answered };
 }
 
+// The reads `deny_github` sees (github-gateway.mjs checkRead()): `read_checks`, CI's results
+// beyond Actions. Its input doesn't depend on the call, only on the run: asked once per run and
+// action, and a definite answer kept, so that `gh pr checks --watch` doesn't start an `opa` per
+// poll. A failed evaluation (policies.mjs's "policy error: …": GitHub not listing the policies,
+// `opa` timing out) refuses this read only: the next one asks again, as each write does.
+export function createReadChecks({ policies = null }) {
+  const decided = new WeakMap();
+  function checkRead(run, action) {
+    if (!policies) return null;
+    const answers = decided.get(run) ?? new Map();
+    decided.set(run, answers);
+    if (!answers.has(action)) {
+      const answer = decide(run, action);
+      answers.set(action, answer);
+      answer.then(
+        (refused) => refused?.failed && answers.get(action) === answer && answers.delete(action),
+        () => answers.get(action) === answer && answers.delete(action),
+      );
+    }
+    return answers
+      .get(action)
+      .then((refused) => refused && refusal(refused.status, refused.message));
+  }
+  async function decide(run, action) {
+    const input = {
+      repo: run.repo,
+      mode: run.mode,
+      ...runTraits(run),
+      issue: run.issue ?? null,
+      action,
+      actions: [action],
+    };
+    const messages = await policies.deny("deny_github", run.repo, run.base || "main", () => input);
+    if (!messages.length) return null;
+    return {
+      ...refusal(403, `the policies refuse it (deny_github): ${messages.join("; ")}`),
+      failed: messages.some((m) => m.startsWith("policy error:")),
+    };
+  }
+  return { checkRead };
+}
+
 // What the policies read of a run besides its mode (issue #448): `custom_mode`, whether the mode
 // is one of the repo's `modes:` (a policy needn't list the built-in ones), `light`, whether it
 // runs without a branch (it can't push: broker.mjs), and `reason`, why the listener started it

@@ -691,6 +691,7 @@ test("/mode policy: every rule on the pull request now, nothing reviewed, fixed 
       ["a work run's branch linked to #12", 1, "work", undefined],
       ["a work run's comment on its pull request", 1, "work", "own_pr"],
       ["a brainstorm's comment on it", 1, "brainstorm", "pr"],
+      ["a work run's read of CI's checks", 1, "work", undefined],
     ],
   );
   // The issue the pull request closes.
@@ -711,6 +712,7 @@ test("/mode policy: every rule on the pull request now, nothing reviewed, fixed 
       ["deny_request_review", "request_review", false],
       ["deny_github", undefined, false],
       ["deny_github", undefined, false],
+      ["deny_github", undefined, false],
     ],
   );
   // The reviewers as when it turns ready, by the run that opened it, as the listener would ask.
@@ -720,11 +722,17 @@ test("/mode policy: every rule on the pull request now, nothing reviewed, fixed 
     [["alice"], "ready", "plan", true, false],
   );
   assert.deepEqual(
-    policy.evals.slice(5).map((e) => [e.mode, e.action, e.target.kind, e.target.number]),
+    policy.evals.slice(5).map((e) => [e.mode, e.action, e.target?.kind, e.target?.number]),
     [
       ["work", "comment", "own_pr", 5],
       ["brainstorm", "comment", "pr", 5],
+      ["work", "read_checks", undefined, undefined],
     ],
+  );
+  // A rule written for writes would refuse the read too: the dry run shows it.
+  assert.match(
+    text,
+    /- `deny_github` \(sample: a work run's read of CI's checks\): allows \(no file defines it\)/,
   );
   assert.equal(s.accepted.length + s.merges().length + s.replies.length + s.decided.length, 0);
   // Nobody to request, or not Deckhand's ready pull request: its "allows" says the listener
@@ -760,14 +768,29 @@ test("githubSamples: a work run's comment, a brainstorm's, and one in the repo's
   assert.deepEqual(traits(githubSamples("Org/Repo", pr)), [
     ["work", false, false, null],
     ["brainstorm", false, true, null],
+    ["work", false, false, null],
   ]);
   // The first mode that may write: a light one's ceiling refuses the comment anyway.
   const own = githubSamples("Org/Repo", pr, { ask: { light: true }, plan: { light: false } });
-  assert.deepEqual(traits(own).at(-1), ["plan", true, false, null]);
-  assert.equal(own.length, 3);
+  assert.deepEqual(traits(own)[2], ["plan", true, false, null]);
+  assert.equal(own.length, 4);
   assert.equal(own[2].what, "a comment on it in the repository's mode plan");
+  // The work run reading CI's checks: the run's fields, no target or change.
+  assert.deepEqual(own[3], {
+    what: "a work run's read of CI's checks",
+    input: {
+      repo: "org/repo",
+      mode: "work",
+      custom_mode: false,
+      light: false,
+      reason: null,
+      issue: 5,
+      action: "read_checks",
+      actions: ["read_checks"],
+    },
+  });
   const light = githubSamples("Org/Repo", pr, { ask: { light: true } });
-  assert.deepEqual(traits(light).at(-1), ["ask", true, true, null]);
+  assert.deepEqual(traits(light)[2], ["ask", true, true, null]);
   assert.match(light[2].what, /mode ask \(light: its ceiling refuses it before any policy\)$/);
   assert.deepEqual(own[2].input.target, {
     kind: "own_pr",

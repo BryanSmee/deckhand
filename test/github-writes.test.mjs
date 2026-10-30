@@ -13,6 +13,7 @@ import { createGithubGateway } from "../listener/github-gateway.mjs";
 import {
   aboveCeiling,
   classify,
+  createReadChecks,
   createWriteChecks,
   runTraits,
 } from "../listener/github-writes.mjs";
@@ -2069,6 +2070,63 @@ test("runTraits: a repo's own mode, light without push, the listener's reason", 
   assert.equal(runTraits(run(null)).custom_mode, false);
 });
 
+test("read_checks: deny_github asked once per run, its answer kept", async (t) => {
+  const { engine: policies, evals } = policyEngine(t, {
+    operator: { "gh-checks.rego": "package deckhand\n" },
+    messages: (input) =>
+      input.action === "read_checks" && input.custom_mode ? ["not in the repo's modes"] : [],
+  });
+  const { checkRead } = createReadChecks({ policies });
+  const work = { ...run("work"), reason: "ci-fix" };
+  // `gh pr checks --watch`: a poll every few seconds, one evaluation.
+  for (let i = 0; i < 5; i++) assert.equal(await checkRead(work, "read_checks"), null);
+  assert.equal(evals.length, 1);
+  assert.deepEqual(evals[0], {
+    rule: "deny_github",
+    version: 1,
+    repo: "org/repo",
+    mode: "work",
+    custom_mode: false,
+    light: false,
+    reason: "ci-fix",
+    issue: 1,
+    action: "read_checks",
+    actions: ["read_checks"],
+  });
+  const ask = run("ask");
+  const refused = {
+    status: 403,
+    message: "the policies refuse it (deny_github): not in the repo's modes",
+  };
+  assert.deepEqual(await checkRead(ask, "read_checks"), refused);
+  assert.deepEqual(await checkRead(ask, "read_checks"), refused);
+  // Each run its own answer; at once, one evaluation too.
+  const brainstorm = run("brainstorm");
+  await Promise.all([checkRead(brainstorm, "read_checks"), checkRead(brainstorm, "read_checks")]);
+  assert.equal(evals.length, 3);
+  // Without policies, nothing is refused.
+  assert.equal(await createReadChecks({}).checkRead(work, "read_checks"), null);
+});
+
+test("read_checks: a failed evaluation refuses that read only, the next one asks again", async (t) => {
+  let fails = 1;
+  // Not a set of strings: the policies fail closed, "policy error: …", as when GitHub can't list
+  // them or opa times out.
+  const { engine: policies, evals } = policyEngine(t, {
+    operator: { "gh-checks.rego": "package deckhand\n" },
+    messages: () => (fails-- > 0 ? 42 : []),
+  });
+  const { checkRead } = createReadChecks({ policies });
+  const work = run("work");
+  const failed = await checkRead(work, "read_checks");
+  assert.equal(failed.status, 403);
+  assert.match(failed.message, /^the policies refuse it \(deny_github\): policy error: /);
+  assert.ok(!("failed" in failed));
+  assert.equal(await checkRead(work, "read_checks"), null);
+  assert.equal(await checkRead(work, "read_checks"), null);
+  assert.equal(evals.length, 2);
+});
+
 // Deckhand's own default policies (policy/*.rego), as the image ships them.
 const builtIn = () => builtInPolicies();
 
@@ -2395,6 +2453,64 @@ test(
     // A file of another name leaves it in place.
     const other = { "extra.rego": "package deckhand\n" };
     assert.equal((await ask("plan", "own_issue", other)).length, 1);
+  },
+);
+
+test(
+  "the real opa: Deckhand's defaults let every kind of run read checks; a same-name file refuses it",
+  { skip: !opa && "no opa on the PATH" },
+  async (t) => {
+    const files = builtIn();
+    assert.ok(files.has("gh-checks.rego"));
+    const engine = (operator = new Map()) =>
+      createPolicies({
+        config: {},
+        github: async () => new Response("{}", { status: 404 }),
+        run: opaRunner(),
+        readBuiltIn: () => files,
+        readOperator: () => operator,
+        tmp: tempDir(t),
+      });
+    const read = (policies, mode, light) =>
+      createReadChecks({ policies }).checkRead(
+        { ...run(mode, { push: !light }), mode, push: !light },
+        "read_checks",
+      );
+    const kinds = [
+      ["work", false],
+      ["brainstorm", true],
+      ["stop", true],
+      ["idea", true],
+      ["bug", true],
+      ["discussion", true],
+      ["review", true],
+      ["plan", false],
+      ["ask", true],
+    ];
+    const defaults = engine();
+    for (const [mode, light] of kinds) {
+      assert.equal(await read(defaults, mode, light), null, mode);
+    }
+    // The operator's (or a repository's) gh-checks.rego replaces Deckhand's, for one mode or all.
+    const narrowed = engine(
+      new Map([
+        [
+          "gh-checks.rego",
+          `package deckhand
+
+deny_github contains "repository modes don't read checks" if {
+  input.action == "read_checks"
+  input.custom_mode
+}
+`,
+        ],
+      ]),
+    );
+    assert.equal(await read(narrowed, "work", false), null);
+    assert.deepEqual(await read(narrowed, "plan", false), {
+      status: 403,
+      message: "the policies refuse it (deny_github): repository modes don't read checks",
+    });
   },
 );
 

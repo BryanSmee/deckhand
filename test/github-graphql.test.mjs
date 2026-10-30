@@ -4,10 +4,13 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
+  checkReads,
+  checkSelections,
   createGraphqlChecks,
   createValidator,
   githubSchema,
   lookupNodes,
+  MAX_CHECK_PATHS,
   MAX_FIELDS,
   MAX_QUERY,
   MAX_TOKENS,
@@ -15,6 +18,7 @@ import {
   parseCall,
   restName,
 } from "../listener/github-graphql.mjs";
+import { parse } from "../listener/vendor/graphql.mjs";
 import { classify, createWriteChecks } from "../listener/github-writes.mjs";
 import { policyEngine } from "./helpers.mjs";
 
@@ -1556,4 +1560,175 @@ test("review threads: a work run replies to and resolves its pull request's, by 
     assert.ok(out.refused, body.toString());
     assert.match(out.refused.message, why);
   }
+});
+
+// gh pr checks' query (cli/cli api/query_builder.go RequiredStatusCheckRollupGraphQL), on its
+// pull request's node.
+const GH_CHECKS = `query PullRequestStatusChecks($id: ID!) { node(id: $id) { ...on PullRequest {
+  statusCheckRollup: commits(last: 1) { nodes { commit { statusCheckRollup {
+    contexts(first: 100) { nodes { __typename
+      ...on StatusContext { context, state, targetUrl, createdAt, description, isRequired(pullRequestId: $id) }
+      ...on CheckRun { name, checkSuite { workflowRun { event, workflow { name } } }, status, conclusion,
+        startedAt, completedAt, detailsUrl, isRequired(pullRequestId: $id) } }
+    pageInfo { hasNextPage, endCursor } } } } } } } } }`;
+
+// gh pr view's rollup field, as gh builds it for its default fields.
+const GH_VIEW_ROLLUP = `statusCheckRollup: commits(last: 1) { nodes { commit { statusCheckRollup {
+  contexts(first: 100) { nodes { __typename
+    ...on StatusContext { context, state, targetUrl, createdAt, description },
+    ...on CheckRun { name, checkSuite { workflowRun { workflow { name } } }, status, conclusion,
+      startedAt, completedAt, detailsUrl } },
+  pageInfo { hasNextPage, endCursor } } } } } }`;
+
+test("checkReads: what a call reads of CI beyond Actions, by its types, through fragments and nodes", async () => {
+  const reads = (query) => {
+    const doc = parse(query);
+    const op = doc.definitions.find((d) => d.kind === "OperationDefinition");
+    return checkReads(githubSchema(), doc, op);
+  };
+  const both = { checks: "read", statuses: "read" };
+  assert.deepEqual(reads(GH_CHECKS), both);
+  // gh pr view's default fields select the rollup too, as this field (cli/cli
+  // api/query_builder.go StatusCheckRollupGraphQLWithoutCountByState).
+  assert.deepEqual(
+    reads(`{ repository(owner: "o", name: "r") { pullRequest(number: 1) { title
+      ${GH_VIEW_ROLLUP} } } }`),
+    both,
+  );
+  assert.deepEqual(
+    reads(`{ repository(owner: "o", name: "r") { object(expression: "main") {
+      ... on Commit { status { state } } } } }`),
+    { statuses: "read" },
+  );
+  assert.deepEqual(
+    reads(`query { repository(owner: "o", name: "r") { object(expression: "main") { ...C } } }
+      fragment C on Commit { checkSuites(first: 5) { totalCount } }`),
+    { checks: "read" },
+  );
+  // A node by its ID, or a fragment on one of their types, whatever it selects.
+  assert.deepEqual(reads(`{ node(id: "CR_1") { ... on CheckRun { id } } }`), { checks: "read" });
+  assert.deepEqual(reads(`{ node(id: "SC_1") { ...S } } fragment S on StatusContext { id }`), {
+    statuses: "read",
+  });
+  assert.deepEqual(reads(`{ nodes(ids: ["x"]) { __typename ... on CheckSuite { id } } }`), {
+    checks: "read",
+  });
+  // Nothing of theirs: nothing. A pull request, its commits, Actions' workflow runs.
+  assert.deepEqual(
+    reads(`{ repository(owner: "o", name: "r") { pullRequest(number: 1) { title
+      commits(last: 1) { nodes { commit { oid message } } } } } }`),
+    {},
+  );
+  assert.deepEqual(reads(`{ viewer { login } }`), {});
+  // A mutation's answer counts too.
+  assert.deepEqual(
+    reads(`mutation { updatePullRequest(input: { pullRequestId: "PR_1", title: "t" }) {
+      pullRequest { commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } } } }`),
+    both,
+  );
+  // The checks say so, for a query and a mutation alike; a plain one reads nothing.
+  const { check } = checks();
+  assert.deepEqual((await check(run("work"), call(GH_CHECKS, { id: "PR_1" }))).reads, both);
+  assert.deepEqual((await check(run("work"), call("{ viewer { login } }"))).reads, {});
+});
+
+test("checkSelections: where the check and status fields are in the answer, aliases as such", async () => {
+  const paths = (query) => {
+    const doc = parse(query);
+    const op = doc.definitions.find((d) => d.kind === "OperationDefinition");
+    return checkSelections(githubSchema(), doc, op).paths;
+  };
+  // gh pr checks': its alias, under the node; nothing deeper (the rollup covers its subtree).
+  assert.deepEqual(paths(GH_CHECKS), [
+    ["node", "statusCheckRollup", "nodes", "commit", "statusCheckRollup"],
+  ]);
+  // gh pr view's: the rollup, and none of the other fields it selects.
+  assert.deepEqual(
+    paths(`{ repository(owner: "o", name: "r") { pullRequest(number: 1) { title
+      projectItems(first: 5) { totalCount } ${GH_VIEW_ROLLUP} } } }`),
+    [["repository", "pullRequest", "statusCheckRollup", "nodes", "commit", "statusCheckRollup"]],
+  );
+  // A fragment on a check type: the field it is spread under. A named fragment spread in two
+  // places: under each.
+  assert.deepEqual(paths(`{ node(id: "CR_1") { ... on CheckRun { id } } }`), [["node"]]);
+  assert.deepEqual(
+    paths(`{ a: repository(owner: "o", name: "r") { object(expression: "x") { ...C } }
+      b: repository(owner: "o", name: "s") { object(expression: "y") { ...C } } }
+      fragment C on Commit { status { state } checkSuites(first: 1) { totalCount } }`),
+    [
+      ["a", "object", "status"],
+      ["a", "object", "checkSuites"],
+      ["b", "object", "status"],
+      ["b", "object", "checkSuites"],
+    ],
+  );
+  assert.deepEqual(paths(`{ viewer { login } }`), []);
+  // An interface or a union a check run or a status context is one of: what the value may be
+  // there decides (a node, a resource by URL), not the type's name.
+  const selections = (query) => {
+    const doc = parse(query);
+    const op = doc.definitions.find((d) => d.kind === "OperationDefinition");
+    return checkSelections(githubSchema(), doc, op);
+  };
+  const both = { checks: "read", statuses: "read" };
+  assert.deepEqual(
+    selections(`{ node(id: "CR_1") { ... on UniformResourceLocatable { url resourcePath }
+      ... on RequirableByPullRequest { isRequired(pullRequestNumber: 1) } } }`),
+    { reads: both, paths: [["node"], ["node"]] },
+  );
+  assert.deepEqual(
+    selections(`{ n: node(id: "x") { ...U } } fragment U on UniformResourceLocatable { url }`),
+    { reads: { checks: "read" }, paths: [["n"]] },
+  );
+  assert.deepEqual(selections(`{ resource(url: "https://github.com/o/r/runs/1") { url } }`), {
+    reads: { checks: "read" },
+    paths: [["resource"]],
+  });
+  // Its fields behind an untyped inline fragment, a directive's, or a named fragment on the
+  // same type: still selected on that value.
+  for (const [query, path] of [
+    [`{ resource(url: "https://github.com/o/r/runs/1") { ... { url resourcePath } } }`, "resource"],
+    [
+      `{ node(id: "CR_1") { ... on UniformResourceLocatable { ... @include(if: true) { url } } } }`,
+      "node",
+    ],
+    [
+      `{ node(id: "CR_1") { ...F } } fragment F on UniformResourceLocatable { ... { url } }`,
+      "node",
+    ],
+    [
+      `{ node(id: "CR_1") { ... on UniformResourceLocatable { ...G } } }
+      fragment G on UniformResourceLocatable { url }`,
+      "node",
+    ],
+  ]) {
+    assert.deepEqual(selections(query), { reads: { checks: "read" }, paths: [[path]] }, query);
+  }
+  // What can't be a check there, or says nothing of one: no read.
+  for (const query of [
+    `{ node(id: "x") { ... on UniformResourceLocatable { ...P } } } fragment P on PullRequest { title }`,
+    `{ resource(url: "u") { ... { __typename id } } }`,
+    `{ resource(url: "https://github.com/o/r/pull/1") { __typename ... on PullRequest { title } } }`,
+    `{ repository(owner: "o", name: "r") { ... on Node { id } ... on UniformResourceLocatable { url } } }`,
+    `{ node(id: "x") { id __typename ... on Node { id } } }`,
+    `{ viewer { ... on Actor { login } } }`,
+  ]) {
+    assert.deepEqual(selections(query), { reads: {}, paths: [] }, query);
+  }
+  // Fragments doubling at each level: past the cap, no paths (GitHub's messages kept), quickly.
+  const levels = 12;
+  let query = '{ repository(owner: "o", name: "r") { object(expression: "x") { ...F0 } } }';
+  for (let i = 0; i < levels; i++) {
+    query += ` fragment F${i} on Commit { a${i}: parents(first: 1) { nodes { ...F${i + 1} } } b${i}: parents(first: 1) { nodes { ...F${i + 1} } } }`;
+  }
+  query += ` fragment F${levels} on Commit { status { state } }`;
+  assert.ok(2 ** levels > MAX_CHECK_PATHS);
+  const started = Date.now();
+  const many = checkSelections(githubSchema(), parse(query), parse(query).definitions[0]);
+  assert.deepEqual([many.reads, many.paths], [{ statuses: "read" }, null]);
+  assert.ok(Date.now() - started < 1000);
+  // The checks pass them on with the reads.
+  const { check } = checks();
+  const out = await check(run("work"), call(GH_CHECKS, { id: "PR_1" }));
+  assert.deepEqual(out.readPaths, paths(GH_CHECKS));
 });

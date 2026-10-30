@@ -469,6 +469,25 @@ to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to the
   A new mutation in GitHub's schema means `npm run schema` in `listener/vendor/`, a reviewed
   diff, and its entry in `MUTATIONS` before any run may send it.
 
+- **CI's results beyond GitHub Actions** (`checks: read`, `statuses: read`): a run reads its
+  repository's check runs and suites and commit statuses (`CHECK_READS`: `…/check-runs`,
+  `…/check-suites`, `…/status`, `…/statuses`), and a GraphQL call that selects them (a field
+  or fragment of their types: `statusCheckRollup`, `checkSuites`, `status`, a check run by its
+  node ID; and a fragment on an interface or union one of them may be there, such as
+  `node(id:) { ... on UniformResourceLocatable { url } }` or `resource(url:) { url }`, unless it
+  selects only `__typename` and `id`), as `gh pr checks` and `gh pr view` do. That is what CI says of each commit: a
+  check's name, state, conclusion, links, timestamps, and the title, summary and annotations
+  its App wrote; nothing it couldn't already learn by reading the code and running the tests,
+  but for what an external service chose to publish there. Neither permission writes: the
+  routes that create or rerun a check are writes no ceiling holds. Each such read is first
+  held to `deny_github`, with `action: "read_checks"` and no target
+  ([The GitHub input](repo-config.md#the-github-input)), once per run, the answer kept: its
+  input depends on the run only, and `gh pr checks --watch` polls. A refusal refuses the
+  call, `gh pr view` without `--json` included. It hides the checks, not whether CI passes:
+  a pull request's `mergeStateStatus` (`UNSTABLE`) and search's `status:success|failure|pending`
+  qualifier stay readable, as any pull request's state and any search. Without the permissions, the REST reads are
+  refused, naming them; a GraphQL read goes on with a token that lacks them, and GitHub's
+  refusal of those fields comes back as Deckhand's message (`explained()`).
 - **On to GitHub** with a token for the run's repository: its mode's permissions only for a
   write that passed these checks (and a pull request's own write's: `pull_requests` or
   `contents`, [The default branch](#the-default-branch); a rerun's `actions: write`), the same permissions read-only for

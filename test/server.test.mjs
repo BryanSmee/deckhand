@@ -1786,6 +1786,19 @@ mounts:
     const levels = mints().map((m) => JSON.parse(m.body).permissions.issues);
     assert.deepEqual([...new Set(levels)].sort(), ["read", "write"]);
     assert.equal(levels.filter((l) => l === "write").length, 1);
+    // CI's checks and statuses (`gh pr checks`): held to deny_github's read_checks, which
+    // Deckhand's defaults allow, then read with a token that has them.
+    const rollup =
+      '{ repository(owner: "org", name: "repo") { pullRequest(number: 1) { commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } } } }';
+    assert.equal((await graphql(rollup)).status, 200);
+    await fetch(
+      `http://127.0.0.1:${ctx.brokerPort}/relay/127.0.0.1/repos/org/repo/commits/abc/check-runs`,
+      {
+        headers: { authorization: `token ${secret}` },
+      },
+    );
+    assert.ok(ctx.github.requests.some((r) => r.path === "/repos/org/repo/commits/abc/check-runs"));
+    assert.equal(JSON.parse(mints().at(-1).body).permissions.checks, "read");
     // A mutation Deckhand doesn't know: refused before anything is looked up.
     const deleted = await graphql(
       'mutation { deleteIssue(input: {issueId: "I_3"}) { clientMutationId } }',
@@ -2253,6 +2266,33 @@ mounts:
       ["setup", "work", "wrap-up"],
     );
     assert.match(JSON.parse(replies(github)[0].body).body, / · 1\.1 min/);
+  });
+
+  test("check_suite and status deliveries: taken, and nothing logged or run for them", async (t) => {
+    const { github, send, listener } = await listen(t, {});
+    const ci = {
+      installation: { id: 7 },
+      repository: { full_name: "org/repo", default_branch: "trunk" },
+      sender: { login: "ci-bot[bot]", type: "Bot" },
+    };
+    const calls = github.requests.length;
+    // The same status twice: kept out of the memory of handled deliveries, which would push
+    // out those that matter (a redelivery's GUID), so not "already handled" either.
+    for (const [payload, event, id] of [
+      [{ ...ci, state: "pending", context: "ci/jenkins", sha: "abc" }, "status", "s-1"],
+      [{ ...ci, state: "pending", context: "ci/jenkins", sha: "abc" }, "status", "s-1"],
+      [{ ...ci, action: "completed", check_suite: { head_sha: "abc" } }, "check_suite", "c-1"],
+    ]) {
+      assert.equal((await send(payload, event, id)).status, 202, event);
+    }
+    // The next delivery's line: they came before it, and logged nothing.
+    await send({ ...ci, action: "opened", issue: { number: 3, labels: [] } }, "issues");
+    await listener.until("Delivery: issues opened");
+    assert.doesNotMatch(
+      listener.output(),
+      /Delivery: (?:status|check_suite)|not a comment|Delivery (?:s|c)-1 again/,
+    );
+    assert.equal(github.requests.slice(calls).filter((r) => r.path.includes("abc")).length, 0);
   });
 
   test("open questions label an issue; an allowed user's answer takes the label off", async (t) => {
@@ -3165,6 +3205,8 @@ modes:
       pull_requests: "read",
       metadata: "read",
       actions: "read",
+      checks: "read",
+      statuses: "read",
     });
     // The same hosts as any run of the repo: the mandatory ones and its grant's.
     assert.deepEqual(allowedHosts(egressAnswers(dir)), [

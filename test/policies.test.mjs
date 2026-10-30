@@ -178,7 +178,10 @@ test("builtInPolicies: Deckhand's policy/*.rego, each in package deckhand; no fo
   assert.ok(own.has("github.rego"));
   for (const [name, text] of own) {
     assert.match(name, /^(github|gh-[a-z0-9-]+)\.rego$/, name);
-    assert.ok(deniesOf(text).length, `${name} defines a deny_* rule of package deckhand`);
+    // A feature allowed everywhere (gh-checks.rego) ships its file for its docs and its name
+    // alone: comments and the package, nothing else.
+    const bare = text.replace(/^\s*#.*$/gm, "").trim() === "package deckhand";
+    assert.ok(deniesOf(text).length || bare, `${name} defines a deny_* rule of package deckhand`);
   }
   assert.equal(BUILT_IN_DIR, join(import.meta.dirname, "..", "policy/"));
   const dir = tempDir(t);

@@ -185,6 +185,9 @@ Skip screenshots for changes with nothing visible (API, tests, tooling).
 - Rewriting history (rebase, `git push --force-with-lease`) is fine on the task's own branch,
   never on any other branch. Rebase it on the base branch before `gh pr ready`: Deckhand
   refuses to mark a pull request with conflicts ready.
+- After a push, `gh pr checks` says whether CI passes on the pull request (`--watch` waits for
+  it), and `gh run view <id> --log-failed` shows why a GitHub Actions run failed. When
+  Deckhand refuses them, say so in your reply rather than guessing CI's result.
 - A pull request from a fork that you weren't triggered from (one an issue or a comment only
   mentions): don't install, build or run its code (its setup, tests, scripts), nor merge it
   into a branch. In a work run (one that pushes a branch), its code doesn't come at all: the

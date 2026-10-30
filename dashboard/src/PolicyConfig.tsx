@@ -95,10 +95,11 @@ const DECISIONS: {
   },
   {
     rule: "deny_github",
-    name: "GitHub writes",
+    name: "GitHub writes and checks",
     denies:
-      "A denial refuses a run's write to GitHub (REST or GraphQL); gh prints the messages to the agent.",
-    refused: (until) => `Every run's write to GitHub is refused ${until}.`,
+      "A denial refuses a run's write to GitHub (REST or GraphQL), or its reads of CI's checks (read_checks, as gh pr checks and gh pr view make); gh prints the messages to the agent.",
+    refused: (until) =>
+      `Every run's write to GitHub, and every read of CI's checks, is refused ${until}.`,
   },
 ];
 
@@ -180,9 +181,11 @@ export function PolicyConfig({ config }: { config: RepoConfig }) {
       </p>
       <p class={styles.model}>
         <code>deny_github</code> reads the write (<code>action</code>, <code>target</code>,{" "}
-        <code>change</code>) and the run: its <code>mode</code>, <code>custom_mode</code> (one of
-        the repo's <code>modes:</code>), <code>light</code> and <code>reason</code> (
-        <code>review-fix</code>, <code>ci-fix</code>, <code>conflict</code>, or null).{" "}
+        <code>change</code>), or a read of CI's checks (<code>action</code> <code>read_checks</code>
+        , no <code>target</code> or <code>change</code>), and the run: its <code>mode</code>,{" "}
+        <code>custom_mode</code> (one of the repo's <code>modes:</code>), <code>light</code> and{" "}
+        <code>reason</code> (<code>review-fix</code>, <code>ci-fix</code>, <code>conflict</code>, or
+        null).{" "}
         <a href={GITHUB_INPUT} target="_blank" rel="noreferrer">
           The GitHub input
         </a>
