@@ -61,8 +61,8 @@ What the App asks for:
 | Issues, Pull requests, Contents: read and write | `issues`, `issue_comment`, `pull_request`     |
 | Deployments, Discussions: read and write        | `pull_request_review`                         |
 | Workflows, Actions: read and write              | `pull_request_review_comment`, `workflow_run` |
-| Metadata: read                                  | `discussion`, `discussion_comment`            |
-| Organization projects: read and write           | `push`                                        |
+| Checks, Commit statuses, Metadata: read         | `discussion`, `discussion_comment`            |
+| Organization projects: read and write           | `push`, `check_suite`, `status`               |
 
 An App created before Deckhand answered discussions lacks the `discussion` events and the
 Discussions permission: add them in the App's settings (_Permissions & events_), then accept
@@ -98,6 +98,21 @@ installation. Until then, the listener's moves fail (said in its log and the run
 run's project writes are refused with a message naming the permission; nothing else
 changes. A GitHub App can't reach a project owned by a user account.
 
+Checks and Commit statuses let runs read what CI says of a commit beyond GitHub Actions
+(other services' check runs, commit statuses: `gh pr checks`); the `check_suite` and `status`
+events are subscribed for the listener's own use to come (nothing reads them yet). An App created before then lacks
+them: add **Checks: read** and **Commit statuses: read** in its settings, turn on **Check
+suite** and **Status** under _Subscribe to events_, then accept the new permissions on each
+installation ([below](#when-the-app-needs-a-new-permission)). Until then, where a commit
+has checks, a run's `gh pr checks`, and `gh pr view` without `--json` (it shows them), fail
+with a message naming the permissions; everything else works as before.
+
+Upgrading: runs' reads of checks are new to `deny_github` (`action: "read_checks"`, without a
+`target` or `change`). A policy of yours written for writes that refuses whatever isn't in a
+list (`not input.target.kind in {…}`) now refuses those reads too: guard it with
+`input.action != "read_checks"` ([Reading CI's checks](repo-config.md#reading-cis-checks)).
+`/mode policy` on a pull request shows whether one does.
+
 An App created before `/after` lacks the `issues` event: turn on **Issues** under _Subscribe
 to events_ in its settings. Without it, a comment waiting for an issue (`/after #77`) still
 starts at once when a pull request that closes the issue (`Closes #77`) is merged into the
@@ -130,8 +145,8 @@ those it hasn't accepted yet (with the address of its page). The dashboard's Git
 shows the same: a _Missing in its settings_ row for the App's events and permissions, and
 what each installation lacks beside it.
 
-Until then, the permissions a feature added later are optional (`OPTIONAL_PERMISSIONS`,
-`actions` and `organization_projects` for now): a run's token goes without one its installation lacks, and the GitHub
+Until then, the permissions a feature added later are optional (`OPTIONAL_PERMISSIONS`:
+`actions`, `checks`, `statuses` and `organization_projects` for now): a run's token goes without one its installation lacks, and the GitHub
 gateway refuses its repository's calls that need it with a `Deckhand:` message naming the permission and
 the page that accepts it, instead of every token failing. The others are required: a token
 asking for `issues`, `contents` or `pull_requests` that the installation lacks fails, as
@@ -1288,7 +1303,7 @@ No sandbox gets a GitHub token, an SSH key or the host's git configuration:
   published), which sends it on with an installation token limited to the run's repository,
   which the sandbox never sees, and redacts secrets from what it writes (see
   [The GitHub gateway](security.md#the-github-gateway)). A work run's token writes issues,
-  and reads contents, pull requests, actions and metadata: the listener opens and edits its
+  and reads contents, pull requests, actions, checks, commit statuses and metadata: the listener opens and edits its
   pull requests for it. Brainstorms and inbox runs get the same; discussion runs also write
   discussions, and only those. Onboarding, run analyses, reviews and a repository's own
   light modes only read. Installation tokens last an hour; the gateway renews them before

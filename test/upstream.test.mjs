@@ -4,7 +4,13 @@ import assert from "node:assert/strict";
 import { request } from "node:http";
 import { test } from "node:test";
 import { createBroker } from "../listener/broker.mjs";
-import { baseOf, createApiProxy, MAX_IN_FLIGHT, MAX_NOTED } from "../listener/upstream.mjs";
+import {
+  baseOf,
+  createApiProxy,
+  forward,
+  MAX_IN_FLIGHT,
+  MAX_NOTED,
+} from "../listener/upstream.mjs";
 import { sandboxAt, serve } from "./helpers.mjs";
 
 // A provider that answers each call's headers and a first event, then holds the rest until
@@ -208,4 +214,42 @@ test("a refused call's path is redacted, and doesn't hide a provider's failure",
   assert.match(notes[0], /GET \/api\/\[redacted\]/);
   // The reply still quotes the provider's failure; the refusal is in the run's log.
   assert.equal(broker.runOf(secret).apiError, "Provider answered 529");
+});
+
+test("forward's transform: the answer read whole and sent as it returns it; past its cap, as is", async (t) => {
+  const { url: provider } = await serve(t, (req, res) => {
+    req.resume();
+    res.writeHead(200, { "content-type": "application/json", "content-length": "11" });
+    res.end('{"a":"bcd"}');
+  });
+  const through = (options) =>
+    serve(t, (req, res) =>
+      forward(req, res, {
+        target: new URL(provider),
+        headers: {},
+        unreachable: () => res.end(),
+        log: () => {},
+        what: "test",
+        ...options,
+      }),
+    );
+  const seen = [];
+  const tapped = [];
+  const changed = await through({
+    transform: (status, headers, body) => (
+      seen.push([status, body.toString()]),
+      Buffer.from("[1]")
+    ),
+    tap: (chunk) => tapped.push(chunk.toString()),
+  });
+  const res = await fetch(changed.url);
+  assert.equal(await res.text(), "[1]");
+  assert.equal(res.headers.get("content-length"), "3");
+  assert.deepEqual(seen, [[200, '{"a":"bcd"}']]);
+  assert.deepEqual(tapped, ['{"a":"bcd"}']);
+  // null: as it was. Over the cap: never transformed, sent as it came.
+  const same = await through({ transform: () => null });
+  assert.equal(await (await fetch(same.url)).text(), '{"a":"bcd"}');
+  const big = await through({ transform: () => Buffer.from("no"), maxTransform: 4 });
+  assert.equal(await (await fetch(big.url)).text(), '{"a":"bcd"}');
 });

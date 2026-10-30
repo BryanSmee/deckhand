@@ -134,7 +134,7 @@ test("a policy that doesn't compile: the badge, the banner, the cards and its ro
   expect(within(fix).getByText("Refused")).toBeTruthy();
   expect(fix.textContent).toContain("No rule of its own, but refused too");
   expect(fix.textContent).toContain("none in any file");
-  expect(within(card("GitHub writes")).getByText("Refused")).toBeTruthy();
+  expect(within(card("GitHub writes and checks")).getByText("Refused")).toBeTruthy();
   expect(within(card("Linked branch")).getByText("Refused")).toBeTruthy();
   expect(card("Reviewers").textContent).toContain("No rule of its own, but refused too");
   // Its row, and its source: open, the bad line marked with its error.
@@ -234,10 +234,14 @@ test("Deckhand's default files: under the operator's and the repo's, each replac
       "6 files · 3 from Deckhand, 2 from the operator, 1 from the repo · merged by name",
     ),
   );
-  expect(within(card("GitHub writes")).getByText("Active")).toBeTruthy();
+  const github = card("GitHub writes and checks");
+  expect(within(github).getByText("Active")).toBeTruthy();
+  // The same rule refuses reads of CI's checks too.
+  expect(github.textContent).toContain("its reads of CI's checks (read_checks");
   // What deny_github reads of the run, and where its input is documented.
   const input = screen.getByRole("link", { name: "The GitHub input" });
   expect(input.getAttribute("href")).toMatch(/docs\/repo-config\.md#the-github-input$/);
+  expect(input.closest("p")!.textContent).toMatch(/read_checks, no target or change/);
   expect(input.closest("p")!.textContent).toMatch(/custom_mode.*light.*reason/);
   expect(source("deckhand/policy/gh-a.rego").textContent).toContain(
     "replaced by the operator's: not evaluated",

@@ -30,6 +30,7 @@
 // the review. Failed: no review, a comment naming the failed runs, and with `review.fix` a CI
 // fix run (`ci-fix`), counted apart (`ciFixes`, at most `review.ci_fix`), whose push goes back
 // to waiting. Out of CI fix runs, or `review.ci_wait` minutes gone: the review anyway.
+import { ciState, countedRuns, PASSED } from "./ci.mjs";
 import { waitsForInput } from "./comments.mjs";
 import { repoAllowed } from "./config.mjs";
 import {
@@ -457,49 +458,6 @@ const ALLOWS = {
   merge: "allow_merge_commit",
   rebase: "allow_rebase_merge",
 };
-
-// Actions conclusions that pass: they neither stop a merge nor start a CI fix run.
-const PASSED = new Set(["success", "skipped", "neutral"]);
-
-// GitHub Actions runs on a commit → { state, failed, going }: `failed` when one completed with
-// any other conclusion (even while others go on), else `running` while one hasn't completed,
-// else `passed`, or `none` without any run. One rule for the merge gate and the CI step. A run
-// cancelled and replaced by a newer one of its workflow and event (`cancel-in-progress` when
-// `gh pr ready` starts it again) decides nothing (countedRuns()); any other failure still does.
-export function ciState(all) {
-  const runs = countedRuns(all);
-  const failed = runs.filter((r) => r.status === "completed" && !PASSED.has(r.conclusion));
-  const going = runs.filter((r) => r.status !== "completed");
-  const state = failed.length
-    ? "failed"
-    : going.length
-      ? "running"
-      : runs.length
-        ? "passed"
-        : "none";
-  return { state, failed, going };
-}
-
-// `runs` without those cancelled and replaced: a newer run of the same workflow and event (by
-// `run_number`, then `created_at`, then `id`) exists. Only `cancelled`: a newer run that passes
-// or is skipped (a label starting the workflow again, its jobs skipped) never hides a failure.
-// A run without `workflow_id` stands alone.
-export function countedRuns(runs) {
-  const newest = new Map();
-  const order = (r) => [r.run_number ?? 0, String(r.created_at ?? ""), r.id ?? 0];
-  const newer = (a, b) => {
-    const [x, y] = [order(a), order(b)];
-    for (let i = 0; i < x.length; i++) if (x[i] !== y[i]) return x[i] > y[i];
-    return false;
-  };
-  runs.forEach((r, i) => {
-    const key = r.workflow_id == null ? `run:${i}` : `${r.workflow_id}:${r.event ?? ""}`;
-    const kept = newest.get(key);
-    if (!kept || newer(r, kept)) newest.set(key, r);
-  });
-  const latest = new Set(newest.values());
-  return runs.filter((r) => latest.has(r) || r.conclusion !== "cancelled");
-}
 
 // The GitHub Actions runs on commit `sha` → { ok, status, runs }: not ok when GitHub refuses
 // to list them (403, 404).
@@ -1006,7 +964,7 @@ export function dryRunText({ number, sha = null, files, errors = [], results = [
   const samples = results.filter((r) => r.sample);
   if (samples.length) {
     parts.push(
-      "The sample lines (`deny_github`'s writes, `deny_link_branch`'s branch) are not decisions on this pull request: they aren't counted as denials.",
+      "The sample lines (`deny_github`'s writes and read, `deny_link_branch`'s branch) are not decisions on this pull request: they aren't counted as denials.",
     );
   }
   parts.push(
@@ -1032,10 +990,11 @@ function details(summary, value) {
   return `<details><summary>${summary}</summary>\n\n${fence}json\n${json}\n${fence}\n\n</details>`;
 }
 
-// The writes a dry run asks `deny_github` about, on pull request `pr` (GitHub's): a comment by
-// a work run whose pull request it is, by a brainstorm on another issue, and by a run in the
-// repo's first own mode (`modes`: its settings' `modes:`), if it has one. → [{ what, input }]
-// (docs/repo-config.md#the-github-input).
+// What a dry run asks `deny_github` about, on pull request `pr` (GitHub's): a comment by a work
+// run whose pull request it is, by a brainstorm on another issue, and by a run in the repo's
+// first own mode (`modes`: its settings' `modes:`), if it has one; then the work run reading
+// CI's checks (`read_checks`, no target), which a rule written for writes may refuse unawares.
+// → [{ what, input }] (docs/repo-config.md#the-github-input).
 export function githubSamples(repo, pr, modes = {}) {
   const target = (kind) => ({
     kind,
@@ -1071,6 +1030,11 @@ export function githubSamples(repo, pr, modes = {}) {
     const what = `a comment on it in the repository's mode ${own}${light ? " (light: its ceiling refuses it before any policy)" : ""}`;
     samples.push(sample(what, own, "own_pr", pr.number, { custom_mode: true, light }));
   }
+  const { target: _, change: __, ...work } = samples[0].input;
+  samples.push({
+    what: "a work run's read of CI's checks",
+    input: { ...work, action: "read_checks", actions: ["read_checks"] },
+  });
   return samples;
 }
 

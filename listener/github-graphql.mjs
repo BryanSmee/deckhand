@@ -5,7 +5,8 @@
 //
 // - a call that doesn't parse or validate, or that names no single operation (several without
 //   a matching `operationName`), is refused, and so is a subscription;
-// - a query goes on: the token it gets only reads (github-app.mjs readsOf());
+// - a query goes on: the token it gets only reads (github-app.mjs readsOf()); one that selects
+//   CI's results beyond Actions says so (checkReads()), for `read_checks` and its permissions;
 // - each field of a mutation, through its fragments and under any alias, must be one MUTATIONS
 //   names, with only the input fields it knows: any other is refused before any policy runs;
 // - its targets come from GitHub: the node IDs it names (inline or in its variables, which
@@ -748,6 +749,142 @@ function ownPath(doc, fields, path) {
   return found;
 }
 
+// The types that hold CI's results beyond Actions, by the permission GitHub reads them with
+// (github-gateway.mjs CHECK_READS): check runs and suites, commit statuses, and the rollup of
+// both that `gh pr checks` and `gh pr view` select. Their enums and scalars are only reached
+// through them.
+const CHECK_TYPES = /^Check(?:Run|Suite|Step|Annotation)/;
+const STATUS_TYPES = new Set(["Status", "StatusContext", "StatusContextStateCount"]);
+const ROLLUP_TYPES = /^StatusCheckRollup/;
+
+// The most response paths checkSelections() keeps: fragments spread under several aliases at
+// each level could name exponentially many. Past it, none is kept (paths: null).
+export const MAX_CHECK_PATHS = 500;
+
+// What an operation reads of CI's results → { checks: "read", statuses: "read" }, either or
+// both, or {}: any field it selects, through its fragments, whose type is one of theirs, and any
+// fragment on one of them (`node(id:) { ... on CheckRun }`). A validated document: its fields
+// are its types'.
+export function checkReads(schema, doc, op) {
+  return checkSelections(schema, doc, op).reads;
+}
+
+// checkReads()'s work → { reads, paths }: `paths`, the response paths (keys, aliases as such,
+// without list indices) of those fields, and of the fields a fragment on their types is spread
+// under: what GitHub refuses without the permissions is at or under one of them
+// (github-gateway.mjs explained()). Null past MAX_CHECK_PATHS. Each named fragment is walked
+// once, on its own type condition, its paths then put under each place it is spread.
+export function checkSelections(schema, doc, op) {
+  const fragments = new Map(
+    doc.definitions
+      .filter((d) => d.kind === Kind.FRAGMENT_DEFINITION)
+      .map((d) => [d.name.value, d]),
+  );
+  let over = false;
+  const kinds = (type) => {
+    const name = type?.name ?? "";
+    const out = [];
+    if (CHECK_TYPES.test(name) || ROLLUP_TYPES.test(name)) out.push("checks");
+    if (STATUS_TYPES.has(name) || ROLLUP_TYPES.test(name)) out.push("statuses");
+    return out;
+  };
+  const named = (type) => {
+    let t = type;
+    while (t?.ofType) t = t.ofType;
+    return t;
+  };
+  // The object types a value of `type` may be: an interface's or a union's members, or itself.
+  const possible = (type) => {
+    if (!type) return [];
+    const members = schema.getPossibleTypes(type) ?? [];
+    return members.length ? members : [type];
+  };
+  const abstract = (type) => !!type && possible(type)[0] !== type;
+  // What an abstract type, at a place whose value is one of `runtime`, reads of them: a fragment
+  // on an interface a check run implements (`node(id:) { ... on UniformResourceLocatable { url
+  // } }`), or fields selected on `resource(url:)`. Only when it selects something besides
+  // `__typename` and `id`, which say nothing of a check.
+  // `set`, on `type`: through untyped inline fragments (`... @include(if: …) { url }`) and the
+  // named fragments on that same type, which select on the same value; a fragment on another
+  // type is walk()'s, as any. A named fragment is looked into once.
+  const told = new Map();
+  const telling = (set, type) =>
+    (set?.selections ?? []).some((n) => {
+      if (n.kind === Kind.FIELD) return !["__typename", "id"].includes(n.name.value);
+      if (n.kind === Kind.INLINE_FRAGMENT) {
+        const same = !n.typeCondition || n.typeCondition.name.value === type?.name;
+        return same && telling(n.selectionSet, type);
+      }
+      const fragment = fragments.get(n.name.value);
+      if (fragment?.typeCondition.name.value !== type?.name) return false;
+      if (!told.has(fragment)) {
+        told.set(fragment, false);
+        told.set(fragment, telling(fragment.selectionSet, type));
+      }
+      return told.get(fragment);
+    });
+  const kindsOf = (type, runtime, set) => {
+    const own = new Set(kinds(type));
+    if (abstract(type) && telling(set, type))
+      for (const t of runtime) for (const k of kinds(t)) own.add(k);
+    return [...own];
+  };
+  const within = (runtime, type) => {
+    const names = new Set(possible(type).map((t) => t.name));
+    return runtime.filter((t) => names.has(t.name));
+  };
+  const memo = new Map();
+  // A selection set on `parent`, whose value is one of `runtime` → { reads: Set, paths:
+  // [relative paths] }; [] is the set's own place (a fragment on a check type).
+  const walk = (set, parent, runtime = possible(parent)) => {
+    const reads = new Set();
+    const paths = [];
+    const add = (path) => {
+      if (paths.length >= MAX_CHECK_PATHS) over = true;
+      else paths.push(path);
+    };
+    const merge = (own, inner, prefix) => {
+      for (const k of [...own, ...inner.reads]) reads.add(k);
+      if (own.length) add(prefix);
+      else for (const p of inner.paths) add([...prefix, ...p]);
+    };
+    for (const node of set?.selections ?? []) {
+      if (node.kind === Kind.FIELD) {
+        const type = named(parent?.getFields?.()[node.name.value]?.type);
+        if (!node.selectionSet) {
+          merge(kinds(type), { reads: [], paths: [] }, [keyOf(node)]);
+          continue;
+        }
+        const here = possible(type);
+        const own = kindsOf(type, here, node.selectionSet);
+        merge(own, walk(node.selectionSet, type, here), [keyOf(node)]);
+      } else if (node.kind === Kind.INLINE_FRAGMENT) {
+        if (!node.typeCondition) {
+          merge([], walk(node.selectionSet, parent, runtime), []);
+          continue;
+        }
+        const type = schema.getType(node.typeCondition.name.value);
+        const here = within(runtime, type);
+        merge(kindsOf(type, here, node.selectionSet), walk(node.selectionSet, type, here), []);
+      } else if (node.kind === Kind.FRAGMENT_SPREAD) {
+        const name = node.name.value;
+        const fragment = fragments.get(name);
+        const type = fragment && schema.getType(fragment.typeCondition.name.value);
+        // Walked once, on its own type: wider than where it is spread, never narrower.
+        if (!memo.has(name)) memo.set(name, walk(fragment?.selectionSet, type));
+        const own = kindsOf(type, within(runtime, type), fragment?.selectionSet);
+        merge(own, memo.get(name), []);
+      }
+    }
+    return { reads, paths };
+  };
+  const { reads, paths } = walk(op.selectionSet, schema.getRootType(op.operation));
+  return {
+    reads: Object.fromEntries([...reads].sort().map((k) => [k, "read"])),
+    paths: over ? null : paths,
+  };
+}
+
 // Whether a createIssue field's answer names the issue it created where github-writes.mjs
 // answered() reads it (`issue.url`, else `issue.html_url`), as GitHub's own fields: `issue`
 // and `url` unaliased (or aliased to themselves), and no `html_url`, which GraphQL's Issue
@@ -941,12 +1078,13 @@ export function createGraphqlChecks({
   log = () => {},
 }) {
   // A run's GraphQL call → { refused } or { body, write, creates, comments, reacts, unreacts,
-  // permissions, pulls }: what goes on to GitHub (printed again), whether it writes (its token
-  // then may), the response keys of its `createIssue` fields, whose answers name the issues it
-  // created, and of its `addComment` ones, the comments it posted, the new reactions it adds and
-  // those it removes ({ key, subject, content }) (github-writes.mjs answered()), what its token
-  // needs beyond its mode's, and the pull requests it changes (github-pulls.mjs
-  // permissionsOf(), pullOf()).
+  // permissions, pulls, reads, readPaths }: what goes on to GitHub (printed again), whether it
+  // writes (its token then may), the response keys of its `createIssue` fields, whose answers
+  // name the issues it created, and of its `addComment` ones, the comments it posted, the new
+  // reactions it adds and those it removes ({ key, subject, content }) (github-writes.mjs
+  // answered()), what its token needs beyond its mode's, the pull requests it changes
+  // (github-pulls.mjs permissionsOf(), pullOf()), and the optional permissions its reads need,
+  // with where they are in the answer (checkSelections()).
   async function check(run, body) {
     const call = readCall(body);
     if (call.refused) return call;
@@ -970,6 +1108,7 @@ export function createGraphqlChecks({
         ...(variables !== null && { variables }),
       }),
     );
+    const { reads, paths: readPaths } = checkSelections(schema(), doc, op);
     if (op.operation !== "mutation") {
       return {
         body: forwarded,
@@ -980,6 +1119,8 @@ export function createGraphqlChecks({
         unreacts: [],
         permissions: {},
         pulls: [],
+        reads,
+        readPaths,
       };
     }
     const fields = mutationFields(parsed, schema());
@@ -1036,6 +1177,8 @@ export function createGraphqlChecks({
       unreacts,
       permissions: permissionsOf(writes),
       pulls: writes.map((w, i) => pullOf(w, fields[i].key)).filter(Boolean),
+      reads,
+      readPaths,
     };
   }
 

@@ -14,6 +14,7 @@ deny_github contains msg if {
 
 deny_github contains msg if {
   input.mode in {"brainstorm", "stop"}
+  input.action != "read_checks"
   not input.target.kind in {"own_issue", "new_issue", "label"}
   not orders_follow_ups
   not files_follow_ups
@@ -42,6 +43,7 @@ orders_follow_ups if {
 # Inbox entries only file issues (with their label), and link the ones they split.
 deny_github contains msg if {
   input.mode in {"idea", "bug"}
+  input.action != "read_checks"
   not input.action in {"create", "link"}
   msg := sprintf("%s entries only file issues", [input.mode])
 }

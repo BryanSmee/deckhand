@@ -4,13 +4,13 @@ import assert from "node:assert/strict";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
+import { ciState } from "../listener/ci.mjs";
 import { parseRepoConfig } from "../listener/repo-config.mjs";
 import {
   CI_NEXT,
   mergeInput,
   ciFailedText,
   ciFixMessage,
-  ciState,
   createReviews,
   fixMessage,
   latestReview,

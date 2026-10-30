@@ -86,6 +86,9 @@ export function baseOf(upstream) {
 // `follow(status, headers)`: { target, headers } to fetch instead with a GET, its answer sent
 // back in place of this one (github-gateway.mjs's Actions logs, a redirect to a storage host
 // the sandbox can't reach), or null; asked of the first answer only.
+// `transform(status, headers, body)`: the answer read whole, up to `maxTransform` bytes, and
+// sent back as it returns it (null: as it was); past that size, it goes on as it comes, as is
+// (github-gateway.mjs's GraphQL reads without a permission, whose error it explains).
 export function forward(
   req,
   res,
@@ -101,6 +104,8 @@ export function forward(
     body,
     tap,
     follow,
+    transform,
+    maxTransform = 1024 * 1024,
   },
 ) {
   const sender = (url) => (url.protocol === "https:" ? httpsRequest : httpRequest);
@@ -124,6 +129,7 @@ export function forward(
         out.end();
         return;
       }
+      if (transform) return transformed(answer);
       answered(answer.statusCode, answer.headers);
       res.writeHead(answer.statusCode, forwarded(answer.headers));
       // Server-sent events: each chunk goes on as it arrives.
@@ -131,6 +137,43 @@ export function forward(
       if (tap) answer.on("data", tap);
       answer.pipe(res);
       answer.on("end", resolve);
+      answer.on("error", () => (res.destroy(), resolve()));
+    };
+    // The answer held until it ends, then transform()'s; past maxTransform, what was held and
+    // the rest go on as they come.
+    const transformed = (answer) => {
+      const chunks = [];
+      let size = 0;
+      let passing = false;
+      answer.on("data", idle);
+      if (tap) answer.on("data", tap);
+      answer.on("data", (chunk) => {
+        if (passing) return void res.write(chunk);
+        chunks.push(chunk);
+        size += chunk.length;
+        if (size <= maxTransform) return;
+        passing = true;
+        answered(answer.statusCode, answer.headers);
+        res.writeHead(answer.statusCode, forwarded(answer.headers));
+        for (const held of chunks) res.write(held);
+      });
+      answer.on("end", () => {
+        if (passing) return (res.end(), resolve());
+        const held = Buffer.concat(chunks);
+        let body = held;
+        try {
+          body = transform(answer.statusCode, answer.headers, held) ?? held;
+        } catch (error) {
+          log(`${what}: ${req.method} ${target.pathname}: ${error.message}`);
+        }
+        answered(answer.statusCode, answer.headers);
+        res.writeHead(answer.statusCode, {
+          ...forwarded(answer.headers),
+          "content-length": String(body.length),
+        });
+        res.end(body);
+        resolve();
+      });
       answer.on("error", () => (res.destroy(), resolve()));
     };
     let out = sender(target)(target, { method: req.method, headers }, (answer) =>

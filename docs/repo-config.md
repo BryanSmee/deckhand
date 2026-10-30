@@ -1279,6 +1279,13 @@ across a restart). Deckhand's default, `policy/gh-actions-rerun.rego`, allows a 
 (`target.attempt == 1`) in work, fix and conflict runs only; a repository's file of that name
 broadens it.
 
+#### Reading CI's checks
+
+`deny_github` also sees `read_checks`: reading CI's checks beyond Actions (`gh pr checks`), over
+REST or GraphQL, once per run, the input the run's fields with no `target` or `change`. A rule
+refusing what isn't in a list (`not input.target.kind in {…}`) refuses it too: guard it with
+`input.action != "read_checks"`. More: [security model](security.md#the-github-gateway).
+
 ### The linked-branch input
 
 A work run's branch shows in its issue's Development sidebar from the run's start, not only
@@ -1396,6 +1403,7 @@ deny_github contains msg if {
 
 deny_github contains msg if {
   input.mode in {"brainstorm", "stop"}
+  input.action != "read_checks"
   not input.target.kind in {"own_issue", "new_issue", "label"}
   not orders_follow_ups
   not files_follow_ups
@@ -1424,6 +1432,7 @@ orders_follow_ups if {
 # Inbox entries only file issues (with their label), and link the ones they split.
 deny_github contains msg if {
   input.mode in {"idea", "bug"}
+  input.action != "read_checks"
   not input.action in {"create", "link"}
   msg := sprintf("%s entries only file issues", [input.mode])
 }
@@ -1435,6 +1444,9 @@ deny_github contains msg if {
   msg := sprintf("%s entries' issues carry the %s label", [input.mode, input.mode])
 }
 ```
+
+`gh-checks.rego` refuses nothing: [`read_checks`](#reading-cis-checks) is allowed wherever a
+run has a token. A file of that name turns it off.
 
 #### A run's own comments
 
@@ -1587,7 +1599,7 @@ deny_github contains "only work runs assign people" if {
 `deny_review`, `deny_fix` and `deny_request_review` on the pull request as it is now, and `deny_github` on
 sample writes (a comment on it by the work run whose pull request it is, one by a brainstorm
 of another issue, `issue: null`, and, when the repository has `modes:`, one by a run in the
-first of them that isn't light, else the first, `custom_mode: true`), `deny_link_branch` on a
+first of them that isn't light, else the first, `custom_mode: true`), then on a `read_checks` sample, `deny_link_branch` on a
 sample (the pull request's head branch, as its work run on the issue it closes would have had it
 linked), and replies with each rule's result (denies, with
 its messages, or allows), the merge's input and the samples' inputs, in collapsed blocks. The

@@ -20,6 +20,7 @@ import {
   verified,
   workItem,
 } from "./events.mjs";
+import { UNREAD_EVENTS } from "./github-app.mjs";
 import { fetchPull } from "./github.mjs";
 import { isLight, kindOf } from "./modes.mjs";
 import { onboardingTargets } from "./onboarding.mjs";
@@ -344,6 +345,10 @@ export function createHttp(ctx, { dashboardDir }) {
           res.statusCode = 202;
           res.end();
           const id = req.headers["x-github-delivery"];
+          const event = req.headers["x-github-event"];
+          // Nothing reads them yet (github-app.mjs UNREAD_EVENTS): no log line, nor a place in
+          // the memory of handled deliveries, which would push out those that matter.
+          if (UNREAD_EVENTS.has(event)) return;
           if (!firstTime(id)) return log(`Delivery ${id} again: already handled`);
           let payload;
           try {
@@ -351,7 +356,7 @@ export function createHttp(ctx, { dashboardDir }) {
           } catch {
             return;
           }
-          guarded(req.headers["x-github-event"], payload, id);
+          guarded(event, payload, id);
         },
         (error) => log(`Rejected a delivery: ${error.message}`),
       );

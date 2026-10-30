@@ -67,6 +67,30 @@ test("failed deliveries: those no attempt succeeded, worth another try, oldest f
   );
 });
 
+test("failed deliveries: never the events nothing reads, a status per state and commit", async () => {
+  const list = [
+    delivery(4, "status", 1, 0, { event: "status", action: undefined }),
+    delivery(3, "suite", 2, 503, { event: "check_suite", action: "completed" }),
+    delivery(2, "comment", 3, 0),
+    delivery(1, "run", 4, 503, { event: "workflow_run", action: "completed" }),
+  ];
+  assert.deepEqual(
+    failedDeliveries(list).map((d) => d.guid),
+    ["run", "comment"],
+  );
+  // A scan asks GitHub for none of them, nor logs them.
+  const github = fakeApp({ "": list });
+  const logs = [];
+  const redeliveries = createRedeliveries({
+    app: github.app,
+    now: () => NOW,
+    log: (line) => logs.push(line),
+  });
+  assert.equal(await redeliveries.scan(), 2);
+  assert.deepEqual(github.redelivered(), ["1", "2"]);
+  assert.ok(!logs.some((line) => /status|check_suite/.test(line)), logs.join("\n"));
+});
+
 test("the Link header's next cursor, none on the last page", () => {
   const link =
     '<https://api.github.com/app/hook/deliveries?per_page=100&cursor=v1_9>; rel="next", <https://api.github.com/app/hook/deliveries?per_page=100>; rel="first"';

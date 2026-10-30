@@ -15,6 +15,9 @@ export const APP_PERMISSIONS = {
   // Optional (OPTIONAL_PERMISSIONS): runs read CI with it, and rerun their pull request's failed
   // jobs (github-writes.mjs ACTIONS_WRITE), the only writes it ever gets.
   actions: "write",
+  // What CI says of a commit beyond Actions (check runs, commit statuses): `gh pr checks`.
+  checks: "read",
+  statuses: "read",
   discussions: "write",
   // Only the git gateway's push token carries it, for repos granted `allow_workflows`.
   workflows: "write",
@@ -37,7 +40,15 @@ export const APP_EVENTS = [
   "pull_request_review_comment",
   "workflow_run",
   "push",
+  // CI beyond GitHub Actions (check suites of other Apps, commit statuses): subscribed ahead of
+  // their use (the dashboard's CI status, #436; the review's CI step), see UNREAD_EVENTS.
+  "check_suite",
+  "status",
 ];
+// The events of APP_EVENTS nothing reads yet: dropped as they arrive (http.mjs), before any log
+// line or the memory of handled deliveries, and never redelivered (redeliveries.mjs). A status
+// comes for each state of each context on every commit.
+export const UNREAD_EVENTS = new Set(["check_suite", "status"]);
 // The App's settings page on GitHub (permissions, events, webhook): under the organization
 // that owns it, or the user's settings when it isn't one (or isn't known).
 export function appSettingsUrl(githubUrl, { slug, owner, ownerType }) {
@@ -106,6 +117,8 @@ export const SANDBOX_PERMISSIONS = {
   pull_requests: "read",
   metadata: "read",
   actions: "read",
+  checks: "read",
+  statuses: "read",
 };
 // Built-in light runs (brainstorms, inbox entries, discussions) comment and create issues, and
 // never touch a pull request: they can't push either (the broker's `push`), and their
@@ -145,9 +158,15 @@ export function readsOf(extra = {}) {
 // what needs one is refused by the GitHub gateway instead, saying which (github-gateway.mjs
 // NEEDS). Any other permission stays required: a token without it fails, as it would have.
 // `actions`: reading CI runs and logs, and rerunning failed jobs, which a run can do without;
+// `checks` and `statuses`, the rest of CI's results (`gh pr checks`).
 // `organization_projects`: adding items to a granted project (issue #454), which only repos
 // granted one need.
-export const OPTIONAL_PERMISSIONS = new Set(["actions", "organization_projects"]);
+export const OPTIONAL_PERMISSIONS = new Set([
+  "actions",
+  "checks",
+  "statuses",
+  "organization_projects",
+]);
 // What a run's token gets in a repo granted `allow_projects`: its reads see the organization's
 // projects (`gh project item-add` looks the project up first), and a project write the GitHub
 // gateway checked writes them (github-graphql.mjs addProjectV2ItemById).

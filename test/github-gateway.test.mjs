@@ -9,8 +9,10 @@ import { NO_TOKEN, readsOf } from "../listener/github-app.mjs";
 import { createGraphqlChecks } from "../listener/github-graphql.mjs";
 import {
   createGithubGateway,
+  explained,
   logStorage,
   needed,
+  readsChecks,
   readsThread,
   redactBody,
   secretOf,
@@ -39,6 +41,7 @@ async function gateway(
     lacking,
     forks,
     readsProjects,
+    checkRead,
   } = {},
 ) {
   const calls = [];
@@ -76,6 +79,7 @@ async function gateway(
     ...(wroteWrite && { wroteWrite }),
     ...(forks && { forks }),
     ...(readsProjects && { readsProjects }),
+    ...(checkRead && { checkRead }),
   });
   const { url } = await serve(t, (req, res) => gw.handle(req, res));
   // A run, its log's notes beside it.
@@ -753,6 +757,16 @@ test("without a write check, every REST write is refused", async (t) => {
   assert.deepEqual(gw.calls, []);
 });
 
+test("without a read check, every read of CI's checks is refused; other reads go on", async (t) => {
+  const gw = await gateway(t);
+  const { secret } = gw.register(undefined, { mode: "work", push: true });
+  const res = await gw.call("/api/v3/repos/org/repo/commits/abc/status", { secret });
+  assert.equal(res.status, 403);
+  assert.match((await res.json()).message, /no read of CI's checks is checked here/);
+  assert.equal((await gw.call("/api/v3/repos/org/repo/commits/abc", { secret })).status, 200);
+  assert.equal(gw.calls.length, 1);
+});
+
 test("a run has so many calls in flight at once", async (t) => {
   let release;
   const gw = await gateway(t, { maxInFlight: 1, hold: new Promise((r) => (release = r)) });
@@ -1219,6 +1233,208 @@ test("a checked write needing an optional permission the installation lacks: ref
   });
   assert.equal(issue.status, 200);
   assert.equal(gw.calls.length, 2);
+});
+
+test("reading CI's checks and statuses is held to checkRead, REST and GraphQL alike", async (t) => {
+  const asked = [];
+  let refuse = false;
+  const gw = await gateway(t, {
+    checkRead: async (run, action) => {
+      asked.push([run.mode, action]);
+      return refuse ? { status: 403, message: "the policies refuse it (deny_github): no" } : null;
+    },
+    checkGraphql: async (run, body) => ({
+      body,
+      write: false,
+      creates: [],
+      reads: body.includes("statusCheckRollup") ? { checks: "read", statuses: "read" } : {},
+    }),
+  });
+  const { secret, notes } = gw.register(undefined, { mode: "brainstorm", issue: 1 });
+  const reads = [
+    "/api/v3/repos/org/repo/commits/abc/check-runs",
+    "/api/v3/repos/org/repo/commits/feature%2Fx/check-suites",
+    "/api/v3/repos/org/repo/commits/abc/status",
+    "/api/v3/repos/org/repo/commits/abc/statuses?per_page=100",
+    "/api/v3/repos/org/repo/check-runs/12",
+    "/api/v3/repos/org/repo/check-suites/3/check-runs",
+    "/api/v3/repositories/12/statuses/abc",
+  ];
+  for (const path of reads) assert.equal((await gw.call(path, { secret })).status, 200, path);
+  const graphql = (query) =>
+    gw.call("/api/graphql", { secret, method: "POST", body: JSON.stringify({ query }) });
+  assert.equal((await graphql("{ statusCheckRollup }")).status, 200);
+  assert.equal(asked.length, reads.length + 1);
+  assert.deepEqual(asked[0], ["brainstorm", "read_checks"]);
+  // Other reads aren't asked.
+  assert.equal((await gw.call("/api/v3/repos/org/repo/commits/abc", { secret })).status, 200);
+  assert.equal((await graphql("{ viewer { login } }")).status, 200);
+  assert.equal(asked.length, reads.length + 1);
+  // Refused: GitHub's error shape, and the run's log says so.
+  refuse = true;
+  const calls = gw.calls.length;
+  for (const res of [await gw.call(reads[0], { secret }), await graphql("{ statusCheckRollup }")]) {
+    assert.equal(res.status, 403);
+    assert.deepEqual(await res.json(), {
+      message: "Deckhand: the policies refuse it (deny_github): no",
+    });
+  }
+  assert.match(notes.at(-1), /refused the run's GitHub call POST \/api\/graphql: the policies/);
+  assert.equal(gw.calls.length, calls);
+});
+
+test("CI's checks the installation lacks a permission for: REST refused, GraphQL explained", async (t) => {
+  const asked = [];
+  const rollup = (data, errors) => JSON.stringify({ data, ...(errors && { errors }) });
+  let answer = rollup({ repository: { pullRequest: { title: "T", statusCheckRollup: null } } });
+  const gw = await gateway(t, {
+    lacking: async (repo, wanted) => {
+      asked.push(wanted);
+      const missing = ["checks", "statuses"]
+        .filter((p) => wanted[p])
+        .map((p) => `${p}: ${wanted[p]}`);
+      return missing.length ? { missing, account: "org", url: "https://github.com/inst/7" } : null;
+    },
+    checkRead: async () => null,
+    checkGraphql: async (run, body) => ({
+      body,
+      write: false,
+      creates: [],
+      reads: body.includes("statusCheckRollup") ? { checks: "read", statuses: "read" } : {},
+      readPaths: [["repository", "pullRequest", "commits", "nodes", "commit", "statusCheckRollup"]],
+    }),
+    respond: (req, res) => {
+      if (!req.url.endsWith("/graphql")) return false;
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(answer);
+      return true;
+    },
+  });
+  const { secret, notes } = gw.register(undefined, { mode: "work", push: true });
+  // REST: only checks, refused before GitHub, naming the permission.
+  const rest = await gw.call("/api/v3/repos/org/repo/commits/abc/check-runs", { secret });
+  assert.equal(rest.status, 403);
+  assert.match((await rest.json()).message, /^Deckhand: this needs the GitHub App's checks: read /);
+  assert.equal(gw.calls.length, 0);
+  // GraphQL: `gh pr view` selects the rollup on commits without any check too: it goes on, and
+  // GitHub's answer comes back as it was.
+  const query = JSON.stringify({ query: "{ statusCheckRollup }" });
+  const post = () => gw.call("/api/graphql", { secret, method: "POST", body: query });
+  const plain = await post();
+  assert.equal(plain.status, 200);
+  assert.equal(await plain.text(), answer);
+  assert.equal(gw.calls.at(-1).headers["accept-encoding"], "identity");
+  // A commit with checks: GitHub refuses those fields, and the refusal names the permissions.
+  // Another field's refusal (another repository's data, SAML…) keeps GitHub's message.
+  const at = ["repository", "pullRequest", "commits", "nodes", 0, "commit", "statusCheckRollup"];
+  const forbidden = "Resource not accessible by integration";
+  answer = rollup({ repository: { pullRequest: { statusCheckRollup: null } } }, [
+    { type: "FORBIDDEN", path: at, message: forbidden },
+    { type: "NOT_FOUND", message: "Could not resolve" },
+    { type: "FORBIDDEN", path: ["repository", "pullRequest", "projectItems"], message: forbidden },
+  ]);
+  const refused = await post();
+  assert.equal(refused.status, 200);
+  const { data, errors } = await refused.json();
+  assert.deepEqual(data, { repository: { pullRequest: { statusCheckRollup: null } } });
+  assert.match(
+    errors[0].message,
+    /^Deckhand: this needs the GitHub App's checks: read, statuses: read permission/,
+  );
+  assert.deepEqual(errors[0].path, at);
+  assert.equal(errors[1].message, "Could not resolve");
+  assert.equal(errors[2].message, forbidden);
+  assert.match(notes.at(-1), /explained GitHub's refusal of POST \/api\/graphql/);
+  // REST's path once; each GraphQL read its fields' (a read has no write's own to ask).
+  assert.deepEqual(asked, [
+    { checks: "read" },
+    { checks: "read", statuses: "read" },
+    { checks: "read", statuses: "read" },
+  ]);
+  // Nothing else needs them.
+  const other = JSON.stringify({ query: "{ viewer { login } }" });
+  assert.equal(
+    (await gw.call("/api/graphql", { secret, method: "POST", body: other })).status,
+    200,
+  );
+  assert.equal(gw.calls.length, 3);
+});
+
+test("explained: GitHub's refusals of check fields as Deckhand's message, the rest as it was", () => {
+  const answer = (value) => Buffer.from(JSON.stringify(value));
+  const forbidden = "Resource not accessible by integration";
+  const paths = [["repository", "object", "statusCheckRollup"], ["node"]];
+  const out = explained(
+    answer({
+      data: { a: 1 },
+      errors: [
+        // At a check field, under one (list indices aside), or under a node spread on a check
+        // type: explained.
+        { message: forbidden, path: ["repository", "object", "statusCheckRollup"] },
+        {
+          type: "FORBIDDEN",
+          message: "x",
+          path: ["repository", "object", "statusCheckRollup", "contexts", "nodes", 3, "name"],
+        },
+        { type: "FORBIDDEN", message: "x", path: ["node", "checkSuite"] },
+        // Elsewhere, above one, without a path, or not a refusal: as GitHub sent it.
+        { message: forbidden, path: ["repository", "pullRequest", "projectItems"] },
+        { message: forbidden, path: ["repository", "object"] },
+        { message: forbidden },
+        { message: "other", path: ["repository", "object", "statusCheckRollup"] },
+      ],
+    }),
+    "why",
+    paths,
+  );
+  assert.deepEqual(
+    JSON.parse(out).errors.map((e) => e.message),
+    ["Deckhand: why", "Deckhand: why", "Deckhand: why", forbidden, forbidden, forbidden, "other"],
+  );
+  assert.deepEqual(JSON.parse(out).data, { a: 1 });
+  const elsewhere = answer({ errors: [{ message: forbidden, path: ["repository", "x"] }] });
+  assert.equal(explained(elsewhere, "why", paths), null);
+  // No paths (none known, or past checkSelections()' cap): GitHub's messages, all of them.
+  const there = answer({ errors: [{ message: forbidden, path: paths[0] }] });
+  assert.equal(explained(there, "why", null), null);
+  assert.equal(explained(there, "why", []), null);
+  assert.equal(explained(answer({ data: { a: 1 } }), "why", paths), null);
+  assert.equal(explained(Buffer.from("not json"), "why", paths), null);
+});
+
+test("readsChecks: check runs and suites and statuses, a commit's or by id", () => {
+  for (const path of [
+    "repos/org/repo/commits/abc/check-runs",
+    "repos/org/repo/commits/a/b/CHECK-SUITES",
+    "repos/org/repo/commits/abc/status",
+    "repos/org/repo/commits/abc/statuses",
+    "repos/org/repo/commits/abc/status/",
+    "repos/org/repo/check-runs/1/annotations",
+    "repos/org/repo/check-suites/2",
+    "repos/org/repo/statuses/abc",
+    "repositories/12/commits/abc/check-runs",
+  ]) {
+    assert.ok(readsChecks(path), path);
+  }
+  for (const path of [
+    "repos/org/repo/commits/abc",
+    "repos/org/repo/commits",
+    "repos/org/repo/check-runsx",
+    "repos/org/repo/statuses",
+    "repos/org/repo/actions/runs",
+  ]) {
+    assert.ok(!readsChecks(path), path);
+  }
+  // Their permissions: the run's own repository's only, as Actions'; deny_github's read_checks
+  // covers any repository's.
+  const own = "Org/Repo";
+  assert.deepEqual(needed("repos/org/repo/commits/abc/status", {}, own), { statuses: "read" });
+  assert.deepEqual(needed("repos/org/repo/commits/a/b/statuses", {}, own), { statuses: "read" });
+  assert.deepEqual(needed("repos/org/repo/check-runs/1", {}, own), { checks: "read" });
+  assert.deepEqual(needed("repos/org/repo/commits/abc/check-suites", {}, own), { checks: "read" });
+  assert.deepEqual(needed("repos/other/repo/check-runs/1", {}, own), {});
+  assert.deepEqual(needed("repositories/12/check-runs/1", {}, own), {});
+  assert.ok(readsChecks("repos/other/repo/check-runs/1"));
 });
 
 test("logStorage: GitHub's log storage and its own host, nothing else", () => {

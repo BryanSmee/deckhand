@@ -351,6 +351,26 @@ test("organization_projects: optional, so an installation that lacks it still mi
   });
 });
 
+test("checks and statuses: optional, in the App's and the runs' permissions, events subscribed", async () => {
+  for (const name of ["checks", "statuses"]) {
+    assert.ok(OPTIONAL_PERMISSIONS.has(name), name);
+    assert.equal(APP_PERMISSIONS[name], "read", name);
+    assert.equal(SANDBOX_PERMISSIONS[name], "read", name);
+  }
+  assert.ok(APP_EVENTS.includes("check_suite") && APP_EVENTS.includes("status"));
+  // An installation that hasn't accepted them: its runs' tokens go without them, and work.
+  const granted = { ...SANDBOX_PERMISSIONS, checks: undefined, statuses: undefined };
+  const { app, gh } = installedWith(granted);
+  assert.equal((await app.repoToken("org/repo")).token, "tok-1");
+  const { checks: _, statuses: __, ...rest } = SANDBOX_PERMISSIONS;
+  const mint = gh.calls.find((c) => c.path.endsWith("/access_tokens"));
+  assert.deepEqual(JSON.parse(mint.body).permissions, rest);
+  assert.deepEqual((await app.lacking("org/repo", { checks: "read", statuses: "read" })).missing, [
+    "checks: read",
+    "statuses: read",
+  ]);
+});
+
 test("a required permission the installation lacks still fails the token", async () => {
   const { app, gh } = installedWith({ ...SANDBOX_PERMISSIONS, issues: "read" });
   await assert.rejects(app.repoToken("org/repo"), { status: 422 });
