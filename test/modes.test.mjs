@@ -69,3 +69,22 @@ test("work runs and the repo's other modes label their issues and create labels;
   assert.equal(work.other_issue, undefined);
   assert.ok(!work.label.includes("edit") && !work.label.includes("delete"));
 });
+
+test("docs/repo-config.md's ceiling table and `action` list name every action of the ceilings", () => {
+  const docs = readFileSync(new URL("../docs/repo-config.md", import.meta.url), "utf8");
+  const input = docs.slice(docs.indexOf("### The GitHub input"));
+  const row = (start) => new RegExp(`^\\| ${start}.*$`, "m").exec(input)?.[0] ?? "";
+  const actions = row("`action` ");
+  for (const [mode, start] of [
+    ["work", "`work`"],
+    ["brainstorm", "`brainstorm`"],
+    ["idea", "`idea`"],
+    ["discussion", "`discussion`"],
+  ]) {
+    const shown = row(start);
+    for (const action of new Set(Object.values(MODES[mode].ceiling).flat())) {
+      assert.ok(shown.includes(`\`${action}\``), `${mode}'s row names ${action}`);
+      assert.ok(actions.includes(`\`${action}\``), `the action list names ${action}`);
+    }
+  }
+});
