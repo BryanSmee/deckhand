@@ -164,11 +164,14 @@ export function engineFor(config, task, settings, { grant, limits }, fork, note)
 // the reply's reason, or null. Docker does all of it; the Kubernetes runner runs no container
 // engine, builds no repo image, runs no preview hook and mounts no host path
 // (runner/kubernetes.mjs). Only what is granted: an ungranted ask is refused before this, by
-// grantedAccess().
-export function runnerRefusal(config, task, settings, { grant, mounts }) {
+// grantedAccess(). The engine only when the run would get one (`engine`, engineFor()'s): a
+// light run, a fork's, or one without SANDBOX_ENGINE goes without, as under Docker. A
+// preview hook stops every run, as the issue settled (#391): the hook itself runs on
+// webhooks, and previews.mjs skips it here.
+export function runnerRefusal(config, settings, { grant, mounts }, engine) {
   if ((config.runner ?? "docker") === "docker") return null;
   const asked = [
-    settings.docker && grant.allowDocker && !task.live.light && "a container engine (`docker`)",
+    engine && "a container engine (`docker`)",
     settings.dockerfile && grant.allowDockerfile && `its own image (\`dockerfile\`)`,
     settings.preview && grant.allowPreview && "a preview hook (`preview`)",
     mounts.length && "host mounts (`mounts`)",

@@ -36,6 +36,9 @@ export function inClusterFetch({ ca = readFileSync(`${SERVICE_ACCOUNT}/ca.crt`) 
           }),
         );
       });
+      // A connection that died without a word (a lost node, an API server replaced) shows
+      // as one: a followed log otherwise waits on it forever.
+      req.on("socket", (socket) => socket.setKeepAlive(true, 30_000));
       req.on("error", reject);
       req.end(body);
     });
@@ -49,12 +52,14 @@ export function apiBase(env = process.env) {
 }
 
 // `base`: the API server's URL; `token()`: the bearer token, read at each call, as the
-// kubelet rotates it; `namespace`: where everything the runner makes lives.
+// kubelet rotates it; `namespace`: where everything the runner makes lives; `timeoutMs`: how
+// long a call (not a stream, whose caller says when to stop) waits for its whole answer.
 export function createKubeApi({
   fetch = inClusterFetch(),
   base = apiBase(),
   token = () => readFileSync(`${SERVICE_ACCOUNT}/token`, "utf8").trim(),
   namespace,
+  timeoutMs = 30_000,
 }) {
   const ns = `/api/v1/namespaces/${namespace}`;
 
@@ -87,32 +92,45 @@ export function createKubeApi({
     throw new KubeError(`${method} ${path}`, res.status, message);
   }
 
-  const json = async (res) => (res.status === 204 ? null : res.json());
+  // call()'s answer, read whole as JSON within `timeoutMs`: a connection that hangs is an
+  // error the caller can retry (kubernetes.mjs look()), not a wait without end.
+  async function answer(method, path, options = {}) {
+    const signal = AbortSignal.timeout(timeoutMs);
+    try {
+      const res = await call(method, path, { ...options, signal });
+      if (method === "DELETE") return await res.body?.cancel();
+      return res.status === 204 ? null : await res.json();
+    } catch (error) {
+      if (!signal.aborted) throw error;
+      throw new KubeError(`${method} ${path}`, 0, `no answer in ${timeoutMs / 1000} s`);
+    }
+  }
 
   return {
     namespace,
-    get: async (path, query) => json(await call("GET", path, { query })),
+    get: (path, query) => answer("GET", path, { query }),
     // null for a 404: "is it there?" is a question the runner asks often.
     find: async (path, query) => {
       try {
-        return json(await call("GET", path, { query }));
+        return await answer("GET", path, { query });
       } catch (error) {
         if (error.status === 404) return null;
         throw error;
       }
     },
-    create: async (path, body) => json(await call("POST", path, { body })),
+    create: (path, body) => answer("POST", path, { body }),
     // False when it was gone already.
     remove: async (path, query) => {
       try {
-        await (await call("DELETE", path, { query })).body?.cancel();
+        await answer("DELETE", path, { query });
         return true;
       } catch (error) {
         if (error.status === 404) return false;
         throw error;
       }
     },
-    // The answer itself, its body read as it comes (a followed log).
+    // The answer itself, its body read as it comes (a followed log), until `signal` aborts:
+    // no time limit of its own.
     stream: (path, query, signal) => call("GET", path, { query, signal }),
   };
 }

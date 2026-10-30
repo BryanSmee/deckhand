@@ -981,8 +981,8 @@ policy check below accepts no peer in another namespace, so sandboxes elsewhere 
 be allowed to reach them, and every run would be refused.
 
 - **RBAC**: a Role for the listener's ServiceAccount: `create`, `get`, `list` and `delete` on
-  `pods`, `secrets` and `persistentvolumeclaims`, `get` on `pods/log`, `services`, and `list`
-  on `networkpolicies` (`networking.k8s.io`) and `endpointslices` (`discovery.k8s.io`).
+  `pods`, `secrets` and `persistentvolumeclaims`, `get` on `pods/log` and `services`, and `list` on
+  `events` (why a pod is stuck), `networkpolicies` (`networking.k8s.io`) and `endpointslices` (`discovery.k8s.io`).
   Nothing cluster-wide.
 - **Services** named after the hosts of `BROKER_URL` and `EGRESS_PROXY` (`listener` on 8081,
   `egress` on 3128 by default), each with a cluster IP. Sandboxes get no DNS server (a lookup fails at once): their pods map
@@ -1034,9 +1034,10 @@ with the run. An issue's clone and agent session are claims of their own
 stays Pending longer than `KUBERNETES_PENDING_MINUTES` (no node with the room, an image it
 can't pull) is removed, and its run fails with Kubernetes' reason in its reply.
 
-Not on Kubernetes yet: a run whose repository is granted a container engine (`docker`), its own
-image (`dockerfile`), a preview hook (`preview`) or host mounts (`mounts`) is refused, with a
-reply naming the runner. Caches are skipped, said in the run's log, and so is the Antigravity
+Not on Kubernetes yet: a run whose repository is granted its own image (`dockerfile`), a
+preview hook (`preview`) or host mounts (`mounts`) is refused, with a reply naming the runner,
+and so is one that would get a container engine (`docker`; a light run, a fork's or one
+without `SANDBOX_ENGINE` goes without, as under Docker). Caches are skipped, said in the run's log, and so is the Antigravity
 CLI's plan login, which the listener refreshes in a container.
 
 ## Container engine

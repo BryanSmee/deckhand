@@ -223,8 +223,10 @@ export function podSpec(
   };
 }
 
-// Why a pod is still Pending, as Kubernetes says it: its container waiting (an image it can't
-// pull), or not scheduled (no node with the room).
+// Why a pod is still Pending, as its status says it: its container waiting (an image it can't
+// pull), or not scheduled (no node with the room). Null when it says nothing more than
+// ContainerCreating: its events tell then (Multi-Attach of a claim another node holds, a
+// volume that won't mount), or nothing does.
 export function pendingReason(pod) {
   for (const s of pod.status?.containerStatuses ?? []) {
     const w = s.state?.waiting;
@@ -236,12 +238,28 @@ export function pendingReason(pod) {
     (c) => c.type === "PodScheduled" && c.status === "False",
   );
   if (unscheduled) return unscheduled.message || unscheduled.reason || "not scheduled";
-  return "Kubernetes gave no reason";
+  return null;
 }
 
-// The agent's output is JSON, one object a line; everything else (the setup's, the
-// entrypoint's) is what Docker keeps apart as stderr. A pod's log has both in one stream.
-const isOutput = (line) => line.startsWith("{");
+// The newest Warning event's "reason: message" among `events` (the pod's), or null.
+export function latestWarning(events) {
+  const when = (e) =>
+    Date.parse(e.lastTimestamp ?? e.eventTime ?? e.metadata?.creationTimestamp ?? "") || 0;
+  const last = events.filter((e) => e.type === "Warning").sort((a, b) => when(b) - when(a))[0];
+  return last ? `${last.reason}: ${last.message}` : null;
+}
+
+const UNSAID = "Kubernetes gave no reason: its volumes may not have mounted";
+
+// A pod's log has stdout and stderr in one stream: the sandbox starts each stderr line (the
+// setup's, the entrypoint's) with this, when SANDBOX_TAG_STDERR asks it to
+// (../../sandbox/entrypoint.sh), so they stay apart from the agent's output, as under Docker.
+// A setup line that looks like JSON is still the setup's.
+export const STDERR_TAG = "\x1e";
+
+// How often follow() looks at the pod while its log streams: a connection the API server
+// dropped without a word would otherwise never end.
+const WATCH_MS = 30_000;
 
 export function createKubernetesRunner({
   config,
@@ -251,6 +269,7 @@ export function createKubernetesRunner({
   now = Date.now,
   sleep = delay,
   timers, // inbox.mjs poll()'s clock
+  watchMs = WATCH_MS,
 }) {
   const { pendingMs, storageClass, sessionSize } = config.kubernetes;
   const inbox = createInbox({ inboxDir, timers });
@@ -315,7 +334,7 @@ export function createKubernetesRunner({
           annotations: { ...labels, "deckhand.run": run },
           secret,
           // Not secrets: where the run's files are.
-          env: inbox.env(config.brokerUrl, ca, digest),
+          env: { ...inbox.env(config.brokerUrl, ca, digest), SANDBOX_TAG_STDERR: "1" },
           aliases,
         }),
       );
@@ -447,31 +466,48 @@ export function createKubernetesRunner({
 
   // Resolves once the pod's log ends (it exited, or the API closed the stream: state() tells).
   // `skip`: { out, err } lines already read by a previous listener. The log has the agent's
-  // output and the rest in one stream, told apart line by line (isOutput()). A pod that stays
-  // Pending past KUBERNETES_PENDING_MINUTES is removed, and its run fails with the reason.
+  // output and the rest in one stream, told apart by STDERR_TAG. A pod that stays Pending past
+  // KUBERNETES_PENDING_MINUTES is removed, and its run fails with the reason.
+  //
+  // A stream the API server dropped without closing it (an instance replaced during an
+  // upgrade) would never end: while it lasts, the pod is looked at every watchMs, and once it
+  // has been seen exited twice in a row, the stream is let go and its log read once more,
+  // whole, for the lines it hadn't delivered.
   async function follow(name, { skip = { out: 0, err: 0 }, onOut, onErr }) {
     if (!(await started(name))) return;
-    const seen = { out: 0, err: 0 };
-    const split = splitLines((line, at) => {
-      const kind = isOutput(line) ? "out" : "err";
-      if (seen[kind]++ < skip[kind]) return;
+    let seen = { out: 0, err: 0 };
+    let past = skip;
+    const each = (raw, at) => {
+      const kind = raw.startsWith(STDERR_TAG) ? "err" : "out";
+      const line = kind === "err" ? raw.slice(STDERR_TAG.length) : raw;
+      if (seen[kind]++ < past[kind]) return;
       try {
         (kind === "out" ? onOut : onErr)(line, at);
       } catch (error) {
         log(`The log of ${name}: ${error.stack ?? error}`);
       }
-    });
+    };
+    const stop = new AbortController();
+    const watch = watchdog(name, stop);
     try {
-      const res = await api.stream(`${podPath(name)}/log`, {
-        container: CONTAINER,
-        follow: "true",
-        timestamps: "true",
-      });
-      for await (const chunk of res.body ?? []) split(Buffer.from(chunk));
+      await readLog(name, { follow: "true" }, stop.signal, each);
     } catch (error) {
-      // The caller follows again while the pod runs (runs.mjs follow()).
-      log(`The log of ${name}: ${error.message}`);
+      if (!stop.signal.aborted) {
+        // The caller follows again while the pod runs (runs.mjs follow()).
+        log(`The log of ${name}: ${error.message}`);
+        return;
+      }
+      log(`The log of ${name}: its stream outlived the pod, reading the rest`);
+      past = { out: Math.max(skip.out, seen.out), err: Math.max(skip.err, seen.err) };
+      seen = { out: 0, err: 0 };
+      try {
+        await readLog(name, {}, AbortSignal.timeout(WATCH_MS), each);
+      } catch (error) {
+        log(`The log of ${name}: ${error.message}`);
+      }
       return;
+    } finally {
+      clearInterval(watch);
     }
     // The kubelet rotates a container's log (containerLogMaxSize): what was rotated away is
     // gone, and lines were read twice or will be skipped.
@@ -482,6 +518,38 @@ export function createKubernetesRunner({
     }
   }
 
+  // The pod's log, line by line to `each`, until it ends or `signal` aborts.
+  async function readLog(name, query, signal, each) {
+    const res = await api.stream(
+      `${podPath(name)}/log`,
+      { container: CONTAINER, ...query, timestamps: "true" },
+      signal,
+    );
+    const split = splitLines(each);
+    for await (const chunk of res.body ?? []) split(Buffer.from(chunk));
+  }
+
+  // Aborts `stop` once the pod has been seen exited (or gone) on two looks in a row: the
+  // first may come while the stream still delivers its last lines.
+  function watchdog(name, stop) {
+    let looking = false;
+    let exited = 0;
+    const timer = setInterval(async () => {
+      if (looking) return;
+      looking = true;
+      try {
+        exited = (await state(name)) === "running" ? 0 : exited + 1;
+        if (exited >= 2) stop.abort();
+      } catch (error) {
+        log(`The log of ${name}: ${error.message}`);
+      } finally {
+        looking = false;
+      }
+    }, watchMs);
+    timer.unref?.();
+    return timer;
+  }
+
   // Until the pod leaves Pending: true once its container ran, false when it is gone.
   async function started(name) {
     for (;;) {
@@ -489,7 +557,7 @@ export function createKubernetesRunner({
       if (!pod) return false;
       if (pod.status?.phase !== "Pending") return true;
       if (overdue(pod)) {
-        const why = pendingReason(pod);
+        const why = await whyPending(name, pod);
         log(`${name}: Pending for ${minutes(pendingMs)} min (${why}): removing it`);
         await kill(name).catch((error) => log(`Removing ${name}: ${error.message}`));
         throw new RunError(
@@ -497,6 +565,21 @@ export function createKubernetesRunner({
         );
       }
       await sleep(POLL_MS);
+    }
+  }
+
+  // pendingReason(), else the pod's latest Warning event, else that Kubernetes didn't say.
+  async function whyPending(name, pod) {
+    const said = pendingReason(pod);
+    if (said) return said;
+    try {
+      const { items = [] } = await api.get("events", {
+        fieldSelector: `involvedObject.kind=Pod,involvedObject.name=${kubeName(name)}`,
+      });
+      return latestWarning(items) ?? UNSAID;
+    } catch (error) {
+      log(`The events of ${name}: ${error.message}`);
+      return UNSAID;
     }
   }
 
@@ -515,7 +598,9 @@ export function createKubernetesRunner({
       const pod = await look(name);
       if (!pod || !running(pod)) return;
       if (overdue(pod) && !pod.metadata.deletionTimestamp) {
-        log(`${name}: Pending for ${minutes(pendingMs)} min (${pendingReason(pod)}): removing it`);
+        log(
+          `${name}: Pending for ${minutes(pendingMs)} min (${await whyPending(name, pod)}): removing it`,
+        );
         await kill(name);
       }
       await sleep(POLL_MS);

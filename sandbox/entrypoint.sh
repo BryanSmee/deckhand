@@ -16,6 +16,37 @@
 #   bash, git log…      any other command, run in the clone
 set -euo pipefail
 
+# SANDBOX_TAG_STDERR=1 (the Kubernetes runner, whose pod log has stdout and stderr in one
+# stream): every stderr line, the setup's and the agent's, starts with an ASCII record
+# separator, so the listener keeps them apart from the agent's output as Docker's two streams
+# do. This script runs again under a wrapper that tags them, and forwards SIGTERM to it. The
+# tagger gets up to 2 s to write the last lines before the container stops: no more, as a
+# background job (deckhand-files' watcher) may hold stderr open until then.
+if [ -n "${SANDBOX_TAG_STDERR:-}" ] && [ -z "${DECKHAND_TAGGED:-}" ]; then
+  export DECKHAND_TAGGED=1
+  # A FIFO rather than >(…), whose pipe bash keeps open itself: the tagger would never end.
+  fifo=$(mktemp -u /tmp/deckhand-stderr.XXXXXX)
+  mkfifo -m 600 "$fifo"
+  LC_ALL=C sed -u "s/^/$(printf '\036')/" < "$fifo" >&2 &
+  tagger=$!
+  "$0" "$@" <&0 2> "$fifo" &
+  child=$!
+  trap 'kill -TERM "$child" 2> /dev/null' TERM INT
+  status=0
+  wait "$child" || status=$?
+  # Interrupted by the trap: the child's own status comes once it exits.
+  if kill -0 "$child" 2> /dev/null; then
+    status=0
+    wait "$child" || status=$?
+  fi
+  for _ in $(seq 20); do
+    kill -0 "$tagger" 2> /dev/null || break
+    sleep 0.1
+  done
+  rm -f "$fifo"
+  exit "$status"
+fi
+
 : "${REPO_URL:?REPO_URL: the repository to clone (https://github.com/owner/repo.git)}"
 : "${BASE_BRANCH:=main}"
 

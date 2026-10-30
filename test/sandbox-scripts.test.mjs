@@ -87,6 +87,20 @@ test("a sandbox without its Codex version says how to install it", () => {
   );
 });
 
+// The Kubernetes runner's pod log has both streams in one: stderr's lines are tagged there.
+test("SANDBOX_TAG_STDERR: every stderr line starts with a record separator, the status kept", () => {
+  const env = { PATH: process.env.PATH, REPO_URL: "https://x/o/r.git", SANDBOX_AGENT: "gemini" };
+  const tagged = spawnSync(`${bin}entrypoint.sh`, [], {
+    env: { ...env, SANDBOX_TAG_STDERR: "1" },
+    encoding: "utf8",
+  });
+  assert.equal(tagged.status, 1);
+  assert.equal(tagged.stdout, "");
+  assert.match(tagged.stderr, /^\x1eUnknown agent gemini \(SANDBOX_AGENT\)/);
+  const plain = spawnSync(`${bin}entrypoint.sh`, [], { env, encoding: "utf8" });
+  assert.match(plain.stderr, /^Unknown agent gemini/);
+});
+
 test("an unknown agent stops the sandbox before anything runs", () => {
   for (const agent of ["gemini", "../claude", "Claude"]) {
     const result = spawnSync(`${bin}entrypoint.sh`, [], {

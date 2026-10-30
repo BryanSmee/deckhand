@@ -15,6 +15,7 @@ import {
   isolationProblem,
   kubeName,
   labelValue,
+  latestWarning,
   pendingReason,
   podSpec,
   quantity,
@@ -55,12 +56,22 @@ const SERVICES = {
 // A namespace's API: `objects` by resource then name; `logs` a pod's log, chunks of text;
 // `fail(call)` answers a call instead (a Response), when it does. Every call is in `calls`
 // as "METHOD path?query", the bodies sent in `bodies`.
-function fakeApi({ policies = [POLICY], logs = {}, slices = [], fail = () => null } = {}) {
+// `fail` gets the request's `signal`, and may answer a promise that only it ends (an API that
+// never answers); a pod's log may be a function of { follow, signal } giving a Response.
+// `timeoutMs`: createKubeApi()'s.
+function fakeApi({
+  policies = [POLICY],
+  logs = {},
+  slices = [],
+  fail = () => null,
+  timeoutMs,
+} = {}) {
   const objects = {
     pods: new Map(),
     secrets: new Map(),
     persistentvolumeclaims: new Map(),
     services: new Map(Object.entries(SERVICES)),
+    events: new Map(),
   };
   const calls = [];
   const bodies = [];
@@ -77,7 +88,7 @@ function fakeApi({ policies = [POLICY], logs = {}, slices = [], fail = () => nul
     assert.equal(init.headers.authorization, "Bearer token-1");
     const body = init.body && JSON.parse(init.body);
     if (body) bodies.push(body);
-    const failed = fail({ method, path: pathname, body });
+    const failed = await fail({ method, path: pathname, body, signal: init.signal });
     if (failed) return failed;
     if (pathname === `/apis/networking.k8s.io/v1/namespaces/${NS}/networkpolicies`) {
       return Response.json({ items: policies });
@@ -94,6 +105,9 @@ function fakeApi({ policies = [POLICY], logs = {}, slices = [], fail = () => nul
       Response.json({ message: `${kind} "${name}" not found` }, { status: 404 });
     if (sub === "log") {
       if (!store.has(name)) return missing();
+      if (typeof logs[name] === "function") {
+        return logs[name]({ follow: searchParams.get("follow") === "true", signal: init.signal });
+      }
       const chunks = logs[name] ?? [];
       return new Response(
         new ReadableStream({
@@ -124,7 +138,13 @@ function fakeApi({ policies = [POLICY], logs = {}, slices = [], fail = () => nul
     const selector = searchParams.get("labelSelector");
     return Response.json({ items: [...store.values()].filter((o) => matches(o, selector)) });
   };
-  const api = createKubeApi({ fetch, base: "https://kube", token: () => "token-1", namespace: NS });
+  const api = createKubeApi({
+    fetch,
+    base: "https://kube",
+    token: () => "token-1",
+    namespace: NS,
+    timeoutMs,
+  });
   return { api, calls, bodies, objects };
 }
 
@@ -183,6 +203,8 @@ test("start: a Secret with the run's env, a claim per session volume, then the P
   assert.deepEqual(c.env, [
     { name: "TASK_INBOX", value: "http://listener:8081/run/inbox" },
     { name: "DECKHAND_CA", value: "http://listener:8081/run/ca" },
+    // Its stderr lines tagged: the pod log has both streams in one.
+    { name: "SANDBOX_TAG_STDERR", value: "1" },
   ]);
   assert.deepEqual(pod.spec.hostAliases, [
     { ip: "10.96.0.10", hostnames: ["listener"] },
@@ -393,11 +415,12 @@ test("list and state: this deployment's sandbox pods, Pending and Running as run
 
 test("follow: the agent's lines and the rest apart, from one log, past what was read", async (t) => {
   const stamp = (s) => `2026-10-30T10:00:0${s}.123456789Z `;
+  // Stderr's lines start with STDERR_TAG, a setup's JSON too: it's never the agent's.
   const log = [
-    `${stamp(1)}Cloning…\n`,
-    `${stamp(2)}{"type":"system"}\n${stamp(3)}Setup: npm ci\n`,
+    `${stamp(1)}\x1eCloning…\n`,
+    `${stamp(2)}{"type":"system"}\n${stamp(3)}\x1e{"type":"result","result":"from setup"}\n`,
     `${stamp(4)}{"type":"assi`,
-    `stant"}\n${stamp(5)}{"type":"result"}\n${stamp(6)}half a line`,
+    `stant"}\n${stamp(5)}{"type":"result"}\n${stamp(6)}\x1ehalf a line`,
   ];
   const { runner } = setup(t, { logs: { "dh-org-repo-12-abc": log } });
   await runner.start(spec());
@@ -413,13 +436,13 @@ test("follow: the agent's lines and the rest apart, from one log, past what was 
     ['{"type":"result"}', Date.parse("2026-10-30T10:00:05.123Z")],
   ]);
   // The half line is read again, whole, by the next follow().
-  assert.deepEqual(err, ["Setup: npm ci"]);
+  assert.deepEqual(err, ['{"type":"result","result":"from setup"}']);
 });
 
 test("follow: a line over MAX_LINE is cut; a handler that throws loses its line only", async (t) => {
   const long = "x".repeat(MAX_LINE + 10);
   const { runner, logged } = setup(t, {
-    logs: { "dh-org-repo-12-abc": [`${long}\n`, "boom\n", "after\n"] },
+    logs: { "dh-org-repo-12-abc": [`\x1e${long}\n`, "\x1eboom\n", "\x1eafter\n"] },
   });
   await runner.start(spec());
   const err = [];
@@ -430,12 +453,13 @@ test("follow: a line over MAX_LINE is cut; a handler that throws loses its line 
       err.push(line);
     },
   });
-  assert.deepEqual(err, ["x".repeat(MAX_LINE) + LINE_CUT, "after"]);
+  // The tag counts toward MAX_LINE.
+  assert.deepEqual(err, ["x".repeat(MAX_LINE - 1) + LINE_CUT, "after"]);
   assert.ok(logged.some((l) => l.includes("disk full")));
 });
 
 test("follow: a log shorter than what was read (rotated by the kubelet) is logged", async (t) => {
-  const { runner, logged } = setup(t, { logs: { "dh-org-repo-12-abc": ["one\n"] } });
+  const { runner, logged } = setup(t, { logs: { "dh-org-repo-12-abc": ["\x1eone\n"] } });
   await runner.start(spec());
   await runner.follow("dh-org-repo-12-abc", {
     skip: { out: 40, err: 2 },
@@ -452,7 +476,7 @@ test("follow: a Pending pod is waited for, then followed", async (t) => {
   const fake = {};
   const { runner, objects, calls } = setup(
     t,
-    { logs: { "dh-org-repo-12-abc": ["started\n"] } },
+    { logs: { "dh-org-repo-12-abc": ["\x1estarted\n"] } },
     {
       sleep: async () => {
         if (++looks === 3) fake.pod.status.phase = "Running";
@@ -500,6 +524,48 @@ test("follow: a pod Pending past KUBERNETES_PENDING_MINUTES fails its run, sayin
   assert.equal(objects.pods.size, 0);
 });
 
+test("follow: a pod stuck mounting its volumes fails with its latest Warning event", async (t) => {
+  const { runner, objects, calls } = setup(t);
+  await runner.start(spec());
+  const pod = objects.pods.get("dh-org-repo-12-abc");
+  pod.metadata.creationTimestamp = "2026-10-30T09:50:00Z";
+  pod.status = {
+    phase: "Pending",
+    containerStatuses: [{ state: { waiting: { reason: "ContainerCreating" } } }],
+  };
+  objects.events.set("e1", {
+    metadata: { name: "e1" },
+    type: "Warning",
+    reason: "FailedAttachVolume",
+    message: 'Multi-Attach error for volume "pvc-1": Volume is already used by pod(s) other',
+    lastTimestamp: "2026-10-30T09:55:00Z",
+  });
+  const follow = () => runner.follow("dh-org-repo-12-abc", { onOut: () => {}, onErr: () => {} });
+  await assert.rejects(
+    follow(),
+    /stayed Pending for 10 min \(FailedAttachVolume: Multi-Attach error for volume "pvc-1"/,
+  );
+  assert.ok(
+    calls.some((c) =>
+      c.endsWith(
+        "/events?fieldSelector=involvedObject.kind%3DPod%2CinvolvedObject.name%3Ddh-org-repo-12-abc",
+      ),
+    ),
+  );
+  // No event either: it says what it can.
+  await runner.remove("dh-org-repo-12-abc", "dh-org-repo-12-abc-1730000000");
+  objects.events.clear();
+  await runner.start(spec());
+  Object.assign(objects.pods.get("dh-org-repo-12-abc"), {
+    status: pod.status,
+    metadata: {
+      ...objects.pods.get("dh-org-repo-12-abc").metadata,
+      creationTimestamp: "2026-10-30T09:50:00Z",
+    },
+  });
+  await assert.rejects(follow(), /\(Kubernetes gave no reason: its volumes may not have mounted\)/);
+});
+
 test("pendingReason: an image it can't pull before scheduling, else Kubernetes' silence", () => {
   const waiting = (reason, message) => ({
     status: { containerStatuses: [{ state: { waiting: { reason, message } } }] },
@@ -508,8 +574,19 @@ test("pendingReason: an image it can't pull before scheduling, else Kubernetes' 
     pendingReason(waiting("ImagePullBackOff", 'Back-off pulling image "x"')),
     'ImagePullBackOff: Back-off pulling image "x"',
   );
-  assert.equal(pendingReason(waiting("ContainerCreating")), "Kubernetes gave no reason");
-  assert.equal(pendingReason({}), "Kubernetes gave no reason");
+  // Nothing more than ContainerCreating: the events tell.
+  assert.equal(pendingReason(waiting("ContainerCreating")), null);
+  assert.equal(pendingReason({}), null);
+  const event = (type, reason, at) => ({ type, reason, message: `${reason}!`, lastTimestamp: at });
+  assert.equal(
+    latestWarning([
+      event("Warning", "FailedMount", "2026-10-30T09:55:00Z"),
+      event("Warning", "FailedAttachVolume", "2026-10-30T09:58:00Z"),
+      event("Normal", "Scheduled", "2026-10-30T09:59:00Z"),
+    ]),
+    "FailedAttachVolume: FailedAttachVolume!",
+  );
+  assert.equal(latestWarning([event("Normal", "Pulling", "2026-10-30T09:59:00Z")]), null);
 });
 
 test("wait: a leftover stuck Pending past the limit is removed, not waited on forever", async (t) => {
@@ -698,27 +775,28 @@ test("images on Kubernetes: the base image only; the agent's claim must be there
 
 test("runnerRefusal: what Kubernetes can't run yet, granted, gets a reply naming the runner", () => {
   const grant = { allowDocker: true, allowDockerfile: true, allowPreview: true };
-  const task = (light = false) => ({ live: { light } });
   const settings = { docker: {}, dockerfile: "Dockerfile", preview: { command: "x" } };
   const mounts = [{ source: "/srv", target: "/srv" }];
-  assert.equal(runnerRefusal({ runner: "docker" }, task(), settings, { grant, mounts }), null);
+  const engine = { limits: {}, cache: null };
+  assert.equal(runnerRefusal({ runner: "docker" }, settings, { grant, mounts }, engine), null);
   assert.equal(
-    runnerRefusal(config, task(), settings, { grant, mounts }),
+    runnerRefusal(config, settings, { grant, mounts }, engine),
     "the operator runs sandboxes on the kubernetes runner, which doesn't support a container engine (`docker`), its own image (`dockerfile`), a preview hook (`preview`), host mounts (`mounts`) yet. The repository can remove them from `.deckhand.yaml`, or the operator can run its sandboxes on Docker (`RUNNER=docker`).",
   );
-  // A light run gets no engine anyway; nothing asked, nothing refused.
+  // No engine for this run (a light run, a fork's, no SANDBOX_ENGINE): it goes without one,
+  // as under Docker.
   assert.match(
-    runnerRefusal(config, task(true), { dockerfile: "D" }, { grant, mounts: [] }),
+    runnerRefusal(config, { docker: {}, dockerfile: "D" }, { grant, mounts: [] }, null),
     /support its own image \(`dockerfile`\) yet\. The repository can remove it from/,
   );
-  assert.equal(runnerRefusal(config, task(true), { docker: {} }, { grant, mounts: [] }), null);
-  assert.equal(runnerRefusal(config, task(), {}, { grant, mounts: [] }), null);
+  assert.equal(runnerRefusal(config, { docker: {} }, { grant, mounts: [] }, null), null);
+  assert.equal(runnerRefusal(config, {}, { grant, mounts: [] }, null), null);
 });
 
 test("state and follow: an API that errs for a while is asked again, a run at work goes on", async (t) => {
   let failures = 0;
   const { runner, logged, clock } = setup(t, {
-    logs: { "dh-org-repo-12-abc": ["still here\n"] },
+    logs: { "dh-org-repo-12-abc": ["\x1estill here\n"] },
     fail: ({ method, path }) =>
       method === "GET" && path.endsWith("/pods/dh-org-repo-12-abc") && failures-- > 0
         ? Response.json({ message: "etcdserver: leader changed" }, { status: 500 })
@@ -776,4 +854,62 @@ test("remove: a pod still running gets its grace, an exited one goes at once", a
   assert.ok(
     calls.includes("DELETE /api/v1/namespaces/runs/pods/dh-org-repo-12-abc?gracePeriodSeconds=0"),
   );
+});
+
+// What an API that never answers does: nothing, until the request's signal aborts.
+const never = (signal) =>
+  new Promise((resolve, reject) => signal.addEventListener("abort", () => reject(signal.reason)));
+
+test("state: a call the API never answers times out, and is asked again", async (t) => {
+  let hangs = 0;
+  const { runner, logged } = setup(t, {
+    timeoutMs: 20,
+    fail: ({ method, path, signal }) =>
+      method === "GET" && path.endsWith("/pods/dh-org-repo-12-abc") && hangs-- > 0
+        ? never(signal)
+        : null,
+  });
+  await runner.start(spec());
+  hangs = 2;
+  assert.equal(await runner.state("dh-org-repo-12-abc"), "running");
+  assert.equal(
+    logged.filter((l) => l.includes("GET pods/dh-org-repo-12-abc: no answer in 0.02 s")).length,
+    2,
+  );
+});
+
+test("follow: a log stream that outlives its pod is let go, the rest of the log read", async (t) => {
+  const encode = (text) => new TextEncoder().encode(text);
+  const fake = {};
+  const logs = {
+    "dh-org-repo-12-abc": ({ follow, signal }) => {
+      if (!follow) return new Response("\x1eone\n\x1etwo\n");
+      // The first line, then nothing, the connection never closed: the pod exits meanwhile.
+      return new Response(
+        new ReadableStream({
+          start(c) {
+            c.enqueue(encode("\x1eone\n"));
+            fake.pod.status.phase = "Succeeded";
+            signal.addEventListener("abort", () => c.error(signal.reason));
+          },
+        }),
+      );
+    },
+  };
+  const fakes = fakeApi({ logs });
+  const logged = [];
+  const runner = createKubernetesRunner({
+    config,
+    api: fakes.api,
+    inboxDir: tempDir(t),
+    log: (line) => logged.push(line),
+    sleep: async () => {},
+    watchMs: 5,
+  });
+  await runner.start(spec());
+  fake.pod = fakes.objects.pods.get("dh-org-repo-12-abc");
+  const err = [];
+  await runner.follow("dh-org-repo-12-abc", { onOut: () => {}, onErr: (l) => err.push(l) });
+  assert.deepEqual(err, ["one", "two"]);
+  assert.ok(logged.some((l) => /its stream outlived the pod, reading the rest/.test(l)));
 });

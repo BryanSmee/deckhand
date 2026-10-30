@@ -52,9 +52,9 @@ export function createPreparation(ctx) {
     // A review's are optional (its `review` block); a repo's mode always has them.
     const instructions = own?.instructions ? await modeInstructions(task, own) : null;
     const access = grantedAccess(config, task, settings, { agent, note, log });
-    const refused = runnerRefusal(config, task, settings, access);
-    if (refused) throw new RunError(`${cantRun(agent)}: ${refused}`);
     const engine = engineFor(config, task, settings, access, fork, note);
+    const refused = runnerRefusal(config, settings, access, engine);
+    if (refused) throw new RunError(`${cantRun(agent)}: ${refused}`);
     const prepared = await prepareImage(task, items, settings, access.grant, note, pulls);
     live.shots = shotsFolder();
     live.record.shots = live.shots;
