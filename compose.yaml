@@ -212,9 +212,11 @@ services:
     stop_grace_period: 30s
     environment:
       # The egress policy's own port, open while the broker's drains on a restart; the broker's,
-      # where relayed requests go (docs/architecture.md#restarts).
+      # where relayed requests go, and the sandboxes' calls to it (the listener's BROKER_URL),
+      # which the proxy forwards (docs/architecture.md#restarts).
       POLICY_URL: http://listener:8082/egress
       RELAY_URL: http://listener:8081/relay
+      BROKER_URL: http://listener:8081
     volumes:
       # Answers from the hosts the grants list in cached_hosts, kept for every run, and the
       # CA with which the proxy decrypts their HTTPS: its key never leaves this volume

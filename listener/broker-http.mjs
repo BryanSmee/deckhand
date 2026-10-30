@@ -9,7 +9,7 @@
 import { createServer } from "node:http";
 import { agentFor } from "./agents/index.mjs";
 import { addressOf } from "./broker.mjs";
-import { egressPolicy, githubContent, githubHosts, matchHost } from "./egress.mjs";
+import { brokerHost, egressPolicy, githubContent, githubHosts, matchHost } from "./egress.mjs";
 import { restricted } from "./github-forks.mjs";
 import { NO_TOKEN } from "./github-app.mjs";
 import { taskKey } from "./events.mjs";
@@ -124,6 +124,10 @@ export function createBrokerHttp(ctx) {
   // Built here: only sandboxes call it.
   const runFiles = createRunFiles(ctx, { taskOf });
 
+  // The proxy's BROKER_URL naming another broker than the listener's, said once: every run's
+  // agent calls, pushes and files are refused meanwhile.
+  let warnedBroker = false;
+
   // The running task whose sandbox has this address on its network.
   async function taskAt(ip) {
     for (const task of tasks.values()) {
@@ -141,6 +145,21 @@ export function createBrokerHttp(ctx) {
       return sendJson(res, { allowed: false }, 403);
     }
     const task = await taskAt(ip);
+    // The broker itself (#511): the proxy forwards its plain HTTP (`broker=1`) for the runs'
+    // sandboxes and engines (and a pod's agent install, which has no secret), never a build's.
+    if (matchHost(host, [brokerHost(config)]) === "exact") {
+      const forwarded = url.searchParams.get("broker") === "1";
+      if (!forwarded && !warnedBroker) {
+        warnedBroker = true;
+        log(
+          `Egress: the egress proxy asked about the broker's host (${host}) as any other: its BROKER_URL ` +
+            `must be the listener's, ${config.brokerUrl}, or the runs' agent calls, pushes and files are refused (docs/setup.md)`,
+        );
+      }
+      const allowed = forwarded && !!task;
+      if (!allowed) log(`Egress: refused the broker for ${ip}`);
+      return sendJson(res, { allowed, private: false, cache: false, decrypt: false, relay: false });
+    }
     // Not a sandbox: the runner's builder or an agent's install pod, or nothing.
     const other = task ? null : await ctx.images.egressFor?.(ip, host);
     if (other) {

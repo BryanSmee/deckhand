@@ -32,6 +32,19 @@ test("a run's secret names its run until the run ends, and only from its own san
   broker.revoke(a);
   assert.equal(broker.runOf(a), undefined);
   assert.equal(broker.size(), 1);
+  // A call the egress proxy forwarded (#511): the sandbox it names (broker-http.mjs
+  // clientAddress()), for the git gateway, the agents' APIs and the run's files alike.
+  const forwarded = createBroker({
+    sentFrom,
+    clientOf: async (r) => r.headers?.["x-deckhand-client"] ?? "",
+  });
+  const c = forwarded.register("org/c");
+  const via = (ip) => ({
+    socket: { remoteAddress: "10.0.0.9" },
+    headers: { "x-deckhand-client": ip },
+  });
+  assert.equal(await forwarded.sentBy(forwarded.runOf(c), via("10.9.0.5")), true);
+  assert.equal(await forwarded.sentBy(forwarded.runOf(c), via("10.9.0.6")), false);
   // Without a `sentFrom`, no request is the run's.
   const none = createBroker({});
   assert.equal(await none.sentBy(none.runOf(none.register("org/a")), req), false);

@@ -8,10 +8,11 @@ import { request } from "node:http";
 import { join } from "node:path";
 import { test } from "node:test";
 import { createBroker } from "../listener/broker.mjs";
-import { createBrokerHttp } from "../listener/broker-http.mjs";
+import { clientAddress, createBrokerHttp } from "../listener/broker-http.mjs";
 import { MAX_SHOT, MAX_SHOTS, SHOT_NAME } from "../listener/run-files.mjs";
 import { CLOSE, createInbox } from "../listener/runner/inbox.mjs";
-import { serve, tempDir, testConfig } from "./helpers.mjs";
+import { createProxy } from "../proxy/proxy.mjs";
+import { listening, serve, tempDir, testConfig } from "./helpers.mjs";
 
 const PNG = Buffer.from("89504e470d0a1a0a", "hex");
 const image = (head, size = 64) => Buffer.concat([head, Buffer.alloc(size - head.length)]);
@@ -19,9 +20,13 @@ const image = (head, size = 64) => Buffer.concat([head, Buffer.alloc(size - head
 // A listener with two running tasks, A (its sandbox at 127.0.0.1, where the test's requests
 // come from) and B (elsewhere), over `runsDir` and `shotsDir`: what a restart keeps.
 // `secrets`: theirs again, as restart.mjs registers them once more.
-function listener({ runsDir, shotsDir, secrets = {} }) {
+// `ips`: their sandboxes' addresses.
+function listener({ runsDir, shotsDir, secrets = {}, ips = { a: "127.0.0.1", b: "10.2.0.2" } }) {
   const at = new Map();
-  const broker = createBroker({ sentFrom: async (run, ip) => at.get(run) === ip });
+  const broker = createBroker({
+    sentFrom: async (run, ip) => at.get(run) === ip,
+    clientOf: (req) => clientAddress(ctx, req),
+  });
   const inbox = createInbox({ inboxDir: runsDir });
   const task = (key, id, ip, shots) => {
     const secret = broker.register("org/repo", null, { secret: secrets[key] });
@@ -29,8 +34,8 @@ function listener({ runsDir, shotsDir, secrets = {} }) {
     return [key, { name: id, repo: "org/repo", live: { id, secret, shots } }];
   };
   const tasks = new Map([
-    task("a", "run-a", "127.0.0.1", "a".repeat(24)),
-    task("b", "run-b", "10.2.0.2", "b".repeat(24)),
+    task("a", "run-a", ips.a, "a".repeat(24)),
+    task("b", "run-b", ips.b, "b".repeat(24)),
   ]);
   const config = testConfig();
   const ctx = { config, broker, tasks, runner: inbox, shotsDir, log: () => {} };
@@ -48,10 +53,10 @@ async function start(t, ctx, port = 0) {
   return { url: ctx.config.brokerUrl, port: server.address().port, stop };
 }
 
-function fixture(t) {
+function fixture(t, ips) {
   const runsDir = tempDir(t, "deckhand-runs-");
   const shotsDir = tempDir(t, "deckhand-shots-");
-  const made = listener({ runsDir, shotsDir });
+  const made = listener({ runsDir, shotsDir, ips });
   made.inbox.write("run-a", "PEM-A", "# Digest A\n");
   made.inbox.write("run-b", "PEM-B", "# Digest B\n");
   return { runsDir, shotsDir, ...made };
@@ -308,4 +313,48 @@ test("deckhand-files and the broker agree on the screenshots' names", () => {
   const copy = script.match(/^const SHOT = (\/.+\/);$/m);
   assert.ok(copy, "deckhand-files declares SHOT");
   assert.equal(new Function(`return ${copy[1]}`)().source, SHOT_NAME.source);
+});
+
+test("a sandbox's calls through the egress proxy are its own: the broker believes the address it names", async (t) => {
+  // B's sandbox at 127.0.0.2; the proxy calls the broker from 127.0.0.1.
+  const { ctx, secret } = fixture(t, { a: "10.1.0.2", b: "127.0.0.2" });
+  ctx.runner.proxyAddresses = async () => ["127.0.0.1"];
+  const { url } = await start(t, ctx);
+  // The listener's policy: the broker for its runs' sandboxes.
+  const proxy = createProxy({
+    policy: async (ip, host, { broker } = {}) => ({
+      allowed: broker === true && ["10.1.0.2", "127.0.0.2"].includes(ip),
+    }),
+    brokerUrl: url,
+  });
+  const proxyPort = await listening(proxy);
+  t.after(() => proxy.close());
+  // From B's sandbox, through the proxy → [status, body].
+  const viaProxy = (path, headers) =>
+    new Promise((resolve, reject) => {
+      const req = request(
+        {
+          host: "127.0.0.1",
+          localAddress: "127.0.0.2",
+          port: proxyPort,
+          path: url + path,
+          headers,
+        },
+        (res) => {
+          let text = "";
+          res.setEncoding("utf8");
+          res.on("data", (d) => (text += d));
+          res.on("end", () => resolve([res.statusCode, text]));
+        },
+      );
+      req.on("error", reject);
+      req.end();
+    });
+  assert.deepEqual(await viaProxy("/run/ca", auth(secret("b"))), [200, "PEM-B"]);
+  // A's secret from B's sandbox: refused, whatever address B names itself.
+  const spoofed = { ...auth(secret("a")), "x-deckhand-client": "10.1.0.2" };
+  assert.equal((await viaProxy("/run/ca", spoofed))[0], 403);
+  // Without the header, a call is its source address's: here the proxy's own, no sandbox's.
+  const direct = await fetch(`${url}/run/ca`, { headers: auth(secret("b")) });
+  assert.equal(direct.status, 403);
 });

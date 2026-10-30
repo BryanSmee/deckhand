@@ -994,6 +994,7 @@ else set it in the service's `environment`, for example in a `compose.override.y
 | `EGRESS_CONTAINER`                                   | none                             | labelled `deckhand.role=egress`                       | the egress proxy's container, which joins each run's network; by default, the one in the listener's compose project                                                                                                                                              |
 | `POLICY_URL` (egress proxy)                          | none                             | `http://listener:8081/egress`                         | where the proxy asks whether a sandbox may reach a host; compose sets it to `POLICY_PORT`'s `http://listener:8082/egress`, which keeps answering while the broker drains on a restart: set it so elsewhere too (Kubernetes: with 8082 on the `listener` Service) |
 | `RELAY_URL` (egress proxy)                           | none                             | `POLICY_URL`'s host (port 8081 for 8082), `/relay`    | where the proxy hands the requests it relays to the listener (the [Antigravity CLI](#antigravity-cli)'s)                                                                                                                                                         |
+| `BROKER_URL` (egress proxy)                          | none                             | `RELAY_URL`'s origin                                  | the broker, as sandboxes call it (the listener's `BROKER_URL`): the proxy forwards their plain HTTP to it, and waits for a listener restarting; it must be the listener's own (scheme, host and port), or the runs' calls to it are refused; compose sets it     |
 | `EGRESS_CACHE_DIR` (egress proxy)                    | none                             | `/cache`                                              | where the proxy keeps the [egress cache](security.md#the-egress-cache) and its CA (`ca/`, the `egress-cache` volume)                                                                                                                                             |
 | `EGRESS_CACHE_MAX` (egress proxy)                    | none                             | `10g`                                                 | the egress cache's size, in bytes or with `k`, `m`, `g`, `t`; the least recently used answers go beyond it; `0`: no cache                                                                                                                                        |
 | `EGRESS_CACHE_ENTRY_MAX` (egress proxy)              | none                             | `1g`                                                  | the largest answer it keeps                                                                                                                                                                                                                                      |
@@ -1076,6 +1077,14 @@ be allowed to reach them, and every run would be refused.
       - to: [{ podSelector: { matchLabels: { app: deckhand-listener } } }]
         ports: [{ port: 8081 }]
   ```
+
+  Sandboxes reach the listener through the proxy (#511); the second rule is for those started
+  before, which still call it directly, and can go once none of them runs. The proxy
+  recognises their calls by its own `BROKER_URL`, which must be the listener's (same scheme,
+  host and port): its default, `RELAY_URL`'s origin, is only right when both name the same
+  Service. Set it in the proxy's Deployment otherwise; with another value, the runs' agent
+  calls, pushes and files are refused, and the listener logs that the proxy's `BROKER_URL`
+  isn't its own.
 
   The cluster's network plugin has to enforce NetworkPolicies (Calico, Cilium…): one that
   ignores them leaves the sandboxes unisolated, whatever the policy says.

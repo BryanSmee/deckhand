@@ -18,7 +18,8 @@
 // a token, ../listener/github-gateway.mjs, and an agent's, in place of the operator's
 // credential, ../listener/google.mjs) are decrypted the same way, whether the cache is on or
 // not, and each request goes to the listener (RELAY_URL) instead of the host, with the address
-// of the sandbox it came from (CLIENT_HEADER).
+// of the sandbox it came from (CLIENT_HEADER). Plain HTTP to the listener's broker (BROKER_URL:
+// the agents' APIs, pushes, the run's files) goes to it the same way, for whom the policy allows it.
 // Everything else, and every CONNECT to another host, is forwarded as is: a raw tunnel.
 import { lookup as dnsLookup } from "node:dns/promises";
 import { createServer, request as httpRequest } from "node:http";
@@ -56,11 +57,12 @@ export function target(authority) {
 
 // Asks the listener: { allowed, private, cache, decrypt, relay }. Fails closed: no `decrypt`,
 // a tunnel. A listener restarting is waited for (wait.mjs; `wait`: its clock, in the tests),
-// unless the client left (`gone()`).
+// unless the client left (`gone()`). `broker`: the host is the broker's, whose calls the proxy
+// forwards (BROKER_URL): the listener allows them for its runs' sandboxes and engines only.
 export function listenerPolicy(url, timeoutMs = 5000, wait = {}) {
-  return async (ip, host, { gone } = {}) => {
+  return async (ip, host, { gone, broker } = {}) => {
     try {
-      const query = new URLSearchParams({ ip, host });
+      const query = new URLSearchParams({ ip, host, ...(broker && { broker: "1" }) });
       const res = await untilReached(
         () => fetch(`${url}?${query}`, { signal: AbortSignal.timeout(timeoutMs) }),
         { ...wait, ...(gone && { gone }) },
@@ -107,6 +109,18 @@ export function defaultRelayUrl(policyUrl) {
   const relay = new URL("/relay", policyUrl);
   if (relay.port === "8082") relay.port = "8081";
   return relay.href;
+}
+
+// Where the sandboxes' calls to the broker go without BROKER_URL: RELAY_URL's origin.
+export function defaultBrokerUrl(relayUrl) {
+  return new URL(relayUrl).origin;
+}
+
+// Whether a call to the broker is its egress policy's, which the broker answers the proxy alone:
+// forwarded, it would be asked on the sandbox's behalf. `pathname`: the parsed URL's, its dot
+// segments resolved.
+export function policyPath(pathname) {
+  return /^\/egress(?:[/?]|$)/i.test(pathname);
 }
 
 class Refused extends Error {}
@@ -159,6 +173,7 @@ export function createProxy({
   cache = null, // createCache()'s, or none
   authority = null, // createAuthority()'s, ready: HTTPS to cached and relayed hosts is decrypted
   relayUrl = null, // where relayed requests go: <relayUrl>/<host><path>
+  brokerUrl = null, // the broker, as sandboxes call it: its plain HTTP is forwarded to it
   upstreamCa, // what verifies the hosts' certificates, and an https: relayUrl's; default: Node's trust store
   // How relayed requests wait for a listener restarting (wait.mjs): { limitMs, now, sleep }.
   wait = {},
@@ -359,6 +374,8 @@ export function createProxy({
     }),
   );
 
+  const broker = brokerUrl ? new URL(brokerUrl).origin : null;
+
   // Plain HTTP: the request line holds the absolute URL. The CA's certificate, the
   // listener's to hand to sandboxes, at /deckhand-ca.crt.
   async function forward(req, res) {
@@ -385,6 +402,7 @@ export function createProxy({
       res.writeHead(400, { "content-type": "text/plain" });
       return res.end("Deckhand's egress proxy: expected an http:// URL or CONNECT\n");
     }
+    if (url.origin === broker) return toBroker(req, res, url).catch(() => res.destroy());
     const host = url.hostname.replace(/^\[|\]$/g, "").toLowerCase();
     let decision;
     try {
@@ -405,18 +423,50 @@ export function createProxy({
     relay(req, res, { address: decision.address, url, host }, decision.cache);
   }
 
+  // A sandbox's call to the broker (#511): on to it, naming the sandbox, which the broker binds
+  // the run's secret to, as for a relayed request. Only for whom the listener says may (its runs'
+  // sandboxes and engines, not a build or an install), and never its policy's path: the broker
+  // would take the question for the proxy's own. `url`: parsed, its dot segments resolved.
+  async function toBroker(req, res, url) {
+    const forbid = (why) => {
+      res.writeHead(403, { "content-type": "text/plain" });
+      res.end(`Deckhand's egress proxy: ${why}\n`);
+    };
+    // Its path and query set on a copy of the broker's URL, never parsed again: "//host/x" would
+    // read as another host's URL. No credentials in the URL become a header either.
+    const to = new URL(broker);
+    to.pathname = url.pathname;
+    to.search = url.search;
+    if (to.origin !== broker || policyPath(to.pathname)) {
+      return forbid("the broker answers that to the proxy alone");
+    }
+    const from = req.socket.remoteAddress;
+    const { allowed } = await policy(from.replace(/^::ffff:/, ""), to.hostname, {
+      gone: () => req.socket.readableEnded || req.socket.destroyed,
+      broker: true,
+    });
+    if (req.socket.destroyed) return;
+    if (!allowed) return forbid("only a running sandbox reaches the listener's broker");
+    return toListener(req, res, to, from);
+  }
+
   // A relayed host's request, to the listener as <relayUrl>/<host><path>: the listener checks
   // the run's secret and sends it on with the operator's credential (../listener/google.mjs).
   // Only under <relayUrl>/<host>/: the URL parser resolves "..", so a path that climbs out
   // would reach the listener's other endpoints (/egress) from the proxy's address. `from`: the
-  // client's address. A listener restarting is waited for: the request is sent once a
-  // connection is made, and never again (wait.mjs).
+  // client's address.
   async function relayed(req, res, host, from) {
     const url = relayTarget(relayUrl, host, req.url);
     if (!url) {
       res.writeHead(400, { "content-type": "text/plain" });
       return res.end("Deckhand's egress proxy: not a path it relays\n");
     }
+    return toListener(req, res, url, from);
+  }
+
+  // A request on to the listener at `url`, naming its client (`from`). A listener restarting is
+  // waited for: the request is sent once a connection is made, and never again (wait.mjs).
+  async function toListener(req, res, url, from) {
     const headers = { ...req.headers, host: url.host };
     for (const name of Object.keys(headers)) {
       if (name.startsWith("proxy-")) delete headers[name];
@@ -555,8 +605,18 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   // The listener's broker, where POLICY_URL is (on 8081 beside the policy's 8082, else POLICY_URL
   // names the broker's port, as before it had its own): relayed requests go to its /relay/.
   const relayUrl = (process.env.RELAY_URL || defaultRelayUrl(url)).replace(/\/$/, "");
+  // The broker as sandboxes call it (the listener's BROKER_URL): their plain HTTP to it is
+  // forwarded there, and waits for a listener restarting.
+  const brokerUrl = process.env.BROKER_URL || defaultBrokerUrl(relayUrl);
   const https = authority ? ", HTTPS too" : "";
-  const proxy = createProxy({ policy: listenerPolicy(url), cache, authority, relayUrl, log });
+  const proxy = createProxy({
+    policy: listenerPolicy(url),
+    cache,
+    authority,
+    relayUrl,
+    brokerUrl,
+    log,
+  });
   proxy.listen(port, () =>
     log(`Egress proxy on :${port}, asking ${url}; cache ${cache.enabled ? `on${https}` : "off"}`),
   );
