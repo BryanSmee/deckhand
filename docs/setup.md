@@ -1091,8 +1091,7 @@ cluster and pushed to a registry, as nodes only pull from one:
 - **A pull Secret** (`KUBERNETES_REGISTRY_SECRET`), of type `kubernetes.io/dockerconfigjson`,
   whose credentials may push to and delete from the registry: sandbox pods pull with it, and
   the listener reads it (its Role's `get` on `secrets` covers it) to push through BuildKit and
-  prune. `SANDBOX_IMAGE` has to be in a registry too: the listener reads its digest there
-  (anonymously for a public one, such as ghcr.io's releases).
+  prune. For a repository with its own image, `SANDBOX_IMAGE` has to be readable through its registry's API too: the listener reads its digest there (anonymously for a public one, such as ghcr.io's releases). Runs on the base image alone don't look it up: the nodes pull it as they can.
 - **A BuildKit daemon** (`moby/buildkit`, rootless), a Deployment with a Service named after
   `KUBERNETES_BUILDKIT`'s host, in the namespace. The listener drives it with `buildctl`
   (in its image), with the checkout as the build's context and `DECKHAND_BASE` as on Docker.
@@ -1100,7 +1099,7 @@ cluster and pushed to a registry, as nodes only pull from one:
   `HTTPS_PROXY` and `HTTP_PROXY` to `EGRESS_PROXY` in its Deployment, with `NO_PROXY` for an
   in-cluster registry, and give its pods NetworkPolicies that one picks for `Egress` and one
   for `Ingress`, letting them out to the namespace's pods only (the proxy, an in-cluster
-  registry) and to DNS (port 53), and in from the namespace's pods only (the listener). The
+  registry) and to DNS (UDP or TCP port 53, no `endPort`), and in only from the namespace's pods that can't be sandboxes (the listener's: a peer has to ask for a label sandbox pods don't have, or a `deckhand.role` other than `sandbox`, as a sandbox's own policy lets it reach any pod but another sandbox). The
   listener checks them before every build, as it checks the sandboxes', and refuses to build
   otherwise, saying why (the Role's `get` on `pods` and `list` on `networkpolicies` and
   `endpointslices` cover it). The proxy asks the listener about the daemon's pod IPs (the
@@ -1143,7 +1142,8 @@ holds only where the storage class applies `fsGroup`: a CSI driver with `fsGroup
 new volumes every user can write (NFS with `root_squash` ignores `fsGroup`; EFS needs an access
 point). The listener checks it: an install, or a short pod at a cache's first use, that can't
 write to its claim fails the run saying so (and a cache's claim is removed, so the next run
-makes it again).
+makes it again). An agent's claim filled beforehand needs no write: its installer finds the
+version there and leaves it as it is.
 
 ### Caches on Kubernetes
 

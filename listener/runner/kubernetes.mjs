@@ -50,9 +50,6 @@ const API_BACKOFF_MS = [1000, 2000, 5000, 10_000];
 const STUCK_MS = 2 * 60_000;
 const UNKNOWN_MS = 5 * 60_000;
 
-// How long installing() keeps a yes: the egress proxy asks at each connection.
-const INSTALLING_TTL_MS = 1000;
-
 // The proxy's addresses, as networks.mjs caches them.
 const PROXY_TTL_MS = 10000;
 const PROXY_RETRY_MS = 2000;
@@ -137,7 +134,7 @@ export function selects(selector = {}, labels = {}) {
 // Whether a peer's selector can never pick a sandbox pod, any run's or deployment's, not just
 // this one (`labels`, whose keys are the only ones sandbox pods carry): it asks for a label
 // they never have, or for a deckhand.role other than theirs.
-function excludesSandboxes(selector = {}, labels) {
+export function excludesSandboxes(selector = {}, labels) {
   const ours = (key) => Object.hasOwn(labels, key);
   for (const [key, value] of Object.entries(selector.matchLabels ?? {})) {
     if (!ours(key) || (key === ROLE && value !== SANDBOX)) return true;
@@ -777,14 +774,13 @@ export function createKubernetesRunner({
     return Boolean(await api.find(claimPath(`${name}-${agent.session.volume}`)));
   }
 
-  // Whether the sandbox's init container is installing its agent: its pod has one, and is
-  // still Pending (its sandbox container hasn't started). A yes is kept a moment. A no is
-  // final for the run, which the caller remembers (broker-http.mjs): a pod that left Pending
-  // never installs again. Null when the API can't tell.
-  const pendingInstalls = new Map(); // name → { at, installing }
+  // Whether the sandbox's init container is installing its agent: its pod has one, and it
+  // hasn't ended yet. Asked of the init container's own status, not the pod's phase, which
+  // the kubelet reports Running only at its next sync, after the sandbox has started; and
+  // never kept, for the same reason. A no is final for the run, which the caller remembers
+  // (broker-http.mjs): an init container that ended never runs again. Null when the API
+  // can't tell.
   async function installing(name) {
-    const seen = pendingInstalls.get(name);
-    if (seen && now() - seen.at < INSTALLING_TTL_MS) return seen.installing;
     let pod;
     try {
       pod = await api.find(podPath(name));
@@ -792,11 +788,9 @@ export function createKubernetesRunner({
       log(`${name}: whether it installs its agent: ${error.message}`);
       return null;
     }
-    const answer =
-      Boolean(pod?.metadata?.annotations?.[AGENT_INIT]) && pod.status?.phase === "Pending";
-    if (answer) pendingInstalls.set(name, { at: now(), installing: true });
-    else pendingInstalls.delete(name);
-    return answer;
+    if (!pod?.metadata?.annotations?.[AGENT_INIT] || pod.status?.phase !== "Pending") return false;
+    const init = (pod.status?.initContainerStatuses ?? []).find((s) => s.name === INIT_CONTAINER);
+    return !init?.state?.terminated;
   }
 
   // Its pod's IPs, what the egress proxy and the broker see it call from.

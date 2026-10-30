@@ -166,9 +166,16 @@ export function createRegistry({ fetch = globalThis.fetch, auths = async () => (
       if (res.status === 404) return found.length ? found : null;
       if (!res.ok) throw await failed(`listing the tags of ${repository}`, res);
       found.push(...((await res.json()).tags ?? []));
-      // The next page, when there is one: Link: </v2/<name>/tags/list?…>; rel="next".
-      const next = /<\/v2\/([^>]+)>;\s*rel="?next"?/.exec(res.headers.get("link") ?? "");
-      path = next ? next[1] : null;
+      // The next page, when there is one: Link: </v2/<name>/tags/list?…>; rel="next", or the
+      // same as an absolute URL of this registry (not another host's).
+      const link = /<([^>]+)>;\s*rel="?next"?/.exec(res.headers.get("link") ?? "")?.[1];
+      path = null;
+      if (link) {
+        const url = new URL(link, base(host));
+        if (url.origin === new URL(base(host)).origin && url.pathname.startsWith("/v2/")) {
+          path = url.pathname.slice(4) + url.search;
+        }
+      }
     }
     return found;
   }

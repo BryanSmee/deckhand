@@ -20,7 +20,14 @@
 import { setTimeout as delay } from "node:timers/promises";
 import { egressPolicy, proxyEnv } from "../egress.mjs";
 import { buildArgs, buildctl as buildctlCli, withDockerConfig } from "./buildkit.mjs";
-import { INSTALL_USER, kubeName, labelValue, quantity, selects } from "./kubernetes.mjs";
+import {
+  excludesSandboxes,
+  INSTALL_USER,
+  kubeName,
+  labelValue,
+  quantity,
+  selects,
+} from "./kubernetes.mjs";
 import { aliasOf } from "./networks.mjs";
 import { SANDBOX_USER } from "../sandbox-spec.mjs";
 import { authsOf, createRegistry, parseRef } from "./registry.mjs";
@@ -54,8 +61,10 @@ export const REGISTRY_HOSTS = {
 // Why the namespace's NetworkPolicies (`policies`) don't isolate the BuildKit daemon's pods
 // (`labels`), or null when they do: one picks them for Egress and one for Ingress, and none of
 // those that pick them lets them out but to the namespace's pods (the egress proxy) and to DNS
-// (port 53), or in but from the namespace's pods (the listener). Without that, a Dockerfile's
-// RUN steps could skip the proxy, or anything could drive the daemon. Fail closed.
+// (UDP or TCP port 53, no range), or in but from the namespace's pods that can't be sandboxes
+// (the listener). Without that, a Dockerfile's RUN steps could skip the proxy, or anything (a
+// sandbox among them: its own policy lets it reach any pod that isn't one) could drive the
+// daemon, which asks for no credentials. Fail closed.
 export function builderIsolationProblem(policies, labels) {
   const picking = policies.filter((p) => selects(p.spec?.podSelector, labels));
   const types = (p) => p.spec.policyTypes ?? (p.spec.egress ? ["Ingress", "Egress"] : ["Ingress"]);
@@ -65,7 +74,13 @@ export function builderIsolationProblem(policies, labels) {
     }
   }
   const dns = (rule) =>
-    rule.ports?.length && rule.ports.every((port) => String(port.port) === "53");
+    rule.ports?.length &&
+    rule.ports.every(
+      (port) =>
+        String(port.port) === "53" &&
+        port.endPort === undefined &&
+        ["UDP", "TCP", undefined].includes(port.protocol),
+    );
   for (const p of picking) {
     const name = `the NetworkPolicy ${p.metadata?.name}`;
     for (const rule of p.spec.egress ?? []) {
@@ -83,16 +98,28 @@ export function builderIsolationProblem(policies, labels) {
         rule.from.some((peer) => peer.ipBlock || peer.namespaceSelector || !peer.podSelector);
       if (wide)
         return `${name} lets traffic in to the BuildKit daemon from beyond the namespace's pods`;
+      if (rule.from.some((peer) => !excludesSandboxes(peer.podSelector, SANDBOX_LABELS))) {
+        return `${name} lets sandbox pods reach the BuildKit daemon`;
+      }
     }
   }
   return null;
 }
 
-// A shell command for a pod: fails with NOT_WRITABLE unless its user may write to "$1" (a
-// claim's mount point), then runs the rest, if any. The kubelet applies a pod's fsGroup to
-// a claim only where its storage allows (a CSI driver's fsGroupPolicy, NFS's root_squash):
-// said plainly, rather than an EACCES halfway through an install.
-const WRITABLE = `p=$1; shift; t=$(mktemp -p "$p" .deckhand-check-XXXXXX 2>/dev/null) && rm -f "$t" || exit ${NOT_WRITABLE}; [ $# -eq 0 ] || exec "$@"`;
+// The label keys a sandbox pod carries (kubernetes.mjs start()), and its role: what a peer
+// has to rule out to never pick one.
+const SANDBOX_LABELS = { "deckhand.owner": "", "deckhand.run": "", "deckhand.role": "sandbox" };
+
+// A shell command for a pod: runs the rest, if any, once its user proved it may write to "$1"
+// (a claim's mount point). The kubelet applies a pod's fsGroup to a claim only where its
+// storage allows (a CSI driver's fsGroupPolicy, NFS's root_squash): said plainly
+// (NOT_WRITABLE), rather than an EACCES halfway through an install. A claim it can't write
+// may still hold what the command would put there (a claim filled beforehand, which an
+// installer leaves as it is): the command runs anyway, and only its failure is NOT_WRITABLE.
+const WRITABLE = `p=$1; shift
+if t=$(mktemp -p "$p" .deckhand-check-XXXXXX 2>/dev/null); then rm -f "$t"; [ $# -eq 0 ] || exec "$@"; exit 0; fi
+[ $# -gt 0 ] && "$@" && exit 0
+exit ${NOT_WRITABLE}`;
 export const writable = (path, ...command) => ["sh", "-c", WRITABLE, "sh", path, ...command];
 
 // What NOT_WRITABLE means, for an error: a claim the storage class doesn't hand to the pod.
@@ -103,6 +130,7 @@ const INSTALL_MS = 15 * 60_000;
 // The pull Secret and the BuildKit pods' addresses, read again after this long.
 const SECRET_TTL_MS = 60_000;
 const BUILDER_TTL_MS = 10_000;
+const BASE_TTL_MS = 60_000;
 
 export function createKubernetesImages({
   config,
@@ -141,8 +169,13 @@ export function createKubernetesImages({
 
   // The image's digest in its registry, or null when it isn't there. The base image's too:
   // a new one pushed under the same tag gives repo images a new tag (images.mjs imageTag()).
+  // The base's is kept a minute: every run with a Dockerfile asks for it.
+  let base = { at: -Infinity, digest: null };
   async function id(ref) {
-    return registry.digest(ref);
+    if (ref !== config.image) return registry.digest(ref);
+    if (base.digest && now() - base.at < BASE_TTL_MS) return base.digest;
+    base = { at: now(), digest: await registry.digest(ref) };
+    return base.digest;
   }
 
   // Builds in progress: the hosts each may reach, by what they are (gate()).

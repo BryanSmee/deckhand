@@ -368,12 +368,15 @@ test("a repo's Dockerfile is built by buildctl, pushed to the registry, then reu
 });
 
 test("the tag follows the base image's digest and the Dockerfile", async (t) => {
-  const { images, build, registry } = setup(t);
+  const { images, build, registry, clock } = setup(t);
   const ask = () =>
     images.imageFor({ repo: "org/a", ref: "main", dockerfile: "Dockerfile", access });
   const first = await ask();
-  // The same tag of the base pushed again: a new digest, a new image.
+  // The same tag of the base pushed again: a new digest, a new image, once the base's digest
+  // is looked up again (it is kept a minute).
   registry.images.set(BASE, { digest: "sha256:base2", created: 2 });
+  assert.equal(await ask(), first);
+  clock.at += 60_000;
   const second = await ask();
   assert.notEqual(second, first);
   assert.equal(build.calls.length, 2);
@@ -686,7 +689,7 @@ test("an agent's claim its storage doesn't hand to the install's user: said, not
   );
 });
 
-test("writable(): a check of the mount point, then the command, in the base image's shell", (t) => {
+test("writable(): a check of the mount point, then the command; a claim filled beforehand needs no write", (t) => {
   const dir = tempDir(t);
   const run = (...command) => {
     const [shell, ...args] = writable(dir, ...command);
@@ -699,7 +702,11 @@ test("writable(): a check of the mount point, then the command, in the base imag
   if (process.getuid() === 0) return; // root writes anywhere
   chmodSync(dir, 0o555);
   try {
-    assert.equal(run("true"), 97);
+    // A claim it can't write: NOT_WRITABLE unless the command manages without (a claim
+    // filled beforehand, which the installer leaves as it is).
+    assert.equal(run(), 97);
+    assert.equal(run("sh", "-c", "exit 4"), 97);
+    assert.equal(run("true"), 0);
   } finally {
     chmodSync(dir, 0o755);
   }
@@ -954,4 +961,33 @@ test("a tag the registry won't delete alone is logged, and kept", async (t) => {
   for (const sha of ["b1", "b2"]) await ask(sha, true);
   assert.ok(registry.images.has(`${name}:branch-old`));
   assert.match(logged.join("\n"), /Pruning .*:branch-old \(its tag only\): deleting .*: HTTP 400/);
+});
+
+test("a run without a Dockerfile doesn't look its base image up: the nodes pull it", async (t) => {
+  const { images, registry } = setup(t);
+  registry.images.delete(BASE);
+  const before = registry.calls.length;
+  assert.equal(await images.imageFor({ repo: "org/a", ref: "main", dockerfile: null }), BASE);
+  assert.equal(registry.calls.length, before);
+});
+
+test("registry: a tag list's next page as an absolute URL of the same registry, not another's", async () => {
+  const seen = [];
+  const fetch = async (input) => {
+    const url = new URL(input);
+    seen.push(url.href);
+    if (url.searchParams.get("last") === "b") {
+      return Response.json(
+        { tags: ["c"] },
+        { headers: { link: '<https://evil.example/v2/x/tags/list?last=c>; rel="next"' } },
+      );
+    }
+    return Response.json(
+      { tags: ["a", "b"] },
+      { headers: { link: '<https://r.example.com/v2/x/tags/list?n=2&last=b>; rel="next"' } },
+    );
+  };
+  const registry = createRegistry({ fetch });
+  assert.deepEqual(await registry.tags("r.example.com/x"), ["a", "b", "c"]);
+  assert.ok(seen.every((url) => url.startsWith("https://r.example.com/v2/x/tags/list")));
 });

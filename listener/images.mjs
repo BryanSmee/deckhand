@@ -91,8 +91,13 @@ export function createImages({
     output,
     access = {},
   }) {
+    // Without a Dockerfile, a registry's base image is the nodes' to pull, with their own
+    // credentials (a kind or ECR node's): not looked up. A host's Docker must have it.
+    if (!dockerfile) {
+      if (!backend.repository) await baseId();
+      return config.image;
+    }
     const id = await baseId();
-    if (!dockerfile) return config.image;
     const file = await readFile(repo, dockerfile, ref);
     if (!file)
       throw new Error(`${dockerfile} (the config's dockerfile) is not in ${repo} at ${ref}`);

@@ -509,15 +509,20 @@ test("start: an agent whose claim is there mounts it, no init container", async 
   });
 });
 
-test("installing: while its pod with an init container is Pending, not once it runs", async (t) => {
-  const { runner, objects, clock } = setup(t);
+test("installing: while its init container hasn't ended, whatever the pod's phase says yet", async (t) => {
+  const { runner, objects } = setup(t);
   await runner.start(spec({ volumes: [agentVolume, ...spec().volumes.slice(1)] }));
   const pod = objects.pods.get("dh-org-repo-12-abc");
   pod.status.phase = "Pending";
   assert.equal(await runner.installing("dh-org-repo-12-abc"), true);
+  // Its init container ended: the sandbox starts, before the kubelet reports Running.
+  pod.status.initContainerStatuses = [
+    { name: "agent-install", state: { terminated: { exitCode: 0 } } },
+  ];
+  assert.equal(await runner.installing("dh-org-repo-12-abc"), false);
+  pod.status.initContainerStatuses = [{ name: "agent-install", state: { running: {} } }];
+  assert.equal(await runner.installing("dh-org-repo-12-abc"), true);
   pod.status.phase = "Running";
-  // Its answer is kept a moment: the proxy asks at each connection.
-  clock.at += 1000;
   assert.equal(await runner.installing("dh-org-repo-12-abc"), false);
   // A pod without an init container never installs.
   objects.pods.clear();
