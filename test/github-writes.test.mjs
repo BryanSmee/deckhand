@@ -666,6 +666,9 @@ test("a run edits and deletes the comments it posted, never the listener's, anot
     version: 1,
     repo: "org/repo",
     mode: "work",
+    custom_mode: false,
+    light: false,
+    reason: null,
     issue: 1,
     action: "edit",
     actions: ["edit"],
@@ -729,10 +732,11 @@ test("a run edits and deletes the comments it posted, never the listener's, anot
 });
 
 test(
-  "the real opa: policy/gh-own-comments.rego lets work runs edit their comments, and a repo's same-name file lets them delete",
+  "the real opa: Deckhand's gh-own-comments.rego lets work runs edit their comments, and a repo's same-name file lets them delete",
   { skip: !opa && "no opa on the PATH" },
   async (t) => {
-    const rego = readFileSync(join(import.meta.dirname, "..", "policy", "gh-own-comments.rego"));
+    // Deckhand's own, as the image ships it.
+    const rego = builtInPolicies().get("gh-own-comments.rego");
     // The repo's own files (name → text) in its .deckhand/policy/.
     let files = {};
     const policies = createPolicies({
@@ -751,7 +755,8 @@ test(
         return new Response("{}", { status: 404 });
       },
       run: opaRunner(),
-      readOperator: () => new Map([["gh-own-comments.rego", String(rego)]]),
+      readOperator: () => new Map(),
+      readBuiltIn: () => new Map([["gh-own-comments.rego", rego]]),
       tmp: tempDir(t),
       now: (() => {
         let clock = 0;
@@ -790,7 +795,7 @@ test(
     );
     // A repository's same-name file replaces it: here, without the rule on deleting.
     files = {
-      "gh-own-comments.rego": String(rego).replace(/\n# A deleted comment[\s\S]*$/, "\n"),
+      "gh-own-comments.rego": rego.replace(/\n# A deleted comment[\s\S]*$/, "\n"),
     };
     assert.equal(await check(posted("work"), remove), null);
     assert.match((await check(posted("deploy"), remove)).message, /a deploy run doesn't change/);

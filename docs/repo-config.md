@@ -1157,18 +1157,17 @@ that ends the URL gh printed when the run posted it (`#issuecomment-<id>`). An e
 redacted as any write's.
 
 The ceiling holds `edit` and `delete` on `created_comment` for work runs and the repository's
-modes that aren't light. Deckhand's default file, `policy/gh-own-comments.rego`, narrows it:
+modes that aren't light. Deckhand's default file, `gh-own-comments.rego`, narrows it:
 
 |                              | work, fix, conflict                   | brainstorm                                       | research    | repository modes                      |
 | ---------------------------- | ------------------------------------- | ------------------------------------------------ | ----------- | ------------------------------------- |
 | `edit` a comment it posted   | ✅ allowed                            | ❌ (its replies are the listener's: its ceiling) | ❌ no token | ❌ denied, the repository may broaden |
 | `delete` a comment it posted | ❌ denied, the repository may broaden | ❌                                               | ❌ no token | ❌ denied, the repository may broaden |
 
-A repository broadens it with its own `.deckhand/policy/gh-own-comments.rego`, which replaces
-the default by its name (a file without the rule on `delete`, say): never past the ceiling.
-Until Deckhand ships its default files in the listener's image (issue #448), copy
-`policy/gh-own-comments.rego` into the grants folder's `policy/`, as `github.rego` above:
-without it, a work run may delete the comments it posted too.
+The file ships in the listener's image ([The default policies](#the-default-policies)), so
+this holds without any setup. The operator's `policy/gh-own-comments.rego` replaces it for every
+repository, and a repository's `.deckhand/policy/gh-own-comments.rego` for its own (a file
+without the rule on `delete`, say): never past the ceiling.
 
 ### A dry run and the dashboard
 
