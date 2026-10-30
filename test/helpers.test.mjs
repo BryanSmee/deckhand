@@ -25,10 +25,12 @@ test("a cleanup that fails", async (t) => {
 `,
   );
   // Without --test-force-exit: the helper alone has to let it end. Not as a child of this
-  // runner (NODE_TEST_CONTEXT), which would report to it rather than run the file itself.
+  // runner (NODE_TEST_CONTEXT), which would report to it rather than run the file itself. TAP,
+  // whatever Node's default (Node 26 reports `spec` to a pipe too).
   const { NODE_TEST_CONTEXT, ...env } = process.env;
+  const args = ["--test", "--test-reporter=tap", file];
   const ran = await new Promise((resolve) =>
-    execFile(process.execPath, ["--test", file], { env, timeout: 20_000 }, (error, stdout) =>
+    execFile(process.execPath, args, { env, timeout: 20_000 }, (error, stdout) =>
       resolve({ killed: !!error?.killed, code: error?.code ?? 0, stdout }),
     ),
   );
