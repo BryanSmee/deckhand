@@ -4,7 +4,8 @@ Where the listener is headed once it is split (#499, its parts #500 to #509). To
 process, beside the egress proxy: [architecture.md](architecture.md) describes what runs now.
 
 The split follows who holds which secret and who can reach what. The only service the internet
-reaches holds neither the App's key nor the Docker socket, and each secret lives in one service.
+reaches holds neither the App's key, the operator's agent credentials nor the Docker socket, and
+each secret lives in one service.
 
 ```mermaid
 flowchart LR
@@ -36,6 +37,7 @@ flowchart LR
   edge --> github
   orch --> runner
   orch --> broker
+  runner --> broker
   orch --> github
   orch --> policy
   runner -. starts .-> sandbox
@@ -50,19 +52,20 @@ flowchart LR
   models --> ai
 ```
 
-| Service      | Holds                                     | Owns (its own store)                    | Reached by                   |
-| ------------ | ----------------------------------------- | --------------------------------------- | ---------------------------- |
-| edge         | webhook secret, session key, OAuth client | sessions                                | the internet, browsers       |
-| orchestrator | nothing secret                            | queue, waits, tasks, history, decisions | edge                         |
-| runner       | Docker socket or Kubernetes API           | containers, networks, run logs          | orchestrator                 |
-| broker       | the tokens' signing key                   | live runs, run files                    | orchestrator, runner, proxy  |
-| github       | the App's key, installation tokens        | each run's issues, reactions, pushes    | edge, orchestrator, proxy    |
-| models       | the operator's agent credentials          | plan logins                             | proxy                        |
-| policy       | nothing secret                            | nothing (reads the policy folders)      | github, orchestrator, broker |
-| proxy        | Deckhand's CA                             | the egress cache                        | sandboxes                    |
+| Service      | Holds                                     | Owns (its own store)                    | Reached by                                                                                           |
+| ------------ | ----------------------------------------- | --------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| edge         | webhook secret, session key, OAuth client | sessions                                | the internet, browsers                                                                               |
+| orchestrator | nothing secret                            | queue, waits, tasks, history, decisions | edge                                                                                                 |
+| runner       | Docker socket or Kubernetes API           | containers, networks, run logs          | orchestrator                                                                                         |
+| broker       | the tokens' signing key                   | live runs, run files                    | orchestrator, runner (a run's first token), proxy (sandboxes), every service (its own service token) |
+| github       | the App's key, installation tokens        | each run's issues, reactions, pushes    | edge, orchestrator, proxy                                                                            |
+| models       | the operator's agent credentials          | plan logins                             | proxy                                                                                                |
+| policy       | nothing secret                            | nothing (reads the policy folders)      | github, orchestrator, broker                                                                         |
+| proxy        | Deckhand's CA                             | the egress cache                        | sandboxes                                                                                            |
 
 The broker also serves the endpoints a sandbox calls about its own run: progress, needs-input,
-its files.
+its files. Every service also calls it for its own service token (#500), which the diagram leaves
+out: each one reaches the broker, for that alone.
 
 ## Upgrades without downtime
 
@@ -75,7 +78,15 @@ streams until the orchestrator acknowledges them.
 | policy                       | 2, active         | no state: the new copy starts, the old one drains                                                                                             |
 | github, models, broker, edge | 2, active         | shared state in the store; the new copy starts, the old one drains (models: up to 10 minutes, an agent call's length)                         |
 | orchestrator, runner         | 2, active/passive | the old copy releases its lease on SIGTERM, the new one takes it at once and restores from the store: about a second                          |
-| proxy                        | per runs' network | drains on SIGTERM; until the split, it waits for a restarting listener instead of failing (#507), for every call a sandbox makes to it (#511) |
+| proxy                        | 2, active         | both on every runs' network, under the same name; the new copy starts, the old one drains up to 10 minutes, an agent call's length, as models |
+
+Every agent call goes through the proxy to the models service, so the proxy's drain has to last
+as long as the models service's. Today one proxy, joined to every run's network, drains for 25 s
+(#507): the next one only starts once it exits, and nothing in a sandbox tries a refused
+connection again, so a longer drain would refuse every sandbox's new connections that long. Until
+two copies hand over, a proxy update cuts the agent calls still going after 25 s. Until the
+split, the proxy waits for a restarting listener instead of failing (#507), for every call a
+sandbox makes to it (#511).
 
 Active/passive is safe because state is saved as it changes (#508), each lease holder gets a
 higher fencing epoch that the github service, the runner and the broker check, events are
@@ -104,6 +115,16 @@ file backend on one node, Redis on several (#509).
   and passes its changes to those that need them as store streams, acknowledged once handled,
   so a handover loses none. The broker streams run starts, ends and progress; edge, verified
   events; the orchestrator, task updates for the dashboard; the runner, run logs.
-- **Shared code** in `lib/`, copied into each image: no runtime dependencies, per service.
+- **Secrets never go in the store** but encrypted by their own service, with a key only it
+  holds: the plan logins the models service refreshes, for example (#504). The App's key, the
+  signing key and the agents' credentials stay in their service's own secret or volume, never in
+  the store (#509). With Redis on several nodes, every service that uses the store could read
+  them otherwise.
+- **Shared code** in `lib/`, copied into each image: no npm package in it, so "no runtime
+  dependencies" holds per service. The github service keeps the listener's one exception,
+  graphql-js, bundled at build (`listener/vendor/`).
+- **Sandboxes outlive an update**: an endpoint that moves to another service first answers, for a
+  while, with where to go instead (`docs/architecture.md`, Restarts).
+- **The security rules of `AGENTS.md` hold per service.**
 - **The UI** stays in edge: static files from the dashboard's build, on the same origin as its
   API.
