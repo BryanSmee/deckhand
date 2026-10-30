@@ -412,7 +412,7 @@ test("mounts: .., symlinks out, other paths and no grant are refused", (t) => {
   assert.match(refusedFor("/etc", { mounts: [] }), /grants this repository no host paths/);
   assert.match(refusedFor("/workspace/x"), /the sandbox uses \/workspace itself/);
   assert.match(refusedFor("/home/node"), /the sandbox uses \/home\/node\/\.claude itself/);
-  assert.match(refusedFor("/deckhand/x"), /the sandbox uses \/deckhand itself/);
+  assert.match(refusedFor("/tmp/deckhand/x"), /the sandbox uses \/tmp\/deckhand itself/);
   assert.match(refusedFor(`${dir}/work/a,b`), /only letters, digits/);
   // A root the listener can't see grants nothing.
   const unseen = { mounts: [{ root: "/nfs/nowhere", readOnly: false }] };

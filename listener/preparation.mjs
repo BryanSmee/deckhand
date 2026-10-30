@@ -3,7 +3,7 @@
 // its screenshots' folder, the egress cache, and an analysis's digest or a research run's
 // thread. What fails stops the run with a reply (RunError).
 import { randomBytes } from "node:crypto";
-import { chmodSync, mkdirSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import {
   cantRun,
@@ -197,8 +197,8 @@ export function createPreparation(ctx) {
   // A fresh, unguessable folder per run: its screenshots are public once linked on GitHub.
   function shotsFolder() {
     const shots = randomBytes(12).toString("hex");
+    // The listener writes it, from the sandbox's uploads (run-files.mjs).
     mkdirSync(join(ctx.shotsDir, shots), { recursive: true });
-    chmodSync(join(ctx.shotsDir, shots), 0o777); // the sandbox runs as uid 1000
     return shots;
   }
 

@@ -6,7 +6,6 @@ import { createBackend } from "../listener/runner/index.mjs";
 import { SANDBOX_USER, sandboxEnv, sandboxSpec } from "../listener/sandbox-spec.mjs";
 
 const config = {
-  shotsVolume: "deckhand-shots",
   claudeCodeVolume: "deckhand-claude-code",
   claudeCodeVersion: "2.0.0",
   codexVolume: "deckhand-codex",
@@ -58,7 +57,7 @@ const parts = {
   digest: undefined,
 };
 
-test("sandboxSpec: as uid 1000, no capabilities, its own shots folder, the agent read-only", () => {
+test("sandboxSpec: as uid 1000, no capabilities, no shots volume, the agent read-only", () => {
   const spec = sandboxSpec(runOf(), "the prompt", "the message", parts);
   assert.equal(spec.run, "deckhand-org-app-12-1");
   assert.equal(spec.name, "deckhand-org-app-12");
@@ -67,8 +66,8 @@ test("sandboxSpec: as uid 1000, no capabilities, its own shots folder, the agent
   assert.deepEqual(spec.user, SANDBOX_USER);
   assert.deepEqual(spec.limits, limits);
   assert.deepEqual(spec.caps, []);
+  // Its screenshots go to the broker (run-files.mjs), not into a volume of the listener's.
   assert.deepEqual(spec.volumes, [
-    { kind: "shots", name: "deckhand-shots", path: "/screenshots", subpath: "f".repeat(24) },
     { kind: "agent", name: "deckhand-claude-code", path: "/opt/claude-code", readOnly: true },
     { kind: "session", name: "deckhand-org-app-12-workspace", path: "/workspace" },
     { kind: "session", name: "deckhand-org-app-12-claude", path: "/home/node/.claude" },
@@ -123,17 +122,18 @@ test("sandboxSpec: a work run that isn't a fork's clones whole; a light run does
 });
 
 // The `docker run` options the spec carried itself before it became a description (#392):
-// the Docker runner must still give these, word for word.
+// the Docker runner must still give these, word for word, but the screenshots volume, which
+// sandboxes no longer mount (#393).
 const BEFORE = {
-  work: "--user 1000:1000 --cap-drop ALL --security-opt no-new-privileges --cpus 2 --memory 4g --memory-swap 4g --pids-limit 512 --mount type=volume,src=deckhand-shots,dst=/screenshots,volume-subpath=ffffffffffffffffffffffff -v deckhand-claude-code:/opt/claude-code:ro -v deckhand-org-app-12-workspace:/workspace -v deckhand-org-app-12-claude:/home/node/.claude",
+  work: "--user 1000:1000 --cap-drop ALL --security-opt no-new-privileges --cpus 2 --memory 4g --memory-swap 4g --pids-limit 512 -v deckhand-claude-code:/opt/claude-code:ro -v deckhand-org-app-12-workspace:/workspace -v deckhand-org-app-12-claude:/home/node/.claude",
   light:
-    "--user 1000:1000 --cap-drop ALL --security-opt no-new-privileges --cpus 2 --memory 4g --memory-swap 4g --pids-limit 512 --mount type=volume,src=deckhand-shots,dst=/screenshots,volume-subpath=ffffffffffffffffffffffff -v deckhand-claude-code:/opt/claude-code:ro -v deckhand-org-app-12-light-workspace:/workspace -v deckhand-org-app-12-light-claude:/home/node/.claude",
+    "--user 1000:1000 --cap-drop ALL --security-opt no-new-privileges --cpus 2 --memory 4g --memory-swap 4g --pids-limit 512 -v deckhand-claude-code:/opt/claude-code:ro -v deckhand-org-app-12-light-workspace:/workspace -v deckhand-org-app-12-light-claude:/home/node/.claude",
   // A fork's run's clone is its own (#409).
-  fork: "--user 1000:1000 --cap-drop ALL --security-opt no-new-privileges --cpus 2 --memory 4g --memory-swap 4g --pids-limit 512 --mount type=volume,src=deckhand-shots,dst=/screenshots,volume-subpath=ffffffffffffffffffffffff -v deckhand-claude-code:/opt/claude-code:ro -v deckhand-org-app-12-fork-workspace:/workspace -v deckhand-org-app-12-claude:/home/node/.claude --mount type=bind,src=/srv/data,dst=/data,readonly --mount type=bind,src=/srv/ref,dst=/ref,readonly",
+  fork: "--user 1000:1000 --cap-drop ALL --security-opt no-new-privileges --cpus 2 --memory 4g --memory-swap 4g --pids-limit 512 -v deckhand-claude-code:/opt/claude-code:ro -v deckhand-org-app-12-fork-workspace:/workspace -v deckhand-org-app-12-claude:/home/node/.claude --mount type=bind,src=/srv/data,dst=/data,readonly --mount type=bind,src=/srv/ref,dst=/ref,readonly",
   caches:
-    "--user 1000:1000 --cap-drop ALL --security-opt no-new-privileges --cpus 2 --memory 4g --memory-swap 4g --pids-limit 512 --mount type=volume,src=deckhand-shots,dst=/screenshots,volume-subpath=ffffffffffffffffffffffff -v deckhand-claude-code:/opt/claude-code:ro -v deckhand-org-app-12-workspace:/workspace -v deckhand-org-app-12-claude:/home/node/.claude -v deckhand-cache-a:/home/node/.npm -v deckhand-cache-b:/home/node/.cache/pip",
+    "--user 1000:1000 --cap-drop ALL --security-opt no-new-privileges --cpus 2 --memory 4g --memory-swap 4g --pids-limit 512 -v deckhand-claude-code:/opt/claude-code:ro -v deckhand-org-app-12-workspace:/workspace -v deckhand-org-app-12-claude:/home/node/.claude -v deckhand-cache-a:/home/node/.npm -v deckhand-cache-b:/home/node/.cache/pip",
   mounts:
-    "--user 1000:1000 --cap-drop ALL --security-opt no-new-privileges --cpus 2 --memory 4g --memory-swap 4g --pids-limit 512 --mount type=volume,src=deckhand-shots,dst=/screenshots,volume-subpath=ffffffffffffffffffffffff -v deckhand-claude-code:/opt/claude-code:ro -v deckhand-org-app-12-workspace:/workspace -v deckhand-org-app-12-claude:/home/node/.claude --mount type=bind,src=/srv/data,dst=/data --mount type=bind,src=/srv/ref,dst=/ref,readonly",
+    "--user 1000:1000 --cap-drop ALL --security-opt no-new-privileges --cpus 2 --memory 4g --memory-swap 4g --pids-limit 512 -v deckhand-claude-code:/opt/claude-code:ro -v deckhand-org-app-12-workspace:/workspace -v deckhand-org-app-12-claude:/home/node/.claude --mount type=bind,src=/srv/data,dst=/data --mount type=bind,src=/srv/ref,dst=/ref,readonly",
 };
 
 const mounts = [
@@ -178,6 +178,7 @@ test("sandboxEnv: the run's secret in place of a credential, its prompt, mode an
   assert.equal(env.REPO_URL, "https://github.com/org/app.git");
   assert.equal(env.GIT_AUTHOR_NAME, "deckhand[bot]");
   assert.equal(env.SCREENSHOT_URL, `https://deckhand.example/shots/${"f".repeat(24)}`);
+  assert.equal(env.SCREENSHOT_DIR, "/tmp/screenshots");
   assert.equal(env.HTTPS_PROXY, "http://egress:3128");
   assert.doesNotMatch(env.NO_PROXY, /engine/);
   assert.equal(env.SANDBOX_SPEED, "normal");

@@ -8,6 +8,7 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
+  rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
@@ -663,6 +664,141 @@ test("draft-pr's start leaves the issue's branch alone when it has commits that 
   assert.equal(start(), "feat");
   sh(clone, "git commit -q --allow-empty -m unpushed && git checkout -q main");
   assert.equal(start(), "main");
+});
+
+// The entrypoint's fetch of the run's files (fetch_run_files()), against a fake deckhand-files:
+// the variables name the fetched files, a path stays as it is, a failed fetch stops the run.
+test("the entrypoint fetches the CA and digest from the broker, and stops when it can't", (t) => {
+  const script = readFileSync(`${bin}entrypoint.sh`, "utf8");
+  const fn = /^fetch_run_files\(\) \{[^]*?^\}$/m.exec(script)[0];
+  assert.match(script, /^fetch_run_files \/tmp\/deckhand$/m, "called at start");
+  const fake = tempDir(t, "files-");
+  writeFileSync(
+    join(fake, "deckhand-files"),
+    '#!/bin/sh\n[ "$1" = get ] || exit 2\ncase "$2" in *fail*) exit 1 ;; esac\necho "from $2" > "$3"\n',
+  );
+  chmodSync(join(fake, "deckhand-files"), 0o755);
+  const dir = join(fake, "run");
+  const run = (env) =>
+    spawnSync(
+      "bash",
+      [
+        "-c",
+        `set -euo pipefail\n${fn}\nfetch_run_files "$DIR"\necho "CA=\${DECKHAND_CA:-} DIGEST=\${TASK_DIGEST:-}"`,
+      ],
+      { env: { PATH: `${fake}:${process.env.PATH}`, DIR: dir, ...env }, encoding: "utf8" },
+    );
+  const both = run({
+    DECKHAND_CA: "http://listener:8081/run/ca",
+    TASK_DIGEST: "https://listener:8081/run/digest",
+  });
+  assert.equal(both.status, 0, both.stderr);
+  assert.equal(both.stdout, `CA=${dir}/egress-ca.crt DIGEST=${dir}/digest.md\n`);
+  assert.equal(
+    readFileSync(join(dir, "egress-ca.crt"), "utf8"),
+    "from http://listener:8081/run/ca\n",
+  );
+  assert.equal(
+    readFileSync(join(dir, "digest.md"), "utf8"),
+    "from https://listener:8081/run/digest\n",
+  );
+  // A path (a sandbox started by hand) and an unset variable are left as they are.
+  const byHand = run({ DECKHAND_CA: "/etc/my-ca.crt" });
+  assert.equal(byHand.stdout, "CA=/etc/my-ca.crt DIGEST=\n");
+  // A fetch that fails stops the run before anything else.
+  const failed = run({ TASK_DIGEST: "http://listener:8081/run/fail" });
+  assert.notEqual(failed.status, 0);
+  assert.equal(failed.stdout, "");
+});
+
+// The agent's Stop hook and every push upload the run's screenshots, for every run, before
+// the final message or the pushed work links them: the watcher's 3 s may be too late.
+test("the Stop hook, a git push hook and pre-push upload the screenshots; other hooks don't", (t) => {
+  const fake = tempDir(t, "files-");
+  const calls = join(fake, "calls");
+  writeFileSync(join(fake, "deckhand-files"), `#!/bin/sh\necho "$*" >> ${calls}\n`);
+  chmodSync(join(fake, "deckhand-files"), 0o755);
+  const env = { PATH: `${fake}:${process.env.PATH}`, SCREENSHOT_DIR: "/tmp/screenshots" };
+  // A brainstorm: draft-pr.sh does nothing else for it.
+  const hook = (args, input = "") =>
+    spawnSync(`${bin}draft-pr.sh`, ["hook", ...args], {
+      env: { ...env, TASK_MODE: "brainstorm" },
+      input,
+      encoding: "utf8",
+    }).status;
+  const count = () => (existsSync(calls) ? readFileSync(calls, "utf8").split("\n").length - 1 : 0);
+  assert.equal(hook([], JSON.stringify({ hook_event_name: "Stop" })), 0);
+  assert.equal(count(), 1);
+  const bash = (command) =>
+    JSON.stringify({ hook_event_name: "PostToolUse", tool_input: { command } });
+  assert.equal(hook([], bash("ls -l")), 0);
+  assert.equal(count(), 1);
+  assert.equal(hook([], bash("git push -u origin x")), 0);
+  assert.equal(count(), 2);
+  assert.equal(hook(["Stop"]), 0); // agy's
+  assert.equal(count(), 3);
+  const push = spawnSync(`${bin}pre-push`, [], { env, input: "", encoding: "utf8" });
+  assert.equal(push.status, 0);
+  // After the hook's own work (on exit), within 20 s: a work run's Stop hook opens the draft
+  // first, whatever the upload takes, and its gh calls (the wrapper) don't upload.
+  const order = join(fake, "order");
+  writeFileSync(
+    join(fake, "git"),
+    `#!/bin/sh\necho "git $1" >> ${order}\n[ "$1" = branch ] && echo feat\nexit 0\n`,
+  );
+  writeFileSync(join(fake, "timeout"), `#!/bin/sh\necho "timeout $1 $2" >> ${order}\n`);
+  writeFileSync(
+    join(fake, "real-gh"),
+    `#!/bin/sh\necho "gh $1 $2" >> ${order}\n[ "$1" = issue ] && echo "A title"\nexit 0\n`,
+  );
+  for (const f of ["git", "timeout", "real-gh"]) chmodSync(join(fake, f), 0o755);
+  mkdirSync(join(fake, ".git"));
+  const script = readFileSync(`${bin}draft-pr.sh`, "utf8").replace(/\/workspace/g, fake);
+  writeFileSync(join(fake, "draft-pr.sh"), script);
+  spawnSync("bash", [join(fake, "draft-pr.sh"), "hook", "Stop"], {
+    env: {
+      ...env,
+      // The image's gh wrapper (sandbox/gh), in front of a fake real gh.
+      PATH: `${fake}:${bin}:${process.env.PATH}`,
+      DECKHAND_REAL_GH: join(fake, "real-gh"),
+      DECKHAND_BROKER_URL: "http://listener:8081",
+      DECKHAND_RUN_SECRET: "s",
+      TASK_ISSUE: "5",
+    },
+    encoding: "utf8",
+  });
+  assert.deepEqual(readFileSync(order, "utf8").trim().split("\n"), [
+    "git branch",
+    "git ls-remote",
+    "gh pr list",
+    "gh issue view",
+    "gh pr create",
+    "timeout 20 deckhand-files",
+  ]);
+  // Outside the hooks, gh uploads first, within 20 s.
+  rmSync(order);
+  spawnSync(`${bin}gh`, ["pr", "view"], {
+    env: {
+      ...env,
+      DECKHAND_REAL_GH: join(fake, "real-gh"),
+      DECKHAND_BROKER_URL: "http://x",
+      DECKHAND_RUN_SECRET: "s",
+      PATH: `${fake}:${bin}:${process.env.PATH}`,
+    },
+  });
+  assert.deepEqual(readFileSync(order, "utf8").trim().split("\n"), [
+    "timeout 20 deckhand-files",
+    "gh pr view",
+  ]);
+  rmSync(join(fake, "git"));
+  rmSync(join(fake, "timeout"));
+  rmSync(join(fake, "real-gh"));
+  // The hooks' stderr is only the run's log (--log); git push's is the agent's.
+  assert.equal(readFileSync(calls, "utf8"), "shots --log\n".repeat(3) + "shots\n");
+  // A failure blocks no push.
+  writeFileSync(join(fake, "deckhand-files"), "#!/bin/sh\nexit 1\n");
+  const failing = spawnSync(`${bin}pre-push`, [], { env, input: "", encoding: "utf8" });
+  assert.equal(failing.status, 0);
 });
 
 // The branch's slug, from draft-pr.sh's own slug(): the gateway only takes issue-<n>-<slug>,

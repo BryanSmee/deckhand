@@ -239,7 +239,7 @@ Antigravity CLI's `AGY_VERSION`, with the sha256 of its tarballs in `AGY_SHA256`
 
 Node 26; the listener has no dependencies. Tests: `node --test`; syntax: `node --check
 listener/server.mjs`, `bash -n` on `sandbox/`'s shell scripts and the tests' fake docker, and `node --check
-sandbox/deckhand-inbox` (the list: [AGENTS.md](AGENTS.md#commands)); format: `npx --yes prettier@3 --check .`.
+sandbox/deckhand-inbox sandbox/deckhand-files` (the list: [AGENTS.md](AGENTS.md#commands)); format: `npx --yes prettier@3 --check .`.
 The dashboard (`dashboard/`, Preact + Vite + TypeScript) is built into the listener's image;
 locally: `cd dashboard && npm ci && npm test && npm run build`, or `npm run dev` against a
 listener on port 8080. See [AGENTS.md](AGENTS.md) for the conventions and security rules.

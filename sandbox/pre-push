@@ -1,5 +1,11 @@
 #!/bin/bash
 # The sandbox only pushes branches: the base branch (often deployed) is the maintainer's.
+# Every push uploads the run's screenshots first (deckhand-files shots), failures ignored, so
+# a pull request that links them finds them. A refused one is said on stderr: in git push's
+# output, which the agent reads.
+if [ -n "${SCREENSHOT_DIR:-}" ] && [ -z "${DECKHAND_SHOTS_SKIP:-}" ]; then
+  timeout 20 deckhand-files shots > /dev/null < /dev/null || true
+fi
 base=${BASE_BRANCH:-main}
 while read -r _local_ref _local_sha remote_ref _remote_sha; do
   if [ "$remote_ref" = "refs/heads/$base" ]; then

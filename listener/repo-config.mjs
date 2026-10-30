@@ -10,17 +10,17 @@ import { AGENTS } from "./agents/index.mjs";
 import { EFFORTS, MODEL_NAME, SPEEDS } from "./events.mjs";
 import { list, normalize } from "./config.mjs";
 import { customMode, PICKED_MODES, RESERVED_MODES } from "./modes.mjs";
-import { INBOX_DIR } from "./runner/inbox.mjs";
+import { FILES_DIR, SCREENSHOT_DIR } from "./runner/inbox.mjs";
 import { isMap, parseYaml } from "./yaml.mjs";
 
 export const CONFIG_FILE = ".deckhand.yaml";
 
-// What the sandbox mounts itself: a cache or mount can't take these over. Every agent's
+// What the sandbox mounts or writes itself: a cache or mount can't take these over. Every agent's
 // session and install, from its definition, so a new agent can't be left out.
 export const RESERVED = [
   "/workspace",
-  "/screenshots",
-  INBOX_DIR,
+  SCREENSHOT_DIR,
+  FILES_DIR,
   ...Object.values(AGENTS).flatMap((a) => [a.session.path, a.install({}).mount]),
 ];
 

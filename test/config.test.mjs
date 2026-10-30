@@ -65,7 +65,6 @@ test("ALLOWED_REPOS refuses entries that are neither owner/repo nor owner/*", ()
 test("names come from settings, with a neutral default", () => {
   const defaults = loadConfig({ ALLOWED_USERS: "a" });
   assert.equal(defaults.image, "deckhand-sandbox");
-  assert.equal(defaults.shotsVolume, "deckhand-screenshots");
   assert.equal(defaults.claudeCodeVolume, "deckhand-claude-code");
   assert.equal(defaults.publicUrl, null);
   const custom = loadConfig({

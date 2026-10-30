@@ -3,7 +3,8 @@
 // (github-gateway.mjs), which the proxy sends the sandboxes' GitHub calls to, the git gateway
 // (git-gateway.mjs) and the agents' API endpoints
 // (anthropic.mjs, openai.mjs, and google.mjs, which the proxy sends the Antigravity CLI's calls
-// to). The runs' secrets are the broker's (broker.mjs).
+// to), and the runs' files: inbox, CA, digest and screenshots (run-files.mjs). The runs'
+// secrets are the broker's (broker.mjs).
 import { createServer } from "node:http";
 import { agentFor } from "./agents/index.mjs";
 import { addressOf } from "./broker.mjs";
@@ -11,6 +12,7 @@ import { egressPolicy, githubContent, githubHosts } from "./egress.mjs";
 import { restricted } from "./github-forks.mjs";
 import { NO_TOKEN } from "./github-app.mjs";
 import { taskKey } from "./events.mjs";
+import { createRunFiles } from "./run-files.mjs";
 import { sendJson } from "./web.mjs";
 
 // Path prefix → the ctx service that handles it, and how its failures are logged. A failure
@@ -94,11 +96,16 @@ export async function runFrom(ctx, ip) {
 // binds a run's secret to its sandbox (broker.mjs sentBy()). The run is found by its record,
 // so no secret is compared here.
 export async function runAt(ctx, run, ip) {
+  const task = taskOf(ctx, run);
+  return task ? hasAddress(ctx, task, ip) : false;
+}
+
+// The running task whose run the broker's record `run` is, or null.
+export function taskOf(ctx, run) {
   for (const task of ctx.tasks.values()) {
-    if (!task.live?.secret || ctx.broker.runOf(task.live.secret) !== run) continue;
-    return hasAddress(ctx, task, ip);
+    if (task.live?.secret && ctx.broker.runOf(task.live.secret) === run) return task;
   }
-  return false;
+  return null;
 }
 
 // `ctx` (server.mjs): the listener's state and services, read at call time.
@@ -112,6 +119,8 @@ export function createBrokerHttp(ctx) {
     { match: (url) => githubContent(/^\/relay\/([^/]+)\//.exec(url)?.[1] ?? ""), ...gateway },
     ...ROUTES,
   ];
+  // Built here: only sandboxes call it.
+  const runFiles = createRunFiles(ctx, { taskOf });
 
   // The running task whose sandbox has this address on its network.
   async function taskAt(ip) {
@@ -172,6 +181,9 @@ export function createBrokerHttp(ctx) {
     const route = routes.find((r) => (r.match ? r.match(req.url) : req.url.startsWith(r.prefix)));
     if (route) {
       return ctx[route.service].handle(req, res).catch(failed(res, route.name, route.destroy));
+    }
+    if (req.url.startsWith("/run/")) {
+      return runFiles.handle(req, res).catch(failed(res, "Run files", true));
     }
     const old = OLD_PR.exec(req.url);
     if (old) {

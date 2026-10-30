@@ -154,8 +154,6 @@ services:
       SANDBOX_IMAGE: *sandbox-image
       ENGINE_IMAGE: *engine-image
       ENGINE_PODMAN_IMAGE: *engine-podman-image
-      SHOTS_VOLUME: ${SHOTS_VOLUME:-deckhand-screenshots}
-      RUNS_VOLUME: ${RUNS_VOLUME:-deckhand-runs}
       # The host's path of the socket mounted below: preview hooks get it too.
       DOCKER_SOCKET: ${DOCKER_SOCKET:-/var/run/docker.sock}
       # How sandboxes reach the token broker: this service, joined to each run's network
@@ -168,9 +166,10 @@ services:
       - ${DOCKER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock
       # The App's credentials (app.json), run logs, queue and brainstorm state.
       - data:/data
-      # Shared with the sandboxes, one folder per run, served under /shots/.
+      # One folder per run, served under /shots/, and each run's inbox (comments for a running
+      # sandbox), its proxy CA and digest. Sandboxes reach them through the broker (#393):
+      # volumes of their own only as sandboxes from before #393 mount them.
       - screenshots:/data/shots
-      # Each run's inbox: comments for a running sandbox, which reads its own folder only.
       - runs:/data/runs
       # Your configuration, one folder you keep in git (server.example/ to start from), read
       # only: config.yaml, your settings, read at start (docs/setup.md#settings); grants/,

@@ -1,5 +1,5 @@
 The maintainer wants to know what would make this repository's Deckhand runs faster and more
-reliable. The listener wrote a digest of recent runs into your read-only inbox (its path is
+reliable. The listener wrote a digest of recent runs into the file `$TASK_DIGEST` names (its path is
 above): for each run, its meta line (kind, agent, model, effort, status, duration), the
 listener's notes, setup output that looked wrong, its tool calls (counts, calls made again
 and again, failed ones with their output) and its final reply. Tool details and outputs are

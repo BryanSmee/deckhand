@@ -84,7 +84,7 @@ ENV GH_PROMPT_DISABLED=1
 COPY sandbox/pre-push /usr/local/share/git-hooks/pre-push
 COPY prompts/sandbox.md /usr/local/share/deckhand-sandbox.md
 COPY sandbox/entrypoint.sh /usr/local/bin/deckhand-entrypoint
-COPY sandbox/deckhand-inbox /usr/local/bin/deckhand-inbox
+COPY sandbox/deckhand-inbox sandbox/deckhand-files /usr/local/bin/
 COPY sandbox/draft-pr.sh /usr/local/bin/sandbox-draft-pr
 COPY sandbox/agents/ /usr/local/share/deckhand-agents/
 

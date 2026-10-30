@@ -303,7 +303,8 @@ Each path in `caches` gets a named Docker volume per repo and path
 repo. Package manager caches are the usual use: `/home/node/.npm`, `/home/node/.cache/pip`,
 `/home/node/.local/share/pnpm`. A new volume is handed to the sandbox's user. Paths the
 sandbox mounts itself are refused, and so is a host mount's target there: `/workspace`,
-`/screenshots`, `/deckhand` (the run's inbox), and each agent's session and install
+`/tmp/screenshots`, `/tmp/deckhand` (the run's screenshots and files; so `/tmp` itself too),
+and each agent's session and install
 (`/home/node/.claude` and `/opt/claude-code`, `/home/node/.codex` and `/opt/codex`,
 `/home/node/.gemini` and `/opt/antigravity`), with what is inside or above them. Runs with a
 comment from a pull request from a fork get no caches, and their host mounts are read-only:

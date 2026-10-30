@@ -743,7 +743,7 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
     const args = readFileSync(join(dir, "run-args"), "utf8");
     assert.match(args, /^deckhand-antigravity:\/opt\/antigravity:ro$/m);
     assert.match(args, /-antigravity:\/home\/node\/\.gemini$/m);
-    assert.match(args, /^DECKHAND_CA=\/deckhand\/egress-ca\.crt$/m);
+    assert.match(args, /^DECKHAND_CA=http:\/\/[^/]+\/run\/ca$/m);
     assert.match(
       readFileSync(join(dir, "docker-calls"), "utf8"),
       /-e AGY_VERSION=1\.4\.0 -e AGY_SHA256=x64:[0-9a-f]{64},arm64:[0-9a-f]{64} -v deckhand-antigravity:\/opt\/antigravity --entrypoint deckhand-install-antigravity/,
@@ -999,6 +999,9 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
     // Not signed with the App's secret: refused, nothing runs.
     const forged = createHmac("sha256", "other").update(payload).digest("hex");
     assert.equal((await deliver(`sha256=${forged}`)).status, 401);
+    // A screenshot the sandbox uploads (a PNG's first bytes are enough).
+    const png = Buffer.concat([Buffer.from("89504e470d0a1a0a", "hex"), Buffer.from("png")]);
+    writeFileSync(join(dir, "shot"), png);
     const good = createHmac("sha256", SECRET).update(payload).digest("hex");
     assert.equal((await deliver(`sha256=${good}`)).status, 202);
 
@@ -1032,23 +1035,21 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
     assert.match(runEnv, /^GIT_AUTHOR_EMAIL=77\+deckhand-x\[bot\]@users\.noreply\.github\.com$/m);
     assert.doesNotMatch(runEnv, /^GH_TOKEN=/m);
 
-    // Hardened, limited, and only its own screenshots folder.
+    // Hardened, limited, and no volume of the listener's: its screenshots go to the broker.
     const joined = args.join(" ");
     assert.match(joined, /--cap-drop ALL --security-opt no-new-privileges/);
     // uid 1000 whatever the image's USER says.
     assert.match(joined, /--user 1000:1000/);
     assert.match(joined, /--cpus 2 --memory 4g --memory-swap 4g --pids-limit 2048/);
-    const shots = runEnv.match(/^SCREENSHOT_URL=https:\/\/hooks\.example\.com\/shots\/(\w+)$/m)[1];
-    assert.ok(
-      args.includes(
-        `type=volume,src=deckhand-screenshots,dst=/screenshots,volume-subpath=${shots}`,
-      ),
-    );
-    assert.equal(
-      args.some((a) => a.startsWith("deckhand-screenshots:")),
-      false,
-    );
-    assert.match(runEnv, /^SCREENSHOT_DIR=\/screenshots$/m);
+    assert.match(runEnv, /^SCREENSHOT_URL=https:\/\/hooks\.example\.com\/shots\/\w{24}$/m);
+    assert.ok(!args.some((a) => /screenshots|deckhand-runs|volume-subpath/.test(a)));
+    assert.match(runEnv, /^SCREENSHOT_DIR=\/tmp\/screenshots$/m);
+    // Uploaded through the broker, served under SCREENSHOT_URL as before.
+    assert.equal(readFileSync(join(dir, "shot-answer"), "utf8"), "204");
+    const token = runEnv.match(/^SCREENSHOT_URL=.*\/shots\/(\w+)$/m)[1];
+    const served = await fetch(`http://127.0.0.1:${port}/shots/${token}/page.png`);
+    assert.equal(served.status, 200);
+    assert.deepEqual(Buffer.from(await served.arrayBuffer()), png);
     // Out through the egress proxy only, the broker directly.
     assert.match(runEnv, /^HTTPS_PROXY=http:\/\/127\.0\.0\.1:\d+$/m);
     assert.match(runEnv, /^https_proxy=http:\/\/127\.0\.0\.1:\d+$/m);
@@ -1253,7 +1254,7 @@ caches:
     };
     const withCa = await run();
     assert.deepEqual(withCa.cached, ["registry.npmjs.org"]);
-    assert.match(withCa.args, /^DECKHAND_CA=\/deckhand\/egress-ca\.crt$/m);
+    assert.match(withCa.args, /^DECKHAND_CA=http:\/\/[^/]+\/run\/ca$/m);
     // GitHub's hosts are relayed to the listener's GitHub gateway instead, never a tunnel.
     assert.deepEqual(withCa.egress["github.com"], {
       allowed: true,
@@ -2544,7 +2545,7 @@ modes:
     assert.doesNotMatch(runEnv, /This review tolerates/);
     // Its thread from the listener (reviews.mjs reviewThread(), unit-tested there).
     const args = readFileSync(join(dir, "run-args"), "utf8");
-    assert.match(args, /^TASK_DIGEST=\/deckhand\/digest\.md$/m);
+    assert.match(args, /^TASK_DIGEST=http:\/\/[^/]+\/run\/digest$/m);
     for (const path of ["/issues/13/comments?", "/pulls/13/reviews?"]) {
       assert.ok(
         github.requests.some((r) => r.path.startsWith(`/repos/org/repo${path}`)),
@@ -2824,7 +2825,7 @@ modes:
     const args = readFileSync(join(dir, "run-args"), "utf8");
     assert.match(args, /-research-workspace:\/workspace/);
     assert.doesNotMatch(args, /screenshots/);
-    assert.match(args, /^TASK_DIGEST=\/deckhand\/digest\.md$/m);
+    assert.match(args, /^TASK_DIGEST=http:\/\/[^/]+\/run\/digest$/m);
     // Nothing from GitHub: the gateway refused the sandbox's call, and no token was minted.
     assert.equal(readFileSync(join(dir, "broker-answer"), "utf8"), "");
     assert.equal(github.requests.filter((r) => r.body.includes("repositories")).length, 0);
@@ -2852,6 +2853,8 @@ modes:
     );
     const digest = readFileSync(join(dir, "runs", folder, "digest.md"), "utf8");
     assert.match(digest, /^# Which queue\?\n/);
+    // The sandbox fetched it from the broker, with its run's secret.
+    assert.equal(readFileSync(join(dir, "digest-fetched"), "utf8"), digest);
     assert.match(digest, /Compare BullMQ and pg-boss\./);
     assert.match(digest, /### @alice, .*\n\nMind the licences\./);
     writeFileSync(join(dir, "go"), "");
@@ -3561,7 +3564,7 @@ mounts:
     );
     assert.match(
       readFileSync(join(dir, "run-args"), "utf8"),
-      /^TASK_DIGEST=\/deckhand\/digest\.md$/m,
+      /^TASK_DIGEST=http:\/\/[^/]+\/run\/digest$/m,
     );
     // In the run's inbox folder: this repo's run, redacted; not the other repo's.
     const [folder] = readdirSync(join(dir, "runs")).filter((f) =>

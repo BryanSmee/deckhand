@@ -1,0 +1,137 @@
+#!/usr/bin/env node
+// The run's files on the broker (../listener/run-files.mjs), with the run's secret:
+//
+//   deckhand-files get <url> <path>   fetches the egress proxy's CA or the run's digest into
+//                                     <path> (entrypoint.sh, at start), retrying for a minute
+//   deckhand-files shots [--watch|--log]  uploads SCREENSHOT_DIR's new or changed PNG, JPEG and
+//                                     WebP files, served under SCREENSHOT_URL; --watch does it
+//                                     every few seconds until the sandbox stops (entrypoint.sh),
+//                                     and the gh wrapper, pre-push and the agent's hooks once
+//                                     (draft-pr.sh), so a pull request's description finds its
+//                                     images. Those say each refused file on stderr, where the
+//                                     agent sees it (gh's and git push's output), even one the
+//                                     watcher found first. --log: once, for a stderr that is
+//                                     only the run's log (the watcher's, the Stop hook's), so a
+//                                     later call still tells the agent.
+"use strict";
+const { readdirSync, readFileSync, renameSync, statSync, writeFileSync } = require("node:fs");
+const { join } = require("node:path");
+
+const broker = process.env.DECKHAND_BROKER_URL ?? "";
+const headers = { authorization: `Bearer ${process.env.DECKHAND_RUN_SECRET ?? ""}` };
+const SHOT = /^[\w.-]+\.(png|jpe?g|webp)$/;
+// What the file itself makes the broker refuse (its name, its size, its type): final until it
+// changes. Others (401, 403 while a restarted listener takes the run back, 409 while another
+// pass sends it, 5xx) are tried again next time.
+const FINAL = new Set([400, 413, 415]);
+// What was uploaded already: name → "size:mtime", or { seen, refused, told } for a file the
+// broker refused (`told`: said where the agent sees it). Shared by every caller.
+const SENT = join(process.env.TMPDIR || "/tmp", "deckhand-shots.json");
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// A failed connection, a 5xx, a 401 or a 403 may be the listener restarting, or taking the
+// run back: asked again for a minute. A 404 (the run has no such file) fails at once.
+async function get(url, path) {
+  let why = "";
+  for (let attempt = 0; attempt < 12; attempt++) {
+    if (attempt) await sleep(5000);
+    let res;
+    try {
+      res = await fetch(url, { headers, signal: AbortSignal.timeout(30_000) });
+    } catch (error) {
+      why = error.message;
+      continue;
+    }
+    if (res.ok) return writeFileSync(path, Buffer.from(await res.arrayBuffer()));
+    why = `${res.status} ${await res.text()}`;
+    if (res.status === 404) break;
+  }
+  console.error(`deckhand-files: couldn't fetch ${url}: ${why}`);
+  process.exit(1);
+}
+
+function sent() {
+  try {
+    return JSON.parse(readFileSync(SENT, "utf8"));
+  } catch {
+    return {};
+  }
+}
+
+// Each new or changed file, once: a refused one (too big, not an image) isn't sent again
+// until it changes. `watching`: the watcher, whose refusals the agent doesn't see.
+async function shots(watching = false) {
+  const dir = process.env.SCREENSHOT_DIR;
+  if (!dir || !broker) return;
+  let names;
+  try {
+    names = readdirSync(dir);
+  } catch {
+    return; // nothing saved yet
+  }
+  const done = sent();
+  // What this pass decided, merged into the file as it is then: other passes (the watcher,
+  // gh, a push, a hook) write it meanwhile, and their entries stay.
+  const updates = {};
+  const set = (name, value) => (done[name] = updates[name] = value);
+  for (const name of names.filter((n) => SHOT.test(n))) {
+    let stat;
+    try {
+      stat = statSync(join(dir, name));
+    } catch {
+      continue;
+    }
+    if (!stat.isFile()) continue;
+    const seen = `${stat.size}:${stat.mtimeMs}`;
+    const before = done[name];
+    if (before === seen) continue;
+    if (before?.seen === seen) {
+      if (!watching && !before.told) {
+        console.error(`deckhand-files: ${name} refused: ${before.refused}`);
+        set(name, { ...before, told: true });
+      }
+      continue;
+    }
+    try {
+      const res = await fetch(`${broker}/run/shots/${encodeURIComponent(name)}`, {
+        method: "PUT",
+        headers,
+        body: readFileSync(join(dir, name)),
+        signal: AbortSignal.timeout(60_000),
+      });
+      if (res.ok) {
+        set(name, seen);
+      } else if (FINAL.has(res.status)) {
+        const refused = `${res.status} ${(await res.text()).trim()}`;
+        console.error(`deckhand-files: ${name} refused: ${refused}`);
+        set(name, { seen, refused, told: !watching });
+      } else {
+        await res.body?.cancel();
+      }
+    } catch {
+      // The listener restarting: sent next time.
+    }
+  }
+  if (Object.keys(updates).length) {
+    writeFileSync(`${SENT}.${process.pid}`, JSON.stringify({ ...sent(), ...updates }));
+    renameSync(`${SENT}.${process.pid}`, SENT);
+  }
+}
+
+async function watch() {
+  for (;;) {
+    await shots(true).catch((error) => console.error(`deckhand-files: ${error.message}`));
+    await sleep(3000);
+  }
+}
+
+const [command, ...args] = process.argv.slice(2);
+if (command === "get" && args.length === 2) get(...args);
+else if (command === "shots" && args[0] === "--watch") watch();
+else if (command === "shots" && args[0] === "--log" && args.length === 1) shots(true);
+else if (command === "shots" && !args.length) shots();
+else {
+  console.error("usage: deckhand-files get <url> <path> | shots [--watch|--log]");
+  process.exit(2);
+}
