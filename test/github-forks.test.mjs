@@ -953,6 +953,13 @@ test("real git through the gateway: a whole clone goes, a fork's head and lone b
     HOME: dir,
     GIT_CONFIG_NOSYSTEM: "1",
     GIT_TERMINAL_PROMPT: "0",
+    // No `git gc --auto` or `git maintenance` left running after a fetch: detached, it would
+    // still write in the clones while the test's dir is removed, which then fails (#521).
+    GIT_CONFIG_COUNT: "2",
+    GIT_CONFIG_KEY_0: "gc.auto",
+    GIT_CONFIG_VALUE_0: "0",
+    GIT_CONFIG_KEY_1: "maintenance.auto",
+    GIT_CONFIG_VALUE_1: "false",
     ...Object.fromEntries(
       ["AUTHOR", "COMMITTER"].flatMap((w) => [
         [`GIT_${w}_NAME`, "a"],
