@@ -113,7 +113,7 @@ test("neither while the loop goes on, a run is going or queued, or the pull requ
   }
 });
 
-test("Review only: a clean loop, a fixed one, CI failed, no review.fix, or an answer awaited", () => {
+test("Review only: a clean loop, a fixed one, CI failed, no review.fix, an answer awaited, a draft", () => {
   const cases: Partial<Task>[] = [
     { review: loop({ loop: "clean", history: [round(0, 3), round(1, 0)] }) },
     { review: loop({ loop: "fixed", rounds: 1 }) },
@@ -121,6 +121,8 @@ test("Review only: a clean loop, a fixed one, CI failed, no review.fix, or an an
     // Without `review.fix`, a blocking review is "rounds-out" with no rounds.
     { review: loop({ round: 0, rounds: 0, history: [round(0, 2)] }) },
     { state: "needs-input" },
+    // The listener refuses a draft's Fix: its push wouldn't be reviewed.
+    { pr: { ...PR, state: "draft" as const } },
   ];
   for (const over of cases) {
     const shown = show(over);

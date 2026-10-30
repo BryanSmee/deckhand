@@ -155,7 +155,9 @@ export function reviewOffers(t: Pick<Task, "review" | "pr" | "state">): {
     return { review: false, fix: false };
   }
   const blocking = !!r.history.at(-1)?.blocking && ["rounds-out", "stopped"].includes(r.loop);
-  return { review: true, fix: blocking && r.rounds > 0 && t.state !== "needs-input" };
+  // Fix on a ready pull request only: the listener refuses a draft's.
+  const ready = t.pr?.state === "ready";
+  return { review: true, fix: blocking && ready && r.rounds > 0 && t.state !== "needs-input" };
 }
 
 // A review's findings by severity: "1 critical · 3 high", "no findings".

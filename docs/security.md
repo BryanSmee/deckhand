@@ -1228,15 +1228,16 @@ the run's issue or pull request, and only for the task's latest run when it ende
 signed-in user's, and posts the App's comment saying who asked.
 
 A pull request's Review and Fix (`POST /api/repos/<owner>/<repo>/review { number, action }`,
-once its review-and-fix loop is over) pass the same checks: same origin, the user in
+which the dashboard offers once its review-and-fix loop is over) pass the same checks: same origin, the user in
 `ALLOWED_USERS` and the repo's `users`, a config without errors, the pull request open and
 nothing running or queued on it or its issue, one request at a time per pull request. They
 need the repo's `review` block, and Fix its `review.fix`: the opt-in that lets findings become
 a pushing run ([Review fix runs](#review-fix-runs)) stays the repository's. Each posts the App's
 comment saying who asked before its run is queued. Review queues what `/mode review` would;
 Fix reads the App's latest review back from GitHub and goes through the fix loop's own checks
-(`startFix()`: Deckhand's own pull request linked to its issue, no needs-input label, the
-`deny_fix` policies), one fix run per click, counted in `reviews.json` before it is queued.
+(`startFix()`: Deckhand's own pull request linked to its issue, ready for review, no
+needs-input label, the loop not going on, the `deny_fix` policies), one fix run per click,
+counted in `reviews.json` before it is queued.
 
 Its Dismiss (`POST /api/repos/<owner>/<repo>/dismiss { runId }`) passes the repository's half
 of these checks (same origin, the user in `ALLOWED_USERS` and the repo's `users`, a config

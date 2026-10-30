@@ -898,8 +898,8 @@ test("latestReview: the App's last review with the marker, not anyone else's", a
   const older = parseReview("- **low** `a.mjs:1`: old.\n\nRating: 9/10\nVerdict: comment");
   const app = { login: "deckhand-app[bot]", type: "Bot" };
   const list = [
-    { user: app, body: body(older) },
-    { user: app, body: body(review) },
+    { user: app, body: body(older), commit_id: "sha-1" },
+    { user: app, body: body(review), commit_id: "sha-2" },
     { user: { login: "alice", type: "User" }, body: body(older) },
     { user: app, body: "A plain review without the marker." },
   ];
@@ -911,6 +911,8 @@ test("latestReview: the App's last review with the marker, not anyone else's", a
   const found = await latestReview(github, config, "org/repo", 5, "medium");
   assert.equal(found.findings.length, 3);
   assert.equal(found.allowed, "medium");
+  // The commit it reviewed, to tell it from the loop's last round.
+  assert.equal(found.head, "sha-2");
   assert.match(paths[0], /^\/repos\/org\/repo\/pulls\/5\/reviews\?/);
   const empty = async () => Response.json([]);
   assert.equal(await latestReview(empty, config, "org/repo", 5), null);
@@ -931,6 +933,14 @@ const askFix = (s, message = HIGH_ONE, user = "alice", pr = {}) => {
   });
   return started.then((result) => ({ ...result, said }));
 };
+
+// askFix() with a posted review of its own.
+const askFixWith = (s, result) =>
+  s.reviews.fixAsked(
+    { repo: "org/repo", number: 5, base: "trunk", settings: s.read.settings },
+    result,
+    { user: "alice", announce: async () => ({ id: 77 }) },
+  );
 
 test("dashboard Fix: one round more once they ran out, counted before it is queued", async (t) => {
   // The fix run queued makes the issue busy until it ends, as the queue does.
@@ -953,7 +963,7 @@ test("dashboard Fix: one round more once they ran out, counted before it is queu
   );
   assert.equal(item.text, fixMessage(parseReview(HIGH_ONE), 5, { round: 3, rounds: 3 }));
   const entry = s.reviews.entry("org/repo", 5);
-  assert.deepEqual([entry.fixes, entry.granted, entry.fixRounds], [3, 1, 3]);
+  assert.deepEqual([entry.fixes, entry.grantedTo, entry.fixRounds], [3, 3, 3]);
   assert.deepEqual([s.loop("review-fix").loop, s.loop("review-fix").rounds], ["fixing", 3]);
   // A second click, or the same after a restart (its run back in the queue): the round is on
   // its way, nothing more.
@@ -984,7 +994,7 @@ test("dashboard Fix: one round more once they ran out, counted before it is queu
   );
   // Another click grants one more: each grants one round at most.
   assert.deepEqual((await askFix(s)).said, [[4, 4, "1 high finding"]]);
-  assert.equal(s.reviews.entry("org/repo", 5).granted, 2);
+  assert.equal(s.reviews.entry("org/repo", 5).grantedTo, 4);
 });
 
 test("dashboard Fix: two clicks at once start one fix run", async (t) => {
@@ -998,7 +1008,7 @@ test("dashboard Fix: two clicks at once start one fix run", async (t) => {
   assert.match([one, two].find((r) => !r.item).why, /being started/);
   assert.equal(s.accepted.length, before + 1);
   // `fix: true`: its one round was used, this one is granted, and its push is reviewed.
-  assert.equal(s.reviews.entry("org/repo", 5).granted, 1);
+  assert.equal(s.reviews.entry("org/repo", 5).grantedTo, 2);
   assert.equal((await s.fixed("sha-3")).reason, "review");
 });
 
@@ -1010,7 +1020,7 @@ test("dashboard Fix: a round left is used, not granted; refusals say why", async
   assert.equal(s.loop().loop, "stopped");
   const { item, said } = await askFix(s);
   assert.deepEqual([item.round, item.rounds, said], [2, 2, [[2, 2, "1 high finding"]]]);
-  assert.equal(s.reviews.entry("org/repo", 5).granted, 0);
+  assert.equal(s.reviews.entry("org/repo", 5).grantedTo, undefined);
   // Nothing blocking, or `review.fix` off.
   const clean = await loopSetup(t);
   await clean.review(HIGH_ONE);
@@ -1032,6 +1042,136 @@ test("dashboard Fix: a round left is used, not granted; refusals say why", async
   });
   assert.match((await askFix(asking)).why, /waits for the maintainer's input/);
   assert.equal(busy.accepted.length + asking.accepted.length + clean.accepted.length, 2);
+});
+
+test("a maintainer's review of a loop CI stopped: the loop shows it, and Fix follows", async (t) => {
+  // Two fix runs, then CI failed on what the second pushed and its CI fix run pushed nothing:
+  // no review of sha-3.
+  const path = join(tempDir(t), "reviews.json");
+  const at = 1_800_000_000_000;
+  const round = (n, head) => ({ round: n, at, head, counts: { high: 1 }, blocking: 1 });
+  const entry = {
+    head: "sha-3",
+    at,
+    fixes: 2,
+    reviewedFixes: 2,
+    fixRounds: 2,
+    rounds: [round(0, "sha-1"), round(1, "sha-2")],
+    ciStopped: { sha: "sha-3", at },
+  };
+  writeFileSync(path, JSON.stringify({ "org/repo#pr-5": entry }));
+  const s = setup(t, "review:\n  on: ready\n  fix: 2\n", {
+    path,
+    github: async () => Response.json({ labels: [] }),
+  });
+  const loop = () => reviewLoop(s.reviews.entry("org/repo", 5));
+  assert.equal(loop().loop, "ci-failed");
+  // The dashboard's Review of sha-3 finds a high one: rounds out, no longer "CI failed".
+  const run = {
+    repo: "org/repo",
+    number: 5,
+    base: "trunk",
+    settings: s.read.settings,
+    auto: false,
+  };
+  const head = { head: { sha: "sha-3", repo: { full_name: "org/repo" } } };
+  assert.equal(await s.reviews.settle(run, posted(HIGH_ONE, head)), null);
+  assert.deepEqual(
+    [loop().loop, loop().history.at(-1).head, s.reviews.entry("org/repo", 5).ciStopped],
+    ["rounds-out", "sha-3", undefined],
+  );
+  const { item } = await askFix(s, HIGH_ONE, "alice", head);
+  assert.deepEqual([item.round, item.rounds], [3, 3]);
+});
+
+// Pull request #5's entry in a new reviews.json: `fixes` fix runs, each reviewed, the last
+// review blocking at `head`; `extra` over it.
+function loopAt(t, fixes, extra = {}) {
+  const path = join(tempDir(t), "reviews.json");
+  const at = 1_800_000_000_000;
+  const rounds = Array.from({ length: fixes + 1 }, (_, n) => ({
+    round: n,
+    at,
+    head: `sha-${n + 1}`,
+    counts: { high: 1 },
+    blocking: 1,
+  }));
+  const entry = { head: `sha-${fixes + 1}`, at, fixes, reviewedFixes: fixes, rounds, ...extra };
+  writeFileSync(path, JSON.stringify({ "org/repo#pr-5": entry }));
+  return path;
+}
+const open5 = async () => Response.json({ labels: [] });
+
+test("dashboard Fix: a grant is a round, whatever review.fix says before or after it", async (t) => {
+  // Three fix runs ran with `fix: 3`, then the repo lowered it to 1: a Fix still grants R4.
+  const path = loopAt(t, 3, { fixRounds: 3 });
+  const lowered = setup(t, "review:\n  on: ready\n  fix: 1\n", { path, github: open5 });
+  const { item } = await askFix(lowered);
+  assert.deepEqual([item.round, item.rounds], [4, 4]);
+  assert.equal(lowered.reviews.entry("org/repo", 5).grantedTo, 4);
+  // A grant on `fix: 1` (round 2), then the repo raised it to 3: three rounds, not four.
+  const raised = setup(t, "review:\n  on: ready\n  fix: 3\n", {
+    path: loopAt(t, 1, { grantedTo: 2 }),
+    github: open5,
+  });
+  const next = await raised.reviews.fix(
+    { repo: "org/repo", number: 5, base: "trunk", settings: raised.read.settings },
+    posted(HIGH_ONE),
+  );
+  assert.deepEqual([next.round, next.rounds], [2, 3]);
+});
+
+test("dashboard Fix: refused when the loop starts again during the App's comment, or the review on GitHub is older", async (t) => {
+  const s = await loopSetup(t);
+  await s.review(HIGH_ONE);
+  await s.fixed();
+  const before = s.accepted.length;
+  const run = { repo: "org/repo", number: 5, base: "trunk", settings: s.read.settings };
+  // Marked ready again at a new head while the comment is posted: its review is on its way.
+  const ready = delivery("ready_for_review", {
+    ...posted().pr,
+    head: { sha: "sha-9", repo: { full_name: "org/repo" } },
+  });
+  const late = await s.reviews.fixAsked(run, posted(HIGH_ONE), {
+    user: "alice",
+    announce: async () => {
+      await s.reviews.consider("pull_request", ready);
+      return { id: 77 };
+    },
+  });
+  assert.equal(late.item, null);
+  assert.match(late.why, /started again meanwhile/);
+  assert.deepEqual(
+    s.accepted.slice(before).map((i) => i.reason),
+    ["review"],
+  );
+  // GitHub's latest review isn't the loop's last round (a newer one went out as a comment).
+  const stale = await loopSetup(t);
+  await stale.review(HIGH_ONE);
+  await stale.fixed();
+  const older = { ...posted(HIGH_ONE), review: { ...parseReview(HIGH_ONE), head: "sha-0" } };
+  const refused = await stale.reviews.fixAsked(run, older, {
+    user: "alice",
+    announce: async () => assert.fail("nothing posted"),
+  });
+  assert.match(refused.why, /latest review couldn't be read from GitHub/);
+  const same = { ...posted(HIGH_ONE), review: { ...parseReview(HIGH_ONE), head: "sha-1" } };
+  assert.equal((await askFixWith(stale, same)).item.round, 2);
+});
+
+test("a maintainer's review that couldn't be read leaves a loop CI stopped as it was", async (t) => {
+  const path = loopAt(t, 0, { rounds: [], ciStopped: { sha: "sha-1", at: 1 } });
+  const s = setup(t, "review:\n  on: ready\n  fix: 2\n", { path, github: open5 });
+  const run = {
+    repo: "org/repo",
+    number: 5,
+    base: "trunk",
+    settings: s.read.settings,
+    auto: false,
+  };
+  await s.reviews.settle(run, { event: null, review: null, pr: posted().pr });
+  const entry = s.reviews.entry("org/repo", 5);
+  assert.deepEqual([reviewLoop(entry).loop, entry.ciStopped.sha], ["ci-failed", "sha-1"]);
 });
 
 test("dashboard Fix while a maintainer's review is settled, or a comment comes: one run", async (t) => {
@@ -1146,7 +1286,7 @@ test("dashboard Fix: a round left on fix: true is reviewed, though the loop's ow
   busy = false;
   const { item } = await askFix(s);
   assert.deepEqual([item.round, item.rounds], [1, 1]);
-  assert.equal(s.reviews.entry("org/repo", 5).granted, 0);
+  assert.equal(s.reviews.entry("org/repo", 5).grantedTo, undefined);
   // Its push is reviewed, and the loop goes on from that review.
   assert.equal((await s.fixed("sha-2")).reason, "review");
   assert.equal(await s.review(HIGH_ONE), null);

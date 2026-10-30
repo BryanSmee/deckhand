@@ -533,26 +533,27 @@ review` gets the "unknown mode" reply. `review: true` (or a block without `on`, 
   failed, or clean), its task page offers, in its Review loop section:
   - **Review** (Shift R): a review of its head now, even a head already reviewed. It is the
     dashboard's `/mode review`: the App comments "Review from the dashboard by @you" on the
-    pull request, the review tolerates nothing and isn't a loop round, and it may start a fix
-    run while rounds are left.
-  - **Fix** (Shift F), with `fix` on only, when the last review left findings above
-    `max_allowed_severity`: one fix run on the findings of the App's latest review on the
-    pull request, read back from GitHub, with the same message as the loop's. A round left
-    (a fix that failed or pushed nothing) is used; with the rounds used up, each click grants
-    one round more, never a new loop. The App comments "Fix round 4 from the dashboard by
-    @you: 2 high findings left", and its push is reviewed like any round's (with `fix: true`
-    and no `merge` too), the review deciding the auto-merge again with `merge`. The round is
-    counted in `reviews.json` before the run is queued: a second click or a restart starts no
-    second one. Only on Deckhand's own open pull request linked to its issue, with nothing
-    running or queued and no needs-input label; `deny_fix` applies, its refusal shown on the
-    dashboard.
+    pull request, then the review runs as that comment's would.
+  - **Fix** (Shift F), with `fix` on, on a pull request ready for review, when the last review
+    left findings above `max_allowed_severity`: one fix run on the findings of the App's
+    latest review on the pull request, read back from GitHub, with the loop's message. A round
+    left (a fix that failed or pushed nothing) is used; with the rounds used up, each click
+    grants one round more, never a new loop. The App comments "Fix round 4 from the dashboard
+    by @you: 2 high findings left" (edited to say so if it is refused after that), and the
+    fix's push is reviewed like any round's, even with `fix: true` and no `merge`; with
+    `merge`, that review decides the auto-merge again. The round is counted in `reviews.json`
+    before the run is queued: a second click or a restart starts no second one. Only on
+    Deckhand's own open pull request linked to its issue, with nothing running or queued, no
+    needs-input label, the loop not going on (no review, CI or checks awaited), and GitHub's
+    latest review the loop's last; `deny_fix` applies, its refusal shown on the dashboard.
 
-  A review a maintainer asks for (either way) on a pull request whose loop the dashboard
-  shows is listed in its history as the latest round, its blocking findings counted with
-  the loop's own tolerance (`max_allowed_severity` with `fix` or auto-merge), so the buttons follow it; it still isn't a loop
-  round and counts no fix run. A Fix's push is reviewed even when it uses a round `fix: true`
-  left. Both are refused, the dashboard saying why, for someone outside the repo's `users`, a
-  closed pull request or one with a run going or queued.
+  A review a maintainer asks for (`/mode review`, or Review) on a pull request whose loop the
+  dashboard shows is listed in its history as the latest round, its blocking findings counted
+  with the loop's own tolerance (`max_allowed_severity` with `fix` or auto-merge), so the
+  buttons follow it, and a CI step that stopped without a review shows it. It still isn't a
+  loop round: it counts no fix run, tolerates nothing itself, and may start a fix run while
+  rounds are left. Both requests are refused, the dashboard saying why, for someone outside
+  the repo's `users`, a closed pull request, or one with a run going or queued.
 
 - **Security risk of `fix`**: the review's findings, a model's output, become the message of a
   run that can push. A comment written to steer the reviewer (a prompt injection) could turn

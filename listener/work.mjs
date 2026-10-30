@@ -29,8 +29,8 @@
 //                                         cancelled, again:
 //                                         its mode and comments (board.mjs rerunnable())
 //   POST /api/repos/<owner>/<repo>/review { number, action: "review" | "fix" }
-//                                         a pull request whose review-and-fix loop is over
-//                                         (reviews.mjs), from the task's page: "review", a
+//                                         the task page's buttons once a pull request's
+//                                         review-and-fix loop is over (reviews.mjs): "review", a
 //                                         review of its head now, as `/mode review` would
 //                                         (no loop round, nothing tolerated); "fix", one fix
 //                                         run more on the App's latest review's findings,
@@ -75,6 +75,7 @@ import {
   issueItem,
   linkedIssue,
   linkTo,
+  MARKER,
   parseKey,
   prId,
   sameRepo,
@@ -847,18 +848,48 @@ export function createWorkApi({
   // the repo's tolerance: reviews' startFix() decides, counts the round and queues it.
   async function fixAgain(repo, user, { number, pr, settings, base }) {
     if (!reviews) refuse(503, "Reviews aren't set up on this listener.");
+    // Its push is reviewed through the CI step, which drops a draft, and only a ready pull
+    // request merges by itself.
+    if (pr.draft) refuse(409, `#${number} is a draft: mark it ready for review first.`);
     const allowed = settings.review.maxAllowedSeverity;
     const review = await latestReview(github, config, repo, number, allowed);
     if (!review) refuse(409, `#${number} has no review of Deckhand's to fix.`);
-    const announce = (round, rounds, left) =>
-      comment(repo, number, `Fix round ${round} from the dashboard by @${user}: ${left} left.`);
-    const started = await reviews.fixAsked(
-      { repo, number, base, settings },
-      { review, pr },
-      { user, announce },
-    );
-    if (!started.item) refuse(409, `No fix run on #${number}: ${started.why}.`);
+    let announced = null;
+    const announce = async (round, rounds, left) => {
+      const asked = `Fix round ${round} from the dashboard by @${user}`;
+      announced = { asked, ...(await comment(repo, number, `${asked}: ${left} left.`)) };
+      return announced;
+    };
+    let started;
+    try {
+      started = await reviews.fixAsked(
+        { repo, number, base, settings },
+        { review, pr },
+        { user, announce },
+      );
+    } catch (error) {
+      if (announced) await withdraw(repo, announced, "not started, the listener failed");
+      throw error;
+    }
+    if (!started.item) {
+      // Refused after the App's comment (checked again once it was posted): it says so.
+      if (announced) await withdraw(repo, announced, `not started, ${started.why}`);
+      refuse(409, `No fix run on #${number}: ${started.why}.`);
+    }
     return `Fix round ${started.item.round} of #${number} queued.`;
+  }
+
+  // The App's comment `posted` ({ id, asked }) edited to say `what` became of it. Failing only
+  // leaves it as it was: logged.
+  async function withdraw(repo, posted, what) {
+    const path = `/repos/${repo}/issues/comments/${posted.id}`;
+    const body = `${posted.asked}: ${what}.\n\n${MARKER}`;
+    try {
+      const res = await github(repo, "PATCH", path, { body });
+      if (!res.ok) log(`Work area: editing comment ${posted.id}: ${res.status}`);
+    } catch (error) {
+      log(`Work area: editing comment ${posted.id}: ${error.message ?? error}`);
+    }
   }
 
   // The task's last run, failed, lost or cancelled, no longer asks for attention: its task

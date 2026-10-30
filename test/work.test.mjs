@@ -128,6 +128,12 @@ function setup({
         ? Response.json({ number: Number(pull[1]), ...pr })
         : new Response("{}", { status: 404 });
     }
+    // A comment of the App's edited (`w.edits`: [id, body]).
+    const edited = /\/issues\/comments\/(\d+)$/.exec(path)?.[1];
+    if (method === "PATCH" && edited) {
+      (w.edits ??= []).push([Number(edited), body.body]);
+      return Response.json({ id: Number(edited) });
+    }
     const timeline = /\/issues\/(\d+)\/events\?/.exec(path)?.[1];
     if (timeline) return Response.json(w.events[timeline] ?? []);
     const n = /\/issues\/(\d+)$/.exec(path)?.[1];
@@ -225,6 +231,9 @@ function setup({
         w.asked.push({ run, posted, user: asked.user });
         if (w.noFix) return { item: null, why: w.noFix };
         const comment = await asked.announce(4, 4, "2 high findings");
+        // Refused once its comment is posted (`w.lateFix`): checked again after it; or failing.
+        if (w.lateFix) return { item: null, why: w.lateFix };
+        if (w.fixFails) throw new Error("GitHub down");
         const item = { reason: "review-fix", round: 4, comment };
         await w.accepted.push(item);
         return { item };
@@ -2269,4 +2278,41 @@ test("review: a second request while the first is being started posts and queues
     assert.equal((await review(w, { number: 8, action: "fix" })).status, 409);
     assert.equal((await review(w, { number: 8, action: "review" })).status, 200, action);
   }
+});
+
+test("review fix refused once its comment is posted: the comment says no run started", async () => {
+  const w = reviewSetup();
+  w.lateFix = "#5 has a run going or queued";
+  const res = await review(w, { number: 8, action: "fix" });
+  assert.equal(res.status, 409);
+  assert.equal(res.body.error, "No fix run on #8: #5 has a run going or queued.");
+  assert.deepEqual(w.comments, [
+    [8, "Fix round 4 from the dashboard by @alice: 2 high findings left."],
+  ]);
+  assert.deepEqual(w.edits, [
+    [
+      501,
+      `Fix round 4 from the dashboard by @alice: not started, #5 has a run going or queued.\n\n${MARKER}`,
+    ],
+  ]);
+  assert.deepEqual(w.accepted, []);
+  // Failing after it: said too, and the request fails.
+  const failing = reviewSetup();
+  failing.fixFails = true;
+  assert.equal((await review(failing, { number: 8, action: "fix" })).status, 502);
+  assert.match(failing.edits[0][1], /: not started, the listener failed\./);
+  // Refused before any comment: nothing to edit.
+  const early = reviewSetup();
+  early.noFix = "it waits for the maintainer's input";
+  assert.equal((await review(early, { number: 8, action: "fix" })).status, 409);
+  assert.equal(early.edits, undefined);
+});
+
+test("review fix refused on a draft, which a review isn't", async () => {
+  const draft = reviewSetup({ pulls: { 8: { ...OWN_PR, draft: true } } });
+  const res = await review(draft, { number: 8, action: "fix" });
+  assert.equal(res.status, 409);
+  assert.equal(res.body.error, "#8 is a draft: mark it ready for review first.");
+  assert.deepEqual([draft.comments, draft.asked], [[], []]);
+  assert.equal((await review(draft, { number: 8, action: "review" })).status, 200);
 });
