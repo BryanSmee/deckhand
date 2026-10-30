@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { ConfigError } from "../listener/config.mjs";
 import { AGENTS } from "../listener/agents/index.mjs";
 import { sandboxArgs } from "../listener/runner/docker.mjs";
 import { createBackend } from "../listener/runner/index.mjs";
@@ -233,6 +234,19 @@ test("createBackend: Docker's runner, images and jobs, or Kubernetes'; another r
   // No short containers: an agent's install, previews and the login refresh say so.
   assert.deepEqual(kube.jobs, {});
   assert.throws(() => createBackend({ config: { runner: "nomad" } }), /RUNNER: expected docker/);
+  // Outside the cluster: no ServiceAccount, no start.
+  assert.throws(
+    () =>
+      createBackend({
+        config: { runner: "kubernetes", kubernetes: { namespace: "" } },
+        readNamespace: () => {
+          throw Object.assign(new Error("ENOENT"), { code: "ENOENT", path: "/x/namespace" });
+        },
+      }),
+    (error) =>
+      error instanceof ConfigError &&
+      /no ServiceAccount at .* \(\/x\/namespace\)/.test(error.message),
+  );
 });
 
 // Fail closed: never a sandbox as the image's user, or without the operator's limits.
