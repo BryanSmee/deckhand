@@ -169,13 +169,13 @@ function claimed(chord: string, target: EventTarget | null) {
   return false;
 }
 
-// Not now: switched off, a dialog or a menu open (theirs are the keys), or typing.
+// Not now: switched off, a dialog, a menu or a popup list open (theirs are the keys), or typing.
 function quiet(e: KeyboardEvent) {
   return (
     e.defaultPrevented ||
     !shortcutsOn() ||
     typing(e.target) ||
-    !!document.querySelector('[aria-modal="true"], [role="menu"]')
+    !!document.querySelector('[aria-modal="true"], [role="menu"], [data-popup]')
   );
 }
 

@@ -181,7 +181,7 @@ test("the log streams in: tool calls with their output, then the result", async 
   expect(source.closed).toBe(true);
 
   // Another run of the task: a new stream, the old one closed.
-  fireEvent.click(screen.getByRole("tab", { name: "Start 2 h ago" }));
+  fireEvent.click(screen.getByRole("tab", { name: "#1 Start 2 h ago" }));
   expect(FakeSource.last).not.toBe(source);
   expect(FakeSource.last!.url).toMatch(/acme-app-22-1791984600000/);
   expect(location.hash).toMatch(/run=acme-app-22-1791984600000/);
@@ -217,7 +217,7 @@ test("an older run's outcome: no pull request, which is the latest run's", () =>
   render(<Dashboard state={state} error={null} />);
   const outcome = () => screen.getByRole("region", { name: "Outcome" });
   expect(within(outcome()).getByRole("link", { name: "Open pull request #25" })).toBeTruthy();
-  fireEvent.click(screen.getByRole("tab", { name: "Start 2 h ago" }));
+  fireEvent.click(screen.getByRole("tab", { name: "#1 Start 2 h ago" }));
   expect(within(outcome()).queryByRole("link", { name: /pull request/ })).toBeNull();
   expect(outcome().textContent).not.toMatch(/Draft|\+86/);
 });

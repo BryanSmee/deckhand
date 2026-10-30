@@ -80,6 +80,28 @@ export const makeTask = (partial: Partial<Task> = {}): Task => {
   };
 };
 
+// A task's `n` runs, newest first: run k (1 = the oldest) started k hours after `start` and took
+// 10 min, the newest still going; every other one a review fix.
+export const makeRuns = (key: string, n: number, start = 0): Run[] =>
+  Array.from({ length: n }, (_, i) => {
+    const k = n - i;
+    const startedAt = start + k * 3_600_000;
+    return {
+      id: `${key.replace(/\W+/g, "-")}-${k}`,
+      key,
+      kind: "issue",
+      title: null,
+      repo: key.split("#")[0],
+      replyTo: null,
+      mode: k === 1 ? "start" : "continue",
+      taskMode: "work",
+      reason: k % 2 ? null : "review-fix",
+      startedAt,
+      finishedAt: i === 0 ? null : startedAt + 600_000,
+      status: i === 0 ? "running" : "ok",
+    } satisfies Run;
+  });
+
 // Runs going on, newest first, with only what the dialogs' links read.
 export const running = (ids: string[]) =>
   ids.map((id) => ({ id, status: "running", startedAt: 0 })) as unknown as Run[];

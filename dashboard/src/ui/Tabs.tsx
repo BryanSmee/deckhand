@@ -1,5 +1,7 @@
 // Tabs (the work queue's, a task's runs): a tablist whose arrows, Home and End move between
 // the tabs, and pick them, as the ARIA pattern has it. Only the picked tab is in the Tab order.
+// `extra` (a task's All runs button) sits last in the row, outside the tablist, which shrinks
+// beside it: its tabs share what `extra` leaves.
 import type { ComponentChildren, JSX } from "preact";
 import { useRef } from "preact/hooks";
 import { Count } from "./Count";
@@ -23,6 +25,7 @@ interface Props<T extends string> {
   // The panel the tabs show (its id).
   panel?: string;
   class?: string;
+  extra?: ComponentChildren;
 }
 
 const MOVES: Record<string, (i: number, n: number) => number> = {
@@ -39,6 +42,7 @@ export function Tabs<T extends string>({
   onSelect,
   panel,
   class: className,
+  extra,
 }: Props<T>) {
   const list = useRef<HTMLDivElement>(null);
   const onKeyDown = (e: KeyboardEvent) => {
@@ -50,10 +54,11 @@ export function Tabs<T extends string>({
     onSelect(tabs[next].id);
     list.current?.querySelectorAll<HTMLElement>("[role=tab]")[next]?.focus();
   };
-  return (
+  const row = [styles.tabs, className].filter(Boolean).join(" ");
+  const tablist = (
     <div
       ref={list}
-      class={[styles.tabs, className].filter(Boolean).join(" ")}
+      class={extra ? styles.list : row}
       role="tablist"
       aria-label={label}
       onKeyDown={onKeyDown}
@@ -75,6 +80,13 @@ export function Tabs<T extends string>({
           {t.count !== undefined && <Count n={t.count} hot={t.hot} />}
         </button>
       ))}
+    </div>
+  );
+  if (!extra) return tablist;
+  return (
+    <div class={row}>
+      {tablist}
+      <div class={styles.extra}>{extra}</div>
     </div>
   );
 }

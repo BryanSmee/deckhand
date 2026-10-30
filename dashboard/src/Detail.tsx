@@ -1,12 +1,14 @@
 // The open task: its kind, number and mode, its title, and its actions (GitHub, Stop while a
-// run goes on, which asks first: Stop.tsx); then its facts and its runs as tabs over the run
-// shown (the latest unless one was picked): its outcome (with Rerun and Dismiss when it
-// failed, and who dismissed it, with Undo) and its log. Waiting for input: its open questions, as a form to answer them. A discussion: its
-// thread first, to read and reply to, with the last reply and Rerun, then its runs. A Policies
-// tab when its pull request's policies decided something (with a badge when one kept it from
-// merging by itself). A phone's log search takes the header's place. Its shortcuts: O opens it
-// on GitHub, A goes to its questions, R reruns, Shift S stops (asking first), [ and ] go
-// through its tabs.
+// run goes on, which asks first: Stop.tsx); then its facts and its runs as tabs, numbered from
+// the oldest (#1), over the run shown (the latest unless one was picked). Past 3 runs, only the
+// latest and the one shown have a tab, and All runs lists them all (RunMenu.tsx). The run
+// shown: its outcome (with Rerun and Dismiss when it failed, and who dismissed it, with Undo)
+// and its log. Waiting for input: its open questions, as a form to answer them. A discussion:
+// its thread first, to read and reply to, with the last reply and Rerun, then its runs. A
+// Policies tab when its pull request's policies decided something (with a badge when one kept
+// it from merging by itself). A phone's log search takes the header's place. Its shortcuts: O
+// opens it on GitHub, A goes to its questions, R reruns, Shift S stops (asking first), [ and ]
+// go through its thread, every run (those without a tab too) and its policies.
 import { useEffect, useRef, useState } from "preact/hooks";
 import { sendCancel, sendDismiss, sendRerun, useRunLog } from "./api";
 import {
@@ -32,6 +34,7 @@ import { AuthTag, Outcome } from "./Outcome";
 import { heldMerge, PolicyTab } from "./Policies";
 import { Questions } from "./Questions";
 import { ReviewRounds } from "./ReviewLoop";
+import { RunMenu } from "./RunMenu";
 import { StopDialog } from "./Stop";
 import { Thread } from "./Thread";
 import type { PullRequest, Run, Task } from "./types";
@@ -64,6 +67,8 @@ const STOPPABLE: Task["state"][] = ["scheduled", "building-image", "working", "s
 const THREAD = "thread";
 const POLICIES = "policies";
 const PANEL = "task-view";
+// Up to this many runs, each has a tab; past it, the latest and the one shown only.
+const ALL_TABS = 3;
 
 export function Detail({
   task: t,
@@ -169,15 +174,26 @@ export function Detail({
     if (!said.error) await refresh?.();
     setDismissing(null);
   };
+  // The latest run follows the next ones; an older one picked (or from the URL) is beside it.
+  const many = t.runs.length > ALL_TABS;
+  const tabbed = many ? t.runs.filter((x, i) => i === 0 || x.id === r?.id) : t.runs;
   const tabs = [
     ...(discussion ? [{ id: THREAD, label: "Thread" }] : []),
-    ...t.runs.map((x, i) => ({
+    ...tabbed.map((x) => ({
       id: x.id,
+      // Narrow, it shrinks: its name cut short, which its title and All runs have whole.
+      attrs: {
+        class: styles.runTab,
+        title: `${x === t.runs[0] ? "Latest: follows the next runs" : x.id}\n${runName(x)}`,
+      },
       label: (
-        <span class={styles.run} title={i === 0 ? "Latest: follows the next runs" : x.id}>
+        <span class={styles.run}>
+          <span class={styles.number}>#{t.runs.length - t.runs.indexOf(x)}</span>{" "}
           <StatusDot state={x.status} />
-          {runName(x)}
-          {x.speed === "fast" && " · fast"}{" "}
+          <span class={styles.name}>
+            {runName(x)}
+            {x.speed === "fast" && " · fast"}
+          </span>{" "}
           <span class={styles.ago}>
             {x.status === "running" ? duration(x, now) : ago(x.startedAt, now)}
           </span>
@@ -215,11 +231,16 @@ export function Detail({
     void again(last);
   };
   keys.stop = () => (stoppable && stopping !== t.key ? setConfirming(t.key) : false);
+  // ] and [: every run in turn, not only those with a tab.
+  const order = [
+    ...(discussion ? [THREAD] : []),
+    ...t.runs.map((x) => x.id),
+    ...(decided ? [POLICIES] : []),
+  ];
   keys.nextRun = (i) => {
-    const at = tabs.findIndex((x) => x.id === selected);
-    const next = tabs[at + (i === 0 ? 1 : -1)];
+    const next = order[order.indexOf(selected) + (i === 0 ? 1 : -1)];
     if (!next) return false;
-    pick(next.id);
+    pick(next);
   };
   return (
     <div class={styles.detail} ref={root}>
@@ -407,6 +428,17 @@ export function Detail({
               onSelect={pick}
               panel={PANEL}
               class={styles.tabs}
+              extra={
+                many && (
+                  <RunMenu
+                    runs={t.runs}
+                    current={logShown ? r.id : null}
+                    onPick={pick}
+                    now={now}
+                    touch={touch}
+                  />
+                )
+              }
             />
           )}
         </header>

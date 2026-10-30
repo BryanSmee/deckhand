@@ -22,6 +22,7 @@ import { NavItem } from "./ui/NavItem";
 import { Sheet } from "./ui/Sheet";
 import { Meter } from "./ui/Meter";
 import { StatusDot } from "./ui/Status";
+import { usePopup } from "./ui/popup";
 import { ThemeSwitch } from "./ui/ThemeSwitch";
 import styles from "./Shell.module.css";
 
@@ -266,10 +267,8 @@ function User({ user }: { user: string }) {
 }
 
 // New request and its menu. Arrows move through it, Escape closes it, and so does a click
-// elsewhere. On the rail the menu opens beside it, outside the sidebar: the sidebar scrolls,
-// so it would clip an absolute menu there. It is fixed instead, at the button, and closes when
-// the window resizes or a scroll moves the button, rather than drift from it. Other scrolls
-// leave it open: a live run's log follows its end on every line.
+// elsewhere (ui/popup.ts). On the rail the menu opens beside it, outside the sidebar: the
+// sidebar scrolls, so it would clip an absolute menu there. It is fixed instead, at the button.
 function NewRequest({
   onPick,
   form,
@@ -282,44 +281,23 @@ function NewRequest({
   const box = useRef<HTMLDivElement>(null);
   const menu = useRef<HTMLDivElement>(null);
   const button = () => box.current?.querySelector<HTMLElement>("[aria-haspopup]");
+  const items = () => [...(menu.current?.querySelectorAll<HTMLElement>("[role=menuitem]") ?? [])];
   useEffect(() => {
-    if (!open) return;
-    const items = () => [...(menu.current?.querySelectorAll<HTMLElement>("[role=menuitem]") ?? [])];
-    items()[0]?.focus();
-    const away = (e: PointerEvent) => {
-      if (!box.current?.contains(e.target as Node)) setOpen(false);
-    };
-    const keys = (e: KeyboardEvent) => {
+    if (open) items()[0]?.focus();
+  }, [open]);
+  usePopup(open, () => setOpen(false), {
+    box,
+    button,
+    fixed: form === "icon",
+    onKey: (e) => {
+      if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+      e.preventDefault();
       const all = items();
       const at = all.indexOf(document.activeElement as HTMLElement);
-      if (e.key === "Escape") {
-        e.preventDefault();
-        setOpen(false);
-        button()?.focus();
-      } else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
-        e.preventDefault();
-        const step = e.key === "ArrowDown" ? 1 : -1;
-        all[(at + step + all.length) % all.length]?.focus();
-      } else if (e.key === "Tab") setOpen(false);
-    };
-    const close = () => setOpen(false);
-    const moved = (e: Event) => {
-      const target = e.target as Node;
-      if (target === document || target.contains(box.current)) setOpen(false);
-    };
-    document.addEventListener("pointerdown", away);
-    document.addEventListener("keydown", keys);
-    if (form === "icon") {
-      window.addEventListener("resize", close);
-      document.addEventListener("scroll", moved, true);
-    }
-    return () => {
-      document.removeEventListener("pointerdown", away);
-      document.removeEventListener("keydown", keys);
-      window.removeEventListener("resize", close);
-      document.removeEventListener("scroll", moved, true);
-    };
-  }, [open, form]);
+      const step = e.key === "ArrowDown" ? 1 : -1;
+      all[(at + step + all.length) % all.length]?.focus();
+    },
+  });
   const attrs = {
     "aria-haspopup": "menu" as const,
     "aria-expanded": open,
