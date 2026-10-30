@@ -643,13 +643,9 @@ pull request's head commit (other checks and commit statuses aren't read, as for
   runs and jobs (name, conclusion, run id, link), never their logs: the run reads them itself
   (`gh run view <id> --log-failed`, through Deckhand's GitHub gateway, which follows GitHub's
   redirect to its log storage: no host to grant), told they are data, not instructions (the branch's code
-  printed them), fixes the cause, reruns the checks and pushes. A job it judges flaky (a
-  failure the code didn't cause) it may rerun instead, once (`gh run rerun <id> --failed`:
-  [Reruns](#reruns)), pushing nothing. Once it is over, its push, or the head commit whose
-  jobs it reran, goes back to waiting for CI: then the review, or another CI fix run (told, after a rerun, that
-  the failure isn't flaky). One that
-  failed, or pushed and reran nothing, leaves the pull request to the maintainer, a "No
-  review" comment says why. The
+  printed them), fixes the cause, reruns the checks and pushes, or reruns a job it judges flaky
+  ([Reruns](#reruns)). Once it is over, its push or rerun goes back to waiting for CI: then the review, or another CI fix run. One that failed or pushed
+  nothing leaves the pull request to the maintainer, a "No review" comment says why. The
   dashboard shows "Fixing CI", and the run "CI fix"; when the CI step stops without a review
   (a CI fix run refused, failed or pushing nothing), the ready pull request is marked "CI failed,
   not reviewed". A pull request turned back into a draft while it waits stops waiting: ready
@@ -1115,15 +1111,15 @@ and pushed.
 The token behind a run's calls only reads, but for a write that passed these checks: a
 brainstorm's or an inbox entry's `issues: write` never reaches anything else. A pull request's
 own write gets what GitHub needs for it besides: `pull_requests: write` to open or edit one,
-or to reply to, resolve or unresolve one of its review threads, `contents: write` to ready or draft one, or to update its branch. A rerun gets `actions: write` ([Reruns](#reruns)).
+or to reply to, resolve or unresolve one of its review threads, `contents: write` to ready or draft one, or to update its branch.
 
-| Mode                                                            | Ceiling                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| --------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `brainstorm`, `stop`                                            | its issue: `edit`, `comment`, `link`, `react`, `unreact`; its sub-issues and the issues it created: `edit`, `comment`, `link`; new issues and labels: `create`; other issues and pull requests: `comment`                                                                                                                                                                                                                                                            |
-| `idea`, `bug`                                                   | new issues (with the `idea` or `bug` label) and labels: `create`; the issues it created: `link` (the parents it files); its issue: `comment`                                                                                                                                                                                                                                                                                                                         |
-| `discussion`                                                    | new issues: `create`                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| `onboarding`, `analyze`, `review`, `research`, a light `modes:` | nothing                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| `work`, a `modes:` entry that isn't light                       | its issue: `edit`, `comment`, `label`, `link`, `react`, `unreact`; its pull requests: `edit`, `comment`, `label`, `ready`, `draft`, `update_branch`, `react`, `unreact`, `rerun`; its sub-issues and the issues it created: `edit`, `comment`, `label`, `link`, `react`, `unreact`; the comments it posted: `edit`, `delete`; new issues, labels and pull requests (from its branches): `create`; its pull requests' review threads: `reply`, `resolve`, `unresolve` |
+| Mode                                                            | Ceiling                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| --------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `brainstorm`, `stop`                                            | its issue: `edit`, `comment`, `link`, `react`, `unreact`; its sub-issues and the issues it created: `edit`, `comment`, `link`; new issues and labels: `create`; other issues and pull requests: `comment`                                                                                                                                                                                                                                                   |
+| `idea`, `bug`                                                   | new issues (with the `idea` or `bug` label) and labels: `create`; the issues it created: `link` (the parents it files); its issue: `comment`                                                                                                                                                                                                                                                                                                                |
+| `discussion`                                                    | new issues: `create`                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `onboarding`, `analyze`, `review`, `research`, a light `modes:` | nothing                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `work`, a `modes:` entry that isn't light                       | its issue: `edit`, `comment`, `label`, `link`, `react`, `unreact`; its pull requests: `edit`, `comment`, `label`, `ready`, `draft`, `update_branch`, `react`, `unreact`; its sub-issues and the issues it created: `edit`, `comment`, `label`, `link`, `react`, `unreact`; the comments it posted: `edit`, `delete`; new issues, labels and pull requests (from its branches): `create`; its pull requests' review threads: `reply`, `resolve`, `unresolve` |
 
 `react` and `unreact` on an issue or pull request hold for the comments on it too, and
 `unreact` only for the reactions the run added ([Reactions](#reactions)).
@@ -1142,30 +1138,30 @@ contents (pushes go through Deckhand's git gateway) or settings, or another repo
 
 `input` of `deny_github`:
 
-| Field                                              | What                                                                                                                                                                                                                                                                                                                                                                             |
-| -------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `version`                                          | `1`.                                                                                                                                                                                                                                                                                                                                                                             |
-| `repo`                                             | `"owner/repo"`, in lower case.                                                                                                                                                                                                                                                                                                                                                   |
-| `mode`                                             | The run's: `work`, `brainstorm`, `stop`, `idea`, `bug`, `discussion`, or one of the repository's `modes:`.                                                                                                                                                                                                                                                                       |
-| `custom_mode`                                      | `true` for one of the repository's `modes:`, `false` for Deckhand's own: a rule needn't list the built-in modes, which change as Deckhand adds some.                                                                                                                                                                                                                             |
-| `light`                                            | The mode's `light`: `true` for a run without a branch (it can't push), `false` for a work run or a repository mode that isn't light.                                                                                                                                                                                                                                             |
-| `reason`                                           | Why the listener started the run itself: `"review-fix"` (a review's fix run), `"ci-fix"` (a CI fix run), `"conflict"` (a rebase), `null` for a comment's run. The defaults don't read it: a repository can narrow one of them.                                                                                                                                                   |
-| `issue`                                            | The number of the run's issue (or pull request).                                                                                                                                                                                                                                                                                                                                 |
-| `action`                                           | What the write does: `create`, `edit`, `comment`, `label`, `link`, `ready`, `draft`, `delete` (a comment the run posted), `react` (adds a reaction), `unreact` (removes one), `reply`, `resolve`, `unresolve` (a review thread), `update_branch`, `rerun`. A write that does several (a `PATCH` setting labels and a title) has them all in `actions`, `action` being the first. |
-| `actions`                                          | All of them: `close` or `reopen` first, then `label`, `assign`, `milestone`, then `edit`.                                                                                                                                                                                                                                                                                        |
-| `target.kind`                                      | `own_issue`, `own_pr`, `sub_issue`, `created_issue` (one the run created), `other_issue`, `pr`, `new_issue` (an issue it creates), `new_pr` (a pull request it opens), `label` (a label it creates), `created_comment` (a comment the run posted).                                                                                                                               |
-| `target.number`                                    | The issue's or pull request's (for `created_comment`, the one the comment is on), `null` for `new_issue`, `new_pr` and `label`.                                                                                                                                                                                                                                                  |
-| `target.comment`                                   | A `created_comment`'s id, or the id of the comment a reaction is on (its target then being the issue or pull request the comment is on). Absent from other targets.                                                                                                                                                                                                              |
-| `target.comment_author`, `target.comment_deckhand` | A reaction's comment's author (its login), and whether the App's bot wrote it. Absent from other writes.                                                                                                                                                                                                                                                                         |
-| `target.labels`                                    | Its labels' names, as GitHub has them now (none for a comment).                                                                                                                                                                                                                                                                                                                  |
-| `target.author`                                    | Its author's login.                                                                                                                                                                                                                                                                                                                                                              |
-| `target.thread`                                    | A `reply`'s, `resolve`'s or `unresolve`'s review thread: `author`, its first comment's author's login, and `deckhand`, whether that is Deckhand's bot (a thread Deckhand's review opened). Absent from other writes.                                                                                                                                                             |
-| `change.fields`                                    | The keys of the write's JSON body (`["title", "body"]`), or the input fields a GraphQL mutation sets, its target's aside, named as REST names them (`labelIds` → `labels`, `assigneeIds` → `assignees`, `milestoneId` → `milestone`, `baseRefName` → `base`, `expectedHeadOid` → `expected_head_sha`, the others in snake case): one spelling for both.                          |
-| `change.labels_added`                              | The labels it adds (or sets, for a `PUT` or a `PATCH` with `labels`, or creates, for `label`).                                                                                                                                                                                                                                                                                   |
-| `change.labels_removed`                            | The labels it removes: those a `PUT` or a `PATCH` with `labels` leaves out of the issue's, or the one it deletes; `["*"]` when it deletes them all.                                                                                                                                                                                                                              |
-| `change.sub_issue`                                 | A link's child: `id`, `number`, `kind` (`sub_issue` or `created_issue`). Absent from other writes.                                                                                                                                                                                                                                                                               |
-| `change.content`                                   | A reaction's, as REST names it: `+1`, `-1`, `laugh`, `confused`, `heart`, `hooray`, `rocket`, `eyes` (GraphQL's `THUMBS_UP` is `+1`); for `unreact`, the one the run added. Absent from other writes.                                                                                                                                                                            |
-| `change.blocked_by`                                | A "blocked by" link's blocker: `id`, `number`, `kind` (`sub_issue`, `created_issue`, or an open issue's kind as a target's: `own_issue`, `other_issue`). Absent from other writes.                                                                                                                                                                                               |
+| Field                                              | What                                                                                                                                                                                                                                                                                                                                                                    |
+| -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `version`                                          | `1`.                                                                                                                                                                                                                                                                                                                                                                    |
+| `repo`                                             | `"owner/repo"`, in lower case.                                                                                                                                                                                                                                                                                                                                          |
+| `mode`                                             | The run's: `work`, `brainstorm`, `stop`, `idea`, `bug`, `discussion`, or one of the repository's `modes:`.                                                                                                                                                                                                                                                              |
+| `custom_mode`                                      | `true` for one of the repository's `modes:`, `false` for Deckhand's own: a rule needn't list the built-in modes, which change as Deckhand adds some.                                                                                                                                                                                                                    |
+| `light`                                            | The mode's `light`: `true` for a run without a branch (it can't push), `false` for a work run or a repository mode that isn't light.                                                                                                                                                                                                                                    |
+| `reason`                                           | Why the listener started the run itself: `"review-fix"` (a review's fix run), `"ci-fix"` (a CI fix run), `"conflict"` (a rebase), `null` for a comment's run. The defaults don't read it: a repository can narrow one of them.                                                                                                                                          |
+| `issue`                                            | The number of the run's issue (or pull request).                                                                                                                                                                                                                                                                                                                        |
+| `action`                                           | What the write does: `create`, `edit`, `comment`, `label`, `link`, `ready`, `draft`, `delete` (a comment the run posted), `react` (adds a reaction), `unreact` (removes one), `reply`, `resolve`, `unresolve` (a review thread), `update_branch`. A write that does several (a `PATCH` setting labels and a title) has them all in `actions`, `action` being the first. |
+| `actions`                                          | All of them: `close` or `reopen` first, then `label`, `assign`, `milestone`, then `edit`.                                                                                                                                                                                                                                                                               |
+| `target.kind`                                      | `own_issue`, `own_pr`, `sub_issue`, `created_issue` (one the run created), `other_issue`, `pr`, `new_issue` (an issue it creates), `new_pr` (a pull request it opens), `label` (a label it creates), `created_comment` (a comment the run posted).                                                                                                                      |
+| `target.number`                                    | The issue's or pull request's (for `created_comment`, the one the comment is on), `null` for `new_issue`, `new_pr` and `label`.                                                                                                                                                                                                                                         |
+| `target.comment`                                   | A `created_comment`'s id, or the id of the comment a reaction is on (its target then being the issue or pull request the comment is on). Absent from other targets.                                                                                                                                                                                                     |
+| `target.comment_author`, `target.comment_deckhand` | A reaction's comment's author (its login), and whether the App's bot wrote it. Absent from other writes.                                                                                                                                                                                                                                                                |
+| `target.labels`                                    | Its labels' names, as GitHub has them now (none for a comment).                                                                                                                                                                                                                                                                                                         |
+| `target.author`                                    | Its author's login.                                                                                                                                                                                                                                                                                                                                                     |
+| `target.thread`                                    | A `reply`'s, `resolve`'s or `unresolve`'s review thread: `author`, its first comment's author's login, and `deckhand`, whether that is Deckhand's bot (a thread Deckhand's review opened). Absent from other writes.                                                                                                                                                    |
+| `change.fields`                                    | The keys of the write's JSON body (`["title", "body"]`), or the input fields a GraphQL mutation sets, its target's aside, named as REST names them (`labelIds` → `labels`, `assigneeIds` → `assignees`, `milestoneId` → `milestone`, `baseRefName` → `base`, `expectedHeadOid` → `expected_head_sha`, the others in snake case): one spelling for both.                 |
+| `change.labels_added`                              | The labels it adds (or sets, for a `PUT` or a `PATCH` with `labels`, or creates, for `label`).                                                                                                                                                                                                                                                                          |
+| `change.labels_removed`                            | The labels it removes: those a `PUT` or a `PATCH` with `labels` leaves out of the issue's, or the one it deletes; `["*"]` when it deletes them all.                                                                                                                                                                                                                     |
+| `change.sub_issue`                                 | A link's child: `id`, `number`, `kind` (`sub_issue` or `created_issue`). Absent from other writes.                                                                                                                                                                                                                                                                      |
+| `change.content`                                   | A reaction's, as REST names it: `+1`, `-1`, `laugh`, `confused`, `heart`, `hooray`, `rocket`, `eyes` (GraphQL's `THUMBS_UP` is `+1`); for `unreact`, the one the run added. Absent from other writes.                                                                                                                                                                   |
+| `change.blocked_by`                                | A "blocked by" link's blocker: `id`, `number`, `kind` (`sub_issue`, `created_issue`, or an open issue's kind as a target's: `own_issue`, `other_issue`). Absent from other writes.                                                                                                                                                                                      |
 
 ```json
 {
@@ -1185,66 +1181,18 @@ contents (pushes go through Deckhand's git gateway) or settings, or another repo
 
 #### Reruns
 
-A work run reruns the failed jobs of a GitHub Actions run on its own pull request
-(`gh run rerun <id> --failed`, `gh run rerun --job <id>`: REST's `POST
-…/actions/runs/<id>/rerun-failed-jobs` and `…/actions/jobs/<id>/rerun`), a CI fix run when it
-judges a job flaky. Never a whole run's (`gh run rerun <id>` without `--failed`), nor
-cancelling, dispatching, approving a fork's run or deleting logs, nor with debug logs
-(`gh run rerun --debug`, `enable_debug_logging` with any value but `false`): they print more of
-the environment and of the expressions a workflow evaluates, in runs that see the repository's
-secrets, and the run reads its logs. That refusal is built in: no policy lifts it. The action is `rerun`, its
-target the pull request whose head commit the run tested, looked up on GitHub with the run:
-the run must have failed (`failure`, `timed_out`, `cancelled`, the job's for a job), have
-been started by a push or a pull request of a branch of the repository, and its head commit
-must still be that pull request's. Then, as any write: the pull request must be the run's
-own (`own_pr`: another one's run, or one on an older commit, is refused), and the policies
-decide. Their input's `target` is that pull request's, with the run's own fields too: `run_id`
-(a job's run, for a job), `sha` (its head commit), `event` (`push` or `pull_request`),
-`workflow` (`name`, `path`), `attempt` (GitHub's `run_attempt` that failed: `1` for its first
-run), `conclusion` (the job's for a job) and `job` (`id`, `name`; `null` for a run's failed
-jobs). A run reruns twice at most per head commit, its workflow runs and jobs together,
-whatever the policies say (`MAX_RERUNS`, saved with the run across a listener restart; a rerun
-still in flight counts too, so calls made at once can't pass it, and so does one whose answer
-never came: GitHub may have taken it). Its token gets `actions: write` for that one call, an
-optional permission of the App's: an installation that lacks it refuses the rerun with a
-message naming it, `actions: read` when it can't even read Actions (checked first: the run
-can't be looked up without it), else `actions: write`
-([setup](setup.md#when-the-app-needs-a-new-permission)).
-
-Deckhand's default, `policy/gh-actions-rerun.rego`:
-
-| Action                                      | work, fix, conflict                                    | brainstorm           | research           | repository modes                       |
-| ------------------------------------------- | ------------------------------------------------------ | -------------------- | ------------------ | -------------------------------------- |
-| `rerun` failed jobs of its own pull request | allowed, once per workflow run (`target.attempt == 1`) | refused (no ceiling) | refused (no token) | refused, the repository may broaden it |
-
-A repository broadens it with its own `.deckhand/policy/gh-actions-rerun.rego`, more attempts
-or its own modes, say (an empty `package deckhand` drops both refusals), up to the bound
-above and the ceiling: a light mode still reruns nothing.
-
-<!-- gh-actions-rerun.rego: test/github-writes.test.mjs checks this block is policy/gh-actions-rerun.rego -->
-
-```rego
-# policy/gh-actions-rerun.rego
-# Deckhand's default policy for rerunning failed GitHub Actions jobs (`gh run rerun --failed`,
-# docs/repo-config.md#reruns): the ceiling lets work runs rerun those of their own pull request's
-# head, at most twice per head commit; this narrows it to a first rerun (GitHub's first attempt
-# failed), and none for the repository's own modes. A grants folder's
-# policy/gh-actions-rerun.rego replaces it, and a repository's
-# .deckhand/policy/gh-actions-rerun.rego replaces both.
-package deckhand
-
-deny_github contains msg if {
-  input.action == "rerun"
-  input.custom_mode
-  msg := sprintf("%s runs don't rerun GitHub Actions jobs here", [input.mode])
-}
-
-deny_github contains msg if {
-  input.action == "rerun"
-  input.target.attempt != 1
-  msg := sprintf("a workflow run is rerun once: run %d is on its attempt %d", [input.target.run_id, input.target.attempt])
-}
-```
+A work run may rerun the failed jobs of a GitHub Actions run on its own pull request's head
+(`gh run rerun <id> --failed` or `--job <id>`): action `rerun`, `actions: write` for that call
+only, an optional App permission whose lack the refusal names. Never a whole run, a cancel,
+dispatch or approval, nor debug logs (`--debug`, refused whatever the policies say: those logs
+print more of what runs with the repository's secrets). The run must have failed, come from a
+push or a pull request of the repository's branch, and still be at that pull request's head;
+the target is that pull request (`own_pr`), with `run_id`, `sha`, `event`, `workflow`
+(`name`, `path`), `attempt` (GitHub's `run_attempt`), `conclusion` and `job` (`id`, `name`, or
+`null`). At most twice per head commit and run, whatever the policies say (`MAX_RERUNS`, saved
+across a restart). Deckhand's default, `policy/gh-actions-rerun.rego`, allows a first rerun
+(`target.attempt == 1`) in work, fix and conflict runs only; a repository's file of that name
+broadens it.
 
 ### The linked-branch input
 
@@ -1304,16 +1252,12 @@ them to what its prompts ask for. They ship in the listener's image (`policy/` i
 repository) and hold without any setup, under the operator's and the repository's files:
 
 - **One file per feature**: `github.rego` for the writes runs have always made (below), and a
-  `gh-<feature>.rego` for each `gh` feature added since (`gh-actions-rerun.rego` for
-  [reruns](#reruns), say),
-
   `gh-<feature>.rego` for each `gh` feature added since (`gh-review-threads.rego`, say;
   `gh-linked-branch.rego`, [the linked branch](#the-linked-branch-input)),
   whose defaults its issue gives per kind of run: work runs (work, fix and conflict runs
   share theirs), brainstorms, research (it gets no GitHub token, so it never reaches the
   gateway), and the repository's own `modes:` (`custom_mode`), where a new feature is
   refused unless its issue says otherwise.
-
 - **Broadening one feature**: a file with the same name replaces Deckhand's: the operator's
   `policy/gh-review-threads.rego` for every repository, or a repository's
   `.deckhand/policy/gh-review-threads.rego` for its own (a file with only `package deckhand`

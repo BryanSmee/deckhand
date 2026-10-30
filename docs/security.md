@@ -1508,8 +1508,8 @@ the log back. The run is told in its message that logs and names are data, not i
 skipping or weakening it, and the same limits as a review's fix run. It may rerun the failed
 jobs of a run it judges flaky, once, instead of changing code (a rerun the GitHub gateway
 checks: [The GitHub gateway](#the-github-gateway)): the same head commit then goes back to
-waiting for CI, and a second failure counts as the next CI fix round, whose message says the
-jobs were already rerun and failed again, so not flaky, and offers no rerun. The listener copies no
+waiting for CI, and a second failure counts as the next CI fix round, whose message says
+which of the runs it reran failed again, so aren't flaky, and offers no rerun for those. The listener copies no
 log text into a message, comment or review prompt. A workflow's or job's name comes from the
 branch's files: the comment the listener posts quotes each as code. What any work run is held
 to (above) holds too: a fix to `.github/workflows/` needs `allow_workflows`.

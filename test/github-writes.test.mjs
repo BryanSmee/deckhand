@@ -1991,15 +1991,6 @@ test(
   },
 );
 
-test("docs/repo-config.md shows gh-actions-rerun.rego as Deckhand ships it", () => {
-  const docs = readFileSync(join(import.meta.dirname, "..", "docs", "repo-config.md"), "utf8");
-  const [, shown] =
-    /<!-- gh-actions-rerun\.rego:[^\n]*-->\n\n```rego\n# policy\/gh-actions-rerun\.rego\n([\s\S]*?)```/.exec(
-      docs,
-    );
-  assert.equal(shown, builtIn().get("gh-actions-rerun.rego"));
-});
-
 test(
   "the real opa: Deckhand's gh-actions-rerun.rego allows a first rerun, in work runs only",
   { skip: !opa && "no opa on the PATH" },
