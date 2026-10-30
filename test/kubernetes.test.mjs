@@ -128,19 +128,25 @@ function fakeApi({ policies = [POLICY], logs = {}, slices = [], fail = () => nul
   return { api, calls, bodies, objects };
 }
 
-function setup(t, options = {}, { now = () => Date.parse("2026-10-30T10:00:00Z"), sleep } = {}) {
+// `now`: a clock of the test's own, else one that the runner's sleep() moves forward (its
+// retries and polls take time); `sleep(ms)` is called too.
+function setup(t, options = {}, { now, sleep = async () => {} } = {}) {
   const fake = fakeApi(options);
   const logged = [];
   const inboxDir = tempDir(t);
+  const clock = { at: Date.parse("2026-10-30T10:00:00Z") };
   const runner = createKubernetesRunner({
     config,
     api: fake.api,
     inboxDir,
     log: (line) => logged.push(line),
-    now,
-    sleep: sleep ?? (async () => {}),
+    now: now ?? (() => clock.at),
+    sleep: async (ms) => {
+      clock.at += ms;
+      await sleep(ms);
+    },
   });
-  return { ...fake, runner, logged, inboxDir };
+  return { ...fake, runner, logged, inboxDir, clock };
 }
 
 // What sandboxSpec() gives a work run (sandbox-spec.mjs).
@@ -624,6 +630,15 @@ test("relink: the Secrets of runs whose pod is gone are removed, the others kept
 
 test("kubeName, labelValue, quantity: Deckhand's names and amounts as Kubernetes takes them", () => {
   assert.equal(kubeName("dh-org-repo-12-abc"), "dh-org-repo-12-abc");
+  assert.equal(kubeName("dh.org.repo-12"), "dh.org.repo-12");
+  // A dot beside a dash, or two in a row, isn't a subdomain: a repo named .github.
+  const subdomain = /^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$/;
+  for (const name of ["deckhand-acme-.github-12-ab12cd", "a..b", "a.-b", ".git_hooks", "x."]) {
+    const made = kubeName(name);
+    assert.match(made, subdomain, name);
+    assert.match(made, /-[0-9a-f]{10}$/, name);
+  }
+  assert.match(kubeName("deckhand-acme-.github-12-ab12cd"), /^deckhand-acme-github-12-ab12cd-/);
   const odd = kubeName("dh-my_org-repo-12");
   assert.match(odd, /^dh-my-org-repo-12-[0-9a-f]{10}$/);
   assert.notEqual(odd, kubeName("dh-my-org-repo-12"));
@@ -698,4 +713,67 @@ test("runnerRefusal: what Kubernetes can't run yet, granted, gets a reply naming
   );
   assert.equal(runnerRefusal(config, task(true), { docker: {} }, { grant, mounts: [] }), null);
   assert.equal(runnerRefusal(config, task(), {}, { grant, mounts: [] }), null);
+});
+
+test("state and follow: an API that errs for a while is asked again, a run at work goes on", async (t) => {
+  let failures = 0;
+  const { runner, logged, clock } = setup(t, {
+    logs: { "dh-org-repo-12-abc": ["still here\n"] },
+    fail: ({ method, path }) =>
+      method === "GET" && path.endsWith("/pods/dh-org-repo-12-abc") && failures-- > 0
+        ? Response.json({ message: "etcdserver: leader changed" }, { status: 500 })
+        : null,
+  });
+  await runner.start(spec());
+  failures = 3;
+  assert.equal(await runner.state("dh-org-repo-12-abc"), "running");
+  assert.equal(logged.filter((l) => /leader changed \(asked again in/.test(l)).length, 3);
+  failures = 2;
+  const err = [];
+  await runner.follow("dh-org-repo-12-abc", { onOut: () => {}, onErr: (l) => err.push(l) });
+  assert.deepEqual(err, ["still here"]);
+  // Past API_RETRY_MS, it says so.
+  failures = Infinity;
+  const before = clock.at;
+  await assert.rejects(runner.state("dh-org-repo-12-abc"), /leader changed/);
+  assert.ok(clock.at - before >= 60_000);
+});
+
+test("state and wait: a pod its node lost is force-deleted and counts as gone", async (t) => {
+  const { runner, objects, calls, clock } = setup(t);
+  const force = "DELETE /api/v1/namespaces/runs/pods/dh-org-repo-12-abc?gracePeriodSeconds=0";
+  await runner.start(spec());
+  const pod = objects.pods.get("dh-org-repo-12-abc");
+  // Deleted, its grace not long past: still running, as it may still be stopping.
+  pod.metadata.deletionTimestamp = new Date(clock.at - 60_000).toISOString();
+  assert.equal(await runner.state("dh-org-repo-12-abc"), "running");
+  pod.metadata.deletionTimestamp = new Date(clock.at - 2 * 60_000).toISOString();
+  assert.equal(await runner.state("dh-org-repo-12-abc"), null);
+  assert.equal(calls.at(-1), force);
+  assert.equal(objects.pods.size, 0);
+  // Unknown: lost once its node said nothing for 5 min; wait() returns then.
+  await runner.remove("dh-org-repo-12-abc", "dh-org-repo-12-abc-1730000000");
+  await runner.start(spec());
+  const unknown = objects.pods.get("dh-org-repo-12-abc");
+  const since = new Date(clock.at).toISOString();
+  unknown.status = { phase: "Unknown", conditions: [{ type: "Ready", lastTransitionTime: since }] };
+  assert.equal(await runner.state("dh-org-repo-12-abc"), "running");
+  await runner.wait("dh-org-repo-12-abc");
+  assert.ok(clock.at - Date.parse(since) >= 5 * 60_000);
+  assert.equal(calls.at(-1), force);
+});
+
+test("remove: a pod still running gets its grace, an exited one goes at once", async (t) => {
+  const { runner, objects, calls } = setup(t);
+  await runner.start(spec());
+  await runner.remove("dh-org-repo-12-abc", "dh-org-repo-12-abc-1730000000");
+  assert.ok(
+    calls.includes("DELETE /api/v1/namespaces/runs/pods/dh-org-repo-12-abc?gracePeriodSeconds=10"),
+  );
+  await runner.start(spec());
+  objects.pods.get("dh-org-repo-12-abc").status.phase = "Succeeded";
+  await runner.remove("dh-org-repo-12-abc", "dh-org-repo-12-abc-1730000000");
+  assert.ok(
+    calls.includes("DELETE /api/v1/namespaces/runs/pods/dh-org-repo-12-abc?gracePeriodSeconds=0"),
+  );
 });

@@ -34,6 +34,17 @@ const KILL_GRACE_S = 10;
 // How often a Pending pod, or one that wait() waits for, is looked at again.
 const POLL_MS = 2000;
 
+// How long state(), wait() and follow() keep asking an API that errs (a control plane being
+// upgraded, a 429, a network blip) before they give up: a run at work outlives a blip.
+const API_RETRY_MS = 60_000;
+const API_BACKOFF_MS = [1000, 2000, 5000, 10_000];
+
+// A pod its node lost (NotReady, unreachable) is never confirmed gone: past its deletion's
+// deadline by STUCK_MS, or in phase Unknown for UNKNOWN_MS, it is force-deleted and counts as
+// gone, so its run ends rather than holding its slot forever.
+const STUCK_MS = 2 * 60_000;
+const UNKNOWN_MS = 5 * 60_000;
+
 // The proxy's addresses, as networks.mjs caches them.
 const PROXY_TTL_MS = 10000;
 const PROXY_RETRY_MS = 2000;
@@ -51,15 +62,19 @@ const DISCOVERY = "/apis/discovery.k8s.io/v1/namespaces";
 
 const hash = (text) => createHash("sha256").update(text).digest("hex");
 
+// An RFC 1123 subdomain: dot-separated labels of letters, digits and inner dashes.
+const SUBDOMAIN = /^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$/;
+
 // A sandbox, Secret or claim name as Kubernetes takes it (a DNS subdomain): Deckhand's names
-// as they are when they fit, else made to, with a hash of the original so two never meet.
+// as they are when they are one, else made one (dots too become dashes: a repo named
+// `.github` gives "-.github"), with a hash of the original so two never meet.
 export function kubeName(name) {
-  if (/^[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?$/.test(name)) return name;
+  if (name.length <= 253 && SUBDOMAIN.test(name)) return name;
   const clean = name
     .toLowerCase()
-    .replace(/[^a-z0-9.-]+/g, "-")
-    .replace(/^[^a-z0-9]+|[^a-z0-9]+$/g, "")
-    .slice(0, 200);
+    .replace(/[^a-z0-9]+/g, "-")
+    .slice(0, 200)
+    .replace(/^-+|-+$/g, "");
   return `${clean || "deckhand"}-${hash(name).slice(0, 10)}`;
 }
 
@@ -383,8 +398,51 @@ export function createKubernetesRunner({
   const running = (pod) => !["Succeeded", "Failed"].includes(pod.status?.phase);
 
   async function state(name) {
-    const pod = await api.find(podPath(name));
+    const pod = await look(name);
     return pod ? (running(pod) ? "running" : "exited") : null;
+  }
+
+  // The pod, or null when there is none. An error of the API's (not a 404) is asked again,
+  // backing off, and thrown only past API_RETRY_MS. A pod its node lost (lost()) is
+  // force-deleted, and null.
+  async function look(name) {
+    const since = now();
+    for (let tries = 0; ; tries++) {
+      let pod;
+      try {
+        pod = await api.find(podPath(name));
+      } catch (error) {
+        if (now() - since >= API_RETRY_MS) throw error;
+        const pause = API_BACKOFF_MS[Math.min(tries, API_BACKOFF_MS.length - 1)];
+        log(`${name}: ${error.message} (asked again in ${pause / 1000} s)`);
+        await sleep(pause);
+        continue;
+      }
+      if (!pod || !lost(pod)) return pod;
+      log(
+        `${name}: its node lost it (${pod.status?.phase}, deleted ${pod.metadata.deletionTimestamp ?? "not yet"}): force-deleting it`,
+      );
+      await api
+        .remove(podPath(name), { gracePeriodSeconds: 0 })
+        .catch((error) => log(`Removing ${name}: ${error.message}`));
+      return null;
+    }
+  }
+
+  // Never to be confirmed gone: deleted, and still there well past its deadline (Kubernetes
+  // sets deletionTimestamp to when the grace ends), or Unknown (its node stopped reporting)
+  // since long enough, by its conditions' latest change.
+  function lost(pod) {
+    const deadline = Date.parse(pod.metadata?.deletionTimestamp ?? "");
+    if (deadline && now() - deadline >= STUCK_MS) return true;
+    if (pod.status?.phase !== "Unknown") return false;
+    const changes = (pod.status.conditions ?? [])
+      .map((c) => Date.parse(c.lastTransitionTime ?? ""))
+      .filter(Boolean);
+    const since = changes.length
+      ? Math.max(...changes)
+      : Date.parse(pod.metadata?.creationTimestamp ?? "") || now();
+    return now() - since >= UNKNOWN_MS;
   }
 
   // Resolves once the pod's log ends (it exited, or the API closed the stream: state() tells).
@@ -427,7 +485,7 @@ export function createKubernetesRunner({
   // Until the pod leaves Pending: true once its container ran, false when it is gone.
   async function started(name) {
     for (;;) {
-      const pod = await api.find(podPath(name));
+      const pod = await look(name);
       if (!pod) return false;
       if (pod.status?.phase !== "Pending") return true;
       if (overdue(pod)) {
@@ -454,7 +512,7 @@ export function createKubernetesRunner({
   // removed instead, its requests given back to the cluster.
   async function wait(name) {
     for (;;) {
-      const pod = await api.find(podPath(name));
+      const pod = await look(name);
       if (!pod || !running(pod)) return;
       if (overdue(pod) && !pod.metadata.deletionTimestamp) {
         log(`${name}: Pending for ${minutes(pendingMs)} min (${pendingReason(pod)}): removing it`);
@@ -469,11 +527,13 @@ export function createKubernetesRunner({
     await api.remove(podPath(name), { gracePeriodSeconds: KILL_GRACE_S });
   }
 
-  // Without `run` (a leftover sandbox), its Secret is the one its annotation names.
+  // Without `run` (a leftover sandbox), its Secret is the one its annotation names. A pod
+  // still running (its run ended on an error) gets its grace, as with kill().
   async function remove(name, run) {
-    const pod = run ? null : await api.find(podPath(name));
+    const pod = await api.find(podPath(name));
     const which = run ?? pod?.metadata?.annotations?.["deckhand.run"];
-    await api.remove(podPath(name), { gracePeriodSeconds: 0 });
+    const grace = pod && running(pod) ? KILL_GRACE_S : 0;
+    await api.remove(podPath(name), { gracePeriodSeconds: grace });
     if (which) await api.remove(`secrets/${secretName(which)}`);
     if (run) inbox.remove(run);
   }

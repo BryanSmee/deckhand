@@ -161,9 +161,10 @@ export const SETTINGS = {
   MAX_PARALLEL: { default: 2, parse: whole("a whole number of sandboxes") },
   // Where sandboxes run (runner/index.mjs): the host's Docker, or pods of a Kubernetes cluster.
   RUNNER: { default: "docker", parse: runnerSetting },
-  // The Kubernetes runner's (runner/kubernetes.mjs): its namespace (empty: the listener's own,
-  // its ServiceAccount's), how long a pod may stay Pending before its run fails, and its
-  // session claims' storage class (empty: the cluster's default) and size.
+  // The Kubernetes runner's (runner/kubernetes.mjs): its namespace, which holds the listener's
+  // and the egress proxy's pods too (empty: the listener's own, its ServiceAccount's), how long
+  // a pod may stay Pending before its run fails, and its session claims' storage class
+  // (empty: the cluster's default) and size.
   KUBERNETES_NAMESPACE: { default: null },
   KUBERNETES_PENDING_MINUTES: {
     default: 10,

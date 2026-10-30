@@ -906,7 +906,7 @@ else set it in the service's `environment`, for example in a `compose.override.y
 | `GRANTS_DIR`                                         | `grants_dir`                 | `/etc/deckhand/grants`                                | what you grant each repo, one file each: hosts, cached hosts, host mounts, limits, preview hook, Dockerfile (the server folder's)                                                                               |
 | `INSTALL_NETWORK`                                    | `install_network`            | `bridge`                                              | network of the agents' install containers (they need npm and GitHub's releases), and of the Antigravity CLI's login refresh                                                                                     |
 | `RUNNER`                                             | `runner`                     | `docker`                                              | where sandboxes run: `docker`, the host's Docker, or `kubernetes`, pods of the cluster the listener runs in (see [Kubernetes runner](#kubernetes-runner)); another value stops the listener at start, saying so |
-| `KUBERNETES_NAMESPACE`                               | `kubernetes_namespace`       | the listener's own                                    | the namespace of the [Kubernetes runner](#kubernetes-runner)'s pods, Secrets and claims                                                                                                                         |
+| `KUBERNETES_NAMESPACE`                               | `kubernetes_namespace`       | the listener's own                                    | the namespace of the [Kubernetes runner](#kubernetes-runner)'s pods, Secrets and claims, which has to hold the listener's and the egress proxy's pods too                                                       |
 | `KUBERNETES_PENDING_MINUTES`                         | `kubernetes_pending_minutes` | `10`                                                  | how long a sandbox's pod may stay Pending (no room, an image it can't pull) before its run fails, with the reason in its reply                                                                                  |
 | `KUBERNETES_STORAGE_CLASS`                           | `kubernetes_storage_class`   | the cluster's default                                 | the storage class of the issues' session claims                                                                                                                                                                 |
 | `KUBERNETES_SESSION_SIZE`                            | `kubernetes_session_size`    | `10Gi`                                                | the size of each session claim (an issue's clone, and its agent's session)                                                                                                                                      |
@@ -975,7 +975,10 @@ rather than a container of the host's Docker: runs spread over the cluster's nod
 `MAX_PARALLEL` still caps how many run at once. The listener stays one replica (its state in
 `/data` has one writer) and calls the API server with its ServiceAccount: no `kubectl`, no
 Docker socket. Ready-made manifests are on their way (issue #396); until then, this is what the
-runner expects in its namespace (`KUBERNETES_NAMESPACE`, by default the listener's own):
+runner expects in its namespace (`KUBERNETES_NAMESPACE`, by default the listener's own).
+That namespace has to hold the listener's and the egress proxy's pods and Services too: the
+policy check below accepts no peer in another namespace, so sandboxes elsewhere could never
+be allowed to reach them, and every run would be refused.
 
 - **RBAC**: a Role for the listener's ServiceAccount: `create`, `get`, `list` and `delete` on
   `pods`, `secrets` and `persistentvolumeclaims`, `get` on `pods/log`, `services`, and `list`
@@ -1013,8 +1016,11 @@ runner expects in its namespace (`KUBERNETES_NAMESPACE`, by default the listener
   read-only: `ReadOnlyMany` or `ReadWriteMany` across nodes (`ReadWriteOnce` will do on a
   single node). The runner doesn't install agents yet: fill it once per version with a pod
   that runs the base image's `deckhand-install-claude-code` as root, with
-  `CLAUDE_CODE_VERSION` set and the claim at `/opt/claude-code`. A run whose claim is missing
-  fails, saying so.
+  `CLAUDE_CODE_VERSION` set and the claim at `/opt/claude-code`. A claim belongs to its
+  namespace, so that pod runs in the sandboxes' namespace: if it enforces Pod Security
+  `restricted`, set it to `baseline` while the pod runs (root and the `CHOWN` capability are
+  allowed there), then back. Installing agents on Kubernetes is issue #395. A run whose claim
+  is missing fails, saying so.
 - **The kubelet**: a `containerLogMaxSize` above `RUN_LOG_MAX_MB` (the default 10 MiB rotates a
   run's log away, and a listener restarted mid-run then misses or repeats lines: it logs a
   warning), and a `podPidsLimit`, as Kubernetes only limits processes per node (grants'
