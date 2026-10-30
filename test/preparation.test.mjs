@@ -326,7 +326,7 @@ test("on the Kubernetes runner with a registry, a granted Dockerfile builds, wit
   const asked = [];
   const { parts } = await workRun(t, "org/repo", {
     runner: "kubernetes",
-    env: { KUBERNETES_REGISTRY: "registry.example.com/dh" },
+    env: { KUBERNETES_REGISTRY: "registry.example.com/dh", KUBERNETES_REGISTRY_SECRET: "pull" },
     grant: "allow_dockerfile: true\nhosts: [pypi.org]\n",
     yaml: "dockerfile: Dockerfile\n",
     imageFor: async (request) => {

@@ -442,6 +442,15 @@ test("KUBERNETES_*: the runner's namespace, Pending wait, storage class and clai
   );
 });
 
+test("KUBERNETES_REGISTRY without KUBERNETES_REGISTRY_SECRET stops the listener: pushes need credentials", () => {
+  assert.throws(
+    () => loadConfig({ ALLOWED_USERS: "a", KUBERNETES_REGISTRY: "registry.example.com/dh" }),
+    /KUBERNETES_REGISTRY is set without KUBERNETES_REGISTRY_SECRET: name the dockerconfigjson Secret with its push credentials/,
+  );
+  // Neither: no repo images, nothing to require.
+  assert.equal(loadConfig({ ALLOWED_USERS: "a" }).kubernetes.registry, null);
+});
+
 test("KUBERNETES_REGISTRY and the shared claims: a registry's name, the agents' class the caches' by default", () => {
   const set = loadConfig({
     ALLOWED_USERS: "a",
@@ -466,7 +475,11 @@ test("KUBERNETES_REGISTRY and the shared claims: a registry's name, the agents' 
   }).kubernetes;
   assert.equal(own.agentStorageClass, "efs");
   assert.equal(
-    loadConfig({ ALLOWED_USERS: "a", KUBERNETES_REGISTRY: "localhost:5000" }).kubernetes.registry,
+    loadConfig({
+      ALLOWED_USERS: "a",
+      KUBERNETES_REGISTRY: "localhost:5000",
+      KUBERNETES_REGISTRY_SECRET: "pull",
+    }).kubernetes.registry,
     "localhost:5000",
   );
   // A scheme, a tag, or a Docker Hub user would make every image's name wrong.

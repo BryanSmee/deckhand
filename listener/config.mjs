@@ -366,6 +366,7 @@ export function loadConfig(env, file = NO_FILE) {
   const from = settings(env, file);
   requiredSettings(env, from);
   const s = readSettings(env, from);
+  registryCredentials(s);
   const brokerPort = wholeNumber(env.BROKER_PORT, 8081, "BROKER_PORT", "a port");
   return {
     port: wholeNumber(env.PORT, 8080, "PORT", "a port"),
@@ -473,6 +474,18 @@ function sandboxConfig(env, s) {
     // The host's Docker socket, as preview hooks mount it.
     dockerSocket: env.DOCKER_SOCKET || "/var/run/docker.sock",
   };
+}
+
+// Fail closed: repo images run in their repos' sandboxes, with their broker secrets and
+// grants, so a registry anyone could push to (an in-cluster one the sandboxes and builds can
+// reach) would let one run replace another repo's image. Its credentials have to be there,
+// which a registry that asks for none would make pointless: docs/setup.md says it must.
+function registryCredentials(s) {
+  if (s.KUBERNETES_REGISTRY && !s.KUBERNETES_REGISTRY_SECRET) {
+    throw new ConfigError(
+      "KUBERNETES_REGISTRY is set without KUBERNETES_REGISTRY_SECRET: name the dockerconfigjson Secret with its push credentials, for a registry that requires them to push and delete (docs/setup.md, Repo images on Kubernetes)",
+    );
+  }
 }
 
 // What must be settled before anything starts: who may trigger runs, and no setting that
