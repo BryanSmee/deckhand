@@ -135,8 +135,11 @@ export function createImages({
   // aren't the sandbox user's (uid 1000) to change: sandboxes mount the volume read-only,
   // and this still holds if a mount ever isn't. CHOWN only to take over a volume uid 1000
   // owned before (../sandbox/agents/claude/install). `agent`: agents/.
+  // A runner without short containers (Kubernetes, runner/kubernetes.mjs) installs nothing:
+  // the volume has to be there, filled beforehand (docs/setup.md, Kubernetes runner).
   function installAgent(agent, output) {
     const { volume, mount, version, versionVar, command, env = {} } = agent.install(config);
+    if (!jobs.run) return agentVolume(agent, volume, version);
     const key = `${agent.name}@${version}`;
     if (!installs.has(key)) {
       const install = jobs
@@ -161,10 +164,19 @@ export function createImages({
     return installs.get(key);
   }
 
+  async function agentVolume(agent, volume, version) {
+    if (await backend.volumeExists(volume)) return;
+    throw new Error(
+      `${agent.displayName}'s volume ${volume} is missing: the ${config.runner} runner doesn't install agents, so ${agent.displayName} ${version} has to be installed into it beforehand (see Deckhand's docs/setup.md)`,
+    );
+  }
+
   // The repo's caches, [{ name, path }] (sandbox-spec.mjs). A new volume is handed to the
-  // sandbox's user (uid 1000): Docker creates a missing mount point as root.
+  // sandbox's user (uid 1000): Docker creates a missing mount point as root. None on a runner
+  // without short containers to do that (preparation.mjs says so).
   async function caches(repo, paths, image) {
     const found = [];
+    if (!jobs.run) return found;
     for (const path of paths) {
       const name = cacheVolume(config, repo, path);
       if (!volumes.has(name)) {
@@ -196,5 +208,13 @@ export function createImages({
     checked(owned, `preparing the cache volume ${name}`);
   }
 
-  return { baseId, imageFor, installAgent, caches, building: () => [...builds.keys()] };
+  return {
+    baseId,
+    imageFor,
+    installAgent,
+    caches,
+    // Whether caches() gives any.
+    keepsCaches: Boolean(jobs.run),
+    building: () => [...builds.keys()],
+  };
 }

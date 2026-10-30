@@ -48,59 +48,16 @@ import {
 import { engineEnv, engineName } from "./engine.mjs";
 import { createRelink } from "./gc.mjs";
 import { createInbox } from "./inbox.mjs";
+import { splitLines } from "./lines.mjs";
 import { createNetworks } from "./networks.mjs";
 import { createEngines } from "./volumes.mjs";
 
 export { CLOSE } from "./inbox.mjs";
+export { LINE_CUT, MAX_LINE, unstamped } from "./lines.mjs";
 export { aliasOf } from "./networks.mjs";
 
 // How long a cancelled run's sandbox has between SIGTERM and SIGKILL.
 const KILL_GRACE_S = 10;
-
-// The longest line follow() keeps: past it, the line is cut and the rest of it, up to its
-// newline, dropped. Unbounded, one line with no newline would grow until the string can't
-// (about 512 MB) and throw in the stream's handler, which takes the listener down (#241).
-export const MAX_LINE = 1024 * 1024;
-export const LINE_CUT = " … (line cut)";
-
-// The RFC 3339 time `docker logs --timestamps` starts each line with, nanoseconds and all.
-const STAMP = /^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(\.\d+)?(Z|[+-]\d\d:\d\d) /;
-
-// Docker keeps a line over 16 KiB as parts of 16384 bytes, and --timestamps stamps each part
-// again, inside the line (moby/moby#37681, docker/cli#4941): those stamps go too. A part may
-// be a few bytes longer: its json-file driver turns the bytes of a character split between two
-// parts into U+FFFDs (with or without --timestamps), so each inner stamp is looked for just
-// past the part's 16384 bytes.
-const PART = 16384;
-const STAMP_MAX = 48; // bytes: "2026-10-29T08:00:00.123456789+02:00 " and some
-const SLACK = 64; // bytes a part may grow by
-const INNER = new RegExp(STAMP.source.slice(1));
-
-const stampAt = (bytes, at) => STAMP.exec(bytes.subarray(at, at + STAMP_MAX).toString("latin1"));
-
-// A line of `docker logs --timestamps`, as bytes → the line as written, and when (ms), or
-// null for a line without the stamp. On bytes: a part may end inside a character.
-export function unstamped(bytes) {
-  const m = stampAt(bytes, 0);
-  if (!m) return [bytes.toString("utf8"), null];
-  // Date.parse() takes milliseconds, not Docker's nanoseconds.
-  const at = Date.parse(m[1] + (m[2] ?? "").slice(0, 4) + m[3]);
-  const parts = [];
-  let from = m[0].length;
-  while (from + PART < bytes.length) {
-    const window = bytes.subarray(from + PART, from + PART + SLACK + STAMP_MAX);
-    const inner = INNER.exec(window.toString("latin1"));
-    if (!inner || inner.index > SLACK) break;
-    const end = from + PART + inner.index;
-    parts.push(bytes.subarray(from, end));
-    from = end + inner[0].length;
-  }
-  parts.push(bytes.subarray(from));
-  return [Buffer.concat(parts).toString("utf8"), Number.isNaN(at) ? null : at];
-}
-
-// The most bytes a line of MAX_LINE takes with its stamps.
-const ROOM = MAX_LINE + (Math.ceil(MAX_LINE / PART) + 1) * STAMP_MAX;
 
 // A sandbox spec's user, hardening, limits and volumes (sandbox-spec.mjs) as `docker run`
 // options: a volume's folder (`subpath`) and a host path through --mount, the others -v.
@@ -246,52 +203,20 @@ export function createDockerRunner({
       const child = spawn("docker", ["logs", "--follow", "--timestamps", name], {
         stdio: ["ignore", "pipe", "pipe"],
       });
-      // By bytes, decoded once a line is whole (unstamped()): a character split between two
-      // chunks isn't mangled.
+      // Whole lines, by bytes (lines.mjs): a character split between two chunks isn't
+      // mangled. A handler that throws (its log's disk full, say) loses that line, not the
+      // listener.
       const lines = (stream, n, each) => {
-        let rest = [];
-        let size = 0;
-        let cut = false; // the current line was cut: dropped up to its newline
         let seen = 0;
-        // A handler that throws (its log's disk full, say) loses that line, not the listener.
-        // `over`: it went past ROOM, and was cut there.
-        const emit = (stamped, over = false) => {
+        const split = splitLines((line, at) => {
           if (seen++ < n) return;
-          const [line, at] = unstamped(stamped);
-          const kept = over || line.length > MAX_LINE ? line.slice(0, MAX_LINE) + LINE_CUT : line;
           try {
-            each(kept, at);
+            each(line, at);
           } catch (error) {
             log(`docker logs ${name}: ${error.stack ?? error}`);
           }
-        };
-        const take = () => {
-          const line = Buffer.concat(rest);
-          rest = [];
-          size = 0;
-          return line;
-        };
-        // A chunk is at most the pipe's buffer: `rest` stays near ROOM.
-        const add = (part) => {
-          if (cut || !part.length) return;
-          rest.push(part);
-          size += part.length;
-          if (size <= ROOM) return;
-          emit(take(), true);
-          cut = true;
-        };
-        stream.on("data", (data) => {
-          const chunk = Buffer.isBuffer(data) ? data : Buffer.from(data);
-          let from = 0;
-          for (let i = chunk.indexOf(10); i !== -1; i = chunk.indexOf(10, from)) {
-            add(chunk.subarray(from, i));
-            if (cut) take();
-            else emit(take());
-            cut = false;
-            from = i + 1;
-          }
-          add(chunk.subarray(from));
         });
+        stream.on("data", (data) => split(Buffer.isBuffer(data) ? data : Buffer.from(data)));
       };
       lines(child.stdout, skip.out, onOut);
       lines(child.stderr, skip.err, onErr);

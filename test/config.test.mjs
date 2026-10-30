@@ -386,12 +386,43 @@ test("server.example/config.yaml is a valid config.yaml", () => {
   assert.deepEqual(loadConfig({ ALLOWED_USERS: "alice" }, file).users, ["alice"]);
 });
 
-test("RUNNER: docker by default; any other runner stops the listener, saying why", () => {
+test("RUNNER: docker by default, or kubernetes; another runner stops the listener, saying why", () => {
   assert.equal(loadConfig({ ALLOWED_USERS: "a" }).runner, "docker");
   assert.equal(loadConfig({ ALLOWED_USERS: "a", RUNNER: " Docker " }).runner, "docker");
+  assert.equal(loadConfig({ ALLOWED_USERS: "a", RUNNER: "kubernetes" }).runner, "kubernetes");
   assert.throws(
-    () => loadConfig({ ALLOWED_USERS: "a", RUNNER: "kubernetes" }),
-    /RUNNER: expected docker \(the only runner so far\), got kubernetes/,
+    () => loadConfig({ ALLOWED_USERS: "a", RUNNER: "nomad" }),
+    /RUNNER: expected docker or kubernetes, got nomad/,
+  );
+});
+
+test("KUBERNETES_*: the runner's namespace, Pending wait, storage class and claim size", () => {
+  assert.deepEqual(loadConfig({ ALLOWED_USERS: "a" }).kubernetes, {
+    namespace: null,
+    pendingMs: 600000,
+    storageClass: null,
+    sessionSize: "10Gi",
+  });
+  const set = loadConfig({
+    ALLOWED_USERS: "a",
+    KUBERNETES_NAMESPACE: "runs",
+    KUBERNETES_PENDING_MINUTES: "3",
+    KUBERNETES_STORAGE_CLASS: "fast",
+    KUBERNETES_SESSION_SIZE: "20Gi",
+  }).kubernetes;
+  assert.deepEqual(set, {
+    namespace: "runs",
+    pendingMs: 180000,
+    storageClass: "fast",
+    sessionSize: "20Gi",
+  });
+  assert.throws(
+    () => loadConfig({ ALLOWED_USERS: "a", KUBERNETES_PENDING_MINUTES: "0" }),
+    /KUBERNETES_PENDING_MINUTES: expected above 0/,
+  );
+  assert.throws(
+    () => loadConfig({ ALLOWED_USERS: "a", KUBERNETES_SESSION_SIZE: "lots" }),
+    /KUBERNETES_SESSION_SIZE: expected a size/,
   );
 });
 

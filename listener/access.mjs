@@ -160,6 +160,23 @@ export function engineFor(config, task, settings, { grant, limits }, fork, note)
   return { limits, cache };
 }
 
+// What the operator granted and the repo asks for that the runner can't do yet (RUNNER), as
+// the reply's reason, or null. Docker does all of it; the Kubernetes runner runs no container
+// engine, builds no repo image, runs no preview hook and mounts no host path
+// (runner/kubernetes.mjs). Only what is granted: an ungranted ask is refused before this, by
+// grantedAccess().
+export function runnerRefusal(config, task, settings, { grant, mounts }) {
+  if ((config.runner ?? "docker") === "docker") return null;
+  const asked = [
+    settings.docker && grant.allowDocker && !task.live.light && "a container engine (`docker`)",
+    settings.dockerfile && grant.allowDockerfile && `its own image (\`dockerfile\`)`,
+    settings.preview && grant.allowPreview && "a preview hook (`preview`)",
+    mounts.length && "host mounts (`mounts`)",
+  ].filter(Boolean);
+  if (!asked.length) return null;
+  return `the operator runs sandboxes on the ${config.runner} runner, which doesn't support ${asked.join(", ")} yet. The repository can remove ${asked.length > 1 ? "them" : "it"} from \`${CONFIG_FILE}\`, or the operator can run its sandboxes on Docker (\`RUNNER=docker\`).`;
+}
+
 // The log's line about the engine the runner started (`started`) for engineFor()'s request.
 export function engineNote({ backend, cached }, { cache }) {
   const storage = cached

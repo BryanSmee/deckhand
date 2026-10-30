@@ -12,6 +12,7 @@ import {
   grantedAccess,
   researchAccess,
   RunError,
+  runnerRefusal,
 } from "./access.mjs";
 import { agentFor } from "./agents/index.mjs";
 import { mandatoryHosts } from "./egress.mjs";
@@ -51,6 +52,8 @@ export function createPreparation(ctx) {
     // A review's are optional (its `review` block); a repo's mode always has them.
     const instructions = own?.instructions ? await modeInstructions(task, own) : null;
     const access = grantedAccess(config, task, settings, { agent, note, log });
+    const refused = runnerRefusal(config, task, settings, access);
+    if (refused) throw new RunError(`${cantRun(agent)}: ${refused}`);
     const engine = engineFor(config, task, settings, access, fork, note);
     const prepared = await prepareImage(task, items, settings, access.grant, note, pulls);
     live.shots = shotsFolder();
@@ -250,6 +253,8 @@ export function createPreparation(ctx) {
       // came from a fork's pull request: its code would write into what every later run uses.
       if (task.live.fork && !task.live.light && settings.caches?.length)
         note("No caches: a pull request from a fork");
+      else if (!task.live.light && settings.caches?.length && ctx.images.keepsCaches === false)
+        note(`No caches: the ${config.runner} runner keeps none yet`);
       const caches =
         task.live.light || task.live.fork
           ? []

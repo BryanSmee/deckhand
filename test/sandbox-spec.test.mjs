@@ -221,14 +221,18 @@ test("sandboxArgs: caps, a read-only volume folder, a root user", () => {
   );
 });
 
-test("createBackend: Docker's runner, images and jobs; another runner is refused", () => {
+test("createBackend: Docker's runner, images and jobs, or Kubernetes'; another runner is refused", () => {
   const backend = createBackend({ config: { runner: "docker" }, docker: async () => ({}) });
   assert.deepEqual(Object.keys(backend).sort(), ["images", "jobs", "runner"]);
   assert.equal(typeof backend.jobs.preview.create, "function");
-  assert.throws(
-    () => createBackend({ config: { runner: "kubernetes" } }),
-    /RUNNER: expected docker/,
-  );
+  const kube = createBackend({
+    config: { runner: "kubernetes", kubernetes: { namespace: "" } },
+    kubeApi: { namespace: "runs" },
+  });
+  assert.equal(typeof kube.runner.start, "function");
+  // No short containers: an agent's install, previews and the login refresh say so.
+  assert.deepEqual(kube.jobs, {});
+  assert.throws(() => createBackend({ config: { runner: "nomad" } }), /RUNNER: expected docker/);
 });
 
 // Fail closed: never a sandbox as the image's user, or without the operator's limits.
