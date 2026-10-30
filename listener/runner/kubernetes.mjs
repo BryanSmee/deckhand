@@ -7,14 +7,16 @@
 //     deleted with the run. The run's files (inbox, CA, digest) come from the broker
 //     (../run-files.mjs), as under Docker: no volume is shared with the listener.
 //   - The Pod meets Pod Security `restricted` (podSpec()), gets no ServiceAccount token and no
-//     DNS: `listener` and `egress` (the hosts of BROKER_URL and EGRESS_PROXY) are the
-//     namespace's Services of those names, through hostAliases.
+//     DNS server (a lookup fails at once, as on Docker's internal network): `listener` and
+//     `egress` (the hosts of BROKER_URL and EGRESS_PROXY) are the namespace's Services of
+//     those names, through hostAliases.
 //   - No network per run: the namespace's NetworkPolicies isolate every sandbox, and start()
 //     refuses to run without them (isolationProblem()). The egress proxy knows a sandbox by its
 //     pod IP (address()).
 //   - Each session volume is a PersistentVolumeClaim, kept between the issue's runs.
 //   - A Pod Pending longer than KUBERNETES_PENDING_MINUTES (no room, an image it can't pull)
-//     fails its run, saying why (follow()).
+//     fails its run, saying why (follow()), and a leftover one is removed rather than waited
+//     for (wait()).
 //
 // Not here yet, refused before a run starts (access.mjs runnerRefusal()): a container engine,
 // a repo's Dockerfile, preview hooks and host mounts. Nor caches, which runs go without.
@@ -152,12 +154,20 @@ export function podSpec(
       shareProcessNamespace: true,
       terminationGracePeriodSeconds: KILL_GRACE_S,
       hostAliases: aliases,
+      // No cluster DNS: its only names are hostAliases'. A resolver that answers nothing fails
+      // a lookup at once, where the cluster's, blocked by the NetworkPolicy, would time out on
+      // every search domain.
+      dnsPolicy: "None",
+      dnsConfig: { nameservers: ["127.0.0.1"] },
       securityContext: {
         runAsNonRoot: true,
         runAsUser: user.uid,
         runAsGroup: user.gid ?? user.uid,
         // Its claims are the sandbox user's to write.
         fsGroup: user.gid ?? user.uid,
+        // Only when the claim's root isn't the group's already: by default the kubelet walks
+        // the whole workspace at every mount, while the pod is Pending (KUBERNETES_PENDING_MINUTES).
+        fsGroupChangePolicy: "OnRootMismatch",
         seccompProfile: { type: "RuntimeDefault" },
       },
       containers: [
@@ -420,8 +430,7 @@ export function createKubernetesRunner({
       const pod = await api.find(podPath(name));
       if (!pod) return false;
       if (pod.status?.phase !== "Pending") return true;
-      const since = Date.parse(pod.metadata.creationTimestamp ?? "") || now();
-      if (now() - since >= pendingMs) {
+      if (overdue(pod)) {
         const why = pendingReason(pod);
         log(`${name}: Pending for ${minutes(pendingMs)} min (${why}): removing it`);
         await kill(name).catch((error) => log(`Removing ${name}: ${error.message}`));
@@ -433,8 +442,26 @@ export function createKubernetesRunner({
     }
   }
 
+  // Whether a pod is still Pending past KUBERNETES_PENDING_MINUTES.
+  function overdue(pod) {
+    if (pod.status?.phase !== "Pending") return false;
+    const since = Date.parse(pod.metadata?.creationTimestamp ?? "") || now();
+    return now() - since >= pendingMs;
+  }
+
+  // Until it exits. A leftover stuck Pending (an image it can't pull; one a restarted listener
+  // found without saved state, which nothing follows) would never exit: past the limit, it is
+  // removed instead, its requests given back to the cluster.
   async function wait(name) {
-    while ((await state(name)) === "running") await sleep(POLL_MS);
+    for (;;) {
+      const pod = await api.find(podPath(name));
+      if (!pod || !running(pod)) return;
+      if (overdue(pod) && !pod.metadata.deletionTimestamp) {
+        log(`${name}: Pending for ${minutes(pendingMs)} min (${pendingReason(pod)}): removing it`);
+        await kill(name);
+      }
+      await sleep(POLL_MS);
+    }
   }
 
   // Deleting it is the only way to stop a pod: SIGTERM, then SIGKILL after the grace.

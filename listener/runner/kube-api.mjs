@@ -41,11 +41,18 @@ export function inClusterFetch({ ca = readFileSync(`${SERVICE_ACCOUNT}/ca.crt`) 
     });
 }
 
+// The API server's URL from the variables Kubernetes sets in every pod. An IPv6 host (a
+// single-stack or IPv6-first cluster) goes in brackets, as a URL needs.
+export function apiBase(env = process.env) {
+  const host = env.KUBERNETES_SERVICE_HOST ?? "";
+  return `https://${host.includes(":") ? `[${host}]` : host}:${env.KUBERNETES_SERVICE_PORT}`;
+}
+
 // `base`: the API server's URL; `token()`: the bearer token, read at each call, as the
 // kubelet rotates it; `namespace`: where everything the runner makes lives.
 export function createKubeApi({
   fetch = inClusterFetch(),
-  base = `https://${process.env.KUBERNETES_SERVICE_HOST}:${process.env.KUBERNETES_SERVICE_PORT}`,
+  base = apiBase(),
   token = () => readFileSync(`${SERVICE_ACCOUNT}/token`, "utf8").trim(),
   namespace,
 }) {

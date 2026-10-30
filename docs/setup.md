@@ -982,7 +982,7 @@ runner expects in its namespace (`KUBERNETES_NAMESPACE`, by default the listener
   on `networkpolicies` (`networking.k8s.io`) and `endpointslices` (`discovery.k8s.io`).
   Nothing cluster-wide.
 - **Services** named after the hosts of `BROKER_URL` and `EGRESS_PROXY` (`listener` on 8081,
-  `egress` on 3128 by default), each with a cluster IP. Sandboxes get no DNS: their pods map
+  `egress` on 3128 by default), each with a cluster IP. Sandboxes get no DNS server (a lookup fails at once): their pods map
   those names to the Services' IPs (`hostAliases`).
 - **NetworkPolicies** that isolate the sandboxes. Their pods are labelled
   `deckhand.role: sandbox`. One policy has to pick them for both `Ingress` and `Egress`, and

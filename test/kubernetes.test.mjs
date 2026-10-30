@@ -8,7 +8,7 @@ import { test } from "node:test";
 import { RunError, runnerRefusal } from "../listener/access.mjs";
 import { claude } from "../listener/agents/claude.mjs";
 import { createImages } from "../listener/images.mjs";
-import { createKubeApi, KubeError } from "../listener/runner/kube-api.mjs";
+import { apiBase, createKubeApi, KubeError } from "../listener/runner/kube-api.mjs";
 import {
   createKubernetesImages,
   createKubernetesRunner,
@@ -234,6 +234,9 @@ test("podSpec: Pod Security restricted, no token, no restart, the grant's limits
   assert.equal(s.restartPolicy, "Never");
   assert.equal(s.automountServiceAccountToken, false);
   assert.equal(s.enableServiceLinks, false);
+  // No cluster DNS: a lookup fails at once rather than timing out behind the NetworkPolicy.
+  assert.equal(s.dnsPolicy, "None");
+  assert.deepEqual(s.dnsConfig, { nameservers: ["127.0.0.1"] });
   assert.equal(s.terminationGracePeriodSeconds, 10);
   assert.equal(s.hostNetwork ?? false, false);
   assert.equal(s.hostPID ?? false, false);
@@ -243,6 +246,8 @@ test("podSpec: Pod Security restricted, no token, no restart, the grant's limits
     runAsUser: 1000,
     runAsGroup: 1000,
     fsGroup: 1000,
+    // Not a walk through the whole workspace at every mount, while the pod is Pending.
+    fsGroupChangePolicy: "OnRootMismatch",
     seccompProfile: { type: "RuntimeDefault" },
   });
   // restricted: no hostPath (volumes are claims only), every container hardened.
@@ -499,6 +504,46 @@ test("pendingReason: an image it can't pull before scheduling, else Kubernetes' 
   );
   assert.equal(pendingReason(waiting("ContainerCreating")), "Kubernetes gave no reason");
   assert.equal(pendingReason({}), "Kubernetes gave no reason");
+});
+
+test("wait: a leftover stuck Pending past the limit is removed, not waited on forever", async (t) => {
+  let onSleep = () => {};
+  const { runner, objects, calls, logged } = setup(t, {}, { sleep: async () => onSleep() });
+  const deletes = () => calls.filter((c) => c.startsWith("DELETE")).length;
+  await runner.start(spec());
+  const pod = objects.pods.get("dh-org-repo-12-abc");
+  pod.metadata.creationTimestamp = "2026-10-30T09:50:00Z"; // 10 min before now()
+  pod.status = {
+    phase: "Pending",
+    containerStatuses: [{ state: { waiting: { reason: "ImagePullBackOff" } } }],
+  };
+  await runner.wait("dh-org-repo-12-abc");
+  assert.equal(
+    calls.filter((c) => c.startsWith("DELETE")).at(-1),
+    "DELETE /api/v1/namespaces/runs/pods/dh-org-repo-12-abc?gracePeriodSeconds=10",
+  );
+  assert.ok(logged.some((l) => /Pending for 10 min \(ImagePullBackOff\): removing it/.test(l)));
+  // Pending within the limit: waited for until it exits, never removed.
+  await runner.remove("dh-org-repo-12-abc", "dh-org-repo-12-abc-1730000000");
+  await runner.start(spec());
+  const young = objects.pods.get("dh-org-repo-12-abc");
+  young.metadata.creationTimestamp = "2026-10-30T09:59:00Z";
+  young.status = { phase: "Pending" };
+  const before = deletes();
+  let looks = 0;
+  onSleep = () => {
+    if (++looks === 3) young.status.phase = "Succeeded";
+  };
+  await runner.wait("dh-org-repo-12-abc");
+  assert.equal(looks, 3);
+  assert.equal(deletes(), before);
+});
+
+test("apiBase: the API server's URL, an IPv6 host in brackets", () => {
+  const env = (host) => ({ KUBERNETES_SERVICE_HOST: host, KUBERNETES_SERVICE_PORT: "443" });
+  assert.equal(apiBase(env("10.96.0.1")), "https://10.96.0.1:443");
+  assert.equal(apiBase(env("fd00:10:96::1")), "https://[fd00:10:96::1]:443");
+  assert.equal(new URL(`${apiBase(env("fd00:10:96::1"))}/api`).hostname, "[fd00:10:96::1]");
 });
 
 test("wait, kill and remove: the pod deleted with its grace, then with its Secret", async (t) => {
