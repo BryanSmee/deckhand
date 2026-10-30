@@ -1,13 +1,14 @@
 // The open task: its kind, number and mode, its title, and its actions (GitHub, Stop while a
-// run goes on, which asks first: Stop.tsx); then its facts and its runs as tabs over the run
-// shown (the latest unless one was picked; past 3 runs, the latest and the one shown only, and
-// All runs lists them all: RunMenu.tsx), numbered from the oldest: its outcome (with Rerun and Dismiss when it
-// failed, and who dismissed it, with Undo) and its log. Waiting for input: its open questions, as a form to answer them. A discussion: its
-// thread first, to read and reply to, with the last reply and Rerun, then its runs. A Policies
-// tab when its pull request's policies decided something (with a badge when one kept it from
-// merging by itself). A phone's log search takes the header's place. Its shortcuts: O opens it
-// on GitHub, A goes to its questions, R reruns, Shift S stops (asking first), [ and ] go
-// through its thread, every run (those without a tab too) and its policies.
+// run goes on, which asks first: Stop.tsx); then its facts and its runs as tabs, numbered from
+// the oldest (#1), over the run shown (the latest unless one was picked). Past 3 runs, only the
+// latest and the one shown have a tab, and All runs lists them all (RunMenu.tsx). The run
+// shown: its outcome (with Rerun and Dismiss when it failed, and who dismissed it, with Undo)
+// and its log. Waiting for input: its open questions, as a form to answer them. A discussion:
+// its thread first, to read and reply to, with the last reply and Rerun, then its runs. A
+// Policies tab when its pull request's policies decided something (with a badge when one kept
+// it from merging by itself). A phone's log search takes the header's place. Its shortcuts: O
+// opens it on GitHub, A goes to its questions, R reruns, Shift S stops (asking first), [ and ]
+// go through its thread, every run (those without a tab too) and its policies.
 import { useEffect, useRef, useState } from "preact/hooks";
 import { sendCancel, sendDismiss, sendRerun, useRunLog } from "./api";
 import {

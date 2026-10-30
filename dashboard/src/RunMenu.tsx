@@ -74,7 +74,11 @@ export function RunMenu({ runs, current, onPick, now, touch }: Props) {
   );
 }
 
-// Under its button, kept on the screen, and moved with it; fixed, so the tab row's scroll
+// The popover's height at most, and the room under its button below which it opens above.
+const MAX_HEIGHT = 420;
+const MIN_HEIGHT = 200;
+
+// Under its button (above it in a short window), kept on the screen, and moved with it; fixed, so the tab row's scroll
 // doesn't clip it. Focus starts on the run shown.
 function Popover({
   anchor,
@@ -91,8 +95,14 @@ function Popover({
     const r = anchor.current?.getBoundingClientRect();
     if (!el || !r) return;
     const right = window.innerWidth - 8 - el.getBoundingClientRect().width;
-    el.style.top = `${r.bottom + 4}px`;
     el.style.left = `${Math.max(8, Math.min(r.left, right))}px`;
+    // As tall as the room below allows (#1, at its bottom, stays reachable), or above the
+    // button when a short window leaves more room there.
+    const below = window.innerHeight - r.bottom - 12;
+    const above = r.top - 12;
+    const up = below < MIN_HEIGHT && above > below;
+    el.style.maxHeight = `${Math.max(0, Math.min(MAX_HEIGHT, up ? above : below))}px`;
+    el.style.top = up ? `${r.top - 4 - el.getBoundingClientRect().height}px` : `${r.bottom + 4}px`;
   }, [moved]);
   useLayoutEffect(() => {
     box.current?.querySelector<HTMLElement>("[role=option][tabindex='0']")?.focus();

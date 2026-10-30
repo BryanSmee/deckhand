@@ -8,10 +8,12 @@
 }
 
 .head {
+  /* Its sides' padding, which the phone's run tabs take from the screen's width. */
+  --pad-x: 28px;
   display: flex;
   flex-direction: column;
   gap: 14px;
-  padding: 20px 28px 0;
+  padding: 20px var(--pad-x) 0;
 }
 
 /* A phone's only (Back, More): the task is a page of its own there. */
@@ -227,8 +229,9 @@
 
 @media (max-width: 760px) {
   .head {
+    --pad-x: 16px;
     gap: 12px;
-    padding: 8px 16px 0;
+    padding: 8px var(--pad-x) 0;
   }
   .phoneBar {
     display: flex;
@@ -247,14 +250,14 @@
   .refused {
     margin: 12px 16px 0;
   }
-  /* The run tabs share a phone's width with All runs, neither squeezed by the other (a share of
-     the row's width, the screen's less the page's padding: a percentage would be of the tab
-     list's own); how long ago is in the run's facts. */
+  /* The run tabs share a phone's width with All runs, neither squeezed by the other: a share of
+     the row's width, the screen's less .head's padding (a percentage would be of the tab list's
+     own). How long ago is in the run's facts. */
   .ago {
     display: none;
   }
   .runTab {
-    max-width: calc((100vw - 32px) * 0.36);
+    max-width: calc((100vw - 2 * var(--pad-x)) * 0.36);
   }
   .runView {
     gap: 12px;

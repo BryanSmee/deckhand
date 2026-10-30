@@ -151,6 +151,31 @@ test("a scroll that moves All runs (a live log following its end): the list move
   expect(screen.queryByRole("listbox")).toBeNull();
 });
 
+test("a short window: the list fits the room below its button, else opens above it", () => {
+  const rect = (top: number, bottom: number) =>
+    ({ top, bottom, left: 300, right: 400, width: 100, height: bottom - top }) as DOMRect;
+  const open = (innerHeight: number, top: number) => {
+    vi.stubGlobal("innerHeight", innerHeight);
+    const button = allRuns()!;
+    button.getBoundingClientRect = () => rect(top, top + 38);
+    fireEvent.click(button);
+    return screen.getByRole("listbox").parentElement!;
+  };
+  show(15);
+  // 900 px high, the button at 250: the list's whole 420 px fit below.
+  let popup = open(900, 250);
+  expect([popup.style.top, popup.style.maxHeight]).toEqual(["292px", "420px"]);
+  fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+  // 600 px: 300 px left below, so #1 at the bottom stays on screen.
+  popup = open(600, 250);
+  expect([popup.style.top, popup.style.maxHeight]).toEqual(["292px", "300px"]);
+  fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+  // 450 px: 150 px below, 238 above: above it.
+  popup = open(450, 250);
+  expect(popup.style.maxHeight).toBe("238px");
+  expect(parseFloat(popup.style.top)).toBeLessThanOrEqual(246);
+});
+
 test("[ and ] go through every run, those without a tab too", () => {
   show(15);
   fireEvent.keyDown(document.body, { key: "]" });
