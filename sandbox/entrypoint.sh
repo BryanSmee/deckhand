@@ -52,9 +52,11 @@ if [ -n "${DECKHAND_RUN_TOKEN:-}" ]; then
   unset DECKHAND_RUN_TOKEN
   if [ -n "${DECKHAND_BROKER_URL:-}" ]; then
     # Signed when the sandbox was created, which may be long before it starts (a pod Pending):
-    # renewed once before the first call. A failure leaves the loop below to try again.
-    deckhand-token --now < /dev/null || true
-    deckhand-token --renew >&2 < /dev/null &
+    # renewed once before the first call. A failure leaves the loop below to try again, after
+    # its retry delay rather than a whole interval: the token may have expired already.
+    first=
+    deckhand-token --now < /dev/null || first=${DECKHAND_TOKEN_RETRY:-30}
+    DECKHAND_TOKEN_FIRST=$first deckhand-token --renew >&2 < /dev/null &
   fi
 fi
 

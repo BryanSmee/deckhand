@@ -253,3 +253,29 @@ test("a restarted broker redacts the run tokens saved with the run, before any r
   again.register("org/a", undefined, { id: "run-a", issued: broker.issuedOf("run-a") });
   assert.deepEqual(again.secretsOf("run-a"), [token]);
 });
+
+test("past its expiry, only the token the sandbox holds renews, not an older one left behind", async () => {
+  const { broker, clock } = tokenBroker();
+  broker.register("org/a", undefined, { id: "run-a" });
+  const a = broker.issue("run-a", "net-a").token;
+  const tokens = [a];
+  for (let i = 0; i < 3; i++) {
+    clock.now += 5 * 60_000;
+    tokens.push((await broker.renew(tokens.at(-1), "10.9.0.5")).token);
+  }
+  const [, b, c, d] = tokens;
+  // Half an hour on, the broker away meanwhile: all of them expired.
+  clock.now += 30 * 60_000;
+  // A (the first, still in a process's environment, say) and B: dead.
+  for (const old of [a, b]) {
+    assert.match((await broker.renew(old, "10.9.0.5")).message, /expired/);
+  }
+  // C was presented last, D is the newest: D renews.
+  const e = (await broker.renew(d, "10.9.0.5")).token;
+  assert.ok(e);
+  // What still renews is what is redacted: D, presented last, and E; C is dead now too.
+  assert.match((await broker.renew(c, "10.9.0.5")).message, /expired/);
+  const listed = broker.secretsOf("run-a");
+  assert.ok(listed.includes(d) && listed.includes(e));
+  for (const old of [a, b, c]) assert.ok(!listed.includes(old));
+});

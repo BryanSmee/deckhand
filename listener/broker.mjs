@@ -330,6 +330,15 @@ export function createBroker({
     const checked = await check(token, from, RUN_AUDIENCE, RENEW_GRACE_MS);
     if (!checked.run) return checked;
     const { run, claims } = checked;
+    // Past its expiry, only the token the sandbox holds renews: the newest signed for the run,
+    // or the last one presented (which a restarted listener may not have signed). An older one,
+    // left behind in a process's environment say, is dead once expired, as it is no longer
+    // redacted (keep()). A run whose tokens a restart didn't keep can't tell: it takes it.
+    const newest = run.issued.at(-1)?.token;
+    const expired = claims.exp * 1000 <= now();
+    if (expired && newest && token !== newest && token !== run.presented) {
+      return { status: 401, message: "this run token is refused: expired" };
+    }
     run.sandbox ??= claims.sandbox;
     // Redacted too: after a restart, the one the sandbox held may be in no list yet; and kept
     // there once expired (keep()).

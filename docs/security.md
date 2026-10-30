@@ -309,11 +309,14 @@ which a running process never reads again. `sandbox/entrypoint.sh` writes the fi
 `DECKHAND_RUN_TOKEN`, then unset), renews it once before the run's first call
 (`deckhand-token --now`: on Kubernetes it is signed when the pod is created, which may stay
 Pending a while, and the broker takes an expired one from its sandbox, below), and starts
-`deckhand-token --renew`, which asks the broker
+`deckhand-token --renew` (its first renewal after 30 seconds when that one failed), which asks
+the broker
 (`POST /run/token`, presenting the current token) for a new one every 5 minutes and replaces
 the file whole; a failure is retried after 30 seconds, so two may fail in a row. The broker
 refuses to renew another sandbox's token or an ended run's, and one more than 7 days past its
-`exp` (`RENEW_GRACE_MS`): an expired token still renews, from its own sandbox, so a broker
+`exp` (`RENEW_GRACE_MS`): an expired token still renews, from its own sandbox, if it is the one
+the sandbox holds (the newest signed for the run, or the last presented; an older one left in a
+process's environment is dead once expired, as it is no longer redacted), so a broker
 away for longer than a token's life doesn't end the run (below). After a restart, the token
 renewed is bound where the one presented was, and the one presented is redacted too. A
 renewal asked within a minute of the last token signed gets that one back: a process asking in

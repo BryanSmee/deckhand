@@ -50,15 +50,28 @@ function oldPrAnswer(match) {
 // (broker.mjs), which tokenEnv() kept on its live state when it signed them. A run from before
 // tokens, picked up from a listener that didn't keep it, has it looked up once by its
 // network's name (or its pod's): an ID is never reused, so keeping it is no list of addresses
-// to go stale. None once it has ended (finish() clears its hosts).
+// to go stale. One lookup at a time, and one that found nothing (its network gone) not again
+// for SANDBOX_RETRY_MS: every connection of every sandbox asks about every task. A run with
+// tokens has none until they are signed (it is starting): nothing to look up. None once it
+// has ended (finish() clears its hosts).
+const SANDBOX_RETRY_MS = 5_000;
 async function sandboxOfTask(ctx, task) {
   const live = task.live;
   if (!live?.hosts) return null;
-  if (!live.sandbox) {
-    const id = (await ctx.runner.sandboxIdOf?.(task.name, live.id)) ?? null;
-    if (task.live === live) live.sandbox ??= id;
+  if (!live.sandbox && live.secret) {
+    const now = (ctx.now ?? Date.now)();
+    if (!live.sandboxLooking && !(now - (live.sandboxMissedAt ?? -Infinity) < SANDBOX_RETRY_MS)) {
+      live.sandboxLooking = Promise.resolve(ctx.runner.sandboxIdOf?.(task.name, live.id))
+        .catch(() => null)
+        .then((id) => {
+          if (id) live.sandbox ??= id;
+          else live.sandboxMissedAt = (ctx.now ?? Date.now)();
+        })
+        .finally(() => (live.sandboxLooking = null));
+    }
+    await live.sandboxLooking;
   }
-  return task.live === live && live.hosts ? live.sandbox : null;
+  return task.live === live && live.hosts ? (live.sandbox ?? null) : null;
 }
 
 // The running task a connection from `ip` belongs to, by the ID of the network (or pod) the

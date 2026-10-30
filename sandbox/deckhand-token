@@ -20,7 +20,8 @@
 #                           (300), presenting the current one, and replaces the file whole,
 #                           until the sandbox stops (entrypoint.sh, in the background). A
 #                           failure is said on stderr, and asked again after
-#                           DECKHAND_TOKEN_RETRY seconds (30).
+#                           DECKHAND_TOKEN_RETRY seconds (30). The first time after
+#                           DECKHAND_TOKEN_FIRST seconds when set (entrypoint.sh: --now failed)
 set -euo pipefail
 file=${DECKHAND_TOKEN_FILE:-/dev/shm/deckhand/run-token}
 JWT='^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$'
@@ -61,7 +62,7 @@ case "${1:-}" in
   --renew)
     : "${DECKHAND_BROKER_URL:?no broker to renew the run token with}"
     every=${DECKHAND_TOKEN_RENEW:-300}
-    wait=$every
+    wait=${DECKHAND_TOKEN_FIRST:-$every}
     while sleep "$wait"; do
       if renew; then
         wait=$every

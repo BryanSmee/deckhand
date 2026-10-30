@@ -1,7 +1,7 @@
 // The sandbox's scripts: git's credential helper and the gh wrapper hand out the run's secret
 // (the listener's GitHub gateway swaps it for a token), the entrypoint, the agents' scripts.
 import assert from "node:assert/strict";
-import { execFile, spawnSync } from "node:child_process";
+import { execFile, spawn, spawnSync } from "node:child_process";
 import {
   chmodSync,
   existsSync,
@@ -136,6 +136,42 @@ test("deckhand-token: the run token from its file, written once, renewed in plac
     encoding: "utf8",
   });
   assert.equal(old.stdout, "s\n");
+});
+
+test("deckhand-token --renew: after a failed --now, its first renewal comes after the retry delay", async (t) => {
+  const dir = tempDir(t);
+  const file = join(dir, "run-token");
+  writeFileSync(file, `${jwt(0)}\n`);
+  const asked = [];
+  const broker = await serve(t, (req, res) => (asked.push(req.url), res.end(`${jwt(1)}\n`)));
+  // Its own process group, stopped whole: its `sleep 300` would outlive it otherwise.
+  const renew = spawn(`${bin}deckhand-token`, ["--renew"], {
+    detached: true,
+    stdio: "ignore",
+    env: {
+      PATH: `${bin}:${process.env.PATH}`,
+      DECKHAND_TOKEN_FILE: file,
+      DECKHAND_BROKER_URL: broker.url,
+      // A whole interval would be too late: the first token may have expired already.
+      DECKHAND_TOKEN_RENEW: "300",
+      DECKHAND_TOKEN_FIRST: "0.1",
+    },
+  });
+  const stop = () => {
+    try {
+      process.kill(-renew.pid, "SIGKILL");
+    } catch {
+      // Gone already.
+    }
+  };
+  t.after(stop);
+  for (let i = 0; i < 100 && !asked.length; i++) await new Promise((r) => setTimeout(r, 50));
+  for (let i = 0; i < 20 && readFileSync(file, "utf8") !== `${jwt(1)}\n`; i++) {
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  stop();
+  assert.deepEqual(asked, ["/run/token"]);
+  assert.equal(readFileSync(file, "utf8"), `${jwt(1)}\n`);
 });
 
 // The Claude Code volume is read-only in a sandbox: a missing version is the listener's to

@@ -116,6 +116,33 @@ test("taskWhere: a run from before tokens has its network's ID looked up once, b
   assert.equal(asked.length, 2);
 });
 
+test("taskWhere: a run with tokens still starting is looked up nowhere; an older run's lookup is shared, a miss not asked again at once", async () => {
+  const { ctx, tasks } = twoRuns();
+  let looked = 0;
+  let id = null;
+  ctx.runner.sandboxIdOf = async () => (looked++, id);
+  const clock = { t: 1_000_000 };
+  ctx.now = () => clock.t;
+  // A has tokens, not signed yet (its sandbox starting): no `sandbox`, no secret.
+  const a = tasks.get("org/a#1");
+  a.live.sandbox = null;
+  delete a.live.secret;
+  const questions = Array.from({ length: 50 }, () => taskWhere(ctx, "10.2.0.2"));
+  assert.ok((await Promise.all(questions)).every((w) => w.task === tasks.get("org/b#2")));
+  assert.equal(looked, 0);
+  // B is from before tokens, its network gone: one lookup for many questions, then none for 5 s.
+  const b = tasks.get("org/b#2");
+  b.live.sandbox = null;
+  await Promise.all(Array.from({ length: 20 }, () => taskWhere(ctx, "10.2.0.2")));
+  assert.equal(looked, 1);
+  assert.equal(await taskWhere(ctx, "10.2.0.2"), null);
+  assert.equal(looked, 1);
+  clock.t += 5_000;
+  id = "net-b";
+  assert.equal((await taskWhere(ctx, "10.2.0.2")).task, b);
+  assert.equal(looked, 2);
+});
+
 test("sandboxAt: a token binds to its run's sandbox or engine, never the listener or the proxy on its network", async () => {
   const { ctx, at } = twoRuns();
   at["10.1.0.8"] = { sandbox: "net-a", name: "egress-1" };
