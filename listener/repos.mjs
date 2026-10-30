@@ -123,7 +123,9 @@ export function createRepoList({
   async function fetchRepos() {
     // The App's settings read again first (server.mjs checkApp()): the links filter what its
     // installations lack by what it lacks itself, as it is now.
-    const appLacks = (await app.settings?.()) ?? [];
+    // Null when GitHub didn't say: an installation's warnings are then left for the next
+    // listing, as what it lacks may be the App's own, which no owner can accept.
+    const appLacks = (await app.settings?.()) ?? null;
     const installations = await paginate((path) => app.asApp("GET", path), "/app/installations");
     const infos = [];
     installed = installations.map((i) => ({
@@ -132,7 +134,9 @@ export function createRepoList({
       // None when GitHub didn't say: the warnings are for what it says is missing.
       missing: i.permissions ? missingPermissions(i.permissions) : [],
     }));
-    installations.forEach((i, n) => warnInstallation(i, installed[n].missing, appLacks));
+    if (appLacks) {
+      installations.forEach((i, n) => warnInstallation(i, installed[n].missing, appLacks));
+    }
     for (const installation of installations) {
       app.rememberPermissions?.(installation);
       const repos = await paginate(

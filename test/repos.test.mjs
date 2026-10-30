@@ -165,13 +165,18 @@ test("each listing reads the App's settings again, and warns about an installati
   await list.list();
   assert.equal(settings, 1);
   assert.deepEqual(logs, []);
+  // GitHub didn't say what the App lacks: no installation warned about what may be the App's.
+  appLacks = null;
+  list.refresh();
+  await list.list();
+  assert.deepEqual(logs, []);
   // The operator added it to the App: the installation has yet to accept it, said once.
   appLacks = [];
   for (const _ of [1, 2]) {
     list.refresh();
     await list.list();
   }
-  assert.equal(settings, 3);
+  assert.equal(settings, 4);
   assert.deepEqual(logs, [
     "The GitHub App's installation on org lacks actions: read: an owner of the account accepts the new permissions on https://github.com/organizations/org/settings/installations/1 (docs/setup.md)",
   ]);

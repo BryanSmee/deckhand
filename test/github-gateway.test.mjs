@@ -37,6 +37,7 @@ async function gateway(
     wroteWrite,
     respond,
     lacking,
+    forks,
   } = {},
 ) {
   const calls = [];
@@ -72,6 +73,7 @@ async function gateway(
     ...(checkWrite && { checkWrite }),
     ...(checkGraphql && { checkGraphql }),
     ...(wroteWrite && { wroteWrite }),
+    ...(forks && { forks }),
   });
   const { url } = await serve(t, (req, res) => gw.handle(req, res));
   // A run, its log's notes beside it.
@@ -960,6 +962,29 @@ test("a call needing an optional permission the installation lacks is refused, n
   assert.equal((await gw.call("/api/v3/repos/org/repo/issues", { secret })).status, 200);
   assert.deepEqual(asked.at(-1), ["org/repo", {}]);
   assert.equal(gw.calls.length, 1);
+});
+
+test("a work run's Actions log, its installation without `actions`: refused naming it, before the fork check", async (t) => {
+  const checked = [];
+  const gw = await gateway(t, {
+    lacking: async (repo, wanted) =>
+      wanted.actions ? { missing: ["actions: read"], account: "org", url: null } : null,
+    // The fork check reads GitHub with the same permission: it would answer a 502.
+    forks: {
+      restricted: (run) => run.push,
+      checkCall: async (run, call) => {
+        checked.push(call.path);
+        return { status: 502, message: "couldn't check whether it is a fork's; try again" };
+      },
+    },
+  });
+  const { secret, notes } = gw.register(undefined, { mode: "work", push: true, issue: 1 });
+  const res = await gw.call("/api/v3/repos/org/repo/actions/runs/1/logs", { secret });
+  assert.equal(res.status, 403);
+  assert.match((await res.json()).message, /actions: read permission/);
+  assert.match(notes.at(-1), /actions: read/);
+  assert.deepEqual(checked, []);
+  assert.equal(gw.calls.length, 0);
 });
 
 test("needed: a path's optional permission, read, and a write's own", () => {

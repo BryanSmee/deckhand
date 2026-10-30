@@ -474,7 +474,7 @@ export interface Repo {
 // installs it on an account, or configures an installation; settingsUrl: its permissions,
 // events and webhook. missingEvents, missingPermissions: what its settings lack of what Deckhand
 // asks for (listener/github-app.mjs APP_EVENTS, APP_PERMISSIONS: "actions: read"), as read at
-// the listener's start. installations: each account it is installed on, with that
+// the listener's start and with each listing of the repositories. installations: each account it is installed on, with that
 // installation's own page, where an owner accepts the App's new permissions, and those it has
 // yet to accept (`missing`).
 export interface AppLinks {

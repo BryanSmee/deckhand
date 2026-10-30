@@ -402,6 +402,15 @@ export function createGithubGateway({
       // its wants (github-forks.mjs remember()); whether its body was inflated.
       let advertised = null;
       let inflated = false;
+      // A path's optional permission first: what checks a work run's call for a fork's code
+      // (forkCheck()) reads GitHub with the same permission, and would fail without a word.
+      if (where.api && !isGraphql(where.path)) {
+        const lacks = await unaccepted(github, run, needed(where.path));
+        if (lacks) {
+          req.resume();
+          return refuse(run, res, call, write, lacks);
+        }
+      }
       const fork = await forkCheck(run, req, where);
       if (fork?.refused) return refuseFork(run, req, res, where, call, fork.refused, fork.git);
       if (where.file) return await anonymous(req, res, where);
@@ -515,18 +524,9 @@ export function createGithubGateway({
         writing = !refused && !classified?.read;
         permissions = classified?.permissions ?? {};
       }
-      if (!refused && where.api) {
-        const wanted = needed(graphqlCall ? "" : where.path, writing ? permissions : {});
-        refused = await unaccepted(github, run, wanted);
-      }
-      if (refused) {
-        note(
-          run,
-          `Deckhand refused the run's GitHub ${write ? "write" : "call"} ${clip(run, call)}: ${refused.message}`,
-        );
-        log(`GitHub gateway: refused ${clip(run, call)} for ${run.repo}: ${refused.message}`);
-        return fail(res, refused.status, refused.message);
-      }
+      // The write's own permissions: its path's were checked above.
+      if (!refused && writing) refused = await unaccepted(github, run, needed("", permissions));
+      if (refused) return refuse(run, res, call, write, refused);
       await proxied(req, res, run, github, where, body, watched, writing && permissions, {
         advertised,
         inflated,
@@ -534,6 +534,16 @@ export function createGithubGateway({
     } finally {
       if (counted) inFlight.set(run, inFlight.get(run) - 1);
     }
+  }
+
+  // A call refused by the gateway's checks: noted in the run's log and the listener's.
+  function refuse(run, res, call, write, refused) {
+    note(
+      run,
+      `Deckhand refused the run's GitHub ${write ? "write" : "call"} ${clip(run, call)}: ${refused.message}`,
+    );
+    log(`GitHub gateway: refused ${clip(run, call)} for ${run.repo}: ${refused.message}`);
+    return fail(res, refused.status, refused.message);
   }
 
   // A refusal when the run's installation lacks an optional permission the call needs: its

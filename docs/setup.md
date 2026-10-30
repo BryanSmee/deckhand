@@ -90,8 +90,9 @@ only seen at the listener's next check of every wait (`WAITS_CHECK_MINUTES`, 5 m
 default, and at each start). Issues opened with an **Open questions** section aren't labelled
 `NEEDS_INPUT_LABEL` until the graph page reads the repo's open issues, answering them doesn't
 take the label off unless a run starts, and the dashboard only sees the label change when the
-listener restarts. The listener logs a warning at each start naming the events the App
-misses, with the address of its settings.
+listener restarts. The listener logs a warning at start and with each listing of the
+repositories naming the events the App misses (once, until that changes), with the address of
+its settings.
 
 ### When the App needs a new permission
 
