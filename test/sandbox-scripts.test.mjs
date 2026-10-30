@@ -130,6 +130,12 @@ test("deckhand-token: the run token from its file, written once, renewed in plac
   const refused = await renewNow({ DECKHAND_BROKER_URL: "http://127.0.0.1:1" });
   assert.equal(refused.status, 1);
   assert.match(refused.stderr, /couldn't be renewed/);
+  // The broker's header, for deckhand-files and deckhand-inbox; outside a run, an empty one.
+  const header = (e) =>
+    spawnSync(`${bin}deckhand-token`, ["--header"], { env: e, encoding: "utf8" });
+  assert.match(header(env).stdout, /^Bearer eyJ.*\n$/);
+  const outside = header({ PATH: env.PATH, DECKHAND_TOKEN_FILE: join(dir, "none") });
+  assert.deepEqual([outside.status, outside.stdout], [0, "Bearer \n"]);
   // A sandbox from before tokens: its secret.
   const old = spawnSync(`${bin}deckhand-token`, [], {
     env: { PATH: env.PATH, DECKHAND_TOKEN_FILE: join(dir, "none"), DECKHAND_RUN_SECRET: "s" },

@@ -20,20 +20,10 @@ const { readdirSync, readFileSync, renameSync, statSync, writeFileSync } = requi
 const { join } = require("node:path");
 
 const broker = process.env.DECKHAND_BROKER_URL ?? "";
-// The run token, from deckhand-token for each request: it renews it every few minutes (or a
-// run's secret from before tokens). None outside a run: the broker refuses the request.
-function headers() {
-  let token = "";
-  try {
-    token = execFileSync("deckhand-token", {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    });
-  } catch {
-    // No token: refused, said by the caller.
-  }
-  return { authorization: `Bearer ${token.trim()}` };
-}
+// The run token for each request, from deckhand-token, which renews it every few minutes.
+const headers = () => ({
+  authorization: execFileSync("deckhand-token", ["--header"], { encoding: "utf8" }).trim(),
+});
 const SHOT = /^[\w.-]+\.(png|jpe?g|webp)$/;
 // What the file itself makes the broker refuse (its name, its size, its type): final until it
 // changes. Others (401, 403 while a restarted listener takes the run back, 409 while another

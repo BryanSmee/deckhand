@@ -8,6 +8,9 @@
 #
 #   deckhand-token          prints the token, from DECKHAND_TOKEN_FILE (a run's secret from
 #                           before tokens, DECKHAND_RUN_SECRET, when there is no file)
+#   deckhand-token --header  the `Authorization` header's value for the broker's own endpoints
+#                           (`Bearer <token>`, deckhand-files and deckhand-inbox): empty after
+#                           `Bearer` outside a run, which the broker refuses
 #   deckhand-token --init   writes DECKHAND_RUN_TOKEN, the first token, to DECKHAND_TOKEN_FILE
 #                           (entrypoint.sh)
 #   deckhand-token --now    renews it once, at once (entrypoint.sh, before the run's first
@@ -52,6 +55,10 @@ case "${1:-}" in
       exit 1
     }
     ;;
+  --header)
+    token=$("$0" 2> /dev/null) || token=
+    printf 'Bearer %s\n' "$token"
+    ;;
   --now)
     : "${DECKHAND_BROKER_URL:?no broker to renew the run token with}"
     renew || {
@@ -81,7 +88,7 @@ case "${1:-}" in
     fi
     ;;
   *)
-    echo "usage: deckhand-token [--init | --now | --renew]" >&2
+    echo "usage: deckhand-token [--header | --init | --now | --renew]" >&2
     exit 2
     ;;
 esac

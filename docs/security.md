@@ -249,9 +249,11 @@ Assume it could, and keep secrets away from workflows on `issue-*` branches as a
 
 A sandbox holds no credential of the operator's and no GitHub token: it holds **run tokens**
 (`listener/run-token.mjs`), JWTs the broker (`listener/broker.mjs`) signs with an **Ed25519**
-key. Every service checks them **offline**, with the public key alone: the
+key. Every service checks their signature **offline**, with the public key alone: the
 [GitHub gateway](#the-github-gateway), the git gateway, the run's files and the agents' API
-endpoints (`listener/upstream.mjs`) never ask the broker whether a token is good. No HMAC: a
+endpoints (`listener/upstream.mjs`) never ask the broker whether a token is genuine. While
+they run inside the listener, they also check that its run is one the broker still knows
+(below), which costs nothing there. No HMAC: a
 service that can check a token can't mint one, which matters once those services run apart
 from the broker (#492). The checks are strict and hand-written on `node:crypto`:
 
