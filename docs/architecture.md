@@ -729,8 +729,10 @@ inbox long polls), each connection closing once its answer is sent, and the list
 they are all done, or after 280 s, a little before compose's `stop_grace_period` (5 minutes)
 ends. The egress policy, which the proxy asks about every sandbox connection (to any host), has
 a port of its own (`POLICY_PORT`, 8082), which stays open until the listener exits: the
-sandboxes' other traffic goes on during the drain. The broker's port answers `/egress` too, for
-a proxy whose `POLICY_URL` still names it.
+sandboxes' other traffic goes on during the drain. Compose's `POLICY_URL` names it; the broker's
+port answers `/egress` too, as the proxy's default `POLICY_URL` (unchanged, so a deployment that
+relied on it keeps working), but a proxy asking there makes every new connection wait while the
+broker drains.
 
 The egress proxy waits for the next listener meanwhile (`proxy/wait.mjs`): a connection the
 listener refused, or that failed before it was made (reset while connecting, its name unknown
@@ -739,10 +741,17 @@ while its container is gone), never reached it, so the proxy tries again, with a
 refuses the host). That is as long as the drain and the next listener's start: with one copy of
 each (compose), the next listener only starts once the previous one has exited. It holds for
 any method, a POST included: a request is only sent once a connection is made, and never sent
-again (a listener that dies with it gives the sandbox a `502`). The direct calls aren't waited
-for: they fail at once until the next listener answers (#511 routes them through the proxy). The
-inbox and the run's files try again on their own (`deckhand-inbox`, `deckhand-files`); an
-agent's call or a push is up to the agent's CLI or to git.
+again (a listener that dies with it gives the sandbox a `502`). The direct calls aren't waited for, and the drain makes them fail for longer: the broker's port
+refuses them from SIGTERM until the next listener has started, up to the drain (280 s) and a
+start, where they used to be refused only for the restart's few seconds. Those in flight finish,
+where they used to be cut. Routing them through the proxy too is #511; until then:
+
+- the run's files at start (`deckhand-files get`) try again for 6 minutes when the broker
+  doesn't answer (a minute for an error it answers), and the inbox (`deckhand-inbox`) and
+  screenshots (`deckhand-files shots`) for as long as the run lasts;
+- an agent's call is up to its CLI, which tries again on a connection error for a while, not
+  necessarily that long: a turn may fail;
+- a push isn't tried again: `git push` fails, and the agent sees it.
 
 The egress proxy drains on SIGTERM too, for 25 s (compose's `stop_grace_period` for it is 30 s):
 no new tunnel, the requests in flight finish, and the decrypted tunnels close once their

@@ -2,11 +2,12 @@
 // wasn't made is tried again, with an injected clock, for up to 5 minutes; any other failure,
 // a request already sent among them, is not.
 import assert from "node:assert/strict";
+import { connect } from "node:net";
 import { test } from "node:test";
 import { DRAIN_MS } from "../listener/drain.mjs";
-import { defaultRelayUrl, listenerPolicy } from "../proxy/proxy.mjs";
+import { createProxy, defaultRelayUrl, listenerPolicy } from "../proxy/proxy.mjs";
 import { LISTENER_WAIT_MS, notReached, untilReached } from "../proxy/wait.mjs";
-import { serve } from "./helpers.mjs";
+import { listening, serve } from "./helpers.mjs";
 
 // A clock that only moves when the code sleeps.
 function fakeClock() {
@@ -135,4 +136,33 @@ test("relayed requests go to the broker's port beside the policy's, without RELA
     defaultRelayUrl("http://broker.internal:9000/egress"),
     "http://broker.internal:9000/relay",
   );
+});
+
+test("a client that left stops the policy's wait: no question for nobody", async (t) => {
+  const { server, port } = await serve(t, () => {});
+  await new Promise((resolve) => server.close(resolve));
+  const url = `http://127.0.0.1:${port}/egress`;
+  const clock = fakeClock();
+  const policy = listenerPolicy(url, 5000, clock);
+  assert.deepEqual(await policy("10.0.0.2", "x.test", { gone: () => true }), { allowed: false });
+  assert.equal(clock.t, 0);
+
+  // Through the proxy: a CONNECT whose client hangs up while the listener is down.
+  let sleeps = 0;
+  const proxy = createProxy({
+    policy: listenerPolicy(url, 5000, {
+      sleep: () => (sleeps++, new Promise((resolve) => setTimeout(resolve, 10))),
+    }),
+  });
+  const proxyPort = await listening(proxy);
+  t.after(() => proxy.close());
+  const client = connect(proxyPort, "127.0.0.1");
+  await new Promise((resolve) => client.once("connect", resolve));
+  client.write("CONNECT x.test:443 HTTP/1.1\r\nhost: x.test:443\r\n\r\n");
+  while (!sleeps) await new Promise((resolve) => setTimeout(resolve, 5));
+  client.destroy();
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  const after = sleeps;
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.equal(sleeps, after);
 });

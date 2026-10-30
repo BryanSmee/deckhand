@@ -3,6 +3,7 @@
 //
 //   deckhand-files get <url> <path>   fetches the egress proxy's CA or the run's digest into
 //                                     <path> (entrypoint.sh, at start), retrying for a minute
+//                                     (6 while the listener restarts)
 //   deckhand-files shots [--watch|--log]  uploads SCREENSHOT_DIR's new or changed PNG, JPEG and
 //                                     WebP files, served under SCREENSHOT_URL; --watch does it
 //                                     every few seconds until the sandbox stops (entrypoint.sh),
@@ -30,22 +31,31 @@ const SENT = join(process.env.TMPDIR || "/tmp", "deckhand-shots.json");
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-// A failed connection, a 5xx, a 401 or a 403 may be the listener restarting, or taking the
-// run back: asked again for a minute. A 404 (the run has no such file) fails at once.
+// A 5xx, a 401 or a 403 may be the listener taking the run back: asked again for a minute. A
+// refused connection is the listener restarting, whose drain may last nearly 5 minutes, and the
+// next one's start after it (docs/architecture.md, Restarts): asked again for 6. A 404 (the run
+// has no such file) fails at once.
+const ANSWERED_MS = 60_000;
+const UNREACHED_MS = 360_000;
+
 async function get(url, path) {
+  const start = Date.now();
+  let answered = null; // when the broker first answered with a failure
   let why = "";
-  for (let attempt = 0; attempt < 12; attempt++) {
+  for (let attempt = 0; ; attempt++) {
     if (attempt) await sleep(5000);
     let res;
     try {
       res = await fetch(url, { headers, signal: AbortSignal.timeout(30_000) });
     } catch (error) {
-      why = error.message;
+      why = error.cause?.code ?? error.message;
+      if (Date.now() - start >= UNREACHED_MS) break;
       continue;
     }
     if (res.ok) return writeFileSync(path, Buffer.from(await res.arrayBuffer()));
     why = `${res.status} ${await res.text()}`;
-    if (res.status === 404) break;
+    answered ??= Date.now();
+    if (res.status === 404 || Date.now() - answered >= ANSWERED_MS) break;
   }
   console.error(`deckhand-files: couldn't fetch ${url}: ${why}`);
   process.exit(1);

@@ -55,14 +55,15 @@ export function target(authority) {
 }
 
 // Asks the listener: { allowed, private, cache, decrypt, relay }. Fails closed: no `decrypt`,
-// a tunnel. A listener restarting is waited for (wait.mjs; `wait`: its clock, in the tests).
+// a tunnel. A listener restarting is waited for (wait.mjs; `wait`: its clock, in the tests),
+// unless the client left (`gone()`).
 export function listenerPolicy(url, timeoutMs = 5000, wait = {}) {
-  return async (ip, host) => {
+  return async (ip, host, { gone } = {}) => {
     try {
       const query = new URLSearchParams({ ip, host });
       const res = await untilReached(
         () => fetch(`${url}?${query}`, { signal: AbortSignal.timeout(timeoutMs) }),
-        wait,
+        { ...wait, ...(gone && { gone }) },
       );
       if (!res.ok) return { allowed: false };
       const answer = await res.json();
@@ -163,9 +164,15 @@ export function createProxy({
 }) {
   // { address to connect to, whether its answers may be cached, and its HTTPS decrypted to do
   // so, or relayed }, or a Refused saying why not.
-  async function decide(client, host) {
+  async function decide(client, host, gone) {
     const ip = client.replace(/^::ffff:/, "");
-    const { allowed, private: privateOk, cache: cacheOk, decrypt, relay } = await policy(ip, host);
+    const {
+      allowed,
+      private: privateOk,
+      cache: cacheOk,
+      decrypt,
+      relay,
+    } = await policy(ip, host, { gone });
     if (!allowed) {
       log(`refused ${host} for ${ip}`);
       throw new Refused(
@@ -213,12 +220,24 @@ export function createProxy({
     client.on("error", () => {});
     const to = target(req.url);
     if (!to) return refuse(client, new Refused("expected CONNECT host:port"));
+    // Read while the policy is asked, so that a client that hangs up is seen (a socket nobody
+    // reads never hears its end), and stops the wait for a restarting listener. What it sent
+    // meanwhile goes on with `head`.
+    const early = [head];
+    const keep = (chunk) => early.push(chunk);
+    client.on("data", keep);
+    const gone = () => client.readableEnded || client.destroyed;
     let decision;
     try {
-      decision = await decide(req.socket.remoteAddress, to.host);
+      decision = await decide(req.socket.remoteAddress, to.host, gone);
     } catch (error) {
       return refuse(client, error);
+    } finally {
+      client.off("data", keep);
+      client.pause();
     }
+    if (gone()) return client.destroy();
+    head = Buffer.concat(early.filter(Boolean));
     // Never a tunnel: the sandbox's calls would reach the host with the run's secret alone.
     if (decision.relay) {
       if (authority && relayUrl && certifiable(to.host)) {
@@ -357,7 +376,11 @@ export function createProxy({
     const host = url.hostname.replace(/^\[|\]$/g, "").toLowerCase();
     let decision;
     try {
-      decision = await decide(req.socket.remoteAddress, host);
+      decision = await decide(
+        req.socket.remoteAddress,
+        host,
+        () => req.socket.readableEnded || req.socket.destroyed,
+      );
     } catch (error) {
       res.writeHead(error.cause === 502 ? 502 : 403, { "content-type": "text/plain" });
       return res.end(`${error instanceof Refused ? error.message : "refused"}\n`);
@@ -495,8 +518,10 @@ export function createProxy({
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  // The listener's egress policy, on a port of its own that stays open while its broker drains.
-  const url = process.env.POLICY_URL || "http://listener:8082/egress";
+  // The listener's egress policy. Compose names its own port (8082), which stays open while the
+  // broker's drains on a restart; the default stays the broker's, which every listener's
+  // Service has, so a deployment that relied on it keeps working (docs/setup.md).
+  const url = process.env.POLICY_URL || "http://listener:8081/egress";
   const port = Number(process.env.PORT ?? 3128);
   const log = (...args) => console.log(new Date().toISOString(), ...args);
   const dir = process.env.EGRESS_CACHE_DIR || "/cache";
