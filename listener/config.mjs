@@ -90,7 +90,7 @@ const AGY_DEFAULT_SHA256 =
   "arm64:cf953adcc69f87d00d71f97c3f35dc723a8669a350accf9a199df781f0523f56";
 
 // The runners there is a backend for (runner/index.mjs).
-const RUNNERS = ["docker"];
+const RUNNERS = ["docker", "kubernetes"];
 
 // The operator's settings, by environment variable (in lowercase, its config.yaml key), in the
 // order they are read: a default can use the ones before it. Each one has
@@ -159,8 +159,19 @@ export const SETTINGS = {
   SANDBOX_FAST_MODE: { default: false, parse: fastModeSetting },
   BRAINSTORM_IDLE_MINUTES: { default: 10, parse: whole("a whole number of minutes") },
   MAX_PARALLEL: { default: 2, parse: whole("a whole number of sandboxes") },
-  // Where sandboxes run (runner/index.mjs): Docker, the only backend so far.
+  // Where sandboxes run (runner/index.mjs): the host's Docker, or pods of a Kubernetes cluster.
   RUNNER: { default: "docker", parse: runnerSetting },
+  // The Kubernetes runner's (runner/kubernetes.mjs): its namespace, which holds the listener's
+  // and the egress proxy's pods too (empty: the listener's own, its ServiceAccount's), how long
+  // a pod may stay Pending before its run fails, and its session claims' storage class
+  // (empty: the cluster's default) and size.
+  KUBERNETES_NAMESPACE: { default: null },
+  KUBERNETES_PENDING_MINUTES: {
+    default: 10,
+    parse: aboveZero("a whole number of minutes above 0"),
+  },
+  KUBERNETES_STORAGE_CLASS: { default: null },
+  KUBERNETES_SESSION_SIZE: { default: "10Gi", parse: storageSize },
   // The container engine sidecar of runs whose repo is granted allow_docker
   // (runner/engine.mjs); none until the operator picks one.
   SANDBOX_ENGINE: { default: null, parse: engineSetting },
@@ -413,6 +424,12 @@ function sandboxConfig(env, s) {
     // Where the listener refreshes the plan's login with `agy` itself (antigravity-login.mjs).
     agyLoginVolume: `${s.AGY_VOLUME}-login`,
     runner: s.RUNNER,
+    kubernetes: {
+      namespace: s.KUBERNETES_NAMESPACE,
+      pendingMs: s.KUBERNETES_PENDING_MINUTES * 60000,
+      storageClass: s.KUBERNETES_STORAGE_CLASS,
+      sessionSize: s.KUBERNETES_SESSION_SIZE,
+    },
     maxParallel: s.MAX_PARALLEL,
     subnets: s.SANDBOX_SUBNETS,
     // Per sandbox, under the grants folder's: default.yaml's limits, then a repo's own.
@@ -495,6 +512,13 @@ function aboveZero(what) {
   };
 }
 
+// A claim's size as Kubernetes takes it: "10Gi", "500Mi", "1T".
+function storageSize(text, { label }) {
+  const size = text.trim();
+  if (/^\d+(\.\d+)?([KMGTPE]i?)?$/.test(size) && parseFloat(size) > 0) return size;
+  throw new ConfigError(`${label}: expected a size (10Gi, 500Mi), got ${text}`);
+}
+
 function onOff(text, { label }) {
   const value = text.trim().toLowerCase();
   if (["on", "true", "1", "yes", ""].includes(value)) return true;
@@ -552,14 +576,12 @@ function fastModeSetting(text, { label }) {
   throw new ConfigError(`${label}: expected allowed or off, got ${text}`);
 }
 
-// RUNNER: docker, or nothing (docker). Another name stops the listener: falling back to
+// RUNNER: docker, kubernetes, or nothing (docker). Another name stops the listener: falling back to
 // Docker would start sandboxes where the operator didn't ask for them.
 function runnerSetting(text, { label }) {
   const runner = text.trim().toLowerCase();
   if (!runner || RUNNERS.includes(runner)) return runner || "docker";
-  throw new ConfigError(
-    `${label}: expected ${RUNNERS.join(", ")} (the only runner so far), got ${text}`,
-  );
+  throw new ConfigError(`${label}: expected ${RUNNERS.join(" or ")}, got ${text}`);
 }
 
 function engineSetting(text, { label }) {

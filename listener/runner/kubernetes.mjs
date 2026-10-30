@@ -1,0 +1,737 @@
+// The Kubernetes runner: the runner interface of docker.mjs (its header lists the methods),
+// with each sandbox a bare Pod in one namespace (KUBERNETES_NAMESPACE), through the API
+// (kube-api.mjs). The listener stays the only writer of its state; the sandboxes are what
+// spread over the cluster's nodes.
+//
+//   - A run's environment goes into a Secret of its own (envFrom), never inline in the Pod,
+//     deleted with the run. The run's files (inbox, CA, digest) come from the broker
+//     (../run-files.mjs), as under Docker: no volume is shared with the listener.
+//   - The Pod meets Pod Security `restricted` (podSpec()), gets no ServiceAccount token and no
+//     DNS server (a lookup fails at once, as on Docker's internal network): `listener` and
+//     `egress` (the hosts of BROKER_URL and EGRESS_PROXY) are the namespace's Services of
+//     those names, through hostAliases.
+//   - No network per run: the namespace's NetworkPolicies isolate every sandbox, and start()
+//     refuses to run without them (isolationProblem()). The egress proxy knows a sandbox by its
+//     pod IP (address()).
+//   - Each session volume is a PersistentVolumeClaim, kept between the issue's runs.
+//   - A Pod Pending longer than KUBERNETES_PENDING_MINUTES (no room, an image it can't pull)
+//     fails its run, saying why (follow()), and a leftover one is removed rather than waited
+//     for (wait()).
+//
+// Not here yet, refused before a run starts (access.mjs runnerRefusal()): a container engine,
+// a repo's Dockerfile, preview hooks and host mounts. Nor caches, which runs go without.
+import { createHash } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
+import { RunError } from "../access.mjs";
+import { agentFor } from "../agents/index.mjs";
+import { createInbox } from "./inbox.mjs";
+import { splitLines } from "./lines.mjs";
+import { aliasOf } from "./networks.mjs";
+
+// How long a cancelled run's sandbox has between SIGTERM and SIGKILL, as under Docker.
+const KILL_GRACE_S = 10;
+
+// How often a Pending pod, or one that wait() waits for, is looked at again.
+const POLL_MS = 2000;
+
+// How long state(), wait() and follow() keep asking an API that errs (a control plane being
+// upgraded, a 429, a network blip) before they give up: a run at work outlives a blip.
+const API_RETRY_MS = 60_000;
+const API_BACKOFF_MS = [1000, 2000, 5000, 10_000];
+
+// A pod its node lost (NotReady, unreachable) is never confirmed gone: past its deletion's
+// deadline by STUCK_MS, or in phase Unknown for UNKNOWN_MS, it is force-deleted and counts as
+// gone, so its run ends rather than holding its slot forever.
+const STUCK_MS = 2 * 60_000;
+const UNKNOWN_MS = 5 * 60_000;
+
+// The proxy's addresses, as networks.mjs caches them.
+const PROXY_TTL_MS = 10000;
+const PROXY_RETRY_MS = 2000;
+
+// The sandbox's container, in its Pod and in its log's URL.
+const CONTAINER = "sandbox";
+
+// What sets a sandbox's pod and its Secret apart from the rest of the namespace.
+const ROLE = "deckhand.role";
+const SANDBOX = "sandbox";
+const ENV = "sandbox-env";
+
+const NETWORKING = "/apis/networking.k8s.io/v1/namespaces";
+const DISCOVERY = "/apis/discovery.k8s.io/v1/namespaces";
+
+const hash = (text) => createHash("sha256").update(text).digest("hex");
+
+// An RFC 1123 subdomain: dot-separated labels of letters, digits and inner dashes.
+const SUBDOMAIN = /^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$/;
+
+// A sandbox, Secret or claim name as Kubernetes takes it (a DNS subdomain): Deckhand's names
+// as they are when they are one, else made one (dots too become dashes: a repo named
+// `.github` gives "-.github"), with a hash of the original so two never meet.
+export function kubeName(name) {
+  if (name.length <= 253 && SUBDOMAIN.test(name)) return name;
+  const clean = name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .slice(0, 200)
+    .replace(/^-+|-+$/g, "");
+  return `${clean || "deckhand"}-${hash(name).slice(0, 10)}`;
+}
+
+// A label's value (63 characters at most, fewer kinds of them): as it is when it fits, else
+// a hash. The value itself goes in an annotation beside it.
+export function labelValue(value) {
+  const text = String(value);
+  return /^[A-Za-z0-9]([A-Za-z0-9._-]{0,61}[A-Za-z0-9])?$/.test(text)
+    ? text
+    : hash(text).slice(0, 40);
+}
+
+// Docker's amounts ("4g", "512m", grants.mjs) → Kubernetes' quantities ("4Gi", "512Mi").
+export function quantity(memory) {
+  const m = /^(\d+)([kmg]?)$/.exec(String(memory).toLowerCase());
+  if (!m) throw new Error(`a memory limit of ${memory}: expected an amount (512m, 4g)`);
+  return m[1] + { "": "", k: "Ki", m: "Mi", g: "Gi" }[m[2]];
+}
+
+// Whether a label selector (matchLabels, matchExpressions) picks a pod with `labels`. An
+// empty one picks every pod.
+export function selects(selector = {}, labels = {}) {
+  const has = (k) => Object.hasOwn(labels, k);
+  for (const [k, v] of Object.entries(selector.matchLabels ?? {})) {
+    if (labels[k] !== v) return false;
+  }
+  for (const { key, operator, values = [] } of selector.matchExpressions ?? []) {
+    const ok = {
+      In: has(key) && values.includes(labels[key]),
+      NotIn: !has(key) || !values.includes(labels[key]),
+      Exists: has(key),
+      DoesNotExist: !has(key),
+    }[operator];
+    if (!ok) return false;
+  }
+  return true;
+}
+
+// Whether a peer's selector can never pick a sandbox pod, any run's or deployment's, not just
+// this one (`labels`, whose keys are the only ones sandbox pods carry): it asks for a label
+// they never have, or for a deckhand.role other than theirs.
+function excludesSandboxes(selector = {}, labels) {
+  const ours = (key) => Object.hasOwn(labels, key);
+  for (const [key, value] of Object.entries(selector.matchLabels ?? {})) {
+    if (!ours(key) || (key === ROLE && value !== SANDBOX)) return true;
+  }
+  for (const { key, operator, values = [] } of selector.matchExpressions ?? []) {
+    if (!ours(key) && ["In", "Exists"].includes(operator)) return true;
+    if (key !== ROLE) continue;
+    if (operator === "In" && !values.includes(SANDBOX)) return true;
+    if (operator === "NotIn" && values.includes(SANDBOX)) return true;
+    if (operator === "DoesNotExist") return true;
+  }
+  return false;
+}
+
+// Why the namespace's NetworkPolicies (`policies`) don't isolate a sandbox pod with `labels`,
+// or null when they do: one of them picks it for both Ingress and Egress, and none of those
+// that pick it lets anything in, nor lets it out to anything but other pods of the namespace
+// that aren't sandboxes (the egress proxy and the listener). Policies add up, so a single
+// wider one is enough to refuse: fail closed.
+export function isolationProblem(policies, labels) {
+  const picking = policies.filter((p) => selects(p.spec?.podSelector, labels));
+  const types = (p) => p.spec.policyTypes ?? (p.spec.egress ? ["Ingress", "Egress"] : ["Ingress"]);
+  if (!picking.some((p) => types(p).includes("Ingress") && types(p).includes("Egress"))) {
+    return "no NetworkPolicy picks the sandbox pods for both Ingress and Egress";
+  }
+  for (const p of picking) {
+    const name = `the NetworkPolicy ${p.metadata?.name}`;
+    if (p.spec.ingress?.length) return `${name} lets traffic in to sandbox pods`;
+    for (const rule of p.spec.egress ?? []) {
+      if (!rule.to?.length) return `${name} lets sandbox pods reach anything`;
+      for (const peer of rule.to) {
+        if (peer.ipBlock || peer.namespaceSelector || !peer.podSelector) {
+          return `${name} lets sandbox pods reach beyond the namespace's pods`;
+        }
+        if (!excludesSandboxes(peer.podSelector, labels)) {
+          return `${name} lets sandbox pods reach each other`;
+        }
+      }
+    }
+  }
+  return null;
+}
+
+// A sandbox spec (sandbox-spec.mjs) as a Pod, Pod Security `restricted` throughout: its user,
+// no privilege gain, no capability, the runtime's seccomp profile. `secret`: the Secret its
+// environment comes from; `env`: values that aren't secrets (where the run's files are);
+// `aliases`: hostAliases; `claims`: volume name → its claim's.
+export function podSpec(
+  { name, image, user, limits, caps = [], volumes = [] },
+  { pod, labels, annotations, secret, env = {}, aliases = [], claims = {} },
+) {
+  if (!user) throw new Error("the sandbox spec has no user");
+  if (!limits) throw new Error("the sandbox spec has no limits");
+  if (caps.length) throw new Error(`the kubernetes runner adds no capabilities (${caps})`);
+  const resources = { cpu: String(limits.cpus), memory: quantity(limits.memory) };
+  const claimed = [...new Set(volumes.map((v) => v.name))];
+  return {
+    apiVersion: "v1",
+    kind: "Pod",
+    metadata: { name: pod, labels, annotations: { "deckhand.name": name, ...annotations } },
+    spec: {
+      // Its run ends with it: no restart, as with `docker run` and no --restart.
+      restartPolicy: "Never",
+      // It never calls the API.
+      automountServiceAccountToken: false,
+      enableServiceLinks: false,
+      // Under Docker, `--init` reaps orphaned processes; here the pod's pause process does.
+      shareProcessNamespace: true,
+      terminationGracePeriodSeconds: KILL_GRACE_S,
+      hostAliases: aliases,
+      // No cluster DNS: its only names are hostAliases'. A resolver that answers nothing fails
+      // a lookup at once, where the cluster's, blocked by the NetworkPolicy, would time out on
+      // every search domain.
+      dnsPolicy: "None",
+      dnsConfig: { nameservers: ["127.0.0.1"] },
+      securityContext: {
+        runAsNonRoot: true,
+        runAsUser: user.uid,
+        runAsGroup: user.gid ?? user.uid,
+        // Its claims are the sandbox user's to write.
+        fsGroup: user.gid ?? user.uid,
+        // Only when the claim's root isn't the group's already: by default the kubelet walks
+        // the whole workspace at every mount, while the pod is Pending (KUBERNETES_PENDING_MINUTES).
+        fsGroupChangePolicy: "OnRootMismatch",
+        seccompProfile: { type: "RuntimeDefault" },
+      },
+      containers: [
+        {
+          name: CONTAINER,
+          image,
+          // No imagePullPolicy: Kubernetes' default pulls a :latest or untagged image again
+          // at every start, so nodes don't keep an old base image (and its entrypoint) after
+          // an update, and keeps a pinned tag or digest.
+          envFrom: [{ secretRef: { name: secret } }],
+          env: Object.entries(env).map(([k, v]) => ({ name: k, value: String(v) })),
+          // As much as it may use is held for it: a node without the room leaves it Pending
+          // rather than starving it later.
+          resources: { limits: resources, requests: resources },
+          securityContext: {
+            allowPrivilegeEscalation: false,
+            capabilities: { drop: ["ALL"] },
+            runAsNonRoot: true,
+            seccompProfile: { type: "RuntimeDefault" },
+          },
+          volumeMounts: volumes.map((v) => ({
+            name: `v${claimed.indexOf(v.name)}`,
+            mountPath: v.path,
+            ...(v.readOnly ? { readOnly: true } : {}),
+            ...(v.subpath ? { subPath: v.subpath } : {}),
+          })),
+        },
+      ],
+      volumes: claimed.map((volume, i) => ({
+        name: `v${i}`,
+        persistentVolumeClaim: {
+          claimName: claims[volume] ?? kubeName(volume),
+          // Read-only for each of its mounts: the claim too, then.
+          ...(volumes.filter((v) => v.name === volume).every((v) => v.readOnly)
+            ? { readOnly: true }
+            : {}),
+        },
+      })),
+    },
+  };
+}
+
+// Why a pod is still Pending, as its status says it: its container waiting (an image it can't
+// pull), or not scheduled (no node with the room). Null when it says nothing more than
+// ContainerCreating: its events tell then (Multi-Attach of a claim another node holds, a
+// volume that won't mount), or nothing does.
+export function pendingReason(pod) {
+  for (const s of pod.status?.containerStatuses ?? []) {
+    const w = s.state?.waiting;
+    if (w?.reason && w.reason !== "ContainerCreating") {
+      return w.message ? `${w.reason}: ${w.message}` : w.reason;
+    }
+  }
+  const unscheduled = (pod.status?.conditions ?? []).find(
+    (c) => c.type === "PodScheduled" && c.status === "False",
+  );
+  if (unscheduled) return unscheduled.message || unscheduled.reason || "not scheduled";
+  return null;
+}
+
+// The newest Warning event's "reason: message" among `events` (the pod's), or null.
+export function latestWarning(events) {
+  const when = (e) =>
+    Date.parse(e.lastTimestamp ?? e.eventTime ?? e.metadata?.creationTimestamp ?? "") || 0;
+  const last = events.filter((e) => e.type === "Warning").sort((a, b) => when(b) - when(a))[0];
+  return last ? `${last.reason}: ${last.message}` : null;
+}
+
+const UNSAID = "Kubernetes gave no reason: its volumes may not have mounted";
+
+// A pod's log has stdout and stderr in one stream, and the runtime splits a long line into
+// parts the other stream's lines can land between. So the sandbox, when SANDBOX_TAG_STDERR
+// asks it to, writes both to stdout through one writer, whole lines only, each stderr line
+// (the setup's, the entrypoint's) starting with this (../../sandbox/deckhand-tagged): they
+// stay apart from the agent's output, as under Docker. A setup line that looks like JSON is
+// still the setup's.
+export const STDERR_TAG = "\x1e";
+
+// How often follow() looks at the pod while its log streams: a connection the API server
+// dropped without a word would otherwise never end.
+const WATCH_MS = 30_000;
+
+export function createKubernetesRunner({
+  config,
+  api, // kube-api.mjs
+  inboxDir, // the runs folder, in the listener's own volume
+  log = () => {},
+  now = Date.now,
+  sleep = delay,
+  timers, // inbox.mjs poll()'s clock
+  watchMs = WATCH_MS,
+}) {
+  const { pendingMs, storageClass, sessionSize } = config.kubernetes;
+  const inbox = createInbox({ inboxDir, timers });
+  // Runs whose Secret exists before their pod does: relink() leaves them alone.
+  const starting = new Set();
+  let proxy = { at: -Infinity, addresses: [] };
+
+  const owner = { "deckhand.owner": labelValue(config.prefix) };
+  const selector = (role) =>
+    Object.entries({ ...owner, [ROLE]: role })
+      .map(([k, v]) => `${k}=${v}`)
+      .join(",");
+  const podPath = (name) => `pods/${kubeName(name)}`;
+  const secretName = (run) => kubeName(`${run}-env`);
+  const claimPath = (volume) => `persistentvolumeclaims/${kubeName(volume)}`;
+
+  // `spec`: sandboxSpec()'s. → { engine: null }: no engine here.
+  async function start(spec) {
+    const { run, name, labels = {}, env: values = {}, engine, ca, digest, volumes = [] } = spec;
+    if (engine) throw new Error("the kubernetes runner runs no container engine");
+    for (const v of volumes) {
+      if (v.kind === "mount" || v.kind === "cache") {
+        throw new Error(
+          `the kubernetes runner mounts no ${v.kind === "mount" ? "host path" : "cache"} (${v.path})`,
+        );
+      }
+    }
+    // Unset values stay unset in the sandbox, as under Docker.
+    const env = Object.fromEntries(
+      Object.entries(values)
+        .filter(([, v]) => v !== undefined)
+        .map(([k, v]) => [k, String(v)]),
+    );
+    inbox.write(run, ca, digest);
+    const podLabels = { ...owner, "deckhand.run": labelValue(run), [ROLE]: SANDBOX };
+    const made = []; // what start() created, removed again if it fails
+    starting.add(run);
+    try {
+      await checkIsolation(podLabels);
+      const aliases = await hostAliases();
+      for (const v of volumes.filter((v) => v.kind === "session")) {
+        if (await ensureClaim(v.name)) made.push(claimPath(v.name));
+      }
+      const secret = secretName(run);
+      await api.create("secrets", {
+        apiVersion: "v1",
+        kind: "Secret",
+        metadata: {
+          name: secret,
+          labels: { ...owner, "deckhand.run": labelValue(run), [ROLE]: ENV },
+          annotations: { "deckhand.run": run },
+        },
+        type: "Opaque",
+        stringData: env,
+      });
+      made.push(`secrets/${secret}`);
+      await api.create(
+        "pods",
+        podSpec(spec, {
+          pod: kubeName(name),
+          labels: podLabels,
+          annotations: { ...labels, "deckhand.run": run },
+          secret,
+          // Not secrets: where the run's files are.
+          env: { ...inbox.env(config.brokerUrl, ca, digest), SANDBOX_TAG_STDERR: "1" },
+          aliases,
+        }),
+      );
+    } catch (error) {
+      for (const path of made.reverse()) {
+        await api.remove(path).catch((e) => log(`Removing ${path}: ${e.message}`));
+      }
+      throw error;
+    } finally {
+      starting.delete(run);
+    }
+    return { engine: null };
+  }
+
+  // Fail closed: without the namespace's NetworkPolicies, a sandbox would reach anything.
+  async function checkIsolation(labels) {
+    const { items = [] } = await api.get(`${NETWORKING}/${api.namespace}/networkpolicies`);
+    const problem = isolationProblem(items, labels);
+    if (problem) {
+      throw new Error(
+        `the namespace ${api.namespace} doesn't isolate its sandboxes: ${problem}. Deckhand's NetworkPolicy lets them reach the egress proxy and the listener only (see docs/setup.md, Kubernetes runner)`,
+      );
+    }
+  }
+
+  // The listener's and the proxy's host names, as sandboxes call them (BROKER_URL,
+  // EGRESS_PROXY), → the namespace's Services of those names: sandboxes have no DNS.
+  async function hostAliases() {
+    const byIp = new Map();
+    for (const url of [config.brokerUrl, config.egressProxy]) {
+      const host = aliasOf(url);
+      if (!host) continue; // an address already
+      const service = await api.find(`services/${host}`);
+      const ip = service?.spec?.clusterIP;
+      if (!ip || ip === "None") {
+        throw new Error(
+          `no Service ${host} with a cluster IP in the namespace ${api.namespace}: sandboxes reach ${url} through it`,
+        );
+      }
+      byIp.set(ip, [...(byIp.get(ip) ?? []), host]);
+    }
+    return [...byIp].map(([ip, hostnames]) => ({ ip, hostnames }));
+  }
+
+  // The session volume's claim, made when missing. → true when it was made now.
+  async function ensureClaim(volume) {
+    if (await api.find(claimPath(volume))) return false;
+    await api.create("persistentvolumeclaims", {
+      apiVersion: "v1",
+      kind: "PersistentVolumeClaim",
+      metadata: {
+        name: kubeName(volume),
+        labels: { ...owner, [ROLE]: "session" },
+        annotations: { "deckhand.volume": volume },
+      },
+      spec: {
+        accessModes: ["ReadWriteOnce"],
+        resources: { requests: { storage: sessionSize } },
+        ...(storageClass ? { storageClassName: storageClass } : {}),
+      },
+    });
+    return true;
+  }
+
+  async function pods() {
+    const { items = [] } = await api.get("pods", { labelSelector: selector(SANDBOX) });
+    return items;
+  }
+
+  // Throws when the API can't tell, rather than "none".
+  async function list() {
+    return (await pods()).map((pod) => ({
+      name: pod.metadata.annotations?.["deckhand.name"] ?? pod.metadata.name,
+      run: pod.metadata.annotations?.["deckhand.run"] ?? null,
+      running: running(pod),
+    }));
+  }
+
+  // Pending counts: it exists, and its run goes on once it starts (follow()).
+  const running = (pod) => !["Succeeded", "Failed"].includes(pod.status?.phase);
+
+  async function state(name) {
+    const pod = await look(name);
+    return pod ? (running(pod) ? "running" : "exited") : null;
+  }
+
+  // The pod, or null when there is none. An error of the API's (not a 404) is asked again,
+  // backing off, and thrown only past API_RETRY_MS. A pod its node lost (lost()) is
+  // force-deleted, and null.
+  async function look(name) {
+    const since = now();
+    for (let tries = 0; ; tries++) {
+      let pod;
+      try {
+        pod = await api.find(podPath(name));
+      } catch (error) {
+        if (now() - since >= API_RETRY_MS) throw error;
+        const pause = API_BACKOFF_MS[Math.min(tries, API_BACKOFF_MS.length - 1)];
+        log(`${name}: ${error.message} (asked again in ${pause / 1000} s)`);
+        await sleep(pause);
+        continue;
+      }
+      if (!pod || !lost(pod)) return pod;
+      log(
+        `${name}: its node lost it (${pod.status?.phase}, deleted ${pod.metadata.deletionTimestamp ?? "not yet"}): force-deleting it`,
+      );
+      await api
+        .remove(podPath(name), { gracePeriodSeconds: 0 })
+        .catch((error) => log(`Removing ${name}: ${error.message}`));
+      return null;
+    }
+  }
+
+  // Never to be confirmed gone: deleted, and still there well past its deadline (Kubernetes
+  // sets deletionTimestamp to when the grace ends), or Unknown (its node stopped reporting)
+  // since long enough, by its conditions' latest change.
+  function lost(pod) {
+    const deadline = Date.parse(pod.metadata?.deletionTimestamp ?? "");
+    if (deadline && now() - deadline >= STUCK_MS) return true;
+    if (pod.status?.phase !== "Unknown") return false;
+    const changes = (pod.status.conditions ?? [])
+      .map((c) => Date.parse(c.lastTransitionTime ?? ""))
+      .filter(Boolean);
+    const since = changes.length
+      ? Math.max(...changes)
+      : Date.parse(pod.metadata?.creationTimestamp ?? "") || now();
+    return now() - since >= UNKNOWN_MS;
+  }
+
+  // Resolves once the pod's log ends (it exited, or the API closed the stream: state() tells).
+  // `skip`: { out, err } lines already read by a previous listener. The log has the agent's
+  // output and the rest in one stream, told apart by STDERR_TAG. A pod that stays Pending past
+  // KUBERNETES_PENDING_MINUTES is removed, and its run fails with the reason.
+  //
+  // A stream the API server dropped without closing it (an instance replaced during an
+  // upgrade) would never end: while it lasts, the pod is looked at every watchMs, and once it
+  // has been seen exited twice in a row, the stream is let go and its log read once more,
+  // whole, for the lines it hadn't delivered.
+  async function follow(name, { skip = { out: 0, err: 0 }, onOut, onErr }) {
+    if (!(await started(name))) return;
+    let seen = { out: 0, err: 0 };
+    let past = skip;
+    const each = (raw, at) => {
+      const kind = raw.startsWith(STDERR_TAG) ? "err" : "out";
+      const line = kind === "err" ? raw.slice(STDERR_TAG.length) : raw;
+      if (seen[kind]++ < past[kind]) return;
+      try {
+        (kind === "out" ? onOut : onErr)(line, at);
+      } catch (error) {
+        log(`The log of ${name}: ${error.stack ?? error}`);
+      }
+    };
+    const stop = new AbortController();
+    const watch = watchdog(name, stop);
+    try {
+      await readLog(name, { follow: "true" }, stop.signal, each);
+    } catch (error) {
+      if (!stop.signal.aborted) {
+        // The caller follows again while the pod runs (runs.mjs follow()).
+        log(`The log of ${name}: ${error.message}`);
+        return;
+      }
+      log(`The log of ${name}: its stream outlived the pod, reading the rest`);
+      past = { out: Math.max(skip.out, seen.out), err: Math.max(skip.err, seen.err) };
+      seen = { out: 0, err: 0 };
+      try {
+        await readLog(name, {}, AbortSignal.timeout(WATCH_MS), each);
+      } catch (error) {
+        log(`The log of ${name}: ${error.message}`);
+      }
+      return;
+    } finally {
+      clearInterval(watch);
+    }
+    // The kubelet rotates a container's log (containerLogMaxSize): what was rotated away is
+    // gone, and lines were read twice or will be skipped.
+    if (seen.out + seen.err < skip.out + skip.err) {
+      log(
+        `The log of ${name} has ${seen.out + seen.err} lines, fewer than the ${skip.out + skip.err} already read: the kubelet rotated it. Set its containerLogMaxSize above RUN_LOG_MAX_MB (docs/setup.md)`,
+      );
+    }
+  }
+
+  // The pod's log, line by line to `each`, until it ends or `signal` aborts.
+  async function readLog(name, query, signal, each) {
+    const res = await api.stream(
+      `${podPath(name)}/log`,
+      { container: CONTAINER, ...query, timestamps: "true" },
+      signal,
+    );
+    const split = splitLines(each);
+    for await (const chunk of res.body ?? []) split(Buffer.from(chunk));
+  }
+
+  // Aborts `stop` once the pod has been seen exited (or gone) on two looks in a row: the
+  // first may come while the stream still delivers its last lines.
+  function watchdog(name, stop) {
+    let looking = false;
+    let exited = 0;
+    const timer = setInterval(async () => {
+      if (looking) return;
+      looking = true;
+      try {
+        exited = (await state(name)) === "running" ? 0 : exited + 1;
+        if (exited >= 2) stop.abort();
+      } catch (error) {
+        log(`The log of ${name}: ${error.message}`);
+      } finally {
+        looking = false;
+      }
+    }, watchMs);
+    timer.unref?.();
+    return timer;
+  }
+
+  // Until the pod leaves Pending: true once its container ran, false when it is gone.
+  async function started(name) {
+    for (;;) {
+      const pod = await look(name);
+      if (!pod) return false;
+      if (pod.status?.phase !== "Pending") return true;
+      if (overdue(pod)) {
+        const why = await whyPending(name, pod);
+        log(`${name}: Pending for ${minutes(pendingMs)} min (${why}): removing it`);
+        await kill(name).catch((error) => log(`Removing ${name}: ${error.message}`));
+        throw new RunError(
+          `The sandbox couldn't start on the Kubernetes runner: its pod stayed Pending for ${minutes(pendingMs)} min (${why}). The operator can make room in the cluster, or check the image (KUBERNETES_PENDING_MINUTES sets the wait). Comment again to retry.`,
+        );
+      }
+      await sleep(POLL_MS);
+    }
+  }
+
+  // pendingReason(), else the pod's latest Warning event, else that Kubernetes didn't say.
+  async function whyPending(name, pod) {
+    const said = pendingReason(pod);
+    if (said) return said;
+    try {
+      const { items = [] } = await api.get("events", {
+        // By its uid too: the pod's name is the task's, the same for every run of the issue,
+        // and a previous pod's events outlive it (about an hour).
+        fieldSelector: `involvedObject.kind=Pod,involvedObject.name=${kubeName(name)},involvedObject.uid=${pod.metadata?.uid ?? ""}`,
+      });
+      return latestWarning(items) ?? UNSAID;
+    } catch (error) {
+      log(`The events of ${name}: ${error.message}`);
+      return UNSAID;
+    }
+  }
+
+  // Whether a pod is still Pending past KUBERNETES_PENDING_MINUTES.
+  function overdue(pod) {
+    if (pod.status?.phase !== "Pending") return false;
+    const since = Date.parse(pod.metadata?.creationTimestamp ?? "") || now();
+    return now() - since >= pendingMs;
+  }
+
+  // Until it exits. A leftover stuck Pending (an image it can't pull; one a restarted listener
+  // found without saved state, which nothing follows) would never exit: past the limit, it is
+  // removed instead, its requests given back to the cluster.
+  async function wait(name) {
+    for (;;) {
+      const pod = await look(name);
+      if (!pod || !running(pod)) return;
+      if (overdue(pod) && !pod.metadata.deletionTimestamp) {
+        log(
+          `${name}: Pending for ${minutes(pendingMs)} min (${await whyPending(name, pod)}): removing it`,
+        );
+        await kill(name);
+      }
+      await sleep(POLL_MS);
+    }
+  }
+
+  // Deleting it is the only way to stop a pod: SIGTERM, then SIGKILL after the grace.
+  async function kill(name) {
+    await api.remove(podPath(name), { gracePeriodSeconds: KILL_GRACE_S });
+  }
+
+  // Without `run` (a leftover sandbox), its Secret is the one its annotation names. A pod
+  // still running (its run ended on an error) gets its grace, as with kill().
+  async function remove(name, run) {
+    const pod = await api.find(podPath(name));
+    const which = run ?? pod?.metadata?.annotations?.["deckhand.run"];
+    const grace = pod && running(pod) ? KILL_GRACE_S : 0;
+    await api.remove(podPath(name), { gracePeriodSeconds: grace });
+    if (which) await api.remove(`secrets/${secretName(which)}`);
+    if (run) inbox.remove(run);
+  }
+
+  // The agent's session claim (its `session`), kept by the issue's runs.
+  async function hasSession(name, agent = agentFor()) {
+    return Boolean(await api.find(claimPath(`${name}-${agent.session.volume}`)));
+  }
+
+  // Its pod's IPs, what the egress proxy and the broker see it call from.
+  async function address(name) {
+    const status = (await api.find(podPath(name)))?.status;
+    const found = (status?.podIPs ?? []).map((p) => p.ip).filter(Boolean);
+    if (!found.length && status?.podIP) found.push(status.podIP);
+    return found.length ? found : null;
+  }
+
+  // The IPs of the pods behind the egress Service, ready or not (one starting still relays).
+  async function proxyAddresses({ fresh = false } = {}) {
+    const age = now() - proxy.at;
+    if (age < PROXY_TTL_MS && !(fresh && age >= PROXY_RETRY_MS)) return proxy.addresses;
+    const at = now();
+    let addresses = [];
+    try {
+      const service = aliasOf(config.egressProxy);
+      const { items = [] } = await api.get(`${DISCOVERY}/${api.namespace}/endpointslices`, {
+        labelSelector: `kubernetes.io/service-name=${service}`,
+      });
+      addresses = [
+        ...new Set(items.flatMap((s) => (s.endpoints ?? []).flatMap((e) => e.addresses ?? []))),
+      ];
+    } catch (error) {
+      log(`Looking up the egress proxy: ${error.message}`);
+    }
+    proxy = { at, addresses };
+    return addresses;
+  }
+
+  // No networks to join again: the Secrets of runs whose pod is gone are removed. Secrets
+  // first, then pods, with the runs starting in between: one listed here either has its pod
+  // listed below or belongs to a run still starting.
+  async function relink() {
+    const { items = [] } = await api.get("secrets", { labelSelector: selector(ENV) });
+    const pending = new Set(starting);
+    const runs = new Set((await list()).map((s) => s.run));
+    for (const secret of items) {
+      const run = secret.metadata.annotations?.["deckhand.run"];
+      if (!run || runs.has(run) || pending.has(run)) continue;
+      log(`Removing the Secret ${secret.metadata.name}: its run is gone`);
+      await api.remove(`secrets/${secret.metadata.name}`);
+    }
+  }
+
+  return {
+    start,
+    list,
+    state,
+    follow,
+    send: inbox.send,
+    close: inbox.close,
+    closed: inbox.closed,
+    poll: inbox.poll,
+    file: inbox.file,
+    wait,
+    kill,
+    remove,
+    hasSession,
+    address,
+    engineAddress: async () => null,
+    relink,
+    proxyAddresses,
+  };
+}
+
+// What ../images.mjs asks of the backend, on Kubernetes: the base image only, which the nodes
+// pull (repo images: a builder and a registry, later), and the agents' claims, which have to
+// be there already: nothing installs into them yet (images.mjs installAgent()).
+export function createKubernetesImages({ config, api }) {
+  const refused = { code: 1, out: "", err: "the kubernetes runner builds no images" };
+  return {
+    id: async (ref) => (ref === config.image ? ref : null),
+    build: async () => refused,
+    tags: async () => null,
+    remove: async () => {},
+    volumeExists: async (name) =>
+      Boolean(await api.find(`persistentvolumeclaims/${kubeName(name)}`)),
+    createVolume: async () => ({ code: 1, out: "", err: "the kubernetes runner makes no volumes" }),
+    removeVolume: async () => {},
+  };
+}
+
+const minutes = (ms) => Math.round(ms / 60000);

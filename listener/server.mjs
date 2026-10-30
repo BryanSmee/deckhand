@@ -116,7 +116,14 @@ function log(...args) {
 }
 
 // Where sandboxes, images and the listener's own short containers run (RUNNER).
-const backend = createBackend({ config, inboxDir: runsDir, log });
+let backend;
+try {
+  backend = createBackend({ config, inboxDir: runsDir, log });
+} catch (error) {
+  if (!(error instanceof ConfigError)) throw error;
+  console.error(error.message);
+  process.exit(1);
+}
 
 // Logs why a delivery is ignored: deliveries that do nothing are the usual question.
 function skip(reason) {

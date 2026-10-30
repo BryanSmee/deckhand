@@ -16,6 +16,15 @@
 #   bash, git log…      any other command, run in the clone
 set -euo pipefail
 
+# SANDBOX_TAG_STDERR=1 (the Kubernetes runner, whose pod log has stdout and stderr in one
+# stream): this script runs again under deckhand-tagged, which merges both into stdout, whole
+# lines only, each stderr line (the setup's, the agent's) starting with an ASCII record
+# separator, so the listener keeps them apart as Docker's two streams do. It forwards SIGTERM.
+if [ -n "${SANDBOX_TAG_STDERR:-}" ] && [ -z "${DECKHAND_TAGGED:-}" ]; then
+  export DECKHAND_TAGGED=1
+  exec deckhand-tagged "$0" "$@"
+fi
+
 : "${REPO_URL:?REPO_URL: the repository to clone (https://github.com/owner/repo.git)}"
 : "${BASE_BRANCH:=main}"
 
