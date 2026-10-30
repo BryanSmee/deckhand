@@ -768,13 +768,17 @@ if (ctx.app) checkApp();
 // Pull requests that changed while the listener was down, or whose delivery was lost. After
 // redeliveries.start(): its first scan is shared, and counted in the last sync.
 if (ctx.app) ctx.sync(null);
-// Labels added or removed while the listener was down.
-if (ctx.app && config.needsInputLabel) {
-  repoList
-    .names()
-    .then((repos) => inputs.sync(repos))
-    .then((found) => titles.seed(found))
-    .catch((error) => log(`Issues waiting for input: ${error.message ?? error}`));
+if (ctx.app) {
+  // The repositories listed at start (without their configs): the listing also warns about
+  // the permissions an installation hasn't accepted (repos.mjs).
+  const listed = repoList.names();
+  // Labels added or removed while the listener was down.
+  if (config.needsInputLabel) {
+    listed
+      .then((repos) => inputs.sync(repos))
+      .then((found) => titles.seed(found))
+      .catch((error) => log(`Issues waiting for input: ${error.message ?? error}`));
+  } else listed.catch((error) => log(`Listing the repositories: ${error.message ?? error}`));
 }
 
 // `docker compose up`, `restart` or an update stops the listener with SIGTERM, and kills it

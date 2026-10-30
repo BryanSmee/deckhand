@@ -84,15 +84,16 @@ const REDIRECTS = new Set([301, 302, 303, 307, 308]);
 // The REST paths (under the API's base) that need one of the App's optional permissions
 // (github-app.mjs OPTIONAL_PERMISSIONS), at least to read: a run's token goes without one its
 // installation lacks, and the call is refused here, naming it, rather than by GitHub, without.
-export const NEEDS = [
-  { permission: "actions", path: new RegExp(String.raw`^${REPO}\/actions(?:\/|$)`, "i") },
-];
-// What a call needs of the optional permissions: its path's (NEEDS), read, and what a checked
-// write needs beyond its mode's (`permissions`), at their levels.
-export function needed(path, permissions = {}) {
+// Only its own repository's, by name: another's (a public repository's CI) GitHub may answer
+// without the permission, and the run's installation isn't the one to accept it.
+export const NEEDS = [{ permission: "actions", path: /^repos\/([^/]+\/[^/]+)\/actions(?:\/|$)/i }];
+// What a call needs of the optional permissions: its path's (NEEDS) when the path is `repo`'s,
+// read, and what a checked write needs beyond its mode's (`permissions`), at their levels.
+export function needed(path, permissions = {}, repo = "") {
   const wanted = { ...permissions };
   for (const { permission, path: re } of NEEDS) {
-    if (re.test(path)) wanted[permission] ??= "read";
+    const named = re.exec(path)?.[1];
+    if (named && named.toLowerCase() === repo.toLowerCase()) wanted[permission] ??= "read";
   }
   return wanted;
 }
@@ -405,7 +406,7 @@ export function createGithubGateway({
       // A path's optional permission first: what checks a work run's call for a fork's code
       // (forkCheck()) reads GitHub with the same permission, and would fail without a word.
       if (where.api && !isGraphql(where.path)) {
-        const lacks = await unaccepted(github, run, needed(where.path));
+        const lacks = await unaccepted(github, run, needed(where.path, {}, run.repo));
         if (lacks) {
           req.resume();
           return refuse(run, res, call, write, lacks);

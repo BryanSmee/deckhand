@@ -3546,6 +3546,9 @@ mounts:
       (dir, github) => ({ GITHUB_URL: github.url }),
     );
     await listener.until("lacks the permission discussions: write");
+    // Listed at start, before anyone opens the dashboard.
+    const start = `installation on org lacks actions: read: an owner of the account accepts the new permissions on ${installation.html_url}`;
+    await listener.until(start);
     const base = `http://127.0.0.1:${port}`;
     const get = (path, cookie) =>
       fetch(base + path, { redirect: "manual", headers: cookie ? { cookie } : {} });
@@ -3558,12 +3561,10 @@ mounts:
       .find((c) => c.startsWith("deckhand_session="))
       .split(";")[0];
     const { app } = await (await get("/api/repos", session)).json();
-    // The listing read the App's settings again, and said what the installation lacks.
-    const out = await listener.until(
-      `installation on org lacks actions: read: an owner of the account accepts the new permissions on ${installation.html_url}`,
-    );
-    // Logged once: read again, the App's warning isn't new.
+    // Logged once: read again with the listing, neither warning is new.
+    const out = listener.output();
     assert.equal(out.split("lacks the permission discussions: write").length, 2);
+    assert.equal(out.split(start).length, 2);
     assert.deepEqual(app.missingEvents, []);
     assert.deepEqual(app.missingPermissions, ["discussions: write"]);
     // What the App lacks is said for the App alone.

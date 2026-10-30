@@ -115,7 +115,7 @@ what each installation lacks beside it.
 
 Until then, the permissions a feature added later are optional (`OPTIONAL_PERMISSIONS`,
 `actions` for now): a run's token goes without one its installation lacks, and the GitHub
-gateway refuses the calls that need it with a `Deckhand:` message naming the permission and
+gateway refuses its repository's calls that need it with a `Deckhand:` message naming the permission and
 the page that accepts it, instead of every token failing. The others are required: a token
 asking for `issues`, `contents` or `pull_requests` that the installation lacks fails, as
 before. An installation's permissions are read again within 5 minutes of a change, at once
