@@ -31,8 +31,10 @@ services:
       dockerfile: listener/Dockerfile
     image: ${DECKHAND_REGISTRY:-ghcr.io/bryansmee}/deckhand-listener:${DECKHAND_VERSION:-latest}
     restart: unless-stopped
-    # Stopping only saves the queue and the runs' state: sandboxes keep running.
-    stop_grace_period: 30s
+    # Stopping saves the queue and the runs' state (sandboxes keep running), and lets the
+    # sandboxes' calls in flight finish (agents' streams, pushes): new ones wait for the next
+    # listener in the egress proxy (docs/architecture.md#restarts).
+    stop_grace_period: 5m
     # Pushes of repositories granted allow_workflows are saved in /tmp while checked (up to
     # 2 GiB each, one per run): a size-limited tmpfs keeps them off the host disk
     # (docs/security.md#github-actions-on-deckhands-branches).
@@ -204,6 +206,8 @@ services:
       dockerfile: proxy/Dockerfile
     image: ${DECKHAND_REGISTRY:-ghcr.io/bryansmee}/deckhand-egress:${DECKHAND_VERSION:-latest}
     restart: unless-stopped
+    # Stopping lets the open tunnels finish first (docs/architecture.md#restarts).
+    stop_grace_period: 5m
     environment:
       POLICY_URL: http://listener:8081/egress
     volumes:

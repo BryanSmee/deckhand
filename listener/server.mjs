@@ -31,6 +31,7 @@ import { checkout } from "./checkout.mjs";
 import { createComments } from "./comments.mjs";
 import { createConflicts, intoDefaultBranch } from "./conflicts.mjs";
 import { ConfigError, loadConfig, readConfigFile, withCredentialFiles } from "./config.mjs";
+import { drain } from "./drain.mjs";
 import {
   checkAppSettings,
   createGitHubApp,
@@ -735,8 +736,8 @@ dismissals.prune(ctx.runs);
 const http = createHttp(ctx, {
   dashboardDir: env.DASHBOARD_DIR || new URL("../dashboard/dist", import.meta.url).pathname,
 });
-http.listen();
-createBrokerHttp(ctx).listen();
+const web = http.listen();
+const broker = createBrokerHttp(ctx).listen();
 
 // Deliveries GitHub couldn't hand over (the listener down, restarting, unreachable), asked for
 // again at start and every few minutes (redeliveries.mjs).
@@ -823,7 +824,10 @@ if (ctx.app) {
 
 // `docker compose up`, `restart` or an update stops the listener with SIGTERM, and kills it
 // after the stop grace period. Sandboxes go on: no run starts any more, what is queued is
-// saved with the 👀 ids, the runs' state is written, and the next listener carries on.
+// saved with the 👀 ids, the runs' state is written, and the next listener carries on. The
+// broker drains meanwhile: it takes no new connection (the egress proxy waits for the next
+// listener, proxy/wait.mjs) and the sandboxes' calls in flight finish (agents' streams, pushes,
+// inbox polls) before it exits (drain.mjs).
 process.on("SIGTERM", () => {
   ctx.stopping = true;
   ctx.conflicts.stop();
@@ -833,10 +837,17 @@ process.on("SIGTERM", () => {
   redeliveries.stop();
   clearInterval(relinking);
   log("Stopping: running sandboxes go on, the next listener picks them up");
+  // Webhooks go to the next listener (GitHub's redelivery if it isn't up yet, redeliveries.mjs).
+  web.close();
+  const drained = drain(broker).then((all) => {
+    if (!all) log("Stopping: sandboxes' calls still going at the end of the grace period, cut");
+  });
   // Replies being posted and comments being admitted first, then what they leave.
-  Promise.allSettled([...ctx.ending, ...http.admitting])
+  const saved = Promise.allSettled([...ctx.ending, ...http.admitting])
     .then(ctx.saveQueue)
     .then(() => Promise.all([...ctx.tasks.values()].map((t) => t.live && ctx.saveLive(t))))
     .catch((error) => log(`Saving the queue: ${error.stack ?? error}`))
-    .finally(() => process.exit(0));
+    // The dashboard's streams: its page reconnects to the next listener.
+    .finally(() => web.closeAllConnections());
+  Promise.all([saved, drained]).finally(() => process.exit(0));
 });

@@ -26,12 +26,14 @@ import { request as httpsRequest } from "node:https";
 import { connect, isIP } from "node:net";
 import { networkInterfaces } from "node:os";
 import { join } from "node:path";
-import { createSecureContext, TLSSocket } from "node:tls";
+import { connect as tlsConnect, createSecureContext, TLSSocket } from "node:tls";
 import { pathToFileURL } from "node:url";
 import { blockedAddress, inSubnets, ownSubnets } from "./addresses.mjs";
 import { certifiable, createAuthority } from "./authority.mjs";
 import { createCache, DEFAULT_ENTRY_MAX, DEFAULT_MAX, parseSize, requestUse } from "./cache.mjs";
 import { createCachedPath } from "./cached.mjs";
+import { drain } from "../listener/drain.mjs";
+import { untilReached } from "./wait.mjs";
 
 // Where they were first: the tests import them from here.
 export { blockedAddress, v6Bytes } from "./addresses.mjs";
@@ -50,12 +52,15 @@ export function target(authority) {
 }
 
 // Asks the listener: { allowed, private, cache, decrypt, relay }. Fails closed: no `decrypt`,
-// a tunnel.
-export function listenerPolicy(url, timeoutMs = 5000) {
+// a tunnel. A listener restarting is waited for (wait.mjs; `wait`: its clock, in the tests).
+export function listenerPolicy(url, timeoutMs = 5000, wait = {}) {
   return async (ip, host) => {
     try {
       const query = new URLSearchParams({ ip, host });
-      const res = await fetch(`${url}?${query}`, { signal: AbortSignal.timeout(timeoutMs) });
+      const res = await untilReached(
+        () => fetch(`${url}?${query}`, { signal: AbortSignal.timeout(timeoutMs) }),
+        wait,
+      );
       if (!res.ok) return { allowed: false };
       const answer = await res.json();
       return {
@@ -95,6 +100,23 @@ export function relayTarget(relayUrl, host, path) {
 
 class Refused extends Error {}
 
+// A connection to `url`'s host, once made (over TLS for https:).
+function dial(url) {
+  return new Promise((resolve, reject) => {
+    const port = Number(url.port) || (url.protocol === "https:" ? 443 : 80);
+    const host = url.hostname.replace(/^\[|\]$/g, "");
+    const socket =
+      url.protocol === "https:"
+        ? tlsConnect({ host, port, servername: isIP(host) ? undefined : host })
+        : connect(port, host);
+    socket.once(url.protocol === "https:" ? "secureConnect" : "connect", () => {
+      socket.off("error", reject);
+      resolve(socket);
+    });
+    socket.once("error", reject);
+  });
+}
+
 // The first bytes a socket receives, read off it (null when it closes first).
 function firstChunk(socket) {
   return new Promise((resolve) => {
@@ -124,6 +146,8 @@ export function createProxy({
   authority = null, // createAuthority()'s, ready: HTTPS to cached and relayed hosts is decrypted
   relayUrl = null, // where relayed requests go: <relayUrl>/<host><path>
   upstreamCa, // what verifies the hosts' certificates; default: Node's trust store
+  // How relayed requests wait for a listener restarting (wait.mjs): { limitMs, now, sleep }.
+  wait = {},
   now = Date.now,
   log = () => {},
 }) {
@@ -251,8 +275,18 @@ export function createProxy({
       log(`TLS with the client for ${to.host}: ${error.code ?? error.message}`);
       tls.destroy();
     });
-    tls.deckhand = { to, address, relay, from };
+    tls.deckhand = { to, address, relay, from, busy: 0 };
+    decrypted.add(tls);
+    tls.on("close", () => decrypted.delete(tls));
     inside.emit("connection", tls);
+  }
+
+  // The decrypted tunnels' connections, each with its requests in flight (`busy`): a drain
+  // closes them once idle, as Node does for the proxy's own.
+  const decrypted = new Set();
+  let draining = false;
+  function closeIdle() {
+    for (const tls of decrypted) if (!tls.deckhand.busy) tls.end();
   }
 
   // One secure context per host, while its certificate lasts.
@@ -269,11 +303,16 @@ export function createProxy({
   // Requests inside an intercepted tunnel: to its host, whatever their Host header says.
   const inside = createServer((req, res) => {
     const { to, address, relay: toListener, from } = req.socket.deckhand;
+    req.socket.deckhand.busy++;
+    res.on("close", () => {
+      req.socket.deckhand.busy--;
+      if (draining) closeIdle();
+    });
     if (!req.url.startsWith("/")) {
       res.writeHead(400, { "content-type": "text/plain" });
       return res.end("Deckhand's egress proxy: expected a path\n");
     }
-    if (toListener) return relayed(req, res, to.host, from);
+    if (toListener) return relayed(req, res, to.host, from).catch(() => res.destroy());
     const name = isIP(to.host) === 6 ? `[${to.host}]` : to.host;
     const url = new URL(`https://${name}:${to.port}${req.url}`);
     relay(req, res, { address, url, host: to.host }, true);
@@ -325,8 +364,9 @@ export function createProxy({
   // the run's secret and sends it on with the operator's credential (../listener/google.mjs).
   // Only under <relayUrl>/<host>/: the URL parser resolves "..", so a path that climbs out
   // would reach the listener's other endpoints (/egress) from the proxy's address. `from`: the
-  // client's address.
-  function relayed(req, res, host, from) {
+  // client's address. A listener restarting is waited for: the request is sent once a
+  // connection is made, and never again (wait.mjs).
+  async function relayed(req, res, host, from) {
     const url = relayTarget(relayUrl, host, req.url);
     if (!url) {
       res.writeHead(400, { "content-type": "text/plain" });
@@ -337,15 +377,28 @@ export function createProxy({
       if (name.startsWith("proxy-")) delete headers[name];
     }
     headers[CLIENT_HEADER] = String(from ?? "").replace(/^::ffff:/, "");
-    const send = url.protocol === "https:" ? httpsRequest : httpRequest;
-    const upstream = send(url, { method: req.method, headers }, (answer) => {
-      res.writeHead(answer.statusCode, answer.headers);
-      answer.pipe(res);
-    });
-    upstream.on("error", () => unreachable(res, "the listener"));
+    let upstream = null;
+    let gone = false;
     res.on("close", () => {
-      if (!res.writableFinished) upstream.destroy();
+      gone = true;
+      if (!res.writableFinished) upstream?.destroy();
     });
+    let socket;
+    try {
+      socket = await untilReached(() => dial(url), { ...wait, gone: () => gone });
+    } catch {
+      return unreachable(res, "the listener");
+    }
+    if (gone) return socket.destroy();
+    upstream = httpRequest(
+      url,
+      { method: req.method, headers, createConnection: () => socket },
+      (answer) => {
+        res.writeHead(answer.statusCode, answer.headers);
+        answer.pipe(res);
+      },
+    );
+    upstream.on("error", () => unreachable(res, "the listener"));
     req.pipe(upstream);
   }
 
@@ -415,6 +468,13 @@ export function createProxy({
   server.on("connect", (req, client, head) => {
     tunnel(req, client, head).catch(() => client.destroy());
   });
+  // On SIGTERM: no new connection, those open finish (tunnels, and requests in decrypted ones)
+  // → whether all did within the grace period (../listener/drain.mjs).
+  server.drain = (options) => {
+    draining = true;
+    closeIdle();
+    return drain(server, { ...options, also: [inside] });
+  };
   return server;
 }
 
@@ -441,7 +501,17 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   // The listener's broker, where POLICY_URL is: relayed requests go to its /relay/.
   const relayUrl = (process.env.RELAY_URL || new URL("/relay", url).href).replace(/\/$/, "");
   const https = authority ? ", HTTPS too" : "";
-  createProxy({ policy: listenerPolicy(url), cache, authority, relayUrl, log }).listen(port, () =>
+  const proxy = createProxy({ policy: listenerPolicy(url), cache, authority, relayUrl, log });
+  proxy.listen(port, () =>
     log(`Egress proxy on :${port}, asking ${url}; cache ${cache.enabled ? `on${https}` : "off"}`),
   );
+  // `docker compose up` recreating it: new connections are refused until the next proxy
+  // starts, those open finish first.
+  process.on("SIGTERM", () => {
+    log("Stopping: open connections finish first");
+    proxy.drain().then((all) => {
+      if (!all) log("Stopping: connections still open at the end of the grace period, cut");
+      process.exit(0);
+    });
+  });
 }

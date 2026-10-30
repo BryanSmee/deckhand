@@ -1,0 +1,126 @@
+// The egress proxy waiting for a listener that restarts (proxy/wait.mjs): a connection that
+// wasn't made is tried again, with an injected clock, for up to 90 seconds; any other failure,
+// a request already sent among them, is not.
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { listenerPolicy } from "../proxy/proxy.mjs";
+import { LISTENER_WAIT_MS, notReached, untilReached } from "../proxy/wait.mjs";
+import { serve } from "./helpers.mjs";
+
+// A clock that only moves when the code sleeps.
+function fakeClock() {
+  const clock = { t: 0, sleeps: [] };
+  clock.now = () => clock.t;
+  clock.sleep = async (ms) => {
+    clock.sleeps.push(ms);
+    clock.t += ms;
+  };
+  return clock;
+}
+
+const refused = () => Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" });
+
+test("a refused connection is tried again, with a growing delay, until the listener answers", async () => {
+  const clock = fakeClock();
+  let tries = 0;
+  const answer = await untilReached(async () => {
+    if (++tries < 5) throw refused();
+    return "answered";
+  }, clock);
+  assert.equal(answer, "answered");
+  assert.equal(tries, 5);
+  assert.deepEqual(clock.sleeps, [250, 500, 1000, 2000]);
+});
+
+test("the wait gives up after 90 seconds, with the last error", async () => {
+  const clock = fakeClock();
+  let tries = 0;
+  await assert.rejects(
+    untilReached(async () => {
+      tries++;
+      throw refused();
+    }, clock),
+    /ECONNREFUSED/,
+  );
+  assert.equal(LISTENER_WAIT_MS, 90_000);
+  assert.equal(clock.t, 90_000);
+  // The delay stops growing at 5 s: about twenty tries.
+  assert.ok(tries > 15 && tries < 25, `${tries} tries`);
+  assert.ok(clock.sleeps.every((ms) => ms <= 5000));
+});
+
+test("any other failure isn't tried again: a request sent, an error answer, a timeout", async () => {
+  const clock = fakeClock();
+  for (const error of [
+    Object.assign(new Error("write EPIPE"), { code: "EPIPE" }),
+    new Error("500"),
+    Object.assign(new Error("timeout"), { name: "TimeoutError" }),
+  ]) {
+    let tries = 0;
+    await assert.rejects(
+      untilReached(async () => {
+        tries++;
+        throw error;
+      }, clock),
+      error,
+    );
+    assert.equal(tries, 1);
+  }
+  assert.equal(clock.t, 0);
+  // A caller that left: not tried again either.
+  let tries = 0;
+  await assert.rejects(
+    untilReached(
+      async () => {
+        tries++;
+        throw refused();
+      },
+      { ...clock, gone: () => true },
+    ),
+  );
+  assert.equal(tries, 1);
+});
+
+test("what counts as not reached: refused, reset while connecting, no such host; fetch's too", () => {
+  for (const code of ["ECONNREFUSED", "ECONNRESET", "ENOTFOUND", "EAI_AGAIN", "EHOSTUNREACH"]) {
+    assert.equal(notReached({ code }), true, code);
+    assert.equal(notReached(new TypeError("fetch failed", { cause: { code } })), true, code);
+  }
+  assert.equal(notReached({ code: "EPIPE" }), false);
+  assert.equal(notReached(new Error("x")), false);
+  assert.equal(notReached(undefined), false);
+});
+
+test("the policy waits for the listener rather than refusing every host", async (t) => {
+  // The listener's port, closed: it listens again at the second wait.
+  const asked = [];
+  const { server, port } = await serve(t, (req, res) => {
+    asked.push(req.url);
+    res.end(JSON.stringify({ allowed: true, relay: true }));
+  });
+  await new Promise((resolve) => server.close(resolve));
+  const clock = fakeClock();
+  const sleep = clock.sleep;
+  clock.sleep = async (ms) => {
+    await sleep(ms);
+    if (clock.sleeps.length === 2)
+      await new Promise((resolve) => server.listen(port, "127.0.0.1", resolve));
+  };
+  const policy = listenerPolicy(`http://127.0.0.1:${port}/egress`, 5000, clock);
+  assert.deepEqual(await policy("10.0.0.2", "api.github.com"), {
+    allowed: true,
+    private: false,
+    cache: false,
+    decrypt: false,
+    relay: true,
+  });
+  assert.deepEqual(asked, ["/egress?ip=10.0.0.2&host=api.github.com"]);
+  assert.equal(clock.sleeps.length, 2);
+
+  // Gone for good: refused after 90 seconds, as a listener that says no.
+  await new Promise((resolve) => server.close(resolve));
+  const later = fakeClock();
+  const gone = listenerPolicy(`http://127.0.0.1:${port}/egress`, 5000, later);
+  assert.deepEqual(await gone("10.0.0.2", "api.github.com"), { allowed: false });
+  assert.equal(later.t, 90_000);
+});
