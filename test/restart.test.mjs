@@ -150,6 +150,36 @@ test("a restored run keeps the issues it created, the comments it posted and the
   ]);
 });
 
+test("a restored run knows whether it started an engine, and saves it again", async (t) => {
+  const dir = tempDir(t);
+  const broker = createBroker({});
+  const ctx = {
+    config: { dataDir: dir },
+    log: () => {},
+    tasks: new Map(),
+    logDir: dir,
+    runs: [],
+    runsById: new Map(),
+    runner: { closed: () => false },
+    broker,
+    running: 0,
+  };
+  const secret = saveRun(dir, "r1", 1, { agent: "claude" });
+  const saved = JSON.parse(readFileSync(join(dir, "r1.live.json"), "utf8"));
+  writeFileSync(join(dir, "r1.live.json"), JSON.stringify({ ...saved, engine: true }));
+  // Saved before runs said: unknown (broker-http.mjs hasAddress() waits for its engine's address).
+  const old = saveRun(dir, "r2", 2, { agent: "claude" });
+  createRestart(ctx).restoreRuns();
+  const of = (s) => [...ctx.tasks.values()].find((task) => task.live.secret === s).live;
+  assert.equal(of(secret).engine, true);
+  assert.equal(of(old).engine, undefined);
+  // Its addresses are looked up again, the flag kept.
+  assert.equal(of(secret).ip, null);
+  broker.runOf(secret).changed();
+  await of(secret).saving;
+  assert.equal(JSON.parse(readFileSync(join(dir, "r1.live.json"), "utf8")).engine, true);
+});
+
 // A data dir whose runs, run going and queue have one repo under two spellings: `live` the
 // running one's, `newest` the last finished run's.
 function twoSpellings(t, { live, newest }) {

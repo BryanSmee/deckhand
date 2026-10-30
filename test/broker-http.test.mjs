@@ -24,7 +24,13 @@ function twoRuns() {
   const task = (name, repo) => ({
     name,
     repo,
-    live: { secret: broker.register(repo), hosts: ["github.com"], ip: null },
+    // Whether it started an engine (runs.mjs launch()).
+    live: {
+      secret: broker.register(repo),
+      hosts: ["github.com"],
+      ip: null,
+      engine: !!engines[name],
+    },
   });
   const tasks = new Map([
     ["org/a#1", task("a", "org/a")],
@@ -121,13 +127,56 @@ test("a run with an engine missed by every lookup so far: its sandbox's address 
   assert.deepEqual(live.ip, ["10.2.0.2", "10.2.0.3"]);
   assert.equal(await runFrom(ctx, "10.2.0.3"), null, "the engine, told apart");
   assert.equal(await runFrom(ctx, "10.2.0.2"), runOf("org/b#2"));
-  // A run without one (no `engine` flag) keeps its sandbox's alone, at once.
+  // A run that started none keeps its sandbox's alone, at once.
   engines.a = null;
   const a = tasks.get("org/a#1").live;
-  a.ip = null;
-  a.engineIp = null;
+  Object.assign(a, { engine: false, ip: null, engineIp: null });
   assert.equal(await runAt(ctx, runOf("org/a#1"), "10.1.0.2"), true);
   assert.deepEqual(a.ip, ["10.1.0.2"]);
+});
+
+test("an engine gone mid-run: its sandbox's kept after 5 s, the engine looked for every 5 s", async () => {
+  const { ctx, tasks, runOf, engines, looked, clock } = twoRuns();
+  const live = tasks.get("org/b#2").live;
+  live.engine = true;
+  engines.b = null;
+  assert.equal(await runAt(ctx, runOf("org/b#2"), "10.2.0.2"), true);
+  assert.equal(live.ip, null);
+  // 5 s on, its engine still missing: its sandbox's are kept, so a question costs no lookup.
+  clock.t += 5_000;
+  assert.equal(await runFrom(ctx, "10.2.0.2"), runOf("org/b#2"));
+  assert.deepEqual(live.ip, ["10.2.0.2"]);
+  // Other sandboxes' questions look its engine up again, at most every 5 s.
+  looked.length = 0;
+  clock.t += 1_000;
+  await runFrom(ctx, "10.9.0.2");
+  assert.deepEqual(looked, []);
+  clock.t += 4_000;
+  await runFrom(ctx, "10.9.0.2");
+  assert.deepEqual(looked, ["b"]);
+  // It's back: in the list, and told apart.
+  engines.b = ["10.2.0.3"];
+  clock.t += 5_000;
+  await runFrom(ctx, "10.9.0.2");
+  assert.deepEqual(live.ip, ["10.2.0.2", "10.2.0.3"]);
+  assert.equal(await runFrom(ctx, "10.2.0.3"), null);
+  // Then nobody looks it up again.
+  looked.length = 0;
+  clock.t += 60_000;
+  await runFrom(ctx, "10.9.0.2");
+  assert.deepEqual(looked, []);
+});
+
+test("a run saved before `engine` was: it may have one, so its sandbox's wait for it", async () => {
+  const { ctx, tasks, runOf, engines } = twoRuns();
+  const live = tasks.get("org/b#2").live;
+  delete live.engine;
+  engines.b = null;
+  assert.equal(await runAt(ctx, runOf("org/b#2"), "10.2.0.2"), true);
+  assert.equal(live.ip, null);
+  engines.b = ["10.2.0.3"];
+  assert.equal(await runAt(ctx, runOf("org/b#2"), "10.2.0.2"), true);
+  assert.deepEqual(live.ip, ["10.2.0.2", "10.2.0.3"]);
 });
 
 test("runAt: calls that miss at once share one lookup, and the limit holds when it finds nothing", async () => {
