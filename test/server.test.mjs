@@ -159,6 +159,11 @@ async function fakeGitHub(files = {}) {
       if (req.method === "GET" && req.url.startsWith("/repos/org/repo/actions/runs?")) {
         return res.end(files.runs ?? JSON.stringify({ workflow_runs: [] }));
       }
+      // A pull request's reviews, as a JSON list, when the test sets them.
+      const reviewed = /^\/repos\/org\/repo\/pulls\/(\d+)\/reviews\?/.exec(req.url);
+      if (req.method === "GET" && reviewed && files[`reviews:${reviewed[1]}`]) {
+        return res.end(req.url.endsWith("page=1") ? files[`reviews:${reviewed[1]}`] : "[]");
+      }
       // A pull request's reviews and an issue's comments otherwise: none.
       if (
         req.method === "GET" &&
@@ -2681,6 +2686,69 @@ modes:
     await new Promise((resolve) => setTimeout(resolve, 300));
     assert.equal(github.requests.filter(requested).length, 1);
     assert.doesNotMatch(listener.output(), /reviewers requested \(fix\)/);
+  });
+
+  test("dashboard Fix: the App's last review read back, its comment, then the fix run", async (t) => {
+    const pr = {
+      number: 13,
+      body: "Closes #12",
+      state: "open",
+      draft: false,
+      labels: [],
+      user: { login: "deckhand-x[bot]", type: "Bot" },
+      head: { sha: "head-1", ref: "issue-12-fix", repo: { full_name: "org/repo" } },
+    };
+    const review = {
+      user: { login: "deckhand-x[bot]", type: "Bot" },
+      body: "**Verdict: request changes** · Rating: 5/10\n\n### 🟠 High (1)\n\n- `a.mjs:3`: no test.\n\nf\n\n<!-- deckhand -->",
+    };
+    const { dir, github, listener, port } = await listen(
+      t,
+      {
+        ".deckhand.yaml": "wait_for_answers: false\nreview:\n  on: ready\n  fix: true\n",
+        "pull:13": JSON.stringify(pr),
+        "reviews:13": JSON.stringify([review]),
+      },
+      // The dashboard's sign-in goes to the fake GitHub too.
+      (dir, github) => ({ GITHUB_URL: github.url }),
+    );
+    const base = `http://127.0.0.1:${port}`;
+    const get = (path, cookie) =>
+      fetch(base + path, { redirect: "manual", headers: cookie ? { cookie } : {} });
+    const login = await get("/auth/login");
+    const to = new URL(login.headers.get("location"));
+    const state = login.headers.getSetCookie()[0].split(";")[0];
+    const back = await get(`/auth/callback?code=c&state=${to.searchParams.get("state")}`, state);
+    const session = back.headers
+      .getSetCookie()
+      .find((c) => c.startsWith("deckhand_session="))
+      .split(";")[0];
+    const res = await fetch(`${base}/api/repos/org/repo/review`, {
+      method: "POST",
+      headers: {
+        cookie: session,
+        origin: "https://hooks.example.com",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ number: 13, action: "fix" }),
+    });
+    assert.equal(res.status, 200);
+    assert.equal((await res.json()).message, "Fix round 1 of #13 queued.");
+    const said = github.requests.find(
+      (r) => r.method === "POST" && r.path === "/repos/org/repo/issues/13/comments",
+    );
+    assert.match(
+      JSON.parse(said.body).body,
+      /^Fix round 1 from the dashboard by @alice: 1 high finding left\./,
+    );
+    await listener.until("org/repo#12: queued (work, issue 12, reply on #13)");
+    await listener.until("org/repo#12: done (ok)");
+    const message = messages(dir).at(-1);
+    assert.match(message, /^The automated review of pull request #13 requested changes\./);
+    assert.match(message, /`a\.mjs:3`: no test\./);
+    // Counted before it was queued.
+    const reviews = JSON.parse(readFileSync(join(dir, "reviews.json"), "utf8"));
+    assert.equal(reviews["org/repo#pr-13"].fixes, 1);
   });
 
   test("review.merge: a clean review of Deckhand's pull request merges it once its checks pass, with the listener's token", async (t) => {

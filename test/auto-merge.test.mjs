@@ -14,6 +14,7 @@ import {
   mergeRefusal,
   parseReview,
   reviewEvent,
+  reviewLoop,
   trustedFile,
 } from "../listener/reviews.mjs";
 import { policyEngine, tempDir, testConfig } from "./helpers.mjs";
@@ -1370,4 +1371,26 @@ test("fix loop: fix: true without review.merge reviews nothing after its fix run
   assert.equal(await s.reviews.fixed(done), null);
   assert.equal(s.accepted.length, 1);
   assert.equal(s.replies.length, 0);
+});
+
+test("a maintainer's review in merge mode: its findings counted with the loop's tolerance", async (t) => {
+  const yaml = "review:\n  on: ready\n  merge: true\n  max_allowed_severity: medium\n";
+  const s = setup(t, { yaml, pr: at("sha-1") });
+  // The automatic review tolerates its medium finding: the loop ends clean.
+  await s.reviews.settle(s.run, s.posted(MEDIUM, at("sha-1"), "medium"));
+  const loop = () => reviewLoop(s.reviews.entry("org/repo", 5));
+  assert.equal(loop().loop, "clean");
+  // `/mode review` or the dashboard's Review finds the same medium one: still clean, with no
+  // "findings left" for a finding the repo tolerates.
+  const manual = { ...s.run, auto: false };
+  await s.reviews.settle(manual, s.posted(MEDIUM, at("sha-1")));
+  assert.deepEqual([loop().loop, loop().history.at(-1).blocking], ["clean", 0]);
+  // A high one blocks, whatever the tolerance.
+  await s.reviews.settle(manual, s.posted(HIGH, at("sha-1")));
+  assert.equal(loop().history.at(-1).blocking, 1);
+  // Without the operator's grant, merge mode is off: the review's own tolerance counts.
+  const off = setup(t, { yaml, grant: false, pr: at("sha-1") });
+  await off.reviews.settle(off.run, off.posted(HIGH, at("sha-1")));
+  await off.reviews.settle({ ...off.run, auto: false }, off.posted(MEDIUM, at("sha-1")));
+  assert.equal(reviewLoop(off.reviews.entry("org/repo", 5)).history.at(-1).blocking, 1);
 });

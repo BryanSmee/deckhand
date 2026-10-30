@@ -236,6 +236,16 @@ fail, posts an App comment ("Rerun from the dashboard by @user") where the run r
 queues those comments again in the run's mode, with that comment for the reactions. The
 issue's session volume carries what the run had done.
 
+A pull request whose review-and-fix loop is over (`review.loop` in `api/state`) shows **Review**
+and, ready for review with blocking findings left and `review.fix` on, **Fix** in its page's
+Review loop section (`reviewOffers()`). `POST /api/repos/<owner>/<repo>/review { number, action }`
+(`work.mjs`) checks the repo's users and config, the pull request open and nothing running or
+queued on it, posts the App's comment on the pull request and queues the run itself: Review as
+`/mode review` would; Fix (not on a draft) through `reviews.mjs` `startFix()`, which refuses
+while the loop goes on, on the findings of the App's latest review read back from GitHub
+(`latestReview()`), one round more than `review.fix` when they are used up (`grantedTo` in
+`reviews.json`, saved before the run is queued).
+
 A failed or interrupted task stops asking for attention (Waiting on you, the Failed tile, the
 Error chip, its repository card's "failed" count) once its issue is closed or its pull request
 merged or closed: what can't run again shouldn't ask to. It keeps its state, runs and page.

@@ -13,6 +13,8 @@ import {
   ciState,
   createReviews,
   fixMessage,
+  latestReview,
+  parsePostedReview,
   parseReview,
   postReview,
   reviewThread,
@@ -315,6 +317,7 @@ function setup(
     busy = () => false,
     settings = config,
     policies = null,
+    reply = async () => {},
   } = {},
 ) {
   let time = 1_800_000_000_000;
@@ -328,6 +331,7 @@ function setup(
     github,
     busy,
     policies,
+    reply,
     now: () => time,
   });
   return { reviews, accepted, path, read, advance: (ms) => (time += ms) };
@@ -718,11 +722,19 @@ const CLEAN = "- **low** `c.mjs:3`: a typo.\n\nRating: 9/10\nVerdict: approve";
 
 // Its pull request turned ready at sha-1: the first review was queued.
 // `during(path)`: called on each GitHub call, while the listener decides what follows a run.
-async function loopSetup(t, yaml = "review:\n  on: ready\n  fix: 2\n", { during } = {}) {
+// `busy`, `policies`, `reply`: as setup()'s.
+async function loopSetup(
+  t,
+  yaml = "review:\n  on: ready\n  fix: 2\n",
+  { during, busy, policies, reply } = {},
+) {
   let head = "sha-1";
   const github = async (repo, method, path) => {
-    during?.(path);
+    await during?.(path);
     if (path === "/repos/org/repo/issues/12") return Response.json({ labels: [] });
+    // What a policy's input reads (readPullInput()).
+    if (path === "/repos/org/repo") return Response.json({ private: true });
+    if (path.startsWith("/repos/org/repo/pulls/5/files?")) return Response.json([]);
     if (path === "/repos/org/repo/pulls/5")
       return Response.json({
         ...posted().pr,
@@ -730,7 +742,13 @@ async function loopSetup(t, yaml = "review:\n  on: ready\n  fix: 2\n", { during 
       });
     return new Response("{}", { status: 404 });
   };
-  const s = setup(t, yaml, { github, path: join(tempDir(t), "reviews.json") });
+  const s = setup(t, yaml, {
+    github,
+    path: join(tempDir(t), "reviews.json"),
+    ...(busy && { busy }),
+    policies,
+    ...(reply && { reply }),
+  });
   await s.reviews.consider("pull_request", delivery("ready_for_review", posted().pr));
   const run = { repo: "org/repo", number: 5, base: "trunk", settings: s.read.settings, auto: true };
   // A review posted at the current head, then its fix run pushing `next`.
@@ -849,6 +867,554 @@ test("review loop: fix: true without merge, its one fix run unreviewed by design
   await failed.review(HIGH_ONE);
   await failed.fixed("sha-2", "error");
   assert.equal(failed.loop().loop, "stopped");
+});
+
+test("parsePostedReview: the review posted, read back with its findings and verdict", () => {
+  const review = parseReview(MESSAGE);
+  const blob = "https://github.com/org/repo/blob/abc";
+  // GitHub keeps the body as postReview() sent it: the footer, then the marker.
+  const body = `${reviewBody(review, MESSAGE, "Footer line.\n- not a finding")}\n\n<!-- deckhand -->`;
+  const linked = `${reviewBody(review, MESSAGE, "f", blob)}\n\n<!-- deckhand -->`;
+  for (const text of [body, linked]) {
+    const back = parsePostedReview(text, { allowed: "medium" });
+    assert.deepEqual([back.rating, back.verdict, back.allowed], [5, "request-changes", "medium"]);
+    const bySeverity = (list) => [...list].sort((a, b) => a.text.localeCompare(b.text));
+    assert.deepEqual(bySeverity(back.findings), bySeverity(review.findings));
+    // The fix run's message is the one the loop would have built.
+    assert.equal(fixMessage(back, 5), fixMessage(review, 5));
+  }
+  assert.equal(reviewEvent(parsePostedReview(body)), "REQUEST_CHANGES");
+  const clean = parseReview("All good.\n\nRating: 9/10\nVerdict: approve");
+  const none = parsePostedReview(reviewBody(clean, "", "f"));
+  assert.deepEqual([none.findings, none.verdict, reviewEvent(none)], [[], "approve", "COMMENT"]);
+  // A raw review, or anything else: not one.
+  assert.equal(parsePostedReview(reviewBody(null, "LGTM", "f")), null);
+  assert.equal(parsePostedReview(undefined), null);
+});
+
+test("latestReview: the App's last review with the marker, not anyone else's", async () => {
+  const review = parseReview(MESSAGE);
+  const body = (r) => `${reviewBody(r, "", "f")}\n\n<!-- deckhand -->`;
+  const older = parseReview("- **low** `a.mjs:1`: old.\n\nRating: 9/10\nVerdict: comment");
+  const app = { login: "deckhand-app[bot]", type: "Bot" };
+  const list = [
+    { user: app, body: body(older), commit_id: "sha-1" },
+    { user: app, body: body(review), commit_id: "sha-2" },
+    { user: { login: "alice", type: "User" }, body: body(older) },
+    { user: app, body: "A plain review without the marker." },
+  ];
+  const paths = [];
+  const github = async (repo, method, path) => {
+    paths.push(path);
+    return Response.json(path.includes("page=1") ? list : []);
+  };
+  const found = await latestReview(github, config, "org/repo", 5, "medium");
+  assert.equal(found.findings.length, 3);
+  assert.equal(found.allowed, "medium");
+  // The commit it reviewed, to tell it from the loop's last round.
+  assert.equal(found.head, "sha-2");
+  assert.match(paths[0], /^\/repos\/org\/repo\/pulls\/5\/reviews\?/);
+  const empty = async () => Response.json([]);
+  assert.equal(await latestReview(empty, config, "org/repo", 5), null);
+  assert.equal(await latestReview(github, { ...config, bot: null }, "org/repo", 5), null);
+});
+
+// A maintainer's Fix from the dashboard on pull request #5 (work.mjs): `announce` records
+// the App's comment it would post.
+const askFix = (s, message = HIGH_ONE, user = "alice", pr = {}) => {
+  const said = [];
+  const run = { repo: "org/repo", number: 5, base: "trunk", settings: s.read.settings };
+  const started = s.reviews.fixAsked(run, posted(message, pr), {
+    user,
+    announce: async (...args) => {
+      said.push(args);
+      return { id: 77, html_url: "c/77", node_id: "N" };
+    },
+  });
+  return started.then((result) => ({ ...result, said }));
+};
+
+// askFix() with a posted review of its own.
+const askFixWith = (s, result) =>
+  s.reviews.fixAsked(
+    { repo: "org/repo", number: 5, base: "trunk", settings: s.read.settings },
+    result,
+    { user: "alice", announce: async () => ({ id: 77 }) },
+  );
+
+test("dashboard Fix: one round more once they ran out, counted before it is queued", async (t) => {
+  // The fix run queued makes the issue busy until it ends, as the queue does.
+  let queued = false;
+  const s = await loopSetup(t, undefined, { busy: () => queued });
+  await s.review(HIGH_TWO);
+  await s.fixed("sha-2");
+  await s.review(HIGH_ONE);
+  await s.fixed("sha-3");
+  assert.equal(await s.review(HIGH_ONE), null);
+  assert.equal(s.loop().loop, "rounds-out");
+  const before = s.accepted.length;
+  const { item, said } = await askFix(s);
+  queued = true;
+  assert.deepEqual(said, [[3, 3, "1 high finding"]]);
+  assert.equal(s.accepted.length, before + 1);
+  assert.deepEqual(
+    [item.reason, item.round, item.rounds, item.id, item.replyTo, item.author, item.comment.id],
+    ["review-fix", 3, 3, "12", 5, "alice", 77],
+  );
+  assert.equal(item.text, fixMessage(parseReview(HIGH_ONE), 5, { round: 3, rounds: 3 }));
+  const entry = s.reviews.entry("org/repo", 5);
+  assert.deepEqual([entry.fixes, entry.grantedTo, entry.fixRounds], [3, 3, 3]);
+  assert.deepEqual([s.loop("review-fix").loop, s.loop("review-fix").rounds], ["fixing", 3]);
+  // A second click, or the same after a restart (its run back in the queue): the round is on
+  // its way, nothing more.
+  const again = await askFix(s);
+  assert.equal(again.item, null);
+  assert.match(again.why, /has a run going or queued/);
+  const restarted = setup(t, "review:\n  on: ready\n  fix: 2\n", {
+    path: s.path,
+    busy: () => true,
+    github: async () => Response.json({ labels: [] }),
+  });
+  const run = { repo: "org/repo", number: 5, base: "trunk", settings: restarted.read.settings };
+  const after = await restarted.reviews.fixAsked(run, posted(HIGH_ONE), {
+    user: "alice",
+    announce: async () => assert.fail("nothing posted"),
+  });
+  assert.equal(after.item, null);
+  assert.equal(restarted.accepted.length, 0);
+  // Its push is reviewed as any round's, and the loop ends again at R3.
+  queued = false;
+  assert.equal((await s.fixed("sha-4")).reason, "review");
+  assert.equal(await s.review(HIGH_ONE), null);
+  const out = s.loop();
+  assert.deepEqual([out.loop, out.round, out.rounds], ["rounds-out", 3, 3]);
+  assert.deepEqual(
+    out.history.map((r) => r.round),
+    [0, 1, 2, 3],
+  );
+  // Another click grants one more: each grants one round at most.
+  assert.deepEqual((await askFix(s)).said, [[4, 4, "1 high finding"]]);
+  assert.equal(s.reviews.entry("org/repo", 5).grantedTo, 4);
+});
+
+test("dashboard Fix: two clicks at once start one fix run", async (t) => {
+  const s = await loopSetup(t, "review:\n  on: ready\n  fix: true\n");
+  await s.review(HIGH_ONE);
+  await s.fixed("sha-2", "error");
+  assert.equal(s.loop().loop, "stopped");
+  const before = s.accepted.length;
+  const [one, two] = await Promise.all([askFix(s), askFix(s)]);
+  assert.equal([one, two].filter((r) => r.item).length, 1);
+  assert.match([one, two].find((r) => !r.item).why, /being started/);
+  assert.equal(s.accepted.length, before + 1);
+  // `fix: true`: its one round was used, this one is granted, and its push is reviewed.
+  assert.equal(s.reviews.entry("org/repo", 5).grantedTo, 2);
+  assert.equal((await s.fixed("sha-3")).reason, "review");
+});
+
+test("dashboard Fix: a round left is used, not granted; refusals say why", async (t) => {
+  // The fix run pushed nothing: the loop stopped with a round left.
+  const s = await loopSetup(t);
+  await s.review(HIGH_ONE);
+  await s.fixed();
+  assert.equal(s.loop().loop, "stopped");
+  const { item, said } = await askFix(s);
+  assert.deepEqual([item.round, item.rounds, said], [2, 2, [[2, 2, "1 high finding"]]]);
+  assert.equal(s.reviews.entry("org/repo", 5).grantedTo, undefined);
+  // Nothing blocking, or `review.fix` off.
+  const clean = await loopSetup(t);
+  await clean.review(HIGH_ONE);
+  await clean.fixed();
+  assert.match((await askFix(clean, CLEAN)).why, /nothing blocking/);
+  const off = await loopSetup(t, "review:\n  on: ready\n");
+  await off.review(HIGH_ONE);
+  assert.match((await askFix(off)).why, /review\.fix/);
+  // Busy, or waiting for the maintainer's input.
+  const busy = setup(t, "review:\n  on: ready\n  fix: 2\n", {
+    busy: () => true,
+    github: async () => Response.json({ labels: [] }),
+  });
+  assert.match((await askFix(busy)).why, /has a run going or queued/);
+  const label = { ...config, needsInputLabel: "needs-input" };
+  const asking = setup(t, "review:\n  on: ready\n  fix: 2\n", {
+    settings: label,
+    github: async () => Response.json({ labels: [{ name: "needs-input" }] }),
+  });
+  assert.match((await askFix(asking)).why, /waits for the maintainer's input/);
+  assert.equal(busy.accepted.length + asking.accepted.length + clean.accepted.length, 2);
+});
+
+test("a maintainer's review of a loop CI stopped: the loop shows it, Fix follows, ready again still runs the CI step", async (t) => {
+  // Two fix runs, then CI failed on what the second pushed and its CI fix run pushed nothing:
+  // no review of sha-3.
+  const at = 1_800_000_000_000;
+  const stopped = () => {
+    const path = join(tempDir(t), "reviews.json");
+    const round = (n, head) => ({
+      round: n,
+      at: at - 2000,
+      head,
+      counts: { high: 1 },
+      blocking: 1,
+    });
+    const entry = {
+      head: "sha-3",
+      at,
+      fixes: 2,
+      reviewedFixes: 2,
+      fixRounds: 2,
+      rounds: [round(0, "sha-1"), round(1, "sha-2")],
+      ciStopped: { sha: "sha-3", at: at - 1000 },
+    };
+    writeFileSync(path, JSON.stringify({ "org/repo#pr-5": entry }));
+    const s = setup(t, "review:\n  on: ready\n  fix: 2\n", { path, github: open5 });
+    const run = {
+      repo: "org/repo",
+      number: 5,
+      base: "trunk",
+      settings: s.read.settings,
+      auto: false,
+    };
+    return { ...s, run, loop: () => reviewLoop(s.reviews.entry("org/repo", 5)) };
+  };
+  const head = { head: { sha: "sha-3", repo: { full_name: "org/repo" } } };
+  const s = stopped();
+  assert.equal(s.loop().loop, "ci-failed");
+  // The dashboard's Review of sha-3 finds a high one: rounds out, no longer "CI failed".
+  assert.equal(await s.reviews.settle(s.run, posted(HIGH_ONE, head)), null);
+  assert.deepEqual([s.loop().loop, s.loop().history.at(-1).head], ["rounds-out", "sha-3"]);
+  // The CI step's mark stays: it wasn't the loop's own review.
+  assert.equal(s.reviews.entry("org/repo", 5).ciStopped.sha, "sha-3");
+  const { item } = await askFix(s, HIGH_ONE, "alice", head);
+  assert.deepEqual([item.round, item.rounds], [3, 3]);
+  // A review of an older head that ended after CI stopped on sha-3: still "CI failed".
+  const older = stopped();
+  const sha2 = { head: { sha: "sha-2", repo: { full_name: "org/repo" } } };
+  await older.reviews.settle(older.run, posted(HIGH_ONE, sha2));
+  assert.equal(older.loop().loop, "ci-failed");
+  // Ready again at sha-3 after that review: the loop's own review runs, as before it.
+  const again = stopped();
+  await again.reviews.settle(again.run, posted(HIGH_ONE, head));
+  const ready = delivery("ready_for_review", { ...posted().pr, ...head });
+  assert.equal((await again.reviews.consider("pull_request", ready)).reason, "review");
+});
+
+// Pull request #5's entry in a new reviews.json: `fixes` fix runs, each reviewed, the last
+// review blocking at `head`; `extra` over it.
+function loopAt(t, fixes, extra = {}) {
+  const path = join(tempDir(t), "reviews.json");
+  const at = 1_800_000_000_000;
+  const rounds = Array.from({ length: fixes + 1 }, (_, n) => ({
+    round: n,
+    at,
+    head: `sha-${n + 1}`,
+    counts: { high: 1 },
+    blocking: 1,
+  }));
+  const entry = { head: `sha-${fixes + 1}`, at, fixes, reviewedFixes: fixes, rounds, ...extra };
+  writeFileSync(path, JSON.stringify({ "org/repo#pr-5": entry }));
+  return path;
+}
+const open5 = async () => Response.json({ labels: [] });
+
+test("dashboard Fix: a grant is a round, whatever review.fix says before or after it", async (t) => {
+  // Three fix runs ran with `fix: 3`, then the repo lowered it to 1: a Fix still grants R4.
+  const path = loopAt(t, 3, { fixRounds: 3 });
+  const lowered = setup(t, "review:\n  on: ready\n  fix: 1\n", { path, github: open5 });
+  const { item } = await askFix(lowered);
+  assert.deepEqual([item.round, item.rounds], [4, 4]);
+  assert.equal(lowered.reviews.entry("org/repo", 5).grantedTo, 4);
+  // A grant on `fix: 1` (round 2), then the repo raised it to 3: three rounds, not four.
+  const raised = setup(t, "review:\n  on: ready\n  fix: 3\n", {
+    path: loopAt(t, 1, { grantedTo: 2 }),
+    github: open5,
+  });
+  const next = await raised.reviews.fix(
+    { repo: "org/repo", number: 5, base: "trunk", settings: raised.read.settings },
+    posted(HIGH_ONE),
+  );
+  assert.deepEqual([next.round, next.rounds], [2, 3]);
+});
+
+test("dashboard Fix: refused when the loop starts again during the App's comment, or the review on GitHub is older", async (t) => {
+  const s = await loopSetup(t);
+  await s.review(HIGH_ONE);
+  await s.fixed();
+  const before = s.accepted.length;
+  const run = { repo: "org/repo", number: 5, base: "trunk", settings: s.read.settings };
+  // Marked ready again at a new head while the comment is posted: its review is on its way.
+  const ready = delivery("ready_for_review", {
+    ...posted().pr,
+    head: { sha: "sha-9", repo: { full_name: "org/repo" } },
+  });
+  const late = await s.reviews.fixAsked(run, posted(HIGH_ONE), {
+    user: "alice",
+    announce: async () => {
+      await s.reviews.consider("pull_request", ready);
+      return { id: 77 };
+    },
+  });
+  assert.equal(late.item, null);
+  assert.match(late.why, /started again meanwhile/);
+  assert.deepEqual(
+    s.accepted.slice(before).map((i) => i.reason),
+    ["review"],
+  );
+  // GitHub's latest review isn't the loop's last round (a newer one went out as a comment).
+  const stale = await loopSetup(t);
+  await stale.review(HIGH_ONE);
+  await stale.fixed();
+  const older = { ...posted(HIGH_ONE), review: { ...parseReview(HIGH_ONE), head: "sha-0" } };
+  const refused = await stale.reviews.fixAsked(run, older, {
+    user: "alice",
+    announce: async () => assert.fail("nothing posted"),
+  });
+  assert.match(refused.why, /latest review couldn't be read from GitHub/);
+  // A maintainer's review of the same head that GitHub refused, posted as a comment: GitHub's
+  // latest review is the older one, at the same head.
+  const asComment = await loopSetup(t);
+  await asComment.review(HIGH_ONE);
+  await asComment.fixed();
+  const manual = { ...run, settings: asComment.read.settings, auto: false };
+  await asComment.reviews.settle(manual, { ...posted(HIGH_TWO), event: null });
+  assert.equal(asComment.loop().history.at(-1).comment, true);
+  const sameHead = { ...posted(HIGH_ONE), review: { ...parseReview(HIGH_ONE), head: "sha-1" } };
+  assert.match(
+    (await askFixWith(asComment, sameHead)).why,
+    /latest review couldn't be read from GitHub/,
+  );
+  const same = { ...posted(HIGH_ONE), review: { ...parseReview(HIGH_ONE), head: "sha-1" } };
+  assert.equal((await askFixWith(stale, same)).item.round, 2);
+});
+
+test("a maintainer's review that couldn't be read leaves a loop CI stopped as it was", async (t) => {
+  const path = loopAt(t, 0, { rounds: [], ciStopped: { sha: "sha-1", at: 1 } });
+  const s = setup(t, "review:\n  on: ready\n  fix: 2\n", { path, github: open5 });
+  const run = {
+    repo: "org/repo",
+    number: 5,
+    base: "trunk",
+    settings: s.read.settings,
+    auto: false,
+  };
+  await s.reviews.settle(run, { event: null, review: null, pr: posted().pr });
+  const entry = s.reviews.entry("org/repo", 5);
+  assert.deepEqual([reviewLoop(entry).loop, entry.ciStopped.sha], ["ci-failed", "sha-1"]);
+});
+
+test("dashboard Fix while a maintainer's review is settled, or a comment comes: one run", async (t) => {
+  // The maintainer's review run ended: what follows it is decided while GitHub is read.
+  let hold = null;
+  let release;
+  const s = await loopSetup(t, undefined, {
+    during: (path) => (path === "/repos/org/repo/issues/12" ? hold : undefined),
+  });
+  await s.review(HIGH_ONE);
+  await s.fixed();
+  assert.equal(s.loop().loop, "stopped");
+  hold = new Promise((resolve) => (release = resolve));
+  const before = s.accepted.length;
+  const run = {
+    repo: "org/repo",
+    number: 5,
+    base: "trunk",
+    settings: s.read.settings,
+    auto: false,
+  };
+  const settling = s.reviews.settle(run, posted(HIGH_ONE));
+  const clicking = askFix(s);
+  // Let the click go as far as it would, then the review's GitHub calls.
+  for (let i = 0; i < 20; i++) await new Promise((resolve) => setImmediate(resolve));
+  hold = null;
+  release();
+  const [item, clicked] = await Promise.all([settling, clicking]);
+  assert.equal(clicked.item, null);
+  assert.match(clicked.why, /review loop is still going/);
+  assert.equal(item.round, 2);
+  assert.equal(s.accepted.length, before + 1);
+  // A comment queued while the App's comment is posted: the fix run doesn't join it.
+  let busy = false;
+  const c = await loopSetup(t, undefined, { busy: () => busy });
+  await c.review(HIGH_ONE);
+  await c.fixed();
+  const queued = c.accepted.length;
+  const late = await c.reviews.fixAsked(
+    { repo: "org/repo", number: 5, base: "trunk", settings: c.read.settings },
+    posted(HIGH_ONE),
+    {
+      user: "alice",
+      announce: async () => {
+        busy = true;
+        return { id: 77 };
+      },
+    },
+  );
+  assert.equal(late.item, null);
+  assert.match(late.why, /has a run going or queued/);
+  assert.equal(c.accepted.length, queued);
+  assert.equal(c.reviews.entry("org/repo", 5).fixes, 1);
+});
+
+test("dashboard Fix after the loop's review run failed: its step left over doesn't hold it", async (t) => {
+  let busy = false;
+  const s = await loopSetup(t, undefined, { busy: () => busy });
+  await s.review(HIGH_TWO);
+  // The review of what the fix pushed is queued, then its run fails: nothing is posted, so
+  // nothing settles it, and its step stays in reviews.json.
+  assert.equal((await s.fixed("sha-2")).reason, "review");
+  assert.equal(s.reviews.entry("org/repo", 5).next, "review");
+  // While it is queued or running, the issue is busy: no Fix.
+  busy = true;
+  assert.match((await askFix(s, HIGH_TWO)).why, /has a run going or queued/);
+  busy = false;
+  assert.deepEqual([s.loop().loop, s.loop().history.at(-1).blocking], ["stopped", 2]);
+  const { item } = await askFix(s, HIGH_TWO);
+  assert.deepEqual([item.round, item.rounds], [2, 2]);
+  assert.equal(s.reviews.entry("org/repo", 5).next, "review-fix");
+  // While the listener decides what follows a run, it still waits.
+  assert.equal((await s.fixed("sha-3")).reason, "review");
+});
+
+test("dashboard Fix after a maintainer's review: a fix that pushed nothing stops the loop", async (t) => {
+  const s = await loopSetup(t, "review:\n  on: ready\n  fix: true\n");
+  const at = (sha) => ({ head: { sha, repo: { full_name: "org/repo" } } });
+  await s.review(HIGH_ONE);
+  // The loop's one fix run pushes sha-2, which nothing reviews by design.
+  assert.equal(await s.fixed("sha-2"), null);
+  assert.equal(s.loop().loop, "fixed");
+  // The dashboard's Review of sha-2 finds it still there: Fix grants round 2, from sha-2.
+  const run = {
+    repo: "org/repo",
+    number: 5,
+    base: "trunk",
+    settings: s.read.settings,
+    auto: false,
+  };
+  await s.reviews.settle(run, posted(HIGH_ONE, at("sha-2")));
+  assert.equal(s.loop().loop, "rounds-out");
+  const { item } = await askFix(s, HIGH_ONE, "alice", at("sha-2"));
+  assert.equal(item.round, 2);
+  // It pushed nothing: no review of sha-2 again, the loop stops there.
+  const queued = s.accepted.length;
+  assert.equal(await s.fixed(), null);
+  assert.equal(s.accepted.length, queued);
+  assert.deepEqual([s.loop().loop, s.loop().history.map((r) => r.round)], ["stopped", [0, 1]]);
+  // A fix that did push is reviewed.
+  const again = await askFix(s, HIGH_ONE, "alice", at("sha-2"));
+  assert.equal(again.item.round, 3);
+  assert.equal((await s.fixed("sha-3")).reason, "review");
+  // The same up to the fix that pushed nothing, then draft and ready again at sha-2: no
+  // automatic review saw sha-2, so the loop's own review runs.
+  const ready = await loopSetup(t, "review:\n  on: ready\n  fix: true\n");
+  await ready.review(HIGH_ONE);
+  await ready.fixed("sha-2");
+  await ready.reviews.settle(
+    { ...run, settings: ready.read.settings },
+    posted(HIGH_ONE, at("sha-2")),
+  );
+  await askFix(ready, HIGH_ONE, "alice", at("sha-2"));
+  assert.equal(await ready.fixed(), null);
+  const delivered = delivery("ready_for_review", { ...posted().pr, ...at("sha-2") });
+  assert.equal((await ready.reviews.consider("pull_request", delivered)).reason, "review");
+});
+
+test("dashboard Fix: a round left on fix: true is reviewed, though the loop's own isn't", async (t) => {
+  let busy = true;
+  const s = await loopSetup(t, "review:\n  on: ready\n  fix: true\n", { busy: () => busy });
+  // The issue was busy: the review's fix run never started, its round is left.
+  assert.equal(await s.review(HIGH_ONE), null);
+  assert.equal(s.loop().loop, "stopped");
+  busy = false;
+  const { item } = await askFix(s);
+  assert.deepEqual([item.round, item.rounds], [1, 1]);
+  assert.equal(s.reviews.entry("org/repo", 5).grantedTo, undefined);
+  // Its push is reviewed, and the loop goes on from that review.
+  assert.equal((await s.fixed("sha-2")).reason, "review");
+  assert.equal(await s.review(HIGH_ONE), null);
+  assert.deepEqual([s.loop().loop, s.loop().history.map((r) => r.round)], ["rounds-out", [0, 1]]);
+});
+
+test("dashboard Fix refused: deny_fix, someone else's pull request; nothing posted or queued", async (t) => {
+  const replies = [];
+  const policy = policyEngine(t, {
+    ref: "trunk",
+    files: { "fix.rego": "package deckhand" },
+    messages: (i, rule) => (rule === "deny_fix" ? ["no fixes on Fridays"] : []),
+  });
+  const s = await loopSetup(t, "review:\n  on: ready\n  fix: 2\n", {
+    policies: policy.engine,
+    reply: async (...args) => replies.push(args),
+  });
+  // The loop's own fix run, refused: said on the pull request, as before.
+  assert.equal(await s.review(HIGH_ONE), null);
+  assert.equal(replies.length, 1);
+  const before = s.accepted.length;
+  const denied = await askFix(s);
+  assert.equal(denied.item, null);
+  assert.equal(denied.why, "the policies refuse it (`deny_fix`): `no fixes on Fridays`");
+  assert.deepEqual(denied.said, []);
+  // The dashboard says why: nothing more on the pull request, nothing queued, no round used.
+  assert.equal(replies.length, 1);
+  assert.equal(s.accepted.length, before);
+  assert.equal(s.reviews.entry("org/repo", 5).fixes, undefined);
+  const asked = policy.evals.filter((e) => e.rule === "deny_fix").at(-1);
+  assert.deepEqual([asked.round, asked.rounds], [1, 2]);
+  // Another author's pull request, or one from a fork: not Deckhand's own.
+  const own = await loopSetup(t);
+  await own.review(HIGH_ONE);
+  await own.fixed();
+  const queued = own.accepted.length;
+  for (const pr of [
+    { user: { login: "alice", type: "User" } },
+    { head: { sha: "x", repo: { full_name: "mallory/repo" } } },
+  ]) {
+    const refused = await askFix(own, HIGH_ONE, "alice", pr);
+    assert.equal(refused.item, null);
+    assert.equal(refused.why, "not an open pull request of Deckhand's own");
+    assert.deepEqual(refused.said, []);
+  }
+  assert.equal(own.accepted.length, queued);
+});
+
+test("a maintainer's review of a pull request in a loop: its round, so the page follows it", async (t) => {
+  const s = await loopSetup(
+    t,
+    "review:\n  on: ready\n  fix: true\n  max_allowed_severity: medium\n",
+  );
+  await s.review(HIGH_ONE);
+  await s.fixed("sha-2");
+  assert.equal(s.loop().loop, "fixed");
+  const run = {
+    repo: "org/repo",
+    number: 5,
+    base: "trunk",
+    settings: s.read.settings,
+    auto: false,
+  };
+  const at = (sha) => ({ head: { sha, repo: { full_name: "org/repo" } } });
+  // The dashboard's Review of what the fix pushed finds a high one: findings left, Fix offered.
+  assert.equal(await s.reviews.settle(run, posted(HIGH_ONE, at("sha-2"))), null);
+  const left = s.loop();
+  assert.deepEqual(
+    [left.loop, left.history.at(-1)],
+    ["rounds-out", { ...left.history.at(-1), round: 1, head: "sha-2", blocking: 1 }],
+  );
+  // Medium findings only, counted with the repo's tolerance as Fix reads them: nothing left.
+  const medium = "- **medium** `a.mjs:1`: slow.\n\nRating: 7/10\nVerdict: comment";
+  await s.reviews.settle(run, posted(medium, at("sha-2")));
+  assert.deepEqual([s.loop().loop, s.loop().history.length], ["clean", 2]);
+});
+
+test("parsePostedReview: a path with parentheses, linked to its line", () => {
+  const review = parseReview(
+    "- **high** `app/(shop)/page.tsx:3`: no check.\n\nRating: 4/10\nVerdict: request-changes",
+  );
+  const blob = "https://github.com/org/repo/blob/abc";
+  const body = reviewBody(review, "", "f", blob);
+  assert.match(body, /\(shop\)\/page\.tsx#L3\)/);
+  assert.deepEqual(parsePostedReview(body).findings, [
+    { severity: "high", path: "app/(shop)/page.tsx", line: 3, text: "no check." },
+  ]);
 });
 
 // The task's last run, over: one of `reason`, started at `startedAt` (by default, after its

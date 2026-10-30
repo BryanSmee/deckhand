@@ -136,6 +136,32 @@ export function findingsLeft(t: Pick<Task, "review">): string | null {
   return `${what ?? last.blocking} ${last.blocking === 1 ? "finding" : "findings"} left ${after}`;
 }
 
+// The loop's ends, where the task page offers to review its pull request again.
+const LOOP_OVER = ["rounds-out", "stopped", "fixed", "ci-failed", "clean"];
+// A run going or queued on the task: the listener would refuse.
+const BUSY = ["scheduled", "building-image", "working", "stopping", "queued", "in-review"];
+
+// What the task page offers once the review loop of its open pull request is over
+// (listener/work.mjs `review`): Review, a review of its head now; Fix, one fix run more, when
+// the last review left blocking findings (findingsLeft()) and the repo has `review.fix`
+// (`rounds`), nobody's answer awaited. The listener checks again, and says why it refuses.
+export function reviewOffers(t: Pick<Task, "review" | "pr" | "state">): {
+  review: boolean;
+  fix: boolean;
+} {
+  const r = t.review;
+  const open = t.pr?.state === "draft" || t.pr?.state === "ready";
+  if (!r || !open || !LOOP_OVER.includes(r.loop) || BUSY.includes(t.state)) {
+    return { review: false, fix: false };
+  }
+  const last = r.history.at(-1);
+  // A last review GitHub refused, posted as a comment: the listener can't read it back to fix.
+  const blocking = !!last?.blocking && !last.comment && ["rounds-out", "stopped"].includes(r.loop);
+  // Fix on a ready pull request only: the listener refuses a draft's.
+  const ready = t.pr?.state === "ready";
+  return { review: true, fix: blocking && ready && r.rounds > 0 && t.state !== "needs-input" };
+}
+
 // A review's findings by severity: "1 critical · 3 high", "no findings".
 export function roundCounts(r: ReviewRound): string {
   const parts = SEVERITIES.filter((s) => r.counts[s]).map((s) => `${r.counts[s]} ${s}`);
