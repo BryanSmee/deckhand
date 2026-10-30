@@ -1422,6 +1422,11 @@ export function createReviews({
     // Checked again: a comment may have come during the calls above.
     if (busy(task)) return skip(`#${issue} has a run going or queued`);
     const comment = asked ? await asked.announce(round, rounds, blockingText(review)) : null;
+    // And again after the App's comment, a GitHub call: a comment queued meanwhile would join
+    // the fix run, a fix run queued meanwhile has this round. The comment stays, the record of
+    // who asked.
+    if (asked && busy(task)) return skip(`#${issue} has a run going or queued`);
+    if (asked && fixesOf(reviewed.get(key)) !== fixes) return skip("another fix run was queued");
     // Before queuing: whatever happens next, never this round twice.
     // A maintainer's Fix starts from the pull request's head now, which no automatic review
     // may have seen (a maintainer's review of it, an unreviewed `fix: true` push): what it
@@ -1483,11 +1488,15 @@ export function createReviews({
       // loop the dashboard shows: its latest round, its blocking findings counted with the
       // tolerance of the loop's own reviews (tolerance(), as the dashboard's Fix reads them),
       // so that what the task page offers follows it. Not a loop round: it counts no fix run
-      // and starts no loop.
-      if (reviewed.get(key)?.rounds?.length) {
-        recordRound(run, posted, await tolerance({ ...run, auto: true }));
-      }
-      return (await startFix(run, posted)).item;
+      // and starts no loop. With `review.fix`, it may start a fix run while rounds are left:
+      // decided as the loop's steps are (deciding()), so a dashboard Fix meanwhile waits.
+      const manual = async () => {
+        if (reviewed.get(key)?.rounds?.length) {
+          recordRound(run, posted, await tolerance({ ...run, auto: true }));
+        }
+        return (await startFix(run, posted)).item;
+      };
+      return run.settings?.review?.fix ? deciding(key, "review", manual) : manual();
     }
     const since = reviewed.get(key)?.nextAt;
     recordRound(run, posted);

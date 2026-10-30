@@ -730,7 +730,7 @@ async function loopSetup(
 ) {
   let head = "sha-1";
   const github = async (repo, method, path) => {
-    during?.(path);
+    await during?.(path);
     if (path === "/repos/org/repo/issues/12") return Response.json({ labels: [] });
     // What a policy's input reads (readPullInput()).
     if (path === "/repos/org/repo") return Response.json({ private: true });
@@ -1032,6 +1032,59 @@ test("dashboard Fix: a round left is used, not granted; refusals say why", async
   });
   assert.match((await askFix(asking)).why, /waits for the maintainer's input/);
   assert.equal(busy.accepted.length + asking.accepted.length + clean.accepted.length, 2);
+});
+
+test("dashboard Fix while a maintainer's review is settled, or a comment comes: one run", async (t) => {
+  // The maintainer's review run ended: what follows it is decided while GitHub is read.
+  let hold = null;
+  let release;
+  const s = await loopSetup(t, undefined, {
+    during: (path) => (path === "/repos/org/repo/issues/12" ? hold : undefined),
+  });
+  await s.review(HIGH_ONE);
+  await s.fixed();
+  assert.equal(s.loop().loop, "stopped");
+  hold = new Promise((resolve) => (release = resolve));
+  const before = s.accepted.length;
+  const run = {
+    repo: "org/repo",
+    number: 5,
+    base: "trunk",
+    settings: s.read.settings,
+    auto: false,
+  };
+  const settling = s.reviews.settle(run, posted(HIGH_ONE));
+  const clicking = askFix(s);
+  // Let the click go as far as it would, then the review's GitHub calls.
+  for (let i = 0; i < 20; i++) await new Promise((resolve) => setImmediate(resolve));
+  hold = null;
+  release();
+  const [item, clicked] = await Promise.all([settling, clicking]);
+  assert.equal(clicked.item, null);
+  assert.match(clicked.why, /review loop is still going/);
+  assert.equal(item.round, 2);
+  assert.equal(s.accepted.length, before + 1);
+  // A comment queued while the App's comment is posted: the fix run doesn't join it.
+  let busy = false;
+  const c = await loopSetup(t, undefined, { busy: () => busy });
+  await c.review(HIGH_ONE);
+  await c.fixed();
+  const queued = c.accepted.length;
+  const late = await c.reviews.fixAsked(
+    { repo: "org/repo", number: 5, base: "trunk", settings: c.read.settings },
+    posted(HIGH_ONE),
+    {
+      user: "alice",
+      announce: async () => {
+        busy = true;
+        return { id: 77 };
+      },
+    },
+  );
+  assert.equal(late.item, null);
+  assert.match(late.why, /has a run going or queued/);
+  assert.equal(c.accepted.length, queued);
+  assert.equal(c.reviews.entry("org/repo", 5).fixes, 1);
 });
 
 test("dashboard Fix after the loop's review run failed: its step left over doesn't hold it", async (t) => {
