@@ -491,7 +491,12 @@ export function createGithubGateway({
       }
       if (!refused && graphqlCall) {
         const checked = await checkGraphql(run, body);
-        if (checked.refused) refused = checked.refused;
+        // A refusal for what the App couldn't see (a project, without its permission): the
+        // permission's message when the installation lacks it, since GitHub's look-up alone
+        // can't tell a missing node from one it hides.
+        if (checked.refused?.needs) {
+          refused = (await unaccepted(github, run, checked.refused.needs)) ?? checked.refused;
+        } else if (checked.refused) refused = checked.refused;
         else {
           // Redacted again as printed: GraphQL's own escapes (`\u0064`) decode only now, which
           // the call's JSON hid from the redaction above.

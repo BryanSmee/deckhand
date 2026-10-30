@@ -1089,6 +1089,56 @@ test("a work run's Actions log, its installation without `actions`: refused nami
   assert.equal(gw.calls.length, 0);
 });
 
+test("a project write from an installation without organization_projects: refused naming it", async (t) => {
+  // The real GraphQL checks: GitHub answers null for every project the installation can't
+  // see, which a missing permission makes all of them.
+  const nodes = async (repo, ids) =>
+    ids.map((id) =>
+      id === "I_1"
+        ? { __typename: "Issue", number: 1, repository: { nameWithOwner: "Org/Repo" } }
+        : null,
+    );
+  const graphql = createGraphqlChecks({
+    nodes,
+    checkWrite: async () => ({ status: 500, message: "not reached" }),
+  });
+  let lacks = true;
+  const gw = await gateway(t, {
+    checkGraphql: graphql.check,
+    lacking: async (repo, wanted) =>
+      lacks && wanted.organization_projects
+        ? {
+            missing: ["organization_projects: write"],
+            account: "org",
+            url: "https://github.com/inst/7",
+          }
+        : null,
+  });
+  const { secret } = gw.register(undefined, { mode: "work", push: true, issue: 1 });
+  const add = () =>
+    gw.call("/api/graphql", {
+      secret,
+      method: "POST",
+      body: JSON.stringify({
+        query:
+          'mutation { addProjectV2ItemById(input: {contentId: "I_1", projectId: "PV_3"}) { item { id } } }',
+      }),
+    });
+  const res = await add();
+  assert.equal(res.status, 403);
+  assert.match(
+    (await res.json()).message,
+    /^Deckhand: this needs the GitHub App's organization_projects: write permission, which its installation on org lacks/,
+  );
+  // Granted: a project still not there is said as such.
+  lacks = false;
+  assert.match(
+    (await (await add()).json()).message,
+    /projectId isn't a project, or the GitHub App can't see it/,
+  );
+  assert.equal(gw.calls.length, 0);
+});
+
 test("needed: its own repository's path's optional permission, read, and a write's own", () => {
   const repo = "Org/Repo";
   assert.deepEqual(needed("repos/org/repo/actions/runs/1/logs", {}, repo), { actions: "read" });

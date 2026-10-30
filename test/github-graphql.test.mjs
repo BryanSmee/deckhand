@@ -918,10 +918,10 @@ test("a project item: its content one of the run's, its project one the grants l
     (await check(work, addItem("I_1", "I_2"))).refused.message,
     /projectId isn't a project, or the GitHub App can't see it/,
   );
-  assert.match(
-    (await check(work, addItem("I_1", "PV_x"))).refused.message,
-    /isn't a project, or the GitHub App can't see it/,
-  );
+  const unseen = (await check(work, addItem("I_1", "PV_x"))).refused;
+  assert.match(unseen.message, /isn't a project, or the GitHub App can't see it/);
+  // What it needs, for the gateway to name a permission the installation lacks.
+  assert.deepEqual(unseen.needs, { organization_projects: "write" });
   // Another repository's issue.
   assert.match((await check(work, addItem("I_o"))).refused.message, /contentId isn't in the run's/);
   // A brainstorm adds the issues it filed only; a repo's light mode, nothing.

@@ -811,15 +811,20 @@ export function writeOf({ name, spec, input }, nodes, repo) {
   if (spec.permissions) write.permissions = spec.permissions;
   // The project an item goes on: outside the repository, so not refused as elsewhere. Which
   // ones the run may write is the grant's (github-writes.mjs). GitHub answers null for a
-  // project the App can't see (without organization_projects, say).
+  // project the App can't see, as it does for every one when the installation lacks
+  // organization_projects: the refusal says what it needs (`needs`), and the gateway names the
+  // permission instead when the installation lacks it (github-gateway.mjs unaccepted()).
   if (spec.project) {
     const project = nodes.get(input[spec.project]);
     if (project?.__typename !== "ProjectV2") {
       return {
-        refused: refusal(
-          403,
-          `${name}'s ${spec.project} isn't a project, or the GitHub App can't see it`,
-        ),
+        refused: {
+          ...refusal(
+            403,
+            `${name}'s ${spec.project} isn't a project, or the GitHub App can't see it`,
+          ),
+          needs: spec.permissions,
+        },
       };
     }
     write.project = {
