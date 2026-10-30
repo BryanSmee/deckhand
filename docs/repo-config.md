@@ -1076,9 +1076,9 @@ repository) and hold without any setup, under the operator's and the repository'
   `.deckhand/policy/gh-review-threads.rego` for its own (a file with only `package deckhand`
   drops every default refusal of that feature). The other features keep their defaults.
 - **Broadening stops at the ceiling**: a file can only drop refusals. Past it, the mode's
-  built-in ceiling still holds: a light repository mode writes nothing, and the modes with no
-  write ceiling (inbox entries, discussions, onboarding, analyses, reviews) stay refused,
-  whatever a policy says.
+  built-in ceiling still holds, whatever a policy says: onboarding, analyses, reviews and light
+  repository modes write nothing, and inbox entries and discussions never go past their own
+  ceilings (filing issues, and for inbox entries linking them).
 - **Each default file is evaluated with the real `opa`** by Deckhand's tests, on every kind of
   mode.
 
@@ -1140,7 +1140,7 @@ deny_github contains msg if {
 `deny_review` and `deny_fix` on the pull request as it is now, and `deny_github` on
 sample writes (a comment on it by the work run whose pull request it is, one by a brainstorm
 of another issue, `issue: null`, and, when the repository has `modes:`, one by a run in the
-first of them, `custom_mode: true`), and replies with each rule's result (denies, with
+first of them that isn't light, else the first, `custom_mode: true`), and replies with each rule's result (denies, with
 its messages, or allows), the merge's input and the samples' inputs, in collapsed blocks. The
 samples' results are labelled as such and aren't counted as denials. Nothing is
 reviewed, fixed or merged, and it is no decision: it debugs a rule without waiting for a pull

@@ -288,10 +288,11 @@ const policies = createPolicies({
 policies.checkOperator().then(({ errors, warnings }) => {
   for (const error of errors) {
     console.error(
-      `GRANTS_DIR/policy: ${error} (every decision a policy is asked for refuses until it is fixed)`,
+      `Policies (Deckhand's and GRANTS_DIR/policy): ${error} (every decision a policy is asked for refuses until it is fixed)`,
     );
   }
-  for (const warning of warnings) console.error(`GRANTS_DIR/policy: ${warning}`);
+  for (const warning of warnings)
+    console.error(`Policies (Deckhand's and GRANTS_DIR/policy): ${warning}`);
 });
 
 // The names of the board's lanes: one a maintainer typed, or a parent's title (lanes.mjs).

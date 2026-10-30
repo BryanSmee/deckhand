@@ -708,10 +708,14 @@ test("githubSamples: a work run's comment, a brainstorm's, and one in the repo's
     ["work", false, false, null],
     ["brainstorm", false, true, null],
   ]);
+  // The first mode that may write: a light one's ceiling refuses the comment anyway.
   const own = githubSamples("Org/Repo", pr, { ask: { light: true }, plan: { light: false } });
-  assert.deepEqual(traits(own).at(-1), ["ask", true, true, null]);
+  assert.deepEqual(traits(own).at(-1), ["plan", true, false, null]);
   assert.equal(own.length, 3);
-  assert.equal(own[2].what, "a comment on it in the repository's mode ask");
+  assert.equal(own[2].what, "a comment on it in the repository's mode plan");
+  const light = githubSamples("Org/Repo", pr, { ask: { light: true } });
+  assert.deepEqual(traits(light).at(-1), ["ask", true, true, null]);
+  assert.match(light[2].what, /mode ask \(light: its ceiling refuses it before any policy\)$/);
   assert.deepEqual(own[2].input.target, {
     kind: "own_pr",
     number: 5,

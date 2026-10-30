@@ -1523,7 +1523,10 @@ default replaces it, others add to them.
   that can't be read (yours or GitHub's). For `deny_merge`, the pull request then waits for a
   human, as with any refusal; for `deny_review`, the review is skipped (the log says why); for
   `deny_fix`, no fix run starts and a comment says why; for `deny_github`, the run's write is
-  refused, so a broken policy stops every run's writes in that repository. A refusal only
+  refused, so a broken policy stops every run's writes in that repository. Deckhand's own
+  `github.rego` defines `deny_github` everywhere, so every run's GitHub write starts an `opa`
+  process: an `opa` that is missing or fails (its temp folder unwritable, say) stops the runs'
+  writes in every repository. A refusal only
   ever costs a run, a write or a merge, never starts one. Your folder's compile errors are logged at start; a repository's
   appear in its onboarding pull request's config check and its config panel on the dashboard.
 - **A dry run decides nothing**: `/mode policy` on a pull request, only from an allowed user

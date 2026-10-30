@@ -229,6 +229,10 @@ test("Deckhand's default files: under the operator's and the repo's, each replac
     ),
   );
   expect(within(card("GitHub writes")).getByText("Active")).toBeTruthy();
+  // What deny_github reads of the run, and where its input is documented.
+  const input = screen.getByRole("link", { name: "The GitHub input" });
+  expect(input.getAttribute("href")).toMatch(/docs\/repo-config\.md#the-github-input$/);
+  expect(input.closest("p")!.textContent).toMatch(/custom_mode.*light.*reason/);
   expect(source("deckhand/policy/gh-a.rego").textContent).toContain(
     "replaced by the operator's: not evaluated",
   );

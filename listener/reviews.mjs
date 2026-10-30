@@ -918,7 +918,7 @@ const OWNERS = { deckhand: "Deckhand's", operator: "the operator's" };
 export function dryRunText({ number, sha = null, files, errors = [], results = [], input = null }) {
   const head = `**Policy dry run** on #${number}${sha ? ` at ${short(sha)}` : ""}: nothing was reviewed, fixed or merged.`;
   if (!files.length) {
-    return `${head}\n\nNo policy applies here: neither \`.deckhand/policy/\` on the default branch nor the operator's policies have a file.`;
+    return `${head}\n\nNo policy applies here: neither \`.deckhand/policy/\` on the default branch, the operator's policies nor Deckhand's defaults have a file.`;
   }
   const source = (f) =>
     `${SOURCES[f.source]}${f.replaces ? `, replaces ${OWNERS[f.replaces]}` : ""}`;
@@ -992,15 +992,13 @@ export function githubSamples(repo, pr, modes = {}) {
     sample("a work run's comment on its pull request", "work", "own_pr", pr.number),
     sample("a brainstorm's comment on it", "brainstorm", "pr", null, { light: true }),
   ];
-  const [own] = Object.keys(modes ?? {});
+  // A mode that may write: a light one's ceiling refuses the comment before any policy runs.
+  const names = Object.keys(modes ?? {});
+  const own = names.find((name) => !modes[name].light) ?? names[0];
   if (own) {
     const light = !!modes[own].light;
-    samples.push(
-      sample(`a comment on it in the repository's mode ${own}`, own, "own_pr", pr.number, {
-        custom_mode: true,
-        light,
-      }),
-    );
+    const what = `a comment on it in the repository's mode ${own}${light ? " (light: its ceiling refuses it before any policy)" : ""}`;
+    samples.push(sample(what, own, "own_pr", pr.number, { custom_mode: true, light }));
   }
   return samples;
 }

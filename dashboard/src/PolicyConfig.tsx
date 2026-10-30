@@ -15,6 +15,9 @@ import { StatusBadge } from "./ui/Status";
 import styles from "./PolicyConfig.module.css";
 
 const COMMAND = "Deckhand /mode policy";
+// What deny_github reads, field by field.
+const GITHUB_INPUT =
+  "https://github.com/BryanSmee/deckhand/blob/main/docs/repo-config.md#the-github-input";
 
 // A file's errors: those opa placed in it. The rest (a timeout, a folder that can't be read)
 // are the whole check's.
@@ -160,6 +163,15 @@ export function PolicyConfig({ config }: { config: RepoConfig }) {
         operator's files are the defaults, the operator's over Deckhand's; a repo file with the same
         name replaces one, any other name adds to them. The repo's are read from{" "}
         <code>{config.base}</code>.
+      </p>
+      <p class={styles.model}>
+        <code>deny_github</code> reads the write (<code>action</code>, <code>target</code>,{" "}
+        <code>change</code>) and the run: its <code>mode</code>, <code>custom_mode</code> (one of
+        the repo's <code>modes:</code>), <code>light</code> and <code>reason</code> (
+        <code>review-fix</code>, <code>ci-fix</code>, <code>conflict</code>, or null).{" "}
+        <a href={GITHUB_INPUT} target="_blank" rel="noreferrer">
+          The GitHub input
+        </a>
       </p>
       <section class={styles.decisions} aria-label="Decisions">
         {DECISIONS.map((d) => (
