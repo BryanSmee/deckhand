@@ -90,7 +90,7 @@ function checks({ why = null } = {}) {
     record: (r, pr, readyAt) => recorded.push([r, pr.number, readyAt]),
     now: () => 1000,
   });
-  const writes = createWriteChecks({ lookup, pulls });
+  const writes = createWriteChecks({ needsInputLabel: () => null, lookup, pulls });
   const graphql = createGraphqlChecks({
     nodes: async (_repo, ids) => ids.map((id) => NODES[id] ?? null),
     checkWrite: writes.checkWrite,

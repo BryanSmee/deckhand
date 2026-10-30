@@ -160,6 +160,11 @@ test("the ceilings: what each mode can ever write", () => {
   assert.deepEqual(aboveCeiling(work, "own_issue", ["edit", "comment", "label"]), []);
   assert.deepEqual(aboveCeiling(work, "own_pr", ["edit", "label"]), []);
   assert.deepEqual(aboveCeiling(work, "sub_issue", ["link", "edit"]), []);
+  // It labels its sub-issues and the issues it files, and creates labels.
+  assert.deepEqual(aboveCeiling(work, "sub_issue", ["label"]), []);
+  assert.deepEqual(aboveCeiling(work, "created_issue", ["label"]), []);
+  assert.deepEqual(aboveCeiling(work, "label", ["create"]), []);
+  assert.deepEqual(aboveCeiling(work, "other_issue", ["label"]), ["label"]);
   assert.deepEqual(aboveCeiling(work, "other_issue", ["comment"]), ["comment"]);
   assert.deepEqual(aboveCeiling(work, "pr", ["comment"]), ["comment"]);
   assert.deepEqual(aboveCeiling(work, "own_issue", ["close"]), ["close"]);
@@ -184,6 +189,8 @@ test("the ceilings: what each mode can ever write", () => {
         assert.ok(!actions.includes(out), `${mode}: ${out}`);
       }
     }
+    // A label's settings: created only, never edited or deleted.
+    assert.deepEqual(aboveCeiling(ceiling, "label", ["edit", "delete"]), ["edit", "delete"], mode);
   }
 });
 
@@ -265,7 +272,7 @@ const write = (method, path, body = {}) => ({ method, path, body: json(body) });
 
 test("a work run writes its issue, its pull requests and its sub-issues, nothing else", async () => {
   const { lookup } = fakeLookup(GITHUB);
-  const { check } = createWriteChecks({ lookup });
+  const { check } = createWriteChecks({ needsInputLabel: () => null, lookup });
   const work = run("work");
   const allowed = [
     write("PATCH", "repos/org/repo/issues/1", { body: "x" }),
@@ -275,7 +282,11 @@ test("a work run writes its issue, its pull requests and its sub-issues, nothing
     write("PATCH", "repos/org/repo/pulls/7", { title: "x" }),
     write("POST", "repos/org/repo/issues/7/comments", { body: "x" }),
     write("PATCH", "repos/org/repo/issues/2", { body: "x" }),
+    write("POST", "repos/org/repo/issues/2/labels", { labels: ["a"] }),
+    write("PATCH", "repos/org/repo/issues/2", { labels: ["a"] }),
+    write("DELETE", "repos/org/repo/issues/2/labels/a"),
     write("POST", "repos/org/repo/issues", { title: "x" }),
+    write("POST", "repos/org/repo/labels", { name: "a", color: "fff" }),
   ];
   for (const w of allowed) assert.equal(await check(work, w), null, `${w.method} ${w.path}`);
   const refused = [
@@ -286,9 +297,14 @@ test("a work run writes its issue, its pull requests and its sub-issues, nothing
     [write("PATCH", "repos/org/repo/issues/3", { body: "x" }), /can't edit on other_issue #3/],
     [write("POST", "repos/org/repo/issues/8/comments", { body: "x" }), /can't comment on pr #8/],
     [
-      write("POST", "repos/org/repo/issues/2/labels", { labels: ["a"] }),
-      /can't label on sub_issue #2/,
+      write("POST", "repos/org/repo/issues/3/labels", { labels: ["a"] }),
+      /can't label on other_issue #3/,
     ],
+    [
+      write("PATCH", "repos/org/repo/labels/a", { color: "fff" }),
+      /can't edit on label \(its ceiling\)/,
+    ],
+    [write("DELETE", "repos/org/repo/labels/a"), /can't delete here/],
     [write("PATCH", "repos/org/repo/issues/1", { state: "closed" }), /can't close here/],
     [write("PUT", "repos/org/repo/pulls/7/merge"), /can't merge here/],
     [write("POST", "repos/org/repo/pulls/7/reviews", { event: "APPROVE" }), /can't review here/],
@@ -313,7 +329,7 @@ test("a work run writes its issue, its pull requests and its sub-issues, nothing
 
 test("target kinds come from GitHub, never from the request", async () => {
   const { lookup, calls } = fakeLookup(GITHUB);
-  const { check } = createWriteChecks({ lookup });
+  const { check } = createWriteChecks({ needsInputLabel: () => null, lookup });
   // Its pull request is by its branch, in its repo: a fork's of the same name isn't its own,
   // and a pull request's own path doesn't make it one.
   const work = run("work");
@@ -350,6 +366,7 @@ test("target kinds come from GitHub, never from the request", async () => {
   assert.equal(calls.length, before);
   // A look-up that fails refuses.
   const broken = createWriteChecks({
+    needsInputLabel: () => null,
     lookup: async () => {
       throw new Error("down");
     },
@@ -359,7 +376,10 @@ test("target kinds come from GitHub, never from the request", async () => {
 });
 
 test("light runs: brainstorms, inbox entries, discussions and the modes that read", async () => {
-  const { check } = createWriteChecks({ lookup: fakeLookup(GITHUB).lookup });
+  const { check } = createWriteChecks({
+    needsInputLabel: () => null,
+    lookup: fakeLookup(GITHUB).lookup,
+  });
   const ok = async (mode, w) => assert.equal(await check(run(mode), w), null, `${mode} ${w.path}`);
   const no = async (mode, w) => assert.ok(await check(run(mode), w), `${mode} ${w.path}`);
   await ok("brainstorm", write("PATCH", "repos/org/repo/issues/1", { body: "x" }));
@@ -427,7 +447,10 @@ const restIssue = (number, repo = "Org/Repo") =>
   });
 
 test("the issues a run created: GitHub's answers to its own creates, REST and GraphQL", () => {
-  const { answered } = createWriteChecks({ lookup: fakeLookup(GITHUB).lookup });
+  const { answered } = createWriteChecks({
+    needsInputLabel: () => null,
+    lookup: fakeLookup(GITHUB).lookup,
+  });
   const work = run("work");
   let saved = 0;
   work.createdChanged = () => saved++;
@@ -476,7 +499,7 @@ test("the issues a run created: GitHub's answers to its own creates, REST and Gr
 
 test("a sub-issue link: its child is one the run created or already under its issue, never moved", async () => {
   const { lookup } = fakeLookup(GITHUB);
-  const { check, answered } = createWriteChecks({ lookup, bot: BOT });
+  const { check, answered } = createWriteChecks({ needsInputLabel: () => null, lookup, bot: BOT });
   const work = run("work");
   const link = (parent, body) => write("POST", `repos/org/repo/issues/${parent}/sub_issues`, body);
   // Any issue of the repo, by its id: refused, and moved from its parent all the more, however
@@ -505,6 +528,10 @@ test("a sub-issue link: its child is one the run created or already under its is
   answered(work, REST_CREATE, 201, restIssue(35));
   for (const id of [900, 905]) assert.equal(await check(work, link(1, { sub_issue_id: id })), null);
   assert.equal(await check(work, write("PATCH", "repos/org/repo/issues/30", { body: "x" })), null);
+  assert.equal(
+    await check(work, write("POST", "repos/org/repo/issues/30/labels", { labels: ["a"] })),
+    null,
+  );
   // The bot's issue another run or an analysis filed meanwhile isn't this run's: the App's
   // authorship says nothing.
   assert.match((await check(work, link(1, { sub_issue_id: 904 }))).message, /links only/);
@@ -541,7 +568,7 @@ test("a sub-issue link: its child is one the run created or already under its is
     /other_issue #50/,
   );
   // Without the App's login, nothing is the run's.
-  const unknown = createWriteChecks({ lookup });
+  const unknown = createWriteChecks({ needsInputLabel: () => null, lookup });
   assert.match((await unknown.check(work, link(1, { sub_issue_id: 900 }))).message, /links only/);
   // Another run's creations aren't this one's.
   assert.ok(await check(run("work"), link(1, { sub_issue_id: 900 })));
@@ -557,7 +584,7 @@ test("a sub-issue link: its child is one the run created or already under its is
 
 test("a blocked-by link: its blocker one the run created, one under its issue, or an open issue of its repo", async () => {
   const { lookup } = fakeLookup(GITHUB);
-  const { check, answered } = createWriteChecks({ lookup, bot: BOT });
+  const { check, answered } = createWriteChecks({ needsInputLabel: () => null, lookup, bot: BOT });
   const work = run("work");
   const block = (n, id) =>
     write("POST", `repos/org/repo/issues/${n}/dependencies/blocked_by`, { issue_id: id });
@@ -600,7 +627,7 @@ test("a blocked-by link's blocker by its id is looked for among the repo's newes
     Array.from({ length: 100 }, (_, i) => ({ number: 1000 + from + i, id: 5000 + from + i }));
   const open = [...filler(0), ...filler(100), { number: 3, id: 903 }];
   const { lookup, calls } = fakeLookup({ ...GITHUB, open });
-  const { check } = createWriteChecks({ lookup });
+  const { check } = createWriteChecks({ needsInputLabel: () => null, lookup });
   const block = { issue_id: 903 };
   const w = write("POST", "repos/org/repo/issues/2/dependencies/blocked_by", block);
   assert.equal(await check(run("work"), w), null);
@@ -608,7 +635,10 @@ test("a blocked-by link's blocker by its id is looked for among the repo's newes
   // Past the pages it reads: not found, refused.
   const many = Array.from({ length: 11 }, (_, p) => filler(p * 100)).flat();
   const far = fakeLookup({ ...GITHUB, open: [...many, { number: 3, id: 903 }] });
-  const { check: farCheck } = createWriteChecks({ lookup: far.lookup });
+  const { check: farCheck } = createWriteChecks({
+    needsInputLabel: () => null,
+    lookup: far.lookup,
+  });
   assert.match((await farCheck(run("work"), w)).message, /an open issue of its repository/);
   assert.equal(far.calls.filter((c) => c.includes("state=open")).length, 10);
 });
@@ -621,7 +651,11 @@ test("deny_github: its input, and its reasons refusing the write", async (t) => 
         ? ["brainstorms write only their own issue", "ask on #1 instead"]
         : [],
   });
-  const { check } = createWriteChecks({ lookup: fakeLookup(GITHUB).lookup, policies });
+  const { check } = createWriteChecks({
+    needsInputLabel: () => null,
+    lookup: fakeLookup(GITHUB).lookup,
+    policies,
+  });
   const brainstorm = run("brainstorm");
   assert.equal(
     await check(brainstorm, write("PATCH", "repos/org/repo/issues/1", { body: "x" })),
@@ -689,7 +723,11 @@ test("a policy's refusal reaches the agent through the gateway, in GitHub's erro
     app: () => ({ repoToken: async () => ({ token: "t-0123456789abcdef" }) }),
     api: github.url,
     web: "https://github.example",
-    checkWrite: createWriteChecks({ lookup: fakeLookup(GITHUB).lookup, policies }).check,
+    checkWrite: createWriteChecks({
+      needsInputLabel: () => null,
+      lookup: fakeLookup(GITHUB).lookup,
+      policies,
+    }).check,
   });
   const { url } = await serve(t, (req, res) => gw.handle(req, res));
   const secret = broker.register("org/repo", undefined, { mode: "work", push: true, issue: 1 });
@@ -740,7 +778,12 @@ test(
         issue: 1,
         action,
         actions: [action],
-        target: { kind, number: kind.startsWith("new") ? null : 7, labels: [], author: "a" },
+        target: {
+          kind,
+          number: kind.startsWith("new") || kind === "label" ? null : 7,
+          labels: [],
+          author: "a",
+        },
         change: { fields: ["body"], labels_added, labels_removed: [], ...more },
       }));
     assert.deepEqual(await ask("brainstorm", "edit", "own_issue"), []);
@@ -773,6 +816,102 @@ test(
     assert.deepEqual(await ask("bug", "comment", "own_issue"), ["bug entries only file issues"]);
     // Work runs and discussions: their ceilings, as they are.
     assert.deepEqual(await ask("work", "comment", "own_pr"), []);
+    assert.deepEqual(await ask("work", "create", "label", ["a"]), []);
+    assert.deepEqual(await ask("plan", "create", "label", ["a"]), []);
+    assert.deepEqual(await ask("work", "label", "sub_issue", ["a"]), []);
     assert.deepEqual(await ask("discussion", "create", "new_issue"), []);
   },
 );
+
+test(
+  "the real opa: a repo narrows label creation to one of its modes",
+  { skip: !opa && "no opa on the PATH" },
+  async (t) => {
+    const rego = `package deckhand
+
+deny_github contains "only plan runs create labels" if {
+  input.target.kind == "label"
+  input.mode != "plan"
+}
+`;
+    const policies = createPolicies({
+      config: {},
+      github: async () => new Response("{}", { status: 404 }),
+      run: opaRunner(),
+      readOperator: () => new Map([["github.rego", rego]]),
+      tmp: tempDir(t),
+    });
+    const { check } = createWriteChecks({
+      needsInputLabel: () => null,
+      lookup: fakeLookup(GITHUB).lookup,
+      policies,
+    });
+    const label = write("POST", "repos/org/repo/labels", { name: "a", color: "fff" });
+    assert.equal(await check(run("plan", { push: true }), label), null);
+    assert.deepEqual(await check(run("work"), label), {
+      status: 403,
+      message: "the policies refuse it (deny_github): only plan runs create labels",
+    });
+    // Labelling its sub-issue is still the work run's.
+    const sub = write("POST", "repos/org/repo/issues/2/labels", { labels: ["a"] });
+    assert.equal(await check(run("work"), sub), null);
+  },
+);
+
+test("the needs-input label: a run neither adds nor removes it on its sub-issues and the issues it created", async () => {
+  const waiting = [{ name: "Needs-Input" }];
+  const { lookup } = fakeLookup({
+    ...GITHUB,
+    issues: {
+      ...GITHUB.issues,
+      2: { ...GITHUB.issues[2], labels: waiting },
+      30: { ...GITHUB.issues[30], labels: waiting },
+    },
+  });
+  const { check, answered } = createWriteChecks({
+    lookup,
+    bot: BOT,
+    needsInputLabel: () => "needs-input",
+  });
+  const work = run("work");
+  answered(work, GRAPHQL_CREATE, 200, created(30));
+  for (const n of [2, 30]) {
+    const refused = [
+      write("DELETE", `repos/org/repo/issues/${n}/labels/needs-input`),
+      write("DELETE", `repos/org/repo/issues/${n}/labels`),
+      write("PUT", `repos/org/repo/issues/${n}/labels`, ["ui"]),
+      write("PATCH", `repos/org/repo/issues/${n}`, { labels: ["ui"] }),
+    ];
+    for (const w of refused) {
+      const got = await check(work, w);
+      assert.equal(got?.status, 403, `${w.method} ${w.path}`);
+      assert.match(got.message, /doesn't add or remove needs-input on \w+ #\d+/);
+    }
+    // Its other labels are the run's, the needs-input label kept.
+    const kept = write("PUT", `repos/org/repo/issues/${n}/labels`, ["ui", "needs-input"]);
+    assert.equal(await check(work, kept), null);
+    assert.equal(
+      await check(work, write("POST", `repos/org/repo/issues/${n}/labels`, { labels: ["ui"] })),
+      null,
+    );
+  }
+  // Nor added where it isn't.
+  const bare = createWriteChecks({
+    lookup: fakeLookup(GITHUB).lookup,
+    needsInputLabel: () => "needs-input",
+  });
+  const add = write("POST", "repos/org/repo/issues/2/labels", { labels: ["Needs-Input"] });
+  assert.match(
+    (await bare.check(work, add)).message,
+    /doesn't add or remove needs-input on sub_issue #2/,
+  );
+  // Its own issue is labelled as before.
+  assert.equal(
+    await check(work, write("POST", "repos/org/repo/issues/1/labels", { labels: ["needs-input"] })),
+    null,
+  );
+});
+
+test("createWriteChecks: the needs-input label is required, so a caller can't leave it unguarded", () => {
+  assert.throws(() => createWriteChecks({ lookup: fakeLookup(GITHUB).lookup }), /needsInputLabel/);
+});

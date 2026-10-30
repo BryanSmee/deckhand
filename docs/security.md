@@ -338,8 +338,10 @@ to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to the
     ceiling** (`listener/modes.mjs` `ceilingOf()`, built in: [the table](repo-config.md#the-github-input))
     are refused before any policy runs. A work run writes its own issue, its pull requests
     (readying and drafting them too: [The default branch](#the-default-branch)), its issue's
-    sub-issues and the issues it created, and creates issues and pull requests from its own
-    branches, nothing else: not other issues and pull requests, though its token could. No ceiling holds closing, merging, reviews, deleting,
+    sub-issues and the issues it created (their labels too, but for `NEEDS_INPUT_LABEL`, which
+    its label writes neither add nor remove there: taking it off answers their questions; an
+    edit dropping their questions section still does), and creates labels, issues, and
+    pull requests from its own branches, nothing else: not other issues and pull requests, though its token could. No ceiling holds closing, merging, reviews, deleting,
     the repository's contents or settings; onboarding, analyses, reviews and a repository's
     light modes write nothing. Only a grant could widen a ceiling, and none does yet;
   - then the policies' **`deny_github`** ([Policies](#policies)), which can only narrow it.
