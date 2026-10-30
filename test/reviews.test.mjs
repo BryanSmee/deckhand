@@ -347,6 +347,7 @@ function setup(
     policies,
     reply,
     now: () => time,
+    sleep: async () => {},
   });
   return { reviews, accepted, path, read, advance: (ms) => (time += ms) };
 }
@@ -1660,6 +1661,7 @@ test("review loop: in review while a ready pull request's review is decided, bef
     busy: () => false,
     policies,
     now: () => 1_800_000_000_000,
+    sleep: async () => {},
   });
   await s.reviews.consider("pull_request", delivery());
   assert.deepEqual(seen, ["reviewing", "reviewing"]);
@@ -1774,6 +1776,7 @@ function ciSetup(t, yaml = CI, { path, busy = () => false, policies = null, gh: 
     policies,
     reply: async (repo, number, text) => replies.push(text),
     now: () => time,
+    sleep: async () => {},
     later: (work, ms) => scheduled.push({ work, ms }),
   });
   const ready = () =>

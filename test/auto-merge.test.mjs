@@ -48,7 +48,7 @@ const PR = {
 // A fake GitHub with a mergeable pull request; `over` changes what it answers: `pr` (or
 // `pulls`, successive answers), `info` (the repo), `files`, `runs` (Actions), `issueLabels`,
 // `merge` (the merge's status), `pullStatus` (GET of the pull request failing), `filesStatus`
-// (GET of its files failing).
+// (GET of its files failing), `filesFail` (the next reads of its files failing, a count).
 function fakeGitHub(over = {}) {
   const calls = [];
   const pulls = over.pulls ? [...over.pulls] : null;
@@ -69,6 +69,10 @@ function fakeGitHub(over = {}) {
     }
     if (method === "GET" && p === "/repos/org/repo/pulls/5/files" && over.filesStatus) {
       return new Response("{}", { status: over.filesStatus });
+    }
+    if (method === "GET" && p === "/repos/org/repo/pulls/5/files" && over.filesFail > 0) {
+      over.filesFail--;
+      return new Response("{}", { status: 502 });
     }
     if (method === "GET" && p === "/repos/org/repo/pulls/5/files") {
       return Response.json(over.files ?? [{ filename: "listener/x.mjs" }]);
@@ -941,9 +945,11 @@ test("deny_review: a policy error is asked again at the next ticks, a rule's ref
     /`policy error: its input can't be built .*`; asked again in 5 minutes$/,
   );
   assert.equal(s.decided[0].denied, true);
-  // Still failing: asked again at each tick, three times, then left to a maintainer.
+  // Asked once more at once (asking()), then at each tick, three times, then left to a
+  // maintainer: two reads each time.
+  assert.equal(reads(s).length, 2);
   for (let i = 0; i < 4; i++) await s.reviews.tick();
-  assert.equal(reads(s).length, 4);
+  assert.equal(reads(s).length, 8);
   assert.equal(s.accepted.length, 0);
   assert.equal(s.reviews.entry("org/repo", 5).policyRetry, undefined);
   // GitHub answers again by the next tick: reviewed, once.
@@ -960,7 +966,27 @@ test("deny_review: a policy error is asked again at the next ticks, a rule's ref
   draft.over.pr = { draft: true };
   delete draft.over.filesStatus;
   await draft.reviews.tick();
-  assert.deepEqual([draft.accepted.length, reads(draft).length], [0, 1]);
+  assert.deepEqual([draft.accepted.length, reads(draft).length], [0, 2]);
+  // GitHub can't give the pull request at a tick: that counts as a try, the next one asks.
+  const unread = setup(t, { yaml: REVIEW_ON, policies: policy.engine, filesStatus: 502 });
+  await unread.reviews.consider("pull_request", ready());
+  unread.over.pullStatus = 502;
+  await unread.reviews.tick();
+  assert.deepEqual(unread.reviews.entry("org/repo", 5).policyRetry, {
+    sha: "sha-1",
+    base: "trunk",
+    tries: 2,
+  });
+  delete unread.over.pullStatus;
+  delete unread.over.filesStatus;
+  await unread.reviews.tick();
+  assert.equal(unread.accepted.length, 1);
+  // Failing on every tick: given up after as many tries as a failing policy gets.
+  const gone = setup(t, { yaml: REVIEW_ON, policies: policy.engine, filesStatus: 502 });
+  await gone.reviews.consider("pull_request", ready());
+  gone.over.pullStatus = 502;
+  for (let i = 0; i < 4; i++) await gone.reviews.tick();
+  assert.equal(gone.reviews.entry("org/repo", 5).policyRetry, undefined);
   // A rule's refusal holds at this head: no tick asks again.
   const wip = setup(t, { yaml: REVIEW_ON, policies: policy.engine });
   await wip.reviews.consider("pull_request", ready({ labels: [{ name: "wip" }] }));
@@ -985,6 +1011,31 @@ test("deny_review: the review after a fix run, refused, leaves the merge to the 
     /^\*\*Not merged automatically\*\*.*the policies refuse it \(`deny_review`\): `too big for a second look`/,
   );
   assert.equal(s.merges().length, 0);
+});
+
+test("deny_review: after a fix run, a policy error is asked once more before it stops the loop", async (t) => {
+  const policy = policyEngine(t, { ref: "trunk", files: { "a.rego": "package deckhand" } });
+  const pushed = { head: { sha: "sha-2", repo: { full_name: "org/repo" } } };
+  const run = { repo: "org/repo", number: 5, base: "trunk", status: "ok" };
+  // GitHub fails to give the files once: asked again, the fix's push is reviewed.
+  const once = setup(t, { pr: pushed, policies: policy.engine });
+  assert.equal((await once.reviews.settle(once.run, once.posted(HIGH))).reason, "review-fix");
+  once.over.filesFail = 1;
+  assert.equal((await once.reviews.fixed(run)).reason, "review");
+  assert.equal(once.replies.length, 0);
+  assert.deepEqual(
+    once.decided.filter((d) => d.rule === "deny_review").map((d) => d.denied),
+    [false],
+  );
+  // Twice: the loop stops, said, the merge left to the maintainer.
+  const twice = setup(t, { pr: pushed, policies: policy.engine });
+  await twice.reviews.settle(twice.run, twice.posted(HIGH));
+  twice.over.filesFail = 2;
+  assert.equal(await twice.reviews.fixed(run), null);
+  assert.match(
+    twice.replies[0].text,
+    /^\*\*Not merged automatically\*\*.*`deny_review`\): `policy error: its input can't be built/,
+  );
 });
 
 test("deny_fix: a finding's path starts no fix run, a comment quotes why, nothing merged", async (t) => {

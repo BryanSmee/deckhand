@@ -490,6 +490,8 @@ const WAIT_TICK_MS = 5 * 60_000;
 // How many times an automatic review the policies failed to decide is asked again, a tick
 // apart (decideReview()): a GitHub or opa hiccup, not a policy that never compiles.
 const POLICY_RETRIES = 3;
+// How long a policy that failed waits before it is asked again, at once (asking()).
+const POLICY_AGAIN_MS = 10_000;
 
 // Why pull request `number` must not be merged now, or null with what the merge needs: { pr,
 // method }. Each gate is asked of GitHub now, not from the webhook or the config alone: the
@@ -1276,10 +1278,19 @@ export function createReviews({
     const retry = reviewed.get(key)?.policyRetry;
     const at = parseKey(key);
     if (!retry || !at) return null;
-    // Taken off first: only another policy error sets it again, whatever else ends this try.
+    let pr;
+    try {
+      pr = await getJson(github, at.repo, `/repos/${at.repo}/pulls/${at.number}`, [404]);
+    } catch (error) {
+      // The same kind of hiccup the retry is for: it counts as a try, and the next tick asks.
+      const tries = retry.tries + 1;
+      keep(key, { policyRetry: tries > POLICY_RETRIES ? undefined : { ...retry, tries } });
+      log(`${key}: reading the pull request to ask the policies again: ${error.message ?? error}`);
+      return null;
+    }
+    // Taken off once read: only another policy error sets it again, whatever else ends this try.
     keep(key, { policyRetry: undefined });
     const drop = (why) => log(`${key}: not asking the policies again, ${why}`);
-    const pr = await getJson(github, at.repo, `/repos/${at.repo}/pulls/${at.number}`, [404]);
     if (!pr || pr.state !== "open") return drop("the pull request isn't open");
     if (pr.draft) return drop("the pull request is a draft again");
     if (pr.head?.sha !== retry.sha) return drop("it was pushed to since");
@@ -1296,15 +1307,35 @@ export function createReviews({
   function asking(pr) {
     if (!policies) return null;
     return {
-      deny: async (rule, repo, ref, input, { gates = [] } = {}) =>
-        (
-          await denyKept(policies, rule, repo, ref, input, {
+      deny: async (rule, repo, ref, input, { gates = [] } = {}) => {
+        let kept = null;
+        const ask = () =>
+          denyKept(policies, rule, repo, ref, input, {
             pr,
             gates,
-            keep: (entry) => decided(repo, pr, entry),
+            keep: (entry) => (kept = entry),
             log,
-          })
-        ).messages,
+          });
+        let { messages } = await ask();
+        // A failure (GitHub couldn't give the input, opa timed out) is asked once more, a
+        // moment later: the review after a fix run stops its loop on one, and since
+        // policy/review.rego every automatic review reads GitHub for its input. The task's
+        // page keeps the last answer only.
+        if (messages.some(isPolicyError)) {
+          log(`${repo}#${pr.number}: ${rule} failed, asking again: ${messages.join(" | ")}`);
+          await sleep(POLICY_AGAIN_MS);
+          kept = null;
+          ({ messages } = await ask());
+        }
+        if (kept) {
+          try {
+            decided(repo, pr, kept);
+          } catch (error) {
+            log(`${repo}#${pr.number}: keeping its ${rule} decision: ${error.message ?? error}`);
+          }
+        }
+        return messages;
+      },
     };
   }
 

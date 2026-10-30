@@ -573,8 +573,6 @@ export function createPolicies({
         }
       }
     }
-    const bots = botsReviewed(files);
-    if (bots) warnings.push(bots);
     const unplaced = (text, message = text) => ({ file: null, row: null, message, text });
     try {
       const res = await staged(files, (cwd) =>
@@ -596,9 +594,10 @@ export function createPolicies({
   // A review.rego that replaces Deckhand's and never names `author_type`: other bots' pull
   // requests, which the default skips, are reviewed now, at the operator's cost. Said, as a
   // file of that name written before the default (wip labels, docs only) drops it unseen. A
-  // file that names it, a comment saying so will do, decided. → the warning, or null.
-  function botsReviewed(files) {
-    const text = files.get(BOT_REVIEWS);
+  // file that names it, a comment saying so will do, decided. `text`: the file's, `source`
+  // the layer it is in ("operator", "repo"), which the warning names: only its owner changes
+  // it. → the warning, or null.
+  function botsReviewed(text, source) {
     let own = null;
     try {
       own = ownDefaults().get(BOT_REVIEWS);
@@ -606,14 +605,26 @@ export function createPolicies({
       // Deckhand's can't be read: describe() says so.
     }
     if (text === undefined || !own || text === own || /\bauthor_type\b/.test(text)) return null;
-    return `${BOT_REVIEWS} replaces Deckhand's default without a rule on \`input.pr.author_type\`: other bots' ready pull requests (Dependabot's, GitHub Actions') are reviewed by themselves. Copy the default's rule in to keep them skipped, or name \`author_type\` in a comment to say they should be reviewed`;
+    const [file, where] =
+      source === "operator"
+        ? [`The grants folder's policy/${BOT_REVIEWS}`, "in every repository without its own"]
+        : [`${POLICY_DIR}/${BOT_REVIEWS}`, "here"];
+    return `${file} replaces Deckhand's default without a rule on \`input.pr.author_type\`: other bots' ready pull requests (Dependabot's, GitHub Actions') are reviewed by themselves ${where}. To keep them skipped, copy the default's rule into it; to say they should be reviewed, name \`author_type\` in a comment there`;
+  }
+
+  // check()'s, with botsReviewed()'s warning about `layer` (name → text: the operator's or the
+  // repo's own files, `source`), whose review.rego is the active one.
+  async function checkWith(files, layer, source) {
+    const checked = await check(files);
+    const bots = botsReviewed(layer.get(BOT_REVIEWS), source);
+    return bots ? { ...checked, warnings: [...checked.warnings, bots] } : checked;
   }
 
   // The operator's policies over Deckhand's, checked: errors to say at start. None: no `opa`
   // call.
   async function checkOperator() {
     try {
-      return await check(defaults());
+      return await checkWith(defaults(), readOperator(), "operator");
     } catch (error) {
       return { errors: [error.message ?? String(error)], warnings: [] };
     }
@@ -630,7 +641,8 @@ export function createPolicies({
     } catch {
       // Said at start: the repo's own are what this check is about.
     }
-    return check(new Map([...under, ...own]));
+    // The operator's review.rego is said at start, and on the repo's Policies tab.
+    return checkWith(new Map([...under, ...own]), own, "repo");
   }
 
   // What applies on `repo` (its policies on `ref`, its default branch, read now), for the
@@ -668,10 +680,12 @@ export function createPolicies({
     );
     const policies = new Map(files.filter((f) => f.active).map((f) => [f.name, f.text]));
     const checked = await compile(policies);
+    const review = files.find((f) => f.active && f.name === BOT_REVIEWS);
+    const bots = review && botsReviewed(review.text, review.source);
     return {
       files: files.map(({ text, ...f }) => ({ ...f, rules: deniesOf(text), ...shown(text) })),
       errors: [...errors, ...checked.errors],
-      warnings: checked.warnings,
+      warnings: bots ? [...checked.warnings, bots] : checked.warnings,
       policies,
     };
   }

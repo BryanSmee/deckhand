@@ -510,10 +510,12 @@ A repo whose `.deckhand.yaml` has a `review` block gets the built-in `review` mo
 with `review.on: ready`, `reviews.mjs` also starts one from a `pull_request` delivery
 (`ready_for_review`, or `opened` when not a draft) for a pull request on a branch of the repo,
 opened by the App, an allowed user, or another bot (left to `deny_review`, which Deckhand's
-`policy/review.rego` refuses). A `deny_review` that fails (a policy error: GitHub couldn't give
-its input, `opa` timed out) rather than refuses is kept as `policyRetry` ({ sha, base, tries })
-in `reviews.json` and asked again at the next `tick()`s, three times at most, unless the pull
-request was closed, made a draft or pushed to since. It is a work item as if from a comment (`trigger:
+`policy/review.rego` refuses). A policy that fails (a policy error: GitHub couldn't give
+its input, `opa` timed out) rather than refuses is asked once more 10 seconds later
+(`asking()`, the review after a fix run's too); a `deny_review` still failing then on a pull request that turned ready
+is kept as `policyRetry` ({ sha, base, tries }) in `reviews.json` and asked again at the next
+`tick()`s, three times at most (a pull request GitHub can't give then counts as one), unless
+it was closed, made a draft or pushed to since. It is a work item as if from a comment (`trigger:
 "review"`, no comment, `reason: "review"`), on the task of the issue the pull request closes
 or the pull request's own. Each pull request's reviewed head commit is kept in
 `reviews.json`, so a redelivery, a restart or the same commit again starts none. Its thread

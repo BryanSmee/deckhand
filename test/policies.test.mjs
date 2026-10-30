@@ -535,17 +535,30 @@ test("check: a review.rego that replaces Deckhand's without a word on bots is wa
     [0, 0, 0],
   );
   // An operator's or a repo's written before the default: said at start, at the onboarding
-  // check and on the Policies tab.
+  // check and on the Policies tab, each naming the file its owner changes. A repo's onboarding
+  // check doesn't repeat the operator's, which the start said.
+  const other = { "a.rego": 'package deckhand\ndeny_merge contains "x" if false\n' };
   assert.deepEqual(await warned({ "review.rego": wip }), [1, 0, 1]);
+  assert.deepEqual(await warned({ "review.rego": wip }, other), [1, 0, 1]);
   assert.deepEqual(await warned({}, { "review.rego": wip }), [0, 1, 1]);
-  const { policies } = setup(t, {
+  const operator = setup(t, { builtIn: { "review.rego": own }, operator: { "review.rego": wip } });
+  const start = (await operator.policies.checkOperator()).warnings[0];
+  assert.match(
+    start,
+    /^The grants folder's policy\/review\.rego replaces Deckhand's default without a rule on `input\.pr\.author_type`: other bots' ready pull requests .* are reviewed by themselves in every repository without its own\./,
+  );
+  assert.deepEqual((await operator.policies.describe("org/repo", "main")).warnings, [start]);
+  const repo = setup(t, { builtIn: { "review.rego": own }, repoFiles: { "review.rego": wip } });
+  const [onboarding] = (await repo.policies.checkRepo("org/repo", "main")).warnings;
+  assert.match(onboarding, /^\.deckhand\/policy\/review\.rego replaces .* by themselves here\./);
+  assert.deepEqual((await repo.policies.describe("org/repo", "main")).warnings, [onboarding]);
+  // The repo's own replaces the operator's: the repo's is the one said on its tab.
+  const both = setup(t, {
     builtIn: { "review.rego": own },
     operator: { "review.rego": wip },
+    repoFiles: { "review.rego": `${wip}# author_type: bots too\n` },
   });
-  assert.match(
-    (await policies.checkOperator()).warnings[0],
-    /^review\.rego replaces Deckhand's default without a rule on `input\.pr\.author_type`: other bots' ready pull requests/,
-  );
+  assert.deepEqual((await both.policies.describe("org/repo", "main")).warnings, []);
 });
 
 test("check: compile errors and rules nobody evaluates; nothing to check, no opa call", async (t) => {
