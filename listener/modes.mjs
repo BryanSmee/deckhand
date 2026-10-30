@@ -23,20 +23,22 @@ import {
 // label their issue, its sub-issues and the issues they file, and create labels (issue #443); a
 // brainstorm only creates labels. Work runs edit and delete the comments they posted, which
 // the default policy narrows to editing them (policy/gh-own-comments.rego); a brainstorm's
-// replies are the listener's. A repo that doesn't want it refuses it with `deny_github`, per
-// mode if it likes.
+// replies are the listener's. Work runs react on their issues and pull requests and the
+// comments there, a brainstorm on its issue and its comments (issue #458), and remove only the
+// reactions they added (github-writes.mjs). A repo that doesn't want it refuses it with
+// `deny_github`, per mode if it likes.
 const WORK_CEILING = {
-  own_issue: ["edit", "comment", "label", "link"],
-  own_pr: ["edit", "comment", "label", "ready", "draft"],
-  sub_issue: ["edit", "comment", "label", "link"],
-  created_issue: ["edit", "comment", "label", "link"],
+  own_issue: ["edit", "comment", "label", "link", "react", "unreact"],
+  own_pr: ["edit", "comment", "label", "ready", "draft", "react", "unreact"],
+  sub_issue: ["edit", "comment", "label", "link", "react", "unreact"],
+  created_issue: ["edit", "comment", "label", "link", "react", "unreact"],
   created_comment: ["edit", "delete"],
   new_issue: ["create"],
   new_pr: ["create"],
   label: ["create"],
 };
 const BRAINSTORM_CEILING = {
-  own_issue: ["edit", "comment", "link"],
+  own_issue: ["edit", "comment", "link", "react", "unreact"],
   sub_issue: ["edit", "comment", "link"],
   created_issue: ["edit", "comment", "link"],
   new_issue: ["create"],

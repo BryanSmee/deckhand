@@ -375,6 +375,7 @@ const pullChecks = createPullChecks({
 const writeChecks = createWriteChecks({
   lookup,
   bot: () => config.bot,
+  listenerReacted: (...args) => ctx.listenerReacted(...args),
   needsInputLabel: () => config.needsInputLabel,
   policies,
   pulls: pullChecks,

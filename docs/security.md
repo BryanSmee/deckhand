@@ -347,7 +347,13 @@ to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to the
     its label writes neither add nor remove there: taking it off answers their questions; an
     edit dropping their questions section still does), and creates labels, issues, and
     pull requests from its own branches, and edits and deletes the comments it posted (the
-    default policy, `policy/gh-own-comments.rego`, refuses deleting them), nothing else: not other issues and pull requests, though its token could. No ceiling holds closing, merging, reviews, deleting anything else,
+    default policy, `policy/gh-own-comments.rego`, refuses deleting them), nothing else: not other issues and pull requests, though its token could. It reacts on its issues and pull requests and the
+    comments there (a comment's issue or pull request, read from GitHub, is the target), a
+    brainstorm on its own issue and its comments, and removes only the reactions GitHub said
+    it added and hasn't removed since (saved with the run like the issues it created, its 100
+    newest): the App's bot also adds the listener's reactions, which a run never removes, on
+    any comment, even where the run's same reaction came first (GitHub keeps one per user and
+    content): the listener notes each one before it asks GitHub (`reactions.json`, issue #458). No ceiling holds closing, merging, reviews, deleting anything else,
     the repository's contents or settings; onboarding, analyses, reviews and a repository's
     light modes write nothing. Only a grant could widen a ceiling, and none does yet;
   - then the policies' **`deny_github`** ([Policies](#policies)), which can only narrow it.

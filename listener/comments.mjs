@@ -1,7 +1,10 @@
 // What the listener writes on GitHub for a run: its reply (a comment, or in a discussion's
 // thread), the reactions on the comments it handled, and the needs-input label.
+import { join } from "node:path";
 import { MARKER } from "./events.mjs";
 import { getJson } from "./github.mjs";
+import { reactionSubject } from "./github-writes.mjs";
+import { persistentMap } from "./store.mjs";
 
 // GitHub's reactions have no ✅: 🚀 reads as "shipped" and isn't mistaken for a manual 👍.
 // A wrap-up ("/stop") and a cancelled run's comments only lose their 👀; a `/cancel` gets 👍.
@@ -14,14 +17,22 @@ const REACTIONS = {
   acknowledged: "+1",
 };
 
-// GraphQL's names for the reactions above.
-const REACTION_ENUM = {
-  eyes: "EYES",
-  rocket: "ROCKET",
-  confused: "CONFUSED",
-  "-1": "THUMBS_DOWN",
+// GraphQL's names for GitHub's reactions, by REST's: the listener's above, and those a run adds
+// (github-graphql.mjs REACTION_CONTENT reads it the other way).
+export const REACTION_ENUM = {
   "+1": "THUMBS_UP",
+  "-1": "THUMBS_DOWN",
+  laugh: "LAUGH",
+  hooray: "HOORAY",
+  confused: "CONFUSED",
+  heart: "HEART",
+  rocket: "ROCKET",
+  eyes: "EYES",
 };
+
+// The most reactions of the listener's kept in reactions.json (claim()), its newest: a run's
+// reaction removed then is one the listener added before that many others.
+const MAX_CLAIMED = 5000;
 
 // Whether `labels` (an issue's, as GitHub has them: names or { name }) hold `name`. GitHub's
 // label names are case-insensitive: a "Needs-Input" set by hand is the same label.
@@ -126,9 +137,39 @@ export function createComments({
   delays = RETRY_DELAYS,
   sleep = wait,
 }) {
+  // The reactions the listener added on comments, on any task's (its 👀, an outcome's, a held
+  // comment's 😕), by "repo subject content" (github-writes.mjs reactionSubject()), with when.
+  // A run's reactions are the same bot's: GitHub keeps one per user and content, so where the
+  // run's came first, the listener's POST answers with it, and the run never removes these
+  // (github-writes.mjs listenerReacted). Saved, so a restart keeps them.
+  const claims = persistentMap(config.dataDir ? join(config.dataDir, "reactions.json") : null);
+  const claimKey = (repo, comment, content) => {
+    const reacted = { id: comment.id, type: comment.review ? "review" : "issue" };
+    return `${String(repo).toLowerCase()} ${reactionSubject({ reacted })} ${content}`;
+  };
+  // Before GitHub is asked, so no run's removal slips in between; kept if the POST fails (a
+  // run's same reaction then stays, fail closed). `held`: false once the listener took it off.
+  function claim(repo, comment, content, held = true) {
+    if (comment.discussion) return;
+    const key = claimKey(repo, comment, content);
+    claims.delete(key);
+    if (held) claims.set(key, Date.now());
+    while (claims.size > MAX_CLAIMED) claims.delete(claims.keys().next().value);
+    try {
+      claims.save();
+    } catch (error) {
+      log(`Saving the listener's reactions: ${error.message ?? error}`);
+    }
+  }
+  // Whether the listener added reaction `content` on `subject` (reactionSubject()'s) of `repo`.
+  function listenerReacted(repo, subject, content) {
+    return claims.has(`${String(repo).toLowerCase()} ${subject} ${content}`);
+  }
+
   // Reaction failures (already removed, 403, 404…) are logged and never break a run.
   async function react(repo, comment, content) {
     const kind = comment.review ? "pulls/comments" : "issues/comments";
+    claim(repo, comment, content);
     try {
       if (comment.discussion) {
         // Removed by content rather than id (settle()): any truthy value will do.
@@ -169,13 +210,14 @@ export function createComments({
           { id: comment.node_id },
         );
       } else if (eyes) {
-        await github(
+        const res = await github(
           repo,
           "DELETE",
           `/repos/${repo}/${kind}/${comment.id}/reactions/${eyes}`,
           null,
           [404],
         );
+        if (res?.ok || res?.status === 404) claim(repo, comment, "eyes", false);
       }
     } catch (error) {
       log(`Reaction on comment ${comment.id}: ${error}`);
@@ -270,5 +312,5 @@ export function createComments({
         );
   }
 
-  return { received, settle, reply, answer, label };
+  return { received, settle, reply, answer, label, listenerReacted };
 }
