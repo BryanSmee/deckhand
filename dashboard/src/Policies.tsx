@@ -15,6 +15,7 @@ const DECISIONS: Record<PolicyDecision["decision"], string> = {
   review: "Automatic review",
   fix: "Fix run",
   link_branch: "Linked branch",
+  request_review: "Reviewers requested",
 };
 
 // listener/decisions.mjs MAX_DECISIONS and KEEP_MS.

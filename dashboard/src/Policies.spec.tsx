@@ -88,6 +88,15 @@ test("the tab counts the decisions and lists them newest first; the newest denie
   expect(screen.queryByRole("region", { name: "Policy decisions, newest first" })).toBeNull();
 });
 
+test("the reviewers' decision, by its own name", () => {
+  const request = decision({ decision: "request_review", rule: "deny_request_review" });
+  render(<Dashboard state={withTask({ decisions: [request] })} error={null} />);
+  openTab();
+  const [entry] = decisions();
+  expect(entry.textContent).toContain("Reviewers requested");
+  expect(entry.textContent).toContain("deny_request_review");
+});
+
 test("the newest auto-merge denied on an open pull request: the badge and the summary", () => {
   render(<Dashboard state={withTask({ decisions: [REVIEW, MERGE] })} error={null} />);
   expect(screen.getByText("Not merged automatically")).toBeTruthy();

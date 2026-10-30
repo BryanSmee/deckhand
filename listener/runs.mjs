@@ -772,6 +772,14 @@ export function createRuns(ctx) {
     const ciRun = live.handled.find(
       (item) => item.reason === "ci-fix" && !task.pending.includes(item),
     );
+    // A run that could push, over on a task whose pull request is ready: its reviewers again,
+    // if it moved the head (reviewers.mjs pushed()).
+    const pull = !light && ctx.pulls?.get(key);
+    if (pull?.state === "ready") {
+      ctx.reviewers
+        ?.pushed({ repo: task.repo, base: task.base, number: pull.number })
+        .catch((error) => log(`${key}: requesting its reviewers: ${error.stack ?? error}`));
+    }
     // Any run's end: a CI fix run may have waited for the issue's task to be free (reviews.mjs
     // runEnded()).
     ctx.reviews?.runEnded(task.repo);

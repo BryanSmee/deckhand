@@ -5,7 +5,8 @@
 // grants, and a repo's, .deckhand/policy/*.rego on its default branch, like its .deckhand.yaml.
 // A file with the same name as one of a layer below replaces it, any other name adds rules. Each decision is a set rule of package `deckhand` (`deny_merge`,
 // `deny_review`, `deny_fix`, `deny_link_branch` for the branch the listener links to a work
-// run's issue: linked-branch.mjs, and `deny_github` for a run's GitHub writes: github-writes.mjs),
+// run's issue: linked-branch.mjs, `deny_request_review` for the reviewers the listener
+// requests: reviewers.mjs, and `deny_github` for a run's GitHub writes: github-writes.mjs),
 // whose strings are the reasons shown to the maintainer (or the run, for `deny_github`).
 //
 // Isolation: the policies are code a repo's maintainers write, and the listener holds the
@@ -32,7 +33,14 @@ const OPERATOR_DIR = "policy";
 export const BUILT_IN_DIR = fileURLToPath(new URL("../policy/", import.meta.url));
 
 // The rules the listener evaluates: another `deny_*` rule is a mistake the config check says.
-export const RULES = ["deny_merge", "deny_review", "deny_fix", "deny_link_branch", "deny_github"];
+export const RULES = [
+  "deny_merge",
+  "deny_review",
+  "deny_fix",
+  "deny_link_branch",
+  "deny_request_review",
+  "deny_github",
+];
 
 // What the input looks like (docs/repo-config.md#the-merge-input): a policy can check it.
 export const INPUT_VERSION = 1;

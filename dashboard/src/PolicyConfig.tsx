@@ -87,6 +87,13 @@ const DECISIONS: {
     refused: (until) => `No branch is linked to an issue ${until}.`,
   },
   {
+    rule: "deny_request_review",
+    name: "Reviewers",
+    denies:
+      "A denial requests no reviewer (review.request) on Deckhand's pull request; the listener's log says why.",
+    refused: (until) => `No reviewer is requested ${until}.`,
+  },
+  {
     rule: "deny_github",
     name: "GitHub writes",
     denies:

@@ -111,6 +111,8 @@ review:
   #          # CI fix run instead of a review (see CI before the review below)
   # ci_wait: 30 # minutes it waits before it reviews anyway (0 to 1440)
   # ci_fix: 1 # CI fix runs per pull request, with fix (0 to the operator's MAX_FIX_ROUNDS)
+  # request: [alice] # reviewers asked on Deckhand's pull request once it is ready, and again
+  #                  # after a fix pushed (see Reviewers below); allowed users only
 
 # Where ideas, bug reports and questions go (see Inboxes below).
 inbox:
@@ -550,8 +552,35 @@ review` gets the "unknown mode" reply. `review: true` (or a block without `on`, 
   run, so `fix: 3` can cost up to four reviews and three work runs per pull request.
 
 `on`, `instructions`, `agent`, `model`, `effort`, `fix`, `merge`, `merge_method`,
-`max_allowed_severity`, `merge_wait`, `ci`, `ci_wait` and `ci_fix` are its only keys: any
-other, or a bad value, is an error.
+`max_allowed_severity`, `merge_wait`, `ci`, `ci_wait`, `ci_fix` and `request` are its only
+keys: any other, or a bad value, is an error.
+
+#### Reviewers
+
+`request: [alice, bob]` asks people to review Deckhand's pull requests, so a pull request that
+turns ready doesn't wait for someone to notice it. A run never picks who gets notified: the
+listener requests them itself, with its own token (runs still can't use `gh pr create
+--reviewer` or `gh pr edit --add-reviewer`).
+
+- **Who**: the logins listed, lower-cased, a leading `@` dropped, only those in the operator's
+  `ALLOWED_USERS` (the others are ignored, with a warning in the config check). Never a team
+  (`org/team` is an error), never the pull request's author.
+- **When**: Deckhand's own pull request (opened by the App, on a branch of the repository)
+  turns ready (marked ready, or opened as ready), and again when a run that could push ends
+  on it while it is ready and its head commit moved (a fix run, a CI fix run, a conflict
+  rebase, a follow-up a maintainer asked for): what they reviewed changed. Each head commit
+  is asked about once, across redeliveries and restarts (`requested.json`).
+- **Independent of the review**: it works with `review: { request: […] }` alone (which also
+  turns on `/mode review`), with or without `on: ready`, `fix` or `merge`.
+- **A [policy](#policies) can refuse it** (`deny_request_review`), keyed on the mode of the
+  run whose pull request it is. [Deckhand's default](#the-default-policies) requests them on
+  work runs' pull requests only.
+- **GitHub decides the rest**: a login that isn't a collaborator makes GitHub refuse the
+  request (the listener's log says so); requesting someone who already reviewed asks them
+  again, which is the point after a fix.
+
+Requesting a review notifies people: keep the list to those who want every one of Deckhand's
+pull requests.
 
 #### CI before the review
 
@@ -843,15 +872,16 @@ rule, that decision runs no `opa` (and the task's page keeps none of it); the re
 folder is listed once, then again only after a push to its default branch (or 10 minutes).
 
 **The rules**: one set of strings per decision, each string a reason shown to the
-maintainer. Five decisions:
+maintainer. Six decisions:
 
-| Rule               | When                                                                                                                                                                     | A message does                                                                                                                                                                                                                                                                                                                                        |
-| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `deny_merge`       | An [auto-merge](#auto-merge), after every other gate passed, right before the merge. Only with `review.merge` and its grant.                                             | Refuses the merge: the "Not merged automatically" comment quotes the messages (5 at most, 200 characters each).                                                                                                                                                                                                                                       |
-| `deny_review`      | A review that starts by itself ([`review.on: ready`](#reviews)), after its own checks, and the review after each fix run. Never a `/mode review` a maintainer asked for. | Skips the review: the listener's log says why, nothing is posted. After a fix run, the fix loop stops; in auto-merge mode the merge waits for a maintainer, the "Not merged automatically" comment quoting the messages.                                                                                                                              |
-| `deny_fix`         | A [`review.fix`](#reviews) run, or a [CI fix run](#ci-before-the-review), after its own checks, right before it is queued.                                               | Starts no fix run: a "No fix run" comment on the pull request quotes the messages. With `review.merge`, nothing is merged: the refusal quotes them too. The round isn't used: a later review may start it. A CI fix run refused: the "CI failed" comment ends with "No CI fix run" and the messages, no review runs, and its round isn't used either. |
-| `deny_link_branch` | A work run on an issue that has no branch yet, as it starts: the listener creates the run's `issue-<n>-…` branch and [links it to the issue](#the-linked-branch-input).  | Links no branch: the sandbox creates its branch itself, unlinked, as before, and the run's log quotes the messages.                                                                                                                                                                                                                                   |
-| `deny_github`      | Each write a run makes to GitHub (a comment, an issue edit, a label…), REST or a GraphQL mutation's field, after [its mode's ceiling](#the-github-input).                | Refuses the write: GitHub's error shape with the messages, which `gh` prints to the agent, and a line in the run's log.                                                                                                                                                                                                                               |
+| Rule                  | When                                                                                                                                                                     | A message does                                                                                                                                                                                                                                                                                                                                        |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `deny_merge`          | An [auto-merge](#auto-merge), after every other gate passed, right before the merge. Only with `review.merge` and its grant.                                             | Refuses the merge: the "Not merged automatically" comment quotes the messages (5 at most, 200 characters each).                                                                                                                                                                                                                                       |
+| `deny_review`         | A review that starts by itself ([`review.on: ready`](#reviews)), after its own checks, and the review after each fix run. Never a `/mode review` a maintainer asked for. | Skips the review: the listener's log says why, nothing is posted. After a fix run, the fix loop stops; in auto-merge mode the merge waits for a maintainer, the "Not merged automatically" comment quoting the messages.                                                                                                                              |
+| `deny_fix`            | A [`review.fix`](#reviews) run, or a [CI fix run](#ci-before-the-review), after its own checks, right before it is queued.                                               | Starts no fix run: a "No fix run" comment on the pull request quotes the messages. With `review.merge`, nothing is merged: the refusal quotes them too. The round isn't used: a later review may start it. A CI fix run refused: the "CI failed" comment ends with "No CI fix run" and the messages, no review runs, and its round isn't used either. |
+| `deny_link_branch`    | A work run on an issue that has no branch yet, as it starts: the listener creates the run's `issue-<n>-…` branch and [links it to the issue](#the-linked-branch-input).  | Links no branch: the sandbox creates its branch itself, unlinked, as before, and the run's log quotes the messages.                                                                                                                                                                                                                                   |
+| `deny_request_review` | The [reviewers](#reviewers) of `review.request`, before the listener requests them on Deckhand's ready pull request, and again after a fix pushed to it.                 | Requests nobody at that head commit: the listener's log says why, nothing is posted.                                                                                                                                                                                                                                                                  |
+| `deny_github`         | Each write a run makes to GitHub (a comment, an issue edit, a label…), REST or a GraphQL mutation's field, after [its mode's ceiling](#the-github-input).                | Refuses the write: GitHub's error shape with the messages, which `gh` prints to the agent, and a line in the run's log.                                                                                                                                                                                                                               |
 
 Another `deny_*` rule is reported by the config check, as probably misspelled.
 
@@ -914,6 +944,30 @@ deny_fix contains msg if {
   startswith(f.path, "migrations/")
   msg := sprintf("a finding in %s: migrations are fixed by a human", [f.path])
 }
+```
+
+### The reviewers input
+
+`input` of `deny_request_review`: the [merge input](#the-merge-input)'s `version`, `time`,
+`repo`, `pr` (with `pr.files[]`) and `issue`, read from GitHub when the decision is made (only
+when a policy applies), with `review: null`, without `fixed`, `fixes` or `checks`, and:
+
+| Field         | What                                                                                                                                                                                   |
+| ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `decision`    | `"request_review"`.                                                                                                                                                                    |
+| `reviewers`   | The logins the listener would request: `review.request`, those in `ALLOWED_USERS`, without the author.                                                                                 |
+| `when`        | `"ready"`: the pull request turned ready (or is asked about for the first time); `"fix"`: a run pushed to it since.                                                                    |
+| `mode`        | The mode of the run whose pull request it is (the newest run on its task that could push): `"work"`, or one of the repository's `modes:`; `null` when the listener no longer knows it. |
+| `custom_mode` | `true` for a mode of the repository's `modes:`, as in [the GitHub input](#the-github-input).                                                                                           |
+| `light`       | That run's `light`: always `false`, a light run pushes nothing.                                                                                                                        |
+| `reason`      | Why the listener started that run: `"review-fix"`, `"ci-fix"`, `"conflict"`, or `null` for a comment's.                                                                                |
+
+```rego
+deny_request_review contains "not on docs-only changes" if {
+  every f in input.pr.files { startswith(f.path, "docs/") }
+}
+
+deny_request_review contains "the first request only" if input.when == "fix"
 ```
 
 ### The GitHub input
@@ -1162,6 +1216,14 @@ repository) and hold without any setup, under the operator's and the repository'
 The Policies tab lists them as `deckhand/policy/<name>`, with the operator's or the
 repository's file that replaces one.
 
+The `gh-<feature>.rego` files:
+
+| File                | Rule                  | work, fix, conflict                                                                           | brainstorm      | research      | repository modes                      |
+| ------------------- | --------------------- | --------------------------------------------------------------------------------------------- | --------------- | ------------- | ------------------------------------- |
+| `gh-reviewers.rego` | `deny_request_review` | ✅ [reviewers](#reviewers) requested when the pull request turns ready, and again after a fix | ❌ (no ceiling) | ❌ (no token) | ❌ denied, the repository may broaden |
+
+Teams are never requested, whatever a policy says: `review.request` takes logins only.
+
 `github.rego`, which a file of that name replaces as a whole:
 
 <!-- github.rego: test/github-writes.test.mjs checks this block is policy/github.rego, and evaluates it with the real opa -->
@@ -1309,7 +1371,7 @@ lets its work runs resolve anyone's threads): never past the ceiling.
 ### A dry run and the dashboard
 
 **`/mode policy`**, commented on a pull request by an allowed user, evaluates `deny_merge`,
-`deny_review` and `deny_fix` on the pull request as it is now, and `deny_github` on
+`deny_review`, `deny_fix` and `deny_request_review` on the pull request as it is now, and `deny_github` on
 sample writes (a comment on it by the work run whose pull request it is, one by a brainstorm
 of another issue, `issue: null`, and, when the repository has `modes:`, one by a run in the
 first of them that isn't light, else the first, `custom_mode: true`), `deny_link_branch` on a
@@ -1321,7 +1383,8 @@ reviewed, fixed or merged, and it is no decision: it debugs a rule without waiti
 request to turn ready. The task's page shows its last one: who asked, when, how many denials,
 and a link to the reply. The input is the merge's, read now, with `review: null` (no review
 ran); `deny_review` and `deny_fix` get it with their own `decision`, without `checks`,
-`deny_fix` with the `round` and `rounds` the next fix run would have. It works without a `review` block. On an issue, a reply says to comment it on the
+`deny_fix` with the `round` and `rounds` the next fix run would have, `deny_request_review`
+with its `reviewers` and `when: "ready"`, as by the work run whose pull request it is. It works without a `review` block. On an issue, a reply says to comment it on the
 pull request.
 
 **The dashboard**: the repository's settings have a Policies tab, next to its config: the

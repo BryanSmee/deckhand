@@ -159,7 +159,8 @@ Skip screenshots for changes with nothing visible (API, tests, tooling).
 - Pushes go through Deckhand, which only lets this task's branch through (the issue's
   `issue-<n>-…`, or the pull request's own), never the base branch or another one, and
   `gh pr create`, `gh pr edit` and `gh pr ready` only work on this task's pull request
-  (and not with reviewers, assignees, a milestone or projects). That token only reads the code and pull requests: no tags, no merging or
+  (and not with reviewers, assignees, a milestone or projects: Deckhand requests the
+  repository's reviewers itself once the pull request is ready). That token only reads the code and pull requests: no tags, no merging or
   reviewing pull requests, no writing files through the API.
 - In a work run, review threads on your pull request (inline review comments): when you
   address one, reply in it with what changed and the commit

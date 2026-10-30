@@ -111,10 +111,11 @@ export interface PullRequest {
 }
 
 // What a repo's policies (Rego `deny_*` rules, listener/policies.mjs) decided about a task's
-// pull request: its review, fix run or auto-merge (listener/reviews.mjs). `messages`: the
-// reasons, capped and redacted; a failure is one "policy error: …".
+// pull request: its review, fix run or auto-merge (listener/reviews.mjs), or the reviewers
+// requested on it (listener/reviewers.mjs). `messages`: the reasons, capped and redacted; a
+// failure is one "policy error: …".
 export interface PolicyDecision {
-  decision: "merge" | "review" | "fix" | "link_branch";
+  decision: "merge" | "review" | "fix" | "link_branch" | "request_review";
   rule: string;
   denied: boolean;
   messages: string[];

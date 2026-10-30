@@ -63,6 +63,7 @@ import { readRepoFile } from "./repo-config.mjs";
 import { createRepoSettings } from "./repo-settings.mjs";
 import { createRepoApi, createRepoList } from "./repos.mjs";
 import { createRestart } from "./restart.mjs";
+import { createReviewers } from "./reviewers.mjs";
 import { createReviews, stepsGoing } from "./reviews.mjs";
 import { loadRuns } from "./runlog.mjs";
 import { createDiscussionApi, fromKey } from "./discussions.mjs";
@@ -71,6 +72,7 @@ import { createBackend } from "./runner/index.mjs";
 import { operatorSecrets } from "./secrets.mjs";
 import { createRuns } from "./runs.mjs";
 import { createSetup } from "./setup.mjs";
+import { sameTask } from "./spelling.mjs";
 import { createStatus, serverInfo, serverSetup } from "./status.mjs";
 import { createSync } from "./sync.mjs";
 import { busyTask, createTasks } from "./tasks.mjs";
@@ -559,6 +561,19 @@ ctx.reviews = createReviews({
       ctx.conflicts.soon(repo).catch((error) => log(`Conflicts: ${error.stack ?? error}`));
     }
   },
+  log,
+});
+// Deckhand's ready pull requests get the reviewers their repo's `review.request` names, again
+// after a run pushed to them (reviewers.mjs).
+ctx.reviewers = createReviewers({
+  path: join(config.dataDir, "requested.json"),
+  config,
+  repoSettings,
+  github,
+  // The run whose pull request it is: the newest on its task that could push.
+  runOf: (key) => ctx.runs.find((r) => sameTask(r.key, key) && !r.light) ?? null,
+  policies,
+  decided: (repo, pr, entry) => ctx.decisions.record(pullEntry(repo, pr).key, entry),
   log,
 });
 // Comments that wait for other issues to be done ("/after #12").

@@ -43,6 +43,7 @@ const REVIEW_KEYS = [
   "ci",
   "ci_wait",
   "ci_fix",
+  "request",
 ];
 // When a review starts by itself (reviews.mjs): `ready`, a pull request marked ready for review
 // or opened as ready; `manual`, only with a "/mode review" line.
@@ -359,6 +360,7 @@ function parseReview(value, { key, settings, config, fail, warn }) {
     ci: false,
     ciWait: CI_WAIT_MINUTES,
     ciFix: CI_FIX_RUNS,
+    request: [],
   };
   if (value === true) {
     settings.review = review;
@@ -410,6 +412,19 @@ function parseReview(value, { key, settings, config, fail, warn }) {
       const cap = config.maxFixRounds;
       if (Number.isInteger(v) && v >= 0 && v <= cap) review.ciFix = v;
       else bad(k, `expected a whole number of CI fix runs from 0 to ${cap}`);
+    } else if (k === "request") {
+      // Reviewers requested on Deckhand's ready pull requests (reviewers.mjs): only narrows
+      // ALLOWED_USERS, like `users`; never a team (GitHub's "org/team").
+      if (!Array.isArray(v) || v.some((u) => typeof u !== "string" || u.includes("/"))) {
+        bad(k, "expected a list of GitHub logins (no teams)");
+      } else {
+        const wanted = list(v.map((u) => u.trim().replace(/^@/, "")).join(","));
+        const outside = wanted.filter((u) => !config.users.includes(u));
+        if (outside.length) {
+          warn(`review.request: not in ALLOWED_USERS, ignored: ${outside.join(", ")}`);
+        }
+        review.request = wanted.filter((u) => config.users.includes(u));
+      }
     } else if (k === "agent") {
       review.agent = agentName(v, `review.${k}`, config, (_, what, fix) => bad(k, what, fix));
     } else if (k === "model") {
@@ -452,7 +467,8 @@ export function reviewText(review) {
     (review.fix || review.merge) &&
     review.maxAllowedSeverity === "medium" &&
     "medium findings allowed";
-  return [when, ci, fix, merge, medium, review.instructions].filter(Boolean).join(" · ");
+  const request = review.request?.length && `reviewers: ${review.request.join(", ")}`;
+  return [when, ci, fix, merge, medium, request, review.instructions].filter(Boolean).join(" · ");
 }
 
 // The operator's value of `field`, as the repo's default: a file can only narrow or replace it.

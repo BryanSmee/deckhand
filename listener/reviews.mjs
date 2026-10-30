@@ -941,7 +941,7 @@ export function dryRunText({ number, sha = null, files, errors = [], results = [
   }
   parts.push(
     details(
-      "The input (`deny_merge`'s: review and fix get the same without `checks`, fix with its `round` and `rounds`; no review here)",
+      "The input (`deny_merge`'s: review and fix get the same without `checks`, fix with its `round` and `rounds`, request_review with its `reviewers`, `when` and the work run's `mode`; no review here)",
       input,
     ),
   );
@@ -1025,6 +1025,9 @@ export function linkSample(repo, pr, issue = null) {
     },
   };
 }
+
+// The run a dry run's `deny_request_review` is about: the work run whose pull request it is.
+const WORK_RUN = { mode: "work", custom_mode: false, light: false, reason: null };
 
 // How much of the input a dry run's reply shows: GitHub takes 65536 characters a comment.
 const DRY_RUN_INPUT = 50_000;
@@ -2205,6 +2208,16 @@ export function createReviews({
       if (decision !== "merge") delete own.checks;
       if (decision === "fix") {
         Object.assign(own, { ci: false, round: fixes + 1, rounds: roundsOf(settings) });
+      }
+      // As when it turns ready, the work run's (reviewers.mjs requestInput()).
+      if (decision === "request_review") {
+        delete own.fixed;
+        delete own.fixes;
+        const author = pr.user?.login?.toLowerCase();
+        const reviewers = (settings?.review?.request ?? []).filter(
+          (login) => config.users.includes(login) && login !== author,
+        );
+        Object.assign(own, { reviewers, when: "ready", ...WORK_RUN });
       }
       const messages = await policies.denied(rule, repo, texts, () => own);
       results.push({ rule, defined, messages });
