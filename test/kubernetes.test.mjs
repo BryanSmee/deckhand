@@ -75,6 +75,7 @@ function fakeApi({
   };
   const calls = [];
   const bodies = [];
+  let uids = 0;
   const matches = (obj, selector) =>
     !selector ||
     selector.split(",").every((term) => {
@@ -124,7 +125,11 @@ function fakeApi({
       }
       const made = {
         ...body,
-        metadata: { creationTimestamp: new Date(0).toISOString(), ...body.metadata },
+        metadata: {
+          creationTimestamp: new Date(0).toISOString(),
+          uid: `uid-${++uids}`,
+          ...body.metadata,
+        },
         status: kind === "pods" ? { phase: "Running", podIPs: [{ ip: "10.244.1.7" }] } : {},
       };
       store.set(body.metadata.name, made);
@@ -354,6 +359,42 @@ test("isolationProblem: any policy that widens what a sandbox may reach or what 
     ),
     /reach each other/,
   );
+  // No sandbox at all, not just this one: another deployment's, another run's.
+  for (const matchLabels of [
+    { "deckhand.role": "sandbox", "deckhand.owner": "other" },
+    { "deckhand.run": "another-run" },
+  ]) {
+    assert.match(
+      isolationProblem(
+        add({
+          ...all,
+          policyTypes: ["Egress"],
+          egress: [{ to: [{ podSelector: { matchLabels } }] }],
+        }),
+        labels,
+      ),
+      /reach each other/,
+    );
+  }
+  // A label sandbox pods never carry, or another role: never a sandbox.
+  for (const podSelector of [
+    { matchLabels: { "deckhand.role": "egress" } },
+    { matchLabels: { "deckhand.owner": "dh", app: "listener" } },
+    { matchExpressions: [{ key: "deckhand.role", operator: "NotIn", values: ["sandbox"] }] },
+    { matchExpressions: [{ key: "deckhand.role", operator: "In", values: ["egress"] }] },
+    { matchExpressions: [{ key: "app", operator: "Exists" }] },
+  ]) {
+    const spec = { ...all, policyTypes: ["Egress"], egress: [{ to: [{ podSelector }] }] };
+    assert.equal(isolationProblem(add(spec), labels), null, JSON.stringify(podSelector));
+  }
+  const notApp = { matchExpressions: [{ key: "app", operator: "DoesNotExist" }] };
+  assert.match(
+    isolationProblem(
+      add({ ...all, policyTypes: ["Egress"], egress: [{ to: [{ podSelector: notApp }] }] }),
+      labels,
+    ),
+    /reach each other/,
+  );
   // A policy for other pods doesn't count, either way.
   const others = { podSelector: { matchLabels: { app: "egress" } }, egress: [{}] };
   assert.equal(isolationProblem(add(others), labels), null);
@@ -548,7 +589,7 @@ test("follow: a pod stuck mounting its volumes fails with its latest Warning eve
   assert.ok(
     calls.some((c) =>
       c.endsWith(
-        "/events?fieldSelector=involvedObject.kind%3DPod%2CinvolvedObject.name%3Ddh-org-repo-12-abc",
+        `/events?fieldSelector=involvedObject.kind%3DPod%2CinvolvedObject.name%3Ddh-org-repo-12-abc%2CinvolvedObject.uid%3D${pod.metadata.uid}`,
       ),
     ),
   );

@@ -113,6 +113,24 @@ export function selects(selector = {}, labels = {}) {
   return true;
 }
 
+// Whether a peer's selector can never pick a sandbox pod, any run's or deployment's, not just
+// this one (`labels`, whose keys are the only ones sandbox pods carry): it asks for a label
+// they never have, or for a deckhand.role other than theirs.
+function excludesSandboxes(selector = {}, labels) {
+  const ours = (key) => Object.hasOwn(labels, key);
+  for (const [key, value] of Object.entries(selector.matchLabels ?? {})) {
+    if (!ours(key) || (key === ROLE && value !== SANDBOX)) return true;
+  }
+  for (const { key, operator, values = [] } of selector.matchExpressions ?? []) {
+    if (!ours(key) && ["In", "Exists"].includes(operator)) return true;
+    if (key !== ROLE) continue;
+    if (operator === "In" && !values.includes(SANDBOX)) return true;
+    if (operator === "NotIn" && values.includes(SANDBOX)) return true;
+    if (operator === "DoesNotExist") return true;
+  }
+  return false;
+}
+
 // Why the namespace's NetworkPolicies (`policies`) don't isolate a sandbox pod with `labels`,
 // or null when they do: one of them picks it for both Ingress and Egress, and none of those
 // that pick it lets anything in, nor lets it out to anything but other pods of the namespace
@@ -133,7 +151,7 @@ export function isolationProblem(policies, labels) {
         if (peer.ipBlock || peer.namespaceSelector || !peer.podSelector) {
           return `${name} lets sandbox pods reach beyond the namespace's pods`;
         }
-        if (selects(peer.podSelector, labels)) {
+        if (!excludesSandboxes(peer.podSelector, labels)) {
           return `${name} lets sandbox pods reach each other`;
         }
       }
@@ -251,10 +269,12 @@ export function latestWarning(events) {
 
 const UNSAID = "Kubernetes gave no reason: its volumes may not have mounted";
 
-// A pod's log has stdout and stderr in one stream: the sandbox starts each stderr line (the
-// setup's, the entrypoint's) with this, when SANDBOX_TAG_STDERR asks it to
-// (../../sandbox/entrypoint.sh), so they stay apart from the agent's output, as under Docker.
-// A setup line that looks like JSON is still the setup's.
+// A pod's log has stdout and stderr in one stream, and the runtime splits a long line into
+// parts the other stream's lines can land between. So the sandbox, when SANDBOX_TAG_STDERR
+// asks it to, writes both to stdout through one writer, whole lines only, each stderr line
+// (the setup's, the entrypoint's) starting with this (../../sandbox/deckhand-tagged): they
+// stay apart from the agent's output, as under Docker. A setup line that looks like JSON is
+// still the setup's.
 export const STDERR_TAG = "\x1e";
 
 // How often follow() looks at the pod while its log streams: a connection the API server
@@ -574,7 +594,9 @@ export function createKubernetesRunner({
     if (said) return said;
     try {
       const { items = [] } = await api.get("events", {
-        fieldSelector: `involvedObject.kind=Pod,involvedObject.name=${kubeName(name)}`,
+        // By its uid too: the pod's name is the task's, the same for every run of the issue,
+        // and a previous pod's events outlive it (about an hour).
+        fieldSelector: `involvedObject.kind=Pod,involvedObject.name=${kubeName(name)},involvedObject.uid=${pod.metadata?.uid ?? ""}`,
       });
       return latestWarning(items) ?? UNSAID;
     } catch (error) {

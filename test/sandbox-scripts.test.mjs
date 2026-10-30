@@ -87,18 +87,77 @@ test("a sandbox without its Codex version says how to install it", () => {
   );
 });
 
-// The Kubernetes runner's pod log has both streams in one: stderr's lines are tagged there.
-test("SANDBOX_TAG_STDERR: every stderr line starts with a record separator, the status kept", () => {
-  const env = { PATH: process.env.PATH, REPO_URL: "https://x/o/r.git", SANDBOX_AGENT: "gemini" };
+// The Kubernetes runner's pod log has both streams in one: the entrypoint runs under
+// deckhand-tagged there, everything on stdout, stderr's lines tagged.
+test("SANDBOX_TAG_STDERR: the entrypoint's stderr comes tagged on stdout, its status kept", () => {
+  const env = { PATH: `${bin}:${process.env.PATH}`, REPO_URL: "https://x/o/r.git" };
   const tagged = spawnSync(`${bin}entrypoint.sh`, [], {
-    env: { ...env, SANDBOX_TAG_STDERR: "1" },
+    env: { ...env, SANDBOX_AGENT: "gemini", SANDBOX_TAG_STDERR: "1" },
     encoding: "utf8",
   });
   assert.equal(tagged.status, 1);
-  assert.equal(tagged.stdout, "");
-  assert.match(tagged.stderr, /^\x1eUnknown agent gemini \(SANDBOX_AGENT\)/);
-  const plain = spawnSync(`${bin}entrypoint.sh`, [], { env, encoding: "utf8" });
+  assert.equal(tagged.stderr, "");
+  assert.match(tagged.stdout, /^\x1eUnknown agent gemini \(SANDBOX_AGENT\)[^\n]*\n$/);
+  const plain = spawnSync(`${bin}entrypoint.sh`, [], {
+    env: { ...env, SANDBOX_AGENT: "gemini" },
+    encoding: "utf8",
+  });
   assert.match(plain.stderr, /^Unknown agent gemini/);
+});
+
+// A line over the runtime's 16 KiB parts, written while the other stream writes: whole, and
+// never spliced with a stderr line, as two writers into one log would.
+test("deckhand-tagged: one writer, whole lines; a long stdout line and stderr lines apart", () => {
+  const script = `
+    const long = JSON.stringify({ type: "result", result: "x".repeat(200000) });
+    let i = 0;
+    const tick = () => {
+      if (i < 20) process.stderr.write("setup " + i + "\\n");
+      if (i < 20) process.stdout.write(long.slice(i * 10000, (i + 1) * 10000));
+      if (++i < 21) return setImmediate(tick);
+      process.stdout.write(long.slice(200000) + "\\n");
+      process.stderr.write("no newline at the end");
+    };
+    tick();`;
+  const result = spawnSync(`${bin}deckhand-tagged`, [process.execPath, "-e", script], {
+    encoding: "utf8",
+    maxBuffer: 16 * 1024 * 1024,
+  });
+  assert.equal(result.status, 0);
+  assert.equal(result.stderr, "");
+  const lines = result.stdout.split("\n");
+  assert.equal(lines.pop(), "");
+  const out = lines.filter((l) => !l.startsWith("\x1e"));
+  const err = lines.filter((l) => l.startsWith("\x1e")).map((l) => l.slice(1));
+  assert.deepEqual(out, [JSON.stringify({ type: "result", result: "x".repeat(200000) })]);
+  assert.deepEqual(err, [
+    ...Array.from({ length: 20 }, (_, i) => `setup ${i}`),
+    "no newline at the end",
+  ]);
+});
+
+test("deckhand-tagged: SIGTERM reaches the command, whose status comes back", async () => {
+  const { spawn } = await import("node:child_process");
+  const child = spawn(
+    `${bin}deckhand-tagged`,
+    [
+      "bash",
+      "-c",
+      'trap "echo bye >&2; exit 7" TERM; echo ready; sleep 30 > /dev/null 2>&1 & wait',
+    ],
+    { stdio: ["ignore", "pipe", "pipe"] },
+  );
+  let out = "";
+  await new Promise((resolve) =>
+    child.stdout.on("data", (d) => {
+      out += d;
+      if (out.includes("ready\n")) resolve();
+    }),
+  );
+  child.kill("SIGTERM");
+  const code = await new Promise((resolve) => child.on("exit", resolve));
+  assert.equal(code, 7);
+  assert.equal(out, "ready\n\x1ebye\n");
 });
 
 test("an unknown agent stops the sandbox before anything runs", () => {

@@ -1,0 +1,91 @@
+#!/usr/bin/env node
+// Runs a command with its stdout and stderr merged into this process's stdout, whole lines
+// only, each stderr line starting with an ASCII record separator: the Kubernetes runner's pod
+// log has both streams in one (../listener/runner/kubernetes.mjs follow()), and entrypoint.sh
+// runs itself under this when SANDBOX_TAG_STDERR asks it to.
+//
+// One writer on purpose: the container runtime keeps a line over 16 KiB as parts, and an
+// entry of the other stream written meanwhile would land inside it. Here a line is written
+// only once it is whole, so the agent's long JSON lines and the setup's output never mix.
+//
+// SIGTERM and SIGINT go to the command (the runner's kill() gives it its grace); its exit
+// status is this one's. Once it exits, the streams get up to 2 s to end: a background job
+// (deckhand-files' watcher) may hold them open until the container stops.
+"use strict";
+const { spawn } = require("node:child_process");
+const { constants } = require("node:os");
+
+const TAG = "\x1e";
+const DRAIN_MS = 2000;
+// The most of a line kept: the listener cuts its lines far below (MAX_LINE, 1 MiB), so the
+// rest of a line without end needn't fill this process's memory.
+const MAX_KEPT = 4 * 1024 * 1024;
+
+const [command, ...args] = process.argv.slice(2);
+if (!command) {
+  process.stderr.write("usage: deckhand-tagged <command> [args…]\n");
+  process.exit(2);
+}
+
+const child = spawn(command, args, { stdio: ["inherit", "pipe", "pipe"] });
+
+// Each line goes out in one write, whole, in order. Writes may be queued (a runtime's FIFO
+// that takes them slower), so the process ends on its own once they are out, never through
+// process.exit() with lines still queued.
+function lines(stream, prefix) {
+  let parts = [];
+  let size = 0;
+  let cut = false;
+  const write = () => {
+    process.stdout.write(Buffer.concat([Buffer.from(prefix), ...parts, Buffer.from("\n")]));
+    parts = [];
+    size = 0;
+    cut = false;
+  };
+  const add = (part) => {
+    if (cut || !part.length) return;
+    const room = MAX_KEPT - size;
+    if (part.length > room) cut = true;
+    const kept = part.subarray(0, room);
+    parts.push(kept);
+    size += kept.length;
+  };
+  stream.on("data", (chunk) => {
+    let from = 0;
+    for (let i = chunk.indexOf(10); i !== -1; i = chunk.indexOf(10, from)) {
+      add(chunk.subarray(from, i));
+      write();
+      from = i + 1;
+    }
+    add(chunk.subarray(from));
+  });
+  // A last line without its newline still goes, whole.
+  return new Promise((resolve) =>
+    stream.on("close", () => {
+      if (size || cut) write();
+      resolve();
+    }),
+  );
+}
+
+const ended = Promise.all([lines(child.stdout, ""), lines(child.stderr, TAG)]);
+
+for (const signal of ["SIGTERM", "SIGINT"]) {
+  process.on(signal, () => child.kill(signal));
+}
+
+child.on("error", (error) => {
+  process.stdout.write(`${TAG}deckhand-tagged: ${command}: ${error.message}\n`);
+  process.exitCode = 127;
+});
+
+child.on("exit", async (code, signal) => {
+  let timer;
+  await Promise.race([ended, new Promise((resolve) => (timer = setTimeout(resolve, DRAIN_MS)))]);
+  clearTimeout(timer);
+  // What still holds them open (a background job) no longer keeps this process.
+  child.stdout.destroy();
+  child.stderr.destroy();
+  process.exitCode = code ?? 128 + (constants.signals[signal] ?? 0);
+  for (const signal of ["SIGTERM", "SIGINT"]) process.removeAllListeners(signal);
+});
