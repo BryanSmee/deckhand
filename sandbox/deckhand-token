@@ -10,6 +10,12 @@
 #                           before tokens, DECKHAND_RUN_SECRET, when there is no file)
 #   deckhand-token --init   writes DECKHAND_RUN_TOKEN, the first token, to DECKHAND_TOKEN_FILE
 #                           (entrypoint.sh)
+#   deckhand-token --now    renews it once, at once (entrypoint.sh, before the run's first
+#                           call): the first token was signed when the sandbox was created, which
+#                           may be long before it starts (a pod Pending while its image pulls or
+#                           its agent installs). The broker takes an expired one from its sandbox
+#                           (../listener/broker.mjs renew()), and gives back the same one when it
+#                           was signed less than a minute ago
 #   deckhand-token --renew  asks the broker for a new one every DECKHAND_TOKEN_RENEW seconds
 #                           (300), presenting the current one, and replaces the file whole,
 #                           until the sandbox stops (entrypoint.sh, in the background). A
@@ -45,6 +51,13 @@ case "${1:-}" in
       exit 1
     }
     ;;
+  --now)
+    : "${DECKHAND_BROKER_URL:?no broker to renew the run token with}"
+    renew || {
+      echo "deckhand-token: the run token couldn't be renewed" >&2
+      exit 1
+    }
+    ;;
   --renew)
     : "${DECKHAND_BROKER_URL:?no broker to renew the run token with}"
     every=${DECKHAND_TOKEN_RENEW:-300}
@@ -67,7 +80,7 @@ case "${1:-}" in
     fi
     ;;
   *)
-    echo "usage: deckhand-token [--init | --renew]" >&2
+    echo "usage: deckhand-token [--init | --now | --renew]" >&2
     exit 2
     ;;
 esac

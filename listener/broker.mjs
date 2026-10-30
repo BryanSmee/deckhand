@@ -265,14 +265,15 @@ export function createBroker({
     return token;
   }
 
-  // A new run token in the run's list (secretsOf()), which holds every one still valid: those
-  // expired go as it comes. `at`: when it was signed (0: by a listener before a restart). Saved
-  // with the run's state (changed()), so a restart still redacts the one the sandbox holds.
+  // A new run token in the run's list (secretsOf()), which holds every one still valid, and the
+  // last one presented for renewal whatever its expiry: renew() takes it for RENEW_GRACE_MS, so
+  // while the sandbox holds it (the broker away longer than its life), it is a credential still.
+  // Others expired go as it comes. `at`: when it was signed (0: by a listener before a
+  // restart). Saved with the run's state (changed()), so a restart still redacts what the
+  // sandbox holds.
   function keep(run, token, exp, at) {
-    run.issued = [
-      ...run.issued.filter((t) => t.token !== token && t.exp > now()),
-      { token, exp, at },
-    ];
+    const kept = (t) => t.token !== token && (t.exp > now() || t.token === run.presented);
+    run.issued = [...run.issued.filter(kept), { token, exp, at }];
     run.changed?.();
   }
 
@@ -330,7 +331,9 @@ export function createBroker({
     if (!checked.run) return checked;
     const { run, claims } = checked;
     run.sandbox ??= claims.sandbox;
-    // Redacted too: after a restart, the one the sandbox held may be in no list yet.
+    // Redacted too: after a restart, the one the sandbox held may be in no list yet; and kept
+    // there once expired (keep()).
+    run.presented = token;
     if (!run.issued.some((t) => t.token === token)) {
       run.issued = [{ token, exp: claims.exp * 1000, at: 0 }, ...run.issued];
     }

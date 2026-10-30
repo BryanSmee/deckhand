@@ -344,11 +344,19 @@ test("start: a Secret refused removes the Pod made before it", async (t) => {
 });
 
 test("locate: the UID of the running sandbox pod at an address, else null", async (t) => {
-  const { runner, objects } = setup(t);
+  let time = 0;
+  const { runner, objects, calls } = setup(t, {}, { now: () => time });
   await runner.start(spec());
   const uid = objects.pods.get("dh-org-repo-12-abc").metadata.uid;
   assert.deepEqual(await runner.locate("10.244.1.7"), { sandbox: uid, name: null });
   assert.equal(await runner.locate("10.244.9.9"), null);
+  // The connections that ask at once about an address share one lookup.
+  const lists = () => calls.filter((c) => c.startsWith("GET") && c.includes("podIP")).length;
+  time += 60_000;
+  const before = lists();
+  const found = await Promise.all([1, 2, 3].map(() => runner.locate("10.244.8.8")));
+  assert.deepEqual(found, [null, null, null]);
+  assert.equal(lists(), before + 1);
   // Gone with its pod: an address never names a pod that was removed.
   await runner.remove("dh-org-repo-12-abc", "dh-org-repo-12-abc-1730000000");
   assert.equal(await runner.locate("10.244.1.7"), null);

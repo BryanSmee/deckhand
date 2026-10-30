@@ -435,7 +435,7 @@ export function createKubernetesRunner({
       );
       made.push(podPath(name));
       // Its address, once it has one, may have been asked about meanwhile: nobody's then.
-      uids = new Map();
+      forgetUids();
       const bound = tokens ? await tokens(pod?.metadata?.uid) : {};
       // Unset values stay unset in the sandbox, as under Docker.
       const env = Object.fromEntries(
@@ -773,7 +773,7 @@ export function createKubernetesRunner({
     const which = run ?? pod?.metadata?.annotations?.["deckhand.run"];
     const grace = pod && running(pod) ? KILL_GRACE_S : 0;
     await api.remove(podPath(name), { gracePeriodSeconds: grace });
-    uids = new Map();
+    forgetUids();
     if (which) await api.remove(`secrets/${secretName(which)}`);
     if (run) inbox.remove(run);
   }
@@ -806,12 +806,32 @@ export function createKubernetesRunner({
   // (../broker.mjs check()). A UID, not the pod's name (each of the issue's runs has the same)
   // nor its IP (reused). Cached for PROXY_TTL_MS, as each call to the broker asks, an address
   // with no sandbox for PROXY_RETRY_MS (a token replayed from elsewhere asks the API that often
-  // at most), and forgotten as a sandbox starts or is removed.
+  // at most), and forgotten as a sandbox starts or is removed. One lookup per address at a
+  // time: the connections that ask meanwhile share it.
   let uids = new Map(); // ip → { uid, at }
+  const looking = new Map(); // ip → Promise<uid>
+  let uidsGen = 0; // counts forgetUids()
+  function forgetUids() {
+    uidsGen++;
+    uids = new Map();
+    looking.clear();
+  }
   async function sandboxOf(ip) {
     const known = uids.get(ip);
     const age = known ? now() - known.at : Infinity;
     if (known && age < (known.uid ? PROXY_TTL_MS : PROXY_RETRY_MS)) return known.uid;
+    if (!looking.has(ip)) {
+      looking.set(
+        ip,
+        podUid(ip).finally(() => looking.delete(ip)),
+      );
+    }
+    return looking.get(ip);
+  }
+
+  // The API's answer for sandboxOf(), cached.
+  async function podUid(ip) {
+    const seen = uidsGen;
     let uid = null;
     try {
       const { items = [] } = await api.get("pods", {
@@ -827,7 +847,8 @@ export function createKubernetesRunner({
       return null;
     }
     if (uids.size > 1000) uids = new Map();
-    uids.set(ip, { uid, at: now() });
+    // Unless a sandbox started or went meanwhile: its answer would be older than that.
+    if (seen === uidsGen) uids.set(ip, { uid, at: now() });
     return uid;
   }
 

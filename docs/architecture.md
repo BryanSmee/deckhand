@@ -793,10 +793,11 @@ do instead, which the old scripts print. The broker's old `/pr/` routes (gone in
 #407 can still run).
 
 A run's tokens outlive a restart: they are signed with `run-token.key`, in the data volume, and
-name the run by its id, which `logs/<run>.live.json` keeps (with its agent token, for
-redaction), so the next listener checks and renews them as the last one did. A renewal is a
-direct call: during a drain and the next start (5 minutes at most) it fails, and
-`deckhand-token` asks again every 30 s; a token that expired meanwhile still renews, from its
+name the run by its id, which `logs/<run>.live.json` keeps (with its tokens, for redaction),
+so the next listener checks and renews them as the last one did. A renewal (`POST /run/token`)
+goes through the egress proxy like the sandbox's other broker calls, which waits for the next
+listener meanwhile; `deckhand-token` gives up on one after 30 s (`curl --max-time 30`) and asks
+again every 30 s; a token that expired meanwhile still renews, from its
 own sandbox, for 7 days (`RENEW_GRACE_MS`), and the renewed one is bound where it was. Runs started before run
 tokens (#493) keep the random secret they started with and no renewal loop: the listener
 keeps accepting it (by hash, from its own sandbox's network, `broker.mjs` `sentBy()`) until

@@ -292,6 +292,12 @@ test("start: the run's tokens bound to its network's ID, by name only; locate() 
   const looks = () => calls.filter((c) => c.args.join(" ").includes("IPv4Address")).length;
   assert.equal(await sandboxOf("10.1.0.2"), "id-dh-org-repo-12-1");
   assert.equal(looks(), 1);
+  // Misses at once share one lookup: every connection of an `npm install` asks.
+  now += 60_000;
+  const before = looks();
+  const parallel = await Promise.all(["10.1.0.2", "10.9.9.9", "10.9.9.8"].map(sandboxOf));
+  assert.deepEqual(parallel, ["id-dh-org-repo-12-1", null, null]);
+  assert.equal(looks(), before + 1);
   // Gone with its network: an address never names a network that was removed.
   await r.remove("dh-org-repo-12", "dh-org-repo-12-1");
   assert.equal(await sandboxOf("10.1.0.2"), null);

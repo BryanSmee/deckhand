@@ -210,6 +210,8 @@ test("a token expired while the broker was away still renews, from its sandbox, 
   // Its calls fail until the broker is back, then the next renewal brings the run back.
   const renewed = await broker.renew(token, "10.9.0.5");
   assert.equal((await broker.check(renewed.token, "10.9.0.5")).run.id, "run-a");
+  // The expired one still renews within the grace: still redacted, as the one presented last.
+  assert.ok(broker.secretsOf("run-a").includes(token));
   // Never from another sandbox, never past the grace, never for an ended run.
   assert.equal((await broker.renew(token, "10.9.1.5")).status, 403);
   clock.now += RENEW_GRACE_MS;

@@ -110,6 +110,26 @@ test("deckhand-token: the run token from its file, written once, renewed in plac
   assert.match(token().stdout, /^eyJ.*\n$/);
   assert.match(err, /couldn't be renewed, asking again in 0\.1 s/);
   assert.deepEqual(readdirSync(join(dir, "deckhand")), ["run-token"]);
+  // Once, at once, before the run's first call (entrypoint.sh): a first token signed long
+  // before the sandbox started (a pod Pending) is replaced before anything presents it.
+  assert.equal(init(jwt(0)).status, 0);
+  // Async: the broker answers from this process.
+  const renewNow = (extra = {}) =>
+    new Promise((resolve) =>
+      execFile(
+        `${bin}deckhand-token`,
+        ["--now"],
+        { env: { ...env, ...extra } },
+        (error, _, stderr) => resolve({ status: error ? (error.code ?? 1) : 0, stderr }),
+      ),
+    );
+  assert.equal((await renewNow()).status, 0);
+  assert.equal(asked.at(-1), `POST /run/token Bearer ${jwt(0)}`);
+  assert.notEqual(token().stdout, `${jwt(0)}\n`);
+  // A broker that refuses it: a failure the caller may ignore, the file as it was.
+  const refused = await renewNow({ DECKHAND_BROKER_URL: "http://127.0.0.1:1" });
+  assert.equal(refused.status, 1);
+  assert.match(refused.stderr, /couldn't be renewed/);
   // A sandbox from before tokens: its secret.
   const old = spawnSync(`${bin}deckhand-token`, [], {
     env: { PATH: env.PATH, DECKHAND_TOKEN_FILE: join(dir, "none"), DECKHAND_RUN_SECRET: "s" },

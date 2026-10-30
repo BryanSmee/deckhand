@@ -50,7 +50,12 @@ if [ -n "${DECKHAND_RUN_TOKEN:-}" ]; then
   export DECKHAND_TOKEN_FILE
   deckhand-token --init
   unset DECKHAND_RUN_TOKEN
-  [ -z "${DECKHAND_BROKER_URL:-}" ] || deckhand-token --renew >&2 < /dev/null &
+  if [ -n "${DECKHAND_BROKER_URL:-}" ]; then
+    # Signed when the sandbox was created, which may be long before it starts (a pod Pending):
+    # renewed once before the first call. A failure leaves the loop below to try again.
+    deckhand-token --now < /dev/null || true
+    deckhand-token --renew >&2 < /dev/null &
+  fi
 fi
 
 # The run's files on the broker (../listener/run-files.mjs), rather than in a volume shared

@@ -306,7 +306,10 @@ removal at the run's end is what refuses its tokens there.
 (`/dev/shm/deckhand/run-token`, `DECKHAND_TOKEN_FILE`) rather than an environment variable,
 which a running process never reads again. `sandbox/entrypoint.sh` writes the first one
 (signed once the runner knows the network's ID, or the pod's UID, and handed over as
-`DECKHAND_RUN_TOKEN`, then unset) and starts `deckhand-token --renew`, which asks the broker
+`DECKHAND_RUN_TOKEN`, then unset), renews it once before the run's first call
+(`deckhand-token --now`: on Kubernetes it is signed when the pod is created, which may stay
+Pending a while, and the broker takes an expired one from its sandbox, below), and starts
+`deckhand-token --renew`, which asks the broker
 (`POST /run/token`, presenting the current token) for a new one every 5 minutes and replaces
 the file whole; a failure is retried after 30 seconds, so two may fail in a row. The broker
 refuses to renew another sandbox's token or an ended run's, and one more than 7 days past its

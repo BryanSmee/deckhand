@@ -197,25 +197,36 @@ export function createNetworks({ config, docker, log, now }) {
   // both are reused, an ID never. Cached, as each call to the broker asks; forgotten whenever a
   // network is created or removed or a container joins one, so an address never names a
   // network that is gone. One not found makes the runner look again, at most every
-  // PROXY_RETRY_MS.
+  // PROXY_RETRY_MS. One lookup at a time: the calls that miss meanwhile (every connection of an
+  // `npm install` asks) share it, unless a network changed since it started.
   let sandboxes = { at: -Infinity, byAddress: new Map() };
   let generation = 0; // counts forget()s
+  let looking = null; // { generation, done: Promise<Map> }
   async function locate(ip) {
     const age = now() - sandboxes.at;
     const known = sandboxes.byAddress.get(ip);
     if (known && age < PROXY_TTL_MS) return known;
     if (age < PROXY_RETRY_MS) return known ?? null;
+    if (looking?.generation !== generation) {
+      const flight = { generation, done: lookUp(generation) };
+      looking = flight;
+      flight.done.finally(() => looking === flight && (looking = null));
+    }
+    return (await looking.done).get(ip) ?? null;
+  }
+
+  // Every run network's containers now, kept unless a network changed meanwhile: its answer
+  // would be older than that.
+  async function lookUp(seen) {
     const at = now();
-    const seen = generation;
     const byAddress = new Map();
     try {
       for (const [address, where] of await runAddresses()) byAddress.set(address, where);
     } catch (error) {
       log(`Looking up the runs' networks: ${error.message}`);
     }
-    // Unless one was created or removed meanwhile: its answer would be older than that.
     if (seen === generation) sandboxes = { at, byAddress };
-    return byAddress.get(ip) ?? null;
+    return byAddress;
   }
 
   // [address, { sandbox: network ID, name }] of every container on this deployment's runs'
