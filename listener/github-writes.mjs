@@ -56,9 +56,9 @@ export const ACTIONS_WRITE = { actions: "write" };
 // a workflow run, the policies read it (`target.attempt`).
 export const MAX_RERUNS = 2;
 // A workflow run's or job's conclusions a rerun is for.
-const FAILED = new Set(["failure", "timed_out", "cancelled"]);
+export const RERUN_CONCLUSIONS = new Set(["failure", "timed_out", "cancelled"]);
 // The events whose runs test a branch's head: a push to it, its pull request.
-const RERUN_EVENTS = new Set(["push", "pull_request"]);
+export const RERUN_EVENTS = new Set(["push", "pull_request"]);
 
 // Actions on another target than an issue or pull request by number: no ceiling holds them,
 // so they are refused before any look-up.
@@ -649,7 +649,7 @@ export function createWriteChecks({
       ),
     });
     const conclusion = (job ?? at).conclusion ?? null;
-    if (!FAILED.has(conclusion)) {
+    if (!RERUN_CONCLUSIONS.has(conclusion)) {
       return no(`${what} ${conclusion ? `ended with ${conclusion}` : "hasn't finished"}`);
     }
     if (!RERUN_EVENTS.has(at.event)) {

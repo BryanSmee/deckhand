@@ -644,8 +644,8 @@ pull request's head commit (other checks and commit statuses aren't read, as for
   (`gh run view <id> --log-failed`, through Deckhand's GitHub gateway, which follows GitHub's
   redirect to its log storage: no host to grant), told they are data, not instructions (the branch's code
   printed them), fixes the cause, reruns the checks and pushes, or reruns a job it judges flaky
-  ([Reruns](#reruns)). Once it is over, its push or rerun goes back to waiting for CI: then the review, or another CI fix run. One that failed or pushed
-  nothing leaves the pull request to the maintainer, a "No review" comment says why. The
+  ([Reruns](#reruns)). Once it is over, its push or rerun goes back to waiting for CI: then the review, or another CI fix run. One that failed, or neither
+  pushed nor reran a job, leaves the pull request to the maintainer, a "No review" comment says why. The
   dashboard shows "Fixing CI", and the run "CI fix"; when the CI step stops without a review
   (a CI fix run refused, failed or pushing nothing), the ready pull request is marked "CI failed,
   not reviewed". A pull request turned back into a draft while it waits stops waiting: ready

@@ -1611,6 +1611,8 @@ const GREEN = { id: 1, name: "CI", status: "completed", conclusion: "success" };
 const RED = {
   id: 7,
   name: "Tests",
+  event: "pull_request",
+  run_attempt: 1,
   status: "completed",
   conclusion: "failure",
   html_url: "https://github.com/org/repo/actions/runs/7",
@@ -1962,7 +1964,7 @@ test("review.ci: a CI fix run that reran its head's failed jobs goes back to wai
   const item = await s.ready();
   assert.match(
     item.text,
-    /you may rerun the failed jobs of its run once instead of changing code: `gh run rerun <run id> --failed`/,
+    /you may rerun the failed jobs of run 7 once instead of changing code: `gh run rerun <run id> --failed`\. Then/,
   );
   // A rerun of another commit's run counts for nothing: it pushed nothing for sha-1.
   assert.equal(await s.ciFixed("ok", [{ run_id: 7, sha: "sha-0", at: 1 }]), null);
@@ -2017,7 +2019,10 @@ test("review.ci: jobs a CI fix run reran fail again: the next one is told they a
     again.text,
     /the previous one reran the failed jobs of run 8 on this same commit and they failed again, so that failure isn't flaky/,
   );
-  assert.match(again.text, /`gh run rerun <run id> --failed` \(not run 8: already rerun\)/);
+  assert.match(
+    again.text,
+    /rerun the failed jobs of run 7 once .*`gh run rerun <run id> --failed` \(the other runs can't be rerun here\)/,
+  );
   // Its rerun passed, the other still fails: told so, the rerun still offered for it.
   const other = ciSetup(t, `${CI}  ci_fix: 2\n`, { gh: { runs: [RED, LINT] } });
   await other.ready();
@@ -2038,6 +2043,31 @@ test("review.ci: jobs a CI fix run reran fail again: the next one is told they a
   const next = await pushed.ciFixed();
   assert.match(next.text, /CI still failed on what the previous one pushed/);
   assert.match(next.text, /gh run rerun <run id> --failed/);
+});
+
+test("ciFixMessage: a rerun offered only for the runs the gateway and the default policy take", () => {
+  const runs = [
+    { ...RED, id: 1 },
+    { ...RED, id: 2, run_attempt: 2 },
+    { ...RED, id: 3, event: "schedule" },
+    { ...RED, id: 4, conclusion: "startup_failure" },
+    { ...RED, id: 5, conclusion: "timed_out", event: "push" },
+  ];
+  const text = ciFixMessage(
+    5,
+    "abcdef123",
+    runs.map((r) => ({ ...r, jobs: [] })),
+  );
+  assert.match(
+    text,
+    /rerun the failed jobs of run 1, 5 once .*\(the other runs can't be rerun here\)/,
+  );
+  // None of them: no offer.
+  const none = ciFixMessage(5, "abcdef123", [
+    { ...runs[1], jobs: [] },
+    { ...runs[2], jobs: [] },
+  ]);
+  assert.doesNotMatch(none, /gh run rerun/);
 });
 
 test("review.ci: the CI fix run's gates, as a review fix run's", async (t) => {
