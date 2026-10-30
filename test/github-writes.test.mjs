@@ -2198,13 +2198,27 @@ test(
   { skip: !opa && "no opa on the PATH" },
   async (t) => {
     const files = builtIn();
-    const ask = (mode, kind, repoFiles = null) => {
+    // `repoFiles`: the repository's .deckhand/policy/ on its default branch.
+    const ask = (mode, kind, repoFiles = {}, reason = null) => {
+      const github = async (repo, method, path) => {
+        if (path === "/repos/org/repo/contents/.deckhand/policy?ref=main") {
+          const list = Object.keys(repoFiles).map((name) => ({ type: "file", name, sha: name }));
+          return Response.json(list);
+        }
+        if (path.startsWith("/repos/org/repo/git/blobs/")) {
+          const text = repoFiles[path.split("/").pop()];
+          return Response.json({
+            content: Buffer.from(text).toString("base64"),
+            encoding: "base64",
+          });
+        }
+        return new Response("{}", { status: 404 });
+      };
       const policies = createPolicies({
         config: {},
-        github: async () => new Response("{}", { status: 404 }),
+        github,
         run: opaRunner(),
         readBuiltIn: () => files,
-        ...(repoFiles && { readOperator: () => new Map(Object.entries(repoFiles)) }),
         tmp: tempDir(t),
       });
       return policies.deny("deny_github", "org/repo", "main", () => ({
@@ -2212,7 +2226,7 @@ test(
         mode,
         custom_mode: !MODES[mode],
         light: !["work", "plan"].includes(mode),
-        reason: null,
+        reason,
         issue: 1,
         action: "project",
         actions: ["project"],
@@ -2225,17 +2239,23 @@ test(
         },
       }));
     };
-    for (const kind of ["own_issue", "own_pr", "sub_issue", "created_issue"]) {
-      assert.deepEqual(await ask("work", kind), [], kind);
+    // Work, fix and conflict runs alike.
+    for (const reason of [null, "review-fix", "ci-fix", "conflict"]) {
+      for (const kind of ["own_issue", "own_pr", "sub_issue", "created_issue"]) {
+        assert.deepEqual(await ask("work", kind, {}, reason), [], `${reason} ${kind}`);
+      }
     }
     assert.deepEqual(await ask("brainstorm", "created_issue"), []);
     assert.deepEqual(await ask("stop", "created_issue"), []);
     assert.deepEqual(await ask("plan", "own_issue"), [
       "mode plan doesn't add items to projects unless .deckhand/policy/gh-projects.rego allows it",
     ]);
-    // A same-name file replaces it: the repo's modes add items too.
+    // The repository's same-name file replaces it: its modes add items too.
     const broadened = { "gh-projects.rego": "package deckhand\n" };
     assert.deepEqual(await ask("plan", "own_issue", broadened), []);
+    // A file of another name leaves it in place.
+    const other = { "extra.rego": "package deckhand\n" };
+    assert.equal((await ask("plan", "own_issue", other)).length, 1);
   },
 );
 

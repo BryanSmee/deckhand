@@ -1787,6 +1787,9 @@ mounts:
         },
       }),
       "graphql:issue(number": JSON.stringify({ data: { repository: { issue: { id: "I_12" } } } }),
+      "graphql:pullRequest(number": JSON.stringify({
+        data: { repository: { pullRequest: { id: "PR_50" } } },
+      }),
       "graphql:mutation($project: ID!, $content": JSON.stringify({
         data: { addProjectV2ItemById: { item: { id: "PVTI_12" } } },
       }),
@@ -1860,8 +1863,17 @@ mounts:
       },
       "pull_request",
     );
-    await ctx.github.waitFor(set("O_2"));
-    await ctx.listener.until("org/repo#12: projects: acme/3: In review (ready)");
+    // Its issue and itself, the bot's pull request.
+    await ctx.listener.until("org/repo#12 and #50: projects: acme/3: In review (ready)");
+    const ready = ctx.github.requests.filter(set("O_2"));
+    assert.equal(ready.length, 2);
+    const added = ctx.github.requests.filter(
+      (r) => r.path === "/graphql" && r.body.includes("$content") && r.auth === "Bearer app-token",
+    );
+    assert.deepEqual(
+      added.map((r) => JSON.parse(r.body).variables.content),
+      ["I_12", "I_12", "PR_50"],
+    );
   });
 
   test("a run's secret sent from another address: no GitHub, push or ready", async (t) => {

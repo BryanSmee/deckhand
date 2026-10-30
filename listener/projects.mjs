@@ -26,6 +26,9 @@ const PROJECT = `query($org: String!, $number: Int!, $field: String!) {
 const ISSUE = `query($owner: String!, $name: String!, $number: Int!) {
   repository(owner: $owner, name: $name) { issue(number: $number) { id } }
 }`;
+const PULL = `query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) { pullRequest(number: $number) { id } }
+}`;
 const ADD = `mutation($project: ID!, $content: ID!) {
   addProjectV2ItemById(input: { projectId: $project, contentId: $content }) { item { id } }
 }`;
@@ -36,11 +39,16 @@ const SET = `mutation($project: ID!, $item: ID!, $field: ID!, $option: String!) 
 }`;
 
 // What the listener sends, for the test that validates them against GitHub's pinned schema.
-export const PROJECT_QUERIES = { PROJECT, ISSUE, ADD, SET };
+export const PROJECT_QUERIES = { PROJECT, ISSUE, PULL, ADD, SET };
 
-// A `pull_request` delivery → { repo, base, number, step } when it moves the issue it closes
-// (events.mjs linkedIssue(): only a pull request from a branch of the repo speaks for one):
-// `ready` when it turned ready for review, `merged` when it merged. Else null.
+// A pull request's dashboard states (pulls.mjs) past which its issue's work is no longer
+// starting: a run then is a fix or a follow-up, and `start` would move the issue back.
+const PAST_START = new Set(["ready", "merged"]);
+
+// A `pull_request` delivery → { repo, base, number, pull, author, step } when it moves the
+// issue it closes and itself (events.mjs linkedIssue(): only a pull request from a branch of
+// the repo speaks for one): `ready` when it turned ready for review, `merged` when it merged.
+// `author`: its author's login, which move() checks. Else null.
 export function projectStep(config, event, p) {
   if (event !== "pull_request") return null;
   const repo = p.repository?.full_name;
@@ -57,14 +65,25 @@ export function projectStep(config, event, p) {
     repo,
     base: p.repository.default_branch || "main",
     number,
+    pull: pr.number,
+    author: pr.user?.login ?? null,
     step: merged ? "merged" : "ready",
   };
 }
 
 // `graphql(repo, query, variables)`: the App's, as the repo's installation (github.mjs);
 // `repoSettings(repo, base)`: its .deckhand.yaml (repo-settings.mjs); `grantOf(repo)`: its grants
-// (grants.mjs grantFor()), null when they have errors; `now`: the clock.
-export function createProjects({ config, graphql, repoSettings, grantOf, now = Date.now, log }) {
+// (grants.mjs grantFor()), null when they have errors; `pullOf(key)`: the dashboard's pull
+// request of a task (pulls.mjs get()), null when none; `now`: the clock.
+export function createProjects({
+  config,
+  graphql,
+  repoSettings,
+  grantOf,
+  pullOf = () => null,
+  now = Date.now,
+  log,
+}) {
   // "acme/3|Status" → { at, ids: Promise<{ project, field, options }> }
   const cache = new Map();
 
@@ -87,27 +106,62 @@ export function createProjects({ config, graphql, repoSettings, grantOf, now = D
     return ids;
   }
 
-  // Issue `number` of `repo` put on each of its granted projects, and their field set to the
-  // option `step` names (repo-config.mjs PROJECT_STEPS), where its entry names one. `note`: a
-  // line in the run's log, when a run started it. Resolves to the moves made, ["acme/3: In
-  // progress"]; never throws.
-  async function move(repo, base, number, step, note = () => {}) {
+  // Issue `number` of `repo`, and with `pull` its pull request too, put on each of its granted
+  // projects, and their field set to the option `step` names (repo-config.mjs PROJECT_STEPS),
+  // where its entry names one. `author`: a delivery's pull request's, which must be one of the
+  // repo's users or the App's bot (an Actions workflow or another App may open pull requests
+  // from outsiders' text); none for a run's start, whose author the run's admission checked.
+  // `note`: a line in the run's log, when a run started it. Resolves to the moves made,
+  // ["acme/3: In progress"]; never throws.
+  async function move(repo, base, number, step, { note = () => {}, pull = null, author } = {}) {
     const done = [];
     const failed = (what) => {
       log(`${repo}#${number}: projects: ${what}`);
-      note(`Deckhand couldn't move #${number} on its project: ${what}`);
+      try {
+        note(`Deckhand couldn't move #${number} on its project: ${what}`);
+      } catch (error) {
+        log(`${repo}#${number}: projects: its run's log: ${error.message ?? error}`);
+      }
     };
-    let settings;
+    let read;
     try {
-      ({ settings } = await repoSettings(repo, base));
+      read = await repoSettings(repo, base);
     } catch (error) {
       failed(error.message ?? String(error));
       return done;
     }
+    // A config with errors moves nothing: its `projects:` may be half read.
+    if (read.errors?.length) return done;
+    const { settings } = read;
     const wanted = (settings?.projects ?? []).filter((p) => p[step]);
     if (!wanted.length) return done;
+    if (author !== undefined) {
+      const login = String(author ?? "").toLowerCase();
+      const allowed =
+        (settings.users ?? []).includes(login) ||
+        (!!config.bot && login === config.bot.toLowerCase());
+      if (!allowed) {
+        log(`${repo}#${number}: projects: #${pull}'s author ${author} isn't one of its users`);
+        return done;
+      }
+    }
     const granted = grantOf(repo)?.allowProjects ?? [];
-    let content = null;
+    const [owner, name] = repo.split("/");
+    // The node IDs of what moves, looked up once.
+    let contents = null;
+    const contentsOf = async () => {
+      if (contents) return contents;
+      const issue = (await graphql(repo, ISSUE, { owner, name, number }))?.repository?.issue?.id;
+      if (!issue) throw new Error(`#${number} isn't an issue of ${repo}`);
+      const found = [issue];
+      if (pull !== null) {
+        const data = await graphql(repo, PULL, { owner, name, number: pull });
+        const id = data?.repository?.pullRequest?.id;
+        if (!id) throw new Error(`#${pull} isn't a pull request of ${repo}`);
+        found.push(id);
+      }
+      return (contents = found);
+    };
     for (const entry of wanted) {
       if (!granted.includes(entry.project)) {
         failed(`the operator's grants don't list ${entry.project} in allow_projects`);
@@ -117,43 +171,47 @@ export function createProjects({ config, graphql, repoSettings, grantOf, now = D
         const ids = await idsOf(repo, entry.project, entry.field);
         const option = ids.options.find((o) => o.name.toLowerCase() === entry[step].toLowerCase());
         if (!option) throw new Error(`${entry.field} has no option ${entry[step]}`);
-        if (!content) {
-          const [owner, name] = repo.split("/");
-          const data = await graphql(repo, ISSUE, { owner, name, number });
-          content = data?.repository?.issue?.id;
-          if (!content) throw new Error(`#${number} isn't an issue of ${repo}`);
+        for (const content of await contentsOf()) {
+          // GitHub answers with the item it already has for the same content.
+          const added = await graphql(repo, ADD, { project: ids.project, content });
+          const item = added?.addProjectV2ItemById?.item?.id;
+          if (!item) throw new Error("GitHub added no item");
+          await graphql(repo, SET, {
+            project: ids.project,
+            item,
+            field: ids.field,
+            option: option.id,
+          });
         }
-        // GitHub answers with the item it already has for the same content.
-        const added = await graphql(repo, ADD, { project: ids.project, content });
-        const item = added?.addProjectV2ItemById?.item?.id;
-        if (!item) throw new Error("GitHub added no item");
-        await graphql(repo, SET, {
-          project: ids.project,
-          item,
-          field: ids.field,
-          option: option.id,
-        });
         done.push(`${entry.project}: ${option.name}`);
       } catch (error) {
         failed(`${entry.project}: ${error.message ?? error}`);
       }
     }
-    if (done.length) log(`${repo}#${number}: projects: ${done.join(", ")} (${step})`);
+    const what = pull === null ? "" : ` and #${pull}`;
+    if (done.length) log(`${repo}#${number}${what}: projects: ${done.join(", ")} (${step})`);
     return done;
   }
 
-  // A work run starting on an issue: its `start` option. Light runs only read and answer, and
-  // a pull request's runs move its issue when it turns ready or merges.
+  // A work run starting on an issue: its `start` option. Light runs only read and answer.
+  // Not a run asked from the issue's pull request (a review's fix, a comment there: its
+  // `replyTo`), nor one once that pull request is ready or merged: the issue stays where the
+  // pull request's steps put it.
   function started(task, note) {
     if (task.live?.light || task.kind !== "issue") return Promise.resolve([]);
-    return move(task.repo, task.base, task.number, "start", note);
+    const replyTo = task.live?.replyTo;
+    if (replyTo != null && replyTo !== task.number) return Promise.resolve([]);
+    if (PAST_START.has(pullOf(task.live?.key ?? task.key)?.state)) return Promise.resolve([]);
+    return move(task.repo, task.base, task.number, "start", { note });
   }
 
-  // A `pull_request` delivery: the issue it closes, at `ready` or `merged` (projectStep()).
+  // A `pull_request` delivery: the issue it closes and itself, at `ready` or `merged`
+  // (projectStep()).
   function pulled(event, payload) {
     const found = projectStep(config, event, payload);
     if (!found) return Promise.resolve([]);
-    return move(found.repo, found.base, found.number, found.step);
+    const { repo, base, number, step, pull, author } = found;
+    return move(repo, base, number, step, { pull, author });
   }
 
   return { move, started, pulled };

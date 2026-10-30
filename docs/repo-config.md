@@ -890,21 +890,26 @@ projects:
     merged: Done
 ```
 
-The listener then moves the issue's item, with the App's own token:
+The listener then moves the items, with the App's own token:
 
 - **`start`**: when a work run starts on the issue (a work run, or one of the repository's
   modes that isn't light; not a brainstorm or any light run), the issue is added to the
-  project if it isn't there yet, and its field set to that option. Each new work run on it
-  sets it again.
+  project if it isn't there yet, and its field set to that option. A later work run on it
+  sets it again, but for one asked from its pull request (a review's fix run, a comment
+  there) and any once its pull request is ready or merged: the issue then stays where the
+  pull request's steps put it.
 - **`ready`**: when a pull request that closes the issue (`Closes #12`, from a branch of the
-  repository, never a fork's) is opened ready or marked ready for review.
-- **`merged`**: when that pull request merges.
+  repository, never a fork's, opened by one of the repository's `users` or by Deckhand's bot)
+  is opened ready or marked ready for review: the issue and the pull request, which is added
+  too.
+- **`merged`**: when that pull request merges: both again.
 
 Each step is optional: one without an option moves nothing at that step. Options are matched
-by name, whatever their case. A project the grant doesn't list, a field or an option that
-isn't there, or a GitHub error never stops a run: the move is skipped, said in the listener's
-log and the run's, and the dashboard's config panel names the projects the grant lacks. Only
-issues move this way; a task on a pull request with no issue isn't on any project.
+by name, whatever their case. A `.deckhand.yaml` with errors moves nothing. A project the
+grant doesn't list, a field or an option that isn't there, or a GitHub error never stops a
+run: the move is skipped, said in the listener's log and the run's, and the dashboard's config
+panel names the projects the grant lacks. A task on a pull request with no issue isn't on any
+project.
 
 Runs only **add** items, to a granted project: a work run its issue, its pull request, its
 issue's sub-issues and the issues it files (`gh project item-add <number> --owner <org> --url
