@@ -523,6 +523,55 @@ test("a client that disconnects mid-download leaves no entry behind", async (t) 
   assert.deepEqual(files(), []);
 });
 
+test("a client that disconnects while a cached body is served: its file is closed (#523)", async (t) => {
+  // Large enough for backpressure to hold the body's stream when the client stops reading.
+  const big = "y".repeat(8 * 1024 * 1024);
+  const routes = {
+    "/big": (req, res) => {
+      res.writeHead(200, { "cache-control": "max-age=60", "content-length": big.length });
+      res.end(big);
+    },
+  };
+  const max = 32 * 1024 * 1024;
+  const { get, stored, cache, upstreamPort, proxyPort } = await setup(t, routes, {
+    max,
+    entryMax: max,
+  });
+  assert.equal((await get("/big")).body.length, big.length);
+  assert.ok(await stored("/big"));
+  // Each file the cache hands out, and whether it was closed. Left open, the garbage collector
+  // closes it, which ends the process on Node 26.
+  const files = [];
+  const get0 = cache.get.bind(cache);
+  cache.get = async (key) => {
+    const entry = await get0(key);
+    if (entry) {
+      const close = entry.file.close.bind(entry.file);
+      const seen = { closed: false };
+      files.push(seen);
+      entry.file.close = () => ((seen.closed = true), close());
+    }
+    return entry;
+  };
+  await new Promise((resolve) => {
+    const req = request(
+      { host: "127.0.0.1", port: proxyPort, path: `http://cached.test:${upstreamPort}/big` },
+      () => {},
+    );
+    req.on("error", () => {});
+    req.on("response", (res) => {
+      assert.equal(res.headers["x-deckhand-cache"], "hit");
+      res.once("data", () => {
+        req.destroy();
+        resolve();
+      });
+    });
+    req.end();
+  });
+  for (let i = 0; i < 100 && !files[0]?.closed; i++) await wait(10);
+  assert.deepEqual(files, [{ closed: true }]);
+});
+
 test("an entry left by a previous proxy is found; temporary files are removed", async (t) => {
   const { get, stored, dir, url } = await setup(t);
   await get("/kept");
