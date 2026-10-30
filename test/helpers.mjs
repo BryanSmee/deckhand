@@ -36,6 +36,10 @@ export async function listening(server) {
 export async function serve(t, handle) {
   const server = createServer(handle);
   const port = await listening(server);
+  // Closed after the test, unless a hook before failed (a temp dir that couldn't go): the hooks
+  // after a failed one don't run. Unreferenced, it then doesn't keep the file's process alive,
+  // which `node --test` would wait for forever (#521); the test's own calls still hold theirs.
+  server.unref();
   t.after(() => server.close());
   return { url: `http://127.0.0.1:${port}`, server, port };
 }
