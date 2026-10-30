@@ -1580,8 +1580,6 @@ test(
   "the real opa: policy/gh-update-branch.rego, per mode, and a repository's file of the same name broadening or refusing it",
   { skip: !opa && "no opa on the PATH" },
   async (t) => {
-    const file = join(import.meta.dirname, "..", "policy", "gh-update-branch.rego");
-    const operator = new Map([["gh-update-branch.rego", readFileSync(file, "utf8")]]);
     const engine = (repoFiles = {}) =>
       createPolicies({
         config: {},
@@ -1602,7 +1600,9 @@ test(
           return new Response("{}", { status: 404 });
         },
         run: opaRunner(),
-        readOperator: () => operator,
+        // Deckhand's defaults as the image ships them: github.rego beside it.
+        readOperator: () => new Map(),
+        readBuiltIn: builtIn,
         tmp: tempDir(t),
       });
     const checks = (policies) =>
