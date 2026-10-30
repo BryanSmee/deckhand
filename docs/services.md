@@ -73,20 +73,23 @@ A run calls the proxy, the broker, the github, models and policy services while 
 the orchestrator or the runner: sandboxes run detached, and their events wait in the store's
 streams until the orchestrator acknowledges them.
 
-| Service                      | Copies            | On an update                                                                                                                                  |
-| ---------------------------- | ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| policy                       | 2, active         | no state: the new copy starts, the old one drains                                                                                             |
-| github, models, broker, edge | 2, active         | shared state in the store; the new copy starts, the old one drains (models: up to 10 minutes, an agent call's length)                         |
-| orchestrator, runner         | 2, active/passive | the old copy releases its lease on SIGTERM, the new one takes it at once and restores from the store: about a second                          |
-| proxy                        | 2, active         | both on every runs' network, under the same name; the new copy starts, the old one drains up to 10 minutes, an agent call's length, as models |
+| Service                      | Copies                           | On an update                                                                                                                                                       |
+| ---------------------------- | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| policy                       | 2, active                        | no state: the new copy starts, the old one drains                                                                                                                  |
+| github, models, broker, edge | 2, active                        | shared state in the store; the new copy starts, the old one drains (models: up to 10 minutes, an agent call's length)                                              |
+| orchestrator, runner         | 2, active/passive                | the old copy releases its lease on SIGTERM, the new one takes it at once and restores from the store: about a second                                               |
+| proxy                        | 1, and a second during an update | both on every run's network under the same name; the new copy takes new connections, the old one drains up to 10 minutes, an agent call's length, as models (#500) |
 
 Every agent call goes through the proxy to the models service, so the proxy's drain has to last
 as long as the models service's. Today one proxy, joined to every run's network, drains for 25 s
 (#507): the next one only starts once it exits, and nothing in a sandbox tries a refused
-connection again, so a longer drain would refuse every sandbox's new connections that long. Until
-two copies hand over, a proxy update cuts the agent calls still going after 25 s. Until the
-split, the proxy waits for a restarting listener instead of failing (#507), for every call a
-sandbox makes to it (#511).
+connection again, so a longer drain would refuse every sandbox's new connections that long. A
+second copy during an update removes that limit (#500): it takes the new connections while the
+old one drains, as long as an agent call lasts. On Kubernetes, that's a Deployment's rolling
+update (one replica, `maxSurge: 1`, `maxUnavailable: 0`). Docker Compose stops a container before
+it starts the next, so on a Compose server a proxy update still cuts the agent calls going after
+25 s. Until the split, the proxy waits for a restarting listener instead of failing (#507), for
+every call a sandbox makes to it (#511).
 
 Active/passive is safe because state is saved as it changes (#508), each lease holder gets a
 higher fencing epoch that the github service, the runner and the broker check, events are
