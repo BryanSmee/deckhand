@@ -92,7 +92,16 @@ function fakeGitHub(over = {}) {
 // repo's `yaml`, and its grant (`allowAutoMerge`).
 function setup(
   t,
-  { yaml = MERGE, grant = true, granted = {}, path, busy = () => false, policies, ...over } = {},
+  {
+    yaml = MERGE,
+    grant = true,
+    granted = {},
+    path,
+    busy = () => false,
+    policies,
+    runOf,
+    ...over
+  } = {},
 ) {
   let time = 1_800_000_000_000;
   const advance = (ms) => (time += ms);
@@ -113,6 +122,7 @@ function setup(
     grantOf: () => ({ allowAutoMerge: grant, ...granted }),
     merged: (repo, pr) => merged.push(pr.number),
     policies,
+    runOf,
     decided: (repo, pr, entry) => decided.push({ repo, pr: pr.number, ...entry }),
     sleep: async () => {},
     now: () => (time += 1000),
@@ -632,7 +642,14 @@ test("/mode policy: every rule on the pull request now, nothing reviewed, fixed 
       return [];
     },
   });
-  const s = setup(t, { policies: policy.engine, pr: { additions: 12 } });
+  const s = setup(t, {
+    policies: policy.engine,
+    pr: { additions: 12 },
+    yaml: `${MERGE}  request: [alice]\n`,
+    // The run that opened it: a repository mode's.
+    runOf: (key, pr) =>
+      key === "org/repo#12" && pr.number === 5 ? { taskMode: "plan", light: false } : null,
+  });
   const { text, denials } = await s.reviews.dryRun({ repo: "org/repo", base: "main", number: 5 });
   // The brainstorm sample's denial is no decision: not counted.
   assert.equal(denials, 1);
@@ -644,6 +661,7 @@ test("/mode policy: every rule on the pull request now, nothing reviewed, fixed 
   assert.match(text, /- `deny_merge`: \*\*denies\*\*: `a 'human' merges this one`/);
   assert.match(text, /- `deny_review`: allows \(no file defines it\)/);
   assert.match(text, /- `deny_fix`: allows \(no file defines it\)/);
+  assert.match(text, /- `deny_request_review`: allows \(no file defines it\)\n/);
   // deny_github on sample writes: a comment on the pull request by its work run, and by a
   // brainstorm.
   assert.match(
@@ -689,24 +707,49 @@ test("/mode policy: every rule on the pull request now, nothing reviewed, fixed 
       ["deny_review", "review", false],
       ["deny_fix", "fix", false],
       ["deny_link_branch", undefined, false],
+      ["deny_request_review", "request_review", false],
       ["deny_github", undefined, false],
       ["deny_github", undefined, false],
     ],
   );
+  // The reviewers as when it turns ready, by the run that opened it, as the listener would ask.
+  const request = policy.evals[4];
   assert.deepEqual(
-    policy.evals.slice(4).map((e) => [e.mode, e.action, e.target.kind, e.target.number]),
+    [request.reviewers, request.when, request.mode, request.custom_mode, "fixes" in request],
+    [["alice"], "ready", "plan", true, false],
+  );
+  assert.deepEqual(
+    policy.evals.slice(5).map((e) => [e.mode, e.action, e.target.kind, e.target.number]),
     [
       ["work", "comment", "own_pr", 5],
       ["brainstorm", "comment", "pr", 5],
     ],
   );
   assert.equal(s.accepted.length + s.merges().length + s.replies.length + s.decided.length, 0);
+  // Nobody to request, or not Deckhand's ready pull request: its "allows" says the listener
+  // wouldn't ask.
+  const none = setup(t, { policies: policy.engine });
+  const nobody = await none.reviews.dryRun({ repo: "org/repo", base: "main", number: 5 });
+  assert.match(
+    nobody.text,
+    /- `deny_request_review`: allows \(no file defines it\), but nobody would be requested: `review\.request` names no allowed user/,
+  );
+  const draft = setup(t, {
+    policies: policy.engine,
+    pr: { draft: true },
+    yaml: `${MERGE}  request: [alice]\n`,
+  });
+  const drafted = await draft.reviews.dryRun({ repo: "org/repo", base: "main", number: 5 });
+  assert.match(
+    drafted.text,
+    /but nobody would be requested: not Deckhand's own ready pull request/,
+  );
   // Without policies: said, no GitHub call for the pull request.
-  const none = setup(t, { policies: policyEngine(t).engine });
-  const said = await none.reviews.dryRun({ repo: "org/repo", base: "main", number: 5 });
+  const empty = setup(t, { policies: policyEngine(t).engine });
+  const said = await empty.reviews.dryRun({ repo: "org/repo", base: "main", number: 5 });
   assert.match(said.text, /No policy applies here/);
   assert.equal(said.denials, 0);
-  assert.equal(none.calls.length, 0);
+  assert.equal(empty.calls.length, 0);
 });
 
 test("githubSamples: a work run's comment, a brainstorm's, and one in the repo's own mode", () => {

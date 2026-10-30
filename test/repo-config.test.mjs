@@ -636,11 +636,11 @@ review:
     "review.instructions: expected a path in the repository (relative, no ..)",
     "review.effort: expected one of low, medium, high, xhigh, max",
     "review.agent: the operator hasn't configured codex (configured: claude)",
-    "review.hosts: unknown key (expected on, instructions, agent, model, effort, fix, merge, merge_method, max_allowed_severity, merge_wait, ci, ci_wait, ci_fix)",
+    "review.hosts: unknown key (expected on, instructions, agent, model, effort, fix, merge, merge_method, max_allowed_severity, merge_wait, ci, ci_wait, ci_fix, request)",
   ]);
   assert.equal(bad.settings.review, null);
   assert.deepEqual(parseRepoConfig("review: [on]\n", config).errors, [
-    "review: expected true, or on, instructions, agent, model, effort, fix, merge, merge_method, max_allowed_severity, merge_wait, ci, ci_wait, ci_fix",
+    "review: expected true, or on, instructions, agent, model, effort, fix, merge, merge_method, max_allowed_severity, merge_wait, ci, ci_wait, ci_fix, request",
   ]);
 });
 
@@ -722,6 +722,20 @@ test("review.ci, ci_wait and ci_fix: off, 30 minutes and one CI fix run by defau
     `review.ci_fix: expected a whole number of CI fix runs from 0 to ${config.maxFixRounds}`,
   ]);
   assert.equal(bad.settings.review, null);
+});
+
+test("review.request: logins only, narrowed to ALLOWED_USERS, none by default", () => {
+  assert.deepEqual(parseRepoConfig("review: true\n", config).settings.review.request, []);
+  const parsed = parseRepoConfig("review:\n  request: [Alice, '@bob', mallory]\n", config);
+  assert.deepEqual(parsed.errors, []);
+  assert.deepEqual(parsed.settings.review.request, ["alice", "bob"]);
+  assert.deepEqual(parsed.warnings, ["review.request: not in ALLOWED_USERS, ignored: mallory"]);
+  assert.match(reviewText(parsed.settings.review), / · reviewers: alice, bob$/);
+  for (const bad of ["alice", "[org/team]", "[1]", "{ a: b }"]) {
+    const wrong = parseRepoConfig(`review:\n  request: ${bad}\n`, config);
+    assert.deepEqual(wrong.errors, ["review.request: expected a list of GitHub logins (no teams)"]);
+    assert.equal(wrong.settings.review, null);
+  }
 });
 
 test("review.fix: true (one round) or a number of rounds up to MAX_FIX_ROUNDS, off by default", () => {

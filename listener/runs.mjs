@@ -22,6 +22,7 @@ import { branchConfigReport } from "./onboarding.mjs";
 import { createPreparation } from "./preparation.mjs";
 import { openingMessages, promptFor } from "./prompts.mjs";
 import { CONFIG_FILE } from "./repo-config.mjs";
+import { askAfterRun } from "./reviewers.mjs";
 import { postReview } from "./reviews.mjs";
 import {
   addRun,
@@ -772,6 +773,14 @@ export function createRuns(ctx) {
     const ciRun = live.handled.find(
       (item) => item.reason === "ci-fix" && !task.pending.includes(item),
     );
+    // A run that pushed and finished, on a task whose pull request is ready: its reviewers
+    // again (reviewers.mjs askAfterRun(), pushed()).
+    const pull = ctx.pulls?.get(key);
+    if (askAfterRun({ light, record, pull })) {
+      ctx.reviewers
+        ?.pushed({ repo: task.repo, base: task.base, number: pull.number })
+        .catch((error) => log(`${key}: requesting its reviewers: ${error.stack ?? error}`));
+    }
     // Any run's end: a CI fix run may have waited for the issue's task to be free (reviews.mjs
     // runEnded()).
     ctx.reviews?.runEnded(task.repo);

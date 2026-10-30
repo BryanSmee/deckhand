@@ -1518,7 +1518,9 @@ trusted, and whose default branch deploys nothing you couldn't roll back.
 [Policies](repo-config.md#policies) are Rego rules that refuse a decision (`deny_merge`, the
 last gate of an auto-merge; `deny_review`, a review that starts by itself; `deny_fix`, a
 review's fix run; `deny_link_branch`, the branch the listener links to a work run's issue
-([The default branch](#the-default-branch)); `deny_github`, a run's write to GitHub (REST, or a GraphQL mutation's field), under its mode's built-in
+([The default branch](#the-default-branch)); `deny_request_review`, the reviewers the listener
+requests on Deckhand's ready pull request (`review.request`, allowed users only, never a team,
+and never at a run's request); `deny_github`, a run's write to GitHub (REST, or a GraphQL mutation's field), under its mode's built-in
 ceiling: [The GitHub gateway](#the-github-gateway)). Deckhand ships its own in the listener's
 image ([the default policies](repo-config.md#the-default-policies): `github.rego`, and a
 `gh-<feature>.rego` per `gh` feature), which hold without any setup. Yours are the `*.rego`
@@ -1557,7 +1559,8 @@ default replaces it, others add to them.
   that can't be read (yours or GitHub's). For `deny_merge`, the pull request then waits for a
   human, as with any refusal; for `deny_review`, the review is skipped (the log says why); for
   `deny_fix`, no fix run starts and a comment says why; for `deny_link_branch`, no branch
-  is linked (the sandbox creates it, unlinked); for `deny_github`, the run's write is
+  is linked (the sandbox creates it, unlinked); for `deny_request_review`, nobody is asked to
+  review (the log says why); for `deny_github`, the run's write is
   refused, so a broken policy stops every run's writes in that repository. Deckhand's own
   `github.rego` defines `deny_github` everywhere, so every run's GitHub write starts an `opa`
   process: an `opa` that is missing or fails (its temp folder unwritable, say) stops the runs'

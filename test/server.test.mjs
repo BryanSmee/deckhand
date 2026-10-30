@@ -2620,20 +2620,18 @@ modes:
       user: { login: "deckhand-x[bot]", type: "Bot" },
       head: { sha: "head-1", ref: "issue-12-fix", repo: { full_name: "org/repo" } },
     };
-    const { dir, github, listener, send } = await listen(
-      t,
-      {
-        ".deckhand.yaml": "wait_for_answers: false\nreview:\n  on: ready\n  fix: true\n",
-        "pull:13": JSON.stringify(pr),
-      },
-      (dir) => {
-        writeFileSync(
-          join(dir, "result"),
-          "Fine overall.\n\n## Findings\n\n- **high** `a.mjs:3`: no test. Fix: add one.\n- **low** `b.mjs:1`: a typo.\n\nRating: 6/10\nVerdict: request-changes\n",
-        );
-        return {};
-      },
-    );
+    const files = {
+      ".deckhand.yaml":
+        "wait_for_answers: false\nreview:\n  on: ready\n  fix: true\n  request: [alice]\n",
+      "pull:13": JSON.stringify(pr),
+    };
+    const { dir, github, listener, send } = await listen(t, files, (dir) => {
+      writeFileSync(
+        join(dir, "result"),
+        "Fine overall.\n\n## Findings\n\n- **high** `a.mjs:3`: no test. Fix: add one.\n- **low** `b.mjs:1`: a typo.\n\nRating: 6/10\nVerdict: request-changes\n",
+      );
+      return {};
+    });
     const ready = {
       action: "ready_for_review",
       installation: { id: 7 },
@@ -2642,6 +2640,14 @@ modes:
       sender: { login: "deckhand-x[bot]", type: "Bot" },
     };
     await send(ready, "pull_request");
+    // The reviewers `review.request` names, asked once it turned ready (reviewers.mjs).
+    const requested = (r) =>
+      r.method === "POST" && r.path === "/repos/org/repo/pulls/13/requested_reviewers";
+    const asked = await github.waitFor(requested);
+    assert.deepEqual(JSON.parse(asked.body), { reviewers: ["alice"] });
+    assert.equal(asked.auth, "Bearer app-token");
+    // Someone else moves the head (the fake fix run pushes nothing through the git gateway).
+    files["pull:13"] = JSON.stringify({ ...pr, head: { ...pr.head, sha: "head-2" } });
     await github.waitFor(
       (r) => r.method === "POST" && r.path === "/repos/org/repo/pulls/13/reviews",
     );
@@ -2665,6 +2671,11 @@ modes:
       (r) => r.method === "POST" && r.path === "/repos/org/repo/issues/13/comments",
     );
     assert.equal(github.requests.filter((r) => r.path.endsWith("/pulls/13/reviews")).length, 1);
+    // A run that pushed nothing fixed nothing: nobody is asked again, though the head moved
+    // (reviewers.mjs askAfterRun(), unit-tested with a push there).
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    assert.equal(github.requests.filter(requested).length, 1);
+    assert.doesNotMatch(listener.output(), /reviewers requested \(fix\)/);
   });
 
   test("review.merge: a clean review of Deckhand's pull request merges it once its checks pass, with the listener's token", async (t) => {

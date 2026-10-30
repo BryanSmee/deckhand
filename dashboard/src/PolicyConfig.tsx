@@ -87,6 +87,13 @@ const DECISIONS: {
     refused: (until) => `No branch is linked to an issue ${until}.`,
   },
   {
+    rule: "deny_request_review",
+    name: "Reviewers",
+    denies:
+      "A denial requests no reviewer (review.request) on Deckhand's pull request; the listener's log says why.",
+    refused: (until) => `No reviewer is requested ${until}.`,
+  },
+  {
     rule: "deny_github",
     name: "GitHub writes",
     denies:
@@ -301,6 +308,12 @@ function Banner({
   );
 }
 
+// A rule's name that may wrap after its underscores (deny_request_review in a narrow card),
+// rather than anywhere in a word; in a block of its own (styles.rule), so a short one moves to
+// the next line whole.
+const breakable = (rule: string) =>
+  rule.split("_").flatMap((part, i) => (i ? ["_", <wbr key={i} />, part] : [part]));
+
 // A decision: its rules and their files, and whether it is asked (active), not (no rules), or
 // refused while the check fails.
 function DecisionCard({
@@ -324,7 +337,7 @@ function DecisionCard({
     <div class={styles.decision}>
       <span class={styles.decisionHead}>
         <span class={styles.key}>
-          {d.name} · {d.rule}
+          {d.name} · <span class={styles.rule}>{breakable(d.rule)}</span>
         </span>
         <StatusBadge tone={tone} label={label} />
       </span>

@@ -100,7 +100,11 @@ const panel = (tab?: "policies") =>
     />,
   );
 
-const card = (name: string) => screen.getByText(new RegExp(`^${name} · `)).closest("div")!;
+// A decision's card by its name (its rule is a span of its own).
+const card = (name: string) =>
+  screen
+    .getByText((_, el) => !!el?.matches("[class*=key]") && el.textContent!.startsWith(`${name} · `))
+    .closest("div")!;
 const rows = () =>
   within(screen.getByRole("list", { name: "Policy files" })).getAllByRole("listitem");
 const source = (path: string) =>
@@ -132,6 +136,7 @@ test("a policy that doesn't compile: the badge, the banner, the cards and its ro
   expect(fix.textContent).toContain("none in any file");
   expect(within(card("GitHub writes")).getByText("Refused")).toBeTruthy();
   expect(within(card("Linked branch")).getByText("Refused")).toBeTruthy();
+  expect(card("Reviewers").textContent).toContain("No rule of its own, but refused too");
   // Its row, and its source: open, the bad line marked with its error.
   const payments = rows().find((r) => r.textContent!.includes("payments.rego"))!;
   expect(within(payments).getByText("Error")).toBeTruthy();
@@ -250,6 +255,7 @@ test("policies that compile: no banner, each decision active or without rules, w
   expect(screen.queryByText(/doesn't compile/)).toBeNull();
   expect(within(card("Auto-merge")).getByText("Active")).toBeTruthy();
   expect(within(card("Fix run")).getByText("No rules")).toBeTruthy();
+  expect(within(card("Reviewers")).getByText("No rules")).toBeTruthy();
   expect(rows().every((r) => /Yes|—/.test(r.textContent!))).toBe(true);
   expect(screen.getByLabelText("Policy warnings").textContent).toContain("deny_wip");
   // Every source folded.

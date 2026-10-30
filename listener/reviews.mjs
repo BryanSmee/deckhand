@@ -43,8 +43,9 @@ import {
 } from "./events.mjs";
 import { autoMergeProblems, previewProblem } from "./grants.mjs";
 import { getJson, paginate } from "./github.mjs";
-import { INPUT_VERSION, RULES } from "./policies.mjs";
+import { INPUT_VERSION, pullInput, RULES } from "./policies.mjs";
 import { CONFIG_FILE } from "./repo-config.mjs";
+import { ownReady, requestInput, reviewersFor, runFields } from "./reviewers.mjs";
 import { respellMap } from "./spelling.mjs";
 import { persistentMap } from "./store.mjs";
 
@@ -622,58 +623,6 @@ const checksOf = (runs) =>
 // before the rounds read it.
 const fixInput = (fixes) => ({ fixed: fixes > 0, fixes });
 
-// What every decision's input has about a pull request (docs/repo-config.md#the-merge-input):
-// the repo (`info`, GET /repos/{repo}), the pull request and its `files`, its linked `issue`,
-// and the `review` when there is one.
-export function pullInput({ decision, info, pr, files, issue, review = null, now = Date.now }) {
-  const names = (labels) => (labels ?? []).map((l) => (typeof l === "string" ? l : l?.name));
-  return {
-    decision,
-    time: new Date(now()).toISOString(),
-    repo: {
-      name: info.full_name ?? null,
-      private: info.private === true,
-      default_branch: info.default_branch ?? null,
-    },
-    pr: {
-      number: pr.number,
-      author: pr.user?.login ?? null,
-      title: pr.title ?? "",
-      labels: names(pr.labels),
-      base: pr.base?.ref ?? null,
-      head: pr.head?.ref ?? null,
-      head_sha: pr.head?.sha ?? null,
-      draft: !!pr.draft,
-      additions: pr.additions ?? 0,
-      deletions: pr.deletions ?? 0,
-      changed_files: pr.changed_files ?? files.length,
-      files: files.map((f) => ({
-        path: f.filename,
-        previous_path: f.previous_filename ?? null,
-        status: f.status ?? null,
-        additions: f.additions ?? 0,
-        deletions: f.deletions ?? 0,
-      })),
-    },
-    issue: issue
-      ? { number: issue.number ?? null, title: issue.title ?? "", labels: names(issue.labels) }
-      : null,
-    review: review
-      ? {
-          verdict: review.verdict,
-          rating: review.rating,
-          allowed: review.allowed ?? "low",
-          findings: review.findings.map(({ severity, path, line, text }) => ({
-            severity,
-            path,
-            line,
-            text,
-          })),
-        }
-      : null,
-  };
-}
-
 // The input of `deny_review` and `deny_fix` (docs/repo-config.md#the-review-and-fix-input),
 // read from GitHub now: only called when a policy applies (policies.mjs deny()), so a repo
 // without any pays no extra call. `issue`: the number of the issue the pull request closes,
@@ -914,8 +863,10 @@ const OWNERS = { deckhand: "Deckhand's", operator: "the operator's" };
 // The reply to `/mode policy` (reviews' dryRun()): which files apply, each rule's result, and
 // the input in a collapsed block. Messages are quoted as code, as policyWhy()'s. `files`: none,
 // no policy applies here.
-// `results[]`: { rule, defined, messages, sample, input }: `sample` names the sample write a
-// `deny_github` result is about (or the branch a `deny_link_branch` one is), `input` its input, shown apart from the merge's (`input`).
+// `results[]`: { rule, defined, messages, sample, input, nobody }: `sample` names the sample
+// write a `deny_github` result is about (or the branch a `deny_link_branch` one is), `input`
+// its input, shown apart from the merge's (`input`); `nobody`, why `deny_request_review` would
+// request nobody whatever it says.
 export function dryRunText({ number, sha = null, files, errors = [], results = [], input = null }) {
   const head = `**Policy dry run** on #${number}${sha ? ` at ${short(sha)}` : ""}: nothing was reviewed, fixed or merged.`;
   if (!files.length) {
@@ -927,10 +878,12 @@ export function dryRunText({ number, sha = null, files, errors = [], results = [
   if (errors.length) {
     parts.push(`The config check has errors:\n\n${errors.map((e) => `- ${quote(e)}`).join("\n")}`);
   }
-  const result = ({ rule, defined, messages, sample }) => {
+  const result = ({ rule, defined, messages, sample, nobody }) => {
     const name = `\`${rule}\`${sample ? ` (sample: ${sample})` : ""}`;
     if (messages.length) return `- ${name}: **denies**: ${messages.map(quote).join(", ")}`;
-    return `- ${name}: ${defined ? "allows" : "allows (no file defines it)"}`;
+    const allows = defined ? "allows" : "allows (no file defines it)";
+    // deny_request_review where the listener wouldn't ask (reviews' dryRun()).
+    return `- ${name}: ${allows}${nobody ? `, but nobody would be requested: ${nobody}` : ""}`;
   };
   parts.push(results.map(result).join("\n"));
   const samples = results.filter((r) => r.sample);
@@ -941,7 +894,7 @@ export function dryRunText({ number, sha = null, files, errors = [], results = [
   }
   parts.push(
     details(
-      "The input (`deny_merge`'s: review and fix get the same without `checks`, fix with its `round` and `rounds`; no review here)",
+      "The input (`deny_merge`'s: review and fix get the same without `checks`, fix with its `round` and `rounds`, request_review its own: `reviewers`, `when` and the mode of the run that opened it; no review here)",
       input,
     ),
   );
@@ -1081,6 +1034,9 @@ export function createReviews({
   merged = () => {},
   policies = null,
   decided = () => {},
+  // The run that opened a pull request, for `/mode policy`'s deny_request_review (reviewers.mjs
+  // openerOf()): `runOf(taskKey, pr)`, or null.
+  runOf = () => null,
   log = () => {},
   now = Date.now,
   sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
@@ -2201,6 +2157,30 @@ export function createReviews({
         continue;
       }
       const decision = rule.replace(/^deny_/, "");
+      // As the listener would ask when it turns ready, about the run that opened it.
+      if (decision === "request_review") {
+        const task = taskKey(repo, issue ?? prId(number));
+        const reviewers = reviewersFor(config, settings, pr);
+        const own = requestInput({
+          info,
+          pr,
+          files: prFiles,
+          issue: found,
+          reviewers,
+          when: "ready",
+          run: runFields(runOf(task, pr)),
+          now,
+        });
+        const messages = await policies.denied(rule, repo, texts, () => own);
+        // An "allows" the listener would never act on: it requests nobody here.
+        const nobody = !reviewers.length
+          ? "`review.request` names no allowed user"
+          : !ownReady(config, repo, pr)
+            ? "not Deckhand's own ready pull request"
+            : null;
+        results.push({ rule, defined, messages, ...(nobody && { nobody }) });
+        continue;
+      }
       const own = { ...input, decision };
       if (decision !== "merge") delete own.checks;
       if (decision === "fix") {

@@ -5,7 +5,8 @@
 // grants, and a repo's, .deckhand/policy/*.rego on its default branch, like its .deckhand.yaml.
 // A file with the same name as one of a layer below replaces it, any other name adds rules. Each decision is a set rule of package `deckhand` (`deny_merge`,
 // `deny_review`, `deny_fix`, `deny_link_branch` for the branch the listener links to a work
-// run's issue: linked-branch.mjs, and `deny_github` for a run's GitHub writes: github-writes.mjs),
+// run's issue: linked-branch.mjs, `deny_request_review` for the reviewers the listener
+// requests: reviewers.mjs, and `deny_github` for a run's GitHub writes: github-writes.mjs),
 // whose strings are the reasons shown to the maintainer (or the run, for `deny_github`).
 //
 // Isolation: the policies are code a repo's maintainers write, and the listener holds the
@@ -32,10 +33,69 @@ const OPERATOR_DIR = "policy";
 export const BUILT_IN_DIR = fileURLToPath(new URL("../policy/", import.meta.url));
 
 // The rules the listener evaluates: another `deny_*` rule is a mistake the config check says.
-export const RULES = ["deny_merge", "deny_review", "deny_fix", "deny_link_branch", "deny_github"];
+export const RULES = [
+  "deny_merge",
+  "deny_review",
+  "deny_fix",
+  "deny_link_branch",
+  "deny_request_review",
+  "deny_github",
+];
 
 // What the input looks like (docs/repo-config.md#the-merge-input): a policy can check it.
 export const INPUT_VERSION = 1;
+
+// What every decision's input has about a pull request (docs/repo-config.md#the-merge-input),
+// reviews.mjs's and reviewers.mjs's: the repo (`info`, GET /repos/{repo}), the pull request
+// and its `files`, its linked `issue`, and the `review` when there is one.
+export function pullInput({ decision, info, pr, files, issue, review = null, now = Date.now }) {
+  const names = (labels) => (labels ?? []).map((l) => (typeof l === "string" ? l : l?.name));
+  return {
+    decision,
+    time: new Date(now()).toISOString(),
+    repo: {
+      name: info.full_name ?? null,
+      private: info.private === true,
+      default_branch: info.default_branch ?? null,
+    },
+    pr: {
+      number: pr.number,
+      author: pr.user?.login ?? null,
+      title: pr.title ?? "",
+      labels: names(pr.labels),
+      base: pr.base?.ref ?? null,
+      head: pr.head?.ref ?? null,
+      head_sha: pr.head?.sha ?? null,
+      draft: !!pr.draft,
+      additions: pr.additions ?? 0,
+      deletions: pr.deletions ?? 0,
+      changed_files: pr.changed_files ?? files.length,
+      files: files.map((f) => ({
+        path: f.filename,
+        previous_path: f.previous_filename ?? null,
+        status: f.status ?? null,
+        additions: f.additions ?? 0,
+        deletions: f.deletions ?? 0,
+      })),
+    },
+    issue: issue
+      ? { number: issue.number ?? null, title: issue.title ?? "", labels: names(issue.labels) }
+      : null,
+    review: review
+      ? {
+          verdict: review.verdict,
+          rating: review.rating,
+          allowed: review.allowed ?? "low",
+          findings: review.findings.map(({ severity, path, line, text }) => ({
+            severity,
+            path,
+            line,
+            text,
+          })),
+        }
+      : null,
+  };
+}
 
 // One decision's evaluation, compile included. Long enough for `opa` to start and load a few
 // files, short enough that a loop in a policy doesn't hold a merge decision for long.

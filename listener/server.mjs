@@ -63,6 +63,7 @@ import { readRepoFile } from "./repo-config.mjs";
 import { createRepoSettings } from "./repo-settings.mjs";
 import { createRepoApi, createRepoList } from "./repos.mjs";
 import { createRestart } from "./restart.mjs";
+import { createReviewers, openerOf } from "./reviewers.mjs";
 import { createReviews, stepsGoing } from "./reviews.mjs";
 import { loadRuns } from "./runlog.mjs";
 import { createDiscussionApi, fromKey } from "./discussions.mjs";
@@ -542,6 +543,8 @@ ctx.reviews = createReviews({
   reply: ctx.reply,
   policies,
   decided: (repo, pr, entry) => ctx.decisions.record(pullEntry(repo, pr).key, entry),
+  // `/mode policy`'s deny_request_review, about the run that opened the pull request.
+  runOf: (key, pr) => openerOf(ctx.runs, key, pr),
   grantOf: (repo) => {
     try {
       return grantFor(loadGrants(config), config, repo);
@@ -559,6 +562,19 @@ ctx.reviews = createReviews({
       ctx.conflicts.soon(repo).catch((error) => log(`Conflicts: ${error.stack ?? error}`));
     }
   },
+  log,
+});
+// Deckhand's ready pull requests get the reviewers their repo's `review.request` names, again
+// after a run pushed to them (reviewers.mjs).
+ctx.reviewers = createReviewers({
+  path: join(config.dataDir, "requested.json"),
+  config,
+  repoSettings,
+  github,
+  // The run whose pull request it is: the one that opened it.
+  runOf: (key, pr) => openerOf(ctx.runs, key, pr),
+  policies,
+  decided: (repo, pr, entry) => ctx.decisions.record(pullEntry(repo, pr).key, entry),
   log,
 });
 // Comments that wait for other issues to be done ("/after #12").
