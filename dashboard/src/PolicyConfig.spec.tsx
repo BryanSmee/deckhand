@@ -100,7 +100,11 @@ const panel = (tab?: "policies") =>
     />,
   );
 
-const card = (name: string) => screen.getByText(new RegExp(`^${name} · `)).closest("div")!;
+// A decision's card by its name (its rule is a span of its own).
+const card = (name: string) =>
+  screen
+    .getByText((_, el) => !!el?.matches("[class*=key]") && el.textContent!.startsWith(`${name} · `))
+    .closest("div")!;
 const rows = () =>
   within(screen.getByRole("list", { name: "Policy files" })).getAllByRole("listitem");
 const source = (path: string) =>

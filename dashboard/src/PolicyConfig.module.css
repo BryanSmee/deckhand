@@ -170,6 +170,11 @@
   font-weight: 600;
 }
 
+/* A rule's name moves to the next line whole, and only wraps at its underscores. */
+.rule {
+  display: inline-block;
+}
+
 .cardHead {
   display: flex;
   flex-wrap: wrap;
