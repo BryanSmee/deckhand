@@ -180,12 +180,19 @@ export function Detail({
     ...(discussion ? [{ id: THREAD, label: "Thread" }] : []),
     ...tabbed.map((x) => ({
       id: x.id,
+      // Narrow, it shrinks: its name cut short, which its title and All runs have whole.
+      attrs: {
+        class: styles.runTab,
+        title: `${x === t.runs[0] ? "Latest: follows the next runs" : x.id}\n${runName(x)}`,
+      },
       label: (
-        <span class={styles.run} title={x === t.runs[0] ? "Latest: follows the next runs" : x.id}>
+        <span class={styles.run}>
           <span class={styles.number}>#{t.runs.length - t.runs.indexOf(x)}</span>{" "}
           <StatusDot state={x.status} />
-          {runName(x)}
-          {x.speed === "fast" && " · fast"}{" "}
+          <span class={styles.name}>
+            {runName(x)}
+            {x.speed === "fast" && " · fast"}
+          </span>{" "}
           <span class={styles.ago}>
             {x.status === "running" ? duration(x, now) : ago(x.startedAt, now)}
           </span>

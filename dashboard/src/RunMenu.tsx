@@ -47,7 +47,7 @@ export function RunMenu({ runs, current, onPick, now, touch }: Props) {
         }}
       >
         All runs <Count n={runs.length} />
-        <Icon.ChevronDown size={14} />
+        <Icon.ChevronDown size={14} class={styles.chevron} />
       </button>
       {open &&
         (touch ? (
@@ -166,7 +166,8 @@ function RunList({ runs, current, now, touch, onPick }: Props & { onPick: (id: s
               {x.speed === "fast" && " · fast"}
             </span>{" "}
             <span class={styles.when}>
-              {dayTime(x.startedAt, now)} · {duration(x, now)}
+              {dayTime(x.startedAt, now, false)} ·{" "}
+              <span class={styles.took}>{duration(x, now)}</span>
             </span>
           </span>
           <span class={styles.check}>{x.id === current && <Icon.Check size={14} />}</span>
