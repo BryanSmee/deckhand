@@ -190,7 +190,10 @@ export function createImages({
               output,
             })
       ).then((result) => {
-        if (result) checked(result, `installing ${agent.displayName} ${version} failed`);
+        // Left to the sandbox (a runner whose sandboxes install it without a volume): asked
+        // again at the next run, which may have a volume to fill by then.
+        if (result?.inSandbox) installs.get(key) === install && installs.delete(key);
+        else if (result) checked(result, `installing ${agent.displayName} ${version} failed`);
       });
       // A failure is not kept: the next run tries again.
       install.catch(() => installs.get(key) === install && installs.delete(key));

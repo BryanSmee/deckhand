@@ -1087,7 +1087,7 @@ cluster and pushed to a registry, as nodes only pull from one:
   default branch's newest and the newest few kept, never one a pod runs), so it has to allow
   deletes (`REGISTRY_STORAGE_DELETE_ENABLED=true` for the CNCF distribution registry); one that
   doesn't keeps its tags, which the listener logs. A tag whose manifest a kept one shares (an
-  identical build) is deleted alone where the registry can, else kept.
+  identical build) is deleted alone where the registry can, else kept. A tag whose date the listener can't read is kept, and logged.
 - **A pull Secret** (`KUBERNETES_REGISTRY_SECRET`), of type `kubernetes.io/dockerconfigjson`,
   whose credentials may push to and delete from the registry: sandbox pods pull with it, and
   the listener reads it (its Role's `get` on `secrets` covers it) to push through BuildKit and

@@ -61,6 +61,7 @@ function fakeRegistry({ deletes = true, tagDeletes = true } = {}) {
   const images = new Map([[BASE, { digest: "sha256:base1", created: 1 }]]);
   const calls = [];
   const tokens = new Set();
+  const undated = new Set(); // digests whose config can't be read
   const fetch = async (input, init = {}) => {
     const url = new URL(input);
     const method = init.method ?? "GET";
@@ -98,6 +99,7 @@ function fakeRegistry({ deletes = true, tagDeletes = true } = {}) {
     }
     if (kind === "blobs") {
       const found = [...images.values()].find((i) => `sha256:config-${i.digest}` === rest);
+      if (undated.has(found.digest)) return new Response("storage down", { status: 500 });
       return Response.json({ created: new Date(found.created).toISOString() });
     }
     const found = rest.startsWith("sha256:")
@@ -132,7 +134,7 @@ function fakeRegistry({ deletes = true, tagDeletes = true } = {}) {
       { headers: { "content-type": type } },
     );
   };
-  return { fetch, images, calls };
+  return { fetch, images, calls, undated };
 }
 
 // Deckhand's policies for the BuildKit daemon, as docs/setup.md describes them: out to the
@@ -165,6 +167,7 @@ function fakeApi({
   exitCode = install === "Succeeded" ? 0 : 1,
   installLog = "Claude Code 9.9.9 installed\n",
   hold = false,
+  podsFail = false,
   policies = [BUILDER_POLICY],
   builder = true,
 } = {}) {
@@ -216,6 +219,7 @@ function fakeApi({
       return found;
     },
     async get(path, query = {}) {
+      if (path === "pods" && podsFail) throw new Error("GET pods: HTTP 503");
       if (path.endsWith("/networkpolicies")) return { items: policies };
       if (path.endsWith("/endpointslices")) {
         const service = query.labelSelector.split("=")[1];
@@ -990,4 +994,70 @@ test("registry: a tag list's next page as an absolute URL of the same registry, 
   const registry = createRegistry({ fetch });
   assert.deepEqual(await registry.tags("r.example.com/x"), ["a", "b", "c"]);
   assert.ok(seen.every((url) => url.startsWith("https://r.example.com/v2/x/tags/list")));
+});
+
+test("a prune whose pods the API can't list is logged, and the run has its image", async (t) => {
+  const { images, registry, logged } = setup(t, { api: { podsFail: true } });
+  const ask = (ref, branch) =>
+    images.imageFor({ repo: "org/a", ref, branch, dockerfile: "Dockerfile", access });
+  const tags = [];
+  for (const [ref, branch] of [
+    ["main", false],
+    ["b1", true],
+    ["b2", true],
+    ["b3", true],
+  ]) {
+    tags.push(await ask(ref, branch));
+  }
+  assert.ok(tags.every((tag) => registry.images.has(tag)));
+  assert.match(logged.join("\n"), /^Pruning .*: GET pods: HTTP 503$/m);
+});
+
+test("a tag whose date can't be read is kept and logged, never taken for the newest", async (t) => {
+  const { images, registry, logged } = setup(t);
+  const ask = (ref, branch) =>
+    images.imageFor({ repo: "org/a", ref, branch, dockerfile: "Dockerfile", access });
+  const main = await ask("main", false);
+  const name = main.slice(0, main.lastIndexOf(":"));
+  // An old default-branch tag, its config unreadable.
+  registry.images.set(`${name}:0000000000000000`, { digest: "sha256:old", created: 0 });
+  registry.undated.add("sha256:old");
+  for (const sha of ["b1", "b2", "b3"]) await ask(sha, true);
+  assert.ok(registry.images.has(`${name}:0000000000000000`));
+  // The default branch's real newest stays too.
+  assert.ok(registry.images.has(main));
+  assert.match(logged.join("\n"), /Dating .*:0000000000000000 \(kept\): .*HTTP 500/);
+});
+
+test("an agent left to the init container is asked again: a claim made later is filled", async (t) => {
+  const { images, objects, created } = setup(t);
+  await images.installAgent(claude, () => {});
+  assert.equal(created.filter((o) => o.kind === "Pod").length, 0);
+  // The operator makes the claim while the listener runs: the next run fills it.
+  objects.persistentvolumeclaims.set("dh-claude-code", { metadata: {} });
+  await images.installAgent(claude, () => {});
+  assert.equal(created.filter((o) => o.kind === "Pod").length, 1);
+  // Installed: once per version from then on.
+  await images.installAgent(claude, () => {});
+  assert.equal(created.filter((o) => o.kind === "Pod").length, 1);
+});
+
+test("builderIsolationProblem: a DNS rule without `to` is DNS, nothing more", () => {
+  const labels = { app: "buildkitd" };
+  const policy = (egress) => ({
+    ...BUILDER_POLICY,
+    spec: { ...BUILDER_POLICY.spec, egress: [...BUILDER_POLICY.spec.egress, egress] },
+  });
+  assert.equal(
+    builderIsolationProblem([policy({ ports: [{ port: 53, protocol: "UDP" }] })], labels),
+    null,
+  );
+  assert.match(
+    builderIsolationProblem([policy({ ports: [{ port: 443 }] })], labels),
+    /lets the BuildKit daemon reach anything/,
+  );
+  assert.match(
+    builderIsolationProblem([policy({ ports: [{ port: 53, endPort: 65535 }] })], labels),
+    /lets the BuildKit daemon reach anything/,
+  );
 });

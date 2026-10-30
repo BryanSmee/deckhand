@@ -84,6 +84,8 @@ export function builderIsolationProblem(policies, labels) {
   for (const p of picking) {
     const name = `the NetworkPolicy ${p.metadata?.name}`;
     for (const rule of p.spec.egress ?? []) {
+      // DNS anywhere, written without `to`, as policies often are.
+      if (!rule.to?.length && dns(rule)) continue;
       if (!rule.to?.length) return `${name} lets the BuildKit daemon reach anything`;
       const wide = rule.to.some(
         (peer) => peer.ipBlock || peer.namespaceSelector || !peer.podSelector,
@@ -295,7 +297,9 @@ export function createKubernetesImages({
     return { HTTP_PROXY, HTTPS_PROXY, http_proxy, https_proxy };
   }
 
-  // Newest first, by when each was built, as `docker image ls` gives them.
+  // Newest first, by when each was built, as `docker image ls` gives them. A tag whose date
+  // can't be read is left out, logged: neither pruned as if it were the oldest nor taken for
+  // the default branch's newest.
   async function tags(name) {
     let found;
     try {
@@ -307,8 +311,11 @@ export function createKubernetesImages({
     if (!found) return null;
     const dated = [];
     for (const tag of found) {
-      const at = await registry.created(`${name}:${tag}`).catch(() => 0);
-      dated.push({ tag, at });
+      try {
+        dated.push({ tag, at: await registry.created(`${name}:${tag}`) });
+      } catch (error) {
+        log(`Dating ${name}:${tag} (kept): ${error.message}`);
+      }
     }
     return dated.sort((a, b) => b.at - a.at).map((d) => d.tag);
   }
@@ -317,14 +324,15 @@ export function createKubernetesImages({
   // deletes every tag that points at it: when one that stays (`kept`, images.mjs prune()'s, or
   // a pod's) shares it (an identical build, which BuildKit's cache makes often), only the tag
   // goes, where the registry can delete a tag alone (OCI distribution 1.1), else it stays.
+  // Never throws, as Docker's doesn't: a prune that fails is logged, the run goes on.
   async function remove(ref, kept = []) {
-    const { items = [] } = await api.get("pods", {
-      labelSelector: `deckhand.owner=${owner["deckhand.owner"]}`,
-    });
-    const used = items.flatMap((p) => (p.spec?.containers ?? []).map((c) => c.image));
-    if (used.includes(ref)) return;
     const name = ref.slice(0, ref.lastIndexOf(":"));
     try {
+      const { items = [] } = await api.get("pods", {
+        labelSelector: `deckhand.owner=${owner["deckhand.owner"]}`,
+      });
+      const used = items.flatMap((p) => (p.spec?.containers ?? []).map((c) => c.image));
+      if (used.includes(ref)) return;
       const digest = await registry.digest(ref);
       if (!digest) return;
       for (const other of new Set([...kept, ...used.filter((i) => i.startsWith(`${name}:`))])) {
@@ -443,7 +451,9 @@ export function createKubernetesImages({
     hosts = [],
     output,
   }) {
-    if (!(await agentClaim(volume))) return;
+    // No claim: the sandbox's init container installs it (kubernetes.mjs). Said, so that
+    // images.mjs doesn't count the version as installed: a claim made later is filled then.
+    if (!(await agentClaim(volume))) return { inSandbox: true };
     const ended = await runPod({
       pod: kubeName(`${config.prefix}-install-${name}-${version}`),
       role: "install",
