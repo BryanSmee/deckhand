@@ -64,10 +64,10 @@ export function createBroker({
   // its token: fail closed. `mode`: the run's (modes.mjs), for what the GitHub gateway refuses
   // a review and its writes' ceiling. `issue`: the number of its issue or pull request, and
   // `base`, its repo's default branch, for what its writes may reach (github-writes.mjs), and
-  // `created`, the list of the issues it created ({ number, at }), which the GitHub gateway adds
-  // to: the run's live state's own list, saved with it (restart.mjs). `reason`: why the listener
-  // started it itself ("review-fix", "ci-fix", "conflict"), null for a comment's: the policies
-  // read it (github-writes.mjs).
+  // `created`, the list of the issues it created ({ number, at }) and the comments it posted
+  // ({ comment, at }), which the GitHub gateway adds to: the run's live state's own list, saved
+  // with it (restart.mjs). `reason`: why the listener started it itself ("review-fix",
+  // "ci-fix", "conflict"), null for a comment's: the policies read it (github-writes.mjs).
   // `secret`: a run's own again, when a restarted listener picks it up.
   function register(
     repo,
@@ -112,8 +112,8 @@ export function createBroker({
     if (run) Object.assign(run, { provider, credential, note });
   }
 
-  // `changed()`: called when the run created an issue (github-writes.mjs answered()), so its
-  // saved state keeps it.
+  // `changed()`: called when the run created an issue or posted a comment (github-writes.mjs
+  // answered()), so its saved state keeps it.
   function watchCreated(secret, changed) {
     const run = runOf(secret);
     if (run) run.createdChanged = changed;

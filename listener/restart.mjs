@@ -174,7 +174,8 @@ export function createRestart(ctx) {
 
   // The pushes of the run's GitHub took (git-gateway.mjs), on its record: when it last pushed,
   // and which branch, for the dashboard. Saved with it, so a restart keeps them.
-  // The issues it creates too (github-writes.mjs answered()), in `live.created`.
+  // The issues it creates and the comments it posts too (github-writes.mjs answered()), in
+  // `live.created`.
   function watchPushes(task) {
     const { live } = task;
     ctx.broker.watchPushes(live.secret, ({ branch, at }) => {

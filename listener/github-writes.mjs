@@ -12,8 +12,12 @@
 // repo), `created_issue` (one this run created: GitHub answered the run's own create with it,
 // over REST or GraphQL, as `gh issue create` sends: answered()),
 // `other_issue`, `pr`, `new_issue` (an issue it creates), `new_pr` (a pull request it opens),
-// `label` (a label of the repo it creates), and `comment`, `review` for writes no ceiling
-// allows anyway.
+// `label` (a label of the repo it creates), `created_comment` (an issue's or pull request's
+// comment this run posted: GitHub answered the run's own comment with it, as `gh issue
+// comment` sends: answered(); issue #455), and `comment`, `review` for writes no ceiling
+// allows anyway. The App's bot writes every run's comments and the listener's own (its live
+// progress, its replies): a comment by the bot isn't the run's for that, and one the run
+// didn't post is refused before any look-up.
 //
 // A sub-issue link names two issues: its target is the parent, in the path, and the child, by
 // its id in the body, must be one the run created or one already under the run's issue (a
@@ -80,9 +84,9 @@ function blocker(value) {
   return Number.isSafeInteger(id) && id > 0 ? { id } : null;
 }
 
-// [method, path under the repo (case-insensitive), match → { actions, target, change, pull,
-// permissions }]: `pull`, a pull request's own write's head, base and draft (github-pulls.mjs),
-// `permissions`, its token's (PULL_WRITE).
+// [method, path under the repo (case-insensitive), (match, body, method) → { actions, target,
+// change, pull, permissions }]: `pull`, a pull request's own write's head, base and draft
+// (github-pulls.mjs), `permissions`, its token's (PULL_WRITE).
 // `number`: an issue's or pull request's; `body`: the write's JSON.
 const ROUTES = [
   [
@@ -190,14 +194,20 @@ const ROUTES = [
     /^issues\/(\d+)\/reactions\/\d+$/i,
     (m) => ({ actions: ["delete"], target: { number: +m[1] } }),
   ],
+  // An issue's or pull request's comment, by its id: one the run posted, or refused before any
+  // look-up (checkWrite()).
   [
-    "PATCH",
-    /^(?:issues|pulls)\/comments\/\d+$/i,
-    () => ({ actions: ["edit"], target: { kind: "comment" } }),
+    /^(?:PATCH|DELETE)$/,
+    /^issues\/comments\/(\d+)$/i,
+    (m, body, method) => ({
+      actions: [method === "PATCH" ? "edit" : "delete"],
+      target: { comment: +m[1] },
+    }),
   ],
+  ["PATCH", /^pulls\/comments\/\d+$/i, () => ({ actions: ["edit"], target: { kind: "comment" } })],
   [
     "DELETE",
-    /^(?:issues|pulls)\/comments\/\d+(?:\/reactions\/\d+)?$/i,
+    /^(?:issues\/comments\/\d+\/reactions\/\d+|pulls\/comments\/\d+(?:\/reactions\/\d+)?)$/i,
     () => ({ actions: ["delete"], target: { kind: "comment" } }),
   ],
   [
@@ -240,8 +250,8 @@ const ROUTES = [
   ],
 ];
 
-// A write → { repo, actions, target: { number } | { kind }, child (a link's: { id,
-// replace_parent }), blocker (a "blocked by" link's: { id }), change: { fields, labels_added,
+// A write → { repo, actions, target: { number } | { kind } | { comment: its id }, child (a
+// link's: { id, replace_parent }), blocker (a "blocked by" link's: { id }), change: { fields, labels_added,
 // labels_removed, labels_set (the labels it sets replace the issue's) }, pull, permissions (ROUTES') }, `{ read: true }` for a POST that writes nothing (rendering markdown), or
 // null when it can't be classified. `path`: under the API's base, decoded, without its query
 // (github-gateway.mjs route()); `body`: the bytes sent.
@@ -266,7 +276,7 @@ export function classify(method, path, body) {
     if (!ok) continue;
     const m = route.exec(rest);
     if (!m) continue;
-    const write = build(m, json);
+    const write = build(m, json, method);
     // A link without its child or its blocker can't be checked.
     if (write.child === null || write.blocker === null) return null;
     return {
@@ -337,8 +347,26 @@ export function createWriteChecks({
     if (!login || String(issue?.user?.login ?? "").toLowerCase() !== login.toLowerCase()) {
       return false;
     }
-    const made = (run.created ?? []).find((c) => c.number === issue?.number);
+    const made = issuesOf(run).find((c) => c.number === issue?.number);
     return !!made && Date.parse(issue.created_at) >= made.at - SKEW_MS;
+  }
+
+  // A comment the run posted (answered()) → its target, `created_comment`, as GitHub has it: in
+  // the run's repo (GitHub answers no other's under its path), by the App's bot, its issue's or
+  // pull request's number. Null when it isn't there, or isn't the bot's.
+  async function resolveComment(repo, id, lookup) {
+    const comment = await lookup(repo, `/repos/${repo}/issues/comments/${id}`);
+    const login = bot();
+    const author = String(comment?.user?.login ?? "");
+    if (!comment || !login || author.toLowerCase() !== login.toLowerCase()) return null;
+    const on = /\/issues\/(\d+)$/.exec(String(comment.issue_url ?? ""));
+    return {
+      number: on ? Number(on[1]) : null,
+      comment: id,
+      labels: [],
+      author,
+      kind: "created_comment",
+    };
   }
 
   // The target's kind, number, labels and author, from GitHub. Null when it isn't there.
@@ -383,7 +411,7 @@ export function createWriteChecks({
       const found = Array.isArray(subs) ? subs.find((i) => i?.id === id) : null;
       if (found) return { id, number: found.number ?? null, kind: "sub_issue" };
     }
-    for (const { number } of (run.created ?? []).slice(-MAX_CREATED)) {
+    for (const { number } of issuesOf(run).slice(-MAX_CREATED)) {
       const issue = await lookup(repo, `/repos/${repo}/issues/${number}`);
       if (issue?.id === id && created(run, issue)) return { id, number, kind: "created_issue" };
     }
@@ -433,9 +461,13 @@ export function createWriteChecks({
   // created, from a REST create (201, its JSON) or a GraphQL `createIssue` (what `gh issue
   // create` sends: `data.<its response key>.issue`, by its URL, `creates` naming the keys:
   // github-graphql.mjs), in the run's repo, are kept on the run (`run.created`, saved with it:
-  // restart.mjs), with when the call was sent.
+  // restart.mjs), with when the call was sent. So are the comments it posted, by their id
+  // (`{ comment, at }`): from a REST comment (201, its JSON's API `url`) or a GraphQL
+  // `addComment` (what `gh issue comment` and `gh pr comment` send:
+  // `data.<its response key>.commentEdge.node.url`, its web page's `#issuecomment-<id>`,
+  // `comments` naming the keys).
   function answered(run, call, status, answer) {
-    const { method, path, body, graphql, creates = [], at } = call;
+    const { method, path, body, graphql, creates = [], comments = [], at } = call;
     pulls
       .answered(run, call, status, answer)
       .catch((error) => log(`GitHub gateway: ${run.repo}: ${error.stack ?? error}`));
@@ -445,15 +477,19 @@ export function createWriteChecks({
     } catch {
       return;
     }
-    let issues;
+    let issues = [];
+    let posted = [];
     if (graphql) {
       if (status !== 200) return;
       issues = creates.map((key) => json?.data?.[key]?.issue);
+      posted = comments.map((key) => commentOf(json?.data?.[key]?.commentEdge?.node, run.repo));
     } else {
       const write = classify(method, path, body);
-      if (status !== 201 || write?.target?.kind !== "new_issue" || write.repo !== run.repo) return;
-      if (!inRepo(json, run.repo)) return;
-      issues = [json];
+      if (status !== 201 || write?.repo !== run.repo) return;
+      if (write.target.kind === "new_issue" && inRepo(json, run.repo)) issues = [json];
+      if (write.actions[0] === "comment" && write.target.number !== undefined) {
+        posted = [restCommentOf(json, run.repo)];
+      }
     }
     if (!Array.isArray(run.created)) return;
     let added = false;
@@ -461,6 +497,11 @@ export function createWriteChecks({
       const number = numberOf(issue, run.repo);
       if (number === null || run.created.some((c) => c.number === number)) continue;
       run.created.push({ number, at });
+      added = true;
+    }
+    for (const comment of posted) {
+      if (comment === null || postedBy(run, comment)) continue;
+      run.created.push({ comment, at });
       added = true;
     }
     if (added) run.createdChanged?.();
@@ -499,7 +540,21 @@ export function createWriteChecks({
       return refusal(403, "a run can't move an issue from another parent (replace_parent)");
     }
     let target = write.target;
-    if (target.number !== undefined) {
+    if (target.comment !== undefined) {
+      // Not one the run posted: another run's, the listener's or a person's, never looked up.
+      if (!postedBy(run, target.comment)) {
+        return refusal(403, notPosted(write.actions, write.repo));
+      }
+      try {
+        target = await resolveComment(write.repo, target.comment, get);
+      } catch (error) {
+        log(
+          `GitHub gateway: ${run.repo} comment ${write.target.comment}: ${error.message ?? error}`,
+        );
+        return refusal(502, `comment ${write.target.comment} can't be looked up on GitHub`);
+      }
+      if (!target) return refusal(404, `comment ${write.target.comment} isn't there`);
+    } else if (target.number !== undefined) {
       try {
         target = await resolve(run, write.repo, target.number, get);
       } catch (error) {
@@ -619,6 +674,42 @@ function numberOf(issue, repo) {
   const m = /\/(?:repos\/)?([^/]+\/[^/]+)\/issues\/(\d+)$/.exec(url);
   if (m) return m[1].toLowerCase() === repo ? Number(m[2]) : null;
   return null;
+}
+
+// A GraphQL comment of GitHub's answer → its id, when it is in `repo`: its `url`, the web page's
+// (`…/owner/repo/issues/12#issuecomment-345`, `/pull/` on a pull request).
+function commentOf(node, repo) {
+  const m = /\/([^/]+\/[^/]+)\/(?:issues|pull)\/\d+#issuecomment-(\d+)$/.exec(
+    String(node?.url ?? ""),
+  );
+  return m && m[1].toLowerCase() === repo ? Number(m[2]) : null;
+}
+
+// A REST comment of GitHub's answer → its id, when it is in `repo`: its API `url`.
+function restCommentOf(comment, repo) {
+  const m = /\/repos\/([^/]+\/[^/]+)\/issues\/comments\/(\d+)$/.exec(String(comment?.url ?? ""));
+  return m && m[1].toLowerCase() === repo ? Number(m[2]) : null;
+}
+
+// The issues a run created, of `run.created` (which holds the comments it posted too).
+const issuesOf = (run) => (run.created ?? []).filter((c) => c.number !== undefined);
+
+// Whether the run posted comment `id` (answered()).
+const postedBy = (run, id) => (run.created ?? []).some((c) => c.comment === id);
+
+// Why a write on a comment the run didn't post is refused, and what to send instead: `gh issue
+// comment --edit-last` (or `--delete-last`) picks the App's last comment, which may be the
+// listener's or another run's, all written by the same bot.
+function notPosted(actions, repo) {
+  const what = actions.join(", ");
+  const call = actions.includes("delete")
+    ? `gh api -X DELETE repos/${repo}/issues/comments/<id>`
+    : `gh api -X PATCH repos/${repo}/issues/comments/<id> -f body=…`;
+  return (
+    `a run can ${what} only the comments it posted, and this isn't one (gh's --edit-last and ` +
+    `--delete-last pick the App's last comment, which may be Deckhand's or another run's): ` +
+    `send \`${call}\`, the <id> ending the URL gh printed for yours (#issuecomment-<id>)`
+  );
 }
 
 // The children a link may name (resolveChild()).

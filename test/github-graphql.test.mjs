@@ -69,6 +69,23 @@ const NODES = {
   },
   PR_7: { __typename: "PullRequest", number: 7, repository: { nameWithOwner: "Org/Repo" } },
   IC_1: { __typename: "IssueComment", repository: { nameWithOwner: "Org/Repo" } },
+  // Comments by their id (a BigInt, sent as a string): one a run posts, the listener's, another
+  // repository's.
+  IC_own: {
+    __typename: "IssueComment",
+    fullDatabaseId: "3000000001",
+    repository: { nameWithOwner: "Org/Repo" },
+  },
+  IC_listener: {
+    __typename: "IssueComment",
+    fullDatabaseId: "3000000009",
+    repository: { nameWithOwner: "Org/Repo" },
+  },
+  IC_o: {
+    __typename: "IssueComment",
+    fullDatabaseId: "3000000001",
+    repository: { nameWithOwner: "org/other" },
+  },
   L_idea: { __typename: "Label", name: "idea", repository: { nameWithOwner: "Org/Repo" } },
   L_bug: { __typename: "Label", name: "bug", repository: { nameWithOwner: "Org/Repo" } },
   L_needs: { __typename: "Label", name: "needs-input", repository: { nameWithOwner: "Org/Repo" } },
@@ -93,7 +110,20 @@ const ISSUES = {
   },
   7: { number: 7, pull_request: {}, user: { login: "deckhand[bot]" }, labels: [] },
 };
+// The comments, by their id: both the bot's.
+const COMMENTS = {
+  3000000001: {
+    user: { login: "deckhand[bot]" },
+    issue_url: "https://api.github.com/repos/Org/Repo/issues/1",
+  },
+  3000000009: {
+    user: { login: "deckhand[bot]" },
+    issue_url: "https://api.github.com/repos/Org/Repo/issues/1",
+  },
+};
 async function lookup(repo, path) {
+  const comment = /^\/repos\/org\/repo\/issues\/comments\/(\d+)$/.exec(path);
+  if (comment) return COMMENTS[comment[1]] ?? null;
   const m = /^\/repos\/org\/repo\/(issues|pulls)\/(\d+)(\/parent|\/sub_issues.*)?$/.exec(path);
   if (!m) throw new Error(`unexpected look-up ${path}`);
   const n = +m[2];
@@ -147,6 +177,11 @@ const GH_COMMENT =
   "mutation CommentCreate($input: AddCommentInput!) { addComment(input: $input) { commentEdge { node { url } } } }";
 const GH_EDIT =
   "mutation IssueUpdate($input: UpdateIssueInput!) { updateIssue(input: $input) { __typename } }";
+// `gh issue comment --edit-last` and `--delete-last` (api/queries_comments.go).
+const GH_COMMENT_EDIT =
+  "mutation CommentUpdate($input: UpdateIssueCommentInput!) { updateIssueComment(input: $input) { issueComment { url } } }";
+const GH_COMMENT_DELETE =
+  "mutation CommentDelete($input: DeleteIssueCommentInput!) { deleteIssueComment(input: $input) { clientMutationId } }";
 
 test("the pinned schema is GitHub's, with the mutations Deckhand classifies", () => {
   const fields = githubSchema().getMutationType().getFields();
@@ -448,6 +483,104 @@ test("a createIssue answer counts only as GitHub's own issue { url }: no alias c
     assert.equal(out.write, true, selection);
     assert.deepEqual(out.creates, [], selection);
   }
+});
+
+test("an addComment answer counts only as GitHub's own commentEdge { node { url } }: no alias can name another comment", async () => {
+  const { check } = checks();
+  const work = run("work");
+  const comment = (selection, extra = "") =>
+    call(
+      `mutation { addComment(input: { subjectId: "I_1", body: "https://github.com/org/repo/issues/1#issuecomment-3000000009" }) ${selection} } ${extra}`,
+    );
+  const counted = [
+    ["{ commentEdge { node { url } } }", ""],
+    ["{ commentEdge { node { id url: url } cursor } }", ""],
+    [
+      "{ ...P }",
+      "fragment P on AddCommentPayload { commentEdge { node { ...C } } } fragment C on IssueComment { url }",
+    ],
+    ["{ commentEdge { node { ... on IssueComment { url } } } }", ""],
+  ];
+  for (const [selection, extra] of counted) {
+    const out = await check(work, comment(selection, extra));
+    assert.deepEqual(out.comments, ["addComment"], selection);
+  }
+  const fakes = [
+    "{ commentEdge { node { url: body } } }",
+    "{ commentEdge { node { id url: bodyText } } }",
+    "{ commentEdge { node: node { id } } }",
+    "{ commentEdge { cursor } }",
+    "{ clientMutationId }",
+    "{ commentEdge { node { ...B } } }",
+    "{ subject { ... on Issue { url } } }",
+  ];
+  for (const selection of fakes) {
+    const extra = selection.includes("...B") ? "fragment B on IssueComment { url: body }" : "";
+    const out = await check(work, comment(selection, extra));
+    assert.equal(out.write, true, selection);
+    assert.deepEqual(out.comments, [], selection);
+  }
+  // Aliased as a whole, under its own key; a createIssue's isn't a comment.
+  const aliased = await check(
+    work,
+    call(
+      'mutation { c: addComment(input: { subjectId: "I_1", body: "x" }) { commentEdge { node { url } } } }',
+    ),
+  );
+  assert.deepEqual(aliased.comments, ["c"]);
+  const created = await check(
+    work,
+    call(
+      'mutation { createIssue(input: { repositoryId: "R_repo", title: "T" }) { issue { url } } }',
+    ),
+  );
+  assert.deepEqual([created.creates, created.comments], [["createIssue"], []]);
+});
+
+test("gh issue comment --edit-last and --delete-last: a comment the run posted, by its node; any other refused before any look-up", async () => {
+  const { check, writes, looked } = checks();
+  const work = { ...run("work"), created: [{ comment: 3000000001, at: 0 }] };
+  const edit = await check(work, call(GH_COMMENT_EDIT, { input: { id: "IC_own", body: "x" } }));
+  assert.equal(edit.write, true);
+  assert.deepEqual(writes.at(-1), {
+    repo: "org/repo",
+    actions: ["edit"],
+    target: { comment: 3000000001 },
+    change: { fields: ["body"], labels_added: [], labels_removed: [] },
+  });
+  assert.ok(looked.includes("/repos/org/repo/issues/comments/3000000001"));
+  const removed = await check(work, call(GH_COMMENT_DELETE, { input: { id: "IC_own" } }));
+  assert.equal(removed.write, true);
+  assert.deepEqual(writes.at(-1).actions, ["delete"]);
+  // The listener's (the last the bot wrote, which --edit-last picks), one without its id:
+  // refused, saying what to send instead, nothing looked up.
+  const before = looked.length;
+  for (const id of ["IC_listener", "IC_1"]) {
+    const out = await check(work, call(GH_COMMENT_EDIT, { input: { id, body: "x" } }));
+    assert.equal(out.refused?.status, 403, id);
+    assert.match(
+      out.refused.message,
+      /^updateIssueComment: a run can edit only the comments it posted, .*--edit-last.*gh api -X PATCH repos\/org\/repo\/issues\/comments\/<id>/,
+    );
+  }
+  assert.equal(looked.length, before);
+  // Another repository's comment of the same id.
+  assert.match(
+    (await check(work, call(GH_COMMENT_DELETE, { input: { id: "IC_o" } }))).refused.message,
+    /id isn't in the run's repository/,
+  );
+  // Above a brainstorm's ceiling, its own or not.
+  const brainstorm = { ...run("brainstorm"), created: work.created };
+  assert.match(
+    (await check(brainstorm, call(GH_COMMENT_EDIT, { input: { id: "IC_own", body: "x" } }))).refused
+      .message,
+    /can't edit on created_comment #1 \(its ceiling\)/,
+  );
+  // An issue isn't a comment.
+  assert.match(
+    (await check(work, call(GH_COMMENT_EDIT, { input: { id: "I_1", body: "x" } }))).refused.message,
+    /updateIssueComment on a Issue/,
+  );
 });
 
 test("an unknown mutation, or an input field Deckhand doesn't check, is refused before any look-up", async () => {

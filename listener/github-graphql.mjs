@@ -60,7 +60,8 @@ export function githubSchema() {
 // The types a target or a subject may be, as GitHub's node lookup answers them.
 const ISSUE = ["Issue"];
 const ISSUE_OR_PR = ["Issue", "PullRequest"];
-// Comments no ceiling lets a run edit or react to: refused as REST refuses them. Those of a
+// Comments no ceiling lets a run react to: refused as REST refuses them (a run edits the ones
+// it posted with updateIssueComment, and deleteIssueComment, not through these). Those of a
 // repository (RepositoryNode, which NODES reads); a discussion's comment has none, and is
 // refused as outside it.
 const COMMENTS = new Set([
@@ -141,6 +142,22 @@ export const MUTATIONS = {
     types: ISSUE_OR_PR,
     fields: ["body"],
     actions: () => ["comment"],
+  },
+  // A comment the run posted (github-writes.mjs `created_comment`, by its id), as `gh issue
+  // comment --edit-last` and `--delete-last` send: any other is refused before any look-up.
+  updateIssueComment: {
+    target: "id",
+    types: ["IssueComment"],
+    comment: true,
+    fields: ["body"],
+    actions: () => ["edit"],
+  },
+  deleteIssueComment: {
+    target: "id",
+    types: ["IssueComment"],
+    comment: true,
+    fields: [],
+    actions: () => ["delete"],
   },
   addLabelsToLabelable: {
     target: "labelableId",
@@ -275,6 +292,7 @@ const NODES = `query($ids: [ID!]!) {
     ... on Issue { number databaseId repository { nameWithOwner } }
     ... on PullRequest { number repository { nameWithOwner } }
     ... on Label { name repository { nameWithOwner } }
+    ... on IssueComment { fullDatabaseId }
     ... on RepositoryNode { repository { nameWithOwner } }
   }
 }`;
@@ -553,6 +571,12 @@ export function restName(field) {
   return REST_NAMES[field] ?? field.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`);
 }
 
+// An IssueComment node's id (its `fullDatabaseId`, a BigInt GitHub sends as a string), or null.
+function commentId(node) {
+  const id = Number(node?.fullDatabaseId);
+  return Number.isSafeInteger(id) && id > 0 ? id : null;
+}
+
 const repoOf = (node) => String(node?.nameWithOwner ?? node?.repository?.nameWithOwner ?? "");
 
 // The fields selection sets select, through their fragments (spread or inline), each node
@@ -583,23 +607,41 @@ function selected(doc, sets) {
 }
 const keyOf = (field) => field.alias?.value ?? field.name.value;
 
+// The fields under `path` of `fields` (the nodes of one response key, whose selections GitHub
+// merges), each step under GitHub's own name: none aliased to another's, nor another field
+// aliased to it. Null otherwise, or when one isn't selected.
+function ownPath(doc, fields, path) {
+  let found = [fields].flat();
+  for (const name of path) {
+    found = selected(
+      doc,
+      found.map((f) => f.selectionSet),
+    ).filter((f) => keyOf(f) === name);
+    if (!found.length || found.some((f) => f.name.value !== name)) return null;
+  }
+  return found;
+}
+
 // Whether a createIssue field's answer names the issue it created where github-writes.mjs
 // answered() reads it (`issue.url`, else `issue.html_url`), as GitHub's own fields: `issue`
 // and `url` unaliased (or aliased to themselves), and no `html_url`, which GraphQL's Issue
 // doesn't have, so it could only be another field's alias. Otherwise a run could answer
-// `url: title` with a title of its choosing, and claim an issue it didn't create. `fields`: the
-// nodes of one response key, whose selections GitHub merges.
+// `url: title` with a title of its choosing, and claim an issue it didn't create.
 export function answersCreated(doc, fields) {
-  const sets = [fields].flat().map((f) => f.selectionSet);
-  const issues = selected(doc, sets).filter((f) => keyOf(f) === "issue");
-  if (!issues.length || issues.some((f) => f.name.value !== "issue")) return false;
+  const issues = ownPath(doc, fields, ["issue"]);
+  if (!issues || !ownPath(doc, issues, ["url"])) return false;
   const inner = selected(
     doc,
     issues.map((f) => f.selectionSet),
   );
-  const urls = inner.filter((f) => keyOf(f) === "url");
-  if (!urls.length || urls.some((f) => f.name.value !== "url")) return false;
   return !inner.some((f) => keyOf(f) === "html_url");
+}
+
+// Whether an addComment field's answer names the comment it posted where github-writes.mjs
+// answered() reads it (`commentEdge.node.url`), as GitHub's own fields, as answersCreated():
+// otherwise `url: body` would claim the comment its body names, the listener's say.
+export function answersComment(doc, fields) {
+  return ownPath(doc, fields, ["commentEdge", "node", "url"]) !== null;
 }
 
 // A mutation field and the nodes it names → a write in github-writes.mjs classify()'s shape,
@@ -617,7 +659,8 @@ export function writeOf({ name, spec, input }, nodes, repo) {
     }
     target = { kind: spec.kind };
   } else if (spec.types.includes(node.__typename)) {
-    target = { number: node.number };
+    // A comment by its id, as REST's path names it: `databaseId`, an Int, no longer holds them.
+    target = spec.comment ? { comment: commentId(node) } : { number: node.number };
   } else if (spec.comments && COMMENTS.has(node.__typename)) {
     // No ceiling holds them: refused before any look-up (github-writes.mjs ID_TARGETS).
     target = { kind: "comment" };
@@ -690,11 +733,12 @@ export function createGraphqlChecks({
   },
   log = () => {},
 }) {
-  // A run's GraphQL call → { refused } or { body, write, creates, permissions, pulls }: what
-  // goes on to GitHub (printed again), whether it writes (its token then may), the response
-  // keys of its `createIssue` fields, whose answers name the issues it created
-  // (github-writes.mjs answered()), what its token needs beyond its mode's, and the pull
-  // requests it changes (github-pulls.mjs permissionsOf(), pullOf()).
+  // A run's GraphQL call → { refused } or { body, write, creates, comments, permissions, pulls }:
+  // what goes on to GitHub (printed again), whether it writes (its token then may), the response
+  // keys of its `createIssue` fields, whose answers name the issues it created, and of its
+  // `addComment` ones, the comments it posted (github-writes.mjs answered()), what its token
+  // needs beyond its mode's, and the pull requests it changes (github-pulls.mjs
+  // permissionsOf(), pullOf()).
   async function check(run, body) {
     const call = readCall(body);
     if (call.refused) return call;
@@ -719,7 +763,14 @@ export function createGraphqlChecks({
       }),
     );
     if (op.operation !== "mutation") {
-      return { body: forwarded, write: false, creates: [], permissions: {}, pulls: [] };
+      return {
+        body: forwarded,
+        write: false,
+        creates: [],
+        comments: [],
+        permissions: {},
+        pulls: [],
+      };
     }
     const fields = mutationFields(parsed, schema());
     if (fields.refused) return fields;
@@ -753,10 +804,15 @@ export function createGraphqlChecks({
     const creates = fields
       .filter((f) => f.name === "createIssue" && answersCreated(doc, f.nodes))
       .map((f) => f.key);
+    // And those whose answer is GitHub's own `commentEdge { node { url } }`.
+    const comments = fields
+      .filter((f) => f.name === "addComment" && answersComment(doc, f.nodes))
+      .map((f) => f.key);
     return {
       body: forwarded,
       write: fields.length > 0,
       creates,
+      comments,
       permissions: permissionsOf(writes),
       pulls: writes.map((w, i) => pullOf(w, fields[i].key)).filter(Boolean),
     };

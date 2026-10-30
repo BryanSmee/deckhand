@@ -10,7 +10,9 @@ import {
 // The modes' ceilings (MODES' `ceiling` below), by the kinds github-writes.mjs resolves from
 // GitHub: `own_issue`, the run's issue; `own_pr`, its pull request or one from a branch it
 // may push; `sub_issue`, an issue whose parent is the run's; `created_issue`, one the run
-// created; `other_issue`, `pr`, the rest; `new_issue`, an issue it creates; `new_pr`, a pull
+// created; `created_comment`, a comment it posted (issue #455: never the listener's or another
+// run's, though the same bot writes them all); `other_issue`, `pr`, the rest; `new_issue`, an
+// issue it creates; `new_pr`, a pull
 // request it opens (from one of its branches: github-pulls.mjs); `label`, a label of the repo
 // it creates. A link's child must be a sub-issue or an issue the run created
 // (github-writes.mjs), and moving one from another parent is in no ceiling. A "blocked by"
@@ -19,13 +21,16 @@ import {
 // comment elsewhere in theirs, which Deckhand's default policy refuses (../policy/github.rego,
 // docs/repo-config.md#the-default-policies). Work runs, and the repo's modes that aren't light,
 // label their issue, its sub-issues and the issues they file, and create labels (issue #443); a
-// brainstorm only creates labels. A repo that doesn't want it refuses it with `deny_github`,
-// per mode if it likes.
+// brainstorm only creates labels. Work runs edit and delete the comments they posted, which
+// the default policy narrows to editing them (policy/gh-own-comments.rego); a brainstorm's
+// replies are the listener's. A repo that doesn't want it refuses it with `deny_github`, per
+// mode if it likes.
 const WORK_CEILING = {
   own_issue: ["edit", "comment", "label", "link"],
   own_pr: ["edit", "comment", "label", "ready", "draft"],
   sub_issue: ["edit", "comment", "label", "link"],
   created_issue: ["edit", "comment", "label", "link"],
+  created_comment: ["edit", "delete"],
   new_issue: ["create"],
   new_pr: ["create"],
   label: ["create"],
@@ -69,9 +74,9 @@ const NO_WRITES = {};
 //   Research gets none (NO_TOKEN): a web page it reads can't make it read the repo.
 // - ceiling: the most its writes to GitHub (REST, and GraphQL mutations: github-graphql.mjs)
 //   can ever do, whatever the policies say (github-writes.mjs): target kind → the actions
-//   allowed on it. None: it writes nothing. Reviews, merges, closing, deleting, labels' and
-//   the repo's settings, and anything outside the run's repo are in no ceiling. GitHub closes
-//   an issue when its pull request merges.
+//   allowed on it. None: it writes nothing. Reviews, merges, closing, deleting (but a work
+//   run's own comments), labels' and the repo's settings, and anything outside the run's repo
+//   are in no ceiling. GitHub closes an issue when its pull request merges.
 // - issueLabel: the label each issue it creates must carry, in its ceiling too
 //   (issueLabelOf(), github-writes.mjs).
 // - prompt: its instructions, in ../prompts/ (prompts.mjs).

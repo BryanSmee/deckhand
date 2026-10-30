@@ -413,7 +413,8 @@ ctx.githubGateway = createGithubGateway({
   // policies' `deny_github` allows. Their targets are looked up with the listener's token.
   checkWrite: writeChecks.check,
   checkGraphql: graphqlChecks.check,
-  // Their creates' answers: the issues each run created, for its links.
+  // Their creates' and comments' answers: the issues each run created, for its links, and the
+  // comments it posted, which it may edit.
   wroteWrite: writeChecks.answered,
   log,
 });

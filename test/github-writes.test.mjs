@@ -25,6 +25,13 @@ const START = Date.parse("2026-10-29T10:00:00Z");
 const at = (s) => new Date(START + s * 1000).toISOString();
 const BOT = () => "deckhand[bot]";
 
+// The real `opa`, when the PATH has it (the listener's image does).
+let opa = false;
+try {
+  execFileSync("opa", ["version"], { stdio: "ignore" });
+  opa = true;
+} catch {}
+
 test("classify: a write's actions, its target and what it changes", () => {
   const cases = [
     [
@@ -97,13 +104,31 @@ test("classify: a write's actions, its target and what it changes", () => {
       { name: "idea" },
       { target: { kind: "label" }, labels_added: ["idea"] },
     ],
+    // An issue's comment by its id, checked against those the run posted; a review's, never.
     [
       "PATCH",
       "repos/org/repo/issues/comments/5",
       { body: "x" },
+      { actions: ["edit"], target: { comment: 5 } },
+    ],
+    [
+      "DELETE",
+      "repos/org/repo/issues/comments/5",
+      null,
+      { actions: ["delete"], target: { comment: 5 } },
+    ],
+    [
+      "PATCH",
+      "repos/org/repo/pulls/comments/5",
+      { body: "x" },
       { actions: ["edit"], target: { kind: "comment" } },
     ],
-    ["DELETE", "repos/org/repo/issues/comments/5", null, { actions: ["delete"] }],
+    [
+      "DELETE",
+      "repos/org/repo/issues/comments/5/reactions/6",
+      null,
+      { actions: ["delete"], target: { kind: "comment" } },
+    ],
     ["POST", "repos/org/repo/pulls/3/reviews", { event: "APPROVE" }, { actions: ["review"] }],
     ["POST", "repos/org/repo/pulls/3/comments/4/replies", { body: "x" }, { actions: ["review"] }],
     ["PUT", "repos/org/repo/pulls/3/merge", null, { actions: ["merge"], target: { number: 3 } }],
@@ -173,7 +198,11 @@ test("the ceilings: what each mode can ever write", () => {
   assert.deepEqual(aboveCeiling(work, "other_issue", ["comment"]), ["comment"]);
   assert.deepEqual(aboveCeiling(work, "pr", ["comment"]), ["comment"]);
   assert.deepEqual(aboveCeiling(work, "own_issue", ["close"]), ["close"]);
+  // It edits and deletes the comments it posted; another's are refused before (checkWrite()).
+  assert.deepEqual(aboveCeiling(work, "created_comment", ["edit", "delete"]), []);
+  assert.deepEqual(aboveCeiling(work, "comment", ["edit"]), ["edit"]);
   const brainstorm = ceilingOf("brainstorm", true);
+  assert.deepEqual(aboveCeiling(brainstorm, "created_comment", ["edit"]), ["edit"]);
   assert.deepEqual(aboveCeiling(brainstorm, "other_issue", ["comment"]), []);
   assert.deepEqual(aboveCeiling(brainstorm, "own_issue", ["label"]), ["label"]);
   assert.deepEqual(ceilingOf("stop", true), brainstorm);
@@ -190,9 +219,13 @@ test("the ceilings: what each mode can ever write", () => {
   // No ceiling holds what stays out of every one.
   for (const [mode, { ceiling = {} }] of Object.entries(MODES)) {
     for (const actions of Object.values(ceiling)) {
-      for (const out of ["close", "reopen", "delete", "merge", "review", "assign", "lock"]) {
+      for (const out of ["close", "reopen", "merge", "review", "assign", "lock"]) {
         assert.ok(!actions.includes(out), `${mode}: ${out}`);
       }
+    }
+    // Deleting: only the comments a work run posted (the default policy refuses it).
+    for (const [kind, actions] of Object.entries(ceiling)) {
+      if (kind !== "created_comment") assert.ok(!actions.includes("delete"), `${mode}: ${kind}`);
     }
     // A label's settings: created only, never edited or deleted.
     assert.deepEqual(aboveCeiling(ceiling, "label", ["edit", "delete"]), ["edit", "delete"], mode);
@@ -201,11 +234,21 @@ test("the ceilings: what each mode can ever write", () => {
 
 // A fake GitHub for the look-ups: issues by number (a `pull_request` field for a pull
 // request), pull requests' heads, issues' parents (a number: in the repo; else GitHub's
-// parent), issues' sub-issues, the repo's open issues (newest first, by pages of 100).
-function fakeLookup({ issues = {}, pulls = {}, parents = {}, subs = {}, open = [] } = {}) {
+// parent), issues' sub-issues, the repo's open issues (newest first, by pages of 100), its
+// issues' and pull requests' comments by their id.
+function fakeLookup({
+  issues = {},
+  pulls = {},
+  parents = {},
+  subs = {},
+  open = [],
+  comments = {},
+} = {}) {
   const calls = [];
   const lookup = async (repo, path) => {
     calls.push(path);
+    const comment = /^\/repos\/org\/repo\/issues\/comments\/(\d+)$/.exec(path);
+    if (comment) return comments[comment[1]] ?? null;
     const page = /^\/repos\/org\/repo\/issues\?state=open&per_page=100&page=(\d+)$/.exec(path);
     if (page) return open.slice((page[1] - 1) * 100, page[1] * 100);
     const m =
@@ -309,11 +352,15 @@ test("a work run writes its issue, its pull requests and its sub-issues, nothing
       write("PATCH", "repos/org/repo/labels/a", { color: "fff" }),
       /can't edit on label \(its ceiling\)/,
     ],
-    [write("DELETE", "repos/org/repo/labels/a"), /can't delete here/],
+    [write("DELETE", "repos/org/repo/labels/a"), /can't delete on label \(its ceiling\)/],
     [write("PATCH", "repos/org/repo/issues/1", { state: "closed" }), /can't close here/],
     [write("PUT", "repos/org/repo/pulls/7/merge"), /can't merge here/],
     [write("POST", "repos/org/repo/pulls/7/reviews", { event: "APPROVE" }), /can't review here/],
-    [write("PATCH", "repos/org/repo/issues/comments/5", { body: "x" }), /can't edit here/],
+    [
+      write("PATCH", "repos/org/repo/issues/comments/5", { body: "x" }),
+      /can edit only the comments it posted/,
+    ],
+    [write("PATCH", "repos/org/repo/pulls/comments/5", { body: "x" }), /can't edit here/],
     [write("POST", "repos/other/repo/issues/1/comments", { body: "x" }), /its own repository/],
     [write("PUT", "repos/org/repo/contents/a", {}), /can't tell what this write does/],
     [write("POST", "repos/org/repo/issues/99/comments", { body: "x" }), /#99 isn't there/],
@@ -501,6 +548,259 @@ test("the issues a run created: GitHub's answers to its own creates, REST and Gr
   ]);
   assert.equal(saved, 3);
 });
+
+// GitHub's answers to comments: `gh issue comment`'s GraphQL call (its URL is the web page's,
+// `/pull/` on a pull request), whose addComment answers under `addComment` (github-graphql.mjs
+// `comments`), and a REST one (its URL is the API's).
+const GRAPHQL_COMMENT = {
+  method: "POST",
+  path: "graphql",
+  body: json({
+    query:
+      "mutation CommentCreate($input: AddCommentInput!) { addComment(input: $input) { commentEdge { node { url } } } }",
+  }),
+  graphql: true,
+  comments: ["addComment"],
+  at: START,
+};
+const commented = (id, repo = "Org/Repo", on = "issues/1") =>
+  json({
+    data: {
+      addComment: {
+        commentEdge: { node: { url: `https://github.com/${repo}/${on}#issuecomment-${id}` } },
+      },
+    },
+  });
+const REST_COMMENT = {
+  ...write("POST", "repos/org/repo/issues/7/comments", { body: "x" }),
+  at: START,
+};
+const restComment = (id, repo = "Org/Repo") =>
+  json({
+    id,
+    url: `https://api.github.com/repos/${repo}/issues/comments/${id}`,
+    html_url: `https://github.com/${repo}/pull/7#issuecomment-${id}`,
+  });
+
+test("the comments a run posted: GitHub's answers to its own comments, REST and GraphQL", () => {
+  const { answered } = createWriteChecks({
+    needsInputLabel: () => null,
+    lookup: fakeLookup(GITHUB).lookup,
+  });
+  const work = run("work");
+  let saved = 0;
+  work.createdChanged = () => saved++;
+  answered(work, GRAPHQL_COMMENT, 200, commented(3000000001));
+  answered(work, GRAPHQL_COMMENT, 200, commented(3000000002, "Org/Repo", "pull/7"));
+  answered(work, REST_COMMENT, 201, restComment(3000000003));
+  // Again, refused by GitHub, another repository's, a call that posted none (its answer names
+  // one all the same), an issue created, not a comment.
+  answered(work, GRAPHQL_COMMENT, 200, commented(3000000001));
+  answered(work, GRAPHQL_COMMENT, 502, commented(41));
+  answered(work, REST_COMMENT, 422, restComment(42));
+  answered(work, GRAPHQL_COMMENT, 200, commented(43, "org/other"));
+  answered(work, REST_COMMENT, 201, restComment(44, "org/other"));
+  answered(work, { ...GRAPHQL_COMMENT, comments: [] }, 200, commented(45));
+  answered(work, REST_CREATE, 201, restComment(46));
+  answered(
+    work,
+    GRAPHQL_COMMENT,
+    200,
+    json({ data: { addComment: { commentEdge: { node: { url: "https://github.com/x" } } } } }),
+  );
+  // Its issues beside them, which a link's child is looked for among.
+  answered(work, GRAPHQL_CREATE, 200, created(30));
+  assert.deepEqual(work.created, [
+    { comment: 3000000001, at: START },
+    { comment: 3000000002, at: START },
+    { comment: 3000000003, at: START },
+    { number: 30, at: START },
+  ]);
+  assert.equal(saved, 4);
+});
+
+// Comments as GitHub has them: those the tests' runs posted, the listener's (its live progress
+// comment, also the bot's) and a person's.
+const COMMENTS = {
+  3000000001: {
+    id: 3000000001,
+    user: { login: "deckhand[bot]" },
+    issue_url: "https://api.github.com/repos/Org/Repo/issues/1",
+  },
+  3000000002: {
+    id: 3000000002,
+    user: { login: "deckhand[bot]" },
+    issue_url: "https://api.github.com/repos/Org/Repo/issues/7",
+  },
+  3000000009: {
+    id: 3000000009,
+    user: { login: "deckhand[bot]" },
+    issue_url: "https://api.github.com/repos/Org/Repo/issues/1",
+  },
+  3000000010: {
+    id: 3000000010,
+    user: { login: "alice" },
+    issue_url: "https://api.github.com/repos/Org/Repo/issues/1",
+  },
+};
+
+test("a run edits and deletes the comments it posted, never the listener's, another run's or a person's", async (t) => {
+  const { engine: policies, evals } = policyEngine(t, {
+    operator: { "github.rego": "package deckhand\n" },
+  });
+  const { lookup, calls } = fakeLookup({ ...GITHUB, comments: COMMENTS });
+  const { check, answered } = createWriteChecks({
+    lookup,
+    bot: BOT,
+    needsInputLabel: () => null,
+    policies,
+  });
+  const work = run("work");
+  answered(work, GRAPHQL_COMMENT, 200, commented(3000000001));
+  answered(work, REST_COMMENT, 201, restComment(3000000002));
+  // Its own: edited and deleted, as its ceiling holds (the default policy narrows it below).
+  const edit = write("PATCH", "repos/org/repo/issues/comments/3000000001", { body: "fixed" });
+  assert.equal(await check(work, edit), null);
+  assert.deepEqual(evals.at(-1), {
+    rule: "deny_github",
+    version: 1,
+    repo: "org/repo",
+    mode: "work",
+    custom_mode: false,
+    light: false,
+    reason: null,
+    issue: 1,
+    action: "edit",
+    actions: ["edit"],
+    target: {
+      number: 1,
+      comment: 3000000001,
+      labels: [],
+      author: "deckhand[bot]",
+      kind: "created_comment",
+    },
+    change: { fields: ["body"], labels_added: [], labels_removed: [] },
+  });
+  assert.equal(
+    await check(work, write("DELETE", "repos/org/repo/issues/comments/3000000002")),
+    null,
+  );
+  assert.equal(evals.at(-1).target.number, 7);
+  // The listener's, a person's, another run's: refused before any look-up or policy, saying
+  // what to send instead.
+  const asked = evals.length;
+  const looked = calls.length;
+  for (const id of [3000000009, 3000000010, 3000000003]) {
+    const refused = await check(
+      work,
+      write("PATCH", `repos/org/repo/issues/comments/${id}`, { body: "x" }),
+    );
+    assert.equal(refused.status, 403);
+    assert.match(refused.message, /can edit only the comments it posted, and this isn't one/);
+    assert.match(refused.message, /--edit-last/);
+    assert.match(refused.message, /gh api -X PATCH repos\/org\/repo\/issues\/comments\/<id>/);
+  }
+  const deleted = await check(work, write("DELETE", "repos/org/repo/issues/comments/3000000009"));
+  assert.match(deleted.message, /gh api -X DELETE repos\/org\/repo\/issues\/comments\/<id>/);
+  assert.equal(evals.length, asked);
+  assert.equal(calls.length, looked);
+  // Another run's list doesn't hold this one's: each run its own.
+  const other = run("work");
+  assert.match((await check(other, edit)).message, /only the comments it posted/);
+  // One GitHub no longer has (deleted since), or that isn't the bot's: refused.
+  work.created.push({ comment: 3000000010, at: START }, { comment: 3000000020, at: START });
+  assert.deepEqual(
+    await check(work, write("PATCH", "repos/org/repo/issues/comments/3000000010", { body: "x" })),
+    { status: 404, message: "comment 3000000010 isn't there" },
+  );
+  assert.equal(
+    (await check(work, write("DELETE", "repos/org/repo/issues/comments/3000000020"))).status,
+    404,
+  );
+  // Above a mode's ceiling: a brainstorm's replies are the listener's, an inbox entry's too.
+  for (const mode of ["brainstorm", "idea", "review"]) {
+    const light = { ...run(mode), created: [{ comment: 3000000001, at: START }] };
+    const refused = await check(light, edit);
+    assert.match(refused.message, /can't edit .*\(its ceiling\)/, mode);
+  }
+  // A review's comments stay refused, whoever wrote them.
+  assert.match(
+    (await check(work, write("PATCH", "repos/org/repo/pulls/comments/3000000001", { body: "x" })))
+      .message,
+    /can't edit here/,
+  );
+});
+
+test(
+  "the real opa: Deckhand's gh-own-comments.rego lets work runs edit their comments, and a repo's same-name file lets them delete",
+  { skip: !opa && "no opa on the PATH" },
+  async (t) => {
+    // Deckhand's own, as the image ships it.
+    const rego = builtInPolicies().get("gh-own-comments.rego");
+    // The repo's own files (name → text) in its .deckhand/policy/.
+    let files = {};
+    const policies = createPolicies({
+      config: {},
+      github: async (repo, method, path) => {
+        if (path === "/repos/org/repo/contents/.deckhand/policy?ref=main") {
+          return Response.json(
+            Object.keys(files).map((name) => ({ type: "file", name, sha: name })),
+          );
+        }
+        const name = path.split("/").pop();
+        if (path.startsWith("/repos/org/repo/git/blobs/") && name in files) {
+          const content = Buffer.from(files[name]).toString("base64");
+          return Response.json({ content, encoding: "base64" });
+        }
+        return new Response("{}", { status: 404 });
+      },
+      run: opaRunner(),
+      readOperator: () => new Map(),
+      readBuiltIn: () => new Map([["gh-own-comments.rego", rego]]),
+      tmp: tempDir(t),
+      now: (() => {
+        let clock = 0;
+        // Each decision a day apart: the repo's listing is read again.
+        return () => (clock += 86_400_000);
+      })(),
+    });
+    const { check, answered } = createWriteChecks({
+      lookup: fakeLookup({ ...GITHUB, comments: COMMENTS }).lookup,
+      bot: BOT,
+      needsInputLabel: () => null,
+      policies,
+    });
+    const posted = (mode) => {
+      const r = run(mode, { push: true });
+      answered(r, GRAPHQL_COMMENT, 200, commented(3000000001));
+      return r;
+    };
+    const edit = write("PATCH", "repos/org/repo/issues/comments/3000000001", { body: "x" });
+    const remove = write("DELETE", "repos/org/repo/issues/comments/3000000001");
+    assert.equal(await check(posted("work"), edit), null);
+    assert.deepEqual(await check(posted("work"), remove), {
+      status: 403,
+      message:
+        "the policies refuse it (deny_github): a run doesn't delete its comments unless .deckhand/policy/gh-own-comments.rego lets it: edit yours instead",
+    });
+    // The repository's own modes: neither, unless it says so.
+    assert.match(
+      (await check(posted("deploy"), edit)).message,
+      /a deploy run doesn't change its comments unless/,
+    );
+    // Other writes aren't this file's.
+    assert.equal(
+      await check(posted("deploy"), write("POST", "repos/org/repo/issues/1/comments", {})),
+      null,
+    );
+    // A repository's same-name file replaces it: here, without the rule on deleting.
+    files = {
+      "gh-own-comments.rego": rego.replace(/\n# A deleted comment[\s\S]*$/, "\n"),
+    };
+    assert.equal(await check(posted("work"), remove), null);
+    assert.match((await check(posted("deploy"), remove)).message, /a deploy run doesn't change/);
+  },
+);
 
 test("a sub-issue link: its child is one the run created or already under its issue, never moved", async () => {
   const { lookup } = fakeLookup(GITHUB);
@@ -775,13 +1075,6 @@ test("a policy's refusal reaches the agent through the gateway, in GitHub's erro
   );
   assert.equal((await post("/repos/org/repo/issues/1/labels", { labels: ["a"] })).status, 200);
 });
-
-// The real `opa`, when the PATH has it (the listener's image does).
-let opa = false;
-try {
-  execFileSync("opa", ["version"], { stdio: "ignore" });
-  opa = true;
-} catch {}
 
 test("runTraits: a repo's own mode, light without push, the listener's reason", () => {
   assert.deepEqual(runTraits(run("work")), { custom_mode: false, light: false, reason: null });
