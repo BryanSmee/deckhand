@@ -111,6 +111,9 @@ export function defaultRelayUrl(policyUrl) {
 
 class Refused extends Error {}
 
+// The most a CONNECT's client may send before its answer (a ClientHello sent early).
+export const EARLY_MAX = 16 * 1024;
+
 // A connection to `url`'s host, once made (over TLS for https:, verified against `ca`).
 function dial(url, ca) {
   return new Promise((resolve, reject) => {
@@ -224,7 +227,14 @@ export function createProxy({
     // reads never hears its end), and stops the wait for a restarting listener. What it sent
     // meanwhile goes on with `head`.
     const early = [head];
-    const keep = (chunk) => early.push(chunk);
+    let kept = head?.length ?? 0;
+    const keep = (chunk) => {
+      early.push(chunk);
+      kept += chunk.length;
+      // More than a TLS ClientHello before the 200: no client waits for an answer that way, and
+      // the proxy, every run's, keeps none of it.
+      if (kept > EARLY_MAX) client.destroy();
+    };
     client.on("data", keep);
     const gone = () => client.readableEnded || client.destroyed;
     let decision;

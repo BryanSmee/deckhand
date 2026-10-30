@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { connect } from "node:net";
 import { test } from "node:test";
 import { DRAIN_MS } from "../listener/drain.mjs";
-import { createProxy, defaultRelayUrl, listenerPolicy } from "../proxy/proxy.mjs";
+import { createProxy, defaultRelayUrl, EARLY_MAX, listenerPolicy } from "../proxy/proxy.mjs";
 import { LISTENER_WAIT_MS, notReached, untilReached } from "../proxy/wait.mjs";
 import { listening, serve } from "./helpers.mjs";
 
@@ -165,4 +165,27 @@ test("a client that left stops the policy's wait: no question for nobody", async
   const after = sleeps;
   await new Promise((resolve) => setTimeout(resolve, 100));
   assert.equal(sleeps, after);
+});
+
+test("what a CONNECT's client sends before its answer is capped while the policy waits", async (t) => {
+  const { server, port } = await serve(t, () => {});
+  await new Promise((resolve) => server.close(resolve));
+  const proxy = createProxy({
+    policy: listenerPolicy(`http://127.0.0.1:${port}/egress`, 5000, {
+      sleep: () => new Promise((resolve) => setTimeout(resolve, 10)),
+    }),
+  });
+  const proxyPort = await listening(proxy);
+  t.after(() => proxy.close());
+  const client = connect(proxyPort, "127.0.0.1");
+  client.on("error", () => {});
+  const closed = new Promise((resolve) => client.once("close", resolve));
+  await new Promise((resolve) => client.once("connect", resolve));
+  client.write("CONNECT x.test:443 HTTP/1.1\r\nhost: x.test:443\r\n\r\n");
+  // A ClientHello's worth is kept; past EARLY_MAX, the client is cut, the listener still down.
+  client.write(Buffer.alloc(4096));
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(client.destroyed, false);
+  client.write(Buffer.alloc(EARLY_MAX));
+  await closed;
 });
