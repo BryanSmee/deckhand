@@ -1,6 +1,6 @@
 # Services (target)
 
-Where the listener is headed once it is split (#499, its parts #500 to #506). Today it is still one
+Where the listener is headed once it is split (#499, its parts #500 to #509). Today it is still one
 process, beside the egress proxy: [architecture.md](architecture.md) describes what runs now.
 
 The split follows who holds which secret and who can reach what. The only service the internet
@@ -70,12 +70,12 @@ A run calls the proxy, the broker, the github, models and policy services while 
 the orchestrator or the runner: sandboxes run detached, and their events wait in the store's
 streams until the orchestrator acknowledges them.
 
-| Service                      | Copies            | On an update                                                                                                          |
-| ---------------------------- | ----------------- | --------------------------------------------------------------------------------------------------------------------- |
-| policy                       | 2, active         | no state: the new copy starts, the old one drains                                                                     |
-| github, models, broker, edge | 2, active         | shared state in the store; the new copy starts, the old one drains (models: up to 10 minutes, an agent call's length) |
-| orchestrator, runner         | 2, active/passive | the old copy releases its lease on SIGTERM, the new one takes it at once and restores from the store: about a second  |
-| proxy                        | per runs' network | drains on SIGTERM; until the split, it waits for a restarting listener instead of failing (#507)                      |
+| Service                      | Copies            | On an update                                                                                                                                  |
+| ---------------------------- | ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| policy                       | 2, active         | no state: the new copy starts, the old one drains                                                                                             |
+| github, models, broker, edge | 2, active         | shared state in the store; the new copy starts, the old one drains (models: up to 10 minutes, an agent call's length)                         |
+| orchestrator, runner         | 2, active/passive | the old copy releases its lease on SIGTERM, the new one takes it at once and restores from the store: about a second                          |
+| proxy                        | per runs' network | drains on SIGTERM; until the split, it waits for a restarting listener instead of failing (#507), for every call a sandbox makes to it (#511) |
 
 Active/passive is safe because state is saved as it changes (#508), each lease holder gets a
 higher fencing epoch that the github service, the runner and the broker check, events are
@@ -100,9 +100,10 @@ file backend on one node, Redis on several (#509).
 
 ## Rules
 
-- **No shared database**: each service keeps its own state, and streams its changes to those
-  that need them (server-sent events). The broker streams run starts, ends and progress; the
-  orchestrator streams task updates to edge; the runner streams run logs.
+- **No shared database**: each service keeps its own state through one store interface (#500),
+  and passes its changes to those that need them as store streams, acknowledged once handled,
+  so a handover loses none. The broker streams run starts, ends and progress; edge, verified
+  events; the orchestrator, task updates for the dashboard; the runner, run logs.
 - **Shared code** in `lib/`, copied into each image: no runtime dependencies, per service.
 - **The UI** stays in edge: static files from the dashboard's build, on the same origin as its
   API.
