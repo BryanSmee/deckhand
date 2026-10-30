@@ -68,7 +68,6 @@ const NODES = {
     repository: { nameWithOwner: "Org/Repo" },
   },
   PR_7: { __typename: "PullRequest", number: 7, repository: { nameWithOwner: "Org/Repo" } },
-  IC_1: { __typename: "IssueComment", repository: { nameWithOwner: "Org/Repo" } },
   // Comments by their id (a BigInt, sent as a string): one a run posts, the listener's, another
   // repository's.
   IC_own: {
@@ -86,6 +85,28 @@ const NODES = {
     fullDatabaseId: "3000000001",
     repository: { nameWithOwner: "org/other" },
   },
+  // Comments for reactions: on #1 (with the listener's 👀, the bot's), on #3, on pull request
+  // #7; a commit's.
+  IC_1: {
+    __typename: "IssueComment",
+    fullDatabaseId: "11",
+    repository: { nameWithOwner: "Org/Repo" },
+    reactionGroups: [
+      { content: "EYES", viewerHasReacted: true },
+      { content: "HEART", viewerHasReacted: false },
+    ],
+  },
+  IC_3: {
+    __typename: "IssueComment",
+    fullDatabaseId: "13",
+    repository: { nameWithOwner: "Org/Repo" },
+  },
+  RC_7: {
+    __typename: "PullRequestReviewComment",
+    fullDatabaseId: "17",
+    repository: { nameWithOwner: "Org/Repo" },
+  },
+  CC_1: { __typename: "CommitComment", repository: { nameWithOwner: "Org/Repo" } },
   L_idea: { __typename: "Label", name: "idea", repository: { nameWithOwner: "Org/Repo" } },
   L_bug: { __typename: "Label", name: "bug", repository: { nameWithOwner: "Org/Repo" } },
   L_needs: { __typename: "Label", name: "needs-input", repository: { nameWithOwner: "Org/Repo" } },
@@ -110,19 +131,35 @@ const ISSUES = {
   },
   7: { number: 7, pull_request: {}, user: { login: "deckhand[bot]" }, labels: [] },
 };
-// The comments, by their id: both the bot's.
+// Comments by their path and id: two the bot's (one a run posts, the listener's), and for
+// reactions, the issue or pull request each is on.
 const COMMENTS = {
-  3000000001: {
+  "issues/comments/3000000001": {
     user: { login: "deckhand[bot]" },
     issue_url: "https://api.github.com/repos/Org/Repo/issues/1",
   },
-  3000000009: {
+  "issues/comments/3000000009": {
     user: { login: "deckhand[bot]" },
     issue_url: "https://api.github.com/repos/Org/Repo/issues/1",
+  },
+  "issues/comments/11": {
+    id: 11,
+    user: { login: "alice" },
+    issue_url: "https://api.github.com/repos/org/repo/issues/1",
+  },
+  "issues/comments/13": {
+    id: 13,
+    user: { login: "bob" },
+    issue_url: "https://api.github.com/repos/org/repo/issues/3",
+  },
+  "pulls/comments/17": {
+    id: 17,
+    user: { login: "bob" },
+    pull_request_url: "https://api.github.com/repos/org/repo/pulls/7",
   },
 };
 async function lookup(repo, path) {
-  const comment = /^\/repos\/org\/repo\/issues\/comments\/(\d+)$/.exec(path);
+  const comment = /^\/repos\/org\/repo\/((?:issues|pulls)\/comments\/\d+)$/.exec(path);
   if (comment) return COMMENTS[comment[1]] ?? null;
   const m = /^\/repos\/org\/repo\/(issues|pulls)\/(\d+)(\/parent|\/sub_issues.*)?$/.exec(path);
   if (!m) throw new Error(`unexpected look-up ${path}`);
@@ -674,11 +711,11 @@ test("targets come from GitHub's nodes: a missing one, a wrong type, another rep
     assert.equal(out.refused?.status, status, JSON.stringify(variables));
     assert.match(out.refused.message, message);
   }
-  // Reactions to a comment: refused as REST refuses them.
+  // Reactions to a commit's comment: refused as REST refuses them.
   const react = await check(
     work,
     call(
-      'mutation { addReaction(input: { subjectId: "IC_1", content: HEART }) { clientMutationId } }',
+      'mutation { addReaction(input: { subjectId: "CC_1", content: HEART }) { clientMutationId } }',
     ),
   );
   assert.equal(react.refused.status, 403);
@@ -1070,4 +1107,102 @@ test("deny_github over GraphQL: the run's mode, whether it is the repo's own, li
     [evals.at(-1).mode, evals.at(-1).custom_mode, evals.at(-1).light],
     ["plan", true, false],
   );
+});
+
+test("reactions over GraphQL: on the run's issues, pull requests and their comments; removed only when its own", async () => {
+  const { check, writes } = checks();
+  const work = run("work");
+  const add = (subject, content = "THUMBS_UP") =>
+    call(
+      `mutation { addReaction(input: { subjectId: "${subject}", content: ${content} }) { reaction { content } } }`,
+    );
+  const remove = (subject, content) =>
+    call(
+      `mutation { removeReaction(input: { subjectId: "${subject}", content: ${content} }) { reaction { content } } }`,
+    );
+  for (const [subject, target, reaction] of [
+    ["I_1", { number: 1 }, { subject: "issue:1", content: "+1", fresh: true }],
+    ["PR_7", { number: 7 }, { subject: "issue:7", content: "+1", fresh: true }],
+    [
+      "IC_1",
+      { reacted: { id: 11, type: "issue" } },
+      { subject: "issue_comment:11", content: "+1", fresh: true },
+    ],
+    [
+      "RC_7",
+      { reacted: { id: 17, type: "review" } },
+      { subject: "review_comment:17", content: "+1", fresh: true },
+    ],
+  ]) {
+    const out = await check(work, add(subject));
+    assert.equal(out.refused, undefined, subject);
+    const { subject: key, content } = reaction;
+    assert.deepEqual(out.reacts, [{ key: "addReaction", subject: key, content }], subject);
+    assert.deepEqual(writes.at(-1).target, target, subject);
+    assert.deepEqual(writes.at(-1).reaction, reaction, subject);
+    assert.deepEqual(writes.at(-1).actions, ["react"]);
+  }
+  // 👀 the bot has already (the listener's): it goes on, but isn't the run's.
+  const eyes = await check(work, add("IC_1", "EYES"));
+  assert.equal(eyes.refused, undefined);
+  assert.deepEqual(eyes.reacts, []);
+  assert.deepEqual((await check(work, add("IC_1", "HEART"))).reacts, [
+    { key: "addReaction", subject: "issue_comment:11", content: "heart" },
+  ]);
+  // Another's issue's comment: its issue's kind.
+  assert.match((await check(work, add("IC_3"))).refused.message, /can't react on other_issue #3/);
+  // Removing: only a reaction the run added, by its subject and content.
+  const listener = await check(work, remove("IC_1", "EYES"));
+  assert.equal(listener.refused?.status, 403);
+  assert.match(listener.refused.message, /removes only the reactions it added/);
+  const own = {
+    ...work,
+    created: [{ reaction: { subject: "issue_comment:11", content: "heart" }, at: 0 }],
+  };
+  const removed = await check(own, remove("IC_1", "HEART"));
+  assert.equal(removed.refused, undefined);
+  assert.deepEqual(writes.at(-1).actions, ["unreact"]);
+  assert.deepEqual(removed.unreacts, [
+    { key: "removeReaction", subject: "issue_comment:11", content: "heart" },
+  ]);
+  assert.deepEqual(removed.reacts, []);
+  assert.equal((await check(own, remove("IC_1", "EYES"))).refused?.status, 403);
+  assert.equal((await check(own, remove("I_1", "HEART"))).refused?.status, 403);
+  // A brainstorm: on its issue and its comments only.
+  const brainstorm = run("brainstorm");
+  assert.equal((await check(brainstorm, add("I_1"))).refused, undefined);
+  assert.equal((await check(brainstorm, add("IC_1"))).refused, undefined);
+  assert.match((await check(brainstorm, add("PR_7"))).refused.message, /can't react on pr #7/);
+  assert.match((await check(brainstorm, add("RC_7"))).refused.message, /can't react on pr #7/);
+});
+
+test("reactions over GraphQL: those GitHub ran are the run's, kept with its issues", () => {
+  const { answered } = createWriteChecks({
+    needsInputLabel: () => null,
+    lookup,
+    bot: () => "deckhand[bot]",
+  });
+  const work = run("work");
+  const reacts = [
+    { key: "a", subject: "issue:1", content: "+1" },
+    { key: "b", subject: "issue_comment:11", content: "heart" },
+  ];
+  const sent = { method: "POST", path: "/graphql", graphql: true, reacts, at: 5 };
+  // GitHub ran `a` only: `b` answers null, with an error beside.
+  answered(work, sent, 200, json({ data: { a: { reaction: {} }, b: null }, errors: [{}] }));
+  assert.deepEqual(work.created, [{ reaction: { subject: "issue:1", content: "+1" }, at: 5 }]);
+  // Again: kept once.
+  answered(work, sent, 200, json({ data: { a: { reaction: {} } } }));
+  assert.equal(work.created.length, 1);
+  answered(work, sent, 502, json({ data: { b: {} } }));
+  assert.equal(work.created.length, 1);
+  // Removed: no longer its own, but where GitHub didn't run it.
+  const unreacts = [
+    { key: "c", subject: "issue:1", content: "+1" },
+    { key: "d", subject: "issue:1", content: "heart" },
+  ];
+  work.created.push({ reaction: { subject: "issue:1", content: "heart" }, at: 6 });
+  const removing = { method: "POST", path: "/graphql", graphql: true, unreacts, at: 7 };
+  answered(work, removing, 200, json({ data: { c: { reaction: {} }, d: null } }));
+  assert.deepEqual(work.created, [{ reaction: { subject: "issue:1", content: "heart" }, at: 6 }]);
 });

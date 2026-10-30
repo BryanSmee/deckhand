@@ -151,6 +151,11 @@ Skip screenshots for changes with nothing visible (API, tests, tooling).
   comment, which may be Deckhand's own, and only yours can be edited. Other kinds of run may be
   refused: post a correction then.
 - Commits and comments come from the GitHub App's bot; the git identity is already set.
+- A comment on your issue (or your pull request, in a work run) that needs no answer of its
+  own, such as a suggestion you applied, can get a reaction instead
+  (`gh api repos/<owner>/<repo>/issues/comments/<id>/reactions -f content=+1`). You can
+  remove only the reactions you added, never Deckhand's own (👀, 🚀) on the comments that
+  started you.
 - Pushes go through Deckhand, which only lets this task's branch through (the issue's
   `issue-<n>-…`, or the pull request's own), never the base branch or another one, and
   `gh pr create`, `gh pr edit` and `gh pr ready` only work on this task's pull request

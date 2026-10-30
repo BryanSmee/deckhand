@@ -3,6 +3,7 @@
 // github-graphql.test.mjs's.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -123,11 +124,30 @@ test("classify: a write's actions, its target and what it changes", () => {
       { body: "x" },
       { actions: ["edit"], target: { kind: "comment" } },
     ],
+    // Reactions: on an issue or pull request, or on a comment, whose issue is looked up.
+    [
+      "POST",
+      "repos/org/repo/issues/12/reactions",
+      { content: "+1" },
+      { actions: ["react"], target: { number: 12 } },
+    ],
     [
       "DELETE",
-      "repos/org/repo/issues/comments/5/reactions/6",
+      "repos/org/repo/issues/12/reactions/77",
       null,
-      { actions: ["delete"], target: { kind: "comment" } },
+      { actions: ["unreact"], target: { number: 12 } },
+    ],
+    [
+      "POST",
+      "repos/org/repo/issues/comments/5/reactions",
+      { content: "eyes" },
+      { actions: ["react"], target: { reacted: { id: 5, type: "issue" } } },
+    ],
+    [
+      "DELETE",
+      "repos/org/repo/pulls/comments/5/reactions/77",
+      null,
+      { actions: ["unreact"], target: { reacted: { id: 5, type: "review" } } },
     ],
     ["POST", "repos/org/repo/pulls/3/reviews", { event: "APPROVE" }, { actions: ["review"] }],
     ["POST", "repos/org/repo/pulls/3/comments/4/replies", { body: "x" }, { actions: ["review"] }],
@@ -161,6 +181,21 @@ test("classify: a write's actions, its target and what it changes", () => {
     classify("PUT", "repos/org/repo/issues/12/labels", json(["a"])).change.labels_set,
     true,
   );
+  // A reaction's subject, as the run's own are kept.
+  for (const [method, path, body, reaction] of [
+    ["POST", "issues/3/reactions", { content: "+1" }, { subject: "issue:3", content: "+1" }],
+    ["DELETE", "issues/3/reactions/9", null, { subject: "issue:3", id: 9 }],
+    [
+      "POST",
+      "issues/comments/5/reactions",
+      { content: "eyes" },
+      { subject: "issue_comment:5", content: "eyes" },
+    ],
+    ["DELETE", "pulls/comments/5/reactions/9", null, { subject: "review_comment:5", id: 9 }],
+  ]) {
+    const body_ = body === null ? Buffer.alloc(0) : json(body);
+    assert.deepEqual(classify(method, `repos/org/repo/${path}`, body_).reaction, reaction, path);
+  }
   // Rendering markdown writes nothing.
   assert.deepEqual(classify("POST", "markdown/raw", Buffer.from("# x")), { read: true });
   // What it can't classify: null.
@@ -235,7 +270,7 @@ test("the ceilings: what each mode can ever write", () => {
 // A fake GitHub for the look-ups: issues by number (a `pull_request` field for a pull
 // request), pull requests' heads, issues' parents (a number: in the repo; else GitHub's
 // parent), issues' sub-issues, the repo's open issues (newest first, by pages of 100), its
-// issues' and pull requests' comments by their id.
+// issues' and pull requests' comments and review comments by their id.
 function fakeLookup({
   issues = {},
   pulls = {},
@@ -243,12 +278,13 @@ function fakeLookup({
   subs = {},
   open = [],
   comments = {},
+  reviewComments = {},
 } = {}) {
   const calls = [];
   const lookup = async (repo, path) => {
     calls.push(path);
-    const comment = /^\/repos\/org\/repo\/issues\/comments\/(\d+)$/.exec(path);
-    if (comment) return comments[comment[1]] ?? null;
+    const comment = /^\/repos\/org\/repo\/(issues|pulls)\/comments\/(\d+)$/.exec(path);
+    if (comment) return (comment[1] === "pulls" ? reviewComments : comments)[comment[2]] ?? null;
     const page = /^\/repos\/org\/repo\/issues\?state=open&per_page=100&page=(\d+)$/.exec(path);
     if (page) return open.slice((page[1] - 1) * 100, page[1] * 100);
     const m =
@@ -310,6 +346,42 @@ const GITHUB = {
     { number: 8, id: 908, pull_request: {} },
     { number: 3, id: 903 },
   ],
+  // On #1, alice's and the bot's; on #3, bob's; on another repository's #1.
+  comments: {
+    11: {
+      id: 11,
+      user: { login: "alice" },
+      issue_url: "https://api.github.com/repos/Org/Repo/issues/1",
+    },
+    12: {
+      id: 12,
+      user: { login: "deckhand[bot]" },
+      issue_url: "https://api.github.com/repos/org/repo/issues/1",
+    },
+    13: {
+      id: 13,
+      user: { login: "bob" },
+      issue_url: "https://api.github.com/repos/org/repo/issues/3",
+    },
+    14: {
+      id: 14,
+      user: { login: "bob" },
+      issue_url: "https://api.github.com/repos/org/other/issues/1",
+    },
+  },
+  // On its pull request #7, and on #8, another branch's.
+  reviewComments: {
+    17: {
+      id: 17,
+      user: { login: "bob" },
+      pull_request_url: "https://api.github.com/repos/org/repo/pulls/7",
+    },
+    18: {
+      id: 18,
+      user: { login: "bob" },
+      pull_request_url: "https://api.github.com/repos/org/repo/pulls/8",
+    },
+  },
 };
 function run(mode, { push = mode === "work", issue = 1, branches = ["issue-1-*"] } = {}) {
   const branch = push ? branches : [];
@@ -948,6 +1020,174 @@ test("a blocked-by link's blocker by its id is looked for among the repo's newes
   assert.equal(far.calls.filter((c) => c.includes("state=open")).length, 10);
 });
 
+// GitHub's answer to a run's REST reaction: 201 when it added it, 200 when it was there.
+const reacted = (id, content, status = 201) => [status, json({ id, content, user: {} })];
+
+test("reactions: a work run's on its issues, pull requests and their comments, nothing else", async () => {
+  const { lookup } = fakeLookup(GITHUB);
+  const { check } = createWriteChecks({ needsInputLabel: () => null, lookup, bot: BOT });
+  const work = run("work");
+  const react = (path) => write("POST", `repos/org/repo/${path}/reactions`, { content: "+1" });
+  for (const path of [
+    "issues/1",
+    "issues/7",
+    "issues/2",
+    "issues/comments/11",
+    "issues/comments/12",
+    "pulls/comments/17",
+  ]) {
+    assert.equal(await check(work, react(path)), null, path);
+  }
+  for (const [path, status, why] of [
+    ["issues/3", 403, /can't react on other_issue #3 \(its ceiling\)/],
+    ["issues/8", 403, /can't react on pr #8/],
+    // A comment's issue is its target: another's, or another repository's.
+    ["issues/comments/13", 403, /can't react on other_issue #3/],
+    ["pulls/comments/18", 403, /can't react on pr #8/],
+    ["issues/comments/14", 404, /comment 14 isn't there/],
+    ["issues/comments/99", 404, /comment 99 isn't there/],
+    // A review comment by an issue comment's path is another comment.
+    ["pulls/comments/11", 404, /comment 11 isn't there/],
+  ]) {
+    const got = await check(work, react(path));
+    assert.equal(got?.status, status, path);
+    assert.match(got.message, why, path);
+  }
+  // A failing look-up: refused, fail closed.
+  const { check: down } = createWriteChecks({
+    needsInputLabel: () => null,
+    lookup: async () => {
+      throw new Error("down");
+    },
+  });
+  assert.equal((await down(work, react("issues/comments/11"))).status, 502);
+});
+
+test("reactions: a brainstorm's on its issue and its comments; the modes that don't react", async () => {
+  const { lookup } = fakeLookup(GITHUB);
+  const { check } = createWriteChecks({ needsInputLabel: () => null, lookup, bot: BOT });
+  const react = (path) => write("POST", `repos/org/repo/${path}/reactions`, { content: "eyes" });
+  for (const mode of ["brainstorm", "stop"]) {
+    assert.equal(await check(run(mode), react("issues/1")), null, mode);
+    assert.equal(await check(run(mode), react("issues/comments/11")), null, mode);
+    assert.match((await check(run(mode), react("issues/2"))).message, /on sub_issue #2/);
+    assert.match((await check(run(mode), react("issues/comments/13"))).message, /other_issue #3/);
+    assert.match((await check(run(mode), react("pulls/comments/17"))).message, /on pr #7/);
+  }
+  for (const mode of ["idea", "bug", "discussion", "onboarding", "analyze", "review"]) {
+    assert.match((await check(run(mode), react("issues/1"))).message, /its ceiling/, mode);
+  }
+});
+
+test("reactions: a run removes only those it added, never the listener's", async () => {
+  const { lookup } = fakeLookup(GITHUB);
+  const { check, answered } = createWriteChecks({ needsInputLabel: () => null, lookup, bot: BOT });
+  const work = { ...run("work"), createdChanged: () => saved++ };
+  let saved = 0;
+  const post = (path, content) => ({
+    method: "POST",
+    path: `/repos/org/repo/${path}/reactions`,
+    body: json({ content }),
+    at: START,
+  });
+  const remove = (path, id) => write("DELETE", `repos/org/repo/${path}/reactions/${id}`);
+  // The listener's 👀 on the comment that triggered the run: the same bot's, never the run's.
+  assert.deepEqual(await check(work, remove("issues/comments/11", 501)), {
+    status: 403,
+    message: "a run removes only the reactions it added, never the listener's or anyone else's",
+  });
+  // The run adds 👀 where the bot had it already (200): still not its own.
+  answered(work, post("issues/comments/11", "eyes"), ...reacted(501, "eyes", 200));
+  assert.equal((await check(work, remove("issues/comments/11", 501))).status, 403);
+  assert.equal(saved, 0);
+  // One it added (201) it removes, by its id, on that comment only.
+  answered(work, post("issues/comments/11", "+1"), ...reacted(502, "+1"));
+  assert.equal(saved, 1);
+  assert.deepEqual(work.created, [
+    { reaction: { subject: "issue_comment:11", content: "+1", id: 502 }, at: START },
+  ]);
+  assert.equal(await check(work, remove("issues/comments/11", 502)), null);
+  assert.equal((await check(work, remove("issues/comments/12", 502))).status, 403);
+  assert.equal((await check(work, remove("issues/1", 502))).status, 403);
+  // On its pull request too, and on a review comment.
+  answered(work, post("issues/7", "rocket"), ...reacted(503, "rocket"));
+  answered(work, post("pulls/comments/17", "heart"), ...reacted(504, "heart"));
+  assert.equal(await check(work, remove("issues/7", 503)), null);
+  assert.equal(await check(work, remove("pulls/comments/17", 504)), null);
+  // Another repository's, a failed one, the same one twice: not kept.
+  answered(
+    work,
+    { ...post("issues/1", "+1"), path: "/repos/org/other/issues/1/reactions" },
+    ...reacted(505, "+1"),
+  );
+  answered(work, post("issues/1", "+1"), 422, json({ message: "Validation Failed" }));
+  answered(work, post("issues/7", "rocket"), ...reacted(503, "rocket"));
+  assert.equal(work.created.length, 3);
+  // Removed (204), it is no longer the run's: the listener's 👀 on that comment since, the
+  // same bot's, isn't.
+  answered(work, post("issues/comments/12", "eyes"), ...reacted(510, "eyes"));
+  const remove510 = remove("issues/comments/12", 510);
+  assert.equal(await check(work, remove510), null);
+  saved = 0;
+  answered(work, { ...remove510, at: START }, 204, Buffer.alloc(0));
+  assert.equal(saved, 1);
+  assert.equal(
+    work.created.some((c) => c.reaction?.id === 510),
+    false,
+  );
+  assert.equal((await check(work, remove510)).status, 403);
+  // A removal GitHub refused keeps it.
+  answered(work, { ...remove("issues/7", 503), at: START }, 404, json({}));
+  assert.equal(await check(work, remove("issues/7", 503)), null);
+  // The issues it created are still read apart from its reactions: none to look up here.
+  const link = write("POST", "repos/org/repo/issues/1/sub_issues", { sub_issue_id: 999 });
+  assert.match((await check(work, link)).message, /links only issues it created/);
+});
+
+test("reactions: never the listener's 👀 on a comment it handed the run, though the run's came first", async () => {
+  const { lookup } = fakeLookup(GITHUB);
+  const { check, answered } = createWriteChecks({ needsInputLabel: () => null, lookup, bot: BOT });
+  const listened = [];
+  const work = { ...run("work"), listened: () => listened };
+  const add = (content) => ({
+    method: "POST",
+    path: "/repos/org/repo/issues/comments/11/reactions",
+    body: json({ content }),
+    at: START,
+  });
+  answered(work, add("eyes"), ...reacted(600, "eyes"));
+  answered(work, add("+1"), ...reacted(601, "+1"));
+  const remove = (id) => write("DELETE", `repos/org/repo/issues/comments/11/reactions/${id}`);
+  assert.equal(await check(work, remove(600)), null);
+  // The listener took the comment in for the run: its 👀 is the one GitHub keeps.
+  listened.push("issue_comment:11");
+  assert.deepEqual(await check(work, remove(600)), {
+    status: 403,
+    message: "a run doesn't take off the listener's 👀 on the comments it handles",
+  });
+  // Its other reactions there are still its own.
+  assert.equal(await check(work, remove(601)), null);
+});
+
+test("reactions: a run keeps its newest ones only", () => {
+  const { answered } = createWriteChecks({ needsInputLabel: () => null, lookup: async () => null });
+  const work = { ...run("work"), created: [{ number: 30, at: 1 }] };
+  for (let id = 1; id <= 105; id++) {
+    const post = {
+      method: "POST",
+      path: "/repos/org/repo/issues/1/reactions",
+      body: json({}),
+      at: id,
+    };
+    answered(work, post, ...reacted(id, "+1"));
+  }
+  const kept = work.created.filter((c) => c.reaction).map((c) => c.reaction.id);
+  assert.equal(kept.length, 100);
+  assert.deepEqual([kept[0], kept.at(-1)], [6, 105]);
+  // Its issues aren't counted with them.
+  assert.deepEqual(work.created[0], { number: 30, at: 1 });
+});
+
 test("deny_github: its input, and its reasons refusing the write", async (t) => {
   const { engine: policies, evals } = policyEngine(t, {
     operator: { "github.rego": "package deckhand\n" },
@@ -1027,6 +1267,46 @@ test("deny_github: its input, and its reasons refusing the write", async (t) => 
     [evals.at(-1).mode, evals.at(-1).custom_mode, evals.at(-1).light, evals.at(-1).reason],
     ["plan", true, false, null],
   );
+  // A reaction's content, and the comment it is on: its author, and whether the bot wrote it.
+  const { check: withBot } = createWriteChecks({
+    needsInputLabel: () => null,
+    lookup: fakeLookup(GITHUB).lookup,
+    bot: BOT,
+    policies,
+  });
+  for (const [id, author, deckhand] of [
+    [11, "alice", false],
+    [12, "deckhand[bot]", true],
+  ]) {
+    const path = `repos/org/repo/issues/comments/${id}/reactions`;
+    assert.equal(await withBot(work, write("POST", path, { content: "eyes" })), null);
+    const { action, target, change } = evals.at(-1);
+    assert.equal(action, "react");
+    assert.deepEqual(target, {
+      number: 1,
+      labels: ["idea"],
+      author: "alice",
+      kind: "own_issue",
+      comment: id,
+      comment_author: author,
+      comment_deckhand: deckhand,
+    });
+    assert.deepEqual(change, {
+      fields: ["content"],
+      labels_added: [],
+      labels_removed: [],
+      content: "eyes",
+    });
+  }
+  // A removal's content is the one the run added.
+  const reacting = {
+    ...work,
+    created: [{ reaction: { subject: "issue:7", content: "+1", id: 5 } }],
+  };
+  await withBot(reacting, write("DELETE", "repos/org/repo/issues/7/reactions/5"));
+  assert.equal(evals.at(-1).action, "unreact");
+  assert.equal(evals.at(-1).change.content, "+1");
+  assert.equal(evals.at(-1).target.comment, undefined);
   // Above the ceiling: refused before any policy runs.
   const asked = evals.length;
   await check(brainstorm, write("PATCH", "repos/org/repo/issues/3", { body: "x" }));
@@ -1238,6 +1518,84 @@ deny_github contains "only plan runs create labels" if {
     // Labelling its sub-issue is still the work run's.
     const sub = write("POST", "repos/org/repo/issues/2/labels", { labels: ["a"] });
     assert.equal(await check(run("work"), sub), null);
+  },
+);
+
+test(
+  "the real opa: policy/gh-reactions.rego lets work runs and brainstorms react, and a repo's same-name file its own modes",
+  { skip: !opa && "no opa on the PATH" },
+  async (t) => {
+    const rego = readFileSync(join(import.meta.dirname, "..", "policy", "gh-reactions.rego"));
+    const shaOf = (text) => createHash("sha1").update(text).digest("hex");
+    // The repo's own files (name → text) in its .deckhand/policy/.
+    let files = {};
+    const policies = createPolicies({
+      config: {},
+      github: async (repo, method, path) => {
+        if (path === "/repos/org/repo/contents/.deckhand/policy?ref=main") {
+          // A file's sha changes with its text, as GitHub's: its blob is read again.
+          return Response.json(
+            Object.keys(files).map((name) => ({ type: "file", name, sha: shaOf(files[name]) })),
+          );
+        }
+        const sha = path.split("/").pop();
+        const name = Object.keys(files).find((n) => shaOf(files[n]) === sha);
+        if (path.startsWith("/repos/org/repo/git/blobs/") && name) {
+          const content = Buffer.from(files[name]).toString("base64");
+          return Response.json({ content, encoding: "base64" });
+        }
+        return new Response("{}", { status: 404 });
+      },
+      run: opaRunner(),
+      readOperator: () => new Map([["gh-reactions.rego", String(rego)]]),
+      tmp: tempDir(t),
+      now: (() => {
+        let clock = 0;
+        // Each decision a day apart: the repo's listing is read again.
+        return () => (clock += 86_400_000);
+      })(),
+    });
+    const { check, answered } = createWriteChecks({
+      lookup: fakeLookup(GITHUB).lookup,
+      bot: BOT,
+      needsInputLabel: () => null,
+      policies,
+    });
+    const react = write("POST", "repos/org/repo/issues/comments/11/reactions", {
+      content: "+1",
+    });
+    // A run that added 👍 there, for the removals.
+    const reacting = (mode) => {
+      const r = run(mode, { push: mode !== "brainstorm" });
+      const post = { method: "POST", path: react.path, body: react.body, at: START };
+      answered(r, post, ...reacted(9, "+1"));
+      return r;
+    };
+    const remove = write("DELETE", "repos/org/repo/issues/comments/11/reactions/9");
+    for (const mode of ["work", "brainstorm", "stop"]) {
+      assert.equal(await check(reacting(mode), react), null, mode);
+      assert.equal(await check(reacting(mode), remove), null, mode);
+    }
+    // The repository's own modes: neither, unless it says so.
+    for (const w of [react, remove]) {
+      assert.deepEqual(await check(reacting("deploy"), w), {
+        status: 403,
+        message:
+          "the policies refuse it (deny_github): a deploy run doesn't react unless .deckhand/policy/gh-reactions.rego lets it",
+      });
+    }
+    // Other writes aren't this file's.
+    const comment = write("POST", "repos/org/repo/issues/1/comments", { body: "x" });
+    assert.equal(await check(reacting("deploy"), comment), null);
+    // A repository's same-name file replaces it: here, one that allows them everywhere.
+    files = { "gh-reactions.rego": "package deckhand\n" };
+    assert.equal(await check(reacting("deploy"), react), null);
+    // Or refuses them altogether.
+    files = {
+      "gh-reactions.rego":
+        'package deckhand\n\ndeny_github contains "no reactions here" if input.action in {"react", "unreact"}\n',
+    };
+    assert.match((await check(reacting("work"), react)).message, /no reactions here/);
   },
 );
 

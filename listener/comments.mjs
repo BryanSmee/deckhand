@@ -14,13 +14,17 @@ const REACTIONS = {
   acknowledged: "+1",
 };
 
-// GraphQL's names for the reactions above.
-const REACTION_ENUM = {
-  eyes: "EYES",
-  rocket: "ROCKET",
-  confused: "CONFUSED",
-  "-1": "THUMBS_DOWN",
+// GraphQL's names for GitHub's reactions, by REST's: the listener's above, and those a run adds
+// (github-graphql.mjs REACTION_CONTENT reads it the other way).
+export const REACTION_ENUM = {
   "+1": "THUMBS_UP",
+  "-1": "THUMBS_DOWN",
+  laugh: "LAUGH",
+  hooray: "HOORAY",
+  confused: "CONFUSED",
+  heart: "HEART",
+  rocket: "ROCKET",
+  eyes: "EYES",
 };
 
 // Whether `labels` (an issue's, as GitHub has them: names or { name }) hold `name`. GitHub's

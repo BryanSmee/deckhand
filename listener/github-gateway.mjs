@@ -233,15 +233,16 @@ export function createGithubGateway({
   // (run, { method, path, body }) → null when a REST write may go on, else { status, message }
   // (github-writes.mjs createWriteChecks()). None: every REST write is refused.
   checkWrite = async () => ({ status: 403, message: "no write is checked here" }),
-  // (run, body) → a GraphQL call's { body, write, creates, comments, permissions, pulls } as it
-  // goes on, or { refused } (github-graphql.mjs createGraphqlChecks()). None: every GraphQL
-  // call is refused.
+  // (run, body) → a GraphQL call's { body, write, creates, comments, reacts, unreacts,
+  // permissions, pulls } as it goes on, or { refused } (github-graphql.mjs
+  // createGraphqlChecks()). None: every GraphQL call is refused.
   checkGraphql = async () => ({ refused: { status: 403, message: "no GraphQL is checked here" } }),
-  // (run, { method, path, body, graphql, creates, comments, pulls, at }, status, answer) →
-  // GitHub's answer to a write that went on and may create an issue, post a comment or change a
-  // pull request (a REST write, a GraphQL `createIssue`, `addComment` or pull request mutation),
-  // its bytes up to MAX_ANSWER, `at` when it was sent (github-writes.mjs answered(): the issues
-  // a run created and the comments it posted, the dashboard's pull requests).
+  // (run, { method, path, body, graphql, creates, comments, reacts, unreacts, pulls, at },
+  // status, answer) → GitHub's answer to a write that went on and may create an issue, post a
+  // comment, add or remove a reaction or change a pull request (a REST write, a GraphQL
+  // `createIssue`, `addComment`, `addReaction`, `removeReaction` or pull request mutation), its
+  // bytes up to MAX_ANSWER, `at` when it was sent (github-writes.mjs answered(): the issues a
+  // run created, the comments it posted and its reactions, the dashboard's pull requests).
   wroteWrite = () => {},
   log = () => {},
   maxInFlight = MAX_IN_FLIGHT,
@@ -467,7 +468,10 @@ export function createGithubGateway({
           permissions = checked.permissions ?? {};
           const pulls = checked.pulls ?? [];
           const comments = checked.comments ?? [];
-          if (checked.creates.length || comments.length || pulls.length) {
+          const reacts = checked.reacts ?? [];
+          const unreacts = checked.unreacts ?? [];
+          const answers = [checked.creates, comments, reacts, unreacts, pulls];
+          if (answers.some((list) => list.length)) {
             watched = {
               method: req.method,
               path: where.path,
@@ -475,6 +479,8 @@ export function createGithubGateway({
               graphql: true,
               creates: checked.creates,
               comments,
+              reacts,
+              unreacts,
               pulls,
             };
           }

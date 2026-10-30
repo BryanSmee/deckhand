@@ -573,7 +573,7 @@ test("a REST write with a query string is refused unchecked: GitHub may read it"
   assert.equal(gw.calls.length, 1);
 });
 
-test("the answers of REST writes and GraphQL createIssue and addComment calls go to wroteWrite, uncompressed", async (t) => {
+test("the answers of REST writes and GraphQL createIssue, addComment and addReaction calls go to wroteWrite, uncompressed", async (t) => {
   const wrote = [];
   const gw = await gateway(t, {
     wroteWrite: (run, write, status, answer) =>
@@ -584,15 +584,20 @@ test("the answers of REST writes and GraphQL createIssue and addComment calls go
         write.graphql,
         write.creates,
         write.comments,
+        write.reacts,
         status,
         answer.toString(),
       ]),
-    // github-graphql.mjs: the response keys of a call's createIssue and addComment fields.
+    // github-graphql.mjs: the response keys of a call's createIssue and addComment fields, and
+    // its new reactions.
     checkGraphql: async (run, body) => ({
       body,
       write: true,
       creates: body.includes("createIssue") ? ["createIssue", "b"] : [],
       comments: body.includes("commentEdge") ? ["addComment"] : [],
+      reacts: body.includes("addReaction")
+        ? [{ key: "addReaction", subject: "issue:1", content: "+1" }]
+        : [],
     }),
   });
   const { secret, run } = gw.register(undefined, { mode: "work", push: true, issue: 1 });
@@ -616,6 +621,12 @@ test("the answers of REST writes and GraphQL createIssue and addComment calls go
     body: '{"query": "mutation { addComment(input: {}) { commentEdge { node { url } } } }"}',
     headers: gzip,
   });
+  await gw.call("/api/graphql", {
+    secret,
+    method: "POST",
+    body: '{"query": "mutation { addReaction(input: {}) { clientMutationId } }"}',
+    headers: gzip,
+  });
   // Neither a read nor another GraphQL call: their answers aren't read, nor their encoding set.
   await gw.call("/api/v3/repos/org/repo", { secret, headers: gzip });
   await gw.call("/api/graphql", {
@@ -626,7 +637,7 @@ test("the answers of REST writes and GraphQL createIssue and addComment calls go
   });
   assert.deepEqual(
     gw.calls.map((c) => c.headers["accept-encoding"]),
-    ["identity", "identity", "identity", "gzip", "gzip"],
+    ["identity", "identity", "identity", "identity", "gzip", "gzip"],
   );
   assert.deepEqual(
     wrote.map(([r, ...rest]) => [r === run, ...rest]),
@@ -638,11 +649,33 @@ test("the answers of REST writes and GraphQL createIssue and addComment calls go
         false,
         undefined,
         undefined,
+        undefined,
         200,
         '{"url":"/api/v3/repos/org/repo/issues"}',
       ],
-      [true, "POST", "api/graphql", true, ["createIssue", "b"], [], 200, '{"url":"/api/graphql"}'],
-      [true, "POST", "api/graphql", true, [], ["addComment"], 200, '{"url":"/api/graphql"}'],
+      [
+        true,
+        "POST",
+        "api/graphql",
+        true,
+        ["createIssue", "b"],
+        [],
+        [],
+        200,
+        '{"url":"/api/graphql"}',
+      ],
+      [true, "POST", "api/graphql", true, [], ["addComment"], [], 200, '{"url":"/api/graphql"}'],
+      [
+        true,
+        "POST",
+        "api/graphql",
+        true,
+        [],
+        [],
+        [{ key: "addReaction", subject: "issue:1", content: "+1" }],
+        200,
+        '{"url":"/api/graphql"}',
+      ],
     ],
   );
 });

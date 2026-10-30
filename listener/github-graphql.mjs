@@ -17,8 +17,9 @@
 //   variables and operation name, never the call's own bytes: GitHub runs what was checked.
 import { readFileSync } from "node:fs";
 import { Worker } from "node:worker_threads";
+import { REACTION_ENUM } from "./comments.mjs";
 import { CONTENTS_WRITE, permissionsOf, PULL_WRITE, pullOf } from "./github-pulls.mjs";
-import { labelNames } from "./github-writes.mjs";
+import { labelNames, reactionSubject } from "./github-writes.mjs";
 import {
   buildSchema,
   getArgumentValues,
@@ -60,8 +61,9 @@ export function githubSchema() {
 // The types a target or a subject may be, as GitHub's node lookup answers them.
 const ISSUE = ["Issue"];
 const ISSUE_OR_PR = ["Issue", "PullRequest"];
-// Comments no ceiling lets a run react to: refused as REST refuses them (a run edits the ones
-// it posted with updateIssueComment, and deleteIssueComment, not through these). Those of a
+// Comments: a reaction on an issue's or pull request's (REACTABLE_COMMENTS) is held to theirs,
+// on the others no ceiling holds, refused as REST refuses them (a run edits the ones it posted
+// with updateIssueComment, and deleteIssueComment, not through these). Those of a
 // repository (RepositoryNode, which NODES reads); a discussion's comment has none, and is
 // refused as outside it.
 const COMMENTS = new Set([
@@ -70,6 +72,13 @@ const COMMENTS = new Set([
   "CommitComment",
   "PullRequestReview",
 ]);
+// The comments a reaction's target may be (issue #458), as REST names their kind: their
+// issue's or pull request's kind is then the target's (github-writes.mjs resolveComment()).
+const REACTABLE_COMMENTS = { IssueComment: "issue", PullRequestReviewComment: "review" };
+// GraphQL's reactions, as REST names them (`change.content`).
+export const REACTION_CONTENT = Object.fromEntries(
+  Object.entries(REACTION_ENUM).map(([rest, graphql]) => [graphql, rest]),
+);
 
 // What a set of fields makes of an issue's or a pull request's update, as REST's PATCH does
 // (github-writes.mjs patched()): a state first, then labels, assignees, the milestone, then
@@ -99,6 +108,7 @@ function updated(input) {
 //   place of the issue's (`set`);
 // - named: the input field of the label it creates' name, its `labels_added` as REST's;
 // - child: a link's sub-issue field; blocker: a "blocked by" link's blocking issue field;
+// - reaction: `add` or `remove`, a reaction's (its subject may be a comment: REACTABLE_COMMENTS);
 // - pull(input), permissions: a pull request's own write's head, base and draft, and what its
 //   token needs beyond its mode's (github-pulls.mjs, github-writes.mjs classify()'s).
 // The pull request ones are in a work run's ceiling, for its own pull requests only: opened,
@@ -233,6 +243,17 @@ export const MUTATIONS = {
     comments: true,
     fields: ["content"],
     actions: () => ["react"],
+    reaction: "add",
+  },
+  // Only the run's own reaction: the viewer's of that content, which GitHub removes, must be one
+  // it added (github-writes.mjs), never the listener's.
+  removeReaction: {
+    target: "subjectId",
+    types: ISSUE_OR_PR,
+    comments: true,
+    fields: ["content"],
+    actions: () => ["unreact"],
+    reaction: "remove",
   },
   createPullRequest: {
     target: "repositoryId",
@@ -293,7 +314,9 @@ const NODES = `query($ids: [ID!]!) {
     ... on PullRequest { number repository { nameWithOwner } }
     ... on Label { name repository { nameWithOwner } }
     ... on IssueComment { fullDatabaseId }
+    ... on PullRequestReviewComment { fullDatabaseId }
     ... on RepositoryNode { repository { nameWithOwner } }
+    ... on Reactable { reactionGroups { content viewerHasReacted } }
   }
 }`;
 
@@ -661,6 +684,13 @@ export function writeOf({ name, spec, input }, nodes, repo) {
   } else if (spec.types.includes(node.__typename)) {
     // A comment by its id, as REST's path names it: `databaseId`, an Int, no longer holds them.
     target = spec.comment ? { comment: commentId(node) } : { number: node.number };
+  } else if (spec.reaction && REACTABLE_COMMENTS[node.__typename]) {
+    // Its issue or pull request, looked up by the comment's id (REST's).
+    const id = commentId(node);
+    if (id === null) {
+      return { refused: refusal(403, `${name} on a comment whose id it can't read`) };
+    }
+    target = { reacted: { id, type: REACTABLE_COMMENTS[node.__typename] } };
   } else if (spec.comments && COMMENTS.has(node.__typename)) {
     // No ceiling holds them: refused before any look-up (github-writes.mjs ID_TARGETS).
     target = { kind: "comment" };
@@ -687,6 +717,16 @@ export function writeOf({ name, spec, input }, nodes, repo) {
   }
   if (spec.named) change.labels_added = labelNames([input[spec.named]]);
   const write = { repo, actions, target, change };
+  // A reaction's subject and content, as REST's; `fresh`: one the bot (the listener's token's
+  // viewer, as the run's) hasn't added yet, which the run's then is once GitHub runs it.
+  if (spec.reaction && target.kind === undefined) {
+    const content = REACTION_CONTENT[input.content] ?? null;
+    write.reaction = { subject: reactionSubject(target), content };
+    if (spec.reaction === "add") {
+      const group = (node.reactionGroups ?? []).find((g) => g?.content === input.content);
+      write.reaction.fresh = !group?.viewerHasReacted;
+    }
+  }
   if (spec.pull) Object.assign(write, { pull: spec.pull(set), permissions: spec.permissions });
   // The other issue a link names, its sub-issue or its blocker: in the run's repo (GitHub
   // allows cross-repository ones, a run doesn't), an issue.
@@ -733,10 +773,11 @@ export function createGraphqlChecks({
   },
   log = () => {},
 }) {
-  // A run's GraphQL call → { refused } or { body, write, creates, comments, permissions, pulls }:
-  // what goes on to GitHub (printed again), whether it writes (its token then may), the response
-  // keys of its `createIssue` fields, whose answers name the issues it created, and of its
-  // `addComment` ones, the comments it posted (github-writes.mjs answered()), what its token
+  // A run's GraphQL call → { refused } or { body, write, creates, comments, reacts, unreacts,
+  // permissions, pulls }: what goes on to GitHub (printed again), whether it writes (its token
+  // then may), the response keys of its `createIssue` fields, whose answers name the issues it
+  // created, and of its `addComment` ones, the comments it posted, the new reactions it adds and
+  // those it removes ({ key, subject, content }) (github-writes.mjs answered()), what its token
   // needs beyond its mode's, and the pull requests it changes (github-pulls.mjs
   // permissionsOf(), pullOf()).
   async function check(run, body) {
@@ -768,6 +809,8 @@ export function createGraphqlChecks({
         write: false,
         creates: [],
         comments: [],
+        reacts: [],
+        unreacts: [],
         permissions: {},
         pulls: [],
       };
@@ -808,11 +851,22 @@ export function createGraphqlChecks({
     const comments = fields
       .filter((f) => f.name === "addComment" && answersComment(doc, f.nodes))
       .map((f) => f.key);
+    // The reactions it adds that the bot hadn't: the run's once GitHub runs them; and those it
+    // removes, no longer its own then.
+    const reactions = (keep) =>
+      writes
+        .map((w, i) => w.reaction && keep(w) && { key: fields[i].key, ...w.reaction })
+        .filter(Boolean)
+        .map(({ key, subject, content }) => ({ key, subject, content }));
+    const reacts = reactions((w) => w.reaction.fresh);
+    const unreacts = reactions((w) => w.actions.includes("unreact"));
     return {
       body: forwarded,
       write: fields.length > 0,
       creates,
       comments,
+      reacts,
+      unreacts,
       permissions: permissionsOf(writes),
       pulls: writes.map((w, i) => pullOf(w, fields[i].key)).filter(Boolean),
     };

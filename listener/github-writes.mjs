@@ -27,6 +27,11 @@
 // A "blocked by" link (issue #437) is a `link` too: its target is the blocked issue, in the
 // path, and its blocker, by its id (the body's `issue_id`, or the path's when removed), one the
 // run created, one under its issue, or any open issue of its repository (resolveBlocker()).
+// A reaction (issue #458) on a comment has the comment's issue or pull request for its target,
+// looked up on GitHub (resolveReacted()), the comment in `target.comment` (its id, as a
+// `created_comment`'s), `comment_author` and `comment_deckhand`. The App's
+// bot adds the listener's reactions too (👀, then the outcome's, on the comments that trigger
+// runs): a run removes (`unreact`) only those GitHub said it added (answered()).
 // Format of the policies' input: ../docs/repo-config.md#the-github-input.
 import { branchAllowed } from "./broker.mjs";
 import { createPullChecks, PULL_WRITE } from "./github-pulls.mjs";
@@ -82,6 +87,17 @@ function child(body) {
 function blocker(value) {
   const id = Number(value);
   return Number.isSafeInteger(id) && id > 0 ? { id } : null;
+}
+
+// A comment a reaction names, by its path: an issue's or pull request's (`issue`), or a review
+// comment (`review`).
+const reactedOf = (where, id) => ({ id: +id, type: /^pulls$/i.test(where) ? "review" : "issue" });
+
+// What a reaction is on, as the run's own reactions are kept (answered()): `issue:<n>` (an
+// issue or a pull request), `issue_comment:<id>`, `review_comment:<id>`. `target`: a write's,
+// `{ number }` or `{ reacted: { id, type } }`.
+export function reactionSubject({ number, reacted }) {
+  return reacted ? `${reacted.type}_comment:${reacted.id}` : `issue:${number}`;
 }
 
 // [method, path under the repo (case-insensitive), (match, body, method) → { actions, target,
@@ -184,15 +200,49 @@ const ROUTES = [
     /^issues\/(\d+)\/lock$/i,
     (m) => ({ actions: ["lock"], target: { number: +m[1] } }),
   ],
+  // Reactions (issue #458): on an issue or pull request, or on a comment, whose own issue or
+  // pull request is then its target (checkWrite()). A reaction is removed by its id.
   [
     "POST",
     /^issues\/(\d+)\/reactions$/i,
-    (m) => ({ actions: ["react"], target: { number: +m[1] } }),
+    (m, body) => ({
+      actions: ["react"],
+      target: { number: +m[1] },
+      reaction: { subject: `issue:${+m[1]}`, content: body.content },
+    }),
   ],
   [
     "DELETE",
-    /^issues\/(\d+)\/reactions\/\d+$/i,
-    (m) => ({ actions: ["delete"], target: { number: +m[1] } }),
+    /^issues\/(\d+)\/reactions\/(\d+)$/i,
+    (m) => ({
+      actions: ["unreact"],
+      target: { number: +m[1] },
+      reaction: { subject: `issue:${+m[1]}`, id: +m[2] },
+    }),
+  ],
+  [
+    "POST",
+    /^(issues|pulls)\/comments\/(\d+)\/reactions$/i,
+    (m, body) => {
+      const reacted = reactedOf(m[1], m[2]);
+      return {
+        actions: ["react"],
+        target: { reacted },
+        reaction: { subject: reactionSubject({ reacted }), content: body.content },
+      };
+    },
+  ],
+  [
+    "DELETE",
+    /^(issues|pulls)\/comments\/(\d+)\/reactions\/(\d+)$/i,
+    (m) => {
+      const reacted = reactedOf(m[1], m[2]);
+      return {
+        actions: ["unreact"],
+        target: { reacted },
+        reaction: { subject: reactionSubject({ reacted }), id: +m[3] },
+      };
+    },
   ],
   // An issue's or pull request's comment, by its id: one the run posted, or refused before any
   // look-up (checkWrite()).
@@ -207,13 +257,8 @@ const ROUTES = [
   ["PATCH", /^pulls\/comments\/\d+$/i, () => ({ actions: ["edit"], target: { kind: "comment" } })],
   [
     "DELETE",
-    /^(?:issues\/comments\/\d+\/reactions\/\d+|pulls\/comments\/\d+(?:\/reactions\/\d+)?)$/i,
+    /^pulls\/comments\/\d+$/i,
     () => ({ actions: ["delete"], target: { kind: "comment" } }),
-  ],
-  [
-    "POST",
-    /^(?:issues|pulls)\/comments\/\d+\/reactions$/i,
-    () => ({ actions: ["react"], target: { kind: "comment" } }),
   ],
   [
     "POST",
@@ -250,8 +295,10 @@ const ROUTES = [
   ],
 ];
 
-// A write → { repo, actions, target: { number } | { kind } | { comment: its id }, child (a
-// link's: { id, replace_parent }), blocker (a "blocked by" link's: { id }), change: { fields, labels_added,
+// A write → { repo, actions, target: { number } | { kind } | { comment: its id } | { reacted:
+// a reaction's comment, { id, type } }, child (a link's: { id, replace_parent }), blocker (a
+// "blocked by" link's: { id }), reaction (a reaction's: { subject, content } added, { subject,
+// id } removed: reactionSubject()), change: { fields, labels_added,
 // labels_removed, labels_set (the labels it sets replace the issue's) }, pull, permissions (ROUTES') }, `{ read: true }` for a POST that writes nothing (rendering markdown), or
 // null when it can't be classified. `path`: under the API's base, decoded, without its query
 // (github-gateway.mjs route()); `body`: the bytes sent.
@@ -285,6 +332,7 @@ export function classify(method, path, body) {
       target: write.target,
       ...(write.child && { child: write.child }),
       ...(write.blocker && { blocker: write.blocker }),
+      ...(write.reaction && { reaction: write.reaction }),
       ...(write.pull && { pull: write.pull, permissions: write.permissions }),
       change: {
         fields: Array.isArray(json) ? [] : Object.keys(json),
@@ -311,6 +359,8 @@ function anyKindHolds(ceiling, actions) {
 
 // The issues a run created that a link's child is looked for among: a run files a few.
 const MAX_CREATED = 100;
+// The reactions a run added that it keeps as its own, its newest: a few acknowledgements.
+const MAX_REACTIONS = 100;
 // The pages of the repo's open issues (and pull requests, which GitHub lists with them), newest first, that a "blocked by" link's blocker named
 // by its id only (REST) is looked for among, past the run's own: GitHub can't look an issue up
 // by its id. GraphQL's names it by its node ID, looked up whatever the repo holds.
@@ -394,6 +444,23 @@ export function createWriteChecks({
     return { ...target, kind: created(run, issue) ? "created_issue" : "other_issue" };
   }
 
+  // A comment a reaction names ({ id, type }: classify()'s) → { number, id, author, deckhand }:
+  // the issue or pull request it is on, in `repo`, its author, and whether the App's bot wrote
+  // it. Null when it isn't there, or is elsewhere.
+  async function resolveReacted(repo, { id, type }, lookup) {
+    const found = await lookup(
+      repo,
+      `/repos/${repo}/${type === "review" ? "pulls" : "issues"}/comments/${id}`,
+    );
+    const on = String(found?.issue_url ?? found?.pull_request_url ?? "");
+    const m = /\/repos\/([^/]+\/[^/]+)\/(?:issues|pulls)\/(\d+)$/.exec(on);
+    if (!m || m[1].toLowerCase() !== repo) return null;
+    const author = found.user?.login ?? null;
+    const login = bot();
+    const deckhand = !!login && String(author ?? "").toLowerCase() === login.toLowerCase();
+    return { number: Number(m[2]), id, author, deckhand };
+  }
+
   // A link's child → { id, number, kind }: `sub_issue` when it is already under the run's issue
   // (its sub-issues list them with their ids), `created_issue` when the run created it (the
   // issues it created, looked up: their ids are GitHub's), else `other_issue`. A GraphQL
@@ -465,12 +532,25 @@ export function createWriteChecks({
   // (`{ comment, at }`): from a REST comment (201, its JSON's API `url`) or a GraphQL
   // `addComment` (what `gh issue comment` and `gh pr comment` send:
   // `data.<its response key>.commentEdge.node.url`, its web page's `#issuecomment-<id>`,
-  // `comments` naming the keys).
+  // `comments` naming the keys). And the reactions it added (`{ reaction: { subject, content,
+  // id }, at }`, the only ones it may remove: checkWrite()): a REST `201` (a `200` says the bot
+  // had it already), or a GraphQL `addReaction` field the gateway found new (`reacts`:
+  // github-graphql.mjs) that GitHub ran; until it removes them (`unreacts`).
   function answered(run, call, status, answer) {
-    const { method, path, body, graphql, creates = [], comments = [], at } = call;
+    const { method, path, body, graphql, at } = call;
+    const { creates = [], comments = [], reacts = [], unreacts = [] } = call;
     pulls
       .answered(run, call, status, answer)
       .catch((error) => log(`GitHub gateway: ${run.repo}: ${error.stack ?? error}`));
+    // A reaction removed is no longer the run's: the bot's same one, added again by the listener
+    // (or answered 200 to the run), isn't.
+    if (!graphql && status === 204) {
+      const write = classify(method, path, body);
+      if (write?.repo === run.repo && write.actions[0] === "unreact") {
+        forget(run, [write.reaction]);
+      }
+      return;
+    }
     let json;
     try {
       json = JSON.parse(answer.toString("utf8"));
@@ -479,16 +559,26 @@ export function createWriteChecks({
     }
     let issues = [];
     let posted = [];
+    let reactions = [];
     if (graphql) {
       if (status !== 200) return;
       issues = creates.map((key) => json?.data?.[key]?.issue);
       posted = comments.map((key) => commentOf(json?.data?.[key]?.commentEdge?.node, run.repo));
+      // A field GitHub didn't run answers null.
+      const ran = ({ key }) => json?.data?.[key] != null;
+      reactions = reacts.filter(ran).map(({ subject, content }) => ({ subject, content }));
+      forget(run, unreacts.filter(ran));
     } else {
       const write = classify(method, path, body);
       if (status !== 201 || write?.repo !== run.repo) return;
       if (write.target.kind === "new_issue" && inRepo(json, run.repo)) issues = [json];
       if (write.actions[0] === "comment" && write.target.number !== undefined) {
         posted = [restCommentOf(json, run.repo)];
+      }
+      // A 201: GitHub added it; a 200, the bot had it already, the listener's maybe.
+      const added = Number.isSafeInteger(json?.id) && typeof json.content === "string";
+      if (write.reaction && write.actions[0] === "react" && added) {
+        reactions = [{ subject: write.reaction.subject, content: json.content, id: json.id }];
       }
     }
     if (!Array.isArray(run.created)) return;
@@ -504,7 +594,29 @@ export function createWriteChecks({
       run.created.push({ comment, at });
       added = true;
     }
+    for (const reaction of reactions) {
+      if (ownReaction(run, reaction)) continue;
+      run.created.push({ reaction, at });
+      added = true;
+    }
+    // The oldest past MAX_REACTIONS go: the run can't take those off any more (fail closed).
+    const kept = run.created.filter((c) => c?.reaction);
+    if (kept.length > MAX_REACTIONS) {
+      const dropped = new Set(kept.slice(0, kept.length - MAX_REACTIONS));
+      run.created.splice(0, run.created.length, ...run.created.filter((c) => !dropped.has(c)));
+    }
     if (added) run.createdChanged?.();
+  }
+
+  // Takes the reactions `removed` names (answered()'s: { subject, id } or { subject, content })
+  // off the run's own.
+  function forget(run, removed) {
+    if (!Array.isArray(run.created) || !removed.length) return;
+    const gone = new Set(removed.map((r) => ownReaction(run, r)).filter(Boolean));
+    if (!gone.size) return;
+    const left = run.created.filter((c) => !gone.has(c?.reaction));
+    run.created.splice(0, run.created.length, ...left);
+    run.createdChanged?.();
   }
 
   // A run's REST write → null when it may go on, else { status, message }: GitHub's status and
@@ -540,6 +652,18 @@ export function createWriteChecks({
       return refusal(403, "a run can't move an issue from another parent (replace_parent)");
     }
     let target = write.target;
+    // A comment's reaction: its target is the issue or pull request the comment is on.
+    let reacted = null;
+    if (target.reacted) {
+      try {
+        reacted = await resolveReacted(write.repo, target.reacted, get);
+      } catch (error) {
+        log(`GitHub gateway: ${run.repo} comment ${target.reacted.id}: ${error.message ?? error}`);
+        return refusal(502, `comment ${target.reacted.id} can't be looked up on GitHub`);
+      }
+      if (!reacted) return refusal(404, `comment ${target.reacted.id} isn't there`);
+      target = { number: reacted.number };
+    }
     if (target.comment !== undefined) {
       // Not one the run posted: another run's, the listener's or a person's, never looked up.
       if (!postedBy(run, target.comment)) {
@@ -555,13 +679,20 @@ export function createWriteChecks({
       }
       if (!target) return refusal(404, `comment ${write.target.comment} isn't there`);
     } else if (target.number !== undefined) {
+      const { number } = target;
       try {
-        target = await resolve(run, write.repo, target.number, get);
+        target = await resolve(run, write.repo, number, get);
       } catch (error) {
-        log(`GitHub gateway: ${run.repo}#${write.target.number}: ${error.message ?? error}`);
-        return refusal(502, `#${write.target.number} can't be looked up on GitHub`);
+        log(`GitHub gateway: ${run.repo}#${number}: ${error.message ?? error}`);
+        return refusal(502, `#${number} can't be looked up on GitHub`);
       }
-      if (!target) return refusal(404, `#${write.target.number} isn't there`);
+      if (!target) return refusal(404, `#${number} isn't there`);
+      // The comment, as a `created_comment` names it (its id), its author and whether the bot
+      // wrote it.
+      if (reacted) {
+        const { id, author, deckhand } = reacted;
+        Object.assign(target, { comment: id, comment_author: author, comment_deckhand: deckhand });
+      }
     } else {
       target = { number: null, labels: [], author: null, ...target };
     }
@@ -577,6 +708,24 @@ export function createWriteChecks({
       return refusal(403, `${mode} runs' issues carry the ${label} label (their ceiling)`);
     }
     const change = { ...write.change };
+    // A run removes only the reactions it added (answered()): never the listener's on the
+    // comments that triggered it, which are the same bot's, nor anyone else's.
+    if (write.reaction) {
+      const own = write.actions.includes("unreact") ? ownReaction(run, write.reaction) : null;
+      if (write.actions.includes("unreact") && !own) {
+        return refusal(
+          403,
+          "a run removes only the reactions it added, never the listener's or anyone else's",
+        );
+      }
+      // The listener's 👀 on a comment it handed the run (or that waits for it) is the same bot's
+      // as a 👀 the run added there first: GitHub keeps one, which the listener takes off.
+      const listened = own?.content === "eyes" && (run.listened?.() ?? []).includes(own.subject);
+      if (listened) {
+        return refusal(403, "a run doesn't take off the listener's 👀 on the comments it handles");
+      }
+      change.content = own?.content ?? write.reaction.content ?? null;
+    }
     // Labels that replace the issue's remove those they leave out.
     if (change.labels_set) {
       const kept = new Set(change.labels_added.map((l) => l.toLowerCase()));
@@ -691,7 +840,8 @@ function restCommentOf(comment, repo) {
   return m && m[1].toLowerCase() === repo ? Number(m[2]) : null;
 }
 
-// The issues a run created, of `run.created` (which holds the comments it posted too).
+// The issues a run created, of `run.created` (which holds the comments it posted and the
+// reactions it added too).
 const issuesOf = (run) => (run.created ?? []).filter((c) => c.number !== undefined);
 
 // Whether the run posted comment `id` (answered()).
@@ -710,6 +860,16 @@ function notPosted(actions, repo) {
     `--delete-last pick the App's last comment, which may be Deckhand's or another run's): ` +
     `send \`${call}\`, the <id> ending the URL gh printed for yours (#issuecomment-<id>)`
   );
+}
+
+// The reaction of `run.created` that `wanted` ({ subject } with its REST `id` or its
+// `content`) names, or null: one the run added.
+function ownReaction(run, { subject, id, content }) {
+  for (const { reaction: r } of run.created ?? []) {
+    if (r?.subject !== subject) continue;
+    if (id !== undefined ? r.id === id : r.content === content) return r;
+  }
+  return null;
 }
 
 // The children a link may name (resolveChild()).
